@@ -176,5 +176,5 @@ fn the_published_bytes_are_bounded() {
 /// Every bucket at its cap fits the budget the manifest gives this server (servers/serving.md R26).
 #[test]
 fn the_limits_fit_the_budget() {
-    assert!(LIMITS.fits(&COST, BUDGET));
+    assert!(limits(16).fits(&COST, BUDGET));
 }

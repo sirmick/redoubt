@@ -39,5 +39,5 @@ extern crate alloc;
 pub mod server;
 pub mod uart;
 
-pub use server::{BUDGET, COST, Console, LIMITS, MAX_INPUT};
+pub use server::{BUDGET, COST, Console, MAX_INPUT, limits};
 pub use uart::Uart;

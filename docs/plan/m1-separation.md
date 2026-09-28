@@ -117,14 +117,9 @@ page.
      [paths the docs checker names that no longer exist](../todo/doccheck-stale-paths.md); and
      [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
      trusted crates from growing unseen.
-   - **Servers:** [an account-0 client's share chain](../todo/account0-share-chain.md),
-     [the 9P skeleton's rollback on a discarded reply](../todo/ninep-discard-rollback-test.md),
-     [compiled-in bucket counts](../todo/server-bucket-counts.md),
-     [consoled's interrupt name](../todo/consoled-irq-name.md),
-     [consoled's refused-request handles](../todo/consoled-unknown-request-handles.md),
-     [host tests the bench does not run](../todo/host-tests-in-bench.md),
-     [loader stub test coverage](../todo/loader-stub-coverage.md),
-     [raw memory calls beside the runtime](../todo/raw-syscall-runtime-audit.md).
+   - **Servers:** [a request answered outside `finish`](../todo/request-raw-reply.md),
+     [starting a thread from safe code](../todo/raw-thread-create.md),
+     [the raw system call beside the runtime](../todo/raw-abi-syscall.md).
    - **beamlet:** [the code path's search order](../todo/module-search-order.md).
    - **The documentation switch-over**, which rewrites process references in code and case
      descriptions: [process names in verdicts and case descriptions](../todo/verdict-strings.md).
@@ -138,7 +133,8 @@ page.
    manifest, builds the budget tree from it
    ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)), hands each server its
    devices ([devices](../kernel/devices.md#which-process-gets-which-device)), runs the
-   confinement and key-separation checks, and starts every server through the loader stub with
+   confinement and key-separation checks
+   ([bucket counts among them](../todo/server-bucket-counts.md)), and starts every server through the loader stub with
    fresh connections ([init](../servers/init.md)). `blkd`, `netd`, `ipd`, `bootfsd`, `consoled`
    and `keyd` move from the bench's rigs to `init`. A launcher releases its children's grants
    ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)). A shared server's

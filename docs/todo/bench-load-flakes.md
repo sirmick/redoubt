@@ -8,7 +8,9 @@ Three runs misbehaved under heavy load and were not all explained:
 - `libs/rt/tests/parked.rs` stopped making progress at 0% CPU under six parallel heavy test
   binaries and had to be killed. It was a race in the test (an unbounded poll after the waiter's
   deadline expired) and the test was fixed by bounding it, but it shows how a test's timing
-  assumptions break under load;
+  assumptions break under load. The runtime's fake kernel, which the runtime's and the servers'
+  host tests run on, now fails a wait with no deadline that sees nothing change for 60 s, so a
+  stuck test fails rather than hangs;
 - a combined bench run killed at its timeout, right after a run with its own `timeout` wrapper,
   seemed to leave an orphaned test process. It did not happen again in four clean runs.
 
@@ -30,8 +32,8 @@ tool work it carries.
 
 ## Done when
 
-- Every host test that waits on time bounds its waits by its own deadline, not the machine's
-  speed.
+- Every host test outside the runtime's fake kernel that waits on time bounds its waits by its
+  own deadline, not the machine's speed.
 - A bench run killed at its timeout leaves no QEMU or helper process behind, checked by a
   self-check.
 - The full bench and the host tests pass five times running under a stated parallel load.

@@ -1,6 +1,8 @@
-description = "bootfsd and consoled serving paths against the runtime's fake kernel, including 9P conformance vectors"
+description = "bootfsd, consoled and keyd serving paths against the runtime's fake kernel, including 9P conformance vectors"
 kind = "host-tests"
 # Host tests cover public bundle contents read back byte for byte, the manifest name hidden
-# like any absent name, and fake ns16550 input reaching a 9P reader through a parked call.
+# like any absent name, fake ns16550 input reaching a 9P reader through a parked call, and keyd's
+# signing, grants and refusals. keyd's timing tests need a release build and stay ignored here
+# (keyd.md).
 # They do not establish server boot integration or native process startup.
-packages = ["redoubt-bootfsd", "redoubt-consoled"]
+packages = ["redoubt-bootfsd", "redoubt-consoled", "redoubt-keyd"]

@@ -47,8 +47,7 @@ and `init`'s only input. Its entries:
   and `NAME-irq` for the interrupt, whichever exist. Two entries for one device would let a
   manifest split it between two holders, and the interrupt's holder could then mask the other's
   device and time its activity. A device name is at most 60 bytes and may not end in `-irq`, so
-  `NAME-irq` never collides and fits the name rule. `consoled` departs from it: it takes
-  `uart:irq` ([todo](../todo/consoled-irq-name.md)).
+  `NAME-irq` never collides and fits the name rule; `consoled` takes `uart` and `uart-irq`.
 - **No server gets a budget handle.** A `servers` entry names the budget `init` creates for the
   server, never a handle to one; a manifest that grants a server a budget handle is refused
   ([R33 (no server holds a system budget)](#r33-no-server-holds-a-system-budget)).
@@ -60,8 +59,9 @@ and `init`'s only input. Its entries:
   library; none has a compiled-in count. `init` refuses the boot unless N is at least the number
   of distinct (account, label set)s the manifest routes to that server, plus its system callers.
   So a server's bucket count never binds in normal use, and a full server cannot tell a latecomer
-  that others hold state ([serving](serving.md#residual-risks)). `bootfsd`, `consoled` and `keyd`
-  depart from it: they compile their counts in ([todo](../todo/server-bucket-counts.md)).
+  that others hold state ([serving](serving.md#residual-risks)). A server whose block has no `buckets=N`, or
+  one outside 1 to 32, does not start. `init` does not exist yet, so the check against the
+  manifest's routes is not built ([todo](../todo/server-bucket-counts.md)).
 - **Weights.** One stride queue serves every budget ([scheduling](../kernel/scheduling.md)), so
   the manifest's weights are the whole scheduling policy. `init`, the steward and the drivers
   (`consoled`, `blkd`, `netd`) get weights an order of magnitude above a session's (1000 against
@@ -190,7 +190,7 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 
 ### The startup block
 
-Status: built · partly tested: the parser's host tests and fuzz target run in no bench case; in a boot, only the blocks the net rig and `stub-launch` write are parsed · tested: host:redoubt-rt::round_trip, host:redoubt-rt::the_page_is_the_wire_message, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::resolve_takes_the_longest_prefix, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup, bench:stub-launch, bench:d3-net-tcp
+Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks the net rig and `stub-launch` write are parsed · tested: bench:rt-host-tests, host:redoubt-rt::round_trip, host:redoubt-rt::the_page_is_the_wire_message, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::resolve_takes_the_longest_prefix, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup, bench:stub-launch, bench:d3-net-tcp
 
 A launcher gives each child one read-only page, the **startup block**, naming the handles it
 installed in the child's slots 1 to n (`process_start`,
@@ -231,7 +231,7 @@ The table: [libs/wire/tables/startup.md](../../libs/wire/tables/startup.md).
 
 ### Launching through the loader stub
 
-Status: built · partly tested: the stub's host tests run in no bench case; its fuzz target has never been run as a campaign; on target the kernel's refusal masks the stub's overlap checks; exit 112 and the unmap of the image copy are not attacked · tested: bench:stub-launch, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_a_segment_reaching_outside_the_image, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_writable_without_readable, host:stub::plan_refuses_a_non_riscv_machine, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_misaligned_p_align, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::plan_refuses_a_non_exec_type, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::read_image_refuses_a_short_page, host:stub::read_image_refuses_an_image_len_over_the_cap
+Status: built · partly tested: on target the kernel's refusal masks the stub's overlap checks, which only host tests pin · tested: bench:rt-host-tests, bench:stub-launch, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_a_segment_reaching_outside_the_image, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_writable_without_readable, host:stub::plan_refuses_a_non_riscv_machine, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_misaligned_p_align, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::plan_refuses_a_non_exec_type, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::read_image_refuses_a_short_page, host:stub::read_image_refuses_an_image_len_over_the_cap
 
 Every process after `init` starts the same way, and no launcher parses an ELF: the **loader
 stub** (`stub/`), a small flat binary mapped into the new process, does it there, where a hostile
@@ -390,7 +390,7 @@ Status: planned · M1 (separation and containment)
 
 ### R31 (startup block checked whole)
 
-Status: built · partly tested: the parser's tests run in no bench case · tested: host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup
+Status: built · tested: bench:rt-host-tests, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup
 
 A program runs only with a startup block that passed every rule: handles within what
 `process_start` installed, clean unique paths, unique names under the manifest's rule, whole
@@ -400,7 +400,7 @@ read two ways, or a name no rule allows.
 
 ### R32 (a hostile image hurts only its process)
 
-Status: built · partly tested: the fuzz target has never been run as a campaign, and on target the kernel's own refusal masks the stub's overlap checks, which only host tests pin · tested: bench:stub-launch, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::read_image_refuses_an_image_len_over_the_cap
+Status: built · partly tested: on target the kernel's own refusal masks the stub's overlap checks, which only host tests pin · tested: bench:stub-launch, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::read_image_refuses_an_image_len_over_the_cap, host:stub::plan_refuses_a_segment_over_its_own_image, host:stub::the_fuzz_corpus_still_passes
 
 No launcher parses an ELF. The loader stub, running as the child, refuses an image whose segments
 overlap each other, the image, the stub, the startup block or page 0, reach past the link range,
@@ -408,7 +408,10 @@ or ask to be writable and executable, before it maps anything; a segment the ker
 over the stack) makes the child exit too. So a hostile image can at most exit or fault the process
 it was going to become. `stub-launch` launches hostile images on both widths and checks that each
 only exits or faults the child, that the parent's budget returns to the same usage after each,
-and that a well-formed child still runs afterwards.
+and that a well-formed child still runs afterwards and finds the image copy unmapped. A segment
+the child's budget cannot hold exits 112, and the same image runs in a budget that holds it. The
+stub's parser was fuzzed for an hour; its kept corpus (`stub/fuzz/seeds/plan`) reruns in the
+stub's host tests.
 
 ### R33 (no server holds a system budget)
 
@@ -477,11 +480,13 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
 - **The stub cannot see the stack.** A segment that names the stack's pages is refused by
   `map_fixed`, but nothing checks for a gap between a segment and the stack
   ([memory layout](../kernel/memory-layout.md#residual-risks)).
-- **The startup block and stub host tests are not in the bench.** Follow-up:
-  [todo](../todo/host-tests-in-bench.md).
-- **The stub's checks are not all attacked on their own.** Its fuzz target has not been run as a
-  campaign, the kernel's refusal hides the stub's overlap checks on target, and exit 112 and the
-  image unmap are untested. Follow-up: [todo](../todo/loader-stub-coverage.md).
+- **The startup block's fuzz target runs outside the bench.** Its host tests and the stub's run
+  in `rt-host-tests`; the fuzz target needs `cargo fuzz`, which a host-tests case does not run,
+  so it is run by hand.
+- **On target, the kernel's refusal hides the stub's overlap checks.** Dropping one still ends
+  in exit 111, because `map_fixed` never replaces a mapping; only the host tests pin the stub's
+  own. The bench's stub is not rebuilt when a dependency's manifest or the lock file changes:
+  [todo](../todo/programs-build-rerun.md).
 - **A restart loop reboots the machine.** A client that can crash a server repeatedly without
   being blamed (a bug the blame rule does not reach) can reboot the box.
 

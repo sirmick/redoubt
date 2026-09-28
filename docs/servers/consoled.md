@@ -17,7 +17,7 @@ channel by [`sshd`](sshd.md), not here.
 
 ### `/dev/cons`
 
-Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel; in a boot the console is held by the bench's interim log server, so `consoled` is only built; no test sends a `consol` opcode or writes as a labelled caller · tested: bench:r4-host-tests, bench:consoled-build, host:redoubt-consoled::typing_on_the_uart_reaches_a_ninep_reader, host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up, host:redoubt-consoled::writes_go_out_of_the_uart_in_order, host:redoubt-consoled::a_flood_of_input_keeps_what_was_typed_first, host:redoubt-consoled::the_console_refuses_what_it_is_not, host:redoubt-consoled::the_conformance_vectors_run_against_consoled
+Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel; in a boot the console is held by the bench's interim log server, so `consoled` is only built; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested: bench:r4-host-tests, bench:consoled-build, host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind, host:redoubt-consoled::typing_on_the_uart_reaches_a_ninep_reader, host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up, host:redoubt-consoled::writes_go_out_of_the_uart_in_order, host:redoubt-consoled::a_flood_of_input_keeps_what_was_typed_first, host:redoubt-consoled::the_console_refuses_what_it_is_not, host:redoubt-consoled::the_conformance_vectors_run_against_consoled
 
 `/dev/cons` is served over the [9P server skeleton](serving.md#the-9p-server-skeleton) as one file
 with nothing below it.
@@ -39,8 +39,8 @@ with nothing below it.
   That reply does not close the handles the request carried, a departure from the serving
   library's rule that unasked handles are closed (Residual risks).
 - **Admission:** at most 2 parked reads, 4 fids and 4 connections per (account, label set), across
-  at most 4 of those (`LIMITS`), sized to fit its 1 MiB budget. The bucket count is compiled in,
-  a departure from the rule that every shared server takes `buckets=N` from the manifest.
+  at most `buckets=N` of those, sized to fit its 1 MiB budget; a block with no `buckets=N`, or
+  one the budget cannot hold, and `consoled` does not start ([init](init.md#the-boot-manifest)).
 
 ### Two threads and the UART
 
@@ -90,8 +90,7 @@ holds the UART: two holders would both reach the registers, and two readers of o
 take half the line.
 
 The rule names the handles `NAME` and `NAME-irq` from one `devices` entry
-([init](init.md#the-boot-manifest)); `consoled` departs from it by taking `uart` and `uart:irq`
-([todo](../todo/consoled-irq-name.md)).
+([init](init.md#the-boot-manifest)); `consoled` takes `uart` and `uart-irq`.
 
 **Open:** none.
 
@@ -137,12 +136,6 @@ Status: built · partly tested: the restart claims are read from the code, not a
   admission slots until a key arrives or its caller gives up.
 - **Anyone with a connection reads the console.** What is typed on the physical console is visible to
   every holder of a `consoled` connection.
-- **The code departs from three rules.** Its bucket count is compiled in
-  ([todo](../todo/server-bucket-counts.md)); its interrupt handle is named `uart:irq`
-  ([todo](../todo/consoled-irq-name.md)); and a typed request it answers `malformed` keeps its
-  handles open in `consoled`, so repeated such requests take `consoled`'s handle table and memory
-  outside its admission, bounded only by the kernel's per-receiver limits
-  ([todo](../todo/consoled-unknown-request-handles.md)).
 - **`consoled` does not run in a boot.** The bench's console is an interim log server holding the
   same UART; the two must never run together.
 

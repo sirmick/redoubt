@@ -8,11 +8,14 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
+
 use redoubt_keyd::keys::Keys;
-use redoubt_keyd::server::{BUDGET, COST, KeyServer, LIMITS};
+use redoubt_keyd::server::{BUDGET, COST, KeyServer, limits};
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Event;
+use redoubt_rt::server::own_args;
 use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(serve);
@@ -21,8 +24,8 @@ redoubt_rt::entry!(serve);
 pub const NO_ENDPOINT: u32 = 2;
 /// `receive` failed for a reason other than the endpoint going away.
 pub const RECEIVE_FAILED: u32 = 3;
-/// The limits in this build do not fit the budget or the open-call headroom: a build-time
-/// mistake, caught at the only moment it can be.
+/// No `buckets=N` in the arguments, or one whose buckets at their caps do not fit the budget or
+/// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
 /// A key argument was refused ([`redoubt_keyd::keys::KeyError`]): not `name,purpose,seed`, a
 /// name outside the manifest's rule, an unknown purpose, a seed that is not 64 lower-case hex
@@ -40,11 +43,15 @@ pub const NO_RANDOM: u32 = 6;
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
     let Some(handle) = startup.handle("keyd") else { return NO_ENDPOINT };
-    let Ok(keys) = Keys::from_args(startup.args()) else { return BAD_KEYS };
+    let args: Vec<&str> = startup.args().collect();
+    let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_LIMITS };
+    let Ok(keys) = Keys::from_args(own_args(&args)) else { return BAD_KEYS };
     // A predictable first granted badge would be a hole across a restart (servers/serving.md
     // R27), so a `keyd` that cannot draw one does not start.
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
-    let Ok(mut server) = KeyServer::new(keys, LIMITS, &COST, BUDGET, random) else { return BAD_LIMITS };
+    let Ok(mut server) = KeyServer::new(keys, limits(buckets), &COST, BUDGET, random) else {
+        return BAD_LIMITS;
+    };
     let endpoint = Endpoint::from_handle(handle);
     loop {
         match endpoint.receive(FOREVER, 0) {

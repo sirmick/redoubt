@@ -14,11 +14,11 @@ use crate::uart::Uart;
 /// drops what it takes, so a flood keeps what was typed first.
 pub const MAX_INPUT: usize = 1024;
 
-/// What admission lets clients hold, sized so that every bucket at its cap fits [`BUDGET`]
-/// (servers/serving.md R26), and so that the parked reads every bucket may hold together stay
-/// well under `MAX_OPEN_CALLS` with its headroom ([`redoubt_rt::server::Admission::new`] checks
-/// that).
-pub const LIMITS: Limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4 };
+/// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
+/// manifest's `buckets=N` ([`redoubt_rt::server::buckets`]). The program refuses a count whose
+/// buckets at their caps would not fit [`BUDGET`], or whose parked reads together would not stay
+/// under `MAX_OPEN_CALLS` with its headroom ([`redoubt_rt::server::Admission::new`] checks that).
+pub const fn limits(buckets: u32) -> Limits { Limits { buckets, in_flight: 2, files: 4, state: 4 } }
 /// What one of each costs, in bytes. A parked read holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), which is `MAX_LEND_PAGES` pages at worst; a
 /// fid and a minted connection are small records.

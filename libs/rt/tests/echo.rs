@@ -81,12 +81,13 @@ fn a_hostile_client_does_not_hurt_the_server_or_other_clients() {
     let code = f.run(attacker, move || {
         let ep = Endpoint::from_handle(connection);
         // Words that are not 9P, with and without a lend and with handles to fill the server's
-        // table: refused, and the handles closed.
+        // table: refused, and the handles closed. Opcode 9 is in ninep_common's range, which it
+        // does not define; 16 is a typed opcode, which the echo server does not serve.
         let mut lend = Buffer::new(1).unwrap();
-        for _ in 0..50 {
+        for opcode in [9, 16].repeat(25) {
             let junk = Endpoint::create().unwrap();
             let (reply, returned) = ep
-                .call(&[9, 9, 9, 9], &[junk.handle(), junk.handle()], Some(lend), FOREVER)
+                .call(&[opcode, 9, 9, 9], &[junk.handle(), junk.handle()], Some(lend), FOREVER)
                 .into_result()
                 .unwrap();
             lend = returned.unwrap();

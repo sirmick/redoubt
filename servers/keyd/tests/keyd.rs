@@ -11,11 +11,11 @@ mod common;
 use common::fake;
 use ed25519_compact::{PublicKey, Signature};
 use redoubt_keyd::keys::Keys;
-use redoubt_keyd::server::{BUDGET, COST, KeyServer, LIMITS, audit_digest};
+use redoubt_keyd::server::{BUDGET, COST, KeyServer, audit_digest, limits};
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Event, Words};
-use redoubt_rt::server::MALFORMED;
+use redoubt_rt::server::{MALFORMED, own_args};
 use redoubt_rt::startup::{Startup, StartupBuilder};
 use redoubt_rt::wire::proto::keyd::{
     ErrorCode, Grant, Holds, Message, PublicKey as PublicKeyRequest, Release, Reply, SignRecord,
@@ -52,10 +52,11 @@ fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread:
     })
 }
 
-/// The block `init` writes for `keyd`: the endpoint it receives on, and one argument per key.
+/// The block `init` writes for `keyd`: the endpoint it receives on, its bucket count, and one
+/// argument per key.
 fn keyd_block(receive: Handle, keys: &[&str]) -> Vec<u8> {
     let mut builder = StartupBuilder::new(receive.index());
-    builder.handle("keyd", receive);
+    builder.handle("keyd", receive).arg("buckets=16");
     for key in keys {
         builder.arg(key);
     }
@@ -278,6 +279,19 @@ fn bad_key_arguments_stop_keyd_starting() {
     let pid = f.process(0, &[]);
     let code = launch(pid, StartupBuilder::new(0).finish().unwrap(), keyd::serve).join().unwrap();
     assert_eq!(code, keyd::NO_ENDPOINT);
+    // A block that does not size it, sizes it at nothing or past the most a server may have, or
+    // sizes it twice: it does not guess a count (servers/serving.md R26).
+    for sizing in [&[][..], &["buckets=0"], &["buckets=16", "buckets=16"], &["buckets=33"]] {
+        let pid = f.process(0, &[]);
+        let receive = f.endpoint(pid);
+        let mut builder = StartupBuilder::new(receive.index());
+        builder.handle("keyd", receive);
+        for arg in sizing {
+            builder.arg(arg);
+        }
+        let code = launch(pid, builder.finish().unwrap(), keyd::serve).join().unwrap();
+        assert_eq!(code, keyd::BAD_LIMITS, "{sizing:?}");
+    }
 }
 
 /// A `send` reaches `keyd` (every message of this protocol is a `call`), is dropped, and what
@@ -329,9 +343,10 @@ fn a_stale_grant_does_not_name_a_new_key_after_a_restart() {
     let first = f.run(server1, move || {
         let startup = Startup::parse(&block1).unwrap();
         let handle = startup.handle("keyd").unwrap();
-        let keys = Keys::from_args(startup.args()).unwrap();
+        let args: Vec<&str> = startup.args().collect();
+        let keys = Keys::from_args(own_args(&args)).unwrap();
         // The first incarnation's own draw.
-        let mut server = KeyServer::new(keys, LIMITS, &COST, BUDGET, 0x1111_1111_1111_1111).unwrap();
+        let mut server = KeyServer::new(keys, limits(16), &COST, BUDGET, 0x1111_1111_1111_1111).unwrap();
         let endpoint = Endpoint::from_handle(handle);
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {
@@ -361,8 +376,9 @@ fn a_stale_grant_does_not_name_a_new_key_after_a_restart() {
     let second = f.run(server2, move || {
         let startup = Startup::parse(&block2).unwrap();
         let handle = startup.handle("keyd").unwrap();
-        let keys = Keys::from_args(startup.args()).unwrap();
-        let mut server = KeyServer::new(keys, LIMITS, &COST, BUDGET, 0x2222_2222_2222_2222).unwrap();
+        let args: Vec<&str> = startup.args().collect();
+        let keys = Keys::from_args(own_args(&args)).unwrap();
+        let mut server = KeyServer::new(keys, limits(16), &COST, BUDGET, 0x2222_2222_2222_2222).unwrap();
         let endpoint = Endpoint::from_handle(handle);
         loop {
             match endpoint.receive(FOREVER, 0) {

@@ -218,9 +218,19 @@ the loader stub.
 - **Tested on the host against a fake kernel.** Every system call goes through one function; on
   the machine it is the `ecall`, on the host a `HostKernel` a test installs, so the runtime and
   programs built on it (the echo client and server) run in host tests.
-- **Beside the owning types, the raw calls.** `unmap` and `set_flags` are safe functions that take
-  any address, so safe code can pull a page from under an object that owns it; which calls must
-  become `unsafe` is a follow-up ([todo](../todo/raw-syscall-runtime-audit.md)).
+- **No safe call pulls memory from under its owner.** The runtime's calls that could invalidate
+  memory a safe owner holds are its owners' alone: `unmap` is private to the heap and `Buffer`,
+  `set_flags` is not offered at all, and `Process::map` moves pages only by taking the `Buffer`
+  that owns them, so the raw address it once took is no longer a way round. `map_anon` only makes
+  memory, and hands back an address that takes `unsafe` to use. A public `unmap` does not compile
+  (a `compile_fail` test in `handle.rs`).
+- **The raw ABI is outside these guarantees.** `redoubt_rt::abi` is `redoubt-sys` itself, and on
+  the machine its `syscall` makes any call, `unmap` and `process_map` included, from safe code.
+  A program that makes one keeps the owners' promises by hand; the test rig's DMA probe is the
+  one place that does. Closing that route is a follow-up ([todo](../todo/raw-abi-syscall.md)).
+  Starting a thread (`thread_create`) takes any entry and stack from safe
+  code as well, so it can run a function on memory an owner still holds: a follow-up
+  ([todo](../todo/raw-thread-create.md)).
 
 ### Client crates and the Rust `std` target
 

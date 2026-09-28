@@ -8,7 +8,8 @@
 //! - `ingress=BADGE`: the badge `netd`'s frames arrive on, once. It has no `/net`.
 //! - `scope=BADGE:RULE[,RULE...]`: what one root badge may do, at most 8 badges of at most 8 rules; a rule is
 //!   `c:A.B.C.D/LEN:PORTS` or `l:PORTS`, `PORTS` being `P` or `LO-HI`.
-//! - `buckets=N`: admission buckets, 1 to 32, at most once (default [`DEFAULT_BUCKETS`]).
+//! - `buckets=N`: admission buckets, required, once; read by the serving library
+//!   ([`redoubt_rt::server::buckets`]), as every shared server's is.
 //! - `limits=BADGE:INFLIGHT:STATE:SOCKETS`: caps for one scope badge's bucket in place of the defaults, at
 //!   most 8.
 //!
@@ -20,8 +21,6 @@ use alloc::vec::Vec;
 
 use crate::scope::{MAX_RULES, Ports, Prefix, Rule, Scope, ip, mask};
 
-/// Buckets when `buckets=` is not given.
-pub const DEFAULT_BUCKETS: u32 = 6;
 /// The most `self=`, `scope=` and `limits=` arguments of each kind.
 pub const MAX_EACH: usize = 8;
 
@@ -59,14 +58,16 @@ impl Config {
 
 /// Parses every argument; all or nothing.
 pub fn parse<'a>(args: impl Iterator<Item = &'a str>) -> Result<Config, BadArgs> {
+    let args: Vec<&str> = args.collect();
+    let buckets =
+        redoubt_rt::server::buckets(&args).map_err(|_| BadArgs("buckets= must be given once, 1 to 32"))?;
     let mut addr = None;
     let mut gateway = None;
     let mut selfs = Vec::new();
     let mut ingress = None;
     let mut scopes: Vec<(u64, Scope)> = Vec::new();
-    let mut buckets = None;
     let mut limits: Vec<Limit> = Vec::new();
-    for arg in args {
+    for arg in redoubt_rt::server::own_args(&args) {
         let (key, value) = arg.split_once('=').ok_or(BadArgs("an argument without '='"))?;
         match key {
             "addr" => {
@@ -99,14 +100,6 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a str>) -> Result<Config, BadArgs>
                     return Err(BadArgs("a scope badge given twice"));
                 }
                 scopes.push((b, scope(rules)?));
-            }
-            "buckets" => {
-                once(&buckets, "buckets")?;
-                let n = number(value)?;
-                if !(1..=32).contains(&n) {
-                    return Err(BadArgs("buckets= must be 1 to 32"));
-                }
-                buckets = Some(n as u32);
             }
             "limits" => {
                 if limits.len() == MAX_EACH {
@@ -152,16 +145,7 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a str>) -> Result<Config, BadArgs>
     if limits.iter().any(|l| !scopes.iter().any(|(b, _)| *b == l.badge)) {
         return Err(BadArgs("a limits badge has no scope"));
     }
-    Ok(Config {
-        addr,
-        len,
-        gateway,
-        selfs,
-        ingress,
-        scopes,
-        buckets: buckets.unwrap_or(DEFAULT_BUCKETS),
-        limits,
-    })
+    Ok(Config { addr, len, gateway, selfs, ingress, scopes, buckets, limits })
 }
 
 fn once<T>(slot: &Option<T>, what: &'static str) -> Result<(), BadArgs> {

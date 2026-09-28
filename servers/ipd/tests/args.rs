@@ -1,9 +1,14 @@
 //! `ipd`'s arguments (servers/ipd.md, "Sizing"): strict, all or nothing.
 
-use redoubt_ipd::args::{BadArgs, Config, DEFAULT_BUCKETS, Limit, parse};
+use redoubt_ipd::args::{BadArgs, Config, Limit, parse};
 use redoubt_ipd::scope::{Ports, Prefix, Rule, ip};
 
-fn run(args: &[&str]) -> Result<Config, BadArgs> { parse(args.iter().copied()) }
+/// `args`, sized with `buckets=4` unless they size `ipd` themselves: every list below is about
+/// something else.
+fn run(args: &[&str]) -> Result<Config, BadArgs> {
+    let sized = args.iter().any(|a| a.starts_with("buckets="));
+    parse(args.iter().copied().chain((!sized).then_some("buckets=4")))
+}
 
 /// The rig's arguments (tests/net) and the milestone manifest's.
 const RIG: &[&str] = &[
@@ -44,7 +49,9 @@ fn the_rig_and_the_milestone_parse() {
     let m = run(MILESTONE).unwrap();
     assert_eq!(m.scope_of(5).unwrap().rules(), &[Rule::Listen(Ports::new(22, 22).unwrap())]);
     assert_eq!(m.limits[0], Limit { badge: 5, in_flight: 23, state: 0, sockets: 20 });
-    assert_eq!(run(&["addr=10.0.2.15/24", "ingress=3"]).unwrap().buckets, DEFAULT_BUCKETS);
+    // Not sized, ipd does not start: there is no default count (servers/serving.md R26).
+    assert!(parse(["addr=10.0.2.15/24", "ingress=3"].into_iter()).is_err());
+    assert_eq!(run(&["addr=10.0.2.15/24", "ingress=3"]).unwrap().buckets, 4);
 }
 
 #[test]

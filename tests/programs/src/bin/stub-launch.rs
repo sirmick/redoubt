@@ -23,7 +23,8 @@ static STUB_BIN: &[u8] = include_bytes!(env!("STUB_BIN"));
 static CHILD_ELF: &[u8] = include_bytes!(env!("STUB_CHILD_ELF"));
 
 /// Where this launcher puts the copied program image in the child: page-aligned and outside the
-/// program link range (`0x1_0000..STUB_ENTRY`, kernel/memory-layout.md).
+/// program link range (`0x1_0000..STUB_ENTRY`, kernel/memory-layout.md). `fixture-child` maps a
+/// page here to see that the stub freed the copy, so the two must agree.
 const IMAGE_AT: usize = 0x4000_0000;
 const STACK_PAGES: usize = 8;
 const WAIT: u64 = 2_000_000;
@@ -33,11 +34,21 @@ const WAIT: u64 = 2_000_000;
 const HUGE_LEN: usize = usize::MAX - IMAGE_AT;
 const _: () = assert!(HUGE_LEN > MAX_IMAGE_LEN);
 
-/// `fixture-child`'s own exit code (`stub/src/bin/fixture-child.rs`).
+/// `fixture-child`'s own exit code once it has seen the image copy gone
+/// (`stub/src/bin/fixture-child.rs`; 78 if the copy was still mapped).
 const CHILD_OK: u32 = 77;
 /// The stub's exit codes (`stub/src/main.rs`, `mod exit`).
 const BAD_STARTUP: u32 = 110;
 const BAD_IMAGE: u32 = 111;
+const MAP_UNAVAILABLE: u32 = 112;
+
+/// The children's budget, in pages: room for the stub, the image, the stack and the child's own
+/// segments, with little to spare.
+const KIDS_PAGES: u64 = 600;
+/// A code segment this big does not fit in [`KIDS_PAGES`], and does in a budget of
+/// [`ROOMY_PAGES`]: the exit-112 case and its contrast.
+const BIG_SEGMENT: usize = 1024 * rd::PAGE_SIZE;
+const ROOMY_PAGES: u64 = 1200;
 
 /// Where the stack and the startup page go in the child.
 #[derive(Clone, Copy)]
@@ -82,7 +93,7 @@ pub extern "C" fn _start(_arg: usize) -> ! {
 
     // Every child runs in its own users' budget, which must be back to empty after each one:
     // whatever a child mapped (the stub, its image, its segments) is freed with it.
-    let budget = rd::create(rd::USERS, &rd::spec(600, 1, 100)).expect("a budget for the children");
+    let budget = rd::create(rd::USERS, &rd::spec(KIDS_PAGES, 1, 100)).expect("a budget for the children");
     let kids = &Kids { budget, empty: rd::usage(budget).expect("usage") };
     let mut ok = check(
         &mut out,
@@ -145,6 +156,26 @@ pub extern "C" fn _start(_arg: usize) -> ! {
         let offset = e.ph(rx, Ph::Offset) + (16 << 20);
         e.set_ph(rx, Ph::Offset, offset);
     });
+    // A well-formed image whose code segment's memory (`p_memsz`, mostly `.bss`) the children's
+    // budget cannot hold: `map_fixed` answers `OutOfMemory`, which the stub alone turns into 112.
+    // The same image in a budget that holds it runs, so the 112 is the budget's, not the image's.
+    let big = |e: &mut Elf| e.set_ph(rx, Ph::Memsz, BIG_SEGMENT);
+    hostile(&mut out, "segment over the budget", n, OUTSIDE, Expect::Code(MAP_UNAVAILABLE), &big);
+    let roomy = rd::create(rd::USERS, &rd::spec(ROOMY_PAGES, 1, 100)).expect("a roomy budget");
+    let roomy = &Kids { budget: roomy, empty: rd::usage(roomy).expect("usage") };
+    let mut buf = [0u8; MAX_CHILD_ELF];
+    let mut elf = Elf::new(&mut buf);
+    big(&mut elf);
+    let image = &elf.bytes[..n];
+    ok &= check(
+        &mut out,
+        roomy,
+        "the same segment in a budget that holds it",
+        image,
+        n,
+        OUTSIDE,
+        Expect::Code(CHILD_OK),
+    );
 
     // Header fuzz: a fixed seed, so a failure reproduces. Every mutated image must end in a
     // notice (any exit code, or a fault) and leave the children's budget empty.

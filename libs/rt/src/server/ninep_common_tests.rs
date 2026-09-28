@@ -320,6 +320,84 @@ fn minted_connections_are_admitted_and_fold_into_the_share_they_came_from() {
     assert_eq!(t.read(&alice, 10, 0, 5).unwrap(), b"hello");
 }
 
+/// The attack on R26 (servers/serving.md) from account 0, which is keyed by badge: a system
+/// caller mints a chain of connections for itself, each through the last, and floods fids and
+/// connections at every link. However deep the chain and whoever holds each link, all of it is
+/// charged to the root badge's one bucket, and another system caller is still admitted. What a
+/// link gives back, by a failed walk, a failed `new_connection` or a disconnect, goes back to
+/// that same bucket: once every link is gone the server holds nothing.
+#[test]
+fn an_account_0_chain_holds_one_bucket() {
+    let mut t = T::with_limit(12);
+    let mut k = FakeKernel::new();
+    let daemon = caller(9, 0, &[]);
+    let mut chain = vec![(daemon.badge, 0)];
+    while let Ok(link) = t.connect(&mut k, &through(&daemon, chain.last().unwrap().0), "", 0) {
+        chain.push(link);
+        // A deep link's failures give back to the root's bucket what they took from it.
+        let deep = through(&daemon, link.0);
+        assert!(t.connect(&mut k, &deep, "nowhere", 0).is_err());
+        t.attach(&deep, 0, "");
+        let walk = Body::Twalk { fid: 0, newfid: 1, wnames: Names::new(&["nowhere"]).unwrap() };
+        assert_eq!(t.err(&deep, walk), "file does not exist");
+        t.clunk(&deep, 0);
+    }
+    assert_eq!(chain.len(), 1 + 8, "the chain holds one bucket's 8 connections");
+    let mut fid = 0;
+    let mut fids = Vec::new();
+    for &(c, _) in &chain {
+        loop {
+            let attach = Body::Tattach { fid, afid: NOFID, uname: "", aname: "" };
+            if t.rpc(&through(&daemon, c), attach) == (Body::Rerror { ename: "too many open files" }) {
+                break;
+            }
+            fids.push((c, fid));
+            fid += 1;
+        }
+    }
+    assert_eq!(fid, 12, "and one bucket's 12 fids");
+    assert_eq!(t.server.admission().keys(), 1, "in one bucket");
+    // Another system caller, and a link handed to one, are no way round it.
+    let other = caller(10, 0, &[]);
+    assert_eq!(t.connect(&mut k, &through(&other, chain[3].0), "", 0), Err(REFUSED));
+    let (_, other_id) = t.connect(&mut k, &other, "", 0).unwrap();
+    t.attach(&other, 0, "");
+    assert_eq!(t.server.admission().keys(), 2);
+    // Every link disconnected, deepest first, each by the link it was minted through, and the
+    // root's own fids clunked: nothing is left held, in either bucket.
+    for i in (1..chain.len()).rev() {
+        t.disconnect(&mut k, &through(&daemon, chain[i - 1].0), chain[i].1).unwrap();
+    }
+    for &(c, fid) in fids.iter().filter(|(c, _)| *c == daemon.badge) {
+        t.clunk(&through(&daemon, c), fid);
+    }
+    t.clunk(&other, 0);
+    t.disconnect(&mut k, &other, other_id).unwrap();
+    let root = t.server.admission();
+    assert_eq!(root.held(AdmitKey::of(&daemon), Resource::State), 0);
+    assert_eq!(root.held(AdmitKey::of(&daemon), Resource::Files), 0);
+    assert_eq!(root.keys(), 0, "no bucket is left behind");
+}
+
+/// The same chain minted by the file server (`ipd`'s `grant`): each rooted mint through the last
+/// link is charged to the root badge's one bucket, and undoing one gives it back there.
+#[test]
+fn an_account_0_rooted_chain_holds_one_bucket() {
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    let daemon = caller(9, 0, &[]);
+    let root = (0usize, t.server.fs.qid(0));
+    let mut last = daemon.badge;
+    let mut made = 0;
+    while let Ok((_, _, badge)) = t.server.mint_rooted(&through(&daemon, last), root, &mut k) {
+        (last, made) = (badge, made + 1);
+    }
+    assert_eq!(made, 8, "the chain holds one bucket's 8 connections");
+    assert_eq!(t.server.admission().keys(), 1, "in one bucket");
+    t.server.unmint(last);
+    assert_eq!(t.server.admission().held(AdmitKey::of(&daemon), Resource::State), 7);
+    assert_eq!(t.server.admission().keys(), 1);
+}
+
 #[test]
 fn a_client_at_its_connection_cap_costs_the_server_no_walk() {
     // Admission comes before the root is walked, as it does for fids.

@@ -34,7 +34,9 @@
 //! badge. A connection a client mints for itself counts in the share of the connection it minted
 //! it through (the share goes up the chain while the requester is the same client), so a client
 //! gains nothing by minting more connections; a connection someone else minted for it (the
-//! steward, for a lease's agent) is a share of its own.
+//! steward, for a lease's agent) is a share of its own. Account 0 is keyed by badge, so there
+//! every connection counts in the bucket of the root badge its chain was minted through, whoever
+//! holds it ([`super::minted::Minted::key`]).
 //!
 //! **Byte quotas** (servers/fsd.md, "Quotas") are the file server's. The skeleton only carries
 //! `new_connection`'s `quota` to [`FileServer::minted`], which may refuse the grant, and tells the
@@ -337,10 +339,6 @@ struct ConnKey {
     client: AdmitKey,
 }
 
-impl ConnKey {
-    fn of(caller: &Caller) -> ConnKey { ConnKey { badge: caller.badge, client: AdmitKey::of(caller) } }
-}
-
 /// One fid's state.
 struct Fid<N> {
     /// Every step from the attach root (first) to where the fid rests (last); never empty.
@@ -430,7 +428,7 @@ impl<S: FileServer> NineServer<S> {
 
     /// Fids open on the caller's connection.
     pub fn fids(&self, caller: &Caller) -> usize {
-        self.conn(&ConnKey::of(caller)).map_or(0, |i| self.conns[i].fids.len())
+        self.conn(&self.conn_key(caller)).map_or(0, |i| self.conns[i].fids.len())
     }
 
     /// Connections minted and not yet disconnected.
@@ -443,17 +441,15 @@ impl<S: FileServer> NineServer<S> {
     /// ([`super::parked::Parked`], which takes it on every call).
     pub fn admission_mut(&mut self) -> &mut Admission { &mut self.admission }
 
-    /// The share `caller`'s requests count in, which is what a parked call is charged to: its
-    /// badge, or, for a connection it minted for itself, the share of the connection it minted
-    /// it through.
-    pub fn share_of(&self, caller: &Caller) -> u64 { self.share(caller) }
+    /// The bucket and share `caller`'s requests are charged to, which is what a parked call is
+    /// charged to: [`Minted::key`] and [`Minted::share`] (servers/serving.md R26).
+    pub fn charge_of(&self, caller: &Caller) -> (AdmitKey, u64) {
+        (self.minted.key(caller), self.share(caller))
+    }
 
     /// Handles one call and replies to it: 9P, or `ninep_common`; any other opcode is malformed.
     pub fn serve(&mut self, request: Request) -> Result<(), Error> {
-        self.serve_with(request, |_, request| {
-            finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
-                .map(|_| ())
-        })
+        self.serve_with(request, |_, request| refuse_malformed(request))
     }
 
     /// Handles one call and replies to it: 9P and `ninep_common` here, and a typed opcode above
@@ -472,10 +468,7 @@ impl<S: FileServer> NineServer<S> {
             None => Ok(()),
             // A server bug (a wait without `serve_parking`), answered rather than left
             // hanging: the caller gets a refusal instead of waiting for a reply that never comes.
-            Some(request) => {
-                finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
-                    .map(|_| ())
-            }
+            Some(request) => refuse_malformed(request),
         }
     }
 
@@ -635,7 +628,7 @@ impl<S: FileServer> NineServer<S> {
 
     /// The R-message for `body`; a reply's data borrows the server's scratch space.
     fn answer<'s>(&'s mut self, caller: &Caller, body: Body<'_>, room: usize) -> Result<Body<'s>, Held> {
-        let key = ConnKey::of(caller);
+        let key = self.conn_key(caller);
         match body {
             Body::Tversion { msize, version } => {
                 // A new session on this connection: every fid on it goes (intro(5), version).
@@ -773,6 +766,11 @@ impl<S: FileServer> NineServer<S> {
     /// itself, the share of the connection it minted it through.
     fn share(&self, caller: &Caller) -> u64 { self.minted.share(caller) }
 
+    /// Whose fids a request names: the badge it came through, in its caller's bucket.
+    fn conn_key(&self, caller: &Caller) -> ConnKey {
+        ConnKey { badge: caller.badge, client: self.minted.key(caller) }
+    }
+
     /// `new_connection`: mints a connection rooted at `root` below the caller's own root, asking
     /// the file server to grant it `quota` bytes. Returns the new handle, its id and its badge.
     fn new_connection(
@@ -783,7 +781,7 @@ impl<S: FileServer> NineServer<S> {
         kernel: &mut impl Minter,
     ) -> Result<(Handle, u64, u64), NineError> {
         // Admission first, so a client at its cap makes the server do no work for it.
-        let (client, share) = (AdmitKey::of(caller), self.share(caller));
+        let (client, share) = self.charge_of(caller);
         self.admission.admit(client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
         let made = self.make_connection(caller, root, quota, kernel, share);
         if made.is_err() {
@@ -832,7 +830,7 @@ impl<S: FileServer> NineServer<S> {
         root: (S::Node, Qid),
         kernel: &mut impl Minter,
     ) -> Result<(Handle, u64, u64), NineError> {
-        let (client, share) = (AdmitKey::of(caller), self.share(caller));
+        let (client, share) = self.charge_of(caller);
         self.admission.admit(client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
         let made = self.mint_at(caller, root, 0, kernel, share);
         if made.is_err() {
@@ -913,7 +911,7 @@ impl<S: FileServer> NineServer<S> {
         names: &[&str],
         qids: &mut [Qid; MAXWELEM],
     ) -> Result<usize, NineError> {
-        let key = ConnKey::of(caller);
+        let key = self.conn_key(caller);
         let f = self.fid(&key, fid)?;
         if f.open.is_some() {
             return Err(NineError::IS_OPEN);
@@ -990,7 +988,7 @@ impl<S: FileServer> NineServer<S> {
         count: u32,
         room: usize,
     ) -> Result<usize, Held> {
-        let key = ConnKey::of(caller);
+        let key = self.conn_key(caller);
         let f = self.fid(&key, fid)?;
         if !f.open.is_some_and(|m| matches!(m & 3, mode::OREAD | mode::ORDWR | mode::OEXEC)) {
             return Err(NineError::NOT_OPEN.into());
@@ -1080,13 +1078,13 @@ impl<S: FileServer> NineServer<S> {
     /// The share a connection's fids are charged to: fixed when its table is made, so a fid is
     /// released from the share it was taken from.
     fn fid_share(&self, caller: &Caller) -> u64 {
-        self.conn(&ConnKey::of(caller)).map_or_else(|| self.share(caller), |i| self.conns[i].share)
+        self.conn(&self.conn_key(caller)).map_or_else(|| self.share(caller), |i| self.conns[i].share)
     }
 
     /// Checks that `fid` can be added to the connection and charges it to the client: all before
     /// the server does any work for it. Undone by `insert_fid` failing or `unreserve`.
     fn reserve_fid(&mut self, caller: &Caller, fid: u32) -> Result<(), NineError> {
-        let key = ConnKey::of(caller);
+        let key = self.conn_key(caller);
         if caller.badge >= FIRST_MINTED_BADGE && self.minted.get(caller.badge).is_none() {
             return Err(NineError::NO_CONNECTION);
         }
@@ -1102,7 +1100,7 @@ impl<S: FileServer> NineServer<S> {
 
     fn unreserve(&mut self, caller: &Caller) {
         let share = self.fid_share(caller);
-        self.admission.release(AdmitKey::of(caller), share, Resource::Files);
+        self.admission.release(self.minted.key(caller), share, Resource::Files);
     }
 
     fn unreserve_on_error<T>(
@@ -1118,7 +1116,7 @@ impl<S: FileServer> NineServer<S> {
 
     /// Adds a reserved fid; on failure (no memory) its reservation is released.
     fn insert_fid(&mut self, caller: &Caller, fid: u32, state: Fid<S::Node>) -> Result<(), NineError> {
-        let key = ConnKey::of(caller);
+        let key = self.conn_key(caller);
         let share = self.fid_share(caller);
         let conn = match self.conn(&key) {
             Some(conn) => Ok(conn),
@@ -1176,7 +1174,8 @@ impl<S: FileServer> NineServer<S> {
 /// with it: a read it asked to hold ([`Read::Wait`]) that it has no room to park. The
 /// T-message is still at the front of the lend, so the `Rerror` carries its tag and the client
 /// matches the reply to its request as usual; a lend too small even for that is answered with
-/// [`MALFORMED`], as a 9P call that cannot be answered in its buffer always is.
+/// [`MALFORMED`], as a 9P call that cannot be answered in its buffer always is. Any handle the
+/// call still carries is closed.
 pub fn refuse(mut request: Request, error: NineError) -> Result<(), Error> {
     let lend = request.lend();
     let room = lend.len().min(MSIZE);
@@ -1186,7 +1185,16 @@ pub fn refuse(mut request: Request, error: NineError) -> Result<(), Error> {
         Ok(_) => WORDS_9P,
         Err(_) => MALFORMED,
     };
-    finish(request, &Outcome { words, send: Handles::new(), close: Handles::new() }).map(|_| ())
+    let close = super::typed::carried(&request);
+    finish(request, &Outcome { words, send: Handles::new(), close }).map(|_| ())
+}
+
+/// Answers `request` as malformed and closes every handle it carried: what a server answers a
+/// typed opcode it does not serve. Never the raw [`Request::reply`], which would leave those
+/// handles open in this process with no owner, outside admission.
+pub fn refuse_malformed(request: Request) -> Result<(), Error> {
+    let close = super::typed::carried(&request);
+    finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close }).map(|_| ())
 }
 
 /// Refuses unknown mode bits, and anything but plain reading for a directory.

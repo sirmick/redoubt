@@ -24,6 +24,9 @@ use elf::segment::ProgramHeader;
 use redoubt_sys::{MemFlags, PAGE_SIZE};
 use redoubt_wire::proto::startup::Message;
 
+#[cfg(any(test, fuzzing))]
+pub mod fuzz;
+
 /// A generous but small bound on `e_phnum` (elf crate honours `PN_XNUM`, so an attacker can
 /// otherwise claim a program header count up to roughly `image_len / 56`, close to
 /// `MAX_IMAGE_LEN / 56`, about 9.5 million entries): `plan`'s segment-vs-segment overlap check is
@@ -478,6 +481,29 @@ mod tests {
         let exclude = [(0x1_0000, 0x1_1000)];
         let result = plan::<()>(&image, 0x2000_0000, &exclude, |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::Overlaps)));
+    }
+
+    #[test]
+    fn plan_refuses_a_segment_over_its_own_image() {
+        let code = [0u8; 4];
+        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64)]);
+        // The image's copy sits where the segment would land: mapping it would overwrite the
+        // bytes still being read. Nothing in `exclude` names it; `plan` must.
+        let result = plan::<()>(&image, 0x1_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::Overlaps)));
+    }
+
+    /// The fuzz campaign's kept corpus (`fuzz/seeds/plan`, minimised after an hour's run), rerun
+    /// with the target's own checks: a regression any of its inputs found fails here.
+    #[test]
+    fn the_fuzz_corpus_still_passes() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/seeds/plan");
+        let mut ran = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            fuzz::plan_one(&std::fs::read(entry.unwrap().path()).unwrap());
+            ran += 1;
+        }
+        assert!(ran >= 100, "the corpus is there: {ran} inputs");
     }
 
     #[test]

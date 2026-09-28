@@ -86,8 +86,8 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
                     let Ok(Some(held)) = nine.serve_parking(request, own) else { continue };
                     // Its deadline runs from now, not from before the receive that waited.
                     let now = handle::time_now().unwrap();
-                    let share = nine.share_of(&held.caller);
-                    if let Err(NotParked(r)) = parked.park(nine.admission_mut(), held, share, (), now) {
+                    let charge = nine.charge_of(&held.caller);
+                    if let Err(NotParked(r)) = parked.park(nine.admission_mut(), held, charge, (), now) {
                         refuse(r, NineError("too_many")).unwrap();
                     }
                 }

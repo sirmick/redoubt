@@ -10,7 +10,7 @@ mod common;
 mod vectors;
 
 use common::fake;
-use redoubt_consoled::server::{Console, LIMITS};
+use redoubt_consoled::server::{Console, limits};
 use redoubt_consoled::uart::Uart;
 use redoubt_rt::abi::Labels;
 use redoubt_rt::handle::Mmio;
@@ -35,7 +35,7 @@ fn the_conformance_vectors_run_against_consoled() {
     let mut server = f.as_process(pid, || {
         let uart = Uart::new(Mmio::from_handle(mmio).registers().unwrap()).unwrap();
         uart.init();
-        NineServer::new(Console::new(uart), LIMITS, 0x0fed_cba9_8765_4321).unwrap()
+        NineServer::new(Console::new(uart), limits(4), 0x0fed_cba9_8765_4321).unwrap()
     });
     // `init()` leaves the divisor latch's low byte in the transmit register; start from a clean
     // one so anything found there afterwards was printed by a vector.

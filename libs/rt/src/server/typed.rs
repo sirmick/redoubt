@@ -139,6 +139,14 @@ pub(crate) fn present(handles: &ReceivedHandles) -> Result<Handles, Handles> {
     if list.as_slice().len() == handles.as_slice().len() { Ok(list) } else { Err(list) }
 }
 
+/// The handles `request` still carries (a slot the kernel emptied has none): what a refusal
+/// closes.
+pub(crate) fn carried(request: &Request) -> Handles {
+    match present(&request.handles) {
+        Ok(handles) | Err(handles) => handles,
+    }
+}
+
 /// The outcome of a request; a buffer-shaped reply's fields are written into `buf`. Makes no
 /// system call: [`serve_call`] wraps it.
 pub fn answer<P: Protocol, S: TypedServer<P>>(

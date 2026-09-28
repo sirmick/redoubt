@@ -1,7 +1,7 @@
 #[path = "../../../libs/rt/tests/common/outcomes.rs"]
 mod seam;
 
-use redoubt_bootfsd::server::{BootFs, LIMITS};
+use redoubt_bootfsd::server::{BootFs, limits};
 use redoubt_rt::abi::*;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Event};
@@ -20,7 +20,7 @@ fn serving_connection_rolls_back_discard_missing_capability_and_error() {
         Ok(ReplyOutcome { delivered: true, installed: 1 }),
     ] {
         let mut server =
-            NineServer::new(BootFs::new(core::iter::empty()).unwrap(), LIMITS, 0x1234_5678).unwrap();
+            NineServer::new(BootFs::new(core::iter::empty()).unwrap(), limits(16), 0x1234_5678).unwrap();
         for _ in 0..20 {
             let mut buf = Buffer::new(1).unwrap();
             let words =
@@ -59,7 +59,8 @@ fn serving_connection_rolls_back_discard_missing_capability_and_error() {
         }
     }
 
-    let mut server = NineServer::new(BootFs::new(core::iter::empty()).unwrap(), LIMITS, 0x1234_5678).unwrap();
+    let mut server =
+        NineServer::new(BootFs::new(core::iter::empty()).unwrap(), limits(16), 0x1234_5678).unwrap();
     let mut buf = Buffer::new(1).unwrap();
     let words = Message::NewConnection(NewConnection { root: "", quota: 0 }).encode(&mut buf).unwrap();
     {

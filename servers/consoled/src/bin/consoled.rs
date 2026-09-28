@@ -24,15 +24,16 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use redoubt_consoled::server::{BUDGET, COST, Console, LIMITS};
+use redoubt_consoled::server::{BUDGET, COST, Console, limits};
 use redoubt_consoled::uart::Uart;
 use redoubt_rt::abi::{Error, FOREVER, Handle, MemFlags, PAGE_SIZE};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Event, Request};
-use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse};
+use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse, refuse_malformed};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::startup::Startup;
 
@@ -43,16 +44,16 @@ redoubt_rt::entry!(serve);
 pub const ENDPOINT: &str = "consoled";
 /// The names of the two device handles `init` puts in the startup block: the UART's registers
 /// and its interrupt (servers/init.md, "The boot manifest": the `devices` list and a server's
-/// device names). The interrupt's name departs from the `NAME-irq` rule
-/// (docs/todo/consoled-irq-name.md).
+/// device names): `NAME` and `NAME-irq` from one `devices` entry.
 pub const UART_MMIO: &str = "uart";
-pub const UART_IRQ: &str = "uart:irq";
+pub const UART_IRQ: &str = "uart-irq";
 
 /// The startup block named no endpoint to receive on.
 pub const NO_ENDPOINT: u32 = 2;
 /// `receive` failed for a reason other than the endpoint going away.
 pub const RECEIVE_FAILED: u32 = 3;
-/// The limits in this build do not fit the budget or the open-call headroom.
+/// No `buckets=N` in the arguments, or one whose buckets at their caps do not fit the budget or
+/// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
 /// The startup block named no UART, or `map_device` refused it, or the mapping is too short to
 /// be an ns16550. A console driver with no console does not start (TENETS.md 2, fail closed).
@@ -120,12 +121,10 @@ fn serve_or_park(
     now: u64,
 ) -> Result<(), Error> {
     // `consoled` serves no typed protocol of its own: only 9P and `ninep_common`.
-    let held = server.serve_parking(request, |_, request| {
-        request.reply(&redoubt_rt::server::MALFORMED, &[]).map(|_| ()).map_err(|(e, _)| e)
-    })?;
+    let held = server.serve_parking(request, |_, request| refuse_malformed(request))?;
     let Some(request) = held else { return Ok(()) };
-    let share = server.share_of(&request.caller);
-    match parked.park(server.admission_mut(), request, share, (), now) {
+    let charge = server.charge_of(&request.caller);
+    match parked.park(server.admission_mut(), request, charge, (), now) {
         Ok(()) => Ok(()),
         // The caller's bucket or share is full of waiting reads, or there is no memory for one
         // more: it is told so, rather than being left to wait on a call the server cannot hold.
@@ -157,11 +156,14 @@ pub fn serve(startup: &Startup) -> u32 {
         return NO_UART;
     };
     uart.init();
-    if !LIMITS.fits(&COST, BUDGET) {
+    let args: Vec<&str> = startup.args().collect();
+    let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_LIMITS };
+    let limits = limits(buckets);
+    if !limits.fits(&COST, BUDGET) {
         return BAD_LIMITS;
     }
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
-    let Ok(mut server) = NineServer::new(Console::new(uart), LIMITS, random) else { return BAD_LIMITS };
+    let Ok(mut server) = NineServer::new(Console::new(uart), limits, random) else { return BAD_LIMITS };
     // A console read waits on a person, so it has no deadline: what reclaims it is its caller
     // giving up, which arrives as an abandoned-call notice.
     let mut parked: Parked<()> = Parked::new(FOREVER);

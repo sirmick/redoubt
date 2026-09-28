@@ -30,7 +30,7 @@ use core::num::NonZeroU64;
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
 use redoubt_net_client::{REPORT, code, event};
 use redoubt_rt::abi::{
-    BudgetSpec, Cause, Error, ExitNotice, FOREVER, Handle, Labels, MemFlags, PAGE_SIZE, ResetKind,
+    BudgetSpec, Call, Cause, Error, ExitNotice, FOREVER, Handle, Labels, MemFlags, PAGE_SIZE, ResetKind,
 };
 use redoubt_rt::client::Client;
 use redoubt_rt::handle::{Budget, Endpoint, Irq, Mmio, Process, Registers, Reset};
@@ -286,7 +286,8 @@ impl Rig {
                     // Only virtio-mmio is DMA-capable (the loader's rule): one page tells.
                     let mmio = Mmio::from_handle(handle);
                     if let Ok((addr, _)) = mmio.dma_alloc(1) {
-                        let _ = redoubt_rt::handle::unmap(addr, PAGE_SIZE);
+                        // The probe's page has no owner in the runtime: freed by the raw call.
+                        let _ = redoubt_rt::abi::syscall(&Call::Unmap { addr, len: PAGE_SIZE });
                         virtio.push(handle);
                     }
                 }
@@ -337,16 +338,15 @@ impl Rig {
         let process = Process::create(&budget, &exit).map_err(at("process_create"))?;
         let rw = MemFlags::READ | MemFlags::WRITE;
         let place = |bytes: &[u8], dst: usize, flags: MemFlags| -> Result<(), Error> {
-            let len = bytes.len().max(1).next_multiple_of(PAGE_SIZE);
-            let scratch = redoubt_rt::handle::map_anon(len, rw)?;
-            copy_in(scratch, bytes);
-            process.map(scratch, dst, len, flags)
+            let mut pages = Buffer::new(bytes.len().max(1).div_ceil(PAGE_SIZE))?;
+            pages[..bytes.len()].copy_from_slice(bytes);
+            process.map(pages, dst, flags)
         };
         place(STUB, STUB_ENTRY, MemFlags::READ | MemFlags::EXECUTE).map_err(at("map the stub"))?;
         place(image, IMAGE_AT, rw).map_err(at("map the image"))?;
         let stack = STACK_PAGES * PAGE_SIZE;
-        let scratch = redoubt_rt::handle::map_anon(stack, rw).map_err(at("stack"))?;
-        process.map(scratch, STACK_TOP - stack, stack, rw).map_err(at("map the stack"))?;
+        let pages = Buffer::new(STACK_PAGES).map_err(at("stack"))?;
+        process.map(pages, STACK_TOP - stack, rw).map_err(at("map the stack"))?;
         let mut block = StartupBuilder::new(handles.len() as u32);
         block.image(IMAGE_AT, image.len());
         for (slot, (name, _)) in handles.iter().enumerate() {
@@ -753,11 +753,4 @@ fn read32(base: usize, len: usize, offset: usize) -> u32 {
     // it stays mapped for the life of the process; `offset + 4 <= len` is checked above, and
     // `offset` is a multiple of 4 on a page-aligned base.
     unsafe { ((base + offset) as *const u32).read_volatile() }
-}
-
-fn copy_in(dst: usize, src: &[u8]) {
-    // SAFETY: `dst` is the start of pages this process just mapped read-write with `map_anon`,
-    // at least `src.len()` bytes of them, and nothing else refers to them yet.
-    let to = unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, src.len()) };
-    to.copy_from_slice(src);
 }

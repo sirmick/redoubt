@@ -18,7 +18,7 @@ nothing more: it is not a signature oracle.
 
 ### Keys and purposes
 
-Status: built · partly tested: `keyd`'s host tests run in no bench case · tested: host:redoubt-keyd::arguments_become_keys_with_root_badges_in_order, host:redoubt-keyd::hostile_arguments_are_refused, host:redoubt-keyd::bad_key_arguments_stop_keyd_starting, host:redoubt-keyd::an_all_zero_seed_is_refused_rather_than_panicking, host:redoubt-keyd::two_keys_may_not_share_a_name_or_a_public_key, host:redoubt-keyd::there_is_a_bound_on_how_many_keys_there_are, host:redoubt-keyd::signatures_are_rfc_8032_ed25519, host:redoubt-keyd::hex_decoding_matches_the_obvious_decoder
+Status: built · tested: bench:r4-host-tests, host:redoubt-keyd::arguments_become_keys_with_root_badges_in_order, host:redoubt-keyd::hostile_arguments_are_refused, host:redoubt-keyd::bad_key_arguments_stop_keyd_starting, host:redoubt-keyd::an_all_zero_seed_is_refused_rather_than_panicking, host:redoubt-keyd::two_keys_may_not_share_a_name_or_a_public_key, host:redoubt-keyd::there_is_a_bound_on_how_many_keys_there_are, host:redoubt-keyd::signatures_are_rfc_8032_ed25519, host:redoubt-keyd::hex_decoding_matches_the_obvious_decoder
 
 `keyd` reads its keys from its startup block's arguments, one key per argument
 ([init](init.md#the-startup-block)), in the form `name,purpose,seed`:
@@ -43,7 +43,7 @@ gives each root badge the same meaning without keeping anything. Badges at or ab
 
 ### Messages
 
-Status: built · partly tested: `keyd`'s host tests run in no bench case · tested: host:redoubt-keyd::a_signature_round_trips_over_the_real_ipc_path, host:redoubt-keyd::the_host_key_comes_from_keyd, host:redoubt-keyd::public_key_and_holds_answer_for_the_key_the_badge_names, host:redoubt-keyd::holds_answers_only_about_keys_that_are_here, host:redoubt-keyd::a_badge_signs_only_its_own_key_and_only_its_own_purpose, host:redoubt-keyd::the_preimage_is_the_rfc_4253_transcript, host:redoubt-keyd::the_hash_matches_an_independent_implementation, host:redoubt-keyd::parts_cannot_be_slid_into_each_other, host:redoubt-keyd::a_transcript_no_exchange_could_make_is_refused, host:redoubt-keyd::a_relayed_ssh_user_auth_blob_is_never_what_gets_signed, host:redoubt-keyd::fips_180_4_vectors, host:redoubt-keyd::chunking_never_changes_the_digest
+Status: built · tested: bench:r4-host-tests, host:redoubt-keyd::a_signature_round_trips_over_the_real_ipc_path, host:redoubt-keyd::the_host_key_comes_from_keyd, host:redoubt-keyd::public_key_and_holds_answer_for_the_key_the_badge_names, host:redoubt-keyd::holds_answers_only_about_keys_that_are_here, host:redoubt-keyd::a_badge_signs_only_its_own_key_and_only_its_own_purpose, host:redoubt-keyd::the_preimage_is_the_rfc_4253_transcript, host:redoubt-keyd::the_hash_matches_an_independent_implementation, host:redoubt-keyd::parts_cannot_be_slid_into_each_other, host:redoubt-keyd::a_transcript_no_exchange_could_make_is_refused, host:redoubt-keyd::a_relayed_ssh_user_auth_blob_is_never_what_gets_signed, host:redoubt-keyd::fips_180_4_vectors, host:redoubt-keyd::chunking_never_changes_the_digest
 
 `keyd` serves a typed protocol, not 9P: a file that answers `Tread` is the export it must not
 have, and it has nothing to name. Every request first resolves the caller's badge to one key and
@@ -73,7 +73,7 @@ The table: [libs/wire/tables/keyd.md](../../libs/wire/tables/keyd.md).
 
 ### Granting and releasing
 
-Status: built · partly tested: `keyd`'s host tests run in no bench case · tested: host:redoubt-keyd::a_launcher_grants_a_fresh_capability_and_releases_it, host:redoubt-keyd::a_granted_capability_cannot_grant_again, host:redoubt-keyd::a_granted_capability_names_the_same_key_and_dies_with_release, host:redoubt-keyd::release_zero_frees_everything_this_caller_granted, host:redoubt-keyd::a_grant_whose_reply_never_arrives_is_undone, host:redoubt-keyd::a_grant_that_fails_gives_its_admission_back, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error, host:redoubt-keyd::a_stale_grant_does_not_name_a_new_key_after_a_restart
+Status: built · tested: bench:r4-host-tests, host:redoubt-keyd::a_launcher_grants_a_fresh_capability_and_releases_it, host:redoubt-keyd::a_granted_capability_cannot_grant_again, host:redoubt-keyd::a_granted_capability_names_the_same_key_and_dies_with_release, host:redoubt-keyd::release_zero_frees_everything_this_caller_granted, host:redoubt-keyd::a_grant_whose_reply_never_arrives_is_undone, host:redoubt-keyd::a_grant_that_fails_gives_its_admission_back, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error, host:redoubt-keyd::a_stale_grant_does_not_name_a_new_key_after_a_restart
 
 `keyd`'s grants follow the typed pattern ([wire](wire.md#granting-and-releasing)), over the serving
 library's minted table ([minted connections](serving.md#minted-connections)):
@@ -95,15 +95,15 @@ library's minted table ([minted connections](serving.md#minted-connections)):
 
 ### Bounds and errors
 
-Status: built · partly tested: `keyd`'s host tests run in no bench case · tested: host:redoubt-keyd::one_requests_work_is_bounded, host:redoubt-keyd::a_flood_takes_only_the_flooders_share, host:redoubt-keyd::a_hostile_client_does_not_hurt_keyd_or_other_clients, host:redoubt-keyd::the_limits_are_sized_as_containment_says, host:redoubt-keyd::malformed_requests_are_refused_and_their_handles_closed, host:redoubt-keyd::a_one_way_message_is_dropped_and_its_handles_closed, host:redoubt-keyd::random_requests_never_panic, host:redoubt-keyd::a_labelled_caller_reads_but_does_not_sign
+Status: built · tested: bench:r4-host-tests, host:redoubt-keyd::one_requests_work_is_bounded, host:redoubt-keyd::a_flood_takes_only_the_flooders_share, host:redoubt-keyd::a_hostile_client_does_not_hurt_keyd_or_other_clients, host:redoubt-keyd::the_limits_are_sized_as_containment_says, host:redoubt-keyd::malformed_requests_are_refused_and_their_handles_closed, host:redoubt-keyd::a_one_way_message_is_dropped_and_its_handles_closed, host:redoubt-keyd::random_requests_never_panic, host:redoubt-keyd::a_labelled_caller_reads_but_does_not_sign
 
 - **One request's work is bounded:** each transcript part at most `MAX_PART` (16 KiB), a record at
   most `MAX_RECORD` (8 KiB); over it is `too_many`.
 - **Admission** counts the one thing a client can make `keyd` hold, its grants: at most 8 live
-  grants per (account, label set), across at most 16 of those at once (`LIMITS`), sized to fit
-  `keyd`'s 256 KiB budget ([R26 (admission fairness)](serving.md#r26-admission-fairness)). The
-  bucket count is compiled in, a departure from the rule that every shared server takes
-  `buckets=N` from the manifest ([init](init.md#the-boot-manifest)).
+  grants per (account, label set), across at most `buckets=N` of those at once, sized to fit
+  `keyd`'s 256 KiB budget ([R26 (admission fairness)](serving.md#r26-admission-fairness)); a
+  block with no `buckets=N`, or one the budget cannot hold, and `keyd` does not start
+  ([init](init.md#the-boot-manifest)).
   `keyd` parks no calls and keeps no other per-caller state, so a flood of signing requests grows
   it by nothing and is bounded by the kernel's fair waiting.
 - **The label check.** `keyd`'s keys carry no labels, so anyone may read a public key or ask
@@ -164,7 +164,7 @@ signs once per grant).
 
 ## Authority
 
-Status: built · partly tested: `keyd`'s host tests run in no bench case · tested: host:redoubt-keyd::nothing_in_the_protocol_returns_a_key, host:redoubt-keyd::no_request_can_put_a_key_into_keyd, host:redoubt-keyd::a_badge_signs_only_its_own_key_and_only_its_own_purpose
+Status: built · tested: bench:r4-host-tests, host:redoubt-keyd::nothing_in_the_protocol_returns_a_key, host:redoubt-keyd::no_request_can_put_a_key_into_keyd, host:redoubt-keyd::a_badge_signs_only_its_own_key_and_only_its_own_purpose
 
 - `keyd` holds its keys, its own endpoint and the handles it minted as grants. It makes no calls
   to any other server.
@@ -179,7 +179,7 @@ Status: built · partly tested: `keyd`'s host tests run in no bench case · test
 
 ### R43 (no export)
 
-Status: built · partly tested: `keyd`'s host tests run in no bench case · tested: host:redoubt-keyd::nothing_in_the_protocol_returns_a_key, host:redoubt-keyd::no_request_can_put_a_key_into_keyd, host:redoubt-keyd::random_requests_never_panic
+Status: built · tested: bench:r4-host-tests, host:redoubt-keyd::nothing_in_the_protocol_returns_a_key, host:redoubt-keyd::no_request_can_put_a_key_into_keyd, host:redoubt-keyd::random_requests_never_panic
 
 No message of `keyd`'s protocol returns a private key or a function of one other than a
 signature, and none adds, replaces or removes a key. A caller cannot ask for what the protocol
@@ -187,7 +187,7 @@ cannot say, so the only way a key leaves `keyd` is a bug in `keyd` itself.
 
 ### R44 (one key, one purpose, keyd's own digest)
 
-Status: built · partly tested: `keyd`'s host tests run in no bench case · tested: host:redoubt-keyd::a_badge_signs_only_its_own_key_and_only_its_own_purpose, host:redoubt-keyd::a_relayed_ssh_user_auth_blob_is_never_what_gets_signed, host:redoubt-keyd::parts_cannot_be_slid_into_each_other, host:redoubt-keyd::the_hash_matches_an_independent_implementation, host:redoubt-keyd::a_granted_capability_names_the_same_key_and_dies_with_release
+Status: built · tested: bench:r4-host-tests, host:redoubt-keyd::a_badge_signs_only_its_own_key_and_only_its_own_purpose, host:redoubt-keyd::a_relayed_ssh_user_auth_blob_is_never_what_gets_signed, host:redoubt-keyd::parts_cannot_be_slid_into_each_other, host:redoubt-keyd::the_hash_matches_an_independent_implementation, host:redoubt-keyd::a_granted_capability_names_the_same_key_and_dies_with_release
 
 A badge names one key and one purpose. Under the purposes `keyd` holds, `ssh_host` and `audit`,
 every signature is over exactly 32 bytes, a digest `keyd` computed itself: an SSH exchange hash
@@ -209,7 +209,7 @@ of one signature; the claim itself rests on reading the code.
 
 ## Failure and restart
 
-Status: built · partly tested: `keyd`'s host tests run in no bench case · tested: host:redoubt-keyd::bad_key_arguments_stop_keyd_starting, host:redoubt-keyd::a_stale_grant_does_not_name_a_new_key_after_a_restart, host:redoubt-keyd::release_zero_frees_everything_this_caller_granted
+Status: built · tested: bench:r4-host-tests, host:redoubt-keyd::bad_key_arguments_stop_keyd_starting, host:redoubt-keyd::a_stale_grant_does_not_name_a_new_key_after_a_restart, host:redoubt-keyd::release_zero_frees_everything_this_caller_granted
 
 - **A bad key argument** stops `keyd` before it serves anything, loudly.
 - **`keyd` restarts:** root badges mean the same keys again; every grant from before the restart
@@ -230,11 +230,8 @@ Status: built · partly tested: `keyd`'s host tests run in no bench case · test
   while keys are unlabelled; with labelled keys it needs a per-key check.
 - **An `ssh_host` badge speaks as the box.** Its holder can complete a key exchange as the box with
   any peer, for as long as it holds the badge.
-- **Its bucket count is compiled in,** so the manifest cannot size it. Follow-up:
-  [todo](../todo/server-bucket-counts.md).
 - **`keyd` does not boot in the bench.** Its behaviour is attacked by host tests against the
-  runtime's fake kernel; `keyd-build` only builds it for both widths, and no bench case runs its
-  host tests. Follow-up: [todo](../todo/host-tests-in-bench.md).
+  runtime's fake kernel (`r4-host-tests`); `keyd-build` only builds it for both widths.
 
 ## Why
 

@@ -27,7 +27,7 @@ use redoubt_rt::server::minted::{Kernel, Minter};
 use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::server::typed::{Outcome, finish};
-use redoubt_rt::server::{AdmitKey, MALFORMED, Resource};
+use redoubt_rt::server::{MALFORMED, Resource};
 use redoubt_rt::wire::proto::ipd::{ErrorCode, GrantReply, Message, Reply};
 use redoubt_rt::wire::typed::error_reply;
 
@@ -57,10 +57,11 @@ pub fn open_sockets<N: Netif, E: Entropy>(
     caller: &Caller,
     words: &Words,
 ) {
+    let (key, share) = nine.charge_of(caller);
+    nine.fs.charge = Some(key);
     if *words != WORDS_9P {
         return;
     }
-    let (key, share) = (AdmitKey::of(caller), nine.share_of(caller));
     let mut left = 0;
     while left < SOCKETS_PER_REQUEST && nine.admission_mut().admit(key, share, Resource::State).is_ok() {
         left += 1;
@@ -70,6 +71,7 @@ pub fn open_sockets<N: Netif, E: Entropy>(
 
 /// After a request: gives back what its reservation did not spend.
 pub fn close_sockets<N: Netif, E: Entropy>(nine: &mut NineServer<NetFs<N, E>>) {
+    nine.fs.charge = None;
     if let Some(room) = nine.fs.stack.close_room() {
         for _ in 0..room.left {
             nine.admission_mut().release(room.key, room.share, Resource::State);
@@ -185,11 +187,12 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
             self.current = None;
             return;
         };
-        let share = self.nine.share_of(&request.caller);
+        let charge = self.nine.charge_of(&request.caller);
         let table = if what == WaitFor::Ctl { &mut self.ctl_parked } else { &mut self.data_parked };
         let waiting = Waiting { owner, n, what };
         self.parked_last = Some(waiting);
-        if let Err(NotParked(request)) = table.park(self.nine.admission_mut(), request, share, waiting, now) {
+        if let Err(NotParked(request)) = table.park(self.nine.admission_mut(), request, charge, waiting, now)
+        {
             // Its bucket's parked calls are at their cap: answered now, with the socket's
             // `too_many`, rather than held.
             let _ = refuse(request, NineError("too_many"));

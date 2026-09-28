@@ -16,7 +16,9 @@ pub mod ninep;
 pub mod parked;
 pub mod typed;
 
-pub use admit::{Admission, AdmitKey, Cost, Limits, Override, Refused, Resource, Unsized};
+pub use admit::{
+    Admission, AdmitKey, Cost, Limits, MAX_BUCKETS, Override, Refused, Resource, Unsized, buckets, own_args,
+};
 
 /// The reply words of a malformed request, in 9P calls and every typed protocol alike: status 1,
 /// `Malformed` (servers/wire.md), which the wire generator reserves in every error table.

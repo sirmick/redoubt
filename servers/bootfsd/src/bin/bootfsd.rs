@@ -9,11 +9,14 @@
 
 extern crate alloc;
 
-use redoubt_bootfsd::server::{BUDGET, BootFs, Bootfs, COST, LIMITS};
+use alloc::vec::Vec;
+
+use redoubt_bootfsd::server::{BUDGET, BootFs, Bootfs, COST, limits};
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Event;
 use redoubt_rt::server::ninep::NineServer;
+use redoubt_rt::server::own_args;
 use redoubt_rt::server::typed::serve_call;
 use redoubt_rt::startup::Startup;
 
@@ -23,8 +26,8 @@ redoubt_rt::entry!(serve);
 pub const NO_ENDPOINT: u32 = 2;
 /// `receive` failed for a reason other than the endpoint going away.
 pub const RECEIVE_FAILED: u32 = 3;
-/// The limits in this build do not fit the budget or the open-call headroom: a build-time
-/// mistake, caught at the only moment it can be.
+/// No `buckets=N` in the arguments, or one whose buckets at their caps do not fit the budget or
+/// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
 /// The `public` list in the arguments was refused
 /// ([`redoubt_bootfsd::SetupError`]): too many names, a name that is not one path component, or
@@ -39,12 +42,15 @@ pub const NO_RANDOM: u32 = 6;
 pub fn serve(startup: &Startup) -> u32 {
     let Some(handle) = startup.handle("bootfsd") else { return NO_ENDPOINT };
     let endpoint = Endpoint::from_handle(handle);
-    let Ok(fs) = BootFs::new(startup.args()) else { return BAD_PUBLIC_LIST };
-    if !LIMITS.fits(&COST, BUDGET) {
+    let args: Vec<&str> = startup.args().collect();
+    let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_LIMITS };
+    let limits = limits(buckets);
+    let Ok(fs) = BootFs::new(own_args(&args)) else { return BAD_PUBLIC_LIST };
+    if !limits.fits(&COST, BUDGET) {
         return BAD_LIMITS;
     }
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
-    let Ok(mut server) = NineServer::new(fs, LIMITS, random) else { return BAD_LIMITS };
+    let Ok(mut server) = NineServer::new(fs, limits, random) else { return BAD_LIMITS };
     loop {
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {

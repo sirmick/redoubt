@@ -9,7 +9,7 @@ use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{self, Endpoint};
 use redoubt_rt::ipc::Event;
 use redoubt_rt::server::parked::Parked;
-use redoubt_rt::server::{Admission, Limits};
+use redoubt_rt::server::{Admission, AdmitKey, Limits};
 
 /// Opcodes of the test protocol: park me; wake one parked call; stop.
 const WAIT: u64 = 1;
@@ -38,7 +38,8 @@ fn serve(ep: Endpoint) -> (u32, u32) {
         match ep.receive(timeout, 0) {
             Ok(Event::Call(request)) if request.words[0] == WAIT => {
                 let badge = request.caller.badge;
-                if let Err(refused) = parked.park(&mut admission, request, badge, badge, now) {
+                let key = AdmitKey::of(&request.caller);
+                if let Err(refused) = parked.park(&mut admission, request, (key, badge), badge, now) {
                     refused.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                 }
             }
@@ -110,12 +111,19 @@ fn parked_calls_are_served_abandoned_and_expired() {
     let a_call = log[served].1;
     assert!(served < log.iter().position(|e| *e == ("reply", a_call)).unwrap());
 
-    // C gives up on its parked call: the server is told and replies at once, freeing it.
+    // C gives up on its parked call: the server is told and replies at once, freeing it, and
+    // closes the handles the call brought.
+    let handles_before = f.held(server).0;
     let gave_up = f.run(c, move || {
-        let r = Endpoint::from_handle(hc).call(&[WAIT, 0, 0, 0], &[], None, 100_000);
+        let carried = [Endpoint::create().unwrap().handle(), Endpoint::create().unwrap().handle()];
+        let r = Endpoint::from_handle(hc).call(&[WAIT, 0, 0, 0], &carried, None, 100_000);
         u32::from(r.status == Err(Error::Timeout))
     });
     assert_eq!(gave_up.join().unwrap(), 1);
+    while f.open_calls(server) != 0 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(f.held(server).0, handles_before, "the abandoned call's handles were closed");
     // D waits past the server's deadline: its call is answered with a timeout, under `serve`.
     let expired = f.run(d, move || {
         Endpoint::from_handle(hd).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[0]
@@ -149,7 +157,8 @@ fn parking_is_admitted_per_bucket_and_share() {
         while let Ok(event) = ep.receive(FOREVER, 0) {
             if let Event::Call(request) = event {
                 let now = handle::time_now().unwrap();
-                if let Err(back) = parked.park(&mut admission, request, 7, (), now) {
+                let key = AdmitKey::of(&request.caller);
+                if let Err(back) = parked.park(&mut admission, request, (key, 7), (), now) {
                     back.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                     refused += 1;
                     if refused == 1 {
@@ -213,7 +222,8 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
                     }
                 }
                 _ => {
-                    if let Err(back) = parked.park(&mut admission, request, share, (), now) {
+                    let key = AdmitKey::of(&request.caller);
+                    if let Err(back) = parked.park(&mut admission, request, (key, share), (), now) {
                         back.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                     }
                 }

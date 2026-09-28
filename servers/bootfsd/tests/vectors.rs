@@ -6,7 +6,7 @@
 #[path = "../../../libs/rt/tests/common/vectors.rs"]
 mod vectors;
 
-use redoubt_bootfsd::server::{BootFs, LIMITS};
+use redoubt_bootfsd::server::{BootFs, limits};
 use redoubt_rt::abi::Labels;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{FIRST_MINTED_BADGE, NineServer};
@@ -27,7 +27,7 @@ fn sealed() -> BootFs {
 
 #[test]
 fn the_conformance_vectors_run_against_bootfsd() {
-    let mut server = NineServer::new(sealed(), LIMITS, 0x1234_5678_9abc_def0).unwrap();
+    let mut server = NineServer::new(sealed(), limits(16), 0x1234_5678_9abc_def0).unwrap();
     // A client, with the badge a minted connection carries and an account of its own.
     let who =
         Caller { badge: FIRST_MINTED_BADGE + 7, account: 1001, labels: Labels::from_slice(&[]).unwrap() };
