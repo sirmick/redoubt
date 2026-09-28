@@ -69,7 +69,7 @@ extern "C" fn driver(arg: usize) -> ! {
     if arg != 0 && spawn::startup_byte(arg, 0) == 1 {
         // SAFETY: not sound, and that is the point: a store to address 0, which no process ever
         // has mapped, must trap, so that the kernel reports the driver `faulted`.
-        unsafe { (0usize as *mut u64).write_volatile(1) };
+        unsafe { (0usize as *mut usize).write_volatile(1) };
     }
     test_programs::park()
 }

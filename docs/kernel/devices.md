@@ -92,7 +92,7 @@ process only at its end.
 
 ### Reset before reuse
 
-Status: built · partly tested: that the reset precedes the pooling inside the kernel is attacked only in the model; the case runs only on rv64 · tested: bench:dma-reset-reuse, bench:dma-rules, host:redoubt-model::exit_pools_after_reset, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:DmaFreeBeforeReset, mutation:DmaResetClearsCoHolderReach
+Status: built · partly tested: that the reset precedes the pooling inside the kernel is attacked only in the model · tested: bench:dma-reset-reuse, bench:dma-rules, host:redoubt-model::exit_pools_after_reset, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:DmaFreeBeforeReset, mutation:DmaResetClearsCoHolderReach
 
 A DMA device may still hold the physical address of a run after the process that programmed it
 has died. So no DMA page goes back to the pool until every device that could hold its address has
@@ -135,7 +135,7 @@ stateDiagram-v2
 
 ### Quarantine
 
-Status: built · partly tested: the cases run only on rv64 · tested: bench:dma-reset-quarantine, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaQuarantineChargeDropped, mutation:DmaQuarantinedDeviceUsable
+Status: built · tested: bench:dma-reset-quarantine, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaQuarantineChargeDropped, mutation:DmaQuarantinedDeviceUsable
 
 When a device in the reset set does not confirm, every run the ending process held is
 **quarantined**, the runs through devices that did confirm included: their pages are never
@@ -346,8 +346,6 @@ Status: built · partly tested: destroying a device object's owner budget, and a
   status after `dma_alloc` has handed a frame to a new holder, so it shows the reset came before
   the new holder's use. That the reset strictly precedes the pooling rests on the kernel's own
   assertion and the model's I16 check.
-- **DMA reset and quarantine are attacked only on rv64.** On rv32 the test build that makes a
-  first reset fail is compiled, never run. Follow-up: [todo](../todo/dma-reset-rv32.md).
 - **Two halves of R5 are not attacked on QEMU.** Its 16550 console raises the controller once
   per byte, not from a held level, so a kernel that never masked a fired source passes
   `uart-irq`; and QEMU accepts a completion for a masked source, so the completion order cannot

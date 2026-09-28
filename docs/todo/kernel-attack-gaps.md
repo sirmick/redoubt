@@ -46,7 +46,7 @@ gap: the page's section, the claim, and what no case attacks.
 ### devices.md
 - Device objects: the one page a device object costs its owner is not measured; a DMA device past `MAX_DMA_DEVICES` (16) getting no object is not attacked.
 - `dma_alloc`: the `MAX_RUNS` (32) runs-per-device limit is not reached by a case.
-- Reset before reuse: that the reset precedes pooling inside the kernel is attacked only in the model; the reset and quarantine cases run only on rv64.
+- Reset before reuse: that the reset precedes pooling inside the kernel is attacked only in the model.
 - Devices handed to the first program: the loader's refusal of a device tree with no console, or a console with no interrupt, is not attacked.
 - R5 (interrupts): masking a fired source is attacked only in the model (QEMU's 16550 raises per byte); completing the claim before masking, and billing interrupt time to the IRQ object's owner, are not attacked.
 - R18 (device authority): the kernel's refusal of a malformed `Devs` entry and of a `Grnt` boot argument is not attacked.
@@ -111,7 +111,6 @@ gap: the page's section, the claim, and what no case attacks.
 - I12 (ids never reused): budget and message ids never reused: invisible to a process, model only; endpoint, device and process-object ids: nothing attacks them, not even the model (it checks budget ids only).
 - I13 (every blocking call returns by its timeout): timeouts on a multi-hart boot: `timeouts` has no `smp` key.
 - I16 (DMA pages reset before reuse): a live co-holder that still reaches a device reset at another holder's death: model only (`reset_at_one_death_does_not_cover_a_co_holder`).
-- I16: `dma-reset-reuse` and `dma-reset-quarantine` are rv64 only ([DMA reset on rv32](dma-reset-rv32.md)).
 - I1 (handles name live objects) and I10 (create-destroy leaves the parent unchanged): no mutation targets I1 alone; I10's `R10KeepCarvedLimits` is caught first by the per-step R6 recount, so `budget_lifecycle`'s own check may be doing no unique work. Not a gap in the kernel, a note on the model.
 
 ### model.md

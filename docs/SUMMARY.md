@@ -69,7 +69,6 @@
   - [Tests that behaved differently under load](todo/bench-load-flakes.md)
   - [The steward's decision wake on rv64](todo/sched-rv64-decision-wake.md)
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
-  - [DMA reset on rv32](todo/dma-reset-rv32.md)
   - [The kernel crate's host test target](todo/hosted-kernel-tests.md)
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)
   - [The raw system call beside the runtime](todo/raw-abi-syscall.md)
