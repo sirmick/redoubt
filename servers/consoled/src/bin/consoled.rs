@@ -43,10 +43,9 @@ redoubt_rt::entry!(serve);
 pub const ENDPOINT: &str = "consoled";
 /// The names of the two device handles `init` puts in the startup block: the UART's registers
 /// and its interrupt (servers/init.md, "The boot manifest": the `devices` list and a server's
-/// device names). The interrupt's name departs from the `NAME-irq` rule
-/// (docs/todo/consoled-irq-name.md).
+/// device names): `NAME` and `NAME-irq` from one `devices` entry.
 pub const UART_MMIO: &str = "uart";
-pub const UART_IRQ: &str = "uart:irq";
+pub const UART_IRQ: &str = "uart-irq";
 
 /// The startup block named no endpoint to receive on.
 pub const NO_ENDPOINT: u32 = 2;

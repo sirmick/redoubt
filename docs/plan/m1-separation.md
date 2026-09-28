@@ -118,7 +118,6 @@ page.
      [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
      trusted crates from growing unseen.
    - **Servers:** [compiled-in bucket counts](../todo/server-bucket-counts.md),
-     [consoled's interrupt name](../todo/consoled-irq-name.md),
      [host tests the bench does not run](../todo/host-tests-in-bench.md),
      [loader stub test coverage](../todo/loader-stub-coverage.md),
      [raw memory calls beside the runtime](../todo/raw-syscall-runtime-audit.md),

@@ -72,7 +72,6 @@
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
   - [Rescaling a carved-down lead](todo/carve-lead-rescale.md)
   - [Clearing SUM and MXR at entry](todo/clear-sum-at-entry.md)
-  - [consoled's interrupt name](todo/consoled-irq-name.md)
   - [Billing a deadline's destruction](todo/deadline-destroy-billing.md)
   - [Executable device and DMA pages](todo/device-mapping-exec.md)
   - [DMA reset on rv32](todo/dma-reset-rv32.md)

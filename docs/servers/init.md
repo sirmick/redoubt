@@ -47,8 +47,7 @@ and `init`'s only input. Its entries:
   and `NAME-irq` for the interrupt, whichever exist. Two entries for one device would let a
   manifest split it between two holders, and the interrupt's holder could then mask the other's
   device and time its activity. A device name is at most 60 bytes and may not end in `-irq`, so
-  `NAME-irq` never collides and fits the name rule. `consoled` departs from it: it takes
-  `uart:irq` ([todo](../todo/consoled-irq-name.md)).
+  `NAME-irq` never collides and fits the name rule; `consoled` takes `uart` and `uart-irq`.
 - **No server gets a budget handle.** A `servers` entry names the budget `init` creates for the
   server, never a handle to one; a manifest that grants a server a budget handle is refused
   ([R33 (no server holds a system budget)](#r33-no-server-holds-a-system-budget)).

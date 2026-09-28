@@ -90,8 +90,7 @@ holds the UART: two holders would both reach the registers, and two readers of o
 take half the line.
 
 The rule names the handles `NAME` and `NAME-irq` from one `devices` entry
-([init](init.md#the-boot-manifest)); `consoled` departs from it by taking `uart` and `uart:irq`
-([todo](../todo/consoled-irq-name.md)).
+([init](init.md#the-boot-manifest)); `consoled` takes `uart` and `uart-irq`.
 
 **Open:** none.
 
@@ -137,9 +136,8 @@ Status: built · partly tested: the restart claims are read from the code, not a
   admission slots until a key arrives or its caller gives up.
 - **Anyone with a connection reads the console.** What is typed on the physical console is visible to
   every holder of a `consoled` connection.
-- **The code departs from two rules.** Its bucket count is compiled in
-  ([todo](../todo/server-bucket-counts.md)); its interrupt handle is named `uart:irq`
-  ([todo](../todo/consoled-irq-name.md)).
+- **The code departs from a rule.** Its bucket count is compiled in
+  ([todo](../todo/server-bucket-counts.md)).
 - **`consoled` does not run in a boot.** The bench's console is an interim log server holding the
   same UART; the two must never run together.
 
