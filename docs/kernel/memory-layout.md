@@ -385,17 +385,15 @@ mapping, reservation or unmap overwrites it (I9 (pages W^X, zeroed, lends unmapp
 
 ### R24 (SUM and MXR clear)
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: no probe covers `MXR` (Residual risks); the firmware already enters S-mode with both bits clear, so no case shows the kernel's own clear doing work · tested: bench:sum-clear
 
-The kernel clears `sstatus.SUM` and `sstatus.MXR` at entry and never sets either. So S-mode
-cannot load or store through a user mapping, and a stray kernel dereference of a user address
-faults. `MXR` is included because with it set, kernel loads could read pages that are
-execute-only. The kernel reaches user memory only by walking the caller's tables and copying
-through the physmap, so no path needs either bit. A boot assertion checks both are clear, and a
-kernel test shows a kernel load through a user address faults
-([todo](../todo/clear-sum-at-entry.md)).
-
-**Open:** none.
+The kernel clears `sstatus.SUM` and `sstatus.MXR` at entry, in `_start` before any Rust runs,
+and never sets either. So S-mode cannot load or store through a user mapping, and a stray kernel
+dereference of a user address faults. `MXR` is included because with it set, kernel loads could
+read pages that are execute-only. The kernel reaches user memory only by walking the caller's
+tables and copying through the physmap, so no path needs either bit. A boot assertion checks
+both are clear. A test build (`sum-probe`) loads the first caller's `ecall` straight through its
+user address, and the load faults as a kernel failure.
 
 ## Residual risks
 
@@ -415,11 +413,9 @@ kernel test shows a kernel load through a user address faults
   and a thread's return to `EXIT_THREAD` are both instruction page faults the kernel must take.
   The vendored RustSBI delegates them; with a firmware that did not, the boot would never reach
   the kernel. The firmware is in the TCB ([boot](boot.md)).
-- **`SUM` and `MXR` are clear by default, not by the kernel's hand.** The kernel never writes
-  `sstatus.SUM` or `sstatus.MXR`: it relies on the firmware entering S-mode with both clear, which
-  [R24](#r24-sum-and-mxr-clear) says the kernel does itself. With `SUM` set, a kernel bug that
-  dereferenced a user address would read the process's memory instead of faulting. Follow-up:
-  [todo](../todo/clear-sum-at-entry.md).
+- **No probe covers `MXR`.** The `sum-clear` probe loads from a readable user page, so it shows
+  `SUM` is clear, not `MXR`: a set `MXR` would let a kernel load read an execute-only page, and
+  only the boot assertion would notice ([R24](#r24-sum-and-mxr-clear)).
 - **No guard gap between a segment and the stack.** The stub checks segments against the stub,
   the startup block and the image, not against the stack, and the kernel refuses only an
   overlap. A launcher that puts the stack inside the link range can get a child whose data ends

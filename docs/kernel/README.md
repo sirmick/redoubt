@@ -228,7 +228,7 @@ two, where a file serves two mechanisms).
   handler's own `println!` while the first write still holds the console; the handler then powers
   off. Follow-up: [todo](../todo/print-panic-reentry.md).
 - **Test builds carry more.** The kernel source has features only some bench cases turn on:
-  `sched-trace`, `dma-reset-deaf` and `smp`, and `sched-inject-tie-fault` for a recorded negative
+  `sched-trace`, `dma-reset-deaf`, `sum-probe` and `smp`, and `sched-inject-tie-fault` for a recorded negative
   run. A production build leaves them off
   ([R23 (no test channels)](scheduling.md#r23-no-test-channels)); a kernel built with them is
   not the kernel this page measures.

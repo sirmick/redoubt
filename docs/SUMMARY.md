@@ -70,7 +70,6 @@
   - [The steward's decision wake on rv64](todo/sched-rv64-decision-wake.md)
   - [The boot hart's interrupt context](todo/boot-hart-context.md)
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
-  - [Clearing SUM and MXR at entry](todo/clear-sum-at-entry.md)
   - [DMA reset on rv32](todo/dma-reset-rv32.md)
   - [The kernel crate's host test target](todo/hosted-kernel-tests.md)
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)

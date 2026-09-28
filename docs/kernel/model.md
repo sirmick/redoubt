@@ -475,7 +475,7 @@ Replay is what turns the model from a reference into evidence about the kernel.
   declassification, by design), ending a vault session, and server crashes. A leak through crash
   blame or a session's end is not checked by it.
 - **Rules outside the model** (R15, R16, R17, R19, R23, R24) have no model check at all; their
-  boot cases are their only attack, and R24, which is planned, has none yet.
+  boot cases are their only attack.
 
 ## Why
 

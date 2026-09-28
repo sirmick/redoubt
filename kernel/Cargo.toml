@@ -29,6 +29,9 @@ sched-inject-tie-fault = ["sched-trace"]
 # Test builds only: each DMA device's first reset reports "not confirmed" after the
 # real write, so the quarantine path runs. It only ever adds quarantine.
 dma-reset-deaf = []
+# Test builds only: at the first system call the kernel loads the caller's `ecall` straight
+# through the user mapping, which must fault (R24).
+sum-probe = []
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in docs/kernel/boot.md.
