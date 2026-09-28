@@ -2,7 +2,7 @@
 
 ## What
 
-Three runs misbehaved under heavy load and were not all explained:
+Four runs misbehaved under heavy load and were not all explained:
 - a full run of the fuzz and host tests looked load-sensitive, in a change that touched none of
   the code those tests cover;
 - `libs/rt/tests/parked.rs` stopped making progress at 0% CPU under six parallel heavy test
@@ -14,7 +14,10 @@ Three runs misbehaved under heavy load and were not all explained:
 - a combined bench run killed at its timeout, right after a run with its own `timeout` wrapper,
   seemed to leave an orphaned test process. It did not happen again in four clean runs. QEMU now
   ends with the bench that started it, however the bench ends
-  ([what a case passes on](../testbench.md#what-a-case-passes-on)).
+  ([what a case passes on](../testbench.md#what-a-case-passes-on));
+- a whole-bench run, while another package ran its own cases on the same machine, failed
+  `dma-reset-quarantine` on rv64 with `the checker did not report`. Five reruns on a quiet
+  machine passed.
 
 ## Why it matters
 
