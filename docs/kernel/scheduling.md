@@ -134,7 +134,8 @@ t = rem + ticks x STRIDE;   pass += t / w;   rem = t mod w      (w: the free wei
 - **One fold counts at most `RUNTIME_CAP`** (2^40 ticks), so the product fits 64 bits on rv32 and
   rv64 alike. The pass is a 128-bit number that is only added to and compared, so it never wraps.
 - **A weight change** (a carve, or a carve returned) folds first, so runtime is charged at the
-  weight it ran at, and then rescales the remainder, losing under one pass unit.
+  weight it ran at, and then rescales what the budget owes to the new weight
+  ([the lead follows the weight](#the-lead-follows-the-weight)).
 
 Kernel time is billed as well:
 - a system call's time is its caller's;
@@ -195,18 +196,46 @@ run between, leaves the victim neither more nor less than half.
 
 ### Running while carved down
 
-Status: built · tested: bench:sched-carve-inflation, bench:sched-budget-churn, bench:sched-destroy-billing, host:redoubt-stride::a_rescale_loses_under_one_unit, mutation:R12StrideWeightIsLimit, mutation:R12FoldAtNewWeight
+Status: built · partly tested: one breach is stated and not yet closed: a weight change rescales only the remainder, so a lead accrued while carved down is not rescaled when the weight returns, which over-charges the budget that carved (the lead follows the weight, planned) · tested: bench:sched-carve-inflation, bench:sched-budget-churn, bench:sched-destroy-billing, host:redoubt-stride::a_rescale_loses_under_one_unit, mutation:R12StrideWeightIsLimit, mutation:R12FoldAtNewWeight
 
 A budget that runs while most of its weight is carved away accrues its lead at the small weight
-it kept. That lead is not rescaled when the weight comes back. A destroyed child's work is lifted
-at the child's weight at its destruction, whatever the child kept while it ran. Both only
-over-charge the budget that carved; neither under-charges, so no share is gained by carving. In
+it kept, and owes that runtime at whatever weight it has later
+([the lead follows the weight](#the-lead-follows-the-weight)). A destroyed child's work is lifted
+at the child's weight at its destruction, whatever the child kept while it ran. That only
+over-charges the budget that carved; it never under-charges, so no share is gained by carving. In
 `bench:sched-carve-inflation` a spinning budget that carves spinning children, one deep and four
 deep, gets at most half against an equal victim.
 
 A budget that holds a process keeps free weight above 0. A carve that would take its last free
 weight gets `InvalidArgument`, and so does `process_create` into a budget whose weight is all
 carved ([R7](budgets.md#r7-carving)).
+
+### The lead follows the weight
+
+Status: planned · M1 (separation and containment)
+
+What a budget owes is runtime, and a weight change keeps it exactly. Every weight change, a
+carve and a carve returned alike, folds at the old weight and then converts the budget's lead
+and remainder to the new weight, the same way a lift converts a child's work:
+
+```
+W = (pass - floor)+ x w_old + rem
+pass = floor + W / w_new;   rem = W mod w_new
+```
+
+So a carve raises the lead by the ratio of the weights and its return lowers it by the same
+ratio, and a carve returned with no run between leaves the budget where it was. Both directions
+are needed: rescaling only on a return would let a budget carve just before a burst and return
+just after, and its lead would shrink at the return without having grown at the carve. A budget
+at or below the floor owes only its remainder, and waking would lift it to the floor anyway. At a
+destruction the carve returns first, so the parent's lead is converted before the child's work
+is lifted onto it at the parent's restored weight ([inheritance](#inheritance)).
+
+The crate, the model and the oracle convert alike. A host test checks that a carve and its return
+leave pass and remainder unchanged, and a bench case has a budget carve most of its weight away
+while it runs, then return it, and get its share back against an equal victim.
+
+**Open:** none.
 
 ### Responsiveness
 
@@ -397,17 +426,12 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   `budget_create`. The 64 staggered weight-0 deadlines of `bench:sched-timer-flood` leave the
   victim its half; larger floods are not attacked. Follow-up:
   [todo](../todo/deadline-destroy-billing.md).
-- **Carving while running over-charges.** A budget's lead accrued while carved down is never
-  rescaled when its weight returns. That is never a gain, but an honest shell or steward that
-  carves heavily while running can be held off the CPU well past its restored share. A rescale
-  (the lead times the weight it ran at, over the weight restored) waits for real carve patterns. Follow-up:
-  [todo](../todo/carve-lead-rescale.md).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
   decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to
   spinners still at the floor and waits out the round; `bench:sched-debt-lift` bounds a sibling's
   first run at (runnable budgets + 2) slices. Rounding loses under one pass unit per destroyed
-  budget and per weight change, and the loss falls on the budget that churns.
+  budget, and the loss falls on the budget that churns.
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).
