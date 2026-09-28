@@ -110,7 +110,6 @@ page.
      [a notice lost to a bad receive record](../todo/receive-output-late-invalid.md).
    - **The bench and its tools**, with the kernel package:
      [tests that behaved differently under load](../todo/bench-load-flakes.md),
-     [the test programs' build inputs](../todo/programs-build-rerun.md),
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
      [the write-only mutation](../todo/write-only-mutation-split.md),
      [the vendored crates under Miri](../todo/miri-vendored-unsafe.md),

@@ -90,7 +90,6 @@
   - [PID pool pinning](todo/pid-pool-pinning.md)
   - [The kernel's print on a panic](todo/print-panic-reentry.md)
   - [process_map's flag order](todo/process-map-flag-order.md)
-  - [The test programs' build inputs](todo/programs-build-rerun.md)
   - [The raw system call beside the runtime](todo/raw-abi-syscall.md)
   - [Starting a thread from safe code](todo/raw-thread-create.md)
   - [A notice lost to a bad receive record](todo/receive-output-late-invalid.md)

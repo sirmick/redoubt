@@ -270,6 +270,32 @@ fn append<W: std::io::Write>(archive: &mut tar::Builder<W>, name: &str, data: &[
 mod tests {
     use super::*;
 
+    /// The test programs embed a stub their build script builds; the script must rerun when
+    /// anything that build reads changes, the manifests and the lock file included, or a bench
+    /// run tests a stub built from other inputs than the tree names.
+    #[test]
+    fn the_test_programs_rebuild_their_stub_on_every_input() {
+        let script = include_str!("../../../tests/programs/build.rs");
+        for input in [
+            "stub/src",
+            "stub/link.x",
+            "stub/build.rs",
+            "stub/Cargo.toml",
+            "libs/sys/src",
+            "libs/sys/Cargo.toml",
+            "libs/wire/src",
+            "libs/wire/Cargo.toml",
+            "Cargo.toml",
+            "Cargo.lock",
+        ] {
+            assert!(
+                script.contains(&format!("\"{input}\"")),
+                "tests/programs/build.rs does not watch {input}"
+            );
+        }
+        assert!(script.contains("cargo:rerun-if-changed={}\", workspace.join(input)"));
+    }
+
     /// The archive these tests sign: any fixed bytes will do, since the loader is handed
     /// whatever the container holds.
     const ARCHIVE: &[u8] = b"not really a tar, but signed the same way";

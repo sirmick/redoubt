@@ -485,8 +485,7 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   so it is run by hand.
 - **On target, the kernel's refusal hides the stub's overlap checks.** Dropping one still ends
   in exit 111, because `map_fixed` never replaces a mapping; only the host tests pin the stub's
-  own. The bench's stub is not rebuilt when a dependency's manifest or the lock file changes:
-  [todo](../todo/programs-build-rerun.md).
+  own.
 - **A restart loop reboots the machine.** A client that can crash a server repeatedly without
   being blamed (a bug the blame rule does not reach) can reboot the box.
 
