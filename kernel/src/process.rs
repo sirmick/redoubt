@@ -377,10 +377,13 @@ pub fn process_map(
         return Err(Error::OutOfMemory);
     }
     // From here nothing fails: every page was counted just above and every address was free.
+    let free_before = mm.free_pages(budget);
     for i in 0..pages {
         crate::arch::mem::prepare_map(mm, &space, child, dst + i * page_size)
             .expect("process_map: the page tables were counted and charged for just above");
     }
+    // The count the charge check trusted is the count `prepare_map` made (a checked build).
+    debug_assert_eq!(free_before - mm.free_pages(budget), tables, "process_map: tables_needed miscounted");
     for i in 0..pages {
         let phys = crate::arch::mem::unmap_page_inner(mm, src + i * page_size)
             .expect("process_map: a checked range unmaps");
@@ -388,6 +391,8 @@ pub fn process_map(
             .expect("process_map: prepared just above");
         mm.move_frame(phys, pid, child).expect("process_map: the pages were charged above");
     }
+    // The source's tables that now map nothing are the caller's to be freed of.
+    crate::arch::mem::free_empty_tables(mm, &crate::mem::MemoryMapping::current(), src, src + len);
     // The caller wrote these pages; the child may fetch from them (on this hart, the only one).
     crate::mem::sync_if_executable(flags);
     Ok(())

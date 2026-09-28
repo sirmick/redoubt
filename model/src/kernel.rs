@@ -1084,10 +1084,11 @@ impl Kernel {
         let p = self.processes.get_mut(&pid)?;
         let m = p.space.remove(&v)?;
         let mut freed = 0;
+        let keep = self.mutation == Some(Mutation::R6EmptyTableKept);
         for k in table_keys(v) {
             let n = p.tables.get_mut(&k).unwrap();
             *n -= 1;
-            if *n == 0 {
+            if *n == 0 && !keep {
                 p.tables.remove(&k);
                 freed += pt;
             }
@@ -2551,13 +2552,13 @@ impl Kernel {
     pub fn map_fixed(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, false)?;
         let (first, n) = user_range(addr, len)?;
-        if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
-            return Err(Error::InvalidArgument);
-        }
         check_flags(flags, false)?;
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
         if n > self.free_pages(b) {
             return Err(Error::OutOfMemory);
+        }
+        if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
+            return Err(Error::InvalidArgument);
         }
         let tables = self.tables_needed(pid, first..first + n);
         self.charge(b, n.checked_add(tables).ok_or(Error::OutOfMemory)?)?;

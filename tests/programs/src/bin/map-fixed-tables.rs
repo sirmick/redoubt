@@ -1,18 +1,20 @@
-//! Regression case for `tables_needed` across gigabytes (R22; kernel/memory.md, `map_fixed`).
+//! `tables_needed` across gigabytes (R22; kernel/memory.md, `map_fixed`).
 //!
 //! `tables_needed` (kernel/src/arch/riscv/mem.rs) once deduplicated missing tables by their
 //! index in their parent table. On Sv39 a level-1 index recurs in every gigabyte, so two missing
 //! level-0 tables at index 0 of consecutive gigabytes, with every table between them present,
-//! were counted as one. `map_fixed`'s charge check then let through a request one page table
-//! short, and the mapping loop's `alloc_page` `.expect` panicked the kernel. The model's
-//! `table_keys` was always right, so only a boot case can catch a regression.
+//! were counted as one, and the mapping loop's `alloc_page` `.expect` panicked the kernel. Now
+//! that a table mapping nothing is freed (kernel/memory.md, "Page tables"), no table is ever
+//! present inside a free range, so that shape cannot be built from userspace any more. What
+//! stays is the exact count across the boundary, and the setup shows `unmap` freeing tables.
 //!
-//! The range is `[3 GiB + 2 MiB - rd::PAGE_SIZE, 4 GiB + rd::PAGE_SIZE)`: 261634 pages, which need exactly
-//! the two missing level-0 tables at index 0 of gigabytes 3 and 4. With `free == pages + 1` the pages
-//! check passes and the page-tables check must refuse: OutOfMemory, nothing charged. Only this
-//! tight half runs. The exact half (`free == pages + 2` succeeds) zeroes 1 GiB, about a minute
-//! under QEMU. `memory_mib = 4608` because `system` gets a quarter of RAM (budget.rs,
-//! `boot_budgets`) and must be able to afford the pages. The guest touches only ~130 MiB.
+//! The range is `[3 GiB + 2 MiB - rd::PAGE_SIZE, 4 GiB + rd::PAGE_SIZE)`: 261634 pages, which
+//! need 515 tables: gigabyte 3's level-1 table and its 512 level-0 tables, and gigabyte 4's
+//! level-1 table and its first level-0 table. With `free == pages + 514` the pages check passes
+//! and the page-tables check must refuse: OutOfMemory, nothing charged. Only this tight half
+//! runs. The exact half zeroes 1 GiB, about a minute under QEMU. `memory_mib = 4608` because
+//! `system` gets a quarter of RAM (budget.rs, `boot_budgets`) and must be able to afford the
+//! pages. The guest touches only ~130 MiB.
 #![no_std]
 #![no_main]
 
@@ -87,11 +89,9 @@ mod case {
     pub fn run(out: &mut MmioSerialPort) {
         const G3: usize = 0xC000_0000;
         const G4: usize = 0x1_0000_0000;
-        // Build every table between the two holes: the level-1 table of the gigabyte at 3 GiB and
-        // the level-0 tables of its blocks 1..=511, then the level-1 table of the gigabyte at
-        // 4 GiB and the level-0 table of its block 1. Map and unmap one page in
-        // each: the kernel keeps a table once it exists, so 514 tables stay charged. If it ever
-        // frees them, this check says so instead of the case silently testing nothing.
+        // The shape the old miscount needed: map one page in each of gigabyte 3's blocks
+        // 1..=511 and in gigabyte 4's block 1, which makes 514 tables, then unmap each. Every
+        // table goes with its page, so none is left inside the range below.
         let before = usage_pages();
         for block in 1..512 {
             rd::map_fixed(G3 + block * SPAN, rd::PAGE_SIZE, rd::rw()).expect("open a G3 table");
@@ -99,14 +99,15 @@ mod case {
         }
         rd::map_fixed(G4 + SPAN, rd::PAGE_SIZE, rd::rw()).expect("open a G4 table");
         rd::unmap(G4 + SPAN, rd::PAGE_SIZE).expect("unmap");
-        check(out, usage_pages() - before == 514, "setup left 514 page tables");
+        check(out, usage_pages() == before, "unmap freed every page table the setup made");
 
+        const TABLES: u64 = 515;
         let at = G3 + SPAN - rd::PAGE_SIZE;
         let pages = ((G4 + rd::PAGE_SIZE - at) / rd::PAGE_SIZE) as u64;
-        fill_to(pages + 1);
+        fill_to(pages + TABLES - 1);
         let before = usage_pages();
         let r = rd::map_fixed(at, pages as usize * rd::PAGE_SIZE, rd::rw());
-        check(out, r == Err(Error::OutOfMemory), "two missing tables a gigabyte apart are both counted");
+        check(out, r == Err(Error::OutOfMemory), "one page table short across two gigabytes is refused");
         check(out, usage_pages() == before, "nothing charged");
     }
 }

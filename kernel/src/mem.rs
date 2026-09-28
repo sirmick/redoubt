@@ -524,6 +524,15 @@ impl MemoryManager {
         self.release_page(phys as *mut usize, pid)
     }
 
+    /// Who owns RAM frame `phys` in the ownership table: the budget of that PID pays for it.
+    /// `None` for a free frame or one outside RAM.
+    pub fn ram_owner(&self, phys: usize) -> Option<Pid> {
+        if !self.is_main_memory(phys as *mut u8) {
+            return None;
+        }
+        self.allocations[(phys - self.ram_start) / PAGE_SIZE]
+    }
+
     /// Back every demand-paged page of `[address, address + len)` in the current address
     /// space, so that the range can be lent or moved. Callers hold the memory manager
     /// already, which is why the backing takes `self` instead of borrowing it again.
@@ -844,7 +853,9 @@ impl MemoryManager {
         Ok(at)
     }
 
-    /// Give back what a failed `map_run` had already mapped, and the pages it had allocated.
+    /// Give back what a failed `map_run` had already mapped, the pages it had allocated, and the
+    /// page tables it made, the failed page's included (`map_page_inner` may have made a table
+    /// before it ran out).
     fn undo_run(&mut self, pid: Pid, at: usize, done: usize, ours: bool) -> redoubt_sys::Error {
         for offset in (0..done).step_by(PAGE_SIZE) {
             if let Ok(frame) = crate::arch::mem::unmap_page_inner(self, at + offset) {
@@ -853,6 +864,8 @@ impl MemoryManager {
                 }
             }
         }
+        // One page past `done`: the failed page's table may exist though nothing in it is mapped.
+        crate::arch::mem::free_empty_tables(self, &MemoryMapping::current(), at, at + done + PAGE_SIZE);
         redoubt_sys::Error::OutOfMemory
     }
 
@@ -861,7 +874,8 @@ impl MemoryManager {
     /// caller's budget; a device's registers are not RAM and only lose their mapping -- the
     /// MMIO page-ownership table is left alone, as `map_device` left it alone (the handle, not
     /// a page owner, is the authority there). A `dma_alloc` frame only loses its mapping too: it
-    /// stays held, and charged, until the process ends (kernel/devices.md, `dma_alloc`).
+    /// stays held, and charged, until the process ends (kernel/devices.md, `dma_alloc`). A page
+    /// table the range leaves mapping nothing is freed, and uncharged, too.
     pub fn unmap(&mut self, pid: Pid, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
         let end = Self::user_range(addr, len)?;
         for page in (addr..end).step_by(PAGE_SIZE) {
@@ -873,6 +887,7 @@ impl MemoryManager {
                 self.release_page(phys as *mut usize, pid).ok();
             }
         }
+        crate::arch::mem::free_empty_tables(self, &MemoryMapping::current(), addr, end);
         Ok(())
     }
 
@@ -909,13 +924,14 @@ impl MemoryManager {
     /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr` (R11;
     /// kernel/memory.md, `map_fixed`) -- zeroed pages, charged to the caller's budget, that never
     /// replace a mapping. Checked in the order kernel/abi.md's row gives: the range
-    /// (`user_range`), then that range's overlap with any of the caller's mappings
-    /// (`range_available_in`, over the whole range before anything is charged or allocated --
-    /// `undo_run`'s rollback leaks page tables, so nothing here may need it), then the flags
-    /// (`check_map_flags`, shared with `process_map`, so W+X and W-without-R are refused here and
-    /// can never reach `map_page_inner`'s `.expect` below), then a charge check for the pages and
-    /// the page tables they need. Only once all of that holds does the guaranteed-success mapping
-    /// loop run, so a failure never leaves anything mapped or charged.
+    /// (`user_range`), then the flags (`check_map_flags`, shared with `process_map`, so W+X and
+    /// W-without-R are refused here and can never reach `map_page_inner`'s `.expect` below), then
+    /// the pages alone against the budget, by arithmetic, so a length no budget can pay for never
+    /// buys a walk (R22), then that range's overlap with any of the caller's mappings
+    /// (`range_available_in`, over the whole range before anything is charged or allocated, so
+    /// nothing here needs a rollback), then the pages and the page tables they need. Only once
+    /// all of that holds does the guaranteed-success mapping loop run, so a failure never leaves
+    /// anything mapped or charged.
     pub fn map_fixed(
         &mut self,
         pid: Pid,
@@ -925,19 +941,19 @@ impl MemoryManager {
     ) -> Result<(), redoubt_sys::Error> {
         let oom = redoubt_sys::Error::OutOfMemory;
         Self::user_range(addr, len)?;
-        let space = MemoryMapping::current();
-        if !crate::arch::mem::range_available_in(&space, addr, len) {
-            return Err(redoubt_sys::Error::InvalidArgument);
-        }
         check_map_flags(flags)?;
         let npages = (len / PAGE_SIZE) as u64;
         // `pid` is the running caller, and only the kernel (which makes no syscalls) has no
         // budget. Not an error: map_fixed's error set is InvalidArgument and OutOfMemory only.
         let budget = self.budget_of(pid).expect("map_fixed: the running process has a budget");
-        // "OutOfMemory (pages, then page tables)": the pages alone first, cheaply, so a huge
-        // `len` that the budget could never pay for is refused before `tables_needed` walks it.
+        // The pages alone first, cheaply, so a huge `len` that the budget could never pay for is
+        // refused before the overlap check or `tables_needed` walks it.
         if npages > self.free_pages(budget) {
             return Err(oom);
+        }
+        let space = MemoryMapping::current();
+        if !crate::arch::mem::range_available_in(&space, addr, len) {
+            return Err(redoubt_sys::Error::InvalidArgument);
         }
         let tables = crate::arch::mem::tables_needed(&space, addr, len / PAGE_SIZE) as u64;
         if npages + tables > self.free_pages(budget) {
@@ -946,10 +962,17 @@ impl MemoryManager {
         // From here nothing fails: the range was free, the flags are good, and the check above
         // found the budget able to pay for exactly this many pages and page tables, which
         // `alloc_page` charges as it takes them.
+        let free_before = self.free_pages(budget);
         for offset in (0..len).step_by(PAGE_SIZE) {
             crate::arch::mem::prepare_map(self, &space, pid, addr + offset)
                 .expect("map_fixed: range_available_in found this page empty, so prepare_map's own (weaker) occupancy check cannot fail, and the charge check above paid for its page table");
         }
+        // The count the charge check trusted is the count `prepare_map` made (a checked build).
+        debug_assert_eq!(
+            free_before - self.free_pages(budget),
+            tables,
+            "map_fixed: tables_needed miscounted"
+        );
         for offset in (0..len).step_by(PAGE_SIZE) {
             // Zeroed through the physmap, before the mapping exists at all (R11). The charge
             // check above guarantees the budget can pay for `npages` pages. That a free frame
@@ -959,7 +982,7 @@ impl MemoryManager {
             // nothing is held back. `process_map` relies on the same thing only
             // for page tables (its `prepare_map` `.expect`, which allocates through `walk`);
             // failing on data frames with `.expect` is new here. `map_run` instead treats a
-            // failed `alloc_page` as live and unwinds, which leaks page tables (see above).
+            // failed `alloc_page` as live and unwinds (`undo_run`).
             let frame = self.alloc_page(pid).expect("map_fixed: charged for above");
             crate::kframe::zero(frame);
             crate::arch::mem::map_page_inner(self, pid, frame, addr + offset, flags, true)

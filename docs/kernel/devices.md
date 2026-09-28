@@ -349,8 +349,6 @@ Status: built · partly tested: destroying a device object's owner budget, and a
   be told apart. The mask is attacked in the model; the order is argued from the code.
 - **An interrupt can be lost before the first `receive`:** seen once on QEMU, cause not found.
   Drivers drain their rings after every `receive`. Follow-up: [todo](../todo/irq-level-latch.md).
-- **Page tables stay after `unmap`.** The tables that mapped a device range or a run stay
-  charged to the process until it ends. Follow-up: [todo](../todo/page-table-freeing.md).
 - **An interrupt's kernel time is billed to the IRQ object's owner** (`system` at boot), not to
   the driver that holds the handle. Masking bounds it to one interrupt per `receive`, at the
   driver's pace.

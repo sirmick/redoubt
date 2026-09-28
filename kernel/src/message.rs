@@ -1264,6 +1264,12 @@ fn move_buffer(ss: &ProcessTable, mm: &mut MemoryManager, m: &Msg, spid: Pid, rp
             mm.move_frame(phys, spid, rpid).expect("R4: the pages were charged above");
         }
     }
+    // Only now, with every page mapped: a self-send's receiving tables are the sender's, and one
+    // prepared but not yet filled would look empty.
+    if m.kind == MsgKind::Send {
+        let end = m.buf_addr + m.buf_pages * PAGE_SIZE;
+        crate::arch::mem::free_empty_tables(mm, &sender_space, m.buf_addr, end);
+    }
 }
 
 /// Put a queued message's buffer back in its sender's address space.
@@ -1366,6 +1372,8 @@ fn return_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCall) {
         )
         .expect("an open call retains both aliases of its lend");
     }
+    let end = call.lend_server + call.lend_pages * PAGE_SIZE;
+    crate::arch::mem::free_empty_tables(mm, &server, call.lend_server, end);
 }
 
 /// The lend of an abandoned call: its pages are the server's alone, so replying frees them.
@@ -1379,6 +1387,8 @@ fn free_abandoned_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCal
             .expect("an abandoned call retains its protected borrower alias");
         mm.free_frame_of(phys, call.server.0).expect("an abandoned lend's frame remains owned by its server");
     }
+    let end = call.lend_server + call.lend_pages * PAGE_SIZE;
+    crate::arch::mem::free_empty_tables(mm, &space, call.lend_server, end);
 }
 
 /// Free an open call's page and the charges it carried (R4a).
@@ -1421,6 +1431,8 @@ fn abandon(ss: &ProcessTable, mm: &mut MemoryManager, frame: u32) {
                 .expect("R3: the receiver has paid for this lend since it took the call");
         }
     }
+    let end = call.lend_caller + call.lend_pages * PAGE_SIZE;
+    crate::arch::mem::free_empty_tables(mm, &space, call.lend_caller, end);
 }
 
 // --- Teardown: R4b, R10, and timeouts --------------------------------------------------------------

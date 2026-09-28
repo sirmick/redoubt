@@ -71,6 +71,8 @@ pub enum Mutation {
     R6EndpointsFree,
     /// Page-table pages cost nothing.
     R6PageTablesFree,
+    /// A page table left mapping nothing stays, and stays charged, until its process ends.
+    R6EmptyTableKept,
     /// Open calls cost nothing.
     R6OpenCallsFree,
     /// Process objects cost nothing.
@@ -305,7 +307,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 129] = {
+    pub const ALL: [Mutation; 130] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -335,6 +337,7 @@ impl Mutation {
             R6OwnPageChargedToItself,
             R6EndpointsFree,
             R6PageTablesFree,
+            R6EmptyTableKept,
             R6OpenCallsFree,
             R6ProcessObjectFree,
             R6ProcessObjectChargedToBudget,
@@ -471,6 +474,7 @@ impl Mutation {
             | R6OwnPageChargedToItself
             | R6EndpointsFree
             | R6PageTablesFree
+            | R6EmptyTableKept
             | R6OpenCallsFree
             | R6ProcessObjectFree
             | R6ProcessObjectChargedToBudget

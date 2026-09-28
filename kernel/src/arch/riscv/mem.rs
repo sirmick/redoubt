@@ -621,6 +621,45 @@ fn first_occupied(table: Table, level: usize, start: usize, end: usize) -> Optio
     None
 }
 
+/// Free the page tables under `[start, end)` of `space`'s user half that map nothing any more,
+/// bottom-up, and give each back to the budget that paid for it (R6; kernel/memory.md, "Page
+/// tables"). A call that empties entries runs this once it has finished, never between preparing a
+/// table and filling it: a table `prepare_map` made is empty until its page is mapped.
+///
+/// One leaf table per span, and the tables above it only when one below was freed: at most
+/// `ENTRIES` reads for each table the range reaches, so the cost follows the pages the call
+/// unmapped (R22). The root is never freed, nor anything in the kernel half.
+pub fn free_empty_tables(mm: &mut MemoryManager, space: &MemoryMapping, start: usize, end: usize) {
+    debug_assert!(end <= USER_AREA_END, "only the user half's tables are ever freed");
+    let root = root_of(space.satp);
+    let leaf_span = physmap::leaf_size(1);
+    let mut virt = start & !(leaf_span - 1);
+    while virt < end {
+        // The tables on `virt`'s path, root first; `path[level]` is the table at `level`.
+        let mut path = [None; physmap::LEVELS];
+        path[physmap::LEVELS - 1] = Some(root);
+        for level in (1..physmap::LEVELS).rev() {
+            path[level - 1] = path[level].and_then(|t| t.child(physmap::vpn(virt, level)));
+        }
+        for level in 0..physmap::LEVELS - 1 {
+            let (Some(table), Some(parent)) = (path[level], path[level + 1]) else { break };
+            if (0..physmap::ENTRIES).any(|index| !table.get(index).is_empty()) {
+                break;
+            }
+            let slot = parent.slot(physmap::vpn(virt, level + 1));
+            let frame = slot.get().phys();
+            // The table goes back to whoever paid for it (`walk` charges the PID it maps for),
+            // as the ownership table records it. A table with no owner there is not one
+            // `walk` made, and is left where it is.
+            let Some(owner) = mm.ram_owner(frame) else { break };
+            mm.free_frame_of(frame, owner).expect("the owner just read releases its frame");
+            slot.set(Pte::EMPTY);
+            flush_tlb();
+        }
+        virt += leaf_span;
+    }
+}
+
 /// Unmap only the protected borrower alias when a lend leaves the server.
 pub fn unmap_from(space: &MemoryMapping, virt: usize) -> Result<usize, PageError> {
     let slot = walk(root_of(space.satp), virt, None)?;

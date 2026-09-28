@@ -1,4 +1,4 @@
-description = "map_fixed's page-table count across gigabytes (R22, I14): two missing level-0 tables at index 0 of consecutive gigabytes, every table between them present, are both counted, so a request one table short is refused with nothing charged instead of panicking the kernel"
+description = "map_fixed's page-table count across gigabytes (R22, I14): unmap frees the 514 tables a setup made, and a range needing 515 tables across a gigabyte boundary is refused one table short with nothing charged instead of panicking the kernel"
 arch = ["rv64"]
 kind = "boot"
 debug_assertions = true
@@ -9,8 +9,8 @@ programs = ["map-fixed-tables"]
 # `alloc_page` fails, so the kernel PANIC is only seen after that.
 timeout_secs = 120
 expect = [
-    '^\[map-fixed-tables\] ok: setup left 514 page tables$',
-    '^\[map-fixed-tables\] ok: two missing tables a gigabyte apart are both counted$',
+    '^\[map-fixed-tables\] ok: unmap freed every page table the setup made$',
+    '^\[map-fixed-tables\] ok: one page table short across two gigabytes is refused$',
     '^\[map-fixed-tables\] ok: nothing charged$',
     '^\[map-fixed-tables\] MAP-FIXED TABLES TEST PASSED$',
 ]

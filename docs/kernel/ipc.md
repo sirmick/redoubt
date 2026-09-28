@@ -249,8 +249,7 @@ backed first, charged to the caller like `map_anon`'s; a caller that cannot pay 
 `InvalidArgument`, since `call` has no `OutOfMemory` of its own. A lent page stays charged to
 the caller. Taking the call charges it to the receiving process's budget as well, until `reply`
 gives it back. The page tables that map the lend in the receiver are charged to the receiver
-too, and stay charged after the reply, like any page table of that process, until it ends
-([memory](memory.md#residual-risks)).
+too, and go at the reply that leaves them mapping nothing ([memory](memory.md#page-tables)).
 
 A taken call is **abandoned** when its caller dies, times out, or is failed by revocation. Then:
 - the caller's charge ends and the lend becomes the server's alone, still mapped there;

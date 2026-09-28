@@ -312,7 +312,7 @@ list, in order.
 | `time_now` | - | - |
 | `random` | - | - |
 | `system_reset` | device: `BadHandle`; kind: `InvalidArgument` | `BadHandle`, `WrongObject` (not the Reset device) |
-| `map_fixed` | flags: `InvalidArgument` | `InvalidArgument` (range: address or len not page-aligned, len 0, wraps, or past `USER_AREA_END`), `InvalidArgument` (overlaps any mapping or reservation of the caller's, lent pages included), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (the pages alone), `OutOfMemory` (the pages and the page tables they need); nothing mapped or charged on failure |
+| `map_fixed` | flags: `InvalidArgument` | `InvalidArgument` (range: address or len not page-aligned, len 0, wraps, or past `USER_AREA_END`), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (the pages alone), `InvalidArgument` (overlaps any mapping or reservation of the caller's, lent pages included), `OutOfMemory` (the pages and the page tables they need); nothing mapped or charged on failure |
 
 Every call can also fail decoding in the general ways of stage 1 (a non-zero unused register, a
 value too wide). "Handle table" is stage 4's last check. Three rows depart from the stages, and
@@ -324,9 +324,9 @@ record check and every later stage, whatever it then returns
 are decoded (a handle wider than 32 bits, a non-zero unused register) leaves the current call
 as it was.
 
-`map_fixed`'s order keeps its cost bounded: the overlap walk skips page-table subtrees that are
-absent, and the charge for the pages alone comes before the walk that counts page tables, so a
-huge length the budget could never pay for is refused by arithmetic
+`map_fixed`'s order keeps its cost bounded: the charge for the pages alone comes before any
+walk, so a huge length the budget could never pay for is refused by arithmetic, and the overlap
+walk that follows skips page-table subtrees that are absent
 ([R22 (range cost)](memory.md#r22-range-cost)).
 
 ## Unknown call numbers

@@ -39,10 +39,9 @@ is a `dma_alloc` page of its own, or device registers it mapped). Only the RAM a
 be made executable ([R11](#r11-memory)). A reservation not yet touched is not a mapping.
 
 Each call checks the whole range before it changes any page, so an error leaves every mapping
-as it was. Two can leave a charge behind: `map_anon`'s rollback keeps the page tables it
-allocated, and `process_map` backs untouched pages of its source before its checks of the
-child, so a refused one can leave them backed and charged to the caller (Residual risks;
-[ABI](abi.md#residual-risks)). It checks the flags first, so bad flags leave nothing charged.
+as it was. One can leave a charge behind: `process_map` backs untouched pages of its source
+before its checks of the child, so a refused one can leave them backed and charged to the
+caller (Residual risks; [ABI](abi.md#residual-risks)). It checks the flags first, so bad flags leave nothing charged.
 The errors are `InvalidArgument` and `OutOfMemory`, and for `process_map` also `BadHandle`,
 `WrongObject` and `NotPermitted` (the child has started). The order of the checks, the same in
 the kernel and the [model](model.md), is in the
@@ -65,7 +64,22 @@ touch: a load or store fault, or a call that lends, transfers or `process_map`s 
 started by `process_start` has no reservations: its parent gave it every page it has.
 
 Running out is the caller's error: `map_anon` of more than the budget or RAM can supply is
-`OutOfMemory`, and every page it had taken goes back.
+`OutOfMemory`, and every page and page table it had taken goes back.
+
+### Page tables
+
+Status: built · tested: bench:page-table-reclaim, mutation:R6EmptyTableKept
+
+A page table is made when a mapping first needs it, charged to the budget of the process it
+maps into, and freed, with its charge, by the call that leaves it mapping nothing: every entry
+empty, with no page, no reservation and neither side of a loan. So `unmap` frees the tables its
+range empties, and so do a failed `map_anon`'s rollback, `process_map` in its source, and a
+transfer in its sender. A lend's tables in the server go at the reply that returns it; an
+abandoned lend's go from the caller when the call is abandoned, and from the server at the reply
+that frees the lend. A call frees tables once it has finished, never between making a table and
+filling it. It reads at most `ENTRIES` entries for each table the range reaches, so the cost
+follows the pages it unmapped ([R22](#r22-range-cost)). The root table goes only with its
+process.
 
 ### Where `map_anon` puts pages
 
@@ -101,10 +115,10 @@ Unlike POSIX `MAP_FIXED` it **never replaces** a mapping. A range that touches a
 entry of the caller's (a mapping, a reservation, either side of a loan) is `InvalidArgument`,
 and nothing is mapped. The checks run in this order, all before anything is allocated:
 1. the range: aligned, non-empty, no overflow, below `USER_AREA_END` (page 0 is user space);
-2. the overlap, over the whole range;
-3. the flags;
-4. the charge: the pages alone first, then the pages and every page table the range still
-   lacks, counted across table boundaries.
+2. the flags;
+3. the pages alone against the budget, by arithmetic;
+4. the overlap, over the whole range;
+5. the pages and every page table the range still lacks, counted across table boundaries.
 
 Only then does the mapping loop run, and it cannot fail. So a `map_fixed` maps everything it
 was asked or nothing, and a refused one charges nothing.
@@ -255,11 +269,12 @@ never what the length asks. A process could otherwise ask for a huge range for f
 kernel, running the call to its end with interrupts off, would stall every other process.
 - `unmap`, `set_flags` and `process_map` check the range page by page and stop at the first
   page that is not the caller's, so their cost follows what is mapped there.
-- `map_fixed` checks overlap by walking the page-table tree and skipping every absent subtree
+- `map_fixed` first refuses a range the budget cannot pay for by arithmetic alone, before any
+  walk. It then checks overlap by walking the page-table tree and skipping every absent subtree
   whole: at most the root entries the range spans, plus `ENTRIES` (512 on Sv39, 1024 on Sv32)
-  for each table present in it. It then refuses a range the budget cannot pay for by
-  arithmetic alone, before counting page tables. A `map_fixed` of the whole of user space above
-  4 GiB, which no budget in the case can pay for, is refused well inside the case's 10 ms bound.
+  for each table present in it, and only then counts page tables. A `map_fixed` of the whole of
+  user space, which no budget in the case can pay for, is refused well inside the case's 10 ms
+  bound, over mappings or not.
 - A lend or transfer checks at most the pages mapped in its range, and a lend is at most
   `MAX_LEND_PAGES` (16).
 - `map_anon`'s search, which also places `map_device`, `dma_alloc` and a received message,
@@ -276,8 +291,8 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 
 - **Out of memory is the caller's error.** A mapping call that cannot be paid for returns
   `OutOfMemory`; a process that exhausts RAM gets `OutOfMemory` and every other process keeps
-  running. A refused `map_fixed` charges nothing, and a refused `process_map` charges the child
-  nothing; `map_anon`'s rollback keeps the page tables it allocated (Residual risks).
+  running. A refused `map_fixed` charges nothing, a refused `process_map` charges the child
+  nothing, and a refused `map_anon` gives back every page and page table it took.
 - **A permission fault ends the process.** A store to a page that is not writable, or a fetch
   from one that is not executable, is never mistaken for a page to back. The process faults,
   and its exit notice carries the RISC-V cause (12 for an instruction page fault, 15 for a store
@@ -291,11 +306,6 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 
 ## Residual risks
 
-- **`unmap` keeps empty page tables.** A page table is freed only when its process ends, not
-  when it maps nothing, and `map_anon`'s rollback after a failure keeps the tables it allocated
-  too. Such tables stay charged to the process's own budget, so a process can strand only its
-  own pages, but its usage stays above what it has mapped. Follow-up:
-  [todo](../todo/page-table-freeing.md).
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`, where the
   [model](model.md), whose placement is unbounded, succeeds. It harms only that process.

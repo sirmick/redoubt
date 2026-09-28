@@ -285,7 +285,7 @@ Status: built · tested: bench:budget, bench:process-attack, bench:budget-forge-
 
 ### R6 (charging)
 
-Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from the rule for `root`'s own page and the kernel from the PID count (see Residual risks), and no case attacks either · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:redoubt-tight, bench:process-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce
+Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from the rule for `root`'s own page and the kernel from the PID count (see Residual risks), and no case attacks either · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:page-table-reclaim, bench:redoubt-tight, bench:process-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6EmptyTableKept, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce
 
 Every kernel object is charged in pages to one budget, and a charge over the budget's limit fails
 with `OutOfMemory` before anything changes. Who pays:
@@ -294,8 +294,9 @@ with `OutOfMemory` before anything changes. Who pays:
   the sum of all charges never exceeds the free frames. A revocation scope is no special case;
 - a process object, which holds the exit notice: the **creator's** budget, the budget of
   `process_create`'s caller (`PROCESS_PAGES`, 1), until the notice is received or dropped;
-- a thread's IPC page (`THREAD_PAGES`, 1), its saved registers, its process's page tables and
-  mapped pages: the budget the process **runs in**;
+- a thread's IPC page (`THREAD_PAGES`, 1), its saved registers, its process's page tables (each
+  until it maps nothing, [memory](memory.md#page-tables)) and mapped pages: the budget the
+  process **runs in**;
 - a handle-table page: the budget of the process whose table it is;
 - an endpoint: the budget of the process that created it, its **owner**;
 - an open call's page: the receiving process's budget ([R4a (open calls)](ipc.md#r4a-open-calls));
