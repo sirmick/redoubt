@@ -851,6 +851,16 @@ fn i5_charging(k: &Kernel) -> Check {
             add(s.payer, c.process);
         }
     }
+    // A PID held by an untaken notice counts where its process ran, or, that budget destroyed,
+    // in its nearest live ancestor, from the ghost's record of the tree (R6, R10 step 8).
+    for n in k.endpoints.values().flat_map(|e| e.exits.iter()) {
+        let mut b = n.budget;
+        while !k.budgets.contains_key(&b) {
+            let Some(p) = k.ghost.parent_at_creation.get(&b) else { break };
+            b = *p;
+        }
+        *procs.entry(b).or_default() += 1;
+    }
     for e in k.endpoints.values() {
         add(e.owner, c.endpoint);
     }

@@ -224,7 +224,7 @@ at 1.
 | 2 | `WrongObject` | the handle names the wrong kind of object for this call |
 | 3 | `InvalidArgument` | a malformed or out-of-range value: an unknown number, tag or flag bit, a bad range, a bad record, a message id that is not an open call |
 | 4 | `OutOfMemory` | the paying budget's page limit, or no room in the address space, no free frame, no free DMA run |
-| 5 | `OutOfProcesses` | a budget's process limit, or no free PID |
+| 5 | `OutOfProcesses` | a budget's process limit |
 | 6 | `TooManyThreads` | the process has `MAX_THREADS` (31) threads |
 | 7 | `NotPermitted` | the right object, without the standing: a badged handle where badge 0 is needed, a started process, a `mint` budget outside the default stamp, `dma_alloc` on a device without DMA |
 | 8 | `ClassDenied` | labels added by a caller whose budget is not of class `system` |
@@ -248,7 +248,7 @@ one wrong code on their way out.
 
 ## Errors and the order of checks
 
-Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the kernel and the model are compared by reading, not by replaying traces, and differ in two rows and in several details (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, fuzz:redoubt-sys/decode
+Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the kernel and the model are compared by reading, not by replaying traces, and differ in one row and in several details (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, fuzz:redoubt-sys/decode
 
 A call with several faults returns the first one found, in a fixed order, so that the kernel,
 the model and a replayed trace agree exactly. Checks go in stages, and within a stage by
@@ -295,7 +295,7 @@ list, in order.
 | `thread_create` | - | `TooManyThreads`, `OutOfMemory` (the thread's page) |
 | `thread_exit` | - | - |
 | `process_exit` | code wider than 32 bits: `InvalidArgument` | - |
-| `process_create` | each handle: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (the budget's free weight is 0), `NotPermitted` (the exit endpoint's badge is not 0), `OutOfProcesses` (no free PID; then the budget's process limit), `OutOfMemory` (the budget: page tables; then the caller: the process object), handle table |
+| `process_create` | each handle: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (the budget's free weight is 0), `NotPermitted` (the exit endpoint's badge is not 0), `OutOfProcesses` (the budget's process limit, which the new PID counts against; with room there a free PID exists), `OutOfMemory` (the budget: page tables; then the caller: the process object), handle table |
 | `process_map` | process: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (source or destination range), `InvalidArgument` (flags 0, or W without R), `InvalidArgument` (a source page unmapped, lent, not the caller's own RAM, or a `dma_alloc` page; untouched source pages are backed first), `NotPermitted` (the process has ended), `InvalidArgument` (a destination page occupied), `NotPermitted` (started), `OutOfMemory` (the child's budget: page tables, and the pages unless the budget is the caller's) |
 | `process_start` | process: `BadHandle`; entry, stack pointer, argument: not checked; count over `MAX_START_HANDLES`: `TooLarge`; handle list: the record, then each slot `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each handle), `NotPermitted` (started or ended), `TooLarge` (the child's table past `MAX_HANDLES`), `OutOfMemory` (the child's budget: its first thread and table pages) |
 | `endpoint_create` | - | `OutOfMemory` (the endpoint's page), handle table |
@@ -354,13 +354,10 @@ interrupt fires, and a child jumping to a fixed kernel return address faults.
 
 ## Residual risks
 
-- **The kernel and the model differ in two rows, and in details.** `budget_create`: the kernel decodes the spec
+- **The kernel and the model differ in one row, and in details.** `budget_create`: the kernel decodes the spec
   record in slot order, so a spec with a process count wider than 32 bits and more than
   `MAX_LABELS` labels is `InvalidArgument`; the model checks the label count first and says
-  `TooLarge`. `process_create`: the kernel checks for a free PID before the budget's process
-  limit and before any charge; the model checks it last, so with no free PID and too little
-  memory the kernel says `OutOfProcesses` and the model `OutOfMemory`. The table above is the
-  kernel's. In details: the model clears a `receive`'s current call only after the record check,
+  `TooLarge`. The table above is the kernel's. In details: the model clears a `receive`'s current call only after the record check,
   checks only a record's first page, and does not model the 32-run limit of `dma_alloc` or the
   size of the placement area. No trace has been replayed on the kernel to find more such
   differences ([model](model.md)). Follow-up: [todo](../todo/abi-model-disagreements.md).

@@ -35,7 +35,6 @@ gap: the page's section, the claim, and what no case attacks.
 - Root, system and users: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`).
 - R10 (destruction): destroying the budget a device object is charged to (the device destroyed, every handle closed) is not checked by a case.
 - R10: no case destroys an endpoint's owner while a receiver waits on it, and no program checks `receive` returning `Dead` ([endpoint destroyed with open calls](endpoint-destroyed-open-calls.md)).
-- R6 (charging): a process object's PID outside every process limit has no case ([PID pool pinning](pid-pool-pinning.md)).
 
 ### timer.md
 - Time: that `time_now` counts from the kernel's start is not checked (only monotonic, never early, linear with `rdtime`).
@@ -57,10 +56,9 @@ gap: the page's section, the claim, and what no case attacks.
 ### processes.md
 - Processes and PIDs: that PIDs are drawn at random is not attacked.
 - Threads: `thread_create` refused with `OutOfMemory`, and the first thread returning from its entry (a fault), have no case.
-- Creating and starting: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` have no case.
+- Creating and starting: `OutOfMemory` from `process_start` has no case.
 - Exit notices: a notice dropped because its exit endpoint was destroyed has no case.
 - R21 (crash blame): blame after the blamed sender's budget is destroyed has no case; a thread holding a parked call that receives a send and then faults (blames nobody) is covered only in parts.
-- PID pinning by untaken notices (a cross-budget `OutOfProcesses`) has no case ([PID pool pinning](pid-pool-pinning.md)).
 
 ### memory.md
 - Backing and zeroing: that a frame freed with data comes back zero is attacked only in the model (`R11NoZeroing`); no case can tell which frames it was handed.

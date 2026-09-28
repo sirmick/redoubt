@@ -85,8 +85,7 @@ page.
 
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
-   - **Kernel:** [PID pool pinning](../todo/pid-pool-pinning.md),
-     [RAM beyond the physmap](../todo/physmap-ram-bound.md),
+   - **Kernel:** [RAM beyond the physmap](../todo/physmap-ram-bound.md),
      [clearing SUM and MXR at entry](../todo/clear-sum-at-entry.md)
      ([R24 (SUM and MXR clear)](../kernel/memory-layout.md#r24-sum-and-mxr-clear)),
      [the boot hart's interrupt context](../todo/boot-hart-context.md),

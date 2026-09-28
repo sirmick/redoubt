@@ -442,6 +442,9 @@ pub struct ExitNotice {
     pub budget: u64,
     /// The budget its process object is charged to (its creator's).
     pub payer: u64,
+    /// The budget whose process limit counts its PID: the exiting process's, or once that one is
+    /// destroyed its parent (R6, R10 step 8).
+    pub counted: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -878,7 +881,7 @@ impl Kernel {
     ) -> u64 {
         let id = self.next_budget;
         self.next_budget += 1;
-        self.ghost.budget_created(id, &labels, creator);
+        self.ghost.budget_created(id, parent, &labels, creator);
         let depth = parent.and_then(|p| self.budgets.get(&p)).map_or(0, |p| p.depth + 1);
         let own_page = if parent.is_some() { self.costs.budget } else { 0 };
         let to_itself = self.broken(Mutation::R6OwnPageChargedToItself);
@@ -1499,7 +1502,7 @@ impl Kernel {
                 // The label check was made when the notice was queued (R1).
                 self.endpoints.get_mut(&e).unwrap().receivers.pop_front();
                 let want = self.ghost.owed.remove(&n.pid).map(|o| o.want);
-                self.free_process_object(n.pid, n.payer);
+                self.free_process_object(n.pid, n.payer, n.counted);
                 let got =
                     Blame { cause: n.cause, account: n.blamed_account, labels: n.blamed_labels.clone() };
                 self.ghost.flows.push(Flow::Exit {
@@ -1770,12 +1773,18 @@ impl Kernel {
         self.close_call(mid);
     }
 
-    /// Free a process object charged to `payer`, once its exit notice is received or dropped.
-    fn free_process_object(&mut self, pid: u64, payer: u64) {
+    /// Free a process object charged to `payer`, once its exit notice is received or dropped; its
+    /// PID stops counting in `counted` (R6).
+    fn free_process_object(&mut self, pid: u64, payer: u64, counted: u64) {
         self.sweep(|h| h.object == Object::Process(pid));
         self.ghost.process_freed(pid);
         if !self.broken(Mutation::R6ProcessObjectFree) {
             self.uncharge(payer, self.costs.process);
+        }
+        if !self.broken(Mutation::R6PidUncountedAtEnd) {
+            if let Some(b) = self.budgets.get_mut(&counted) {
+                b.processes_used = b.processes_used.saturating_sub(1);
+            }
         }
     }
 
@@ -1821,9 +1830,11 @@ impl Kernel {
             p.handles.keys().map(|h| (h - 1) / self.costs.handles_per_page).collect::<BTreeSet<_>>().len()
                 as u64;
         self.uncharge(p.budget, table + self.page_table_cost() + self.costs.contexts);
-        // It stops counting against its budget's process limit now.
-        if let Some(b) = self.budgets.get_mut(&p.budget) {
-            b.processes_used = b.processes_used.saturating_sub(1);
+        // Its PID keeps counting in its budget until its object is freed (R6).
+        if self.broken(Mutation::R6PidUncountedAtEnd) {
+            if let Some(b) = self.budgets.get_mut(&p.budget) {
+                b.processes_used = b.processes_used.saturating_sub(1);
+            }
         }
         // Ghost: the notice is owed if its object's payer, the exit endpoint and the stamp of the
         // handle naming it are alive, and the label rule allows it, judged from the ghost's records.
@@ -1848,13 +1859,13 @@ impl Kernel {
         let payer = p.creator;
         if !self.budgets.contains_key(&payer) {
             self.ghost.owed.remove(&p.pid);
-            self.free_process_object(p.pid, payer);
+            self.free_process_object(p.pid, payer, p.budget);
             return;
         }
         let e = match p.exit_endpoint.map(|h| h.object) {
             Some(Object::Endpoint(e)) if self.endpoints.contains_key(&e) => e,
             _ => {
-                self.free_process_object(p.pid, payer);
+                self.free_process_object(p.pid, payer, p.budget);
                 return;
             }
         };
@@ -1874,7 +1885,7 @@ impl Kernel {
         let dropped =
             self.broken(Mutation::ExitNoticeDroppedIfNoReceiver) && self.endpoints[&e].receivers.is_empty();
         if !allowed || dropped {
-            self.free_process_object(p.pid, payer);
+            self.free_process_object(p.pid, payer, p.budget);
             return;
         }
         let n = ExitNotice {
@@ -1885,6 +1896,7 @@ impl Kernel {
             blamed_labels: blame.labels,
             budget: p.budget,
             payer,
+            counted: p.budget,
         };
         self.endpoints.get_mut(&e).unwrap().exits.push_back(n);
         self.poke(e);
@@ -1908,7 +1920,7 @@ impl Kernel {
         }
         for n in exits {
             self.ghost.owed.remove(&n.pid);
-            self.free_process_object(n.pid, n.payer);
+            self.free_process_object(n.pid, n.payer, n.counted);
         }
         let in_flight: Vec<u64> = self
             .msgs
@@ -1981,14 +1993,14 @@ impl Kernel {
                 .values()
                 .flat_map(|ep| ep.exits.iter())
                 .filter(|n| doomed.contains(&n.payer))
-                .map(|n| (n.pid, n.payer))
+                .map(|n| (n.pid, n.payer, n.counted))
                 .collect();
             for ep in self.endpoints.values_mut() {
                 ep.exits.retain(|n| !doomed.contains(&n.payer));
             }
-            for (pid, payer) in freed {
+            for (pid, payer, counted) in freed {
                 self.ghost.owed.remove(&pid);
-                self.free_process_object(pid, payer);
+                self.free_process_object(pid, payer, counted);
             }
         }
         // Revocation reaches messages already sent through a doomed stamp: a queued one fails its
@@ -2051,6 +2063,21 @@ impl Kernel {
                     }
                 }
             }
+        }
+        // Step 8 again: every PID still held for a process that ran in the subtree, by a notice its
+        // creator outside the subtree has not taken, counts in b's parent from now on. Those PIDs
+        // were inside the carve that just came back, so the parent stays within its limit (I5).
+        let held_move =
+            !self.broken(Mutation::R10HeldPidsDropped) && !self.broken(Mutation::R6PidUncountedAtEnd);
+        if let Some(p) = bb.parent.filter(|_| held_move) {
+            let mut moved = 0;
+            for ep in self.endpoints.values_mut() {
+                for n in ep.exits.iter_mut().filter(|n| doomed.contains(&n.counted)) {
+                    n.counted = p;
+                    moved += 1;
+                }
+            }
+            self.budgets.get_mut(&p).unwrap().processes_used += moved;
         }
         // Bottom-up (R10 order): each budget's work since entry moves to its parent, and its
         // carve returns there.

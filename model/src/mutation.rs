@@ -83,6 +83,8 @@ pub enum Mutation {
     R6LendChargedOnce,
     /// `root`'s limit is every free frame, so its own page is charged to no one.
     R6RootPageUncounted,
+    /// A PID stops counting when its process ends, not when its object is freed.
+    R6PidUncountedAtEnd,
     // R7. Carving.
     /// Children may be carved beyond the parent's free limits.
     R7NoCarveCheck,
@@ -117,6 +119,9 @@ pub enum Mutation {
     R10SweptHandlesDropped,
     /// Destroying a creator's budget leaves the processes it created running.
     R10CreatorDeathSparesProcess,
+    /// Destroying a budget drops the count of the PIDs still held for its processes instead of
+    /// moving it to the parent.
+    R10HeldPidsDropped,
     // R11. Memory.
     /// Reused pages are not zeroed.
     R11NoZeroing,
@@ -313,7 +318,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 133] = {
+    pub const ALL: [Mutation; 135] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -349,6 +354,7 @@ impl Mutation {
             R6ProcessObjectChargedToBudget,
             R6LendChargedOnce,
             R6RootPageUncounted,
+            R6PidUncountedAtEnd,
             R7NoCarveCheck,
             R8AccountFromArgument,
             R9ReceivedHandleRestamped,
@@ -362,6 +368,7 @@ impl Mutation {
             R10RevokedCallAnswered,
             R10SweptHandlesDropped,
             R10CreatorDeathSparesProcess,
+            R10HeldPidsDropped,
             R11NoZeroing,
             R11SetFlagsAllowsWx,
             R11AllowsWriteOnly,
@@ -488,7 +495,8 @@ impl Mutation {
             | R6ProcessObjectFree
             | R6ProcessObjectChargedToBudget
             | R6LendChargedOnce
-            | R6RootPageUncounted => "R6",
+            | R6RootPageUncounted
+            | R6PidUncountedAtEnd => "R6",
             R7NoCarveCheck | R7CarveToZeroFree | ProcessInWeightlessBudget => "R7",
             R8AccountFromArgument => "R8",
             R9ReceivedHandleRestamped | R9MintStampsCaller | R9MsgStampIsSenderBudget => "R9",
@@ -500,6 +508,7 @@ impl Mutation {
             | R10RevokedCallAnswered
             | R10SweptHandlesDropped
             | R10CreatorDeathSparesProcess
+            | R10HeldPidsDropped
             | BudgetDeadlineIgnored => "R10",
             R11NoZeroing
             | R11SetFlagsAllowsWx

@@ -8,9 +8,6 @@ executable model differs from it in a few places:
 - `budget_create`: the kernel decodes the spec record in slot order, so a spec with a process
   count wider than 32 bits and more than `MAX_LABELS` labels is `InvalidArgument`; the model
   checks the label count first and says `TooLarge`.
-- `process_create`: the kernel checks for a free PID before the budget's process limit and
-  before any charge; the model checks it last, so with no free PID and too little memory the
-  kernel says `OutOfProcesses` and the model `OutOfMemory`.
 - `receive`: the model clears the current call only after the record check.
 - The model checks only a record's first page, and does not model the 32-run limit of
   `dma_alloc` or the size of the placement area.

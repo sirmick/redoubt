@@ -319,7 +319,8 @@ process object is charged to its creator until its notice is taken.
 
 **Kept in** `return_carve` (`kernel/src/budget.rs`: the child's limits and its own page back to
 the parent) and `mark_dying` (its weight, first); `free_object` (`kernel/src/process.rs`: a
-process object's page back to its creator when its notice is received or dropped).
+process object's page back to its creator, and its PID's count back to the budget it counts in,
+when its notice is received or dropped).
 
 **Model check:** `check::budget_lifecycle`: after a random prefix, a thread creates a child,
 starts a process in it, lets only the child's subtree act, destroys it and receives the notices;

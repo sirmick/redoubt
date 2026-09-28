@@ -92,7 +92,7 @@ threads. A fault in any thread ends the whole process.
 
 ### Creating and starting
 
-Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` are not attacked by a case, and the kernel departs from the PID count (Residual risks) · tested: bench:process, bench:process-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R11ProcessMapSkipsFlags
+Status: built · partly tested: `OutOfMemory` from `process_start` is not attacked by a case · tested: bench:process, bench:process-attack, bench:pid-pinning-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6PidUncountedAtEnd, mutation:R10HeldPidsDropped, mutation:R11ProcessMapSkipsFlags
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -129,8 +129,7 @@ destroyed budget's parent once the carve has come back
 ([R10 (destruction)](budgets.md#r10-destruction)), so it stays inside the carve that bounded
 it. Because every process limit is carved from `root`'s, which is every PID but the kernel's, a
 `process_create` into a budget under its limit always finds a free PID, and no budget can take
-another's. The kernel departs from this: it counts a process only while it lives, so an ended
-process's PID is held outside every limit until its notice goes (Residual risks).
+another's.
 
 **`process_map`** moves pages from the caller into a process that has not started. The source
 must be whole pages of the caller's own RAM, not lent (a reserved page is backed first); device
@@ -346,12 +345,6 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
   budget the process ran in, not those of the blamed sender. A `system`-class server's notice
   can carry a labelled caller's account and labels to a `user`-class owner of its exit endpoint.
   Only a creator holding a `system`-class budget handle can set this up.
-- **PIDs are one global pool of 63, and untaken notices hold them outside every limit.** The
-  kernel departs from the PID count: an ended process's PID stays held while its notice is
-  untaken, and it no longer counts against any process limit. What bounds these PIDs is the
-  creator's pages, so one creator can hold every free PID with a single one-process budget, and
-  every other `process_create`, in any part of the budget tree, then gets `OutOfProcesses`.
-  Follow-up: [todo](../todo/pid-pool-pinning.md).
 - **A creator's untaken notices hold PIDs in budgets it was given.** A process created into
   another's budget counts there until its creator takes the notice, and after that budget is
   destroyed, in its parent. The loss is bounded by the process limit of the budget whose handle

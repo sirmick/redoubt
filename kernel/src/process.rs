@@ -14,11 +14,12 @@
 //!
 //! So the object has two lives. While the process runs it is what a handle names: `process_map`
 //! and `process_start` name it. When the process exits, faults or is killed, everything the
-//! process had is freed at once -- threads, address space, handle table, open calls -- and it stops
-//! counting against its budget's `processes` usage; the frame stays, now holding only the notice,
-//! until a `receive` on the exit endpoint takes it or the notice is dropped. Its PID is reserved
-//! for exactly that long (R20): [`random_free_pid`] skips a PID a live object names, so no
-//! PID is reused while a notice still names it.
+//! process had is freed at once -- threads, address space, handle table, open calls; the frame
+//! stays, now holding only the notice, until a `receive` on the exit endpoint takes it or the
+//! notice is dropped. Its PID is reserved for exactly that long (R20): [`random_free_pid`] skips a
+//! PID a live object names, so no PID is reused while a notice still names it. And for that long
+//! the PID counts against the process limit of the budget the process ran in (R6), or of that
+//! budget's parent once R10 destroyed it ([`MemoryManager::migrate_held_pids`]).
 //!
 //! Destroying the creator's budget frees the object (R10), killing the process first if it still
 //! runs; then there is no notice at all.
@@ -52,7 +53,7 @@ use redoubt_sys::{
 
 use crate::arch::process::TID;
 use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, Process as ArchProcess};
-use crate::budget::{Class, PROCESS_PAGES, THREAD_PAGES};
+use crate::budget::{BudgetFrame, Class, PROCESS_PAGES, THREAD_PAGES};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object, ProcessRef};
 use crate::kframe;
 use crate::mem::MemoryManager;
@@ -76,7 +77,11 @@ const W_CAUSE: usize = 8;
 const W_CODE: usize = 9;
 const W_BLAMED_ACCOUNT: usize = 10;
 const W_BLAMED_NLABELS: usize = 11;
-const W_BLAMED_LABELS: usize = 12; // MAX_LABELS words
+/// The budget whose process limit counts the PID: the one the process runs in, or its parent
+/// once R10 destroyed that one.
+const W_COUNTED: usize = 12; // frame + 1
+const W_COUNTED_ID: usize = 13;
+const W_BLAMED_LABELS: usize = 14; // MAX_LABELS words
 const WORDS: usize = W_BLAMED_LABELS + MAX_LABELS;
 const _: () = assert!(WORDS * 8 <= redoubt_sys::PAGE_SIZE);
 
@@ -94,6 +99,9 @@ pub struct Proc {
     /// The budget charged for this object (`process_create`'s caller's).
     pub creator: BudgetRef,
     pub pid: Pid,
+    /// The budget whose process limit counts `pid` while this object holds it (R6): the one the
+    /// process runs in, until R10's step 8 moves the count to that budget's parent.
+    pub counted_in: BudgetRef,
     /// The exit endpoint, until it is destroyed.
     pub endpoint: Option<EndpointRef>,
     flags: u64,
@@ -139,6 +147,7 @@ impl MemoryManager {
             id: w(W_ID),
             creator: BudgetRef { frame: frame_of(w(W_CREATOR)).unwrap_or(0), id: w(W_CREATOR_ID) },
             pid: Pid::new(w(W_PID) as u8).expect("I1: a process object names no PID"),
+            counted_in: BudgetRef { frame: frame_of(w(W_COUNTED)).unwrap_or(0), id: w(W_COUNTED_ID) },
             endpoint: frame_of(w(W_ENDPOINT)).map(|frame| EndpointRef { frame, id: w(W_ENDPOINT_ID) }),
             flags: w(W_FLAGS),
             cause: w(W_CAUSE),
@@ -157,6 +166,8 @@ impl MemoryManager {
         words[W_CREATOR] = frame_word(p.creator.frame);
         words[W_CREATOR_ID] = p.creator.id;
         words[W_PID] = u64::from(p.pid.get());
+        words[W_COUNTED] = frame_word(p.counted_in.frame);
+        words[W_COUNTED_ID] = p.counted_in.id;
         words[W_ENDPOINT] = p.endpoint.map_or(0, |e| frame_word(e.frame));
         words[W_ENDPOINT_ID] = p.endpoint.map_or(0, |e| e.id);
         words[W_FLAGS] = p.flags;
@@ -208,6 +219,31 @@ impl MemoryManager {
         self.objects.processes[i] = frame;
         #[cfg(debug_assertions)]
         self.check_process_index();
+    }
+
+    /// R10 step 8, after the dying subtree's carve went back to `parent`: every PID a process
+    /// object still holds and counts in a dying budget counts in `parent` instead. Those PIDs were
+    /// part of the subtree's usage, at most its top's limit, which the parent just got back whole,
+    /// so the count cannot fail (I5).
+    pub fn migrate_held_pids(&mut self, parent: Option<BudgetFrame>) {
+        let Some(parent) = parent else {
+            // No parent: the destroyed top was `root`, so the whole tree is gone, and every held
+            // PID's count goes with it.
+            #[cfg(debug_assertions)]
+            self.check_all_dying();
+            return;
+        };
+        let to = BudgetRef { frame: parent, id: self.budget_id(parent) };
+        let frames = self.objects.processes;
+        for frame in frames.iter().flatten().copied() {
+            let mut p = self.process(frame);
+            if !self.budget(p.counted_in.frame).dying {
+                continue;
+            }
+            self.count_process(to.frame).expect("I5: the carve just returned covers it");
+            p.counted_in = to;
+            self.store_process(frame, &p);
+        }
     }
 
     /// A checked build's proof that the PID index is what a scan of every object frame finds.
@@ -277,12 +313,20 @@ pub fn process_create(
     // Stage 4, resources: the target budget's process limit, then its pages (the address space),
     // then the caller's (the object itself).
     //
-    // A PID is a global resource: one is held by every live process and by every process object
-    // whose notice nobody has taken yet. Running out is `OutOfProcesses` too -- the caller asked
-    // for a process and there is none to be had.
-    let child = random_free_pid(ss, mm).ok_or(Error::OutOfProcesses)?;
+    // A PID is held by every live process and by every process object whose notice nobody has
+    // taken yet, and each held PID counts once against the process limit of the budget the
+    // process runs in (R6). Limits are carved from `root`'s, which is every free PID, so once the
+    // target has room a free PID exists.
+    mm.count_process(target)?;
+    let Some(child) = random_free_pid(ss, mm) else {
+        mm.uncount_process(target);
+        return Err(Error::OutOfProcesses);
+    };
     // From here on every step is undone on failure, so a refused `process_create` costs nothing.
-    mm.process_created(child, target)?;
+    if let Err(e) = mm.process_created(child, target) {
+        mm.uncount_process(target);
+        return Err(e);
+    }
     let made = new_address_space(ss, mm, child).and_then(|()| {
         mm.charge(caller_budget, PROCESS_PAGES)?;
         let frame = mm.alloc_object_frame().inspect_err(|_| mm.uncharge(caller_budget, PROCESS_PAGES))?;
@@ -294,6 +338,7 @@ pub fn process_create(
                 id,
                 creator,
                 pid: child,
+                counted_in: BudgetRef { frame: target, id: mm.budget(target).id },
                 endpoint: Some(endpoint),
                 flags: F_ALIVE,
                 cause: 0,
@@ -312,6 +357,7 @@ pub fn process_create(
             mm.uncharge(caller_budget, PROCESS_PAGES);
         })
     });
+    // With no object left, ending the child gives its PID's count back (`process_ended`).
     made.inspect_err(|_| drop_unstarted(ss, mm, child))
 }
 
@@ -651,7 +697,8 @@ fn allowed(mm: &MemoryManager, e: EndpointRef, flow: Option<Flow>) -> bool {
 }
 
 /// Free a process object: its handles go (I1: nothing may name a freed frame), its page goes back
-/// to the creator's budget, and its PID becomes free again. The process itself is already gone.
+/// to the creator's budget, and its PID stops counting where it counts and becomes free again.
+/// The process itself is already gone.
 pub fn free_object(mm: &mut MemoryManager, frame: u32) {
     let p = mm.process(frame);
     assert!(!p.alive(), "a live process's object was freed");
@@ -660,6 +707,9 @@ pub fn free_object(mm: &mut MemoryManager, frame: u32) {
     if mm.is_live_budget(p.creator) {
         mm.uncharge(p.creator.frame, PROCESS_PAGES);
     }
+    // Always live: a budget's destruction moves the count to its parent first (R10 step 8), and
+    // the object is always freed before the frame of the budget it counts in.
+    mm.uncount_process(p.counted_in.frame);
     mm.free_object_frame(frame);
     mm.index_process(p.pid, None);
 }

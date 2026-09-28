@@ -267,7 +267,10 @@ fn pending_record(c: &mut Checker, image: &spawn::Image) {
     assert_eq!(execution.processes_usage, 1);
     assert!(execution.pages_usage > 0);
     rd::destroy(budget).unwrap(); // Notice is pending synchronously; no timing assumption.
-    let pending = rd::Usage { pages_usage: base.pages_usage + 1, ..base };
+    // The object's page is ours, and the PID it holds now counts here, the destroyed budget's
+    // parent (R10 step 8).
+    let pending =
+        rd::Usage { pages_usage: base.pages_usage + 1, processes_usage: base.processes_usage + 1, ..base };
     assert_eq!(rd::usage(rd::SYSTEM), Ok(pending));
     let bad_record = Call::Receive { from: Some(rd::h(exit)), timeout: 0, max_transfer: 0, received_rec: 0 };
     assert_eq!(redoubt_sys::syscall(&bad_record), Err(Error::InvalidArgument));

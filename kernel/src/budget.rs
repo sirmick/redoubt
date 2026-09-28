@@ -447,29 +447,47 @@ impl MemoryManager {
 
     // --- Processes and threads ------------------------------------------------------------------
 
-    /// Put new process `pid` in `budget`: one process from its process limit, and an account of
-    /// its own, with no threads yet. Its address space is charged to `budget` frame by frame as
-    /// it is built (`process.rs`; kernel/objects.md); its object page is the *creator's*, which
-    /// `process_create` charges separately. Nothing changes on an error.
-    pub fn process_created(&mut self, pid: Pid, budget: BudgetFrame) -> Result<(), Error> {
-        let index = account_index(pid).ok_or(Error::InvalidArgument)?;
+    /// One more PID held against `budget`'s process limit (R6): a created process's from
+    /// `process_create` until its object is freed, a program the loader started while it lives,
+    /// in the budget it runs in either way. Every held PID counts once, and limits are carved from
+    /// `root`'s, which is every free PID, so a budget under its limit always finds one free.
+    /// Nothing changes on an error.
+    pub fn count_process(&mut self, budget: BudgetFrame) -> Result<(), Error> {
         let mut b = self.budget(budget);
-        // A budget with no free weight holds no process (R12: its stride weight is its free
-        // weight).
-        if b.free_weight() == 0 {
-            return Err(Error::InvalidArgument);
-        }
         if b.free_processes() == 0 {
             return Err(Error::OutOfProcesses);
         }
         b.processes_used += 1;
         self.store(budget, &b);
+        Ok(())
+    }
+
+    /// A PID [`MemoryManager::count_process`] counted against `budget` is free again.
+    pub fn uncount_process(&mut self, budget: BudgetFrame) {
+        let mut b = self.budget(budget);
+        b.processes_used = b.processes_used.checked_sub(1).expect("I5: process count underflow");
+        self.store(budget, &b);
+    }
+
+    /// Put new process `pid` in `budget`: an account of its own, with no threads yet. Its PID is
+    /// counted there first ([`MemoryManager::count_process`]); its address space is charged
+    /// there frame by frame as it is built (`process.rs`; kernel/objects.md); its object page is
+    /// the *creator's*, which `process_create` charges separately. Nothing changes on an error.
+    pub fn process_created(&mut self, pid: Pid, budget: BudgetFrame) -> Result<(), Error> {
+        let index = account_index(pid).ok_or(Error::InvalidArgument)?;
+        // A budget with no free weight holds no process (R12: its stride weight is its free
+        // weight).
+        if self.budget(budget).free_weight() == 0 {
+            return Err(Error::InvalidArgument);
+        }
         self.objects.accounts[index] = Account { budget: Some(budget), ..Account::NONE };
         Ok(())
     }
 
     /// Everything the process still has charged goes back to its budget. Its frames were
-    /// released just before (`uncharge_all_frames`); its handle table goes here.
+    /// released just before (`uncharge_all_frames`); its handle table goes here. Its PID stops
+    /// counting only if no process object holds it; one that does counts until it is freed
+    /// (`process::free_object`).
     pub fn process_ended(&mut self, pid: Pid) {
         let Some(budget) = self.budget_of(pid) else { return };
         self.close_all_handles(pid);
@@ -480,9 +498,9 @@ impl MemoryManager {
         let pages = account.threads * THREAD_PAGES + account.frames;
         *account = Account::NONE;
         self.uncharge(budget, pages);
-        let mut b = self.budget(budget);
-        b.processes_used = b.processes_used.checked_sub(1).expect("I5: process count underflow");
-        self.store(budget, &b);
+        if crate::process::object_of(self, pid).is_none() {
+            self.uncount_process(budget);
+        }
     }
 
     pub fn thread_created(&mut self, pid: Pid, tid: usize) -> Result<(), Error> {
@@ -567,6 +585,7 @@ impl MemoryManager {
             nbundle += 1;
             // Everything the loader gave it: its image, its stack, its page tables, its root
             // table and its saved contexts, all owned by the PID in the ownership table.
+            self.count_process(system).expect("boot: the loader's processes do not fit in system");
             self.process_created(pid, system).expect("boot: the loader's processes do not fit in system");
             self.charge(system, frames).expect("boot: the loader's processes do not fit in system");
             self.account_mut(pid).expect("account").frames = frames;
@@ -852,6 +871,15 @@ impl MemoryManager {
         Some(BudgetRef { frame: payer, id: self.budget_id(payer) })
     }
 
+    /// A checked build's proof that a destroyed top with no parent was `root`: every budget is
+    /// dying.
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_all_dying(&self) {
+        for frame in 0..=self.objects.high_frame {
+            assert!(!self.is_budget_frame(frame) || self.budget(frame).dying, "a budget outlives root");
+        }
+    }
+
     /// Whether `pid` lives in a budget that is being destroyed.
     pub fn process_is_doomed(&self, pid: Pid) -> bool {
         self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
@@ -859,8 +887,10 @@ impl MemoryManager {
 
     /// Last step of `budget_destroy`, once the doomed budgets' processes are gone: close every
     /// handle naming a doomed budget or stamped with one, in every table (R10, I2); give the
-    /// parent back what `top` carved from it (I10); free the doomed budgets (marked, with no
-    /// processes and no handles left; nothing reads a dying frame's tree links after this).
+    /// parent back what `top` carved from it (I10), then charge it the quarantined DMA pages and
+    /// count in it the held PIDs that outlive the subtree (step 8); free the doomed budgets
+    /// (marked, with no processes and no handles left; nothing reads a dying frame's tree links
+    /// after this).
     pub fn destroy_marked(&mut self, top: BudgetFrame) {
         self.sweep_handles(|mm, h| {
             let object_dying = match h.object {
@@ -879,6 +909,8 @@ impl MemoryManager {
         // Then, and only then, quarantined DMA pages charged in the subtree move to the parent,
         // which has just got back at least that much (kernel/devices.md, "Quarantine").
         self.dma_migrate_quarantine(self.budget(top).parent);
+        // And so does every PID still held for a process that ran in the subtree (R6).
+        self.migrate_held_pids(self.budget(top).parent);
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.budget(frame).dying {
                 self.unlink_deadline(frame);

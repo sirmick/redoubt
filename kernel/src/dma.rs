@@ -281,9 +281,13 @@ impl MemoryManager {
     /// R10, after `top`'s carve went back to `parent`: every quarantined run charged to a
     /// dying budget is charged to `parent` instead. Those pages were part of the dying subtree's
     /// usage, at most `top`'s limit, which the parent just got back whole, so the charge cannot
-    /// fail (I5). With no parent the charge ends with the tree.
+    /// fail (I5).
     pub fn dma_migrate_quarantine(&mut self, parent: Option<crate::budget::BudgetFrame>) {
         let parent = parent.map(|p| BudgetRef { frame: p, id: self.budget_id(p) });
+        #[cfg(debug_assertions)]
+        if parent.is_none() {
+            self.check_all_dying();
+        }
         for i in 0..MAX_DMA_DEVICES {
             for index in 0..MAX_RUNS {
                 let Some(run) = self.dma.slots[i].as_ref().and_then(|s| s.runs[index]) else { continue };
@@ -293,8 +297,13 @@ impl MemoryManager {
                 if !run.charged.is_some_and(|b| self.is_live_budget(b) && self.budget(b.frame).dying) {
                     continue;
                 }
-                if let Some(p) = parent {
-                    self.charge(p.frame, run.npages as u64).expect("I5: the carve just returned covers it");
+                match parent {
+                    Some(p) => self
+                        .charge(p.frame, run.npages as u64)
+                        .expect("I5: the carve just returned covers it"),
+                    // No parent: the destroyed top was `root`, so the whole tree is gone, and the
+                    // charge goes with it. The run stays quarantined, charged to nobody.
+                    None => {}
                 }
                 self.slot_mut(i).runs[index].as_mut().expect("read above").charged = parent;
             }
