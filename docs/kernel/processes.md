@@ -105,8 +105,8 @@ Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutO
 **`process_create`** refuses, in this order: a bad budget or exit-endpoint handle (`BadHandle`,
 `WrongObject`); a budget with no free weight, which could never be scheduled
 ([R12 (scheduling)](scheduling.md#r12-scheduling)) (`InvalidArgument`); an exit endpoint that is
-not a receive right, badge 0 (`NotPermitted`; see [R21](#r21-crash-blame)); no free PID, or the
-budget at its process limit (`OutOfProcesses`); then `OutOfMemory` for the budget's pages, then
+not a receive right, badge 0 (`NotPermitted`; see [R21](#r21-crash-blame)); the caller's budget
+at its process limit (`OutOfProcesses`); then `OutOfMemory` for the budget's pages, then
 the caller's, and `OutOfMemory` or `TooLarge` if the caller's handle table cannot take the
 handle.
 A refused `process_create` costs nothing. The returned handle has badge 0 and is stamped with
@@ -120,11 +120,14 @@ What a process costs ([objects](objects.md)):
   table and every other page-table page, its handle-table pages, one IPC page per thread and the
   pages mapped in it: all charged to **the budget it runs in**, and all given back when it ends.
 
-A process object counts one against its creator's budget's process limit, from `process_create`
-until the object is freed, as its page is charged there
-([R6 (charging)](budgets.md#r6-charging)). The process also counts against the budget it runs in
-while it lives. Because every process limit is carved from `root`'s, live PIDs never exceed
-`root`'s limit, and no budget can take another's PIDs. The kernel departs from this: it counts a
+A process limit counts PIDs, and every held PID counts once. A created process counts one
+against its creator's budget's process limit, from `process_create` until its object is freed,
+as the object's page is charged there ([R6 (charging)](budgets.md#r6-charging)): that is exactly
+as long as it holds its PID. It does not count again in the budget it runs in, whose pages
+already bound what runs there. A program the loader started has no object, so it counts against
+the budget it runs in while it lives, and its PID goes when it ends. Because every process limit
+is carved from `root`'s, which is every PID but the kernel's, a caller under its own limit always
+finds a free PID, and no budget can take another's. The kernel departs from this: it counts a
 process only in the budget it runs in, and only while it lives, so an ended process's PID is held
 outside every limit until its notice goes (Residual risks).
 
@@ -182,10 +185,10 @@ When a process ends, the kernel first writes the notice into the process object,
 blame before anything is freed. Then it tears the process down: every open call fails its
 caller (R4b), every call it made is withdrawn or abandoned
 ([R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls)), and its threads,
-memory, handle table and DMA runs ([devices](devices.md)) go. It stops counting against its
-budget's process limit at once, and everything it held goes back to that budget, except DMA
-pages quarantined at this end, which stay charged. The process object's page stays charged to
-the creator's budget until the notice goes. Last, the notice is delivered or dropped:
+memory, handle table and DMA runs ([devices](devices.md)) go. Everything it held goes back to
+the budget it ran in at once, except DMA pages quarantined at this end, which stay charged. The
+process object's page, and its count against the creator's process limit, stay with the
+creator's budget until the notice goes. Last, the notice is delivered or dropped:
 - **Delivered** to whichever thread receives on the exit endpoint next; notices come before
   messages. Nothing is allocated, because the notice's page was paid for at `process_create`.
   A notice with no receiver waits for one.

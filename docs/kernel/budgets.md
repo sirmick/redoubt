@@ -40,7 +40,7 @@ Status: built · tested: bench:budget, bench:budget-destroy-attack, bench:proces
 | `account` | the principal it bills to, a u64; 0 for none ([R8](#r8-accounts)) |
 | `deadline` | microseconds since boot at which the kernel destroys it; `FOREVER` (`u64::MAX`) for none |
 | `pages` | limit and usage, in pages ([R6](#r6-charging)) |
-| `processes` | limit and usage: the processes running in it, and its children's process limits |
+| `processes` | limit and usage: the process objects charged to it, the programs the loader started that run in it, and its children's process limits |
 | `weight` | limit and carved: what its children took ([R7](#r7-carving)) |
 | `dying` | set on the whole subtree while [R10](#r10-destruction) destroys it |
 
@@ -293,9 +293,10 @@ with `OutOfMemory` before anything changes. Who pays:
   the sum of all charges never exceeds the free frames. A revocation scope is no special case;
 - a process object, which holds the exit notice: the **creator's** budget, the budget of
   `process_create`'s caller (`PROCESS_PAGES`, 1), until the notice is received or dropped. The
-  object also counts one against that budget's **process limit** for as long, so a PID held
-  for an untaken notice is the creator's to pay for; the process counts against the budget it
-  runs in while it lives;
+  object also counts one against that budget's **process limit** for as long, which is exactly
+  as long as the process holds its PID, so a PID held for an untaken notice is the creator's to
+  pay for. A created process counts nowhere else; a program the loader started, which has no
+  object, counts against the budget it runs in while it lives;
 - a thread's IPC page (`THREAD_PAGES`, 1), its saved registers, its process's page tables and
   mapped pages: the budget the process **runs in**;
 - a handle-table page: the budget of the process whose table it is;
@@ -416,10 +417,10 @@ without preemption.*
 Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench:budget-deadline, bench:budget-syscall-attack
 
 - **A process in a budget ends:** its threads, pages, page tables and handle table go back to the
-  budget at once, and it stops counting against that budget's process limit. Its process object
-  stays charged to its creator's budget until its exit notice is received
-  ([processes](processes.md)), and by R6 counts against the creator's process limit as long; the
-  kernel does not count it there ([Residual risks](#residual-risks)).
+  budget at once. Its process object stays charged to its creator's budget until its exit notice
+  is received ([processes](processes.md)), and by R6 counts against the creator's process limit
+  as long; the kernel counts it in the budget it ran in instead, and only while it lives
+  ([Residual risks](#residual-risks)).
 - **A budget's creator ends:** the budget lives on. Budgets outlive the processes that made them;
   only destruction, of it or an ancestor, or a deadline ends one.
 - **A budget is destroyed while its own process is in the call:** the process is killed last, and
@@ -489,7 +490,8 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   step.
 - **Everything costs pages**, threads, handles, endpoints and budgets included, so one number
   bounds every kind of exhaustion. Processes are counted apart only because PIDs are
-  address-space tags, which are scarce on rv32.
+  address-space tags, which are scarce on rv32; so the count follows the PID, once per PID held,
+  and the budget a process runs in bounds it by its pages.
 - **Carved, never overcommitted.** An allocation that fails on the caller's own budget reveals
   nothing about anyone else's. A parent counts its children's limits, not their usage, for the
   same reason.
