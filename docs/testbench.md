@@ -165,7 +165,7 @@ The kinds, and the fields each takes besides `description` and `arch`:
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
 | `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong) | `packages` |
-| `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `must_fail` |
+| `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented` |
 | `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
 | `fmt` | the formatting gate ([below](#the-formatting-gate)) | `roots`, `[[skip]]` (`path`, `reason`) |
@@ -325,7 +325,7 @@ The guest's own claims about the network are never trusted.
 
 ## SSH sessions
 
-Status: built · partly tested: the loopback self-checks fail on the development host, where the loopback server cannot start a login shell ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback-deadlock, bench:bench-ssh-guest
+Status: built · partly tested: the loopback self-checks cannot run on the development host while the bench runs in a service's SELinux context ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback-deadlock, bench:bench-ssh-guest, host:testbench::only_the_selinux_exec_refusal_is_the_hosts
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
 while the bench keeps watching the console. Each drives the host's OpenSSH `ssh`, an implementation
@@ -350,7 +350,18 @@ Every session's exit status is checked and all of its output passes `forbid`; a 
 stops the others. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in
 `tests/keys/`; they are public and marked not for production, and a boot manifest that lists one
 must never ship. The `ssh-loopback` kind runs sessions against a host OpenSSH server that `ssh`
-starts itself for each session, in inetd mode, so nothing listens on a port.
+starts itself for each session, in inetd mode, so nothing listens on a port. Its log goes to a file
+beside the transcripts, never to `ssh`'s output, so a late line of the server's cannot stand in for
+the session's last output; a case's `server_log` asks what the server saw (a refused key, say), not
+only what the client printed. Before the first loopback case the bench logs in once and runs
+`exit 0`. One failure of that probe is named as the host's: under SELinux, `sshd` moves the shell
+into the user's default context, which a bench running in a service's context may not enter, and
+the shell's exec is refused. When `ssh` reports `<shell>: Permission denied` and the server's log
+shows the context change, every loopback case fails with that reason, as on a host without
+OpenSSH, and `--allow-skip` skips them. The match is loose: on a host whose `sshd` logs that
+context change, any `/<path>: Permission denied` from `ssh` counts as the host's, not only the
+shell's. Any other probe failure fails every loopback case
+(`host:testbench::only_the_selinux_exec_refusal_is_the_hosts`).
 
 ## Self-checks
 

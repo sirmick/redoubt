@@ -58,6 +58,10 @@ pub struct SshLoopback {
     /// The host key the sessions expect, as an OpenSSH public key line. Defaults to the
     /// server's own (`loopback-host`); a self-check sets another to see the check fail.
     pub host_key: Option<String>,
+    /// Regular expressions each of which must match a line of the server's own log once the
+    /// sessions end: what the server saw, not only what the client says.
+    #[serde(default)]
+    pub server_log: Vec<String>,
     /// See `Boot::must_fail`.
     pub must_fail: Option<String>,
 }

@@ -99,23 +99,96 @@ pub fn loopback(
              KbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPidFile none\n\
              ForceCommand /bin/sh\nAllowTcpForwarding no\nAllowAgentForwarding no\n\
              AllowStreamLocalForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitUserRC no\n\
-             PermitUserEnvironment no\nLogLevel VERBOSE\n",
+             PermitUserEnvironment no\nLogLevel DEBUG1\n",
             key_file(workspace, dir, "loopback-host")?.display(),
             authorized_keys.display()
         ),
     )?;
-    let log = dir.join(format!("{case}-sshd.log"));
+    // sshd appends: a line from an earlier run must not satisfy this one's `server_log`.
+    let log = loopback_log(dir, case);
+    match std::fs::remove_file(&log) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => bail!("removing {}: {e}", log.display()),
+        _ => {}
+    }
     // ssh hands ProxyCommand to a shell; keep the paths free of anything it would interpret.
     let proxy = format!("{SSHD} -i -f {} -E {}", config.display(), log.display());
     ensure!(
         proxy.bytes().all(|b| b.is_ascii_alphanumeric() || b" /._+-".contains(&b)),
         "unusual path in {proxy:?}"
     );
+    // sshd logs to `log`, but its monitor can still write a last line to stderr, which is ssh's:
+    // it would stand in for the session's own last output.
+    let proxy = format!("{proxy} 2>/dev/null");
     let host_key = match host_key {
         Some(key) => key.to_string(),
         None => public_key(workspace, "loopback-host")?,
     };
     Ok(Server::Loopback { proxy, host_key, user })
+}
+
+/// The loopback server's log for `case`, written by `sshd -E`.
+pub fn loopback_log(dir: &Path, case: &str) -> PathBuf { dir.join(format!("{case}-sshd.log")) }
+
+/// Why the loopback server cannot be used.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Unusable {
+    /// Something the host lacks, known by name: the bench reports it as such (`--allow-skip`).
+    Host(String),
+    /// Anything else: the case fails.
+    Broken(String),
+}
+
+/// Whether the host's sshd can log the bench's user in and start a shell: one loopback session
+/// that runs `exit 0`.
+pub fn loopback_usable(workspace: &Path, dir: &Path) -> Result<(), Unusable> {
+    let probe = || -> Result<std::process::Output> {
+        let Server::Loopback { proxy, user, .. } =
+            loopback(workspace, dir, "loopback-probe", &["alice".into()], None)?
+        else {
+            unreachable!("loopback() makes a loopback server")
+        };
+        Command::new(SSH)
+            .args(["-F", "/dev/null", "-T", "-l", &user, "-i"])
+            .arg(key_file(workspace, dir, "alice")?)
+            .args(["-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes"])
+            .args(["-o", "LogLevel=ERROR", "-o", "StrictHostKeyChecking=no"])
+            .args(["-o", "UserKnownHostsFile=/dev/null", "-o", "GlobalKnownHostsFile=/dev/null"])
+            .args(["-o", &format!("ProxyCommand={proxy}"), "--", "loopback", "exit 0"])
+            .stdin(Stdio::null())
+            .output()
+            .context("running ssh")
+    };
+    let output =
+        probe().map_err(|e| Unusable::Broken(format!("the loopback sshd could not be set up: {e:#}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let server_log = std::fs::read_to_string(loopback_log(dir, "loopback-probe")).unwrap_or_default();
+    let context = std::fs::read_to_string("/proc/self/attr/current").unwrap_or_default();
+    Err(probe_failure(
+        &String::from_utf8_lossy(&output.stderr),
+        &server_log,
+        context.trim_end_matches(['\0', '\n']),
+    ))
+}
+
+/// Name a failed probe. Only one failure is the host's, and only when all of it is seen: the
+/// shell's exec refused (`<shell>: Permission denied`, sshd's own words) after sshd moved into the
+/// user's SELinux context (its log says it obtained one). Under SELinux, a bench running in a
+/// service's context may not enter the user's. Every other failure is the bench's or the
+/// server's, and fails the case.
+fn probe_failure(stderr: &str, server_log: &str, context: &str) -> Unusable {
+    let last = stderr.lines().last().unwrap_or("");
+    let exec_refused = last.starts_with('/') && last.ends_with(": Permission denied");
+    let selinux = server_log.lines().find(|l| l.contains("get_user_context: obtained context"));
+    match selinux {
+        Some(line) if exec_refused => Unusable::Host(format!(
+            "the host's sshd cannot start a shell for this user under SELinux: the bench runs in {context}, \
+             sshd logged {:?}, and the shell failed: {last:?}",
+            line.trim()
+        )),
+        _ => Unusable::Broken(format!("the loopback probe failed: last output {last:?}")),
+    }
 }
 
 /// Why a session stopped early.
@@ -491,4 +564,29 @@ impl Driver<'_> {
 
 fn describe(status: ExitStatus) -> String {
     status.code().map_or("killed by a signal".into(), |code| format!("status {code}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SELINUX: &str =
+        "debug1: get_user_context: obtained context 'u:r:t:s0' requested context 'u:r:t:s0'\n";
+
+    /// Only the exec refusal after an SELinux context change is the host's; everything else fails.
+    #[test]
+    fn only_the_selinux_exec_refusal_is_the_hosts() {
+        let host = probe_failure("/bin/bash: Permission denied\n", SELINUX, "system_u:system_r:svc_t:s0");
+        assert!(matches!(host, Unusable::Host(ref why) if why.contains("svc_t")), "{host:?}");
+        for (stderr, log) in [
+            // No context change logged: not known to be SELinux.
+            ("/bin/bash: Permission denied\n", "debug1: something else\n"),
+            // A refused key, a closed connection, nothing at all.
+            ("mick@loopback: Permission denied (publickey).\n", SELINUX),
+            ("Connection closed by UNKNOWN port 65535\n", SELINUX),
+            ("", ""),
+        ] {
+            assert!(matches!(probe_failure(stderr, log, "c"), Unusable::Broken(_)), "{stderr:?} {log:?}");
+        }
+    }
 }
