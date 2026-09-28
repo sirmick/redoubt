@@ -108,8 +108,9 @@ struct State {
     rng: u64,
     /// Abandoned-call notices not yet received: (receiving process, endpoint, message id).
     notices: VecDeque<(usize, usize, u64)>,
-    /// Taken calls whose caller gave up: their reply reaches nobody.
-    abandoned: HashSet<u64>,
+    /// Taken calls whose caller gave up, with the lend each left with its server (address,
+    /// length): the reply reaches nobody and frees the lend (R3).
+    abandoned: HashMap<u64, Option<(usize, usize)>>,
     /// `serve` and `reply` as they happened: (process, call, message id).
     log: Vec<(usize, &'static str, u64)>,
     /// Device objects, by the index their handles carry.
@@ -327,6 +328,14 @@ fn lookup(s: &State, pid: usize, h: Handle) -> Result<Object, Error> {
 /// The endpoint `h` names in `pid`, or `WrongObject` if it names a device.
 fn as_endpoint(s: &State, pid: usize, h: Handle) -> Result<Endpoint, Error> { lookup(s, pid, h)?.endpoint() }
 
+/// Frees a mapping this kernel made, which its process no longer holds.
+fn free(addr: usize, len: usize) {
+    // SAFETY: `addr` was returned by `alloc_zeroed` with exactly this layout (MapAnon, or a
+    // transfer or lend of such a mapping), and its caller has just taken it out of its process's
+    // mappings, so it is freed only once.
+    unsafe { dealloc(addr as *mut u8, Layout::from_size_align(len, PAGE_SIZE).unwrap()) };
+}
+
 /// How long a wait with no deadline may see nothing change before the test is called stuck: far
 /// beyond any step of any test here, however loaded the machine.
 const STUCK: Duration = Duration::from_secs(60);
@@ -377,9 +386,7 @@ impl redoubt_rt::HostKernel for Fake {
                     return Err(Error::InvalidArgument);
                 }
                 s.processes[pid].mappings.remove(&addr);
-                // SAFETY: `addr` was returned by `alloc_zeroed` with exactly this layout
-                // (MapAnon, or a transfer of such a mapping) and is unmapped only once.
-                unsafe { dealloc(addr as *mut u8, Layout::from_size_align(len, PAGE_SIZE).unwrap()) };
+                free(addr, len);
                 Ok(Return::Nothing)
             }
             Call::EndpointCreate => {
@@ -467,8 +474,13 @@ impl redoubt_rt::HostKernel for Fake {
                     .collect::<Result<Vec<_>, _>>()?;
                 s.open.remove(&msg_id.get());
                 s.log.push((pid, "reply", msg_id.get()));
-                // An abandoned call's reply is discarded (R3).
-                let delivered = !s.abandoned.remove(&msg_id.get());
+                // An abandoned call's reply is discarded, and frees its lend (R3).
+                let abandoned = s.abandoned.remove(&msg_id.get());
+                if let Some(Some((addr, len))) = abandoned {
+                    s.processes[pid].mappings.remove(&addr);
+                    free(addr, len);
+                }
+                let delivered = abandoned.is_none();
                 let installed = if delivered { (1 << handles.len()) - 1 } else { 0 };
                 if delivered {
                     s.replies.insert(msg_id.get(), (body.words, handles));
@@ -568,13 +580,14 @@ impl Fake {
                 // A call the server took is abandoned (R3): it stays open there until the
                 // server replies, and the server is told.
                 if let Some(&(receiver, endpoint)) = s.open.get(&id.get()) {
-                    s.abandoned.insert(id.get());
                     s.notices.push_back((receiver, endpoint, id.get()));
                     self.changed.notify_all();
-                    if let Some(pages) = pages {
+                    let lend = pages.map(|pages| {
                         let len = s.processes[pid].mappings.remove(&pages.addr).unwrap();
                         s.processes[receiver].mappings.insert(pages.addr, len);
-                    }
+                        (pages.addr, len)
+                    });
+                    s.abandoned.insert(id.get(), lend);
                     return Ok(Return::Call(CallOutcome {
                         status: Err(Error::Timeout),
                         lend: if pages.is_some() { LendDisposition::Consumed } else { LendDisposition::None },
