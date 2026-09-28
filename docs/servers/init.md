@@ -59,8 +59,9 @@ and `init`'s only input. Its entries:
   library; none has a compiled-in count. `init` refuses the boot unless N is at least the number
   of distinct (account, label set)s the manifest routes to that server, plus its system callers.
   So a server's bucket count never binds in normal use, and a full server cannot tell a latecomer
-  that others hold state ([serving](serving.md#residual-risks)). `bootfsd`, `consoled` and `keyd`
-  depart from it: they compile their counts in ([todo](../todo/server-bucket-counts.md)).
+  that others hold state ([serving](serving.md#residual-risks)). A server whose block has no `buckets=N`, or
+  one outside 1 to 32, does not start. `init` does not exist yet, so the check against the
+  manifest's routes is not built ([todo](../todo/server-bucket-counts.md)).
 - **Weights.** One stride queue serves every budget ([scheduling](../kernel/scheduling.md)), so
   the manifest's weights are the whole scheduling policy. `init`, the steward and the drivers
   (`consoled`, `blkd`, `netd`) get weights an order of magnitude above a session's (1000 against

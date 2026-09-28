@@ -102,7 +102,7 @@
   - [Paths the docs checker names that no longer exist](todo/doccheck-stale-paths.md)
   - [The steward decision-wake target](todo/sched-latency-target.md)
   - [The loader stub's unsafe budget](todo/stub-unsafe-budget.md)
-  - [Compiled-in bucket counts](todo/server-bucket-counts.md)
+  - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [Process names in verdicts and case descriptions](todo/verdict-strings.md)
   - [User cache-block invalidation](todo/user-cache-invalidate.md)

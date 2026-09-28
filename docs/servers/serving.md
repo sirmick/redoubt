@@ -345,7 +345,7 @@ could read a's labels itself (`properties` checks exactly that).
 
 ### R26 (admission fairness)
 
-Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested: host:redoubt-rt::the_key_is_the_account_and_the_label_set, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::self_minting_does_not_multiply_the_share, host:redoubt-rt::an_account_0_chain_holds_one_bucket, host:redoubt-rt::an_account_0_rooted_chain_holds_one_bucket, host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything, host:redoubt-rt::open_calls_leave_headroom, host:redoubt-rt::the_worst_order_never_passes_the_headroom
+Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested: host:redoubt-rt::the_key_is_the_account_and_the_label_set, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::self_minting_does_not_multiply_the_share, host:redoubt-rt::an_account_0_chain_holds_one_bucket, host:redoubt-rt::an_account_0_rooted_chain_holds_one_bucket, host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything, host:redoubt-rt::open_calls_leave_headroom, host:redoubt-rt::the_worst_order_never_passes_the_headroom, host:redoubt-rt::a_bucket_count_is_given_once_and_never_defaulted, host:redoubt-bootfsd::a_bad_public_list_stops_the_server, host:redoubt-consoled::a_console_with_no_device_does_not_start, host:redoubt-keyd::bad_key_arguments_stop_keyd_starting, host:redoubt-ipd::the_rig_and_the_milestone_parse
 
 One client cannot use up a shared server that serves others. What a client holds in a server is
 counted per (account, label set), and per badge for account 0; within a bucket of a non-zero account
@@ -362,7 +362,9 @@ non-zero account is keyed by that account. The kernel's
 this rule shares what the server holds afterwards. `Minted::key` is the one fold every charge
 goes through: an account-0 caller's key names the root badge its chain was minted through, so the
 skeleton's fids and connections, a server's parked calls and `ipd`'s sockets all land in that
-root's bucket.
+root's bucket. How many buckets a shared server has is `buckets=N` in its startup block, parsed
+once by the serving library with no default: a server not told, or told a count outside 1 to 32
+or its budget, does not start, so no count is fixed in code where the manifest cannot follow it.
 
 ### R27 (badge allocation)
 
@@ -411,9 +413,9 @@ Status: built · partly tested: the exit after a rejected fallback reply is argu
 - **An undersized server is a channel.** A server sized for fewer buckets than the (account,
   label set)s it serves refuses the latecomers, which tells them others hold state: across
   accounts, and between the label sets of one account, where it is a channel out of a vault. The
-  manifest sizes each server's bucket count to the label sets it serves
-  ([init](init.md#the-boot-manifest)); `bootfsd`, `consoled` and `keyd` compile theirs in
-  ([todo](../todo/server-bucket-counts.md)).
+  manifest sizes each server's bucket count to the label sets it serves, and a server not sized
+  does not start ([init](init.md#the-boot-manifest)); `init` does not yet check N against the
+  manifest's routes ([todo](../todo/server-bucket-counts.md)).
 - **A full bucket makes the last comer wait.** With three or more badges in one bucket, the
   bucket can fill, and a further badge is refused until one gives something back.
 - **A parked call costs its caller and the server.** Each holds one of the caller's

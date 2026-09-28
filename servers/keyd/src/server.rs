@@ -55,16 +55,16 @@ pub const MAX_RECORD: usize = 8 * 1024;
 /// cannot collide with a real one.
 pub const ALL_GRANTS: u64 = 0;
 
-/// What a client may hold in `keyd` at once, per (account, label set) (servers/serving.md R26).
+/// What a client may hold in `keyd` at once, per (account, label set) (servers/serving.md R26), in
+/// `buckets` buckets.
 ///
 /// - `buckets`: the (account, label set)s `keyd` serves at once — `sshd` and the steward (account 0, one
-///   bucket each by badge), and a bucket per logged-in principal and per labelled session of one. Sized for
-///   more than milestone 1 has, so the cap does not bind in normal use; the count is compiled in rather than
-///   taken from the manifest (docs/todo/server-bucket-counts.md).
+///   bucket each by badge), and a bucket per logged-in principal and per labelled session of one: the
+///   manifest's `buckets=N` ([`redoubt_rt::server::buckets`]), never a count in this code.
 /// - `in_flight` is 0: no call is ever parked here; every request is answered as it is taken.
 /// - `files` is 0: `keyd` has no files.
 /// - `state`: capabilities `grant` has made and `release` has not freed.
-pub const LIMITS: Limits = Limits { buckets: 16, in_flight: 0, files: 0, state: 8 };
+pub const fn limits(buckets: u32) -> Limits { Limits { buckets, in_flight: 0, files: 0, state: 8 } }
 
 /// What one of those costs `keyd`, in bytes: a granted capability is its record here and a
 /// badged handle in the kernel, rounded up generously.
@@ -72,7 +72,7 @@ pub const COST: Cost = Cost { in_flight: 0, file: 0, state: 512 };
 
 /// The bytes of `keyd`'s budget its clients may use between them; its manifest entry gives it
 /// the budget, and [`KeyServer::new`] refuses limits that would not fit
-/// (`LIMITS.fits(&COST, BUDGET)`).
+/// (`limits(buckets).fits(&COST, BUDGET)`).
 pub const BUDGET: u64 = 256 * 1024;
 
 /// `keyd`: its keys, the capabilities it has granted, and its admission.

@@ -39,8 +39,8 @@ with nothing below it.
   That reply does not close the handles the request carried, a departure from the serving
   library's rule that unasked handles are closed (Residual risks).
 - **Admission:** at most 2 parked reads, 4 fids and 4 connections per (account, label set), across
-  at most 4 of those (`LIMITS`), sized to fit its 1 MiB budget. The bucket count is compiled in,
-  a departure from the rule that every shared server takes `buckets=N` from the manifest.
+  at most `buckets=N` of those, sized to fit its 1 MiB budget; a block with no `buckets=N`, or
+  one the budget cannot hold, and `consoled` does not start ([init](init.md#the-boot-manifest)).
 
 ### Two threads and the UART
 
@@ -136,8 +136,6 @@ Status: built · partly tested: the restart claims are read from the code, not a
   admission slots until a key arrives or its caller gives up.
 - **Anyone with a connection reads the console.** What is typed on the physical console is visible to
   every holder of a `consoled` connection.
-- **The code departs from a rule.** Its bucket count is compiled in
-  ([todo](../todo/server-bucket-counts.md)).
 - **`consoled` does not run in a boot.** The bench's console is an interim log server holding the
   same UART; the two must never run together.
 

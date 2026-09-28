@@ -36,7 +36,7 @@ const AUDIT_BADGE: u64 = 2;
 fn server() -> KeyServer {
     let args = [format!("host,ssh_host,{HOST_SEED}"), format!("audit,audit,{AUDIT_SEED}")];
     let keys = Keys::from_args(args.iter().map(String::as_str)).unwrap();
-    KeyServer::new(keys, LIMITS, &COST, BUDGET, TEST_RANDOM).unwrap()
+    KeyServer::new(keys, limits(16), &COST, BUDGET, TEST_RANDOM).unwrap()
 }
 
 fn caller(badge: u64, account: u64, labels: &[u64]) -> Caller {
@@ -560,9 +560,9 @@ fn a_flood_takes_only_the_flooders_share() {
     let mut agent_got = 0;
     while let Answered::Ok(OwnedReply::Granted(..)) = ask(&mut s, &mut k, &agent, &grant, &[]) {
         agent_got += 1;
-        assert!(agent_got <= LIMITS.state, "the cap holds");
+        assert!(agent_got <= limits(16).state, "the cap holds");
     }
-    assert_eq!(agent_got, LIMITS.state / 2, "half the bucket, so the sponsor still fits");
+    assert_eq!(agent_got, limits(16).state / 2, "half the bucket, so the sponsor still fits");
     assert!(matches!(ask(&mut s, &mut k, &agent, &grant, &[]), Answered::Err(ErrorCode::TooMany)));
     // The sponsor, sharing the bucket, still gets a share of its own.
     assert!(matches!(ask(&mut s, &mut k, &sponsor, &grant, &[]), Answered::Ok(OwnedReply::Granted(..))));
@@ -580,10 +580,7 @@ fn a_flood_takes_only_the_flooders_share() {
 }
 
 /// **Only a root badge may grant.** A granted capability cannot grant again, so grants never
-/// chain. That is what stops a system-class caller escaping its cap: `admit` keys account 0 by
-/// badge, and `share` folds a capability into its parent's only when the requester and the
-/// caller are the same client, which two badges of account 0 never are — so a chain would open
-/// a fresh bucket per link until `LIMITS.buckets` were spent and nobody could grant at all.
+/// chain: a key's holders stay the ones the manifest names.
 #[test]
 fn a_granted_capability_cannot_grant_again() {
     let (mut s, mut k) = (server(), FakeKernel::new());
@@ -687,7 +684,7 @@ fn release_zero_frees_everything_this_caller_granted() {
     while let Answered::Ok(OwnedReply::Granted(..)) = ask(&mut s, &mut k, &steward, &grant, &[]) {
         mine += 1;
     }
-    assert_eq!(mine, LIMITS.state, "account 0 has a bucket of its own, undivided");
+    assert_eq!(mine, limits(16).state, "account 0 has a bucket of its own, undivided");
     let Answered::Ok(OwnedReply::Granted(theirs, _)) = ask(&mut s, &mut k, &other, &grant, &[]) else {
         panic!("grant")
     };
@@ -751,7 +748,7 @@ fn a_grant_that_fails_gives_its_admission_back() {
     {
         got += 1;
     }
-    assert_eq!(got, LIMITS.state / 2, "the failed attempt cost nothing");
+    assert_eq!(got, limits(16).state / 2, "the failed attempt cost nothing");
 }
 
 /// The label check on every request (servers/serving.md R25). `keyd`'s keys are unlabelled in
@@ -820,20 +817,20 @@ fn one_requests_work_is_bounded() {
 /// cap fits the budget, the open calls they allow leave the headroom, and a cap can seat a share.
 #[test]
 fn the_limits_are_sized_as_containment_says() {
-    assert!(LIMITS.fits(&COST, BUDGET));
+    assert!(limits(16).fits(&COST, BUDGET));
     let keys = || Keys::from_args([format!("k,audit,{AUDIT_SEED}")].iter().map(String::as_str)).unwrap();
-    assert!(KeyServer::new(keys(), LIMITS, &COST, BUDGET, TEST_RANDOM).is_ok());
+    assert!(KeyServer::new(keys(), limits(16), &COST, BUDGET, TEST_RANDOM).is_ok());
     // Every bucket at its cap: what the budget must cover, and one byte less is refused rather
     // than rounded (servers/serving.md R26).
-    let need = u64::from(LIMITS.buckets) * u64::from(LIMITS.state) * COST.state;
+    let need = u64::from(limits(16).buckets) * u64::from(limits(16).state) * COST.state;
     assert!(need <= BUDGET, "the shipped budget covers the shipped caps");
-    assert!(KeyServer::new(keys(), LIMITS, &COST, need, TEST_RANDOM).is_ok());
-    assert!(KeyServer::new(keys(), LIMITS, &COST, need - 1, TEST_RANDOM).is_err());
+    assert!(KeyServer::new(keys(), limits(16), &COST, need, TEST_RANDOM).is_ok());
+    assert!(KeyServer::new(keys(), limits(16), &COST, need - 1, TEST_RANDOM).is_err());
     // A cap of one cannot seat a share and its sponsor.
-    assert!(KeyServer::new(keys(), Limits { state: 1, ..LIMITS }, &COST, BUDGET, TEST_RANDOM).is_err());
+    assert!(KeyServer::new(keys(), Limits { state: 1, ..limits(16) }, &COST, BUDGET, TEST_RANDOM).is_err());
     // `keyd` parks no calls, so it asks for no open calls beyond the ones it is answering.
-    assert_eq!(LIMITS.in_flight, 0);
-    assert_eq!(LIMITS.open_calls(), 0);
+    assert_eq!(limits(16).in_flight, 0);
+    assert_eq!(limits(16).open_calls(), 0);
 }
 
 /// Random words, from every badge, never panic and never answer anything but a reply of this

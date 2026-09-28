@@ -148,6 +148,28 @@ pub struct Refused;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unsized;
 
+/// The most buckets a shared server may be given.
+pub const MAX_BUCKETS: u32 = 32;
+
+/// The argument that sizes a shared server: `buckets=N` (servers/init.md, "The boot manifest").
+const BUCKETS: &str = "buckets=";
+
+/// A shared server's bucket count from its arguments: `buckets=N` exactly once, `N` decimal
+/// without leading zeros, 1 to [`MAX_BUCKETS`]. There is no default: a count fixed in code
+/// cannot follow the manifest (servers/serving.md R26), so a server not told refuses to start.
+pub fn buckets(args: &[&str]) -> Result<u32, Unsized> {
+    let mut given = args.iter().filter_map(|arg| arg.strip_prefix(BUCKETS));
+    let (Some(n), None) = (given.next(), given.next()) else { return Err(Unsized) };
+    let canonical = !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && !n.starts_with('0');
+    let n: u32 = n.parse().ok().filter(|_| canonical).ok_or(Unsized)?;
+    if (1..=MAX_BUCKETS).contains(&n) { Ok(n) } else { Err(Unsized) }
+}
+
+/// The arguments a server reads for itself: all but `buckets=`, which [`buckets`] reads.
+pub fn own_args<'a>(args: &'a [&'a str]) -> impl Iterator<Item = &'a str> + 'a {
+    args.iter().copied().filter(|arg| !arg.starts_with(BUCKETS))
+}
+
 /// Caps for the bucket of one account-0 root badge, in place of [`Limits`]' per-bucket caps
 /// (`ipd` gives `sshd` room for a parked accept and two calls per session, and the
 /// steward room for its grants). It applies only to a caller with account 0 calling on exactly
@@ -341,6 +363,31 @@ mod tests {
     use redoubt_sys::Labels;
 
     use super::*;
+
+    /// servers/serving.md R26: every shared server is told its bucket count; one it is not told,
+    /// or told badly, refuses to start rather than guess.
+    #[test]
+    fn a_bucket_count_is_given_once_and_never_defaulted() {
+        assert_eq!(buckets(&["buckets=4"]), Ok(4));
+        assert_eq!(buckets(&["other", "buckets=32", "x=1"]), Ok(32));
+        for bad in [
+            &[][..],
+            &["other"],
+            &["buckets=4", "buckets=4"],
+            &["buckets=0"],
+            &["buckets=33"],
+            &["buckets=04"],
+            &["buckets="],
+            &["buckets=-1"],
+            &["buckets=+4"],
+            &["buckets=4x"],
+            &["buckets=99999999999"],
+        ] {
+            assert_eq!(buckets(bad), Err(Unsized), "{bad:?}");
+        }
+        let args = ["a", "buckets=4", "b"];
+        assert_eq!(own_args(&args).collect::<Vec<_>>(), ["a", "b"]);
+    }
 
     fn caller(account: u64, labels: &[u64]) -> Caller {
         Caller { badge: 7, account, labels: Labels::from_slice(labels).unwrap() }

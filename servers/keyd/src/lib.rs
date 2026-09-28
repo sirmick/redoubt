@@ -43,4 +43,4 @@ pub mod sha256;
 pub mod ssh;
 
 pub use keys::{Keys, Purpose};
-pub use server::{BUDGET, COST, KeyServer, LIMITS};
+pub use server::{BUDGET, COST, KeyServer, limits};

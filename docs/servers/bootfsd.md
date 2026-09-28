@@ -34,9 +34,8 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
   never change, so every qid version is 0.
 - **Admission** ([R26 (admission fairness)](serving.md#r26-admission-fairness)): at most 32 open
   fids and 8 minted connections per (account, label set), and per badge for account 0, across at
-  most 16 of those at once
-  (`LIMITS`), sized to fit its 256 KiB budget. The bucket count is compiled in, a departure from
-  the rule that every shared server takes `buckets=N` from the manifest
+  most `buckets=N` of those at once, sized to fit its 256 KiB budget; a block with no
+  `buckets=N`, or one the budget cannot hold, and `bootfsd` does not start
   ([init](init.md#the-boot-manifest)).
 
 ### Filling it
@@ -108,8 +107,6 @@ Status: built · partly tested: that a restarted `bootfsd` serves nothing until 
   published entry; a secret put on the `public` list is a secret published.
 - **A restart empties `/boot`** until its launcher fills it again; who does that after boot is
   [init](init.md#restarts-and-reboots)'s.
-- **Its bucket count is compiled in,** so the manifest cannot size it to the principals it
-  serves. Follow-up: [todo](../todo/server-bucket-counts.md).
 - **`bootfsd` does not boot in the bench.** It is attacked by host tests against the runtime's
   fake kernel (`r4-host-tests`); `bootfsd-build` only builds it for both widths.
 

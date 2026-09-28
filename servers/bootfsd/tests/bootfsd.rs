@@ -34,10 +34,11 @@ fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread:
     })
 }
 
-/// The block `init` writes for `bootfsd`: the endpoint it receives on, and the `public` list.
+/// The block `init` writes for `bootfsd`: the endpoint it receives on, its bucket count, and the
+/// `public` list.
 fn block(receive: Handle, public: &[&str]) -> Vec<u8> {
     let mut builder = StartupBuilder::new(receive.index());
-    builder.handle("bootfsd", receive);
+    builder.handle("bootfsd", receive).arg("buckets=16");
     for name in public {
         builder.arg(name);
     }
@@ -230,4 +231,18 @@ fn a_bad_public_list_stops_the_server() {
     let empty = StartupBuilder::new(0).finish().unwrap();
     let thread = launch(f.process(0, &[]), empty, bootfsd::serve);
     assert_eq!(thread.join().unwrap(), bootfsd::NO_ENDPOINT);
+
+    // A block that does not size it, or sizes it at nothing, or for more than its budget holds:
+    // it does not guess a count (servers/serving.md R26).
+    for sizing in [&[][..], &["buckets=0"], &["buckets=16", "buckets=16"], &["buckets=32"]] {
+        let server = f.process(0, &[]);
+        let receive = f.endpoint(server);
+        let mut builder = StartupBuilder::new(receive.index());
+        builder.handle("bootfsd", receive);
+        for arg in sizing {
+            builder.arg(arg);
+        }
+        let thread = launch(server, builder.finish().unwrap(), bootfsd::serve);
+        assert_eq!(thread.join().unwrap(), bootfsd::BAD_LIMITS, "{sizing:?}");
+    }
 }

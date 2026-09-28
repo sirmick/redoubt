@@ -156,8 +156,8 @@ it serves:
 - `ingress=BADGE`: the badge `netd`'s frames arrive on, once; it has no `/net`;
 - `scope=BADGE:RULE[,RULE...]`: one root badge's scope, at most 8 badges of at most 8 rules; a rule
   is `c:A.B.C.D/LEN:PORTS` or `l:PORTS`, `PORTS` being `P` or `LO-HI`;
-- `buckets=N`: admission buckets, 1 to 32 (default 6), parsed by `ipd` itself where the rule has the
-  serving library parse it for every shared server ([todo](../todo/server-bucket-counts.md));
+- `buckets=N`: admission buckets, 1 to 32, required, parsed by the serving library as every
+  shared server's is ([init](init.md#the-boot-manifest));
 - `limits=BADGE:INFLIGHT:STATE:SOCKETS`: caps for one scope badge's bucket in place of the defaults,
   at most 8 (an account-0 override, [serving](serving.md#admit)).
 

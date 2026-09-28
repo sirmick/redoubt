@@ -30,4 +30,4 @@ extern crate alloc;
 
 pub mod server;
 
-pub use server::{BUDGET, BootFs, COST, LIMITS, MAX_BYTES, MAX_ENTRIES, SetupError};
+pub use server::{BUDGET, BootFs, COST, MAX_BYTES, MAX_ENTRIES, SetupError, limits};

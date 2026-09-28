@@ -54,7 +54,8 @@ fn block(receive: Handle, mmio: Handle, irq: Handle) -> Vec<u8> {
     builder
         .handle(consoled::ENDPOINT, receive)
         .handle(consoled::UART_MMIO, mmio)
-        .handle(consoled::UART_IRQ, irq);
+        .handle(consoled::UART_IRQ, irq)
+        .arg("buckets=4");
     builder.finish().expect("the block")
 }
 
@@ -383,9 +384,27 @@ fn a_console_with_no_device_does_not_start() {
     // The UART but no interrupt: a read would wait for ever, so it does not start either.
     let highest = mmio.index().max(receive.index());
     let mut no_irq = StartupBuilder::new(highest);
-    no_irq.handle(consoled::ENDPOINT, receive).handle(consoled::UART_MMIO, mmio);
+    no_irq.handle(consoled::ENDPOINT, receive).handle(consoled::UART_MMIO, mmio).arg("buckets=4");
     let thread = launch(server, no_irq.finish().unwrap(), consoled::serve);
     assert_eq!(thread.join().unwrap(), consoled::NO_IRQ);
+
+    // A console its block does not size, or sizes at nothing, or for more than its budget holds:
+    // it does not guess a count (servers/serving.md R26).
+    for sizing in [&[][..], &["buckets=0"], &["buckets=4", "buckets=4"], &["buckets=32"]] {
+        let unsized_ = f.process(0, &[]);
+        let receive = f.endpoint(unsized_);
+        let (mmio, irq) = f.device(unsized_, REGISTERS);
+        let mut builder = StartupBuilder::new(receive.index().max(mmio.index()).max(irq.index()));
+        builder
+            .handle(consoled::ENDPOINT, receive)
+            .handle(consoled::UART_MMIO, mmio)
+            .handle(consoled::UART_IRQ, irq);
+        for arg in sizing {
+            builder.arg(arg);
+        }
+        let thread = launch(unsized_, builder.finish().unwrap(), consoled::serve);
+        assert_eq!(thread.join().unwrap(), consoled::BAD_LIMITS, "{sizing:?}");
+    }
 
     // A mapping too short to be a 16550 is not one.
     let short = f.process(0, &[]);
