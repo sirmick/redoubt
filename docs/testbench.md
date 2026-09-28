@@ -180,13 +180,14 @@ bounds a measured cost.
 
 ### The scheduler oracle
 
-Status: built · tested: bench:sched-ties, host:testbench::a_trace_that_keeps_every_clause_passes, host:testbench::each_broken_clause_is_caught, host:testbench::a_broken_trace_is_rejected, host:testbench::the_models_own_ranks_pass, host:testbench::the_models_broken_ties_are_caught, host:testbench::lifts_are_recomputed, host:testbench::the_floor_and_the_passes_are_checked_on_their_own, host:testbench::destructions_are_timed_and_bounded
+Status: built · tested: bench:sched-ties, host:testbench::a_trace_that_keeps_every_clause_passes, host:testbench::each_broken_clause_is_caught, host:testbench::a_broken_trace_is_rejected, host:testbench::the_models_own_ranks_pass, host:testbench::the_models_broken_ties_are_caught, host:testbench::lifts_are_recomputed, host:testbench::weight_changes_are_recomputed, host:testbench::the_floor_and_the_passes_are_checked_on_their_own, host:testbench::destructions_are_timed_and_bounded
 
 The oracle is independent of the kernel's code: it reads what the queue did (woke, requeued, left,
 pass changed, picked), never why, and rebuilds the order from the events alone: the lowest pass
 first; at an equal pass a budget that woke ahead of one requeued; of two that woke, the later
 kernel entry's first, and within one entry the lower id; requeued ones in the order they were
-requeued. It is itself checked against the model's ranks and against traces broken one clause at a
+requeued. It recomputes each lift and each weight change from the rule, and lets a pass fall only
+at a weight change. It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only
 ([R23 (no test channels)](kernel/scheduling.md#r23-no-test-channels)).
 

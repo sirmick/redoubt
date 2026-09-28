@@ -18,6 +18,8 @@
 //!   reconcile's wake first; within one reconcile the lower id first; requeues FIFO.
 //! - **Inheritance**: a child enters at `max(floor, parent pass)` ([`entry`]); when destroyed, its work since
 //!   entry is added to its parent's lead, normalized by weight ([`lift`]).
+//! - **Weight change** ([`rescale`]): at a carve or a carve returned, what the budget owes, its lead over the
+//!   floor and its remainder, is restated exactly at the new weight; a carve and its return cancel.
 //! - **Deschedule**: a budget taken off the CPU is charged what it ran, and at least [`MIN_CHARGE`] (a run
 //!   too short for the clock to see is not free).
 //!
@@ -69,15 +71,33 @@ pub fn charge(s: &mut State, weight: u64, runtime: u64) {
     s.rem = t % weight;
 }
 
-/// A budget's stride weight changes from `old` to `new` (a carve, or a carve returned). Runtime
-/// has already been charged at `old`; the remainder is rescaled, losing under one pass unit.
-pub fn rescale(rem: u64, old: u64, new: u64) -> u64 {
-    if old == 0 || new == 0 {
-        return 0;
-    }
-    // rem < old < 2^32 and new < 2^32: the product fits in 64 bits.
-    let r = rem.min(old - 1) * new / old;
-    r.min(new - 1)
+/// A budget's stride weight changes from `old` to `new` (a carve, or a carve returned), its
+/// runtime already charged at `old`. What it owes, `W = (pass − floor)⁺·old + rem`, is kept exactly
+/// and restated at the new weight: `pass = floor + W / new`, `rem = W mod new`
+/// (`kernel/scheduling.md`, "The lead follows the weight"). So a carve and its return with no run
+/// between leave the state as it was. A pass below the floor owes only its remainder (waking lifts
+/// it to the floor anyway). A budget at weight 0 holds no process; what it owes is stated at
+/// weight 1 meanwhile, so it is carried exactly through 0 (a carve of everything and the return of
+/// part of it is the carve old to new).
+pub fn rescale(s: &mut State, old: u64, new: u64, floor: u128) {
+    let (old, new) = (old.max(1), new.max(1));
+    // Saturating: far beyond any pass a machine reaches, but a weight change must not stop the
+    // kernel.
+    let owed = s.pass.saturating_sub(floor).saturating_mul(u128::from(old)).saturating_add(u128::from(s.rem));
+    let w = u128::from(new);
+    s.pass = floor.saturating_add(owed / w);
+    s.rem = (owed % w) as u64;
+}
+
+/// One weight change ([`rescale`]): what went in and what came out, for a kernel that records it
+/// (the test-only `sched-trace`, checked by the bench's oracle).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reweigh {
+    pub before: State,
+    pub after: State,
+    pub old: u64,
+    pub new: u64,
+    pub floor: u128,
 }
 
 /// Where a new budget enters: `max(floor, parent's pass)` (the parent's runtime already charged).
@@ -145,6 +165,9 @@ pub trait Budgets<B> {
     fn left(&mut self, _b: B) {}
     /// `child`'s work moved to `parent` (called after the parent's new state is set).
     fn lifted(&mut self, _parent: B, _child: B, _lift: &Lift) {}
+    /// `b`'s weight changed and its state was converted (called before its new state is set, so
+    /// the conversion is recorded ahead of the pass it may lower).
+    fn reweighed(&mut self, _b: B, _r: &Reweigh) {}
 }
 
 /// The queue: every budget with a runnable thread (or running), at most `N` of them, and the
@@ -289,10 +312,13 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         })
     }
 
-    /// `b`'s stride weight changed from `old` to `new` (its runtime already folded at `old`).
+    /// `b`'s stride weight changed from `old` to `new` (its runtime already folded at `old`): its
+    /// lead and remainder are converted to the new weight ([`rescale`]).
     pub fn reweigh(&mut self, bs: &mut impl Budgets<B>, b: B, old: u64, new: u64) {
-        let mut s = bs.state(b);
-        s.rem = rescale(s.rem, old, new);
+        let before = bs.state(b);
+        let mut s = before;
+        rescale(&mut s, old, new, self.floor);
+        bs.reweighed(b, &Reweigh { before, after: s, old, new, floor: self.floor });
         bs.set_state(b, s);
     }
 
@@ -377,7 +403,7 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
     }
 
     /// `b`'s stride weight changes by `change`: what it ran is charged at the old weight first,
-    /// then its remainder is rescaled.
+    /// then its lead and remainder are converted to the new weight.
     pub fn change_weight<S: Budgets<B>>(&mut self, bs: &mut S, b: B, change: impl FnOnce(&mut S)) {
         self.settle(bs, b);
         let old = bs.weight(b);

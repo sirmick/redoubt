@@ -185,6 +185,8 @@ pub enum Mutation {
     R12FoldAtNewWeight,
     /// A deschedule charges only what the clock saw: a run shorter than one unit is free.
     R12NoMinimumCharge,
+    /// A carve rescales only the remainder; only a carve's return converts the lead.
+    R12RescaleOnlyOnReturn,
     /// A deadline's destruction is billed to no budget.
     R12DeadlineWorkUnbilled,
     // kernel/ipc.md, Messages: what the kernel attaches, and notices.
@@ -311,7 +313,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 132] = {
+    pub const ALL: [Mutation; 133] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -392,6 +394,7 @@ impl Mutation {
             R12LiftCountsEntryWait,
             R12FoldAtNewWeight,
             R12NoMinimumCharge,
+            R12RescaleOnlyOnReturn,
             R12DeadlineWorkUnbilled,
             MsgNoLabels,
             MsgBadgeZero,
@@ -525,6 +528,7 @@ impl Mutation {
             | R12LiftCountsEntryWait
             | R12FoldAtNewWeight
             | R12NoMinimumCharge
+            | R12RescaleOnlyOnReturn
             | R12DeadlineWorkUnbilled => "R12",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "R13",
             MsgNoLabels | MsgBadgeZero | MsgAccountZero | MsgIdsGlobal => "R14",

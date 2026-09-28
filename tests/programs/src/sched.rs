@@ -86,6 +86,9 @@ pub enum Role {
     /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from 200 µs
     /// ahead, each round then counting for 1 ms; report the count.
     DeadlineFlood = 19,
+    /// Carve p0 of this budget's weight (slot 3) to an empty child, count 9 ms, destroy the child
+    /// so the weight comes back, then count until the window ends; report that last count.
+    CarveSpin = 20,
 }
 
 impl Role {
@@ -111,6 +114,7 @@ impl Role {
             WakeDelay,
             DestroyThenCount,
             DeadlineFlood,
+            CarveSpin,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -413,6 +417,12 @@ pub extern "C" fn child(arg: usize) -> ! {
             n
         }
         Some(Role::BudgetChurn) => budget_churn(end, tpu),
+        Some(Role::CarveSpin) => {
+            let child = rd::create(3, &rd::spec(0, 0, param(0) as u32)).expect("the carve");
+            spin_until(ticks() + 9_000 * tpu);
+            rd::destroy(child).expect("the carve's return");
+            spin_until(end)
+        }
         Some(Role::TimerFlood) => {
             let threads = param(2).max(1) as usize;
             for i in 0..threads {

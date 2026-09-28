@@ -73,20 +73,49 @@ fn every_charge_counts_at_any_weight() {
 }
 
 #[test]
-fn a_rescale_loses_under_one_unit() {
+fn a_carve_and_its_return_leave_the_state() {
     let mut rng = Rng(7);
     for _ in 0..100_000 {
-        let old = rng.range(1, u64::from(u32::MAX));
-        let new = rng.range(1, u64::from(u32::MAX));
-        let rem = rng.range(0, old - 1);
-        let r = rescale(rem, old, new);
-        assert!(r < new);
-        // r/new <= rem/old < (r + 1)/new
-        assert!(u128::from(r) * u128::from(old) <= u128::from(rem) * u128::from(new));
-        assert!(u128::from(rem) * u128::from(new) < (u128::from(r) + 1) * u128::from(old));
+        let f = u128::from(rng.range(0, 1 << 40));
+        let w = rng.range(2, u64::from(u32::MAX));
+        let kept = rng.range(1, w - 1);
+        let s = State {
+            pass: f + u128::from(rng.range(0, 1 << 30)),
+            rem: rng.range(0, w - 1),
+            ..State::default()
+        };
+        // What it owes is kept exactly at the smaller weight...
+        let mut carved = s;
+        rescale(&mut carved, w, kept, f);
+        assert!(carved.rem < kept);
+        let owed = |x: &State, w: u64| (x.pass - f) * u128::from(w) + u128::from(x.rem);
+        assert_eq!(owed(&carved, kept), owed(&s, w));
+        // ...and the carve's return with no run between restores the state.
+        let mut back = carved;
+        rescale(&mut back, kept, w, f);
+        assert_eq!(back, s);
     }
-    assert_eq!(rescale(5, 0, 10), 0);
-    assert_eq!(rescale(5, 10, 0), 0);
+    // A carve raises the lead by the ratio of the weights: lead 20 at 10 is lead 200 at 1.
+    let mut s = State { pass: 120, rem: 3, ..State::default() };
+    rescale(&mut s, 10, 1, 100);
+    assert_eq!((s.pass, s.rem), (303, 0));
+    // Below the floor only the remainder is owed; weight 0 converts nothing.
+    let mut low = State { pass: 90, rem: 7, ..State::default() };
+    rescale(&mut low, 10, 5, 100);
+    assert_eq!((low.pass, low.rem), (101, 2));
+    // Through weight 0 what it owes is carried exactly: a carve of everything (10 to 0) and the
+    // return of only part of it (0 to 5) is the carve 10 to 5.
+    let s = State { pass: 120, rem: 3, ..State::default() };
+    let mut direct = s;
+    rescale(&mut direct, 10, 5, 100);
+    let mut through = s;
+    rescale(&mut through, 10, 0, 100);
+    rescale(&mut through, 0, 5, 100);
+    assert_eq!(through, direct);
+    let mut back = through;
+    rescale(&mut back, 5, 0, 100);
+    rescale(&mut back, 0, 10, 100);
+    assert_eq!(back, s);
 }
 
 #[test]
@@ -107,17 +136,16 @@ fn create_then_destroy_without_a_run_moves_nothing() {
 
 #[test]
 fn a_churned_child_adds_to_a_leading_parent() {
-    // P (100, spinning, lead S/99 after its own slice) destroys C (1), which ran a slice
-    // (work S). The additive rule charges both: P ends at f + S/99 + S/100.
+    // P (100, spinning, lead S/99 after its own slice at 99) destroys C (1), which ran a slice
+    // (work S). The additive rule charges both at P's restored weight: f + S/100 + S/100.
     let s = 10_000 * STRIDE; // one slice of work
     let f: u128 = 1 << 40;
     let mut p = State { pass: f + u128::from(s / 99), rem: s % 99, ..State::default() };
     let c = State { pass: f + u128::from(s), entry: f, ..State::default() };
-    // P's remainder was at weight 99; its carve returning makes it 100.
-    p.rem = rescale(p.rem, 99, 100);
+    // P's lead was run at weight 99; its carve returning restates it at 100, exactly.
+    rescale(&mut p, 99, 100, f);
     lift(&mut p, &c, 1, 100, f);
-    let want = f + u128::from(s / 99) + u128::from(s / 100);
-    assert!(p.pass == want || p.pass == want + 1, "P at {}, want about {want}", p.pass);
+    assert_eq!((p.pass, p.rem), (f + 2 * u128::from(s / 100), 0));
     // A parent below the floor starts from the floor: it cannot bank what it did not run.
     let mut low = State { pass: f - 5, rem: 3, ..State::default() };
     lift(&mut low, &State { pass: f, entry: f, ..State::default() }, 1, 100, f);

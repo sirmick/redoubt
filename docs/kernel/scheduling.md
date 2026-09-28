@@ -92,7 +92,8 @@ charged, its pass rises above the floor, and it no longer ties.
 `bench:sched-ties` runs a kernel built with the scheduling trace ([R23](#r23-no-test-channels)).
 The bench's own oracle (`tools/testbench/src/sched_oracle.rs`) rebuilds the order from the trace's
 events with its own reading of the four clauses and checks every pick, keeps its own floor, and
-requires every pass never to fall.
+requires every pass never to fall but at a weight change, which it recomputes
+([the lead follows the weight](#the-lead-follows-the-weight)).
 
 ```mermaid
 flowchart TD
@@ -200,7 +201,7 @@ run between, leaves the victim neither more nor less than half.
 
 ### Running while carved down
 
-Status: built · partly tested: one breach is stated and not yet closed: a weight change rescales only the remainder, so a lead accrued while carved down is not rescaled when the weight returns, which over-charges the budget that carved (the lead follows the weight, planned) · tested: bench:sched-carve-inflation, bench:sched-budget-churn, bench:sched-destroy-billing, host:redoubt-stride::a_rescale_loses_under_one_unit, mutation:R12StrideWeightIsLimit, mutation:R12FoldAtNewWeight
+Status: built · tested: bench:sched-carve-inflation, bench:sched-carve-return, bench:sched-budget-churn, bench:sched-destroy-billing, host:redoubt-stride::a_carve_and_its_return_leave_the_state, mutation:R12StrideWeightIsLimit, mutation:R12FoldAtNewWeight, mutation:R12RescaleOnlyOnReturn
 
 A budget that runs while most of its weight is carved away accrues its lead at the small weight
 it kept, and owes that runtime at whatever weight it has later
@@ -216,7 +217,7 @@ carved ([R7](budgets.md#r7-carving)).
 
 ### The lead follows the weight
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:sched-carve-return, bench:sched-budget-churn, host:redoubt-stride::a_carve_and_its_return_leave_the_state, host:redoubt-stride::the_crate_and_the_model_agree, host:testbench::weight_changes_are_recomputed, mutation:R12RescaleOnlyOnReturn
 
 What a budget owes is runtime, and a weight change keeps it exactly. Every weight change, a
 carve and a carve returned alike, folds at the old weight and then converts the budget's lead
@@ -228,18 +229,24 @@ pass = floor + W / w_new;   rem = W mod w_new
 ```
 
 So a carve raises the lead by the ratio of the weights and its return lowers it by the same
-ratio, and a carve returned with no run between leaves the budget where it was. Both directions
+ratio, and a carve returned with no run between leaves the budget where it was. If the carve
+raised the floor (the budget had the lowest pass), the return converts from the higher floor and
+the budget ends a little higher: over-charged, never ahead. Both directions
 are needed: rescaling only on a return would let a budget carve just before a burst and return
 just after, and its lead would shrink at the return without having grown at the carve. A budget
 at or below the floor owes only its remainder, and waking would lift it to the floor anyway. At a
 destruction the carve returns first, so the parent's lead is converted before the child's work
-is lifted onto it at the parent's restored weight ([inheritance](#inheritance)).
+is lifted onto it at the parent's restored weight ([inheritance](#inheritance)). A budget at
+weight 0 holds no process, and what it owes is stated at weight 1 meanwhile, so it is carried
+exactly through 0: carving everything away and then getting back only part of it is the same as
+the one carve from the old weight to the new.
 
-The crate, the model and the oracle convert alike. A host test checks that a carve and its return
-leave pass and remainder unchanged, and a bench case has a budget carve most of its weight away
-while it runs, then return it, and get its share back against an equal victim.
-
-**Open:** none.
+`libs/stride`'s `rescale` is the conversion; the model makes the same one, and the bench's oracle
+recomputes every weight change a traced kernel records, the one place it lets a pass fall. A host
+test checks that a carve and its return leave pass and remainder unchanged. In
+`bench:sched-carve-return` a budget of weight 1000 carves 999 away, runs 9 ms on the 1 it kept,
+and takes the weight back: it then gets 492 to 494 of 1000 against an equal victim. With the
+remainder alone rescaled, as before, it got 0.
 
 ### Responsiveness
 
@@ -345,7 +352,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range, and the kernel departs from it in three scans of every kernel-object frame (the PID draw, the search for an owed exit notice, the search for an interrupt's IRQ object) · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:deadline-flood-billed, bench:map-anon-search-bound, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge, mutation:R12DeadlineWorkUnbilled
+Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range, and the kernel departs from it in three scans of every kernel-object frame (the PID draw, the search for an owed exit notice, the search for an interrupt's IRQ object) · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:deadline-flood-billed, bench:sched-carve-return, bench:map-anon-search-bound, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge, mutation:R12DeadlineWorkUnbilled, mutation:R12RescaleOnlyOnReturn
 
 A budget's CPU follows its free weight, in one queue with no priority. While it has a runnable
 thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No

@@ -98,7 +98,6 @@ page.
      [DMA reset on rv32](../todo/dma-reset-rv32.md),
      [calls abandoned by an endpoint's destruction](../todo/endpoint-destroyed-open-calls.md),
      [reclaiming an endpoint](../todo/endpoint-reclaim.md),
-     [rescaling a carved-down lead](../todo/carve-lead-rescale.md),
      [the steward's decision wake on rv64, and R10's thin margin](../todo/sched-rv64-decision-wake.md), and
      [a notice lost to a bad receive record](../todo/receive-output-late-invalid.md).
    - **The bench and its tools**, with the kernel package:

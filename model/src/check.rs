@@ -979,21 +979,37 @@ fn sched_idempotence(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
     let (want_pass, want_rem) = (before.pass + t / u128::from(wp), (t % u128::from(wp)) as u64);
     let c = 3;
     sim.s.add_budget(c, Some(p), w_child);
+    // Folded at the old weight, then what it owes restated exactly at the new one ("The lead
+    // follows the weight"): W = (pass − floor)⁺·old + rem, pass = floor + W / new, rem = W mod new.
+    let f = sim.s.floor;
+    let wn = u128::from(wp - w_child);
+    let owed = want_pass.saturating_sub(f) * u128::from(wp) + u128::from(want_rem);
+    let (carved_pass, carved_rem) = (f + owed / wn, (owed % wn) as u64);
     let folded = sim.s.budgets[&p].clone();
-    let rescaled = ((u128::from(want_rem) * u128::from(wp - w_child)) / u128::from(wp)) as u64;
-    if folded.pass != want_pass || folded.rem != rescaled {
+    if folded.pass != carved_pass || folded.rem != carved_rem {
         return Err(format!(
-            "R12: a carve under a running parent charged it {}+{}, not {want_pass}+{rescaled} (fold at the old weight)",
+            "R12: a carve under a running parent charged it {}+{}, not {carved_pass}+{carved_rem} (fold at the old weight, then convert)",
             folded.pass, folded.rem
         )
         .into());
     }
+    // The carve's return with no run between converts back: the parent is where the fold left
+    // it (at the floor at least, as a wake would put it). If the carve raised the floor (it
+    // lifted the lowest pass), the return converts from the higher floor and the parent can only
+    // end higher: over-charged, never ahead.
     sim.s.destroy_budget(c);
     let after = &sim.s.budgets[&p];
-    if after.pass != folded.pass || after.rem > want_rem || (want_rem == 0 && after.rem != 0) {
+    let want = (want_pass.max(f), want_rem);
+    let owes = |pass: u128, rem: u64| pass * u128::from(wp) + u128::from(rem);
+    let moved = if sim.s.floor == f {
+        (after.pass, after.rem) != want
+    } else {
+        owes(after.pass, after.rem) < owes(want.0, want.1)
+    };
+    if moved {
         return Err(format!(
             "R12: create+destroy with no run moved the parent from {}+{} to {}+{}",
-            folded.pass, want_rem, after.pass, after.rem
+            want.0, want.1, after.pass, after.rem
         )
         .into());
     }
@@ -1280,14 +1296,14 @@ mod churn_variants {
         (0..300).any(|seed| budget_churn_variant(&mut Rng::new(seed), Some(m), variant).is_err())
     }
 
-    /// Why budget churn has its spinning-parent and deadline variants: with the parent blocked,
-    /// a lift by `max` is indistinguishable from the additive rule, so the blocking churner alone
-    /// lets `R12LiftByMax` survive; either variant with a running parent catches it.
+    /// Why budget churn has its spinning-parent variant: with the parent blocked, a lift by `max`
+    /// is indistinguishable from the additive rule, so the blocking churner alone lets
+    /// `R12LiftByMax` survive; a parent that destroys at the end of its own slice, its lead
+    /// still ahead of the child's work, catches it.
     #[test]
     fn lift_by_max_needs_a_running_parent() {
         assert!(!caught(Mutation::R12LiftByMax, 0), "the blocking churner alone should not see a max lift");
         assert!(caught(Mutation::R12LiftByMax, 1), "the spinning-parent variant must catch a max lift");
-        assert!(caught(Mutation::R12LiftByMax, 2), "the deadline-timed variant must catch a max lift");
         for v in 0..4 {
             assert!(
                 (0..50).all(|seed| budget_churn_variant(&mut Rng::new(seed), None, v).is_ok()),

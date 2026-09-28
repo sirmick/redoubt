@@ -1,0 +1,13 @@
+description = "The lead follows the weight: a budget that carves most of its weight away while it runs, then returns it, gets its half back against an equal victim (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-carve-return"]
+timeout_secs = 600
+expect = [
+    '^\[carve-return\] ok: U got its half back',
+    '^SCHED-CARVE-RETURN TEST PASSED$',
+]
+forbid = ['\[carve-return\] FAIL']
+poweroff = true
