@@ -70,6 +70,11 @@ pub struct SshLoopback {
 #[serde(deny_unknown_fields)]
 pub struct UnsafeBudget {
     pub budget: Vec<Budget>,
+    /// Workspace members built for the target whose sources no budget counts, each with its
+    /// reason (test programs, host tools, vendored code). Every other such member's sources must
+    /// all be in some budget.
+    #[serde(default)]
+    pub uncounted: Vec<Skip>,
 }
 
 #[derive(Debug, Deserialize)]

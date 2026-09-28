@@ -386,19 +386,24 @@ and must fail on the SYN the capture then shows.
 
 ## The unsafe budget
 
-Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory
+Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory, host:testbench::every_on_target_source_is_in_a_budget, host:testbench::a_long_safety_block_directly_above_justifies
 
 `unsafe-budget.toml` lists every source directory of the trusted computing base that runs on the
 target, each with the most uses of `unsafe` it may hold and the most that may lack a justification
 (zero everywhere): a `// SAFETY:` comment above an `unsafe` block, and a `# Safety` section in the
-doc comment of an `unsafe fn` or `unsafe impl`. The case counts both and fails if either is over.
+doc comment of an `unsafe fn` or `unsafe impl`, in the comment block directly above or within a
+few lines. The case counts both and fails if either is over.
 Budgets only go down; raising one needs a stated reason in the change that does it.
 
-A configured path with no Rust source in it fails, but a source directory left out of every budget
-is not counted at all, and the ratchet cannot prove that every on-target source is configured. The
-loader stub (`stub/src`), which runs on the target and uses `unsafe`, is in no budget today
-([todo](todo/stub-unsafe-budget.md)). Vendored third-party crates are outside the ratchet
-([below](#vendored-dependencies)).
+A configured path with no Rust source in it fails. So does coverage left out: every workspace
+member that can be built for the target (its crate root is `no_std`) must have each of its Rust
+sources in some budget, unless the file lists it under `[[uncounted]]` with a reason (the test
+programs, the model, host tools, vendored code), and an `uncounted` entry that names no such
+member fails too. Vendored third-party crates are outside the ratchet
+([below](#vendored-dependencies)). So are crates outside the workspace: the gate reads only the
+workspace's members, and `userland/otp` is its own workspace whose `no_std` crates (`re`, `crypto`,
+`vm`) no budget counts. They are not in the trusted computing base; if one ever joins it, it joins
+the workspace and the gate sees it.
 
 ## Vendored dependencies
 

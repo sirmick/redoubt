@@ -95,7 +95,6 @@
   - [A notice lost to a bad receive record](todo/receive-output-late-invalid.md)
   - [A request answered outside `finish`](todo/request-raw-reply.md)
   - [A size budget for the trusted crates](todo/size-budget.md)
-  - [The loader stub's unsafe budget](todo/stub-unsafe-budget.md)
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [Process names in verdicts and case descriptions](todo/verdict-strings.md)

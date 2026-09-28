@@ -148,6 +148,10 @@ fn main() -> Result<()> {
         }
         if let Kind::UnsafeBudget(check) = &case.kind {
             let (failure, summary) = budget::check(&workspace, &check.budget)?;
+            let failure = match failure {
+                None => budget::coverage(&workspace, &check.budget, &check.uncounted)?,
+                failure => failure,
+            };
             match failure {
                 None => println!("PASS  {:<32}\n      {summary}", case.name),
                 Some(why) => {
