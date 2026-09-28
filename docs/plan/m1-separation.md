@@ -97,7 +97,6 @@ page.
      [the kernel crate's host test target](../todo/hosted-kernel-tests.md),
      [a stray file in the kernel's tree](../todo/kernel-test-hello.md),
      [an interrupt before the first receive](../todo/irq-level-latch.md),
-     [records at a device mapping](../todo/mmio-record-frames.md),
      [DMA reset on rv32](../todo/dma-reset-rv32.md),
      [calls abandoned by an endpoint's destruction](../todo/endpoint-destroyed-open-calls.md),
      [reclaiming an endpoint](../todo/endpoint-reclaim.md),

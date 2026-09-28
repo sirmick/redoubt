@@ -212,8 +212,6 @@ the OS's own are described on [the tenets](TENETS.md#the-walls).
   ([devices](kernel/devices.md#residual-risks)).
 - A co-holder keeps its mapping of a quarantined device, and of a device whose handle was revoked:
   the kernel does not unmap device ranges ([devices](kernel/devices.md#residual-risks)).
-- A record at a device mapping is refused by the record check, but only some calls' records are
-  attacked there ([the ABI](kernel/abi.md#residual-risks)).
 - Two breaches of I14 are stated: under exhaustion the boot tree's uncharged page stops the
   kernel, and so does a frame past the physmap on a machine with more RAM than it covers
   ([invariants](kernel/invariants.md#residual-risks)).

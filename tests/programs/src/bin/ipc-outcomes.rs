@@ -15,6 +15,10 @@ static TAKEN: AtomicUsize = AtomicUsize::new(0);
 static REPLIES: AtomicUsize = AtomicUsize::new(0);
 static DELIVERY: AtomicUsize = AtomicUsize::new(0);
 static MASK: AtomicUsize = AtomicUsize::new(0);
+/// The console's register page, where `MMIO_REPLY` places its reply record.
+static MMIO: AtomicUsize = AtomicUsize::new(0);
+/// What that reply returned: the error's code, or 0 if the kernel accepted it.
+static MMIO_REPLIED: AtomicUsize = AtomicUsize::new(0);
 const ECHO: usize = 1;
 const READ_ONLY: usize = 2;
 const UNMAP: usize = 3;
@@ -23,6 +27,10 @@ const REVOKE: usize = 5;
 const DIE: usize = 6;
 const REMAP: usize = 7;
 const LOAN_PROTECTION: usize = 8;
+const MMIO_REPLY: usize = 9;
+/// The 16550's scratch register and line status register, as byte offsets in its page.
+const SCRATCH: usize = 7;
+const LINE_STATUS: usize = 5;
 
 fn protected_alias(addr: usize, endpoint: u32) {
     assert_eq!(rd::unmap(addr, rd::PAGE_SIZE), Err(Error::InvalidArgument), "loan alias unmap");
@@ -70,6 +78,11 @@ fn server(_: usize) {
                     assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage, before);
                 }
             }
+            MMIO_REPLY => {
+                let record = MMIO.load(Ordering::Acquire);
+                let r = redoubt_sys::syscall(&rd::Call::Reply { msg_id: m.msg_id, body_rec: record });
+                MMIO_REPLIED.store(r.err().map_or(0, |e| e as usize), Ordering::Release);
+            }
             DIE => return,
             _ => {}
         }
@@ -106,6 +119,13 @@ fn write_body(at: usize, body: rd::Body) {
     unsafe {
         (at as *mut [u64; redoubt_sys::BODY_SLOTS]).write(body.encode());
     }
+}
+
+/// A byte of the console's registers at `offset`. Reading the scratch or line status register
+/// changes nothing on a 16550.
+fn register(mmio: usize, offset: usize) -> u8 {
+    // SAFETY: `mmio` is the console register page this process mapped; `offset` is inside it.
+    unsafe { ((mmio + offset) as *const u8).read_volatile() }
 }
 
 fn raw_call(endpoint: u32, record: usize, lend: Option<rd::Pages>) -> CallOutcome {
@@ -291,6 +311,41 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(replied(8), ReplyOutcome { delivered: false, installed: 0 });
     assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage + 1, before_abandon);
     log!(logger, "ipc-outcomes taken revocation consumed lend; server observed discard");
+
+    // The other records at a device mapping: `send`'s body, `reply`'s body, `receive`'s output
+    // and `process_start`'s handle list. Each is refused with InvalidArgument, and the device
+    // sees no write: the canary in its scratch register and its line status stay as they were.
+    // SAFETY: as `register`; the scratch register holds a byte for software and does nothing.
+    unsafe { ((mmio + SCRATCH) as *mut u8).write_volatile(0x5a) };
+    let line_status = register(mmio, LINE_STATUS);
+    let bad = Err(Error::InvalidArgument);
+    let sent = redoubt_sys::syscall(&rd::Call::Send {
+        endpoint: rd::h(endpoint),
+        body_rec: mmio,
+        transfer: None,
+        timeout: 0,
+    });
+    assert_eq!(sent.map(|_| ()), bad, "send body at MMIO");
+    let quiet = rd::endpoint_create().unwrap();
+    let received = redoubt_sys::syscall(&rd::Call::Receive {
+        from: Some(rd::h(quiet)),
+        timeout: 0,
+        max_transfer: 0,
+        received_rec: mmio,
+    });
+    assert_eq!(received.map(|_| ()), bad, "receive record at MMIO");
+    MMIO.store(mmio, Ordering::Release);
+    let (out, _) = rd::call_outcome(endpoint, &rd::body([MMIO_REPLY, 0, 0, 0]), None, FOREVER).unwrap();
+    assert_eq!(out, CallOutcome { status: Ok(()), lend: LendDisposition::None, reply_present: true });
+    assert_eq!(replied(9), ReplyOutcome { delivered: true, installed: 0 });
+    assert_eq!(MMIO_REPLIED.load(Ordering::Acquire), Error::InvalidArgument as usize, "reply body at MMIO");
+    let budget = rd::create(rd::SYSTEM, &rd::spec(64, 1, 10)).unwrap();
+    let child = rd::process_create(budget, quiet).unwrap();
+    assert_eq!(rd::start_raw(child, 0x1_0000, 0, 0, mmio, 1), bad, "process_start handles at MMIO");
+    assert_eq!(TAKEN.load(Ordering::Acquire), 9, "the MMIO send was never delivered");
+    assert_eq!(register(mmio, SCRATCH), 0x5a, "the scratch register kept its canary");
+    assert_eq!(register(mmio, LINE_STATUS), line_status, "the line status is unchanged");
+    log!(logger, "ipc-outcomes send/reply/receive/process_start records at MMIO refused; device untouched");
 
     let returned = rd::page();
     rd::poke(returned, 0xfeed);

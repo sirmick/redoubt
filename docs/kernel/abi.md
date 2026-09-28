@@ -115,7 +115,7 @@ result (an address, a length) is one register; a handle or TID is one register h
 
 ## Records
 
-Status: built · partly tested: a record at a device mapping is attacked by a case only as a `call` body and as `budget_create` and `budget_usage` records · tested: host:redoubt-sys::records_round_trip, host:redoubt-sys::malformed_records_are_refused, host:redoubt-sys::random_records, fuzz:redoubt-sys/decode, bench:budget-syscall-attack, bench:ipc-outcomes, bench:process-attack
+Status: built · tested: host:redoubt-sys::records_round_trip, host:redoubt-sys::malformed_records_are_refused, host:redoubt-sys::random_records, fuzz:redoubt-sys/decode, bench:budget-syscall-attack, bench:ipc-outcomes, bench:process-attack
 
 ### Layouts
 
@@ -369,11 +369,6 @@ interrupt fires, and a child jumping to a fixed kernel return address faults.
   `receive`, `serve` and `process_start`; most later positions in most rows are read from the
   kernel, not attacked. A wrong order is a replay mismatch, not a way past a check: every
   check in a row is still made.
-- **A record at a device mapping is attacked for only some calls.** The record check confirms
-  every slot is RAM credited to the caller, by its physical address, so a device mapping is
-  refused as a record. A case attacks this for a `call` body and for `budget_create` and `budget_usage` records at a device
-  mapping, not for `send`, `reply`, `receive` or `process_start` records, which share the same
-  check. Follow-up: [todo](../todo/mmio-record-frames.md).
 - **An error may leave a page backed.** Stage 1 never allocates, but stage 2 backs untouched
   pages of a lend, a transfer or a `process_map` source before later checks run; if the call
   then fails (`LabelDenied`, `Busy`), those pages stay backed and charged to the caller, as if it
