@@ -440,7 +440,8 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   104 ms, against 15 and 50 ms for its timer wakes. The targets (20 and 115 ms) are set from the
   sweep, so the gate passes, but a lease's end from the steward's decision is 145 ms, not 80.
   A pinned seed repeats one run; a change that moves the phase can land on a worse one than the
-  sweep saw, which the margin covers and a new sweep re-measures.
+  sweep saw, which the margin covers and a new sweep re-measures. The rv64 median is structural, not noise:
+  follow-up: [todo](../todo/sched-rv64-decision-wake.md).
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   is the stated exception: it dominates lease termination and grows with the objects it walks
