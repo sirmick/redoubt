@@ -409,7 +409,7 @@ would be written into all of them.
 
 ### R17 (fail closed)
 
-Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the loader departs from this for RAM past the physmap and for a boot hart with no PLIC context (Residual risks) · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive
+Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap refusal is tested on the host, not by a boot; the loader departs from this for a boot hart with no PLIC context (Residual risks) · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused
 
 The boot never runs degraded. Each of these powers the machine off through SBI SRST with
 `SystemFailure` rather than boot: a bad bundle signature; an initrd too short to be signed; a
@@ -425,9 +425,9 @@ A device tree with a PLIC but no S-mode context for the boot hart stops the boot
 ([the `Plic` row](#the-argument-block)); the loader departs from this by taking hart 0's
 context.
 
-The loader refuses to boot when RAM extends past `PHYSMAP_SIZE` (the size of the kernel's
-direct physical map), with a clear message. The loader departs from this today: it maps the
-physmap to the end of RAM without comparing the two (Residual risks).
+The loader refuses to boot when RAM does not fit in the kernel's direct physical map
+(`PHYSMAP_SIZE` from `PHYSMAP_PHYS_BASE`, [memory layout](memory-layout.md#the-direct-physical-map)),
+naming both ranges.
 
 ## Failure and restart
 
@@ -474,12 +474,6 @@ Status: built · partly tested: a reboot through `system_reset` is not attacked 
 - **The kernel's argument-block refusals are argued from the code**, not attacked by a case;
   nor are the short-seed and missing-timebase refusals (R17) or the three R16 gaps
   ([attack gaps](../todo/kernel-attack-gaps.md)).
-- **RAM past the physmap is not refused at boot.** The loader maps the physmap to the end of
-  RAM, but the kernel's window stops at `PHYSMAP_SIZE` (128 GiB on Sv39), and nothing compares
-  the two. On a machine with more RAM the kernel boots, then stops the first time it uses a
-  frame past the bound, which a process can cause by allocating
-  ([memory layout](memory-layout.md#residual-risks)). Follow-up:
-  [todo](../todo/physmap-ram-bound.md).
 - **The loader takes the boot hart to be hart 0,** departing from the `Plic` row's rule. It
   reads the PLIC context of the CPU whose `reg` is 0 (`loader/src/dt.rs`), not of the hart ID
   the firmware passes in `a0`. On firmware whose boot hart is another, the failure is silent: if

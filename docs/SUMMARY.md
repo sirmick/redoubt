@@ -74,7 +74,6 @@
   - [DMA reset on rv32](todo/dma-reset-rv32.md)
   - [The kernel crate's host test target](todo/hosted-kernel-tests.md)
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)
-  - [RAM beyond the physmap](todo/physmap-ram-bound.md)
   - [The kernel's print on a panic](todo/print-panic-reentry.md)
   - [The raw system call beside the runtime](todo/raw-abi-syscall.md)
   - [Starting a thread from safe code](todo/raw-thread-create.md)

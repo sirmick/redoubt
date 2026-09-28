@@ -32,6 +32,11 @@ covers the physical addresses below RAM, where the devices sit. On Sv32 it start
 (`0x8000_0000` on QEMU `virt`), which is also the start of the kernel half, so the map is the
 identity there.
 
+The window is `PHYSMAP_SIZE` long (128 GiB on Sv39, 2032 MiB on Sv32). The loader refuses a
+machine whose RAM does not fit in it ([R17 (fail closed)](boot.md#r17-fail-closed)): the kernel hands out
+frames lowest first, so RAM past the window would stop the kernel the first time a process
+allocated a frame there.
+
 Every physmap entry is readable, global and supervisor-only: no `U` bit and never `X`. All are
 writable but the kernel's read-only frames. The map is built from the largest leaves (1 GiB on
 Sv39, 4 MiB on Sv32), except around those frames: for every kernel page that is not writable
@@ -402,13 +407,6 @@ kernel test shows a kernel load through a user address faults
   the current process maps. On Sv39 the physmap also covers the physical range below RAM, where
   device registers sit, as ordinary kernel read-write memory; the kernel never uses those
   addresses, but a stray write through them reaches a device.
-- **RAM larger than the physmap is not refused.** The loader maps the physmap to the end of RAM,
-  but the kernel's window stops at `PHYSMAP_SIZE` (128 GiB on Sv39, 2032 MiB on Sv32), and the
-  loader never compares the two. The kernel hands out frames lowest first, so a larger machine
-  boots, and the kernel stops at run time the first time it uses a frame past the bound, which a
-  process can cause by allocating (a breach of I14 (no call panics the kernel) on such a
-  machine). The rule is that the loader refuses to boot it ([boot](boot.md)). Follow-up:
-  [todo](../todo/physmap-ram-bound.md).
 - **Every change flushes everything.** Each map, unmap, lend and address-space switch runs a
   global `sfence.vma`, so ASIDs save no work, and each flush costs page-table walks afterwards.
   It is also a flush of this hart only: with more than one hart, another hart's cached

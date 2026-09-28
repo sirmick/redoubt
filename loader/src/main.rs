@@ -102,6 +102,16 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     println!("  {} hart(s), timebase {} Hz", platform.cpu_count, platform.timebase_hz);
     println!("  ram: {:#x}..{:#x} ({} MiB)", ram.start, ram.end, ram.len() >> 20);
     println!("  bundle: {:#x}..{:#x}", bundle.start, bundle.end);
+    // Fail closed: the kernel reaches every frame through its physmap, so RAM past it would
+    // stop the kernel later, at a moment a process chooses.
+    assert!(
+        redoubt_layout::physmap_covers(&ram),
+        "RAM {:#x}..{:#x} is not inside the kernel's physmap ({:#x}..{:#x})",
+        ram.start,
+        ram.end,
+        redoubt_layout::PHYSMAP_PHYS_BASE,
+        redoubt_layout::PHYSMAP_PHYS_BASE + redoubt_layout::PHYSMAP_SIZE,
+    );
 
     let firmware = ram.start..(&raw const _start) as usize;
     let loader = firmware.end..(&raw const _loader_end) as usize;

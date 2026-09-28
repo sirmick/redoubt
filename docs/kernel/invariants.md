@@ -399,7 +399,7 @@ side 200 times.
 
 ### I14 (no call panics the kernel)
 
-Status: built · partly tested: one breach is stated and not yet closed: on a machine with more RAM than the physmap the first frame past it stops the kernel (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:redoubt-tight, bench:pages-exhaustion, host:redoubt-sys::malformed_calls_are_refused, fuzz:redoubt-sys/decode, host:redoubt-model::kernel_sequences
+Status: built · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:redoubt-tight, bench:pages-exhaustion, host:redoubt-sys::malformed_calls_are_refused, fuzz:redoubt-sys/decode, host:redoubt-model::kernel_sequences
 
 No sequence of system calls, with any arguments, panics the kernel. A malformed value is an
 error, never a stop.
@@ -508,9 +508,6 @@ cases.
   behind I5 stop the kernel when they fail. A bug that breaks them halts the machine for every
   principal on the box, though it does not hand one process another's memory or objects. No
   argument reaches those checks (I14), but a kernel bug can.
-- **A stated breach of I14.** A machine with more RAM than the physmap boots, and stops the
-  first time a process's allocation reaches a frame past it
-  ([memory layout](memory-layout.md#residual-risks)).
 - **System-class servers are trusted with I7.** R1 does not check a flow into or out of a
   `system` budget, so a system server that hands a receive right across label sets, or mixes two
   label sets' data, breaks label separation and the kernel cannot see it
