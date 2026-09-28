@@ -126,9 +126,10 @@ pub struct SocketCaps {
 }
 
 impl SocketCaps {
-    pub fn of(&self, caller: &Caller) -> usize {
-        if caller.account == 0 {
-            if let Some((_, cap)) = self.overrides.iter().find(|(badge, _)| *badge == caller.badge) {
+    /// The cap of the bucket `key`: an account-0 root badge's override, or the default.
+    pub fn of(&self, key: AdmitKey) -> usize {
+        if let Some(root) = key.root() {
+            if let Some((_, cap)) = self.overrides.iter().find(|(badge, _)| *badge == root) {
                 return *cap;
             }
         }
@@ -151,14 +152,28 @@ pub struct NetFs<N: Netif, E: Entropy> {
     wait: Option<(Owner, u32, WaitFor)>,
     /// The time, set by the server before each request (µs since boot).
     pub now: u64,
+    /// The bucket the request being answered is charged to (`NineServer::charge_of`), set by the
+    /// server before each request ([`crate::server::open_sockets`]) and cleared after it
+    /// ([`crate::server::close_sockets`]).
+    pub charge: Option<AdmitKey>,
 }
+
+/// A socket operation with no bucket set to charge it to (see [`NetFs::charge`]).
+pub const NO_CHARGE: NineError = NineError("no charge");
 
 /// A `net_ctl` failure as the `Rerror` it is: the error's name.
 fn ctl(e: CtlError) -> NineError { NineError(e.name()) }
 
-fn owner(caller: &Caller) -> Owner { Owner { badge: caller.badge, key: AdmitKey::of(caller) } }
-
 impl<N: Netif, E: Entropy> NetFs<N, E> {
+    /// The bucket the request's sockets are charged to: the one set for this request, which folds
+    /// an account-0 chain to its root badge (servers/serving.md R26). None set is a request served
+    /// outside `open_sockets`: refused, never charged to an unfolded key.
+    fn key(&self) -> Result<AdmitKey, NineError> { self.charge.ok_or(NO_CHARGE) }
+
+    fn owner(&self, caller: &Caller) -> Result<Owner, NineError> {
+        Ok(Owner { badge: caller.badge, key: self.key()? })
+    }
+
     /// `/net` over `stack`, with each root badge's scope from the arguments.
     pub fn new(stack: Stack<N, E>, roots: &[(u64, Scope)], caps: SocketCaps) -> NetFs<N, E> {
         let mut fs = NetFs {
@@ -171,6 +186,7 @@ impl<N: Netif, E: Entropy> NetFs<N, E> {
             granting: false,
             wait: None,
             now: 0,
+            charge: None,
         };
         for (badge, scope) in roots {
             let id = fs.add_scope(scope.clone());
@@ -231,14 +247,14 @@ impl<N: Netif, E: Entropy> NetFs<N, E> {
     /// The socket a node names must be the caller's.
     fn check_socket(&self, caller: &Caller, node: &Node) -> Result<(), NineError> {
         match node.socket() {
-            Some(n) if !self.stack.exists(owner(caller), n) => Err(NineError::NOT_FOUND),
+            Some(n) if !self.stack.exists(self.owner(caller)?, n) => Err(NineError::NOT_FOUND),
             _ => Ok(()),
         }
     }
 
     fn ctl_write(&mut self, caller: &Caller, node: &Node, n: u32, data: &[u8]) -> Result<usize, NineError> {
         let op = net_ctl::Message::decode_file(data).map_err(|_| NineError::BAD_MESSAGE)?;
-        let who = owner(caller);
+        let who = self.owner(caller)?;
         let now = self.now;
         match op {
             net_ctl::Message::Connect(c) => {
@@ -248,7 +264,7 @@ impl<N: Netif, E: Entropy> NetFs<N, E> {
             }
             net_ctl::Message::Listen(l) => {
                 let scope = self.scope_of_node(node);
-                let cap = self.caps.of(caller);
+                let cap = self.caps.of(self.key()?);
                 self.stack.listen(who, n, &scope, l.port, l.backlog, cap).map_err(ctl)?;
             }
             net_ctl::Message::Close(_) => self.stack.release(who, n, true, now).map_err(ctl)?,
@@ -321,14 +337,14 @@ impl<N: Netif, E: Entropy> FileServer for NetFs<N, E> {
 
     fn read(&mut self, caller: &Caller, node: &Node, offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
         self.check_socket(caller, node)?;
-        let who = owner(caller);
+        let who = self.owner(caller)?;
         match node.at {
             At::Clone => {
                 if offset != 0 {
                     return Ok(Read::Done(0));
                 }
                 let out = out.get_mut(..4).ok_or(NineError::TOO_SMALL)?;
-                let (group, cap) = (self.group(caller), self.caps.of(caller));
+                let (group, cap) = (self.group(caller), self.caps.of(self.key()?));
                 let n = self.stack.allocate(who, group, cap).map_err(ctl)?;
                 out.copy_from_slice(&n.to_le_bytes());
                 Ok(Read::Done(4))
@@ -337,7 +353,7 @@ impl<N: Netif, E: Entropy> FileServer for NetFs<N, E> {
             // accepted connection), never a position in a file.
             At::Ctl(n) => {
                 let out = out.get_mut(..8).ok_or(NineError::TOO_SMALL)?;
-                match self.stack.status(who, n, self.caps.of(caller)).map_err(ctl)? {
+                match self.stack.status(who, n, self.caps.of(self.key()?)).map_err(ctl)? {
                     Ready::Now((status, m)) => {
                         out[..4].copy_from_slice(&(status as u32).to_le_bytes());
                         out[4..].copy_from_slice(&m.to_le_bytes());
@@ -394,7 +410,7 @@ impl<N: Netif, E: Entropy> FileServer for NetFs<N, E> {
         match node.at {
             At::Ctl(n) => self.ctl_write(caller, node, n, data).map(Write::Done),
             At::Data(n) => {
-                let who = owner(caller);
+                let who = self.owner(caller)?;
                 match self.stack.send(who, n, data).map_err(ctl)? {
                     Ready::Now(k) => Ok(Write::Done(k)),
                     Ready::Wait => {
@@ -424,7 +440,7 @@ impl<N: Netif, E: Entropy> FileServer for NetFs<N, E> {
             At::Root if index == 0 => At::Tcp,
             At::Tcp if index == 0 => At::Clone,
             At::Tcp => {
-                let numbers = self.stack.numbers(owner(caller));
+                let numbers = self.stack.numbers(self.owner(caller)?);
                 match usize::try_from(index - 1).ok().and_then(|i| numbers.get(i)) {
                     Some(n) => At::Dir(*n),
                     None => return Ok(None),

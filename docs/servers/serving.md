@@ -325,7 +325,7 @@ could read a's labels itself (`properties` checks exactly that).
 
 ### R26 (admission fairness)
 
-Status: built · partly tested: the library departs from the rule for an account-0 client's self-minted chain; the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested: host:redoubt-rt::the_key_is_the_account_and_the_label_set, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::self_minting_does_not_multiply_the_share, host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything, host:redoubt-rt::open_calls_leave_headroom, host:redoubt-rt::the_worst_order_never_passes_the_headroom
+Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested: host:redoubt-rt::the_key_is_the_account_and_the_label_set, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::self_minting_does_not_multiply_the_share, host:redoubt-rt::an_account_0_chain_holds_one_bucket, host:redoubt-rt::an_account_0_rooted_chain_holds_one_bucket, host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything, host:redoubt-rt::open_calls_leave_headroom, host:redoubt-rt::the_worst_order_never_passes_the_headroom
 
 One client cannot use up a shared server that serves others. What a client holds in a server is
 counted per (account, label set), and per badge for account 0; within a bucket of a non-zero account
@@ -339,9 +339,10 @@ many links deep and whoever holds it: a chain of self-mints spends one share, an
 separate shares only from separate root badges, which the manifest gives. A capability used under a
 non-zero account is keyed by that account. The kernel's
 [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) shares turns at the endpoint the same way;
-this rule shares what the server holds afterwards. The code departs from the account-0 rule: `Minted::share`
-stops folding when the requester's key changes, so each self-minted link opens a bucket (Residual
-risks).
+this rule shares what the server holds afterwards. `Minted::key` is the one fold every charge
+goes through: an account-0 caller's key names the root badge its chain was minted through, so the
+skeleton's fids and connections, a server's parked calls and `ipd`'s sockets all land in that
+root's bucket.
 
 ### R27 (badge allocation)
 
@@ -384,14 +385,6 @@ Status: built · partly tested: the exit after a rejected fallback reply is argu
 
 ## Residual risks
 
-- **An account-0 client can spend every bucket.** Account 0 is admitted per badge, so a
-  `system`-class client minting connections for itself through a 9P server looks, through each
-  new badge, like a new client: the share does not fold, and each link of the chain opens a fresh
-  bucket, until the server's bucket count is spent and new connections are refused. This is the
-  code departing from R26, which counts the whole chain in its root's share (`Minted::share`
-  stops folding when the requester's key changes). `keyd` allows no chain (only a root badge may
-  grant); the 9P skeleton cannot take that rule. Follow-up:
-  [todo](../todo/account0-share-chain.md).
 - **An undersized server is a channel.** A server sized for fewer buckets than the (account,
   label set)s it serves refuses the latecomers, which tells them others hold state: across
   accounts, and between the label sets of one account, where it is a channel out of a vault. The

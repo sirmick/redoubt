@@ -124,8 +124,8 @@ fn serve_or_park(
         request.reply(&redoubt_rt::server::MALFORMED, &[]).map(|_| ()).map_err(|(e, _)| e)
     })?;
     let Some(request) = held else { return Ok(()) };
-    let share = server.share_of(&request.caller);
-    match parked.park(server.admission_mut(), request, share, (), now) {
+    let charge = server.charge_of(&request.caller);
+    match parked.park(server.admission_mut(), request, charge, (), now) {
         Ok(()) => Ok(()),
         // The caller's bucket or share is full of waiting reads, or there is no memory for one
         // more: it is told so, rather than being left to wait on a call the server cannot hold.

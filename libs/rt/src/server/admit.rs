@@ -70,6 +70,14 @@ impl AdmitKey {
         AdmitKey { account: caller.account, badge, labels, count }
     }
 
+    /// The badge an account-0 key's bucket belongs to (a root badge, [`super::minted::Minted::key`]);
+    /// `None` for any other account.
+    pub fn root(&self) -> Option<u64> { self.per_badge().then_some(self.badge) }
+
+    /// This account-0 key moved to the bucket of `root`, the badge its caller's capability was
+    /// minted through ([`super::minted::Minted::key`]).
+    pub(super) fn rooted(self, root: u64) -> AdmitKey { AdmitKey { badge: root, ..self } }
+
     /// Whether the bucket is one badge's alone (account 0), so it has no shares to divide.
     fn per_badge(&self) -> bool { self.account == 0 }
 }

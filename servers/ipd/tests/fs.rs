@@ -191,6 +191,23 @@ fn clone_makes_a_socket_and_tcp_lists_only_the_callers() {
     assert_eq!(w.nine.fs.stack.numbers(owner(&a)), vec![0, 1]);
 }
 
+/// A request served without its bucket set ([`redoubt_ipd::server::open_sockets`]) makes no
+/// socket: it is refused, never charged to the caller's unfolded key (servers/serving.md R26).
+#[test]
+fn a_request_with_no_bucket_set_makes_no_socket() {
+    let mut w = World::new(64);
+    let a = caller(ANY, 1, &[]);
+    assert_eq!(socket(&mut w, &a), 0);
+    assert_eq!(walk(&mut w, &a, 1, 50, &["clone"]), R::Ok);
+    assert_eq!(open(&mut w, &a, 50, mode::OREAD), R::Ok);
+    let mut buf = vec![0u8; MSIZE];
+    Message { tag: 9, body: Body::Tread { fid: 50, offset: 0, count: 4096 } }.encode(&mut buf).unwrap();
+    assert!(matches!(w.nine.answer_in_place(&a, &mut buf), Answer::Replied));
+    let reply = Message::decode(&buf).unwrap();
+    assert_eq!(reply.body, Body::Rerror { ename: redoubt_ipd::fs::NO_CHARGE.0 });
+    assert_eq!(w.nine.fs.stack.numbers(owner(&a)), vec![0], "no socket was made");
+}
+
 #[test]
 fn a_connect_waits_then_carries_data_through_the_files() {
     let mut w = World::new(64);

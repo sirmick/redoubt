@@ -81,7 +81,7 @@ impl<T> Parked<T> {
     pub fn new(longest: u64) -> Parked<T> { Parked { calls: Vec::new(), longest } }
 
     /// Parks `request` at `now` (µs since boot) for at most the longest wait, charged to its
-    /// caller's bucket and `share` in `admission` (its `in_flight` caps). Refused when the
+    /// caller's bucket `key` and `share` in `admission` (its `in_flight` caps). Refused when the
     /// caller's bucket or share is full, or there is no memory; the request comes back to be
     /// answered now.
     #[allow(clippy::result_large_err)] // the request comes back by value, as `Request::reply`'s does
@@ -89,11 +89,10 @@ impl<T> Parked<T> {
         &mut self,
         admission: &mut Admission,
         request: Request,
-        share: u64,
+        (key, share): (AdmitKey, u64),
         state: T,
         now: u64,
     ) -> Result<(), NotParked> {
-        let key = AdmitKey::of(&request.caller);
         if self.calls.try_reserve(1).is_err() || admission.admit(key, share, Resource::InFlight).is_err() {
             return Err(NotParked(request));
         }

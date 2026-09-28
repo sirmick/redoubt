@@ -24,7 +24,7 @@ use redoubt_rt::ipc::{Caller, Request, Words};
 pub use redoubt_rt::server::minted::FIRST_MINTED_BADGE as FIRST_GRANTED_BADGE;
 use redoubt_rt::server::minted::{Entry, Kernel, MintError, Minted, Minter};
 use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, answer, finish};
-use redoubt_rt::server::{Access, Admission, AdmitKey, Cost, Limits, Resource, Unsized, check};
+use redoubt_rt::server::{Access, Admission, Cost, Limits, Resource, Unsized, check};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::keyd::{
     ErrorCode, Grant, GrantReply, Holds, HoldsReply, Message, PublicKeyReply, Release, ReleaseReply, Reply,
@@ -201,20 +201,16 @@ impl KeyServer {
             // badge it came through.
             Message::Grant(Grant {}) => {
                 // **Only a root badge may grant.** A granted capability cannot grant again,
-                // so grants never chain. Without that rule a system-class caller escapes its
-                // cap: `admit` keys account 0 by badge (servers/serving.md, because the budget id
-                // a system caller shares does not travel), and `share` folds a capability into
-                // its parent's only when the requester and the caller are the same client,
-                // which two badges of account 0 never are. One daemon could then open a fresh
-                // bucket per chained grant until `LIMITS.buckets` were spent and nobody, the
-                // steward included, could grant at all. Milestone 1 needs no chain: only the
-                // steward and `sshd` hold `keyd` capabilities, both through root badges, and
-                // no session or lease holds `keys` at all.
+                // so grants never chain: a key's holders stay the ones the manifest names.
+                // Milestone 1 needs no chain: only the steward and `sshd` hold `keyd`
+                // capabilities, both through root badges, and no session or lease holds `keys`
+                // at all. Admission would hold a chain all the same: an account-0 caller is
+                // charged to its root badge's bucket (`Minted::key`, servers/serving.md R26).
                 if caller.badge >= FIRST_GRANTED_BADGE {
                     return Err(ErrorCode::NotPermitted);
                 }
                 // Admission first, so a client at its cap makes the server do no work for it.
-                let (client, share) = (AdmitKey::of(caller), self.granted.share(caller));
+                let (client, share) = (self.granted.key(caller), self.granted.share(caller));
                 self.admission.admit(client, share, Resource::State).map_err(|_| ErrorCode::TooMany)?;
                 let made = self
                     .granted

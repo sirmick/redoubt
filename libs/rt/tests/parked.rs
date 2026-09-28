@@ -9,7 +9,7 @@ use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{self, Endpoint};
 use redoubt_rt::ipc::Event;
 use redoubt_rt::server::parked::Parked;
-use redoubt_rt::server::{Admission, Limits};
+use redoubt_rt::server::{Admission, AdmitKey, Limits};
 
 /// Opcodes of the test protocol: park me; wake one parked call; stop.
 const WAIT: u64 = 1;
@@ -38,7 +38,8 @@ fn serve(ep: Endpoint) -> (u32, u32) {
         match ep.receive(timeout, 0) {
             Ok(Event::Call(request)) if request.words[0] == WAIT => {
                 let badge = request.caller.badge;
-                if let Err(refused) = parked.park(&mut admission, request, badge, badge, now) {
+                let key = AdmitKey::of(&request.caller);
+                if let Err(refused) = parked.park(&mut admission, request, (key, badge), badge, now) {
                     refused.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                 }
             }
@@ -149,7 +150,8 @@ fn parking_is_admitted_per_bucket_and_share() {
         while let Ok(event) = ep.receive(FOREVER, 0) {
             if let Event::Call(request) = event {
                 let now = handle::time_now().unwrap();
-                if let Err(back) = parked.park(&mut admission, request, 7, (), now) {
+                let key = AdmitKey::of(&request.caller);
+                if let Err(back) = parked.park(&mut admission, request, (key, 7), (), now) {
                     back.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                     refused += 1;
                     if refused == 1 {
@@ -213,7 +215,8 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
                     }
                 }
                 _ => {
-                    if let Err(back) = parked.park(&mut admission, request, share, (), now) {
+                    let key = AdmitKey::of(&request.caller);
+                    if let Err(back) = parked.park(&mut admission, request, (key, share), (), now) {
                         back.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                     }
                 }

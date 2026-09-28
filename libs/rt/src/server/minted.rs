@@ -93,8 +93,8 @@ pub struct Entry<T> {
     /// The random id its requester was given; only they may disconnect it.
     id: u64,
     requester: Requester,
-    /// The share its admission was taken from.
-    requester_share: u64,
+    /// The bucket and share its admission was taken from.
+    charged: (AdmitKey, u64),
     /// The badge it was minted through: it goes when that one goes.
     parent: u64,
     pub value: T,
@@ -102,7 +102,7 @@ pub struct Entry<T> {
 
 impl<T> Entry<T> {
     /// The client whose admission it holds, and the share it was charged to: what to release.
-    pub fn charged_to(&self) -> (AdmitKey, u64) { (self.requester.client, self.requester_share) }
+    pub fn charged_to(&self) -> (AdmitKey, u64) { self.charged }
 }
 
 /// A badge and id drawn and a record reserved, but no handle yet: [`Minted::commit`] mints it.
@@ -112,7 +112,7 @@ pub struct Ticket {
     badge: NonZeroU64,
     id: u64,
     requester: Requester,
-    requester_share: u64,
+    charged: (AdmitKey, u64),
 }
 
 impl Ticket {
@@ -161,15 +161,8 @@ impl<T> Minted<T> {
     /// more badges buys no bigger share. A capability minted *for another client* is a share of
     /// its own, which is what the steward does for a lease's agent.
     ///
-    /// **It cannot tell "for itself" from "for another" within account 0.** `AdmitKey` keys
-    /// account 0 by badge (servers/serving.md, because the budget a system caller shares does not
-    /// travel), so a system caller minting for itself looks, through the new badge, like a
-    /// different client: the fold stops and the chain opens a fresh bucket per link. A server
-    /// whose clients can chain must say what stops one of them spending every bucket it has —
-    /// `keyd` allows no chain at all (only a root badge may grant); the 9P skeleton cannot take
-    /// that rule, because minting a connection for a child is how attenuation works there, so
-    /// for it this is an open hole, tracked in docs/todo/account0-share-chain.md rather than
-    /// closed here.
+    /// Account 0 has no shares, only a bucket per badge; there the fold that matters is
+    /// [`Minted::key`].
     pub fn share(&self, caller: &Caller) -> u64 {
         let client = AdmitKey::of(caller);
         let mut badge = caller.badge;
@@ -183,8 +176,31 @@ impl<T> Minted<T> {
         badge
     }
 
-    /// Draws the badge and id for a capability minted through `caller`'s, charged to `share`
-    /// (which the server admitted first), and reserves its record.
+    /// The bucket `caller`'s requests are charged to: [`AdmitKey::of`], except that an account-0
+    /// caller's is the bucket of the root badge its capability was minted through, however many
+    /// links deep and whoever holds it (servers/serving.md R26). Account 0 is keyed by badge, so
+    /// "for itself" cannot be told from "for another" there; without this a system caller
+    /// minting for itself would open a fresh bucket per link until every bucket was spent. The
+    /// one fold every charge goes through.
+    pub fn key(&self, caller: &Caller) -> AdmitKey {
+        let key = AdmitKey::of(caller);
+        if caller.account == 0 { key.rooted(self.root(caller.badge)) } else { key }
+    }
+
+    /// The root badge `badge` was minted through: itself when it is not in the table.
+    fn root(&self, mut badge: u64) -> u64 {
+        // Each step goes to an older badge, so this ends; the bound is only a backstop.
+        for _ in 0..=self.entries.len() {
+            match self.entries.iter().find(|e| e.badge == badge) {
+                Some(e) => badge = e.parent,
+                None => break,
+            }
+        }
+        badge
+    }
+
+    /// Draws the badge and id for a capability minted through `caller`'s, charged to `share` in
+    /// `caller`'s bucket ([`Minted::key`]; the server admitted both first), and reserves its record.
     pub fn reserve(
         &mut self,
         caller: &Caller,
@@ -196,7 +212,7 @@ impl<T> Minted<T> {
             .ok_or(MintError::TooMany)?;
         let id = self.fresh_id(kernel)?;
         self.entries.try_reserve(1).map_err(|_| MintError::Failed)?;
-        Ok(Ticket { badge, id, requester: Requester::of(caller), requester_share: share })
+        Ok(Ticket { badge, id, requester: Requester::of(caller), charged: (self.key(caller), share) })
     }
 
     /// Mints the handle for `ticket` and records it with `value`: the handle to send, its id and
@@ -207,7 +223,7 @@ impl<T> Minted<T> {
         value: T,
         kernel: &mut impl Minter,
     ) -> Result<(Handle, u64, u64), MintError> {
-        let Ticket { badge, id, requester, requester_share } = ticket;
+        let Ticket { badge, id, requester, charged } = ticket;
         // Never reused, whatever happens to this capability (servers/serving.md R27).
         self.next_badge = badge.get().wrapping_add(1);
         let handle = kernel.mint(badge).map_err(|_| MintError::Failed)?;
@@ -216,7 +232,7 @@ impl<T> Minted<T> {
             badge: badge.get(),
             id,
             requester,
-            requester_share,
+            charged,
             parent: requester.badge,
             value,
         });
