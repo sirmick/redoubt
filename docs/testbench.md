@@ -165,6 +165,7 @@ The kinds, and the fields each takes besides `description` and `arch`:
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented` |
 | `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
+| `fmt` | the formatting gate ([below](#the-formatting-gate)) | `roots`, `[[skip]]` (`path`, `reason`) |
 
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
@@ -420,6 +421,23 @@ Status: built · tested: bench:no-cruft
 
 Its `[[allow]]` entries (path, rule, reason) are the only exemptions, and an entry that no longer
 covers anything fails the case too.
+
+## The formatting gate
+
+Status: built · partly tested: that a skip with no reason, or one that names no workspace, fails is read from the code, not run by a self-check · tested: bench:formatting, host:testbench::only_tracked_workspaces_are_reported, host:testbench::diff_headers_of_both_rustfmt_forms_name_the_file
+
+`formatting.toml` holds the tree to [the formatting rule](../CONTRIBUTING.md#formatting): in each
+cargo workspace root it names (the main workspace, each host-only fuzz or oracle crate that is its
+own workspace, and `userland/otp`), it runs `cargo +nightly fmt --all --check` and fails on every
+file that is not formatted with the repository's `rustfmt.toml`. It also fails on a tracked `Cargo.toml`
+with a `[workspace]` table that is neither a root nor a `[[skip]]`, so a new crate outside the main
+workspace cannot drift unchecked, and on a skip with no reason or no workspace. Two are skipped:
+`bios/`, the upstream RustSBI firmware with its own configuration, and the docs checker's fixture
+crate, whose layout is the checker's input. The generated wire codecs (`libs/wire/src/proto/`) are
+in `rustfmt.toml`'s `ignore`: the generator is their one definition, and its own test holds them to
+its output. Without nightly rustfmt the case fails, unless
+`--allow-skip`. The case file is not called `rustfmt.toml`: rustfmt would read it as the
+configuration for everything under `tests/`.
 
 ## The docs checker
 

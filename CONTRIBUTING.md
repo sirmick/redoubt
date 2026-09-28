@@ -53,8 +53,9 @@ rustfmt +nightly --config skip_children=true path/to/file.rs   # one file
 git diff --check
 ```
 
-The tree does not yet pass this everywhere ([the follow-up](docs/todo/rustfmt-nightly-drift.md)):
-format what you change, not the files around it.
+The whole tree is formatted this way, and the bench's `formatting` case fails on any file that is
+not ([the formatting gate](docs/testbench.md#the-formatting-gate)). A crate that is its own cargo
+workspace (the fuzz crates, `userland/otp`) is formatted from its own directory.
 
 ## Commits
 
