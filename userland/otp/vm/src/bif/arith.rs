@@ -36,20 +36,11 @@ fn num(ctx: &Ctx, t: &Term) -> Result<Num, Exception> {
 fn to_f64(ctx: &Ctx, n: &Num) -> Result<f64, Exception> {
     match n {
         Num::F(f) => Ok(*f),
-        Num::I(i) => i
-            .to_f64()
-            .filter(|f| f.is_finite())
-            .ok_or_else(|| ctx.badarith()),
+        Num::I(i) => i.to_f64().filter(|f| f.is_finite()).ok_or_else(|| ctx.badarith()),
     }
 }
 
-fn mk_float(ctx: &Ctx, f: f64) -> R {
-    if f.is_finite() {
-        Ok(Term::Float(f))
-    } else {
-        Err(ctx.badarith())
-    }
-}
+fn mk_float(ctx: &Ctx, f: f64) -> R { if f.is_finite() { Ok(Term::Float(f)) } else { Err(ctx.badarith()) } }
 
 fn big(ctx: &mut Ctx, b: BigInt) -> R {
     if b.bits() > MAX_BIG_BITS {
@@ -85,17 +76,11 @@ fn arith(
     }
 }
 
-pub fn add(ctx: &mut Ctx, a: &[Term]) -> R {
-    arith(ctx, a, i64::checked_add, |x, y| x + y, |x, y| x + y)
-}
+pub fn add(ctx: &mut Ctx, a: &[Term]) -> R { arith(ctx, a, i64::checked_add, |x, y| x + y, |x, y| x + y) }
 
-pub fn sub(ctx: &mut Ctx, a: &[Term]) -> R {
-    arith(ctx, a, i64::checked_sub, |x, y| x - y, |x, y| x - y)
-}
+pub fn sub(ctx: &mut Ctx, a: &[Term]) -> R { arith(ctx, a, i64::checked_sub, |x, y| x - y, |x, y| x - y) }
 
-pub fn mul(ctx: &mut Ctx, a: &[Term]) -> R {
-    arith(ctx, a, i64::checked_mul, |x, y| x * y, |x, y| x * y)
-}
+pub fn mul(ctx: &mut Ctx, a: &[Term]) -> R { arith(ctx, a, i64::checked_mul, |x, y| x * y, |x, y| x * y) }
 
 pub fn fdiv(ctx: &mut Ctx, a: &[Term]) -> R {
     let x = to_f64(ctx, &num(ctx, &a[0])?)?;
@@ -158,13 +143,7 @@ pub fn neg(ctx: &mut Ctx, a: &[Term]) -> R {
     }
 }
 
-pub fn plus(ctx: &mut Ctx, a: &[Term]) -> R {
-    if a[0].is_number() {
-        Ok(a[0])
-    } else {
-        Err(ctx.badarith())
-    }
-}
+pub fn plus(ctx: &mut Ctx, a: &[Term]) -> R { if a[0].is_number() { Ok(a[0]) } else { Err(ctx.badarith()) } }
 
 fn bitwise(
     ctx: &mut Ctx,
@@ -179,17 +158,11 @@ fn bitwise(
     big(ctx, bigop(&x, &y))
 }
 
-pub fn band(ctx: &mut Ctx, a: &[Term]) -> R {
-    bitwise(ctx, a, |x, y| x & y, |x, y| x & y)
-}
+pub fn band(ctx: &mut Ctx, a: &[Term]) -> R { bitwise(ctx, a, |x, y| x & y, |x, y| x & y) }
 
-pub fn bor(ctx: &mut Ctx, a: &[Term]) -> R {
-    bitwise(ctx, a, |x, y| x | y, |x, y| x | y)
-}
+pub fn bor(ctx: &mut Ctx, a: &[Term]) -> R { bitwise(ctx, a, |x, y| x | y, |x, y| x | y) }
 
-pub fn bxor(ctx: &mut Ctx, a: &[Term]) -> R {
-    bitwise(ctx, a, |x, y| x ^ y, |x, y| x ^ y)
-}
+pub fn bxor(ctx: &mut Ctx, a: &[Term]) -> R { bitwise(ctx, a, |x, y| x ^ y, |x, y| x ^ y) }
 
 pub fn bnot(ctx: &mut Ctx, a: &[Term]) -> R {
     match &a[0] {
@@ -251,13 +224,9 @@ fn shift(ctx: &mut Ctx, x: &Term, n: &Term, left: bool) -> R {
     }
 }
 
-pub fn bsl(ctx: &mut Ctx, a: &[Term]) -> R {
-    shift(ctx, &a[0], &a[1], true)
-}
+pub fn bsl(ctx: &mut Ctx, a: &[Term]) -> R { shift(ctx, &a[0], &a[1], true) }
 
-pub fn bsr(ctx: &mut Ctx, a: &[Term]) -> R {
-    shift(ctx, &a[0], &a[1], false)
-}
+pub fn bsr(ctx: &mut Ctx, a: &[Term]) -> R { shift(ctx, &a[0], &a[1], false) }
 
 pub fn abs(ctx: &mut Ctx, a: &[Term]) -> R {
     match &a[0] {
@@ -297,59 +266,33 @@ fn rounding(ctx: &mut Ctx, a: &[Term], op: fn(f64) -> f64) -> R {
     }
 }
 
-pub fn trunc(ctx: &mut Ctx, a: &[Term]) -> R {
-    rounding(ctx, a, FloatCore::trunc)
-}
+pub fn trunc(ctx: &mut Ctx, a: &[Term]) -> R { rounding(ctx, a, FloatCore::trunc) }
 
 /// Rounds half away from zero, as Erlang's `round/1` does.
-pub fn round(ctx: &mut Ctx, a: &[Term]) -> R {
-    rounding(ctx, a, FloatCore::round)
-}
+pub fn round(ctx: &mut Ctx, a: &[Term]) -> R { rounding(ctx, a, FloatCore::round) }
 
-pub fn floor(ctx: &mut Ctx, a: &[Term]) -> R {
-    rounding(ctx, a, FloatCore::floor)
-}
+pub fn floor(ctx: &mut Ctx, a: &[Term]) -> R { rounding(ctx, a, FloatCore::floor) }
 
-pub fn ceil(ctx: &mut Ctx, a: &[Term]) -> R {
-    rounding(ctx, a, FloatCore::ceil)
-}
+pub fn ceil(ctx: &mut Ctx, a: &[Term]) -> R { rounding(ctx, a, FloatCore::ceil) }
 
 pub fn max(ctx: &mut Ctx, a: &[Term]) -> R {
     // On equal values the first argument wins, as in Erlang.
-    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Greater {
-        a[1]
-    } else {
-        a[0]
-    })
+    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Greater { a[1] } else { a[0] })
 }
 
 pub fn min(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Less {
-        a[1]
-    } else {
-        a[0]
-    })
+    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Less { a[1] } else { a[0] })
 }
 
-pub fn eq(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(ctx.heap().eq_arith(a[0], a[1])))
-}
+pub fn eq(ctx: &mut Ctx, a: &[Term]) -> R { Ok(ctx.bool(ctx.heap().eq_arith(a[0], a[1]))) }
 
-pub fn ne(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(!ctx.heap().eq_arith(a[0], a[1])))
-}
+pub fn ne(ctx: &mut Ctx, a: &[Term]) -> R { Ok(ctx.bool(!ctx.heap().eq_arith(a[0], a[1]))) }
 
-pub fn eq_exact(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(ctx.heap().eq_exact(a[0], a[1])))
-}
+pub fn eq_exact(ctx: &mut Ctx, a: &[Term]) -> R { Ok(ctx.bool(ctx.heap().eq_exact(a[0], a[1]))) }
 
-pub fn ne_exact(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(!ctx.heap().eq_exact(a[0], a[1])))
-}
+pub fn ne_exact(ctx: &mut Ctx, a: &[Term]) -> R { Ok(ctx.bool(!ctx.heap().eq_exact(a[0], a[1]))) }
 
-pub fn lt(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) == Ordering::Less))
-}
+pub fn lt(ctx: &mut Ctx, a: &[Term]) -> R { Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) == Ordering::Less)) }
 
 pub fn gt(ctx: &mut Ctx, a: &[Term]) -> R {
     Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) == Ordering::Greater))
@@ -359,9 +302,7 @@ pub fn le(ctx: &mut Ctx, a: &[Term]) -> R {
     Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) != Ordering::Greater))
 }
 
-pub fn ge(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) != Ordering::Less))
-}
+pub fn ge(ctx: &mut Ctx, a: &[Term]) -> R { Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) != Ordering::Less)) }
 
 fn boolean(ctx: &Ctx, t: &Term) -> Result<bool, Exception> {
     if t.is_atom(&ctx.atoms.true_) {

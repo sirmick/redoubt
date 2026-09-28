@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
-use super::{compare, Heap, Kind, Term};
+use super::{Heap, Kind, Term, compare};
 
 /// A node's cells.
 #[derive(Clone, Copy)]
@@ -26,28 +26,15 @@ impl Heap {
     fn node(&self, n: Term) -> Option<Node> {
         let Term::Node(p) = n else { return None };
         let c = self.object(p).1;
-        let Term::Int(height) = c[4] else {
-            unreachable!("a height")
-        };
-        Some(Node {
-            key: c[0],
-            value: c[1],
-            left: c[2],
-            right: c[3],
-            height: height as u8,
-        })
+        let Term::Int(height) = c[4] else { unreachable!("a height") };
+        Some(Node { key: c[0], value: c[1], left: c[2], right: c[3], height: height as u8 })
     }
 
-    fn height(&self, n: Term) -> u8 {
-        self.node(n).map_or(0, |n| n.height)
-    }
+    fn height(&self, n: Term) -> u8 { self.node(n).map_or(0, |n| n.height) }
 
     fn new_node(&mut self, key: Term, value: Term, left: Term, right: Term) -> Term {
         let height = 1 + self.height(left).max(self.height(right));
-        Term::Node(self.push_object(
-            Kind::Node,
-            &[key, value, left, right, Term::Int(height as i64)],
-        ))
+        Term::Node(self.push_object(Kind::Node, &[key, value, left, right, Term::Int(height as i64)]))
     }
 
     /// A node for `key`, `value` over subtrees whose heights differ by at most two, balanced.
@@ -134,9 +121,7 @@ impl Heap {
     fn map_parts(&self, m: Term) -> Option<(usize, Term)> {
         let Term::Map(p) = m else { return None };
         let c = self.object(p).1;
-        let Term::Int(len) = c[0] else {
-            unreachable!("a map size")
-        };
+        let Term::Int(len) = c[0] else { unreachable!("a map size") };
         Some((len as usize, c[1]))
     }
 
@@ -145,14 +130,10 @@ impl Heap {
     }
 
     /// `#{}`.
-    pub fn empty_map(&mut self) -> Term {
-        self.new_map(0, Term::Nil)
-    }
+    pub fn empty_map(&mut self) -> Term { self.new_map(0, Term::Nil) }
 
     /// The number of keys, if `m` is a map.
-    pub fn map_len(&self, m: Term) -> Option<usize> {
-        self.map_parts(m).map(|(len, _)| len)
-    }
+    pub fn map_len(&self, m: Term) -> Option<usize> { self.map_parts(m).map(|(len, _)| len) }
 
     /// The value of `key` (compared exactly), if `m` is a map that has it.
     pub fn map_get(&self, m: Term, key: Term) -> Option<Term> {
@@ -219,24 +200,17 @@ impl Heap {
 
 #[cfg(test)]
 mod tests {
+    use alloc::collections::BTreeMap;
+
     use super::*;
     use crate::term::Literals;
-    use alloc::collections::BTreeMap;
 
     /// Check order, balance and cached heights of every node; return the height.
     fn check(h: &Heap, n: Term, lo: Option<i64>, hi: Option<i64>) -> u8 {
         let Some(node) = h.node(n) else { return 0 };
-        let Term::Int(k) = node.key else {
-            panic!("int keys")
-        };
-        assert!(
-            lo.is_none_or(|lo| lo < k) && hi.is_none_or(|hi| k < hi),
-            "order"
-        );
-        let (hl, hr) = (
-            check(h, node.left, lo, Some(k)),
-            check(h, node.right, Some(k), hi),
-        );
+        let Term::Int(k) = node.key else { panic!("int keys") };
+        assert!(lo.is_none_or(|lo| lo < k) && hi.is_none_or(|hi| k < hi), "order");
+        let (hl, hr) = (check(h, node.left, lo, Some(k)), check(h, node.right, Some(k), hi));
         assert!((hl as i16 - hr as i16).abs() <= 1, "balance");
         assert_eq!(node.height, 1 + hl.max(hr), "height");
         node.height
@@ -272,16 +246,10 @@ mod tests {
         for step in 0..20_000i64 {
             let k = (rng.next() % 500) as i64;
             if rng.next().is_multiple_of(3) {
-                assert_eq!(
-                    h.map_get(m, Term::Int(k)).map(|v| v.as_i64().unwrap()),
-                    model.remove(&k)
-                );
+                assert_eq!(h.map_get(m, Term::Int(k)).map(|v| v.as_i64().unwrap()), model.remove(&k));
                 m = h.map_remove(m, Term::Int(k));
             } else {
-                assert_eq!(
-                    h.map_get(m, Term::Int(k)).map(|v| v.as_i64().unwrap()),
-                    model.insert(k, step)
-                );
+                assert_eq!(h.map_get(m, Term::Int(k)).map(|v| v.as_i64().unwrap()), model.insert(k, step));
                 m = h.map_put(m, Term::Int(k), Term::Int(step));
             }
             assert_eq!(h.map_len(m), Some(model.len()));
@@ -308,18 +276,9 @@ mod tests {
     #[test]
     fn exact_keys() {
         let mut h = Heap::new(&Literals::default());
-        let m = h.map_from([
-            (Term::Int(1), Term::Int(10)),
-            (Term::Float(1.0), Term::Int(20)),
-        ]);
+        let m = h.map_from([(Term::Int(1), Term::Int(10)), (Term::Float(1.0), Term::Int(20))]);
         assert_eq!(h.map_len(m), Some(2));
-        assert_eq!(
-            h.map_get(m, Term::Int(1)).and_then(|v| v.as_i64()),
-            Some(10)
-        );
-        assert_eq!(
-            h.map_get(m, Term::Float(1.0)).and_then(|v| v.as_i64()),
-            Some(20)
-        );
+        assert_eq!(h.map_get(m, Term::Int(1)).and_then(|v| v.as_i64()), Some(10));
+        assert_eq!(h.map_get(m, Term::Float(1.0)).and_then(|v| v.as_i64()), Some(20));
     }
 }

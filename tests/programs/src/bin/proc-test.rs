@@ -23,9 +23,9 @@
 
 use core::fmt::Write;
 
+use test_programs::console::{self, Console};
 use test_programs::rd::{self, Cause, Error, ExitNotice, Received, ResetKind};
 use test_programs::spawn::{self, Image};
-use test_programs::console::{self, Console};
 
 // --- What a child does, from byte 0 of its startup page -----------------------------------------
 /// Exit with the code in byte 1.

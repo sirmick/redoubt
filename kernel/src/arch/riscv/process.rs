@@ -27,8 +27,8 @@ pub type TID = usize;
 /// The first thread of every process.
 pub const INITIAL_TID: TID = 1;
 
-use redoubt_sys::{MAX_THREADS, PAGE_SIZE};
 use redoubt_layout::Pid;
+use redoubt_sys::{MAX_THREADS, PAGE_SIZE};
 
 use crate::cell::KernelCell;
 use crate::ptable::ProcessInner;

@@ -11,11 +11,8 @@ use redoubt_sys::MemFlags;
 /// The entry permissions for a mapping's `flags`.
 pub fn translate_flags(flags: MemFlags) -> PteFlags {
     let mut pte = PteFlags::NONE;
-    let bits = [
-        (MemFlags::READ, PteFlags::R),
-        (MemFlags::WRITE, PteFlags::W),
-        (MemFlags::EXECUTE, PteFlags::X),
-    ];
+    let bits =
+        [(MemFlags::READ, PteFlags::R), (MemFlags::WRITE, PteFlags::W), (MemFlags::EXECUTE, PteFlags::X)];
     for (flag, bit) in bits {
         if flags.contains(flag) {
             pte |= bit;

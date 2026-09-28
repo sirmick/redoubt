@@ -78,7 +78,12 @@ fn heap_is_bounded() {
     for (name, input) in shapes {
         assert!(input.len() <= MAX_LEN);
         let peak = peak_heap(&input);
-        println!("{name:28} {:6} bytes in, {:8} peak heap, {:5.1}x", input.len(), peak, peak as f64 / input.len() as f64);
+        println!(
+            "{name:28} {:6} bytes in, {:8} peak heap, {:5.1}x",
+            input.len(),
+            peak,
+            peak as f64 / input.len() as f64
+        );
         assert!(peak <= HEAP_PER_BYTE * MAX_LEN, "{name}: {peak} bytes of heap");
     }
 }

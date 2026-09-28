@@ -195,18 +195,11 @@ pub fn all_available(c: &mut Ctx, _a: &[Term]) -> R {
             continue;
         };
         for n in names {
-            let Some(module) = core::str::from_utf8(&n)
-                .ok()
-                .and_then(|n| n.strip_suffix(".beam"))
-            else {
+            let Some(module) = core::str::from_utf8(&n).ok().and_then(|n| n.strip_suffix(".beam")) else {
                 continue;
             };
             if seen.insert(String::from(module)) {
-                let file = c.string(&alloc::format!(
-                    "{}/{}.beam",
-                    dir.trim_end_matches('/'),
-                    module
-                ));
+                let file = c.string(&alloc::format!("{}/{}.beam", dir.trim_end_matches('/'), module));
                 out.push({
                     let e = [c.string(module), file, c.bool(false)];
                     c.tuple(&e)
@@ -240,11 +233,7 @@ fn lib_dir_of(c: &mut Ctx, app: &str) -> Option<String> {
             } else {
                 n.strip_prefix(app)
                     .and_then(|r| r.strip_prefix('-'))
-                    .map(|v| {
-                        v.split('.')
-                            .map(|p| p.parse::<u64>().unwrap_or(0))
-                            .collect()
-                    })
+                    .map(|v| v.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect())
             };
             if let Some(vsn) = vsn {
                 if best.as_ref().is_none_or(|(b, _)| vsn > *b) {
@@ -316,9 +305,7 @@ fn load_from(c: &mut Ctx, module: &crate::atom::Atom, bytes: &[u8], file: Term) 
     match found {
         Ok(name) if &name == module => {
             let file = c.own(file);
-            c.sys()
-                .module_files
-                .insert(String::from(name.as_str()), file);
+            c.sys().module_files.insert(String::from(name.as_str()), file);
             {
                 let e = [c.atom("module"), Term::Atom(name)];
                 c.tuple(&e)
@@ -371,20 +358,12 @@ pub fn load_abs(c: &mut Ctx, a: &[Term]) -> R {
     };
     let file = alloc::format!("{path}.beam");
     let max = c.sys().limits.max_binary_bits / 8;
-    let bytes = match c
-        .platform()
-        .files()
-        .map(|f| super::read_whole_file(f, &file, max))
-    {
+    let bytes = match c.platform().files().map(|f| super::read_whole_file(f, &file, max)) {
         Some(Ok(b)) => b,
         _ => return Ok(nofile(c)),
     };
     let module = path.rsplit('/').next().unwrap_or("");
-    let Some(m) = c
-        .sys()
-        .atom_table
-        .existing(module)
-        .or_else(|| c.sys().atom_table.intern(module).ok())
+    let Some(m) = c.sys().atom_table.existing(module).or_else(|| c.sys().atom_table.intern(module).ok())
     else {
         return Ok(nofile(c));
     };

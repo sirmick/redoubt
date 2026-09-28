@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use beamlet_vm::loader::{self, LoadError};
 use beamlet_vm::platform::{Platform, PlatformError};
 use beamlet_vm::vm::Limits;
-use beamlet_vm::{atom::AtomTable, Vm};
+use beamlet_vm::{Vm, atom::AtomTable};
 
 const FIXTURES: &[(&str, &[u8])] = &[
     ("binaries", include_bytes!("fixtures/binaries.beam")),
@@ -27,22 +27,21 @@ impl Platform for TestPlatform {
         self.now += 1;
         self.now
     }
-    fn system_time_us(&mut self) -> Option<u64> {
-        None
-    }
+
+    fn system_time_us(&mut self) -> Option<u64> { None }
+
     fn idle(&mut self, deadline: Option<u64>) {
         // Time passes instantly in tests.
         if let Some(d) = deadline {
             self.now = self.now.max(d);
         }
     }
+
     fn console_write(&mut self, _bytes: &[u8]) {}
-    fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> {
-        Err(PlatformError::Unavailable)
-    }
-    fn load_module(&mut self, module: &str) -> Option<Vec<u8>> {
-        self.modules.get(module).cloned()
-    }
+
+    fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
+
+    fn load_module(&mut self, module: &str) -> Option<Vec<u8>> { self.modules.get(module).cloned() }
 }
 
 /// xorshift64*: a small deterministic PRNG, so failures reproduce exactly.
@@ -54,9 +53,8 @@ impl Rng {
         self.0 ^= self.0 >> 27;
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
+
+    fn below(&mut self, n: usize) -> usize { (self.next() % n as u64) as usize }
 }
 
 fn mutate(rng: &mut Rng, input: &[u8]) -> Vec<u8> {
@@ -99,11 +97,7 @@ fn fixtures_load() {
 fn every_truncation_is_rejected() {
     for (name, bytes) in FIXTURES {
         for len in 0..bytes.len() {
-            let r = loader::load(
-                &bytes[..len],
-                &mut AtomTable::new(),
-                &mut Default::default(),
-            );
+            let r = loader::load(&bytes[..len], &mut AtomTable::new(), &mut Default::default());
             assert!(r.is_err(), "{name} truncated to {len} bytes loaded");
         }
     }
@@ -112,10 +106,7 @@ fn every_truncation_is_rejected() {
 #[test]
 fn wrong_formats_are_named() {
     let mut atoms = AtomTable::new();
-    assert_eq!(
-        loader::load(b"", &mut atoms, &mut Default::default()).err(),
-        Some(LoadError::NotBeam)
-    );
+    assert_eq!(loader::load(b"", &mut atoms, &mut Default::default()).err(), Some(LoadError::NotBeam));
     assert_eq!(
         loader::load(b"FOR1\0\0\0\x04BEAM", &mut atoms, &mut Default::default()).err(),
         Some(LoadError::MissingChunk("AtU8"))
@@ -123,24 +114,17 @@ fn wrong_formats_are_named() {
     // A chunk length that runs past the end of the file.
     let mut bad = FIXTURES[0].1.to_vec();
     bad[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
-    assert_eq!(
-        loader::load(&bad, &mut atoms, &mut Default::default()).err(),
-        Some(LoadError::NotBeam)
-    );
+    assert_eq!(loader::load(&bad, &mut atoms, &mut Default::default()).err(), Some(LoadError::NotBeam));
 }
 
 /// Load and, where loading succeeds, run thousands of mutants. Nothing may panic.
 #[test]
 fn mutants_never_panic() {
     // More rounds for a long soak: BEAMLET_FUZZ_ROUNDS=1000000 cargo test --release ...
-    let rounds: usize = std::env::var("BEAMLET_FUZZ_ROUNDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20_000);
-    let seed: u64 = std::env::var("BEAMLET_FUZZ_SEED")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0x9E37_79B9_7F4A_7C15);
+    let rounds: usize =
+        std::env::var("BEAMLET_FUZZ_ROUNDS").ok().and_then(|s| s.parse().ok()).unwrap_or(20_000);
+    let seed: u64 =
+        std::env::var("BEAMLET_FUZZ_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(0x9E37_79B9_7F4A_7C15);
     let mut rng = Rng(seed);
     let mut loaded = 0;
     for round in 0..rounds {
@@ -160,11 +144,7 @@ fn mutants_never_panic() {
         let mut modules = BTreeMap::new();
         modules.insert(module_name.clone(), bytes.clone());
         // Small limits keep each run fast; the limits themselves are what is being tested.
-        let limits = Limits {
-            max_binary_bits: 1 << 20,
-            max_stack_slots: 1 << 16,
-            ..Limits::default()
-        };
+        let limits = Limits { max_binary_bits: 1 << 20, max_stack_slots: 1 << 16, ..Limits::default() };
         let mut vm = Vm::with_limits(Box::new(TestPlatform { now: 0, modules }), limits);
         if let Ok(pid) = vm.spawn(&module_name, "start", |_| Vec::new()) {
             // A mutant may loop forever; that is fine, as long as it does not crash the VM.
@@ -176,10 +156,7 @@ fn mutants_never_panic() {
     // The mutator should leave a fair share loadable, or this test proves little about the
     // interpreter.
     eprintln!("{loaded} of {rounds} mutants loaded and ran");
-    assert!(
-        loaded * 20 > rounds,
-        "only {loaded} of {rounds} mutants loaded"
-    );
+    assert!(loaded * 20 > rounds, "only {loaded} of {rounds} mutants loaded");
 }
 
 /// A process stuck in a loop of plain jumps (no calls, so no reductions) is still preempted,
@@ -187,16 +164,11 @@ fn mutants_never_panic() {
 #[test]
 fn jump_loops_are_preempted() {
     let mut modules = BTreeMap::new();
-    modules.insert(
-        "jumploop".to_string(),
-        include_bytes!("fixtures/jumploop.beam").to_vec(),
-    );
+    modules.insert("jumploop".to_string(), include_bytes!("fixtures/jumploop.beam").to_vec());
     let mut vm = Vm::new(Box::new(TestPlatform { now: 0, modules }));
     let _spinner = vm.spawn("jumploop", "spin", |_| Vec::new()).unwrap();
     let done = vm.spawn("jumploop", "done", |_| Vec::new()).unwrap();
-    let r = vm
-        .run_bounded(done, 100)
-        .expect("done/0 ran despite the spinning process");
+    let r = vm.run_bounded(done, 100).expect("done/0 ran despite the spinning process");
     assert_eq!(r.unwrap().unwrap().to_string(), "42");
 }
 
@@ -205,15 +177,8 @@ fn jump_loops_are_preempted() {
 #[test]
 fn empty_frames_count_against_the_stack() {
     let mut modules = BTreeMap::new();
-    modules.insert(
-        "exceptions".to_string(),
-        include_bytes!("fixtures/regress-frames.beam").to_vec(),
-    );
-    let limits = Limits {
-        max_binary_bits: 1 << 20,
-        max_stack_slots: 1 << 20,
-        ..Limits::default()
-    };
+    modules.insert("exceptions".to_string(), include_bytes!("fixtures/regress-frames.beam").to_vec());
+    let limits = Limits { max_binary_bits: 1 << 20, max_stack_slots: 1 << 20, ..Limits::default() };
     let mut vm = Vm::with_limits(Box::new(TestPlatform { now: 0, modules }), limits);
     let pid = vm.spawn("exceptions", "start", |_| Vec::new()).unwrap();
     let r = vm.run_bounded(pid, 100_000).expect("finished");

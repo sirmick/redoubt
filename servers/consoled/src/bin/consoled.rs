@@ -5,11 +5,11 @@
 //!   ([`redoubt_rt::server::parked`]) instead of blocking, so every other client is still served. Nothing of
 //!   a parked read is kept but the call itself: serving it again reads its T-message out of its own lend
 //!   afresh (`NineServer::serve_parking`).
-//! - **The interrupt thread** does nothing but `receive` on the IRQ handle (kernel/devices.md R5:
-//!   the kernel masks the source when it fires and the next receive unmasks it; there is no
-//!   acknowledge) and `send` one word to the serving thread's own endpoint. It touches no register,
-//!   so the UART stays on one thread and there is no shared state between the two — which is why
-//!   neither needs a lock, and why the runtime's `Registers` need not be `Sync`.
+//! - **The interrupt thread** does nothing but `receive` on the IRQ handle (kernel/devices.md R5: the kernel
+//!   masks the source when it fires and the next receive unmasks it; there is no acknowledge) and `send` one
+//!   word to the serving thread's own endpoint. It touches no register, so the UART stays on one thread and
+//!   there is no shared state between the two — which is why neither needs a lock, and why the runtime's
+//!   `Registers` need not be `Sync`.
 //!
 //! A wake-up carries no data: the serving thread drains the whole FIFO each time, so two bytes
 //! that arrive between two interrupts are both read, and a wake-up that names nothing costs a

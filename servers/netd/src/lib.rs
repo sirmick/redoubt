@@ -20,16 +20,15 @@
 //! 4. **No address travels in a message.** Both regions are allocated, both queues configured and the device
 //!    started by the serving thread before the receive thread exists. The receive thread's half ([`RxPart`])
 //!    is handed over in this process's own memory ([`kernel`]).
-//! 5. **A DMA page never leaves `netd`** (kernel/devices.md, `dma_alloc`: the kernel refuses to
-//!    lend, transfer or `process_map` a `dma_alloc` page). No path here lends, transfers or maps
-//!    one: each received frame is copied into a fresh one-page `Buffer` of anonymous memory before
-//!    it is sent to `ipd`, a transmit is copied out of the caller's lend into a slot, and no reply
-//!    carries a buffer. DMA addresses exist only as numbers inside [`kernel::Device`].
-//! 6. **Either thread leaving its loop stops the device.** The receive thread resets it and tells
-//!    the serving thread on every way out ([`receiver`]); the serving thread resets it on a lie, on
-//!    a report, and before it exits; a panic resets it from the runtime's panic hook
-//!    ([`kernel::Regs::arm_panic_reset`]). A kill or a fault runs none of this; the kernel resets
-//!    the device then (kernel/invariants.md I16).
+//! 5. **A DMA page never leaves `netd`** (kernel/devices.md, `dma_alloc`: the kernel refuses to lend,
+//!    transfer or `process_map` a `dma_alloc` page). No path here lends, transfers or maps one: each received
+//!    frame is copied into a fresh one-page `Buffer` of anonymous memory before it is sent to `ipd`, a
+//!    transmit is copied out of the caller's lend into a slot, and no reply carries a buffer. DMA addresses
+//!    exist only as numbers inside [`kernel::Device`].
+//! 6. **Either thread leaving its loop stops the device.** The receive thread resets it and tells the serving
+//!    thread on every way out ([`receiver`]); the serving thread resets it on a lie, on a report, and before
+//!    it exits; a panic resets it from the runtime's panic hook ([`kernel::Regs::arm_panic_reset`]). A kill
+//!    or a fault runs none of this; the kernel resets the device then (kernel/invariants.md I16).
 //!
 //! # Shape
 //! - [`transport`]: the seam to the kernel, and [`kernel`], its one implementation and the only `unsafe` in

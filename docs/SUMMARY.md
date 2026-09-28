@@ -100,7 +100,6 @@
   - [The test programs' build inputs](todo/programs-build-rerun.md)
   - [Raw memory calls beside the runtime](todo/raw-syscall-runtime-audit.md)
   - [A notice lost to a bad receive record](todo/receive-output-late-invalid.md)
-  - [Nightly rustfmt drift](todo/rustfmt-nightly-drift.md)
   - [A size budget for the trusted crates](todo/size-budget.md)
   - [Paths the docs checker names that no longer exist](todo/doccheck-stale-paths.md)
   - [The steward decision-wake target](todo/sched-latency-target.md)

@@ -69,7 +69,6 @@ fn a_full_run_of_sectors_round_trips() {
     assert_eq!(device.strayed(), 0);
 }
 
-
 /// The completion may already be there when the driver first looks (`defer` off) or arrive while
 /// it waits (`defer` on). Both paths work, and neither is the only one tested.
 #[test]

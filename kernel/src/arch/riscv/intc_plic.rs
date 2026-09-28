@@ -39,7 +39,8 @@ fn context() -> usize { CONTEXT.load(Ordering::Relaxed) }
 
 /// Map the PLIC described by the `Plic` kernel argument, if there is one.
 pub fn init() {
-    let Some(arg) = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Plic"))
+    let Some(arg) =
+        crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Plic"))
     else {
         println!("No PLIC reported by the loader; external interrupts are unavailable");
         return;

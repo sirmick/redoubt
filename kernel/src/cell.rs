@@ -47,7 +47,10 @@ unsafe impl<T: Send> Sync for SpinLock<T> {}
 #[cfg(feature = "smp")]
 impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
-        SpinLock { locked: core::sync::atomic::AtomicBool::new(false), value: core::cell::UnsafeCell::new(value) }
+        SpinLock {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            value: core::cell::UnsafeCell::new(value),
+        }
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
@@ -84,4 +87,3 @@ impl<T> KernelCell<T> {
         }
     }
 }
-

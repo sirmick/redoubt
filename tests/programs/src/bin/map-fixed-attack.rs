@@ -52,16 +52,37 @@ fn bad_ranges(c: &mut Checker) {
     refused(c, "addr unaligned", addr + 1, PAGE_SIZE, rd::rw(), Error::InvalidArgument);
     refused(c, "len unaligned", addr, PAGE_SIZE + 1, rd::rw(), Error::InvalidArgument);
     refused(c, "len 0", addr, 0, rd::rw(), Error::InvalidArgument);
-    refused(c, "addr + len overflows", usize::MAX & !(PAGE_SIZE - 1), PAGE_SIZE, rd::rw(), Error::InvalidArgument);
+    refused(
+        c,
+        "addr + len overflows",
+        usize::MAX & !(PAGE_SIZE - 1),
+        PAGE_SIZE,
+        rd::rw(),
+        Error::InvalidArgument,
+    );
     refused(c, "outside user space", USER_AREA_END, PAGE_SIZE, rd::rw(), Error::InvalidArgument);
     // The last page below USER_AREA_END is accepted (checked as a success case below); an
     // aligned range starting there and running one page past it is refused whole.
-    refused(c, "straddles USER_AREA_END", USER_AREA_END - PAGE_SIZE, 2 * PAGE_SIZE, rd::rw(), Error::InvalidArgument);
+    refused(
+        c,
+        "straddles USER_AREA_END",
+        USER_AREA_END - PAGE_SIZE,
+        2 * PAGE_SIZE,
+        rd::rw(),
+        Error::InvalidArgument,
+    );
     // On Sv39 both cases above are also refused by the overlap walk: USER_AREA_END is root slot
     // 256, the physmap every process copies. Root slot 320 is kernel half but empty, so only
     // `user_range`'s end check refuses this one (without it, the kernel panics mapping it).
     #[cfg(target_pointer_width = "64")]
-    refused(c, "outside user space, empty root slot", 0x50_0000_0000, PAGE_SIZE, rd::rw(), Error::InvalidArgument);
+    refused(
+        c,
+        "outside user space, empty root slot",
+        0x50_0000_0000,
+        PAGE_SIZE,
+        rd::rw(),
+        Error::InvalidArgument,
+    );
 }
 
 fn bad_flags(c: &mut Checker) {
@@ -91,8 +112,22 @@ fn occupied_ranges(c: &mut Checker) {
     // Partial overlap: [free, occupied, free] and [occupied, free].
     let addr = 0x5002_0000;
     rd::map_fixed(addr + PAGE_SIZE, PAGE_SIZE, rd::rw()).expect("set up the occupied middle page");
-    refused(c, "partial overlap: free, occupied, free", addr, 3 * PAGE_SIZE, rd::rw(), Error::InvalidArgument);
-    refused(c, "partial overlap: occupied, free", addr + PAGE_SIZE, 2 * PAGE_SIZE, rd::rw(), Error::InvalidArgument);
+    refused(
+        c,
+        "partial overlap: free, occupied, free",
+        addr,
+        3 * PAGE_SIZE,
+        rd::rw(),
+        Error::InvalidArgument,
+    );
+    refused(
+        c,
+        "partial overlap: occupied, free",
+        addr + PAGE_SIZE,
+        2 * PAGE_SIZE,
+        rd::rw(),
+        Error::InvalidArgument,
+    );
     rd::unmap(addr + PAGE_SIZE, PAGE_SIZE).expect("unmap the occupied middle page");
 
     rd::unmap(anon, PAGE_SIZE).expect("unmap the map_anon region");
@@ -115,13 +150,17 @@ fn lend_server(_: usize) {
     };
     let MessageKind::Call { lend: Some(lend) } = m.kind else { panic!("expected a lend") };
     let before = usage_pages();
-    LENT_IN_REFUSED
-        .store(rd::map_fixed(lend.addr, PAGE_SIZE, rd::rw()) == Err(Error::InvalidArgument), Ordering::Release);
+    LENT_IN_REFUSED.store(
+        rd::map_fixed(lend.addr, PAGE_SIZE, rd::rw()) == Err(Error::InvalidArgument),
+        Ordering::Release,
+    );
     LENT_IN_UNCHARGED.store(usage_pages() == before, Ordering::Release);
     let before = usage_pages();
     let lent_out = m.body.words[0];
-    LENT_OUT_REFUSED
-        .store(rd::map_fixed(lent_out, PAGE_SIZE, rd::rw()) == Err(Error::InvalidArgument), Ordering::Release);
+    LENT_OUT_REFUSED.store(
+        rd::map_fixed(lent_out, PAGE_SIZE, rd::rw()) == Err(Error::InvalidArgument),
+        Ordering::Release,
+    );
     LENT_OUT_UNCHARGED.store(usage_pages() == before, Ordering::Release);
     rd::reply(m.msg_id.get(), &rd::body([0; 4])).expect("reply");
     // Block for good rather than exit, so nothing this thread owns changes `system`'s usage

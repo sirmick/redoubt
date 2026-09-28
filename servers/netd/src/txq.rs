@@ -83,7 +83,8 @@ impl TxQueue {
         self.reclaim(t)?;
         let now = t.now_us();
         for id in 0..QUEUE_SIZE {
-            if self.outstanding & (1 << id) != 0 && now.saturating_sub(self.offered_at[usize::from(id)]) >= TX_TIMEOUT_US
+            if self.outstanding & (1 << id) != 0
+                && now.saturating_sub(self.offered_at[usize::from(id)]) >= TX_TIMEOUT_US
             {
                 return Err(DeviceError::Timeout);
             }

@@ -7,14 +7,13 @@
 //! (kernel/ipc.md, "Messages"). **Word 0 of a request is its opcode.** Each message type is
 //! one of two shapes, fixed by its table, and its reply has the same shape:
 //!
-//! - **inline**: the request's fields and the reply's fields are each fixed-size integers
-//!   whose encoding fits in [`INLINE_BYTES`]; the bytes are packed into words 1..=3, four per
-//!   word, little-endian, zero-padded; there is no buffer.
-//! - **buffer**: the request's or the reply's fields need more room, or are variable-length.
-//!   The encoding of the request's fields goes in the buffer (a lend for `call`, a transfer
-//!   for `send`) and word 1 holds its length; words 2 and 3 are zero. The reply is written
-//!   into the caller's lend, its length in word 1: a `reply` carries only words and handles,
-//!   so reply data can only travel in the lend.
+//! - **inline**: the request's fields and the reply's fields are each fixed-size integers whose encoding fits
+//!   in [`INLINE_BYTES`]; the bytes are packed into words 1..=3, four per word, little-endian, zero-padded;
+//!   there is no buffer.
+//! - **buffer**: the request's or the reply's fields need more room, or are variable-length. The encoding of
+//!   the request's fields goes in the buffer (a lend for `call`, a transfer for `send`) and word 1 holds its
+//!   length; words 2 and 3 are zero. The reply is written into the caller's lend, its length in word 1: a
+//!   `reply` carries only words and handles, so reply data can only travel in the lend.
 //!
 //! **Word 0 of a reply is a status**: 0 for success, otherwise a code from the protocol's
 //! error table, where code 1 is always [`MALFORMED`]. An error reply has words 1..=3 zero
@@ -31,8 +30,8 @@
 //! bytes, the capacity of three 32-bit words. Handles travel in the message's handle slots;
 //! the codec does not see them, but checks their count against the layout.
 
-use crate::codec::{Error, Reader, Writer};
 use crate::MSIZE;
+use crate::codec::{Error, Reader, Writer};
 
 /// Machine words in a message (kernel/ipc.md `WORDS`).
 pub const WORDS: usize = 4;
@@ -87,9 +86,7 @@ impl HandleKind {
     }
 
     /// The kind a table's name stands for.
-    pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|k| k.name() == name)
-    }
+    pub fn from_name(name: &str) -> Option<Self> { Self::ALL.into_iter().find(|k| k.name() == name) }
 }
 
 /// One row of a generated protocol's layout: a request, or the reply to one (keyed by the
@@ -108,9 +105,7 @@ pub fn layout(layouts: &[Layout], opcode: u32) -> Result<&Layout, Error> {
 }
 
 /// The opcode in word 0 of a request.
-pub fn opcode(words: &Words) -> Result<u32, Error> {
-    u32::try_from(words[0]).map_err(|_| Error::BadWords)
-}
+pub fn opcode(words: &Words) -> Result<u32, Error> { u32::try_from(words[0]).map_err(|_| Error::BadWords) }
 
 /// The status in word 0 of a reply: `None` for success, `Some(code)` for an error reply,
 /// whose other words must be zero and which carries no handles.
@@ -127,9 +122,7 @@ pub fn reply_status(words: &Words, handles: usize) -> Result<Option<u32>, Error>
 }
 
 /// The words of an error reply.
-pub const fn error_reply(code: u32) -> Words {
-    [code as u64, 0, 0, 0]
-}
+pub const fn error_reply(code: u32) -> Words { [code as u64, 0, 0, 0] }
 
 /// Encodes a request (`word0` is its opcode) or a reply (`word0` is 0) in its layout's
 /// shape: `body` writes the fields.
@@ -139,11 +132,7 @@ pub fn encode(
     buf: &mut [u8],
     body: impl FnOnce(&mut Writer<'_>) -> Result<(), Error>,
 ) -> Result<Words, Error> {
-    if layout.inline {
-        encode_inline(word0, body)
-    } else {
-        encode_buffer(word0, buf, body)
-    }
+    if layout.inline { encode_inline(word0, body) } else { encode_buffer(word0, buf, body) }
 }
 
 /// Decodes the fields of a request or reply whose layout is known. `read_inline` reads the
@@ -335,7 +324,10 @@ mod tests {
 
     #[test]
     fn file_framing() {
-        let layouts = [Layout { opcode: 9, inline: true, handles: 0 }, Layout { opcode: 10, inline: false, handles: 1 }];
+        let layouts = [
+            Layout { opcode: 9, inline: true, handles: 0 },
+            Layout { opcode: 10, inline: false, handles: 1 },
+        ];
         let mut out = [0u8; 8];
         let n = encode_file(&layouts[0], &mut out, |w| w.u16(0x0201)).unwrap();
         assert_eq!(out[..n], [9, 0, 0, 0, 1, 2]);

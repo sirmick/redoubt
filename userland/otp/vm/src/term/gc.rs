@@ -30,20 +30,13 @@ impl Heap {
         self.offheap_index.clear();
         self.offheap_bytes = 0;
         let offheap_moved = alloc::vec![u32::MAX; from_offheap.len()];
-        Collector {
-            heap: self,
-            from,
-            from_offheap,
-            offheap_moved,
-        }
+        Collector { heap: self, from, from_offheap, offheap_moved }
     }
 }
 
 impl Collector<'_> {
     /// A term the heap's owner holds: after this call it is its new self.
-    pub fn root(&mut self, t: &mut Term) {
-        *t = self.evacuate(*t);
-    }
+    pub fn root(&mut self, t: &mut Term) { *t = self.evacuate(*t); }
 
     /// Copy the object `t` points to (once), and return `t` pointing at the copy.
     fn evacuate(&mut self, mut t: Term) -> Term {
@@ -53,28 +46,19 @@ impl Collector<'_> {
             return t;
         }
         let at = p.at();
-        if let Term::Header(Header {
-            kind: Kind::Forward,
-            len,
-        }) = self.from[at]
-        {
+        if let Term::Header(Header { kind: Kind::Forward, len }) = self.from[at] {
             p.index = len;
             return t;
         }
         let size = if is_cons {
             2
         } else {
-            let Term::Header(h) = self.from[at] else {
-                unreachable!("an object starts with a header")
-            };
+            let Term::Header(h) = self.from[at] else { unreachable!("an object starts with a header") };
             1 + h.len as usize
         };
         let new = Ptr::own(self.heap.terms.len());
         self.heap.terms.extend_from_slice(&self.from[at..at + size]);
-        self.from[at] = Term::Header(Header {
-            kind: Kind::Forward,
-            len: new.index,
-        });
+        self.from[at] = Term::Header(Header { kind: Kind::Forward, len: new.index });
         p.index = new.index;
         t
     }
@@ -89,8 +73,7 @@ impl Collector<'_> {
                 Term::OffHeap(j) => {
                     let j = j as usize;
                     if self.offheap_moved[j] == u32::MAX {
-                        let Term::OffHeap(k) = self.heap.push_offheap(self.from_offheap[j].clone())
-                        else {
+                        let Term::OffHeap(k) = self.heap.push_offheap(self.from_offheap[j].clone()) else {
                             unreachable!()
                         };
                         self.offheap_moved[j] = k;

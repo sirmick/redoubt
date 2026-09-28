@@ -2,12 +2,11 @@
 //!
 //! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 
-use paging::{PteFlags, Slot, Table, Window, ENTRIES, LARGEST_LEAF, LEVELS};
+use paging::{ENTRIES, LARGEST_LEAF, LEVELS, PteFlags, Slot, Table, Window};
 use redoubt_layout::{PHYSMAP_PHYS_BASE, PROCESS_AREA, Pid};
-
-use crate::alloc::PageAllocator;
 use redoubt_sys::PAGE_SIZE;
 
+use crate::alloc::PageAllocator;
 
 const ROOT_KERNEL_START: usize = ENTRIES / 2;
 const ROOT_PROCESS_AREA: usize = paging::vpn(PROCESS_AREA, LEVELS - 1);

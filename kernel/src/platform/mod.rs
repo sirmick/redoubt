@@ -6,9 +6,7 @@ pub use sbi::rand;
 
 /// Platform initialization that must not depend on the memory manager or on process
 /// state. Runs first thing at boot, so that early panics can be reported.
-pub fn early_init() {
-    self::sbi::early_init();
-}
+pub fn early_init() { self::sbi::early_init(); }
 
 /// Power the machine off, or reboot it (`system_reset`; kernel/devices.md). The kernel owns no
 /// reset device: on every platform we support the firmware does it (SBI SRST), which is also
@@ -23,6 +21,4 @@ pub fn reset(reboot: bool) -> ! {
 }
 
 /// Platform specific initialization.
-pub fn init() {
-    self::sbi::init();
-}
+pub fn init() { self::sbi::init(); }

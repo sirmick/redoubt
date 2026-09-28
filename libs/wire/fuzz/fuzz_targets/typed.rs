@@ -10,9 +10,9 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use redoubt_wire::MSIZE;
 use redoubt_wire::proto::example::{Message, Reply};
 use redoubt_wire::typed::Words;
-use redoubt_wire::MSIZE;
 
 /// The opcodes the fixture defines, 0, one past them, and the extremes.
 fn opcode(raw: u64) -> u64 {

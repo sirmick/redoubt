@@ -28,32 +28,21 @@ mod imp {
 
     impl<T> Lock<T> {
         pub const fn new(value: T) -> Lock<T> {
-            Lock {
-                inner: std::sync::Mutex::new(value),
-                owner: AtomicUsize::new(0),
-            }
+            Lock { inner: std::sync::Mutex::new(value), owner: AtomicUsize::new(0) }
         }
 
         /// Wait for exclusive access. A panic while holding a lock does not poison it: the VM
         /// never panics on purpose, and a value left half-changed is no worse than losing it.
         pub fn lock(&self) -> Guard<'_, T> {
             let me = me();
-            assert!(
-                self.owner.load(Ordering::Relaxed) != me,
-                "a lock taken twice by one thread"
-            );
+            assert!(self.owner.load(Ordering::Relaxed) != me, "a lock taken twice by one thread");
             let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             self.owner.store(me, Ordering::Relaxed);
-            Guard {
-                guard: Some(guard),
-                owner: &self.owner,
-            }
+            Guard { guard: Some(guard), owner: &self.owner }
         }
 
         /// Access through an exclusive reference, which needs no locking.
-        pub fn get_mut(&mut self) -> &mut T {
-            self.inner.get_mut().unwrap_or_else(|e| e.into_inner())
-        }
+        pub fn get_mut(&mut self) -> &mut T { self.inner.get_mut().unwrap_or_else(|e| e.into_inner()) }
     }
 
     pub struct Guard<'a, T> {
@@ -64,21 +53,16 @@ mod imp {
 
     impl<T> core::ops::Deref for Guard<'_, T> {
         type Target = T;
-        fn deref(&self) -> &T {
-            self.guard.as_ref().expect("held")
-        }
+
+        fn deref(&self) -> &T { self.guard.as_ref().expect("held") }
     }
 
     impl<T> core::ops::DerefMut for Guard<'_, T> {
-        fn deref_mut(&mut self) -> &mut T {
-            self.guard.as_mut().expect("held")
-        }
+        fn deref_mut(&mut self) -> &mut T { self.guard.as_mut().expect("held") }
     }
 
     impl<T> Drop for Guard<'_, T> {
-        fn drop(&mut self) {
-            self.owner.store(0, Ordering::Relaxed);
-        }
+        fn drop(&mut self) { self.owner.store(0, Ordering::Relaxed); }
     }
 
     /// Where idle schedulers wait for work.
@@ -96,13 +80,9 @@ mod imp {
             guard
         }
 
-        pub fn wake_one(&self) {
-            self.0.notify_one();
-        }
+        pub fn wake_one(&self) { self.0.notify_one(); }
 
-        pub fn wake_all(&self) {
-            self.0.notify_all();
-        }
+        pub fn wake_all(&self) { self.0.notify_all(); }
     }
 
     /// Values that may be shared between schedulers.
@@ -123,20 +103,14 @@ mod imp {
     pub struct Lock<T>(core::cell::RefCell<T>);
 
     impl<T> Lock<T> {
-        pub const fn new(value: T) -> Lock<T> {
-            Lock(core::cell::RefCell::new(value))
-        }
+        pub const fn new(value: T) -> Lock<T> { Lock(core::cell::RefCell::new(value)) }
 
         /// Exclusive access. With one scheduler nothing else can hold it, unless this code
         /// already does: that is a bug, and panics.
-        pub fn lock(&self) -> Guard<'_, T> {
-            self.0.borrow_mut()
-        }
+        pub fn lock(&self) -> Guard<'_, T> { self.0.borrow_mut() }
 
         /// Access through an exclusive reference, which needs no locking.
-        pub fn get_mut(&mut self) -> &mut T {
-            self.0.get_mut()
-        }
+        pub fn get_mut(&mut self) -> &mut T { self.0.get_mut() }
     }
 
     pub type Guard<'a, T> = core::cell::RefMut<'a, T>;
@@ -146,9 +120,7 @@ mod imp {
     pub struct Wakeup(());
 
     impl Wakeup {
-        pub fn wait<'a, T>(&self, guard: Guard<'a, T>) -> Guard<'a, T> {
-            guard
-        }
+        pub fn wait<'a, T>(&self, guard: Guard<'a, T>) -> Guard<'a, T> { guard }
 
         pub fn wake_one(&self) {}
 
@@ -170,9 +142,7 @@ mod imp {
 pub use imp::{AnyShared, Guard, Lock, Sendable, Shared, Wakeup};
 
 impl<T: Default> Default for Lock<T> {
-    fn default() -> Lock<T> {
-        Lock::new(T::default())
-    }
+    fn default() -> Lock<T> { Lock::new(T::default()) }
 }
 
 /// What several schedulers will share must be `Sync`; what moves between them, `Send`.

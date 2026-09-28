@@ -4,9 +4,9 @@
 
 use std::collections::BTreeMap;
 
+use beamlet_vm::Vm;
 use beamlet_vm::platform::{Platform, PlatformError};
 use beamlet_vm::vm::Limits;
-use beamlet_vm::Vm;
 
 struct TestPlatform {
     now: u64,
@@ -17,23 +17,22 @@ impl Platform for TestPlatform {
         self.now += 1;
         self.now
     }
-    fn system_time_us(&mut self) -> Option<u64> {
-        None
-    }
+
+    fn system_time_us(&mut self) -> Option<u64> { None }
+
     fn idle(&mut self, deadline: Option<u64>) {
         if let Some(d) = deadline {
             self.now = self.now.max(d);
         }
     }
+
     fn console_write(&mut self, _bytes: &[u8]) {}
-    fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> {
-        Err(PlatformError::Unavailable)
-    }
+
+    fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
+
     fn load_module(&mut self, module: &str) -> Option<Vec<u8>> {
         let modules: BTreeMap<&str, &[u8]> =
-            [("limits", include_bytes!("fixtures/limits.beam").as_slice())]
-                .into_iter()
-                .collect();
+            [("limits", include_bytes!("fixtures/limits.beam").as_slice())].into_iter().collect();
         modules.get(module).map(|b| b.to_vec())
     }
 }
@@ -50,12 +49,7 @@ fn run(f: &str, limits: Limits) -> String {
 }
 
 fn small() -> Limits {
-    Limits {
-        max_mailbox: 100,
-        max_heap_words: 1 << 20,
-        max_ets_words: 1 << 16,
-        ..Limits::default()
-    }
+    Limits { max_mailbox: 100, max_heap_words: 1 << 20, max_ets_words: 1 << 16, ..Limits::default() }
 }
 
 #[test]
@@ -70,10 +64,7 @@ fn full_own_mailbox_kills_the_sender() {
 
 #[test]
 fn a_roomy_mailbox_is_not_a_limit() {
-    let limits = Limits {
-        max_mailbox: 10_000,
-        ..small()
-    };
+    let limits = Limits { max_mailbox: 10_000, ..small() };
     assert_eq!(run("mailbox", limits), "alive");
 }
 

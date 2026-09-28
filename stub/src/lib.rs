@@ -554,7 +554,10 @@ mod tests {
     fn plan_refuses_two_segments_that_overlap_each_other() {
         let code = [0u8; 4];
         // Neither overlaps `exclude`; they overlap each other instead.
-        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64), (PF_R, 0x1_0000, &code, PAGE_SIZE as u64)]);
+        let image = elf64(
+            0x1_0000,
+            &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64), (PF_R, 0x1_0000, &code, PAGE_SIZE as u64)],
+        );
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::Overlaps)));
     }

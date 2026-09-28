@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 8
+revision = 21
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -9,10 +9,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "beamlet: the code path's search order"
   template = "package"
   parent = "M1"
-  needs = ["HIST1"]
+  needs = ["HIST1", "FMT1"]
   body = "docs/todo/module-search-order.md"
   state = "todo"
-  revision = 2
+  revision = 9
 
 [[node]]
   id = "HIST1"
@@ -25,22 +25,22 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "IPC1"
-  title = "IPC call completion: one outcome per call (merged, review owed)"
+  title = "IPC call completion: one outcome per call"
   template = "package"
   parent = "M1"
   body = "Built in cf445aa0c: docs/kernel/ipc.md#r13-one-outcome-per-call, docs/kernel/memory.md (a loan within one process). Owed: one red review of the completion path as it is now, including the same-process lend return the last round blocked on. Cross-hart races: docs/todo/kernel-attack-gaps.md; model replay: node model-replay."
   state = "done"
-  revision = 8
+  revision = 11
 
 [[node]]
   id = "K7"
   title = "Kernel and bench follow-ups"
   template = "package"
   parent = "M1"
-  needs = ["HIST1"]
+  needs = ["HIST1", "FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work: the Kernel and The bench and its tools bullets, the documentation switch-over (docs/todo/verdict-strings.md), and the latency seed pin and sweep (docs/todo/sched-latency-target.md)."
   state = "todo"
-  revision = 2
+  revision = 9
 
 [[node]]
   id = "M1"
@@ -91,10 +91,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "Server follow-ups"
   template = "package"
   parent = "M1"
-  needs = ["HIST1"]
+  needs = ["HIST1", "FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work: the Servers bullet."
   state = "todo"
-  revision = 2
+  revision = 9
 
 [[node]]
   id = "agent-suite"
@@ -194,3 +194,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Waits for an owner decision; blocks the console's resize. docs/servers/serving.md"
   state = "todo"
   revision = 2
+
+[[node]]
+  id = "FMT1"
+  title = "The tree formatted once with nightly rustfmt, and kept so"
+  template = "package"
+  parent = "M1"
+  needs = ["HIST1"]
+  body = "docs/todo/rustfmt-nightly-drift.md. Owner decision 2026-09-27: reformat once now, before K7, S2 and BL1 branch; a bench case keeps it. Tooling only: implementer plus the editor."
+  state = "done"
+  revision = 21

@@ -18,7 +18,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ghost::{Blame, Flow, Key, group};
-use crate::kernel::{Backing, DeviceKind, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, USERS, Wait};
+use crate::kernel::{
+    Backing, DeviceKind, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, USERS, Wait,
+};
 use crate::spec::*;
 use crate::syscall::{MintSource, Ret};
 

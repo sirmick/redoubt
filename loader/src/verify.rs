@@ -26,7 +26,8 @@ const SIGNATURE_LEN: usize = 64;
 /// verifying over the two concatenated (`redoubt_signing`, `preimage_is_preamble_then_archive`).
 /// A signature over the bare archive does not verify here, and is refused like any other bad one.
 pub fn authenticated_bundle(initrd: &[u8]) -> &[u8] {
-    let (signature, bundle) = initrd.split_at_checked(SIGNATURE_LEN).expect("initrd is too small to be signed");
+    let (signature, bundle) =
+        initrd.split_at_checked(SIGNATURE_LEN).expect("initrd is too small to be signed");
 
     let key = PublicKey::new(DEV_PUBLIC_KEY);
     let signature = Signature::new(signature.try_into().unwrap());

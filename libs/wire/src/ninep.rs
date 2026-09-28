@@ -11,8 +11,8 @@
 //! fid is in use, whether `version` is "9P2000". Those are protocol state and belong to the
 //! server (userland/sessions.md: servers clean paths themselves).
 
-use crate::codec::{Error, Reader, Writer};
 use crate::MSIZE;
+use crate::codec::{Error, Reader, Writer};
 
 /// The only version string we speak.
 pub const VERSION: &str = "9P2000";
@@ -56,11 +56,13 @@ int_fields!(u8 u16 u32 u64);
 
 impl<'a> Field<'a> for &'a str {
     fn read(r: &mut Reader<'a>) -> Result<Self, Error> { r.string() }
+
     fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> { w.string(self) }
 }
 
 impl<'a> Field<'a> for &'a [u8] {
     fn read(r: &mut Reader<'a>) -> Result<Self, Error> { r.bytes() }
+
     fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> { w.bytes(self) }
 }
 
@@ -171,9 +173,7 @@ impl<'a> Field<'a> for Stat<'a> {
 /// The stats in the data of a directory read, one after another. Iteration stops after the
 /// first malformed entry (which is yielded as an error), so a hostile server cannot make a
 /// client loop: every step consumes at least two bytes or ends.
-pub fn stats(data: &[u8]) -> Stats<'_> {
-    Stats { r: Reader::new(data), failed: false }
-}
+pub fn stats(data: &[u8]) -> Stats<'_> { Stats { r: Reader::new(data), failed: false } }
 
 /// Iterator returned by [`stats`].
 #[derive(Debug, Clone)]
@@ -212,9 +212,7 @@ impl<'a> Names<'a> {
         Ok(Names { len: names.len(), items })
     }
 
-    pub fn as_slice(&self) -> &[&'a str] {
-        self.items.get(..self.len).unwrap_or(&[])
-    }
+    pub fn as_slice(&self) -> &[&'a str] { self.items.get(..self.len).unwrap_or(&[]) }
 }
 
 /// `nwname[2] nwname*(wname[s])`.
@@ -250,9 +248,7 @@ impl Qids {
         Ok(Qids { len: qids.len(), items })
     }
 
-    pub fn as_slice(&self) -> &[Qid] {
-        self.items.get(..self.len).unwrap_or(&[])
-    }
+    pub fn as_slice(&self) -> &[Qid] { self.items.get(..self.len).unwrap_or(&[]) }
 }
 
 /// `nwqid[2] nwqid*(qid[13])`.

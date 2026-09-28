@@ -7,13 +7,13 @@
 //! The legacy numbers (0..=46) get the arguments their old calls took, so a surviving decoder
 //! would act on them. What each would have done is then checked from outside the call's own
 //! result:
-//! - the `MapMemory` rows name a fixed address `V` (anonymous, then by physical address: the
-//!   console, a virtio slot and RAM), and `map_fixed(V)` must succeed afterwards;
-//! - the `ClaimInterrupt(10, cb)`, `CreateThread(cb)` and `SetExceptionHandler(cb)` rows pass a
-//!   `cb` that sets a flag, which must still be clear after the console's interrupt (the bench
-//!   types a byte, which log-server echoes);
-//! - a child jumping to the old `RETURN_FROM_ISR` or `RETURN_FROM_EXCEPTION_HANDLER` address
-//!   faults, and this program gets its `faulted` exit notice.
+//! - the `MapMemory` rows name a fixed address `V` (anonymous, then by physical address: the console, a
+//!   virtio slot and RAM), and `map_fixed(V)` must succeed afterwards;
+//! - the `ClaimInterrupt(10, cb)`, `CreateThread(cb)` and `SetExceptionHandler(cb)` rows pass a `cb` that
+//!   sets a flag, which must still be clear after the console's interrupt (the bench types a byte, which
+//!   log-server echoes);
+//! - a child jumping to the old `RETURN_FROM_ISR` or `RETURN_FROM_EXCEPTION_HANDLER` address faults, and this
+//!   program gets its `faulted` exit notice.
 //!
 //! A spawned child is a copy of this image, statics and all, so no child uses `Logger`.
 
@@ -143,8 +143,10 @@ pub extern "C" fn _start() -> ! {
     let exit = rd::endpoint_create().expect("an exit endpoint");
     let kids = rd::create(gifts.users, &rd::spec(400, 2, 10)).expect("the children's budget");
     let image = spawn::image();
-    for (name, to) in [("RETURN_FROM_ISR", RETURN_FROM_ISR), ("RETURN_FROM_EXCEPTION_HANDLER", RETURN_FROM_EXCEPTION_HANDLER)]
-    {
+    for (name, to) in [
+        ("RETURN_FROM_ISR", RETURN_FROM_ISR),
+        ("RETURN_FROM_EXCEPTION_HANDLER", RETURN_FROM_EXCEPTION_HANDLER),
+    ] {
         let entry = jumper as *const () as usize;
         spawn::spawn(&image, kids, exit, entry, &(to as u64).to_le_bytes(), &[]).expect("a jumping child");
         let faulted = match rd::receive(Some(exit), WAIT, 0) {

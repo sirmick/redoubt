@@ -71,13 +71,7 @@ impl CFs {
         // owns and never moves or resizes until `drop`, which frees the shim first; the shim
         // only reads and writes inside it.
         let shim = unsafe {
-            shim_new(
-                image.as_mut_ptr(),
-                cfg.block_size,
-                cfg.block_count,
-                cfg.prog_size,
-                cfg.block_cycles,
-            )
+            shim_new(image.as_mut_ptr(), cfg.block_size, cfg.block_count, cfg.prog_size, cfg.block_cycles)
         };
         assert!(!shim.is_null());
         CFs { shim, image, mounted: false }
@@ -148,12 +142,29 @@ impl CFs {
     }
 
     /// Writes `data` at `at` (after emptying the file if `trunc`), then truncates to `cut`.
-    pub fn write(&mut self, path: &str, create: bool, trunc: bool, at: u32, data: &[u8], cut: Option<u32>) -> CResult<()> {
+    pub fn write(
+        &mut self,
+        path: &str,
+        create: bool,
+        trunc: bool,
+        at: u32,
+        data: &[u8],
+        cut: Option<u32>,
+    ) -> CResult<()> {
         let p = c(path);
         let cut = cut.map_or(-1, i64::from);
         // SAFETY: as in `mkdir`; `data` is readable for `data.len()` bytes during the call.
         check(unsafe {
-            shim_write(self.shim, p.as_ptr(), create as i32, trunc as i32, at, data.as_ptr(), data.len() as u32, cut)
+            shim_write(
+                self.shim,
+                p.as_ptr(),
+                create as i32,
+                trunc as i32,
+                at,
+                data.as_ptr(),
+                data.len() as u32,
+                cut,
+            )
         })
     }
 

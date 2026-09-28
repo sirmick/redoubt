@@ -7,7 +7,8 @@ use littlefs::{BlockDevice, Error, Filesystem, OpenOptions};
 
 use super::*;
 
-const NAMES: [&str; 6] = ["a", "b", "cc", "dir", "e0", "a-rather-long-name-that-fills-metadata-quickly-0123456789"];
+const NAMES: [&str; 6] =
+    ["a", "b", "cc", "dir", "e0", "a-rather-long-name-that-fills-metadata-quickly-0123456789"];
 /// File sizes: inline, one block, several blocks.
 const SIZES: [usize; 9] = [0, 1, 17, 64, 200, 511, 1000, 3000, 9000];
 
@@ -35,13 +36,15 @@ impl Profile {
     /// dropped pairs' blocks.
     pub fn crowded() -> Profile {
         const MANY: [&str; 24] = [
-            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u",
-            "v", "w", "x",
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
+            "t", "u", "v", "w", "x",
         ];
         Profile { names: &MANY, sizes: &[0, 3, 9, 40, 300], max_attr: 4, grow: 20 }
     }
 
-    pub fn name(&self, rng: &mut Rng) -> &'static str { self.names[rng.below(self.names.len() as u64) as usize] }
+    pub fn name(&self, rng: &mut Rng) -> &'static str {
+        self.names[rng.below(self.names.len() as u64) as usize]
+    }
 
     pub fn size(&self, rng: &mut Rng) -> usize { self.sizes[rng.below(self.sizes.len() as u64) as usize] }
 }
@@ -62,7 +65,8 @@ pub enum Op {
 pub fn parent(path: &str) -> &str { path.rsplit_once('/').map_or("", |(p, _)| p) }
 
 pub fn is_empty_dir(tree: &Tree, path: &str) -> bool {
-    matches!(tree.get(path), Some(Node::Dir { .. })) && !tree.keys().any(|k| !k.is_empty() && parent(k) == path)
+    matches!(tree.get(path), Some(Node::Dir { .. }))
+        && !tree.keys().any(|k| !k.is_empty() && parent(k) == path)
 }
 
 pub fn pick<'a>(rng: &mut Rng, tree: &'a Tree, f: impl Fn(&str, &Node) -> bool) -> Option<&'a String> {
@@ -165,7 +169,9 @@ pub fn generate(rng: &mut Rng, tree: &Tree, p: &Profile) -> Option<Op> {
         }
         3 => Op::Mkdir(fresh(rng, tree, p)?),
         4 => {
-            let path = pick(rng, tree, |k, v| !k.is_empty() && (matches!(v, Node::File { .. }) || is_empty_dir(tree, k)))?;
+            let path = pick(rng, tree, |k, v| {
+                !k.is_empty() && (matches!(v, Node::File { .. }) || is_empty_dir(tree, k))
+            })?;
             Op::Remove(path.clone())
         }
         5 | 6 => {
@@ -230,8 +236,11 @@ pub fn apply_model(tree: &mut Tree, op: &Op) {
         Op::Rename(from, to) => {
             if from != to {
                 let under = |k: &str| k == from || k.starts_with(&format!("{from}/"));
-                let moved: Vec<(String, Node)> =
-                    tree.iter().filter(|(k, _)| under(k)).map(|(k, v)| (format!("{to}{}", &k[from.len()..]), v.clone())).collect();
+                let moved: Vec<(String, Node)> = tree
+                    .iter()
+                    .filter(|(k, _)| under(k))
+                    .map(|(k, v)| (format!("{to}{}", &k[from.len()..]), v.clone()))
+                    .collect();
                 tree.retain(|k, _| !under(k));
                 tree.remove(to);
                 tree.extend(moved);

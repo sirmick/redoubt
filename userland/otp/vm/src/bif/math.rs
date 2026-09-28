@@ -22,13 +22,7 @@ fn arg(c: &Ctx, t: &Term) -> Result<f64, Exception> {
 }
 
 /// A result, or `badarith` if it is not a finite number (Erlang has no NaN or infinity).
-fn result(c: &Ctx, f: f64) -> R {
-    if f.is_finite() {
-        Ok(Term::Float(f))
-    } else {
-        Err(c.badarith())
-    }
-}
+fn result(c: &Ctx, f: f64) -> R { if f.is_finite() { Ok(Term::Float(f)) } else { Err(c.badarith()) } }
 
 macro_rules! unary {
     ($($name:ident => $f:path),* $(,)?) => {

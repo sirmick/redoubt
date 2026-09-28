@@ -6,7 +6,7 @@ extern crate std;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::fs::{attr_struct, attr_tail, pair_bytes, Attr};
+use crate::fs::{Attr, attr_struct, attr_tail, pair_bytes};
 use crate::mdir::GState;
 use crate::tag::*;
 use crate::{BlockDevice, Config, Error, Filesystem, OpenOptions};
@@ -104,7 +104,9 @@ fn skip_list_pointing_at_itself_terminates() {
     let mut ram = forged("/f", |_, _| Vec::new());
     let mut fs = Filesystem::mount(&mut ram, CFG).unwrap();
     let (crate::ops::Lookup::Found { dir, id }, _) = fs.lookup("/f").unwrap() else { panic!() };
-    let crate::fs::Struct::Ctz { head, .. } = fs.decode(&dir.c.entries[id as usize]).unwrap() else { panic!() };
+    let crate::fs::Struct::Ctz { head, .. } = fs.decode(&dir.c.entries[id as usize]).unwrap() else {
+        panic!()
+    };
     drop(fs);
     // The head block's first pointer now points at the head itself.
     let at = (head * 256) as usize;
@@ -185,8 +187,12 @@ fn forged_file_sizes_do_not_amplify_allocation() {
     }
     let mut heads = Vec::new();
     for i in 0..200 {
-        let (crate::ops::Lookup::Found { dir, id }, _) = fs.lookup(&std::format!("/f{i:03}")).unwrap() else { panic!() };
-        let crate::fs::Struct::Ctz { head, .. } = fs.decode(&dir.c.entries[id as usize]).unwrap() else { panic!() };
+        let (crate::ops::Lookup::Found { dir, id }, _) = fs.lookup(&std::format!("/f{i:03}")).unwrap() else {
+            panic!()
+        };
+        let crate::fs::Struct::Ctz { head, .. } = fs.decode(&dir.c.entries[id as usize]).unwrap() else {
+            panic!()
+        };
         let ctz = [head.to_le_bytes(), (256u32 * 4096).to_le_bytes()].concat();
         fs.commit(dir.pair, &[attr_struct(TYPE_CTZSTRUCT, id, &ctz).unwrap()]).unwrap();
         heads.push(head);
@@ -194,8 +200,8 @@ fn forged_file_sizes_do_not_amplify_allocation() {
     drop(fs);
     for h in heads {
         let at = (h * 256) as usize;
-        dev.0 .0[at..at + 4].copy_from_slice(&h.to_le_bytes());
-        dev.0 .0[at + 4..at + 8].copy_from_slice(&h.to_le_bytes());
+        dev.0.0[at..at + 4].copy_from_slice(&h.to_le_bytes());
+        dev.0.0[at + 4..at + 8].copy_from_slice(&h.to_le_bytes());
     }
     let mut fs = Filesystem::mount(&mut dev, BIG).unwrap();
     assert_eq!(fs.mkdir("/new"), Err(Error::Corrupt));
@@ -206,7 +212,9 @@ fn forged_file_sizes_do_not_amplify_allocation() {
 }
 
 fn write_all<D: BlockDevice>(fs: &mut Filesystem<D>, path: &str, data: &[u8]) {
-    let h = fs.open(path, OpenOptions { write: true, create: true, truncate: true, ..Default::default() }).unwrap();
+    let h = fs
+        .open(path, OpenOptions { write: true, create: true, truncate: true, ..Default::default() })
+        .unwrap();
     fs.write(h, data).unwrap();
     fs.close(h).unwrap();
 }

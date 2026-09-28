@@ -39,7 +39,15 @@ pub extern "C" fn _start() -> ! {
     ];
     for (parent, pages, processes, weight) in attempts {
         let got = rd::create(parent, &rd::spec(pages, processes, weight));
-        log!(logger, "[carve] {} pages {} processes {} weight under {} -> {:?}", pages, processes, weight, parent, got);
+        log!(
+            logger,
+            "[carve] {} pages {} processes {} weight under {} -> {:?}",
+            pages,
+            processes,
+            weight,
+            parent,
+            got
+        );
     }
     // Two children that together exceed their parent, or whose sum wraps a u64.
     let first = rd::create(hog, &rd::spec(rd::free(hog) - 1, 0, 0));

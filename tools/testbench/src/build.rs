@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use ed25519_compact::{KeyPair, Seed};
 
 use crate::case::{Corruption, Program};
@@ -40,7 +40,13 @@ impl Builder {
     }
 
     /// `cargo build` one package for `target` with `profile`.
-    pub fn cargo_build(&self, target: &Target, package: &str, features: &[String], profile: Profile) -> Result<()> {
+    pub fn cargo_build(
+        &self,
+        target: &Target,
+        package: &str,
+        features: &[String],
+        profile: Profile,
+    ) -> Result<()> {
         self.cargo(target, package, None, features, profile)
     }
 
@@ -53,7 +59,15 @@ impl Builder {
         profile: Profile,
     ) -> Result<()> {
         let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-        cargo.current_dir(&self.workspace).args(["build", "--profile", profile.name(), "--target", target.triple, "-p", package]);
+        cargo.current_dir(&self.workspace).args([
+            "build",
+            "--profile",
+            profile.name(),
+            "--target",
+            target.triple,
+            "-p",
+            package,
+        ]);
         if let Some(bin) = bin {
             cargo.args(["--bin", bin]);
         }
@@ -66,7 +80,11 @@ impl Builder {
         let output = cargo.output().context("running cargo")?;
         if !output.status.success() {
             let what = bin.map_or(package.to_string(), |bin| format!("{package}:{bin}"));
-            bail!("building {what} for {} failed: {}", target.name, String::from_utf8_lossy(&output.stderr).trim());
+            bail!(
+                "building {what} for {} failed: {}",
+                target.name,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
         }
         Ok(())
     }
@@ -75,7 +93,8 @@ impl Builder {
     pub fn program(&self, target: &Target, program: &Program) -> Result<(String, PathBuf)> {
         let (package, bin) = match program {
             Program::Path { path } => {
-                let name = path.file_name().context("program path has no file name")?.to_string_lossy().into_owned();
+                let name =
+                    path.file_name().context("program path has no file name")?.to_string_lossy().into_owned();
                 return Ok((name, self.workspace.join(path)));
             }
             Program::Corrupted { corrupt, with } => {
@@ -83,7 +102,8 @@ impl Builder {
                 let mut elf = std::fs::read(self.out_dir(target, Profile::Release).join(corrupt))?;
                 corrupt_elf(&mut elf, with)?;
                 let name = format!("{corrupt}-corrupted");
-                let path = self.workspace.join("target/testbench").join(format!("{name}-{}.elf", target.name));
+                let path =
+                    self.workspace.join("target/testbench").join(format!("{name}-{}.elf", target.name));
                 std::fs::write(&path, elf)?;
                 return Ok((name, path));
             }
@@ -117,7 +137,17 @@ impl Builder {
         let out = String::from_utf8_lossy(&output.stdout);
         let err = String::from_utf8_lossy(&output.stderr);
         let reason = [out.trim(), err.trim()].map(str::to_string).join("\n");
-        Ok(Some(reason.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n      ")))
+        Ok(Some(
+            reason
+                .lines()
+                .rev()
+                .take(12)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n      "),
+        ))
     }
 }
 
@@ -145,9 +175,19 @@ fn corrupt_elf(elf: &mut Vec<u8>, corruption: &Corruption) -> Result<()> {
         Corruption::SegmentVaddr(address) => {
             // (e_phoff, e_phentsize, e_phnum, p_vaddr within a program header)
             let (phoff, phentsize, phnum, vaddr_at) = if is_64 {
-                (u64::from_le_bytes(elf[0x20..0x28].try_into()?) as usize, u16_at(elf, 0x36), u16_at(elf, 0x38), 0x10)
+                (
+                    u64::from_le_bytes(elf[0x20..0x28].try_into()?) as usize,
+                    u16_at(elf, 0x36),
+                    u16_at(elf, 0x38),
+                    0x10,
+                )
             } else {
-                (u32::from_le_bytes(elf[0x1c..0x20].try_into()?) as usize, u16_at(elf, 0x2a), u16_at(elf, 0x2c), 0x08)
+                (
+                    u32::from_le_bytes(elf[0x1c..0x20].try_into()?) as usize,
+                    u16_at(elf, 0x2a),
+                    u16_at(elf, 0x2c),
+                    0x08,
+                )
             };
             let header = (0..phnum)
                 .map(|i| phoff + i * phentsize)
@@ -176,8 +216,9 @@ pub fn bundle(
     bare_archive: bool,
 ) -> Result<()> {
     let mut archive = tar::Builder::new(Vec::new());
-    let entries: Vec<_> =
-        std::iter::once(("kernel".to_string(), kernel.to_path_buf())).chain(programs.iter().chain(files).cloned()).collect();
+    let entries: Vec<_> = std::iter::once(("kernel".to_string(), kernel.to_path_buf()))
+        .chain(programs.iter().chain(files).cloned())
+        .collect();
     let mut names: Vec<&str> = entries.iter().map(|(name, _)| name.as_str()).collect();
     names.sort();
     if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {

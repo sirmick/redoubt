@@ -181,7 +181,8 @@ impl Platform {
         // CPUs: timebase and count.
         if let Some(cpus) = root.children().find(|n| n.name() == Ok("cpus")) {
             platform.timebase_hz = cell(prop(&cpus, "timebase-frequency")).unwrap_or(0);
-            platform.cpu_count = cpus.children().filter(|n| n.name().unwrap_or("").starts_with("cpu@")).count();
+            platform.cpu_count =
+                cpus.children().filter(|n| n.name().unwrap_or("").starts_with("cpu@")).count();
         }
 
         // MMIO device regions: any node with a reg that lies outside RAM. QEMU virt keeps
@@ -213,7 +214,8 @@ impl Platform {
                 continue;
             }
             // An interrupt controller belongs to the kernel, so it is not offered as a device
-            // object; it stays in `MREx` (for the kernel's ownership table) and the kernel maps the PLIC for itself.
+            // object; it stays in `MREx` (for the kernel's ownership table) and the kernel maps the PLIC for
+            // itself.
             let kernel_only = is_interrupt_controller(&node);
             let is_console = console == Some(name);
             // The interrupts a device raises. `#interrupt-cells` is 1 for the PLIC, which is
@@ -275,7 +277,8 @@ impl Platform {
 /// number) pairs, one per context in order. Supervisor external interrupt is number 9.
 fn read_plic(idx: &DevTreeIndex, root: &Node, _ac: usize, _sc: usize) -> Option<Plic> {
     const SUPERVISOR_EXTERNAL: u32 = 9;
-    let plic = idx.nodes().find(|n| prop(n, "compatible").map_or(false, |b| b.windows(4).any(|w| w == b"plic")))?;
+    let plic =
+        idx.nodes().find(|n| prop(n, "compatible").map_or(false, |b| b.windows(4).any(|w| w == b"plic")))?;
     let reg = prop(&plic, "reg")?;
     let base = read_cells(reg, 0, _ac) as usize;
     let range = base..base + read_cells(reg, _ac, _sc) as usize;

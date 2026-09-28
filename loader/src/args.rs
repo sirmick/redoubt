@@ -4,7 +4,7 @@
 //! Payloads that carry addresses are 64-bit clean: `XArg` is version 2 and `MREx`
 //! entries are `{ start: u64, size: u64, tag: u32, pad: u32 }`.
 
-use crc::{Crc, CRC_16_IBM_SDLC};
+use crc::{CRC_16_IBM_SDLC, Crc};
 
 /// Same polynomial `create-image` uses (`crc16::X25`).
 const CRC: Crc<u16> = Crc::<u16>::new(&CRC_16_IBM_SDLC);

@@ -6,8 +6,8 @@
 //! Two kinds of frame go through here:
 //! - frames holding kernel objects (budgets, handle-table pages): the kernel allocated them to
 //!   [`crate::mem::OBJECT_OWNER`], and they are never mapped into any process;
-//! - a process's own pages, while a system call copies a record in or a result out; the caller
-//!   found the frame by walking the process's page tables and checked its permissions.
+//! - a process's own pages, while a system call copies a record in or a result out; the caller found the
+//!   frame by walking the process's page tables and checked its permissions.
 //!
 //! Objects are stored as plain 64-bit words, encoded and decoded by their own modules, so no
 //! frame is ever read as a Rust type with invalid bit patterns (an enum, a reference, a `bool`).

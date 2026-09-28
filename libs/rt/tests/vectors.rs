@@ -11,8 +11,8 @@ mod common;
 mod vectors;
 
 use redoubt_rt::ipc::Caller;
-use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, NineServer, Qid, Read, mode};
 use redoubt_rt::server::Limits;
+use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, NineServer, Qid, Read, mode};
 
 /// A server that serves one small file and otherwise refuses: enough for every vector line, and
 /// it never asks to hold a call.
@@ -28,11 +28,7 @@ impl FileServer for OneFile {
     fn labels(&self, _: &u8) -> &[u64] { &[] }
 
     fn walk(&mut self, _: &Caller, _: &u8, name: &str) -> Result<(u8, Qid), NineError> {
-        if name == "file" {
-            Ok((1, Qid { kind: 0, version: 0, path: 1 }))
-        } else {
-            Err(NineError::NOT_FOUND)
-        }
+        if name == "file" { Ok((1, Qid { kind: 0, version: 0, path: 1 })) } else { Err(NineError::NOT_FOUND) }
     }
 
     fn open(&mut self, _: &Caller, _: &u8, mode: u8) -> Result<Qid, NineError> {

@@ -114,8 +114,7 @@ page.
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
      [the write-only mutation](../todo/write-only-mutation-split.md),
      [the vendored crates under Miri](../todo/miri-vendored-unsafe.md),
-     [paths the docs checker names that no longer exist](../todo/doccheck-stale-paths.md), and,
-     once the owner decides the rule, [nightly rustfmt drift](../todo/rustfmt-nightly-drift.md); and
+     [paths the docs checker names that no longer exist](../todo/doccheck-stale-paths.md); and
      [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
      trusted crates from growing unseen.
    - **Servers:** [an account-0 client's share chain](../todo/account0-share-chain.md),

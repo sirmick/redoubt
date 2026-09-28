@@ -138,9 +138,7 @@ pub extern "C" fn _start() -> ! {
     // Receive on an endpoint nothing arrives on, and on an interrupt that never fires.
     let quiet_ep = rd::endpoint_create().unwrap();
     let r = rd::receive(Some(quiet_ep), 3_000, 0);
-    let irq = devices
-        .map(|d| (d, rd::receive(Some(d), 1_000, 0)))
-        .find(|(_, r)| *r == Err(Error::Timeout));
+    let irq = devices.map(|d| (d, rd::receive(Some(d), 1_000, 0))).find(|(_, r)| *r == Err(Error::Timeout));
     log!(
         logger,
         "[timeouts] {}: receive timed out on an endpoint ({:?}) and on an interrupt (handle {:?})",

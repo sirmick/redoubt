@@ -44,9 +44,7 @@ fn keyfind_tuple(c: &Ctx, a: &[Term]) -> Result<Option<Term>, Exception> {
     Ok(None)
 }
 
-pub fn keyfind(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(keyfind_tuple(c, a)?.unwrap_or_else(|| c.bool(false)))
-}
+pub fn keyfind(c: &mut Ctx, a: &[Term]) -> R { Ok(keyfind_tuple(c, a)?.unwrap_or_else(|| c.bool(false))) }
 
 pub fn keymember(c: &mut Ctx, a: &[Term]) -> R {
     let found = keyfind_tuple(c, a)?.is_some();

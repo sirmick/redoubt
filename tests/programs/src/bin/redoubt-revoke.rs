@@ -7,13 +7,13 @@
 //! neither of which cares which address space they are in.
 //!
 //! What it shows:
-//! - a budget handle only narrows: minting into a budget that is not the default stamp or below
-//!   it is `NotPermitted` (I3);
+//! - a budget handle only narrows: minting into a budget that is not the default stamp or below it is
+//!   `NotPermitted` (I3);
 //! - destroying the stamping budget fails a **queued** message with `Dead` (R10);
-//! - and fails a **taken** call with `Dead` at once, abandoning it, so the server's reply --
-//!   handles and all -- reaches nobody (R3, R10);
-//! - a handle **inside** a queued message that the same destruction revoked arrives as 0,
-//!   keeping its slot (R10, ABI).
+//! - and fails a **taken** call with `Dead` at once, abandoning it, so the server's reply -- handles and all
+//!   -- reaches nobody (R3, R10);
+//! - a handle **inside** a queued message that the same destruction revoked arrives as 0, keeping its slot
+//!   (R10, ABI).
 //!
 //! See `tests/redoubt-revoke.toml`.
 

@@ -1,14 +1,14 @@
 //! Hashes, HMAC, Poly1305, PBKDF2 and constant-time comparison.
 
 use alloc::vec::Vec;
-use beamlet_vm::sync::Lock;
 
-use beamlet_vm::bif::Ctx;
 use beamlet_vm::Term;
+use beamlet_vm::bif::Ctx;
+use beamlet_vm::sync::Lock;
 use hmac::{KeyInit, Mac, SimpleHmac};
 use sha2::Digest;
 
-use crate::{atom_name, badarg, bin, bytes, notsup, resource, resource_ref, R};
+use crate::{R, atom_name, badarg, bin, bytes, notsup, resource, resource_ref};
 
 /// A hash function by OTP name.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -92,9 +92,7 @@ macro_rules! with_hash {
     };
 }
 
-pub(crate) fn digest(a: Alg, data: &[u8]) -> Vec<u8> {
-    with_hash!(a, H => H::digest(data).to_vec())
-}
+pub(crate) fn digest(a: Alg, data: &[u8]) -> Vec<u8> { with_hash!(a, H => H::digest(data).to_vec()) }
 
 fn hash_arg(c: &mut Ctx, a: &[Term], i: usize) -> Result<Alg, beamlet_vm::Exception> {
     match alg(&a[i]) {
@@ -294,10 +292,7 @@ pub fn pbkdf2_hmac(c: &mut Ctx, a: &[Term]) -> R {
     let h = hash_arg(c, a, 0)?;
     let pass = bytes(c, a, 1, "password")?;
     let salt = bytes(c, a, 2, "salt")?;
-    let iter = a[3]
-        .as_i64()
-        .and_then(|i| u32::try_from(i).ok())
-        .filter(|i| *i > 0);
+    let iter = a[3].as_i64().and_then(|i| u32::try_from(i).ok()).filter(|i| *i > 0);
     let Some(iter) = iter else {
         return Err(badarg(c, 3, "Bad iteration count"));
     };

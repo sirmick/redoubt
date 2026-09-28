@@ -5,9 +5,9 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use redoubt_wire::codec::Writer;
-use redoubt_wire::ninep::{message_size, stats, Message};
 use redoubt_wire::MSIZE;
+use redoubt_wire::codec::Writer;
+use redoubt_wire::ninep::{Message, message_size, stats};
 
 fuzz_target!(|data: &[u8]| {
     // The last byte picks how short the short buffers are.

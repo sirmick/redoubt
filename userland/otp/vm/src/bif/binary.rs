@@ -11,26 +11,17 @@ use crate::term::{Bits, Term};
 type R = Result<Term, Exception>;
 
 fn bin(c: &Ctx, t: &Term) -> Result<Bits, Exception> {
-    c.heap()
-        .as_bits(*t)
-        .filter(Bits::is_binary)
-        .ok_or_else(|| c.badarg())
+    c.heap().as_bits(*t).filter(Bits::is_binary).ok_or_else(|| c.badarg())
 }
 
-fn bytes_of(c: &Ctx, t: &Term) -> Result<Vec<u8>, Exception> {
-    Ok(bin(c, t)?.to_bytes().into_owned())
-}
+fn bytes_of(c: &Ctx, t: &Term) -> Result<Vec<u8>, Exception> { Ok(bin(c, t)?.to_bytes().into_owned()) }
 
 /// A `{Start, Length}` part of `size` bytes; a negative length counts backwards.
 fn part_range(c: &Ctx, start: &Term, len: &Term, size: usize) -> Result<(usize, usize), Exception> {
     let (Some(s), Some(l)) = (start.as_i64(), len.as_i64()) else {
         return Err(c.badarg());
     };
-    let (lo, hi) = if l >= 0 {
-        (s, s.checked_add(l))
-    } else {
-        (s + l, Some(s))
-    };
+    let (lo, hi) = if l >= 0 { (s, s.checked_add(l)) } else { (s + l, Some(s)) };
     match hi {
         Some(hi) if lo >= 0 && hi as u64 <= size as u64 => Ok((lo as usize, hi as usize)),
         _ => Err(c.badarg()),
@@ -98,32 +89,18 @@ pub fn bin_to_list(c: &mut Ctx, a: &[Term]) -> R {
         },
         _ => part_range(c, &a[1], &a[2], size)?,
     };
-    Ok(c.list(
-        (lo..hi)
-            .map(|i| Term::Int(b.byte(i) as i64))
-            .collect::<Vec<_>>(),
-    ))
+    Ok(c.list((lo..hi).map(|i| Term::Int(b.byte(i) as i64)).collect::<Vec<_>>()))
 }
 
-pub fn list_to_bin(c: &mut Ctx, a: &[Term]) -> R {
-    super::erlang::list_to_binary(c, a)
-}
+pub fn list_to_bin(c: &mut Ctx, a: &[Term]) -> R { super::erlang::list_to_binary(c, a) }
 
 pub fn encode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
-    let v = c
-        .heap()
-        .as_bigint(a[0])
-        .filter(|v| v.sign() != Sign::Minus)
-        .ok_or_else(|| c.badarg())?;
+    let v = c.heap().as_bigint(a[0]).filter(|v| v.sign() != Sign::Minus).ok_or_else(|| c.badarg())?;
     let little = a.get(1).is_some_and(|e| e.is_atom(&c.atoms.little));
     if a.len() == 2 && !little && !a[1].is_atom(&c.atoms.big) {
         return Err(c.badarg());
     }
-    let mut bytes = if little {
-        v.to_bytes_le().1
-    } else {
-        v.to_bytes_be().1
-    };
+    let mut bytes = if little { v.to_bytes_le().1 } else { v.to_bytes_be().1 };
     if bytes.is_empty() {
         bytes.push(0);
     }
@@ -198,21 +175,17 @@ fn scope(c: &Ctx, opts: Option<&Term>, size: usize) -> Result<(usize, usize), Ex
     let mut range = (0, size);
     for o in options(c, opts)? {
         match c.heap().as_tuple(o) {
-            Some(&[Term::Atom(tag), part]) if tag.as_str() == "scope" => {
-                match c.heap().as_tuple(part) {
-                    Some(&[s, l]) => range = part_range(c, &s, &l, size)?,
-                    _ => return Err(c.badarg()),
-                }
-            }
+            Some(&[Term::Atom(tag), part]) if tag.as_str() == "scope" => match c.heap().as_tuple(part) {
+                Some(&[s, l]) => range = part_range(c, &s, &l, size)?,
+                _ => return Err(c.badarg()),
+            },
             _ => return Err(c.badarg()),
         }
     }
     Ok(range)
 }
 
-fn found(c: &mut Ctx, i: usize, len: usize) -> Term {
-    c.tuple(&[Term::Int(i as i64), Term::Int(len as i64)])
-}
+fn found(c: &mut Ctx, i: usize, len: usize) -> Term { c.tuple(&[Term::Int(i as i64), Term::Int(len as i64)]) }
 
 pub fn compile_pattern(c: &mut Ctx, a: &[Term]) -> R {
     patterns(c, &a[0])?;
@@ -280,10 +253,7 @@ pub fn split(c: &mut Ctx, a: &[Term]) -> R {
             pieces.pop();
         }
     }
-    let pieces: Vec<Term> = pieces
-        .into_iter()
-        .map(|(s, e)| c.bits(b.slice(s * 8, (e - s) * 8)))
-        .collect();
+    let pieces: Vec<Term> = pieces.into_iter().map(|(s, e)| c.bits(b.slice(s * 8, (e - s) * 8))).collect();
     Ok(c.list(pieces))
 }
 
@@ -308,10 +278,6 @@ fn common(c: &Ctx, a: &Term, suffix: bool) -> R {
     Ok(Term::Int(n as i64))
 }
 
-pub fn longest_common_prefix(c: &mut Ctx, a: &[Term]) -> R {
-    common(c, &a[0], false)
-}
+pub fn longest_common_prefix(c: &mut Ctx, a: &[Term]) -> R { common(c, &a[0], false) }
 
-pub fn longest_common_suffix(c: &mut Ctx, a: &[Term]) -> R {
-    common(c, &a[0], true)
-}
+pub fn longest_common_suffix(c: &mut Ctx, a: &[Term]) -> R { common(c, &a[0], true) }

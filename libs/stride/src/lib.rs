@@ -18,8 +18,8 @@
 //!   reconcile's wake first; within one reconcile the lower id first; requeues FIFO.
 //! - **Inheritance**: a child enters at `max(floor, parent pass)` ([`entry`]); when destroyed, its work since
 //!   entry is added to its parent's lead, normalized by weight ([`lift`]).
-//! - **Deschedule**: a budget taken off the CPU is charged what it ran, and at least [`MIN_CHARGE`] (a run too
-//!   short for the clock to see is not free).
+//! - **Deschedule**: a budget taken off the CPU is charged what it ran, and at least [`MIN_CHARGE`] (a run
+//!   too short for the clock to see is not free).
 //!
 //! [`Cpu`] is the wiring itself: the budget whose runtime is accruing, when it is folded, and the
 //! order of the steps at a deschedule, a pick, a creation, a weight change and a destruction. The

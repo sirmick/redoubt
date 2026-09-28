@@ -70,11 +70,7 @@ fn current_root() -> Table { root_of(satp::read().bits()) }
 ///
 /// If `alloc` is given, missing intermediate tables are allocated on behalf of that PID.
 /// Otherwise a missing table is reported as `Unmapped`.
-fn walk(
-    root: Table,
-    virt: usize,
-    mut alloc: Option<(&mut MemoryManager, Pid)>,
-) -> Result<Slot, PageError> {
+fn walk(root: Table, virt: usize, mut alloc: Option<(&mut MemoryManager, Pid)>) -> Result<Slot, PageError> {
     if !physmap::is_canonical(virt) {
         return Err(PageError::NonCanonical);
     }
@@ -262,7 +258,6 @@ impl core::fmt::Debug for MemoryMapping {
 
 /// Controls MMU configurations.
 impl MemoryMapping {
-
     /// # Safety
     /// `init` must be a process description produced by the loader.
     pub unsafe fn from_init_process(&mut self, init: InitialProcess) { self.satp = init.satp; }
@@ -458,8 +453,7 @@ pub fn return_page_inner(
     if !src.get().is_valid() || !src.get().has(PteFlags::S) {
         return Err(PageError::Lent);
     }
-    let dest = walk(root_of(dest_space.satp), dest_addr as usize, None)
-        .or(Err(PageError::Lent))?;
+    let dest = walk(root_of(dest_space.satp), dest_addr as usize, None).or(Err(PageError::Lent))?;
     if dest.get().is_valid() || !dest.get().has(PteFlags::S) || dest.get().phys() != phys {
         return Err(PageError::Lent);
     }
@@ -702,9 +696,9 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
 
 /// `set_flags` (kernel/memory.md, R11): give a mapped user page exactly the permissions
 /// `flags` asks for, keeping everything else about the entry (its frame, `USER`, the
-/// accessed and dirty bits). It may add a permission as well as drop one: a program maps a page writable, writes code into it, and then makes it
-/// executable and not writable, which is what W^X asks of it. `Pte::leaf` refuses the
-/// combination that would break W^X, as decoding already did.
+/// accessed and dirty bits). It may add a permission as well as drop one: a program maps a page writable,
+/// writes code into it, and then makes it executable and not writable, which is what W^X asks of it.
+/// `Pte::leaf` refuses the combination that would break W^X, as decoding already did.
 ///
 /// A page that is not the caller's own unshared live mapping -- unmapped, reserved but never
 /// touched, lent out, or a protected borrower alias -- is `BadAddress`, which the caller
@@ -760,11 +754,8 @@ pub fn page_flags(virt: usize) -> Option<MemFlags> {
         return None;
     }
     let mut flags = MemFlags::NONE;
-    let bits = [
-        (PteFlags::R, MemFlags::READ),
-        (PteFlags::W, MemFlags::WRITE),
-        (PteFlags::X, MemFlags::EXECUTE),
-    ];
+    let bits =
+        [(PteFlags::R, MemFlags::READ), (PteFlags::W, MemFlags::WRITE), (PteFlags::X, MemFlags::EXECUTE)];
     for (bit, flag) in bits {
         if pte.has(bit) {
             flags = flags | flag;

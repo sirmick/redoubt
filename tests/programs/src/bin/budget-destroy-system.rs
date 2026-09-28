@@ -5,8 +5,8 @@
 #![no_std]
 #![no_main]
 
-use test_programs::rd;
 use test_programs::log;
+use test_programs::rd;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {

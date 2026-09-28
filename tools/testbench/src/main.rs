@@ -8,6 +8,7 @@ mod budget;
 mod build;
 mod case;
 mod cruft;
+mod fmt;
 mod peer;
 mod qemu;
 mod sched_oracle;
@@ -18,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 use crate::build::{Builder, Profile};
@@ -83,11 +84,18 @@ fn main() -> Result<()> {
 
     if args.run {
         let target = target::find(args.arch.as_deref().unwrap_or("rv64")).context("unknown arch")?;
-        let machine = target.machine.as_ref().map_err(|why| anyhow::anyhow!("{} cannot boot: {why}", target.name))?;
+        let machine =
+            target.machine.as_ref().map_err(|why| anyhow::anyhow!("{} cannot boot: {why}", target.name))?;
         let programs: Vec<_> = args
             .programs
             .iter()
-            .map(|p| if p.contains('/') { Program::Path { path: p.into() } } else { Program::TestProgram(p.clone()) })
+            .map(|p| {
+                if p.contains('/') {
+                    Program::Path { path: p.into() }
+                } else {
+                    Program::TestProgram(p.clone())
+                }
+            })
             .collect();
         let bundle = prepare(
             &builder,
@@ -116,7 +124,11 @@ fn main() -> Result<()> {
     }
     // Something the host lacks. A skip would make the run look greener than it is.
     let missing = |why: String| {
-        if args.allow_skip { Outcome::Skip(why) } else { Outcome::Fail(format!("{why} (--allow-skip to skip)")) }
+        if args.allow_skip {
+            Outcome::Skip(why)
+        } else {
+            Outcome::Fail(format!("{why} (--allow-skip to skip)"))
+        }
     };
 
     let mut paths: Vec<_> = std::fs::read_dir(workspace.join("tests"))?
@@ -153,6 +165,18 @@ fn main() -> Result<()> {
             }
             continue;
         }
+        if let Kind::Fmt(gate) = &case.kind {
+            let started = Instant::now();
+            let outcome = match fmt::available() {
+                Err(why) => missing(why),
+                Ok(()) => match fmt::check(&workspace, gate)? {
+                    None => Outcome::Pass,
+                    Some(why) => Outcome::Fail(format!("\n      {why}")),
+                },
+            };
+            failures += report(&case.name, outcome, started.elapsed().as_secs_f32());
+            continue;
+        }
         if let Kind::HostTests(host) = &case.kind {
             let started = Instant::now();
             let outcome = match builder.cargo_test(&host.packages) {
@@ -177,7 +201,8 @@ fn main() -> Result<()> {
             continue;
         }
         for arch in case.arch.iter().filter(|a| args.arch.as_ref().is_none_or(|only| only == *a)) {
-            let target = target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
+            let target =
+                target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
             for (variant, outcome, seconds) in run_case(&builder, case, target, &logs, &missing)? {
                 failures += report(&format!("{} [{}{}]", case.name, target.name, variant), outcome, seconds);
             }
@@ -221,7 +246,9 @@ fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
     if std::path::Path::new(&path).exists() {
         Ok(std::fs::canonicalize(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or(path))
     } else {
-        Err(format!("RustSBI Prototyper not found ({path}); build it with scripts/build-bios.sh or set {env}"))
+        Err(format!(
+            "RustSBI Prototyper not found ({path}); build it with scripts/build-bios.sh or set {env}"
+        ))
     }
 }
 
@@ -273,7 +300,6 @@ fn compare_boots(boot: &case::Boot, first: &[Option<String>], second: &[Option<S
     Outcome::Pass
 }
 
-
 /// Run one case on one target. A boot case yields one result per `smp` entry. `missing` turns
 /// something the host lacks into a failure or, with --allow-skip, a skip.
 fn run_case(
@@ -288,14 +314,19 @@ fn run_case(
 
     let boot = match &case.kind {
         Kind::Build(build) => {
-            let outcome = match builder.cargo_build(target, &build.package, &build.features, Profile::Release) {
+            let outcome = match builder.cargo_build(target, &build.package, &build.features, Profile::Release)
+            {
                 Ok(()) => Outcome::Pass,
                 Err(e) => Outcome::Fail(format!("{e:#}")),
             };
             return Ok(vec![(String::new(), outcome, elapsed(started))]);
         }
         Kind::Boot(boot) => boot,
-        Kind::UnsafeBudget(_) | Kind::NoCruft(_) | Kind::SshLoopback(_) | Kind::HostTests(_) => {
+        Kind::UnsafeBudget(_)
+        | Kind::NoCruft(_)
+        | Kind::Fmt(_)
+        | Kind::SshLoopback(_)
+        | Kind::HostTests(_) => {
             unreachable!("handled before the per-target loop")
         }
     };
@@ -357,7 +388,8 @@ fn run_case(
             // The network's far side dials in while it boots (`peer.rs`); its peers and capture are
             // judged by the post-check below.
             let deadline = Instant::now() + std::time::Duration::from_secs_f64(boot.timeout_secs);
-            let dials = boot.net.as_ref().map(|net| peer::Dials::start(net, &forwards, deadline)).transpose()?;
+            let dials =
+                boot.net.as_ref().map(|net| peer::Dials::start(net, &forwards, deadline)).transpose()?;
             let verdict = qemu::run(&image, boot, &builder.workspace, &forwards, log)?;
             Ok(peer::finish_dials(verdict, dials))
         };
@@ -378,7 +410,11 @@ fn run_case(
             Outcome::Pass if boot.post_check.is_some() || peers => post_check(boot, &log)?,
             other => other,
         };
-        results.push((format!(", smp={smp}"), judge(boot.must_fail.as_deref(), outcome)?, elapsed(run_started)));
+        results.push((
+            format!(", smp={smp}"),
+            judge(boot.must_fail.as_deref(), outcome)?,
+            elapsed(run_started),
+        ));
     }
     Ok(results)
 }
@@ -413,7 +449,8 @@ fn post_check(boot: &case::Boot, log: &Path) -> Result<Outcome> {
 /// failed, and for the named reason, so a self-check cannot pass by failing for some other one.
 fn judge(must_fail: Option<&str>, outcome: Outcome) -> Result<Outcome> {
     let Some(pattern) = must_fail else { return Ok(outcome) };
-    let pattern = regex::Regex::new(pattern).with_context(|| format!("bad regular expression {pattern:?}"))?;
+    let pattern =
+        regex::Regex::new(pattern).with_context(|| format!("bad regular expression {pattern:?}"))?;
     Ok(match outcome {
         Outcome::Fail(why) if pattern.is_match(&why) => Outcome::Pass,
         Outcome::Fail(why) => Outcome::Fail(format!("failed, but not with /{pattern}/: {why}")),
@@ -438,8 +475,13 @@ fn ssh_available(server_too: bool) -> Result<(), String> {
 /// is the bench's own trouble; the outcome is the sessions' verdict.
 fn ssh_loopback(workspace: &Path, case: &Case, loopback: &case::SshLoopback, logs: &Path) -> Result<Outcome> {
     let deadline = Instant::now() + std::time::Duration::from_secs_f64(loopback.timeout_secs);
-    let server =
-        ssh::loopback(workspace, &logs.join("ssh"), &case.name, &loopback.authorized, loopback.host_key.as_deref())?;
+    let server = ssh::loopback(
+        workspace,
+        &logs.join("ssh"),
+        &case.name,
+        &loopback.authorized,
+        loopback.host_key.as_deref(),
+    )?;
     let abort = std::sync::atomic::AtomicBool::new(false);
     Ok(match ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort)? {
         None => Outcome::Pass,

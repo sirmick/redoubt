@@ -64,36 +64,19 @@ pub struct Exception {
 
 impl Exception {
     pub fn error(reason: Term) -> Exception {
-        Exception {
-            class: Class::Error,
-            reason,
-            trace: None,
-            cause: None,
-        }
+        Exception { class: Class::Error, reason, trace: None, cause: None }
     }
+
     pub fn exit(reason: Term) -> Exception {
-        Exception {
-            class: Class::Exit,
-            reason,
-            trace: None,
-            cause: None,
-        }
+        Exception { class: Class::Exit, reason, trace: None, cause: None }
     }
+
     pub fn throw(reason: Term) -> Exception {
-        Exception {
-            class: Class::Throw,
-            reason,
-            trace: None,
-            cause: None,
-        }
+        Exception { class: Class::Throw, reason, trace: None, cause: None }
     }
+
     pub fn with_trace(class: Class, reason: Term, trace: Term) -> Exception {
-        Exception {
-            class,
-            reason,
-            trace: Some(trace),
-            cause: None,
-        }
+        Exception { class, reason, trace: Some(trace), cause: None }
     }
 }
 
@@ -140,12 +123,7 @@ pub struct MaxHeap {
 
 impl Default for MaxHeap {
     fn default() -> MaxHeap {
-        MaxHeap {
-            size: 0,
-            kill: true,
-            error_logger: true,
-            include_shared_binaries: false,
-        }
+        MaxHeap { size: 0, kill: true, error_logger: true, include_shared_binaries: false }
     }
 }
 
@@ -170,8 +148,7 @@ pub struct Dictionary {
 
 impl Dictionary {
     fn find(&self, heap: &Heap, key: Term) -> Result<usize, usize> {
-        self.entries
-            .binary_search_by(|(k, _)| heap.cmp_exact(*k, key))
+        self.entries.binary_search_by(|(k, _)| heap.cmp_exact(*k, key))
     }
 
     pub fn get(&self, heap: &Heap, key: Term) -> Option<Term> {
@@ -193,21 +170,13 @@ impl Dictionary {
         self.find(heap, key).ok().map(|i| self.entries.remove(i).1)
     }
 
-    pub fn entries(&self) -> &[(Term, Term)] {
-        &self.entries
-    }
+    pub fn entries(&self) -> &[(Term, Term)] { &self.entries }
 
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
+    pub fn len(&self) -> usize { self.entries.len() }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 
-    pub fn take(&mut self) -> Vec<(Term, Term)> {
-        core::mem::take(&mut self.entries)
-    }
+    pub fn take(&mut self) -> Vec<(Term, Term)> { core::mem::take(&mut self.entries) }
 
     /// The terms, for a collection.
     pub fn terms_mut(&mut self) -> impl Iterator<Item = &mut Term> {
@@ -375,7 +344,5 @@ impl Process {
     }
 
     /// Refresh the heap's view of the literal chunks (after code was loaded).
-    pub fn refresh(&mut self, lits: &Literals) {
-        self.heap.refresh(lits);
-    }
+    pub fn refresh(&mut self, lits: &Literals) { self.heap.refresh(lits); }
 }

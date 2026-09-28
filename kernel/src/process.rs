@@ -46,12 +46,11 @@
 //! functions that take both are only ever called from a dispatcher that holds both.
 
 use redoubt_layout::Pid;
-
-use crate::arch::process::TID;
 use redoubt_sys::{
     Cause, Error, ExitNotice, Handle as AbiHandle, Labels, MAX_LABELS, MAX_START_HANDLES, MemFlags,
 };
 
+use crate::arch::process::TID;
 use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, Process as ArchProcess};
 use crate::budget::{Class, PROCESS_PAGES, THREAD_PAGES};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object, ProcessRef};

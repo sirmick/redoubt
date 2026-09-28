@@ -41,12 +41,11 @@
 use core::convert::TryFrom;
 
 use redoubt_layout::{KERNEL_PID, Pid};
-
-use crate::arch::process::TID;
-use redoubt_sys::MAX_THREADS;
 use redoubt_stride::{Budgets, Cpu, State};
+use redoubt_sys::MAX_THREADS;
 
 use crate::arch::process::MAX_PROCESS_COUNT;
+use crate::arch::process::TID;
 use crate::budget::BudgetFrame;
 use crate::cell::KernelCell;
 use crate::handle::BudgetRef;

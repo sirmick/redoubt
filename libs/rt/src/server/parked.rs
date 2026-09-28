@@ -13,17 +13,17 @@
 //!   person rather than on the machine (`consoled`, for a key press) passes [`FOREVER`] as the longest wait:
 //!   such a call has no deadline and never expires, and what reclaims it is its caller giving up, which
 //!   arrives as an abandoned-call notice.
-//! - **`serve` before resuming** (kernel/processes.md R21). Every call handed back is made the
-//!   thread's current call first ([`Request::serve`]), so a crash while working on it blames its
-//!   caller, not whoever sent the call taken most recently.
-//! - **Abandoned calls** (kernel/ipc.md R3). [`Parked::abandoned`] replies to the call at once,
-//!   which frees it (the reply reaches nobody), and hands back the server's state for it.
+//! - **`serve` before resuming** (kernel/processes.md R21). Every call handed back is made the thread's
+//!   current call first ([`Request::serve`]), so a crash while working on it blames its caller, not whoever
+//!   sent the call taken most recently.
+//! - **Abandoned calls** (kernel/ipc.md R3). [`Parked::abandoned`] replies to the call at once, which frees
+//!   it (the reply reaches nobody), and hands back the server's state for it.
 //!
-//! - **Ahead of admission.** A request the server answers at once takes no admission, so one that
-//!   must always get through (the steward ending a lease for its sponsor, servers/serving.md R26)
-//!   is answered straight from the receive loop, never parked; the caps' headroom under
-//!   `MAX_OPEN_CALLS` ([`super::admit::OPEN_CALL_HEADROOM`]) leaves room to take it however full
-//!   the buckets are (`tests/parked.rs` shows the loop).
+//! - **Ahead of admission.** A request the server answers at once takes no admission, so one that must always
+//!   get through (the steward ending a lease for its sponsor, servers/serving.md R26) is answered straight
+//!   from the receive loop, never parked; the caps' headroom under `MAX_OPEN_CALLS`
+//!   ([`super::admit::OPEN_CALL_HEADROOM`]) leaves room to take it however full the buckets are
+//!   (`tests/parked.rs` shows the loop).
 //!
 //! The table belongs to one thread: a call is replied to by the thread that took it
 //! (kernel/ipc.md, "The calls"), and its abandoned-call notice arrives at that thread's

@@ -15,10 +15,16 @@ use crate::{BlockDevice, DirEntry, Error, FileType, Filesystem, Health, Metadata
 pub(crate) enum Lookup {
     Root,
     /// Entry `id` of `dir`.
-    Found { dir: MDir, id: u16 },
+    Found {
+        dir: MDir,
+        id: u16,
+    },
     /// The last name does not exist; it would be created as entry `id` of `dir` (the last
     /// pair of its directory).
-    Missing { dir: MDir, id: u16 },
+    Missing {
+        dir: MDir,
+        id: u16,
+    },
 }
 
 /// Splits a path into names. Empty components (repeated or trailing slashes) are skipped;
@@ -263,7 +269,10 @@ impl<D: BlockDevice> Filesystem<D> {
             let old = oldcwd.c.entries[oldid as usize].clone();
             // A directory cannot move inside itself: it would cut itself off from the root.
             let (old_names, new_names) = (components(from)?, components(to)?);
-            if old.name_type == TYPE_DIR && new_names.len() > old_names.len() && new_names.starts_with(&old_names) {
+            if old.name_type == TYPE_DIR
+                && new_names.len() > old_names.len()
+                && new_names.starts_with(&old_names)
+            {
                 return Err(Error::Invalid);
             }
 
@@ -341,7 +350,8 @@ impl<D: BlockDevice> Filesystem<D> {
 
     /// Open files whose entry is `id` in `pair`.
     fn files_at(&self, pair: &Pair, id: u16) -> Vec<usize> {
-        let at = |f: &crate::file::OpenFile| f.loc.is_some_and(|l| l.id == id && pair_overlaps(&l.pair, pair));
+        let at =
+            |f: &crate::file::OpenFile| f.loc.is_some_and(|l| l.id == id && pair_overlaps(&l.pair, pair));
         self.files.iter().enumerate().filter(|(_, f)| f.as_ref().is_some_and(at)).map(|(i, _)| i).collect()
     }
 
@@ -484,4 +494,6 @@ fn sorted(p: Pair) -> Pair { [p[0].min(p[1]), p[0].max(p[1])] }
 
 /// Whether some path can name an entry: not empty, not `.` or `..`, no `/` and no NUL.
 /// Names read back from the medium may be anything; `fsd` must treat them as opaque bytes.
-fn nameable(name: &[u8]) -> bool { !(name.is_empty() || name == b"." || name == b".." || name.contains(&b'/') || name.contains(&0)) }
+fn nameable(name: &[u8]) -> bool {
+    !(name.is_empty() || name == b"." || name == b".." || name.contains(&b'/') || name.contains(&0))
+}

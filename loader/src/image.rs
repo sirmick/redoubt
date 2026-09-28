@@ -4,15 +4,15 @@
 //! initrd. The first entry is the kernel; every following entry becomes an initial
 //! process, in order, starting at PID 2.
 
+use elf::ElfBytes;
 use elf::abi::{PF_R, PF_W, PF_X, PT_LOAD};
 use elf::endian::LittleEndian;
-use elf::ElfBytes;
-
-use crate::alloc::PageAllocator;
-use crate::paging::AddressSpace;
 use paging::PteFlags;
 use redoubt_layout::Pid;
 use redoubt_sys::PAGE_SIZE;
+
+use crate::alloc::PageAllocator;
+use crate::paging::AddressSpace;
 
 /// Map every `PT_LOAD` segment of `image` into `space` and return the entry point.
 ///
@@ -39,7 +39,8 @@ pub fn load_elf(
         }
 
         let vaddr = segment.p_vaddr as usize;
-        let segment_end = vaddr.checked_add(segment.p_memsz as usize).expect("ELF segment wraps the address space");
+        let segment_end =
+            vaddr.checked_add(segment.p_memsz as usize).expect("ELF segment wraps the address space");
         assert!(
             allowed.contains(&vaddr) && segment_end <= allowed.end && segment.p_filesz <= segment.p_memsz,
             "ELF segment {vaddr:#x}..{segment_end:#x} is outside {:#x}..{:#x}",
