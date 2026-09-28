@@ -106,9 +106,8 @@ Status: built · tested: bench:rustsbi-boot, bench:loader-rejects-kernel-address
 1. **Reads the device tree** (`loader/src/dt.rs`, over `fdt-rs`), once, into one record: RAM,
    the initrd's range, `/chosen/rng-seed`, the timebase and hart count, every MMIO `reg`
    outside RAM, each device's interrupts, the console `/chosen/stdout-path` names and its
-   interrupt, the PLIC with hart 0's S-mode context (the loader takes the boot hart to be hart
-   0; Residual risks), and the CLINT. A region that does not
-   start on a page is skipped and said so. Nothing after this step touches the tree.
+   interrupt, the PLIC with the boot hart's S-mode context (the hart ID the firmware passes in
+   `a0`), and the CLINT. A region that does not start on a page is skipped and said so. Nothing after this step touches the tree.
 2. **Keeps memory it must not hand out.** The allocator (`loader/src/alloc.rs`) gives out
    zeroed pages from the top of RAM down and never from the firmware (all RAM below the
    loader), the loader, the device tree or the bundle. Its first allocation is the **RAM
@@ -171,7 +170,7 @@ by `kernel/src/args.rs`. It is a run of tags, `XArg` first:
 | `MREx` | every MMIO region in the tree, controllers included, six words each: start (2), size in bytes rounded up to whole pages (2), the node name's first four bytes, 0 | `mem.rs`: the MMIO ownership table | no MMIO table; a second `MREx` stops the boot |
 | `Ctrl` | the PLIC and CLINT ranges, four words each: base (2), size (2) | `device.rs` | no controller check |
 | `Devs` | one entry per device object, six words each (below) | `device.rs` | no device objects |
-| `Plic` | PLIC base (2), size (2), the PLIC's S-mode context of the boot hart (the hart ID the firmware passes in `a0`), matched to the cpu node whose `reg` is that ID, 0; a device tree with a PLIC but no S-mode context for the boot hart stops the boot (R17). The loader departs from this: it takes hart 0's context (Residual risks) | `arch/riscv/intc_plic.rs` | no external interrupts |
+| `Plic` | PLIC base (2), size (2), the PLIC's S-mode context of the boot hart (the hart ID the firmware passes in `a0`), matched to the cpu node whose `reg` is that ID, 0; a device tree with a PLIC but no S-mode context for the boot hart stops the boot (R17). | `arch/riscv/intc_plic.rs` | no external interrupts |
 | `Seed` | `/chosen/rng-seed`: 16 to 64 bytes, zero-padded to words | `platform/sbi/rand.rs` | the boot stops ([R17](#r17-fail-closed)) |
 | `Time` | the timebase: ticks of the `time` counter per second (2) | `arch/riscv/timer_sbi.rs` | the boot stops (R17) |
 | `IniE` | nothing; one per program, counted to size the process table | `ptable.rs` | only the kernel runs |
@@ -409,7 +408,7 @@ would be written into all of them.
 
 ### R17 (fail closed)
 
-Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap refusal is tested on the host, not by a boot; the loader departs from this for a boot hart with no PLIC context (Residual risks) · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused
+Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals are tested on the host, not by a boot · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused, host:loader::a_boot_hart_without_an_s_mode_context_is_refused, host:loader::booting_on_hart_1_takes_hart_1s_s_mode_context
 
 The boot never runs degraded. Each of these powers the machine off through SBI SRST with
 `SystemFailure` rather than boot: a bad bundle signature; an initrd too short to be signed; a
@@ -422,8 +421,7 @@ the loader's prints `loader PANIC` and one of the kernel's a kernel panic; both 
 The two boot cases require the power-off and QEMU's status 255.
 
 A device tree with a PLIC but no S-mode context for the boot hart stops the boot too
-([the `Plic` row](#the-argument-block)); the loader departs from this by taking hart 0's
-context.
+([the `Plic` row](#the-argument-block)).
 
 The loader refuses to boot when RAM does not fit in the kernel's direct physical map
 (`PHYSMAP_SIZE` from `PHYSMAP_PHYS_BASE`, [memory layout](memory-layout.md#the-direct-physical-map)),
@@ -474,13 +472,6 @@ Status: built · partly tested: a reboot through `system_reset` is not attacked 
 - **The kernel's argument-block refusals are argued from the code**, not attacked by a case;
   nor are the short-seed and missing-timebase refusals (R17) or the three R16 gaps
   ([attack gaps](../todo/kernel-attack-gaps.md)).
-- **The loader takes the boot hart to be hart 0,** departing from the `Plic` row's rule. It
-  reads the PLIC context of the CPU whose `reg` is 0 (`loader/src/dt.rs`), not of the hart ID
-  the firmware passes in `a0`. On firmware whose boot hart is another, the failure is silent: if
-  hart 0 has an S-mode context, the kernel enables interrupts there, they are raised on the
-  parked hart 0, and no driver hears its device; if it has none, the boot goes on with no
-  `Plic` tag and no external interrupts. No interrupt reaches the wrong owner, because claims
-  and R5 (interrupts) route by source. Follow-up: [todo](../todo/boot-hart-context.md).
 - **Device indices are positional.** Past the fixed three, a device's handle index depends on
   the device tree's order and on which DMA devices the kernel could register. A program that
   pins one depends on the machine. Placement by name is planned

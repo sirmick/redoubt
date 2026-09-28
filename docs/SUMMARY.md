@@ -68,7 +68,6 @@
   - [The model's order of checks](todo/abi-model-disagreements.md)
   - [Tests that behaved differently under load](todo/bench-load-flakes.md)
   - [The steward's decision wake on rv64](todo/sched-rv64-decision-wake.md)
-  - [The boot hart's interrupt context](todo/boot-hart-context.md)
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
   - [DMA reset on rv32](todo/dma-reset-rv32.md)
   - [The kernel crate's host test target](todo/hosted-kernel-tests.md)

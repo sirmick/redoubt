@@ -14,7 +14,6 @@
 
 mod alloc;
 mod args;
-mod dt;
 mod image;
 mod paging;
 mod verify;
@@ -22,7 +21,8 @@ mod verify;
 use core::arch::{asm, global_asm};
 
 use ::paging::PteFlags;
-use dt::Platform;
+use loader::dt::{self, Platform};
+use loader::println;
 use redoubt_layout::{
     KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PID, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
     KERNEL_STACK_TOP, PROCESS_AREA, Pid, THREAD_CONTEXT_PAGES, TRAP_STACK_PAGES, TRAP_STACK_TOP,
@@ -96,7 +96,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     println!("loader: Redoubt rv{} loader, boot hart {}", xlen, hart_id);
 
     // SAFETY: the SBI boot protocol passes the device-tree address in `a1`.
-    let platform = unsafe { Platform::read(dtb) };
+    let platform = unsafe { Platform::read(dtb, hart_id) };
     let ram = platform.ram.clone();
     let bundle = platform.initrd.clone();
     println!("  {} hart(s), timebase {} Hz", platform.cpu_count, platform.timebase_hz);
@@ -409,24 +409,4 @@ fn shutdown() -> ! {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     println!("loader PANIC: {}", info);
     shutdown()
-}
-
-pub struct Console;
-
-impl core::fmt::Write for Console {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for b in s.bytes() {
-            sbi_rt::console_write_byte(b);
-        }
-        Ok(())
-    }
-}
-
-#[macro_export]
-macro_rules! println {
-    () => {{ let _ = core::fmt::Write::write_str(&mut $crate::Console, "\n"); }};
-    ($($arg:tt)*) => {{
-        let _ = core::fmt::Write::write_fmt(&mut $crate::Console, format_args!($($arg)*));
-        let _ = core::fmt::Write::write_str(&mut $crate::Console, "\n");
-    }};
 }
