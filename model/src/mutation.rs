@@ -133,8 +133,8 @@ pub enum Mutation {
     R11NoZeroing,
     /// `set_flags` accepts writable and executable together (the decoder's refusal included).
     R11SetFlagsAllowsWx,
-    /// `set_flags` and `process_map` accept writable without readable.
-    R11AllowsWriteOnly,
+    /// `set_flags` accepts writable without readable.
+    R11SetFlagsAllowsWriteOnly,
     /// A lent page stays mapped in the lender during the call.
     R11LendStaysMapped,
     /// `map_fixed` skips the overlap check, so it can map over an existing mapping.
@@ -379,7 +379,7 @@ impl Mutation {
             R10HeldPidsDropped,
             R11NoZeroing,
             R11SetFlagsAllowsWx,
-            R11AllowsWriteOnly,
+            R11SetFlagsAllowsWriteOnly,
             R11LendStaysMapped,
             R11MapFixedSkipsOverlap,
             R11ExecOnDeviceMemory,
@@ -522,7 +522,7 @@ impl Mutation {
             | BudgetDeadlineIgnored => "R10",
             R11NoZeroing
             | R11SetFlagsAllowsWx
-            | R11AllowsWriteOnly
+            | R11SetFlagsAllowsWriteOnly
             | R11LendStaysMapped
             | R11MapFixedSkipsOverlap
             | R11ExecOnDeviceMemory

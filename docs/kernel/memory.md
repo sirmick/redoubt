@@ -208,7 +208,7 @@ Status: built · partly tested: that no call names a physical frame is argued fr
 
 ### R11 (memory)
 
-Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap, mutation:R11ExecOnDeviceMemory, mutation:R11ProcessMapSkipsFlags
+Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11SetFlagsAllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap, mutation:R11ExecOnDeviceMemory, mutation:R11ProcessMapSkipsFlags
 
 - **No RAM page is ever mapped writable and executable** ([W^X](../GLOSSARY.md#wx)): not by one
   entry, and not by two, since a RAM frame has at most one user entry at a time (the kernel's

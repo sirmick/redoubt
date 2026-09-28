@@ -86,7 +86,6 @@
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [The unsafe budget's stated reason](todo/unsafe-ratchet-reason.md)
   - [User cache-block invalidation](todo/user-cache-invalidate.md)
-  - [The write-only mutation](todo/write-only-mutation-split.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [SMP](beyond/smp.md)

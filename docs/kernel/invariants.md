@@ -281,7 +281,7 @@ reads the account the kernel attaches to the child's messages; the same probe, i
 
 ### I9 (pages W^X, zeroed, lends unmapped)
 
-Status: built · partly tested: reuse of a freed frame, and a lender touching its own lent page, are attacked only in the model · tested: bench:wx, bench:write-only-attack, bench:mem-attack, bench:map-fixed-attack, bench:return-lent-unmapped, bench:uaf-lent-page, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11ExecOnDeviceMemory
+Status: built · partly tested: reuse of a freed frame, and a lender touching its own lent page, are attacked only in the model · tested: bench:wx, bench:write-only-attack, bench:mem-attack, bench:map-fixed-attack, bench:return-lent-unmapped, bench:uaf-lent-page, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11SetFlagsAllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11ExecOnDeviceMemory
 
 No user page is ever mapped writable and executable, or writable without being readable, and no
 page of device registers or DMA frame is ever mapped executable. Every page is zeroed before a

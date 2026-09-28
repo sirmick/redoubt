@@ -586,7 +586,8 @@ fn decode_range(b: Option<Buffer>) -> R<Option<Buffer>> {
 }
 
 /// Kernel check of mapping flags: some access, and write only with read (RISC-V has no
-/// write-only pages). `allow_write_only` is the R11AllowsWriteOnly mutation.
+/// write-only pages). `allow_write_only` is `set_flags`'s R11SetFlagsAllowsWriteOnly mutation;
+/// `process_map`'s flag check is broken whole by R11ProcessMapSkipsFlags.
 fn check_flags(flags: u64, allow_write_only: bool) -> R<()> {
     if flags == 0 || (flags & FLAG_W != 0 && flags & FLAG_R == 0 && !allow_write_only) {
         Err(Error::InvalidArgument)
@@ -2580,7 +2581,7 @@ impl Kernel {
     pub fn set_flags(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, self.broken(Mutation::R11SetFlagsAllowsWx))?;
         let (first, n) = user_range(addr, len)?;
-        check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
+        check_flags(flags, self.broken(Mutation::R11SetFlagsAllowsWriteOnly))?;
         // W^X per frame (R11): `EXECUTE` only on RAM the caller owns, never on device registers
         // or a `dma_alloc` frame.
         let exec_ok = flags & FLAG_X == 0 || self.broken(Mutation::R11ExecOnDeviceMemory);
@@ -2910,7 +2911,7 @@ impl Kernel {
         let (d, _) = user_range(dst, len)?;
         // The flags before the source, as the kernel checks them before it backs any page.
         if !self.broken(Mutation::R11ProcessMapSkipsFlags) {
-            check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
+            check_flags(flags, false)?;
         }
         self.own_range(pid, s, n, |m| match m.backing {
             Backing::Frame(f) => self.frames[&f].dma.is_none(),

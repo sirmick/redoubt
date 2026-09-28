@@ -100,8 +100,7 @@ page.
    - **The bench and its tools**, with the kernel package:
      [tests that behaved differently under load](../todo/bench-load-flakes.md),
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
-     [the unsafe budget's stated reason](../todo/unsafe-ratchet-reason.md),
-     and [the write-only mutation](../todo/write-only-mutation-split.md).
+     and [the unsafe budget's stated reason](../todo/unsafe-ratchet-reason.md).
    - **Servers:** [a request answered outside `finish`](../todo/request-raw-reply.md),
      [starting a thread from safe code](../todo/raw-thread-create.md),
      [the raw system call beside the runtime](../todo/raw-abi-syscall.md).
