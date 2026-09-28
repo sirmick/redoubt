@@ -7,6 +7,15 @@ name = "redoubt-kernel"
 version = "0.9.38"
 resolver = "2"
 
+# The kernel is a `no_std` binary for the machine only, and has no host tests: its rules are
+# tested on the target by the bench, and its pure parts through `redoubt-stride` and the model
+# (docs/kernel/model.md). So `cargo test` over the workspace builds nothing here.
+[[bin]]
+name = "redoubt-kernel"
+path = "src/main.rs"
+test = false
+bench = false
+
 # Dependency versions enforced by Cargo.lock.
 [dependencies]
 rand_chacha = { version = "0.3.1", optional = true, default-features = false }
