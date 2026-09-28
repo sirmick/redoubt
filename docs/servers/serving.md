@@ -425,9 +425,6 @@ Status: built · partly tested: the exit after a rejected fallback reply is argu
   counts against its own account and label set, never another's.
 - **Rollback ends at provisional state.** A client that abandons a request after the server
   performed a non-provisional effect (a file write) keeps the effect without learning of it.
-- **The library's host tests are not in the bench.** No bench case runs `redoubt-rt`'s own tests,
-  so a change can break them without a bench run noticing. Follow-up:
-  [todo](../todo/host-tests-in-bench.md).
 - **Admission counts objects, not bytes.** Bytes are the file server's to meter (`fsd`'s quotas);
   every other server keeps no byte count.
 

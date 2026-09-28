@@ -1,0 +1,4 @@
+description = "The native runtime, the ABI and the loader stub on the host: the serving library (admission, minted connections, the 9P skeleton, parked calls, typed replies) against the runtime's fake kernel, the startup block's parser, the ABI's records, and the stub's ELF checks with its fuzz corpus replayed"
+kind = "host-tests"
+# The runtime's compile_fail doctests run too (cargo test runs doctests): a public `unmap` fails.
+packages = ["redoubt-rt", "redoubt-sys", "stub"]

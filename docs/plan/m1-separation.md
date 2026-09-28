@@ -117,8 +117,7 @@ page.
      [paths the docs checker names that no longer exist](../todo/doccheck-stale-paths.md); and
      [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
      trusted crates from growing unseen.
-   - **Servers:** [host tests the bench does not run](../todo/host-tests-in-bench.md),
-     [a request answered outside `finish`](../todo/request-raw-reply.md),
+   - **Servers:** [a request answered outside `finish`](../todo/request-raw-reply.md),
      [starting a thread from safe code](../todo/raw-thread-create.md),
      [the raw system call beside the runtime](../todo/raw-abi-syscall.md).
    - **beamlet:** [the code path's search order](../todo/module-search-order.md).

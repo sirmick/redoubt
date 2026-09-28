@@ -13,6 +13,8 @@
 /target/image/
 *.uf2
 *.img
+# ...but not the hand-built hostile littlefs volumes its host tests read.
+!libs/littlefs/tests/images/*.img
 
 # Vendored inputs that are large or reconstructible and should not bloat the repo:
 # the OTP/Elixir archives and the BEAM reference sources.

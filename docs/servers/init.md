@@ -190,7 +190,7 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 
 ### The startup block
 
-Status: built · partly tested: the parser's host tests and fuzz target run in no bench case; in a boot, only the blocks the net rig and `stub-launch` write are parsed · tested: host:redoubt-rt::round_trip, host:redoubt-rt::the_page_is_the_wire_message, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::resolve_takes_the_longest_prefix, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup, bench:stub-launch, bench:d3-net-tcp
+Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks the net rig and `stub-launch` write are parsed · tested: bench:rt-host-tests, host:redoubt-rt::round_trip, host:redoubt-rt::the_page_is_the_wire_message, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::resolve_takes_the_longest_prefix, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup, bench:stub-launch, bench:d3-net-tcp
 
 A launcher gives each child one read-only page, the **startup block**, naming the handles it
 installed in the child's slots 1 to n (`process_start`,
@@ -231,7 +231,7 @@ The table: [libs/wire/tables/startup.md](../../libs/wire/tables/startup.md).
 
 ### Launching through the loader stub
 
-Status: built · partly tested: the stub's host tests run in no bench case; its fuzz target has never been run as a campaign; on target the kernel's refusal masks the stub's overlap checks; exit 112 and the unmap of the image copy are not attacked · tested: bench:stub-launch, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_a_segment_reaching_outside_the_image, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_writable_without_readable, host:stub::plan_refuses_a_non_riscv_machine, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_misaligned_p_align, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::plan_refuses_a_non_exec_type, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::read_image_refuses_a_short_page, host:stub::read_image_refuses_an_image_len_over_the_cap
+Status: built · partly tested: on target the kernel's refusal masks the stub's overlap checks, which only host tests pin · tested: bench:rt-host-tests, bench:stub-launch, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_a_segment_reaching_outside_the_image, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_writable_without_readable, host:stub::plan_refuses_a_non_riscv_machine, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_misaligned_p_align, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::plan_refuses_a_non_exec_type, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::read_image_refuses_a_short_page, host:stub::read_image_refuses_an_image_len_over_the_cap
 
 Every process after `init` starts the same way, and no launcher parses an ELF: the **loader
 stub** (`stub/`), a small flat binary mapped into the new process, does it there, where a hostile
@@ -390,7 +390,7 @@ Status: planned · M1 (separation and containment)
 
 ### R31 (startup block checked whole)
 
-Status: built · partly tested: the parser's tests run in no bench case · tested: host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup
+Status: built · tested: bench:rt-host-tests, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup
 
 A program runs only with a startup block that passed every rule: handles within what
 `process_start` installed, clean unique paths, unique names under the manifest's rule, whole
@@ -480,8 +480,9 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
 - **The stub cannot see the stack.** A segment that names the stack's pages is refused by
   `map_fixed`, but nothing checks for a gap between a segment and the stack
   ([memory layout](../kernel/memory-layout.md#residual-risks)).
-- **The startup block and stub host tests are not in the bench.** Follow-up:
-  [todo](../todo/host-tests-in-bench.md).
+- **The startup block's fuzz target runs outside the bench.** Its host tests and the stub's run
+  in `rt-host-tests`; the fuzz target needs `cargo fuzz`, which a host-tests case does not run,
+  so it is run by hand.
 - **On target, the kernel's refusal hides the stub's overlap checks.** Dropping one still ends
   in exit 111, because `map_fixed` never replaces a mapping; only the host tests pin the stub's
   own. The bench's stub is not rebuilt when a dependency's manifest or the lock file changes:
