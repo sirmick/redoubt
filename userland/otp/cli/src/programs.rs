@@ -10,9 +10,9 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use beamlet_vm::platform::{ConsoleInput, FileError, Program, ProgramEvent, Spawn, Spawned};
 
@@ -59,18 +59,11 @@ pub struct Programs {
 
 impl Programs {
     pub fn new(events: Sender<Event>, alive: Alive) -> Programs {
-        Programs {
-            events,
-            alive,
-            running: BTreeMap::new(),
-            next: 1,
-        }
+        Programs { events, alive, running: BTreeMap::new(), next: 1 }
     }
 
     /// Whether any program may still send events.
-    pub fn any(&self) -> bool {
-        !self.running.is_empty()
-    }
+    pub fn any(&self) -> bool { !self.running.is_empty() }
 
     /// Start `spawn`, with `host` mapping VM paths to host paths.
     pub fn spawn(
@@ -94,25 +87,15 @@ impl Programs {
                 cmd
             }
         };
-        cmd.env_clear()
-            .envs(spawn.env.iter().map(|(k, v)| (k, v)))
-            .current_dir(host(&spawn.cwd)?);
-        cmd.stdin(if spawn.input {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        });
+        cmd.env_clear().envs(spawn.env.iter().map(|(k, v)| (k, v))).current_dir(host(&spawn.cwd)?);
+        cmd.stdin(if spawn.input { Stdio::piped() } else { Stdio::null() });
         let merged = if spawn.output && spawn.stderr_to_stdout {
             let (reader, writer) = std::io::pipe().map_err(crate::files::error)?;
             cmd.stdout(writer.try_clone().map_err(crate::files::error)?);
             cmd.stderr(writer);
             Some(reader)
         } else {
-            cmd.stdout(if spawn.output {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            });
+            cmd.stdout(if spawn.output { Stdio::piped() } else { Stdio::null() });
             None
         };
         let mut child = cmd.spawn().map_err(crate::files::error)?;
@@ -135,10 +118,7 @@ impl Programs {
         });
         let output: Option<Box<dyn Read + Send>> = match merged {
             Some(reader) => Some(Box::new(reader)),
-            None => child
-                .stdout
-                .take()
-                .map(|o| Box::new(o) as Box<dyn Read + Send>),
+            None => child.stdout.take().map(|o| Box::new(o) as Box<dyn Read + Send>),
         };
         let closed = Arc::new(AtomicBool::new(false));
         let (events, stop) = (self.events.clone(), closed.clone());
@@ -163,9 +143,9 @@ impl Programs {
                 send(ProgramEvent::Eof);
             }
             let status = match child.wait() {
-                Ok(s) => s.code().unwrap_or_else(|| {
-                    128 + std::os::unix::process::ExitStatusExt::signal(&s).unwrap_or(0)
-                }),
+                Ok(s) => s
+                    .code()
+                    .unwrap_or_else(|| 128 + std::os::unix::process::ExitStatusExt::signal(&s).unwrap_or(0)),
                 Err(_) => 128,
             };
             alive.add(-1);
@@ -188,7 +168,5 @@ impl Programs {
     }
 
     /// A program has exited: it sends nothing more.
-    pub fn exited(&mut self, handle: u64) {
-        self.running.remove(&handle);
-    }
+    pub fn exited(&mut self, handle: u64) { self.running.remove(&handle); }
 }

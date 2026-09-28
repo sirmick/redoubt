@@ -18,18 +18,13 @@ pub struct Usage {
 
 impl Usage {
     /// Everything, in words: what resource limits compare against.
-    pub fn total_words(&self) -> u64 {
-        self.words.saturating_add(self.binary_bytes.div_ceil(8))
-    }
+    pub fn total_words(&self) -> u64 { self.words.saturating_add(self.binary_bytes.div_ceil(8)) }
 }
 
 /// Everything process `p` holds.
 pub fn process(p: &Process) -> Usage {
     let fixed = PROCESS_WORDS + p.x.len() as u64 + 2 * p.stack.len() as u64 + p.frames.len() as u64;
-    Usage {
-        words: fixed + 2 * p.heap.len() as u64,
-        binary_bytes: p.heap.offheap_bytes() as u64,
-    }
+    Usage { words: fixed + 2 * p.heap.len() as u64, binary_bytes: p.heap.offheap_bytes() as u64 }
 }
 
 /// A process's own structures (BEAM's process struct and minimum heap), in words.

@@ -5,17 +5,16 @@
 //! (`undefined`, `none`, `pkcs_padding`, `zero`, `random`) behave as in BEAM.
 
 use alloc::vec::Vec;
-use beamlet_vm::sync::Lock;
 
 use aes::cipher::{
     BlockCipherDecrypt, BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher, StreamCipherSeek,
 };
 use beamlet_vm::bif::Ctx;
+use beamlet_vm::sync::Lock;
 use beamlet_vm::{Exception, Term};
 
 use crate::{
-    atom_name, badarg, bin, bytes, is_true, nif_error, notsup, random_bytes, resource,
-    resource_ref, R,
+    R, atom_name, badarg, bin, bytes, is_true, nif_error, notsup, random_bytes, resource, resource_ref,
 };
 
 const BLOCK: usize = 16;
@@ -58,16 +57,11 @@ const CIPHERS: &[(&str, Mode, usize, i64)] = &[
     ("chacha20_poly1305", Mode::ChaCha20Poly1305, 32, 1018),
 ];
 
-pub(crate) fn names() -> impl Iterator<Item = &'static str> {
-    CIPHERS.iter().map(|(n, ..)| *n)
-}
+pub(crate) fn names() -> impl Iterator<Item = &'static str> { CIPHERS.iter().map(|(n, ..)| *n) }
 
 fn lookup(t: &Term) -> Option<(Mode, usize, i64)> {
     let name = atom_name(t)?;
-    CIPHERS
-        .iter()
-        .find(|(n, ..)| *n == name)
-        .map(|&(_, m, k, nid)| (m, k, nid))
+    CIPHERS.iter().find(|(n, ..)| *n == name).map(|&(_, m, k, nid)| (m, k, nid))
 }
 
 fn iv_len(m: Mode) -> usize {
@@ -82,11 +76,7 @@ pub fn cipher_info(c: &mut Ctx, a: &[Term]) -> R {
     let Some((mode, key_len, nid)) = lookup(&a[0]) else {
         return Err(Exception::error(c.atom("notsup")));
     };
-    let block = if matches!(mode, Mode::Cbc | Mode::Ecb) {
-        BLOCK
-    } else {
-        1
-    };
+    let block = if matches!(mode, Mode::Cbc | Mode::Ecb) { BLOCK } else { 1 };
     let aead = matches!(mode, Mode::Gcm | Mode::ChaCha20Poly1305);
     let mode_name = match mode {
         Mode::Cbc => "cbc_mode",
@@ -356,21 +346,11 @@ fn new_ctx(c: &mut Ctx, a: &[Term], data_opts: usize) -> Result<CipherCtx, Excep
         Mode::Cfb128 | Mode::Cfb8 => Engine::Stream(Stream::Cfb(
             Cfb::new(&key, &iv, mode == Mode::Cfb8, encrypt).expect("sizes checked"),
         )),
-        Mode::Cbc => Engine::Cbc(
-            Aes::new(&key).expect("size checked"),
-            iv.try_into().expect("size checked"),
-        ),
+        Mode::Cbc => Engine::Cbc(Aes::new(&key).expect("size checked"), iv.try_into().expect("size checked")),
         Mode::Ecb => Engine::Ecb(Aes::new(&key).expect("size checked")),
         Mode::Gcm | Mode::ChaCha20Poly1305 => unreachable!("rejected above"),
     };
-    Ok(CipherCtx {
-        engine,
-        encrypt,
-        padding,
-        pending: Vec::new(),
-        size: 0,
-        padded_size: 0,
-    })
+    Ok(CipherCtx { engine, encrypt, padding, pending: Vec::new(), size: 0, padded_size: 0 })
 }
 
 impl CipherCtx {
@@ -386,19 +366,13 @@ impl CipherCtx {
             }
             Engine::Cbc(k, chain) => {
                 if encrypt {
-                    block
-                        .iter_mut()
-                        .zip(chain.iter())
-                        .for_each(|(b, c)| *b ^= c);
+                    block.iter_mut().zip(chain.iter()).for_each(|(b, c)| *b ^= c);
                     k.encrypt(block);
                     chain.copy_from_slice(block);
                 } else {
                     let ciphertext: [u8; BLOCK] = (&*block).try_into().expect("16-byte block");
                     k.decrypt(block);
-                    block
-                        .iter_mut()
-                        .zip(chain.iter())
-                        .for_each(|(b, c)| *b ^= c);
+                    block.iter_mut().zip(chain.iter()).for_each(|(b, c)| *b ^= c);
                     *chain = ciphertext;
                 }
             }
@@ -441,12 +415,7 @@ impl CipherCtx {
                 }
                 Padding::None => {
                     if !pending.is_empty() {
-                        return Err(nif_error(
-                            c,
-                            "error",
-                            -1,
-                            "Padding 'none' but unfilled last block",
-                        ));
+                        return Err(nif_error(c, "error", -1, "Padding 'none' but unfilled last block"));
                     }
                     return Ok(Vec::new());
                 }
@@ -474,8 +443,7 @@ impl CipherCtx {
                 let mut last = pending;
                 self.block(&mut last);
                 let n = last[BLOCK - 1] as usize;
-                let valid =
-                    (1..=BLOCK).contains(&n) && last[BLOCK - n..].iter().all(|&b| b as usize == n);
+                let valid = (1..=BLOCK).contains(&n) && last[BLOCK - n..].iter().all(|&b| b as usize == n);
                 if !valid {
                     return Err(nif_error(c, "error", -1, "Can't finalize"));
                 }
@@ -566,13 +534,11 @@ fn aead_seal(mode: Mode, key: &[u8], iv: &[u8], aad: &[u8], data: &mut [u8]) -> 
             .encrypt_inout_detached(iv.try_into().ok()?, aad, data.into())
             .ok()?
             .into(),
-        (Mode::Gcm, 24) => {
-            aes_gcm::AesGcm::<aes::Aes192, aes_gcm::aead::consts::U12>::new_from_slice(key)
-                .ok()?
-                .encrypt_inout_detached(iv.try_into().ok()?, aad, data.into())
-                .ok()?
-                .into()
-        }
+        (Mode::Gcm, 24) => aes_gcm::AesGcm::<aes::Aes192, aes_gcm::aead::consts::U12>::new_from_slice(key)
+            .ok()?
+            .encrypt_inout_detached(iv.try_into().ok()?, aad, data.into())
+            .ok()?
+            .into(),
         (Mode::Gcm, 32) => aes_gcm::Aes256Gcm::new_from_slice(key)
             .ok()?
             .encrypt_inout_detached(iv.try_into().ok()?, aad, data.into())
@@ -589,14 +555,7 @@ fn aead_seal(mode: Mode, key: &[u8], iv: &[u8], aad: &[u8], data: &mut [u8]) -> 
 }
 
 /// Decrypt in place; `false` if the tag does not authenticate.
-fn aead_open(
-    mode: Mode,
-    key: &[u8],
-    iv: &[u8],
-    aad: &[u8],
-    data: &mut [u8],
-    tag: &[u8; 16],
-) -> bool {
+fn aead_open(mode: Mode, key: &[u8], iv: &[u8], aad: &[u8], data: &mut [u8], tag: &[u8; 16]) -> bool {
     use aes_gcm::aead::AeadInOut;
     let (Ok(nonce), tag) = (<&[u8; 12]>::try_from(iv), tag.into()) else {
         return false;
@@ -604,10 +563,8 @@ fn aead_open(
     let r = match (mode, key.len()) {
         (Mode::Gcm, 16) => aes_gcm::Aes128Gcm::new_from_slice(key)
             .map(|k| k.decrypt_inout_detached(nonce.into(), aad, data.into(), tag)),
-        (Mode::Gcm, 24) => {
-            aes_gcm::AesGcm::<aes::Aes192, aes_gcm::aead::consts::U12>::new_from_slice(key)
-                .map(|k| k.decrypt_inout_detached(nonce.into(), aad, data.into(), tag))
-        }
+        (Mode::Gcm, 24) => aes_gcm::AesGcm::<aes::Aes192, aes_gcm::aead::consts::U12>::new_from_slice(key)
+            .map(|k| k.decrypt_inout_detached(nonce.into(), aad, data.into(), tag)),
         (Mode::Gcm, 32) => aes_gcm::Aes256Gcm::new_from_slice(key)
             .map(|k| k.decrypt_inout_detached(nonce.into(), aad, data.into(), tag)),
         (Mode::ChaCha20Poly1305, 32) => chacha20poly1305::ChaCha20Poly1305::new_from_slice(key)
@@ -645,8 +602,7 @@ fn aead_run(
             if !(1..=16).contains(&tag_len) {
                 return Err(badarg(c, 5, "Bad tag length"));
             }
-            let tag = aead_seal(mode, key, iv, aad, &mut data)
-                .ok_or_else(|| badarg(c, 1, "Bad key size"))?;
+            let tag = aead_seal(mode, key, iv, aad, &mut data).ok_or_else(|| badarg(c, 1, "Bad key size"))?;
             Ok((data, Some(tag[..tag_len].to_vec())))
         }
         Err(tag) => {
@@ -671,9 +627,7 @@ pub fn aead_one_time(c: &mut Ctx, a: &[Term]) -> R {
     let aad = bytes(c, a, 4, "AAD")?;
     let encrypt = is_true(c, &a[6]);
     let enc = if encrypt {
-        Ok(a[5]
-            .as_usize()
-            .ok_or_else(|| badarg(c, 5, "Bad tag length"))?)
+        Ok(a[5].as_usize().ok_or_else(|| badarg(c, 5, "Bad tag length"))?)
     } else {
         Err(bytes(c, a, 5, "tag")?)
     };
@@ -698,20 +652,10 @@ struct AeadState {
 pub fn aead_init(c: &mut Ctx, a: &[Term]) -> R {
     let mode = aead_cipher(c, &a[0])?;
     let key = bytes(c, a, 1, "key")?;
-    let tag_len = a[2]
-        .as_usize()
-        .filter(|l| (1..=16).contains(l))
-        .ok_or_else(|| badarg(c, 2, "Bad tag length"))?;
+    let tag_len =
+        a[2].as_usize().filter(|l| (1..=16).contains(l)).ok_or_else(|| badarg(c, 2, "Bad tag length"))?;
     let encrypt = is_true(c, &a[3]);
-    Ok(resource(
-        c,
-        AeadState {
-            mode,
-            key,
-            tag_len,
-            encrypt,
-        },
-    ))
+    Ok(resource(c, AeadState { mode, key, tag_len, encrypt }))
 }
 
 /// `aead_cipher_nif(State, IV, In, AAD)`: encrypting returns ciphertext followed by the tag;

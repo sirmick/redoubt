@@ -10,7 +10,6 @@
 //!
 //! Every open file belongs to the process that opened it and is closed when that process exits.
 
-use crate::sync::Lock;
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -18,6 +17,7 @@ use alloc::vec::Vec;
 use super::Ctx;
 use crate::platform::{FileError, FileInfo, FileKind, Files, OpenMode, SeekFrom};
 use crate::process::Exception;
+use crate::sync::Lock;
 use crate::term::{Bits, Heap, Term};
 
 type R = Result<Term, Exception>;
@@ -60,10 +60,7 @@ fn done(c: &mut Ctx, r: Result<(), FileError>) -> R {
 }
 
 /// Run `f` on the platform's file system, with only the platform locked while it runs.
-fn with_files<T>(
-    c: &Ctx,
-    f: impl FnOnce(&mut dyn Files) -> Result<T, FileError>,
-) -> Result<T, FileError> {
+fn with_files<T>(c: &Ctx, f: impl FnOnce(&mut dyn Files) -> Result<T, FileError>) -> Result<T, FileError> {
     let mut platform = c.platform();
     f(platform.files().ok_or(FileError::Enotsup)?)
 }
@@ -80,9 +77,7 @@ pub fn name2native(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// A file name argument (string, deep list, binary or atom) as UTF-8 bytes.
-pub(crate) fn name_bytes(heap: &Heap, t: Term) -> Option<Vec<u8>> {
-    native_name(heap, t)
-}
+pub(crate) fn name_bytes(heap: &Heap, t: Term) -> Option<Vec<u8>> { native_name(heap, t) }
 
 fn native_name(heap: &Heap, t: Term) -> Option<Vec<u8>> {
     let mut out = Vec::new();
@@ -137,19 +132,14 @@ pub fn normalize_utf8(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn is_translatable(c: &mut Ctx, a: &[Term]) -> R {
     let ok = match &a[0] {
-        Term::Bits(_) => c
-            .heap()
-            .as_bits(a[0])
-            .is_some_and(|b| core::str::from_utf8(&b.to_bytes()).is_ok()),
+        Term::Bits(_) => c.heap().as_bits(a[0]).is_some_and(|b| core::str::from_utf8(&b.to_bytes()).is_ok()),
         _ => true,
     };
     Ok(c.bool(ok))
 }
 
 /// `file:native_name_encoding()`: always `utf8`.
-pub fn native_name_encoding(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.atom("utf8"))
-}
+pub fn native_name_encoding(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.atom("utf8")) }
 
 /// Resolve `name` (bytes from `internal_name2native`) against `cwd`: an absolute path with no
 /// `.`, `..` or empty components. `..` at the root stays at the root.
@@ -320,12 +310,13 @@ pub fn del_dir(c: &mut Ctx, a: &[Term]) -> R {
 /// `rename_nif(From, To)`. Onto a directory that is not empty is `eexist`, as OTP reports it.
 pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
     let (from, to) = (path(c, &a[0])?, path(c, &a[1])?);
-    let r = from
-        .and_then(|from| to.and_then(|to| with_files(c, |f| f.rename(&from, &to))))
-        .map_err(|e| match e {
-            FileError::Enotempty => FileError::Eexist,
-            e => e,
-        });
+    let r =
+        from.and_then(|from| to.and_then(|to| with_files(c, |f| f.rename(&from, &to)))).map_err(
+            |e| match e {
+                FileError::Enotempty => FileError::Eexist,
+                e => e,
+            },
+        );
     done(c, r)
 }
 
@@ -396,12 +387,7 @@ pub fn set_permissions(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `make_soft_link_nif(Target, Link)`: the target is stored as written.
 pub fn make_symlink(c: &mut Ctx, a: &[Term]) -> R {
-    let target = c
-        .heap()
-        .as_bits(a[0])
-        .ok_or_else(|| c.badarg())?
-        .to_bytes()
-        .into_owned();
+    let target = c.heap().as_bits(a[0]).ok_or_else(|| c.badarg())?.to_bytes().into_owned();
     with_path(c, &a[1], |c, p| {
         let r = with_files(c, |f| f.make_symlink(&target, p));
         done(c, r)
@@ -416,9 +402,7 @@ pub fn make_link(c: &mut Ctx, a: &[Term]) -> R {
 
 /// NIFs for things the VM does not offer (ownership, raw handles, Windows device paths):
 /// `{error, enotsup}`, which `file:write_file_info/2` tolerates.
-pub fn not_supported(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(error(c, FileError::Enotsup))
-}
+pub fn not_supported(c: &mut Ctx, _a: &[Term]) -> R { Ok(error(c, FileError::Enotsup)) }
 
 // ---- open files ----
 
@@ -434,8 +418,8 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
                 "append" => m.append = true,
                 "exclusive" => m.exclusive = true,
                 // Options `prim_file` or `file` handle themselves, or hints.
-                "binary" | "raw" | "read_ahead" | "delayed_write" | "sync" | "compressed"
-                | "ram" | "directory" => {}
+                "binary" | "raw" | "read_ahead" | "delayed_write" | "sync" | "compressed" | "ram"
+                | "directory" => {}
                 _ => return Err(c.badarg()),
             },
             Term::Tuple(_) => {}
@@ -460,10 +444,7 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
             Ok(h) => {
                 let owner = c.p.pid;
                 c.sys().files.insert(h, owner);
-                let r = c.new_resource(FileRef {
-                    handle: h,
-                    open: Lock::new(true),
-                });
+                let r = c.new_resource(FileRef { handle: h, open: Lock::new(true) });
                 Ok(ok_with(c, r))
             }
             Err(e) => Ok(error(c, e)),
@@ -627,13 +608,7 @@ pub fn read_whole_file(f: &mut dyn Files, path: &str, max: usize) -> Result<Vec<
     if size > max as u64 {
         return Err(FileError::Einval);
     }
-    let h = f.open(
-        path,
-        OpenMode {
-            read: true,
-            ..OpenMode::default()
-        },
-    )?;
+    let h = f.open(path, OpenMode { read: true, ..OpenMode::default() })?;
     let mut out = Vec::new();
     let r = loop {
         match f.read(h, 1 << 16) {
@@ -677,10 +652,7 @@ fn buffer(c: &Ctx, t: &Term) -> Result<super::Held<Buffer>, Exception> {
 }
 
 pub fn buffer_new(c: &mut Ctx, _a: &[Term]) -> R {
-    let b = Buffer {
-        bytes: Lock::new(VecDeque::new()),
-        locked: Lock::new(false),
-    };
+    let b = Buffer { bytes: Lock::new(VecDeque::new()), locked: Lock::new(false) };
     Ok(c.new_resource(b))
 }
 
@@ -767,10 +739,7 @@ mod tests {
         assert_eq!(resolve("/", b"a/b").unwrap(), "/a/b");
         assert_eq!(resolve("/home", b"x").unwrap(), "/home/x");
         assert_eq!(resolve("/home", b"/x").unwrap(), "/x");
-        assert_eq!(
-            resolve("/home", b"../../../etc/passwd").unwrap(),
-            "/etc/passwd"
-        );
+        assert_eq!(resolve("/home", b"../../../etc/passwd").unwrap(), "/etc/passwd");
         assert_eq!(resolve("/a/b", b"./c/./../d//e/").unwrap(), "/a/b/d/e");
         assert_eq!(resolve("/a", b"..").unwrap(), "/");
         assert_eq!(resolve("/", b"").unwrap_err(), FileError::Enoent);

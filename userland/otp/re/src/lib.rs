@@ -115,8 +115,8 @@ fn compile_option(h: &Heap, f: &mut Flags, o: &Term) -> bool {
         Some("dollar_endonly") => f.dollar_endonly = true,
         Some("ucp") => f.ucp = true,
         Some(
-            "no_start_optimize" | "no_auto_capture" | "never_utf" | "dupnames" | "firstline"
-            | "bsr_anycrlf" | "bsr_unicode" | "report_errors",
+            "no_start_optimize" | "no_auto_capture" | "never_utf" | "dupnames" | "firstline" | "bsr_anycrlf"
+            | "bsr_unicode" | "report_errors",
         ) => {}
         _ => match h.as_tuple(*o) {
             Some(&[k, v]) if atom(&k) == Some("newline") => {
@@ -159,12 +159,12 @@ fn text(h: &Heap, t: &Term, unicode: bool) -> Option<Vec<u8>> {
 
 /// Rewrite the PCRE constructs that Rust's regex syntax spells differently, so that the same
 /// pattern means the same thing:
-/// - inside a character class, `[` is literal in PCRE but opens a nested class in Rust, and
-///   `&&`, `--` and `~~` are Rust set operators: escape them (POSIX `[:name:]` classes stay);
+/// - inside a character class, `[` is literal in PCRE but opens a nested class in Rust, and `&&`, `--` and
+///   `~~` are Rust set operators: escape them (POSIX `[:name:]` classes stay);
 /// - `\e` (escape), `\h` (horizontal space) and `\R` (any line break) have no Rust spelling.
 ///
-/// - `\d`, `\s`, `\w` and `\b` are ASCII-only in PCRE unless `ucp` asks for Unicode
-///   (`ascii_classes`), where Rust's follow the `unicode` flag.
+/// - `\d`, `\s`, `\w` and `\b` are ASCII-only in PCRE unless `ucp` asks for Unicode (`ascii_classes`), where
+///   Rust's follow the `unicode` flag.
 ///
 /// Constructs with no equivalent at all (backreferences, lookaround) are left alone, and the
 /// regex parser rejects them.
@@ -194,19 +194,13 @@ fn translate(p: &str, ascii_classes: bool) -> String {
                     };
                     let neg = if next.is_ascii_uppercase() { "^" } else { "" };
                     let class = format!("[:{neg}{name}:]");
-                    if in_class {
-                        out.push_str(&class)
-                    } else {
-                        out.push_str(&format!("[{class}]"))
-                    }
+                    if in_class { out.push_str(&class) } else { out.push_str(&format!("[{class}]")) }
                 }
                 'b' | 'B' if ascii_classes && !in_class => out.push_str(&format!("(?-u:\\{next})")),
                 // `\p{Lu}`, `\x{263A}`, `\g{1}`...: the braces belong to the escape.
                 'p' | 'P' | 'x' | 'o' | 'g' | 'k' if chars.get(i + 2) == Some(&'{') => {
-                    let end = chars[i + 2..]
-                        .iter()
-                        .position(|&c| c == '}')
-                        .map_or(chars.len(), |e| i + 2 + e + 1);
+                    let end =
+                        chars[i + 2..].iter().position(|&c| c == '}').map_or(chars.len(), |e| i + 2 + e + 1);
                     out.extend(&chars[i..end]);
                     i = end;
                     continue;
@@ -317,11 +311,7 @@ fn build_pcre(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
         );
     } else {
         for &b in pattern {
-            if b < 0x80 {
-                raw.push(b as char)
-            } else {
-                raw.push_str(&format!("\\x{{{b:02x}}}"))
-            }
+            if b < 0x80 { raw.push(b as char) } else { raw.push_str(&format!("\\x{{{b:02x}}}")) }
         }
     }
     if f.dollar_endonly && !f.multiline {
@@ -355,21 +345,11 @@ fn build_pcre(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
         .map_err(|e| {
             let text = alloc::string::ToString::to_string(&e);
             let msg = text.split_once(": ").map_or(text.as_str(), |(_, m)| m);
-            let msg = msg
-                .split_once("offset ")
-                .and_then(|(_, r)| r.split_once(": "))
-                .map_or(msg, |(_, m)| m);
-            (
-                String::from(msg),
-                e.offset().unwrap_or(0).saturating_sub(prefix),
-            )
+            let msg = msg.split_once("offset ").and_then(|(_, r)| r.split_once(": ")).map_or(msg, |(_, m)| m);
+            (String::from(msg), e.offset().unwrap_or(0).saturating_sub(prefix))
         })?;
     let names = regex.capture_names().to_vec();
-    Ok(Compiled {
-        engine: Engine::Pcre(regex),
-        unicode: f.unicode,
-        names,
-    })
+    Ok(Compiled { engine: Engine::Pcre(regex), unicode: f.unicode, names })
 }
 
 fn build_automata(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
@@ -403,11 +383,7 @@ fn build_automata(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)>
     let edge = |body: &str, negative: bool, behind: bool| -> Result<Edge, (String, usize)> {
         let body = translate(body, f.unicode && !f.ucp);
         // A lookbehind is matched against the text just before the match, ending there.
-        let text = if behind {
-            format!("(?:{body})\\z")
-        } else {
-            body.clone()
-        };
+        let text = if behind { format!("(?:{body})\\z") } else { body.clone() };
         let regex = regex_for(&text, cfg, f, original_len)?;
         let max_len = if behind {
             let hir = regex_syntax::ParserBuilder::new()
@@ -424,11 +400,7 @@ fn build_automata(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)>
         } else {
             0
         };
-        Ok(Edge {
-            regex,
-            negative,
-            max_len,
-        })
+        Ok(Edge { regex, negative, max_len })
     };
     let behind = behind.map(|(b, neg)| edge(&b, neg, true)).transpose()?;
     let ahead = ahead.map(|(a, neg)| edge(&a, neg, false)).transpose()?;
@@ -439,24 +411,11 @@ fn build_automata(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)>
         .pattern_names(regex_automata::PatternID::ZERO)
         .map(|n| n.map(String::from))
         .collect();
-    Ok(Compiled {
-        engine: Engine::Automata {
-            regex,
-            behind,
-            ahead,
-        },
-        unicode: f.unicode,
-        names,
-    })
+    Ok(Compiled { engine: Engine::Automata { regex, behind, ahead }, unicode: f.unicode, names })
 }
 
 /// Compile translated pattern text with the limits every pattern gets.
-fn regex_for(
-    pattern: &str,
-    cfg: syntax::Config,
-    f: Flags,
-    len: usize,
-) -> Result<Regex, (String, usize)> {
+fn regex_for(pattern: &str, cfg: syntax::Config, f: Flags, len: usize) -> Result<Regex, (String, usize)> {
     Regex::builder()
         .syntax(cfg)
         // Bound what a pattern may cost to compile and run: a hostile `(a{1000}){1000}` is an
@@ -483,10 +442,7 @@ fn regex_for(
 ///
 /// With `pcre_dollar`, a `$` ending the pattern becomes the lookahead `\n?\z`: outside multiline
 /// mode PCRE's `$` also matches before a final newline, where Rust's matches only at the end.
-fn split_edges(
-    p: &str,
-    pcre_dollar: bool,
-) -> (String, Option<(String, bool)>, Option<(String, bool)>) {
+fn split_edges(p: &str, pcre_dollar: bool) -> (String, Option<(String, bool)>, Option<(String, bool)>) {
     let chars: Vec<char> = p.chars().collect();
     let whole = || (String::from(p), None, None);
     // Top-level groups (start, end) and whether there is a top-level `|`.
@@ -539,18 +495,10 @@ fn split_edges(
     let text = |a: usize, b: usize| chars[a..b].iter().collect::<String>();
     let kind = |(s, _): (usize, usize)| -> Option<(bool, bool)> {
         // (is lookbehind, is negative)
-        match chars
-            .get(s + 1..s + 4)
-            .map(|c| c.iter().collect::<String>())
-            .as_deref()
-        {
+        match chars.get(s + 1..s + 4).map(|c| c.iter().collect::<String>()).as_deref() {
             Some("?<=") => Some((true, false)),
             Some("?<!") => Some((true, true)),
-            _ => match chars
-                .get(s + 1..s + 3)
-                .map(|c| c.iter().collect::<String>())
-                .as_deref()
-            {
+            _ => match chars.get(s + 1..s + 3).map(|c| c.iter().collect::<String>()).as_deref() {
                 Some("?=") => Some((false, false)),
                 Some("?!") => Some((false, true)),
                 _ => None,
@@ -566,10 +514,7 @@ fn split_edges(
             from = g.1 + 1;
         }
     }
-    if let Some(&g) = groups
-        .last()
-        .filter(|g| g.1 + 1 == chars.len() && g.0 >= from)
-    {
+    if let Some(&g) = groups.last().filter(|g| g.1 + 1 == chars.len() && g.0 >= from) {
         if let Some((false, neg)) = kind(g) {
             ahead = Some((text(g.0 + 3, g.1), neg));
             to = g.0;
@@ -598,24 +543,17 @@ fn pcre_error(e: &regex_automata::meta::BuildError, len: usize) -> (String, usiz
         K::ClassUnclosed => ("missing terminating ] for character class", len),
         K::GroupUnclosed => ("missing closing parenthesis", len),
         K::GroupUnopened => ("unmatched closing parenthesis", at),
-        K::RepetitionMissing => (
-            "quantifier does not follow a repeatable item",
-            (err.span().start.offset + 1).min(len),
-        ),
-        K::RepetitionCountInvalid => (
-            "numbers out of order in {} quantifier",
-            at.saturating_sub(1),
-        ),
-        K::RepetitionCountUnclosed | K::RepetitionCountDecimalEmpty => {
-            ("missing } after quantifier", at)
+        K::RepetitionMissing => {
+            ("quantifier does not follow a repeatable item", (err.span().start.offset + 1).min(len))
         }
+        K::RepetitionCountInvalid => ("numbers out of order in {} quantifier", at.saturating_sub(1)),
+        K::RepetitionCountUnclosed | K::RepetitionCountDecimalEmpty => ("missing } after quantifier", at),
         K::EscapeUnexpectedEof => ("\\ at end of pattern", len),
         K::EscapeUnrecognized => ("unrecognized character follows \\", at),
         K::ClassRangeInvalid => ("range out of order in character class", at),
-        K::GroupNameDuplicate { .. } => (
-            "two named subpatterns have the same name (PCRE2_DUPNAMES not set)",
-            (at + 1).min(len),
-        ),
+        K::GroupNameDuplicate { .. } => {
+            ("two named subpatterns have the same name (PCRE2_DUPNAMES not set)", (at + 1).min(len))
+        }
         K::GroupNameInvalid | K::GroupNameEmpty => ("subpattern name expected", at),
         K::UnsupportedBackreference => ("backreferences are not supported", at),
         K::UnsupportedLookAround => ("lookaround assertions are not supported", at),
@@ -635,13 +573,7 @@ fn mp_term(c: &mut Ctx, compiled: Compiled) -> Term {
     let unicode = compiled.unicode as i64;
     let res = c.new_resource(compiled);
     let tag = c.atom("re_pattern");
-    c.tuple(&[
-        tag,
-        Term::Int(groups),
-        Term::Int(unicode),
-        Term::Int(0),
-        res,
-    ])
+    c.tuple(&[tag, Term::Int(groups), Term::Int(unicode), Term::Int(0), res])
 }
 
 fn compiled_of(c: &Ctx, t: &Term) -> Option<Held<Compiled>> {
@@ -757,9 +689,7 @@ fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exc
                 Some(&[k, v]) if atom(&k) == Some("offset") => {
                     r.offset = v.as_usize().ok_or_else(|| c.badarg())?
                 }
-                Some(&[k, v])
-                    if matches!(atom(&k), Some("match_limit" | "match_limit_recursion")) =>
-                {
+                Some(&[k, v]) if matches!(atom(&k), Some("match_limit" | "match_limit_recursion")) => {
                     // Matching is linear here; limits have nothing to bound.
                     v.as_usize().ok_or_else(|| c.badarg())?;
                 }
@@ -809,15 +739,9 @@ fn find(
     no_empty: bool,
 ) -> Option<Groups> {
     let (regex, behind, ahead) = match &re.engine {
-        Engine::Automata {
-            regex,
-            behind,
-            ahead,
-        } => (regex, behind, ahead),
+        Engine::Automata { regex, behind, ahead } => (regex, behind, ahead),
         #[cfg(feature = "pcre2")]
-        Engine::Pcre(regex) => {
-            return find_pcre(re, regex, subject, at, anchored, skip_empty_at, no_empty)
-        }
+        Engine::Pcre(regex) => return find_pcre(re, regex, subject, at, anchored, skip_empty_at, no_empty),
     };
     let mut caps = regex.create_captures();
     let mut start = at;
@@ -825,11 +749,8 @@ fn find(
         if start > subject.len() {
             return None;
         }
-        let input = Input::new(subject).range(start..).anchored(if anchored {
-            Anchored::Yes
-        } else {
-            Anchored::No
-        });
+        let input =
+            Input::new(subject).range(start..).anchored(if anchored { Anchored::Yes } else { Anchored::No });
         regex.search_captures(&input, &mut caps);
         let m = caps.get_match()?;
         let empty = m.start() == m.end();
@@ -837,11 +758,7 @@ fn find(
             || !edges_hold(behind, ahead, subject, m.start(), m.end());
         if !rejected {
             let n = caps.group_len();
-            return Some(
-                (0..n)
-                    .map(|g| caps.get_group(g).map(|s| (s.start, s.end)))
-                    .collect(),
-            );
+            return Some((0..n).map(|g| caps.get_group(g).map(|s| (s.start, s.end))).collect());
         }
         if anchored {
             return None;
@@ -886,13 +803,7 @@ fn find_pcre(
 }
 
 /// Whether the edge lookarounds hold around a match from `start` to `end`.
-fn edges_hold(
-    behind: &Option<Edge>,
-    ahead: &Option<Edge>,
-    subject: &[u8],
-    start: usize,
-    end: usize,
-) -> bool {
+fn edges_hold(behind: &Option<Edge>, ahead: &Option<Edge>, subject: &[u8], start: usize, end: usize) -> bool {
     if let Some(b) = behind {
         let window = &subject[start.saturating_sub(b.max_len)..start];
         let found = b.regex.search(&Input::new(window)).is_some();
@@ -901,10 +812,7 @@ fn edges_hold(
         }
     }
     if let Some(a) = ahead {
-        let found = a
-            .regex
-            .search(&Input::new(subject).range(end..).anchored(Anchored::Yes))
-            .is_some();
+        let found = a.regex.search(&Input::new(subject).range(end..).anchored(Anchored::Yes)).is_some();
         if found == a.negative {
             return false;
         }
@@ -954,13 +862,7 @@ fn capture_term(
 }
 
 /// The captures of one match, as the capture spec asks.
-fn captures(
-    c: &mut Ctx,
-    re: &Compiled,
-    subject: &[u8],
-    g: &Groups,
-    o: &RunOpts,
-) -> Result<Term, Exception> {
+fn captures(c: &mut Ctx, re: &Compiled, subject: &[u8], g: &Groups, o: &RunOpts) -> Result<Term, Exception> {
     // As in PCRE, `all` stops at the last group that matched.
     let last_set = g.iter().rposition(|x| x.is_some()).unwrap_or(0);
     let indices: Vec<Option<usize>> = match &o.spec {
@@ -969,12 +871,8 @@ fn captures(
         Spec::First => alloc::vec![Some(0)],
         Spec::None => Vec::new(),
         Spec::AllNames => {
-            let mut named: Vec<(&str, usize)> = re
-                .names
-                .iter()
-                .enumerate()
-                .filter_map(|(i, n)| n.as_deref().map(|n| (n, i)))
-                .collect();
+            let mut named: Vec<(&str, usize)> =
+                re.names.iter().enumerate().filter_map(|(i, n)| n.as_deref().map(|n| (n, i))).collect();
             named.sort();
             named.into_iter().map(|(_, i)| Some(i)).collect()
         }
@@ -983,20 +881,10 @@ fn captures(
             for it in items {
                 let idx = match it {
                     Term::Int(i) => usize::try_from(*i).ok().filter(|i| *i < g.len()),
-                    Term::Atom(a) => re
-                        .names
-                        .iter()
-                        .position(|n| n.as_deref() == Some(a.as_str())),
+                    Term::Atom(a) => re.names.iter().position(|n| n.as_deref() == Some(a.as_str())),
                     other => {
-                        let name = c
-                            .heap()
-                            .iodata_bytes(*other)
-                            .and_then(|b| String::from_utf8(b).ok());
-                        name.and_then(|n| {
-                            re.names
-                                .iter()
-                                .position(|x| x.as_deref() == Some(n.as_str()))
-                        })
+                        let name = c.heap().iodata_bytes(*other).and_then(|b| String::from_utf8(b).ok());
+                        name.and_then(|n| re.names.iter().position(|x| x.as_deref() == Some(n.as_str())))
                     }
                 };
                 v.push(idx);
@@ -1006,15 +894,7 @@ fn captures(
     };
     let items: Vec<Term> = indices
         .into_iter()
-        .map(|i| {
-            capture_term(
-                c,
-                re,
-                subject,
-                i.and_then(|i| g.get(i).copied().flatten()),
-                o.kind,
-            )
-        })
+        .map(|i| capture_term(c, re, subject, i.and_then(|i| g.get(i).copied().flatten()), o.kind))
         .collect();
     Ok(c.list(items))
 }
@@ -1054,17 +934,15 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
     }
     if !o.global {
         let skip = o.notempty_atstart.then_some(o.offset);
-        return Ok(
-            match find(re, &subject, o.offset, anchored, skip, o.notempty) {
-                None => c.atom("nomatch"),
-                Some(_) if matches!(o.spec, Spec::None) => c.atom("match"),
-                Some(g) => {
-                    let caps = captures(c, re, &subject, &g, &o)?;
-                    let tag = c.atom("match");
-                    c.tuple(&[tag, caps])
-                }
-            },
-        );
+        return Ok(match find(re, &subject, o.offset, anchored, skip, o.notempty) {
+            None => c.atom("nomatch"),
+            Some(_) if matches!(o.spec, Spec::None) => c.atom("match"),
+            Some(g) => {
+                let caps = captures(c, re, &subject, &g, &o)?;
+                let tag = c.atom("match");
+                c.tuple(&[tag, caps])
+            }
+        });
     }
     // Global: after an empty match, look for a non-empty one anchored at the same place, then
     // move on a character (PCRE's documented loop).
@@ -1085,9 +963,7 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
                 &subject,
                 pos,
                 anchored,
-                o.notempty_atstart
-                    .then_some(o.offset)
-                    .filter(|_| all.is_empty()),
+                o.notempty_atstart.then_some(o.offset).filter(|_| all.is_empty()),
                 o.notempty,
             )
         };
@@ -1128,9 +1004,7 @@ pub fn inspect(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.tuple(&[tag, list]))
 }
 
-pub fn version(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.binary(b"regex-automata 0.4 (beamlet)"))
-}
+pub fn version(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.binary(b"regex-automata 0.4 (beamlet)")) }
 
 #[cfg(test)]
 mod tests {
@@ -1155,14 +1029,8 @@ mod tests {
         assert_eq!(translate("%\\{\\}", false), "%\\{\\}");
         assert_eq!(translate("a{}b{,}c{x}", false), "a\\{}b\\{,}c\\{x}");
         assert_eq!(translate("[{]", false), "[{]");
-        assert_eq!(
-            translate("\\p{Lu}\\P{Latin}\\x{263A}{2}", false),
-            "\\p{Lu}\\P{Latin}\\x{263A}{2}"
-        );
+        assert_eq!(translate("\\p{Lu}\\P{Latin}\\x{263A}{2}", false), "\\p{Lu}\\P{Latin}\\x{263A}{2}");
         assert_eq!(translate("#Function\\<.+\\>", false), "#Function<.+>");
-        assert_eq!(
-            translate("\\w+\\b[\\d\\S]", true),
-            "[[:word:]]+(?-u:\\b)[[:digit:][:^space:]]"
-        );
+        assert_eq!(translate("\\w+\\b[\\d\\S]", true), "[[:word:]]+(?-u:\\b)[[:digit:][:^space:]]");
     }
 }

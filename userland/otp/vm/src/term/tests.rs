@@ -6,13 +6,9 @@ use super::*;
 
 const DEEP: usize = 1_000_000;
 
-fn heap() -> Heap {
-    Heap::new(&Literals::default())
-}
+fn heap() -> Heap { Heap::new(&Literals::default()) }
 
-fn nested_tuples(h: &mut Heap, depth: usize) -> Term {
-    (0..depth).fold(Term::Nil, |acc, _| h.tuple(&[acc]))
-}
+fn nested_tuples(h: &mut Heap, depth: usize) -> Term { (0..depth).fold(Term::Nil, |acc, _| h.tuple(&[acc])) }
 
 fn nested_heads(h: &mut Heap, depth: usize) -> Term {
     (0..depth).fold(Term::Nil, |acc, _| h.cons(acc, Term::Nil))
@@ -36,10 +32,7 @@ fn printing_matches_otp() {
     let m = h.empty_map();
     let b = h.binary(b"ab");
     let t = h.tuple(&[l, improper, empty, Term::Nil, m, b, Term::Float(1.5)]);
-    assert_eq!(
-        h.show(t).to_string(),
-        "{[1,2],[1|2],{},[],#{},<<97,98>>,1.5}"
-    );
+    assert_eq!(h.show(t).to_string(), "{[1,2],[1|2],{},[],#{},<<97,98>>,1.5}");
 }
 
 /// A million levels of nesting, which is legal Erlang, must compare, print, copy and collect
@@ -88,10 +81,7 @@ fn collection_keeps_what_is_reachable_and_sharing() {
     let elems = h.as_tuple(roots[0]).unwrap();
     assert_eq!(elems[0].ptr(), elems[1].ptr());
     assert_eq!(h.to_vec(elems[0]).unwrap().len(), 100);
-    assert_eq!(
-        h.as_bits(roots[1]).unwrap().to_bytes().as_ref(),
-        &[7u8; 1000][..]
-    );
+    assert_eq!(h.as_bits(roots[1]).unwrap().to_bytes().as_ref(), &[7u8; 1000][..]);
 }
 
 #[test]
@@ -100,14 +90,7 @@ fn copying_between_heaps() {
     let s = a.string("hello");
     let big = a.big(num_bigint::BigInt::from(u64::MAX) * 3u32);
     let m = a.map_from([(Term::Int(1), s), (Term::Int(2), big)]);
-    let f = a.fun_local(
-        Atom::test("m"),
-        0,
-        1,
-        99,
-        Atom::test("-f/0-fun-0-"),
-        &[m, s],
-    );
+    let f = a.fun_local(Atom::test("m"), 0, 1, 99, Atom::test("-f/0-fun-0-"), &[m, s]);
     let t = a.tuple(&[s, s, m, f]);
     let mut b = heap();
     let u = copy(&a, t, &mut b);
@@ -215,16 +198,8 @@ fn absorbed_fragments_read_the_same() {
     let before_text = h.show(before).to_string();
     let t = frag.absorb_into(&mut h);
     assert_eq!(h.show(t).to_string(), text);
-    assert_eq!(
-        h.show(before).to_string(),
-        before_text,
-        "what was there is untouched"
-    );
+    assert_eq!(h.show(before).to_string(), before_text, "what was there is untouched");
     let e = h.as_tuple(t).unwrap();
     assert_eq!(e[0].ptr(), e[1].ptr(), "sharing kept");
-    assert_eq!(
-        h.offheap_bytes(),
-        1000 + 13,
-        "the buffer counts once; the bignum's 13 bytes"
-    );
+    assert_eq!(h.offheap_bytes(), 1000 + 13, "the buffer counts once; the bignum's 13 bytes");
 }

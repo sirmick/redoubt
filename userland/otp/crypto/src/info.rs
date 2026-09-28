@@ -2,12 +2,12 @@
 
 use alloc::vec::Vec;
 
-use beamlet_vm::bif::Ctx;
 use beamlet_vm::Term;
+use beamlet_vm::bif::Ctx;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
-use crate::{badarg, bin, bytes, random_bytes, R};
+use crate::{R, badarg, bin, bytes, random_bytes};
 
 fn atoms(c: &mut Ctx, names: &[&str]) -> Term {
     let v: Vec<Term> = names.iter().map(|n| c.atom(n)).collect();
@@ -52,17 +52,11 @@ pub fn info_nif(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(c.map_from(m))
 }
 
-pub fn info_fips(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.atom("not_supported"))
-}
+pub fn info_fips(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.atom("not_supported")) }
 
-pub fn enable_fips_mode(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.bool(false))
-}
+pub fn enable_fips_mode(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.bool(false)) }
 
-pub fn empty_list(_c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::Nil)
-}
+pub fn empty_list(_c: &mut Ctx, _a: &[Term]) -> R { Ok(Term::Nil) }
 
 pub fn hash_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
     let names: Vec<&str> = crate::hash::ALGS.iter().map(|(n, ..)| *n).collect();
@@ -78,27 +72,14 @@ pub fn cipher_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(atoms(c, &names))
 }
 
-pub fn mac_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(atoms(c, &["hmac", "poly1305"]))
-}
+pub fn mac_algorithms(c: &mut Ctx, _a: &[Term]) -> R { Ok(atoms(c, &["hmac", "poly1305"])) }
 
 pub fn curve_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(atoms(
-        c,
-        &["secp256r1", "prime256v1", "secp384r1", "x25519", "ed25519"],
-    ))
+    Ok(atoms(c, &["secp256r1", "prime256v1", "secp384r1", "x25519", "ed25519"]))
 }
 
 pub fn rsa_opts_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(atoms(
-        c,
-        &[
-            "rsa_pkcs1_pss_padding",
-            "rsa_pss_saltlen",
-            "rsa_mgf1_md",
-            "rsa_pkcs1_padding",
-        ],
-    ))
+    Ok(atoms(c, &["rsa_pkcs1_pss_padding", "rsa_pss_saltlen", "rsa_mgf1_md", "rsa_pkcs1_padding"]))
 }
 
 /// `strong_rand_bytes_nif(N)`: `false` (which crypto.erl turns into `low_entropy`) if the
@@ -143,9 +124,7 @@ pub fn strong_rand_range(c: &mut Ctx, a: &[Term]) -> R {
 /// `rand_uniform_nif(From, To)` with both as binaries (mpint): an integer in `[From, To)`.
 pub fn rand_uniform(c: &mut Ctx, a: &[Term]) -> R {
     // crypto.erl passes 4-byte-length-prefixed mpints here.
-    fn mpint(b: &[u8]) -> Option<BigUint> {
-        (b.len() >= 4).then(|| BigUint::from_bytes_be(&b[4..]))
-    }
+    fn mpint(b: &[u8]) -> Option<BigUint> { (b.len() >= 4).then(|| BigUint::from_bytes_be(&b[4..])) }
     let (from, to) = (bytes(c, a, 0, "from")?, bytes(c, a, 1, "to")?);
     let (Some(from), Some(to)) = (mpint(&from), mpint(&to)) else {
         return Err(badarg(c, 0, "Bad range"));
@@ -161,6 +140,4 @@ pub fn rand_uniform(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `rand_seed_nif(Seed)`: the platform's source needs no seeding.
-pub fn rand_seed(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.ok())
-}
+pub fn rand_seed(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.ok()) }

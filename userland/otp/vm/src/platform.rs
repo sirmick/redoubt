@@ -33,16 +33,12 @@ pub trait Platform: crate::sync::Sendable {
     /// server does not know, and must not claim a size it was never told. On Redoubt the embedder
     /// will answer by asking `/dev/cons` with a fresh `consol` `size` call on each query, not caching it
     /// (docs/USERLAND-API.md, "The console and the `Platform` contract"; answer 162).
-    fn console_size(&mut self) -> Option<(u16, u16)> {
-        None
-    }
+    fn console_size(&mut self) -> Option<(u16, u16)> { None }
 
     /// Input typed at the console, if any has arrived. Must not block: the VM calls it between
     /// time slices, and [`Platform::idle`] is where it waits (an `idle` call should return when
     /// input arrives). The default is a console with no input at all.
-    fn console_read(&mut self) -> ConsoleInput {
-        ConsoleInput::Eof
-    }
+    fn console_read(&mut self) -> ConsoleInput { ConsoleInput::Eof }
 
     /// Fill `buf` from a cryptographically secure source. On failure the VM raises rather than
     /// using a weaker source.
@@ -68,16 +64,12 @@ pub trait Platform: crate::sync::Sendable {
 
     /// The file system this VM may use. The default is none: `file` operations then fail
     /// with `enotsup`.
-    fn files(&mut self) -> Option<&mut dyn Files> {
-        None
-    }
+    fn files(&mut self) -> Option<&mut dyn Files> { None }
 
     /// The programs this VM may start, behind ports (`open_port/2`, and so `os:cmd/1`). The
     /// default is none: opening such a port then fails with `eacces`. Output from programs is
     /// an external event: [`Platform::idle`] should return when some arrives.
-    fn programs(&mut self) -> Option<&mut dyn Programs> {
-        None
-    }
+    fn programs(&mut self) -> Option<&mut dyn Programs> { None }
 }
 
 /// Running other programs. A program is outside the VM altogether (an OS process with rights
@@ -99,11 +91,7 @@ pub trait Programs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Program {
     Shell(String),
-    Executable {
-        path: String,
-        arg0: Option<String>,
-        args: Vec<String>,
-    },
+    Executable { path: String, arg0: Option<String>, args: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

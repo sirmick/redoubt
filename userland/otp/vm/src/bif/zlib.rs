@@ -7,19 +7,19 @@
 //! Not provided: preset dictionaries (`deflateSetDictionary`, `inflateSetDictionary`, raising
 //! `not_supported`) and compression strategies other than the default (accepted, ignored).
 
-use crate::sync::Lock;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use miniz_oxide::deflate::core::{
-    compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush, TDEFLStatus,
+    CompressorOxide, TDEFLFlush, TDEFLStatus, compress, create_comp_flags_from_zip_params,
 };
-use miniz_oxide::inflate::stream::{inflate, InflateState};
+use miniz_oxide::inflate::stream::{InflateState, inflate};
 use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
 
 use super::Ctx;
 use crate::process::Exception;
+use crate::sync::Lock;
 use crate::term::{OwnedTerm, Pid, Resource, Term};
 
 type R = Result<Term, Exception>;
@@ -99,16 +99,13 @@ struct StreamRef(alloc::sync::Arc<Resource>);
 
 impl core::ops::Deref for StreamRef {
     type Target = Stream;
-    fn deref(&self) -> &Stream {
-        self.0.get::<Stream>().expect("checked when made")
-    }
+
+    fn deref(&self) -> &Stream { self.0.get::<Stream>().expect("checked when made") }
 }
 
 // ---- errors ----
 
-fn raise(c: &mut Ctx, what: &str) -> Exception {
-    Exception::error(c.atom(what))
-}
+fn raise(c: &mut Ctx, what: &str) -> Exception { Exception::error(c.atom(what)) }
 
 /// The stream an argument names, if the caller controls it.
 fn stream(c: &mut Ctx, t: &Term) -> Result<StreamRef, Exception> {
@@ -179,10 +176,7 @@ pub fn open(c: &mut Ctx, _a: &[Term]) -> R {
         stash: Lock::new(None),
     };
     let id = c.sys().make_ref().0;
-    Ok(c.heap_mut().resource(Resource {
-        id,
-        value: Box::new(s),
-    }))
+    Ok(c.heap_mut().resource(Resource { id, value: Box::new(s) }))
 }
 
 pub fn close(c: &mut Ctx, a: &[Term]) -> R {
@@ -208,11 +202,7 @@ pub fn deflate_init(c: &mut Ctx, a: &[Term]) -> R {
     let level = int(c, &a[1])?;
     let bits = int(c, &a[3])?;
     let level = if level < 0 { 6 } else { level.min(9) };
-    let (gzip, bits) = if bits > 15 {
-        (true, -(bits - 16))
-    } else {
-        (false, bits)
-    };
+    let (gzip, bits) = if bits > 15 { (true, -(bits - 16)) } else { (false, bits) };
     if !matches!(bits.abs(), 8..=15) {
         return Err(c.badarg());
     }
@@ -257,11 +247,7 @@ pub fn inflate_init(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 fn new_inflater(wrap: Wrap, after_end: AfterEnd) -> Inflater {
-    let format = if wrap == Wrap::Zlib {
-        DataFormat::Zlib
-    } else {
-        DataFormat::Raw
-    };
+    let format = if wrap == Wrap::Zlib { DataFormat::Zlib } else { DataFormat::Raw };
     Inflater {
         state: InflateState::new_boxed(format),
         initial: wrap,
@@ -384,10 +370,7 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
 /// `inflate_nif(Z, InputChunk, OutputChunk, Flush)`.
 pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    let (in_chunk, out_chunk) = (
-        int(c, &a[1])?.max(1) as usize,
-        int(c, &a[2])?.max(1) as usize,
-    );
+    let (in_chunk, out_chunk) = (int(c, &a[1])?.max(1) as usize, int(c, &a[2])?.max(1) as usize);
     let mut codec = s.codec.lock();
     let Codec::Inflate(inf) = &mut *codec else {
         return Err(raise(c, "not_initialized"));
@@ -412,11 +395,7 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
         // Frames (gzip header and trailer) are gathered byte by byte from the queue.
         if matches!(inf.wrap, Wrap::Detect) {
             let first = s.input.lock()[0];
-            inf.wrap = if first == 0x1f {
-                Wrap::Gzip
-            } else {
-                Wrap::Zlib
-            };
+            inf.wrap = if first == 0x1f { Wrap::Gzip } else { Wrap::Zlib };
             if inf.wrap == Wrap::Zlib {
                 inf.state = InflateState::new_boxed(DataFormat::Zlib);
             }

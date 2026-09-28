@@ -43,9 +43,7 @@ pub enum LoadError {
 }
 
 impl From<etf::EtfError> for LoadError {
-    fn from(e: etf::EtfError) -> Self {
-        LoadError::Literal(e)
-    }
+    fn from(e: etf::EtfError) -> Self { LoadError::Literal(e) }
 }
 
 type Result<T> = core::result::Result<T, LoadError>;
@@ -78,9 +76,7 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable, lits: &mut Literals) -> Result<
 fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module> {
     let chunks = chunks(bytes)?;
     let chunk = |id: &[u8; 4]| chunks.iter().find(|(c, _)| c == id).map(|(_, d)| *d);
-    let need = |id: &'static str| {
-        chunk(id.as_bytes().try_into().unwrap()).ok_or(LoadError::MissingChunk(id))
-    };
+    let need = |id: &'static str| chunk(id.as_bytes().try_into().unwrap()).ok_or(LoadError::MissingChunk(id));
 
     let atom_table = atom_chunk(need("AtU8")?, atoms)?;
     let atom = |i: usize| -> Result<Atom> {
@@ -94,12 +90,7 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
 
     let mut imports = Vec::new();
     for [m, f, a] in triples(need("ImpT")?)? {
-        imports.push(Import {
-            module: atom(m)?,
-            function: atom(f)?,
-            arity: arity(a)?,
-            native: None,
-        });
+        imports.push(Import { module: atom(m)?, function: atom(f)?, arity: arity(a)?, native: None });
     }
 
     let literals = match chunk(b"LitT") {
@@ -108,11 +99,7 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
     };
     let strings = chunk(b"StrT").unwrap_or(&[]).to_vec();
 
-    let mut ctx = Tables {
-        atoms: &atom_table,
-        literals: &literals,
-        heap,
-    };
+    let mut ctx = Tables { atoms: &atom_table, literals: &literals, heap };
     let (code, label_count, labels) = code_chunk(need("Code")?, &mut ctx)?;
     let heap = ctx.heap;
     let resolve = |label: usize| -> Result<u32> {
@@ -124,11 +111,7 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
 
     let mut exports = Vec::new();
     for [f, a, l] in triples(need("ExpT")?)? {
-        exports.push(Export {
-            function: atom(f)?,
-            arity: arity(a)?,
-            entry: resolve(l)?,
-        });
+        exports.push(Export { function: atom(f)?, arity: arity(a)?, entry: resolve(l)? });
     }
 
     let mut funs = Vec::new();
@@ -141,9 +124,7 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
         for e in rest.chunks_exact(6) {
             let (arity_total, num_free) = (arity(e[1] as usize)?, e[4]);
             if num_free > arity_total {
-                return Err(LoadError::Malformed(
-                    "fun has more free variables than arguments",
-                ));
+                return Err(LoadError::Malformed("fun has more free variables than arguments"));
             }
             funs.push(FunEntry {
                 function: atom(e[0] as usize)?,
@@ -175,11 +156,7 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
         }
         if ins.op == opcodes::FUNC_INFO {
             if let [_, Arg::Const(Term::Atom(f)), Arg::U(a)] = &ins.args[..] {
-                functions.push(FunctionInfo {
-                    start: pc as u32,
-                    name: *f,
-                    arity: arity(*a as usize)?,
-                });
+                functions.push(FunctionInfo { start: pc as u32, name: *f, arity: arity(*a as usize)? });
             } else {
                 return Err(LoadError::Malformed("func_info"));
             }
@@ -253,10 +230,7 @@ fn line_chunk(d: &[u8], module: &str, heap: &mut Heap) -> Result<crate::module::
                     .ok_or(LoadError::Malformed("Line file"))?;
             }
             (TAG_I, line) => {
-                items.push((
-                    file,
-                    u32::try_from(line).map_err(|_| LoadError::Malformed("Line number"))?,
-                ));
+                items.push((file, u32::try_from(line).map_err(|_| LoadError::Malformed("Line number"))?));
             }
             _ => return Err(LoadError::Malformed("Line item")),
         }
@@ -264,15 +238,10 @@ fn line_chunk(d: &[u8], module: &str, heap: &mut Heap) -> Result<crate::module::
     let mut files = alloc::vec![heap.string(&alloc::format!("{module}.erl"))];
     for _ in 0..name_count {
         let len = u16::from_be_bytes(r.take(2)?.try_into().unwrap()) as usize;
-        let name = core::str::from_utf8(r.take(len)?)
-            .map_err(|_| LoadError::Malformed("Line file name"))?;
+        let name = core::str::from_utf8(r.take(len)?).map_err(|_| LoadError::Malformed("Line file name"))?;
         files.push(heap.string(name));
     }
-    Ok(crate::module::Lines {
-        files,
-        items,
-        marks: Vec::new(),
-    })
+    Ok(crate::module::Lines { files, items, marks: Vec::new() })
 }
 
 /// Split the IFF container into `(id, data)` chunks.
@@ -281,9 +250,7 @@ fn chunks(bytes: &[u8]) -> Result<Vec<([u8; 4], &[u8])>> {
         return Err(LoadError::NotBeam);
     }
     let size = u32::from_be_bytes(bytes[4..8].try_into().unwrap()) as usize;
-    let body = bytes
-        .get(8..8usize.checked_add(size).ok_or(LoadError::NotBeam)?)
-        .ok_or(LoadError::NotBeam)?;
+    let body = bytes.get(8..8usize.checked_add(size).ok_or(LoadError::NotBeam)?).ok_or(LoadError::NotBeam)?;
     let mut pos = 4; // past "BEAM"
     let mut out = Vec::new();
     while pos < body.len() {
@@ -302,9 +269,7 @@ fn words(d: &[u8]) -> Result<Vec<u32>> {
     if !d.len().is_multiple_of(4) {
         return Err(LoadError::Malformed("chunk is not a whole number of words"));
     }
-    Ok(d.chunks_exact(4)
-        .map(|w| u32::from_be_bytes(w.try_into().unwrap()))
-        .collect())
+    Ok(d.chunks_exact(4).map(|w| u32::from_be_bytes(w.try_into().unwrap())).collect())
 }
 
 /// A table of `count` entries of three words (ImpT, ExpT).
@@ -314,27 +279,15 @@ fn triples(d: &[u8]) -> Result<Vec<[usize; 3]>> {
     if rest.len() != count as usize * 3 {
         return Err(LoadError::Malformed("table size"));
     }
-    Ok(rest
-        .chunks_exact(3)
-        .map(|t| [t[0] as usize, t[1] as usize, t[2] as usize])
-        .collect())
+    Ok(rest.chunks_exact(3).map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]).collect())
 }
 
 fn arity(a: usize) -> Result<u32> {
-    if a <= 255 {
-        Ok(a as u32)
-    } else {
-        Err(LoadError::Malformed("arity above 255"))
-    }
+    if a <= 255 { Ok(a as u32) } else { Err(LoadError::Malformed("arity above 255")) }
 }
 
 fn atom_chunk(d: &[u8], atoms: &mut AtomTable) -> Result<Vec<Atom>> {
-    let count = i32::from_be_bytes(
-        d.get(0..4)
-            .ok_or(LoadError::Malformed("AtU8"))?
-            .try_into()
-            .unwrap(),
-    );
+    let count = i32::from_be_bytes(d.get(0..4).ok_or(LoadError::Malformed("AtU8"))?.try_into().unwrap());
     // OTP 28 writes a negative count and compact-encoded lengths; older compilers do not.
     if count >= 0 {
         return Err(LoadError::OldFormat);
@@ -352,8 +305,7 @@ fn atom_chunk(d: &[u8], atoms: &mut AtomTable) -> Result<Vec<Atom>> {
         }
         let len = usize::try_from(len).map_err(|_| LoadError::Malformed("atom length"))?;
         let text = r.take(len)?;
-        let text =
-            core::str::from_utf8(text).map_err(|_| LoadError::Malformed("atom is not UTF-8"))?;
+        let text = core::str::from_utf8(text).map_err(|_| LoadError::Malformed("atom is not UTF-8"))?;
         out.push(atoms.intern(text).map_err(|_| LoadError::AtomLimit)?);
     }
     Ok(out)
@@ -403,9 +355,7 @@ fn code_chunk(d: &[u8], t: &mut Tables) -> Result<(Vec<Instr>, usize, Vec<Option
     if max_opcode > MAX_OPCODE as u32 {
         return Err(LoadError::NewerOpcode(max_opcode.min(255) as u8));
     }
-    r.pos = header_start
-        .checked_add(header_size)
-        .ok_or(LoadError::Malformed("Code header"))?;
+    r.pos = header_start.checked_add(header_size).ok_or(LoadError::Malformed("Code header"))?;
     if r.pos > d.len() || label_count > d.len() {
         return Err(LoadError::Malformed("Code header"));
     }
@@ -445,11 +395,7 @@ fn code_chunk(d: &[u8], t: &mut Tables) -> Result<(Vec<Instr>, usize, Vec<Option
     Ok((code, label_count, labels))
 }
 
-fn resolve_labels(
-    args: &mut [Arg],
-    resolve: &impl Fn(usize) -> Result<u32>,
-    count: usize,
-) -> Result<()> {
+fn resolve_labels(args: &mut [Arg], resolve: &impl Fn(usize) -> Result<u32>, count: usize) -> Result<()> {
     for a in args {
         match a {
             Arg::Label(Some(n)) => {
@@ -466,12 +412,7 @@ fn resolve_labels(
 }
 
 /// Checks that need to know what an operand means: table indices.
-fn check_operands(
-    ins: &Instr,
-    imports: &[Import],
-    funs: &[FunEntry],
-    strings: usize,
-) -> Result<()> {
+fn check_operands(ins: &Instr, imports: &[Import], funs: &[FunEntry], strings: usize) -> Result<()> {
     use opcodes::*;
     let index_at = |i: usize| match ins.args.get(i) {
         Some(Arg::U(n)) => Ok(*n as usize),
@@ -491,9 +432,7 @@ fn check_operands(
         if imports[index_at(i)?].arity == n {
             Ok(())
         } else {
-            Err(LoadError::Malformed(
-                "BIF import arity does not match the instruction",
-            ))
+            Err(LoadError::Malformed("BIF import arity does not match the instruction"))
         }
     };
     match ins.op {
@@ -548,30 +487,19 @@ enum Value {
 
 impl Compact<'_> {
     fn byte(&mut self) -> Result<u8> {
-        let b = *self
-            .bytes
-            .get(self.pos)
-            .ok_or(LoadError::Malformed("truncated"))?;
+        let b = *self.bytes.get(self.pos).ok_or(LoadError::Malformed("truncated"))?;
         self.pos += 1;
         Ok(b)
     }
 
     fn take(&mut self, n: usize) -> Result<&[u8]> {
-        let end = self
-            .pos
-            .checked_add(n)
-            .ok_or(LoadError::Malformed("truncated"))?;
-        let s = self
-            .bytes
-            .get(self.pos..end)
-            .ok_or(LoadError::Malformed("truncated"))?;
+        let end = self.pos.checked_add(n).ok_or(LoadError::Malformed("truncated"))?;
+        let s = self.bytes.get(self.pos..end).ok_or(LoadError::Malformed("truncated"))?;
         self.pos = end;
         Ok(s)
     }
 
-    fn word(&mut self) -> Result<u32> {
-        Ok(u32::from_be_bytes(self.take(4)?.try_into().unwrap()))
-    }
+    fn word(&mut self) -> Result<u32> { Ok(u32::from_be_bytes(self.take(4)?.try_into().unwrap())) }
 
     /// Read a tag and a value that must fit in `i64`.
     fn tag_and_value(&mut self) -> Result<(u8, i64)> {
@@ -639,9 +567,7 @@ impl Compact<'_> {
         };
         Ok(match tag {
             TAG_U => match value {
-                Value::Small(v) => {
-                    Arg::U(u64::try_from(v).map_err(|_| LoadError::Malformed("negative"))?)
-                }
+                Value::Small(v) => Arg::U(u64::try_from(v).map_err(|_| LoadError::Malformed("negative"))?),
                 // Only bs_match patterns carry unsigned values this wide; they are read as numbers.
                 Value::Wide(v) if v.sign() != num_bigint::Sign::Minus => Arg::Const(t.heap.big(v)),
                 Value::Wide(_) => return Err(LoadError::Malformed("negative")),
@@ -663,9 +589,7 @@ impl Compact<'_> {
             TAG_Y => Arg::Y(index(&value, MAX_Y_REGS)? as u16),
             TAG_F => match small(&value)? {
                 0 => Arg::Label(None),
-                n => Arg::Label(Some(
-                    u32::try_from(n).map_err(|_| LoadError::Malformed("label"))?,
-                )),
+                n => Arg::Label(Some(u32::try_from(n).map_err(|_| LoadError::Malformed("label"))?)),
             },
             TAG_Z => match small(&value)? {
                 1 => {
@@ -728,6 +652,4 @@ impl Compact<'_> {
 }
 
 #[allow(dead_code)]
-fn describe(e: &LoadError) -> String {
-    alloc::format!("{e:?}")
-}
+fn describe(e: &LoadError) -> String { alloc::format!("{e:?}") }

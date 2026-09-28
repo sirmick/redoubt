@@ -27,24 +27,20 @@ pub trait Code {
 }
 
 impl Code for System {
-    fn atoms(&self) -> &Atoms {
-        &self.atoms
-    }
-    fn module(&mut self, name: &Atom) -> Option<&'static Module> {
-        System::module(self, name)
-    }
+    fn atoms(&self) -> &Atoms { &self.atoms }
+
+    fn module(&mut self, name: &Atom) -> Option<&'static Module> { System::module(self, name) }
+
     fn resolve(&mut self, module: &Atom, function: &Atom, arity: u32) -> Option<Target> {
         System::resolve(self, module, function, arity)
     }
 }
 
 impl Code for Sched<'_> {
-    fn atoms(&self) -> &Atoms {
-        &self.atoms
-    }
-    fn module(&mut self, name: &Atom) -> Option<&'static Module> {
-        Sched::module(self, name)
-    }
+    fn atoms(&self) -> &Atoms { &self.atoms }
+
+    fn module(&mut self, name: &Atom) -> Option<&'static Module> { Sched::module(self, name) }
+
     fn resolve(&mut self, module: &Atom, function: &Atom, arity: u32) -> Option<Target> {
         Sched::resolve(self, module, function, arity)
     }
@@ -89,12 +85,7 @@ impl<'v> Sched<'v> {
     }
 
     /// Exclusive access to the system, until the guard is dropped.
-    pub fn lock(&self) -> SysGuard<'v> {
-        SysGuard {
-            guard: self.sys.lock(),
-            wakeup: self.wakeup,
-        }
-    }
+    pub fn lock(&self) -> SysGuard<'v> { SysGuard { guard: self.sys.lock(), wakeup: self.wakeup } }
 
     /// The platform, locked until the guard is dropped (after the system lock, never before).
     pub fn platform(&self) -> Guard<'_, alloc::boxed::Box<dyn crate::platform::Platform>> {
@@ -152,33 +143,19 @@ impl<'v> Sched<'v> {
         Some(t)
     }
 
-    pub fn module(&mut self, name: &Atom) -> Option<&'static Module> {
-        self.lock().module(name)
-    }
+    pub fn module(&mut self, name: &Atom) -> Option<&'static Module> { self.lock().module(name) }
 
-    pub fn atom(&mut self, name: &str) -> Atom {
-        self.lock().atom(name)
-    }
+    pub fn atom(&mut self, name: &str) -> Atom { self.lock().atom(name) }
 
-    pub fn backtrace_depth(&self) -> usize {
-        self.lock().backtrace_depth
-    }
+    pub fn backtrace_depth(&self) -> usize { self.lock().backtrace_depth }
 
-    pub fn now_us(&mut self) -> u64 {
-        self.lock().now_us()
-    }
+    pub fn now_us(&mut self) -> u64 { self.lock().now_us() }
 
-    pub fn make_ref(&mut self) -> Ref {
-        self.lock().make_ref()
-    }
+    pub fn make_ref(&mut self) -> Ref { self.lock().make_ref() }
 
-    pub fn arm_timer(&mut self, pid: Pid, deadline: u64) {
-        self.lock().arm_timer(pid, deadline)
-    }
+    pub fn arm_timer(&mut self, pid: Pid, deadline: u64) { self.lock().arm_timer(pid, deadline) }
 
-    pub fn cancel_timer(&mut self, pid: Pid, deadline: u64) {
-        self.lock().cancel_timer(pid, deadline)
-    }
+    pub fn cancel_timer(&mut self, pid: Pid, deadline: u64) { self.lock().cancel_timer(pid, deadline) }
 }
 
 /// The system, locked. Releasing it wakes a sleeping scheduler if there is now something to do.
@@ -189,15 +166,12 @@ pub struct SysGuard<'v> {
 
 impl core::ops::Deref for SysGuard<'_> {
     type Target = System;
-    fn deref(&self) -> &System {
-        &self.guard
-    }
+
+    fn deref(&self) -> &System { &self.guard }
 }
 
 impl core::ops::DerefMut for SysGuard<'_> {
-    fn deref_mut(&mut self) -> &mut System {
-        &mut self.guard
-    }
+    fn deref_mut(&mut self) -> &mut System { &mut self.guard }
 }
 
 impl Drop for SysGuard<'_> {

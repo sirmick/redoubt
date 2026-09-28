@@ -24,9 +24,7 @@ fn badkey(c: &mut Ctx, k: &Term) -> Exception {
     c.error_with(&tag, *k)
 }
 
-fn entries(c: &Ctx, m: Term) -> Vec<(Term, Term)> {
-    c.heap().map_entries(m).expect("a map")
-}
+fn entries(c: &Ctx, m: Term) -> Vec<(Term, Term)> { c.heap().map_entries(m).expect("a map") }
 
 pub fn map_size(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[0])?;
@@ -43,9 +41,7 @@ pub fn get(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `maps:get(Key, Map)`.
-pub fn get_rev(c: &mut Ctx, a: &[Term]) -> R {
-    get(c, a)
-}
+pub fn get_rev(c: &mut Ctx, a: &[Term]) -> R { get(c, a) }
 
 pub fn find(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[1])?;
@@ -61,9 +57,7 @@ pub fn is_key(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `erlang:is_map_key(Key, Map)`, same argument order as `maps:is_key/2`.
-pub fn is_key_rev(c: &mut Ctx, a: &[Term]) -> R {
-    is_key(c, a)
-}
+pub fn is_key_rev(c: &mut Ctx, a: &[Term]) -> R { is_key(c, a) }
 
 pub fn put(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[2])?;
@@ -117,10 +111,7 @@ pub fn values(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn to_list(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[0])?;
-    let pairs: Vec<Term> = entries(c, m)
-        .into_iter()
-        .map(|(k, v)| c.tuple(&[k, v]))
-        .collect();
+    let pairs: Vec<Term> = entries(c, m).into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
     Ok(c.list(pairs))
 }
 
@@ -161,10 +152,7 @@ pub fn map_next(c: &mut Ctx, a: &[Term]) -> R {
         if !matches!(a[2], Term::Nil | Term::Cons(_)) || !a[0].is_integer() {
             return Err(c.badarg());
         }
-        let pairs: Vec<Term> = entries(c, m)
-            .into_iter()
-            .map(|(k, v)| c.tuple(&[k, v]))
-            .collect();
+        let pairs: Vec<Term> = entries(c, m).into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
         return Ok(c.list_with_tail(pairs, a[2]));
     }
     let keys: Term = match a[0] {

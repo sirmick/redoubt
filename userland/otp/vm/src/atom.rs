@@ -22,21 +22,15 @@ pub const MAX_ATOM_CHARS: usize = 255;
 pub struct Atom(&'static String);
 
 impl Atom {
-    pub fn as_str(&self) -> &str {
-        self.0
-    }
+    pub fn as_str(&self) -> &str { self.0 }
 
     /// An atom outside any table, for unit tests.
     #[cfg(test)]
-    pub fn test(name: &str) -> Atom {
-        Atom(Box::leak(Box::new(String::from(name))))
-    }
+    pub fn test(name: &str) -> Atom { Atom(Box::leak(Box::new(String::from(name)))) }
 
     /// A number that identifies this atom (its allocation: atoms are interned and never freed),
     /// for cheap keys.
-    pub fn id(&self) -> usize {
-        self.0 as *const String as usize
-    }
+    pub fn id(&self) -> usize { self.0 as *const String as usize }
 }
 
 impl PartialEq for Atom {
@@ -48,9 +42,7 @@ impl PartialEq for Atom {
 impl Eq for Atom {}
 
 impl fmt::Debug for Atom {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0)
-    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.0) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,11 +58,7 @@ pub struct AtomTable {
 }
 
 impl AtomTable {
-    pub fn new() -> AtomTable {
-        AtomTable {
-            by_name: BTreeMap::new(),
-        }
-    }
+    pub fn new() -> AtomTable { AtomTable { by_name: BTreeMap::new() } }
 
     /// The atom named `name`, creating it if needed.
     pub fn intern(&mut self, name: &str) -> Result<Atom, AtomError> {
@@ -90,23 +78,15 @@ impl AtomTable {
     }
 
     /// The atom named `name` if it already exists (`list_to_existing_atom`).
-    pub fn existing(&self, name: &str) -> Option<Atom> {
-        self.by_name.get(name).copied()
-    }
+    pub fn existing(&self, name: &str) -> Option<Atom> { self.by_name.get(name).copied() }
 
-    pub fn len(&self) -> usize {
-        self.by_name.len()
-    }
+    pub fn len(&self) -> usize { self.by_name.len() }
 
-    pub fn is_empty(&self) -> bool {
-        self.by_name.is_empty()
-    }
+    pub fn is_empty(&self) -> bool { self.by_name.is_empty() }
 }
 
 impl Default for AtomTable {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 /// Declares [`Atoms`]: the atoms the VM itself refers to, interned once at start-up.

@@ -6,18 +6,15 @@ use alloc::vec::Vec;
 use super::Ctx;
 use crate::atom::{AtomTable, Atoms};
 use crate::process::{Exception, Process, State};
-use crate::term::{compare, copy, Heap, Pid, Term};
+use crate::term::{Heap, Pid, Term, compare, copy};
 
 type R = Result<Term, Exception>;
 
 fn text_of(c: &Ctx, t: &Term) -> Result<String, Exception> {
     let mut s = String::new();
     for item in c.heap().list_iter(*t) {
-        let ch = item
-            .ok()
-            .and_then(|x| x.as_i64())
-            .and_then(|i| u32::try_from(i).ok())
-            .and_then(char::from_u32);
+        let ch =
+            item.ok().and_then(|x| x.as_i64()).and_then(|i| u32::try_from(i).ok()).and_then(char::from_u32);
         s.push(ch.ok_or_else(|| c.badarg())?);
     }
     Ok(s)
@@ -26,14 +23,7 @@ fn text_of(c: &Ctx, t: &Term) -> Result<String, Exception> {
 // ---- processes ----
 
 pub fn processes(c: &mut Ctx, _a: &[Term]) -> R {
-    let pids: Vec<Term> = c
-        .sys()
-        .procs
-        .pids()
-        .into_iter()
-        .filter(|p| !p.port)
-        .map(Term::Pid)
-        .collect();
+    let pids: Vec<Term> = c.sys().procs.pids().into_iter().filter(|p| !p.port).map(Term::Pid).collect();
     Ok(c.list(pids))
 }
 
@@ -69,9 +59,8 @@ fn info_item(
     }
     let Term::Atom(item) = item else { return None };
     let item = item.as_str();
-    let pids = |out: &mut Heap, set: &mut dyn Iterator<Item = Pid>| {
-        out.list(set.map(Term::Pid).collect::<Vec<_>>())
-    };
+    let pids =
+        |out: &mut Heap, set: &mut dyn Iterator<Item = Pid>| out.list(set.map(Term::Pid).collect::<Vec<_>>());
     let bool = |b: bool| Term::Atom(if b { atoms.true_ } else { atoms.false_ });
     let mut atom = |name: &str| Term::Atom(table.intern(name).expect("short atom"));
     Some(match item {
@@ -128,11 +117,9 @@ fn info_item(
             None => atom("error_handler"),
         },
         "current_function" => match p.pc.module.function_at(p.pc.pc) {
-            Some(f) => out.tuple(&[
-                Term::Atom(p.pc.module.name),
-                Term::Atom(f.name),
-                Term::Int(f.arity as i64),
-            ]),
+            Some(f) => {
+                out.tuple(&[Term::Atom(p.pc.module.name), Term::Atom(f.name), Term::Int(f.arity as i64)])
+            }
             None => Term::Atom(atoms.undefined),
         },
         "status" => atom(if running {
@@ -155,11 +142,8 @@ pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     }
     let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
-    let items: Vec<Term> = if single {
-        alloc::vec![a[1]]
-    } else {
-        c.heap().to_vec(a[1]).ok_or_else(|| c.badarg())?
-    };
+    let items: Vec<Term> =
+        if single { alloc::vec![a[1]] } else { c.heap().to_vec(a[1]).ok_or_else(|| c.badarg())? };
     // One lock for all of it: the process read cannot start running meanwhile.
     let mut guard = c.sys();
     let sys = &mut *guard;
@@ -229,12 +213,7 @@ pub fn process_info1(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn loaded(c: &mut Ctx, _a: &[Term]) -> R {
     Ok({
-        let v = c
-            .sys()
-            .loaded_modules()
-            .into_iter()
-            .map(Term::Atom)
-            .collect::<Vec<_>>();
+        let v = c.sys().loaded_modules().into_iter().map(Term::Atom).collect::<Vec<_>>();
         c.list(v)
     })
 }
@@ -338,21 +317,13 @@ pub fn delete_module(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else {
         return Err(c.badarg());
     };
-    Ok(if c.sys().delete_module(m) {
-        c.bool(true)
-    } else {
-        Term::Atom(c.atoms.undefined)
-    })
+    Ok(if c.sys().delete_module(m) { c.bool(true) } else { Term::Atom(c.atoms.undefined) })
 }
 
 /// `code:purge/1`: `false` (no old code is ever kept); `code:soft_purge/1`: `true`.
-pub fn purge(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.bool(false))
-}
+pub fn purge(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.bool(false)) }
 
-pub fn soft_purge(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.bool(true))
-}
+pub fn soft_purge(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.bool(true)) }
 
 /// `code:get_object_code(Module)`: `{Module, Beam, Filename}` from the platform (with a nominal
 /// file name, `Module.beam`: where the platform keeps it is its own business) or else from the
@@ -390,10 +361,7 @@ pub fn get_object_code(c: &mut Ctx, a: &[Term]) -> R {
 pub fn all_loaded(c: &mut Ctx, _a: &[Term]) -> R {
     let file = c.atom("loaded");
     let mods = c.sys().loaded_modules();
-    let v: Vec<Term> = mods
-        .into_iter()
-        .map(|m| c.tuple(&[Term::Atom(m), file]))
-        .collect();
+    let v: Vec<Term> = mods.into_iter().map(|m| c.tuple(&[Term::Atom(m), file])).collect();
     Ok(c.list(v))
 }
 
@@ -484,11 +452,7 @@ pub fn list_to_pid(c: &mut Ctx, a: &[Term]) -> R {
     let parts: Option<Vec<u32>> = s
         .strip_prefix('<')
         .and_then(|s| s.strip_suffix('>'))
-        .and_then(|s| {
-            s.split('.')
-                .map(|n| n.parse().ok())
-                .collect::<Option<Vec<u32>>>()
-        });
+        .and_then(|s| s.split('.').map(|n| n.parse().ok()).collect::<Option<Vec<u32>>>());
     match parts.as_deref() {
         Some([0, index, serial]) => Ok(Term::Pid(Pid::process(*index, *serial))),
         _ => Err(c.badarg()),
@@ -545,12 +509,7 @@ pub fn getenv(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn getenv_all(c: &mut Ctx, _a: &[Term]) -> R {
-    let vars: Vec<String> = c
-        .sys()
-        .env
-        .iter()
-        .map(|(k, v)| alloc::format!("{k}={v}"))
-        .collect();
+    let vars: Vec<String> = c.sys().env.iter().map(|(k, v)| alloc::format!("{k}={v}")).collect();
     let v: Vec<Term> = vars.iter().map(|s| c.string(s)).collect();
     Ok(c.list(v))
 }
@@ -593,16 +552,12 @@ pub fn gethostname(c: &mut Ctx, _a: &[Term]) -> R {
 }
 
 /// `net_adm:localhost()`: the host name without a resolver domain (there is no resolver).
-pub fn localhost(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.string("localhost"))
-}
+pub fn localhost(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.string("localhost")) }
 
 // ---- init (a preloaded module in BEAM; its queries answered here) ----
 
 /// A VM has no command line: no arguments, no flags.
-pub fn init_get_arguments(_c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::Nil)
-}
+pub fn init_get_arguments(_c: &mut Ctx, _a: &[Term]) -> R { Ok(Term::Nil) }
 
 /// `init:get_argument(Flag)`: `home` is the VM's `HOME`, `root` its OTP root (see
 /// `code:root_dir/0`); there are no other command-line flags.
@@ -612,10 +567,7 @@ pub fn init_get_argument(c: &mut Ctx, a: &[Term]) -> R {
         Term::Atom(f) if f.as_str() == "root" && !c.sys().lib_roots.is_empty() => {
             let root = super::code::root_dir(c, &[])?;
             c.heap().to_vec(root).map(|chars| {
-                chars
-                    .iter()
-                    .filter_map(|t| t.as_i64().and_then(|i| char::from_u32(i as u32)))
-                    .collect()
+                chars.iter().filter_map(|t| t.as_i64().and_then(|i| char::from_u32(i as u32))).collect()
             })
         }
         _ => None,
@@ -667,11 +619,7 @@ fn datetime(c: &mut Ctx, secs: i64) -> Term {
     let (y, m, d) = civil(secs.div_euclid(86_400));
     let t = secs.rem_euclid(86_400);
     let date = c.tuple(&[Term::Int(y), Term::Int(m as i64), Term::Int(d as i64)]);
-    let time = c.tuple(&[
-        Term::Int(t / 3600),
-        Term::Int(t / 60 % 60),
-        Term::Int(t % 60),
-    ]);
+    let time = c.tuple(&[Term::Int(t / 3600), Term::Int(t / 60 % 60), Term::Int(t % 60)]);
     c.tuple(&[date, time])
 }
 
@@ -700,12 +648,10 @@ pub fn posixtime_to_universaltime(c: &mut Ctx, a: &[Term]) -> R {
 pub fn universaltime_to_posixtime(c: &mut Ctx, a: &[Term]) -> R {
     let h = c.heap();
     let field = |t: &Term, i: usize| {
-        h.as_tuple(*t)
-            .filter(|x| x.len() == 3)
-            .and_then(|x| match x[i] {
-                Term::Int(n) => Some(n),
-                _ => None,
-            })
+        h.as_tuple(*t).filter(|x| x.len() == 3).and_then(|x| match x[i] {
+            Term::Int(n) => Some(n),
+            _ => None,
+        })
     };
     let parts = h.as_tuple(a[0]).filter(|x| x.len() == 2).and_then(|dt| {
         Some([
@@ -721,20 +667,7 @@ pub fn universaltime_to_posixtime(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     };
     let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let month_days = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
+    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let valid = YEARS.contains(&y)
         && (1..=12).contains(&m)
         && d >= 1
@@ -765,9 +698,7 @@ pub fn same_datetime(c: &mut Ctx, a: &[Term]) -> R {
     let h = c.heap();
     let three = |t: Term| h.as_tuple(t).is_some_and(|x| x.len() == 3);
     match h.as_tuple(a[0]) {
-        Some(&[d, t]) if three(d) && three(t) => {
-            Ok(if a.len() == 1 { a[0] } else { c.list([a[0]]) })
-        }
+        Some(&[d, t]) if three(d) && three(t) => Ok(if a.len() == 1 { a[0] } else { c.list([a[0]]) }),
         _ => Err(c.badarg()),
     }
 }
@@ -780,11 +711,7 @@ pub(crate) fn crc32_update(mut crc: u32, bytes: &[u8]) -> u32 {
     for &b in bytes {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0xEDB8_8320
-            } else {
-                crc >> 1
-            };
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
         }
     }
     !crc
@@ -794,12 +721,7 @@ pub(crate) fn crc32_update(mut crc: u32, bytes: &[u8]) -> u32 {
 pub fn crc32(c: &mut Ctx, a: &[Term]) -> R {
     let (old, data) = match a {
         [data] => (0, data),
-        [old, data] => (
-            old.as_i64()
-                .and_then(|v| u32::try_from(v).ok())
-                .ok_or_else(|| c.badarg())?,
-            data,
-        ),
+        [old, data] => (old.as_i64().and_then(|v| u32::try_from(v).ok()).ok_or_else(|| c.badarg())?, data),
         _ => return Err(c.badarg()),
     };
     let bytes = c.heap().iodata_bytes(*data).ok_or_else(|| c.badarg())?;
@@ -864,12 +786,7 @@ fn adler32_update(adler: u32, bytes: &[u8]) -> u32 {
 pub fn adler32(c: &mut Ctx, a: &[Term]) -> R {
     let (old, data) = match a {
         [data] => (1, data),
-        [old, data] => (
-            old.as_i64()
-                .and_then(|v| u32::try_from(v).ok())
-                .ok_or_else(|| c.badarg())?,
-            data,
-        ),
+        [old, data] => (old.as_i64().and_then(|v| u32::try_from(v).ok()).ok_or_else(|| c.badarg())?, data),
         _ => return Err(c.badarg()),
     };
     let bytes = c.heap().iodata_bytes(*data).ok_or_else(|| c.badarg())?;
@@ -879,11 +796,7 @@ pub fn adler32(c: &mut Ctx, a: &[Term]) -> R {
 /// Arguments of the `*_combine` functions: two checksums and a length.
 fn combine_args(c: &Ctx, a: &[Term]) -> Result<(u32, u32, u64), Exception> {
     let word = |t: &Term| t.as_i64().and_then(|v| u32::try_from(v).ok());
-    match (
-        word(&a[0]),
-        word(&a[1]),
-        a[2].as_i64().and_then(|v| u64::try_from(v).ok()),
-    ) {
+    match (word(&a[0]), word(&a[1]), a[2].as_i64().and_then(|v| u64::try_from(v).ok())) {
         (Some(x), Some(y), Some(n)) => Ok((x, y, n)),
         _ => Err(c.badarg()),
     }
@@ -926,11 +839,7 @@ fn crc_multmodp(a: u32, mut b: u32) -> u32 {
             }
         }
         m >>= 1;
-        b = if b & 1 != 0 {
-            (b >> 1) ^ 0xEDB8_8320
-        } else {
-            b >> 1
-        };
+        b = if b & 1 != 0 { (b >> 1) ^ 0xEDB8_8320 } else { b >> 1 };
     }
 }
 
@@ -955,24 +864,15 @@ fn crc_x2nmodp(mut n: u64, mut k: u32) -> u32 {
 /// `crc32_combine(C1, C2, Size2)`: the CRC of two concatenated inputs (zlib's method).
 pub fn crc32_combine(c: &mut Ctx, a: &[Term]) -> R {
     let (c1, c2, len2) = combine_args(c, a)?;
-    Ok(Term::Int(
-        (crc_multmodp(crc_x2nmodp(len2, 3), c1) ^ c2) as i64,
-    ))
+    Ok(Term::Int((crc_multmodp(crc_x2nmodp(len2, 3), c1) ^ c2) as i64))
 }
 
 /// `os:getpid()`: the VM has no host process number of its own to report.
-pub fn os_getpid(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.string("1"))
-}
+pub fn os_getpid(c: &mut Ctx, _a: &[Term]) -> R { Ok(c.string("1")) }
 
 /// `os:env()`: the VM's environment as `{Name, Value}` pairs.
 pub fn os_env(c: &mut Ctx, _a: &[Term]) -> R {
-    let vars: Vec<(String, String)> = c
-        .sys()
-        .env
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let vars: Vec<(String, String)> = c.sys().env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let v: Vec<Term> = vars
         .iter()
         .map(|(k, v)| {
@@ -1004,17 +904,8 @@ pub fn console_subscribe(c: &mut Ctx, _a: &[Term]) -> R {
 // ---- erlang:memory ----
 
 /// The categories of `erlang:memory/0`, in its order.
-const MEMORY_TYPES: [&str; 9] = [
-    "total",
-    "processes",
-    "processes_used",
-    "system",
-    "atom",
-    "atom_used",
-    "binary",
-    "code",
-    "ets",
-];
+const MEMORY_TYPES: [&str; 9] =
+    ["total", "processes", "processes_used", "system", "atom", "atom_used", "binary", "code", "ets"];
 
 /// Bytes in use per category of `erlang:memory/0`, read off each process's heap, and the ETS
 /// tables' running totals. `code` is not tracked (0), and
@@ -1035,17 +926,7 @@ fn memory_values(c: &mut Ctx) -> [u64; 9] {
     drop(sys);
     let code = 0;
     let system = atom + binary + code + ets;
-    [
-        processes + system,
-        processes,
-        processes,
-        system,
-        atom,
-        atom,
-        binary,
-        code,
-        ets,
-    ]
+    [processes + system, processes, processes, system, atom, atom, binary, code, ets]
 }
 
 pub fn memory0(c: &mut Ctx, _a: &[Term]) -> R {

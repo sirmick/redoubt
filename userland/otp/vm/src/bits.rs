@@ -16,18 +16,11 @@ pub struct Builder {
 }
 
 impl Default for Builder {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl Builder {
-    pub fn new() -> Builder {
-        Builder {
-            bytes: Vec::new(),
-            len: 0,
-        }
-    }
+    pub fn new() -> Builder { Builder { bytes: Vec::new(), len: 0 } }
 
     /// Continue building on `bits` without copying it, if nothing else holds its bytes and it
     /// covers them exactly; otherwise start from a copy. Either way the result is the same.
@@ -39,11 +32,7 @@ impl Builder {
                 Ok(bytes) => return Builder { bytes, len },
                 Err(shared) => {
                     let mut b = Builder::new();
-                    b.push_bits(&Bits {
-                        data: shared,
-                        offset: 0,
-                        len,
-                    });
+                    b.push_bits(&Bits { data: shared, offset: 0, len });
                     return b;
                 }
             }
@@ -53,9 +42,7 @@ impl Builder {
         b
     }
 
-    pub fn bit_len(&self) -> usize {
-        self.len
-    }
+    pub fn bit_len(&self) -> usize { self.len }
 
     pub fn push_bit(&mut self, bit: bool) {
         if self.len.is_multiple_of(8) {
@@ -68,9 +55,7 @@ impl Builder {
         self.len += 1;
     }
 
-    pub fn push_byte(&mut self, b: u8) {
-        self.push_bytes(&[b]);
-    }
+    pub fn push_byte(&mut self, b: u8) { self.push_bytes(&[b]); }
 
     pub fn push_bytes(&mut self, bs: &[u8]) {
         let r = self.len % 8;
@@ -100,9 +85,7 @@ impl Builder {
         }
     }
 
-    pub fn push_bits(&mut self, b: &Bits) {
-        self.push_bits_prefix(b, b.len);
-    }
+    pub fn push_bits(&mut self, b: &Bits) { self.push_bits_prefix(b, b.len); }
 
     /// The first `n` bits of `b` (caller checks `n <= b.len`).
     pub fn push_bits_prefix(&mut self, b: &Bits, n: usize) {
@@ -175,22 +158,12 @@ impl Builder {
     }
 
     /// The bitstring built, on `heap`.
-    pub fn finish(self, heap: &mut Heap) -> Term {
-        heap.bits(self.into_bits())
-    }
+    pub fn finish(self, heap: &mut Heap) -> Term { heap.bits(self.into_bits()) }
 
-    pub fn into_bits(self) -> Bits {
-        Bits {
-            data: Arc::new(self.bytes),
-            offset: 0,
-            len: self.len,
-        }
-    }
+    pub fn into_bits(self) -> Bits { Bits { data: Arc::new(self.bytes), offset: 0, len: self.len } }
 
     /// The bytes and length in bits.
-    pub fn into_parts(self) -> (Vec<u8>, usize) {
-        (self.bytes, self.len)
-    }
+    pub fn into_parts(self) -> (Vec<u8>, usize) { (self.bytes, self.len) }
 
     /// Continue building on bytes holding `len` bits.
     pub fn from_parts(bytes: Vec<u8>, len: usize) -> Builder {
@@ -200,14 +173,7 @@ impl Builder {
 }
 
 /// Read `size` bits at `pos` of `b` as an integer.
-pub fn read_integer(
-    heap: &mut Heap,
-    b: &Bits,
-    pos: usize,
-    size: usize,
-    signed: bool,
-    little: bool,
-) -> Term {
+pub fn read_integer(heap: &mut Heap, b: &Bits, pos: usize, size: usize, signed: bool, little: bool) -> Term {
     if size == 0 {
         return Term::Int(0);
     }
@@ -406,8 +372,9 @@ pub fn read_utf8(b: &Bits, pos: usize) -> Option<(u32, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::string::ToString;
+
+    use super::*;
 
     fn show(b: Builder) -> alloc::string::String {
         let mut h = Heap::new(&Default::default());

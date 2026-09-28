@@ -12,11 +12,11 @@
 //! raises `notsup`, and `crypto:supports/1` lists exactly what is here:
 //! - hashes: MD5, SHA-1, SHA-2 (224/256/384/512), SHA-3 (224/256/384/512);
 //! - MACs: HMAC over those hashes, Poly1305; PBKDF2-HMAC;
-//! - ciphers: AES-128/192/256 in CTR, CBC, ECB and CFB (128- and 8-bit feedback) modes, ChaCha20;
-//!   AEAD: AES-128/256-GCM, ChaCha20-Poly1305;
+//! - ciphers: AES-128/192/256 in CTR, CBC, ECB and CFB (128- and 8-bit feedback) modes, ChaCha20; AEAD:
+//!   AES-128/256-GCM, ChaCha20-Poly1305;
 //! - key agreement: X25519, ECDH on P-256 and P-384, finite-field Diffie-Hellman;
-//! - signatures: Ed25519, ECDSA on P-256 and P-384, RSA (PKCS #1 v1.5 and PSS);
-//!   RSA encryption (PKCS #1 v1.5); RSA key generation.
+//! - signatures: Ed25519, ECDSA on P-256 and P-384, RSA (PKCS #1 v1.5 and PSS); RSA encryption (PKCS #1
+//!   v1.5); RSA key generation.
 //!
 //! It also provides `asn1rt_nif`'s BER TLV splitter (`asn1.rs`), which `public_key` needs for
 //! certificates and keys.
@@ -57,27 +57,12 @@ pub static NATIVES: &[NativeSpec] = &[
     ("crypto", "kdf_algorithms", 0, info::empty_list),
     ("crypto", "mac_algorithms", 0, info::mac_algorithms),
     ("crypto", "curve_algorithms", 0, info::curve_algorithms),
-    (
-        "crypto",
-        "rsa_opts_algorithms",
-        0,
-        info::rsa_opts_algorithms,
-    ),
+    ("crypto", "rsa_opts_algorithms", 0, info::rsa_opts_algorithms),
     ("crypto", "hash_info_nif", 1, hash::hash_info),
     ("crypto", "cipher_info_nif", 1, cipher::cipher_info),
     // Random numbers.
-    (
-        "crypto",
-        "strong_rand_bytes_nif",
-        1,
-        info::strong_rand_bytes,
-    ),
-    (
-        "crypto",
-        "strong_rand_range_nif",
-        1,
-        info::strong_rand_range,
-    ),
+    ("crypto", "strong_rand_bytes_nif", 1, info::strong_rand_bytes),
+    ("crypto", "strong_rand_range_nif", 1, info::strong_rand_range),
     ("crypto", "rand_uniform_nif", 2, info::rand_uniform),
     ("crypto", "rand_seed_nif", 1, info::rand_seed),
     // Hashes, MACs, key derivation.
@@ -132,13 +117,9 @@ fn nif_error(c: &mut Ctx, id: &str, arg: i64, msg: &str) -> Exception {
     Exception::error(c.tuple(&[id, info, msg]))
 }
 
-fn badarg(c: &mut Ctx, arg: i64, msg: &str) -> Exception {
-    nif_error(c, "badarg", arg, msg)
-}
+fn badarg(c: &mut Ctx, arg: i64, msg: &str) -> Exception { nif_error(c, "badarg", arg, msg) }
 
-fn notsup(c: &mut Ctx, arg: i64, msg: &str) -> Exception {
-    nif_error(c, "notsup", arg, msg)
-}
+fn notsup(c: &mut Ctx, arg: i64, msg: &str) -> Exception { nif_error(c, "notsup", arg, msg) }
 
 // ---- arguments ----
 
@@ -157,21 +138,15 @@ fn atom_name(t: &Term) -> Option<&str> {
     }
 }
 
-fn is_true(c: &Ctx, t: &Term) -> bool {
-    t.is_atom(&c.atoms.true_)
-}
+fn is_true(c: &Ctx, t: &Term) -> bool { t.is_atom(&c.atoms.true_) }
 
 // ---- resources ----
 
 /// Wrap a native value as a resource term.
-fn resource<T: Any + beamlet_vm::sync::Shared>(c: &mut Ctx, value: T) -> Term {
-    c.new_resource(value)
-}
+fn resource<T: Any + beamlet_vm::sync::Shared>(c: &mut Ctx, value: T) -> Term { c.new_resource(value) }
 
 /// The `T` inside a resource argument, held so the caller's heap stays free.
-fn resource_ref<T: Any>(c: &Ctx, t: &Term) -> Option<Held<T>> {
-    c.resource::<T>(*t)
-}
+fn resource_ref<T: Any>(c: &Ctx, t: &Term) -> Option<Held<T>> { c.resource::<T>(*t) }
 
 // ---- randomness ----
 
@@ -194,8 +169,7 @@ impl KeystreamRng {
     fn new(c: &mut Ctx) -> Result<KeystreamRng, Exception> {
         use chacha20::cipher::KeyIvInit;
         let key = random_bytes(c, 32)?;
-        let rng = chacha20::ChaCha20::new_from_slices(&key, &[0u8; 12])
-            .expect("fixed key and nonce sizes");
+        let rng = chacha20::ChaCha20::new_from_slices(&key, &[0u8; 12]).expect("fixed key and nonce sizes");
         Ok(KeystreamRng(rng))
     }
 }
@@ -206,16 +180,19 @@ impl rand_core_06::RngCore for KeystreamRng {
         self.fill_bytes(&mut b);
         u32::from_le_bytes(b)
     }
+
     fn next_u64(&mut self) -> u64 {
         let mut b = [0u8; 8];
         self.fill_bytes(&mut b);
         u64::from_le_bytes(b)
     }
+
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         use chacha20::cipher::StreamCipher;
         dest.fill(0);
         self.0.apply_keystream(dest);
     }
+
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
         self.fill_bytes(dest);
         Ok(())
@@ -230,6 +207,4 @@ fn uint(c: &mut Ctx, a: &[Term], i: usize, what: &str) -> Result<num_bigint::Big
     Ok(num_bigint::BigUint::from_bytes_be(&b))
 }
 
-fn bin(c: &mut Ctx, b: &[u8]) -> Term {
-    c.binary(b)
-}
+fn bin(c: &mut Ctx, b: &[u8]) -> Term { c.binary(b) }

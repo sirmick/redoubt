@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 
-use super::{compare, Heap, Literals, Ptr, Term};
+use super::{Heap, Literals, Ptr, Term, compare};
 
 /// Copy `t`, a term of `src`, onto `dst`, and return it as a term of `dst`. Objects in `src`'s
 /// own space are copied (each once, so sharing within `t` is kept); immediates and literals are
@@ -16,11 +16,7 @@ pub fn copy(src: &Heap, t: Term, dst: &mut Heap) -> Term {
         return t;
     }
     let start = dst.terms.len();
-    let mut c = Copier {
-        src,
-        moved: BTreeMap::new(),
-        offheap: BTreeMap::new(),
-    };
+    let mut c = Copier { src, moved: BTreeMap::new(), offheap: BTreeMap::new() };
     let root = c.evacuate(dst, t);
     let mut i = start;
     while i < dst.terms.len() {
@@ -68,8 +64,7 @@ impl Copier<'_> {
                     Term::Header(h) => 1 + h.len as usize,
                     _ => 2, // a list cell
                 };
-                dst.terms
-                    .extend_from_slice(&self.src.terms[from..from + len]);
+                dst.terms.extend_from_slice(&self.src.terms[from..from + len]);
                 let new = Ptr::own(at).index;
                 self.moved.insert(p.index, new);
                 new
@@ -106,33 +101,19 @@ impl OwnedTerm {
 
     /// A term that is an immediate or a literal (so needs no heap).
     pub fn immediate(t: Term) -> OwnedTerm {
-        debug_assert!(
-            t.ptr().is_none_or(|p| p.space != 0),
-            "a term with objects of its own"
-        );
-        OwnedTerm {
-            heap: Heap::new(&Literals::default()),
-            root: t,
-        }
+        debug_assert!(t.ptr().is_none_or(|p| p.space != 0), "a term with objects of its own");
+        OwnedTerm { heap: Heap::new(&Literals::default()), root: t }
     }
 
-    pub fn term(&self) -> Term {
-        self.root
-    }
+    pub fn term(&self) -> Term { self.root }
 
-    pub fn heap(&self) -> &Heap {
-        &self.heap
-    }
+    pub fn heap(&self) -> &Heap { &self.heap }
 
     /// A copy of this term on `dst`.
-    pub fn copy_into(&self, dst: &mut Heap) -> Term {
-        copy(&self.heap, self.root, dst)
-    }
+    pub fn copy_into(&self, dst: &mut Heap) -> Term { copy(&self.heap, self.root, dst) }
 
     /// Memory in 8-byte words.
-    pub fn words(&self) -> u64 {
-        self.heap.words()
-    }
+    pub fn words(&self) -> u64 { self.heap.words() }
 
     /// Move this term onto `dst`: its cells are appended and their pointers shifted, one pass
     /// with no graph walk (BEAM merges a message's heap fragment the same way). Garbage in the
@@ -170,21 +151,15 @@ impl OwnedTerm {
 }
 
 impl PartialEq for OwnedTerm {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
+    fn eq(&self, other: &Self) -> bool { self.cmp(other) == Ordering::Equal }
 }
 impl Eq for OwnedTerm {}
 impl PartialOrd for OwnedTerm {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
 }
 /// Exact term order.
 impl Ord for OwnedTerm {
-    fn cmp(&self, other: &Self) -> Ordering {
-        compare(&self.heap, self.root, &other.heap, other.root, true)
-    }
+    fn cmp(&self, other: &Self) -> Ordering { compare(&self.heap, self.root, &other.heap, other.root, true) }
 }
 
 impl fmt::Display for OwnedTerm {
@@ -194,9 +169,7 @@ impl fmt::Display for OwnedTerm {
 }
 
 impl fmt::Debug for OwnedTerm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { fmt::Display::fmt(self, f) }
 }
 
 impl Clone for Heap {

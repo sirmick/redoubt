@@ -18,7 +18,7 @@ use crate::platform::{ConsoleInput, Platform};
 use crate::process::{Class, Cp, Exception, Process, State};
 use crate::sched::Sched;
 use crate::sync::{Lock, Sendable, Wakeup};
-use crate::term::{copy, Heap, Literals, OwnedTerm, Pid, Ref, Term};
+use crate::term::{Heap, Literals, OwnedTerm, Pid, Ref, Term, copy};
 
 /// Reductions (calls) a process may run before it is preempted.
 pub const TIME_SLICE: usize = 2000;
@@ -202,10 +202,8 @@ const EMBEDDED: &[&[u8]] = &[
 
 /// Stand-ins for the kernel's `logger` and `error_logger`, loaded only when the platform does
 /// not provide OTP's own (which then starts at boot, see `beamlet_kernel`).
-const LOGGER_FALLBACK: &[&[u8]] = &[
-    include_bytes!("../lib/logger.beam"),
-    include_bytes!("../lib/error_logger.beam"),
-];
+const LOGGER_FALLBACK: &[&[u8]] =
+    &[include_bytes!("../lib/logger.beam"), include_bytes!("../lib/error_logger.beam")];
 
 enum Slot {
     Free,
@@ -271,11 +269,7 @@ impl ProcTable {
                 (self.slots.len() - 1) as u32
             }
         };
-        let pid = Pid {
-            index,
-            serial,
-            port,
-        };
+        let pid = Pid { index, serial, port };
         self.slots[index as usize] = Slot::Running { pid };
         Some(pid)
     }
@@ -316,9 +310,7 @@ impl ProcTable {
     }
 
     /// Whether `pid` traps exits, if it is alive.
-    fn traps(&self, pid: Pid) -> Option<bool> {
-        self.is_alive(pid).then(|| self.traps[pid.index as usize])
-    }
+    fn traps(&self, pid: Pid) -> Option<bool> { self.is_alive(pid).then(|| self.traps[pid.index as usize]) }
 
     /// Whether a scheduler is running `pid` just now.
     pub(crate) fn is_running(&self, pid: Pid) -> bool {
@@ -327,11 +319,7 @@ impl ProcTable {
 
     /// Change process `pid`: now if it is in the table, or when its time slice ends if a
     /// scheduler is running it. `false` if there is no such process.
-    pub(crate) fn update(
-        &mut self,
-        pid: Pid,
-        f: impl FnOnce(&mut Process) + Sendable + 'static,
-    ) -> bool {
+    pub(crate) fn update(&mut self, pid: Pid, f: impl FnOnce(&mut Process) + Sendable + 'static) -> bool {
         let index = pid.index as usize;
         match self.slots.get_mut(index) {
             Some(Slot::Present(p)) if p.pid == pid => {
@@ -369,9 +357,7 @@ impl ProcTable {
         self.slots[index] = Slot::Present(p);
     }
 
-    pub(crate) fn count(&self) -> usize {
-        self.live
-    }
+    pub(crate) fn count(&self) -> usize { self.live }
 
     /// Every live pid, including the running process's.
     pub(crate) fn pids(&self) -> Vec<Pid> {
@@ -387,11 +373,7 @@ impl ProcTable {
 
     /// The inbox of `pid`, if it is alive.
     pub(crate) fn inbox(&mut self, pid: Pid) -> Option<&mut VecDeque<OwnedTerm>> {
-        if self.is_alive(pid) {
-            self.inboxes.get_mut(pid.index as usize)
-        } else {
-            None
-        }
+        if self.is_alive(pid) { self.inboxes.get_mut(pid.index as usize) } else { None }
     }
 
     /// Move the messages waiting in the inbox of `p` (the running process) onto its heap and
@@ -513,18 +495,10 @@ pub struct Vm {
 }
 
 impl Vm {
-    pub fn new(platform: Box<dyn Platform>) -> Vm {
-        Vm::with_limits(platform, Limits::default())
-    }
+    pub fn new(platform: Box<dyn Platform>) -> Vm { Vm::with_limits(platform, Limits::default()) }
 
     pub fn with_limits(platform: Box<dyn Platform>, limits: Limits) -> Vm {
-        Vm::with_config(
-            platform,
-            Config {
-                limits,
-                natives: &[],
-            },
-        )
+        Vm::with_config(platform, Config { limits, natives: &[] })
     }
 
     /// A VM with resource limits and extra natives chosen by the embedder.
@@ -590,10 +564,7 @@ impl Vm {
         let sys = self.sys.get_mut();
         sys.stats.start_us = sys.platform.lock().monotonic_us();
         for module in EMBEDDED {
-            self.sys
-                .get_mut()
-                .load(module)
-                .expect("embedded modules load");
+            self.sys.get_mut().load(module).expect("embedded modules load");
         }
         let real_logger = {
             let mut platform = self.sys.get_mut().platform.lock();
@@ -601,10 +572,7 @@ impl Vm {
         };
         if !real_logger {
             for module in LOGGER_FALLBACK {
-                self.sys
-                    .get_mut()
-                    .load(module)
-                    .expect("embedded modules load");
+                self.sys.get_mut().load(module).expect("embedded modules load");
             }
         }
         // The shell `os:cmd/1` runs commands with (the kernel sets this at start). Programs run
@@ -613,18 +581,11 @@ impl Vm {
         let mut h = Heap::new(&self.sys.get_mut().literals);
         let shell = h.string("/bin/sh");
         let shell = self.sys.get_mut().make_literal(&h, shell);
-        self.sys
-            .get_mut()
-            .persistent
-            .insert(OwnedTerm::immediate(key), shell);
+        self.sys.get_mut().persistent.insert(OwnedTerm::immediate(key), shell);
         let user_name = self.atom("user");
-        let user = self
-            .spawn("beamlet_io", "start", |_| alloc::vec![user_name])
-            .expect("spawn user");
+        let user = self.spawn("beamlet_io", "start", |_| alloc::vec![user_name]).expect("spawn user");
         let stderr = self.atom("standard_error");
-        let err = self
-            .spawn("beamlet_io", "start", |_| alloc::vec![stderr])
-            .expect("spawn standard_error");
+        let err = self.spawn("beamlet_io", "start", |_| alloc::vec![stderr]).expect("spawn standard_error");
         for pid in [user, err] {
             if let Some(p) = self.sys.get_mut().procs.get_mut(pid) {
                 p.group_leader = Some(user);
@@ -646,9 +607,7 @@ impl Vm {
     }
 
     /// Load a module from `.beam` bytes, replacing any module of the same name.
-    pub fn load(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
-        self.sys.get_mut().load(bytes)
-    }
+    pub fn load(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> { self.sys.get_mut().load(bytes) }
 
     /// Spawn `module:function(args)` as a new process, loading the module if needed. `args`
     /// builds the arguments on the new process's heap.
@@ -662,14 +621,11 @@ impl Vm {
         let f = self.sys.get_mut().atom(function);
         let mut heap = Heap::new(&self.sys.get_mut().literals);
         let args = args(&mut heap);
-        self.sys
-            .get_mut()
-            .spawn(&m, &f, heap, args)
-            .map_err(|e| OwnedException {
-                class: e.class,
-                reason: OwnedTerm::immediate(e.reason),
-                trace: None,
-            })
+        self.sys.get_mut().spawn(&m, &f, heap, args).map_err(|e| OwnedException {
+            class: e.class,
+            reason: OwnedTerm::immediate(e.reason),
+            trace: None,
+        })
     }
 
     /// Run until process `pid` ends, and return its result: the value its first function
@@ -708,34 +664,21 @@ impl Vm {
 
     /// Set a variable of the VM's own environment (`os:getenv/1`), which starts empty.
     pub fn setenv(&mut self, name: &str, value: &str) {
-        self.sys
-            .get_mut()
-            .env
-            .insert(String::from(name), String::from(value));
+        self.sys.get_mut().env.insert(String::from(name), String::from(value));
     }
 
     /// Add a directory of the VM's file system where applications live (`App-Vsn/ebin`,
     /// `App-Vsn/priv`, `App-Vsn/include`), searched by `code:lib_dir/1`.
-    pub fn add_lib_root(&mut self, dir: &str) {
-        self.sys.get_mut().lib_roots.push(String::from(dir));
-    }
+    pub fn add_lib_root(&mut self, dir: &str) { self.sys.get_mut().lib_roots.push(String::from(dir)); }
 
     /// Start sampling where processes are at the end of each time slice (a statistical profile
     /// for finding hot code; see [`Vm::profile`]).
-    pub fn enable_profile(&mut self) {
-        self.sys.get_mut().profile = Some(BTreeMap::new());
-    }
+    pub fn enable_profile(&mut self) { self.sys.get_mut().profile = Some(BTreeMap::new()); }
 
     /// The samples so far, most frequent first: `(count, "m:f/a < caller < ...")`.
     pub fn profile(&self) -> Vec<(u64, String)> {
-        let mut v: Vec<(u64, String)> = self
-            .sys
-            .lock()
-            .profile
-            .iter()
-            .flatten()
-            .map(|(k, n)| (*n, k.clone()))
-            .collect();
+        let mut v: Vec<(u64, String)> =
+            self.sys.lock().profile.iter().flatten().map(|(k, n)| (*n, k.clone())).collect();
         v.sort_by(|a, b| b.cmp(a));
         v
     }
@@ -759,9 +702,7 @@ impl Vm {
         None
     }
 
-    pub fn atom(&mut self, name: &str) -> Term {
-        Term::Atom(self.sys.get_mut().atom(name))
-    }
+    pub fn atom(&mut self, name: &str) -> Term { Term::Atom(self.sys.get_mut().atom(name)) }
 }
 
 impl System {
@@ -826,25 +767,19 @@ impl System {
 
     /// Intern an atom the VM needs. Only for names from code or the embedder, which are short.
     pub fn atom(&mut self, name: &str) -> Atom {
-        self.atom_table
-            .intern(name)
-            .expect("VM-internal atom names are within limits")
+        self.atom_table.intern(name).expect("VM-internal atom names are within limits")
     }
 
     /// Loaded code changed: every cache of resolved calls is stale.
     fn code_changed(&mut self) {
         self.resolved.clear();
-        self.generations
-            .code
-            .fetch_add(1, core::sync::atomic::Ordering::Release);
+        self.generations.code.fetch_add(1, core::sync::atomic::Ordering::Release);
     }
 
     /// Literal chunks were added: schedulers pick them up on their next check.
     fn literals_changed(&mut self) {
         let n = self.literals.chunks();
-        self.generations
-            .literals
-            .store(n, core::sync::atomic::Ordering::Release);
+        self.generations.literals.store(n, core::sync::atomic::Ordering::Release);
     }
 
     pub fn make_ref(&mut self) -> Ref {
@@ -854,9 +789,7 @@ impl System {
     }
 
     /// Load a module from bytes, replacing any module of the same name.
-    pub fn load_bytes(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
-        self.load(bytes)
-    }
+    pub fn load_bytes(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> { self.load(bytes) }
 
     fn load(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
         let mut module = loader::load(bytes, &mut self.atom_table, &mut self.literals)?;
@@ -873,11 +806,7 @@ impl System {
                 continue;
             };
             let entry = f.start as usize + 1;
-            if module
-                .code
-                .get(entry)
-                .is_some_and(|i| i.op == crate::opcodes::LABEL)
-            {
+            if module.code.get(entry).is_some_and(|i| i.op == crate::opcodes::LABEL) {
                 let index = module.body_natives.len() as u64;
                 module.body_natives.push((n, f.name, f.arity));
                 module.code[entry] = crate::module::Instr {
@@ -887,8 +816,7 @@ impl System {
             }
         }
         let name = module.name;
-        self.modules
-            .insert(name.as_str().to_string(), Box::leak(Box::new(module)));
+        self.modules.insert(name.as_str().to_string(), Box::leak(Box::new(module)));
         self.code_changed();
         Ok(name)
     }
@@ -922,19 +850,15 @@ impl System {
         if let Some(bytes) = self.platform.lock().load_module(module) {
             return Some(Found::Platform(bytes));
         }
-        self.find_in_code_path(module, false)
-            .map(|(path, bytes)| Found::Path(path, bytes))
+        self.find_in_code_path(module, false).map(|(path, bytes)| Found::Path(path, bytes))
     }
 
     /// `Module.beam` from the first directory of the VM's code path that has it, among those
     /// before the platform (`front`) or after it: its path and its bytes.
     fn find_in_code_path(&mut self, module: &str, front: bool) -> Option<(String, Vec<u8>)> {
         let max = self.limits.max_binary_bits / 8;
-        let dirs = if front {
-            &self.code_path[..self.platform_at]
-        } else {
-            &self.code_path[self.platform_at..]
-        };
+        let dirs =
+            if front { &self.code_path[..self.platform_at] } else { &self.code_path[self.platform_at..] };
         if dirs.is_empty() {
             return None;
         }
@@ -954,9 +878,7 @@ impl System {
         self.modules.get(name.as_str()).map(|m| m.md5)
     }
 
-    pub fn is_loaded(&self, name: &Atom) -> bool {
-        self.modules.contains_key(name.as_str())
-    }
+    pub fn is_loaded(&self, name: &Atom) -> bool { self.modules.contains_key(name.as_str()) }
 
     /// Unload a module (`code:delete/1`): new calls no longer reach it, while code already
     /// running in it finishes (it is reference counted). A later call loads it afresh through
@@ -988,10 +910,7 @@ impl System {
             None => {
                 let m = self.module(module)?;
                 let entry = m.export(function, arity)?;
-                Target::Code(Cp {
-                    module: m,
-                    pc: entry,
-                })
+                Target::Code(Cp { module: m, pc: entry })
             }
         };
         self.resolved.insert(key, target.clone());
@@ -1015,13 +934,7 @@ impl System {
     }
 
     /// Spawn a process running `entry` with a copy of `args` (terms of `src`).
-    pub fn spawn_copy(
-        &mut self,
-        entry: Cp,
-        src: &Heap,
-        args: &[Term],
-        port: bool,
-    ) -> Result<Pid, Exception> {
+    pub fn spawn_copy(&mut self, entry: Cp, src: &Heap, args: &[Term], port: bool) -> Result<Pid, Exception> {
         let mut heap = Heap::new(&self.literals);
         let args = args.iter().map(|&a| copy(src, a, &mut heap)).collect();
         self.spawn_as(entry, heap, args, port)
@@ -1035,10 +948,8 @@ impl System {
         args: Vec<Term>,
         port: bool,
     ) -> Result<Pid, Exception> {
-        let pid = self
-            .procs
-            .allocate(port)
-            .ok_or_else(|| Exception::error(Term::Atom(self.atoms.system_limit)))?;
+        let pid =
+            self.procs.allocate(port).ok_or_else(|| Exception::error(Term::Atom(self.atoms.system_limit)))?;
         let mut p = Process::new(pid, entry, heap, args);
         p.group_leader = self.default_group_leader;
         self.procs.put(Box::new(p));
@@ -1068,13 +979,7 @@ impl System {
         };
         if inbox.len() >= self.limits.max_mailbox {
             let reason = mailbox_full(&mut self.atom_table, &self.atoms);
-            self.exits.push_back(ExitSignal {
-                target: to,
-                from: to,
-                reason,
-                from_link: false,
-                forced: true,
-            });
+            self.exits.push_back(ExitSignal { target: to, from: to, reason, from_link: false, forced: true });
             return false;
         }
         inbox.push_back(fragment);
@@ -1158,9 +1063,7 @@ impl System {
         self.timers.remove(&(deadline, Timer::Receive(pid)));
     }
 
-    pub fn now_us(&mut self) -> u64 {
-        self.platform.lock().monotonic_us()
-    }
+    pub fn now_us(&mut self) -> u64 { self.platform.lock().monotonic_us() }
 
     /// Housekeeping, then the next process to run, taken out of the table.
     fn next(&mut self) -> Next {
@@ -1252,11 +1155,7 @@ impl System {
         let own = p.max_heap;
         let over = |p: &Process| {
             let usage = crate::memory::process(p);
-            let used = if own.include_shared_binaries {
-                usage.total_words()
-            } else {
-                usage.words
-            };
+            let used = if own.include_shared_binaries { usage.total_words() } else { usage.words };
             usage.total_words() > vm_limit || (own.size > 0 && used > own.size && own.kill)
         };
         if !over(p) {
@@ -1321,10 +1220,7 @@ impl System {
                 None
             }
         };
-        let (tag, eof) = (
-            Term::Atom(self.atom("beamlet_console")),
-            Term::Atom(self.atom("eof")),
-        );
+        let (tag, eof) = (Term::Atom(self.atom("beamlet_console")), Term::Atom(self.atom("eof")));
         self.send_with(reader, |h| {
             let msg = match &input {
                 Some(bytes) => h.binary(bytes),
@@ -1341,29 +1237,16 @@ impl System {
             return;
         };
         let atom = |s: &mut Self, name: &str| Term::Atom(s.atom(name));
-        let [emulator, tag, error, error_logger, gl, pid_key, time_key, log] = [
-            "emulator",
-            "tag",
-            "error",
-            "error_logger",
-            "gl",
-            "pid",
-            "time",
-            "log",
-        ]
-        .map(|n| atom(self, n));
+        let [emulator, tag, error, error_logger, gl, pid_key, time_key, log] =
+            ["emulator", "tag", "error", "error_logger", "gl", "pid", "time", "log"].map(|n| atom(self, n));
         let true_ = Term::Atom(self.atoms.true_);
         let time = self.platform.lock().system_time_us().unwrap_or(0) as i64;
         let (pid, leader) = (Term::Pid(p.pid), Term::Pid(p.group_leader.unwrap_or(p.pid)));
         self.send_with(logger, |h| {
             let format = h.string("Error in process ~p with exit value:~n~p~n");
             let el = h.map_from([(emulator, true_), (tag, error)]);
-            let meta = h.map_from([
-                (error_logger, el),
-                (gl, leader),
-                (pid_key, pid),
-                (time_key, Term::Int(time)),
-            ]);
+            let meta =
+                h.map_from([(error_logger, el), (gl, leader), (pid_key, pid), (time_key, Term::Int(time))]);
             let reason = reason.copy_into(h);
             let args = h.list([pid, reason]);
             h.tuple(&[log, error, format, args, meta])
@@ -1372,12 +1255,7 @@ impl System {
 
     /// Close the files `pid` opened.
     fn close_files(&mut self, pid: Pid) {
-        let handles: Vec<u64> = self
-            .files
-            .iter()
-            .filter(|(_, &o)| o == pid)
-            .map(|(&h, _)| h)
-            .collect();
+        let handles: Vec<u64> = self.files.iter().filter(|(_, &o)| o == pid).map(|(&h, _)| h).collect();
         for h in handles {
             self.files.remove(&h);
             if let Some(f) = self.platform.lock().files() {
@@ -1431,31 +1309,15 @@ impl System {
                 forced: false,
             });
         }
-        let kind = if pid.port {
-            Term::Atom(self.atom("port"))
-        } else {
-            Term::Atom(self.atoms.process)
-        };
+        let kind = if pid.port { Term::Atom(self.atom("port")) } else { Term::Atom(self.atoms.process) };
         let down = Term::Atom(self.atoms.down);
-        for (
-            r,
-            crate::process::Monitor {
-                watcher,
-                object,
-                tag,
-            },
-        ) in &p.monitored_by
-        {
+        for (r, crate::process::Monitor { watcher, object, tag }) in &p.monitored_by {
             let r = *r;
             self.procs.update(*watcher, move |w| {
                 w.monitors.remove(&r);
             });
             // A monitor's alias ends when the monitor fires.
-            if self
-                .aliases
-                .get(&r)
-                .is_some_and(|a| a.mode != AliasMode::Explicit)
-            {
+            if self.aliases.get(&r).is_some_and(|a| a.mode != AliasMode::Explicit) {
                 self.aliases.remove(&r);
             }
             self.send_with(*watcher, |h| {
@@ -1477,11 +1339,7 @@ impl System {
                 Some((to, data)) if to != pid && self.procs.is_alive(to) => {
                     let t = self.ets.get_mut(tid).expect("listed");
                     t.owner = to;
-                    let id = if t.named {
-                        Term::Atom(t.name)
-                    } else {
-                        Term::Ref(Ref(t.tid))
-                    };
+                    let id = if t.named { Term::Atom(t.name) } else { Term::Ref(Ref(t.tid)) };
                     let tag = Term::Atom(self.atom("ETS-TRANSFER"));
                     self.send_with(to, |h| {
                         let data = data.copy_into(h);
@@ -1520,13 +1378,7 @@ impl System {
                 later.push_back(signal);
                 continue;
             }
-            let ExitSignal {
-                target,
-                from,
-                reason,
-                from_link,
-                forced,
-            } = signal;
+            let ExitSignal { target, from, reason, from_link, forced } = signal;
             if forced {
                 if let Some(mut p) = self.procs.take(target) {
                     let reason = reason.copy_into(&mut p.heap);
@@ -1547,11 +1399,7 @@ impl System {
                 });
             } else if !normal || from == target {
                 let mut p = self.procs.take(target).expect("present");
-                let reason = if kill {
-                    Term::Atom(self.atoms.killed)
-                } else {
-                    reason.copy_into(&mut p.heap)
-                };
+                let reason = if kill { Term::Atom(self.atoms.killed) } else { reason.copy_into(&mut p.heap) };
                 // Remove it from the run queue lazily: `step` skips pids that are gone.
                 self.terminate(p, Err(Exception::exit(reason)));
             }
@@ -1576,9 +1424,7 @@ fn absorb(p: &mut Process, inbox: &mut VecDeque<OwnedTerm>, max_mailbox: usize) 
 pub(crate) fn mailbox_full(table: &mut AtomTable, atoms: &Atoms) -> Arc<OwnedTerm> {
     let queue = Term::Atom(table.intern("message_queue").expect("short atom"));
     let limit = Term::Atom(atoms.system_limit);
-    Arc::new(OwnedTerm::build(&Literals::default(), |h| {
-        h.tuple(&[limit, queue])
-    }))
+    Arc::new(OwnedTerm::build(&Literals::default(), |h| h.tuple(&[limit, queue])))
 }
 
 /// A change to a process that a scheduler is running, made when its time slice ends.
@@ -1620,8 +1466,7 @@ fn help(sys: &Lock<System>, wakeup: &Wakeup, index: usize) {
         // Park while offline, or while the run's result waits for the main scheduler to
         // collect it, until the count is raised or the run is over.
         sched.park_while(|s| {
-            !s.stopping
-                && (index >= s.schedulers_online || !s.results.is_empty() || s.halted.is_some())
+            !s.stopping && (index >= s.schedulers_online || !s.results.is_empty() || s.halted.is_some())
         });
         if sched.lock().stopping || !schedule(&mut sched) {
             return;

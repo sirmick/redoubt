@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use crate::atom::Atom;
-use crate::term::{compare, Heap, OwnedTerm, Pid, Term};
+use crate::term::{Heap, OwnedTerm, Pid, Term, compare};
 
 /// Most tables one VM may have (as BEAM's default `ERL_MAX_ETS_TABLES`, roughly).
 pub const MAX_TABLES: usize = 8192;
@@ -46,25 +46,15 @@ pub struct Key {
 }
 
 impl PartialEq for Key {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
+    fn eq(&self, other: &Self) -> bool { self.cmp(other) == Ordering::Equal }
 }
 impl Eq for Key {}
 impl PartialOrd for Key {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
 }
 impl Ord for Key {
     fn cmp(&self, other: &Self) -> Ordering {
-        compare(
-            self.term.heap(),
-            self.term.term(),
-            other.term.heap(),
-            other.term.term(),
-            !self.arith,
-        )
+        compare(self.term.heap(), self.term.term(), other.term.heap(), other.term.term(), !self.arith)
     }
 }
 
@@ -86,21 +76,14 @@ pub struct Table {
 }
 
 /// The words an object costs a table.
-pub fn weigh(obj: &OwnedTerm) -> u64 {
-    obj.words()
-}
+pub fn weigh(obj: &OwnedTerm) -> u64 { obj.words() }
 
-fn weigh_all(objs: &[OwnedTerm]) -> u64 {
-    objs.iter().map(weigh).sum()
-}
+fn weigh_all(objs: &[OwnedTerm]) -> u64 { objs.iter().map(weigh).sum() }
 
 impl Table {
     /// `t`, a term of `heap`, as a key of this table.
     pub fn key(&self, heap: &Heap, t: Term) -> Key {
-        Key {
-            term: OwnedTerm::new(heap, t),
-            arith: self.kind == Kind::OrderedSet,
-        }
+        Key { term: OwnedTerm::new(heap, t), arith: self.kind == Kind::OrderedSet }
     }
 
     /// The key of `obj` (a term of `heap`), if it is a tuple long enough to have one.
@@ -109,22 +92,14 @@ impl Table {
         Some(self.key(heap, k))
     }
 
-    pub fn size(&self) -> usize {
-        self.count
-    }
+    pub fn size(&self) -> usize { self.count }
 
     /// Memory the objects hold, in words.
-    pub fn words(&self) -> u64 {
-        self.words
-    }
+    pub fn words(&self) -> u64 { self.words }
 
-    pub fn may_read(&self, who: Pid) -> bool {
-        self.access != Access::Private || who == self.owner
-    }
+    pub fn may_read(&self, who: Pid) -> bool { self.access != Access::Private || who == self.owner }
 
-    pub fn may_write(&self, who: Pid) -> bool {
-        self.access == Access::Public || who == self.owner
-    }
+    pub fn may_write(&self, who: Pid) -> bool { self.access == Access::Public || who == self.owner }
 
     /// Insert one object (already checked to have a key).
     pub fn insert(&mut self, key: Key, obj: OwnedTerm) {
@@ -151,13 +126,9 @@ impl Table {
         }
     }
 
-    pub fn lookup(&self, key: &Key) -> &[OwnedTerm] {
-        self.objects.get(key).map(|v| &v[..]).unwrap_or(&[])
-    }
+    pub fn lookup(&self, key: &Key) -> &[OwnedTerm] { self.objects.get(key).map(|v| &v[..]).unwrap_or(&[]) }
 
-    pub fn contains(&self, key: &Key) -> bool {
-        self.objects.contains_key(key)
-    }
+    pub fn contains(&self, key: &Key) -> bool { self.objects.contains_key(key) }
 
     pub fn remove(&mut self, key: &Key) -> Vec<OwnedTerm> {
         let removed = self.objects.remove(key).unwrap_or_default();
@@ -206,30 +177,19 @@ impl Table {
     }
 
     /// Every object, in key order.
-    pub fn all(&self) -> impl Iterator<Item = &OwnedTerm> {
-        self.objects.values().flatten()
-    }
+    pub fn all(&self) -> impl Iterator<Item = &OwnedTerm> { self.objects.values().flatten() }
 
-    pub fn first(&self) -> Option<&Key> {
-        self.objects.keys().next()
-    }
+    pub fn first(&self) -> Option<&Key> { self.objects.keys().next() }
 
-    pub fn last(&self) -> Option<&Key> {
-        self.objects.keys().next_back()
-    }
+    pub fn last(&self) -> Option<&Key> { self.objects.keys().next_back() }
 
     /// The key after `key` (which need not be in the table).
     pub fn next(&self, key: &Key) -> Option<&Key> {
         use core::ops::Bound::{Excluded, Unbounded};
-        self.objects
-            .range((Excluded(key), Unbounded))
-            .next()
-            .map(|(k, _)| k)
+        self.objects.range((Excluded(key), Unbounded)).next().map(|(k, _)| k)
     }
 
-    pub fn prev(&self, key: &Key) -> Option<&Key> {
-        self.objects.range(..key).next_back().map(|(k, _)| k)
-    }
+    pub fn prev(&self, key: &Key) -> Option<&Key> { self.objects.range(..key).next_back().map(|(k, _)| k) }
 }
 
 /// All the tables of one VM.
@@ -269,13 +229,9 @@ impl Tables {
         }
     }
 
-    pub fn get(&self, tid: u64) -> Option<&Table> {
-        self.by_tid.get(&tid)
-    }
+    pub fn get(&self, tid: u64) -> Option<&Table> { self.by_tid.get(&tid) }
 
-    pub fn get_mut(&mut self, tid: u64) -> Option<&mut Table> {
-        self.by_tid.get_mut(&tid)
-    }
+    pub fn get_mut(&mut self, tid: u64) -> Option<&mut Table> { self.by_tid.get_mut(&tid) }
 
     pub fn delete(&mut self, tid: u64) -> Option<Table> {
         let t = self.by_tid.remove(&tid)?;
@@ -289,10 +245,7 @@ impl Tables {
         if self.by_name.contains_key(name.as_str()) {
             return Err(TableError::NameTaken);
         }
-        let t = self
-            .by_tid
-            .get_mut(&tid)
-            .expect("caller resolved the table");
+        let t = self.by_tid.get_mut(&tid).expect("caller resolved the table");
         if t.named {
             self.by_name.remove(t.name.as_str());
             self.by_name.insert(name.as_str().into(), tid);
@@ -303,21 +256,13 @@ impl Tables {
 
     /// Tables owned by `pid`, for cleanup when it dies.
     pub fn owned_by(&self, pid: Pid) -> Vec<u64> {
-        self.by_tid
-            .values()
-            .filter(|t| t.owner == pid)
-            .map(|t| t.tid)
-            .collect()
+        self.by_tid.values().filter(|t| t.owner == pid).map(|t| t.tid).collect()
     }
 
-    pub fn tids(&self) -> Vec<u64> {
-        self.by_tid.keys().copied().collect()
-    }
+    pub fn tids(&self) -> Vec<u64> { self.by_tid.keys().copied().collect() }
 
     /// Memory all tables hold, in words.
-    pub fn words(&self) -> u64 {
-        self.by_tid.values().map(Table::words).sum()
-    }
+    pub fn words(&self) -> u64 { self.by_tid.values().map(Table::words).sum() }
 }
 
 /// What `ets:new/2` was asked for.
@@ -439,11 +384,7 @@ pub fn parse_spec(heap: &Heap, ms: Term) -> Option<Vec<Clause>> {
         let &[head, guards, body] = heap.as_tuple(item)? else {
             return None;
         };
-        out.push(Clause {
-            head,
-            guards: heap.to_vec(guards)?,
-            body: heap.to_vec(body)?,
-        });
+        out.push(Clause { head, guards: heap.to_vec(guards)?, body: heap.to_vec(body)? });
     }
     Some(out)
 }

@@ -11,24 +11,15 @@ pub struct Show<'h> {
 }
 
 impl Heap {
-    pub fn show(&self, t: Term) -> Show<'_> {
-        Show {
-            heap: self,
-            term: t,
-        }
-    }
+    pub fn show(&self, t: Term) -> Show<'_> { Show { heap: self, term: t } }
 }
 
 impl fmt::Display for Show<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_term(f, self.heap, self.term)
-    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write_term(f, self.heap, self.term) }
 }
 
 impl fmt::Debug for Show<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_term(f, self.heap, self.term)
-    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write_term(f, self.heap, self.term) }
 }
 
 /// What is left to print: terms, and the punctuation between them.
@@ -81,13 +72,7 @@ fn write_term(f: &mut fmt::Formatter<'_>, h: &Heap, t: Term) -> fmt::Result {
             }
             Term::Map(_) => {
                 work.push(Out::Text("}"));
-                for (i, (k, v)) in h
-                    .map_entries(t)
-                    .expect("a map")
-                    .into_iter()
-                    .enumerate()
-                    .rev()
-                {
+                for (i, (k, v)) in h.map_entries(t).expect("a map").into_iter().enumerate().rev() {
                     work.push(Out::Term(v));
                     work.push(Out::Text(" => "));
                     work.push(Out::Term(k));
@@ -135,23 +120,16 @@ fn write_leaf(f: &mut fmt::Formatter<'_>, h: &Heap, t: Term) -> fmt::Result {
             f.write_str(">>")
         }
         Term::Fun(_) => match h.as_fun(t).expect("a fun") {
-            FunView::Export {
-                module,
-                function,
-                arity,
-            } => {
+            FunView::Export { module, function, arity } => {
                 f.write_str("fun ")?;
                 write_atom(f, module.as_str())?;
                 f.write_str(":")?;
                 write_atom(f, function.as_str())?;
                 write!(f, "/{arity}")
             }
-            FunView::Local {
-                module,
-                index,
-                uniq,
-                ..
-            } => write!(f, "#Fun<{}.{}.{}>", module.as_str(), index, uniq),
+            FunView::Local { module, index, uniq, .. } => {
+                write!(f, "#Fun<{}.{}.{}>", module.as_str(), index, uniq)
+            }
         },
         Term::Pid(p) if p.port => write!(f, "#Port<0.{}>", p.serial),
         Term::Pid(p) => write!(f, "<0.{}.{}>", p.index, p.serial),
@@ -167,9 +145,9 @@ fn write_leaf(f: &mut fmt::Formatter<'_>, h: &Heap, t: Term) -> fmt::Result {
 
 pub(crate) fn atom_needs_quotes(s: &str) -> bool {
     const RESERVED: &[&str] = &[
-        "after", "and", "andalso", "band", "begin", "bnot", "bor", "bsl", "bsr", "bxor", "case",
-        "catch", "cond", "div", "else", "end", "fun", "if", "let", "maybe", "not", "of", "or",
-        "orelse", "receive", "rem", "try", "when", "xor",
+        "after", "and", "andalso", "band", "begin", "bnot", "bor", "bsl", "bsr", "bxor", "case", "catch",
+        "cond", "div", "else", "end", "fun", "if", "let", "maybe", "not", "of", "or", "orelse", "receive",
+        "rem", "try", "when", "xor",
     ];
     let mut chars = s.chars();
     match chars.next() {

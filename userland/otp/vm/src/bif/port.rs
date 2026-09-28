@@ -56,9 +56,7 @@ fn port_arg(c: &Ctx, t: &Term) -> Option<Pid> {
 
 /// An open port, or `badarg`.
 fn open_port_arg(c: &Ctx, t: &Term) -> Result<Pid, Exception> {
-    port_arg(c, t)
-        .filter(|p| c.sys().ports.contains_key(p))
-        .ok_or_else(|| c.badarg())
+    port_arg(c, t).filter(|p| c.sys().ports.contains_key(p)).ok_or_else(|| c.badarg())
 }
 
 /// Text in a port setting: a string or a binary, as UTF-8.
@@ -78,8 +76,7 @@ enum Framing {
 }
 
 pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
-    if let Some(&[Term::Atom(k), Term::Int(0), Term::Int(out @ (1 | 2))]) = c.heap().as_tuple(a[0])
-    {
+    if let Some(&[Term::Atom(k), Term::Int(0), Term::Int(out @ (1 | 2))]) = c.heap().as_tuple(a[0]) {
         if k.as_str() == "fd" {
             return open_console(c, out, &a[1]);
         }
@@ -93,9 +90,7 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
         _ => return Err(c.badarg()),
     };
     let h = c.heap();
-    let name = text(h, &what)
-        .filter(|n| !n.is_empty())
-        .ok_or_else(|| c.badarg())?;
+    let name = text(h, &what).filter(|n| !n.is_empty()).ok_or_else(|| c.badarg())?;
 
     let mut framing = Framing::Stream;
     let (mut binary, mut eof, mut exit_status, mut stderr_to_stdout) = (false, false, false, false);
@@ -117,14 +112,10 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
                 _ => return Err(c.badarg()),
             },
             Term::Tuple(_) => match *h.as_tuple(*o).expect("a tuple") {
-                [Term::Atom(k), Term::Int(n)]
-                    if k.as_str() == "packet" && matches!(n, 1 | 2 | 4) =>
-                {
+                [Term::Atom(k), Term::Int(n)] if k.as_str() == "packet" && matches!(n, 1 | 2 | 4) => {
                     framing = Framing::Packet(n as u8)
                 }
-                [Term::Atom(k), Term::Int(n)] if k.as_str() == "line" && n > 0 => {
-                    framing = Framing::Line(n)
-                }
+                [Term::Atom(k), Term::Int(n)] if k.as_str() == "line" && n > 0 => framing = Framing::Line(n),
                 [Term::Atom(k), dir] if k.as_str() == "cd" => {
                     cd = Some(text(h, &dir).ok_or_else(|| c.badarg())?)
                 }
@@ -158,10 +149,7 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
                     }
                 }
                 [Term::Atom(k), _]
-                    if matches!(
-                        k.as_str(),
-                        "parallelism" | "busy_limits_port" | "busy_limits_msgq"
-                    ) => {}
+                    if matches!(k.as_str(), "parallelism" | "busy_limits_port" | "busy_limits_msgq") => {}
                 _ => return Err(c.badarg()),
             },
             _ => return Err(c.badarg()),
@@ -180,11 +168,7 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
     } else {
         let cwd = c.sys().cwd.clone();
         let path = resolve(&cwd, &name).map_err(|e| posix(c, e))?;
-        Program::Executable {
-            path,
-            arg0,
-            args: args.unwrap_or_default(),
-        }
+        Program::Executable { path, arg0, args: args.unwrap_or_default() }
     };
     let here = c.sys().cwd.clone();
     let cwd = match &cd {
@@ -209,16 +193,9 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
     };
 
     let entry = driver(c)?;
-    let spawned = c
-        .platform()
-        .programs()
-        .map_or(Err(FileError::Eacces), |programs| programs.spawn(&spawn));
+    let spawned = c.platform().programs().map_or(Err(FileError::Eacces), |programs| programs.spawn(&spawn));
     let spawned = spawned.map_err(|e| posix(c, e))?;
-    let packet = if let Framing::Packet(n) = framing {
-        n
-    } else {
-        0
-    };
+    let packet = if let Framing::Packet(n) = framing { n } else { 0 };
     let framing = match framing {
         Framing::Stream => c.atom("stream"),
         Framing::Packet(n) => {
@@ -334,9 +311,7 @@ fn open_console(c: &mut Ctx, out: i64, opts: &Term) -> R {
 }
 
 /// A failure to start a program: `error:Reason` with the POSIX name, as BEAM raises.
-fn posix(c: &mut Ctx, e: FileError) -> Exception {
-    Exception::error(c.atom(e.name()))
-}
+fn posix(c: &mut Ctx, e: FileError) -> Exception { Exception::error(c.atom(e.name())) }
 
 /// `port_command(Port, Data)`: write `Data` to the program, framed if the port uses packets.
 pub fn port_command(c: &mut Ctx, a: &[Term]) -> R {
@@ -400,9 +375,7 @@ pub fn port_close(c: &mut Ctx, a: &[Term]) -> R {
     let port = open_port_arg(c, &a[0])?;
     close(c, port);
     if port != c.p.pid {
-        let normal = alloc::sync::Arc::new(crate::term::OwnedTerm::immediate(Term::Atom(
-            c.atoms.normal,
-        )));
+        let normal = alloc::sync::Arc::new(crate::term::OwnedTerm::immediate(Term::Atom(c.atoms.normal)));
         c.sys().exits.push_back(crate::vm::ExitSignal {
             target: port,
             from: c.p.pid,
@@ -446,9 +419,7 @@ pub fn port_connect(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `port_control/3` and `port_call/2,3`: only drivers answer these, and there are none.
-pub fn no_driver(c: &mut Ctx, _a: &[Term]) -> R {
-    Err(c.badarg())
-}
+pub fn no_driver(c: &mut Ctx, _a: &[Term]) -> R { Err(c.badarg()) }
 
 /// `erlang:ports()`.
 pub fn ports(c: &mut Ctx, _a: &[Term]) -> R {
@@ -456,42 +427,20 @@ pub fn ports(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(c.list(ports))
 }
 
-const INFO_ITEMS: [&str; 7] = [
-    "name",
-    "links",
-    "id",
-    "connected",
-    "input",
-    "output",
-    "os_pid",
-];
+const INFO_ITEMS: [&str; 7] = ["name", "links", "id", "connected", "input", "output", "os_pid"];
 
 fn info_item(c: &mut Ctx, port: Pid, item: &str) -> Option<Term> {
     let mut sys = c.sys();
     let st = sys.ports.get(&port)?;
-    let (owner, id, input, output, os_pid, name) = (
-        st.owner,
-        port.serial,
-        st.input,
-        st.output,
-        st.os_pid,
-        st.name.clone(),
-    );
+    let (owner, id, input, output, os_pid, name) =
+        (st.owner, port.serial, st.input, st.output, st.os_pid, st.name.clone());
     // The port's own process, unless it is the one asking.
     let (links, watchers): (Vec<Pid>, Vec<Pid>) = {
-        let p: &crate::process::Process = if port == c.p.pid {
-            c.p
-        } else {
-            sys.procs.get_mut(port)?
-        };
-        (
-            p.links.iter().copied().collect(),
-            p.monitored_by.values().map(|m| m.watcher).collect(),
-        )
+        let p: &crate::process::Process = if port == c.p.pid { c.p } else { sys.procs.get_mut(port)? };
+        (p.links.iter().copied().collect(), p.monitored_by.values().map(|m| m.watcher).collect())
     };
     drop(sys);
-    let pids =
-        |c: &mut Ctx, set: Vec<Pid>| c.list(set.into_iter().map(Term::Pid).collect::<Vec<_>>());
+    let pids = |c: &mut Ctx, set: Vec<Pid>| c.list(set.into_iter().map(Term::Pid).collect::<Vec<_>>());
     let value = match item {
         "name" => c.string(&name),
         "id" => Term::Int(id as i64),
@@ -506,12 +455,8 @@ fn info_item(c: &mut Ctx, port: Pid, item: &str) -> Option<Term> {
         "monitored_by" => pids(c, watchers),
         "monitors" => Term::Nil,
         "registered_name" => {
-            let name = c
-                .sys()
-                .registered
-                .iter()
-                .find(|(_, &p)| p == port)
-                .map(|(n, _)| String::from(n.as_str()));
+            let name =
+                c.sys().registered.iter().find(|(_, &p)| p == port).map(|(n, _)| String::from(n.as_str()));
             match name {
                 Some(n) => c.atom(&n),
                 None => Term::Nil,
@@ -571,9 +516,7 @@ pub fn port_info2(c: &mut Ctx, a: &[Term]) -> R {
     match info_item(c, port, item.as_str()) {
         // A port with no registered name answers `[]`, as BEAM's does.
         Some(v) => Ok(c.tuple(&[Term::Atom(item), v])),
-        None if INFO_ITEMS.contains(&item.as_str()) || item.as_str() == "registered_name" => {
-            c.retry()
-        }
+        None if INFO_ITEMS.contains(&item.as_str()) || item.as_str() == "registered_name" => c.retry(),
         None => Err(c.badarg()),
     }
 }
@@ -601,11 +544,7 @@ pub fn list_to_port(c: &mut Ctx, a: &[Term]) -> R {
         .ok_or_else(|| c.badarg())?;
     let found = c.sys().ports.keys().find(|p| p.serial == n).copied();
     // A closed port's slot is unknown; any index names no live process.
-    Ok(Term::Pid(found.unwrap_or(Pid {
-        serial: n,
-        index: u32::MAX,
-        port: true,
-    })))
+    Ok(Term::Pid(found.unwrap_or(Pid { serial: n, index: u32::MAX, port: true })))
 }
 
 impl crate::vm::System {
@@ -626,8 +565,8 @@ impl crate::vm::System {
             if let (ProgramEvent::Output(bytes), Some(st)) = (&event, self.ports.get_mut(&port)) {
                 st.input += bytes.len() as u64;
             }
-            let [data, eof, exit_status, tag] = ["data", "eof", "exit_status", "$beamlet_program"]
-                .map(|n| Term::Atom(self.atom(n)));
+            let [data, eof, exit_status, tag] =
+                ["data", "eof", "exit_status", "$beamlet_program"].map(|n| Term::Atom(self.atom(n)));
             self.send_with(port, |h| {
                 let event = match &event {
                     ProgramEvent::Output(bytes) => {
