@@ -112,8 +112,7 @@ page.
      [tests that behaved differently under load](../todo/bench-load-flakes.md),
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
      [the write-only mutation](../todo/write-only-mutation-split.md),
-     [the vendored crates under Miri](../todo/miri-vendored-unsafe.md),
-     [paths the docs checker names that no longer exist](../todo/doccheck-stale-paths.md); and
+     [the vendored crates under Miri](../todo/miri-vendored-unsafe.md); and
      [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
      trusted crates from growing unseen.
    - **Servers:** [a request answered outside `finish`](../todo/request-raw-reply.md),
