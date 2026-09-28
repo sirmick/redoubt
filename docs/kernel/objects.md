@@ -322,8 +322,7 @@ Status: built · tested: bench:budget-destroy-attack, bench:budget-table-attack,
 - **No call destroys an endpoint.** An endpoint lives, and costs its owner a page, until the owner
   budget is destroyed; closing every handle to it frees nothing. The owner is always the creating
   process's own budget, so a server that makes an endpoint per client pays for each until that
-  budget goes, bounded by the budget's page limit. Whether an endpoint should be reclaimable on
-  its own is open. Follow-up: [todo](../todo/endpoint-reclaim.md).
+  budget goes, bounded by the budget's page limit. Servers make one per service instead (Why).
 - **A device object is never remade.** None is created after boot; one destroyed with its owner,
   or for failing a DMA reset, is gone until reboot ([devices](devices.md)).
 - **Revocation is by budget only.** A grant is revoked by destroying the budget it is stamped
@@ -364,6 +363,11 @@ Status: built · tested: bench:budget-destroy-attack, bench:budget-table-attack,
 - **Stamps only narrow.** A server answering a call mints under the call's stamp by default, so
   what it hands a client dies with the client's grant, and the server never holds the client's
   budget.
+- **An endpoint dies only with its owner.** A server serves every client on one endpoint and
+  tells them apart by badge ([the servers](../servers/README.md#connections)), so it makes one
+  endpoint per service, not per client, and no server needs to free one on its own. A call that
+  did would add a destruction path to the kernel for a cost that already falls only on the
+  owner's own budget, bounded by its page limit.
 - **Stamp and owner are separate.** Who pays for an object and who may revoke a handle to it are
   different questions. A process in budget A may create a budget under B for someone else; B's
   child lives as long as B, while A's own handle to it dies with A.
