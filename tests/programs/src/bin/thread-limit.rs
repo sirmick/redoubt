@@ -35,7 +35,12 @@ pub extern "C" fn _start() -> ! {
     };
     let all = seen == ((1u64 << (MAX_THREADS + 1)) - 2);
     log!(logger, "[thread-limit] {} threads, the initial one included", threads);
-    log!(logger, "[thread-limit] TIDs distinct and within 1..={}, all used: {}", MAX_THREADS, in_range && all);
+    log!(
+        logger,
+        "[thread-limit] TIDs distinct and within 1..={}, all used: {}",
+        MAX_THREADS,
+        in_range && all
+    );
     log!(logger, "[thread-limit] the next thread_create: {:?}", refusal);
     if threads == MAX_THREADS && in_range && all && refusal == Error::TooManyThreads {
         log!(logger, "THREAD LIMIT TEST PASSED");

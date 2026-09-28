@@ -286,7 +286,8 @@ fn late_record(c: &mut Checker) {
     let stack = rd::map_anon(4 * rd::PAGE_SIZE, rd::rw()).unwrap();
     LATE_RECORD.store(record, Ordering::Release);
     LATE_BUDGET.store(budget as usize, Ordering::Release);
-    rd::thread_create(invalidate_notice_record as *const () as usize, stack + 4 * rd::PAGE_SIZE - 16, 0).unwrap();
+    rd::thread_create(invalidate_notice_record as *const () as usize, stack + 4 * rd::PAGE_SIZE - 16, 0)
+        .unwrap();
     let receive =
         Call::Receive { from: Some(rd::h(exit)), timeout: WAIT, max_transfer: 0, received_rec: record };
     assert_eq!(redoubt_sys::syscall(&receive), Err(Error::InvalidArgument));

@@ -3,10 +3,10 @@
 //! free pages away and give them back.
 //!
 //! What it shows:
-//! - a server thread that exits holding an open call gives its caller `Dead` and its lend back,
-//!   intact, while the endpoint survives and a later server receives on it (R4b);
-//! - a message the receiving process's budget cannot pay for is `Refused` to its sender, and
-//!   the receiver is unaffected: it takes the very next message (R4).
+//! - a server thread that exits holding an open call gives its caller `Dead` and its lend back, intact, while
+//!   the endpoint survives and a later server receives on it (R4b);
+//! - a message the receiving process's budget cannot pay for is `Refused` to its sender, and the receiver is
+//!   unaffected: it takes the very next message (R4).
 //!
 //! See `tests/redoubt-dead.toml`.
 

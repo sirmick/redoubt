@@ -19,7 +19,6 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
 use crate::console::{self, Console};
-
 use crate::rd::{self, Error, Received};
 use crate::spawn::{self, Image};
 

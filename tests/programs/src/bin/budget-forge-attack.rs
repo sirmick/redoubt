@@ -28,7 +28,22 @@ pub extern "C" fn _start() -> ! {
     let mut tried = 0;
     let mut forged = [0u32; 140];
     let mut n = 0;
-    for h in (own..=128).chain([129, 130, 131, 132, 133, 257, 258, 259, 260, 261, 4096, 4097, 0x8000_0001, u32::MAX]) {
+    for h in (own..=128).chain([
+        129,
+        130,
+        131,
+        132,
+        133,
+        257,
+        258,
+        259,
+        260,
+        261,
+        4096,
+        4097,
+        0x8000_0001,
+        u32::MAX,
+    ]) {
         forged[n] = h;
         n += 1;
     }
@@ -47,8 +62,13 @@ pub extern "C" fn _start() -> ! {
     }
     // How many indices there are to forge depends on how many handles the machine gave this
     // program to start with, so what the case pins is that every one of them was refused.
-    log!(logger, "[forge] {} of {} calls on forged indices got BadHandle ({})", refused, tried,
-        if refused == tried { "all" } else { "FAIL" });
+    log!(
+        logger,
+        "[forge] {} of {} calls on forged indices got BadHandle ({})",
+        refused,
+        tried,
+        if refused == tried { "all" } else { "FAIL" }
+    );
     // Indices that are not indices at all: 0, and (where registers are wide) above 32 bits.
     let destroy = rd::number(Number::BudgetDestroy);
     // Where registers are 64 bits wide, an index whose low 32 bits name `system`: a kernel that

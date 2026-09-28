@@ -7,8 +7,8 @@
 //! short, and the mapping loop's `alloc_page` `.expect` panicked the kernel. The model's
 //! `table_keys` was always right, so only a boot case can catch a regression.
 //!
-//! The range is `[3 GiB + 2 MiB - rd::PAGE_SIZE, 4 GiB + rd::PAGE_SIZE)`: 261634 pages, which need exactly the two
-//! missing level-0 tables at index 0 of gigabytes 3 and 4. With `free == pages + 1` the pages
+//! The range is `[3 GiB + 2 MiB - rd::PAGE_SIZE, 4 GiB + rd::PAGE_SIZE)`: 261634 pages, which need exactly
+//! the two missing level-0 tables at index 0 of gigabytes 3 and 4. With `free == pages + 1` the pages
 //! check passes and the page-tables check must refuse: OutOfMemory, nothing charged. Only this
 //! tight half runs. The exact half (`free == pages + 2` succeeds) zeroes 1 GiB, about a minute
 //! under QEMU. `memory_mib = 4608` because `system` gets a quarter of RAM (budget.rs,
@@ -78,7 +78,8 @@ mod case {
             }
             let (table, slot) = (filled / SLOTS, filled % SLOTS);
             let n = short.min(SLOTS - slot);
-            rd::map_fixed(FILL + table * SPAN + (1 + slot) * rd::PAGE_SIZE, n * rd::PAGE_SIZE, rd::rw()).expect("fill");
+            rd::map_fixed(FILL + table * SPAN + (1 + slot) * rd::PAGE_SIZE, n * rd::PAGE_SIZE, rd::rw())
+                .expect("fill");
             filled += n;
         }
     }

@@ -14,13 +14,17 @@ fn run(tag: &str, readme: &str, dirs: &[String], args: &[&str]) -> (i32, String)
     let tree = std::env::temp_dir().join(format!("vendor-check-provenance-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tree);
     std::fs::create_dir_all(tree.join("tools/vendor-check")).unwrap();
-    std::fs::copy(root().join("tools/vendor-check/provenance.sh"), tree.join("tools/vendor-check/provenance.sh"))
-        .unwrap();
+    std::fs::copy(
+        root().join("tools/vendor-check/provenance.sh"),
+        tree.join("tools/vendor-check/provenance.sh"),
+    )
+    .unwrap();
     for dir in dirs {
         std::fs::create_dir_all(tree.join("vendor").join(dir)).unwrap();
     }
     std::fs::write(tree.join("vendor/README.md"), readme).unwrap();
-    let out = Command::new("bash").arg(tree.join("tools/vendor-check/provenance.sh")).args(args).output().unwrap();
+    let out =
+        Command::new("bash").arg(tree.join("tools/vendor-check/provenance.sh")).args(args).output().unwrap();
     let _ = std::fs::remove_dir_all(&tree);
     let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     (out.status.code().unwrap_or(-1), text)
@@ -62,7 +66,8 @@ fn a_renamed_header_fails_before_any_download() {
 #[test]
 fn a_missing_row_fails() {
     let (readme, dirs) = tree();
-    let without: String = readme.lines().filter(|l| !l.starts_with("| `hash32`")).map(|l| format!("{l}\n")).collect();
+    let without: String =
+        readme.lines().filter(|l| !l.starts_with("| `hash32`")).map(|l| format!("{l}\n")).collect();
     assert_ne!(without, readme);
     for args in [&["--structure-only"][..], &[]] {
         let (code, out) = run("row", &without, &dirs, args);

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use regex::Regex;
 
-use crate::case::{Boot, ALWAYS_FORBIDDEN};
+use crate::case::{ALWAYS_FORBIDDEN, Boot};
 use crate::peer;
 use crate::ssh;
 use crate::target::Machine;
@@ -122,7 +122,8 @@ pub type Forward = (u16, u16);
 /// retried, so it would show as a failure rather than hide.
 fn free_ports(count: usize) -> Result<Vec<u16>> {
     // Hold every listener until all are chosen, so the OS cannot hand out one port twice.
-    let listeners = (0..count).map(|_| TcpListener::bind("127.0.0.1:0")).collect::<std::io::Result<Vec<_>>>()?;
+    let listeners =
+        (0..count).map(|_| TcpListener::bind("127.0.0.1:0")).collect::<std::io::Result<Vec<_>>>()?;
     Ok(listeners.iter().map(|l| l.local_addr().map(|a| a.port())).collect::<std::io::Result<Vec<_>>>()?)
 }
 
@@ -207,7 +208,9 @@ impl Console {
                 _ => return Ok(Line::Forbidden(format!("a DONE line not the reporter's: {line}"))),
             }
         }
-        for (pattern, slot) in self.capture.iter().zip(self.captured.iter_mut()).filter(|(_, slot)| slot.is_none()) {
+        for (pattern, slot) in
+            self.capture.iter().zip(self.captured.iter_mut()).filter(|(_, slot)| slot.is_none())
+        {
             *slot = pattern.captures(&line).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
         }
         let mut pending = Vec::new();
@@ -225,7 +228,13 @@ impl Console {
 }
 
 /// Boot `image` and judge it by `boot`. `forwards` are the host ports from `virtio_devices`.
-pub fn run(image: &Image, boot: &Boot, workspace: &Path, forwards: &[Forward], log: &Path) -> Result<Verdict> {
+pub fn run(
+    image: &Image,
+    boot: &Boot,
+    workspace: &Path,
+    forwards: &[Forward],
+    log: &Path,
+) -> Result<Verdict> {
     let machine = image.machine;
     let compile = |patterns: &mut dyn Iterator<Item = &str>| -> Result<Vec<Regex>> {
         patterns.map(|p| Regex::new(p).with_context(|| format!("bad regular expression {p:?}"))).collect()
@@ -234,11 +243,8 @@ pub fn run(image: &Image, boot: &Boot, workspace: &Path, forwards: &[Forward], l
     let always = ALWAYS_FORBIDDEN.iter().copied().filter(|p| !(boot.allow_panic && *p == "PANIC"));
     let forbid = compile(&mut boot.forbid.iter().map(String::as_str).chain(always))?;
     let capture = compile(&mut boot.distinct_across_boots.iter().map(String::as_str))?;
-    let inputs = boot
-        .input
-        .iter()
-        .map(|i| Ok((Regex::new(&i.after)?, i.send.clone())))
-        .collect::<Result<Vec<_>>>()?;
+    let inputs =
+        boot.input.iter().map(|i| Ok((Regex::new(&i.after)?, i.send.clone()))).collect::<Result<Vec<_>>>()?;
 
     let done = boot
         .reporter_pid()
@@ -283,7 +289,9 @@ pub fn run(image: &Image, boot: &Boot, workspace: &Path, forwards: &[Forward], l
             Line::Text(_) => {}
             Line::Forbidden(why) => return Ok(Verdict::Fail(why)),
             Line::Timeout => return Ok(Verdict::Fail(format!("timed out waiting for /{}/", expect[next]))),
-            Line::Exited => return Ok(Verdict::Fail(format!("guest exited while waiting for /{}/", expect[next]))),
+            Line::Exited => {
+                return Ok(Verdict::Fail(format!("guest exited while waiting for /{}/", expect[next])));
+            }
         }
     }
     if !boot.session.is_empty() {
@@ -337,7 +345,8 @@ fn run_sessions(
     let server = ssh::Server::Guest { forwards, host_key };
     let abort = AtomicBool::new(false);
     std::thread::scope(|scope| {
-        let sessions = scope.spawn(|| ssh::run(workspace, &boot.session, &server, logs, &prefix, deadline, &abort));
+        let sessions =
+            scope.spawn(|| ssh::run(workspace, &boot.session, &server, logs, &prefix, deadline, &abort));
         let mut console: Result<Option<String>> = Ok(None);
         while !sessions.is_finished() && matches!(console, Ok(None)) {
             console = match watched.next(Instant::now() + Duration::from_millis(50)) {
@@ -368,7 +377,8 @@ mod tests {
         // beside its disk.
         static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let call = CALLS.fetch_add(1, Ordering::Relaxed);
-        let disk = std::env::temp_dir().join(format!("testbench-qemu-test-{}-{call}.img", std::process::id()));
+        let disk =
+            std::env::temp_dir().join(format!("testbench-qemu-test-{}-{call}.img", std::process::id()));
         let (args, _) = virtio_devices(&boot(devices), &disk).expect("device arguments");
         std::fs::remove_file(&disk).ok();
         std::fs::remove_dir_all(disk.with_extension("peers")).ok();
@@ -410,7 +420,12 @@ mod tests {
         let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
         assert!(netdev.contains(&format!(",{},", peer::VNET)), "{netdev}");
         assert_eq!(netdev.matches(",guestfwd=tcp:10.0.9.10").count(), 2, "{netdev}");
-        assert!(netdev.contains(&format!("-cmd:{}", shell_quote(&std::env::current_exe().unwrap().to_string_lossy()))));
+        assert!(
+            netdev.contains(&format!(
+                "-cmd:{}",
+                shell_quote(&std::env::current_exe().unwrap().to_string_lossy())
+            ))
+        );
         assert!(netdev.contains(" peer-helper --id 10.0.9.100:7 --dir "), "{netdev}");
         let capture = args.windows(2).find(|w| w[0] == "-object").expect("a capture");
         assert!(capture[1].starts_with("filter-dump,id=capture0,netdev=net0,file="), "{}", capture[1]);

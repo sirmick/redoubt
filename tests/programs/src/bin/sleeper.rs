@@ -5,7 +5,6 @@
 #![no_std]
 #![no_main]
 
-
 use test_programs::rd::{self, Error};
 use test_programs::{Logger, log};
 

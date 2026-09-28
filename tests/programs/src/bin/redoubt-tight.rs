@@ -16,8 +16,8 @@
 #![no_std]
 #![no_main]
 
-use test_programs::rd::{self, Error, FOREVER, Received};
 use test_programs::log;
+use test_programs::rd::{self, Error, FOREVER, Received};
 
 static mut ENDPOINT: u32 = 0;
 

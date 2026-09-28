@@ -47,7 +47,10 @@ fn set_flags(c: &mut Checker) {
         "set_flags refuses W without R over a range",
     );
     // Still readable (the reads below would fault otherwise) and still a writable record.
-    c.check(rd::peek(rw) == 0x1122 && rd::peek(rw + rd::PAGE_SIZE) == 0x3344, "refused set_flags kept the contents");
+    c.check(
+        rd::peek(rw) == 0x1122 && rd::peek(rw + rd::PAGE_SIZE) == 0x3344,
+        "refused set_flags kept the contents",
+    );
     c.check(
         writable_record(rw) && writable_record(rw + rd::PAGE_SIZE),
         "refused set_flags left the pages readable and writable",

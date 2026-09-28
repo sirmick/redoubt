@@ -10,10 +10,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use regex::Regex;
 
 use crate::case::{Session, Step};
@@ -38,7 +38,10 @@ fn check_key_name(name: &str) -> Result<()> {
 pub fn public_key(workspace: &Path, name: &str) -> Result<String> {
     check_key_name(name)?;
     let path = workspace.join(KEYS).join(format!("{name}.pub"));
-    Ok(std::fs::read_to_string(&path).with_context(|| format!("no test key {name} ({})", path.display()))?.trim().into())
+    Ok(std::fs::read_to_string(&path)
+        .with_context(|| format!("no test key {name} ({})", path.display()))?
+        .trim()
+        .into())
 }
 
 /// Copy test key `name`'s private half to `dir/name`, readable only by us: ssh and sshd
@@ -46,12 +49,19 @@ pub fn public_key(workspace: &Path, name: &str) -> Result<String> {
 fn key_file(workspace: &Path, dir: &Path, name: &str) -> Result<PathBuf> {
     use std::os::unix::fs::OpenOptionsExt;
     check_key_name(name)?;
-    let key = std::fs::read(workspace.join(KEYS).join(name)).with_context(|| format!("no test key {name}"))?;
+    let key =
+        std::fs::read(workspace.join(KEYS).join(name)).with_context(|| format!("no test key {name}"))?;
     std::fs::create_dir_all(dir)?;
     let path = dir.join(name);
     // Write a temporary file and rename it, so a concurrent reader never sees half a key.
     let temporary = dir.join(format!(".{name}.{}", std::process::id()));
-    std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&temporary)?.write_all(&key)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temporary)?
+        .write_all(&key)?;
     std::fs::rename(&temporary, &path)?;
     Ok(path)
 }
@@ -68,7 +78,13 @@ pub enum Server<'a> {
 /// Set up a loopback server that accepts the `authorized` test keys, logs in only the user
 /// running the bench (an unprivileged sshd can log in no one else), runs `/bin/sh` for every
 /// login and allows nothing else: no forwarding, no agent, no rc files it controls.
-pub fn loopback(workspace: &Path, dir: &Path, case: &str, authorized: &[String], host_key: Option<&str>) -> Result<Server<'static>> {
+pub fn loopback(
+    workspace: &Path,
+    dir: &Path,
+    case: &str,
+    authorized: &[String],
+    host_key: Option<&str>,
+) -> Result<Server<'static>> {
     let keys = authorized.iter().map(|name| public_key(workspace, name)).collect::<Result<Vec<_>>>()?;
     let authorized_keys = dir.join(format!("{case}-authorized_keys"));
     std::fs::create_dir_all(dir)?;
@@ -91,7 +107,10 @@ pub fn loopback(workspace: &Path, dir: &Path, case: &str, authorized: &[String],
     let log = dir.join(format!("{case}-sshd.log"));
     // ssh hands ProxyCommand to a shell; keep the paths free of anything it would interpret.
     let proxy = format!("{SSHD} -i -f {} -E {}", config.display(), log.display());
-    ensure!(proxy.bytes().all(|b| b.is_ascii_alphanumeric() || b" /._+-".contains(&b)), "unusual path in {proxy:?}");
+    ensure!(
+        proxy.bytes().all(|b| b.is_ascii_alphanumeric() || b" /._+-".contains(&b)),
+        "unusual path in {proxy:?}"
+    );
     let host_key = match host_key {
         Some(key) => key.to_string(),
         None => public_key(workspace, "loopback-host")?,
@@ -158,7 +177,8 @@ pub fn run(
             host_key_options.push("StrictHostKeyChecking=yes".into());
             host_key_options.push(format!("UserKnownHostsFile={}", known_hosts.display()));
         }
-        None => host_key_options.extend(["StrictHostKeyChecking=no".into(), "UserKnownHostsFile=/dev/null".into()]),
+        None => host_key_options
+            .extend(["StrictHostKeyChecking=no".into(), "UserKnownHostsFile=/dev/null".into()]),
     }
 
     let shared = Shared { marks: Mutex::new(HashSet::new()), changed: Condvar::new(), abort };
@@ -172,18 +192,35 @@ pub fn run(
         };
         ssh.args(["-F", "/dev/null", if session.pty { "-tt" } else { "-T" }, "-l", login, "-i"])
             .arg(key_file(workspace, &dir, session.key())?)
-            .args(["-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR"]);
+            .args([
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "IdentityAgent=none",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "LogLevel=ERROR",
+            ]);
         for option in &host_key_options {
             ssh.args(["-o", option]);
         }
         match server {
             Server::Guest { forwards, .. } => {
-                let (_, port) = forwards.iter().find(|(guest, _)| *guest == 22).context("port 22 is not forwarded")?;
+                let (_, port) =
+                    forwards.iter().find(|(guest, _)| *guest == 22).context("port 22 is not forwarded")?;
                 // Give up connecting half a second before the case's deadline, so that ssh
                 // says why (refused, no banner, ...) rather than the bench timing out bare.
                 let left = deadline.saturating_duration_since(Instant::now()).as_secs_f64() - 0.5;
                 let connect_timeout = (left.floor() as u64).max(1);
-                ssh.args(["-p", &port.to_string(), "-o", &format!("ConnectTimeout={connect_timeout}"), "--", "127.0.0.1"]);
+                ssh.args([
+                    "-p",
+                    &port.to_string(),
+                    "-o",
+                    &format!("ConnectTimeout={connect_timeout}"),
+                    "--",
+                    "127.0.0.1",
+                ]);
             }
             Server::Loopback { proxy, .. } => {
                 ssh.args(["-o", &format!("ProxyCommand={proxy}"), "--", "loopback"]);
@@ -250,7 +287,13 @@ struct Driver<'a> {
     unmatched: String,
 }
 
-fn drive(session: &Session, mut ssh: Command, log: &Path, shared: &Shared, deadline: Instant) -> Result<(), Stop> {
+fn drive(
+    session: &Session,
+    mut ssh: Command,
+    log: &Path,
+    shared: &Shared,
+    deadline: Instant,
+) -> Result<(), Stop> {
     let forbid = session
         .forbid
         .iter()
@@ -331,7 +374,12 @@ impl Driver<'_> {
                         return Err(Stop::Failed(format!("timed out waiting for mark {mark:?}")));
                     }
                     // Wake up now and then to notice the case being aborted from outside.
-                    marks = self.shared.changed.wait_timeout(marks, left.min(Duration::from_millis(50))).unwrap().0;
+                    marks = self
+                        .shared
+                        .changed
+                        .wait_timeout(marks, left.min(Duration::from_millis(50)))
+                        .unwrap()
+                        .0;
                 }
                 Ok(())
             }
@@ -345,7 +393,11 @@ impl Driver<'_> {
                         return Ok(());
                     }
                     if let Some(status) = self.status {
-                        return Err(Stop::Failed(format!("ssh exited ({}) while waiting for /{pattern}/{}", describe(status), self.last())));
+                        return Err(Stop::Failed(format!(
+                            "ssh exited ({}) while waiting for /{pattern}/{}",
+                            describe(status),
+                            self.last()
+                        )));
                     }
                     self.pump(&format!("/{pattern}/"))?;
                 }
@@ -357,7 +409,11 @@ impl Driver<'_> {
                 }
                 let status = self.status.unwrap();
                 if status.code() != Some(*expected) {
-                    return Err(Stop::Failed(format!("ssh exited ({}), expected {expected}{}", describe(status), self.last())));
+                    return Err(Stop::Failed(format!(
+                        "ssh exited ({}), expected {expected}{}",
+                        describe(status),
+                        self.last()
+                    )));
                 }
                 Ok(())
             }
@@ -392,7 +448,9 @@ impl Driver<'_> {
                     return Ok(());
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Stop::Broken("lost ssh's output".into())),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(Stop::Broken("lost ssh's output".into()));
+                }
             }
         }
     }

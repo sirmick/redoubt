@@ -121,12 +121,16 @@ pub extern "C" fn _start() -> ! {
     t.hold(a);
     // The parent pays the child's own page and counts its limits, never its usage (R6).
     let s = system0;
-    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(Usage {
-        pages_usage: s.pages_usage + 101,
-        processes_usage: s.processes_usage + 2,
-        weight_carved: s.weight_carved + 50,
-        ..s
-    }));
+    let _ = expect!(
+        t,
+        rd::usage(rd::SYSTEM),
+        Ok(Usage {
+            pages_usage: s.pages_usage + 101,
+            processes_usage: s.processes_usage + 2,
+            weight_carved: s.weight_carved + 50,
+            ..s
+        })
+    );
     let _ = expect!(t, rd::usage(a), Ok(usage(100, 0, 2, 0, 50, 0)));
     // A revocation scope costs its parent one page, like any budget, and has no usage of its own.
     let scope = expect!(t, rd::create(a, &rd::spec(0, 0, 0)), Ok(base + 1)).unwrap_or(base + 1);
@@ -172,9 +176,8 @@ pub extern "C" fn _start() -> ! {
     t.hold(lab);
     let _ = expect!(t, rd::create(lab, &labelled(1, &[3])), Err(Error::LabelDenied));
     let _ = expect!(t, rd::create(lab, &labelled(1, &[])), Err(Error::LabelDenied));
-    let same =
-        expect!(t, rd::create(lab, &labelled(1, &[5, 3, 5, 3, 5, 3, 5, 3])), Ok(base + 3))
-            .unwrap_or(base + 3);
+    let same = expect!(t, rd::create(lab, &labelled(1, &[5, 3, 5, 3, 5, 3, 5, 3])), Ok(base + 3))
+        .unwrap_or(base + 3);
     let more = expect!(t, rd::create(lab, &labelled(1, &[7, 5, 3])), Ok(base + 4)).unwrap_or(base + 4);
     let _ = expect!(t, rd::destroy(more), Ok(()));
     let _ = expect!(t, rd::destroy(same), Ok(()));

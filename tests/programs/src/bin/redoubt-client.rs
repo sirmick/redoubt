@@ -96,7 +96,11 @@ pub extern "C" fn _start() -> ! {
     let _ = expect!(t, rd::peek(page), 0x5151);
     // A lend over `MAX_LEND_PAGES` is `TooLarge`, and nothing has moved when it is refused.
     let too_big = rd::pages(page, rd::MAX_LEND_PAGES + 1);
-    let _ = expect!(t, rd::call(E, &rd::body([op::LEND, 0, 0, 0]), too_big, FOREVER).err(), Some(Error::TooLarge));
+    let _ = expect!(
+        t,
+        rd::call(E, &rd::body([op::LEND, 0, 0, 0]), too_big, FOREVER).err(),
+        Some(Error::TooLarge)
+    );
     let _ = expect!(t, rd::peek(page), 0x5151);
     // A lend of memory that is not this program's is refused too.
     let stranger = rd::pages(0x4000, 1);

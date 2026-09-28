@@ -35,19 +35,33 @@ pub extern "C" fn _start() -> ! {
         rd::receive(Some(u32::MAX), 0, 0).err(),
     ];
     let ok = refused.iter().all(|e| *e == Some(Error::BadHandle));
-    log!(logger, "[irq-attack] {}: receive on an irq handle it does not hold -> {:?}",
-        if ok { "ok" } else { "FAIL" }, refused);
+    log!(
+        logger,
+        "[irq-attack] {}: receive on an irq handle it does not hold -> {:?}",
+        if ok { "ok" } else { "FAIL" },
+        refused
+    );
 
     // Mapping the victim's MMIO range without its handle. There is no call that takes a
     // physical address at all.
     let by_index = [rd::map_device(rd::CONSOLE_MMIO).err(), rd::map_device(free).err()];
     let ok = by_index.iter().all(|e| *e == Some(Error::BadHandle));
-    log!(logger, "[irq-attack] {}: mapping the console's mmio -> {:?}", if ok { "ok" } else { "FAIL" }, by_index);
+    log!(
+        logger,
+        "[irq-attack] {}: mapping the console's mmio -> {:?}",
+        if ok { "ok" } else { "FAIL" },
+        by_index
+    );
 
     // RAM cannot be named by physical address either (R11): `map_anon` takes no address, and
     // the pages it hands out are zero.
     let zero = rd::map_anon(rd::PAGE_SIZE, rd::rw()).map(rd::peek);
-    log!(logger, "[irq-attack] {}: map_anon first word -> {:?}", if zero == Ok(0) { "ok" } else { "FAIL" }, zero);
+    log!(
+        logger,
+        "[irq-attack] {}: map_anon first word -> {:?}",
+        if zero == Ok(0) { "ok" } else { "FAIL" },
+        zero
+    );
 
     // A handle of the wrong kind is `WrongObject`, and one that does not exist `BadHandle`,
     // for every device call -- including `system_reset`, which would end the case early.
@@ -63,8 +77,13 @@ pub extern "C" fn _start() -> ! {
     ];
     let ok = wrong.iter().all(|e| *e == Some(Error::WrongObject))
         && absent.iter().all(|e| *e == Some(Error::BadHandle));
-    log!(logger, "[irq-attack] {}: wrong kind -> {:?}, not held -> {:?}",
-        if ok { "ok" } else { "FAIL" }, wrong, absent);
+    log!(
+        logger,
+        "[irq-attack] {}: wrong kind -> {:?}, not held -> {:?}",
+        if ok { "ok" } else { "FAIL" },
+        wrong,
+        absent
+    );
 
     // The verdict is the victim's, not ours (docs/testbench.md, "Rule F (trusted verdicts)").
     log!(logger, "[irq-attack] attempts done");

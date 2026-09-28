@@ -770,7 +770,8 @@ impl Gen {
         // A child holding DMA devices maps them and allocates through them often, so that
         // co-holders (one maps a device another allocates through or maps too) and their deaths
         // come up in short sequences.
-        if pid != INIT_PID && self.rng.pct(12) && k.processes[&pid].handles.values().any(|h| dma_device(k, h)) {
+        if pid != INIT_PID && self.rng.pct(12) && k.processes[&pid].handles.values().any(|h| dma_device(k, h))
+        {
             let h = self.handle(k, pid, |h| dma_device(k, h));
             return if self.rng.pct(50) {
                 Syscall::MapDevice { h }

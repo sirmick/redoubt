@@ -225,7 +225,8 @@ pub const RAM_BASE: u64 = 0x8000_0000;
 /// The longest `Op::Tick` the model accepts (one hour): a replay of hostile input must finish.
 pub const MAX_TICK: u64 = 3_600_000_000;
 
-/// The pid of `init`, the one process the kernel creates (fixed, not drawn, so a trace can name it before any result).
+/// The pid of `init`, the one process the kernel creates (fixed, not drawn, so a trace can name it before any
+/// result).
 pub const INIT_PID: u64 = 1;
 /// PIDs are ASIDs: Sv39's 16 bits (`init` has 1; the others are drawn from 2..=MAX_PID).
 pub const MAX_PID: u64 = 0xffff;
@@ -525,8 +526,8 @@ pub struct Kernel {
     wakes: Vec<Wake>,
     notes: Vec<Note>,
     /// Endpoints where something became deliverable during the step; matched with their
-    /// receivers once the step's other effects are done, so a destruction revokes everything it reaches before
-    /// anything is delivered.
+    /// receivers once the step's other effects are done, so a destruction revokes everything it reaches
+    /// before anything is delivered.
     to_pump: BTreeSet<u64>,
 }
 
@@ -3509,8 +3510,9 @@ impl Kernel {
         if carve_check && processes > px.processes_limit.saturating_sub(px.processes_used) {
             return Err(Error::OutOfProcesses);
         }
-        // A weight over the parent's free weight is `InvalidArgument`. A carve may not leave a budget that holds a process with free weight 0:
-        // its stride weight is its free weight, and a weight-0 budget holds no process (R7, R12).
+        // A weight over the parent's free weight is `InvalidArgument`. A carve may not leave a budget that
+        // holds a process with free weight 0: its stride weight is its free weight, and a weight-0
+        // budget holds no process (R7, R12).
         let free = px.weight.saturating_sub(px.weight_used);
         let holds = self.processes.values().any(|x| x.budget == p);
         if carve_check

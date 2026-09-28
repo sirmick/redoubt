@@ -200,7 +200,13 @@ pub fn give_image(process: u32, image: &Image) -> Result<(), Error> {
         }
         if flags != 0 {
             let len = (end - page) * rd::PAGE_SIZE;
-            rd::process_map(process, scratch + page * rd::PAGE_SIZE, image.base + page * rd::PAGE_SIZE, len, mem_flags(flags))?;
+            rd::process_map(
+                process,
+                scratch + page * rd::PAGE_SIZE,
+                image.base + page * rd::PAGE_SIZE,
+                len,
+                mem_flags(flags),
+            )?;
         }
         page = end;
     }

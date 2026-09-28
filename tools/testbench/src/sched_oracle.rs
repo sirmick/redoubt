@@ -5,8 +5,8 @@
 //! The kernel's trace says what its queue did, never why: a budget woke (`W`), was requeued (`R`),
 //! left the queue (`D`), had its pass changed (`P`), or was picked (`K`); each record carries the
 //! kernel entry (reconcile) it belongs to and the budget's pass after the event (its low 64 bits).
-//! It holds no tie key. This module rebuilds the order from those events alone, with its own reading of the rules,
-//! and checks every pick against it:
+//! It holds no tie key. This module rebuilds the order from those events alone, with its own reading of the
+//! rules, and checks every pick against it:
 //! - the lowest pass first; at an equal pass,
 //! - a budget that woke ranks ahead of one that was requeued;
 //! - of two that woke, the later kernel entry's first, and within one entry the lower id;
@@ -110,7 +110,9 @@ const LIFT: &str = "LlefrqwAa";
 /// Check the lift group starting at `records[0]` against the rule; (records used, whether the
 /// child's work was above zero and the parent led the floor, so a lift by `max` would differ).
 fn check_lift(records: &[Record]) -> Result<(usize, bool), String> {
-    let g = records.get(..LIFT.len()).ok_or_else(|| format!("record {}: a lift group cut short", records[0].seq))?;
+    let g = records
+        .get(..LIFT.len())
+        .ok_or_else(|| format!("record {}: a lift group cut short", records[0].seq))?;
     let kinds: String = g.iter().map(|r| r.kind).collect();
     if kinds != LIFT {
         return Err(format!("record {}: a lift group of kinds {kinds}, not {LIFT}", g[0].seq));
@@ -171,7 +173,10 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
             last_pass.insert(r.id, r.pass);
         }
         if r.kind == 'W' && r.pass < floor {
-            return Err(format!("record {}: budget {} woke at pass {:#x}, below the floor {floor:#x}", r.seq, r.id, r.pass));
+            return Err(format!(
+                "record {}: budget {} woke at pass {:#x}, below the floor {floor:#x}",
+                r.seq, r.id, r.pass
+            ));
         }
         match r.kind {
             'X' => {
@@ -183,7 +188,12 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
             'Z' => sum.r10_frames = sum.r10_frames.max(r.pass as u64),
             'Y' => match open_r10.take() {
                 Some((id, t)) if id == r.id => sum.r10_us.push(r.pass.saturating_sub(t) as u64),
-                _ => return Err(format!("record {}: budget {}'s destruction ended without beginning", r.seq, r.id)),
+                _ => {
+                    return Err(format!(
+                        "record {}: budget {}'s destruction ended without beginning",
+                        r.seq, r.id
+                    ));
+                }
             },
             'L' => {
                 let (used, tells) = check_lift(&records[i - 1..])?;
@@ -266,8 +276,11 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
     let n = sum.r10_us.len();
-    let (p50, p99, max) =
-        (percentile(&mut sum.r10_us, 50), percentile(&mut sum.r10_us, 99), sum.r10_us.last().copied().unwrap_or(0));
+    let (p50, p99, max) = (
+        percentile(&mut sum.r10_us, 50),
+        percentile(&mut sum.r10_us, 99),
+        sum.r10_us.last().copied().unwrap_or(0),
+    );
     for arg in args.split_whitespace() {
         let bound = arg
             .strip_prefix("r10_p99_us=")
@@ -360,7 +373,18 @@ mod tests {
     /// A lift group, then a pick so the trace is complete: parent 1 at `pb` rem `pr`, child 2 at
     /// `cp` rem `cr` entry `e`, floor `f`, weights `wc` and `wp`, parent after `pa` rem `par`.
     #[allow(clippy::too_many_arguments)]
-    fn lift_trace(pb: u128, pr: u128, cp: u128, cr: u128, e: u128, f: u128, wc: u128, wp: u128, pa: u128, par: u128) -> String {
+    fn lift_trace(
+        pb: u128,
+        pr: u128,
+        cp: u128,
+        cr: u128,
+        e: u128,
+        f: u128,
+        wc: u128,
+        wp: u128,
+        pa: u128,
+        par: u128,
+    ) -> String {
         trace(&[
             (1, 'L', 1, pb),
             (1, 'l', 2, cp),
@@ -407,7 +431,16 @@ mod tests {
         assert!(v.as_ref().is_err_and(|e| e.contains("below the floor")), "{v:?}");
         // Two wake into an empty queue above the floor, one entry: each against the floor as it was
         // (the waker's own raised pass, `P`, moves nothing).
-        let together = [(1, 'W', 1, 9), (1, 'K', 1, 9), (1, 'D', 1, 9), (2, 'P', 3, 12), (2, 'W', 3, 12), (2, 'P', 2, 9), (2, 'W', 2, 9), (2, 'K', 2, 9)];
+        let together = [
+            (1, 'W', 1, 9),
+            (1, 'K', 1, 9),
+            (1, 'D', 1, 9),
+            (2, 'P', 3, 12),
+            (2, 'W', 3, 12),
+            (2, 'P', 2, 9),
+            (2, 'W', 2, 9),
+            (2, 'K', 2, 9),
+        ];
         assert!(verdict(&together).is_ok(), "{:?}", verdict(&together));
         // The floor holds while the queue is empty: 1 leaves at 9, 2 wakes at 5 later.
         let held = [(1, 'W', 1, 9), (1, 'K', 1, 9), (1, 'D', 1, 9), (2, 'W', 2, 5), (2, 'K', 2, 5)];
@@ -420,9 +453,21 @@ mod tests {
 
     #[test]
     fn destructions_are_timed_and_bounded() {
-        let t = trace(&[(1, 'X', 7, 100), (1, 'Y', 7, 130), (1, 'X', 8, 200), (1, 'Y', 8, 250), (1, 'W', 1, 5), (1, 'K', 1, 5)]);
+        let t = trace(&[
+            (1, 'X', 7, 100),
+            (1, 'Y', 7, 130),
+            (1, 'X', 8, 200),
+            (1, 'Y', 8, 250),
+            (1, 'W', 1, 5),
+            (1, 'K', 1, 5),
+        ]);
         let ok = run(&t, "r10_p99_us=50");
-        assert!(ok.as_ref().is_ok_and(|s| s.contains("R10 2 destructions over up to 0 object frames, µs p50/p99/max 30/50/50")), "{ok:?}");
+        assert!(
+            ok.as_ref().is_ok_and(
+                |s| s.contains("R10 2 destructions over up to 0 object frames, µs p50/p99/max 30/50/50")
+            ),
+            "{ok:?}"
+        );
         assert!(run(&t, "r10_p99_us=49").is_err_and(|e| e.contains("above 49")));
         assert!(run(&t, "r10_p99=49").is_err());
         // Unpaired or nested brackets.
@@ -448,10 +493,7 @@ mod tests {
                 "SCHED-TRACE 0 2 W 1 5\nSCHED-TRACE 1 1 K 1 5\nSCHED-TRACE-END 2 dropped 0\n".to_string(),
             ),
             ("no pick", "SCHED-TRACE 0 1 W 1 5\nSCHED-TRACE-END 1 dropped 0\n".to_string()),
-            (
-                "a pick of nothing queued",
-                "SCHED-TRACE 0 1 K 1 5\nSCHED-TRACE-END 1 dropped 0\n".to_string(),
-            ),
+            ("a pick of nothing queued", "SCHED-TRACE 0 1 K 1 5\nSCHED-TRACE-END 1 dropped 0\n".to_string()),
             (
                 "a pick at another pass",
                 "SCHED-TRACE 0 1 W 1 5\nSCHED-TRACE 1 1 K 1 6\nSCHED-TRACE-END 2 dropped 0\n".to_string(),
