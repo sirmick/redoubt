@@ -86,12 +86,12 @@ impl Buffer {
         Ok(Buffer::adopt(Pages { addr, npages }))
     }
 
-    fn adopt(pages: Pages) -> Self { Self { mapping: Mapping::adopt(pages) } }
+    pub(crate) fn adopt(pages: Pages) -> Self { Self { mapping: Mapping::adopt(pages) } }
 
     pub fn npages(&self) -> usize { self.mapping.pages.npages.get() }
 
     /// Gives up ownership without unmapping (the pages are about to be transferred).
-    fn into_pages(mut self) -> Pages {
+    pub(crate) fn into_pages(mut self) -> Pages {
         let pages = self.mapping.release();
         core::mem::forget(self);
         pages

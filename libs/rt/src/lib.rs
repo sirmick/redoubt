@@ -44,6 +44,11 @@ pub mod start;
 pub mod startup;
 mod sys;
 
+/// The kernel's ABI, raw: its types, and on the machine `abi::syscall`, which makes any call.
+/// **Outside the runtime's guarantees.** The runtime's owning types (the heap, a
+/// [`ipc::Buffer`], a lend) promise that safe code never holds memory it no longer has; a raw
+/// `unmap`, `set_flags` or `process_map` made through `abi::syscall` can break that promise, so a
+/// program that makes one keeps it by hand (userland/native.md, "redoubt-rt").
 pub use redoubt_sys as abi;
 pub use redoubt_wire as wire;
 pub use start::exit;

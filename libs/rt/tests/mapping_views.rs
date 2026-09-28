@@ -5,8 +5,9 @@ mod seam;
 
 use std::num::NonZeroUsize;
 
+use redoubt_rt::HostKernel;
 use redoubt_rt::abi::*;
-use redoubt_rt::handle::{Endpoint, map_anon, unmap};
+use redoubt_rt::handle::{Endpoint, map_anon};
 use redoubt_rt::ipc::{Buffer, Event};
 
 #[test]
@@ -45,6 +46,7 @@ fn mapping_reborrows_and_failed_reply_recovery() {
     assert_eq!(kernel.0.lock().unwrap().open_calls, 1);
     assert!(request.reply(&[0; WORDS], &[]).unwrap().delivered);
     assert_eq!(kernel.0.lock().unwrap().open_calls, 0);
-    // The seam does not perform the real kernel's lend unmap; release its backing page now.
-    unmap(addr, PAGE_SIZE).unwrap();
+    // The seam does not perform the real kernel's lend unmap; release its backing page now, as
+    // the kernel would (the runtime's own unmap is its owners' alone).
+    kernel.syscall(&Call::Unmap { addr, len: PAGE_SIZE }).unwrap();
 }
