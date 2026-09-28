@@ -110,10 +110,9 @@ page.
    - **The bench and its tools**, with the kernel package:
      [tests that behaved differently under load](../todo/bench-load-flakes.md),
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
+     [the unsafe budget's stated reason](../todo/unsafe-ratchet-reason.md),
      [the write-only mutation](../todo/write-only-mutation-split.md),
-     [the vendored crates under Miri](../todo/miri-vendored-unsafe.md); and
-     [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
-     trusted crates from growing unseen.
+     and [the vendored crates under Miri](../todo/miri-vendored-unsafe.md).
    - **Servers:** [a request answered outside `finish`](../todo/request-raw-reply.md),
      [starting a thread from safe code](../todo/raw-thread-create.md),
      [the raw system call beside the runtime](../todo/raw-abi-syscall.md).

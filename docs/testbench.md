@@ -168,7 +168,8 @@ The kinds, and the fields each takes besides `description` and `arch`:
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
 | `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong) | `packages` |
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
-| `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented` |
+| `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
+| `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
 | `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
 | `fmt` | the formatting gate ([below](#the-formatting-gate)) | `roots`, `[[skip]]` (`path`, `reason`) |
 
@@ -404,6 +405,24 @@ member fails too. Vendored third-party crates are outside the ratchet
 workspace's members, and `userland/otp` is its own workspace whose `no_std` crates (`re`, `crypto`,
 `vm`) no budget counts. They are not in the trusted computing base; if one ever joins it, it joins
 the workspace and the gate sees it.
+
+## The size budget
+
+Status: built · tested: bench:size-budget, host:testbench::only_code_lines_count, host:testbench::a_raise_needs_its_reason, host:testbench::the_ratchet_reads_the_commit_that_raised, host:testbench::a_merge_is_judged_against_its_first_parent
+
+The size of the trusted computing base is budgeted, not observed
+([the tenets](TENETS.md)). `size-budget.toml` lists each trusted crate (the kernel, the loader,
+the stub, the libraries they and the servers link, the model and the servers) with a ceiling in
+lines of code: every line of every `.rs` file under its paths that is not blank, a `//` comment
+(doc comments included) or inside a `/* */` comment, in-file tests included. The case fails when a
+crate is over its ceiling. The ceilings started at each crate's size when the case landed and only
+fall: the case reads every commit that changed its file, merges included, and where one raised a
+ceiling over the file in its first parent, dropped a crate (a rename drops the old name) or
+narrowed a crate's paths (fewer lines counted under the same ceiling), requires a line
+`Size budget: <crate>: <reason>` for each such crate, in its message or, for a merge, in a commit
+it brings in. A raise not yet committed fails, and so does a path with no Rust source in it. The
+history check needs the history: in a shallow clone the oldest commit has no parent to compare
+with, so a raise there passes unchecked.
 
 ## Vendored dependencies
 

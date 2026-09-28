@@ -12,6 +12,7 @@ mod fmt;
 mod peer;
 mod qemu;
 mod sched_oracle;
+mod size;
 mod ssh;
 mod target;
 
@@ -152,6 +153,17 @@ fn main() -> Result<()> {
                 None => budget::coverage(&workspace, &check.budget, &check.uncounted)?,
                 failure => failure,
             };
+            match failure {
+                None => println!("PASS  {:<32}\n      {summary}", case.name),
+                Some(why) => {
+                    failures += 1;
+                    println!("FAIL  {:<32}        {why}\n      {summary}", case.name);
+                }
+            }
+            continue;
+        }
+        if let Kind::SizeBudget(budget) = &case.kind {
+            let (failure, summary) = size::check(&workspace, &format!("tests/{}.toml", case.name), budget)?;
             match failure {
                 None => println!("PASS  {:<32}\n      {summary}", case.name),
                 Some(why) => {
@@ -335,6 +347,7 @@ fn run_case(
         }
         Kind::Boot(boot) => boot,
         Kind::UnsafeBudget(_)
+        | Kind::SizeBudget(_)
         | Kind::NoCruft(_)
         | Kind::Fmt(_)
         | Kind::SshLoopback(_)

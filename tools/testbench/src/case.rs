@@ -32,6 +32,9 @@ pub enum Kind {
     Build(Build),
     /// A ratchet on `unsafe` in the trusted computing base. Not a boot; reads the sources.
     UnsafeBudget(UnsafeBudget),
+    /// Each trusted crate's lines of Rust against a ceiling that only falls (`size.rs`). Not a
+    /// boot; reads the sources and the case file's history.
+    SizeBudget(SizeBudget),
     /// No leftover of a dropped interface, no silenced dead code, no unread Cargo feature, one
     /// literal definition of each shared constant (`cruft.rs`). Not a boot; reads the sources.
     NoCruft(NoCruft),
@@ -75,6 +78,23 @@ pub struct UnsafeBudget {
     /// all be in some budget.
     #[serde(default)]
     pub uncounted: Vec<Skip>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SizeBudget {
+    #[serde(rename = "crate")]
+    pub crates: Vec<SizeCrate>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SizeCrate {
+    pub name: String,
+    /// Files or directories, relative to the workspace root.
+    pub paths: Vec<String>,
+    /// Most lines of code allowed across `paths`.
+    pub max_lines: usize,
 }
 
 #[derive(Debug, Deserialize)]
