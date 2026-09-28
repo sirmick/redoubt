@@ -118,7 +118,6 @@ page.
      [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
      trusted crates from growing unseen.
    - **Servers:** [host tests the bench does not run](../todo/host-tests-in-bench.md),
-     [loader stub test coverage](../todo/loader-stub-coverage.md),
      [a request answered outside `finish`](../todo/request-raw-reply.md),
      [starting a thread from safe code](../todo/raw-thread-create.md),
      [the raw system call beside the runtime](../todo/raw-abi-syscall.md).

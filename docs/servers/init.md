@@ -400,7 +400,7 @@ read two ways, or a name no rule allows.
 
 ### R32 (a hostile image hurts only its process)
 
-Status: built · partly tested: the fuzz target has never been run as a campaign, and on target the kernel's own refusal masks the stub's overlap checks, which only host tests pin · tested: bench:stub-launch, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::read_image_refuses_an_image_len_over_the_cap
+Status: built · partly tested: on target the kernel's own refusal masks the stub's overlap checks, which only host tests pin · tested: bench:stub-launch, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::read_image_refuses_an_image_len_over_the_cap, host:stub::plan_refuses_a_segment_over_its_own_image, host:stub::the_fuzz_corpus_still_passes
 
 No launcher parses an ELF. The loader stub, running as the child, refuses an image whose segments
 overlap each other, the image, the stub, the startup block or page 0, reach past the link range,
@@ -408,7 +408,10 @@ or ask to be writable and executable, before it maps anything; a segment the ker
 over the stack) makes the child exit too. So a hostile image can at most exit or fault the process
 it was going to become. `stub-launch` launches hostile images on both widths and checks that each
 only exits or faults the child, that the parent's budget returns to the same usage after each,
-and that a well-formed child still runs afterwards.
+and that a well-formed child still runs afterwards and finds the image copy unmapped. A segment
+the child's budget cannot hold exits 112, and the same image runs in a budget that holds it. The
+stub's parser was fuzzed for an hour; its kept corpus (`stub/fuzz/seeds/plan`) reruns in the
+stub's host tests.
 
 ### R33 (no server holds a system budget)
 
@@ -479,9 +482,10 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   ([memory layout](../kernel/memory-layout.md#residual-risks)).
 - **The startup block and stub host tests are not in the bench.** Follow-up:
   [todo](../todo/host-tests-in-bench.md).
-- **The stub's checks are not all attacked on their own.** Its fuzz target has not been run as a
-  campaign, the kernel's refusal hides the stub's overlap checks on target, and exit 112 and the
-  image unmap are untested. Follow-up: [todo](../todo/loader-stub-coverage.md).
+- **On target, the kernel's refusal hides the stub's overlap checks.** Dropping one still ends
+  in exit 111, because `map_fixed` never replaces a mapping; only the host tests pin the stub's
+  own. The bench's stub is not rebuilt when a dependency's manifest or the lock file changes:
+  [todo](../todo/programs-build-rerun.md).
 - **A restart loop reboots the machine.** A client that can crash a server repeatedly without
   being blamed (a bug the blame rule does not reach) can reboot the box.
 

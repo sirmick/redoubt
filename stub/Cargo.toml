@@ -9,14 +9,18 @@ description = "The Redoubt loader stub: a flat binary, system-signed and the sam
 name = "stub"
 path = "src/lib.rs"
 
+# The binaries are the machine's alone (their own panic handlers and allocators): host tests
+# are the library's.
 [[bin]]
 name = "stub"
 path = "src/main.rs"
+test = false
 
 [[bin]]
 # Test fixture, not the stub itself: see src/bin/fixture-child.rs.
 name = "fixture-child"
 path = "src/bin/fixture-child.rs"
+test = false
 
 # Only our own crates, plus the same pinned ELF parser the boot loader already vets
 # (loader/Cargo.toml) -- one crate, one version, read once (TENETS.md 5). Never redoubt-rt: see
@@ -30,3 +34,7 @@ elf = { version = "0.8", default-features = false }
 # binary never links it (see [dependencies]).
 [dev-dependencies]
 redoubt-rt = { path = "../libs/rt" }
+
+# `cargo fuzz` builds with `--cfg fuzzing`, which compiles `src/fuzz.rs` for the fuzz target.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
