@@ -69,7 +69,6 @@
   - [Tests that behaved differently under load](todo/bench-load-flakes.md)
   - [The steward's decision wake on rv64](todo/sched-rv64-decision-wake.md)
   - [The boot hart's interrupt context](todo/boot-hart-context.md)
-  - [Root's own page](todo/boot-root-frame.md)
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
   - [Rescaling a carved-down lead](todo/carve-lead-rescale.md)
   - [Clearing SUM and MXR at entry](todo/clear-sum-at-entry.md)

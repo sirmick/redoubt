@@ -81,6 +81,8 @@ pub enum Mutation {
     R6ProcessObjectChargedToBudget,
     /// A lend is charged to its caller only, not to the receiver as well.
     R6LendChargedOnce,
+    /// `root`'s limit is every free frame, so its own page is charged to no one.
+    R6RootPageUncounted,
     // R7. Carving.
     /// Children may be carved beyond the parent's free limits.
     R7NoCarveCheck,
@@ -307,7 +309,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 130] = {
+    pub const ALL: [Mutation; 131] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -342,6 +344,7 @@ impl Mutation {
             R6ProcessObjectFree,
             R6ProcessObjectChargedToBudget,
             R6LendChargedOnce,
+            R6RootPageUncounted,
             R7NoCarveCheck,
             R8AccountFromArgument,
             R9ReceivedHandleRestamped,
@@ -478,7 +481,8 @@ impl Mutation {
             | R6OpenCallsFree
             | R6ProcessObjectFree
             | R6ProcessObjectChargedToBudget
-            | R6LendChargedOnce => "R6",
+            | R6LendChargedOnce
+            | R6RootPageUncounted => "R6",
             R7NoCarveCheck | R7CarveToZeroFree | ProcessInWeightlessBudget => "R7",
             R8AccountFromArgument => "R8",
             R9ReceivedHandleRestamped | R9MintStampsCaller | R9MsgStampIsSenderBudget => "R9",

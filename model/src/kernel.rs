@@ -117,6 +117,9 @@ pub struct Boot {
     /// In `init`'s handle order after the three budgets.
     pub devices: Vec<DeviceSpec>,
     pub costs: Costs,
+    /// The RAM frames the kernel did not keep: what every charge in the tree, and `root`'s own
+    /// page, which no budget pays for, must fit in (R6).
+    pub ram_frames: u64,
 }
 
 impl Default for Boot {
@@ -142,6 +145,8 @@ impl Default for Boot {
                 DeviceSpec::Mmio { base: 0x1000_3000, pages: 1, dma: true, resets: Resets::Always },
             ],
             costs: Costs::default(),
+            // `root`'s limit and its own page (the default `Costs::budget`, 1).
+            ram_frames: 1025,
         }
     }
 }
@@ -202,6 +207,10 @@ fn check_boot(b: &Boot) -> Result<(), String> {
     .try_fold(0u64, |acc, x| acc.checked_add(*x));
     if pages.is_none_or(|p| p > b.root.pages) {
         return Err("boot: system, users and init do not fit in root's pages".into());
+    }
+    // R6: `root`'s own page is charged to no budget, so its limit leaves room for it.
+    if b.root.pages.checked_add(c.budget).is_none_or(|p| p > b.ram_frames) {
+        return Err("boot: root's pages and its own page do not fit in RAM".into());
     }
     let procs = b.system.processes.checked_add(b.users.processes).and_then(|x| x.checked_add(1));
     if procs.is_none_or(|p| p > b.root.processes) {
@@ -503,6 +512,8 @@ pub struct Step {
 pub struct Kernel {
     pub mutation: Option<Mutation>,
     pub costs: Costs,
+    /// `Boot::ram_frames`.
+    pub ram_frames: u64,
     pub now: u64,
     pub budgets: BTreeMap<u64, Budget>,
     pub processes: BTreeMap<u64, Process>,
@@ -610,6 +621,7 @@ impl Kernel {
         let mut k = Kernel {
             mutation,
             costs: boot.costs,
+            ram_frames: boot.ram_frames,
             now: 0,
             budgets: BTreeMap::new(),
             processes: BTreeMap::new(),
@@ -633,7 +645,10 @@ impl Kernel {
             to_pump: BTreeSet::new(),
         };
         let c = k.costs;
-        let (r, s, u) = (boot.root, boot.system, boot.users);
+        let (mut r, s, u) = (boot.root, boot.system, boot.users);
+        if mutation == Some(Mutation::R6RootPageUncounted) {
+            r.pages = boot.ram_frames;
+        }
         let (sys, user) = (Class::System, Class::User);
         // `root` and `system` are class system; all budgets share one stride queue.
         let root = k.new_budget(None, sys, Vec::new(), 0, None, r, sys);

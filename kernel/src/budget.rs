@@ -511,18 +511,19 @@ impl MemoryManager {
     /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
     /// kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
-        // Every RAM page the kernel did not keep for itself. Nothing is held back: a process's
-        // saved contexts and its root page table are charged to the budget it runs in as they
-        // are allocated, like any other frame it owns, so every charged page has a real frame
-        // behind it without a reservation.
-        let pages = self.ram_frames() - self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) as u64;
+        // Every RAM page the kernel did not keep for itself, less `root`'s own page, which no
+        // budget pays for (R6): `root`'s limit bounds every charge in the tree, so the charges and
+        // `root`'s page together never exceed the free frames. Nothing else is held back: a
+        // process's saved contexts and its root page table are charged to the budget it runs in
+        // as they are allocated, like any other frame it owns, so every charged page has a real
+        // frame behind it without a reservation.
+        let kept = self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) as u64;
+        let pages = self.ram_frames() - kept - BUDGET_PAGES;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
         // `users` gets the rest of the weight but what `root` keeps for `init`.
         let users_weight = ROOT_WEIGHT - sys_weight - INIT_WEIGHT;
-        // Root pays for the two budgets' own pages. Root's own page is charged to no one: it has
-        // no parent, and its frame is one of the RAM pages counted in its limit, taken for the tree
-        // itself.
+        // Root pays for the two budgets' own pages; its own page is the one left out of `pages`.
         let users_pages = pages - 2 * BUDGET_PAGES - sys_pages;
         // `root` and `system` are class `system`; `users` is class `user`. Nothing runs before
         // anything else: one stride queue, and weight decides (kernel/scheduling.md).
@@ -540,6 +541,10 @@ impl MemoryManager {
         let root = boot(self, None, Class::System, pages, processes, ROOT_WEIGHT);
         let system = boot(self, Some(root), Class::System, sys_pages, sys_processes, sys_weight);
         let users = boot(self, Some(root), Class::User, users_pages, processes - sys_processes, users_weight);
+        assert!(
+            self.budget(root).pages_limit + BUDGET_PAGES + kept <= self.ram_frames(),
+            "R6: root's limit, its own page and the kernel's frames exceed RAM"
+        );
         let mut first = None;
         let mut bundle = [None; MAX_PROCESS_COUNT];
         let mut nbundle = 0;

@@ -36,7 +36,7 @@ gap: the page's section, the claim, and what no case attacks.
 - Root, system and users: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`).
 - R10 (destruction): destroying the budget a device object is charged to (the device destroyed, every handle closed) is not checked by a case.
 - R10: no case destroys an endpoint's owner while a receiver waits on it, and no program checks `receive` returning `Dead` ([endpoint destroyed with open calls](endpoint-destroyed-open-calls.md)).
-- R6 (charging): `root`'s own page charged to no one, and a process object's PID outside every process limit, have no case ([root's own page](boot-root-frame.md), [PID pool pinning](pid-pool-pinning.md)).
+- R6 (charging): a process object's PID outside every process limit has no case ([PID pool pinning](pid-pool-pinning.md)).
 
 ### timer.md
 - Time: that `time_now` counts from the kernel's start is not checked (only monotonic, never early, linear with `rdtime`).

@@ -57,6 +57,7 @@ impl Checker {
         serving(k)?;
         i1_i2_i3_i4_handles(k)?;
         i5_charging(k)?;
+        ledger_backed(k)?;
         i6_i8_budgets(k)?;
         self.flows(k)?;
         for flow in &k.ghost.flows {
@@ -905,6 +906,21 @@ fn i5_charging(k: &Kernel) -> Check {
 /// I6: labels never change, contain the parent's, and only a system-class creator adds labels.
 /// I8: class(child) = class(parent); account is inherited unless the parent's is 0.
 /// I12: budget ids ascend.
+/// R6: every charged page has a frame behind it. `root`'s limit bounds every charge in the tree,
+/// and `root`'s own page is charged to no budget, so the two together fit in the RAM frames the
+/// kernel did not keep.
+fn ledger_backed(k: &Kernel) -> Check {
+    // A destroyed `root` takes the whole tree, and every charge, with it.
+    let Some(root) = k.budgets.get(&crate::kernel::ROOT) else { return Ok(()) };
+    ensure!(
+        root.pages_limit.saturating_add(k.costs.budget) <= k.ram_frames,
+        "R6: root's limit {} and its own page exceed the {} free frames",
+        root.pages_limit,
+        k.ram_frames
+    );
+    Ok(())
+}
+
 fn i6_i8_budgets(k: &Kernel) -> Check {
     for b in k.budgets.values() {
         ensure!(

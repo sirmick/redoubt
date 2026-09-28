@@ -122,7 +122,8 @@ After every step, `Checker::check` (`model/src/invariants.rs`) runs its checks i
 - the objects' structure and serving state;
 - handles: I1 (handles name live objects), I2 (revocation is complete),
   I3 (minted badges are non-zero and narrow) and I4 (only badge-0 handles receive);
-- charging: I5 (usage within limits);
+- charging: I5 (usage within limits), and R6 (charging)'s backing: `root`'s limit and its own
+  page fit in the boot's `ram_frames`;
 - budgets: I6 (labels only grow downward) and I8 (class and account inherited);
 - the step's flows and call outcomes;
 - memory: I9 (pages W^X, zeroed, lends unmapped) and I16 (DMA pages reset before reuse);
@@ -217,7 +218,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 130 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 131 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks.
 
@@ -239,7 +240,7 @@ model checks.
 | [R4a (open calls)](ipc.md#r4a-open-calls) | `R4aOpenCallsPerThread`, `R4aFullTakesNothing`, `OpenCallsUnlimited`, `ReceiveDropsOpenCalls` | the limit, per process; sends and notices at the limit; keeping open calls across a `receive` |
 | [R4b (a server dies)](ipc.md#r4b-a-server-dies) | `R4bDeadServerFakesReply` | `Dead` for a dead server's callers |
 | [R5 (interrupts)](devices.md#r5-interrupts) | `R5NoMaskOnFire`, `R5NoUnmaskOnReceive` | masking on fire, unmasking on `receive` |
-| [R6 (charging)](budgets.md#r6-charging) | `R6ChargeAncestors`, `R6OwnPageChargedToItself`, `R6EndpointsFree`, `R6PageTablesFree`, `R6EmptyTableKept`, `R6OpenCallsFree`, `R6ProcessObjectFree`, `R6ProcessObjectChargedToBudget`, `R6LendChargedOnce` | who pays for each object, and for how long a page table |
+| [R6 (charging)](budgets.md#r6-charging) | `R6ChargeAncestors`, `R6OwnPageChargedToItself`, `R6EndpointsFree`, `R6PageTablesFree`, `R6EmptyTableKept`, `R6OpenCallsFree`, `R6ProcessObjectFree`, `R6ProcessObjectChargedToBudget`, `R6LendChargedOnce`, `R6RootPageUncounted` | who pays for each object, and for how long a page table; `root`'s own page |
 | [R7 (carving)](budgets.md#r7-carving) | `R7NoCarveCheck`, `R7CarveToZeroFree`, `ProcessInWeightlessBudget` | carving within free limits; no process in a budget with free weight 0 |
 | [R8 (accounts)](budgets.md#r8-accounts) | `R8AccountFromArgument` | inheriting the parent's account |
 | [R9 (stamps)](objects.md#r9-stamps) | `R9ReceivedHandleRestamped`, `R9MintStampsCaller`, `R9MsgStampIsSenderBudget` | which budget a handle is stamped with |

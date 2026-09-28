@@ -371,6 +371,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
         system: Limits { pages: 1_000, processes: 10, weight: 1_000 },
         users: Limits { pages: 55_000, processes: 680, weight: 8_000 },
         devices: alloc::vec![DeviceSpec::Reset],
+        ram_frames: 60_001,
         ..Boot::default()
     };
     let mut k = Kernel::boot(&boot, mutation).map_err(fail)?;

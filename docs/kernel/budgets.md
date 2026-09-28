@@ -93,21 +93,21 @@ there cannot become one.
 
 ### Root, system and users
 
-Status: built · partly tested: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`), and the boot code departs from R6 (charging) for `root`'s own page (Residual risks) · tested: bench:budget, bench:budget-destroy-kills, bench:process-attack
+Status: built · partly tested: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`) · tested: bench:budget, bench:budget-destroy-kills, bench:process-attack, bench:pages-exhaustion
 
 At boot the kernel creates three budgets, all with account 0, no labels and no deadline:
 
 | Budget | Class | Pages | Processes | Weight |
 | --- | --- | --- | --- | --- |
-| `root` | `system` | every RAM page the kernel did not keep for itself | 63 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
+| `root` | `system` | every RAM page the kernel did not keep for itself, less `root`'s own page | 63 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
 | `system` | `system` | a quarter of `root`'s | 15 (a quarter) | 250,000 (a quarter) |
 | `users` | `user` | the rest, less the two budgets' own pages | 48 (the rest) | 749,000 |
 
 `root` pays for the two budgets' own pages and carves all its pages and processes into them. It
 keeps `INIT_WEIGHT` (1,000) of its weight free, because a budget that holds a process needs free
 weight; that share is `init`'s. By R6 (charging) `root`'s own page is charged to `root`, so its
-limit is the free frames less that page. The boot code departs from this: it counts the page in
-`root`'s limit and charges it to no one ([Residual risks](#residual-risks)).
+limit is the free frames less that page. The boot checks that `root`'s limit, its own page and
+the kernel's frames fit in RAM, and stops if they do not.
 
 Every program the loader started runs in `system`, charged there for everything the loader gave
 it (image, stack, page tables, saved contexts) and for its first thread. The first of them gets
@@ -285,7 +285,7 @@ Status: built · tested: bench:budget, bench:process-attack, bench:budget-forge-
 
 ### R6 (charging)
 
-Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from the rule for `root`'s own page and the kernel from the PID count (see Residual risks), and no case attacks either · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:page-table-reclaim, bench:redoubt-tight, bench:process-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6EmptyTableKept, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce
+Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the kernel departs from the PID count (see Residual risks), and no case attacks it · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:page-table-reclaim, bench:pages-exhaustion, bench:redoubt-tight, bench:process-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6EmptyTableKept, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce, mutation:R6RootPageUncounted
 
 Every kernel object is charged in pages to one budget, and a charge over the budget's limit fails
 with `OutOfMemory` before anything changes. Who pays:
@@ -479,13 +479,6 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   until reboot. When its budget is destroyed, the charge moves to the parent, which keeps paying
   for those pages until it too is destroyed or the machine reboots
   ([devices](devices.md#quarantine)).
-- **The boot tree promises one page more than there is.** The boot code departs from R6:
-  `root`'s limit is every RAM page the kernel did not keep, and it carves all of them into
-  `system`, `users` and their two pages; but `root`'s own page is taken from the same frames and
-  charged to no one. So the charges can total
-  one page more than the free frames. If every budget fills to its limit, the last allocation finds
-  no frame, and the kernel stops instead of refusing the call (a breach of I14 under exhaustion).
-  Follow-up: [todo](../todo/boot-root-frame.md).
 - **Usage reads and `OutOfMemory` are signals.** A `budget_usage` read and a failed carve tell the
   reader about the budget it names, and only a budget it holds a handle to. Covert and timing
   channels are out of scope ([TENETS](../TENETS.md#threat-model)).
