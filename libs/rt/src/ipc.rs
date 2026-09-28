@@ -37,13 +37,18 @@ pub struct Buffer {
     mapping: Mapping,
 }
 
-/// A unique view of writable RAM that the kernel has mapped into this process. Private:
-/// only freshly mapped, received, or explicitly returned pages may be adopted. This view
-/// does not unmap on drop: a received lend is released by `reply`, not by dropping a Request.
-/// The reference never escapes with its storage lifetime; users get ordinary reborrows.
+/// Writable RAM that the kernel has mapped into this process, held by its address alone.
+/// Private: only freshly mapped, received, or explicitly returned pages may be adopted. It does
+/// not unmap on drop: a received lend is released by `reply`, not by dropping a Request.
+///
+/// It holds no reference to the pages, only makes one for each borrow of itself. A stored
+/// reference would stay live for as long as the `Buffer` holding it, including across the
+/// system call that hands the pages to another process: passed by value into `call`, it is
+/// still the caller's argument while the server writes the same pages, which Rust's aliasing
+/// rules forbid (Miri reports it).
 struct Mapping {
     pages: Pages,
-    bytes: &'static mut [u8],
+    len: usize,
 }
 
 impl core::fmt::Debug for Mapping {
@@ -61,19 +66,22 @@ impl Mapping {
             len <= isize::MAX as usize && pages.addr.checked_add(len).is_some(),
             "invalid mapping length"
         );
-        // SAFETY: every caller adopts only RAM just mapped writable by map_anon, received
-        // exclusively in a transfer/lend (R3/R4), or returned by call/send/reply completion.
-        // The kernel guarantees initialized contiguous pages and exclusive access; the checks
-        // above also bound the slice. Safe reborrows cannot outlive this private view, whose
-        // reference is cleared before any syscall can unmap or transfer the pages.
-        let bytes = unsafe { core::slice::from_raw_parts_mut(pages.addr as *mut u8, len) };
-        Self { pages, bytes }
+        Self { pages, len }
     }
 
-    /// End the Rust view before entering a syscall that can remove the mapping.
-    fn release(&mut self) -> Pages {
-        self.bytes = &mut [];
-        self.pages
+    fn bytes(&self) -> &[u8] {
+        // SAFETY: as for `bytes_mut`; the shared borrow of `self` rules out a mutable view
+        // alongside this one.
+        unsafe { core::slice::from_raw_parts(self.pages.addr as *const u8, self.len) }
+    }
+
+    fn bytes_mut(&mut self) -> &mut [u8] {
+        // SAFETY: every caller adopts only RAM just mapped writable by map_anon, received
+        // exclusively in a transfer/lend (R3/R4), or returned by call/send/reply completion, and
+        // stops using the `Mapping` before a syscall that can unmap or transfer the pages. The
+        // kernel guarantees initialized contiguous pages and exclusive access; `adopt` bounds
+        // the length. The view lives only as long as this borrow of `self`.
+        unsafe { core::slice::from_raw_parts_mut(self.pages.addr as *mut u8, self.len) }
     }
 }
 
@@ -91,8 +99,8 @@ impl Buffer {
     pub fn npages(&self) -> usize { self.mapping.pages.npages.get() }
 
     /// Gives up ownership without unmapping (the pages are about to be transferred).
-    pub(crate) fn into_pages(mut self) -> Pages {
-        let pages = self.mapping.release();
+    pub(crate) fn into_pages(self) -> Pages {
+        let pages = self.mapping.pages;
         core::mem::forget(self);
         pages
     }
@@ -101,17 +109,17 @@ impl Buffer {
 impl Deref for Buffer {
     type Target = [u8];
 
-    fn deref(&self) -> &[u8] { self.mapping.bytes }
+    fn deref(&self) -> &[u8] { self.mapping.bytes() }
 }
 
 impl DerefMut for Buffer {
-    fn deref_mut(&mut self) -> &mut [u8] { self.mapping.bytes }
+    fn deref_mut(&mut self) -> &mut [u8] { self.mapping.bytes_mut() }
 }
 
 impl Drop for Buffer {
     fn drop(&mut self) {
         // A failure means the pages are already gone; there is nothing else to do.
-        let pages = self.mapping.release();
+        let pages = self.mapping.pages;
         let _ = crate::handle::unmap(pages.addr, pages.npages.get() * PAGE_SIZE);
     }
 }
@@ -302,7 +310,7 @@ impl Request {
     /// The caller cannot see it change until the reply; it is hostile input all the same.
     pub fn lend(&mut self) -> &mut [u8] {
         match self.lend.as_mut() {
-            Some(mapping) => mapping.bytes,
+            Some(mapping) => mapping.bytes_mut(),
             None => &mut [],
         }
     }
@@ -340,7 +348,7 @@ impl Request {
             Ok(body) => Record::<BODY_SLOTS>(body.encode()),
             Err(e) => return Err((e, self)),
         };
-        let lend = self.lend.take().map(|mut mapping| mapping.release());
+        let lend = self.lend.take().map(|mapping| mapping.pages);
         match syscall(&Call::Reply { msg_id: self.id, body_rec: rec.addr() }) {
             Ok(Return::Reply(outcome)) => Ok(outcome.validate(handles.len()).expect("invalid reply mask")),
             Ok(_) => panic!("invalid IPC reply outcome"),
