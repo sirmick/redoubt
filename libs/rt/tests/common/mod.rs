@@ -276,11 +276,23 @@ impl Fake {
         result
     }
 
-    /// Waits for a change or the deadline; false once the deadline has passed.
+    /// Waits for a change or the deadline; false once the deadline has passed. A wait with no
+    /// deadline (`FOREVER`) that sees nothing change anywhere in this kernel for [`STUCK`] panics:
+    /// the test is stuck (a server that ended early, a reply never sent), and fails naming it
+    /// rather than hanging the run. Load slows a test's progress; it does not stop every change.
     fn wait<'a>(&self, guard: &mut Option<MutexGuard<'a, State>>, deadline: Option<Instant>) -> bool {
         let g = guard.take().unwrap();
         match deadline {
-            None => *guard = Some(self.changed.wait(g).unwrap_or_else(|e| e.into_inner())),
+            None => {
+                let (g, waited) = self.changed.wait_timeout(g, STUCK).unwrap_or_else(|e| e.into_inner());
+                if waited.timed_out() {
+                    drop(g);
+                    panic!(
+                        "a FOREVER wait saw no change in the fake kernel for {STUCK:?}: the test is stuck"
+                    );
+                }
+                *guard = Some(g);
+            }
             Some(deadline) => {
                 let now = Instant::now();
                 if now >= deadline {
@@ -314,6 +326,10 @@ fn lookup(s: &State, pid: usize, h: Handle) -> Result<Object, Error> {
 
 /// The endpoint `h` names in `pid`, or `WrongObject` if it names a device.
 fn as_endpoint(s: &State, pid: usize, h: Handle) -> Result<Endpoint, Error> { lookup(s, pid, h)?.endpoint() }
+
+/// How long a wait with no deadline may see nothing change before the test is called stuck: far
+/// beyond any step of any test here, however loaded the machine.
+const STUCK: Duration = Duration::from_secs(60);
 
 fn deadline(timeout: u64) -> Option<Instant> {
     (timeout != FOREVER).then(|| Instant::now() + Duration::from_micros(timeout))
