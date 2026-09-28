@@ -90,7 +90,6 @@
   - [The vendored crates under Miri](todo/miri-vendored-unsafe.md)
   - [Records at a device mapping](todo/mmio-record-frames.md)
   - [The code path's search order](todo/module-search-order.md)
-  - [The 9P skeleton's rollback on a discarded reply](todo/ninep-discard-rollback-test.md)
   - [Freeing empty page tables](todo/page-table-freeing.md)
   - [RAM beyond the physmap](todo/physmap-ram-bound.md)
   - [PID pool pinning](todo/pid-pool-pinning.md)

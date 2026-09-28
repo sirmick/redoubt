@@ -117,8 +117,7 @@ page.
      [paths the docs checker names that no longer exist](../todo/doccheck-stale-paths.md); and
      [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
      trusted crates from growing unseen.
-   - **Servers:** [the 9P skeleton's rollback on a discarded reply](../todo/ninep-discard-rollback-test.md),
-     [compiled-in bucket counts](../todo/server-bucket-counts.md),
+   - **Servers:** [compiled-in bucket counts](../todo/server-bucket-counts.md),
      [consoled's interrupt name](../todo/consoled-irq-name.md),
      [consoled's refused-request handles](../todo/consoled-unknown-request-handles.md),
      [host tests the bench does not run](../todo/host-tests-in-bench.md),

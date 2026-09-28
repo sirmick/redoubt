@@ -236,7 +236,7 @@ an R-message sent to a server is refused, and nothing a vector sends mints a con
 
 ### Replies and rollback
 
-Status: built · partly tested: the rollback on a discarded reply is tested through unmint and keyd's grant, not through the 9P skeleton's serve path · tested: host:redoubt-rt::what_was_minted_here_can_be_undone, host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error
+Status: built · tested: bench:ninep-newconn-discard, host:redoubt-rt::what_was_minted_here_can_be_undone, host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error
 
 A successful `reply` says `delivered` or `discarded`, and which of the reply's handle slots were
 installed in the caller ([IPC](../kernel/ipc.md#how-a-call-completes)). Reply success is not
@@ -254,9 +254,9 @@ outcome is known:
 
 Rollback reaches only provisional records: a file write already made stays made. An operation
 that makes more than one resource needs an explicit policy for each: which of them a missing slot
-rolls back. A bench case that
-makes the skeleton's `new_connection` replies undeliverable is a follow-up:
-[todo](../todo/ninep-discard-rollback-test.md).
+rolls back. The bench attacks the skeleton's own serve path: a client whose handle table is full
+has every `new_connection` reply's capability dropped by the kernel, more times than its bucket
+holds, and the server's tables show each one rolled back (`ninep-newconn-discard`).
 
 **`finish`** is the one place a call is finished, for 9P, `ninep_common` and typed protocols
 alike. It closes the handles that do not travel before replying, so a caller holding its reply
