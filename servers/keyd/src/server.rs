@@ -59,8 +59,8 @@ pub const ALL_GRANTS: u64 = 0;
 ///
 /// - `buckets`: the (account, label set)s `keyd` serves at once — `sshd` and the steward (account 0, one
 ///   bucket each by badge), and a bucket per logged-in principal and per labelled session of one. Sized for
-///   more than milestone 1 has, so the cap does not bind in normal use; the count is compiled in
-///   rather than taken from the manifest (docs/todo/server-bucket-counts.md).
+///   more than milestone 1 has, so the cap does not bind in normal use; the count is compiled in rather than
+///   taken from the manifest (docs/todo/server-bucket-counts.md).
 /// - `in_flight` is 0: no call is ever parked here; every request is answered as it is taken.
 /// - `files` is 0: `keyd` has no files.
 /// - `state`: capabilities `grant` has made and `release` has not freed.

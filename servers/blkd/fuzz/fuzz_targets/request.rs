@@ -3,8 +3,8 @@
 //!
 //! 1. every request is answered — with a reply or an error code — and none panics;
 //! 2. no address outside the DMA region is ever named (`FakeDevice::strayed`);
-//! 3. nothing a client sends makes `blkd` grow: it holds one buffer and one range table, and a
-//!    sequence of any length leaves both the size they started.
+//! 3. nothing a client sends makes `blkd` grow: it holds one buffer and one range table, and a sequence of
+//!    any length leaves both the size they started.
 //!
 //! A sequence rather than one request, because the state that could go wrong is what one request
 //! leaves for the next: the DMA buffer, the reply scratch, and whether the device has been marked
@@ -77,8 +77,8 @@ fuzz_target!(|data: &[u8]| {
         device.set_policy(policy_from(&mut || bytes.u8()));
         let words = [bytes.u64(), bytes.u64(), bytes.u64(), bytes.u64()];
         let badge = match bytes.u8() % 4 {
-            0 => 1,                    // GPT entry 0
-            1 => 2,                    // GPT entry 1
+            0 => 1,                     // GPT entry 0
+            1 => 2,                     // GPT entry 1
             2 => u64::from(bytes.u8()), // often an unused entry, sometimes past the end
             _ => bytes.u64(),
         };

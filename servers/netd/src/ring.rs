@@ -44,7 +44,6 @@ pub const USED_IDX_OFF: usize = USED_OFF + 2;
 pub const USED_RING_OFF: usize = USED_OFF + 4;
 const USED_BYTES: usize = 6 + USED_ELEM_BYTES * QUEUE_SIZE as usize;
 
-
 /// The slots start on their own page, so a device writing past a slot lands in slots `netd`
 /// already treats as hostile rather than on the rings.
 pub const SLOTS_OFF: usize = PAGE_SIZE;
