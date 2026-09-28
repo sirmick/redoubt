@@ -1,0 +1,14 @@
+description = "A deadline's whole destruction is billed to the dying budget's parent (R10, R12): a creator flooding its own budget with empty weight-0 deadline budgets pays for them, and an equal-weight victim keeps half (virtual time)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+programs = ["deadline-flood-billed"]
+timeout_secs = 600
+expect = [
+    '^\[deadline-flood\] ok: 16 deadlines a round',
+    '^\[deadline-flood\] ok: 64 deadlines a round',
+    '^\[deadline-flood\] ok: the creator',
+    '^DEADLINE-FLOOD-BILLED TEST PASSED$',
+]
+forbid = ['\[deadline-flood\] FAIL', 'PANIC']
+poweroff = true

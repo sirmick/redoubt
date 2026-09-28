@@ -103,8 +103,9 @@ fn running() -> Option<redoubt_layout::Pid> {
 /// deadline fired (a preemption point, R12). Takes the scheduler only: destroying a budget
 /// borrows the memory manager in phases (`process.rs`, Locks).
 ///
-/// Each item's handling is billed to its own budget (`sched::bill`): a timeout to its thread's,
-/// a deadline to the dying budget (whose debt then moves up). So is the walk that found it: a
+/// Each item's handling is billed (`sched::bill`): a timeout to its thread's budget, and a
+/// deadline, the whole destruction, to the dying budget's parent once its carve is back, or the
+/// nearest ancestor with free weight (`destroy_subtree`, R10). So is the walk that found it: a
 /// budget with many timeouts due at once pays for the walk each one costs. The one walk that
 /// finds nothing more is the kernel's, so an entry does at most one walk nobody pays for.
 pub fn expire_due(ss: &mut ProcessTable) -> bool {
@@ -133,13 +134,9 @@ pub fn expire_due(ss: &mut ProcessTable) -> bool {
                     crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started));
                 }
             });
-        } else if let Some((_, id, frame)) = budget {
-            MemoryManager::with_mut(|mm| {
-                let b = crate::handle::BudgetRef { frame, id };
-                crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started));
-                mm.mark_dying(frame)
-            });
-            crate::budget::destroy_subtree(ss, frame, running(), true);
+        } else if let Some((_, _, frame)) = budget {
+            MemoryManager::with_mut(|mm| mm.mark_dying(frame));
+            crate::budget::destroy_subtree(ss, frame, running(), Some(started));
             destroyed = true;
         }
     }

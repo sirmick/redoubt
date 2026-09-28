@@ -30,7 +30,6 @@ gap: the page's section, the claim, and what no case attacks.
 ### budgets.md
 - R6 (charging): an endpoint's page charge is attacked only in the model; the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case.
 - R10 (destruction): timeouts before deadlines at an equal instant is attacked only in the model (`ExpireBudgetsFirst`).
-- Deadlines: floods of weight-0 deadline budgets past the 64 of `sched-timer-flood` are not attacked ([deadline destruction billing](deadline-destroy-billing.md)).
 - Class is trust, not order: that the scheduler never reads class is argued from the code.
 - Deadlines: a process entering the kernel in a tight loop to put its deadline off is not attacked.
 - Root, system and users: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`).
@@ -79,7 +78,6 @@ gap: the page's section, the claim, and what no case attacks.
 - The current minimum and ties: clauses 1 and 4 are checked on the target only when a run happens to tie; the host tests and model attack them.
 - Charging: interrupt handling billed to the device object's owner is not attacked.
 - Responsiveness: `budget_destroy` call-to-return is recorded, not asserted.
-- Charging: floods of weight-0 budgets with deadlines beyond the 64 of `sched-timer-flood` are not attacked (their destruction is billed to nobody).
 - R12 (scheduling): the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range.
 - R23 (no test channels): no case builds the production kernel and scans it for the trace.
 - Failure and restart: a picked thread dying before the switch, and a full queue, are not attacked.

@@ -618,7 +618,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
 /// | gaming | (d) sub-slice and large-weight short bursts cannot buy more than the weight |
 /// | idle gap | (c) a sleeper waking into an empty queue cannot bank credit |
 /// | exit churn | (f) exiting on the CPU is charged |
-/// | budget churn | (g) create, run, destroy (blocking, spinning-parent, deadline-timed, parking) gains nothing |
+/// | budget churn | (g) create, run, destroy (blocking, spinning-parent, deadline-timed and billed, parking) gains nothing |
 /// | carve inflation | (h) carving moves share, never duplicates it |
 /// | debt lift | (i) a light grandchild's work reaches a shared parent normalized |
 /// | idempotence | (j) create then destroy with no run moves nothing; (l) a weight change folds first |
@@ -809,7 +809,9 @@ fn sched_exit_churn(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
 /// (g) Budget churn under the attacker's own budget P (weight 100) against a victim V (100):
 /// a weight-1 child is created, runs a slice and is destroyed, over and over. Variants: P blocked;
 /// P spinning and destroying at the end of its own slice; destruction timed just after P's slice
-/// (a deadline); fresh intermediates that park the children. The subtree gets at most half.
+/// (a deadline, whose slice of kernel work P pays for); fresh intermediates that park the
+/// children. The subtree gets at most half, and the victim half of all the time, the destructions'
+/// included.
 fn sched_budget_churn(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
     let variant = rng.below(4);
     budget_churn_variant(rng, mutation, variant)
@@ -859,7 +861,19 @@ pub fn budget_churn_variant(rng: &mut Rng, mutation: Option<Mutation>, variant: 
         };
         if destroy {
             sim.s.thread_blocked(c, (c, 0));
-            sim.s.destroy_budget(c);
+            if variant == 2 {
+                // A deadline: the carve comes back, the kernel spends a slice destroying the
+                // child, and its payer is billed for all of it.
+                sim.s.return_carve(c);
+                let payer = sim.s.destruction_payer(c);
+                sim.s.destroy_budget(c);
+                sim.now += SLICE;
+                if let Some(payer) = payer {
+                    sim.s.bill_destruction(payer, SLICE);
+                }
+            } else {
+                sim.s.destroy_budget(c);
+            }
             sim.s.reconcile();
             child = None;
         }
@@ -1280,5 +1294,11 @@ mod churn_variants {
                 "variant {v}"
             );
         }
+    }
+    /// A deadline's destruction takes the machine's time: billed to no budget, it comes out of
+    /// the victim's half.
+    #[test]
+    fn unbilled_deadline_work_is_caught() {
+        assert!(caught(Mutation::R12DeadlineWorkUnbilled, 2), "the deadline variant must see unbilled work");
     }
 }

@@ -113,7 +113,7 @@ flowchart TD
 
 ### Charging
 
-Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case, and the kernel departs from whole-cost billing on a deadline's destruction (Residual risks) · tested: bench:sched-sleep-gaming, bench:sched-exit-churn, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-destroy-billing, host:redoubt-stride::a_split_charge_equals_the_whole, host:redoubt-stride::every_charge_counts_at_any_weight, host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12NoMinimumCharge, mutation:R12FoldAtNewWeight
+Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested: bench:sched-sleep-gaming, bench:sched-exit-churn, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-destroy-billing, bench:deadline-flood-billed, host:redoubt-stride::a_split_charge_equals_the_whole, host:redoubt-stride::every_charge_counts_at_any_weight, host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12NoMinimumCharge, mutation:R12FoldAtNewWeight, mutation:R12DeadlineWorkUnbilled
 
 Runtime is counted in timebase ticks at the trap boundary. There are two ways into user mode
 (resuming a thread, returning from a call) and one way out (the trap handler). On every trap from
@@ -149,7 +149,7 @@ Kernel time is billed as well:
 
 The top of a destruction returns its carve to its parent before any of the destruction's work is
 billed. So the parent, often the caller of `budget_destroy`, pays for the destruction at the
-weight it has once the child is gone (on a deadline the kernel departs from this; see below), not at the sliver it kept while the child held the rest.
+weight it has once the child is gone, not at the sliver it kept while the child held the rest.
 In `bench:sched-destroy-billing` a parent that kept 10 of 1000 destroys the child holding 990 and
 is back on the CPU within twice the destruction's cost and four slices; billed at 10, it would wait
 for seconds.
@@ -157,14 +157,18 @@ for seconds.
 Every destruction's whole cost is billed to someone. For `budget_destroy` that is the caller, as
 the call's own kernel time. For a deadline it is the top's parent, after its carve returns, or the
 nearest ancestor with free weight above 0 if the parent has none; `root` always has. No part of a
-destruction is billed to nobody ([R10 (destruction)](budgets.md#r10-destruction)). The kernel
-departs from this on a deadline: it bills the dying budget up to the lift, whose debt then moves
-to its parent ([Inheritance](#inheritance)), and the rest to nobody (Residual risks).
+destruction is billed to nobody ([R10 (destruction)](budgets.md#r10-destruction)). On a
+deadline the kernel names the payer once the carve is back, and bills it after the subtree is
+gone for everything from the walk that found the deadline. In `bench:deadline-flood-billed` a
+creator floods its own budget with empty weight-0 budgets on short deadlines: its count falls as
+the flood grows from 16 to 64 a round, and an equal-weight victim keeps its half. With the bill
+planted out, the victim fell to 137 of 1000.
 
 A server that works for a caller spends its own budget's CPU: no time is donated
 ([Residual risks](#residual-risks)). CPU charging is separate from page charging
-([R6 (charging)](budgets.md#r6-charging)). The model charges runtime only; billing kernel work is the
-kernel's alone, and the boot cases are its only check.
+([R6 (charging)](budgets.md#r6-charging)). The model charges runtime, and a deadline's
+destruction as work billed to its payer (`R12DeadlineWorkUnbilled`); billing other kernel work is
+the kernel's alone, and the boot cases are its only check.
 
 ### Inheritance
 
@@ -341,7 +345,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range, and the kernel departs from it in three scans of every kernel-object frame (the PID draw, the search for an owed exit notice, the search for an interrupt's IRQ object); a deadline's destruction is billed only in part · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:map-anon-search-bound, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge
+Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range, and the kernel departs from it in three scans of every kernel-object frame (the PID draw, the search for an owed exit notice, the search for an interrupt's IRQ object) · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:deadline-flood-billed, bench:map-anon-search-bound, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge, mutation:R12DeadlineWorkUnbilled
 
 A budget's CPU follows its free weight, in one queue with no priority. While it has a runnable
 thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No
@@ -452,14 +456,6 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   to the IRQ object's owner), but every wake waits for it. Follow-up:
   [todo](../todo/kernel-scan-bounds.md). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
-- **A deadline's last steps are billed to nobody.** The kernel departs from the whole-cost
-  billing rule ([Charging](#charging)). On a deadline the dying budget is billed for
-  the destruction's work up to the lift. The rest (closing handles in every table, freeing
-  frames) comes after the bill and is charged to no budget. A budget of free weight 0 is charged
-  nothing at all, so the deadline of an empty revocation scope costs its creator only the
-  `budget_create`. The 64 staggered weight-0 deadlines of `bench:sched-timer-flood` leave the
-  victim its half; larger floods are not attacked. Follow-up:
-  [todo](../todo/deadline-destroy-billing.md).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
   decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to

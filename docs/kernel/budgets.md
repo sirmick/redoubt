@@ -350,7 +350,7 @@ by itself.
 
 ### R10 (destruction)
 
-Status: built · partly tested: destroying the budget a device object is charged to, or an endpoint's owner while a receiver waits on it, is not checked by a case, and no program checks `receive` returning `Dead`; the equal-instant order of timeouts before deadlines is attacked only in the model; a deadline's destruction is billed only in part, and step 8 moves no PID count (see Residual risks) · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-deadline, bench:redoubt-revoke, bench:process-attack, bench:sched-destroy-billing, bench:dma-reset-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:ExpireBudgetsFirst
+Status: built · partly tested: destroying the budget a device object is charged to, or an endpoint's owner while a receiver waits on it, is not checked by a case, and no program checks `receive` returning `Dead`; the equal-instant order of timeouts before deadlines is attacked only in the model; step 8 moves no PID count (see Residual risks) · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:sched-destroy-billing, bench:dma-reset-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:ExpireBudgetsFirst
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
@@ -403,10 +403,9 @@ its lend consumed, not `Dead` with it returned ([timer](timer.md#expiry)).
 Every destruction's whole cost is billed to someone. For `budget_destroy` that is the caller, as
 the call's own kernel time. For a deadline it is B's parent, after its carve returns, or the
 nearest ancestor with free weight above 0 if the parent has none; `root` always has. No part of a
-destruction is billed to nobody. The deadline path departs from this: it bills B for its expiry
-walk and for steps 2 to 4, which step 5 moves up with B's debt, and the mark (step 1) and
-steps 5 to 9 to nobody; a B with free weight 0 pays
-nothing at all ([Residual risks](#residual-risks)).
+destruction is billed to nobody. On a deadline the kernel names the payer once step 1 has
+returned B's carve, and after step 9 bills it for everything from the expiry walk that found the
+deadline on, whatever B's own free weight (`bench:deadline-flood-billed`).
 
 ```mermaid
 stateDiagram-v2
@@ -450,14 +449,6 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   machine waits for it. It dominates driver-wake and lease-end latency whenever a lease ends,
   and must be brought well inside the target before the steward is built, in
   M1 (separation and containment). Follow-up: [todo](../todo/budget-destroy-cost.md).
-- **Part of a deadline's destruction is billed to nobody.** The kernel departs from R10's
-  billing rule: a deadline bills the dying budget only up to the lift, and the rest (closing
-  handles everywhere, freeing frames) to no budget; a budget with free weight 0 is not billed at
-  all. A creator can make many empty weight-0 budgets with short deadlines, one `budget_create`
-  each, and have the machine spend time no budget pays for. The 64 staggered deadlines of
-  `bench:sched-timer-flood` leave a victim its share; larger floods are not attacked
-  ([scheduling](scheduling.md#residual-risks)). Follow-up:
-  [todo](../todo/deadline-destroy-billing.md).
 - **Untaken exit notices hold PIDs outside every process limit.** The kernel departs from R6's
   PID count: an ended process stops counting against any process limit while its PID stays held
   until its notice is taken, and a destruction moves no count. One creator can hold every free PID of the global pool

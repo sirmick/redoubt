@@ -219,6 +219,34 @@ impl Scheduler {
         self.budgets.get_mut(&b).unwrap().returned = true;
     }
 
+    /// Who pays for `top`'s destruction when its deadline passes (R10, R12): its parent, or else
+    /// the nearest ancestor with stride weight above 0, or the root if none has. Asked once
+    /// [`Scheduler::return_carve`] has given `top`'s carve back.
+    pub fn destruction_payer(&self, top: u64) -> Option<u64> {
+        let mut payer = self.budgets.get(&top)?.parent?;
+        while self.weight(payer) == 0 {
+            let Some(up) = self.budgets.get(&payer).and_then(|e| e.parent) else { break };
+            payer = up;
+        }
+        Some(payer)
+    }
+
+    /// The kernel spent `work` destroying a budget on its deadline: all of it is billed to the
+    /// payer ([`Scheduler::destruction_payer`]) once the subtree is gone, as runtime at the
+    /// payer's weight then (the running budget's joins its pending runtime).
+    pub fn bill_destruction(&mut self, payer: u64, work: u64) {
+        if self.broken(Mutation::R12DeadlineWorkUnbilled) {
+            return;
+        }
+        match self.current.as_mut() {
+            Some(c) if c.budget == payer => c.pending = c.pending.saturating_add(work),
+            _ => {
+                self.charge(payer, work);
+                self.raise_floor();
+            }
+        }
+    }
+
     /// Budget `b` is destroyed; its descendants already were (bottom-up, R10 order), and every
     /// thread in it has already been blocked or removed. Its work since entry moves to its parent,
     /// and its carved weight returns there.

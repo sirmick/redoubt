@@ -83,6 +83,9 @@ pub enum Role {
     /// deadlines; report [`Stats::TIMER_WAKE`], [`Stats::DESTROY`], [`Stats::DECISION_WAKE`] and
     /// [`Stats::DEADLINE`].
     Steward = 15,
+    /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from 200 µs
+    /// ahead, each round then counting for 1 ms; report the count.
+    DeadlineFlood = 19,
 }
 
 impl Role {
@@ -107,6 +110,7 @@ impl Role {
             TieReceiver,
             WakeDelay,
             DestroyThenCount,
+            DeadlineFlood,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -396,6 +400,18 @@ pub extern "C" fn child(arg: usize) -> ! {
             TOTAL.load(SeqCst) as u64
         }
         Some(Role::ProcessChurn) => process_churn(end),
+        Some(Role::DeadlineFlood) => {
+            let mut n = 0;
+            while ticks() < end {
+                let now = rd::time_now().unwrap_or(0);
+                for i in 0..param(0) {
+                    let spec = rd::BudgetSpec { deadline: now + 200 + i, ..rd::spec(1, 0, 0) };
+                    let _ = rd::create(3, &spec);
+                }
+                n += spin_until((ticks() + 1_000 * tpu).min(end));
+            }
+            n
+        }
         Some(Role::BudgetChurn) => budget_churn(end, tpu),
         Some(Role::TimerFlood) => {
             let threads = param(2).max(1) as usize;

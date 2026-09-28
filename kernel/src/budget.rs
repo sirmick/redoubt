@@ -831,6 +831,19 @@ impl MemoryManager {
         }
     }
 
+    /// Who pays for `top`'s destruction when its deadline passes (R10, R12): its parent, or else
+    /// the nearest ancestor whose free weight is above 0, or `root` if none is. Asked after
+    /// `mark_dying`, so the parent's free weight counts the carve `top` gave back. The walk is at
+    /// most `MAX_DEPTH` long. `None` only for a top with no parent (`root`, which has no deadline).
+    pub fn destruction_payer(&self, top: BudgetFrame) -> Option<BudgetRef> {
+        let mut payer = self.budget(top).parent?;
+        while self.free_weight_of(payer) == 0 {
+            let Some(up) = self.budget(payer).parent else { break };
+            payer = up;
+        }
+        Some(BudgetRef { frame: payer, id: self.budget_id(payer) })
+    }
+
     /// Whether `pid` lives in a budget that is being destroyed.
     pub fn process_is_doomed(&self, pid: Pid) -> bool {
         self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
@@ -948,9 +961,18 @@ impl MemoryManager {
 /// caller last if it is one of them; the process objects charged to it are freed; messages in
 /// flight are failed or abandoned and its endpoints and devices destroyed; then its handles are
 /// swept and its frames freed. `caller` is the process whose call or whose interrupted run this
-/// is, if any. Returns whether the caller is gone (it must not be resumed).
-pub fn destroy_subtree(ss: &mut ProcessTable, top: BudgetFrame, caller: Option<Pid>, bill: bool) -> bool {
-    let started = crate::sched::now_ticks();
+/// is, if any. `deadline_since` is the tick a deadline's handling began, whose whole cost is
+/// billed at the end to the payer (`destruction_payer`); `None` for `budget_destroy`, whose caller
+/// pays for the call as system-call time. Returns whether the caller is gone (it must not be
+/// resumed).
+pub fn destroy_subtree(
+    ss: &mut ProcessTable,
+    top: BudgetFrame,
+    caller: Option<Pid>,
+    deadline_since: Option<u64>,
+) -> bool {
+    // Named now, while `top` still links to its parent, and after `mark_dying` gave its carve back.
+    let payer = deadline_since.and_then(|_| MemoryManager::with(|mm| mm.destruction_payer(top)));
     #[cfg(feature = "sched-trace")]
     let top_id = MemoryManager::with(|mm| mm.budget_id(top));
     #[cfg(feature = "sched-trace")]
@@ -990,14 +1012,13 @@ pub fn destroy_subtree(ss: &mut ProcessTable, top: BudgetFrame, caller: Option<P
     // message sent through a handle stamped with it fails its sender with `Dead`.
     MemoryManager::with_mut(|mm| {
         crate::message::budgets_dying(ss, mm);
-        // A deadline's work so far is the dying budget's own, and moves up with its debt.
-        if bill {
-            let top_ref = BudgetRef { frame: top, id: mm.budget(top).id };
-            crate::sched::bill(mm, top_ref, crate::sched::now_ticks().saturating_sub(started));
-        }
         // Each budget's work since entry moves to its parent, bottom-up, and its carve returns.
         mm.lift_dying(top);
         mm.destroy_marked(top);
+        // A deadline's whole cost, the walk that found it included, is its payer's (R10, R12).
+        if let (Some(started), Some(payer)) = (deadline_since, payer) {
+            crate::sched::bill(mm, payer, crate::sched::now_ticks().saturating_sub(started));
+        }
     });
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);
