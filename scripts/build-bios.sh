@@ -12,6 +12,10 @@
 # The bench defaults to bios/; override with
 # RUSTSBI_PROTOTYPER / RUSTSBI_PROTOTYPER_RV32.
 #
+# The firmware logs at WARN (override with BIOS_LOG_LEVEL): its INFO banner is some 34 lines at
+# the top of every boot log, and no case reads it. The level goes in through a copy of the
+# vendored default config, so bios/ stays unedited.
+#
 # RustSBI pins its own nightly toolchain in bios/rust-toolchain.toml, which rustup selects
 # automatically.
 set -euo pipefail
@@ -31,10 +35,20 @@ if ! command -v rust-objcopy >/dev/null 2>&1; then
     cargo install --locked cargo-binutils@0.4.0
 fi
 
+config="$(mktemp --suffix=.toml)"
+trap 'rm -f "$config"' EXIT
+sed "s/^log_level = .*/log_level = \"${BIOS_LOG_LEVEL:-WARN}\"/" \
+    "$dest/firmware/prototyper/config/default.toml" > "$config"
+grep -q "^log_level = \"${BIOS_LOG_LEVEL:-WARN}\"$" "$config" || {
+    echo "error: no log_level line in the Prototyper's default config" >&2
+    exit 1
+}
+
 build() {
     local label="$1" target="$2"
-    echo "==> building Prototyper for $label ($target)"
-    ( cd "$dest" && cargo xtask prototyper build --features qemu-virt ${target:+--target "$target"} )
+    echo "==> building Prototyper for $label ($target), log level ${BIOS_LOG_LEVEL:-WARN}"
+    ( cd "$dest" && cargo xtask prototyper build --features qemu-virt --config-file "$config" \
+        ${target:+--target "$target"} )
 }
 
 # Default target (rv64, riscv64gc) needs no --target flag; rv32 is explicit.

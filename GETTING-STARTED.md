@@ -34,6 +34,8 @@ Your own machine instead needs:
 Both widths boot only the vendored RustSBI firmware; there is no fallback to QEMU's own. Skip
 this if `bios/target/` is already built for both widths. A checkout elsewhere (a worktree) can
 point at built images with `RUSTSBI_PROTOTYPER` and `RUSTSBI_PROTOTYPER_RV32`.
+The firmware logs at WARN, so a boot log starts at the loader's first line; set
+`BIOS_LOG_LEVEL=INFO` when building to see its banner and platform report.
 
 ## Build
 
