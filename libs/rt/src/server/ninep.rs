@@ -449,10 +449,7 @@ impl<S: FileServer> NineServer<S> {
 
     /// Handles one call and replies to it: 9P, or `ninep_common`; any other opcode is malformed.
     pub fn serve(&mut self, request: Request) -> Result<(), Error> {
-        self.serve_with(request, |_, request| {
-            finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
-                .map(|_| ())
-        })
+        self.serve_with(request, |_, request| refuse_malformed(request))
     }
 
     /// Handles one call and replies to it: 9P and `ninep_common` here, and a typed opcode above
@@ -471,10 +468,7 @@ impl<S: FileServer> NineServer<S> {
             None => Ok(()),
             // A server bug (a wait without `serve_parking`), answered rather than left
             // hanging: the caller gets a refusal instead of waiting for a reply that never comes.
-            Some(request) => {
-                finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
-                    .map(|_| ())
-            }
+            Some(request) => refuse_malformed(request),
         }
     }
 
@@ -1180,7 +1174,8 @@ impl<S: FileServer> NineServer<S> {
 /// with it: a read it asked to hold ([`Read::Wait`]) that it has no room to park. The
 /// T-message is still at the front of the lend, so the `Rerror` carries its tag and the client
 /// matches the reply to its request as usual; a lend too small even for that is answered with
-/// [`MALFORMED`], as a 9P call that cannot be answered in its buffer always is.
+/// [`MALFORMED`], as a 9P call that cannot be answered in its buffer always is. Any handle the
+/// call still carries is closed.
 pub fn refuse(mut request: Request, error: NineError) -> Result<(), Error> {
     let lend = request.lend();
     let room = lend.len().min(MSIZE);
@@ -1190,7 +1185,16 @@ pub fn refuse(mut request: Request, error: NineError) -> Result<(), Error> {
         Ok(_) => WORDS_9P,
         Err(_) => MALFORMED,
     };
-    finish(request, &Outcome { words, send: Handles::new(), close: Handles::new() }).map(|_| ())
+    let close = super::typed::carried(&request);
+    finish(request, &Outcome { words, send: Handles::new(), close }).map(|_| ())
+}
+
+/// Answers `request` as malformed and closes every handle it carried: what a server answers a
+/// typed opcode it does not serve. Never the raw [`Request::reply`], which would leave those
+/// handles open in this process with no owner, outside admission.
+pub fn refuse_malformed(request: Request) -> Result<(), Error> {
+    let close = super::typed::carried(&request);
+    finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close }).map(|_| ())
 }
 
 /// Refuses unknown mode bits, and anything but plain reading for a directory.

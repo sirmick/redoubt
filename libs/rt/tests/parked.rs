@@ -111,12 +111,19 @@ fn parked_calls_are_served_abandoned_and_expired() {
     let a_call = log[served].1;
     assert!(served < log.iter().position(|e| *e == ("reply", a_call)).unwrap());
 
-    // C gives up on its parked call: the server is told and replies at once, freeing it.
+    // C gives up on its parked call: the server is told and replies at once, freeing it, and
+    // closes the handles the call brought.
+    let handles_before = f.held(server).0;
     let gave_up = f.run(c, move || {
-        let r = Endpoint::from_handle(hc).call(&[WAIT, 0, 0, 0], &[], None, 100_000);
+        let carried = [Endpoint::create().unwrap().handle(), Endpoint::create().unwrap().handle()];
+        let r = Endpoint::from_handle(hc).call(&[WAIT, 0, 0, 0], &carried, None, 100_000);
         u32::from(r.status == Err(Error::Timeout))
     });
     assert_eq!(gave_up.join().unwrap(), 1);
+    while f.open_calls(server) != 0 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(f.held(server).0, handles_before, "the abandoned call's handles were closed");
     // D waits past the server's deadline: its call is answered with a timeout, under `serve`.
     let expired = f.run(d, move || {
         Endpoint::from_handle(hd).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[0]

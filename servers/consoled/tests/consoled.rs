@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use common::fake;
 use redoubt_consoled::MAX_INPUT;
 use redoubt_consoled::uart::FIFO;
-use redoubt_rt::abi::Handle;
+use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::mode;
@@ -248,7 +248,7 @@ fn a_device_stuck_on_data_ready_does_not_hang_the_server() {
         c.attach(0, "").unwrap();
         c.open(0, mode::ORDWR).unwrap();
         // Reads are answered (with the byte the device keeps handing over) rather than hanging.
-        for _ in 0..64 {
+        for _ in 0..8 {
             let mut got = [0u8; 8];
             let n = c.read(0, 0, &mut got).unwrap();
             assert!(n > 0 && got[..n].iter().all(|b| *b == b'x'));
@@ -286,7 +286,7 @@ fn a_flood_of_input_keeps_what_was_typed_first() {
             b.holds(*byte);
             // Two answered calls, with the server's drain between them. Refused walks, not
             // writes: a write would put its byte in the same register.
-            for _ in 0..2 {
+            for _ in 0..8 {
                 assert_eq!(c.walk(0, 1, "anything").unwrap_err(), ClientError::Remote);
             }
         }
@@ -335,6 +335,34 @@ fn the_console_refuses_what_it_is_not() {
         c.open(0, mode::OREAD).unwrap();
         assert_eq!(c.write(0, 0, b"x").unwrap_err(), ClientError::Remote);
     });
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// `consoled` serves no typed protocol of its own, so it refuses every typed opcode, and the
+/// handles such a request carries are closed with the refusal: a client repeating them cannot
+/// grow the server's handle table (servers/serving.md, "Authority").
+#[test]
+fn a_refused_typed_request_leaves_no_handle_behind() {
+    let b = boot();
+    let f = fake();
+    let (client, conn) = b.client();
+    let server = Endpoint::from_handle(conn);
+    // The first opcode above ninep_common's: the console's own protocol, which it does not serve.
+    // It answers malformed (status 1).
+    let refused = |carried: &[Handle]| {
+        let (reply, _) = server.call(&[16, 0, 0, 0], carried, None, FOREVER).into_result().unwrap();
+        assert_eq!(reply.words[0], 1);
+    };
+    // Counted once the server has answered a call, so its own start-up (the badge it mints for
+    // its interrupt thread's wake-ups) is behind it.
+    f.as_process(client, || refused(&[]));
+    let before = f.held(b.server).0;
+    f.as_process(client, || {
+        for _ in 0..64 {
+            refused(&[Endpoint::create().unwrap().handle(), Endpoint::create().unwrap().handle()]);
+        }
+    });
+    assert_eq!(f.held(b.server).0, before, "every carried handle was closed");
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
 

@@ -324,6 +324,9 @@ impl Request {
     /// The handles are **copied** into the caller (kernel/ipc.md, "Messages"): this process keeps
     /// its own, and must close any it does not mean to keep (a handle minted for the caller,
     /// say), or its handle table grows by one per reply.
+    /// It closes none of the handles the request carried either: a server answers through
+    /// `server::typed::finish` or a refusal built on it (servers/serving.md, "Authority"), which
+    /// do.
     ///
     /// On failure the request comes back with the error, so the server can still answer it:
     /// words or handles that cannot be encoded (more than `MAX_MSG_HANDLES` handles, or on rv32 a

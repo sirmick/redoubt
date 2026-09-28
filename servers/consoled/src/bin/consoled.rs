@@ -32,7 +32,7 @@ use redoubt_consoled::uart::Uart;
 use redoubt_rt::abi::{Error, FOREVER, Handle, MemFlags, PAGE_SIZE};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Event, Request};
-use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse};
+use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse, refuse_malformed};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::startup::Startup;
 
@@ -120,9 +120,7 @@ fn serve_or_park(
     now: u64,
 ) -> Result<(), Error> {
     // `consoled` serves no typed protocol of its own: only 9P and `ninep_common`.
-    let held = server.serve_parking(request, |_, request| {
-        request.reply(&redoubt_rt::server::MALFORMED, &[]).map(|_| ()).map_err(|(e, _)| e)
-    })?;
+    let held = server.serve_parking(request, |_, request| refuse_malformed(request))?;
     let Some(request) = held else { return Ok(()) };
     let charge = server.charge_of(&request.caller);
     match parked.park(server.admission_mut(), request, charge, (), now) {

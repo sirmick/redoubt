@@ -119,10 +119,10 @@ page.
      trusted crates from growing unseen.
    - **Servers:** [compiled-in bucket counts](../todo/server-bucket-counts.md),
      [consoled's interrupt name](../todo/consoled-irq-name.md),
-     [consoled's refused-request handles](../todo/consoled-unknown-request-handles.md),
      [host tests the bench does not run](../todo/host-tests-in-bench.md),
      [loader stub test coverage](../todo/loader-stub-coverage.md),
-     [raw memory calls beside the runtime](../todo/raw-syscall-runtime-audit.md).
+     [raw memory calls beside the runtime](../todo/raw-syscall-runtime-audit.md),
+     [a request answered outside `finish`](../todo/request-raw-reply.md).
    - **beamlet:** [the code path's search order](../todo/module-search-order.md).
    - **The documentation switch-over**, which rewrites process references in code and case
      descriptions: [process names in verdicts and case descriptions](../todo/verdict-strings.md).

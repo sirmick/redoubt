@@ -294,7 +294,7 @@ or decoded again when it is served; which typed operations may park at all
 
 ## Authority
 
-Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist, host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed, host:redoubt-rt::labels_are_checked_on_every_request
+Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist, host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::a_hostile_client_does_not_hurt_the_server_or_other_clients, host:redoubt-rt::parked_calls_are_served_abandoned_and_expired, host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
 
 - **The library adds no authority.** It uses the server's own handles and the facts the kernel
   attaches to each message: badge, account and labels. It trusts nothing a request says about who
@@ -307,6 +307,26 @@ Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_tha
   badge, account and label set, and answer a stranger as they answer an id that does not exist.
 - **Unasked handles are closed.** Every handle a request carries that its protocol did not ask
   for is closed, so a client cannot grow the server's handle table.
+- **A refusal closes what it refuses.** A request is answered through `finish`, which closes the
+  handles that do not travel, or through a refusal built on it: `refuse` (a 9P `Rerror`),
+  `refuse_malformed` (a typed opcode the server does not serve: what `NineServer::serve` and
+  `consoled` answer) and `Parked::abandoned`. None of them leaves a carried handle open. The
+  places the runtime and the servers combine the raw calls (`Request::reply`, `Request::serve`,
+  `handle::close`) with the owning views (`Request`, `Delivery`, `Parked`, `NineServer`):
+  - `NineServer::serve`'s answer to a typed opcode, `serve_with`'s answer to a wait it cannot
+    hold, and `consoled`'s own-protocol callback replied raw and kept the handles: now
+    `refuse_malformed`.
+  - `refuse` and `Parked::abandoned` closed nothing; their requests had already been emptied by
+    `serve_parking`, but a server may park any request: both now close what it still carries.
+  - `finish`'s fallback reply after a rejected one: the handles were closed before the first
+    try, so it carries none. Sound.
+  - `Parked::resume`'s `Request::serve` changes which call a fault blames, not what it holds.
+    Sound.
+  - Every server's `Event::Send` arm closes the delivery's handles itself; a `Delivery` owns
+    none of them. Sound. `serve_parking` closes a held call's handles and empties its list, so
+    serving it again cannot close them twice. Sound.
+  - `Request::reply` stays public and a dropped `Request` closes nothing, so a new raw reply
+    would leak again: [todo](../todo/request-raw-reply.md).
 
 ## Security properties
 
@@ -385,6 +405,9 @@ Status: built · partly tested: the exit after a rejected fallback reply is argu
 
 ## Residual risks
 
+- **A raw reply would leak.** `Request::reply` is public and a dropped `Request` closes nothing;
+  the audit under [Authority](#authority) found no place left that answers outside `finish`, but
+  nothing enforces it: [todo](../todo/request-raw-reply.md).
 - **An undersized server is a channel.** A server sized for fewer buckets than the (account,
   label set)s it serves refuses the latecomers, which tells them others hold state: across
   accounts, and between the label sets of one account, where it is a channel out of a vault. The
