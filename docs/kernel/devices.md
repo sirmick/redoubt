@@ -218,7 +218,7 @@ Status: built · tested: bench:irq-attack, bench:device, bench:dma-rules, bench:
 
 ### R5 (interrupts)
 
-Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested: bench:uart-irq, bench:receive-bad-record, mutation:R5NoMaskOnFire, mutation:R5NoUnmaskOnReceive, mutation:R5BadRecordConsumesInterrupt
+Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested: bench:uart-irq, bench:irq-first-receive, bench:receive-bad-record, mutation:R5NoMaskOnFire, mutation:R5NoUnmaskOnReceive, mutation:R5BadRecordConsumesInterrupt
 
 When an interrupt fires, the kernel masks its source and sets the IRQ object's `fired` flag.
 `receive` on the IRQ handle unmasks the source when it begins, then returns an `interrupt`
@@ -239,9 +239,12 @@ level-triggered source still asserted when the driver receives fires again at on
 - The kernel's time handling an interrupt is billed to the budget that owns the IRQ object
   ([scheduling](scheduling.md)), not to whichever budget it interrupted.
 
-An interrupt raised while its object is masked, before the driver's first `receive`, was lost
-in one diagnostic run on QEMU; the cause is not found. Follow-up:
-[todo](../todo/irq-level-latch.md).
+An interrupt raised while its object is masked stays pending in the controller, and the unmask
+at the next `receive`, the first after a handle is handed over included, delivers it. Masking
+clears the source's enable bit and leaves its priority. Every unmask, the re-arm after a claim
+included, is that `receive`'s, and it enables the source before it writes the source's priority,
+last, because QEMU's PLIC looks at its pending sources again when a priority changes but not when
+an enable bit does.
 
 ```mermaid
 sequenceDiagram
@@ -349,8 +352,6 @@ Status: built · partly tested: destroying a device object's owner budget, and a
   per byte, not from a held level, so a kernel that never masked a fired source passes
   `uart-irq`; and QEMU accepts a completion for a masked source, so the completion order cannot
   be told apart. The mask is attacked in the model; the order is argued from the code.
-- **An interrupt can be lost before the first `receive`:** seen once on QEMU, cause not found.
-  Drivers drain their rings after every `receive`. Follow-up: [todo](../todo/irq-level-latch.md).
 - **An interrupt's kernel time is billed to the IRQ object's owner** (`system` at boot), not to
   the driver that holds the handle. Masking bounds it to one interrupt per `receive`, at the
   driver's pace.

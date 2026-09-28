@@ -73,7 +73,6 @@
   - [Clearing SUM and MXR at entry](todo/clear-sum-at-entry.md)
   - [DMA reset on rv32](todo/dma-reset-rv32.md)
   - [The kernel crate's host test target](todo/hosted-kernel-tests.md)
-  - [An interrupt before the first receive](todo/irq-level-latch.md)
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)
   - [RAM beyond the physmap](todo/physmap-ram-bound.md)
   - [The kernel's print on a panic](todo/print-panic-reentry.md)

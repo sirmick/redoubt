@@ -1,0 +1,13 @@
+description = "An interrupt raised while its object is masked reaches the first receive after the handle is handed over (R5): twenty goldfish RTC alarms, each raised with nothing receiving, each taken by a new process's first receive; with nothing raised, that receive finds nothing"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The program runs first and holds the RTC; the verdict is each driver's exit notice.
+programs = ["irq-first-receive"]
+timeout_secs = 120
+expect = [
+    '^\[irq-first-receive\] ok: with nothing raised, the first receive after a handover times out$',
+    '^\[irq-first-receive\] ok: a masked interrupt reaches the first receive after a handover: 20 of 20$',
+    '^IRQ-FIRST-RECEIVE TEST PASSED$',
+]
+forbid = ['\[irq-first-receive\] FAIL', 'PANIC']
+poweroff = true

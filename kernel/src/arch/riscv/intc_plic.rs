@@ -66,11 +66,19 @@ pub fn init() {
     plic().set_threshold(context(), 0);
 }
 
+/// Enable a source, then set its priority. The order matters on QEMU's PLIC, which re-evaluates
+/// its output when a priority, a pending bit or a claim changes but not when an enable bit does:
+/// a source that became pending while masked would stay undelivered after its unmask until some
+/// other source changed. Writing the priority after the enable makes the PLIC look again. This is
+/// the only enable write, so every unmask (the re-arm after a claim is `receive`'s) goes through
+/// it.
 pub fn enable_irq(irq_no: usize) {
-    plic().set_priority(irq_no as u32, PRIORITY);
     plic().enable(irq_no as u32, context());
+    plic().set_priority(irq_no as u32, PRIORITY);
 }
 
+/// Mask a source: clear its enable bit. Its priority stays, so `enable_irq` rewrites the same
+/// value.
 pub fn disable_irq(irq_no: usize) { plic().disable(irq_no as u32, context()); }
 
 /// Complete the interrupt `pending()` claimed, if any.

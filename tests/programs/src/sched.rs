@@ -735,7 +735,8 @@ pub mod rtc {
     /// device that is not virtio and whose first word (its time's low half, in ns) moves by half
     /// a million to a hundred million over a millisecond's sleep: nothing else of the others is
     /// read, since some fault on reads they do not expect. The interrupt is the one a `receive`
-    /// on which returns when the alarm fires.
+    /// on which returns when the alarm fires. The probing's alarms are all taken before this
+    /// returns, so the caller's first `receive` on it meets only an alarm the caller set.
     pub fn find(devices: core::ops::Range<u32>) -> Option<(u32, usize, u32)> {
         let (mmio, base) = devices.clone().find_map(|h| {
             let (addr, len) = rd::map_device(h).ok()?;
@@ -757,8 +758,16 @@ pub mod rtc {
             let fired = matches!(rd::receive(Some(*h), 3_000, 0), Ok(Received::Interrupt));
             clear(base);
             fired
-        });
-        Some((mmio, base, irq?))
+        })?;
+        // A probe's alarm can still be raised on the found source (the kernel reports it at the
+        // next unmask): take them all, until 20 ms pass quietly.
+        loop {
+            clear(base);
+            if rd::receive(Some(irq), 20_000, 0).is_err() {
+                break;
+            }
+        }
+        Some((mmio, base, irq))
     }
 }
 
