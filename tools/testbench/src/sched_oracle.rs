@@ -26,7 +26,8 @@
 //!
 //! Each destruction (R10) is bracketed by `X` and `Y` records carrying the time in µs in the pass
 //! field; the check reports their durations, and a case can bound their p99
-//! (`post_check = "sched_oracle r10_p99_us=30000"`).
+//! (`post_check = "sched_oracle r10_p99_us=30000"`) and, adding the worst steward decision-wake
+//! p99 the program printed, a lease's end (`lease_end_p99_us=145000`).
 //!
 //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
 //! saw nothing proves nothing.
@@ -271,7 +272,9 @@ fn percentile(v: &mut [u64], q: usize) -> u64 {
 }
 
 /// The bench's post-check: parse the case's console log and check it. `args` may bound the p99
-/// of R10's durations: `r10_p99_us=N`.
+/// of R10's durations, `r10_p99_us=N`, and a lease's end from the steward's decision,
+/// `lease_end_p99_us=N`: the worst decision-wake p99 the program printed (over every N) plus R10's
+/// p99 (kernel/scheduling.md, "Responsiveness").
 pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
@@ -281,26 +284,52 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         percentile(&mut sum.r10_us, 99),
         sum.r10_us.last().copied().unwrap_or(0),
     );
+    let mut lease_end = String::new();
     for arg in args.split_whitespace() {
-        let bound = arg
-            .strip_prefix("r10_p99_us=")
-            .and_then(|v| v.parse::<u64>().ok())
+        let (name, bound) = arg
+            .split_once('=')
+            .and_then(|(name, v)| Some((name, v.parse::<u64>().ok()?)))
             .ok_or_else(|| format!("unknown sched_oracle argument {arg:?}"))?;
         if n == 0 {
-            return Err("r10_p99_us is set, but the trace holds no destruction".into());
+            return Err(format!("{name} is set, but the trace holds no destruction"));
         }
-        if p99 > bound {
-            return Err(format!("R10's p99 is {p99} µs over {n} destructions, above {bound}"));
+        match name {
+            "r10_p99_us" if p99 > bound => {
+                return Err(format!("R10's p99 is {p99} µs over {n} destructions, above {bound}"));
+            }
+            "r10_p99_us" => {}
+            "lease_end_p99_us" => {
+                let wake = decision_wake_p99(log)?;
+                if wake + p99 > bound {
+                    return Err(format!(
+                        "a lease's end, decision wake p99 {wake} µs + R10 p99 {p99} µs, is above {bound}"
+                    ));
+                }
+                lease_end = format!("; lease end p99 {wake} + {p99} = {} µs", wake + p99);
+            }
+            _ => return Err(format!("unknown sched_oracle argument {arg:?}")),
         }
     }
     Ok(format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling; {} lifts by the rule ({} with a leading parent and work to move); R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling; {} lifts by the rule ({} with a leading parent and work to move); R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}{lease_end}",
         records.len(),
         sum.picks,
         sum.lifts,
         sum.telling,
         sum.r10_frames
     ))
+}
+
+/// The worst steward decision-wake p99 the program printed, µs: its lines read
+/// `[latency] N=<n> steward decision wake: <p50> / <p99> / <max> (<samples>): ...`.
+fn decision_wake_p99(log: &str) -> Result<u64, String> {
+    let mut worst = None;
+    for (_, rest) in log.lines().filter_map(|line| line.split_once(" steward decision wake: ")) {
+        let p99 = rest.split(" / ").nth(1).and_then(|v| v.parse::<u64>().ok());
+        let p99 = p99.ok_or_else(|| format!("unreadable decision wake {rest:?}"))?;
+        worst = Some(worst.unwrap_or(0).max(p99));
+    }
+    worst.ok_or_else(|| "lease_end_p99_us is set, but the log holds no decision wake".into())
 }
 
 #[cfg(test)]
@@ -470,6 +499,13 @@ mod tests {
         );
         assert!(run(&t, "r10_p99_us=49").is_err_and(|e| e.contains("above 49")));
         assert!(run(&t, "r10_p99=49").is_err());
+        // A lease's end: the worst decision-wake p99 over every N, plus R10's p99 (50).
+        assert!(run(&t, "lease_end_p99_us=1000").is_err_and(|e| e.contains("no decision wake")));
+        let t = t + "[latency] N=1 steward decision wake: 5 / 900 / 900 (50): target met\n\
+               [latency] N=16 steward decision wake: 7 / 950 / 950 (50): target met\n";
+        let ok = run(&t, "r10_p99_us=50 lease_end_p99_us=1000");
+        assert!(ok.as_ref().is_ok_and(|s| s.contains("lease end p99 950 + 50 = 1000 µs")), "{ok:?}");
+        assert!(run(&t, "lease_end_p99_us=999").is_err_and(|e| e.contains("above 999")));
         // Unpaired or nested brackets.
         assert!(verdict(&[(1, 'Y', 7, 1), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
         assert!(verdict(&[(1, 'X', 7, 1), (1, 'X', 8, 2), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());

@@ -365,6 +365,10 @@ fn run_case(
     };
 
     let loader = builder.artifact(target, machine.loader_package, profile);
+    let seed = qemu_seed(boot)?;
+    if let Some(seed) = seed {
+        println!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)");
+    }
     let mut results = Vec::new();
     for smp in &boot.smp {
         let run_started = Instant::now();
@@ -375,6 +379,9 @@ fn run_case(
             let (mut devices, forwards) = qemu::virtio_devices(boot, &disk)?;
             if let Some(icount) = &boot.icount {
                 devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
+            }
+            if let Some(seed) = seed {
+                devices.extend(["-seed".into(), seed.to_string()]);
             }
             let image = Image {
                 machine,
@@ -417,6 +424,15 @@ fn run_case(
         ));
     }
     Ok(results)
+}
+
+/// The guest seed of a case that pins one (`qemu_seed`), replaced by TESTBENCH_QEMU_SEED when set.
+fn qemu_seed(boot: &case::Boot) -> Result<Option<u64>> {
+    let Some(pinned) = boot.qemu_seed else { return Ok(None) };
+    match std::env::var("TESTBENCH_QEMU_SEED") {
+        Ok(seed) => Ok(Some(seed.parse().with_context(|| format!("TESTBENCH_QEMU_SEED={seed:?}"))?)),
+        Err(_) => Ok(Some(pinned)),
+    }
 }
 
 /// Run a case's `post_check` (a name, then its arguments) over the console log of a boot that

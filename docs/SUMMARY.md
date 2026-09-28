@@ -97,7 +97,6 @@
   - [A request answered outside `finish`](todo/request-raw-reply.md)
   - [A size budget for the trusted crates](todo/size-budget.md)
   - [Paths the docs checker names that no longer exist](todo/doccheck-stale-paths.md)
-  - [The steward decision-wake target](todo/sched-latency-target.md)
   - [The loader stub's unsafe budget](todo/stub-unsafe-budget.md)
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)

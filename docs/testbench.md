@@ -126,6 +126,7 @@ smp = [1, 4]                 # one boot per hart count (default [1])
 memory_mib = 32              # guest RAM (default 256)
 timeout_secs = 60            # default 60; fractions allowed
 icount = "shift=3,sleep=off" # virtual time: 2^3 ns per guest instruction, the RTC on it too
+qemu_seed = 1                # pin the guest's randomness (QEMU -seed)
 kernel_features = []         # extra kernel features
 debug_assertions = false     # true: a checked build of the kernel and the loader
 expect = ['regex 1', 'regex 2']   # each must match a console line, in this order
@@ -149,11 +150,13 @@ system failure, which a rejection case asks for).
 With `icount`, QEMU runs the guest at a fixed instruction rate, skips idle time to the next timer
 deadline and puts the RTC on the same clock (`-rtc clock=vm`). A time a case asserts is then a
 count of guest instructions (at `shift=3`, 1 ms is 125,000), the same on any host however loaded.
-It does not make a run repeat: QEMU fills the guest's boot RNG seed from host entropy on every
-boot, the kernel draws PIDs from it, and that moves every later event. A timing gate therefore
-runs one pinned seed and states its target from a sweep of seeds
-([responsiveness](kernel/scheduling.md#responsiveness)); the bench cannot pin one yet
-([todo](todo/sched-latency-target.md)).
+It does not make a run repeat on its own: QEMU fills the guest's boot RNG seed from host entropy
+on every boot, the kernel draws PIDs from it, and that moves every later event. `qemu_seed = N`
+pins it (QEMU `-seed N`, which fills the device tree's `/chosen/rng-seed`), and with `icount` a
+run then repeats exactly. The bench prints the seed before the result, and
+`TESTBENCH_QEMU_SEED=M` replaces the pinned seed of every case that has one, to replay a run or
+to sweep. A timing gate runs one pinned seed and states its target from a sweep of seeds
+([responsiveness](kernel/scheduling.md#responsiveness)).
 
 The kinds, and the fields each takes besides `description` and `arch`:
 

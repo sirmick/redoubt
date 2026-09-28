@@ -194,6 +194,12 @@ pub struct Boot {
     /// every case ran before.
     #[serde(default)]
     pub icount: Option<String>,
+    /// Pin the guest's randomness: QEMU `-seed <this>`, which fills the device tree's
+    /// `/chosen/rng-seed` and so the kernel's RNG. With `icount` a run then repeats exactly. The
+    /// seed is printed with the result, and TESTBENCH_QEMU_SEED replaces it to replay or sweep.
+    /// None: QEMU draws it from host entropy on every boot.
+    #[serde(default)]
+    pub qemu_seed: Option<u64>,
     /// Build the kernel and the loader with debug assertions on, so `core`'s precondition
     /// checks on raw-pointer calls and every `debug_assert!` run (a failure is a `PANIC`).
     #[serde(default)]

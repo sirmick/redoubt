@@ -157,7 +157,8 @@ page.
    ([the steward](../servers/steward.md)); the server graph, trust tiers and capability holdings
    it runs on ([the servers](../servers/README.md)). The cost of destroying a budget is brought
    under its target first ([budget destruction's cost](../todo/budget-destroy-cost.md)), and the
-   steward's decision-wake target is settled ([the target](../todo/sched-latency-target.md)).
+   steward's decision-wake target is set from a seed sweep
+   ([responsiveness](../kernel/scheduling.md#responsiveness)).
    The scheduling latency bench, measured with stand-ins for the steward and the drivers, is
    rerun with the real ones, and its numbers must stay within the target.
 - **`sshd`.** Sessions over SSH as beamlet VMs running IEx, vault sessions, and `approve@box`
