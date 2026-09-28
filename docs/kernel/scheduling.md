@@ -395,7 +395,7 @@ It is attacked three ways:
 
 ### R23 (no test channels)
 
-Status: built · partly tested: no case builds the production kernel and checks that it carries no trace
+Status: built · partly tested: no case builds the production kernel and checks that it carries no trace, or that a test-only feature is refused without debug assertions
 
 The production kernel carries no test-only diagnostic channel. The scheduling trace is one: a
 record of every budget's id and pass at every wake, requeue, pass change, pick and lift, which
@@ -415,7 +415,9 @@ debug-only break of the tie rule that implies the trace, and `debug-print`, whic
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
 ([devices](devices.md)), and so are `sum-probe`, a stray kernel load that must fault
 ([R24 (SUM and MXR clear)](memory-layout.md#r24-sum-and-mxr-clear)), and `panic-in-print`, a
-panic inside `print!` ([boot](boot.md#failure-and-restart)).
+panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these implies the feature
+`test-only`, which the kernel refuses to compile without debug assertions, so the release build
+`./build` makes cannot carry one; a checked build, as `./build --debug` makes, still can.
 
 ## Failure and restart
 

@@ -9,6 +9,12 @@
 #[cfg(not(feature = "sbi"))]
 compile_error!("the kernel runs under SBI firmware: enable the `sbi` feature (or `qemu-virt`)");
 
+// Test-only features build only into a checked kernel, which a shipped one (`./build`, release)
+// is not; each implies `test-only`, and the bench builds every case that turns one on with debug
+// assertions (R23).
+#[cfg(all(feature = "test-only", not(debug_assertions)))]
+compile_error!("a test-only kernel feature needs a checked build (debug assertions on)");
+
 #[macro_use]
 mod debug;
 

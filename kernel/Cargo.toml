@@ -29,21 +29,24 @@ redoubt-sys = { path = "../libs/sys" }
 
 [features]
 smp = [] # multi-hart: KernelCell becomes a spinlock (the big kernel lock)
+# Implied by every test-only feature below; the kernel refuses to compile it without debug
+# assertions (main.rs), so a release kernel carries none of them (R23).
+test-only = []
 # Test builds only: record the stride queue's raw events in a bounded ring and print it at
 # `system_reset`, for the bench's independent rank oracle (tools/testbench, sched_oracle).
-sched-trace = []
+sched-trace = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]
 # Test builds only: each DMA device's first reset reports "not confirmed" after the
 # real write, so the quarantine path runs. It only ever adds quarantine.
-dma-reset-deaf = []
+dma-reset-deaf = ["test-only"]
 # Test builds only: at the first system call the kernel loads the caller's `ecall` straight
 # through the user mapping, which must fault (R24).
-sum-probe = []
+sum-probe = ["test-only"]
 # Test builds only: print a value whose `Display` prints and then panics, at boot, so both strike
 # inside `print!` (debug/console.rs).
-panic-in-print = []
+panic-in-print = ["test-only"]
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in docs/kernel/boot.md.
