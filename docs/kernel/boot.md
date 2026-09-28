@@ -139,7 +139,7 @@ Status: built · tested: bench:rustsbi-boot, bench:loader-rejects-kernel-address
 
 ### The argument block
 
-Status: built · partly tested: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a `Devs` entry that names RAM or a controller, wraps or names interrupt 0, a `Grnt` tag) are not attacked by a case · tested: bench:rustsbi-boot, bench:device, bench:uart-irq, bench:rng
+Status: built · partly tested: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a `Devs` entry that names RAM or a controller, wraps or names interrupt 0 or one at or above 1024, a `Grnt` tag) are not attacked by a case · tested: bench:rustsbi-boot, bench:device, bench:uart-irq, bench:rng
 
 The block is `ARGS_PAGES` (4) pages of 32-bit words, written by `loader/src/args.rs` and read
 by `kernel/src/args.rs`. It is a run of tags, `XArg` first:

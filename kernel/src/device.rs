@@ -52,6 +52,10 @@ use crate::mem::MemoryManager;
 /// The cost table (kernel/objects.md, "What objects cost"), in pages.
 pub const DEVICE_PAGES: u64 = 1;
 
+/// Interrupt numbers a `Devs` entry may name: the PLIC numbers its sources 1 to 1023. The IRQ
+/// index (`Objects::irqs`) has one slot each, and an entry at or above it stops the boot.
+pub const MAX_IRQS: usize = 1024;
+
 /// First word of every device frame, so that a frame read as a device that is not one is
 /// caught. Distinct from every other object's magic.
 const MAGIC: u64 = u64::from_le_bytes(*b"device\0\0");
@@ -171,16 +175,33 @@ impl MemoryManager {
         }
     }
 
-    /// The frame of the IRQ object for interrupt `irq`, if the machine has one. The scan is
-    /// over the object frames, as R10's sweeps are; it runs once per interrupt.
-    pub fn irq_device(&self, irq: usize) -> Option<u32> {
-        let irq = u32::try_from(irq).ok()?;
-        (0..=self.objects.high_frame).find(|f| {
-            self.is_device_frame(*f) && {
-                let d = self.device(*f);
-                d.kind == Kind::Irq && d.irq == irq
-            }
-        })
+    /// The frame of the IRQ object for interrupt `irq`, if the machine has one: one lookup in
+    /// the IRQ index, on every interrupt (R12).
+    pub fn irq_device(&self, irq: usize) -> Option<u32> { self.objects.irqs.get(irq).copied().flatten() }
+
+    /// Interrupt `irq`'s object is now `frame` (`None`: freed), in the IRQ index.
+    fn index_irq(&mut self, irq: u32, frame: Option<u32>) {
+        self.objects.irqs[irq as usize] = frame;
+        #[cfg(debug_assertions)]
+        self.check_irq_index();
+    }
+
+    /// A checked build's proof that the IRQ index is what a scan of every object frame finds.
+    /// Keep it: it is one of the two things that catch a wrong IRQ index (with `irq-attack`), since
+    /// `scan-bounds` times only the lookup and the old scan found boot's IRQ objects early.
+    #[cfg(debug_assertions)]
+    fn check_irq_index(&self) {
+        let objects = (0..=self.objects.high_frame)
+            .filter(|f| self.is_device_frame(*f) && self.device(*f).kind == Kind::Irq);
+        for frame in objects.clone() {
+            let irq = self.device(frame).irq as usize;
+            assert_eq!(self.objects.irqs[irq], Some(frame), "the IRQ index misses an IRQ object");
+        }
+        assert_eq!(
+            objects.count(),
+            self.objects.irqs.iter().flatten().count(),
+            "the IRQ index names a frame that is no IRQ object"
+        );
     }
 
     /// Create one device object, charged to `owner` (the cost table).
@@ -190,13 +211,20 @@ impl MemoryManager {
         let id = self.next_object_id();
         let owner = BudgetRef { frame: owner, id: self.budget(owner).id };
         self.store_device(frame, &Device { id, owner, ..*d });
+        if d.kind == Kind::Irq {
+            self.index_irq(d.irq, Some(frame));
+        }
         Ok(DeviceRef { frame, id })
     }
 
     /// Free a device object and give its page back to its owner.
     pub fn free_device(&mut self, frame: u32) {
-        let owner = self.device(frame).owner;
+        let d = self.device(frame);
+        let owner = d.owner;
         self.free_object_frame(frame);
+        if d.kind == Kind::Irq {
+            self.index_irq(d.irq, None);
+        }
         if self.is_live_budget(owner) {
             self.uncharge(owner.frame, DEVICE_PAGES);
         }
@@ -273,6 +301,7 @@ impl MemoryManager {
                 // The timer is a hart resource, not a device (kernel/boot.md), and PLIC source 0
                 // does not exist.
                 assert!(irq != 0, "Devs: interrupt 0 is the hart timer, not a device");
+                assert!((irq as usize) < MAX_IRQS, "Devs: an interrupt beyond the PLIC's sources");
                 d.kind = Kind::Irq;
                 d.irq = irq;
                 // Masked until someone receives on it (R5), so an unheld source cannot storm.

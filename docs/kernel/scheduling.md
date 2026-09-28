@@ -352,7 +352,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range, and the kernel departs from it in three scans of every kernel-object frame (the PID draw, the search for an owed exit notice, the search for an interrupt's IRQ object) · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:deadline-flood-billed, bench:sched-carve-return, bench:map-anon-search-bound, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge, mutation:R12DeadlineWorkUnbilled, mutation:R12RescaleOnlyOnReturn
+Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range and `process_create` · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:deadline-flood-billed, bench:sched-carve-return, bench:map-anon-search-bound, bench:scan-bounds, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge, mutation:R12DeadlineWorkUnbilled, mutation:R12RescaleOnlyOnReturn
 
 A budget's CPU follows its free weight, in one queue with no priority. While it has a runnable
 thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No
@@ -367,12 +367,15 @@ and never in `len` (`bench:map-anon-search-bound`). A term linear in a fixed ker
 interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in RAM
 frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
 every wake waits for it. R10 (destruction)'s sweeps are the one stated exception
-([todo](../todo/budget-destroy-cost.md)). The kernel departs from this bound in three scans of
-every kernel-object frame up to the highest one ever used, a mark that grows with the objects every
-other budget creates: `process_create`'s PID draw, which looks for a process object naming each
-candidate PID; the search for an exit notice owed on an endpoint, at each delivery there; and the
-search for an interrupt's IRQ object, on every interrupt
-([todo](../todo/kernel-scan-bounds.md)).
+([todo](../todo/budget-destroy-cost.md)). What a call looks up by PID or by interrupt number
+it finds in an index the kernel keeps as objects are made and freed: a process object in one of
+`MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's sources; a boot
+naming a higher interrupt stops). So `process_create`'s PID draw looks at most at 63 slots, an
+owed exit notice is sought among at most 63 process objects, and an interrupt finds its object
+in one lookup; a checked build proves each index against a scan of every object frame. In
+`bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
+its exit notice and an interrupt take what they took on an empty system; with the old scans, the
+first took 1.2 s against 22 ms.
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
@@ -456,12 +459,7 @@ Status: built · partly tested: a picked thread that dies before the switch, and
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   is the stated exception: it dominates lease termination and grows with the objects it walks
-  ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). The PID draw,
-  the search for an owed exit notice and the search for an interrupt's IRQ object break the
-  bound, each a scan of every kernel-object frame up to the highest one used, which other
-  budgets raise by creating objects. Their time is billed (to the caller, or for an interrupt
-  to the IRQ object's owner), but every wake waits for it. Follow-up:
-  [todo](../todo/kernel-scan-bounds.md). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
+  ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,

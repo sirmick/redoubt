@@ -76,7 +76,6 @@
   - [Reclaiming an endpoint](todo/endpoint-reclaim.md)
   - [The kernel crate's host test target](todo/hosted-kernel-tests.md)
   - [An interrupt before the first receive](todo/irq-level-latch.md)
-  - [Scans of every kernel-object frame](todo/kernel-scan-bounds.md)
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)
   - [RAM beyond the physmap](todo/physmap-ram-bound.md)
   - [PID pool pinning](todo/pid-pool-pinning.md)

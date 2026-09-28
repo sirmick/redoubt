@@ -166,6 +166,12 @@ pub struct Objects {
     /// (`Budget::next_deadline`), so finding the next deadline never scans every frame.
     deadlines: Option<BudgetFrame>,
     accounts: [Account; MAX_PROCESS_COUNT],
+    /// Each PID's process object, by `account_index`: kept at `process_create` and `free_object`
+    /// (`process.rs`), so finding one is a lookup, never a scan of the object frames (R12).
+    pub(crate) processes: [Option<u32>; MAX_PROCESS_COUNT],
+    /// Each interrupt's IRQ object: kept at `boot_devices` and `free_device` (`device.rs`), so an
+    /// interrupt finds its object in one lookup (R12).
+    pub(crate) irqs: [Option<u32>; crate::device::MAX_IRQS],
 }
 
 impl Objects {
@@ -176,11 +182,13 @@ impl Objects {
             high_frame: 0,
             deadlines: None,
             accounts: [Account::NONE; MAX_PROCESS_COUNT],
+            processes: [None; MAX_PROCESS_COUNT],
+            irqs: [None; crate::device::MAX_IRQS],
         }
     }
 }
 
-fn account_index(pid: Pid) -> Option<usize> {
+pub(crate) fn account_index(pid: Pid) -> Option<usize> {
     let index = usize::from(pid.get()) - 1;
     (index < MAX_PROCESS_COUNT).then_some(index)
 }

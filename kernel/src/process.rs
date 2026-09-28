@@ -196,16 +196,40 @@ impl MemoryManager {
         }
     }
 
-    /// The first object frame for which `f` holds.
+    /// The lowest process-object frame for which `f` holds: at most `MAX_PROCESS_COUNT` objects,
+    /// through the PID index, never a scan of the object frames (R12).
     fn find_process(&self, f: impl Fn(&MemoryManager, u32) -> bool) -> Option<u32> {
-        (0..=self.objects.high_frame).find(|frame| self.is_process_frame(*frame) && f(self, *frame))
+        self.objects.processes.iter().flatten().copied().filter(|frame| f(self, *frame)).min()
+    }
+
+    /// `pid`'s process object is now `frame` (`None`: freed), in the PID index.
+    fn index_process(&mut self, pid: Pid, frame: Option<u32>) {
+        let i = crate::budget::account_index(pid).expect("a process object names a PID");
+        self.objects.processes[i] = frame;
+        #[cfg(debug_assertions)]
+        self.check_process_index();
+    }
+
+    /// A checked build's proof that the PID index is what a scan of every object frame finds.
+    #[cfg(debug_assertions)]
+    fn check_process_index(&self) {
+        let objects = (0..=self.objects.high_frame).filter(|f| self.is_process_frame(*f));
+        for frame in objects.clone() {
+            let i = crate::budget::account_index(self.process(frame).pid).expect("a PID");
+            assert_eq!(self.objects.processes[i], Some(frame), "the PID index misses a process object");
+        }
+        assert_eq!(
+            objects.count(),
+            self.objects.processes.iter().flatten().count(),
+            "the PID index names a frame that is no process object"
+        );
     }
 }
 
 /// The object frame of the process `pid`, if it has one. The loader's own programs have none:
 /// nobody created them and nobody is owed their notice (`budget.rs`, `boot_budgets`).
 pub fn object_of(mm: &MemoryManager, pid: Pid) -> Option<u32> {
-    mm.find_process(|mm, frame| mm.process(frame).pid == pid)
+    crate::budget::account_index(pid).and_then(|i| mm.objects.processes[i])
 }
 
 /// A PID drawn at random from the free ASIDs (kernel/processes.md, "Processes and PIDs"): free in
@@ -279,10 +303,12 @@ pub fn process_create(
                 blamed_nlabels: 0,
             },
         );
+        mm.index_process(child, Some(frame));
         // R9: the new handle is stamped with the caller's budget.
         let object = Object::Process(ProcessRef { frame, id });
         mm.install_handle(pid, Handle { object, badge: 0, stamp: creator }).inspect_err(|_| {
             mm.free_object_frame(frame);
+            mm.index_process(child, None);
             mm.uncharge(caller_budget, PROCESS_PAGES);
         })
     });
@@ -635,6 +661,7 @@ pub fn free_object(mm: &mut MemoryManager, frame: u32) {
         mm.uncharge(p.creator.frame, PROCESS_PAGES);
     }
     mm.free_object_frame(frame);
+    mm.index_process(p.pid, None);
 }
 
 /// The notice a process object owes on `e`, with its frame (`message.rs` calls this while it is

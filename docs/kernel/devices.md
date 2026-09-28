@@ -284,7 +284,9 @@ CLINT, the core-local timer block, could forge timer interrupts) and **RAM**. Th
 both out of the device list, but that is a reading of a device tree the kernel does not trust,
 so the kernel checks every `Devs` entry itself. It refuses to boot on an MMIO entry that
 overlaps RAM or a `Ctrl` range, wraps the address space, is empty or is not whole pages, and on
-an IRQ entry for interrupt 0 (the hart timer, a hart resource and not a device). The kernel maps
+an IRQ entry for interrupt 0 (the hart timer, a hart resource and not a device) or for one at or
+above `MAX_IRQS` (1024: the PLIC numbers its sources 1 to 1023, and the kernel's IRQ index has a
+slot for each). The kernel maps
 the PLIC for itself alone.
 
 ## Failure and restart
@@ -352,10 +354,6 @@ Status: built · partly tested: destroying a device object's owner budget, and a
 - **An interrupt's kernel time is billed to the IRQ object's owner** (`system` at boot), not to
   the driver that holds the handle. Masking bounds it to one interrupt per `receive`, at the
   driver's pace.
-- **Finding an interrupt's IRQ object scans every kernel-object frame** up to the highest one
-  ever used, on every interrupt, so interrupt latency grows with the objects other budgets
-  create ([scheduling](scheduling.md#residual-risks)). Follow-up:
-  [todo](../todo/kernel-scan-bounds.md).
 
 ## Why
 

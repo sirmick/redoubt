@@ -357,14 +357,6 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
   destroyed, in its parent. The loss is bounded by the process limit of the budget whose handle
   the creator was given, and a budget handle is already the right to spend that limit; the
   creators that launch into others' budgets are `init` and the steward.
-- **Finding a process object scans every object frame.** Drawing a PID looks for a process
-  object naming each candidate PID, and matching a notice to its endpoint looks for one owing a
-  notice there; each walks every kernel-object frame up to the highest one ever used, a mark
-  bounded only by RAM that any budget raises by creating objects. The time is billed to the
-  caller, as every call's is, but the kernel runs it with interrupts off, so every wake waits
-  for it; this departs from R12 (scheduling)'s bound on a call's kernel time
-  ([scheduling](scheduling.md#r12-scheduling)). Follow-up:
-  [todo](../todo/kernel-scan-bounds.md).
 - **The loader's own programs send no notice.** Nothing hears when one of them ends
   ([boot](boot.md)).
 
