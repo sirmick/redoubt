@@ -12,11 +12,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::fs::{attr_create, attr_name, attr_struct, Struct};
-use crate::mdir::{align_up, Pair};
-use crate::ops::{names_dir, Lookup};
+use crate::fs::{Struct, attr_create, attr_name, attr_struct};
+use crate::mdir::{Pair, align_up};
+use crate::ops::{Lookup, names_dir};
 use crate::tag::*;
-use crate::{ctz, BlockDevice, Error, Filesystem};
+use crate::{BlockDevice, Error, Filesystem, ctz};
 
 /// An open file. Handles are only meaningful to the filesystem that returned them.
 ///
@@ -164,11 +164,14 @@ impl<D: BlockDevice> Filesystem<D> {
                     return Err(Error::NotDir);
                 }
                 self.check_name(name)?;
-                self.commit(dir.pair, &[
-                    attr_create(id),
-                    attr_name(TYPE_REG, id, name)?,
-                    attr_struct(TYPE_INLINESTRUCT, id, &[])?,
-                ])?;
+                self.commit(
+                    dir.pair,
+                    &[
+                        attr_create(id),
+                        attr_name(TYPE_REG, id, name)?,
+                        attr_struct(TYPE_INLINESTRUCT, id, &[])?,
+                    ],
+                )?;
                 // The commit may have split the pair; look again rather than predict.
                 let (Lookup::Found { dir, id }, _) = self.lookup(path)? else { return Err(Error::Corrupt) };
                 (Loc { pair: dir.pair, id }, Content::Inline(Vec::new()), false)

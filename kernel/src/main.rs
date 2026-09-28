@@ -28,8 +28,8 @@ mod mem;
 mod message;
 mod platform;
 mod process;
-mod redoubt;
 mod ptable;
+mod redoubt;
 mod sched;
 mod time;
 

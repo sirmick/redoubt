@@ -20,8 +20,8 @@
 //! The **owner** is the budget of the process that created it, which is what R1 compares a sender
 //! with (I7) and where the cost table charges the page.
 
-use redoubt_sys::{Error, MAX_LABELS};
 use redoubt_layout::Pid;
+use redoubt_sys::{Error, MAX_LABELS};
 
 use crate::budget::{Budget, BudgetFrame};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object};

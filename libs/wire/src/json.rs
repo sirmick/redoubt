@@ -3,24 +3,24 @@
 //!
 //! servers/wire.md's rules, as enforced here:
 //! - UTF-8 only;
-//! - no object has two members with the same name. Names are compared byte for byte after
-//!   unescaping (so `"a"` and `"\u0061"` are the same name), with no Unicode normalisation;
-//! - each field's JSON type is fixed by the schema: a 64-bit quantity is a decimal string,
-//!   read with [`Value::u64_string`] (up to `u64::MAX`), and a small count is a number, read
-//!   with [`Value::int`]; the wrong JSON type is a `WrongType` error. A number must lie in
-//!   `-(2^53 - 1)..=2^53 - 1` ([`MAX_SAFE_INT`], I-JSON's safe range; 2^53 itself is refused);
+//! - no object has two members with the same name. Names are compared byte for byte after unescaping (so
+//!   `"a"` and `"\u0061"` are the same name), with no Unicode normalisation;
+//! - each field's JSON type is fixed by the schema: a 64-bit quantity is a decimal string, read with
+//!   [`Value::u64_string`] (up to `u64::MAX`), and a small count is a number, read with [`Value::int`]; the
+//!   wrong JSON type is a `WrongType` error. A number must lie in `-(2^53 - 1)..=2^53 - 1` ([`MAX_SAFE_INT`],
+//!   I-JSON's safe range; 2^53 itself is refused);
 //! - nesting at most [`MAX_DEPTH`] (32) deep, counting the top-level container as depth 1;
 //! - a file at most [`MAX_LEN`] (64 KiB);
-//! - unknown members are errors: objects are decoded only through [`Value::object`], which
-//!   refuses any member the decoder did not take.
+//! - unknown members are errors: objects are decoded only through [`Value::object`], which refuses any member
+//!   the decoder did not take.
 //!
 //! Stricter than servers/wire.md states (each is also I-JSON's advice or removes a second
 //! spelling):
 //! - no byte-order mark;
-//! - no surrogates (so no unpaired `\uD800` escape) and no Unicode noncharacters
-//!   (U+FDD0..U+FDEF, U+xFFFE, U+xFFFF), escaped or raw (RFC 7493 section 2.1);
-//! - numbers are integers: fractions, exponents and `-0` are refused, so the parser has no
-//!   floating point and 0 has one spelling;
+//! - no surrogates (so no unpaired `\uD800` escape) and no Unicode noncharacters (U+FDD0..U+FDEF, U+xFFFE,
+//!   U+xFFFF), escaped or raw (RFC 7493 section 2.1);
+//! - numbers are integers: fractions, exponents and `-0` are refused, so the parser has no floating point and
+//!   0 has one spelling;
 //! - a decimal string is canonical: digits only, no sign, spaces or leading zeros.
 //!
 //! Errors from typed decoding ([`SchemaError`]) name where they happened, e.g.
@@ -28,16 +28,14 @@
 //!
 //! Cost, for a caller that must size memory before parsing (`init` parses the boot manifest
 //! before anything else runs; tests/json_limits.rs holds these bounds):
-//! - time is linear in the input: every loop consumes input, plus a sort per object to find
-//!   duplicate names in O(n log n);
-//! - heap: at most 32 bytes per input byte, so 2 MiB for a 64 KiB file. The worst case is a
-//!   flat array of one-byte values (`[0,0,...]`): each 2 input bytes become a 32-byte
-//!   [`Value`], and growing the `Vec` briefly holds the old and new buffers (measured peak
-//!   24x, 1.5 MiB);
-//! - stack: the parser recurses once per container level, bounded by `MAX_DEPTH`. The
-//!   deepest file needs about 56 KiB unoptimised (roughly 1.7 KiB per level) and under
-//!   16 KiB optimised. Input nested deeper fails with `TooDeep` at level 33, before using
-//!   more.
+//! - time is linear in the input: every loop consumes input, plus a sort per object to find duplicate names
+//!   in O(n log n);
+//! - heap: at most 32 bytes per input byte, so 2 MiB for a 64 KiB file. The worst case is a flat array of
+//!   one-byte values (`[0,0,...]`): each 2 input bytes become a 32-byte [`Value`], and growing the `Vec`
+//!   briefly holds the old and new buffers (measured peak 24x, 1.5 MiB);
+//! - stack: the parser recurses once per container level, bounded by `MAX_DEPTH`. The deepest file needs
+//!   about 56 KiB unoptimised (roughly 1.7 KiB per level) and under 16 KiB optimised. Input nested deeper
+//!   fails with `TooDeep` at level 33, before using more.
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -122,13 +120,9 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn err(&self, kind: ErrorKind) -> Error {
-        Error { offset: self.pos, kind }
-    }
+    fn err(&self, kind: ErrorKind) -> Error { Error { offset: self.pos, kind } }
 
-    fn peek(&self) -> Option<u8> {
-        self.text.as_bytes().get(self.pos).copied()
-    }
+    fn peek(&self) -> Option<u8> { self.text.as_bytes().get(self.pos).copied() }
 
     fn next(&mut self) -> Result<u8, Error> {
         let b = self.peek().ok_or(self.err(ErrorKind::Syntax))?;
@@ -386,9 +380,7 @@ pub enum SchemaKind {
 }
 
 impl SchemaError {
-    fn new(kind: SchemaKind) -> Self {
-        SchemaError { path: String::new(), kind }
-    }
+    fn new(kind: SchemaKind) -> Self { SchemaError { path: String::new(), kind } }
 
     /// Prefixes the path with the member or index the error happened inside.
     fn inside(mut self, segment: &str) -> Self {
@@ -436,7 +428,10 @@ impl<'a> Value<'a> {
     }
 
     /// Decodes each item of an array with `decode`.
-    pub fn items<T>(&self, mut decode: impl FnMut(&Value<'a>) -> Result<T, SchemaError>) -> Result<Vec<T>, SchemaError> {
+    pub fn items<T>(
+        &self,
+        mut decode: impl FnMut(&Value<'a>) -> Result<T, SchemaError>,
+    ) -> Result<Vec<T>, SchemaError> {
         let Value::Array(items) = self else { return Err(SchemaError::new(SchemaKind::WrongType)) };
         let mut out = Vec::with_capacity(items.len());
         for (i, item) in items.iter().enumerate() {
@@ -447,7 +442,10 @@ impl<'a> Value<'a> {
 
     /// Decodes an object: `decode` takes the members it knows from [`Members`]; afterwards
     /// any member it did not take is an `Unknown` error.
-    pub fn object<'v, T>(&'v self, decode: impl FnOnce(&mut Members<'v, 'a>) -> Result<T, SchemaError>) -> Result<T, SchemaError> {
+    pub fn object<'v, T>(
+        &'v self,
+        decode: impl FnOnce(&mut Members<'v, 'a>) -> Result<T, SchemaError>,
+    ) -> Result<T, SchemaError> {
         let Value::Object(members) = self else { return Err(SchemaError::new(SchemaKind::WrongType)) };
         let mut m = Members { members, taken: alloc::vec![false; members.len()] };
         let value = decode(&mut m)?;
@@ -467,9 +465,15 @@ pub struct Members<'v, 'a> {
 
 impl<'v, 'a> Members<'v, 'a> {
     /// Decodes the member `name` with `decode`, if present.
-    pub fn optional<T>(&mut self, name: &str, decode: impl FnOnce(&'v Value<'a>) -> Result<T, SchemaError>) -> Result<Option<T>, SchemaError> {
+    pub fn optional<T>(
+        &mut self,
+        name: &str,
+        decode: impl FnOnce(&'v Value<'a>) -> Result<T, SchemaError>,
+    ) -> Result<Option<T>, SchemaError> {
         let members = self.members;
-        let Some((i, (_, value))) = members.iter().enumerate().find(|(_, (n, _))| n == name) else { return Ok(None) };
+        let Some((i, (_, value))) = members.iter().enumerate().find(|(_, (n, _))| n == name) else {
+            return Ok(None);
+        };
         if let Some(t) = self.taken.get_mut(i) {
             *t = true;
         }
@@ -477,23 +481,28 @@ impl<'v, 'a> Members<'v, 'a> {
     }
 
     /// Decodes the member `name`, which must be present, with `decode`.
-    pub fn required<T>(&mut self, name: &str, decode: impl FnOnce(&'v Value<'a>) -> Result<T, SchemaError>) -> Result<T, SchemaError> {
+    pub fn required<T>(
+        &mut self,
+        name: &str,
+        decode: impl FnOnce(&'v Value<'a>) -> Result<T, SchemaError>,
+    ) -> Result<T, SchemaError> {
         self.optional(name, decode)?.ok_or_else(|| SchemaError::new(SchemaKind::Missing).inside(name))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
 
-    fn kind(input: &str) -> ErrorKind {
-        parse(input.as_bytes()).unwrap_err().kind
-    }
+    use super::*;
+
+    fn kind(input: &str) -> ErrorKind { parse(input.as_bytes()).unwrap_err().kind }
 
     #[test]
     fn accepts_json() {
-        let v = parse(r#" { "a": [1, -2, true, false, null, "x\n\u00e9\ud83d\ude00"], "b": {} } "#.as_bytes()).unwrap();
+        let v =
+            parse(r#" { "a": [1, -2, true, false, null, "x\n\u00e9\ud83d\ude00"], "b": {} } "#.as_bytes())
+                .unwrap();
         assert_eq!(
             v,
             Value::Object(vec![
@@ -539,7 +548,10 @@ mod tests {
 
     #[test]
     fn big_integers_as_strings() {
-        let v = parse(br#"["18446744073709551615", "0", 7, "007", "-1", " 1", "18446744073709551616", -1, true, "7"]"#).unwrap();
+        let v = parse(
+            br#"["18446744073709551615", "0", 7, "007", "-1", " 1", "18446744073709551616", -1, true, "7"]"#,
+        )
+        .unwrap();
         let Value::Array(items) = &v else { panic!() };
         let strings: Vec<Option<u64>> = items.iter().map(|v| v.u64_string().ok()).collect();
         assert_eq!(strings, [Some(u64::MAX), Some(0), None, None, None, None, None, None, None, Some(7)]);
@@ -597,15 +609,27 @@ mod tests {
 
     #[test]
     fn syntax_errors() {
-        for bad in ["", " ", "[1,]", "{\"a\":1,}", "[1 2]", "{\"a\" 1}", "{1:2}", "tru", "nul", "[", "{}}", "{} {}", "'a'"] {
+        for bad in [
+            "",
+            " ",
+            "[1,]",
+            "{\"a\":1,}",
+            "[1 2]",
+            "{\"a\" 1}",
+            "{1:2}",
+            "tru",
+            "nul",
+            "[",
+            "{}}",
+            "{} {}",
+            "'a'",
+        ] {
             assert!(parse(bad.as_bytes()).is_err(), "{bad:?}");
         }
         assert_eq!(kind("{} x"), ErrorKind::Trailing);
     }
 
-    fn err(path: &str, kind: SchemaKind) -> SchemaError {
-        SchemaError { path: path.into(), kind }
-    }
+    fn err(path: &str, kind: SchemaKind) -> SchemaError { SchemaError { path: path.into(), kind } }
 
     /// servers/init.md's budget: pages is a 64-bit quantity (a string), the rest small counts.
     #[derive(Debug, PartialEq)]
@@ -650,14 +674,16 @@ mod tests {
 
     #[test]
     fn schema_errors_name_the_path() {
-        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": 1, "weight": "1"}}]}"#).unwrap();
+        let v =
+            parse(br#"{"servers": [{"budget": {"pages": "1", "processes": 1, "weight": "1"}}]}"#).unwrap();
         let servers = |v: &Value<'_>| v.object(|m| m.required("servers", |s| s.items(|s| server(s, &[]))));
         assert_eq!(servers(&v), Err(err("servers[0].budget.weight", SchemaKind::WrongType)));
         let v = parse(br#"{"servers": [{"budget": {"pages": 1, "processes": 1, "weight": 1}}]}"#).unwrap();
         assert_eq!(servers(&v), Err(err("servers[0].budget.pages", SchemaKind::WrongType)));
         let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": 1}}]}"#).unwrap();
         assert_eq!(servers(&v), Err(err("servers[0].budget.weight", SchemaKind::Missing)));
-        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": 1, "weight": 1, "cpu": 2}}]}"#).unwrap();
+        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": 1, "weight": 1, "cpu": 2}}]}"#)
+            .unwrap();
         assert_eq!(servers(&v), Err(err("servers[0].budget.cpu", SchemaKind::Unknown)));
         assert_eq!(servers(&Value::Int(1)), Err(err("", SchemaKind::WrongType)));
         let v = parse(br#"{"servers": {}}"#).unwrap();

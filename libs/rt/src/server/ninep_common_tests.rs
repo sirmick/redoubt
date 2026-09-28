@@ -417,7 +417,10 @@ fn a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says() {
     // Its id is an ordinary connection's: `disconnect` frees it and its fids.
     t.disconnect(&mut k, &a, id).unwrap();
     assert_eq!(t.server.connections(), 0);
-    assert_eq!(t.err(&child, Body::Tattach { fid: 5, afid: NOFID, uname: "", aname: "" }), "no such connection");
+    assert_eq!(
+        t.err(&child, Body::Tattach { fid: 5, afid: NOFID, uname: "", aname: "" }),
+        "no such connection"
+    );
     // `unmint` undoes one whose reply was not delivered, admission and all.
     let (_, _, badge) = t.server.mint_rooted(&a, root, &mut k).unwrap();
     t.server.unmint(badge);

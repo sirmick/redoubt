@@ -8,9 +8,9 @@
 //! - [`start`]: the entry point ([`entry!`]), exit codes and the panic handler.
 //! - [`path`]: lexical path cleaning, so `..` never climbs above a root.
 //! - [`client`]: a small synchronous 9P client.
-//! - [`server`]: the shared server library (servers/serving.md): `admit` with a fair share per
-//!   badge, `check`, the 9P server skeleton with `ninep_common` (fresh connections, `disconnect`,
-//!   byte quotas), parked calls, and typed-message dispatch.
+//! - [`server`]: the shared server library (servers/serving.md): `admit` with a fair share per badge,
+//!   `check`, the 9P server skeleton with `ninep_common` (fresh connections, `disconnect`, byte quotas),
+//!   parked calls, and typed-message dispatch.
 //!
 //! Models to copy: `src/bin/echo-server.rs` is a complete 9P server on the skeleton, and
 //! `src/bin/echo-client.rs` a program that uses its namespace; the [`server::typed`] docs show a

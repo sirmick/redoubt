@@ -15,7 +15,7 @@ mod exercise;
 
 use std::sync::OnceLock;
 
-use common::{write_file, Ram, Rng};
+use common::{Ram, Rng, write_file};
 use libfuzzer_sys::fuzz_target;
 use littlefs::{Config, Filesystem};
 

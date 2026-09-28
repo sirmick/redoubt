@@ -74,7 +74,14 @@ struct Held {
 
 /// Opens, writes through or closes a handle held across other operations. Closing commits
 /// the handle's whole view of the file to wherever the file is now, if it still exists.
-fn handle_step(fs: &mut Filesystem<&mut Ram>, rng: &mut Rng, p: &Profile, tree: &mut Tree, held: &mut Vec<Held>, what: &str) {
+fn handle_step(
+    fs: &mut Filesystem<&mut Ram>,
+    rng: &mut Rng,
+    p: &Profile,
+    tree: &mut Tree,
+    held: &mut Vec<Held>,
+    what: &str,
+) {
     match rng.below(3) {
         0 if held.len() < 4 => {
             let Some(path) = pick(rng, tree, |_, v| matches!(v, Node::File { .. })).cloned() else { return };
@@ -189,7 +196,9 @@ fn run(cfg: Config, p: Profile, seed: u64, steps: usize) {
         // Now and then empty a directory of files (`rm dir/*`): its later pairs empty and
         // drop, possibly under an open handle.
         if rng.below(40) == 0 {
-            let Some(dir) = pick(&mut rng, &tree, |_, v| matches!(v, Node::Dir { .. })).cloned() else { continue };
+            let Some(dir) = pick(&mut rng, &tree, |_, v| matches!(v, Node::Dir { .. })).cloned() else {
+                continue;
+            };
             let files: Vec<String> = tree
                 .iter()
                 .filter(|(k, v)| !k.is_empty() && parent(k) == dir && matches!(v, Node::File { .. }))
@@ -322,7 +331,10 @@ fn directory_split_and_drop() {
     assert_eq!(n, 120);
     fs.fsck().unwrap();
     for i in 0..120 {
-        assert_eq!(read_file(&mut fs, &format!("/d/file{i:03}")).unwrap(), format!("contents {i}").as_bytes());
+        assert_eq!(
+            read_file(&mut fs, &format!("/d/file{i:03}")).unwrap(),
+            format!("contents {i}").as_bytes()
+        );
     }
     for i in 0..120 {
         fs.remove(&format!("/d/file{i:03}")).unwrap();
@@ -368,7 +380,8 @@ fn handles_follow_renames() {
     Filesystem::format(&mut ram, cfg).unwrap();
     let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
     fs.mkdir("/x").unwrap();
-    let h = fs.open("/f", OpenOptions { read: true, write: true, create: true, ..Default::default() }).unwrap();
+    let h =
+        fs.open("/f", OpenOptions { read: true, write: true, create: true, ..Default::default() }).unwrap();
     fs.write(h, b"hello").unwrap();
     fs.rename("/f", "/x/g").unwrap();
     fs.write(h, b" world").unwrap();
@@ -400,5 +413,8 @@ fn bad_arguments() {
     assert_eq!(fs.open("/d", OpenOptions { read: true, ..Default::default() }), Err(Error::IsDir));
     assert_eq!(fs.set_attr("/d", 1, &[0; 1023]), Err(Error::NoSpace));
     assert_eq!(fs.get_attr("/d", 1), Err(Error::NoAttr));
-    assert_eq!(fs.open("/nope", OpenOptions { read: true, create: true, ..Default::default() }), Err(Error::Invalid));
+    assert_eq!(
+        fs.open("/nope", OpenOptions { read: true, create: true, ..Default::default() }),
+        Err(Error::Invalid)
+    );
 }

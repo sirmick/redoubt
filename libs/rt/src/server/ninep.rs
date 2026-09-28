@@ -13,17 +13,15 @@
 //! **Connections** (servers/wire.md, one connection per endpoint handle). One badge is one
 //! client. A launcher never passes its own connection to a child: it asks for a fresh one with
 //! `new_connection`, which the skeleton serves ([`ninep_common`]):
-//! - `new_connection(root, quota)` mints a connection rooted at `root`, a path relative to the
-//!   caller's own root, cleaned so it never climbs above it, and walked with the same label checks
-//!   as a `Twalk`. The new badge comes from a counter starting at [`FIRST_MINTED_BADGE`] and is
-//!   never reused (servers/serving.md R27), so a handle revoked in flight never reaches a later
-//!   connection. The reply carries the handle and a random 64-bit connection id; the minted
-//!   connection is charged to the requester's [`Resource::State`].
-//! - `disconnect(id)` frees that connection and every connection minted under it: their fids are
-//!   clunked, their admission released, and the file server told ([`FileServer::disconnected`]).
-//!   Only the connection that asked for the id (the same badge, account and label set) may name it
-//!   (servers/serving.md, "Minted connections"); anyone else, like an id that does not exist, gets
-//!   the same refusal.
+//! - `new_connection(root, quota)` mints a connection rooted at `root`, a path relative to the caller's own
+//!   root, cleaned so it never climbs above it, and walked with the same label checks as a `Twalk`. The new
+//!   badge comes from a counter starting at [`FIRST_MINTED_BADGE`] and is never reused (servers/serving.md
+//!   R27), so a handle revoked in flight never reaches a later connection. The reply carries the handle and a
+//!   random 64-bit connection id; the minted connection is charged to the requester's [`Resource::State`].
+//! - `disconnect(id)` frees that connection and every connection minted under it: their fids are clunked,
+//!   their admission released, and the file server told ([`FileServer::disconnected`]). Only the connection
+//!   that asked for the id (the same badge, account and label set) may name it (servers/serving.md, "Minted
+//!   connections"); anyone else, like an id that does not exist, gets the same refusal.
 //! - Badges below [`FIRST_MINTED_BADGE`] are the server's own: whoever set the server up minted them, and
 //!   [`FileServer::attach`] says what each means. A badge at or above it that the skeleton has not minted, or
 //!   has disconnected, is no connection at all.
@@ -56,12 +54,11 @@
 //!   directory read continues only from where the last one ended.
 //!
 //! **Labels** ([`check`], on every request, against [`FileServer::labels`] of the object named):
-//! - `Read` on the attach root; on the directory walked from, and on every node walked into (a qid
-//!   is a read, servers/serving.md R25), for a `Twalk` and a `new_connection` alike; on the node
-//!   for `Tstat`, `Tread` and opening for reading; on every directory entry listed (entries the
-//!   caller cannot read are left out).
-//! - `Write` (equal label sets, R25) on the node for `Twrite`, opening for writing, truncation
-//!   (`OTRUNC`) and `Tremove`, and on the directory for `Tcreate`.
+//! - `Read` on the attach root; on the directory walked from, and on every node walked into (a qid is a read,
+//!   servers/serving.md R25), for a `Twalk` and a `new_connection` alike; on the node for `Tstat`, `Tread`
+//!   and opening for reading; on every directory entry listed (entries the caller cannot read are left out).
+//! - `Write` (equal label sets, R25) on the node for `Twrite`, opening for writing, truncation (`OTRUNC`) and
+//!   `Tremove`, and on the directory for `Tcreate`.
 //!
 //! **Protocol corners.** `Tversion` is accepted at any time and clunks every fid of the
 //! connection; it is not required first, since the msize is fixed. `Tauth` is refused (access

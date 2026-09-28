@@ -39,7 +39,9 @@ pub struct Ram {
 }
 
 impl Ram {
-    pub fn new(cfg: Config) -> Ram { Ram::from_image(cfg, vec![0xff; (cfg.block_size * cfg.block_count) as usize]) }
+    pub fn new(cfg: Config) -> Ram {
+        Ram::from_image(cfg, vec![0xff; (cfg.block_size * cfg.block_count) as usize])
+    }
 
     pub fn from_image(cfg: Config, data: Vec<u8>) -> Ram {
         Ram { cfg, data, budget: None, writes: 0, strict: true, tear: Tear::Prefix, rng: Rng(1) }
@@ -77,7 +79,9 @@ impl BlockDevice for Ram {
 
     fn prog(&mut self, block: u32, off: u32, data: &[u8]) -> Result<(), Error> {
         assert!(block < self.cfg.block_count && off as usize + data.len() <= self.cfg.block_size as usize);
-        assert!(off.is_multiple_of(self.cfg.prog_size) && (data.len() as u32).is_multiple_of(self.cfg.prog_size));
+        assert!(
+            off.is_multiple_of(self.cfg.prog_size) && (data.len() as u32).is_multiple_of(self.cfg.prog_size)
+        );
         let at = self.at(block, off);
         if self.strict {
             assert!(self.data[at..at + data.len()].iter().all(|b| *b == 0xff), "program over unerased bytes");
@@ -91,7 +95,8 @@ impl BlockDevice for Ram {
         if self.tear == Tear::Subset {
             for u in 0..units {
                 if self.rng.below(2) == 0 {
-                    self.data[at + u * unit..at + (u + 1) * unit].copy_from_slice(&data[u * unit..(u + 1) * unit]);
+                    self.data[at + u * unit..at + (u + 1) * unit]
+                        .copy_from_slice(&data[u * unit..(u + 1) * unit]);
                 }
             }
             return Err(Error::Io);
@@ -103,7 +108,8 @@ impl BlockDevice for Ram {
         if k < units {
             let mode = self.rng.below(3);
             let partial = k * unit..(k + 1) * unit;
-            for (dst, &src) in self.data[at + partial.start..at + partial.end].iter_mut().zip(&data[partial]) {
+            for (dst, &src) in self.data[at + partial.start..at + partial.end].iter_mut().zip(&data[partial])
+            {
                 let kept = match mode {
                     0 => self.rng.next() as u8,
                     1 if self.rng.below(2) == 0 => 0xff,
@@ -210,10 +216,15 @@ pub fn tree_diff(a: &Tree, b: &Tree) -> Vec<String> {
     let brief = |n: Option<&Node>| match n {
         None => "absent".to_string(),
         Some(Node::Dir { attrs }) => format!("dir, attrs {:?}", attrs.keys().collect::<Vec<_>>()),
-        Some(Node::File { data, attrs }) => format!("file of {} bytes, attrs {:?}", data.len(), attrs.keys().collect::<Vec<_>>()),
+        Some(Node::File { data, attrs }) => {
+            format!("file of {} bytes, attrs {:?}", data.len(), attrs.keys().collect::<Vec<_>>())
+        }
     };
     let keys: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
-    keys.into_iter().filter(|k| a.get(*k) != b.get(*k)).map(|k| format!("{k}: {} vs {}", brief(a.get(k)), brief(b.get(k)))).collect()
+    keys.into_iter()
+        .filter(|k| a.get(*k) != b.get(*k))
+        .map(|k| format!("{k}: {} vs {}", brief(a.get(k)), brief(b.get(k))))
+        .collect()
 }
 
 /// Reads everything in the volume.

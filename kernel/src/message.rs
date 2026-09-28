@@ -37,17 +37,16 @@
 use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
 
-use redoubt_sys::PAGE_SIZE;
 use redoubt_layout::{KERNEL_PID, Pid};
-
-use crate::arch::process::TID;
+use redoubt_sys::PAGE_SIZE;
 use redoubt_sys::{
     Body, CallOutcome, Error, Handle as AbiHandle, Labels, LendDisposition, MAX_LABELS, MAX_LEND_PAGES,
-    MAX_MSG_HANDLES, MAX_OPEN_CALLS, Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received,
-    MAX_THREADS, ReceivedBody, ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
+    MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_THREADS, Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS,
+    Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
 };
 
 use crate::arch::process::MAX_PROCESS_COUNT;
+use crate::arch::process::TID;
 use crate::budget::Class;
 use crate::endpoint::Group;
 use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
@@ -1046,12 +1045,7 @@ fn deliver(
 
 /// Whether `(pid, tid)`'s `receive` record is still where it can be written. `InvalidArgument`
 /// is the error a record earns, and every call's row carries it (decoding, stage 1).
-fn check_receive_record(
-    ss: &mut ProcessTable,
-    pid: Pid,
-    tid: TID,
-    mm: &MemoryManager,
-) -> Result<(), Error> {
+fn check_receive_record(ss: &mut ProcessTable, pid: Pid, tid: TID, mm: &MemoryManager) -> Result<(), Error> {
     let rec = slot(mm, pid, tid).rec;
     let here = crate::arch::process::current_pid();
     let checked = ss

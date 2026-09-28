@@ -12,9 +12,9 @@
 
 use alloc::vec::Vec;
 
+use crate::Error;
 use crate::crc::crc32;
 use crate::tag::{self, *};
-use crate::Error;
 
 /// A metadata pair: two blocks, one of them holding the current log.
 pub(crate) type Pair = [u32; 2];
@@ -392,12 +392,7 @@ impl CommitBuf {
     /// the next `prog_size` bytes, which `read_next` reads from the (erased) block, so a later
     /// mount can tell whether an append was attempted there. Those bytes also choose the
     /// valid-bit polarity of the next commit, so a partial program always flips something.
-    pub fn finish(
-        &mut self,
-        block_size: u32,
-        prog_size: u32,
-        read_next: &mut ReadAt,
-    ) -> Result<(), Error> {
+    pub fn finish(&mut self, block_size: u32, prog_size: u32, read_next: &mut ReadAt) -> Result<(), Error> {
         // Room for the forward CRC tag (4 + 8 bytes) and the CRC tag (4 + 4), padded to a
         // program unit.
         let end = align_up((self.off() + 20).min(block_size), prog_size);
@@ -420,7 +415,8 @@ impl CommitBuf {
                 self.push_tag(tag::mk(TYPE_FCRC, ID_NONE, 8), &fcrc)?;
             }
 
-            let ntag = tag::mk(TYPE_CCRC + ((!eperturb) >> 7) as u16, ID_NONE, (noff - (self.off() + 4)) as u16);
+            let ntag =
+                tag::mk(TYPE_CCRC + ((!eperturb) >> 7) as u16, ID_NONE, (noff - (self.off() + 4)) as u16);
             let raw = (ntag ^ self.ptag).to_be_bytes();
             self.crc = crc32(self.crc, &raw);
             self.buf.extend_from_slice(&raw);

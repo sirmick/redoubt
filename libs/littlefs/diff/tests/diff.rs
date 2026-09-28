@@ -69,7 +69,9 @@ fn dump_c(fs: &mut CFs) -> Tree {
     tree
 }
 
-fn rust_cfg(c: CConfig) -> Config { Config { block_size: c.block_size, block_count: c.block_count, prog_size: c.prog_size } }
+fn rust_cfg(c: CConfig) -> Config {
+    Config { block_size: c.block_size, block_count: c.block_count, prog_size: c.prog_size }
+}
 
 /// Reads the image with both implementations and compares with the model, then runs the
 /// read-only volume check. An image Rust wrote last must be clean. One the reference wrote
@@ -77,13 +79,18 @@ fn rust_cfg(c: CConfig) -> Config { Config { block_size: c.block_size, block_cou
 /// can leave half-orphaned directories with the orphan flag clear); those are reported.
 fn check_both(cfg: CConfig, image: &[u8], model: &Tree, last: Who, strict: bool, what: &str) {
     let mut ram = Ram::from_image(rust_cfg(cfg), image.to_vec());
-    let mut fs = Filesystem::mount(&mut ram, rust_cfg(cfg)).unwrap_or_else(|e| panic!("{what}: Rust mount: {e:?}"));
+    let mut fs =
+        Filesystem::mount(&mut ram, rust_cfg(cfg)).unwrap_or_else(|e| panic!("{what}: Rust mount: {e:?}"));
     let seen = dump(&mut fs).unwrap();
     assert!(&seen == model, "{what}: Rust reads: {:#?}", tree_diff(&seen, model));
     match fs.check() {
         Ok(Health::Clean) => {}
-        Ok(Health::NeedsRepair) if last == Who::C && !strict => eprintln!("{what}: the reference left leftovers to repair"),
-        other => panic!("{what}: Rust check after {} wrote: {other:?}", if last == Who::C { "C" } else { "Rust" }),
+        Ok(Health::NeedsRepair) if last == Who::C && !strict => {
+            eprintln!("{what}: the reference left leftovers to repair")
+        }
+        other => {
+            panic!("{what}: Rust check after {} wrote: {other:?}", if last == Who::C { "C" } else { "Rust" })
+        }
     }
     drop(fs);
     assert_eq!(ram.data, image, "{what}: the check wrote");
@@ -101,7 +108,9 @@ enum Who {
 
 /// Runs `steps` random operations, each done by Rust or C as `who` says (alternating
 /// randomly for `Both`), checking both readers against the model every `every` steps.
-fn run(cfg: CConfig, who: Who, seed: u64, steps: usize, every: usize) { run_checked(cfg, who, seed, steps, every, false) }
+fn run(cfg: CConfig, who: Who, seed: u64, steps: usize, every: usize) {
+    run_checked(cfg, who, seed, steps, every, false)
+}
 
 /// `run`, where `strict` also refuses leftovers from the reference.
 fn run_checked(cfg: CConfig, who: Who, seed: u64, steps: usize, every: usize, strict: bool) {
@@ -246,7 +255,9 @@ fn program_sizes_differ_between_mounts() {
         let rust_prog = [16, 4, 512, 32][round % 4];
         let mut ops = Vec::new();
         while ops.len() < 8 {
-            if let Some(op) = generate(&mut rng, &model, &Profile { max_attr: 32, ..Profile::default_for(rust) }) {
+            if let Some(op) =
+                generate(&mut rng, &model, &Profile { max_attr: 32, ..Profile::default_for(rust) })
+            {
                 apply_model(&mut model, &op);
                 ops.push(op);
             }
@@ -264,7 +275,14 @@ fn program_sizes_differ_between_mounts() {
             ops.iter().for_each(|op| apply_c(&mut fs, op));
             image = fs.into_image();
         }
-        check_both(c, &image, &model, if round % 2 == 0 { Who::Rust } else { Who::C }, false, &format!("round {round}"));
+        check_both(
+            c,
+            &image,
+            &model,
+            if round % 2 == 0 { Who::Rust } else { Who::C },
+            false,
+            &format!("round {round}"),
+        );
     }
 }
 
@@ -272,7 +290,10 @@ fn program_sizes_differ_between_mounts() {
 fn geometries() {
     let tiny = CConfig { block_size: 128, block_count: 16384, prog_size: 1, block_cycles: -1 };
     let big = CConfig { block_size: 4096, block_count: 512, prog_size: 512, block_cycles: -1 };
-    for (i, cfg) in [tiny, big, CConfig { block_cycles: 5, ..tiny }, CConfig { block_cycles: 7, ..big }].into_iter().enumerate() {
+    for (i, cfg) in [tiny, big, CConfig { block_cycles: 5, ..tiny }, CConfig { block_cycles: 7, ..big }]
+        .into_iter()
+        .enumerate()
+    {
         run(cfg, Who::Both, 50 + i as u64, 400, 10);
     }
 }

@@ -227,16 +227,13 @@ impl MemoryManager {
     /// Allocate a page for a process's saved thread contexts (`ProcessImpl`), charged to the
     /// budget the process runs in like any other frame it owns (kernel/objects.md: the kernel
     /// charges what a process really costs instead of holding it back from `root` at boot).
-    pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> {
-        self.alloc_page(pid)
-    }
+    pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> { self.alloc_page(pid) }
 
     /// Take a free frame for `owner`; its index in the ownership table.
     fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
         // First fit. (The previous next-fit search computed its starting point with `max`
         // where `min` was meant, so it always scanned from the start anyway.)
-        let index =
-            self.allocations.iter().position(Option::is_none).ok_or(PageError::NoFrame)?;
+        let index = self.allocations.iter().position(Option::is_none).ok_or(PageError::NoFrame)?;
         self.allocations[index] = Some(owner);
         Ok(index)
     }
@@ -742,7 +739,6 @@ impl MemoryManager {
         }
         self.uncharge_all_frames(pid);
     }
-
 }
 
 // --- The Redoubt memory calls (kernel/memory.md; R11) ----------------------------------------

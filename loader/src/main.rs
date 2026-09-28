@@ -15,24 +15,23 @@
 mod alloc;
 mod args;
 mod dt;
-mod verify;
 mod image;
 mod paging;
+mod verify;
 
 use core::arch::{asm, global_asm};
 
+use ::paging::PteFlags;
 use dt::Platform;
-
-use tar_no_std::TarArchiveRef;
 use redoubt_layout::{
-    KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PID, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES, KERNEL_STACK_TOP,
-    PROCESS_AREA, Pid, THREAD_CONTEXT_PAGES, TRAP_STACK_PAGES, TRAP_STACK_TOP,
+    KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PID, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
+    KERNEL_STACK_TOP, PROCESS_AREA, Pid, THREAD_CONTEXT_PAGES, TRAP_STACK_PAGES, TRAP_STACK_TOP,
 };
 use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
+use tar_no_std::TarArchiveRef;
 
 use crate::alloc::PageAllocator;
 use crate::paging::AddressSpace;
-use ::paging::PteFlags;
 
 /// Top of the first thread's stack in every loader process, the same on both widths.
 const USER_STACK_TOP: usize = 0x8000_0000;
@@ -228,7 +227,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         let pid = Pid::new(count as u8 + 1).expect("count < MAX_PROCESSES");
 
         let space = AddressSpace::new_user(&mut alloc, pid, &kernel);
-        let entrypoint = image::load_elf(&mut alloc, &space, pid, entry.data(), PAGE_SIZE..USER_AREA_END, true);
+        let entrypoint =
+            image::load_elf(&mut alloc, &space, pid, entry.data(), PAGE_SIZE..USER_AREA_END, true);
         let stack_flags = PteFlags::R | PteFlags::W | PteFlags::USER;
         space.map_stack(&mut alloc, USER_STACK_TOP, 1, stack_flags);
         for page in 2..=USER_STACK_PAGES {
@@ -237,8 +237,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         map_context(&mut alloc, &space, pid);
         println!("  PID {}: {} -> {:#x}", pid, name, entrypoint);
 
-        let process =
-            InitialProcess { satp: space.satp(), entrypoint, sp: USER_STACK_TOP - STACK_PADDING };
+        let process = InitialProcess { satp: space.satp(), entrypoint, sp: USER_STACK_TOP - STACK_PADDING };
         *processes.get_mut(count).expect("too many initial processes") = process;
         count += 1;
 
@@ -309,7 +308,8 @@ fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
     }
     // The controllers, so the kernel can refuse to make a device object of either.
     args.begin(b"Ctrl");
-    let controllers = platform.plic.as_ref().map(|p| p.range.clone()).into_iter().chain(platform.clint.clone());
+    let controllers =
+        platform.plic.as_ref().map(|p| p.range.clone()).into_iter().chain(platform.clint.clone());
     for range in controllers {
         args.word64(range.start as u64);
         args.word64(range.len().next_multiple_of(PAGE_SIZE) as u64);
@@ -387,12 +387,6 @@ unsafe fn enter_kernel(
         options(noreturn),
     )
 }
-
-
-
-
-
-
 
 fn shutdown() -> ! {
     sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::SystemFailure);

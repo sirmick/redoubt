@@ -15,19 +15,19 @@
 //!
 //! # Why the unsafe code here is sound
 //!
-//! 1. *The window is real.* Whoever constructs a `Window` promises (it is an `unsafe fn`)
-//!    that `base + phys` is a valid, writable address for every RAM frame below `size`,
-//!    for as long as any `Table` made from it is in use.
-//! 2. *A `Table` is always a page table.* One is only created by `Table::at`, whose caller
-//!    vouches for the frame (a root named by `satp`), by `Table::child`, which follows a
-//!    valid non-leaf entry, or by `Slot::install_table`. Non-leaf entries are written only
-//!    by `install_table`, which zeroes the frame first; `Slot::set` refuses them. So every
-//!    non-leaf entry names a page table, by induction. Tables must not be freed while an
-//!    entry still points at them; that is the caller's obligation and is stated on `at`.
-//! 3. *Accesses do not race.* Entries are read and written whole, with volatile accesses
-//!    through a raw pointer; no reference to table memory is ever formed. The callers are
-//!    single-threaded (the loader) or run with interrupts off on one hart (the kernel).
-//!    SMP must put address-space edits under a lock before this stops being true.
+//! 1. *The window is real.* Whoever constructs a `Window` promises (it is an `unsafe fn`) that `base + phys`
+//!    is a valid, writable address for every RAM frame below `size`, for as long as any `Table` made from it
+//!    is in use.
+//! 2. *A `Table` is always a page table.* One is only created by `Table::at`, whose caller vouches for the
+//!    frame (a root named by `satp`), by `Table::child`, which follows a valid non-leaf entry, or by
+//!    `Slot::install_table`. Non-leaf entries are written only by `install_table`, which zeroes the frame
+//!    first; `Slot::set` refuses them. So every non-leaf entry names a page table, by induction. Tables must
+//!    not be freed while an entry still points at them; that is the caller's obligation and is stated on
+//!    `at`.
+//! 3. *Accesses do not race.* Entries are read and written whole, with volatile accesses through a raw
+//!    pointer; no reference to table memory is ever formed. The callers are single-threaded (the loader) or
+//!    run with interrupts off on one hart (the kernel). SMP must put address-space edits under a lock before
+//!    this stops being true.
 
 #![no_std]
 
@@ -163,7 +163,10 @@ impl Window {
     pub const unsafe fn identity() -> Window { Window { offset: 0, phys_start: 0, phys_end: usize::MAX } }
 
     fn frame(&self, phys: usize) -> NonNull<u8> {
-        assert!((self.phys_start..self.phys_end).contains(&phys) && phys % PAGE_SIZE == 0, "not a reachable frame");
+        assert!(
+            (self.phys_start..self.phys_end).contains(&phys) && phys % PAGE_SIZE == 0,
+            "not a reachable frame"
+        );
         NonNull::new(self.offset.wrapping_add(phys) as *mut u8).unwrap()
     }
 
@@ -191,7 +194,9 @@ impl Table {
     /// # Safety
     /// The frame must hold a page table and keep doing so while this `Table`, or any
     /// table reached from it, is in use (module docs, 2).
-    pub unsafe fn at(window: Window, phys: usize) -> Table { Table { entries: window.frame(phys).cast(), window } }
+    pub unsafe fn at(window: Window, phys: usize) -> Table {
+        Table { entries: window.frame(phys).cast(), window }
+    }
 
     /// Turn the freshly allocated RAM frame at `phys` into an empty table.
     ///

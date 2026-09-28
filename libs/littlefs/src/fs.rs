@@ -506,7 +506,13 @@ impl<D: BlockDevice> Filesystem<D> {
     }
 
     /// Appends a commit to the current block's log. `Ok(false)`: it does not fit.
-    fn append(&mut self, dir: &MDir, attrs: &[Attr], delta: &GState, block_delta: &GState) -> Result<bool, Error> {
+    fn append(
+        &mut self,
+        dir: &MDir,
+        attrs: &[Attr],
+        delta: &GState,
+        block_delta: &GState,
+    ) -> Result<bool, Error> {
         // Tags may fill the block but for the 8 bytes of the closing CRC tag.
         let mut cb = CommitBuf::new(dir.off, dir.etag, self.block_size - 8);
         let push = |cb: &mut CommitBuf, t: u32, d: &[u8]| match cb.push_tag(t, d) {
@@ -518,7 +524,8 @@ impl<D: BlockDevice> Filesystem<D> {
                 return Ok(false);
             }
         }
-        if !delta.is_zero() && !push(&mut cb, tag::mk(TYPE_MOVESTATE, ID_NONE, 12), &block_delta.to_bytes())? {
+        if !delta.is_zero() && !push(&mut cb, tag::mk(TYPE_MOVESTATE, ID_NONE, 12), &block_delta.to_bytes())?
+        {
             return Ok(false);
         }
         let block = dir.pair[0];
@@ -756,7 +763,14 @@ impl<D: BlockDevice> Filesystem<D> {
     }
 
     fn superblock_entry(&self) -> Entry {
-        let fields = [crate::DISK_VERSION, self.block_size, self.block_count, self.name_max, self.file_max, self.attr_max];
+        let fields = [
+            crate::DISK_VERSION,
+            self.block_size,
+            self.block_count,
+            self.name_max,
+            self.file_max,
+            self.attr_max,
+        ];
         let strct = Some((TYPE_INLINESTRUCT, fields.iter().flat_map(|v| v.to_le_bytes()).collect()));
         Entry { name_type: TYPE_SUPERBLOCK, name: MAGIC.to_vec(), strct, attrs: Vec::new() }
     }
@@ -840,9 +854,13 @@ impl<D: BlockDevice> Filesystem<D> {
 
 /// Lets a caller lend a device: `Filesystem<&mut Dev>` gives it back on unmount or failure.
 impl<T: BlockDevice + ?Sized> BlockDevice for &mut T {
-    fn read(&mut self, block: u32, off: u32, buf: &mut [u8]) -> Result<(), Error> { (**self).read(block, off, buf) }
+    fn read(&mut self, block: u32, off: u32, buf: &mut [u8]) -> Result<(), Error> {
+        (**self).read(block, off, buf)
+    }
 
-    fn prog(&mut self, block: u32, off: u32, data: &[u8]) -> Result<(), Error> { (**self).prog(block, off, data) }
+    fn prog(&mut self, block: u32, off: u32, data: &[u8]) -> Result<(), Error> {
+        (**self).prog(block, off, data)
+    }
 
     fn erase(&mut self, block: u32) -> Result<(), Error> { (**self).erase(block) }
 

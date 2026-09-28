@@ -7,16 +7,15 @@
 //! other way round; the C code runs only on the host, as a test oracle (`diff/`).
 //!
 //! # Shape
-//! - [`BlockDevice`]: the four operations littlefs needs from storage, and the contract
-//!   power-loss safety relies on.
-//! - [`Filesystem`]: format, mount, and every operation `fsd` needs: files (open, read,
-//!   write, seek, truncate, sync, close), directories (mkdir, remove, rename, read_dir),
-//!   stat, user attributes (the reference's "custom attributes") on files and directories,
-//!   and a volume check.
-//! - Paths are `/`-separated names relative to the root; `.` and `..` are refused, and a
-//!   trailing slash names a directory. Names read back from the medium are opaque bytes:
-//!   nothing forces them to be UTF-8, or to be names a path could name (the check reports
-//!   those). `fsd` must never join such a name into a path it then resolves.
+//! - [`BlockDevice`]: the four operations littlefs needs from storage, and the contract power-loss safety
+//!   relies on.
+//! - [`Filesystem`]: format, mount, and every operation `fsd` needs: files (open, read, write, seek,
+//!   truncate, sync, close), directories (mkdir, remove, rename, read_dir), stat, user attributes (the
+//!   reference's "custom attributes") on files and directories, and a volume check.
+//! - Paths are `/`-separated names relative to the root; `.` and `..` are refused, and a trailing slash names
+//!   a directory. Names read back from the medium are opaque bytes: nothing forces them to be UTF-8, or to be
+//!   names a path could name (the check reports those). `fsd` must never join such a name into a path it then
+//!   resolves.
 //!
 //! # Terms
 //! A *pair* is a metadata pair: two blocks, one holding the current log of commits. Every
@@ -45,19 +44,19 @@
 //! file handle that is writing, and the allocator's bitmap of `block_count / 8` bytes.
 //!
 //! # Differences from the C reference
-//! - Open file handles follow renames and survive removal (their data stays readable; sync
-//!   then commits nothing). The reference detaches them.
+//! - Open file handles follow renames and survive removal (their data stays readable; sync then commits
+//!   nothing). The reference detaches them.
 //! - Renaming a directory into itself is refused.
 //! - [`Filesystem::read_dir`] returns no `.` or `..` entries.
-//! - Stricter log parsing: CRC-valid commits that make no sense (duplicate names, entries
-//!   without names, tags out of range) are `Corrupt`, where the reference may accept them.
-//! - Files up to `min(1022, block_size / 8)` bytes are stored inline (the reference also
-//!   caps this by its cache size); either reads the other's inline files of any length.
+//! - Stricter log parsing: CRC-valid commits that make no sense (duplicate names, entries without names, tags
+//!   out of range) are `Corrupt`, where the reference may accept them.
+//! - Files up to `min(1022, block_size / 8)` bytes are stored inline (the reference also caps this by its
+//!   cache size); either reads the other's inline files of any length.
 //! - Mounting requires the configured block count to equal the superblock's.
 //! - [`Filesystem::unmount`] drops open handles unsynced.
 //! - A file's attributes and its data are two commits (the reference can do both in one).
-//! - Only on-disk version 2.1: 2.0 images, which the reference upgrades in place, are
-//!   refused with [`Error::Invalid`]; `fsd` formats its own volumes.
+//! - Only on-disk version 2.1: 2.0 images, which the reference upgrades in place, are refused with
+//!   [`Error::Invalid`]; `fsd` formats its own volumes.
 //!
 //! # Left out on purpose
 //! Wear levelling and bad-block relocation (`block_cycles`): `fsd` sits on a virtio disk,
@@ -69,20 +68,20 @@
 //! # Testing
 //! All host-only; nothing here runs on the machine.
 //! - `cargo test --release` (here): unit tests and forged hostile metadata (`src/tests.rs`);
-//!   `tests/model.rs`, random operations against an in-memory model, with handles held open
-//!   and volumes run full; `tests/crash.rs`, power failure at every write of fixed and random
-//!   workloads (`MODEL_TRACE`, `MODEL_PEEK` and `MODEL_SEEDS` help debug the model test);
-//!   `tests/hostile.rs`, corrupted and noise images, and hand-built hostile ones.
-//! - `diff/` (its own workspace, outside the root one; needs a C compiler): the C reference
-//!   v2.11.3 as an oracle. `cargo test --release` there runs Rust-writes-C-reads and the
-//!   reverse, both taking turns on one image, and the reference with wear levelling on.
-//!   `WL_SEED=n` runs one wear-levelling seed; `DIFF_ONLY=c` or `rust` replays the same
-//!   operations with one side doing every step. Ignored tests show the reference's own leak.
-//! - `fuzz/` (its own workspace; nightly pinned in `fuzz/rust-toolchain.toml`), from
-//!   `libs/littlefs`: `cargo fuzz run -s none image fuzz/corpus/image fuzz/seeds/image`
-//!   (arbitrary images) and the same for `mutate` (edits of a valid volume, optionally with
-//!   the commit CRC fixed up). `fuzz/seeds/` is a minimized corpus to start from; `-s none`
-//!   because the address sanitizer adds nothing to safe Rust and costs a factor of five.
+//!   `tests/model.rs`, random operations against an in-memory model, with handles held open and volumes run
+//!   full; `tests/crash.rs`, power failure at every write of fixed and random workloads (`MODEL_TRACE`,
+//!   `MODEL_PEEK` and `MODEL_SEEDS` help debug the model test); `tests/hostile.rs`, corrupted and noise
+//!   images, and hand-built hostile ones.
+//! - `diff/` (its own workspace, outside the root one; needs a C compiler): the C reference v2.11.3 as an
+//!   oracle. `cargo test --release` there runs Rust-writes-C-reads and the reverse, both taking turns on one
+//!   image, and the reference with wear levelling on. `WL_SEED=n` runs one wear-levelling seed; `DIFF_ONLY=c`
+//!   or `rust` replays the same operations with one side doing every step. Ignored tests show the reference's
+//!   own leak.
+//! - `fuzz/` (its own workspace; nightly pinned in `fuzz/rust-toolchain.toml`), from `libs/littlefs`: `cargo
+//!   fuzz run -s none image fuzz/corpus/image fuzz/seeds/image` (arbitrary images) and the same for `mutate`
+//!   (edits of a valid volume, optionally with the commit CRC fixed up). `fuzz/seeds/` is a minimized corpus
+//!   to start from; `-s none` because the address sanitizer adds nothing to safe Rust and costs a factor of
+//!   five.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -115,16 +114,16 @@ pub const DISK_VERSION: u32 = 0x0002_0001;
 /// # What power-loss safety relies on
 /// The crash guarantees hold for a device that keeps this contract (the crash tests inject
 /// exactly these failures; a device outside it is shown failing in `tests/crash.rs`):
-/// - **A torn program persists a prefix.** If power fails during `prog`, the bytes that
-///   landed are a prefix of whole program units, possibly followed by one partly written
-///   unit; nothing after that. A unit is overwritten as a whole: a later program of it
-///   replaces all its bytes (disk semantics) or only clears bits of erased bytes (flash).
+/// - **A torn program persists a prefix.** If power fails during `prog`, the bytes that landed are a prefix
+///   of whole program units, possibly followed by one partly written unit; nothing after that. A unit is
+///   overwritten as a whole: a later program of it replaces all its bytes (disk semantics) or only clears
+///   bits of erased bytes (flash).
 /// - **A torn erase** leaves the block erased, untouched, or erased only in part.
-/// - **Order within a block**: an erase and later programs of the same block reach the
-///   medium in the order they were issued.
-/// - **`sync` means durable**: when it returns `Ok`, everything programmed or erased
-///   before it survives power loss. The filesystem syncs before each metadata commit that
-///   depends on data blocks, and after each commit.
+/// - **Order within a block**: an erase and later programs of the same block reach the medium in the order
+///   they were issued.
+/// - **`sync` means durable**: when it returns `Ok`, everything programmed or erased before it survives power
+///   loss. The filesystem syncs before each metadata commit that depends on data blocks, and after each
+///   commit.
 pub trait BlockDevice {
     fn read(&mut self, block: u32, off: u32, buf: &mut [u8]) -> Result<(), Error>;
     fn prog(&mut self, block: u32, off: u32, data: &[u8]) -> Result<(), Error>;

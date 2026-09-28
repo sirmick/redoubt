@@ -1,8 +1,8 @@
 //! Redoubt's wire formats (servers/wire.md), shared by every server:
 //!
 //! - [`ninep`]: plain 9P2000 with a fixed `msize` of 64 KiB;
-//! - [`typed`]: the typed-message framing, used by the codecs in [`proto`] that
-//!   `redoubt-wire-gen` generates from the owning servers' tables;
+//! - [`typed`]: the typed-message framing, used by the codecs in [`proto`] that `redoubt-wire-gen` generates
+//!   from the owning servers' tables;
 //! - [`json`]: the strict JSON (I-JSON) profile for files people write.
 //!
 //! All three parse untrusted bytes. The rules they share: no `unsafe`, no panics (every

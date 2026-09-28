@@ -20,7 +20,9 @@ fn write(path: &str, data: Vec<u8>) -> Op { Op::Write { path: path.into(), data 
 
 fn patch(path: &str, at: u32, data: Vec<u8>) -> Op { Op::Patch { path: path.into(), at, data, cut: None } }
 
-fn truncate(path: &str, size: u32) -> Op { Op::Patch { path: path.into(), at: 0, data: Vec::new(), cut: Some(size) } }
+fn truncate(path: &str, size: u32) -> Op {
+    Op::Patch { path: path.into(), at: 0, data: Vec::new(), cut: Some(size) }
+}
 
 fn mkdir(path: &str) -> Op { Op::Mkdir(path.into()) }
 
@@ -163,8 +165,17 @@ fn crash_workload(cfg: Config, ops: Vec<Op>, tear: Tear, double: bool) {
                 break;
             }
             doubles += 1;
-            let again = check_crashed(cfg, ram.data, &states, k, &format!("crash at write {n}, then repair write {m}"));
-            assert_eq!(again, seen, "crash at write {n}, then repair write {m}: the repair changed what is visible");
+            let again = check_crashed(
+                cfg,
+                ram.data,
+                &states,
+                k,
+                &format!("crash at write {n}, then repair write {m}"),
+            );
+            assert_eq!(
+                again, seen,
+                "crash at write {n}, then repair write {m}: the repair changed what is visible"
+            );
             assert!(m < 64, "a repair of more than 64 writes");
         }
     }
@@ -172,10 +183,14 @@ fn crash_workload(cfg: Config, ops: Vec<Op>, tear: Tear, double: bool) {
 }
 
 #[test]
-fn crash_at_every_write_small_blocks() { crash_everywhere(Config { block_size: 256, block_count: 128, prog_size: 16 }); }
+fn crash_at_every_write_small_blocks() {
+    crash_everywhere(Config { block_size: 256, block_count: 128, prog_size: 16 });
+}
 
 #[test]
-fn crash_at_every_write_tiny_blocks() { crash_everywhere(Config { block_size: 128, block_count: 256, prog_size: 1 }); }
+fn crash_at_every_write_tiny_blocks() {
+    crash_everywhere(Config { block_size: 128, block_count: 256, prog_size: 1 });
+}
 
 #[test]
 fn crash_at_every_write_large_blocks() {
@@ -204,7 +219,12 @@ fn crash_at_every_write_torn_erases() {
 
 #[test]
 fn crash_during_repair() {
-    crash_workload(Config { block_size: 256, block_count: 128, prog_size: 16 }, workload(), Tear::PrefixAndErase, true);
+    crash_workload(
+        Config { block_size: 256, block_count: 128, prog_size: 16 },
+        workload(),
+        Tear::PrefixAndErase,
+        true,
+    );
     for seed in 21..=23 {
         let cfg = Config { block_size: 256, block_count: 256, prog_size: 16 };
         crash_workload(cfg, random_workload(seed, cfg, 50), Tear::PrefixAndErase, true);

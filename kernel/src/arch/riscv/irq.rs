@@ -6,8 +6,8 @@ use riscv::register::{scause, sepc, sstatus, stval};
 use crate::arch::current_pid;
 use crate::arch::exception::RiscvException;
 use crate::arch::mem::MemoryMapping;
-use crate::arch::process::{EXIT_THREAD, Thread};
 use crate::arch::process::Process as ArchProcess;
+use crate::arch::process::{EXIT_THREAD, Thread};
 use crate::ptable::ProcessTable;
 
 extern "Rust" {
@@ -75,9 +75,9 @@ fn system_call(pid: redoubt_layout::Pid, regs: [usize; 8]) -> ! {
     });
     match crate::redoubt::handle(pid, tid, &regs.map(|r| r as u64)) {
         // Every result register holds at most 32 bits or one `usize` (redoubt-sys).
-        crate::redoubt::Outcome::Return(out) => ArchProcess::with_current_mut(|p| {
-            return_registers(&out.map(|r| r as usize), p.current_thread())
-        }),
+        crate::redoubt::Outcome::Return(out) => {
+            ArchProcess::with_current_mut(|p| return_registers(&out.map(|r| r as usize), p.current_thread()))
+        }
         crate::redoubt::Outcome::Resume => resume_current(),
     }
 }
@@ -150,13 +150,7 @@ pub extern "C" fn trap_handler(
         let pid = current_pid();
         let ex = RiscvException::from_regs(sc.bits(), sepc::read(), stval::read());
         let tid = ArchProcess::with_current(|p| p.current_tid());
-        println!(
-            "IRQ ({}.{}): {} sepc {:x}",
-            pid,
-            tid,
-            ex,
-            sepc::read(),
-        );
+        println!("IRQ ({}.{}): {} sepc {:x}", pid, tid, ex, sepc::read(),);
     }
     match ex {
         // `kmain`'s switch (`sched::switch_to`), the one S-mode `ecall`: resumed past it.

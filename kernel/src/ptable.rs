@@ -3,15 +3,13 @@
 
 use redoubt_layout::{KERNEL_PID, Pid};
 
-use crate::arch::process::TID;
-
 use crate::arch;
 use crate::arch::mem::MemoryMapping;
 pub use crate::arch::process::Process as ArchProcess;
+use crate::arch::process::TID;
 pub use crate::arch::process::Thread;
-use crate::cell::KernelCell;
-
 pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
+use crate::cell::KernelCell;
 
 /// Why the process table refused a step. Kernel-internal: a system call maps it explicitly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,7 +123,6 @@ impl Default for ProcessInner {
 }
 
 impl Process {
-
     /// This process slot is unallocated and may be turn into a process
     pub fn free(&self) -> bool { matches!(self.state, ProcessState::Free) }
 
@@ -279,8 +276,7 @@ impl ProcessTable {
         mm: &mut crate::mem::MemoryManager,
         pid: Pid,
     ) -> Result<(), ProcessError> {
-        let entry =
-            self.processes.get_mut(pid.get() as usize - 1).ok_or(ProcessError::NotFound)?;
+        let entry = self.processes.get_mut(pid.get() as usize - 1).ok_or(ProcessError::NotFound)?;
         if entry.state != ProcessState::Free {
             return Err(ProcessError::NotFound);
         }
@@ -452,9 +448,7 @@ impl ProcessTable {
         process.state = match process.state {
             ProcessState::Free => return Err(ProcessError::NotFound),
             ProcessState::Sleeping => return Err(ProcessError::NotFound),
-            ProcessState::Allocated | ProcessState::Setup { .. } => {
-                return Err(ProcessError::NotFound)
-            }
+            ProcessState::Allocated | ProcessState::Setup { .. } => return Err(ProcessError::NotFound),
             ProcessState::Ready(0) => {
                 panic!("ProcessState was `Ready(0)`, which is invalid!");
             }
@@ -549,7 +543,9 @@ impl ProcessTable {
         }
         self.get_process(pid)?.activate();
         ArchProcess::current().set_thread_registers(tid, &words);
-        self.get_process(current_pid).expect("couldn't switch back after setting a Redoubt result").activate();
+        self.get_process(current_pid)
+            .expect("couldn't switch back after setting a Redoubt result")
+            .activate();
         Ok(())
     }
 
@@ -806,5 +802,4 @@ impl ProcessTable {
         self.get_process(current)?.activate();
         Ok(())
     }
-
 }

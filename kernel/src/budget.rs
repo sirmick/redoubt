@@ -346,7 +346,10 @@ impl MemoryManager {
     /// created, so the frame is already paid for; one missing here would mean the kernel
     /// over-committed RAM, which `boot_budgets` reserves against, so it stops (fail closed).
     fn give_ipc_frame(&mut self, pid: Pid, tid: usize) {
-        if self.account(pid).is_none() || !(1..=MAX_THREADS).contains(&tid) || self.ipc_frame(pid, tid).is_some() {
+        if self.account(pid).is_none()
+            || !(1..=MAX_THREADS).contains(&tid)
+            || self.ipc_frame(pid, tid).is_some()
+        {
             return;
         }
         let frame = self.alloc_object_frame().expect("R6: a thread's page was charged but has no frame");

@@ -3,10 +3,10 @@
 //! and a typed server's `grant`/`release` are the same table with a different payload.
 //!
 //! - [`Minted::reserve`] then [`Minted::commit`] mint one: a badge from a counter starting at
-//!   [`FIRST_MINTED_BADGE`] that is never reused (servers/serving.md R27), a random id (never a
-//!   counter: servers/serving.md), and a handle minted from the message in hand, so it is stamped
-//!   like the handle the request came through and dies with it. Between the two the server has
-//!   the last word (a file server's quota) before any handle exists.
+//!   [`FIRST_MINTED_BADGE`] that is never reused (servers/serving.md R27), a random id (never a counter:
+//!   servers/serving.md), and a handle minted from the message in hand, so it is stamped like the handle the
+//!   request came through and dies with it. Between the two the server has the last word (a file server's
+//!   quota) before any handle exists.
 //! - [`Minted::disconnect`] frees the capability with `id` and everything minted under it, for the client
 //!   that received the id and nobody else: the same answer whether the id is somebody else's or nobody's.
 //! - A capability a client mints for itself counts in the share of the one it minted it through

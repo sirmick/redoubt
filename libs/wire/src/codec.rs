@@ -46,9 +46,7 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
-        Reader { buf, pos: 0 }
-    }
+    pub fn new(buf: &'a [u8]) -> Self { Reader { buf, pos: 0 } }
 
     /// The next `n` bytes, or `Short` if the input has fewer.
     pub fn take(&mut self, n: usize) -> Result<&'a [u8], Error> {
@@ -62,21 +60,13 @@ impl<'a> Reader<'a> {
         self.take(N)?.try_into().map_err(|_| Error::Short)
     }
 
-    pub fn u8(&mut self) -> Result<u8, Error> {
-        Ok(u8::from_le_bytes(self.array()?))
-    }
+    pub fn u8(&mut self) -> Result<u8, Error> { Ok(u8::from_le_bytes(self.array()?)) }
 
-    pub fn u16(&mut self) -> Result<u16, Error> {
-        Ok(u16::from_le_bytes(self.array()?))
-    }
+    pub fn u16(&mut self) -> Result<u16, Error> { Ok(u16::from_le_bytes(self.array()?)) }
 
-    pub fn u32(&mut self) -> Result<u32, Error> {
-        Ok(u32::from_le_bytes(self.array()?))
-    }
+    pub fn u32(&mut self) -> Result<u32, Error> { Ok(u32::from_le_bytes(self.array()?)) }
 
-    pub fn u64(&mut self) -> Result<u64, Error> {
-        Ok(u64::from_le_bytes(self.array()?))
-    }
+    pub fn u64(&mut self) -> Result<u64, Error> { Ok(u64::from_le_bytes(self.array()?)) }
 
     /// A `u16` length and that many bytes of UTF-8.
     pub fn string(&mut self) -> Result<&'a str, Error> {
@@ -92,9 +82,7 @@ impl<'a> Reader<'a> {
     }
 
     /// The bytes not yet read.
-    pub fn rest(&self) -> &'a [u8] {
-        self.buf.get(self.pos..).unwrap_or(&[])
-    }
+    pub fn rest(&self) -> &'a [u8] { self.buf.get(self.pos..).unwrap_or(&[]) }
 
     /// Succeeds only if every byte was read: an encoding has no slack.
     pub fn finish(&self) -> Result<(), Error> {
@@ -115,14 +103,10 @@ pub struct Writer<'a> {
 }
 
 impl<'a> Writer<'a> {
-    pub fn new(buf: &'a mut [u8]) -> Self {
-        Writer { buf, pos: 0 }
-    }
+    pub fn new(buf: &'a mut [u8]) -> Self { Writer { buf, pos: 0 } }
 
     /// Bytes written so far.
-    pub fn position(&self) -> usize {
-        self.pos
-    }
+    pub fn position(&self) -> usize { self.pos }
 
     pub fn put(&mut self, bytes: &[u8]) -> Result<(), Error> {
         let end = self.pos.checked_add(bytes.len()).ok_or(Error::TooLarge)?;
@@ -131,21 +115,13 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    pub fn u8(&mut self, v: u8) -> Result<(), Error> {
-        self.put(&v.to_le_bytes())
-    }
+    pub fn u8(&mut self, v: u8) -> Result<(), Error> { self.put(&v.to_le_bytes()) }
 
-    pub fn u16(&mut self, v: u16) -> Result<(), Error> {
-        self.put(&v.to_le_bytes())
-    }
+    pub fn u16(&mut self, v: u16) -> Result<(), Error> { self.put(&v.to_le_bytes()) }
 
-    pub fn u32(&mut self, v: u32) -> Result<(), Error> {
-        self.put(&v.to_le_bytes())
-    }
+    pub fn u32(&mut self, v: u32) -> Result<(), Error> { self.put(&v.to_le_bytes()) }
 
-    pub fn u64(&mut self, v: u64) -> Result<(), Error> {
-        self.put(&v.to_le_bytes())
-    }
+    pub fn u64(&mut self, v: u64) -> Result<(), Error> { self.put(&v.to_le_bytes()) }
 
     pub fn string(&mut self, s: &str) -> Result<(), Error> {
         self.u16(u16::try_from(s.len()).map_err(|_| Error::TooLarge)?)?;
@@ -227,7 +203,13 @@ mod tests {
         let mut buf = [0u8; 6];
         let mut w = Writer::new(&mut buf);
         w.u16(0x0101).unwrap();
-        assert_eq!(w.atomic(|w| { w.u16(0x0202)?; w.u32(0x0303_0303) }), Err(Error::TooLarge));
+        assert_eq!(
+            w.atomic(|w| {
+                w.u16(0x0202)?;
+                w.u32(0x0303_0303)
+            }),
+            Err(Error::TooLarge)
+        );
         assert_eq!(w.position(), 2);
         assert_eq!(w.atomic(|w| w.u16(0x0404)), Ok(()));
         // Patching past what was written is refused, even inside the buffer.

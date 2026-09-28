@@ -16,13 +16,12 @@
 //! `system_reset` and the `process_*` and `thread_*` families.
 
 use redoubt_layout::Pid;
-
-use crate::arch::process::TID;
 use redoubt_sys::{
     BUDGET_SPEC_SLOTS, BudgetSpec, Call, CallOutcome, Error, LendDisposition, Number, REGS, Return,
     USAGE_SLOTS, encode_result,
 };
 
+use crate::arch::process::TID;
 use crate::kframe;
 use crate::mem::MemoryManager;
 use crate::message::MsgKind;

@@ -5,23 +5,21 @@
 //!   are cheap to create; with the label set, so that a vault session filling a server's slots is not visible
 //!   to its owner's unlabelled session, which shares the account. Account 0 (every system-class caller) is
 //!   admitted per badge, so one daemon cannot fill a bucket the steward needs.
-//! - **A fair share per badge within a bucket** (servers/serving.md R26), with the bucket as the
-//!   ceiling, so an agent cannot lock out its sponsor, who shares its bucket. A share may take one
-//!   more of a resource while it holds less than `limit / (n + 1)`, where n is the shares in the
-//!   bucket holding that resource, itself included: whatever the others hold, a share always leaves
-//!   room for one more share's worth. So an agent flooding its sponsor's bucket alone gets half of
-//!   it, and its sponsor can still take a third. The unit of a share is the caller's badge; the 9P
-//!   skeleton counts a connection a client minted for itself in the share of the connection it
-//!   minted it from, so minting more connections gains nothing ([`crate::server::ninep`],
-//!   Connections).
-//! - **Caps sized to fit**: at most [`Limits::buckets`] buckets hold anything at once, so that
-//!   every bucket at its cap fits the server's budget ([`Limits::fits`]) and the calls they may
-//!   hold open sum to less than `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). A
-//!   bucket beyond that is refused. Stated residual: a server sized for fewer buckets than it
-//!   serves refuses the latecomers, which tells them that others hold state - across accounts, and
-//!   between the label sets of one account, where it is a channel out of a vault
-//!   (servers/serving.md, "Residual risks"). Sizing closes it: a server's manifest sizes its bucket
-//!   count to the (account, label set)s it serves, so the cap never binds in normal use.
+//! - **A fair share per badge within a bucket** (servers/serving.md R26), with the bucket as the ceiling, so
+//!   an agent cannot lock out its sponsor, who shares its bucket. A share may take one more of a resource
+//!   while it holds less than `limit / (n + 1)`, where n is the shares in the bucket holding that resource,
+//!   itself included: whatever the others hold, a share always leaves room for one more share's worth. So an
+//!   agent flooding its sponsor's bucket alone gets half of it, and its sponsor can still take a third. The
+//!   unit of a share is the caller's badge; the 9P skeleton counts a connection a client minted for itself in
+//!   the share of the connection it minted it from, so minting more connections gains nothing
+//!   ([`crate::server::ninep`], Connections).
+//! - **Caps sized to fit**: at most [`Limits::buckets`] buckets hold anything at once, so that every bucket
+//!   at its cap fits the server's budget ([`Limits::fits`]) and the calls they may hold open sum to less than
+//!   `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). A bucket beyond that is refused. Stated
+//!   residual: a server sized for fewer buckets than it serves refuses the latecomers, which tells them that
+//!   others hold state - across accounts, and between the label sets of one account, where it is a channel
+//!   out of a vault (servers/serving.md, "Residual risks"). Sizing closes it: a server's manifest sizes its
+//!   bucket count to the (account, label set)s it serves, so the cap never binds in normal use.
 //! - **Caps big enough for a share to mean anything**: a non-zero cap is at least [`SMALLEST_CAP`], so that
 //!   one badge alone can never fill its bucket (its share is at most half of it) and a second badge - the
 //!   sponsor an agent shares the bucket with - always finds a slot. With three or more badges a bucket can

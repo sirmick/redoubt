@@ -62,9 +62,7 @@ impl Ty {
         }
     }
 
-    fn bits(self) -> usize {
-        self.info().0.unwrap_or(0) * 8
-    }
+    fn bits(self) -> usize { self.info().0.unwrap_or(0) * 8 }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,8 +86,9 @@ fn handles(fields: &[Field]) -> impl Iterator<Item = (&Field, usize, HandleKind)
 
 /// `` `name` (slot N, KIND) `` for each handle, for the generated docs; `None` if there are none.
 fn handle_doc(fields: &[Field]) -> Option<String> {
-    let hs: Vec<String> =
-        handles(fields).map(|(f, slot, kind)| format!("`{}` (slot {slot}, {})", f.name, kind.name())).collect();
+    let hs: Vec<String> = handles(fields)
+        .map(|(f, slot, kind)| format!("`{}` (slot {slot}, {})", f.name, kind.name()))
+        .collect();
     (!hs.is_empty()).then(|| hs.join(", "))
 }
 
@@ -99,9 +98,7 @@ fn fits_inline(fields: &[Field]) -> bool {
     sizes.is_some_and(|s| s.iter().sum::<usize>() <= INLINE_BYTES)
 }
 
-fn borrows(fields: &[Field]) -> bool {
-    data(fields).any(|f| matches!(f.ty, Ty::Str | Ty::Bytes))
-}
+fn borrows(fields: &[Field]) -> bool { data(fields).any(|f| matches!(f.ty, Ty::Str | Ty::Bytes)) }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageDef {
@@ -119,17 +116,11 @@ impl MessageDef {
     /// Inline if the request's fields and the reply's fields each fit in the words; a
     /// message whose reply needs a buffer is buffer-shaped, because reply data can only
     /// come back in the caller's lend (servers/wire.md).
-    pub fn inline(&self) -> bool {
-        fits_inline(&self.fields) && fits_inline(&self.reply)
-    }
+    pub fn inline(&self) -> bool { fits_inline(&self.fields) && fits_inline(&self.reply) }
 
-    fn type_name(&self) -> String {
-        camel(&self.name)
-    }
+    fn type_name(&self) -> String { camel(&self.name) }
 
-    fn reply_type(&self) -> String {
-        format!("{}Reply", camel(&self.name))
-    }
+    fn reply_type(&self) -> String { format!("{}Reply", camel(&self.name)) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,11 +160,54 @@ const RESERVED: &[&str] = &[
 /// Type names a message may not produce: the generated module's own items and imports, and
 /// the Rust prelude's names, which the generated code uses (`Result`, `Ok`, ...).
 const RESERVED_TYPES: &[&str] = &[
-    "Message", "Reply", "ErrorCode", "Error", "Reader", "Writer", "Layout", "Words", "Result", "Ok",
-    "Err", "Option", "Some", "None", "Box", "Vec", "String", "Copy", "Clone", "Debug", "PartialEq", "Eq",
-    "PartialOrd", "Ord", "Hash", "Default", "Drop", "Send", "Sync", "Sized", "Unpin", "Fn", "FnMut", "FnOnce",
-    "From", "Into", "TryFrom", "TryInto", "AsRef", "AsMut", "Iterator", "IntoIterator", "DoubleEndedIterator",
-    "ExactSizeIterator", "Extend", "FromIterator", "ToOwned", "ToString",
+    "Message",
+    "Reply",
+    "ErrorCode",
+    "Error",
+    "Reader",
+    "Writer",
+    "Layout",
+    "Words",
+    "Result",
+    "Ok",
+    "Err",
+    "Option",
+    "Some",
+    "None",
+    "Box",
+    "Vec",
+    "String",
+    "Copy",
+    "Clone",
+    "Debug",
+    "PartialEq",
+    "Eq",
+    "PartialOrd",
+    "Ord",
+    "Hash",
+    "Default",
+    "Drop",
+    "Send",
+    "Sync",
+    "Sized",
+    "Unpin",
+    "Fn",
+    "FnMut",
+    "FnOnce",
+    "From",
+    "Into",
+    "TryFrom",
+    "TryInto",
+    "AsRef",
+    "AsMut",
+    "Iterator",
+    "IntoIterator",
+    "DoubleEndedIterator",
+    "ExactSizeIterator",
+    "Extend",
+    "FromIterator",
+    "ToOwned",
+    "ToString",
 ];
 
 fn check_ident(what: &str, name: &str) -> Result<(), String> {
@@ -205,14 +239,13 @@ fn cells(line: &str) -> Option<Vec<&str>> {
     Some(inner.split('|').map(str::trim).collect())
 }
 
-fn backticked(s: &str) -> Option<&str> {
-    s.strip_prefix('`')?.strip_suffix('`')
-}
+fn backticked(s: &str) -> Option<&str> { s.strip_prefix('`')?.strip_suffix('`') }
 
 /// A nonzero decimal `u32` with one spelling: no sign, no leading zeros. Code 0 is the
 /// reply status "ok", so neither an opcode nor an error code may be 0.
 fn parse_code(what: &str, s: &str) -> Result<u32, String> {
-    let canonical = !s.is_empty() && (s == "0" || !s.starts_with('0')) && s.bytes().all(|b| b.is_ascii_digit());
+    let canonical =
+        !s.is_empty() && (s == "0" || !s.starts_with('0')) && s.bytes().all(|b| b.is_ascii_digit());
     let value: u32 = s
         .parse()
         .ok()
@@ -248,7 +281,10 @@ fn parse_type(s: &str, handles_so_far: usize) -> Result<Ty, String> {
             let kinds = || HandleKind::ALL.map(HandleKind::name).join(", ");
             let kind = match kind {
                 None => {
-                    return Err(format!("`{s}`: a handle needs its kind, `handle[{slot}] KIND` (one of {})", kinds()));
+                    return Err(format!(
+                        "`{s}`: a handle needs its kind, `handle[{slot}] KIND` (one of {})",
+                        kinds()
+                    ));
                 }
                 Some(k) if k.chars().any(char::is_whitespace) || k.is_empty() => {
                     return Err(format!("`{s}`: expected `handle[{slot}] KIND`, with one space"));
@@ -275,7 +311,8 @@ fn parse_fields(cell: &str) -> Result<Vec<Field>, String> {
     }
     for item in cell.split(',') {
         let item = item.trim_ascii();
-        let inner = backticked(item).ok_or_else(|| format!("field `{item}` must be `name: type` in backticks"))?;
+        let inner =
+            backticked(item).ok_or_else(|| format!("field `{item}` must be `name: type` in backticks"))?;
         let (fname, ty) = inner.split_once(':').ok_or_else(|| format!("field `{inner}` has no `: type`"))?;
         let fname = fname.trim_ascii();
         check_ident("field", fname)?;
@@ -292,7 +329,9 @@ fn parse_message(row: &[&str], with_kind: bool) -> Result<MessageDef, String> {
     let (opcode, kind, name, fields, reply) = match (row, with_kind) {
         ([opcode, name, fields, reply], false) => (opcode, "call", name, fields, reply),
         ([opcode, kind, name, fields, reply], true) => (opcode, *kind, name, fields, reply),
-        _ => return Err(format!("a row has {} cells, expected {}", row.len(), if with_kind { 5 } else { 4 })),
+        _ => {
+            return Err(format!("a row has {} cells, expected {}", row.len(), if with_kind { 5 } else { 4 }));
+        }
     };
     let opcode = parse_code("opcode", opcode)?;
     let send = match kind {
@@ -305,7 +344,9 @@ fn parse_message(row: &[&str], with_kind: bool) -> Result<MessageDef, String> {
     let reply = parse_fields(reply)?;
     // A `send` is never an open call, so nothing can answer it (kernel/ipc.md R4a).
     if send && !reply.is_empty() {
-        return Err(format!("message `{name}` is a `send`: its reply must be `-`, since a send has no reply"));
+        return Err(format!(
+            "message `{name}` is a `send`: its reply must be `-`, since a send has no reply"
+        ));
     }
     Ok(MessageDef { opcode, name: name.to_string(), fields: parse_fields(fields)?, reply, send })
 }
@@ -314,9 +355,7 @@ fn parse_message(row: &[&str], with_kind: bool) -> Result<MessageDef, String> {
 const MALFORMED_NAME: &str = "malformed";
 
 /// The error every protocol has: code 1.
-fn malformed() -> ErrorDef {
-    ErrorDef { code: MALFORMED, name: MALFORMED_NAME.into() }
-}
+fn malformed() -> ErrorDef { ErrorDef { code: MALFORMED, name: MALFORMED_NAME.into() } }
 
 fn parse_error(row: &[&str]) -> Result<ErrorDef, String> {
     let [code, name] = row else {
@@ -355,7 +394,11 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
         // A table with our header but no marker would be silently ignored: refuse it.
         let headed = |c: Vec<&str>| c == MESSAGE_HEADER || c == MESSAGE_HEADER_KIND || c == ERROR_HEADER;
         if cells(trimmed).is_some_and(headed) {
-            return Err(at(i, "a wire table needs a `<!-- wire: NAME -->` or `<!-- wire-errors: NAME -->` line before it".into()));
+            return Err(at(
+                i,
+                "a wire table needs a `<!-- wire: NAME -->` or `<!-- wire-errors: NAME -->` line before it"
+                    .into(),
+            ));
         }
         let (rest, header) = if let Some(rest) = trimmed.strip_prefix(ERROR_MARKER) {
             (rest, &ERROR_HEADER[..])
@@ -391,7 +434,9 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
         }
         i += 1;
         let separator = line(i).and_then(cells);
-        if separator.is_none_or(|c| c.len() != header.len() || c.iter().any(|s| s.len() < 3 || !s.chars().all(|ch| ch == '-'))) {
+        if separator.is_none_or(|c| {
+            c.len() != header.len() || c.iter().any(|s| s.len() < 3 || !s.chars().all(|ch| ch == '-'))
+        }) {
             return Err(at(i, "expected a separator row of `---` cells".into()));
         }
         i += 1;
@@ -415,7 +460,10 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             next += 1;
         }
         if line(next).is_some_and(|l| l.starts_with('|') || (l.contains('|') && l.contains('`'))) {
-            return Err(at(next, format!("this looks like a row of `{name}`, but its table ended at the blank line above")));
+            return Err(at(
+                next,
+                format!("this looks like a row of `{name}`, but its table ended at the blank line above"),
+            ));
         }
         if header == ERROR_HEADER {
             // Code 1 is `malformed` in every protocol (servers/wire.md): added here, and a
@@ -424,11 +472,14 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             for (n, row) in rows {
                 let e = parse_error(&row).map_err(|e| at(n, e))?;
                 if e.code == MALFORMED || e.name == MALFORMED_NAME {
-                    return Err(at(n, format!(
-                        "error `{}` (code {}): code {MALFORMED} is `malformed` in every protocol, added by the generator; \
+                    return Err(at(
+                        n,
+                        format!(
+                            "error `{}` (code {}): code {MALFORMED} is `malformed` in every protocol, added by the generator; \
                          a protocol's own codes start at 2",
-                        e.name, e.code
-                    )));
+                            e.name, e.code
+                        ),
+                    ));
                 }
                 if errors.iter().any(|o| o.code == e.code || camel(&o.name) == camel(&e.name)) {
                     return Err(at(n, format!("error `{}` or code {} used twice", e.name, e.code)));
@@ -447,21 +498,33 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
                 // `ninep_common` reserves opcodes 1-15 on a 9P endpoint, so a protocol served
                 // there starts at 16; an unmarked table starts at 1 (servers/wire.md).
                 if ninep && m.opcode < NINEP_FIRST_OPCODE {
-                    return Err(at(n, format!(
-                        "message `{}`: opcode {} is below {NINEP_FIRST_OPCODE}, reserved for `ninep_common`, \
+                    return Err(at(
+                        n,
+                        format!(
+                            "message `{}`: opcode {} is below {NINEP_FIRST_OPCODE}, reserved for `ninep_common`, \
                          because `{name}` is served on a 9P endpoint (servers/wire.md)",
-                        m.name, m.opcode
-                    )));
+                            m.name, m.opcode
+                        ),
+                    ));
                 }
                 // Every Rust type the message produces must be new: `a_reply` and the
                 // reply of `a` would both be `AReply`.
                 let new_types = vec![m.type_name(), m.reply_type()];
                 for t in &new_types {
                     if RESERVED_TYPES.contains(&t.as_str()) {
-                        return Err(at(n, format!("message `{}` would make the Rust type `{t}`, which the generated code already uses", m.name)));
+                        return Err(at(
+                            n,
+                            format!(
+                                "message `{}` would make the Rust type `{t}`, which the generated code already uses",
+                                m.name
+                            ),
+                        ));
                     }
                     if types.contains(t) || messages.iter().any(|o| o.name == m.name) {
-                        return Err(at(n, format!("message `{}` defined twice (as the Rust type `{t}`)", m.name)));
+                        return Err(at(
+                            n,
+                            format!("message `{}` defined twice (as the Rust type `{t}`)", m.name),
+                        ));
                     }
                 }
                 types.extend(new_types);
@@ -486,7 +549,10 @@ pub fn link(tables: Vec<Tables>) -> Result<Vec<Protocol>, String> {
     for t in tables {
         for p in t.protocols {
             if let Some(other) = protocols.iter().find(|o| o.name == p.name) {
-                return Err(format!("protocol `{}` is defined in both {} and {}", p.name, other.source, p.source));
+                return Err(format!(
+                    "protocol `{}` is defined in both {} and {}",
+                    p.name, other.source, p.source
+                ));
             }
             protocols.push(p);
         }
@@ -503,7 +569,10 @@ pub fn link(tables: Vec<Tables>) -> Result<Vec<Protocol>, String> {
         p.errors = e.errors;
     }
     if let Some(p) = protocols.iter().find(|p| p.errors.is_empty()) {
-        return Err(format!("{}: protocol `{}` has no `<!-- wire-errors: {} -->` table", p.source, p.name, p.name));
+        return Err(format!(
+            "{}: protocol `{}` has no `<!-- wire-errors: {} -->` table",
+            p.source, p.name, p.name
+        ));
     }
     protocols.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(protocols)
@@ -514,7 +583,9 @@ fn rust_struct(s: &mut String, doc: &str, name: &str, fields: &[Field]) {
     let _ = writeln!(s, "\n{doc}");
     if let Some(hs) = handle_doc(fields) {
         let _ = writeln!(s, "///\n/// Handle slots: {hs}.");
-        s.push_str("/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`\n");
+        s.push_str(
+            "/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`\n",
+        );
         s.push_str("/// on first use.\n");
     }
     let _ = writeln!(s, "#[derive(Debug, Clone, Copy, PartialEq, Eq)]");
@@ -561,7 +632,8 @@ fn rust_enum(s: &mut String, kind: &str, doc: &str, rows: &[Row<'_>]) {
         let _ = writeln!(s, "            {kind}::{}(_) => &[{}],", r.variant, names.join(", "));
     }
     s.push_str("        }\n    }\n\n");
-    let key = if kind == "Reply" { "The opcode of the request this replies to." } else { "The opcode in word 0." };
+    let key =
+        if kind == "Reply" { "The opcode of the request this replies to." } else { "The opcode in word 0." };
     let _ = writeln!(s, "    /// {key}");
     s.push_str("    fn opcode(&self) -> u32 {\n        match self {\n");
     for r in rows {
@@ -581,7 +653,8 @@ fn rust_enum(s: &mut String, kind: &str, doc: &str, rows: &[Row<'_>]) {
                 let _ = writeln!(s, "            {kind}::{}(_) => Ok(()),", r.variant);
             }
             [f] => {
-                let _ = writeln!(s, "            {kind}::{}(m) => w.{}(m.{}),", r.variant, f.ty.info().1, f.name);
+                let _ =
+                    writeln!(s, "            {kind}::{}(m) => w.{}(m.{}),", r.variant, f.ty.info().1, f.name);
             }
             _ => {
                 let _ = writeln!(s, "            {kind}::{}(m) => {{", r.variant);
@@ -602,15 +675,20 @@ fn rust_enum(s: &mut String, kind: &str, doc: &str, rows: &[Row<'_>]) {
         let r = if reads { "r" } else { "_r" };
         if chosen.is_empty() {
             // A protocol with no inline messages (only a `_` arm would be unreachable code).
-            let _ = writeln!(s, "    fn {fname}(_opcode: u32, {r}: &mut Reader<{rlt}>) -> Result<Self, Error> {{");
+            let _ = writeln!(
+                s,
+                "    fn {fname}(_opcode: u32, {r}: &mut Reader<{rlt}>) -> Result<Self, Error> {{"
+            );
             s.push_str("        Err(Error::BadOpcode)\n    }\n\n");
             continue;
         }
         let _ = writeln!(s, "    fn {fname}(opcode: u32, {r}: &mut Reader<{rlt}>) -> Result<Self, Error> {{");
         s.push_str("        Ok(match opcode {\n");
         for r in chosen {
-            let inits: Vec<String> = data(r.fields).map(|f| format!("{}: r.{}()?", f.name, f.ty.info().1)).collect();
-            let body = if inits.is_empty() { "{}".to_string() } else { format!("{{ {} }}", inits.join(", ")) };
+            let inits: Vec<String> =
+                data(r.fields).map(|f| format!("{}: r.{}()?", f.name, f.ty.info().1)).collect();
+            let body =
+                if inits.is_empty() { "{}".to_string() } else { format!("{{ {} }}", inits.join(", ")) };
             let _ = writeln!(s, "            {} => {kind}::{}({} {body}),", r.opcode, r.variant, r.ty);
         }
         s.push_str("            _ => return Err(Error::BadOpcode),\n        })\n    }\n\n");
@@ -640,31 +718,46 @@ pub fn rust(p: &Protocol) -> String {
 
     let layouts = |rows: Vec<(u32, bool, usize)>| {
         rows.iter()
-            .map(|(op, inline, h)| format!("    Layout {{ opcode: {op}, inline: {inline}, handles: {h} }},\n"))
+            .map(|(op, inline, h)| {
+                format!("    Layout {{ opcode: {op}, inline: {inline}, handles: {h} }},\n")
+            })
             .collect::<String>()
     };
-    let requests = layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), handles(&m.fields).count())).collect());
+    let requests =
+        layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), handles(&m.fields).count())).collect());
     let _ = write!(s, "\n/// Requests by opcode.\nconst REQUESTS: &[Layout] = &[\n{requests}];\n");
     let rows: Vec<Row<'_>> = p
         .messages
         .iter()
-        .map(|m| Row { opcode: m.opcode, variant: m.type_name(), ty: m.type_name(), fields: &m.fields, inline: m.inline() })
+        .map(|m| Row {
+            opcode: m.opcode,
+            variant: m.type_name(),
+            ty: m.type_name(),
+            fields: &m.fields,
+            inline: m.inline(),
+        })
         .collect();
     rust_enum(&mut s, "Message", "Every request of the protocol.", &rows);
     s.push_str("    /// Decodes a received request: its words, the buffer that came with it (empty if\n");
     s.push_str("    /// none), and how many handles it carried.\n");
     s.push_str("    pub fn decode(words: &Words, buf: &'a [u8], handles: usize) -> Result<Self, Error> {\n");
     s.push_str("        let layout = typed::layout(REQUESTS, typed::opcode(words)?)?;\n");
-    s.push_str("        typed::decode(layout, words, buf, handles, Self::read_inline, Self::read_buffer)\n    }\n\n");
+    s.push_str(
+        "        typed::decode(layout, words, buf, handles, Self::read_inline, Self::read_buffer)\n    }\n\n",
+    );
     s.push_str("    /// Encodes the request: returns its words, and writes the fields into `buf` if it is\n");
     s.push_str("    /// a buffer message (the buffer's length is then in word 1).\n");
     s.push_str("    pub fn encode(&self, buf: &mut [u8]) -> Result<Words, Error> {\n");
     s.push_str("        let opcode = self.opcode();\n");
-    s.push_str("        typed::encode(typed::layout(REQUESTS, opcode)?, opcode, buf, |w| self.write(w))\n    }\n\n");
+    s.push_str(
+        "        typed::encode(typed::layout(REQUESTS, opcode)?, opcode, buf, |w| self.write(w))\n    }\n\n",
+    );
     s.push_str("    /// Decodes a request written into a 9P file: all of `bytes` is one operation.\n");
     s.push_str("    pub fn decode_file(bytes: &'a [u8]) -> Result<Self, Error> {\n");
     s.push_str("        typed::decode_file(REQUESTS, bytes, Self::read_buffer)\n    }\n\n");
-    s.push_str("    /// Writes the request in the file framing into the front of `out`; returns its length.\n");
+    s.push_str(
+        "    /// Writes the request in the file framing into the front of `out`; returns its length.\n",
+    );
     s.push_str("    pub fn encode_file(&self, out: &mut [u8]) -> Result<usize, Error> {\n");
     s.push_str("        typed::encode_file(typed::layout(REQUESTS, self.opcode())?, out, |w| self.write(w))\n    }\n");
     // Only a protocol with a `Kind` column that names a `send` says which messages are sent: every
@@ -672,19 +765,33 @@ pub fn rust(p: &Protocol) -> String {
     if p.messages.iter().any(|m| m.send) {
         let sends: Vec<String> =
             p.messages.iter().filter(|m| m.send).map(|m| format!("Message::{}(_)", m.type_name())).collect();
-        s.push_str("\n    /// Whether this message is sent one-way (`send`, its buffer a transfer) rather than\n");
-        s.push_str("    /// called: a receiver must not reply to it, and a sender must not wait for a reply.\n");
+        s.push_str(
+            "\n    /// Whether this message is sent one-way (`send`, its buffer a transfer) rather than\n",
+        );
+        s.push_str(
+            "    /// called: a receiver must not reply to it, and a sender must not wait for a reply.\n",
+        );
         let sends = sends.join(" | ");
         let _ = writeln!(s, "    pub fn is_send(&self) -> bool {{\n        matches!(self, {sends})\n    }}");
     }
     s.push_str("}\n");
 
-    let replies = layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), handles(&m.reply).count())).collect());
-    let _ = write!(s, "\n/// Replies, by the opcode of their request.\nconst REPLIES: &[Layout] = &[\n{replies}];\n");
+    let replies =
+        layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), handles(&m.reply).count())).collect());
+    let _ = write!(
+        s,
+        "\n/// Replies, by the opcode of their request.\nconst REPLIES: &[Layout] = &[\n{replies}];\n"
+    );
     let rows: Vec<Row<'_>> = p
         .messages
         .iter()
-        .map(|m| Row { opcode: m.opcode, variant: m.type_name(), ty: m.reply_type(), fields: &m.reply, inline: m.inline() })
+        .map(|m| Row {
+            opcode: m.opcode,
+            variant: m.type_name(),
+            ty: m.reply_type(),
+            fields: &m.reply,
+            inline: m.inline(),
+        })
         .collect();
     rust_enum(&mut s, "Reply", "Every successful reply of the protocol, named after its request.", &rows);
     s.push_str("    /// Decodes the reply to the request with `opcode` (the caller knows what it sent):\n");
@@ -693,7 +800,9 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("    pub fn decode(opcode: u32, words: &Words, buf: &'a [u8], handles: usize) -> Result<Result<Self, ErrorCode>, Error> {\n");
     s.push_str("        let layout = typed::layout(REPLIES, opcode)?;\n");
     s.push_str("        if let Some(code) = typed::reply_status(words, handles)? {\n");
-    s.push_str("            return ErrorCode::from_code(code).map(Err).ok_or(Error::BadStatus);\n        }\n");
+    s.push_str(
+        "            return ErrorCode::from_code(code).map(Err).ok_or(Error::BadStatus);\n        }\n",
+    );
     s.push_str("        typed::decode(layout, words, buf, handles, Self::read_inline, Self::read_buffer).map(Ok)\n    }\n\n");
     s.push_str("    /// Encodes the reply (status 0): returns its words, and writes the fields into `buf`\n");
     s.push_str("    /// (the caller's lend) if it is a buffer message.\n");
@@ -701,7 +810,9 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("        typed::encode(typed::layout(REPLIES, self.opcode())?, 0, buf, |w| self.write(w))\n    }\n}\n");
 
     s.push_str("\n/// The protocol's error codes: word 0 of an error reply. Code 1, `Malformed`, is every\n");
-    s.push_str("/// protocol's: a request that does not decode (servers/wire.md, \"The message convention\").\n");
+    s.push_str(
+        "/// protocol's: a request that does not decode (servers/wire.md, \"The message convention\").\n",
+    );
     s.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ErrorCode {\n");
     for e in &p.errors {
         let _ = writeln!(s, "    {},", camel(&e.name));
@@ -710,7 +821,9 @@ pub fn rust(p: &Protocol) -> String {
     for e in &p.errors {
         let _ = writeln!(s, "            ErrorCode::{} => {},", camel(&e.name), e.code);
     }
-    s.push_str("        }\n    }\n\n    pub fn from_code(code: u32) -> Option<Self> {\n        match code {\n");
+    s.push_str(
+        "        }\n    }\n\n    pub fn from_code(code: u32) -> Option<Self> {\n        match code {\n",
+    );
     for e in &p.errors {
         let _ = writeln!(s, "            {} => Some(ErrorCode::{}),", e.code, camel(&e.name));
     }
@@ -774,8 +887,10 @@ fn elixir_clauses(enc: &mut String, read: &mut String, dir: &str, m: &MessageDef
     segs.push("rest::binary".into());
     let map: Vec<String> = d.iter().map(|f| format!("{}: v_{}", f.name, f.name)).collect();
     let result = format!("{{:ok, :{}, %{{{}}}, rest}}", m.name, map.join(", "));
-    let strings: Vec<String> = d.iter().filter(|f| f.ty == Ty::Str).map(|f| format!("v_{}", f.name)).collect();
-    let result = if strings.is_empty() { result } else { format!("W.utf8([{}], {result})", strings.join(", ")) };
+    let strings: Vec<String> =
+        d.iter().filter(|f| f.ty == Ty::Str).map(|f| format!("v_{}", f.name)).collect();
+    let result =
+        if strings.is_empty() { result } else { format!("W.utf8([{}], {result})", strings.join(", ")) };
     let _ = writeln!(read, "  defp read(:{dir}, {}, <<{}>>), do: {result}", m.opcode, segs.join(", "));
 }
 
@@ -789,9 +904,16 @@ pub fn elixir(p: &Protocol) -> String {
     let _ = writeln!(s, "# Do not edit: change the tables and run `cargo run -p redoubt-wire-gen`.");
     let _ = writeln!(s, "defmodule {module} do");
     let _ = writeln!(s, "  @moduledoc \"\"\"");
-    let _ = writeln!(s, "  Codec for the `{}` protocol. A request or reply is `{{name, fields}}`, with `fields` a", p.name);
+    let _ = writeln!(
+        s,
+        "  Codec for the `{}` protocol. A request or reply is `{{name, fields}}`, with `fields` a",
+        p.name
+    );
     let _ = writeln!(s, "  map holding exactly the table's non-handle fields; an error reply decodes to");
-    let _ = writeln!(s, "  `{{:failed, error}}`; `:malformed` (code 1) is every protocol's error for a request that");
+    let _ = writeln!(
+        s,
+        "  `{{:failed, error}}`; `:malformed` (code 1) is every protocol's error for a request that"
+    );
     let _ = writeln!(s, "  does not decode. Framing and errors: `Redoubt.Wire`.");
     let _ = writeln!(s, "  \"\"\"");
     s.push_str("  alias Redoubt.Wire, as: W\n\n");
@@ -826,7 +948,9 @@ pub fn elixir(p: &Protocol) -> String {
         })
         .collect();
     if !kinds.is_empty() {
-        s.push_str("\n  Handle kinds, from the table: documentation, checked by use (a handle of the wrong kind\n");
+        s.push_str(
+            "\n  Handle kinds, from the table: documentation, checked by use (a handle of the wrong kind\n",
+        );
         s.push_str("  gets `WrongObject` on first use).\n\n");
         for k in kinds {
             let _ = writeln!(s, "{k}");
@@ -835,18 +959,31 @@ pub fn elixir(p: &Protocol) -> String {
     s.push_str("  \"\"\"\n");
     for m in &p.messages {
         let reply = format!("{{{}}}", elixir_fields(&m.reply));
-        let _ = writeln!(s, "  def layout(:{}), do: {{{}, {}, {}, {reply}}}", m.name, m.opcode, shape(m), elixir_fields(&m.fields));
+        let _ = writeln!(
+            s,
+            "  def layout(:{}), do: {{{}, {}, {}, {reply}}}",
+            m.name,
+            m.opcode,
+            shape(m),
+            elixir_fields(&m.fields)
+        );
     }
     s.push_str("  def layout(_), do: nil\n\n");
 
     s.push_str("  @doc \"Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`.\"\n");
     s.push_str("  def encode(message), do: W.encode(message, @requests, &enc(:request, &1, &2))\n\n");
-    s.push_str("  @doc \"Encodes a successful reply (status 0): `{:ok, words, buffer}` or `{:error, reason}`.\"\n");
+    s.push_str(
+        "  @doc \"Encodes a successful reply (status 0): `{:ok, words, buffer}` or `{:error, reason}`.\"\n",
+    );
     s.push_str("  def encode_reply(reply), do: W.encode_reply(reply, @replies, &enc(:reply, &1, &2))\n\n");
     s.push_str("  @doc \"The words of an error reply: `{:ok, words, <<>>}` or `{:error, :bad_message}`.\"\n");
     s.push_str("  def encode_error(error), do: W.encode_error(error, @errors)\n\n");
-    s.push_str("  @doc \"Encodes a request for writing into a 9P file: `{:ok, bytes}` or `{:error, reason}`.\"\n");
-    s.push_str("  def encode_file(message), do: W.encode_file(message, @requests, &enc(:request, &1, &2))\n\n");
+    s.push_str(
+        "  @doc \"Encodes a request for writing into a 9P file: `{:ok, bytes}` or `{:error, reason}`.\"\n",
+    );
+    s.push_str(
+        "  def encode_file(message), do: W.encode_file(message, @requests, &enc(:request, &1, &2))\n\n",
+    );
     s.push_str("  @doc \"Decodes a request from its four words, its buffer and its handle count.\"\n");
     s.push_str("  def decode(words, buffer, handles), do: W.decode(words, buffer, handles, @requests, &read(:request, &1, &2))\n\n");
     s.push_str("  @doc \"Decodes the reply to the request with `opcode`: `{:ok, reply}`, `{:failed, error}` or `{:error, reason}`.\"\n");
@@ -930,25 +1067,20 @@ pub fn orphans(root: &Path, expected: &[(PathBuf, String)]) -> Vec<PathBuf> {
 }
 
 /// The repository root, from this crate's location (`libs/wire/gen`).
-pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
-}
+pub fn repo_root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..") }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const HEAD: &str = "<!-- wire: demo -->\n| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n";
+    const HEAD: &str =
+        "<!-- wire: demo -->\n| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n";
     const ERRORS: &str = "\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n| 2 | `denied` |\n";
 
-    fn protocols(text: &str) -> Result<Vec<Protocol>, String> {
-        link(vec![parse("n.md", text)?])
-    }
+    fn protocols(text: &str) -> Result<Vec<Protocol>, String> { link(vec![parse("n.md", text)?]) }
 
     /// The error for a message table `rows`, given an error table.
-    fn err(rows: &str) -> String {
-        protocols(&format!("{HEAD}{rows}{ERRORS}")).unwrap_err()
-    }
+    fn err(rows: &str) -> String { protocols(&format!("{HEAD}{rows}{ERRORS}")).unwrap_err() }
 
     #[test]
     fn parses_tables() {
@@ -975,7 +1107,10 @@ mod tests {
     #[test]
     fn refuses_bad_tables() {
         let bare = |t: &str| protocols(t).unwrap_err();
-        assert!(bare("| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n| 1 | `a` | - | - |\n").contains("needs a"));
+        assert!(
+            bare("| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n| 1 | `a` | - | - |\n")
+                .contains("needs a")
+        );
         assert!(bare("| Code | Error |\n| --- | --- |\n| 1 | `a` |\n").contains("needs a"));
         assert!(err("| 1 | `a` | - | - |\n| 1 | `b` | - | - |\n").contains("opcode 1 used twice"));
         assert!(err("| 1 | `a` | - | - |\n| 2 | `a` | - | - |\n").contains("defined twice"));
@@ -1030,9 +1165,17 @@ mod tests {
     #[test]
     fn error_tables() {
         assert!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).is_ok());
-        assert!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n")).unwrap_err().contains("no `<!-- wire-errors: demo -->` table"));
+        assert!(
+            protocols(&format!("{HEAD}| 1 | `a` | - | - |\n"))
+                .unwrap_err()
+                .contains("no `<!-- wire-errors: demo -->` table")
+        );
         assert!(err(&format!("| 1 | `a` | - | - |\n{ERRORS}")).contains("two error tables"));
-        assert!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{}", ERRORS.replace("demo", "other"))).unwrap_err().contains("unknown protocol"));
+        assert!(
+            protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{}", ERRORS.replace("demo", "other")))
+                .unwrap_err()
+                .contains("unknown protocol")
+        );
         let errors = |rows: &str| {
             protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n{rows}")).unwrap_err()
         };
@@ -1047,7 +1190,8 @@ mod tests {
     #[test]
     fn handle_kinds() {
         for kind in HandleKind::ALL {
-            let p = protocols(&format!("{HEAD}| 1 | `a` | `h: handle[0] {}` | - |\n{ERRORS}", kind.name())).unwrap();
+            let p = protocols(&format!("{HEAD}| 1 | `a` | `h: handle[0] {}` | - |\n{ERRORS}", kind.name()))
+                .unwrap();
             assert_eq!(p[0].messages[0].fields[0].ty, Ty::Handle(0, kind));
         }
         assert!(err("| 1 | `a` | `h: handle[0]` | - |\n").contains("needs its kind"));
@@ -1098,7 +1242,12 @@ mod tests {
         assert!(rust.contains("/// Handle slots: `b` (slot 0, budget)."), "{rust}");
         assert!(!rust.contains("HandleKind"), "{rust}");
         let ex = elixir(&p[0]);
-        assert!(ex.contains("  - `a`: `r` (slot 0, endpoint), `m` (slot 1, mmio)\n  - `a` reply: `b` (slot 0, budget)\n"), "{ex}");
+        assert!(
+            ex.contains(
+                "  - `a`: `r` (slot 0, endpoint), `m` (slot 1, mmio)\n  - `a` reply: `b` (slot 0, budget)\n"
+            ),
+            "{ex}"
+        );
         assert!(ex.contains("[{:x, :u32}], [:r, :m], {[], [:b]}"), "{ex}");
     }
 
@@ -1107,9 +1256,13 @@ mod tests {
     #[test]
     fn malformed_is_code_one_everywhere() {
         let errors = |rows: &str| {
-            protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n{rows}"))
+            protocols(&format!(
+                "{HEAD}| 1 | `a` | - | - |\n\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n{rows}"
+            ))
         };
-        assert!(errors("| 1 | `not_found` |\n").unwrap_err().contains("code 1 is `malformed` in every protocol"));
+        assert!(
+            errors("| 1 | `not_found` |\n").unwrap_err().contains("code 1 is `malformed` in every protocol")
+        );
         assert!(errors("| 1 | `malformed` |\n").unwrap_err().contains("code 1 is `malformed`"));
         assert!(errors("| 7 | `malformed` |\n").unwrap_err().contains("code 1 is `malformed`"));
         // Other names are the table's own.
@@ -1122,7 +1275,9 @@ mod tests {
         assert!(errors("\n| 2 | `x` |\n").unwrap_err().contains("ended at the blank line"));
         // A line straight after the empty table names the table.
         assert!(errors("Some prose.\n").unwrap_err().contains("table `demo` must end at a blank line"));
-        assert!(errors("<!-- wire: other -->\n").unwrap_err().contains("table `demo` must end at a blank line"));
+        assert!(
+            errors("<!-- wire: other -->\n").unwrap_err().contains("table `demo` must end at a blank line")
+        );
         let p = errors("| 2 | `denied` |\n").unwrap();
         let rust = rust(&p[0]);
         assert!(rust.contains("    Malformed,\n    Denied,\n"), "{rust}");
@@ -1130,8 +1285,7 @@ mod tests {
         assert!(elixir(&p[0]).contains("1 => :malformed,\n    2 => :denied"));
     }
 
-    const KIND_HEAD: &str =
-        "<!-- wire: demo -->\n| Opcode | Kind | Message | Fields | Reply |\n| --- | --- | --- | --- | --- |\n";
+    const KIND_HEAD: &str = "<!-- wire: demo -->\n| Opcode | Kind | Message | Fields | Reply |\n| --- | --- | --- | --- | --- |\n";
 
     /// servers/wire.md: a `Kind` column says which messages are `send`s; without it, all are calls.
     #[test]
@@ -1142,8 +1296,13 @@ mod tests {
         assert!(!p[0].messages[0].send);
         assert!(p[0].messages[1].send);
         let rust = rust(&p[0]);
-        assert!(rust.contains("/// `b`: opcode 2, buffer, a `send`: its buffer is a transfer and there is no reply."));
-        assert!(rust.contains("pub fn is_send(&self) -> bool {\n        matches!(self, Message::B(_))\n    }"), "{rust}");
+        assert!(rust.contains(
+            "/// `b`: opcode 2, buffer, a `send`: its buffer is a transfer and there is no reply."
+        ));
+        assert!(
+            rust.contains("pub fn is_send(&self) -> bool {\n        matches!(self, Message::B(_))\n    }"),
+            "{rust}"
+        );
         // Without the column every message is a call, and the generated code says nothing of sends.
         let calls = protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).unwrap();
         assert!(!calls[0].messages[0].send);
@@ -1196,13 +1355,22 @@ mod tests {
         assert!(rust.contains("fn read_inline(_opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> {\n        Err(Error::BadOpcode)"));
     }
 
-
     /// These names would compile into code that does not build.
     #[test]
     fn refuses_names_that_clash_in_generated_code() {
         for name in [
-            "message", "reply", "error_code", "error", "words", "reader", "writer", "layout", "result", "ok",
-            "option", "vec",
+            "message",
+            "reply",
+            "error_code",
+            "error",
+            "words",
+            "reader",
+            "writer",
+            "layout",
+            "result",
+            "ok",
+            "option",
+            "vec",
         ] {
             assert!(err(&format!("| 1 | `{name}` | - | - |\n")).contains("already uses"), "{name}");
         }
@@ -1219,7 +1387,12 @@ mod tests {
         assert!(err("| 1 | `a` | - | - |\nSome prose.\n").contains("must end at a blank line"));
         assert!(err("| 1 | `a` | - | - | x |\n").contains("5 cells"));
         // Prose after a blank line is fine.
-        assert_eq!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\nSome prose.\n{ERRORS}")).unwrap()[0].messages.len(), 1);
+        assert_eq!(
+            protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\nSome prose.\n{ERRORS}")).unwrap()[0]
+                .messages
+                .len(),
+            1
+        );
     }
 
     #[test]

@@ -41,8 +41,8 @@
 
 use core::convert::TryFrom;
 
-use redoubt_sys::{Error, PAGE_SIZE};
 use redoubt_layout::Pid;
+use redoubt_sys::{Error, PAGE_SIZE};
 
 use crate::budget::BudgetFrame;
 use crate::handle::{BudgetRef, DeviceRef, Handle, Object};
@@ -175,13 +175,12 @@ impl MemoryManager {
     /// over the object frames, as R10's sweeps are; it runs once per interrupt.
     pub fn irq_device(&self, irq: usize) -> Option<u32> {
         let irq = u32::try_from(irq).ok()?;
-        (0..=self.objects.high_frame)
-            .find(|f| {
-                self.is_device_frame(*f) && {
-                    let d = self.device(*f);
-                    d.kind == Kind::Irq && d.irq == irq
-                }
-            })
+        (0..=self.objects.high_frame).find(|f| {
+            self.is_device_frame(*f) && {
+                let d = self.device(*f);
+                d.kind == Kind::Irq && d.irq == irq
+            }
+        })
     }
 
     /// Create one device object, charged to `owner` (the cost table).
