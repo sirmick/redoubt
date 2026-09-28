@@ -92,7 +92,7 @@ threads. A fault in any thread ends the whole process.
 
 ### Creating and starting
 
-Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` are not attacked by a case, and the kernel departs from the PID count (Residual risks) · tested: bench:process, bench:process-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget
+Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` are not attacked by a case, and the kernel departs from the PID count (Residual risks) · tested: bench:process, bench:process-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R11ProcessMapSkipsFlags
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -134,13 +134,13 @@ process's PID is held outside every limit until its notice goes (Residual risks)
 
 **`process_map`** moves pages from the caller into a process that has not started. The source
 must be whole pages of the caller's own RAM, not lent (a reserved page is backed first); device
-and DMA pages stay put. Every check runs before any page moves. The ranges, the source and the
-flags are `InvalidArgument` (flags never empty, never writable and executable together, never
-writable without readable: [R11 (memory)](memory.md#r11-memory)); a process that has ended
-(its address space gone) is `NotPermitted`; a destination page already in use is
-`InvalidArgument`; a process that has started is `NotPermitted`; last, the
-process's budget must pay for the page tables and, unless parent and child share a budget, the
-pages (`OutOfMemory`). The exact order is in the
+and DMA pages stay put. Every check runs before any page moves. The ranges, the flags and the
+source, in that order, are `InvalidArgument` (flags never empty, never writable and executable
+together, never writable without readable: [R11 (memory)](memory.md#r11-memory)), so bad flags
+back no page of the source; a process that has ended (its address space gone) is
+`NotPermitted`; a destination page already in use is `InvalidArgument`; a process that has
+started is `NotPermitted`; last, the process's budget must pay for the page tables and, unless
+parent and child share a budget, the pages (`OutOfMemory`). The exact order is in the
 [ABI reference](abi.md#errors-and-the-order-of-checks). The pages then belong to the process and
 are charged to its budget; the page rules are in [memory](memory.md#the-mapping-calls). The
 image and the startup block reach a process this way.
@@ -365,11 +365,6 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
   for it; this departs from R12 (scheduling)'s bound on a call's kernel time
   ([scheduling](scheduling.md#r12-scheduling)). Follow-up:
   [todo](../todo/kernel-scan-bounds.md).
-- **`process_map` backs its source before it checks the flags.** A `process_map` with bad flags
-  may first make the caller's untouched source pages real, at the caller's cost, before it
-  refuses. The model's proof of the write-without-read refusal goes through `set_flags`, not
-  `process_map` ([todo](../todo/write-only-mutation-split.md)). Follow-up:
-  [todo](../todo/process-map-flag-order.md).
 - **The loader's own programs send no notice.** Nothing hears when one of them ends
   ([boot](boot.md)).
 

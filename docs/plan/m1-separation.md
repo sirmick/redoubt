@@ -97,7 +97,6 @@ page.
      [the kernel's print on a panic](../todo/print-panic-reentry.md),
      [the kernel crate's host test target](../todo/hosted-kernel-tests.md),
      [a stray file in the kernel's tree](../todo/kernel-test-hello.md),
-     [`process_map`'s flag order](../todo/process-map-flag-order.md),
      [an interrupt before the first receive](../todo/irq-level-latch.md),
      [freeing empty page tables](../todo/page-table-freeing.md),
      [records at a device mapping](../todo/mmio-record-frames.md),

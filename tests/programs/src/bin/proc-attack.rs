@@ -170,6 +170,18 @@ fn arguments(c: &mut Checker, image: &spawn::Image) {
         assert_eq!(rd::peek(src), 0x1122);
     }
     c.check(true, "hostile mapping ranges and W+X refused without moving source");
+    // Bad flags on a source page never touched: refused before the page is backed, so the
+    // caller's own budget (this loader program's, `system`) is charged nothing.
+    let untouched = rd::untouched_stack_page();
+    let own = rd::usage(rd::SYSTEM).unwrap();
+    for flags in [MemFlags::WRITE, MemFlags::NONE] {
+        assert_eq!(
+            rd::process_map(process, untouched, DEST, rd::PAGE_SIZE, flags),
+            Err(Error::InvalidArgument)
+        );
+        assert_eq!(rd::usage(rd::SYSTEM), Ok(own));
+    }
+    c.check(true, "bad flags refused before an untouched source page is backed");
     rd::process_map(process, src, DEST, rd::PAGE_SIZE, rd::rw()).unwrap();
     let second = rd::map_anon(rd::PAGE_SIZE, rd::rw()).unwrap();
     rd::poke(second, 0x5566);

@@ -2858,16 +2858,18 @@ impl Kernel {
         let child = self.lookup_process(pid, process)?;
         let (s, n) = user_range(src, len)?;
         let (d, _) = user_range(dst, len)?;
+        // The flags before the source, as the kernel checks them before it backs any page.
+        if !self.broken(Mutation::R11ProcessMapSkipsFlags) {
+            check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
+        }
         self.own_range(pid, s, n, |m| match m.backing {
             Backing::Frame(f) => self.frames[&f].dma.is_none(),
             _ => false,
         })?;
-        let cp = self.processes.get(&child);
-        if cp.is_some_and(|p| (d..d + n).any(|v| p.space.contains_key(&v))) {
+        let cp = self.processes.get(&child).ok_or(Error::NotPermitted)?;
+        if (d..d + n).any(|v| cp.space.contains_key(&v)) {
             return Err(Error::InvalidArgument);
         }
-        check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
-        let cp = cp.ok_or(Error::NotPermitted)?;
         if cp.started {
             return Err(Error::NotPermitted);
         }

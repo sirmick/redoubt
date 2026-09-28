@@ -1,4 +1,4 @@
-description = "Hostile mapping/startup, R8 accounts, R9 creation stamps, I8 user-class restrictions, pending exit-record rollback and creator-paid notice exhaustion"
+description = "Hostile mapping/startup (bad flags refused before the source is backed), R8 accounts, R9 creation stamps, I8 user-class restrictions, pending exit-record rollback and creator-paid notice exhaustion"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -10,6 +10,7 @@ expect = [
     '^\[proc-attack\] ok: weight zero refused$',
     '^\[proc-attack\] ok: badged exit refused$',
     '^\[proc-attack\] ok: hostile mapping ranges and W\+X refused without moving source$',
+    '^\[proc-attack\] ok: bad flags refused before an untouched source page is backed$',
     '^\[proc-attack\] ok: occupied destination refused without losing caller page$',
     '^\[proc-attack\] ok: oversized startup list refused before record access$',
     '^\[proc-attack\] ok: invalid startup records and handles leave process unchanged$',

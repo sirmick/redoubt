@@ -126,6 +126,8 @@ pub enum Mutation {
     R11MapFixedSkipsOverlap,
     /// `set_flags` grants `EXECUTE` on device registers and `dma_alloc` frames.
     R11ExecOnDeviceMemory,
+    /// `process_map` skips its own flag check (empty flags, and writable without readable).
+    R11ProcessMapSkipsFlags,
     /// Publishes no lend despite a supplied buffer.
     IpcWrongLend,
     /// Hides a committed partial reply behind its error.
@@ -303,7 +305,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 128] = {
+    pub const ALL: [Mutation; 129] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -356,6 +358,7 @@ impl Mutation {
             R11LendStaysMapped,
             R11MapFixedSkipsOverlap,
             R11ExecOnDeviceMemory,
+            R11ProcessMapSkipsFlags,
             IpcWrongLend,
             IpcDropPartial,
             IpcFalseDelivery,
@@ -489,7 +492,8 @@ impl Mutation {
             | R11AllowsWriteOnly
             | R11LendStaysMapped
             | R11MapFixedSkipsOverlap
-            | R11ExecOnDeviceMemory => "R11",
+            | R11ExecOnDeviceMemory
+            | R11ProcessMapSkipsFlags => "R11",
             R12PriorityById
             | R12IgnoreWeight
             | R12WakeBanksCredit

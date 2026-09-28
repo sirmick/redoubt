@@ -340,9 +340,14 @@ pub fn process_map(
     let page_size = redoubt_sys::PAGE_SIZE;
     let r = mm.process_handle(pid, process_h)?;
     let p = mm.process_at(r);
-    // Stage 2: the ranges, then the source, which must be the caller's own backed RAM, mapped
-    // and not lent out. Checked whole before any page moves (kernel/memory.md).
+    // Stage 2: the ranges, then the flags, then the source. R11's flag check is made here as
+    // well as while decoding and in the page tables, so neither check rests on the other
+    // (kernel/abi.md): not W+X, and not writable without readable. It comes before the source
+    // is backed, so a refused call leaves nothing charged (kernel/memory.md).
     let pages = whole_pages(src, dst, len)?;
+    crate::mem::check_map_flags(flags)?;
+    // The source must be the caller's own backed RAM, mapped and not lent out. Checked whole
+    // before any page moves, because a later failure would not put the source back.
     mm.ensure_range_exists(src, len).map_err(|_| Error::InvalidArgument)?;
     for i in 0..pages {
         let phys = mm.owned_mapping(pid, src + i * page_size)?;
@@ -351,11 +356,6 @@ pub fn process_map(
             return Err(Error::InvalidArgument);
         }
     }
-    // R11, checked here as well as while decoding and in the page tables, so neither check
-    // rests on the other (kernel/abi.md). It must refuse before any page moves,
-    // because a later failure would not put the source back. Not W+X, and not writable
-    // without readable.
-    crate::mem::check_map_flags(flags)?;
     let child = p.pid;
     let space = ss.mapping_of(child).ok_or(Error::NotPermitted)?;
     for i in 0..pages {
