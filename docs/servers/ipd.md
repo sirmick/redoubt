@@ -276,6 +276,27 @@ Status: built · tested: host:redoubt-ipd::each_active_open_takes_one_seed_and_i
 Every TCP connection's initial sequence number comes from its own seed drawn from the kernel's
 random words, so an off-path attacker cannot predict one from another connection's.
 
+### Under Miri
+
+Status: built · partly tested: a recorded run, not a bench case
+
+The vendored crates' `unsafe` sits outside the ratchet, so Miri checks it instead, with the
+features `ipd` builds them with (`alloc`, `medium-ethernet`, `proto-ipv4`, `socket-tcp` for
+smoltcp; `alloc` and `map` for managed; defaults for the rest), under nightly Miri with Stacked
+Borrows. `ipd`'s tests run with `MIRIFLAGS=-Zmiri-disable-isolation` (the
+conformance vectors read a file) and take fewer rounds under `cfg(miri)`. Each vendored crate's own
+tests run in an unedited copy outside the tree.
+
+| Run | Result |
+| --- | --- |
+| `ipd`: `args`, `ctl_deadline`, `fs`, `grant_undo`, `isn`, `program`, `scope`, `sizing`, `stack`, `sweep`, `vectors` | pass |
+| smoltcp 0.14.0, its library tests | 156 pass; `storage::assembler::test_random` alone runs too long under Miri to finish |
+| managed 0.8.0 | 30 pass |
+| heapless 0.9.3 | 216 pass; the `pool` tests cannot run (inline assembly, which Miri does not interpret; smoltcp does not use `pool`) |
+| byteorder 1.5.0 | 412 pass |
+| stable_deref_trait 1.2.1 | 6 pass |
+| hash32 0.3.1 | no unit tests |
+
 ## Failure and restart
 
 Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes_back, host:redoubt-ipd::anything_else_stops_ipd, host:redoubt-ipd::a_disconnect_aborts_and_returns_the_charges
@@ -304,8 +325,8 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
 - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
   that matters, each trust domain gets its own `ipd`.
 - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a
-  bug in `ipd`; it is fuzzed only through `ipd`'s own targets, and its `unsafe` has never run
-  under Miri ([todo](../todo/miri-vendored-unsafe.md)).
+  bug in `ipd`; it is fuzzed only through `ipd`'s own targets, and its `unsafe` is checked by
+  recorded Miri runs, not by a bench case ([under Miri](#under-miri)).
 
 ## Why
 

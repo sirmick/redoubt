@@ -444,7 +444,8 @@ checksum. Two checks guard them, and they prove different things:
   it checked matches on all three counts and it checked as many crates as `vendor/` holds.
 
 The residuals: provenance is only as current as the last review that ran it, and the vendored
-crates' `unsafe` has never run under Miri ([todo](todo/miri-vendored-unsafe.md)).
+crates' `unsafe` is checked by recorded Miri runs, not by a bench case
+([ipd under Miri](servers/ipd.md#under-miri)).
 
 ## The no-cruft gate
 

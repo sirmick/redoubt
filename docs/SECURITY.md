@@ -244,10 +244,11 @@ the OS's own are described on [the tenets](TENETS.md#the-walls).
 - Vendored crates are checked against checksums taken from the tree itself: that proves they have
   not changed since vendoring, not that they match their upstream release
   ([vendored dependencies](testbench.md#vendored-dependencies)).
-- The vendored crates' `unsafe` is outside the ratchet and has never run under Miri
-  ([todo](todo/miri-vendored-unsafe.md)).
-- The unsafe ratchet refuses a configured path with no source, but cannot prove every on-target
-  source is configured, and the loader stub's is not ([the unsafe budget](testbench.md#the-unsafe-budget)).
+- The vendored crates' `unsafe` is outside the ratchet; recorded Miri runs cover their own tests
+  and `ipd`'s ([ipd under Miri](servers/ipd.md#under-miri)).
+- The unsafe ratchet counts only what its budgets name; it fails when a `no_std` workspace member
+  has a source in no budget, but a member it lists as uncounted is trusted to be off the target
+  ([the unsafe budget](testbench.md#the-unsafe-budget)).
 
 **The network.**
 - Upstream DNS answers are believed, and an allowed name's address may host other services
