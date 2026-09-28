@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 26
+revision = 8
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -19,19 +19,18 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "Clean git history (reword and fold)"
   template = "package"
   parent = "M1"
-  body = "todo/HIST1-git-history-rewrite.md (brief to be rewritten: reword and fold, not a component squash). Runs with no package in flight; force-push is the owner's call."
+  body = ".wash/history-rewrite.md: the one rewrite of the history, and how to check it. Force-pushed; origin/main at e3141503b."
   state = "done"
-  revision = 26
+  revision = 3
 
 [[node]]
   id = "IPC1"
-  title = "IPC completion checker (merged, review owed)"
+  title = "IPC call completion: one outcome per call (merged, review owed)"
   template = "package"
   parent = "M1"
-  needs = ["model-replay"]
-  body = "Remaining gates: model replay on the real kernel, the timer, the serving path, concurrency."
-  state = "review-due"
-  revision = 2
+  body = "Built in cf445aa0c: docs/kernel/ipc.md#r13-one-outcome-per-call, docs/kernel/memory.md (a loan within one process). Owed: one red review of the completion path as it is now, including the same-process lend return the last round blocked on. Cross-hart races: docs/todo/kernel-attack-gaps.md; model replay: node model-replay."
+  state = "done"
+  revision = 8
 
 [[node]]
   id = "K7"
@@ -41,7 +40,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["HIST1"]
   body = "docs/plan/m1-separation.md#remaining-work: the Kernel and The bench and its tools bullets, the documentation switch-over (docs/todo/verdict-strings.md), and the latency seed pin and sweep (docs/todo/sched-latency-target.md)."
   state = "todo"
-  revision = 3
+  revision = 2
 
 [[node]]
   id = "M1"
@@ -140,12 +139,11 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 [[node]]
   id = "host-shell-scripts"
   title = "Does tenet 3 reach the build host?"
-  emoji = "🔴"
   template = "note"
   parent = "M1"
-  body = "Waits for an owner decision; blocks nothing. docs/todo/host-shell-scripts.md"
-  state = "todo"
-  revision = 2
+  body = "Owner decision 2026-09-27: the build host may run shell scripts. Written on docs/TENETS.md#3-rust-and-assembly-only-where-rust-cannot-reach."
+  state = "done"
+  revision = 4
 
 [[node]]
   id = "init"
