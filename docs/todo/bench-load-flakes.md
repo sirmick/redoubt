@@ -12,28 +12,26 @@ Three runs misbehaved under heavy load and were not all explained:
   host tests run on, now fails a wait with no deadline that sees nothing change for 60 s, so a
   stuck test fails rather than hangs;
 - a combined bench run killed at its timeout, right after a run with its own `timeout` wrapper,
-  seemed to leave an orphaned test process. It did not happen again in four clean runs.
+  seemed to leave an orphaned test process. It did not happen again in four clean runs. QEMU now
+  ends with the bench that started it, however the bench ends
+  ([what a case passes on](../testbench.md#what-a-case-passes-on)).
 
 ## Why it matters
 
 Tenet 6 says a flaky test is a bug, in the test or the system, and is fixed rather than retried
 ([the tenets](../TENETS.md#6-tested-to-hell-and-back)). A test that passes only on a quiet machine
-fails on a loaded one, and a bench that leaves processes behind skews the next run.
+fails on a loaded one.
 
-Fixed in the kernel follow-up package after the documentation rewrite, with the bench and
-tool work it carries.
+The host tests that wait on time are fixed with the servers follow-up package, which owns
+`libs/rt`; the loaded runs close this page.
 
 ## Where
 
 - [`libs/rt/tests/parked.rs`](../../libs/rt/tests/parked.rs) and the other host tests that wait on
   time.
-- [`tools/testbench/src/qemu.rs`](../../tools/testbench/src/qemu.rs): how a timed-out boot's
-  processes are ended.
 
 ## Done when
 
 - Every host test outside the runtime's fake kernel that waits on time bounds its waits by its
   own deadline, not the machine's speed.
-- A bench run killed at its timeout leaves no QEMU or helper process behind, checked by a
-  self-check.
 - The full bench and the host tests pass five times running under a stated parallel load.

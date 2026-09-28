@@ -35,14 +35,16 @@ fallback to QEMU's own firmware.
 
 ### What a case passes on
 
-Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:rustsbi-boot
+Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu
 
 A boot case passes when every `expect` pattern matches a console line, in order, no `forbid`
 pattern ever matches, and the boot ends as the case says. Three patterns are always forbidden:
 `PANIC`, `TEST FAILED` and `WARNING: INSECURE`. After the last `expect`, and any sessions, the bench
 keeps reading for 50 ms (1 s in a checked build), so a forbidden line right after the last expected
 one still fails the case. With `poweroff = true` it reads instead until QEMU exits, and requires the
-exit status the case names (0 by default; 255 for an SBI system failure).
+exit status the case names (0 by default; 255 for an SBI system failure). QEMU runs with
+`-run-with exit-with-parent=on`, so a bench killed at its timeout, even outright, leaves no guest
+running to skew the next run.
 
 In-guest programs print through the log server and finish with `<NAME> TEST PASSED` or
 `<NAME> TEST FAILED`; attack programs end with `attempts done` instead. The log server starts every
