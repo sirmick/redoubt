@@ -23,11 +23,15 @@ loses an interrupt can stall.
 
 - [`kernel/src/message.rs`](../../kernel/src/message.rs): `answer_record` and
   `check_receive_record`, and the interrupt and abandoned-call delivery paths.
-- The pages: [IPC](../kernel/ipc.md#residual-risks) and
+- The pages: [IPC](../kernel/ipc.md#a-bad-record-takes-nothing) and
   [invariants](../kernel/invariants.md).
 
 ## Done when
 
-The owner decides the rule: either interrupts and abandoned-call notices stay pending like
-messages when the record is bad, or the loss is the stated rule. The code follows it, and a case
-makes a waiting thread's record unwritable and then delivers each kind.
+- The kernel follows [a bad record takes nothing](../kernel/ipc.md#a-bad-record-takes-nothing):
+  an interrupt or an abandoned-call notice is taken only once the record is written.
+- A bench case makes a waiting thread's record unwritable, then delivers an interrupt and an
+  abandoned-call notice, and both arrive on the next good `receive`.
+- A mutation that consumes them fails that case.
+- The pages move with it: the section's status goes to built with the case and the mutation,
+  and I15's stated breach and the security register's residual are removed.

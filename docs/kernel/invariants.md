@@ -421,13 +421,15 @@ and the kernel must survive to power off; `syscall-attack` makes an oversized le
 
 ### I15 (abandoned calls reported once)
 
-Status: built · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated
+Status: built · partly tested: one breach is stated and not yet closed: a notice owed to a thread whose record became unwritable while it waited is consumed, not kept pending (IPC, a bad record takes nothing, planned) · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated
 
 Every abandoned call is reported to the thread holding it exactly once, and stays open until that
 thread replies; the reply reaches nobody. The report is an abandoned-call notice, delivered on the
 holder's next `receive` on the endpoint the call came in on. When the holder's reply enters
 before it has seen one (the caller timed out or died just before), the report is the reply's own
-result instead: `discarded`, mask 0, and no notice follows.
+result instead: `discarded`, mask 0, and no notice follows. A `receive` whose record cannot be
+written takes nothing, so the notice stays for the holder's next good `receive`
+([a bad record takes nothing](ipc.md#a-bad-record-takes-nothing)).
 
 **Kept in** `abandon` (`kernel/src/message.rs`): it runs only while the caller still waits, and
 sets the call's notice flag in the same step that clears its waiting flag; `pump` delivers the
@@ -514,11 +516,6 @@ cases.
 - **I13 bounds the commit, not the run.** A timed-out thread is runnable at the first kernel
   entry after its timeout, within timer latency measured under virtual time; when it runs is its
   budget's share under R12. Neither is a hard real-time bound.
-- **A notice can be lost to a bad record.** If a thread's `receive` record becomes unwritable
-  while it waits, an abandoned-call notice delivered to it is consumed and the thread gets
-  `InvalidArgument` instead: I15's report is made but never received, and the thread holds a call
-  whose id it never learned until the process ends. Only the process's own threads can cause
-  this. Follow-up: [todo](../todo/receive-output-late-invalid.md).
 - **I10 waits for the notices.** A creator that never receives its children's exit notices keeps
   paying for their process objects. That is its own cost, never another budget's.
 - **I16 covers reuse, not a live driver.** Without an IOMMU a DMA driver can point its device at

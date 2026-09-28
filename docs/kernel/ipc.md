@@ -73,7 +73,7 @@ fixed order, the same in the kernel and the [model](model.md); the full rows are
 
 ### What `receive` returns
 
-Status: built · partly tested: a record made unwritable while its thread waits is attacked only for an exit notice (`process-attack`); for a message, an interrupt or an abandoned-call notice it is not attacked by a case · tested: bench:redoubt-ipc, bench:timeouts, bench:process-attack, host:redoubt-sys::received_layout
+Status: built · partly tested: a record made unwritable while its thread waits is attacked only for an exit notice (`process-attack`); for a message it is not attacked by a case · tested: bench:redoubt-ipc, bench:timeouts, bench:process-attack, host:redoubt-sys::received_layout
 
 One record layout for every result: `(kind, msg_id, badge, account, labels, words, handles,
 buffer, pages)`. A field a kind does not use is 0.
@@ -94,8 +94,9 @@ so slots keep their positions.
 The record is checked when `receive` starts, and again just before a message or exit notice is
 delivered, because another thread of the process may have unmapped it meanwhile. If it can no
 longer be written, the receiver gets `InvalidArgument` and the message or notice stays pending
-for the next `receive`: nothing is taken that the receiver cannot be told about. An interrupt
-or an abandoned-call notice is not re-checked first; see Residual risks.
+for the next `receive`: nothing is taken that the receiver cannot be told about. Interrupts and
+abandoned-call notices follow the same rule
+([a bad record takes nothing](#a-bad-record-takes-nothing)).
 
 ```mermaid
 flowchart TD
@@ -111,6 +112,21 @@ flowchart TD
     C -- yes --> D[deliver: map buffer,<br/>install handles, return record]
 ```
 *Figure: what one `receive` on an endpoint returns, in order.*
+
+### A bad record takes nothing
+
+Status: planned · M1 (separation and containment)
+
+An interrupt or an abandoned-call notice is kept like a message: the record is checked just
+before either is delivered, and if it can no longer be written the receiver gets
+`InvalidArgument` and the item stays pending, the interrupt still fired and the call's notice
+still owed. The next `receive` that can write its record gets it, in the order above. So the one
+report of I15 (abandoned calls reported once) is always received, and a driver never loses an
+interrupt to its own thread's unmap. A case makes a waiting thread's record unwritable, then
+delivers an interrupt and an abandoned-call notice, and both arrive on the next good `receive`;
+a mutation that consumes them must fail it.
+
+**Open:** none.
 
 ### How a call completes
 
@@ -367,12 +383,6 @@ Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-
   hart the kernel runs with interrupts off. On several (a build for more than one hart), each
   kernel global is guarded by its own lock, and the completion holds the memory manager's for
   the whole step.
-- **A notice can be lost to a bad record.** If a thread's `receive` record becomes unwritable
-  while it waits, an interrupt or abandoned-call notice delivered to it is consumed and the
-  thread gets `InvalidArgument` instead. A lost abandoned-call notice leaves the thread holding a
-  call whose id it never learned, until the process ends (I15's report is made but not
-  received). Only the process's own threads can cause this. Follow-up:
-  [todo](../todo/receive-output-late-invalid.md).
 
 ## Why
 
