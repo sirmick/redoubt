@@ -1968,6 +1968,13 @@ impl Kernel {
                 self.wake(caller, Err(Error::Dead));
             }
         }
+        // No notice follows for a call taken here: there is no endpoint left to receive one on,
+        // and `Dead` from `receive` on it was the holder's cue (R3).
+        if !self.broken(Mutation::EndpointDestroyNoticeKept) {
+            for m in self.msgs.values_mut().filter(|m| m.endpoint == e) {
+                m.notice = false;
+            }
+        }
         self.endpoints.remove(&e);
         if !self.broken(Mutation::R6EndpointsFree) {
             self.uncharge(owner, self.costs.endpoint);

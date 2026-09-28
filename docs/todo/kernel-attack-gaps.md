@@ -34,7 +34,6 @@ gap: the page's section, the claim, and what no case attacks.
 - Deadlines: a process entering the kernel in a tight loop to put its deadline off is not attacked.
 - Root, system and users: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`).
 - R10 (destruction): destroying the budget a device object is charged to (the device destroyed, every handle closed) is not checked by a case.
-- R10: no case destroys an endpoint's owner while a receiver waits on it, and no program checks `receive` returning `Dead` ([endpoint destroyed with open calls](endpoint-destroyed-open-calls.md)).
 
 ### timer.md
 - Time: that `time_now` counts from the kernel's start is not checked (only monotonic, never early, linear with `rdtime`).

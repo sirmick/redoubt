@@ -1,0 +1,17 @@
+description = "Calls taken through an endpoint that is then destroyed (R3): the server's receive returns Dead, each caller gets Dead with its lend consumed, the server's replies are discarded with mask 0, and its usage comes back (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The program runs first and judges from call results, the server's exit code (what the kernel
+# answered its receive and replies, and its budget's usage) and the kernel's checked build.
+programs = ["endpoint-destroy-open-calls"]
+timeout_secs = 60
+expect = [
+    '^\[endpoint-destroy\] ok: the server.s receive on the destroyed endpoint returns Dead$',
+    '^\[endpoint-destroy\] ok: each caller gets Dead with its lend consumed$',
+    '^\[endpoint-destroy\] ok: the server.s reply to each taken call is discarded, mask 0$',
+    '^\[endpoint-destroy\] ok: the server.s usage is back to its start after both replies$',
+    '^ENDPOINT-DESTROY TEST PASSED$',
+]
+forbid = ['\[endpoint-destroy\] FAIL', 'PANIC']
+poweroff = true

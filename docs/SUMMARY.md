@@ -72,7 +72,6 @@
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
   - [Clearing SUM and MXR at entry](todo/clear-sum-at-entry.md)
   - [DMA reset on rv32](todo/dma-reset-rv32.md)
-  - [Calls abandoned by an endpoint's destruction](todo/endpoint-destroyed-open-calls.md)
   - [The kernel crate's host test target](todo/hosted-kernel-tests.md)
   - [An interrupt before the first receive](todo/irq-level-latch.md)
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)

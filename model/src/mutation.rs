@@ -49,6 +49,8 @@ pub enum Mutation {
     /// A receiver whose record went bad while it waited takes its abandoned-call notice anyway,
     /// and the notice is lost (I15).
     BadRecordConsumesNotice,
+    /// An endpoint's destruction leaves the calls taken through it owing a notice there.
+    EndpointDestroyNoticeKept,
     // R4. Delivery.
     /// Transfers are delivered whatever `max_transfer` says.
     R4IgnoreMaxTransfer,
@@ -324,7 +326,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 137] = {
+    pub const ALL: [Mutation; 138] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -344,6 +346,7 @@ impl Mutation {
             AbandonNoticeMissing,
             AbandonNoticeRepeated,
             BadRecordConsumesNotice,
+            EndpointDestroyNoticeKept,
             R4IgnoreMaxTransfer,
             R4OverdrawOnDelivery,
             R4aOpenCallsPerThread,
@@ -491,7 +494,8 @@ impl Mutation {
             | R3ChargeStaysWithCaller
             | AbandonNoticeMissing
             | AbandonNoticeRepeated
-            | BadRecordConsumesNotice => "R3",
+            | BadRecordConsumesNotice
+            | EndpointDestroyNoticeKept => "R3",
             R4IgnoreMaxTransfer | R4OverdrawOnDelivery => "R4",
             R4aOpenCallsPerThread | R4aFullTakesNothing | OpenCallsUnlimited | ReceiveDropsOpenCalls => "R4a",
             R4bDeadServerFakesReply => "R4b",

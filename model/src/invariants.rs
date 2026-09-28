@@ -267,6 +267,12 @@ impl Checker {
     fn i15_abandoned(&mut self, k: &Kernel) -> Check {
         self.reported.retain(|m| k.msgs.contains_key(m));
         for m in k.msgs.values() {
+            ensure!(
+                !m.notice || k.endpoints.contains_key(&m.endpoint),
+                "I15: call {} owes a notice on endpoint {}, which is gone",
+                m.id,
+                m.endpoint
+            );
             let Some((_, stid)) = m.server else { continue };
             if m.kind != MsgKind::Call || awaited(k, m.id) || self.reported.contains(&m.id) {
                 continue;

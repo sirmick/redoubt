@@ -238,7 +238,7 @@ k receives (I11 (fair turns)).
 
 ### R3 (lends and abandoned calls)
 
-Status: built · tested: bench:redoubt-revoke, bench:timeouts, bench:ipc-outcomes, bench:uaf-lent-page, bench:process-lifecycle, mutation:R3UnmapAbandonedLend, mutation:R3ChargeStaysWithCaller, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice
+Status: built · tested: bench:redoubt-revoke, bench:timeouts, bench:ipc-outcomes, bench:uaf-lent-page, bench:process-lifecycle, bench:endpoint-destroy-open-calls, mutation:R3UnmapAbandonedLend, mutation:R3ChargeStaysWithCaller, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice, mutation:EndpointDestroyNoticeKept
 
 A lend's range must be the caller's own writable RAM. Pages in it that were never touched are
 backed first, charged to the caller like `map_anon`'s; a caller that cannot pay for them gets
@@ -259,11 +259,11 @@ abandonment comes first and the server replies before it has received the notice
 returns `discarded`, mask 0, and no notice follows: the reply closed the call.
 
 The destruction of the endpoint a call arrived on ([budgets](budgets.md#r10-destruction)) also
-abandons the calls taken through it, and fails their callers with `Dead`, but offers no notice:
-the kernel fails the endpoint's receivers first, so there is nowhere left to receive one. A
-server learns it only from its `receive` returning `Dead`. Whether that `Dead` is the stated
-cue that every call taken through the endpoint is abandoned is open
-([todo](../todo/endpoint-destroyed-open-calls.md)).
+abandons the calls taken through it, and fails their callers with `Dead` and their lends
+consumed, but no notice follows: there is no endpoint left to receive one on. `Dead` from
+`receive` reaches only a thread already blocked in `receive` on the endpoint; the sure sign is
+the reply: a reply to one of those calls returns `discarded`, mask 0, and frees its lend, as for
+any abandoned call.
 
 ```mermaid
 stateDiagram-v2
@@ -349,8 +349,8 @@ Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-
 - **A budget is destroyed:** endpoints it owns are destroyed and everything waiting on them gets
   `Dead`; queued messages sent through a handle it stamped fail with `Dead`; a taken call sent
   through one is abandoned ([R10 (destruction)](budgets.md#r10-destruction)). A taken call on a
-  destroyed endpoint is abandoned with no notice (R3): the server's `Dead` from `receive` is all
-  it learns ([todo](../todo/endpoint-destroyed-open-calls.md)).
+  destroyed endpoint is abandoned with no notice (R3): a thread blocked in `receive` on it gets
+  `Dead`, and the reply's `discarded` is the sure sign.
 - **Crash blame:** when a server process faults, or exits while it holds open calls, the exit
   notice blames the account and labels of the sender of the ending thread's current call, or
   nobody if it has none ([R21 (crash blame)](processes.md#r21-crash-blame)). A `send` is never blamed. A server calls `serve`

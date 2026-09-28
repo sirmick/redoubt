@@ -423,7 +423,7 @@ and the kernel must survive to power off; `syscall-attack` makes an oversized le
 
 ### I15 (abandoned calls reported once)
 
-Status: built · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, bench:receive-bad-record, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice
+Status: built · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, bench:receive-bad-record, bench:endpoint-destroy-open-calls, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice, mutation:EndpointDestroyNoticeKept
 
 Every abandoned call is reported to the thread holding it exactly once, and stays open until that
 thread replies; the reply reaches nobody. The report is an abandoned-call notice, delivered on the
@@ -437,7 +437,9 @@ written takes nothing, so the notice stays for the holder's next good `receive`
 sets the call's notice flag in the same step that clears its waiting flag; `pump` delivers the
 notice to the holding thread before any exit notice or message and clears the flag; `reply` to a
 call whose caller no longer waits frees the lend and reports `discarded`, and since the call
-leaves the thread's open calls there, no notice is left to deliver. Each step runs to its end
+leaves the thread's open calls there, no notice is left to deliver; `destroy_endpoint` clears the
+notices owed on the endpoint it destroys, whose `Dead` is the holder's report, and `reply` checks,
+in a checked build, that none is owed on a destroyed endpoint. Each step runs to its end
 with interrupts off, holding the memory manager, so a reply and an abandonment cannot both
 win.
 

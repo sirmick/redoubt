@@ -1316,6 +1316,12 @@ pub fn reply(
     // exactly this reply).
     drop_open_call(mm, pid, tid, frame);
     if call.flags & F_WAITING == 0 {
+        // A notice owed here waits on a live endpoint: one destroyed took its notices with it
+        // (`destroy_endpoint`).
+        debug_assert!(
+            call.flags & F_NOTICE == 0 || mm.is_live_endpoint(call.endpoint),
+            "I15: an abandoned call owes a notice on a destroyed endpoint"
+        );
         // R3: the reply to an abandoned call reaches nobody, and its lend is freed.
         free_abandoned_lend(ss, mm, &call);
     } else {
@@ -1554,6 +1560,20 @@ fn destroy_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
         let s = slot(mm, pid, tid);
         s.wait == Wait::Reply && open_call_at(mm, s.open).endpoint == e
     });
+    // Every call taken through it is abandoned now, and no notice follows: there is no endpoint
+    // left to receive one on. `Dead` from `receive` on it is the holder's cue (R3); a reply to
+    // one of them is `discarded`, as to any abandoned call.
+    while let Some(frame) = find_thread(mm, |mm, pid, tid| {
+        let s = slot(mm, pid, tid);
+        (0..s.ncalls).map(|i| nth_call(mm, pid, tid, i)).find(|f| {
+            let c = open_call_at(mm, *f);
+            c.flags & F_NOTICE != 0 && c.endpoint == e
+        })
+    }) {
+        let mut c = open_call_at(mm, frame);
+        c.flags &= !F_NOTICE;
+        store_open_call(mm, frame, &c);
+    }
     // Every exit notice owed here is dropped, and a process still running loses the ear it was
     // to report to (R10; `process.rs`).
     crate::process::endpoint_dying(mm, e);
