@@ -517,7 +517,9 @@ cases.
   entry after its timeout, within timer latency measured under virtual time; when it runs is its
   budget's share under R12. Neither is a hard real-time bound.
 - **I10 waits for the notices.** A creator that never receives its children's exit notices keeps
-  paying for their process objects. That is its own cost, never another budget's.
+  paying for their process objects, and their PIDs keep counting in the budgets they ran in, or
+  those budgets' parents once destroyed. The pages are its own cost; the PIDs are bounded by the
+  process limit of a budget it was given a handle to, the right to spend that limit.
 - **I16 covers reuse, not a live driver.** Without an IOMMU a DMA driver can point its device at
   any physical address while it lives, so it is TCB. Only virtio-mmio devices can be reset: every
   death that reaches another DMA device quarantines its pages. Quarantined pages are lost until

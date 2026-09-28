@@ -40,7 +40,7 @@ Status: built · tested: bench:budget, bench:budget-destroy-attack, bench:proces
 | `account` | the principal it bills to, a u64; 0 for none ([R8](#r8-accounts)) |
 | `deadline` | microseconds since boot at which the kernel destroys it; `FOREVER` (`u64::MAX`) for none |
 | `pages` | limit and usage, in pages ([R6](#r6-charging)) |
-| `processes` | limit and usage: the process objects charged to it, the programs the loader started that run in it, and its children's process limits |
+| `processes` | limit and usage: the PIDs held by processes that run or ran in it, those moved to it from destroyed children, and its children's process limits ([R6](#r6-charging)) |
 | `weight` | limit and carved: what its children took ([R7](#r7-carving)) |
 | `dying` | set on the whole subtree while [R10](#r10-destruction) destroys it |
 
@@ -139,7 +139,8 @@ from the boot manifest.*
 
 Status: planned · M1 (separation and containment)
 
-The loader starts only `init`, which runs in `root` on the weight `root` keeps free. The kernel
+The loader starts only `init`, which runs in `root` on the weight and the one process `root`
+keeps free; what `init` launches counts in the budgets it launches into. The kernel
 creates `root`, `system` and `users` with the sizes the boot manifest sets for `system` (default a
 quarter of RAM) and gives `init` the three handles. `init` carves each server's budget from
 `system` with the pages, processes and weight its manifest entry names: 1,000 for `init`, the
@@ -284,7 +285,7 @@ Status: built · tested: bench:budget, bench:process-attack, bench:budget-forge-
 
 ### R6 (charging)
 
-Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from the rule for `root`'s own page and for process objects (see Residual risks), and no case attacks either · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:redoubt-tight, bench:process-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce
+Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from the rule for `root`'s own page and the kernel from the PID count (see Residual risks), and no case attacks either · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:redoubt-tight, bench:process-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce
 
 Every kernel object is charged in pages to one budget, and a charge over the budget's limit fails
 with `OutOfMemory` before anything changes. Who pays:
@@ -292,11 +293,7 @@ with `OutOfMemory` before anything changes. Who pays:
   `root`: `root`'s limit is the RAM frames the kernel did not keep, less `root`'s own page, so
   the sum of all charges never exceeds the free frames. A revocation scope is no special case;
 - a process object, which holds the exit notice: the **creator's** budget, the budget of
-  `process_create`'s caller (`PROCESS_PAGES`, 1), until the notice is received or dropped. The
-  object also counts one against that budget's **process limit** for as long, which is exactly
-  as long as the process holds its PID, so a PID held for an untaken notice is the creator's to
-  pay for. A created process counts nowhere else; a program the loader started, which has no
-  object, counts against the budget it runs in while it lives;
+  `process_create`'s caller (`PROCESS_PAGES`, 1), until the notice is received or dropped;
 - a thread's IPC page (`THREAD_PAGES`, 1), its saved registers, its process's page tables and
   mapped pages: the budget the process **runs in**;
 - a handle-table page: the budget of the process whose table it is;
@@ -304,6 +301,13 @@ with `OutOfMemory` before anything changes. Who pays:
 - an open call's page: the receiving process's budget ([R4a (open calls)](ipc.md#r4a-open-calls));
 - a lent page and the page tables that map it: the caller **and** the receiving process's budget
   while the call is open ([R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls)).
+
+A process limit counts PIDs, and every held PID counts once: against the budget the process
+**runs in**, for as long as the PID is held, which for a created process is until its object is
+freed and for a program the loader started is while it lives. It counts there whoever launched
+the process. If that budget is destroyed while the PID is still held, the count moves to the
+destroyed budget's parent ([R10](#r10-destruction)). A `process_create` over the limit fails
+with `OutOfProcesses` before a PID is drawn ([processes](processes.md#creating-and-starting)).
 
 The page counts per object are in [objects](objects.md#what-objects-cost). A parent's usage
 counts its children's **limits** and their own pages, never their live usage, so one child
@@ -345,7 +349,7 @@ by itself.
 
 ### R10 (destruction)
 
-Status: built · partly tested: destroying the budget a device object is charged to, or an endpoint's owner while a receiver waits on it, is not checked by a case, and no program checks `receive` returning `Dead`; the equal-instant order of timeouts before deadlines is attacked only in the model; a deadline's destruction is billed only in part (see Residual risks) · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-deadline, bench:redoubt-revoke, bench:process-attack, bench:sched-destroy-billing, bench:dma-reset-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:ExpireBudgetsFirst
+Status: built · partly tested: destroying the budget a device object is charged to, or an endpoint's owner while a receiver waits on it, is not checked by a case, and no program checks `receive` returning `Dead`; the equal-instant order of timeouts before deadlines is attacked only in the model; a deadline's destruction is billed only in part, and step 8 moves no PID count (see Residual risks) · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-deadline, bench:redoubt-revoke, bench:process-attack, bench:sched-destroy-billing, bench:dma-reset-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:ExpireBudgetsFirst
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
@@ -373,10 +377,13 @@ this order:
    ([IPC](ipc.md#what-receive-returns)).
 7. **Return.** B's page, its page and process limits go back to its parent. The parent's usage is
    exactly what it was before B was created (I10 (create-destroy leaves the parent unchanged)),
-   except for quarantined DMA pages, which step 8 moves onto it.
-8. **Move quarantined DMA pages.** DMA pages held in quarantine and charged to a dying budget are
-   charged to B's parent instead, after the carve came back, so the parent never goes over its
-   limit (I16 (DMA pages reset before reuse), [devices](devices.md#quarantine)).
+   except for what step 8 moves onto it.
+8. **Move what outlives the carve.** DMA pages held in quarantine and charged to a dying budget
+   are charged to B's parent instead (I16 (DMA pages reset before reuse),
+   [devices](devices.md#quarantine)), and so is every PID still held by a process that ran in a
+   dying budget: one whose object step 3 did not free, because its creator is outside B and has
+   not taken the notice ([R6](#r6-charging)). Both move after the carve came back, and both were
+   inside it, so the parent never goes over its limit.
 9. **Free.** The dying budgets' pages are freed and they leave the deadline list.
 
 Revocation is complete (I2 (revocation is complete)): no handle, queued message or taken call
@@ -418,9 +425,8 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
 
 - **A process in a budget ends:** its threads, pages, page tables and handle table go back to the
   budget at once. Its process object stays charged to its creator's budget until its exit notice
-  is received ([processes](processes.md)), and by R6 counts against the creator's process limit
-  as long; the kernel counts it in the budget it ran in instead, and only while it lives
-  ([Residual risks](#residual-risks)).
+  is received ([processes](processes.md)), and by R6 its PID counts against the budget it ran in
+  as long; the kernel stops counting it when it ends ([Residual risks](#residual-risks)).
 - **A budget's creator ends:** the budget lives on. Budgets outlive the processes that made them;
   only destruction, of it or an ancestor, or a deadline ends one.
 - **A budget is destroyed while its own process is in the call:** the process is killed last, and
@@ -452,8 +458,8 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   ([scheduling](scheduling.md#residual-risks)). Follow-up:
   [todo](../todo/deadline-destroy-billing.md).
 - **Untaken exit notices hold PIDs outside every process limit.** The kernel departs from R6's
-  process-object rule: an ended process stops counting against any process limit while its PID
-  stays held until its notice is taken. One creator can hold every free PID of the global pool
+  PID count: an ended process stops counting against any process limit while its PID stays held
+  until its notice is taken, and a destruction moves no count. One creator can hold every free PID of the global pool
   of 63, and every other `process_create`, anywhere in the tree, then gets `OutOfProcesses`
   ([processes](processes.md#residual-risks)). Follow-up: [todo](../todo/pid-pool-pinning.md).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
@@ -491,7 +497,8 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
 - **Everything costs pages**, threads, handles, endpoints and budgets included, so one number
   bounds every kind of exhaustion. Processes are counted apart only because PIDs are
   address-space tags, which are scarce on rv32; so the count follows the PID, once per PID held,
-  and the budget a process runs in bounds it by its pages.
+  in the budget the process runs in. The steward and `init` launch everyone's processes, and
+  counting them in the launcher would pool every principal's PIDs in one budget.
 - **Carved, never overcommitted.** An allocation that fails on the caller's own budget reveals
   nothing about anyone else's. A parent counts its children's limits, not their usage, for the
   same reason.

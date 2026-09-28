@@ -24,15 +24,13 @@ Status: built · partly tested: that PIDs are drawn at random is not attacked by
 
 A process has:
 - a **PID**, which is also its hardware address-space id (the ASID in `satp`);
-- the **budget it runs in**, which pays for everything it holds and sets its CPU share
-  ([scheduling](scheduling.md));
+- the **budget it runs in**, which pays for everything it holds, counts its PID against its
+  process limit and sets its CPU share ([scheduling](scheduling.md));
 - an address space, a handle table ([objects](objects.md)) and up to `MAX_THREADS` (31) threads;
 - an **exit endpoint**, named by its creator, where its exit notice goes;
 - its open calls, at most `MAX_OPEN_CALLS` (64) ([IPC](ipc.md#r4a-open-calls));
 - a **process object**: one page charged to its creator's budget, which holds the exit notice
-  (see [Exit notices](#exit-notices)), and by R6 (charging) one count against that budget's
-  process limit, a count the kernel departs from ([below](#creating-and-starting)). A process
-  handle names this object.
+  (see [Exit notices](#exit-notices)). A process handle names this object.
 
 PIDs run from 2 to `MAX_PROCESS_COUNT` (64: the PIDs there are, the kernel's included); PID 1 is
 the kernel. `process_create` draws the PID at random from the free ones: a PID is free when no
@@ -94,7 +92,7 @@ threads. A fault in any thread ends the whole process.
 
 ### Creating and starting
 
-Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` are not attacked by a case, and the kernel departs from R6 (charging)'s process-object count (Residual risks) · tested: bench:process, bench:process-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget
+Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` are not attacked by a case, and the kernel departs from the PID count (Residual risks) · tested: bench:process, bench:process-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -105,8 +103,8 @@ Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutO
 **`process_create`** refuses, in this order: a bad budget or exit-endpoint handle (`BadHandle`,
 `WrongObject`); a budget with no free weight, which could never be scheduled
 ([R12 (scheduling)](scheduling.md#r12-scheduling)) (`InvalidArgument`); an exit endpoint that is
-not a receive right, badge 0 (`NotPermitted`; see [R21](#r21-crash-blame)); the caller's budget
-at its process limit (`OutOfProcesses`); then `OutOfMemory` for the budget's pages, then
+not a receive right, badge 0 (`NotPermitted`; see [R21](#r21-crash-blame)); the budget at its
+process limit (`OutOfProcesses`); then `OutOfMemory` for the budget's pages, then
 the caller's, and `OutOfMemory` or `TooLarge` if the caller's handle table cannot take the
 handle.
 A refused `process_create` costs nothing. The returned handle has badge 0 and is stamped with
@@ -120,16 +118,19 @@ What a process costs ([objects](objects.md)):
   table and every other page-table page, its handle-table pages, one IPC page per thread and the
   pages mapped in it: all charged to **the budget it runs in**, and all given back when it ends.
 
-A process limit counts PIDs, and every held PID counts once. A created process counts one
-against its creator's budget's process limit, from `process_create` until its object is freed,
-as the object's page is charged there ([R6 (charging)](budgets.md#r6-charging)): that is exactly
-as long as it holds its PID. It does not count again in the budget it runs in, whose pages
-already bound what runs there. A program the loader started has no object, so it counts against
-the budget it runs in while it lives, and its PID goes when it ends. Because every process limit
-is carved from `root`'s, which is every PID but the kernel's, a caller under its own limit always
-finds a free PID, and no budget can take another's. The kernel departs from this: it counts a
-process only in the budget it runs in, and only while it lives, so an ended process's PID is held
-outside every limit until its notice goes (Residual risks).
+A process limit counts PIDs, and every held PID counts once, against the budget the process
+runs in, for as long as the PID is held ([R6 (charging)](budgets.md#r6-charging)). For a created
+process that is from `process_create` until its object is freed, after its notice goes; for a
+program the loader started, which has no object, it is while the program lives. Who launched a
+process does not matter: a session the steward starts counts in the session's budget, not the
+steward's. If that budget is destroyed while the PID is still held (the process was killed and
+its creator, outside the destroyed budgets, has not taken the notice), the count moves to the
+destroyed budget's parent once the carve has come back
+([R10 (destruction)](budgets.md#r10-destruction)), so it stays inside the carve that bounded
+it. Because every process limit is carved from `root`'s, which is every PID but the kernel's, a
+`process_create` into a budget under its limit always finds a free PID, and no budget can take
+another's. The kernel departs from this: it counts a process only while it lives, so an ended
+process's PID is held outside every limit until its notice goes (Residual risks).
 
 **`process_map`** moves pages from the caller into a process that has not started. The source
 must be whole pages of the caller's own RAM, not lent (a reserved page is backed first); device
@@ -186,9 +187,9 @@ blame before anything is freed. Then it tears the process down: every open call 
 caller (R4b), every call it made is withdrawn or abandoned
 ([R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls)), and its threads,
 memory, handle table and DMA runs ([devices](devices.md)) go. Everything it held goes back to
-the budget it ran in at once, except DMA pages quarantined at this end, which stay charged. The
-process object's page, and its count against the creator's process limit, stay with the
-creator's budget until the notice goes. Last, the notice is delivered or dropped:
+the budget it ran in at once, except DMA pages quarantined at this end, which stay charged, and
+its PID, which that budget keeps counting until the notice goes. The process object's page stays
+charged to the creator's budget as long. Last, the notice is delivered or dropped:
 - **Delivered** to whichever thread receives on the exit endpoint next; notices come before
   messages. Nothing is allocated, because the notice's page was paid for at `process_create`.
   A notice with no receiver waits for one.
@@ -209,8 +210,8 @@ names it closes, in every table (a copy still in a queued message arrives as 0),
 back to the creator's budget, and its PID becomes free. Until then the PID is held, and a
 process handle still names an ended process: `process_map` and `process_start` get
 `NotPermitted`. So no PID is reused while a notice still names it. A launcher that leaves its
-children's notices untaken keeps their PIDs and their pages, and its next `process_create` can
-get `OutOfProcesses`.
+children's notices untaken keeps their object pages, and their PIDs keep counting in the budgets
+they ran in, so its next `process_create` into one of those can get `OutOfProcesses`.
 
 ```mermaid
 sequenceDiagram
@@ -346,11 +347,16 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
   can carry a labelled caller's account and labels to a `user`-class owner of its exit endpoint.
   Only a creator holding a `system`-class budget handle can set this up.
 - **PIDs are one global pool of 63, and untaken notices hold them outside every limit.** The
-  kernel departs from R6's process-object count: an ended process's PID stays held while its
-  notice is untaken, and it no longer counts against any process limit. What bounds these PIDs is the
+  kernel departs from the PID count: an ended process's PID stays held while its notice is
+  untaken, and it no longer counts against any process limit. What bounds these PIDs is the
   creator's pages, so one creator can hold every free PID with a single one-process budget, and
   every other `process_create`, in any part of the budget tree, then gets `OutOfProcesses`.
   Follow-up: [todo](../todo/pid-pool-pinning.md).
+- **A creator's untaken notices hold PIDs in budgets it was given.** A process created into
+  another's budget counts there until its creator takes the notice, and after that budget is
+  destroyed, in its parent. The loss is bounded by the process limit of the budget whose handle
+  the creator was given, and a budget handle is already the right to spend that limit; the
+  creators that launch into others' budgets are `init` and the steward.
 - **Finding a process object scans every object frame.** Drawing a PID looks for a process
   object naming each candidate PID, and matching a notice to its endpoint looks for one owing a
   notice there; each walks every kernel-object frame up to the highest one ever used, a mark
@@ -375,6 +381,11 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
   notices a creator can pile up are bounded by its own pages.
 - **The PID lives as long as the notice.** A notice names a PID; if the PID could be reused
   first, a launcher could take a later process's notice for an earlier one's.
+- **The PID counts where the process runs, not where it was launched.** The steward and `init`
+  launch everyone's processes; counting them in the launcher would pool every principal's PIDs
+  in one budget, so one principal could spend what the others need, and a vault session's
+  launches would show in what its unlabelled side can start. Counted where they run, a
+  principal's processes are bounded by its own budget, as its pages are.
 - **Random PIDs.** A counter would let one process watch another's rate of process creation,
   including a vault session's. A PID drawn at random from the free ones says nothing about when
   other processes were made, and a creator learns it only from the notice.
