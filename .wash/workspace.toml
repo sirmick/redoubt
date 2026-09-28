@@ -1,7 +1,7 @@
 # Redoubt's Wash workspace. Loaded with workspace_configure {"from": ".wash/workspace.toml"};
 # how it is run is in PROJECT.md, the process in SWARM.md.
 name = "Redoubt"
-max_active = 3
+max_active = 5
 max_members = 16
 qa_dir = ".wash/qa"
 plan_file = ".wash/plan.toml"
