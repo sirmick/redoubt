@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 47
+revision = 59
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -40,7 +40,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work, the Kernel bullet: every docs/todo/ page it links, plus docs/todo/receive-output-late-invalid.md (rule: docs/kernel/ipc.md#a-bad-record-takes-nothing) and the IPC1 review's note (a dangling comment at kernel/src/arch/riscv/mem.rs map_into_with). Tier A."
   state = "reported"
-  revision = 43
+  revision = 56
 
 [[node]]
   id = "M1"
@@ -202,5 +202,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work, the bench and its tools bullet (bench-load-flakes, programs-build-rerun, ssh-loopback-host, write-only-mutation-split, miri-vendored-unsafe, doccheck-stale-paths, size-budget), the documentation switch-over (docs/todo/verdict-strings.md) and docs/todo/sched-latency-target.md. First goal: a green whole bench. Tier A (the bench)."
-  state = "active"
-  revision = 38
+  state = "done"
+  revision = 59

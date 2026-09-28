@@ -42,9 +42,6 @@ const MILESTONES: [(&str, &str); 5] = [
     ("M5", "persist, install, share"),
 ];
 const EXEMPT: [&str; 4] = ["Purpose", "Residual risks", "Why", "How to use it"];
-/// Directories under `docs/` that hold no pages and take no links (the rendering assets in
-/// `docs/theme` are not pages either, but C8 checks them).
-const EXCLUDED: [&str; 1] = ["docs/legacy"];
 const ROOT_PAGES: [&str; 3] = ["README.md", "GETTING-STARTED.md", "CONTRIBUTING.md"];
 const PACKAGES: [&str; 17] =
     ["SV", "IPC", "DOC", "HIST", "OD", "K", "D", "B", "E", "C", "W", "A", "L", "T", "V", "G", "S"];
@@ -203,7 +200,8 @@ fn heading(line: &str) -> Option<(usize, &str)> {
 
 fn page_paths(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
-    walk(root, "docs", &|p| EXCLUDED.contains(&p) || p == "docs/theme", &mut out);
+    // The rendering assets in `docs/theme` are not pages, but C8 checks them.
+    walk(root, "docs", &|p| p == "docs/theme", &mut out);
     out.retain(|p| p.ends_with(".md"));
     out.extend(ROOT_PAGES.iter().filter(|p| root.join(p).is_file()).map(|p| p.to_string()));
     out.sort();
@@ -671,7 +669,6 @@ fn mutations(root: &Path) -> BTreeSet<String> {
 // ---- C3, C4: milestones and process references ----
 
 fn milestones_and_process(c: &mut Ctx, p: &Page) {
-    let process = p.path != "docs/SWARM.md" && p.path != "docs/PROJECT.md";
     for (i, l) in p.lines.iter().enumerate() {
         for (at, w) in words(l) {
             let Some(m) = MILESTONES.iter().position(|(id, _)| *id == w) else { continue };
@@ -681,10 +678,8 @@ fn milestones_and_process(c: &mut Ctx, p: &Page) {
                 c.err(3, &p.path, i + 1, format!("`{w}` must read `{}`", milestone(m)));
             }
         }
-        if process {
-            for m in process_refs(l, !p.fenced[i], p.path == "docs/testbench.md") {
-                c.err(4, &p.path, i + 1, m);
-            }
+        for m in process_refs(l, !p.fenced[i], p.path == "docs/testbench.md") {
+            c.err(4, &p.path, i + 1, m);
         }
     }
 }
@@ -795,9 +790,6 @@ fn bad_link(root: &Path, from: &str, t: &str) -> Option<String> {
     let (path, anchor) = t.split_once('#').map_or((t, None), |(p, a)| (p, Some(a)));
     let target = if path.is_empty() { Some(from.to_string()) } else { resolve(from, path) };
     let Some(target) = target else { return Some("leaves the repository".into()) };
-    if EXCLUDED.iter().any(|x| target == *x || target.starts_with(&format!("{x}/"))) {
-        return Some("links into an excluded directory".into());
-    }
     if !root.join(&target).exists() {
         return Some("no such file".into());
     }
@@ -918,7 +910,7 @@ fn security(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
 
 fn no_binaries(c: &mut Ctx) {
     let mut files = Vec::new();
-    walk(c.root, "docs", &|p| EXCLUDED.contains(&p), &mut files);
+    walk(c.root, "docs", &|_| false, &mut files);
     for f in files {
         let ext = f.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_lowercase());
         let theme_js = f.strip_prefix("docs/theme/").is_some_and(|r| !r.contains('/') && ext == "js");

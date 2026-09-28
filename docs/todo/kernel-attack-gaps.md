@@ -78,7 +78,7 @@ gap: the page's section, the claim, and what no case attacks.
 - Preemption points: an interrupt's wake not preempting, and another budget's deadline preempting, are not attacked.
 - The current minimum and ties: clauses 1 and 4 are checked on the target only when a run happens to tie; the host tests and model attack them.
 - Charging: interrupt handling billed to the device object's owner is not attacked.
-- Responsiveness: decision wake plus R10 time is not asserted as one sum; `budget_destroy` call-to-return is recorded, not asserted.
+- Responsiveness: `budget_destroy` call-to-return is recorded, not asserted.
 - Charging: floods of weight-0 budgets with deadlines beyond the 64 of `sched-timer-flood` are not attacked (their destruction is billed to nobody).
 - R12 (scheduling): the bound on a call's kernel time is not attacked; `map_anon`'s search departs from it ([map_anon's search cost](map-anon-search-cost.md)).
 - R23 (no test channels): no case builds the production kernel and scans it for the trace.

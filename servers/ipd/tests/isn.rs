@@ -59,7 +59,9 @@ fn each_active_open_takes_one_seed_and_its_isn_is_that_seeds() {
     let main_seed = w.seeds.borrow()[0];
     assert_eq!(w.seeds.borrow().len(), 1, "one seed for the main interface");
     let mut isns = Vec::new();
-    for k in 0..1000u32 {
+    // Miri, far slower, opens fewer through the same checks.
+    let opens: u32 = if cfg!(miri) { 20 } else { 1000 };
+    for k in 0..opens {
         let before = w.seeds.borrow().len();
         let n = w.nine.fs.stack.allocate(who, 5, 2000).unwrap();
         w.nine.fs.stack.connect(who, n, &anywhere(), LAN_HOST, 1 + (k % 1000) as u16, w.now).unwrap();
@@ -74,7 +76,7 @@ fn each_active_open_takes_one_seed_and_its_isn_is_that_seeds() {
         isns.push(*sent.last().unwrap());
         w.nine.fs.stack.release(who, n, false, w.now).unwrap();
     }
-    // The main interface's PRNG never made one: none of the 1000 is among its first 10,000.
+    // The main interface's PRNG never made one: none of them is among its first 10,000.
     let mut main = Rand(main_seed);
     let outputs: HashSet<u32> = (0..10_000).map(|_| main.u32()).collect();
     assert!(isns.iter().all(|isn| !outputs.contains(isn)), "an ISN came from the main interface's PRNG");

@@ -30,6 +30,10 @@ pub enum Verdict {
     Fail(String),
 }
 
+/// QEMU ends when the bench does, even when the bench is killed and nothing is dropped
+/// (Linux's parent-death signal): a run killed at its timeout leaves no guest running.
+const EXIT_WITH_PARENT: [&str; 2] = ["-run-with", "exit-with-parent=on"];
+
 /// A child process (QEMU, ssh) that is killed however the run ends.
 pub struct Reaped(pub Child);
 
@@ -58,6 +62,7 @@ impl Image<'_> {
     fn qemu(&self) -> Command {
         let mut qemu = Command::new(self.machine.qemu);
         qemu.args(self.machine.qemu_args)
+            .args(EXIT_WITH_PARENT)
             .args(["-bios", self.firmware])
             .args(["-smp", &self.smp.to_string()])
             .args(["-m", &format!("{}M", self.memory_mib)])
@@ -383,6 +388,70 @@ mod tests {
         std::fs::remove_file(&disk).ok();
         std::fs::remove_dir_all(disk.with_extension("peers")).ok();
         args
+    }
+
+    /// A bench killed outright (SIGKILL, nothing dropped) takes its QEMU with it: here a shell
+    /// stands in for the bench, starts QEMU the way `Image::qemu` does, and is killed.
+    #[test]
+    fn a_killed_bench_leaves_no_qemu() {
+        let qemu = "qemu-system-riscv64";
+        // QEMU greets a QMP client only from its main loop, so after it has read its options and
+        // asked for the parent-death signal: killing the stand-in earlier would test only a race.
+        let qmp = std::env::temp_dir().join(format!("testbench-exit-with-parent-{}.qmp", std::process::id()));
+        std::fs::remove_file(&qmp).ok();
+        let script = format!(
+            "{qemu} {} -machine virt -bios none -display none -monitor none -serial none -S -qmp unix:{},server=on,wait=off </dev/null >/dev/null 2>&1 & echo $!; exec sleep 600",
+            EXIT_WITH_PARENT.join(" "),
+            qmp.display()
+        );
+        let mut bench = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("starting sh");
+        let mut line = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(bench.stdout.take().expect("sh's stdout")),
+            &mut line,
+        )
+        .expect("QEMU's pid");
+        let pid: u32 = line.trim().parse().expect("a pid");
+        let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+        let kill = || {
+            std::process::Command::new("kill").args(["-9", &pid.to_string()]).status().ok();
+        };
+        // Generous: a loaded machine starts QEMU slowly, and this bounds only a broken run.
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let greeted = || {
+            let Ok(mut qmp) = std::os::unix::net::UnixStream::connect(&qmp) else { return false };
+            qmp.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut greeting = [0u8; 16];
+            std::io::Read::read(&mut qmp, &mut greeting).is_ok_and(|n| greeting[..n].starts_with(b"{\"QMP\""))
+        };
+        while !greeted() {
+            if Instant::now() > deadline {
+                kill();
+                bench.kill().ok();
+                panic!("QEMU never greeted on QMP");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::remove_file(&qmp).ok();
+        bench.kill().expect("killing sh");
+        bench.wait().ok();
+        // Gone, or a zombie waiting for init to reap it.
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let running = || {
+            std::fs::read_to_string(proc.join("stat"))
+                .is_ok_and(|stat| stat.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z')))
+        };
+        while running() {
+            if Instant::now() > deadline {
+                kill();
+                panic!("QEMU {pid} outlived the process that started it");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn modern(args: &[String]) -> usize { args.windows(2).filter(|w| w == &MODERN_VIRTIO).count() }

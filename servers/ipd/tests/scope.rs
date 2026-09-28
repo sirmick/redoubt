@@ -97,10 +97,12 @@ fn allows(scope: &Scope, connect: bool, addr: u32, port: u16) -> bool {
     })
 }
 
+/// Random scopes per property. Miri, far slower, checks fewer through the same assertions.
+const SCOPES: usize = if cfg!(miri) { 50 } else { 20_000 };
 #[test]
 fn a_scope_permits_exactly_what_its_rules_contain() {
     let mut r = Rng(0x1234_5678_9abc_def1);
-    for _ in 0..20_000 {
+    for _ in 0..SCOPES {
         let s = r.scope();
         for _ in 0..20 {
             let (addr, port) = (r.addr(), r.port());
@@ -116,7 +118,7 @@ fn a_scope_permits_exactly_what_its_rules_contain() {
 fn a_grant_only_narrows() {
     let mut r = Rng(0x0bad_cafe_f00d_d00d);
     let mut accepted = 0;
-    for _ in 0..20_000 {
+    for _ in 0..SCOPES {
         let held = r.scope();
         let inside = r.narrower(&held);
         assert!(held.narrows(&inside), "{held:?} refused its own narrowing {inside:?}");
@@ -154,7 +156,7 @@ fn a_grant_only_narrows() {
             assert!(!asked.permits_listen(port) || held.permits_listen(port));
         }
     }
-    assert!(accepted > 10_000, "the sweep accepted too few grants to mean anything ({accepted})");
+    assert!(accepted > SCOPES / 2, "the sweep accepted too few grants to mean anything ({accepted})");
 }
 
 #[test]
@@ -183,7 +185,7 @@ fn a_grant_never_widens_or_adds_listen() {
 #[test]
 fn the_encoding_is_canonical_and_round_trips() {
     let mut r = Rng(0xfeed_face_dead_beef);
-    for _ in 0..20_000 {
+    for _ in 0..SCOPES {
         let s = r.scope();
         let bytes = s.encode();
         assert_eq!(bytes.len(), 1 + s.rules().len() * RULE_BYTES);

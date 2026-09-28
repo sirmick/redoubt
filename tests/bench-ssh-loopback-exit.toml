@@ -2,6 +2,8 @@ description = "Bench self-check: a session that never logs in fails on ssh's exi
 kind = "ssh-loopback"
 timeout_secs = 20
 authorized = ["alice"]
+# The server refused the key: its verdict, not only the client's words.
+server_log = ['Failed publickey for \S+ from .* ED25519 ']
 must_fail = '^session mallory: at the end: ssh exited \(status 255\), expected 0; last output: .*Permission denied \(publickey\)\.$'
 
 [[session]]

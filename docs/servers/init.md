@@ -190,7 +190,7 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 
 ### The startup block
 
-Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks the net rig and `stub-launch` write are parsed · tested: bench:rt-host-tests, host:redoubt-rt::round_trip, host:redoubt-rt::the_page_is_the_wire_message, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::resolve_takes_the_longest_prefix, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup, bench:stub-launch, bench:d3-net-tcp
+Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks the net rig and `stub-launch` write are parsed · tested: bench:rt-host-tests, host:redoubt-rt::round_trip, host:redoubt-rt::the_page_is_the_wire_message, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::resolve_takes_the_longest_prefix, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup, bench:stub-launch, bench:net-tcp
 
 A launcher gives each child one read-only page, the **startup block**, naming the handles it
 installed in the child's slots 1 to n (`process_start`,
@@ -485,8 +485,7 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   so it is run by hand.
 - **On target, the kernel's refusal hides the stub's overlap checks.** Dropping one still ends
   in exit 111, because `map_fixed` never replaces a mapping; only the host tests pin the stub's
-  own. The bench's stub is not rebuilt when a dependency's manifest or the lock file changes:
-  [todo](../todo/programs-build-rerun.md).
+  own.
 - **A restart loop reboots the machine.** A client that can crash a server repeatedly without
   being blamed (a bug the blame rule does not reach) can reboot the box.
 

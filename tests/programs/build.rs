@@ -53,10 +53,20 @@ fn main() {
     println!("cargo:rerun-if-changed={}", child_elf.display());
 
     // The outputs above are this script's own products, so watching them alone never rebuilds
-    // the stub after its sources change: watch what `cargo build -p stub` reads instead.
-    for input in
-        ["stub/src", "stub/link.x", "stub/build.rs", "stub/Cargo.toml", "libs/sys/src", "libs/wire/src"]
-    {
+    // the stub after its sources change: watch what `cargo build -p stub` reads instead, its
+    // path dependencies' manifests, and the workspace's (profiles) and lock file (versions).
+    for input in [
+        "stub/src",
+        "stub/link.x",
+        "stub/build.rs",
+        "stub/Cargo.toml",
+        "libs/sys/src",
+        "libs/sys/Cargo.toml",
+        "libs/wire/src",
+        "libs/wire/Cargo.toml",
+        "Cargo.toml",
+        "Cargo.lock",
+    ] {
         println!("cargo:rerun-if-changed={}", workspace.join(input).display());
     }
     println!("cargo:rerun-if-env-changed=CARGO");

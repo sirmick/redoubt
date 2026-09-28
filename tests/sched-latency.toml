@@ -1,13 +1,16 @@
-description = "Latency under the named workload (the targets in kernel/scheduling.md, \"Responsiveness\"): a driver stand-in on the goldfish RTC's alarm interrupt, a steward stand-in on timeouts, hand destroys after a decision timeout and lease deadlines, and 1, 4 and 16 spinning sessions; 200 wakes and 50 destructions of each kind per run; wakes p50 <= 15 ms and p99 <= 50 ms, deadline notice p99 <= 30 ms, R10 kernel time p99 <= 30 ms (from the trace), a 1000-weight server's share under the 16-session load; every pick checked by the rank oracle (virtual time, checked build)"
+description = "Latency under the named workload (the targets in kernel/scheduling.md, \"Responsiveness\"): a driver stand-in on the goldfish RTC's alarm interrupt, a steward stand-in on timeouts, hand destroys after a decision timeout and lease deadlines, and 1, 4 and 16 spinning sessions; 200 wakes and 50 destructions of each kind per run; driver and timer wakes p50 <= 15 ms and p99 <= 50 ms, decision wakes p50 <= 20 ms and p99 <= 115 ms (from the seed sweep), deadline notice p99 <= 30 ms, R10 kernel time p99 <= 30 ms (from the trace), a lease's end p99 <= 145 ms, a 1000-weight server's share under the 16-session load; every pick checked by the rank oracle (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
+# The guest seed the gate runs: the sweep's worst (kernel/scheduling.md, "Responsiveness").
+qemu_seed = 3
 programs = ["sched-latency"]
 # Test builds only: the trace ring and its dump (never in a default or production kernel).
 kernel_features = ["sched-trace"]
-# The rank oracle, and R10's kernel time from the trace's X/Y records: p99 <= 30 ms.
-post_check = "sched_oracle r10_p99_us=30000"
+# The rank oracle; R10's kernel time from the trace's X/Y records, p99 <= 30 ms; a lease's end, the
+# worst decision-wake p99 plus R10's, <= 115 + 30 ms.
+post_check = "sched_oracle r10_p99_us=30000 lease_end_p99_us=145000"
 timeout_secs = 1800
 expect = [
     '^\[latency\] the RTC keeps virtual time: met',

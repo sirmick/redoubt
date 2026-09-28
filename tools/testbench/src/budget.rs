@@ -2,11 +2,11 @@
 //! many of them lack a `// SAFETY:` justification, and fails if either exceeds its budget.
 //! Budgets only ever get lowered. Raising one needs a reason in the commit that does it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
-use crate::case::Budget;
+use crate::case::{Budget, Skip};
 
 #[derive(Default)]
 pub struct Count {
@@ -37,9 +37,11 @@ fn count_file(path: &Path, count: &mut Count) -> Result<()> {
         let (reach, marker) =
             if is_declaration { (SAFETY_DOC_REACH, "# Safety") } else { (SAFETY_COMMENT_REACH, "SAFETY:") };
         let above = &lines[number.saturating_sub(reach)..number];
-        let documented = above
-            .iter()
-            .any(|l| l.trim_start().starts_with("//") && (l.contains(marker) || l.contains("SAFETY:")))
+        let justifies = |l: &&str| l.contains(marker) || l.contains("SAFETY:");
+        // The comment block directly above counts however long it is; otherwise one within reach.
+        let block = lines[..number].iter().rev().take_while(|l| l.trim_start().starts_with("//"));
+        let documented = block.clone().any(|l| justifies(&l))
+            || above.iter().any(|l| l.trim_start().starts_with("//") && justifies(l))
             || line.contains("SAFETY:");
         if !documented {
             count.undocumented += uses;
@@ -48,22 +50,22 @@ fn count_file(path: &Path, count: &mut Count) -> Result<()> {
     Ok(())
 }
 
-/// Count source files separately: a real zero-unsafe crate is not missing coverage.
-fn count_path(path: &Path, count: &mut Count) -> Result<usize> {
+/// Every Rust source under `path`, a file or a directory. A path that is not there fails, and so
+/// does a broken link under it.
+pub fn rust_files(path: &Path) -> Result<Vec<PathBuf>> {
     let metadata = std::fs::metadata(path).with_context(|| format!("examining {}", path.display()))?;
     if metadata.is_dir() {
-        let mut files = 0;
+        let mut files = Vec::new();
         for entry in std::fs::read_dir(path).with_context(|| format!("listing {}", path.display()))? {
             let entry = entry.with_context(|| format!("reading directory entry in {}", path.display()))?;
-            files += count_path(&entry.path(), count)?;
+            files.extend(rust_files(&entry.path())?);
         }
         Ok(files)
     } else if path.extension().is_some_and(|e| e == "rs") {
         ensure!(metadata.is_file(), "not a regular Rust source file: {}", path.display());
-        count_file(path, count)?;
-        Ok(1)
+        Ok(vec![path.to_path_buf()])
     } else {
-        Ok(0)
+        Ok(Vec::new())
     }
 }
 
@@ -77,9 +79,12 @@ pub fn check(workspace: &Path, budgets: &[Budget]) -> Result<(Option<String>, St
         let mut count = Count::default();
         for path in &budget.paths {
             let root = workspace.join(path);
-            let files =
-                count_path(&root, &mut count).with_context(|| format!("checking budget {}", budget.name))?;
-            ensure!(files != 0, "budget {}: no Rust source files in {}", budget.name, root.display());
+            // A real zero-unsafe crate is not missing coverage; a path with no source is.
+            let files = rust_files(&root).with_context(|| format!("checking budget {}", budget.name))?;
+            ensure!(!files.is_empty(), "budget {}: no Rust source files in {}", budget.name, root.display());
+            for file in files {
+                count_file(&file, &mut count).with_context(|| format!("checking budget {}", budget.name))?;
+            }
         }
         let name = &budget.name;
         summary.push(format!("{name}: {} unsafe, {} undocumented", count.total, count.undocumented));
@@ -102,9 +107,58 @@ pub fn check(workspace: &Path, budgets: &[Budget]) -> Result<(Option<String>, St
     Ok((failure, summary.join("\n      ")))
 }
 
+/// Whether a crate root declares itself `no_std` (outright, or under a `cfg_attr`): the crates
+/// that can be built for the target.
+fn is_no_std(root: &str) -> bool {
+    root.lines().map(str::trim_start).any(|l| {
+        l.starts_with("#![")
+            && l.contains("no_std")
+            && (l.starts_with("#![no_std") || l.starts_with("#![cfg_attr"))
+    })
+}
+
+/// The coverage the budgets alone cannot prove: every Rust source of every workspace member that
+/// can be built for the target (`no_std`) is in some budget, unless the member is `uncounted`;
+/// and every `uncounted` entry names such a member. `Some` names what is wrong.
+pub fn coverage(workspace: &Path, budgets: &[Budget], uncounted: &[Skip]) -> Result<Option<String>> {
+    let manifest = std::fs::read_to_string(workspace.join("Cargo.toml")).context("reading Cargo.toml")?;
+    let manifest: toml::Table = toml::from_str(&manifest).context("parsing Cargo.toml")?;
+    let members = manifest
+        .get("workspace")
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+        .context("Cargo.toml has no workspace.members")?;
+    let counted = |file: &str| {
+        budgets.iter().flat_map(|b| &b.paths).any(|p| file == p || file.starts_with(&format!("{p}/")))
+    };
+    let mut on_target = Vec::new();
+    let mut missing = Vec::new();
+    for member in members.iter().filter_map(|m| m.as_str()) {
+        let roots = ["src/lib.rs", "src/main.rs"].map(|r| workspace.join(member).join(r));
+        let no_std = roots.iter().any(|r| std::fs::read_to_string(r).is_ok_and(|text| is_no_std(&text)));
+        if !no_std {
+            continue;
+        }
+        on_target.push(member);
+        if uncounted.iter().any(|u| u.path == member) {
+            continue;
+        }
+        for file in rust_files(&workspace.join(member).join("src"))? {
+            let file = file.strip_prefix(workspace).unwrap_or(&file).to_string_lossy().into_owned();
+            if !counted(&file) {
+                missing.push(file);
+            }
+        }
+    }
+    if let Some(stale) = uncounted.iter().find(|u| !on_target.contains(&u.path.as_str())) {
+        return Ok(Some(format!("uncounted {} is not a workspace member built for the target", stale.path)));
+    }
+    missing.sort();
+    Ok((!missing.is_empty()).then(|| format!("on-target sources in no budget: {}", missing.join(", "))))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -138,6 +192,53 @@ mod tests {
 
     impl Drop for Fixture {
         fn drop(&mut self) { std::fs::remove_dir_all(&self.0).unwrap(); }
+    }
+
+    fn budget(paths: &[&str]) -> Budget {
+        Budget {
+            name: "b".into(),
+            paths: paths.iter().map(|p| p.to_string()).collect(),
+            max_unsafe: 0,
+            max_undocumented: 0,
+        }
+    }
+
+    /// A source of an on-target crate that no budget counts fails; a host crate, and a member
+    /// left uncounted with a reason, do not; an uncounted entry that names no such member fails.
+    #[test]
+    fn every_on_target_source_is_in_a_budget() {
+        let fixture = Fixture::new();
+        let w = &fixture.0;
+        std::fs::write(w.join("Cargo.toml"), "[workspace]\nmembers = [\"a\", \"host\"]\n").unwrap();
+        for dir in ["a/src/nested", "host/src"] {
+            std::fs::create_dir_all(w.join(dir)).unwrap();
+        }
+        std::fs::write(w.join("a/src/lib.rs"), "//! A.\n#![cfg_attr(not(test), no_std)]\n").unwrap();
+        std::fs::write(w.join("a/src/nested/x.rs"), "fn x() {}\n").unwrap();
+        std::fs::write(w.join("host/src/main.rs"), "fn main() {}\n").unwrap();
+        let uncounted = |path: &str| vec![Skip { path: path.into(), reason: "r".into() }];
+        let missed = coverage(w, &[budget(&["a/src/lib.rs"])], &[]).unwrap();
+        assert_eq!(missed.as_deref(), Some("on-target sources in no budget: a/src/nested/x.rs"));
+        assert_eq!(coverage(w, &[budget(&["a/src"])], &[]).unwrap(), None);
+        assert_eq!(coverage(w, &[budget(&["a/src/lib.rs"])], &uncounted("a")).unwrap(), None);
+        let stale = coverage(w, &[budget(&["a/src"])], &uncounted("host")).unwrap();
+        assert!(stale.is_some_and(|s| s.contains("uncounted host")));
+    }
+
+    /// A justification is the comment block directly above, however long, or a comment within
+    /// reach; one farther up, cut off by code, does not count.
+    #[test]
+    fn a_long_safety_block_directly_above_justifies() {
+        let fixture = Fixture::new();
+        let long = format!("// SAFETY: why.\n{}fn f() {{ unsafe {{}} }}\n", "// more.\n".repeat(10));
+        std::fs::write(fixture.0.join("long.rs"), long).unwrap();
+        let far = format!("// SAFETY: why.\nfn g() {{}}\n{}fn f() {{ unsafe {{}} }}\n", "\n".repeat(10));
+        std::fs::write(fixture.0.join("far.rs"), far).unwrap();
+        let mut count = Count::default();
+        count_file(&fixture.0.join("long.rs"), &mut count).unwrap();
+        assert_eq!((count.total, count.undocumented), (1, 0));
+        count_file(&fixture.0.join("far.rs"), &mut count).unwrap();
+        assert_eq!((count.total, count.undocumented), (2, 1));
     }
 
     #[test]

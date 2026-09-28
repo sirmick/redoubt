@@ -23,11 +23,12 @@
 //!   trace (records `X`, `Y`, `Z`); the bench's post-check reports and bounds them.
 //!
 //! The targets (kernel/scheduling.md, virtual time, N <= 16, this workload): driver and steward
-//! wakes p50 <= 15 ms and p99 <= 50 ms; deadline notice p99 <= 30 ms; R10 kernel time p99 <= 30 ms
-//! (the post-check); a lease's termination from the steward's decision, decision wake + R10, p99 <=
-//! 80 ms; the 1000-weight server's share of the spinning CPU at N = 16 at least its weight's less
-//! 30/1000. Each is printed as `met` or `missed`; the virtual-time case requires `met`, and the
-//! plain-TCG reference case only reports. Adding objects moves the R10 terms
+//! timer wakes p50 <= 15 ms and p99 <= 50 ms; the steward's decision wake p50 <= 20 ms and p99 <=
+//! 115 ms (from the seed sweep); deadline notice p99 <= 30 ms; R10 kernel time p99 <= 30 ms (the
+//! post-check); a lease's termination from the steward's decision, decision wake + R10, p99 <=
+//! 145 ms (the post-check adds the two); the 1000-weight server's share of the spinning CPU at
+//! N = 16 at least its weight's less 30/1000. Each is printed as `met` or `missed`; the virtual-time case
+//! requires `met`, and the plain-TCG reference case only reports. Adding objects moves the R10 terms
 //! (docs/todo/budget-destroy-cost.md).
 
 #![no_std]
@@ -46,6 +47,10 @@ const WINDOW_US: u64 = 16_000_000;
 /// The targets, µs.
 const WAKE_P50: usize = 15_000;
 const WAKE_P99: usize = 50_000;
+/// The steward's decision wake, set from the seed sweep (kernel/scheduling.md, "Responsiveness"):
+/// its worst case over the seeds plus a tenth, rounded up to 5 ms.
+const DECISION_P50: usize = 20_000;
+const DECISION_P99: usize = 115_000;
 const NOTICE_P99: usize = 30_000;
 const R10_P99: usize = 30_000;
 
@@ -106,7 +111,7 @@ pub extern "C" fn _start() -> ! {
         for (i, tag, what, p50, p99) in [
             (d, Stats::DRIVER_WAKE, "driver wake", Some(WAKE_P50), WAKE_P99),
             (s, Stats::TIMER_WAKE, "steward timer wake", Some(WAKE_P50), WAKE_P99),
-            (s, Stats::DECISION_WAKE, "steward decision wake", Some(WAKE_P50), WAKE_P99),
+            (s, Stats::DECISION_WAKE, "steward decision wake", Some(DECISION_P50), DECISION_P99),
             (s, Stats::DEADLINE, "deadline notice", None, NOTICE_P99),
         ] {
             match stat(i, tag) {

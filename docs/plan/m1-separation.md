@@ -28,7 +28,7 @@ Alice's leased agent, trying to get out.
 | Attack | Rules | Bench case |
 | --- | --- | --- |
 | Read outside its `/work`, or reach the network | [R25 (the label check)](../servers/serving.md#r25-the-label-check), [R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope) | not yet |
-| A labelled agent reaches a sink not cleared for its labels | [R60 (a sink refuses labels)](../servers/ipd.md#r60-a-sink-refuses-labels) | `d3-net-attacks` for `ipd`; the agent's case not yet |
+| A labelled agent reaches a sink not cleared for its labels | [R60 (a sink refuses labels)](../servers/ipd.md#r60-a-sink-refuses-labels) | `net-attacks` for `ipd`; the agent's case not yet |
 | Outlive its lease: expiry destroys everything, the handles it passed on and its sub-agents included | [R39 (leases end)](../servers/steward.md#r39-leases-end), [R10 (destruction)](../kernel/budgets.md#r10-destruction) | `budget-deadline`, `budget-destroy-attack` for the kernel; the lease case not yet |
 | Ask for a lease longer than `MAX_LEASE` | R39 | not yet |
 | Spoof the approval screen (control, bidi and format characters, swapped requests); send free text from a vault | [R38 (out-of-band approval)](../servers/steward.md#r38-out-of-band-approval) | not yet |
@@ -48,14 +48,14 @@ Bob, attacking Alice.
 | A vault session filling its `WAIT_CAP` on a shared server leaves its owner's unlabelled session's turn and cap unaffected | R2, [R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference) | not yet |
 | A lender destroyed while `fsd` holds its lent pages, and `fsd` survives | [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls) | `uaf-lent-page`, `process-lifecycle` for the kernel; with `fsd` not yet |
 | Crash blame: Bob crashes `fsd` three times while Alice is busy; every session and lease of Bob's with that label set ends and he cannot log straight back in; Alice is unaffected, also when `fsd` panics rather than faults and when the crashing thread holds her calls open too; a crash from a `send` while a bystander's call is parked blames nobody; a vault session's crashes do not end its owner's unlabelled session | [R21 (crash blame)](../kernel/processes.md#r21-crash-blame), [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `process`, `process-attack` for the kernel's blame; the steward's not yet |
-| Pinned open calls: 64 lent calls parked at `ipd` with short timeouts, and `ipd` still takes `netd`'s frames and frees the abandoned calls; SSH sessions survive | [R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting), [R4a (open calls)](../kernel/ipc.md#r4a-open-calls) | `d3-net-pinned`; with SSH not yet |
+| Pinned open calls: 64 lent calls parked at `ipd` with short timeouts, and `ipd` still takes `netd`'s frames and frees the abandoned calls; SSH sessions survive | [R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting), [R4a (open calls)](../kernel/ipc.md#r4a-open-calls) | `net-pinned`; with SSH not yet |
 | System fairness: a busy `fsd:data` does not fill `blkd`'s `WAIT_CAP` for `fsd:alice-secrets` | R2 | not yet |
 | Server CPU: expensive requests to a server delay other users only by that server's weight | R12 | `sched-server-busy`, `sched-large-weight` |
 | Shared pools: filling the `data` volume does not fail Alice's saves; flooding `fsd` with handles does not grow its table | [R48 (a quota per attach root)](../servers/fsd.md#r48-a-quota-per-attach-root) | not yet |
 | Server authority: no server's startup block holds its budget, a manifest granting one is refused, and no server can destroy a session | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | not yet |
 | `process_create` with a badged exit endpoint, to aim exit notices and blame at a server | R21 | `process-attack` |
 | A reused PID carries authority | [R20 (PID reuse)](../kernel/processes.md#r20-pid-reuse) | `pid-reuse-authority` |
-| Loopback login: a session connects to the box's own `sshd` with a key `keyd` holds | [R59 (never the box's own addresses)](../servers/ipd.md#r59-never-the-boxs-own-addresses) | `d3-net-attacks` for `ipd`'s refusal; the login not yet |
+| Loopback login: a session connects to the box's own `sshd` with a key `keyd` holds | [R59 (never the box's own addresses)](../servers/ipd.md#r59-never-the-boxs-own-addresses) | `net-attacks` for `ipd`'s refusal; the login not yet |
 | No leaky state: while a vault session works, an unlabelled observer sees no change in usage, request and session ids, message ids, PIDs, file versions, qids, directory listings, audit records or approval notifications, and cannot write, truncate, create or remove anything in the vault's volume | R37, R25 | not yet |
 | Hostile launch: a malformed ELF or startup block from a user parent hurts only the child | [R32 (a hostile image hurts only its process)](../servers/init.md#r32-a-hostile-image-hurts-only-its-process), [R31 (startup block checked whole)](../servers/init.md#r31-startup-block-checked-whole) | `stub-launch` for a malformed ELF, `process-attack` for malformed startup records at `process_start`; from a user parent not yet |
 | Approval flood: requests hit the per-(account, label set) cap; the steward and Alice's approval screen are unaffected | R38, R26 | not yet |
@@ -106,23 +106,17 @@ page.
      [calls abandoned by an endpoint's destruction](../todo/endpoint-destroyed-open-calls.md),
      [reclaiming an endpoint](../todo/endpoint-reclaim.md),
      [rescaling a carved-down lead](../todo/carve-lead-rescale.md),
-     [the loader stub's unsafe budget](../todo/stub-unsafe-budget.md), and
+     [the steward's decision wake on rv64, and R10's thin margin](../todo/sched-rv64-decision-wake.md), and
      [a notice lost to a bad receive record](../todo/receive-output-late-invalid.md).
    - **The bench and its tools**, with the kernel package:
      [tests that behaved differently under load](../todo/bench-load-flakes.md),
-     [the test programs' build inputs](../todo/programs-build-rerun.md),
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
-     [the write-only mutation](../todo/write-only-mutation-split.md),
-     [the vendored crates under Miri](../todo/miri-vendored-unsafe.md),
-     [paths the docs checker names that no longer exist](../todo/doccheck-stale-paths.md); and
-     [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
-     trusted crates from growing unseen.
+     [the unsafe budget's stated reason](../todo/unsafe-ratchet-reason.md),
+     and [the write-only mutation](../todo/write-only-mutation-split.md).
    - **Servers:** [a request answered outside `finish`](../todo/request-raw-reply.md),
      [starting a thread from safe code](../todo/raw-thread-create.md),
      [the raw system call beside the runtime](../todo/raw-abi-syscall.md).
    - **beamlet:** [the code path's search order](../todo/module-search-order.md).
-   - **The documentation switch-over**, which rewrites process references in code and case
-     descriptions: [process names in verdicts and case descriptions](../todo/verdict-strings.md).
 - **A kernel containment gate.** One boot on QEMU that proves the kernel's primitives alone,
    before the whole milestone is layered on them: hostile code preempted and ended at its
    deadline, a budget subtree revoked with messages and lends in flight, and a victim that stays
@@ -157,7 +151,8 @@ page.
    ([the steward](../servers/steward.md)); the server graph, trust tiers and capability holdings
    it runs on ([the servers](../servers/README.md)). The cost of destroying a budget is brought
    under its target first ([budget destruction's cost](../todo/budget-destroy-cost.md)), and the
-   steward's decision-wake target is settled ([the target](../todo/sched-latency-target.md)).
+   steward's decision-wake target is set from a seed sweep
+   ([responsiveness](../kernel/scheduling.md#responsiveness)).
    The scheduling latency bench, measured with stand-ins for the steward and the drivers, is
    rerun with the real ones, and its numbers must stay within the target.
 - **`sshd`.** Sessions over SSH as beamlet VMs running IEx, vault sessions, and `approve@box`

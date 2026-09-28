@@ -35,14 +35,16 @@ fallback to QEMU's own firmware.
 
 ### What a case passes on
 
-Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:rustsbi-boot
+Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu
 
 A boot case passes when every `expect` pattern matches a console line, in order, no `forbid`
 pattern ever matches, and the boot ends as the case says. Three patterns are always forbidden:
 `PANIC`, `TEST FAILED` and `WARNING: INSECURE`. After the last `expect`, and any sessions, the bench
 keeps reading for 50 ms (1 s in a checked build), so a forbidden line right after the last expected
 one still fails the case. With `poweroff = true` it reads instead until QEMU exits, and requires the
-exit status the case names (0 by default; 255 for an SBI system failure).
+exit status the case names (0 by default; 255 for an SBI system failure). QEMU runs with
+`-run-with exit-with-parent=on`, so a bench killed at its timeout, even outright, leaves no guest
+running to skew the next run.
 
 In-guest programs print through the log server and finish with `<NAME> TEST PASSED` or
 `<NAME> TEST FAILED`; attack programs end with `attempts done` instead. The log server starts every
@@ -126,6 +128,7 @@ smp = [1, 4]                 # one boot per hart count (default [1])
 memory_mib = 32              # guest RAM (default 256)
 timeout_secs = 60            # default 60; fractions allowed
 icount = "shift=3,sleep=off" # virtual time: 2^3 ns per guest instruction, the RTC on it too
+qemu_seed = 1                # pin the guest's randomness (QEMU -seed)
 kernel_features = []         # extra kernel features
 debug_assertions = false     # true: a checked build of the kernel and the loader
 expect = ['regex 1', 'regex 2']   # each must match a console line, in this order
@@ -149,11 +152,13 @@ system failure, which a rejection case asks for).
 With `icount`, QEMU runs the guest at a fixed instruction rate, skips idle time to the next timer
 deadline and puts the RTC on the same clock (`-rtc clock=vm`). A time a case asserts is then a
 count of guest instructions (at `shift=3`, 1 ms is 125,000), the same on any host however loaded.
-It does not make a run repeat: QEMU fills the guest's boot RNG seed from host entropy on every
-boot, the kernel draws PIDs from it, and that moves every later event. A timing gate therefore
-runs one pinned seed and states its target from a sweep of seeds
-([responsiveness](kernel/scheduling.md#responsiveness)); the bench cannot pin one yet
-([todo](todo/sched-latency-target.md)).
+It does not make a run repeat on its own: QEMU fills the guest's boot RNG seed from host entropy
+on every boot, the kernel draws PIDs from it, and that moves every later event. `qemu_seed = N`
+pins it (QEMU `-seed N`, which fills the device tree's `/chosen/rng-seed`), and with `icount` a
+run then repeats exactly. The bench prints the seed before the result, and
+`TESTBENCH_QEMU_SEED=M` replaces the pinned seed of every case that has one, to replay a run or
+to sweep. A timing gate runs one pinned seed and states its target from a sweep of seeds
+([responsiveness](kernel/scheduling.md#responsiveness)).
 
 The kinds, and the fields each takes besides `description` and `arch`:
 
@@ -161,9 +166,10 @@ The kinds, and the fields each takes besides `description` and `arch`:
 | --- | --- | --- |
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
-| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong) | `packages` |
-| `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `must_fail` |
-| `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented` |
+| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri | `packages`, `tests` (the test files to run; default all), `miri` |
+| `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
+| `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
+| `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
 | `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
 | `fmt` | the formatting gate ([below](#the-formatting-gate)) | `roots`, `[[skip]]` (`path`, `reason`) |
 
@@ -322,7 +328,7 @@ The guest's own claims about the network are never trusted.
 
 ## SSH sessions
 
-Status: built · partly tested: the loopback self-checks fail on the development host, where the loopback server cannot start a login shell ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback-deadlock, bench:bench-ssh-guest
+Status: built · partly tested: the loopback self-checks cannot run on the development host while the bench runs in a service's SELinux context ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback-deadlock, bench:bench-ssh-guest, host:testbench::only_the_selinux_exec_refusal_is_the_hosts
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
 while the bench keeps watching the console. Each drives the host's OpenSSH `ssh`, an implementation
@@ -347,11 +353,22 @@ Every session's exit status is checked and all of its output passes `forbid`; a 
 stops the others. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in
 `tests/keys/`; they are public and marked not for production, and a boot manifest that lists one
 must never ship. The `ssh-loopback` kind runs sessions against a host OpenSSH server that `ssh`
-starts itself for each session, in inetd mode, so nothing listens on a port.
+starts itself for each session, in inetd mode, so nothing listens on a port. Its log goes to a file
+beside the transcripts, never to `ssh`'s output, so a late line of the server's cannot stand in for
+the session's last output; a case's `server_log` asks what the server saw (a refused key, say), not
+only what the client printed. Before the first loopback case the bench logs in once and runs
+`exit 0`. One failure of that probe is named as the host's: under SELinux, `sshd` moves the shell
+into the user's default context, which a bench running in a service's context may not enter, and
+the shell's exec is refused. When `ssh` reports `<shell>: Permission denied` and the server's log
+shows the context change, every loopback case fails with that reason, as on a host without
+OpenSSH, and `--allow-skip` skips them. The match is loose: on a host whose `sshd` logs that
+context change, any `/<path>: Permission denied` from `ssh` counts as the host's, not only the
+shell's. Any other probe failure fails every loopback case
+(`host:testbench::only_the_selinux_exec_refusal_is_the_hosts`).
 
 ## Self-checks
 
-Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:d3-net-self-unrefused
+Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused
 
 The harness can fail, and each feature shows it. Cases named `bench-*` check the bench itself:
 each feature has a case that passes only if the feature works and, where the bench can be
@@ -365,24 +382,55 @@ must_fail = '^regex$'        # passes only if the run fails with a matching reas
 the bench's own trouble is a failure regardless. Each case writes its pattern anchored and quoting
 the evidence, so it cannot pass by failing for some other reason; the bench does not enforce the
 anchoring, so a reviewer checks it. An attack case can have a self-check of its own:
-`d3-net-self-unrefused` runs `d3-net-attacks`'s boot with `ipd` not told one of the box's addresses,
+`bench-net-self-unrefused` runs `net-attacks`'s boot with `ipd` not told one of the box's addresses,
 and must fail on the SYN the capture then shows.
 
 ## The unsafe budget
 
-Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory
+Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory, host:testbench::every_on_target_source_is_in_a_budget, host:testbench::a_long_safety_block_directly_above_justifies, bench:rt-miri, host:testbench::a_miri_case_runs_its_files_under_miri
 
 `unsafe-budget.toml` lists every source directory of the trusted computing base that runs on the
 target, each with the most uses of `unsafe` it may hold and the most that may lack a justification
 (zero everywhere): a `// SAFETY:` comment above an `unsafe` block, and a `# Safety` section in the
-doc comment of an `unsafe fn` or `unsafe impl`. The case counts both and fails if either is over.
+doc comment of an `unsafe fn` or `unsafe impl`, in the comment block directly above or within a
+few lines. The case counts both and fails if either is over.
 Budgets only go down; raising one needs a stated reason in the change that does it.
 
-A configured path with no Rust source in it fails, but a source directory left out of every budget
-is not counted at all, and the ratchet cannot prove that every on-target source is configured. The
-loader stub (`stub/src`), which runs on the target and uses `unsafe`, is in no budget today
-([todo](todo/stub-unsafe-budget.md)). Vendored third-party crates are outside the ratchet
-([below](#vendored-dependencies)).
+A configured path with no Rust source in it fails. So does coverage left out: every workspace
+member that can be built for the target (its crate root is `no_std`) must have each of its Rust
+sources in some budget, unless the file lists it under `[[uncounted]]` with a reason (the test
+programs, the model, host tools, vendored code), and an `uncounted` entry that names no such
+member fails too. Vendored third-party crates are outside the ratchet
+([below](#vendored-dependencies)). So are crates outside the workspace: the gate reads only the
+workspace's members, and `userland/otp` is its own workspace whose `no_std` crates (`re`, `crypto`,
+`vm`) no budget counts. They are not in the trusted computing base; if one ever joins it, it joins
+the workspace and the gate sees it.
+
+The ratchet counts `unsafe`; it does not check it. `rt-miri` runs the native runtime's host tests
+under Miri (Stacked Borrows, isolation off), which checks the heap's free lists, page buffers and
+lends that a native run only executes. It runs the files that finish in seconds; `ipc` and `echo`
+take minutes under Miri and are run by hand. Without nightly Miri the case is missing, not passed.
+With the runtime's page-buffer aliasing fix reverted, `mapping_views` fails it with the Stacked
+Borrows error `not granting access to tag <wildcard> because that would remove [Unique for <…>]
+which is strongly protected`.
+
+## The size budget
+
+Status: built · tested: bench:size-budget, host:testbench::only_code_lines_count, host:testbench::a_raise_needs_its_reason, host:testbench::the_ratchet_reads_the_commit_that_raised, host:testbench::a_merge_is_judged_against_its_first_parent
+
+The size of the trusted computing base is budgeted, not observed
+([the tenets](TENETS.md)). `size-budget.toml` lists each trusted crate (the kernel, the loader,
+the stub, the libraries they and the servers link, the model and the servers) with a ceiling in
+lines of code: every line of every `.rs` file under its paths that is not blank, a `//` comment
+(doc comments included) or inside a `/* */` comment, in-file tests included. The case fails when a
+crate is over its ceiling. The ceilings started at each crate's size when the case landed and only
+fall: the case reads every commit that changed its file, merges included, and where one raised a
+ceiling over the file in its first parent, dropped a crate (a rename drops the old name) or
+narrowed a crate's paths (fewer lines counted under the same ceiling), requires a line
+`Size budget: <crate>: <reason>` for each such crate, in its message or, for a merge, in a commit
+it brings in. A raise not yet committed fails, and so does a path with no Rust source in it. The
+history check needs the history: in a shallow clone the oldest commit has no parent to compare
+with, so a raise there passes unchecked.
 
 ## Vendored dependencies
 
@@ -404,7 +452,8 @@ checksum. Two checks guard them, and they prove different things:
   it checked matches on all three counts and it checked as many crates as `vendor/` holds.
 
 The residuals: provenance is only as current as the last review that ran it, and the vendored
-crates' `unsafe` has never run under Miri ([todo](todo/miri-vendored-unsafe.md)).
+crates' `unsafe` is checked by recorded Miri runs, not by a bench case
+([ipd under Miri](servers/ipd.md#under-miri)).
 
 ## The no-cruft gate
 

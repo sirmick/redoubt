@@ -1,0 +1,94 @@
+description = "Size budget: each trusted crate's lines of Rust (code lines, not blank or comment) against a ceiling that only falls; raising one needs a Size budget: line in the commit"
+kind = "size-budget"
+# Ceilings only fall. Raising one needs a `Size budget: <crate>: <reason>` line in the commit
+# message of the change that raises it (docs/testbench.md, "The size budget").
+
+[[crate]]
+name = "kernel"
+paths = ["kernel/src"]
+max_lines = 7000
+
+[[crate]]
+name = "loader"
+paths = ["loader/src"]
+max_lines = 822
+
+[[crate]]
+name = "stub"
+paths = ["stub/src"]
+max_lines = 578
+
+[[crate]]
+name = "libs/sys"
+paths = ["libs/sys/src"]
+max_lines = 1665
+
+[[crate]]
+name = "libs/layout"
+paths = ["libs/layout/src"]
+max_lines = 51
+
+[[crate]]
+name = "libs/paging"
+paths = ["libs/paging/src"]
+max_lines = 158
+
+[[crate]]
+name = "libs/stride"
+paths = ["libs/stride/src"]
+max_lines = 516
+
+[[crate]]
+name = "libs/signing"
+paths = ["libs/signing/src"]
+max_lines = 33
+
+[[crate]]
+name = "libs/rt"
+paths = ["libs/rt/src"]
+max_lines = 4775
+
+[[crate]]
+name = "libs/wire"
+paths = ["libs/wire/src"]
+max_lines = 3470
+
+[[crate]]
+name = "libs/littlefs"
+paths = ["libs/littlefs/src"]
+max_lines = 2277
+
+[[crate]]
+name = "model"
+paths = ["model/src"]
+max_lines = 10132
+
+[[crate]]
+name = "servers/keyd"
+paths = ["servers/keyd/src"]
+max_lines = 1526
+
+[[crate]]
+name = "servers/bootfsd"
+paths = ["servers/bootfsd/src"]
+max_lines = 387
+
+[[crate]]
+name = "servers/consoled"
+paths = ["servers/consoled/src"]
+max_lines = 256
+
+[[crate]]
+name = "servers/blkd"
+paths = ["servers/blkd/src"]
+max_lines = 2061
+
+[[crate]]
+name = "servers/netd"
+paths = ["servers/netd/src"]
+max_lines = 1554
+
+[[crate]]
+name = "servers/ipd"
+paths = ["servers/ipd/src"]
+max_lines = 2883

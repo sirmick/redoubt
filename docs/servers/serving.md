@@ -332,7 +332,7 @@ Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_tha
 
 ### R25 (the label check)
 
-Status: built · partly tested: the check and its use in the 9P skeleton are attacked in host tests; in a boot only `ipd`'s refusal of labelled callers is · tested: host:redoubt-rt::matches_the_set_definition, host:redoubt-rt::properties, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::every_write_needs_equal_labels, host:redoubt-rt::labelled_metadata_does_not_flow_down, host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it, bench:d3-net-attacks
+Status: built · partly tested: the check and its use in the 9P skeleton are attacked in host tests; in a boot only `ipd`'s refusal of labelled callers is · tested: host:redoubt-rt::matches_the_set_definition, host:redoubt-rt::properties, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::every_write_needs_equal_labels, host:redoubt-rt::labelled_metadata_does_not_flow_down, host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it, bench:net-attacks
 
 A system server lets information flow from an object to a caller only if the object's labels
 are a subset of the caller's, and from a caller into an object only if their label sets are
@@ -378,14 +378,14 @@ agree on a badge with probability 2^-62 per badge, not with certainty.
 
 ### R28 (parked-call accounting)
 
-Status: built · partly tested: attacked in host tests with the runtime's fake kernel; `consoled` and `ipd`, which park, are attacked only in part in a boot · tested: host:redoubt-rt::parking_is_admitted_per_bucket_and_share, host:redoubt-rt::parked_calls_are_served_abandoned_and_expired, host:redoubt-rt::a_waiting_write_is_parked_abandoned_and_expired, bench:d3-net-pinned
+Status: built · partly tested: attacked in host tests with the runtime's fake kernel; `consoled` and `ipd`, which park, are attacked only in part in a boot · tested: host:redoubt-rt::parking_is_admitted_per_bucket_and_share, host:redoubt-rt::parked_calls_are_served_abandoned_and_expired, host:redoubt-rt::a_waiting_write_is_parked_abandoned_and_expired, bench:net-pinned
 
 A parked call holds exactly one `InFlight` of its caller's bucket and share, from `park` to the
 moment it is resumed, expires or is abandoned; the caps keep every bucket's parked calls under
 `MAX_OPEN_CALLS` with the headroom free; every parked call has a server-side deadline unless it
 waits on a person; and an abandoned one is answered at once. So a client that parks calls and
 walks away cannot pin a server's open calls ([R4a (open calls)](../kernel/ipc.md#r4a-open-calls)).
-In `d3-net-pinned` a client abandons 64 parked reads at `ipd`, which answers and frees each one;
+In `net-pinned` a client abandons 64 parked reads at `ipd`, which answers and frees each one;
 a read with nothing coming ends at `ipd`'s deadline, and the connection still works after.
 
 ## Failure and restart

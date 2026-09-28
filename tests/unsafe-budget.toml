@@ -154,3 +154,44 @@ name = "redoubt-layout (kernel-half map)"
 paths = ["libs/layout/src"]
 max_unsafe = 0
 max_undocumented = 0
+
+[[budget]]
+# The loader stub, which every loader-launched process runs first: raw slices over its argument
+# page and the image, the mapping calls, and `NullAlloc`'s `unsafe impl GlobalAlloc`.
+name = "stub (the loader stub)"
+paths = ["stub/src"]
+max_unsafe = 7
+max_undocumented = 0
+
+[[budget]]
+# The littlefs driver. `#![forbid(unsafe_code)]`; the budget says so where the rest is counted.
+name = "redoubt-littlefs"
+paths = ["libs/littlefs/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+# Members built for the target whose sources no budget counts. Every other `no_std` member's
+# sources must all be in a budget above, or the case fails.
+[[uncounted]]
+path = "model"
+reason = "the executable model: a host crate that is no_std only to share the kernel's types"
+
+[[uncounted]]
+path = "tests/programs"
+reason = "test programs, never in a shipped image"
+
+[[uncounted]]
+path = "tests/net"
+reason = "the network test rig's programs, never in a shipped image"
+
+[[uncounted]]
+path = "tests/net/client"
+reason = "the network test rig's client, never in a shipped image"
+
+[[uncounted]]
+path = "tools/vendor-check"
+reason = "a host tool"
+
+[[uncounted]]
+path = "vendor/getrandom"
+reason = "vendored third-party code, pinned by checksum and outside the ratchet (vendor/README.md)"

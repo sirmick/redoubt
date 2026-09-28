@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail, ensure};
 use ed25519_compact::{KeyPair, Seed};
 
-use crate::case::{Corruption, Program};
+use crate::case::{Corruption, HostTests, Program};
 use crate::target::Target;
 
 pub struct Builder {
@@ -120,12 +120,29 @@ impl Builder {
 
     /// `cargo test` for host packages, for the unit tests a boot cannot reach. Returns what
     /// failed, or `None` if every test passed.
-    pub fn cargo_test(&self, packages: &[String]) -> Result<Option<String>> {
-        let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-        cargo.current_dir(&self.workspace).arg("test");
-        for package in packages {
+    /// The `cargo test` a host-tests case runs. Under Miri it goes through rustup's `cargo`,
+    /// which alone takes `+nightly`, with isolation off: some tests read files or the clock.
+    fn test_command(&self, host: &HostTests) -> Command {
+        let mut cargo = if host.miri {
+            let mut cargo = Command::new("cargo");
+            cargo.args(["+nightly", "miri"]).env("MIRIFLAGS", "-Zmiri-disable-isolation");
+            cargo
+        } else {
+            Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        };
+        cargo.current_dir(&self.workspace);
+        cargo.arg("test");
+        for package in &host.packages {
             cargo.args(["-p", package]);
         }
+        for test in &host.tests {
+            cargo.args(["--test", test]);
+        }
+        cargo
+    }
+
+    pub fn cargo_test(&self, host: &HostTests) -> Result<Option<String>> {
+        let mut cargo = self.test_command(host);
         if !self.verbose {
             cargo.arg("--quiet").stdout(Stdio::piped()).stderr(Stdio::piped());
         }
@@ -266,9 +283,63 @@ fn append<W: std::io::Write>(archive: &mut tar::Builder<W>, name: &str, data: &[
     Ok(())
 }
 
+/// Whether nightly Miri can run; `Err` says what is missing.
+pub fn miri_available() -> Result<(), String> {
+    match Command::new("cargo").args(["+nightly", "miri", "--version"]).output() {
+        Ok(out) if out.status.success() => Ok(()),
+        _ => Err("nightly Miri not installed (rustup component add miri --toolchain nightly)".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Miri case runs the named test files under nightly Miri with isolation off; a plain case
+    /// runs every test target natively.
+    #[test]
+    fn a_miri_case_runs_its_files_under_miri() {
+        let builder = Builder { workspace: PathBuf::from("/w"), verbose: false };
+        let args = |host: &HostTests| {
+            let cargo = builder.test_command(host);
+            let miriflags = cargo.get_envs().find(|(k, _)| *k == "MIRIFLAGS").and_then(|(_, v)| v);
+            let args: Vec<_> = cargo.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            (args.join(" "), miriflags.map(|v| v.to_string_lossy().into_owned()))
+        };
+        let miri = HostTests { packages: vec!["p".into()], tests: vec!["a".into(), "b".into()], miri: true };
+        assert_eq!(
+            args(&miri),
+            ("+nightly miri test -p p --test a --test b".into(), Some("-Zmiri-disable-isolation".into()))
+        );
+        let native = HostTests { packages: vec!["p".into()], tests: Vec::new(), miri: false };
+        assert_eq!(args(&native), ("test -p p".into(), None));
+    }
+
+    /// The test programs embed a stub their build script builds; the script must rerun when
+    /// anything that build reads changes, the manifests and the lock file included, or a bench
+    /// run tests a stub built from other inputs than the tree names.
+    #[test]
+    fn the_test_programs_rebuild_their_stub_on_every_input() {
+        let script = include_str!("../../../tests/programs/build.rs");
+        for input in [
+            "stub/src",
+            "stub/link.x",
+            "stub/build.rs",
+            "stub/Cargo.toml",
+            "libs/sys/src",
+            "libs/sys/Cargo.toml",
+            "libs/wire/src",
+            "libs/wire/Cargo.toml",
+            "Cargo.toml",
+            "Cargo.lock",
+        ] {
+            assert!(
+                script.contains(&format!("\"{input}\"")),
+                "tests/programs/build.rs does not watch {input}"
+            );
+        }
+        assert!(script.contains("cargo:rerun-if-changed={}\", workspace.join(input)"));
+    }
 
     /// The archive these tests sign: any fixed bytes will do, since the loader is handed
     /// whatever the container holds.

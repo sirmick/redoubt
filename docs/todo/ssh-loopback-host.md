@@ -2,27 +2,27 @@
 
 ## What
 
-Five of the six `bench-ssh-loopback*` cases fail on the development host: every session that logs
-in ends with `/bin/bash: Permission denied` or `Broken pipe`, before its first step, so the cases
-fail for a reason their `must_fail` pattern does not name. Only `bench-ssh-loopback-deadlock`,
-which never gets a shell, passes. The loopback server is the host's OpenSSH `sshd`, started by
-`ssh` itself in inetd mode for each session; on this host it cannot start the user's login shell.
+The six `bench-ssh-loopback*` cases cannot run on the development host while the bench runs as
+part of a system service. The host is Fedora with SELinux enforcing, and the agents' bench runs
+in `system_u:system_r:unconfined_service_t`. The loopback server is the host's OpenSSH `sshd`,
+started by `ssh` itself in inetd mode; with SELinux enabled it always moves the login shell into
+the user's default context (`unconfined_u:unconfined_r:unconfined_t`), which the service's context
+may not enter, so the shell fails with `/bin/bash: Permission denied`. No `sshd_config` option
+turns that off. The bench probes for this before the first loopback case and fails each case with
+the reason ([SSH sessions](../testbench.md#ssh-sessions)), or skips it under `--allow-skip`.
 
 ## Why it matters
 
 These cases are the self-checks of the bench's SSH session runner: that `expect`, `forbid`,
-`wait`, exit statuses and host keys each fail when they should. While they fail for the wrong
-reason, a broken session runner would go unnoticed, and every future SSH attack case rests on it
-([the test bench](../testbench.md#ssh-sessions)).
+`wait`, exit statuses and host keys each fail when they should. While they cannot run, a broken
+session runner would go unnoticed, and every future SSH attack case rests on it.
 
 ## Where
 
-- [`tools/testbench/src/ssh.rs`](../../tools/testbench/src/ssh.rs): the loopback server's
-  configuration (`ForceCommand /bin/sh`) and how `sshd -i` is started.
-- [`tests/bench-ssh-loopback.toml`](../../tests/bench-ssh-loopback.toml) and its siblings.
+The host, not the tree: how the bench is started, or its SELinux policy.
 
 ## Done when
 
-- The six cases pass on the development host, or the bench reports them as skipped with the
-  reason when the host cannot run a loopback `sshd`, and a host that can runs them in every full
-  bench run.
+- The owner has chosen a host change (run the bench from a login session, or a local policy
+  module that lets the service's context start the user's shell), and the six cases pass on the
+  development host in a full bench run.

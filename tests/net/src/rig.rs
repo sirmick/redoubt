@@ -82,7 +82,7 @@ const PROBE_PORT: u16 = 9;
 /// How long the rig waits for `ipd`'s link (µs).
 const LINK_WAIT: u64 = 20_000_000;
 
-/// The peers (the bench's `[[net.peer]]`s; `tests/d3-net-*.toml`).
+/// The peers (the bench's `[[net.peer]]`s; `tests/net-*.toml`, `tests/bench-net-*.toml`).
 const ECHO_PEER: [u8; 4] = [10, 0, 9, 100];
 const OUTSIDE_TARGET: [u8; 4] = [10, 0, 9, 101];
 const FORWARDED_SELF: [u8; 4] = [10, 0, 9, 102];
@@ -97,17 +97,17 @@ const PEER_PORT: u16 = 7;
 pub enum Mode {
     /// `bench-virtio-legacy-off`: find the card, say its transport version, power off.
     Probe,
-    /// `d3-net-tcp`: a client round-trips bytes through a peer; a listener echoes the bench's dial.
+    /// `net-tcp`: a client round-trips bytes through a peer; a listener echoes the bench's dial.
     Tcp,
     /// The bench's self-checks: the echo client connects to the peer twice.
     Twice,
-    /// `d3-net-attacks`: every attack with its positive control, then the bucket cap.
+    /// `net-attacks`: every attack with its positive control, then the bucket cap.
     Attacks,
-    /// `d3-net-self-unrefused`: the same, with `ipd` not told 10.0.9.102 is the box's own.
+    /// `bench-net-self-unrefused`: the same, with `ipd` not told 10.0.9.102 is the box's own.
     Unrefused,
     /// `bench-net-peer`: an echo through the peer, and a connect nobody answers, which must end.
     Peer,
-    /// `d3-net-pinned`: parked calls abandoned, a parked read ended by `ipd`'s deadline, and the
+    /// `net-pinned`: parked calls abandoned, a parked read ended by `ipd`'s deadline, and the
     /// echo still working.
     Pinned,
 }
@@ -598,7 +598,7 @@ impl Rig {
 
     /// The bench's peer, both ways: the echo peer counts one connection, and a connect in scope to
     /// an address with no peer ends closed: slirp (`restrict=on`) refuses it at once with an RST
-    /// (a refusal, not a timeout; `d3-net-pinned` tests the deadlines).
+    /// (a refusal, not a timeout; `net-pinned` tests the deadlines).
     fn peer(&mut self) -> Result<(), String> {
         let echo = [Rule::Connect(prefix(ECHO_PEER, 32), ports(PEER_PORT))];
         let notice = self.run_client(&echo, &[], &["role=echo", "addr=10.0.9.100", "port=7"])?;

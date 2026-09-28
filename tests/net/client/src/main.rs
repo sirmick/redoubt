@@ -237,7 +237,7 @@ impl Me {
         Err(code::CONNECTED + state.min(5))
     }
 
-    /// Pins `ipd` with abandoned calls (plan 6.5, `d3-net-pinned`): `times` data reads on a quiet
+    /// Pins `ipd` with abandoned calls (plan 6.5, `net-pinned`): `times` data reads on a quiet
     /// socket, each parked and then given up by this client's short timeout, so `ipd` must free
     /// every one (a leaked one fills this share's parked calls and the next read is refused at
     /// once); then a read with no timeout of its own, which `ipd`'s 30 s deadline must end; then

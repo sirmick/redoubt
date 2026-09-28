@@ -32,6 +32,9 @@ pub enum Kind {
     Build(Build),
     /// A ratchet on `unsafe` in the trusted computing base. Not a boot; reads the sources.
     UnsafeBudget(UnsafeBudget),
+    /// Each trusted crate's lines of Rust against a ceiling that only falls (`size.rs`). Not a
+    /// boot; reads the sources and the case file's history.
+    SizeBudget(SizeBudget),
     /// No leftover of a dropped interface, no silenced dead code, no unread Cargo feature, one
     /// literal definition of each shared constant (`cruft.rs`). Not a boot; reads the sources.
     NoCruft(NoCruft),
@@ -58,6 +61,10 @@ pub struct SshLoopback {
     /// The host key the sessions expect, as an OpenSSH public key line. Defaults to the
     /// server's own (`loopback-host`); a self-check sets another to see the check fail.
     pub host_key: Option<String>,
+    /// Regular expressions each of which must match a line of the server's own log once the
+    /// sessions end: what the server saw, not only what the client says.
+    #[serde(default)]
+    pub server_log: Vec<String>,
     /// See `Boot::must_fail`.
     pub must_fail: Option<String>,
 }
@@ -66,6 +73,28 @@ pub struct SshLoopback {
 #[serde(deny_unknown_fields)]
 pub struct UnsafeBudget {
     pub budget: Vec<Budget>,
+    /// Workspace members built for the target whose sources no budget counts, each with its
+    /// reason (test programs, host tools, vendored code). Every other such member's sources must
+    /// all be in some budget.
+    #[serde(default)]
+    pub uncounted: Vec<Skip>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SizeBudget {
+    #[serde(rename = "crate")]
+    pub crates: Vec<SizeCrate>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SizeCrate {
+    pub name: String,
+    /// Files or directories, relative to the workspace root.
+    pub paths: Vec<String>,
+    /// Most lines of code allowed across `paths`.
+    pub max_lines: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +159,12 @@ pub struct Allow {
 pub struct HostTests {
     /// Workspace packages whose `cargo test` must pass, on the host.
     pub packages: Vec<String>,
+    /// The integration test files to run (`--test NAME`); every test target when empty.
+    #[serde(default)]
+    pub tests: Vec<String>,
+    /// Run under nightly Miri, which checks the `unsafe` a native run only executes.
+    #[serde(default)]
+    pub miri: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,6 +229,12 @@ pub struct Boot {
     /// every case ran before.
     #[serde(default)]
     pub icount: Option<String>,
+    /// Pin the guest's randomness: QEMU `-seed <this>`, which fills the device tree's
+    /// `/chosen/rng-seed` and so the kernel's RNG. With `icount` a run then repeats exactly. The
+    /// seed is printed with the result, and TESTBENCH_QEMU_SEED replaces it to replay or sweep.
+    /// None: QEMU draws it from host entropy on every boot.
+    #[serde(default)]
+    pub qemu_seed: Option<u64>,
     /// Build the kernel and the loader with debug assertions on, so `core`'s precondition
     /// checks on raw-pointer calls and every `debug_assert!` run (a failure is a `PANIC`).
     #[serde(default)]

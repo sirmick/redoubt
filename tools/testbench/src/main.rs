@@ -12,6 +12,7 @@ mod fmt;
 mod peer;
 mod qemu;
 mod sched_oracle;
+mod size;
 mod ssh;
 mod target;
 
@@ -139,6 +140,8 @@ fn main() -> Result<()> {
     let cases = paths.iter().map(|p| Case::load(p)).collect::<Result<Vec<_>>>()?;
 
     let mut failures = 0;
+    // Probed once, at the first loopback case.
+    let mut loopback_usable: Option<Result<(), ssh::Unusable>> = None;
     for case in cases.iter().filter(|c| args.filter.as_ref().is_none_or(|f| c.name.contains(f.as_str()))) {
         if args.list {
             println!("{:<16} [{}] {}", case.name, case.arch.join(", "), case.description);
@@ -146,6 +149,21 @@ fn main() -> Result<()> {
         }
         if let Kind::UnsafeBudget(check) = &case.kind {
             let (failure, summary) = budget::check(&workspace, &check.budget)?;
+            let failure = match failure {
+                None => budget::coverage(&workspace, &check.budget, &check.uncounted)?,
+                failure => failure,
+            };
+            match failure {
+                None => println!("PASS  {:<32}\n      {summary}", case.name),
+                Some(why) => {
+                    failures += 1;
+                    println!("FAIL  {:<32}        {why}\n      {summary}", case.name);
+                }
+            }
+            continue;
+        }
+        if let Kind::SizeBudget(budget) = &case.kind {
+            let (failure, summary) = size::check(&workspace, &format!("tests/{}.toml", case.name), budget)?;
             match failure {
                 None => println!("PASS  {:<32}\n      {summary}", case.name),
                 Some(why) => {
@@ -179,18 +197,26 @@ fn main() -> Result<()> {
         }
         if let Kind::HostTests(host) = &case.kind {
             let started = Instant::now();
-            let outcome = match builder.cargo_test(&host.packages) {
-                Ok(None) => Outcome::Pass,
-                Ok(Some(why)) => Outcome::Fail(format!("host tests failed:\n      {why}")),
-                Err(e) => Outcome::Fail(format!("bench error: {e:#}")),
+            let available = if host.miri { build::miri_available() } else { Ok(()) };
+            let outcome = match available.map(|()| builder.cargo_test(host)) {
+                Err(why) => missing(why),
+                Ok(Ok(None)) => Outcome::Pass,
+                Ok(Ok(Some(why))) => Outcome::Fail(format!("host tests failed:\n      {why}")),
+                Ok(Err(e)) => Outcome::Fail(format!("bench error: {e:#}")),
             };
             failures += report(&case.name, outcome, started.elapsed().as_secs_f32());
             continue;
         }
         if let Kind::SshLoopback(loopback) = &case.kind {
             let started = Instant::now();
-            let outcome = match ssh_available(true) {
-                Err(why) => missing(why),
+            let usable = loopback_usable.get_or_insert_with(|| {
+                ssh_available(true)
+                    .map_err(ssh::Unusable::Host)
+                    .and_then(|()| ssh::loopback_usable(&workspace, &logs.join("ssh")))
+            });
+            let outcome = match usable.clone() {
+                Err(ssh::Unusable::Host(why)) => missing(why),
+                Err(ssh::Unusable::Broken(why)) => Outcome::Fail(why),
                 Ok(()) => match ssh_loopback(&workspace, case, loopback, &logs) {
                     Ok(outcome) => judge(loopback.must_fail.as_deref(), outcome)?,
                     // The bench's own trouble is never what a `must_fail` is waiting for.
@@ -323,6 +349,7 @@ fn run_case(
         }
         Kind::Boot(boot) => boot,
         Kind::UnsafeBudget(_)
+        | Kind::SizeBudget(_)
         | Kind::NoCruft(_)
         | Kind::Fmt(_)
         | Kind::SshLoopback(_)
@@ -365,6 +392,10 @@ fn run_case(
     };
 
     let loader = builder.artifact(target, machine.loader_package, profile);
+    let seed = qemu_seed(boot)?;
+    if let Some(seed) = seed {
+        println!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)");
+    }
     let mut results = Vec::new();
     for smp in &boot.smp {
         let run_started = Instant::now();
@@ -375,6 +406,9 @@ fn run_case(
             let (mut devices, forwards) = qemu::virtio_devices(boot, &disk)?;
             if let Some(icount) = &boot.icount {
                 devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
+            }
+            if let Some(seed) = seed {
+                devices.extend(["-seed".into(), seed.to_string()]);
             }
             let image = Image {
                 machine,
@@ -417,6 +451,15 @@ fn run_case(
         ));
     }
     Ok(results)
+}
+
+/// The guest seed of a case that pins one (`qemu_seed`), replaced by TESTBENCH_QEMU_SEED when set.
+fn qemu_seed(boot: &case::Boot) -> Result<Option<u64>> {
+    let Some(pinned) = boot.qemu_seed else { return Ok(None) };
+    match std::env::var("TESTBENCH_QEMU_SEED") {
+        Ok(seed) => Ok(Some(seed.parse().with_context(|| format!("TESTBENCH_QEMU_SEED={seed:?}"))?)),
+        Err(_) => Ok(Some(pinned)),
+    }
 }
 
 /// Run a case's `post_check` (a name, then its arguments) over the console log of a boot that
@@ -483,7 +526,17 @@ fn ssh_loopback(workspace: &Path, case: &Case, loopback: &case::SshLoopback, log
         loopback.host_key.as_deref(),
     )?;
     let abort = std::sync::atomic::AtomicBool::new(false);
-    Ok(match ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort)? {
+    let sessions = ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort)?;
+    // What the server saw comes first: a case that fails as its `must_fail` expects still fails if
+    // the server did not see it that way.
+    let server_log = std::fs::read_to_string(ssh::loopback_log(&logs.join("ssh"), &case.name))?;
+    for pattern in &loopback.server_log {
+        let re = regex::Regex::new(pattern)?;
+        if !server_log.lines().any(|line| re.is_match(line)) {
+            return Ok(Outcome::Fail(format!("the server's log has no line matching /{pattern}/")));
+        }
+    }
+    Ok(match sessions {
         None => Outcome::Pass,
         Some(why) => Outcome::Fail(why),
     })
