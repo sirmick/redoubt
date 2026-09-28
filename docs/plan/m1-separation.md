@@ -175,9 +175,7 @@ page.
    step ([the model](../kernel/model.md#replaying-traces-on-the-real-kernel)), after the model and
    the kernel agree on their order of checks ([the model's order of checks](../todo/abi-model-disagreements.md)).
 
-Every follow-up page is placed above except one, which waits for an owner decision: whether
-tenet 3 reaches the build host ([host shell scripts](../todo/host-shell-scripts.md)). It blocks
-nothing above.
+Every follow-up page is placed above.
 
 ## Progress
 

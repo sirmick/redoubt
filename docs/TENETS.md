@@ -348,12 +348,11 @@ like a textbook example of each mechanism.
   shell script runs on the machine. One exception, on the build host only: test oracles and fuzz
   drivers (the littlefs C reference, libFuzzer) may be C or C++, in crates outside the workspace
   build, never linked into anything that runs on the machine.
-- The residual is stated: the build host runs shell scripts. They are `build`, `test`, `launch`,
-  `mkimage` and `dev.sh` at the root, `scripts/build-bios.sh`, `scripts/pi-ensure.sh`,
-  `scripts/ssh-key-ensure.sh`, `tools/vendor-check/provenance.sh`, `libs/wire/elixir/run-vectors`
-  and the Elixir runtime's tools under `userland/otp/tools/`. Whether this tenet reaches the build
-  host is the owner's to decide; until then they are listed in
-  [host shell scripts](todo/host-shell-scripts.md).
+- This tenet governs what runs on the machine; the build host is outside it and may run shell
+  scripts that drive the build, the bench and the tools. The reason: the tenet keeps what the
+  adversary can reach auditable in one language, and a build-host script never runs on the
+  machine; what it builds is signed and verified before it runs
+  ([R15](kernel/boot.md#r15-verified-boot)).
 - The build is one pinned toolchain (`rustc` and `cargo`), and reproducible.
 
 ### 4. Open, auditable standards
