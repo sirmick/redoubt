@@ -81,7 +81,6 @@
   - [An interrupt before the first receive](todo/irq-level-latch.md)
   - [Scans of every kernel-object frame](todo/kernel-scan-bounds.md)
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)
-  - [map_anon's search cost](todo/map-anon-search-cost.md)
   - [Records at a device mapping](todo/mmio-record-frames.md)
   - [Freeing empty page tables](todo/page-table-freeing.md)
   - [RAM beyond the physmap](todo/physmap-ram-bound.md)

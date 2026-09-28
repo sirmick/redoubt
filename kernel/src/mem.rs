@@ -325,8 +325,19 @@ impl MemoryManager {
         self.allocations.iter().filter(|owner| **owner == Some(pid)).count()
     }
 
-    /// Find a virtual address in the current process that is big enough
-    /// to fit `size` bytes.
+    /// Find a virtual address in the current process's area `kind` where `size` bytes of free
+    /// pages fit, and remember it as the area's last placement.
+    ///
+    /// Every start in `[area start, area end - size]` is a candidate, the last one included, so a
+    /// run that fits only at the area's end is found, and so is a request for the whole of an
+    /// empty area. The scan begins at the lower of the last placement and the last start that
+    /// fits, runs up to that last start, then wraps once to the area's start and runs up to where
+    /// it began. It skips ahead: when page `p` is taken, no run through `p` fits, so the next
+    /// candidate is `p` plus one page. Each page of the area is therefore looked at once, and a
+    /// missing page table skips its whole span (`first_occupied_page`). So the search costs at
+    /// most the area's pages, a fixed size, and never the area's pages times the request's
+    /// (R12's bound on a call's kernel time, kernel/scheduling.md). Every run returned lies
+    /// inside the area.
     pub fn find_virtual_address(
         &mut self,
         virt_ptr: *mut u8,
@@ -339,7 +350,7 @@ impl MemoryManager {
         }
 
         Process::with_inner_mut(|process_inner| {
-            let (start, end, initial) = match kind {
+            let (start, end, last) = match kind {
                 MemoryType::Default => (
                     process_inner.mem_default_base,
                     process_inner.mem_default_base + 0x1000_0000,
@@ -356,41 +367,49 @@ impl MemoryManager {
             let Some(last_start) = end.checked_sub(size).filter(|last| *last >= start) else {
                 return Err(PageError::NoSpace);
             };
-            // Look for a sequence of `size` pages that are free.
-            for potential_start in (initial..last_start).step_by(PAGE_SIZE) {
-                let mut all_free = true;
-                for check_page in (potential_start..potential_start + size).step_by(PAGE_SIZE) {
-                    if !crate::arch::mem::address_available(check_page) {
-                        all_free = false;
-                        break;
+            let first = last.clamp(start, last_start);
+            let taken = |at: usize, until: usize| crate::arch::mem::first_occupied_page(at, until);
+            // From `first` up to the last start. The first page taken at or after `first`
+            // (within one run of it) is remembered for the wrap.
+            let mut candidate = first;
+            let mut taken_after_first = None;
+            let found = loop {
+                if candidate > last_start {
+                    break None;
+                }
+                match taken(candidate, candidate + size) {
+                    None => break Some(candidate),
+                    Some(page) => {
+                        taken_after_first.get_or_insert(page);
+                        candidate = page + PAGE_SIZE;
                     }
                 }
-                if all_free {
-                    match kind {
-                        MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        MemoryType::Messages => process_inner.mem_message_last = potential_start,
+            };
+            // Then from the area's start up to `first`. `[first, taken_after_first)` is known to
+            // be free and `taken_after_first` taken, so a run reaching into it is decided without
+            // looking at those pages again.
+            let found = found.or_else(|| {
+                let mut candidate = start;
+                while candidate < first {
+                    let run_end = candidate + size;
+                    match taken(candidate, run_end.min(first)) {
+                        Some(page) => candidate = page + PAGE_SIZE,
+                        None if taken_after_first.is_none_or(|page| run_end <= page) => {
+                            return Some(candidate);
+                        }
+                        // The run reaches a taken page at or past `first`; so does every later
+                        // start below `first`.
+                        None => return None,
                     }
-                    return Ok(potential_start as *mut u8);
                 }
+                None
+            });
+            let at = found.ok_or(PageError::NoSpace)?;
+            match kind {
+                MemoryType::Default => process_inner.mem_default_last = at,
+                MemoryType::Messages => process_inner.mem_message_last = at,
             }
-
-            for potential_start in (start..initial).step_by(PAGE_SIZE) {
-                let mut all_free = true;
-                for check_page in (potential_start..potential_start + size).step_by(PAGE_SIZE) {
-                    if !crate::arch::mem::address_available(check_page) {
-                        all_free = false;
-                        break;
-                    }
-                }
-                if all_free {
-                    match kind {
-                        MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        MemoryType::Messages => process_inner.mem_message_last = potential_start,
-                    }
-                    return Ok(potential_start as *mut u8);
-                }
-            }
-            Err(PageError::NoSpace)
+            Ok(at as *mut u8)
         })
     }
 

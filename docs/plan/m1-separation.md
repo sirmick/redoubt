@@ -85,8 +85,7 @@ page.
 
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
-   - **Kernel:** [`map_anon`'s search cost](../todo/map-anon-search-cost.md),
-     [root's own page](../todo/boot-root-frame.md),
+   - **Kernel:** [root's own page](../todo/boot-root-frame.md),
      [billing a deadline's destruction](../todo/deadline-destroy-billing.md),
      [PID pool pinning](../todo/pid-pool-pinning.md),
      [RAM beyond the physmap](../todo/physmap-ram-bound.md),

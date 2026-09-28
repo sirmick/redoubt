@@ -69,13 +69,16 @@ Running out is the caller's error: `map_anon` of more than the budget or RAM can
 
 ### Where `map_anon` puts pages
 
-Status: built · partly tested: no case attacks the placement itself (first fit from the last run, the wrap to the area's start, a full area, a run that fits only at the area's end, an oversize request, the message area); `touch-beyond-ram` exhausts RAM, not the area; the kernel departs from the placement rule at both ends of the area (Residual risks) · tested: bench:map-fixed-attack, bench:touch-beyond-ram
+Status: built · partly tested: the message area's placement is not attacked by a case, nor an oversize request; `touch-beyond-ram` exhausts RAM, not the area · tested: bench:map-anon-search-bound, bench:map-fixed-attack, bench:touch-beyond-ram
 
 The kernel chooses the address, and nothing may depend on it. `map_anon` takes the first free
 run of pages in its placement area, 256 MiB from `DEFAULT_BASE` (0x6000_0000 to 0x7000_0000),
-searching from the start of the run it placed last to the area's end, then from the area's
-start. A page is free only if its entry is empty: a reservation or either side of a loan is
-taken. A request that finds no run, or is larger than the area, is `OutOfMemory`.
+searching from the start of the run it placed last to the last start that fits, then from the
+area's start. Every start up to the last one that fits is tried, so a run that fits only at the
+area's end is found, and so is the whole of an empty area; every run placed lies inside the
+area. A page is free only if its entry is empty: a reservation or either side of a loan is
+taken. A request that finds no run, or is larger than the area, is `OutOfMemory`. The search
+looks at each page of the area at most once ([R22](#r22-range-cost)).
 `map_device` and `dma_alloc` place their mappings the same way ([devices](devices.md#map_device)). A
 receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAGE_BASE`
 (0x4000_0000), found the same way. The rest of the user layout is on
@@ -83,8 +86,7 @@ receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAG
 
 The [model](model.md) places runs differently: above the highest mapping, falling back to the
 first gap large enough. The two agree on outcomes, not addresses, except where the kernel's
-area is full, where a run fits only at its end, and where the kernel's search runs past the
-area's end (Residual risks).
+area is full (Residual risks).
 
 ### `map_fixed`
 
@@ -246,7 +248,7 @@ device registers, is read-write and never executable.
 
 ### R22 (range cost)
 
-Status: built · partly tested: only `map_fixed`'s huge length is attacked, and `map_anon`'s search is an exception no case measures · tested: bench:map-fixed-attack, host:redoubt-model::huge_len_is_refused_promptly
+Status: built · partly tested: only `map_fixed`'s huge length and `map_anon`'s search are attacked · tested: bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly
 
 A call that takes a range costs what the page tables hold and what the budget can pay for,
 never what the length asks. A process could otherwise ask for a huge range for free, and the
@@ -260,10 +262,13 @@ kernel, running the call to its end with interrupts off, would stall every other
   4 GiB, which no budget in the case can pay for, is refused well inside the case's 10 ms bound.
 - A lend or transfer checks at most the pages mapped in its range, and a lend is at most
   `MAX_LEND_PAGES` (16).
-
-`map_anon` does not meet R22: its search is bounded by its 256 MiB area, not by what is mapped
-in it, so it also breaks the bound R12 (scheduling) sets on a call's kernel time (Residual
-risks).
+- `map_anon`'s search, which also places `map_device`, `dma_alloc` and a received message,
+  never tests a start twice: when a page is taken, the next start tried is the page after it,
+  and a missing page table skips its whole span. So it looks at each page of its fixed area at
+  most once, 65536 for `map_anon`'s and 1024 for the message area, whatever the request asks.
+  With every page table of the area present, the worst case, a refusal takes about 9.6 ms in a
+  checked build under virtual time; the case bounds it at 12 ms, and a timer wake during it at
+  15 ms.
 
 ## Failure and restart
 
@@ -291,24 +296,6 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
   too. Such tables stay charged to the process's own budget, so a process can strand only its
   own pages, but its usage stays above what it has mapped. Follow-up:
   [todo](../todo/page-table-freeing.md).
-- **`map_anon`'s search costs what the area allows, not what is mapped.** It runs before any
-  budget check. It tries each start in its 256 MiB area (65536 pages) and tests the pages of
-  the run from there until one is taken. One page mapped in the middle of the area makes a
-  request for half of it test about 5 × 10^8 pages before it fails. The search's kernel time is
-  billed to the caller, as every call's is, so the caller pays for it in CPU share. The harm is
-  latency: the kernel runs the search with interrupts off, so every wake, timeout, deadline and
-  interrupt on the machine waits for it, and a bill after the fact gives nobody that time back.
-  The kernel departs here from R12, which bounds a call's kernel time by what it
-  maps or names ([scheduling](scheduling.md#r12-scheduling)). The receiver's message area uses
-  the same search over 1024 pages. No case measures it. Follow-up:
-  [todo](../todo/map-anon-search-cost.md).
-- **`map_anon`'s search misses the area's last start and can run past its end.** Its first
-  pass stops one start short, so a run that fits only at the very end of the area, or a request
-  for the whole of an empty area, is `OutOfMemory`. Its second pass, from the area's start up to
-  the last placement, has no upper bound: when the last placement lies above the last start that
-  fits, a run can be placed there and extend past the area's end, into the caller's own user
-  space beyond it. Only the caller is affected. Follow-up:
-  [todo](../todo/map-anon-search-cost.md).
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`, where the
   [model](model.md), whose placement is unbounded, succeeds. It harms only that process.

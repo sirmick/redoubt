@@ -80,7 +80,7 @@ gap: the page's section, the claim, and what no case attacks.
 - Charging: interrupt handling billed to the device object's owner is not attacked.
 - Responsiveness: `budget_destroy` call-to-return is recorded, not asserted.
 - Charging: floods of weight-0 budgets with deadlines beyond the 64 of `sched-timer-flood` are not attacked (their destruction is billed to nobody).
-- R12 (scheduling): the bound on a call's kernel time is not attacked; `map_anon`'s search departs from it ([map_anon's search cost](map-anon-search-cost.md)).
+- R12 (scheduling): the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range.
 - R23 (no test channels): no case builds the production kernel and scans it for the trace.
 - Failure and restart: a picked thread dying before the switch, and a full queue, are not attacked.
 

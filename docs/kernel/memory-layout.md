@@ -191,7 +191,7 @@ any other address there is an ordinary fault.
 
 ### Regions
 
-Status: built · partly tested: the placement areas and the stack are conventions of the kernel and loader that no case attacks as addresses · tested: bench:map-fixed-attack, bench:map-fixed-tables
+Status: built · partly tested: the message area and the stack are conventions of the kernel and loader that no case attacks as addresses · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:map-anon-search-bound
 
 User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the rest, up to
 256 GiB, is free for `map_fixed` and `process_map` and nothing is placed there by default.
@@ -201,8 +201,8 @@ User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the 
 | `0x0`..`0x1_0000` | free; page 0 is user space | nobody |
 | `0x1_0000`..`0x1FF0_0000` | the program image: the link range | the program's linker |
 | `0x1FF0_0000`..`0x1FF4_0000` | the loader stub, in a launched process (at most 256 KiB) | the launcher |
-| `0x4000_0000`..`0x4040_0000` | the message area (4 MiB): where the kernel maps a lend or transfer the process receives | the kernel |
-| `0x6000_0000`..`0x7000_0000` | the `map_anon` area (256 MiB): where `map_anon` places pages | the kernel |
+| `0x4000_0000`..`0x4040_0000` | the message area (4 MiB): where the kernel maps a lend or transfer the process receives, every one inside it | the kernel |
+| `0x6000_0000`..`0x7000_0000` | the `map_anon` area (256 MiB): where `map_anon`, `map_device` and `dma_alloc` place pages, every run inside it | the kernel |
 | `0x7FF0_0000` | the startup block, in a launched process | the launcher |
 | `0x7FFE_0000`..`0x8000_0000` | the first thread's stack: 32 pages (128 KiB) reserved, only the top one backed; the rest are backed on first touch | the loader for a boot process; a launcher places its own |
 

@@ -1,0 +1,22 @@
+description = "map_anon's placement search: a whole-area request in an empty area succeeds, a run that fits only at the area's end is placed there, a run that does not fit after a high placement is refused rather than placed past the area's end, a refused search stays under 12 ms, past one middle page and with every page table of the area present, and a timer wake meanwhile under 15 ms, and every run placed lies inside the area (checked build, virtual time)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The first program, alone: every ok line is an address or a time the kernel returned
+# (docs/testbench.md, "Rule F"). The whole-area request needs 256 MiB of `system`'s pages.
+programs = ["map-anon-search-bound"]
+memory_mib = 1536
+icount = "shift=3,sleep=off"
+timeout_secs = 120
+expect = [
+    '^\[search\] ok: a request for the whole empty area is placed at its start$',
+    '^\[search\] ok: a run that fits only at the area.s end is placed there$',
+    '^\[search\] ok: after a high placement, a run that does not fit is refused$',
+    '^\[search\] ok: a refused search past a middle page took \d+ us, under 12 ms$',
+    '^\[search\] ok: a refused search over every page table took \d+ us, under 12 ms$',
+    '^\[search\] ok: a timer wake during the search was \d+ us late, under 15 ms$',
+    '^\[search\] ok: every run placed lies inside the area$',
+    '^\[search\] MAP_ANON SEARCH BOUNDED$',
+]
+forbid = ['\[search\] FAIL']
+poweroff = true

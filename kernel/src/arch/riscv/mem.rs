@@ -548,8 +548,8 @@ pub fn map_into_with(
     Ok(())
 }
 
-/// Whether `virt` is free in `space`: `address_available`, for an address space that is not the
-/// running one (`process_map` looks into a child that has never run).
+/// Whether `virt` is free in `space`, an address space that need not be the running one
+/// (`process_map` looks into a child that has never run): its entry is empty.
 pub fn address_available_in(space: &MemoryMapping, virt: usize) -> bool {
     debug_assert!(virt < redoubt_sys::USER_AREA_END, "process_map checks its range first");
     match walk(root_of(space.satp), virt, None) {
@@ -562,21 +562,37 @@ pub fn address_available_in(space: &MemoryMapping, virt: usize) -> bool {
     }
 }
 
-/// Whether every page in `[addr, addr + len)` is free in `space` (`map_fixed`'s overlap check):
-/// like `address_available_in` for each page (any nonzero PTE, including a reservation, is
-/// occupied), but a missing subtree is skipped as a whole instead of walking it one page at a
-/// time, so a huge range that is mostly unmapped costs at most the root entries it spans plus
-/// `ENTRIES` (512 on Sv39, 1024 on Sv32) per table actually present in the range -- never one
-/// walk per page. `addr` and `addr + len` are assumed already checked (page-aligned, in user
-/// space): this only interprets what it finds in the page tables.
+/// Whether every page in `[addr, addr + len)` is free in `space` (`map_fixed`'s overlap check).
+/// `addr` and `addr + len` are assumed already checked (page-aligned, in user space): this only
+/// interprets what it finds in the page tables.
 pub fn range_available_in(space: &MemoryMapping, addr: usize, len: usize) -> bool {
-    !subtree_occupied(root_of(space.satp), physmap::LEVELS - 1, addr, addr + len)
+    first_occupied(root_of(space.satp), physmap::LEVELS - 1, addr, addr + len).is_none()
 }
 
-/// True if any page in `[start, end)` is occupied under `table`, a table at `level`. `start` and
-/// `end` need not be aligned to `level`'s span; each entry's coverage is computed from its own
-/// index, not from `start`.
-fn subtree_occupied(table: Table, level: usize, start: usize, end: usize) -> bool {
+/// The first page of `[start, end)` that is occupied in the current address space, if any:
+/// what the placement search (`MemoryManager::find_virtual_address`) skips past.
+pub fn first_occupied_page(start: usize, end: usize) -> Option<usize> {
+    debug_assert!(end <= USER_AREA_END, "the placement areas are in user space");
+    first_occupied(current_root(), physmap::LEVELS - 1, start, end)
+}
+
+/// The first page in `[start, end)` that is occupied under `table`, a table at `level`: like
+/// `address_available_in` for each page (any nonzero PTE, including a reservation or either side
+/// of a loan, is occupied), but a missing subtree is skipped as a whole instead of walking it one
+/// page at a time. So a range costs at most the root entries it spans plus `ENTRIES` (512 on
+/// Sv39, 1024 on Sv32) per table actually present in it, never one walk per page, however long
+/// the range is. `start` and `end` are page-aligned but need not be aligned to `level`'s span;
+/// each entry's coverage is computed from its own index, not from `start`.
+fn first_occupied(table: Table, level: usize, start: usize, end: usize) -> Option<usize> {
+    if level == 0 {
+        // A leaf table, reached with `[start, end)` inside it: one read per page. This loop is
+        // the search's whole cost when the tables are there, so it does nothing else.
+        let first = physmap::vpn(start, 0);
+        let pages = (end - start) / PAGE_SIZE;
+        return (first..first + pages)
+            .find(|index| !table.get(*index).is_empty())
+            .map(|index| start + (index - first) * PAGE_SIZE);
+    }
     let span = physmap::leaf_size(level);
     let mut virt = start;
     while virt < end {
@@ -585,28 +601,24 @@ fn subtree_occupied(table: Table, level: usize, start: usize, end: usize) -> boo
         let next = boundary.min(end);
         let index = physmap::vpn(virt, level);
         let pte = table.get(index);
-        if level == 0 {
-            if !pte.is_empty() {
-                return true;
-            }
-        } else if !pte.is_empty() {
+        if !pte.is_empty() {
             match table.child(index) {
-                // A live subtree: recurse into it over the clipped range.
+                // A live subtree: search it over the clipped range.
                 Some(child) => {
-                    if subtree_occupied(child, level - 1, virt, next) {
-                        return true;
+                    if let Some(page) = first_occupied(child, level - 1, virt, next) {
+                        return Some(page);
                     }
                 }
                 // Nonempty but not a table: a leaf this high (user space has none on either
-                // width) or a malformed entry. Fail closed rather than skip it.
-                None => return true,
+                // width) or a malformed entry. Fail closed: all of it counts as occupied.
+                None => return Some(virt),
             }
         }
         // Empty entry: the whole `[virt, next)` gap is free (matches `walk`'s "missing table
         // means nothing is mapped" reading, used by `address_available_in`), so skip it.
         virt = next;
     }
-    false
+    None
 }
 
 /// Unmap only the protected borrower alias when a lend leaves the server.
@@ -735,14 +747,6 @@ pub fn user_mapping(virt: usize) -> Option<usize> {
 /// making no progress and the kernel printing nothing.
 pub fn is_mapped(virt: usize) -> bool {
     walk(current_root(), virt, None).is_ok_and(|slot| slot.get().is_valid())
-}
-
-/// Determine whether a virtual address has been mapped
-pub fn address_available(virt: usize) -> bool {
-    debug_assert!(virt < redoubt_sys::USER_AREA_END, "find_virtual_address searches user areas only");
-    // An empty entry, or no table reaching it; a reservation or either alias of a loan is not
-    // free (`map_anon` would then find a lent page taken, not free).
-    walk(current_root(), virt, None).map_or(true, |slot| slot.get().is_empty())
 }
 
 /// The permissions of the page at `virt`, a page-aligned address: `None` if it has none or is
