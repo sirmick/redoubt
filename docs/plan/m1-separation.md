@@ -94,8 +94,7 @@ page.
      [a stray file in the kernel's tree](../todo/kernel-test-hello.md),
      [an interrupt before the first receive](../todo/irq-level-latch.md),
      [DMA reset on rv32](../todo/dma-reset-rv32.md),
-     [calls abandoned by an endpoint's destruction](../todo/endpoint-destroyed-open-calls.md),
-     [reclaiming an endpoint](../todo/endpoint-reclaim.md), and
+     [calls abandoned by an endpoint's destruction](../todo/endpoint-destroyed-open-calls.md), and
      [the steward's decision wake on rv64, and R10's thin margin](../todo/sched-rv64-decision-wake.md).
    - **The bench and its tools**, with the kernel package:
      [tests that behaved differently under load](../todo/bench-load-flakes.md),
