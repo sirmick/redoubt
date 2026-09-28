@@ -59,17 +59,33 @@ workspace (the fuzz crates, `userland/otp`) is formatted from its own directory.
 
 ## Commits
 
-- The subject is in the imperative, starts with a capital letter, has no final full stop and
-  stays within 50 characters.
-- A blank line, then a body wrapped at 72 characters that says what and why.
-- The DCO sign-off is required; GPG signing is optional.
+This is the one definition of a commit; the history keeps it throughout.
+
+- **The subject is `<component>: <what>`**, in the book's voice: the component is the crate,
+  server, page set or tool the change is in (`kernel`, `ipd`, `docs`, `doccheck`, `testbench`,
+  `workspace`), and after the colon the subject is lower case (names keep their case) and says
+  what is now true, with no final full stop. It is one line; there is no fixed length, and
+  shorter is better.
+  `docs: a held PID counts in the budget its process runs in`
+- **A blank line, then a body that gives the reason**, wrapped at about 72 columns: why the
+  change is right, not a list of files.
+- **One logical change per commit**, and every commit builds and passes its tests.
+- **No process bookkeeping.** No package IDs, question numbers, thread names or review labels in
+  the subject or the body, and no WIP, fixup or fix-round commits in the main history: fold them
+  before the merge.
+- **An owner's call is stated plainly** in the body: `Owner decision: <what, and why>`.
+- **AI work carries a trailer naming the model:**
+  `Co-Authored-By: <model> <noreply@anthropic.com>` (or the vendor's equivalent).
+- **Every commit carries the DCO sign-off**, `Signed-off-by: Your Name <email>`. For work an
+  agent wrote, the sign-off is the owner's, added when the work is merged. GPG signing is
+  optional.
 
 ## AI disclosure
 
-Disclose substantial AI-generated content kept unchanged in a commit trailer, for example
-`Assisted-by: <tool/model>`, and disclose assistance whenever it helps reviewers; spelling and
-grammar corrections need none. Tag a pull request `AI` when the work was primarily generated or
-guided by AI. Keep every contribution modular, reviewable and explainable.
+AI-written work is disclosed in its commit's `Co-Authored-By` trailer ([Commits](#commits)), and
+whenever else it helps reviewers; spelling and grammar corrections need none. Tag a pull request
+`AI` when the work was primarily generated or guided by AI. Keep every contribution modular,
+reviewable and explainable.
 
 ## Reporting a vulnerability
 

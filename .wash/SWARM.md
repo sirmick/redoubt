@@ -279,12 +279,10 @@ paragraph, stages those files in the merge, and ends the package's members.
 - Stage by path. Never `git add -A` or `git commit -a` in a shared worktree, never stage another
   session's work, never `git stash` (the stash is shared by every worktree; set work aside with a
   WIP commit, and fold it before the merge).
-- **A commit message says what changed and why,** in the book's voice: `<component>: <what>`, then
-  a body. It carries no package IDs, thread names, answer numbers or review labels; those belong in
-  trailers. An owner decision is stated in plain words ("Owner decision: …"). It ends with a
-  trailer naming the model that wrote it.
-- A package's merge commit carries the trailers `plan_accept` returns: `Plan-Node`, `QA`, `Gates`
-  and `Reviewed-by`.
+- **Commits follow [CONTRIBUTING.md](../CONTRIBUTING.md#commits).** What is agent-only: a
+  package's merge commit carries the trailers `plan_accept` returns (`Plan-Node`, `QA`, `Gates`
+  and `Reviewed-by`), the one place process names appear; and the orchestrator adds the owner's
+  sign-off at merge (`git rebase --signoff` on the branch, `git commit -s` on the merge).
 - `.wash/plan.toml` and `.wash/qa/` are committed only with a package's merge, or in one commit
   when the owner parks or ends the workspace. Nothing else commits them.
 - Nobody pushes without the owner's word.
