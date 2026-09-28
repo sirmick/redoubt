@@ -289,7 +289,7 @@ list, in order.
 | --- | --- | --- |
 | `map_anon` | flags: `InvalidArgument` | `InvalidArgument` (len 0 or not page-aligned), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (no room in the placement area; then each page and its page tables) |
 | `unmap` | - | `InvalidArgument` (range: len 0, not page-aligned, wraps, or past `USER_AREA_END`), `InvalidArgument` (a page that is not a live mapping of the caller's, is either side of a lend, or is RAM not credited to the caller; the whole range before any page goes) |
-| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range), `InvalidArgument` (flags 0), `InvalidArgument` (a page not the caller's own mapping, as for `unmap`), `InvalidArgument` (W without R) |
+| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range), `InvalidArgument` (flags 0), `InvalidArgument` (a page not the caller's own mapping, as for `unmap`, or `EXECUTE` on a page of device registers or a `dma_alloc` page; the whole range before any page changes), `InvalidArgument` (W without R) |
 | `map_device` | device: `BadHandle` | `BadHandle`, `WrongObject` (not an MMIO device), `OutOfMemory` (no room in the placement area, or the page tables) |
 | `dma_alloc` | device: `BadHandle` | `BadHandle`, `WrongObject` (not an MMIO device), `InvalidArgument` (pages 0), `NotPermitted` (the device has no DMA flag), `OutOfMemory` (all 32 of the device's runs in use; then the pages; then no contiguous frames; then the placement area and page tables) |
 | `thread_create` | - | `TooManyThreads`, `OutOfMemory` (the thread's page) |

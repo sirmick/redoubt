@@ -349,11 +349,6 @@ Status: built · partly tested: destroying a device object's owner budget, and a
   be told apart. The mask is attacked in the model; the order is argued from the code.
 - **An interrupt can be lost before the first `receive`:** seen once on QEMU, cause not found.
   Drivers drain their rings after every `receive`. Follow-up: [todo](../todo/irq-level-latch.md).
-- **A device mapping or DMA page can be made executable.** `set_flags` refuses writable and
-  executable together, but not executable on a device range or a DMA page, which R11 forbids.
-  Two `map_device` mappings of one range can be one writable and one executable, and a device
-  can write a DMA page that is executable
-  ([memory](memory.md#residual-risks)). Follow-up: [todo](../todo/device-mapping-exec.md).
 - **Page tables stay after `unmap`.** The tables that mapped a device range or a run stay
   charged to the process until it ends. Follow-up: [todo](../todo/page-table-freeing.md).
 - **An interrupt's kernel time is billed to the IRQ object's owner** (`system` at boot), not to

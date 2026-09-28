@@ -74,7 +74,6 @@
   - [Rescaling a carved-down lead](todo/carve-lead-rescale.md)
   - [Clearing SUM and MXR at entry](todo/clear-sum-at-entry.md)
   - [Billing a deadline's destruction](todo/deadline-destroy-billing.md)
-  - [Executable device and DMA pages](todo/device-mapping-exec.md)
   - [DMA reset on rv32](todo/dma-reset-rv32.md)
   - [Calls abandoned by an endpoint's destruction](todo/endpoint-destroyed-open-calls.md)
   - [Reclaiming an endpoint](todo/endpoint-reclaim.md)

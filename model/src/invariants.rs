@@ -283,11 +283,11 @@ impl Checker {
         Ok(())
     }
 
-    /// I9 (R11): no mapping is writable and executable, or writable without being readable; a
-    /// frame read zero when first handed out; a page is accessible in at most one address
-    /// space, so a lent page is not the lender's until the call ends. R6 and R3: each frame is
-    /// charged to whoever holds it (the lender while its call lasts, the server once the call is
-    /// abandoned).
+    /// I9 (R11): no mapping is writable and executable, or writable without being readable, and
+    /// none of device registers or a DMA frame is executable; a frame read zero when first
+    /// handed out; a page is accessible in at most one address space, so a lent page is not the
+    /// lender's until the call ends. R6 and R3: each frame is charged to whoever holds it (the
+    /// lender while its call lasts, the server once the call is abandoned).
     fn i9_memory(&mut self, k: &Kernel) -> Check {
         #[derive(Default)]
         struct Seen {
@@ -316,6 +316,11 @@ impl Checker {
                 ensure!(
                     !(m.flags & FLAG_W != 0 && m.flags & FLAG_X != 0),
                     "I9: page {v:#x} of process {} is W+X",
+                    p.pid
+                );
+                ensure!(
+                    !(m.flags & FLAG_X != 0 && k.is_device_memory(m)),
+                    "I9: page {v:#x} of process {} is executable device or DMA memory",
                     p.pid
                 );
                 ensure!(

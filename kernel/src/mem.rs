@@ -858,7 +858,9 @@ impl MemoryManager {
     }
 
     /// `set_flags(addr, len, flags)`: the same range rules, then each page gets exactly the
-    /// permissions asked for. W+X cannot be decoded and `Pte::leaf` refuses it again.
+    /// permissions asked for. W+X cannot be decoded and `Pte::leaf` refuses it again. W^X holds
+    /// per frame too (R11): `EXECUTE` only on RAM the caller owns, never on device registers or a
+    /// `dma_alloc` frame, which the device or another mapping of the same registers can write.
     pub fn set_flags(
         &mut self,
         pid: Pid,
@@ -872,7 +874,11 @@ impl MemoryManager {
             return Err(bad);
         }
         for page in (addr..end).step_by(PAGE_SIZE) {
-            self.owned_mapping(pid, page)?;
+            let phys = self.owned_mapping(pid, page)?;
+            let device_memory = !self.is_main_memory(phys as *mut u8) || self.is_dma_frame(phys);
+            if flags.contains(MemFlags::EXECUTE) && device_memory {
+                return Err(bad);
+            }
         }
         for page in (addr..end).step_by(PAGE_SIZE) {
             crate::arch::mem::set_user_page_flags(page, flags).map_err(|_| bad)?;

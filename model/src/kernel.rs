@@ -1099,6 +1099,15 @@ impl Kernel {
 
     /// Every page in `[first, first + n)` is an accessible mapping of `pid` that it owns
     /// (not lent out, not lent in).
+    /// Whether `m` maps device registers or a `dma_alloc` frame: memory a device, or another
+    /// mapping of the same registers, can write underneath (R11: never executable).
+    pub fn is_device_memory(&self, m: &Mapping) -> bool {
+        match m.backing {
+            Backing::Device { .. } => true,
+            Backing::Frame(f) => self.frames.get(&f).is_some_and(|fr| fr.dma.is_some()),
+        }
+    }
+
     fn own_range(&self, pid: u64, first: u64, n: u64, want: impl Fn(&Mapping) -> bool) -> R<()> {
         let p = self.processes.get(&pid).ok_or(Error::Dead)?;
         for v in first..first + n {
@@ -2522,7 +2531,10 @@ impl Kernel {
         decode_flags(flags, self.broken(Mutation::R11SetFlagsAllowsWx))?;
         let (first, n) = user_range(addr, len)?;
         check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
-        self.own_range(pid, first, n, |_| true)?;
+        // W^X per frame (R11): `EXECUTE` only on RAM the caller owns, never on device registers
+        // or a `dma_alloc` frame.
+        let exec_ok = flags & FLAG_X == 0 || self.broken(Mutation::R11ExecOnDeviceMemory);
+        self.own_range(pid, first, n, |m| exec_ok || !self.is_device_memory(m))?;
         let p = self.processes.get_mut(&pid).unwrap();
         for v in first..first + n {
             p.space.get_mut(&v).unwrap().flags = flags;

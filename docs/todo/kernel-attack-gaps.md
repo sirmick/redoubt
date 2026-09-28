@@ -69,7 +69,7 @@ gap: the page's section, the claim, and what no case attacks.
 - `map_fixed`: `map-fixed-attack` and `map-fixed-tables` run on rv64 only; on rv32 only `return-lent-unmapped` calls it.
 - Instruction fetch after mapping: no case can see a missing `fence.i` (QEMU keeps fetch coherent).
 - Lending at the page-table level: a lend within one process is not attacked across harts.
-- R11 (memory): W^X on device registers and `dma_alloc` pages is not attacked, and does not hold ([device mapping exec](device-mapping-exec.md)); the absence of any physical-address argument is argued from the call table.
+- R11 (memory): the absence of any physical-address argument is argued from the call table.
 - R19 (kernel W^X): no case plants a writable kernel code page to show the boot check stops; the case boots rv64 only.
 - R22 (range cost): only `map_fixed`'s huge length is attacked; `unmap`, `set_flags`, `process_map` and lends with huge ranges are not, and `map_anon`'s search is an exception no case measures.
 

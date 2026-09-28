@@ -281,16 +281,17 @@ reads the account the kernel attaches to the child's messages; the same probe, i
 
 ### I9 (pages W^X, zeroed, lends unmapped)
 
-Status: built · partly tested: reuse of a freed frame, and a lender touching its own lent page, are attacked only in the model · tested: bench:wx, bench:write-only-attack, bench:mem-attack, bench:map-fixed-attack, bench:return-lent-unmapped, bench:uaf-lent-page, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped
+Status: built · partly tested: reuse of a freed frame, and a lender touching its own lent page, are attacked only in the model · tested: bench:wx, bench:write-only-attack, bench:mem-attack, bench:map-fixed-attack, bench:return-lent-unmapped, bench:uaf-lent-page, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11ExecOnDeviceMemory
 
-No user page is ever mapped writable and executable, or writable without being readable. Every
-page is zeroed before a process first sees it. A lent page is unmapped from its lender until the
-call ends, so a page is reachable from at most one address space at a time. This is R11's
-state-level form; the kernel's own mappings are R19 (kernel W^X)'s
-([memory](memory.md)).
+No user page is ever mapped writable and executable, or writable without being readable, and no
+page of device registers or DMA frame is ever mapped executable. Every page is zeroed before a
+process first sees it. A lent page is unmapped from its lender until the call ends, so a page is
+reachable from at most one address space at a time. This is R11's state-level form; the
+kernel's own mappings are R19 (kernel W^X)'s ([memory](memory.md)).
 
 **Kept in** `check_permissions` ([`kernel/src/arch/riscv/mem.rs`](../../kernel/src/arch/riscv/mem.rs):
-every user mapping; decoding refuses W+X flags before that); zeroing through the physmap before a
+every user mapping; decoding refuses W+X flags before that); `set_flags`'s refusal of `EXECUTE`
+on a frame that is not RAM or is a `dma_alloc` frame; zeroing through the physmap before a
 mapping exists (`map_anon` and `map_fixed` in [`kernel/src/mem.rs`](../../kernel/src/mem.rs),
 `alloc_contiguous` for DMA, `ensure_page_exists_inner` for a page backed on first touch);
 `lend_out`, which clears the lender's valid bit and

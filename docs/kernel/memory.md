@@ -35,8 +35,8 @@ A range is page-aligned and non-empty, and for every call but `map_anon` it lies
 on rv64). Flags are `READ`, `WRITE` and `EXECUTE`: at least one, never `WRITE` with
 `EXECUTE`, never `WRITE` without `READ`. "The caller's own page" is a live user mapping that is
 neither side of a loan and is credited to the caller in the kernel's frame ownership table (or
-is a `dma_alloc` page of its own, or device registers it mapped). A reservation not yet touched
-is not a mapping.
+is a `dma_alloc` page of its own, or device registers it mapped). Only the RAM among them can
+be made executable ([R11](#r11-memory)). A reservation not yet touched is not a mapping.
 
 Each call checks the whole range before it changes any page, so an error leaves every mapping
 as it was. Two can leave a charge behind: `map_anon`'s rollback keeps the page tables it
@@ -191,7 +191,7 @@ Status: built · partly tested: that no call names a physical frame is argued fr
 
 ### R11 (memory)
 
-Status: built · partly tested: the kernel departs from per-frame W^X, because `set_flags` makes device registers and `dma_alloc` pages executable on request, and no case attacks it; that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap
+Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap, mutation:R11ExecOnDeviceMemory
 
 - **No RAM page is ever mapped writable and executable** ([W^X](../GLOSSARY.md#wx)): not by one
   entry, and not by two, since a RAM frame has at most one user entry at a time (the kernel's
@@ -203,8 +203,8 @@ Status: built · partly tested: the kernel departs from per-frame W^X, because `
   executable. Device registers and DMA frames are never mapped executable: the device, or
   another mapping of the same registers (in this process or a co-holder's, since a mapping
   outlives its handle), can write them underneath. `map_device` and `dma_alloc` map read-write
-  and never executable, and `process_map` refuses device and DMA pages. The kernel departs from
-  this in `set_flags`, which grants `EXECUTE` on both (Residual risks).
+  and never executable, `set_flags` refuses `EXECUTE` on either, and `process_map` refuses
+  device and DMA pages.
 - **Writable implies readable.** The privileged architecture reserves the write-only entry, so
   `map_anon`, `map_fixed`, `set_flags` and `process_map` refuse `WRITE` without `READ`.
 - **Flags are checked before anything is charged or moved** for the new mapping, so a step
@@ -311,15 +311,6 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`, where the
   [model](model.md), whose placement is unbounded, succeeds. It harms only that process.
-- **`set_flags` departs from R11 on device memory.** It accepts `EXECUTE` on mapped device
-  registers and on a held `dma_alloc` page, because both count as the caller's own pages. A
-  process that maps one device twice with `map_device` gets two mappings of the same physical
-  memory, and can make one read-write and the other read-execute. A DMA page made executable
-  is not writable through its mapping, but the device can still write it. So a process holding
-  a device object, such as a block or network driver, can make device registers or its DMA
-  buffers executable, and hostile device input can become injected code in a compromised
-  driver, where W^X would have left the attacker only the driver's own code to reuse. No case
-  attacks it. Follow-up: [todo](../todo/device-mapping-exec.md).
 - **User cache-block invalidation is not turned off.** The firmware enables `cbo.inval` below
   M-mode and the kernel never writes `senvcfg`, so on a hart with a write-back cache a process
   may be able to discard the kernel's zeroes on a page it was just given and read the previous

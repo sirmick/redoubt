@@ -532,7 +532,6 @@ pub fn map_into(
     Ok(())
 }
 
-/// Remove a protected borrower alias without changing who owns the frame: an abandoned
 /// Map `phys` at `virt` in `space` with exactly `flags`, for `pid`: what `process_map` gives a
 /// child, where the parent chooses the permissions and W^X is checked before we get here (R11).
 pub fn map_into_with(
