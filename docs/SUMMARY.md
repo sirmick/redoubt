@@ -70,7 +70,6 @@
   - [The steward's decision wake on rv64](todo/sched-rv64-decision-wake.md)
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
   - [The kernel crate's host test target](todo/hosted-kernel-tests.md)
-  - [A stray file in the kernel's tree](todo/kernel-test-hello.md)
   - [The raw system call beside the runtime](todo/raw-abi-syscall.md)
   - [Starting a thread from safe code](todo/raw-thread-create.md)
   - [A request answered outside `finish`](todo/request-raw-reply.md)
