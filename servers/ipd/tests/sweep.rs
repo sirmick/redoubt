@@ -5,6 +5,10 @@
 
 use redoubt_ipd::fake::{drive_frames, drive_session};
 
+/// Inputs per sweep. Miri, far slower, runs a few through the same checks; how deep the sweep
+/// reaches is asserted by the ordinary run.
+const ROUNDS: usize = if cfg!(miri) { 8 } else { 400 };
+
 struct Rng(u64);
 
 impl Rng {
@@ -24,20 +28,22 @@ impl Rng {
 fn randomized_frames() {
     let mut rng = Rng(0x0dd_ba11_c0ff_ee42);
     let (mut steps, mut sent, mut sockets) = (0, 0, 0);
-    for i in 0..400 {
+    for i in 0..ROUNDS {
         let len = 512 + (i * 37) % 3000;
         let d = drive_frames(&rng.bytes(len));
         (steps, sent, sockets) = (steps + d.steps, sent + d.sent, sockets.max(d.sockets));
     }
     eprintln!("frames: {steps} steps, {sent} frames sent, at most {sockets} sockets");
-    assert!(steps > 400 * 20 && sent > 400 * 10 && sockets >= 4, "the sweep stayed shallow");
+    if !cfg!(miri) {
+        assert!(steps > 400 * 20 && sent > 400 * 10 && sockets >= 4, "the sweep stayed shallow");
+    }
 }
 
 #[test]
 fn randomized_sessions() {
     let mut rng = Rng(0x5e55_1015_f00d_4321);
     let mut total = redoubt_ipd::fake::Drove::default();
-    for i in 0..400 {
+    for i in 0..ROUNDS {
         let len = 512 + (i * 53) % 3000;
         let d = drive_session(&rng.bytes(len));
         total.steps += d.steps;
@@ -49,11 +55,12 @@ fn randomized_sessions() {
     }
     eprintln!("sessions: {total:?}");
     assert!(
-        total.steps > 400 * 30
-            && total.answered > 3000
-            && total.held > 50
-            && total.minted > 500
-            && total.sockets >= 8,
+        cfg!(miri)
+            || total.steps > 400 * 30
+                && total.answered > 3000
+                && total.held > 50
+                && total.minted > 500
+                && total.sockets >= 8,
         "the sweep stayed shallow: {total:?}"
     );
 }
