@@ -1,0 +1,17 @@
+description = "A bad record takes nothing (kernel/ipc.md): a thread waiting in receive whose record page its process unmaps gets InvalidArgument when an abandoned-call notice or an interrupt comes, and the notice or interrupt arrives on its next receive (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The program runs first and holds the goldfish RTC; the verdicts are receive's results and the
+# kernel's clock.
+programs = ["receive-bad-record"]
+timeout_secs = 60
+expect = [
+    '^\[receive-bad-record\] ok: an abandoned-call notice to a bad record: the waiting receive gets InvalidArgument',
+    '^\[receive-bad-record\] ok: an abandoned-call notice arrives on the next receive with a good record$',
+    '^\[receive-bad-record\] ok: an interrupt to a bad record: the waiting receive gets InvalidArgument',
+    '^\[receive-bad-record\] ok: an interrupt arrives on the next receive with a good record$',
+    '^RECEIVE-BAD-RECORD TEST PASSED$',
+]
+forbid = ['\[receive-bad-record\] FAIL', 'PANIC']
+poweroff = true

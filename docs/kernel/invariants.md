@@ -423,7 +423,7 @@ and the kernel must survive to power off; `syscall-attack` makes an oversized le
 
 ### I15 (abandoned calls reported once)
 
-Status: built · partly tested: one breach is stated and not yet closed: a notice owed to a thread whose record became unwritable while it waited is consumed, not kept pending (IPC, a bad record takes nothing, planned) · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated
+Status: built · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, bench:receive-bad-record, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice
 
 Every abandoned call is reported to the thread holding it exactly once, and stays open until that
 thread replies; the reply reaches nobody. The report is an abandoned-call notice, delivered on the

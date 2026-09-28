@@ -1202,6 +1202,22 @@ impl Kernel {
         }
     }
 
+    /// Whether a thread blocked in `receive` can still be told what it takes: its record is
+    /// checked just before anything is delivered, and a bad one takes nothing (kernel/ipc.md, "A
+    /// bad record takes nothing").
+    fn receive_record_valid(&self, tid: u64) -> bool {
+        self.threads.get(&tid).is_some_and(|t| self.record_valid(t.pid, tid, true))
+    }
+
+    /// A receiver whose record went bad while it waited leaves `e`'s queue with `InvalidArgument`,
+    /// having taken nothing.
+    fn fail_bad_record(&mut self, e: u64, tid: u64) {
+        if let Some(ep) = self.endpoints.get_mut(&e) {
+            ep.receivers.retain(|x| *x != tid);
+        }
+        self.wake(tid, Err(Error::InvalidArgument));
+    }
+
     fn input_record_valid(&self, pid: u64, tid: u64) -> bool {
         match self.threads.get(&tid).map(|t| t.record) {
             Some(Record::Owned | Record::ReadOnly | Record::CopyFault) => true,
@@ -1487,6 +1503,14 @@ impl Kernel {
             // Abandoned-call notices go to the thread holding the call.
             if let Some((rtid, mid)) = receivers.iter().find_map(|t| self.notice_for(*t, e).map(|m| (*t, m)))
             {
+                if !self.receive_record_valid(rtid) {
+                    // The notice stays owed for the next `receive` that can be told.
+                    if self.broken(Mutation::BadRecordConsumesNotice) {
+                        self.msgs.get_mut(&mid).unwrap().notice = false;
+                    }
+                    self.fail_bad_record(e, rtid);
+                    continue;
+                }
                 self.endpoints.get_mut(&e).unwrap().receivers.retain(|x| *x != rtid);
                 let again = self.broken(Mutation::AbandonNoticeRepeated);
                 let m = self.msgs.get_mut(&mid).unwrap();
@@ -1498,6 +1522,10 @@ impl Kernel {
             }
 
             let rtid = receivers[0];
+            if !self.endpoints[&e].exits.is_empty() && !self.receive_record_valid(rtid) {
+                self.fail_bad_record(e, rtid);
+                continue;
+            }
             if let Some(n) = self.endpoints.get_mut(&e).unwrap().exits.pop_front() {
                 // The label check was made when the notice was queued (R1).
                 self.endpoints.get_mut(&e).unwrap().receivers.pop_front();
@@ -1533,6 +1561,10 @@ impl Kernel {
                 self.next_sender(e, !full).map(|m| (*t, m))
             });
             let Some((rtid, mid)) = pick else { return };
+            if !self.receive_record_valid(rtid) {
+                self.fail_bad_record(e, rtid);
+                continue;
+            }
             if self.deliver(e, rtid, mid) {
                 continue;
             }
@@ -2238,18 +2270,24 @@ impl Kernel {
         if !no_mask {
             *masked = true;
         }
-        // A waiting receiver takes it at once, clearing `fired`.
+        // A waiting receiver takes it at once, clearing `fired`, if its record can be written; a
+        // bad record takes nothing, and the source stays fired and masked for the next receive.
         let waiter = d.waiters.pop_front();
-        if waiter.is_some() {
-            if let DeviceKind::Irq { fired, .. } = &mut d.kind {
+        self.ghost.irq_fired(id);
+        let Some(tid) = waiter else { return };
+        let wait = self.threads.get(&tid).and_then(|t| t.wait);
+        let good = self.receive_record_valid(tid);
+        if good || self.broken(Mutation::R5BadRecordConsumesInterrupt) {
+            if let DeviceKind::Irq { fired, .. } = &mut self.devices.get_mut(&id).unwrap().kind {
                 *fired = false;
             }
         }
-        self.ghost.irq_fired(id);
-        if let Some(tid) = waiter {
-            if let Some(Wait::Irq { h, .. }) = self.threads.get(&tid).and_then(|t| t.wait) {
+        if let Some(Wait::Irq { h, .. }) = wait {
+            if good {
                 self.ghost.irq_delivered(id);
                 self.wake(tid, Ok(Ret::Interrupt { h }));
+            } else {
+                self.wake(tid, Err(Error::InvalidArgument));
             }
         }
     }
@@ -2260,42 +2298,11 @@ impl Kernel {
     /// Apply one op. `None` if the op is not a legal event (it names a thread that does not
     /// exist or is blocked, a tick is longer than `MAX_TICK`, or the machine is halted); the
     /// state is then unchanged.
-    /// These events would require choosing a late-invalid receive result
-    /// (todo/receive-output-late-invalid.md); keep them outside the oracle until that is settled.
+    /// A `receive` whose record passes decoding but faults when written (`Record::CopyFault`) has
+    /// no kernel counterpart to replay against, so it stays outside the oracle.
     pub fn unsupported_receive_output(&self, op: &Op) -> bool {
-        if let Op::Sys { tid, call: Syscall::Receive { .. }, .. } = op {
-            if self.threads.get(tid).is_some_and(|t| t.record == Record::CopyFault) {
-                return true;
-            }
-        }
-        for t in self
-            .threads
-            .values()
-            .filter(|t| matches!(t.wait, Some(Wait::Receive { .. } | Wait::Irq { .. } | Wait::Sleep)))
-        {
-            if let Op::Record { tid, record, .. } = op {
-                if *tid == t.tid && *record != t.record {
-                    return true;
-                }
-            }
-            let Record::Memory(address) = t.record else { continue };
-            let Op::Sys { pid, call, .. } = op else { continue };
-            if *pid != t.pid {
-                continue;
-            }
-            let range = match call {
-                Syscall::Unmap { addr, len } | Syscall::SetFlags { addr, len, .. } => Some((*addr, *len)),
-                Syscall::ProcessMap { src, len, .. } => Some((*src, *len)),
-                Syscall::Call { lend: Some(b), .. } | Syscall::Send { transfer: Some(b), .. } => {
-                    Some((b.addr, b.npages.saturating_mul(PAGE_SIZE)))
-                }
-                _ => None,
-            };
-            if range.is_some_and(|(start, len)| address >= start && address < start.saturating_add(len)) {
-                return true;
-            }
-        }
-        false
+        let Op::Sys { tid, call: Syscall::Receive { .. }, .. } = op else { return false };
+        self.threads.get(tid).is_some_and(|t| t.record == Record::CopyFault)
     }
 
     pub fn step(&mut self, op: &Op) -> Option<Step> {

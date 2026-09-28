@@ -237,26 +237,7 @@ fn pid_reuse_only_after_notice_receipt() {
 }
 
 #[test]
-fn unsettled_receive_output_is_rejected_by_trace_oracle() {
-    let mut w = World::new(None);
-    let (ep, _, server) = w.setup().unwrap();
-    w.sys(server, Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 0 }).unwrap();
-    let op = Op::Record { pid: 1, tid: server, record: Record::Unmapped };
-    assert!(w.k.unsupported_receive_output(&op));
-    assert!(w.k.step(&op).is_none());
-    let mut ops = w.ops.clone();
-    ops.push(op);
-    assert!(trace::record(&Boot::default(), &ops, None).unwrap_err().contains("late-invalid receive output"));
-    let mut w = World::new(None);
-    let (ep, _, server) = w.setup().unwrap();
-    let memory = w.lend().unwrap();
-    w.op(Op::Record { pid: 1, tid: server, record: Record::Memory(memory.addr) }).unwrap();
-    w.sys(server, Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 0 }).unwrap();
-    let op = Op::Sys { pid: 1, tid: 1, call: Syscall::Unmap { addr: memory.addr, len: PAGE_SIZE } };
-    assert!(w.k.unsupported_receive_output(&op));
-    let mut ops = w.ops.clone();
-    ops.push(op);
-    assert!(trace::record(&Boot::default(), &ops, None).unwrap_err().contains("late-invalid receive output"));
+fn a_copy_faulting_receive_record_is_rejected_by_trace_oracle() {
     let mut w = World::new(None);
     let (ep, _, server) = w.setup().unwrap();
     w.op(Op::Record { pid: 1, tid: server, record: Record::CopyFault }).unwrap();
@@ -266,6 +247,27 @@ fn unsettled_receive_output_is_rejected_by_trace_oracle() {
         call: Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 0 },
     };
     assert!(w.k.unsupported_receive_output(&op));
+    assert!(w.k.step(&op).is_none());
+    let mut ops = w.ops.clone();
+    ops.push(op);
+    assert!(trace::record(&Boot::default(), &ops, None).unwrap_err().contains("copy"));
+}
+
+#[test]
+fn a_record_gone_bad_while_receiving_takes_nothing() {
+    let mut w = World::new(None);
+    let (ep, client, server) = w.setup().unwrap();
+    let memory = w.lend().unwrap();
+    w.op(Op::Record { pid: 1, tid: server, record: Record::Memory(memory.addr) }).unwrap();
+    w.sys(server, Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 0 }).unwrap();
+    w.sys(1, Syscall::Unmap { addr: memory.addr, len: PAGE_SIZE }).unwrap();
+    let s = w
+        .sys(1, Syscall::Send { h: client, words: [5; 4], handles: vec![], transfer: None, timeout: FOREVER })
+        .unwrap();
+    assert!(s.wakes.iter().any(|x| x.tid == server && x.result == Err(Error::InvalidArgument)));
+    w.op(Op::Record { pid: 1, tid: server, record: Record::Owned }).unwrap();
+    let m = w.take(ep, server).unwrap();
+    assert_eq!(m.words, [5; 4]);
 }
 
 #[test]

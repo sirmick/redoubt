@@ -115,18 +115,14 @@ flowchart TD
 
 ### A bad record takes nothing
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:receive-bad-record, bench:process-attack, host:redoubt-model::a_record_gone_bad_while_receiving_takes_nothing, mutation:BadRecordConsumesNotice, mutation:R5BadRecordConsumesInterrupt
 
 An interrupt or an abandoned-call notice is kept like a message: the record is checked just
 before either is delivered, and if it can no longer be written the receiver gets
-`InvalidArgument` and the item stays pending, the interrupt still fired and the call's notice
-still owed. The next `receive` that can write its record gets it, in the order above. So the one
-report of I15 (abandoned calls reported once) is always received, and a driver never loses an
-interrupt to its own thread's unmap. A case makes a waiting thread's record unwritable, then
-delivers an interrupt and an abandoned-call notice, and both arrive on the next good `receive`;
-a mutation that consumes them must fail it.
-
-**Open:** none.
+`InvalidArgument` and the item stays pending, the interrupt still fired (and its source masked)
+and the call's notice still owed. The next `receive` that can write its record gets it, in the
+order above. So the one report of I15 (abandoned calls reported once) is always received, and a
+driver never loses an interrupt to its own thread's unmap.
 
 ### How a call completes
 
@@ -242,7 +238,7 @@ k receives (I11 (fair turns)).
 
 ### R3 (lends and abandoned calls)
 
-Status: built · tested: bench:redoubt-revoke, bench:timeouts, bench:ipc-outcomes, bench:uaf-lent-page, bench:process-lifecycle, mutation:R3UnmapAbandonedLend, mutation:R3ChargeStaysWithCaller, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated
+Status: built · tested: bench:redoubt-revoke, bench:timeouts, bench:ipc-outcomes, bench:uaf-lent-page, bench:process-lifecycle, mutation:R3UnmapAbandonedLend, mutation:R3ChargeStaysWithCaller, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice
 
 A lend's range must be the caller's own writable RAM. Pages in it that were never touched are
 backed first, charged to the caller like `map_anon`'s; a caller that cannot pay for them gets

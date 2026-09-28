@@ -218,7 +218,7 @@ Status: built · tested: bench:irq-attack, bench:device, bench:dma-rules, bench:
 
 ### R5 (interrupts)
 
-Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested: bench:uart-irq, mutation:R5NoMaskOnFire, mutation:R5NoUnmaskOnReceive
+Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested: bench:uart-irq, bench:receive-bad-record, mutation:R5NoMaskOnFire, mutation:R5NoUnmaskOnReceive, mutation:R5BadRecordConsumesInterrupt
 
 When an interrupt fires, the kernel masks its source and sets the IRQ object's `fired` flag.
 `receive` on the IRQ handle unmasks the source when it begins, then returns an `interrupt`

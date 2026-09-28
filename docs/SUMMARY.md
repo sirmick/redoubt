@@ -81,7 +81,6 @@
   - [The kernel's print on a panic](todo/print-panic-reentry.md)
   - [The raw system call beside the runtime](todo/raw-abi-syscall.md)
   - [Starting a thread from safe code](todo/raw-thread-create.md)
-  - [A notice lost to a bad receive record](todo/receive-output-late-invalid.md)
   - [A request answered outside `finish`](todo/request-raw-reply.md)
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)

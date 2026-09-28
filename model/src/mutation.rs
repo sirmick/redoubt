@@ -46,6 +46,9 @@ pub enum Mutation {
     AbandonNoticeMissing,
     /// An abandoned-call notice is delivered again on every `receive` (I15).
     AbandonNoticeRepeated,
+    /// A receiver whose record went bad while it waited takes its abandoned-call notice anyway,
+    /// and the notice is lost (I15).
+    BadRecordConsumesNotice,
     // R4. Delivery.
     /// Transfers are delivered whatever `max_transfer` says.
     R4IgnoreMaxTransfer,
@@ -62,6 +65,9 @@ pub enum Mutation {
     R5NoMaskOnFire,
     /// `receive` on an IRQ handle does not unmask the source.
     R5NoUnmaskOnReceive,
+    /// A receiver whose record went bad while it waited clears `fired` anyway, and the interrupt
+    /// is lost.
+    R5BadRecordConsumesInterrupt,
     // R6. Charging.
     /// A parent's usage also counts its children's live usage (not only their limits).
     R6ChargeAncestors,
@@ -318,7 +324,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 135] = {
+    pub const ALL: [Mutation; 137] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -337,6 +343,7 @@ impl Mutation {
             R3ChargeStaysWithCaller,
             AbandonNoticeMissing,
             AbandonNoticeRepeated,
+            BadRecordConsumesNotice,
             R4IgnoreMaxTransfer,
             R4OverdrawOnDelivery,
             R4aOpenCallsPerThread,
@@ -344,6 +351,7 @@ impl Mutation {
             R4bDeadServerFakesReply,
             R5NoMaskOnFire,
             R5NoUnmaskOnReceive,
+            R5BadRecordConsumesInterrupt,
             R6ChargeAncestors,
             R6OwnPageChargedToItself,
             R6EndpointsFree,
@@ -479,13 +487,15 @@ impl Mutation {
             | R2KeyByAccountOnly
             | R2KeyByStampLabels
             | R2SystemCallersShareGroup => "R2",
-            R3UnmapAbandonedLend | R3ChargeStaysWithCaller | AbandonNoticeMissing | AbandonNoticeRepeated => {
-                "R3"
-            }
+            R3UnmapAbandonedLend
+            | R3ChargeStaysWithCaller
+            | AbandonNoticeMissing
+            | AbandonNoticeRepeated
+            | BadRecordConsumesNotice => "R3",
             R4IgnoreMaxTransfer | R4OverdrawOnDelivery => "R4",
             R4aOpenCallsPerThread | R4aFullTakesNothing | OpenCallsUnlimited | ReceiveDropsOpenCalls => "R4a",
             R4bDeadServerFakesReply => "R4b",
-            R5NoMaskOnFire | R5NoUnmaskOnReceive => "R5",
+            R5NoMaskOnFire | R5NoUnmaskOnReceive | R5BadRecordConsumesInterrupt => "R5",
             R6ChargeAncestors
             | R6OwnPageChargedToItself
             | R6EndpointsFree

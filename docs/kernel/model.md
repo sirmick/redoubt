@@ -218,7 +218,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 135 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 137 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks.
 
@@ -235,11 +235,11 @@ model checks.
 | --- | --- | --- |
 | [R1 (flow)](ipc.md#r1-flow) | `R1SkipLabelCheck`, `R1ExitNoticeIgnoresLabels`, `R1UsageIgnoresLabels`, `R1UsageExemptBySystemTarget`, `R1ExitExemptBySystemExiting`, `R1ChecksReceiverNotOwner`, `R1SenderClassFromStamp` | the label check on messages, exit notices and usage reads, and which side's class exempts it |
 | [R2 (fair waiting)](ipc.md#r2-fair-waiting) | `R2FifoAcrossAccounts`, `R2NoWaitCap`, `R2KeyByAccountOnly`, `R2KeyByStampLabels`, `R2SystemCallersShareGroup` | turns, the cap, and how groups are keyed |
-| [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls) | `R3UnmapAbandonedLend`, `R3ChargeStaysWithCaller`, `AbandonNoticeMissing`, `AbandonNoticeRepeated` | an abandoned lend's mapping and charge; the notice, once |
+| [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls) | `R3UnmapAbandonedLend`, `R3ChargeStaysWithCaller`, `AbandonNoticeMissing`, `AbandonNoticeRepeated`, `BadRecordConsumesNotice` | an abandoned lend's mapping and charge; the notice, once, and kept for a good record |
 | [R4 (delivery)](ipc.md#r4-delivery) | `R4IgnoreMaxTransfer`, `R4OverdrawOnDelivery` | `max_transfer`; paying for a delivery |
 | [R4a (open calls)](ipc.md#r4a-open-calls) | `R4aOpenCallsPerThread`, `R4aFullTakesNothing`, `OpenCallsUnlimited`, `ReceiveDropsOpenCalls` | the limit, per process; sends and notices at the limit; keeping open calls across a `receive` |
 | [R4b (a server dies)](ipc.md#r4b-a-server-dies) | `R4bDeadServerFakesReply` | `Dead` for a dead server's callers |
-| [R5 (interrupts)](devices.md#r5-interrupts) | `R5NoMaskOnFire`, `R5NoUnmaskOnReceive` | masking on fire, unmasking on `receive` |
+| [R5 (interrupts)](devices.md#r5-interrupts) | `R5NoMaskOnFire`, `R5NoUnmaskOnReceive`, `R5BadRecordConsumesInterrupt` | masking on fire, unmasking on `receive`; an interrupt kept for a good record |
 | [R6 (charging)](budgets.md#r6-charging) | `R6ChargeAncestors`, `R6OwnPageChargedToItself`, `R6EndpointsFree`, `R6PageTablesFree`, `R6EmptyTableKept`, `R6OpenCallsFree`, `R6ProcessObjectFree`, `R6ProcessObjectChargedToBudget`, `R6LendChargedOnce`, `R6RootPageUncounted`, `R6PidUncountedAtEnd` | who pays for each object, and for how long a page table; `root`'s own page; how long a PID counts |
 | [R7 (carving)](budgets.md#r7-carving) | `R7NoCarveCheck`, `R7CarveToZeroFree`, `ProcessInWeightlessBudget` | carving within free limits; no process in a budget with free weight 0 |
 | [R8 (accounts)](budgets.md#r8-accounts) | `R8AccountFromArgument` | inheriting the parent's account |
@@ -441,7 +441,7 @@ run on the real timer. The case passes when 100,000 model traces replay with ide
 
 Replay is what turns the model from a reference into evidence about the kernel.
 
-**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM) and the rv32 cost table (one saved-context page); `map_device`'s result (the kernel returns the address and the length, the model only the address); `map_anon` once the kernel's placement window is full, where the model still succeeds; a receive record made unwritable while its thread waits, which the model refuses to put in a trace ([follow-up](../todo/receive-output-late-invalid.md)); completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
+**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM) and the rv32 cost table (one saved-context page); `map_device`'s result (the kernel returns the address and the length, the model only the address); `map_anon` once the kernel's placement window is full, where the model still succeeds; a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
 
 ## Residual risks
 

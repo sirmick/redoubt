@@ -469,13 +469,11 @@ fn wake(ss: &mut ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID, result: R
 }
 
 /// Write `slots` into `(pid, tid)`'s record, in its own address space, and wake it with
-/// `result`. A record that is no longer the thread's writable memory is `InvalidArgument`: the
-/// record is part of decoding, whose error every call's row carries.
-/// Write a blocked thread's record in its own memory and wake it with `result`, or with the
-/// error the record earned. By the time this runs the message is consumed -- taken from the
-/// queue, its handles installed, its buffer mapped -- so a record that has gone unwritable
-/// since is the receiver's own loss, not the sender's; delivery re-checks it beforehand
-/// (`check_receive_record`) so that this is a narrow race, not the usual way.
+/// `result`, or with the error the record earned: a record that is no longer the thread's
+/// writable memory is `InvalidArgument`, the error of decoding, which every call's row carries.
+/// Every delivery checks the record first (`check_receive_record`) and takes nothing if it fails
+/// (kernel/ipc.md, "A bad record takes nothing"), so by the time this runs the record was good a
+/// moment ago.
 fn answer_record<const N: usize>(
     ss: &mut ProcessTable,
     mm: &MemoryManager,
@@ -826,7 +824,9 @@ fn receive_irq(
 
 /// Hand the interrupt to a thread waiting in `receive` on device `frame`, if one is waiting
 /// and the device has fired. Clearing `fired` here is R5's "returns when `fired` is set
-/// (clearing it)", and it happens exactly once per waiting thread.
+/// (clearing it)", and it happens exactly once per waiting thread, and only once its record is
+/// known to be writable: a bad record takes nothing, so the device stays fired (and masked) for
+/// the next `receive`.
 pub fn irq_ready(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     if !mm.device(frame).fired {
         return;
@@ -837,6 +837,10 @@ pub fn irq_ready(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
         (s.wait == Wait::Irq && s.irq == Some(DeviceRef { frame, id })).then_some((pid, tid))
     });
     let Some((pid, tid)) = waiting else { return };
+    if let Err(error) = check_receive_record(ss, pid, tid, mm) {
+        wake(ss, mm, pid, tid, Err(error));
+        return;
+    }
     let mut d = mm.device(frame);
     d.fired = false;
     mm.store_device(frame, &d);
@@ -928,6 +932,11 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
             })
         });
         if let Some((pid, tid, frame, rid)) = notice {
+            // A bad record takes nothing: the notice stays owed for the next `receive`.
+            if let Err(error) = check_receive_record(ss, pid, tid, mm) {
+                wake(ss, mm, pid, tid, Err(error));
+                continue;
+            }
             // I15: reported exactly once.
             let mut c = open_call_at(mm, frame);
             c.flags &= !F_NOTICE;

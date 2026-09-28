@@ -74,6 +74,8 @@ fn a_rule_breaking_kernel_fails_replay() {
     texts.push(common::contracts::expiry_order_trace());
     // A quarantined device named again (kernel/devices.md, "Quarantine").
     texts.push(common::contracts::dma_quarantine_trace());
+    // A record gone bad while its thread waits, as an abandoned-call notice or an interrupt comes.
+    texts.extend(common::contracts::bad_record_traces());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
         m.is_policy()
