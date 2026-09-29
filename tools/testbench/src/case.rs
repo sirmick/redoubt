@@ -45,15 +45,19 @@ pub enum Kind {
     /// a constant both the loader and the bench agree on is right in the machine's eyes even
     /// when it is wrong (see `libs/signing`). Not a boot.
     HostTests(HostTests),
-    /// SSH sessions against an OpenSSH server run on the host. Not a boot: it checks the
-    /// bench's SSH client and session runner against a known-good server.
+    /// SSH sessions against a server run on the host: Redoubt's `sshd` on its host platform, or
+    /// OpenSSH's for the reference case. Not a boot.
     SshLoopback(SshLoopback),
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SshLoopback {
-    /// Test keys (`tests/keys/`) the server accepts.
+    /// Which server `ssh` starts.
+    #[serde(default)]
+    pub server: LoopbackServer,
+    /// Test keys (`tests/keys/`) the server accepts. On Redoubt's server each is a principal of
+    /// the same name.
     pub authorized: Vec<String>,
     pub session: Vec<Session>,
     #[serde(default = "default_timeout")]
@@ -65,8 +69,22 @@ pub struct SshLoopback {
     /// sessions end: what the server saw, not only what the client says.
     #[serde(default)]
     pub server_log: Vec<String>,
+    /// Regular expressions none of which may match a line of the server's log: what the server
+    /// must not have done.
+    #[serde(default)]
+    pub server_log_forbid: Vec<String>,
     /// See `Boot::must_fail`.
     pub must_fail: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LoopbackServer {
+    /// Redoubt's `sshd` on its host platform, `redoubt-sshd-host`.
+    #[default]
+    Redoubt,
+    /// The host's OpenSSH `sshd`: the session runner's independent witness.
+    Openssh,
 }
 
 #[derive(Debug, Deserialize)]
@@ -342,6 +360,11 @@ pub struct Session {
     /// Regular expressions that must never match a line of this session's output.
     #[serde(default)]
     pub forbid: Vec<String>,
+    /// More arguments for `ssh`, before the host: `-R`, `-W`, `-s` and the like.
+    #[serde(default)]
+    pub ssh_args: Vec<String>,
+    /// A command to run, or with `-s` a subsystem, in place of a shell.
+    pub command: Option<String>,
     pub steps: Vec<Step>,
 }
 

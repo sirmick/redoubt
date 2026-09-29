@@ -19,7 +19,7 @@ steward started.
 
 ### The core and its platforms
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested: bench:sshd-host-tests, bench:sshd-build, bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:bench-ssh-loopback
 
 `sshd` is a core and a platform. The core runs `sunset` over byte slices and makes every decision
 this page states: the login name, the key checks, a channel's labels, and what a channel may not
@@ -73,10 +73,6 @@ crates](../testbench.md#patched-crates)), which changes three things:
 - **Its X25519 and Ed25519 verification use `ed25519-compact`,** the crate the loader and `keyd`
   already link, in place of the `dalek` crates. The box then has one implementation of each
   curve operation.
-
-**Open:** whether the box's platform lets a call to the steward or `keyd` hold up other
-connections; a post-quantum key exchange (`mlkem768x25519-sha256`), which changes the transcript
-`keyd` signs.
 
 ### Sessions over SSH
 
@@ -139,7 +135,9 @@ sequenceDiagram
 ```
 *Figure: an SSH login to a vault session. All of it is planned.*
 
-**Open:** how many channels and connections one principal may hold at once. The operations
+**Open:** how many channels and connections one principal may hold at once; whether the box's
+platform lets a call to the steward or `keyd` hold up other connections; a post-quantum key
+exchange (`mlkem768x25519-sha256`), which changes the transcript `keyd` signs. The operations
 `sshd` sends the steward are in the steward's table ([steward](steward.md#the-stewards-protocol)).
 
 ### `approve@box`

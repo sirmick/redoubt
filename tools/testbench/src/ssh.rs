@@ -1,5 +1,6 @@
-//! SSH sessions: the test keys, a host OpenSSH server for self-checks, and the runner that
-//! drives a case's scripted sessions concurrently.
+//! SSH sessions: the test keys, the host servers for loopback cases (Redoubt's `sshd` on its host
+//! platform, and OpenSSH's for the reference case), and the runner that drives a case's scripted
+//! sessions concurrently.
 //!
 //! The client is the system's OpenSSH `ssh`, not a Rust crate: the box's `sshd` is built on
 //! `sunset`, and checking it with an independent implementation catches interoperability
@@ -73,6 +74,69 @@ pub enum Server<'a> {
     /// A host sshd run by ssh itself for each session, in inetd mode (`sshd -i`) through
     /// `ProxyCommand`: it never listens on a port, so nobody else on the machine can reach it.
     Loopback { proxy: String, host_key: String, user: String },
+    /// Redoubt's `sshd` on its host platform, `redoubt-sshd-host`, run by ssh the same way.
+    Redoubt { proxy: String, host_key: String },
+}
+
+/// Removes `case`'s server log: both servers append, and a line from an earlier run must not
+/// satisfy this one's `server_log`.
+fn fresh_log(dir: &Path, case: &str) -> Result<PathBuf> {
+    let log = loopback_log(dir, case);
+    match std::fs::remove_file(&log) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => bail!("removing {}: {e}", log.display()),
+        _ => Ok(log),
+    }
+}
+
+/// ssh hands `ProxyCommand` to a shell; keep it free of anything the shell would interpret.
+fn proxy_command(proxy: String) -> Result<String> {
+    ensure!(
+        proxy.bytes().all(|b| b.is_ascii_alphanumeric() || b" /._+=-".contains(&b)),
+        "unusual path in {proxy:?}"
+    );
+    Ok(proxy)
+}
+
+/// The key `ssh` expects: the case's, or the loopback servers' own, `loopback-host`.
+fn expected_host_key(workspace: &Path, host_key: Option<&str>) -> Result<String> {
+    match host_key {
+        Some(key) => Ok(key.to_string()),
+        None => public_key(workspace, "loopback-host"),
+    }
+}
+
+/// Set up Redoubt's `sshd` on its host platform: it builds `redoubt-sshd-host`, whose host key is
+/// `loopback-host` and whose login table gives each `authorized` test key a principal of its name.
+pub fn redoubt(
+    workspace: &Path,
+    dir: &Path,
+    case: &str,
+    authorized: &[String],
+    host_key: Option<&str>,
+) -> Result<Server<'static>> {
+    let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let output = cargo
+        .current_dir(workspace)
+        .args(["build", "--quiet", "-p", "redoubt-sshd-host"])
+        .output()
+        .context("running cargo")?;
+    ensure!(
+        output.status.success(),
+        "building redoubt-sshd-host failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let keys = workspace.join(KEYS);
+    let mut proxy = format!(
+        "{} --host-key {} --log {}",
+        workspace.join("target/debug/redoubt-sshd-host").display(),
+        keys.join("loopback-host").display(),
+        fresh_log(dir, case)?.display()
+    );
+    for name in authorized {
+        check_key_name(name)?;
+        proxy += &format!(" --login {name}={}", keys.join(format!("{name}.pub")).display());
+    }
+    Ok(Server::Redoubt { proxy: proxy_command(proxy)?, host_key: expected_host_key(workspace, host_key)? })
 }
 
 /// Set up a loopback server that accepts the `authorized` test keys, logs in only the user
@@ -104,29 +168,15 @@ pub fn loopback(
             authorized_keys.display()
         ),
     )?;
-    // sshd appends: a line from an earlier run must not satisfy this one's `server_log`.
-    let log = loopback_log(dir, case);
-    match std::fs::remove_file(&log) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => bail!("removing {}: {e}", log.display()),
-        _ => {}
-    }
-    // ssh hands ProxyCommand to a shell; keep the paths free of anything it would interpret.
-    let proxy = format!("{SSHD} -i -f {} -E {}", config.display(), log.display());
-    ensure!(
-        proxy.bytes().all(|b| b.is_ascii_alphanumeric() || b" /._+-".contains(&b)),
-        "unusual path in {proxy:?}"
-    );
-    // sshd logs to `log`, but its monitor can still write a last line to stderr, which is ssh's:
+    let proxy =
+        proxy_command(format!("{SSHD} -i -f {} -E {}", config.display(), fresh_log(dir, case)?.display()))?;
+    // sshd logs to its log file, but its monitor can still write a last line to stderr, which is ssh's:
     // it would stand in for the session's own last output.
     let proxy = format!("{proxy} 2>/dev/null");
-    let host_key = match host_key {
-        Some(key) => key.to_string(),
-        None => public_key(workspace, "loopback-host")?,
-    };
-    Ok(Server::Loopback { proxy, host_key, user })
+    Ok(Server::Loopback { proxy, host_key: expected_host_key(workspace, host_key)?, user })
 }
 
-/// The loopback server's log for `case`, written by `sshd -E`.
+/// The loopback server's log for `case`, written by `sshd -E` or `redoubt-sshd-host --log`.
 pub fn loopback_log(dir: &Path, case: &str) -> PathBuf { dir.join(format!("{case}-sshd.log")) }
 
 /// Why the loopback server cannot be used.
@@ -239,7 +289,7 @@ pub fn run(
     // guest cases may accept any.
     let host_key = match server {
         Server::Guest { host_key, .. } => *host_key,
-        Server::Loopback { host_key, .. } => Some(host_key.as_str()),
+        Server::Loopback { host_key, .. } | Server::Redoubt { host_key, .. } => Some(host_key.as_str()),
     };
     let mut host_key_options = vec!["GlobalKnownHostsFile=/dev/null".to_string()];
     match host_key {
@@ -260,7 +310,7 @@ pub fn run(
         let mut ssh = Command::new(SSH);
         // The loopback sshd can log in only the user running it; there `user` only picks the key.
         let login = match server {
-            Server::Guest { .. } => &session.user,
+            Server::Guest { .. } | Server::Redoubt { .. } => &session.user,
             Server::Loopback { user, .. } => user,
         };
         ssh.args(["-F", "/dev/null", if session.pty { "-tt" } else { "-T" }, "-l", login, "-i"])
@@ -278,6 +328,11 @@ pub fn run(
         for option in &host_key_options {
             ssh.args(["-o", option]);
         }
+        if let Server::Redoubt { .. } = server {
+            // Its exchange is not post-quantum, and OpenSSH's warning would be session output.
+            ssh.args(["-o", "WarnWeakCrypto=no-pq-kex"]);
+        }
+        ssh.args(&session.ssh_args);
         match server {
             Server::Guest { forwards, .. } => {
                 let (_, port) =
@@ -295,10 +350,11 @@ pub fn run(
                     "127.0.0.1",
                 ]);
             }
-            Server::Loopback { proxy, .. } => {
+            Server::Loopback { proxy, .. } | Server::Redoubt { proxy, .. } => {
                 ssh.args(["-o", &format!("ProxyCommand={proxy}"), "--", "loopback"]);
             }
         }
+        ssh.args(&session.command);
         let log = logs.join(format!("{log_prefix}-{}.ssh.log", session.user));
         commands.push((session, ssh, log));
     }

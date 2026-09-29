@@ -1,0 +1,19 @@
+description = "sshd on its host platform: a break (ssh's ~B escape) and a 0x03 byte reach the console as its interrupt, and the session goes on"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+# The break request reaches the console through the core as its interrupt; the byte arrives as
+# input, which the console logs apart.
+server_log = ['^console interrupt$', '^console interrupt byte$']
+
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { send = "echo ready\n" },
+    { expect = '^ready$' },
+    { send = "~B" },
+    { send = "\u0003\n" },
+    { send = "echo after\n" },
+    { expect = '^after$' },
+]

@@ -698,6 +698,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-sshd-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "redoubt-keyd",
+ "redoubt-rt",
+ "redoubt-sshd",
+]
+
+[[package]]
 name = "redoubt-stride"
 version = "0.1.0"
 dependencies = [

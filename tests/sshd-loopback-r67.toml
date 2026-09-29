@@ -1,0 +1,38 @@
+description = "R67 on sshd's host platform: a labelled session gets no shell without a pty (sent env or not), and exec, a subsystem, remote and local port forwarding are refused; the verdict is the server's log, where no console starts"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+server_log = ['^login alice\+secrets: labels \{alice-secrets\}$']
+server_log_forbid = ['^console started']
+
+[[session]]
+user = "alice+secrets"
+steps = [{ expect = 'shell request failed' }, { exit = 255 }]
+
+[[session]]
+user = "alice+exec"
+command = "echo hi"
+steps = [{ expect = 'exec request failed' }, { exit = 255 }]
+
+[[session]]
+user = "alice+sftp"
+ssh_args = ["-s"]
+command = "sftp"
+steps = [{ expect = 'subsystem request failed' }, { exit = 255 }]
+
+# ssh asks no reply to env, so what shows is only that no console starts for it.
+[[session]]
+user = "alice+env"
+ssh_args = ["-o", "SetEnv=REDOUBT_TEST=1"]
+steps = [{ expect = 'shell request failed' }, { exit = 255 }]
+
+[[session]]
+user = "alice+remote"
+pty = true
+ssh_args = ["-o", "ExitOnForwardFailure=yes", "-R", "0:127.0.0.1:9"]
+steps = [{ expect = 'remote port forwarding failed' }, { exit = 255 }]
+
+[[session]]
+user = "alice+local"
+ssh_args = ["-W", "127.0.0.1:9"]
+steps = [{ expect = 'stdio forwarding failed' }, { exit = 255 }]
