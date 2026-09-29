@@ -1,12 +1,26 @@
 //! The `unsafe` ratchet: counts uses of the keyword in the trusted computing base and how
 //! many of them lack a `// SAFETY:` justification, and fails if either exceeds its budget.
-//! Budgets only ever get lowered. Raising one needs a reason in the commit that does it.
+//! Budgets only ever get lowered. Raising one needs a line `Unsafe budget: <name>: <reason>` in
+//! the commit that does it, which the size budget's history check reads (`size::ratchet`).
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
 use crate::case::{Budget, Skip};
+use crate::size::{self, Limit};
+
+impl Limit for Budget {
+    const TABLE: &'static str = "budget";
+
+    fn name(&self) -> &str { &self.name }
+
+    fn paths(&self) -> &[String] { &self.paths }
+
+    fn limits(&self) -> Vec<(&'static str, usize)> {
+        vec![("max_unsafe", self.max_unsafe), ("max_undocumented", self.max_undocumented)]
+    }
+}
 
 #[derive(Default)]
 pub struct Count {
@@ -69,8 +83,19 @@ pub fn rust_files(path: &Path) -> Result<Vec<PathBuf>> {
     }
 }
 
+/// Count every budget, then check the budgets in `file` only fell. Returns the first failure, if
+/// any, and a summary.
+pub fn check(workspace: &Path, file: &str, budgets: &[Budget]) -> Result<(Option<String>, String)> {
+    let (failure, summary) = counts(workspace, budgets)?;
+    let failure = match failure {
+        None => size::ratchet::<Budget>(workspace, file, "Unsafe budget")?,
+        failure => failure,
+    };
+    Ok((failure, summary))
+}
+
 /// Returns a description of the first budget that is exceeded, if any, and a summary line.
-pub fn check(workspace: &Path, budgets: &[Budget]) -> Result<(Option<String>, String)> {
+fn counts(workspace: &Path, budgets: &[Budget]) -> Result<(Option<String>, String)> {
     ensure!(!budgets.is_empty(), "no unsafe budgets configured");
     let mut summary = Vec::new();
     let mut failure = None;
@@ -178,7 +203,7 @@ mod tests {
         }
 
         fn check(&self, paths: &[&str]) -> Result<(Option<String>, String)> {
-            check(
+            counts(
                 &self.0,
                 &[Budget {
                     name: "fixture".into(),
@@ -254,7 +279,7 @@ mod tests {
     #[test]
     fn empty_configuration_is_not_coverage() {
         let fixture = Fixture::new();
-        assert_eq!(check(&fixture.0, &[]).unwrap_err().to_string(), "no unsafe budgets configured");
+        assert_eq!(counts(&fixture.0, &[]).unwrap_err().to_string(), "no unsafe budgets configured");
         assert_eq!(fixture.check(&[]).unwrap_err().to_string(), "budget fixture: no source paths configured");
     }
 
@@ -303,6 +328,29 @@ mod tests {
         let error = format!("{:#}", fixture.check(&["invalid.rs"]).unwrap_err());
         assert!(error.contains("checking budget fixture"), "{error}");
         assert!(error.contains(&format!("reading {}", fixture.0.join("invalid.rs").display())), "{error}");
+    }
+
+    /// A raise of either limit needs its `Unsafe budget:` line; a `Size budget:` line is not one.
+    #[test]
+    fn a_raise_needs_its_unsafe_budget_line() {
+        let repo = size::tests::Scratch::new("unsafe");
+        let limits = |unsafe_uses: usize, undocumented: usize| {
+            repo.write(&format!(
+                "[[budget]]\nname = \"b\"\npaths = [\"b\"]\nmax_unsafe = {unsafe_uses}\nmax_undocumented = {undocumented}\n"
+            ))
+        };
+        let ratchet = || size::ratchet::<Budget>(&repo.0, "b.toml", "Unsafe budget").unwrap();
+        limits(2, 0);
+        repo.run(&["add", "b.toml"]);
+        repo.run(&["commit", "-qm", "first"]);
+        repo.run(&["checkout", "-qb", "wp"]);
+        limits(2, 1);
+        repo.run(&["commit", "-qam", "grow\n\nSize budget: b: it needs it\n"]);
+        assert!(ratchet().is_some_and(|w| w.contains("max_undocumented raised from 0 to 1")));
+        repo.run(&["commit", "-q", "--amend", "-m", "grow\n\nUnsafe budget: b: it needs it\n"]);
+        assert_eq!(ratchet(), None);
+        limits(3, 1);
+        assert!(ratchet().is_some_and(|w| w.contains("max_unsafe raised from 2 to 3 and not committed")));
     }
 
     #[cfg(unix)]

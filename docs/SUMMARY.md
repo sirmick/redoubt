@@ -73,7 +73,6 @@
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [Requests the bench cannot see against sshd](todo/sshd-unseen-requests.md)
   - [sshd's vendored crates under Miri](todo/sshd-vendored-miri.md)
-  - [The unsafe budget's stated reason](todo/unsafe-ratchet-reason.md)
   - [User cache-block invalidation](todo/user-cache-invalidate.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)

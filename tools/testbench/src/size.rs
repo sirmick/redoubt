@@ -8,18 +8,19 @@
 //! whatever else names it, and a module file the case cannot find fails it, as does a form it
 //! does not follow (`mod r#name;`, a macro's `mod $name;`, the word `include`).
 //!
-//! Raising a ceiling needs a reason in the commit that does it. The case reads every commit that
-//! changed the case file, merges included; where one raised a ceiling over the file in its first
-//! parent, dropped a crate (a rename drops the old name) or narrowed a crate's paths, a line
-//! `Size budget: <crate>: <reason>` must name each such crate, in its message or, for a merge, in
-//! a commit it brings in. A raise not yet committed fails outright.
+//! Raising a ceiling needs a reason in the commit that does it. The case reads the branch's own
+//! commits that changed the case file, merges included; where one raised a ceiling over the file
+//! in its first parent, dropped a crate (a rename drops the old name) or narrowed a crate's paths,
+//! a line `Size budget: <crate>: <reason>` must name each such crate, in its message or, for a
+//! merge, in a commit it brings in. A raise not yet committed fails outright. The unsafe budget
+//! shares this history check (`ratchet`), with its own prefix.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail, ensure};
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::case::{SizeBudget, SizeCrate};
 
@@ -443,43 +444,62 @@ fn count_path(path: &Path) -> Result<usize> {
     Ok(scans.iter().filter(|(file, _)| counted.contains(*file)).map(|(_, s)| s.lines).sum())
 }
 
-#[derive(Deserialize)]
-struct File {
-    #[serde(rename = "crate")]
-    crates: Vec<SizeCrate>,
+/// One entry of a budget file whose limits only fall: a trusted crate's ceiling, a directory's
+/// `unsafe`. The history check is the same for every such file.
+pub trait Limit: DeserializeOwned {
+    /// The array of tables the entries are listed in (`[[crate]]`, `[[budget]]`).
+    const TABLE: &'static str;
+    fn name(&self) -> &str;
+    fn paths(&self) -> &[String];
+    /// Each limit, with its key.
+    fn limits(&self) -> Vec<(&'static str, usize)>;
 }
 
-/// The crates in one version of the case file.
-fn ceilings(text: &str) -> Result<Vec<SizeCrate>> {
-    let file: File = toml::from_str(text).context("parsing the size budget")?;
-    Ok(file.crates)
+impl Limit for SizeCrate {
+    const TABLE: &'static str = "crate";
+
+    fn name(&self) -> &str { &self.name }
+
+    fn paths(&self) -> &[String] { &self.paths }
+
+    fn limits(&self) -> Vec<(&'static str, usize)> { vec![("max_lines", self.max_lines)] }
 }
 
-/// The crates `now` raises over `before`, drops, or counts fewer paths of, each with what changed.
-fn raised(before: &[SizeCrate], now: &[SizeCrate]) -> Vec<(String, String)> {
+/// The entries in one version of a budget file.
+fn entries<T: Limit>(text: &str) -> Result<Vec<T>> {
+    let mut file: toml::Table = toml::from_str(text).context("parsing the budget file")?;
+    let list = file.remove(T::TABLE).with_context(|| format!("no [[{}]] in the budget file", T::TABLE))?;
+    list.try_into().context("parsing the budget file")
+}
+
+/// The entries `now` raises a limit of over `before`, drops, or counts fewer paths of, each with
+/// what changed.
+fn raised<T: Limit>(before: &[T], now: &[T]) -> Vec<(String, String)> {
     before
         .iter()
         .filter_map(|old| {
-            let name = old.name.clone();
-            let Some(new) = now.iter().find(|c| c.name == old.name) else {
-                return Some((name, format!("dropped (its ceiling was {})", old.max_lines)));
+            let name = old.name().to_string();
+            let Some(new) = now.iter().find(|n| n.name() == old.name()) else {
+                let limits: Vec<_> = old.limits().iter().map(|(key, was)| format!("{key} = {was}")).collect();
+                return Some((name, format!("dropped ({})", limits.join(", "))));
             };
-            if new.max_lines > old.max_lines {
-                return Some((name, format!("ceiling raised from {} to {}", old.max_lines, new.max_lines)));
+            let mut limits = old.limits().into_iter().zip(new.limits());
+            if let Some(((key, was), (_, is))) = limits.find(|((_, was), (_, is))| is > was) {
+                return Some((name, format!("{key} raised from {was} to {is}")));
             }
             let gone: Vec<_> =
-                old.paths.iter().filter(|p| !new.paths.contains(p)).map(String::as_str).collect();
+                old.paths().iter().filter(|p| !new.paths().contains(p)).map(String::as_str).collect();
             (!gone.is_empty())
                 .then(|| (name, format!("paths narrowed (no longer counts {})", gone.join(", "))))
         })
         .collect()
 }
 
-/// The reasons a commit message gives, `Size budget: <crate>: <reason>`, by crate.
-fn reasons(message: &str) -> Vec<&str> {
+/// The entries a commit message gives a reason for, `<prefix>: <name>: <reason>`.
+fn reasons<'a>(message: &'a str, prefix: &str) -> Vec<&'a str> {
     message
         .lines()
-        .filter_map(|l| l.trim().strip_prefix("Size budget: "))
+        .filter_map(|l| l.trim().strip_prefix(prefix)?.strip_prefix(": "))
         .filter_map(|l| l.split_once(": ").filter(|(_, why)| !why.trim().is_empty()).map(|(name, _)| name))
         .collect()
 }
@@ -489,36 +509,71 @@ fn git(workspace: &Path, args: &[&str]) -> Result<Option<String>> {
     Ok(out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
-/// Whether the ceilings only fell, or each raise carries its reason. `Some` says what is wrong.
-fn ratchet(workspace: &Path, file: &str, now_text: &str) -> Result<Option<String>> {
-    let committed = git(workspace, &["show", &format!("HEAD:{file}")])?;
-    if let Some(committed) = committed.filter(|c| c != now_text) {
-        return Ok(raised(&ceilings(&committed)?, &ceilings(now_text)?).into_iter().next().map(
-            |(name, what)| {
-                format!("{name}: {what} and not committed; commit it with `Size budget: {name}: <reason>`")
-            },
-        ));
+/// The branch a package branch is judged against: the local main branch, or else, in a fresh
+/// clone, the remote's default branch.
+const MAIN_BRANCHES: [&str; 2] = ["redoubt", "origin/HEAD"];
+
+/// Whether a budget file's limits only fell, or each raise, drop and narrowing carries a line
+/// `<prefix>: <name>: <reason>`: in the commit that made it or, for a merge judged against its
+/// first parent, in a commit the merge brings in. A branch is judged on its own commits, those
+/// since its merge-base with the main branch, so merged history is never read again; on the main
+/// branch itself only the file as it stands is. A commit whose parent lacks the file is judged
+/// against the last version before it, the main branch's at the start, and where there is none,
+/// as a new or renamed file, every entry needs its reason; a commit that deletes the file fails. A raise not
+/// yet committed fails, and uncommitted changes do not stop the committed ones being judged. `Some` says what
+/// is wrong.
+pub fn ratchet<T: Limit>(workspace: &Path, file: &str, prefix: &str) -> Result<Option<String>> {
+    let now = std::fs::read_to_string(workspace.join(file)).with_context(|| format!("reading {file}"))?;
+    if let Some(committed) = git(workspace, &["show", &format!("HEAD:{file}")])?.filter(|c| *c != now) {
+        if let Some((name, what)) =
+            raised(&entries::<T>(&committed)?, &entries::<T>(&now)?).into_iter().next()
+        {
+            return Ok(Some(format!(
+                "{name}: {what} and not committed; commit it with `{prefix}: {name}: <reason>`"
+            )));
+        }
     }
-    let Some(commits) = git(workspace, &["log", "--format=%H", "--", file])? else {
+    let mut bases = MAIN_BRANCHES.iter().map(|branch| git(workspace, &["merge-base", "HEAD", branch]));
+    let Some(base) = bases.find_map(|base| base.transpose()).transpose()? else {
+        bail!("no merge-base with {} to judge {file}'s commits from", MAIN_BRANCHES.join(" or "));
+    };
+    let base = base.trim();
+    let Some(commits) =
+        git(workspace, &["log", "--reverse", "--format=%H", &format!("{base}..HEAD"), "--", file])?
+    else {
         bail!("git log failed for {file}");
     };
+    // The last version of the file before the commit judged: the main branch's, to start with.
+    let mut last = git(workspace, &["show", &format!("{base}:{file}")])?;
     for commit in commits.lines() {
-        let Some(parent) = git(workspace, &["show", &format!("{commit}^:{file}")])? else {
-            continue;
-        };
         let Some(text) = git(workspace, &["show", &format!("{commit}:{file}")])? else {
-            continue;
+            return Ok(Some(format!("{file} deleted in {commit}; a budget file is never deleted")));
         };
-        // A merge is judged against its first parent, with the reasons of every commit it brings in.
+        let before = last.replace(text.clone());
+        let parent = git(workspace, &["show", &format!("{commit}^:{file}")])?.or(before);
+        let now = entries::<T>(&text)?;
+        let changed = match parent {
+            Some(parent) => raised(&entries::<T>(&parent)?, &now),
+            // A file the main branch lacks, new or renamed: every limit in it is a raise from none.
+            None => now
+                .iter()
+                .map(|entry| {
+                    let limits: Vec<_> =
+                        entry.limits().iter().map(|(key, is)| format!("{key} = {is}")).collect();
+                    (
+                        entry.name().to_string(),
+                        format!("added ({}) in a file the main branch lacks", limits.join(", ")),
+                    )
+                })
+                .collect(),
+        };
         let message =
             git(workspace, &["log", "--format=%B", &format!("{commit}^..{commit}")])?.unwrap_or_default();
-        let given = reasons(&message);
-        let unexplained = raised(&ceilings(&parent)?, &ceilings(&text)?)
-            .into_iter()
-            .find(|(name, _)| !given.contains(&name.as_str()));
+        let given = reasons(&message, prefix);
+        let unexplained = changed.into_iter().find(|(name, _)| !given.contains(&name.as_str()));
         if let Some((name, what)) = unexplained {
             return Ok(Some(format!(
-                "{name}: {what} in {commit} without a `Size budget: {name}: <reason>` line"
+                "{name}: {what} in {commit} without a `{prefix}: {name}: <reason>` line"
             )));
         }
     }
@@ -543,15 +598,13 @@ pub fn check(workspace: &Path, file: &str, budget: &SizeBudget) -> Result<(Optio
         }
     }
     if failure.is_none() {
-        let text =
-            std::fs::read_to_string(workspace.join(file)).with_context(|| format!("reading {file}"))?;
-        failure = ratchet(workspace, file, &text)?;
+        failure = ratchet::<SizeCrate>(workspace, file, "Size budget")?;
     }
     Ok((failure, summary.join("\n      ")))
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]
@@ -665,74 +718,127 @@ fn h() {}
         let before = crates(&[("kernel", &["k"], 100), ("loader", &["l"], 50)]);
         let now = crates(&[("kernel", &["k"], 120), ("loader", &["l", "l2"], 40), ("new", &["n"], 9)]);
         let one = |name: &str, what: &str| vec![(name.to_string(), what.to_string())];
-        assert_eq!(raised(&before, &now), one("kernel", "ceiling raised from 100 to 120"));
+        assert_eq!(raised(&before, &now), one("kernel", "max_lines raised from 100 to 120"));
         let renamed = crates(&[("kernel", &["k"], 100), ("boot", &["l"], 50)]);
-        assert_eq!(raised(&before, &renamed), one("loader", "dropped (its ceiling was 50)"));
+        assert_eq!(raised(&before, &renamed), one("loader", "dropped (max_lines = 50)"));
         let narrowed = crates(&[("kernel", &["k/src"], 100), ("loader", &["l"], 50)]);
         assert_eq!(raised(&before, &narrowed), one("kernel", "paths narrowed (no longer counts k)"));
         assert_eq!(
-            reasons("x\nSize budget: kernel: the timer wheel\nSize budget: loader:\n"),
+            reasons("x\nSize budget: kernel: the timer wheel\nSize budget: loader:\n", "Size budget"),
             vec!["kernel"]
         );
     }
 
-    /// A throwaway git repository holding one case file, `b.toml`.
-    struct Scratch(std::path::PathBuf);
+    /// A throwaway git repository holding one budget file, `b.toml`, on the main branch `redoubt`.
+    pub struct Scratch(pub std::path::PathBuf);
 
     impl Scratch {
-        fn new(tag: &str) -> Self {
+        pub fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!("redoubt-size-{tag}-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let scratch = Self(dir);
-            scratch.run(&["init", "-q", "-b", "main"]);
+            scratch.run(&["init", "-q", "-b", "redoubt"]);
             scratch.run(&["config", "user.email", "t@t"]);
             scratch.run(&["config", "user.name", "t"]);
             scratch
         }
 
-        fn run(&self, args: &[&str]) {
+        pub fn run(&self, args: &[&str]) {
             assert!(
                 Command::new("git").current_dir(&self.0).args(args).status().unwrap().success(),
                 "{args:?}"
             )
         }
 
-        fn write(&self, max: usize) -> String {
-            let text = format!("[[crate]]\nname = \"k\"\npaths = [\"k\"]\nmax_lines = {max}\n");
-            std::fs::write(self.0.join("b.toml"), &text).unwrap();
-            text
+        pub fn write(&self, text: &str) { std::fs::write(self.0.join("b.toml"), text).unwrap(); }
+
+        fn ceiling(&self, max: usize) {
+            self.write(&format!("[[crate]]\nname = \"k\"\npaths = [\"k\"]\nmax_lines = {max}\n"));
         }
 
-        fn ratchet(&self, text: &str) -> Option<String> { ratchet(&self.0, "b.toml", text).unwrap() }
+        fn ratchet(&self) -> Option<String> {
+            ratchet::<SizeCrate>(&self.0, "b.toml", "Size budget").unwrap()
+        }
     }
 
     impl Drop for Scratch {
         fn drop(&mut self) { std::fs::remove_dir_all(&self.0).unwrap(); }
     }
 
-    /// In a scratch repository: a committed raise without its reason fails, with it passes, an
+    /// On a package branch: a committed raise without its reason fails, with it passes, an
     /// uncommitted raise fails, and a raise without its reason fails behind a later commit too.
     #[test]
     fn the_ratchet_reads_the_commit_that_raised() {
         let repo = Scratch::new("commits");
-        let text = repo.write(10);
+        repo.ceiling(10);
         repo.run(&["add", "b.toml"]);
         repo.run(&["commit", "-qm", "first"]);
-        assert_eq!(repo.ratchet(&text), None);
-        let text = repo.write(12);
-        assert!(repo.ratchet(&text).is_some_and(|w| w.contains("not committed")));
+        repo.run(&["checkout", "-qb", "wp"]);
+        assert_eq!(repo.ratchet(), None);
+        repo.ceiling(12);
+        assert!(repo.ratchet().is_some_and(|w| w.contains("not committed")));
         repo.run(&["commit", "-qam", "grow"]);
-        assert!(repo.ratchet(&text).is_some_and(|w| w.contains("without")));
+        assert!(repo.ratchet().is_some_and(|w| w.contains("without")));
         repo.run(&["commit", "-q", "--amend", "-m", "grow\n\nSize budget: k: it needs it\n"]);
-        assert_eq!(repo.ratchet(&text), None);
-        let text = repo.write(8);
-        assert_eq!(repo.ratchet(&text), None);
+        assert_eq!(repo.ratchet(), None);
+        repo.ceiling(8);
+        assert_eq!(repo.ratchet(), None);
         repo.run(&["commit", "-qam", "shrink"]);
-        repo.write(9);
+        repo.ceiling(9);
         repo.run(&["commit", "-qam", "grow again"]);
-        let text = repo.write(7);
+        repo.ceiling(7);
         repo.run(&["commit", "-qam", "shrink again"]);
-        assert!(repo.ratchet(&text).is_some_and(|w| w.contains("from 8 to 9")));
+        assert!(repo.ratchet().is_some_and(|w| w.contains("from 8 to 9")));
+        // An uncommitted fall does not hide it.
+        repo.ceiling(6);
+        assert!(repo.ratchet().is_some_and(|w| w.contains("from 8 to 9")));
+    }
+
+    /// A budget file the main branch lacks, new or renamed, needs a reason for every entry.
+    #[test]
+    fn a_new_budget_file_needs_every_reason() {
+        let repo = Scratch::new("new");
+        std::fs::write(repo.0.join("x"), "x").unwrap();
+        repo.run(&["add", "x"]);
+        repo.run(&["commit", "-qm", "first"]);
+        repo.run(&["checkout", "-qb", "wp"]);
+        repo.write("[[crate]]\nname = \"k\"\npaths = [\"k\"]\nmax_lines = 10\n[[crate]]\nname = \"l\"\npaths = [\"l\"]\nmax_lines = 5\n");
+        repo.run(&["add", "b.toml"]);
+        repo.run(&["commit", "-qm", "budget\n\nSize budget: k: the kernel\n"]);
+        assert!(repo.ratchet().is_some_and(|w| w.contains("l: added (max_lines = 5)")));
+        repo.run(&[
+            "commit",
+            "-q",
+            "--amend",
+            "-m",
+            "budget\n\nSize budget: k: the kernel\nSize budget: l: the loader\n",
+        ]);
+        assert_eq!(repo.ratchet(), None);
+    }
+
+    /// Deleting the file on a branch fails, whatever comes after: the file added back raised, or
+    /// added back as it was and then raised with a reason.
+    #[test]
+    fn a_deleted_budget_file_fails() {
+        let repo = Scratch::new("deleted");
+        repo.ceiling(10);
+        repo.run(&["add", "b.toml"]);
+        repo.run(&["commit", "-qm", "first"]);
+        repo.run(&["checkout", "-qb", "wp"]);
+        repo.run(&["rm", "-q", "b.toml"]);
+        repo.run(&["commit", "-qm", "drop"]);
+        repo.ceiling(12);
+        repo.run(&["add", "b.toml"]);
+        repo.run(&["commit", "-qm", "back"]);
+        assert!(repo.ratchet().is_some_and(|w| w.contains("deleted in")));
+        repo.run(&["reset", "-q", "--hard", "redoubt"]);
+        repo.run(&["rm", "-q", "b.toml"]);
+        repo.run(&["commit", "-qm", "drop"]);
+        repo.run(&["checkout", "-q", "redoubt", "--", "b.toml"]);
+        repo.run(&["commit", "-qm", "back"]);
+        repo.ceiling(12);
+        repo.run(&["commit", "-qam", "grow\n\nSize budget: k: it needs it\n"]);
+        assert!(repo.ratchet().is_some_and(|w| w.contains("deleted in")));
     }
 
     /// A merge that brings in a raise with its reason passes; a raise made in the merge itself
@@ -740,23 +846,45 @@ fn h() {}
     #[test]
     fn a_merge_is_judged_against_its_first_parent() {
         let repo = Scratch::new("merges");
-        repo.write(10);
+        repo.ceiling(10);
         repo.run(&["add", "b.toml"]);
         repo.run(&["commit", "-qm", "first"]);
+        repo.run(&["checkout", "-qb", "wp"]);
         repo.run(&["checkout", "-qb", "side"]);
-        let text = repo.write(12);
+        repo.ceiling(12);
         repo.run(&["commit", "-qam", "grow\n\nSize budget: k: it needs it\n"]);
-        repo.run(&["checkout", "-q", "main"]);
+        repo.run(&["checkout", "-q", "wp"]);
         repo.run(&["merge", "-q", "--no-ff", "-m", "merge side", "side"]);
-        assert_eq!(repo.ratchet(&text), None);
+        assert_eq!(repo.ratchet(), None);
         repo.run(&["checkout", "-qb", "other", "HEAD~1"]);
         std::fs::write(repo.0.join("x"), "x").unwrap();
         repo.run(&["add", "x"]);
         repo.run(&["commit", "-qm", "unrelated"]);
-        repo.run(&["checkout", "-q", "main"]);
+        repo.run(&["checkout", "-q", "wp"]);
         repo.run(&["merge", "-q", "--no-ff", "--no-commit", "other"]);
-        let text = repo.write(14);
+        repo.ceiling(14);
         repo.run(&["commit", "-qam", "merge other"]);
-        assert!(repo.ratchet(&text).is_some_and(|w| w.contains("from 12 to 14")));
+        assert!(repo.ratchet().is_some_and(|w| w.contains("from 12 to 14")));
+    }
+
+    /// A raise already on the main branch is not read again, on it or on a branch from it; with no
+    /// main branch to measure from, the check fails.
+    #[test]
+    fn merged_history_is_not_read_again() {
+        let repo = Scratch::new("merged");
+        repo.ceiling(10);
+        repo.run(&["add", "b.toml"]);
+        repo.run(&["commit", "-qm", "first"]);
+        repo.ceiling(12);
+        repo.run(&["commit", "-qam", "grow"]);
+        assert_eq!(repo.ratchet(), None);
+        repo.run(&["checkout", "-qb", "wp"]);
+        assert_eq!(repo.ratchet(), None);
+        repo.ceiling(13);
+        repo.run(&["commit", "-qam", "grow again"]);
+        assert!(repo.ratchet().is_some_and(|w| w.contains("from 12 to 13")));
+        repo.run(&["branch", "-qm", "redoubt", "trunk"]);
+        let error = ratchet::<SizeCrate>(&repo.0, "b.toml", "Size budget").unwrap_err();
+        assert!(error.to_string().contains("no merge-base"), "{error}");
     }
 }
