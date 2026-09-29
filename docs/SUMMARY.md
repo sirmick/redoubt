@@ -84,7 +84,6 @@
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)
   - [map_anon's search cost](todo/map-anon-search-cost.md)
   - [Records at a device mapping](todo/mmio-record-frames.md)
-  - [The code path's search order](todo/module-search-order.md)
   - [Freeing empty page tables](todo/page-table-freeing.md)
   - [RAM beyond the physmap](todo/physmap-ram-bound.md)
   - [PID pool pinning](todo/pid-pool-pinning.md)

@@ -82,11 +82,9 @@ It is a steward record, not a file the principal can write.
   ([beamlet](beamlet.md#beamlet-on-redoubt)).
 - **No shadowing.** The system bundle always resolves first, and a package may not define a module
   the bundle defines: `pkg` refuses it at install. Two packages in one profile may not define the
-  same module: the steward refuses it at `use`. beamlet departs from the first rule: it searches
-  directories a session adds to the front of its code path before the platform's modules, so such a
-  directory, in the session's own files, shadows a system module in that VM. It grants nothing the
-  session lacked, and it is fixed in the beamlet follow-up
-  ([module search order](../todo/module-search-order.md)).
+  same module: the steward refuses it at `use`. beamlet looks a module name up in the bundle before
+  any directory on the session's code path, even one added to the front
+  ([beamlet](beamlet.md#the-platform-boundary)).
 - **One's own code is not installed code.** A session that compiles or loads its own code
   (`Code.compile_string`, `Code.require_file` on its own files) runs it within its own authority.
   The code-path rule is about what loads implicitly, not a wall against one's own code

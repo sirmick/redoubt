@@ -82,7 +82,7 @@ kernel's to share, by budget weight ([scheduling](../kernel/scheduling.md)).
 
 ### The `Platform` boundary
 
-Status: built · partly tested: runs on the host only; only the host embedding exists · tested: host:beamlet-vm::programs_need_the_platform_to_grant_them, host:beamlet-vm::names_resolve_inside_the_root, host:beamlet::symlinks_cannot_leave_the_root, host:beamlet::mounts_are_separate_and_may_be_read_only, host:beamlet::files_round_trip
+Status: built · partly tested: runs on the host only; only the host embedding exists · tested: host:beamlet-vm::programs_need_the_platform_to_grant_them, host:beamlet-vm::the_bundle_wins_over_a_front_directory, host:beamlet-vm::a_name_the_bundle_lacks_is_found_on_the_path, host:beamlet-vm::names_resolve_inside_the_root, host:beamlet::symlinks_cannot_leave_the_root, host:beamlet::mounts_are_separate_and_may_be_read_only, host:beamlet::files_round_trip
 
 Everything the VM gets from outside comes through the `Platform` trait
 ([`userland/otp/vm/src/platform.rs`](../../userland/otp/vm/src/platform.rs)):
@@ -97,12 +97,14 @@ Everything the VM gets from outside comes through the `Platform` trait
 | `files` | a file system, as `prim_file` sees it | none: `file` calls fail with `enotsup` |
 | `programs` | starting programs behind ports | none: `open_port` fails with `eacces` |
 
-- **`load_module` is a lookup, not a gate.** It is one step of the lookup: a module name is looked
-  for first in the directories added to the front of the code path with `code:add_patha/1`, then
-  through `load_module`, then in the directories added at the end, as BEAM does, and no module is
-  sticky ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). So a
-  directory on the front of the path shadows a platform module, in that VM only ([module search
-  order](../todo/module-search-order.md)). Code in the VM can also load any bytes it holds with
+- **`load_module` is a lookup, not a gate.** It is the first step of the lookup: a module name is
+  looked for through `load_module` (the system bundle) first, whatever the code path holds, and
+  only then in the code path's directories in order, those added with `code:add_patha/1` too
+  ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). Unlike BEAM,
+  no directory shadows a system module ([packages](packages.md#profiles-and-upgrades)). Residual:
+  the bundle's protocols are not consolidated when it is built, so a protocol consolidated in a
+  session's own directory is not used and protocol dispatch stays the slower, unconsolidated kind;
+  behaviour is the same. Code in the VM can also load any bytes it holds with
   `code:load_binary/3` ([`userland/otp/vm/src/bif/info.rs`](../../userland/otp/vm/src/bif/info.rs)),
   through the same loader checks. So what confines loaded code is not how it arrived but what the VM
   holds: every module, however loaded, reaches only what the `Platform` grants. Loading one's own
