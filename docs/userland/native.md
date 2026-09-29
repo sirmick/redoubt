@@ -231,9 +231,10 @@ the loader stub.
   `syscall`; a multi-line re-export list, and a `pub fn` that wraps the call, are review's. The
   loader stub and the bench's test programs call `redoubt-sys` directly and are not built on the
   runtime.
-- **A thread's stack is unchecked.** Starting a thread (`thread_create`) takes any entry and
-  stack from safe code, so it can run a function on memory an owner still holds: a follow-up
-  ([todo](../todo/raw-thread-create.md)).
+- **A thread's stack is its own.** `thread_create` takes an `extern "C" fn(usize) -> !` and a
+  `Buffer`, and keeps the `Buffer`'s pages mapped for good, even after the thread exits, so no
+  owner holds a thread's stack and no entry is an arbitrary address. A raw form does not compile
+  (a `compile_fail` test in `handle.rs`).
 
 ### Libraries for native programs
 

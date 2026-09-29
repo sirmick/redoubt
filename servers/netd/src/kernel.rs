@@ -18,6 +18,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use redoubt_rt::abi::Error;
 use redoubt_rt::handle::{Dma, Irq, Mmio, time_now};
+use redoubt_rt::ipc::Buffer;
 
 use crate::RxPart;
 use crate::ring::{REGION_LEN, REGION_PAGES};
@@ -212,15 +213,15 @@ impl Transport for Device {
 /// or a pointer from `Box::into_raw` in [`start_rx_thread`].
 static RX_PART: AtomicPtr<RxPart> = AtomicPtr::new(null_mut());
 
-/// Starts the receive thread at `entry` on the stack whose top is `sp`, handing it `part`. No
+/// Starts the receive thread at `entry` on `stack`, handing it `part`. No
 /// address travels in a message: the part is moved in memory this process owns, before the thread
 /// that takes it exists. If the thread cannot be started, the part is taken back and dropped here
 /// (the `Box` reclaimed, never retried with); the caller resets the device.
-pub fn start_rx_thread(part: RxPart, entry: extern "C" fn(usize) -> !, sp: usize) -> Result<(), Error> {
+pub fn start_rx_thread(part: RxPart, entry: extern "C" fn(usize) -> !, stack: Buffer) -> Result<(), Error> {
     let raw = Box::into_raw(Box::new(part));
     let previous = RX_PART.swap(raw, Ordering::AcqRel);
     debug_assert!(previous.is_null(), "one receive thread per process");
-    redoubt_rt::handle::thread_create(entry as usize, sp, 0).map(|_| ()).inspect_err(|_| {
+    redoubt_rt::handle::thread_create(entry, stack, 0).map(|_| ()).inspect_err(|_| {
         drop(take_rx_part());
     })
 }
