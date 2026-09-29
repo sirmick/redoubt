@@ -124,9 +124,10 @@ impl Box_ {
 }
 
 /// Waits for a condition the server reaches on its own; a deterministic wait on real state, not
-/// a sleep. Failing it is a hang the test turns into a clear failure.
+/// a sleep. Failing it is a hang the test turns into a clear failure, so the guard is the runtime's
+/// fake kernel's own: 60 s, far beyond any step here however loaded the machine.
 fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
         if done() {
             return;

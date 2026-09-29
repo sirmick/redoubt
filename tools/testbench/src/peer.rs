@@ -687,21 +687,25 @@ mod tests {
     fn a_dial_needs_its_echo() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
+        // The second dial ends when its echo is in, not at a deadline: the echo raises `echoed`
+        // before the close the dial reads, so however slow the machine the error names what came.
+        let echoed = std::sync::Arc::new(AtomicBool::new(false));
+        let done = echoed.clone();
         std::thread::spawn(move || {
-            for stream in listener.incoming().take(2) {
+            for (i, stream) in listener.incoming().take(2).enumerate() {
                 let mut stream = stream.unwrap();
                 let mut buf = [0u8; 16];
                 let n = stream.read(&mut buf).unwrap();
                 stream.write_all(&buf[..n]).unwrap();
+                done.store(i == 1, Ordering::Relaxed);
             }
         });
-        let stop = AtomicBool::new(false);
-        let soon = Instant::now() + Duration::from_secs(5);
+        // Only a guard against a hang: a dial that is echoed returns at once.
+        let guard = Instant::now() + Duration::from_secs(60);
         let echo = Dial { port: 8000, send: "hello".into(), expect: "hello".into() };
-        assert_eq!(dial_until(&echo, port, soon, &stop), Ok(()));
+        assert_eq!(dial_until(&echo, port, guard, &AtomicBool::new(false)), Ok(()));
         let other = Dial { port: 8000, send: "hello".into(), expect: "goodbye".into() };
-        let soon = Instant::now() + Duration::from_millis(700);
-        let err = dial_until(&other, port, soon, &stop).unwrap_err();
+        let err = dial_until(&other, port, guard, &echoed).unwrap_err();
         assert!(err.contains("\"hello\""), "{err}");
     }
 }

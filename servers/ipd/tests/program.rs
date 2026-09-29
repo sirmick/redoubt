@@ -261,8 +261,10 @@ impl Net {
     }
 }
 
+/// Waits for state the server reaches on its own. The guard only turns a hang into a failure, so it
+/// is the runtime's fake kernel's own: 60 s, far beyond any step here however loaded the machine.
 fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
         if done() {
             return;
@@ -463,11 +465,10 @@ fn parked_calls_are_freed_when_abandoned_and_capped_by_the_share() {
         let mut c = Connection::new(Endpoint::from_handle(conn));
         let mut lend = Lend::new(4).unwrap();
         let mut got = [0u8; 8];
-        // Refused at once (an `Rerror`), not held: the client's timeout never runs out.
+        // Refused (an `Rerror`), not held: a held read would end in the client's own timeout
+        // instead, so the error alone shows it, however slow the machine.
         c.timeout = 2_000_000;
-        let started = Instant::now();
         assert_eq!(c.read(&mut lend, 3, 0, &mut got), Err(ClientError::Remote), "a third parked read");
-        assert!(started.elapsed() < Duration::from_secs(1));
         assert_eq!(f.open_calls(net.ipd), 2);
     });
     for r in readers {

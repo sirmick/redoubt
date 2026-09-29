@@ -76,8 +76,10 @@ impl Uart {
     }
 }
 
+/// Waits for state the server reaches on its own. The guard only turns a hang into a failure, so it
+/// is the runtime's fake kernel's own: 60 s, far beyond any step here however loaded the machine.
 fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while !done() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::yield_now();
