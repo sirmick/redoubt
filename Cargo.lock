@@ -595,6 +595,7 @@ dependencies = [
 name = "redoubt-bootfsd"
 version = "0.1.0"
 dependencies = [
+ "redoubt-fake-kernel",
  "redoubt-rt",
 ]
 
@@ -602,6 +603,7 @@ dependencies = [
 name = "redoubt-consoled"
 version = "0.1.0"
 dependencies = [
+ "redoubt-fake-kernel",
  "redoubt-rt",
 ]
 
@@ -610,9 +612,17 @@ name = "redoubt-doccheck"
 version = "0.1.0"
 
 [[package]]
+name = "redoubt-fake-kernel"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-ipd"
 version = "0.1.0"
 dependencies = [
+ "redoubt-fake-kernel",
  "redoubt-rt",
  "smoltcp",
 ]
@@ -636,6 +646,7 @@ name = "redoubt-keyd"
 version = "0.1.0"
 dependencies = [
  "ed25519-compact",
+ "redoubt-fake-kernel",
  "redoubt-rt",
 ]
 
@@ -680,6 +691,7 @@ dependencies = [
 name = "redoubt-rt"
 version = "0.1.0"
 dependencies = [
+ "redoubt-fake-kernel",
  "redoubt-sys",
  "redoubt-wire",
 ]

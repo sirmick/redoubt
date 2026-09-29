@@ -6,10 +6,7 @@
 //! The rules that need no kernel are in `src/server_tests.rs`; the 9P conformance vectors are in
 //! `tests/vectors.rs`.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod common;
-
-use common::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;

@@ -1,7 +1,5 @@
-#[path = "../../../libs/rt/tests/common/outcomes.rs"]
-mod seam;
-
 use redoubt_bootfsd::server::{BootFs, limits};
+use redoubt_fake_kernel::scripted as seam;
 use redoubt_rt::abi::*;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Event};

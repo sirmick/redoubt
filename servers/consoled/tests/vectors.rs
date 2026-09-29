@@ -4,14 +4,10 @@
 //! swallows a byte that was typed, and — with the line quiet — no vector leaves a call held,
 //! because every one of them reaches a fid that was never opened for reading.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod common;
-#[path = "../../../libs/rt/tests/common/vectors.rs"]
-mod vectors;
-
-use common::fake;
 use redoubt_consoled::server::{Console, limits};
 use redoubt_consoled::uart::Uart;
+use redoubt_fake_kernel::fake;
+use redoubt_fake_kernel::vectors;
 use redoubt_rt::abi::Labels;
 use redoubt_rt::handle::Mmio;
 use redoubt_rt::ipc::Caller;

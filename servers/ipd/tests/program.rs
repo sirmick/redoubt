@@ -6,9 +6,6 @@
 //! The loop checks at every poll that no call is current (a `debug_assert!`, on in these tests),
 //! so a poll with a current call fails the test by panicking `ipd`'s thread.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod kernel;
-
 #[allow(dead_code)]
 #[path = "../src/bin/ipd.rs"]
 mod ipd_bin;
@@ -19,7 +16,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use kernel::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
 use redoubt_rt::abi::{FOREVER, Handle, Handles};
 use redoubt_rt::client::{Client, ClientError};

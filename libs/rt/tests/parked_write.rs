@@ -2,11 +2,9 @@
 //! a waiting read, charged to the same admission, answered at once when its caller gives up, and
 //! refused with the server's timeout when its deadline passes.
 
-mod common;
-
 use std::time::{Duration, Instant};
 
-use common::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::{self, Endpoint};

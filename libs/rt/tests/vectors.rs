@@ -1,15 +1,11 @@
 //! `redoubt-rt`'s own run of the 9P2000 conformance vectors (`libs/wire/vectors/9p.txt`).
 //!
-//! The vector runner (`common/vectors.rs`) is a shared module the servers include; this test
-//! exists so it is also compiled and exercised where it lives, against a minimal server, rather
-//! than only from a server package that may not have landed yet. A server that never waits must
-//! see no `Read::Wait`, which is the one count that is a property of *this* server.
+//! The vector runner (`redoubt_fake_kernel::vectors`) is shared with the servers' tests; this test
+//! exercises it beside the runtime, against a minimal server, rather than only from a server
+//! package. A server that never waits must see no `Read::Wait`, which is the one count that is a
+//! property of *this* server.
 
-mod common;
-
-#[path = "common/vectors.rs"]
-mod vectors;
-
+use redoubt_fake_kernel::vectors;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::Limits;
 use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, NineServer, Qid, Read, mode};

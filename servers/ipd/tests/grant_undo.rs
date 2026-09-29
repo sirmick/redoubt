@@ -2,13 +2,10 @@
 //! forgotten again, with its scope, unless the reply carrying its handle was delivered. Driven
 //! through `Ipd::on_call` on the rt fake kernel, with a caller that gives up before the reply.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod kernel;
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use kernel::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_ipd::fake::{
     ADDR, ANY, GATEWAY, INGRESS, LEN, Pipe, Seeds, Wire, anywhere, connect_scope, selfset,
 };

@@ -1,10 +1,9 @@
 //! The server's ownership refusal must be recognized by the generated protocol codec.
-mod common;
 
 #[path = "../src/bin/echo-server.rs"]
 mod echo_server;
 
-use common::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::FOREVER;
 use redoubt_rt::client::Client;
 use redoubt_rt::handle::Endpoint;

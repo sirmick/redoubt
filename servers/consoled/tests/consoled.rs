@@ -10,14 +10,11 @@
 //!
 //! The 9P conformance vectors are in `tests/vectors.rs`.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod common;
-
 use std::time::{Duration, Instant};
 
-use common::fake;
 use redoubt_consoled::MAX_INPUT;
 use redoubt_consoled::uart::FIFO;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;

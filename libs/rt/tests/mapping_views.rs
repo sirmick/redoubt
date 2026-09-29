@@ -1,10 +1,8 @@
 //! Mapping views are relinquished across IPC and reconstructed only when ownership returns.
 //! This scripted ABI test checks runtime ownership, not kernel isolation.
-#[path = "common/outcomes.rs"]
-mod seam;
-
 use std::num::NonZeroUsize;
 
+use redoubt_fake_kernel::scripted as seam;
 use redoubt_rt::HostKernel;
 use redoubt_rt::abi::*;
 use redoubt_rt::handle::{Endpoint, map_anon};

@@ -1,12 +1,10 @@
 //! The runtime's system-call paths against the fake kernel: IPC with lends, transfers and
 //! handles, `mint`, the heap over `map_anon`, and exits.
 
-mod common;
-
 use std::alloc::{GlobalAlloc, Layout};
 use std::num::NonZeroU64;
 
-use common::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, FOREVER, Handles, PAGE_SIZE};
 use redoubt_rt::handle::{self, Endpoint};
 use redoubt_rt::heap::Heap;

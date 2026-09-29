@@ -3,14 +3,12 @@
 //! would, and runs its entry function. Then a hostile client attacks the same server, and a
 //! launcher gives a child a fresh connection and disconnects it.
 
-mod common;
-
 #[path = "../src/bin/echo-client.rs"]
 mod echo_client;
 #[path = "../src/bin/echo-server.rs"]
 mod echo_server;
 
-use common::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle, PAGE_SIZE};
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;

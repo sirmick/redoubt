@@ -1,9 +1,7 @@
 //! Red-team regressions that need the fake kernel: handle leaks between client
 //! and server, and a reply that cannot be encoded.
 
-mod common;
-
-use common::fake;
+use redoubt_fake_kernel::{answer, fake};
 use redoubt_rt::abi::{FOREVER, Handle, Handles};
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;
@@ -201,9 +199,8 @@ fn a_held_9p_call_closes_what_it_brought_exactly_once() {
         let ep = Endpoint::from_handle(receive);
         let limits = Limits { buckets: 2, in_flight: 2, files: 4, state: 0 };
         let mut nine = NineServer::new(WaitOnce { ready: false }, limits, 9).unwrap();
-        let own = |_: &mut NineServer<WaitOnce>, r: redoubt_rt::ipc::Request| {
-            common::answer(r, [1, 0, 0, 0]).map(|_| ())
-        };
+        let own =
+            |_: &mut NineServer<WaitOnce>, r: redoubt_rt::ipc::Request| answer(r, [1, 0, 0, 0]).map(|_| ());
         let mut verdict = 0;
         while let Ok(event) = ep.receive(FOREVER, 0) {
             let Event::Call(request) = event else { continue };
@@ -295,7 +292,7 @@ fn a_wait_without_serve_parking_is_refused_not_stranded() {
         let limits = Limits { buckets: 2, in_flight: 2, files: 4, state: 0 };
         let mut nine = NineServer::new(AlwaysWaits, limits, 9).unwrap();
         let own = |_: &mut NineServer<AlwaysWaits>, r: redoubt_rt::ipc::Request| {
-            common::answer(r, [1, 0, 0, 0]).map(|_| ())
+            answer(r, [1, 0, 0, 0]).map(|_| ())
         };
         let mut answered = 0;
         while let Ok(event) = ep.receive(FOREVER, 0) {

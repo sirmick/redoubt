@@ -2,13 +2,10 @@
 //! is answered `timeout`: driven through `Ipd::on_call` and `Ipd::expire` on the rt fake kernel,
 //! with the clock the test chooses.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod kernel;
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use kernel::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_ipd::fake::{ADDR, ANY, GATEWAY, INGRESS, IPD_MAC, LEN, Pipe, Seeds, Wire, anywhere, selfset};
 use redoubt_ipd::fs::{NetFs, SocketCaps};
 use redoubt_ipd::link::Link;

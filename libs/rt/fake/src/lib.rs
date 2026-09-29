@@ -14,8 +14,13 @@
 //! over a page of host memory a test can read and write as if it were registers, `receive` on an
 //! IRQ handle (R5: the source is unmasked when the receive begins and `fired` is cleared when it
 //! returns), and `thread_create`, which runs the new thread as the same fake process.
+//!
+//! Beside it: [`scripted`], a one-call ABI seam for the outcome tests, and [`vectors`], the 9P
+//! conformance runner every 9P server's tests use. Dev-only: host tests depend on this crate, and
+//! nothing that runs on the machine does.
 
-#![allow(dead_code)]
+pub mod scripted;
+pub mod vectors;
 
 use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::cell::Cell;
@@ -132,12 +137,12 @@ thread_local! {
 /// The unwind payload of `process_exit`.
 struct Exited(u32);
 
-/// Installs the fake for this test binary (once) and returns it.
 /// Answers `request` with `words` and no handles, the public way (`finish`).
 pub fn answer(request: Request, words: Words) -> Result<ReplyOutcome, Error> {
     finish(request, &Outcome { words, send: Handles::new(), close: Handles::new() })
 }
 
+/// Installs the fake for this test binary (once) and returns it.
 pub fn fake() -> &'static Fake {
     static FAKE: std::sync::OnceLock<&'static Fake> = std::sync::OnceLock::new();
     FAKE.get_or_init(|| {
