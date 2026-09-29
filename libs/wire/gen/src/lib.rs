@@ -163,6 +163,7 @@ const RESERVED_TYPES: &[&str] = &[
     "Message",
     "Reply",
     "ErrorCode",
+    "Protocol",
     "Error",
     "Reader",
     "Writer",
@@ -830,6 +831,11 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("            _ => None,\n        }\n    }\n\n");
     s.push_str("    /// The words of the error reply (no buffer, no handles).\n");
     s.push_str("    pub fn encode(self) -> Words {\n        typed::error_reply(self.code())\n    }\n}\n");
+
+    // As `rust_enum` decides: an enum borrows when any of its rows does.
+    let message_lt = if p.messages.iter().any(|m| borrows(&m.fields)) { "<'a>" } else { "" };
+    let reply_lt = if p.messages.iter().any(|m| borrows(&m.reply)) { "<'a>" } else { "" };
+    let _ = writeln!(s, "\ntyped::protocol!('a, Message{message_lt}, Reply{reply_lt});");
     s
 }
 
@@ -1362,6 +1368,7 @@ mod tests {
             "message",
             "reply",
             "error_code",
+            "protocol",
             "error",
             "words",
             "reader",

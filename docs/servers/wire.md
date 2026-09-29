@@ -123,7 +123,7 @@ Status: built · tested: host:redoubt-wire::tversion_bytes, host:redoubt-wire::t
 
 ### Wire tables and the generator
 
-Status: built · partly tested: the generated Elixir codec is checked against the Rust one by `libs/wire/elixir/run-vectors`, which no bench case runs · tested: host:redoubt-wire-gen::generated_files_are_current, host:redoubt-wire-gen::parses_tables, host:redoubt-wire-gen::refuses_bad_tables, host:redoubt-wire-gen::every_row_is_read_or_refused, host:redoubt-wire-gen::ninep_marker_sets_the_opcode_floor, host:redoubt-wire-gen::malformed_is_code_one_everywhere, host:redoubt-wire-gen::kind_column_is_checked, host:redoubt-wire-gen::inline_boundary_is_twelve_bytes, host:redoubt-wire::generated_vectors_are_current, bench:wire-host-tests
+Status: built · partly tested: the generated Elixir codec is checked against the Rust one by `libs/wire/elixir/run-vectors`, which no bench case runs · tested: host:redoubt-wire-gen::generated_files_are_current, host:redoubt-wire-gen::parses_tables, host:redoubt-wire-gen::refuses_bad_tables, host:redoubt-wire-gen::every_row_is_read_or_refused, host:redoubt-wire-gen::ninep_marker_sets_the_opcode_floor, host:redoubt-wire-gen::malformed_is_code_one_everywhere, host:redoubt-wire-gen::kind_column_is_checked, host:redoubt-wire-gen::inline_boundary_is_twelve_bytes, host:redoubt-wire::generated_vectors_are_current, host:redoubt-wire::layouts_are_the_tables, host:redoubt-wire::replies_and_error_codes_decode_through_the_trait, bench:wire-host-tests
 
 Each typed protocol is defined by one file, `libs/wire/tables/<protocol>.md`: a message table and
 an error table, each under a marker line (`<!-- wire: NAME -->`, `<!-- wire-errors: NAME -->`).
@@ -162,7 +162,9 @@ flowchart LR
 *Figure: one table feeds the page, the Rust codec and the Elixir codec; the drift check compares the checked-in code with the tables.*
 
 Each generated Rust module has a `Message` and a `Reply` enum with `decode`, `encode`,
-`decode_file` and `encode_file`, and an `ErrorCode` enum. The vector files
+`decode_file` and `encode_file`, an `ErrorCode` enum, and a unit type `Protocol` implementing
+`typed::Protocol` (each message's layout, and the module's own encode and decode), so code generic
+over every protocol, the client library's one typed call, needs no copy of a layout. The vector files
 `libs/wire/vectors/example.txt` (written by hand) and `example-generated.txt` (thousands of
 hostile inputs with the Rust codec's verdict on each) are run by both codecs, through the
 fixture protocol `example`, which no server speaks.

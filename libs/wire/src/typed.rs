@@ -99,6 +99,71 @@ pub struct Layout {
     pub handles: usize,
 }
 
+/// One generated protocol, for code generic over every table: the client library's one typed
+/// call. `redoubt-wire-gen` implements it on each module's unit type `Protocol`, forwarding to the
+/// module's own codec, so nothing here encodes. It is the caller's direction (encode a request,
+/// decode a reply); a server's is the runtime's `redoubt_rt::server::typed::Protocol` (decode a
+/// request, encode a reply), written by hand in each server.
+pub trait Protocol {
+    type Message<'a>;
+    type Reply<'a>;
+    type ErrorCode: Copy;
+
+    /// The request's layout: its opcode, its shape (inline or buffer, which its reply shares)
+    /// and how many handles travel with it.
+    fn layout(message: &Self::Message<'_>) -> Result<&'static Layout, Error>;
+
+    /// [`Self::Message`]'s `encode`: the request's words, its fields in `buf` if it is a buffer
+    /// message.
+    fn encode(message: &Self::Message<'_>, buf: &mut [u8]) -> Result<Words, Error>;
+
+    /// [`Self::Reply`]'s `decode` of the reply to the request with `opcode`.
+    fn decode_reply<'a>(
+        opcode: u32,
+        words: &Words,
+        buf: &'a [u8],
+        handles: usize,
+    ) -> Result<Result<Self::Reply<'a>, Self::ErrorCode>, Error>;
+
+    /// An error code's number, word 0 of its reply.
+    fn code(error: Self::ErrorCode) -> u32;
+}
+
+/// Implements [`Protocol`] on a generated module's unit type `Protocol`, forwarding to the
+/// module's own `REQUESTS`, `Message`, `Reply` and `ErrorCode`. `redoubt-wire-gen` writes one
+/// invocation per module: the lifetime, then the two enums as the module spells them.
+macro_rules! protocol {
+    ($lt:lifetime, $message:ty, $reply:ty) => {
+        /// This protocol, for code generic over every protocol ([`typed::Protocol`]).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct Protocol;
+
+        impl typed::Protocol for Protocol {
+            type Message<$lt> = $message;
+            type Reply<$lt> = $reply;
+            type ErrorCode = ErrorCode;
+
+            fn layout(message: &Self::Message<'_>) -> Result<&'static Layout, Error> {
+                typed::layout(REQUESTS, message.opcode())
+            }
+
+            fn encode(message: &Self::Message<'_>, buf: &mut [u8]) -> Result<Words, Error> { message.encode(buf) }
+
+            fn decode_reply<$lt>(
+                opcode: u32,
+                words: &Words,
+                buf: &$lt [u8],
+                handles: usize,
+            ) -> Result<Result<Self::Reply<$lt>, ErrorCode>, Error> {
+                Reply::decode(opcode, words, buf, handles)
+            }
+
+            fn code(error: ErrorCode) -> u32 { error.code() }
+        }
+    };
+}
+pub(crate) use protocol;
+
 /// The layout for `opcode`, or `BadOpcode`.
 pub fn layout(layouts: &[Layout], opcode: u32) -> Result<&Layout, Error> {
     layouts.iter().find(|l| l.opcode == opcode).ok_or(Error::BadOpcode)
