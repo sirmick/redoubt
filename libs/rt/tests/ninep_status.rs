@@ -47,7 +47,7 @@ fn wrong_owner_disconnect_is_a_recognized_not_yours_reply() {
     });
     // The refusal neither consumes the owner's id nor disconnects its child.
     f.as_process(owner, || {
-        Connection::new(Endpoint::from_handle(owner_connection)).disconnect(id).unwrap();
+        Connection::new(Endpoint::from_handle(owner_connection)).disconnect(id, FOREVER).unwrap();
     });
     f.destroy(server, receive);
     assert_eq!(serving.join().unwrap(), 0);

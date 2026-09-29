@@ -38,7 +38,7 @@ pub extern "C" fn _start() -> ! {
     match client.new_connection(&mut lend, "", 0) {
         Ok((_, id)) => {
             log!(logger, "[ninep-client] connected with one slot free");
-            let _ = client.disconnect(id);
+            let _ = client.disconnect(id, client.timeout);
         }
         Err(e) => log!(logger, "[ninep-client] refused with one slot free: {:?}", e),
     }

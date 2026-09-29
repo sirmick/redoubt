@@ -193,21 +193,7 @@ impl<'a> Startup<'a> {
     /// Resolves the clean absolute `path` against the namespace table: the entry with the
     /// longest matching prefix, and what is left of `path` after it (no leading `/`).
     pub fn resolve<'p>(&self, path: &'p str) -> Option<(Handle, &'p str)> {
-        let mut best: Option<(usize, Handle, &'p str)> = None;
-        for (prefix, handle) in self.namespace() {
-            let rest = if prefix == "/" {
-                path.strip_prefix('/')
-            } else {
-                path.strip_prefix(prefix)
-                    .and_then(|r| if r.is_empty() { Some(r) } else { r.strip_prefix('/') })
-            };
-            if let Some(rest) = rest {
-                if best.is_none_or(|(len, _, _)| prefix.len() > len) {
-                    best = Some((prefix.len(), handle, rest));
-                }
-            }
-        }
-        best.map(|(_, handle, rest)| (handle, rest))
+        path::resolve(self.namespace(), path)
     }
 }
 

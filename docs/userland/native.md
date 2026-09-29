@@ -269,9 +269,9 @@ Every one is also to build for rv32, where the vendored crates are checked too, 
 
 ### The client library
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: only on the host (no program on the machine links it yet); `fsd`'s operations and `consol`'s `size` and `resize` against in-test servers until `fsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested: bench:client-host-tests, bench:client-build, host:redoubt-client::each_operation_names_its_files_fids, host:redoubt-client::files_on_two_connections_are_refused_before_any_call, host:redoubt-client::a_child_gets_the_stub_its_image_a_stack_and_its_block, host:redoubt-client::a_bad_launch_is_refused_before_any_kernel_call, host:redoubt-client::a_refusal_midway_hands_the_budget_back, host:redoubt-client::the_exit_notice_releases_every_grant, host:redoubt-client::a_hung_server_does_not_stop_the_reaping, host:redoubt-client::a_killed_job_ends_with_its_notice, host:redoubt-client::typed_calls_reach_keyd, host:redoubt-client::a_refusal_is_the_servers_code, host:redoubt-client::a_hostile_reply_leaves_no_handle, host:redoubt-client::a_server_dying_mid_call_is_disconnected, host:redoubt-client::a_session_reads_boot_through_the_library, host:redoubt-client::a_refusal_is_the_servers_and_costs_no_fid, host:redoubt-client::a_path_too_long_to_send_costs_no_fid, host:redoubt-client::a_dropped_file_keeps_its_fid_and_a_closed_one_returns_it, host:redoubt-client::files_are_created_written_and_removed, host:redoubt-client::a_minted_connection_cannot_climb_out_of_its_root_and_a_refused_quota_mints_nothing, host:redoubt-client::threads_share_a_connection, host:redoubt-client::a_gone_server_is_disconnected_every_time, host:redoubt-client::a_session_writes_and_reads_the_console, host:redoubt-client::a_labelled_session_cannot_write_the_console, host:redoubt-client::size_and_resize_come_from_the_server, host:redoubt-client::the_namespace_resolves_by_longest_prefix, host:redoubt-wire::layouts_are_the_tables, host:redoubt-wire::replies_and_error_codes_decode_through_the_trait
 
-`redoubt-client` (`libs/client`) is the one client API every userland binds to: native programs
+`redoubt-client` ([`libs/client`](../../libs/client/src/lib.rs)) is the one client API every userland binds to: native programs
 link it, beamlet's Redoubt platform and natives are thin adapters over it
 ([beamlet](beamlet.md#beamlet-on-redoubt)), and `init` launches and asks its servers through it.
 It is `no_std` with `alloc`, has no `unsafe`, and sits on the runtime and the wire codecs, adding
@@ -296,14 +296,23 @@ tables through their generated Elixir codecs.
 
 - **A namespace owns its connections.** A `bind` puts the same connection under another prefix:
   one connection, one badge, as a copied handle is in beamlet. An open file keeps its connection
-  for as long as it is open.
+  for as long as it is open. A handle bound at two paths of a startup block is one connection.
+- **Every call lends the caller's pages.** A call takes the caller's `Lend`, one per thread and
+  reused, so the library maps nothing behind its caller's back; an inline typed message lends
+  nothing at all.
 - **Nothing is buffered, cached or retried.** One read or write is one 9P request of at most the
   connection's `iounit`, and its error is its own, never deferred. Every open walks from the
   connection's root, so a rename, a removal or a revoked connection shows on the next open. A
   connection whose server has gone is `Disconnected` on every call; the library never reconnects,
   since a new connection is its launcher's to grant ([init](../servers/init.md#restarts-and-reboots)).
 - **A connection is shared by threads.** Its fids come from one allocator, and each request lends
-  its own buffer, so several threads use one connection at once.
+  its own buffer, so several threads use one connection at once. A fid goes back to the allocator
+  only once the server has let it go (its clunk's reply), or once its request is refused before
+  it is sent (a path that does not clean or does not fit the lend), so an untrusted path cannot
+  drain a shared connection's fids. A file dropped without `close` makes no
+  call, so its fid stays in use until the connection ends, and so does one whose clunk timed out:
+  a program that drops its files runs out of fids (`NoFid`), never reuses one the server may
+  still hold.
 - **Policy is the servers'.** The library holds none and makes no check a server does not make:
   the label check is the server's ([R25 (the label check)](../servers/serving.md#r25-the-label-check)).
 - **One error type** tells apart the kernel's error, a reply that does not decode, the server's
@@ -311,10 +320,25 @@ tables through their generated Elixir codecs.
   handle: the runtime's accounting of a call's outcome is kept whole
   ([R13 (one outcome per call)](../kernel/ipc.md#r13-one-outcome-per-call)).
 - **No second copy** of the ABI, the startup encoder or a wire format: `launch` calls
-  `StartupBuilder`, and `typed` calls the generated codecs.
+  `StartupBuilder` and places the child where the stub crate's launching convention says, and
+  `typed` calls the generated codecs through the `typed::Protocol` trait each generated module
+  implements ([wire](../servers/wire.md#wire-tables-and-the-generator)).
+- **A launch refuses before the kernel does.** More than `MAX_START_HANDLES` handles, an empty
+  image or a block the parser refuses fails before `process_create`; a kernel refusal after it
+  hands back the caller's budget, holding the process that never started, for the caller to
+  destroy. The caller brings the stub's bytes as it brings the image's, and each job has its own
+  exit endpoint, since `process_create` gives no PID to tell two children's notices apart.
+- **A release is bounded.** A child's grants are released when its exit notice arrives, each
+  within `RELEASE_TIMEOUT` (a second: one short call a live server answers at once), so one hung
+  server cannot stop a launcher reaping; a release that times out is reported in the job's end,
+  not retried, and the rest still go. A typed grant is released through the endpoint handle it
+  was recorded with, which must stay open until the job has ended: closed sooner, its slot is
+  stale, and the release goes to whatever the slot holds then, or nowhere.
 - **Tested on the host** against the real servers: the runtime's fake kernel is a crate of its own
-  for tests, and `bootfsd`, `consoled` and `keyd` run on it, so each userland's bindings, beamlet's
-  platform included, are tested long before `init` boots them.
+  for tests (`libs/rt/fake`), and `bootfsd`, `consoled` and `keyd` run on it, so each userland's
+  bindings, beamlet's platform included, are tested long before `init` boots them. The fake kernel
+  also keeps what a launcher gives each child, so `launch`'s block is read back by the runtime's
+  own parser.
 - **One scripting language.** Elixir on beamlet is the box's scripting language; no embedded
   script language is taken as a further userland, and the library binds any language that might
   be ([other runtimes](../beyond/runtimes.md)).
@@ -322,10 +346,9 @@ tables through their generated Elixir codecs.
 The attack cases: no call succeeds where the underlying call is refused (a label, a quota, a walk
 above a connection's root, a launch with `MAX_START_HANDLES` + 1 handles refused before any kernel
 call); an error path never leaks a handle (a partial reply, a server that dies mid-call, a hostile
-reply carrying handles); a child's grants are released at every server when its exit notice
-arrives.
-
-**Open:** none.
+reply carrying handles); a request refused before it is sent costs no fid; a child's grants are
+released at every server when its exit notice arrives, and a server that never answers delays the
+reaping by one timeout, no more.
 
 ### The Rust `std` target
 

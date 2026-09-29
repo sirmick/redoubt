@@ -52,6 +52,29 @@ pub fn clean(path: &str) -> Result<Vec<&str>, PathError> {
     Ok(out)
 }
 
+/// Resolves the clean absolute `path` against a namespace table's `(prefix, value)` entries: the
+/// entry with the longest prefix that is `path` or a parent of it, and what is left of `path` after
+/// it (no leading `/`). The one rule for the startup block and the client library's namespace.
+pub fn resolve<'e, 'p, T>(
+    entries: impl Iterator<Item = (&'e str, T)>,
+    path: &'p str,
+) -> Option<(T, &'p str)> {
+    let mut best: Option<(usize, T, &'p str)> = None;
+    for (prefix, value) in entries {
+        let rest = if prefix == "/" {
+            path.strip_prefix('/')
+        } else {
+            path.strip_prefix(prefix).and_then(|r| if r.is_empty() { Some(r) } else { r.strip_prefix('/') })
+        };
+        if let Some(rest) = rest {
+            if best.as_ref().is_none_or(|(len, _, _)| prefix.len() > *len) {
+                best = Some((prefix.len(), value, rest));
+            }
+        }
+    }
+    best.map(|(_, value, rest)| (value, rest))
+}
+
 /// Whether `path` is already absolute and clean, as a namespace table's names must be: `/`, or
 /// `/` followed by valid names joined by single `/`s.
 pub fn is_clean_absolute(path: &str) -> bool {

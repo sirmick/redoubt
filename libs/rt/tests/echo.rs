@@ -175,7 +175,7 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
     // Someone else cannot disconnect the child, even knowing its id.
     f.as_process(stranger, || {
         assert_eq!(
-            Connection::new(Endpoint::from_handle(strangers_conn)).disconnect(id),
+            Connection::new(Endpoint::from_handle(strangers_conn)).disconnect(id, FOREVER),
             Err(ClientError::Remote)
         );
     });
@@ -187,8 +187,8 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
     // The launcher can; then the child's connection is gone, its fid with it.
     f.as_process(launcher, || {
         let client = Connection::new(Endpoint::from_handle(connection));
-        client.disconnect(id).unwrap();
-        assert_eq!(client.disconnect(id), Err(ClientError::Remote), "an id is spent once used");
+        client.disconnect(id, FOREVER).unwrap();
+        assert_eq!(client.disconnect(id, FOREVER), Err(ClientError::Remote), "an id is spent once used");
     });
     f.as_process(child, || {
         let client = Connection::new(Endpoint::from_handle(fresh));

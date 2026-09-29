@@ -458,7 +458,7 @@ impl Rig {
     }
 
     fn disconnect(&mut self, id: u64) {
-        let done = self.nine.as_ref().map(|nine| nine.disconnect(id));
+        let done = self.nine.as_ref().map(|nine| nine.disconnect(id, nine.timeout));
         if !matches!(done, Some(Ok(()))) {
             self.fail(&format!("disconnect {id}: {done:?}"));
         }

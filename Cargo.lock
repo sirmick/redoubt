@@ -600,6 +600,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-client"
+version = "0.1.0"
+dependencies = [
+ "redoubt-bootfsd",
+ "redoubt-consoled",
+ "redoubt-fake-kernel",
+ "redoubt-keyd",
+ "redoubt-rt",
+ "stub",
+]
+
+[[package]]
 name = "redoubt-consoled"
 version = "0.1.0"
 dependencies = [

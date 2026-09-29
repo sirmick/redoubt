@@ -5,10 +5,15 @@
 //! address, and records are read and written where the runtime put them. It models what the
 //! runtime and the echo pair use (endpoints, badges, `mint`, the four IPC calls, `serve`,
 //! abandoned calls and their notices, `map_anon`, `unmap`, `handle_close`, `time_now`, `random`,
-//! `process_exit`) and not the rest: no budgets
-//! or charging, no label check between user budgets (R1), no fair waiting (R2), no lend
-//! unmapping from the caller. The executable model (`model/`) should replace it. Calls it does
+//! `process_exit`) and not the rest: no charging, no label check between user budgets (R1), no fair waiting
+//! (R2), no lend unmapping from the caller. The executable model (`model/`) should replace it. Calls it does
 //! not model panic, so a test cannot rely on them by accident.
+//!
+//! For launchers it models budgets as handles (`Fake::budget`), `process_create`, `process_map`,
+//! `process_start` and `budget_destroy`, and keeps what each child was given for a test to read
+//! back (`Fake::launched`); a child runs nothing, and a test ends it (`Fake::exit`), which sends
+//! its one exit notice. Every call is logged by name (`Fake::calls`), and a test can have the next
+//! call of a name refused (`Fake::refuse`).
 //!
 //! It also has what a driver needs: device objects (`Fake::mmio` and `Fake::irq`), `map_device`
 //! over a page of host memory a test can read and write as if it were registers, `receive` on an
@@ -30,9 +35,9 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use redoubt_rt::abi::{
-    BODY_SLOTS, Body, Call, CallOutcome, Error, FOREVER, Handle, Handles, Labels, LendDisposition, Message,
-    MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
-    ReplyOutcome, Return,
+    BODY_SLOTS, Body, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels,
+    LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind, MintSource, PAGE_SIZE, Pages,
+    RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return,
 };
 use redoubt_rt::ipc::{Request, Words};
 use redoubt_rt::server::typed::{Outcome, finish};
@@ -45,6 +50,10 @@ enum Object {
     Mmio(usize),
     /// A device's interrupt: the index of a [`State::devices`] entry.
     Irq(usize),
+    /// A budget: the index of a [`State::budgets`] entry (true once destroyed).
+    Budget(usize),
+    /// A launched process: the index of a [`State::launched`] entry.
+    Process(usize),
 }
 
 impl Object {
@@ -64,6 +73,23 @@ struct Device {
     len: usize,
     fired: bool,
     masked: bool,
+}
+
+/// What a launcher gave one child, as `process_map` and `process_start` received it.
+#[derive(Clone, Debug, Default)]
+pub struct Launched {
+    /// The budget it runs in (a [`State::budgets`] index).
+    budget: usize,
+    /// The endpoint its exit notice goes to.
+    exit: usize,
+    /// Each `process_map`: destination, flags, and the bytes the pages held.
+    pub maps: Vec<(usize, MemFlags, Vec<u8>)>,
+    /// `process_start`'s entry, stack pointer and argument, once started.
+    pub start: Option<(usize, usize, usize)>,
+    /// The handles `process_start` installed, as copies in this fake's own table: the launcher's
+    /// handle for each, found again by [`Fake::installed`].
+    handles: Vec<Object>,
+    ended: bool,
 }
 
 /// What a handle names. Only endpoints are modelled.
@@ -122,6 +148,16 @@ struct State {
     log: Vec<(usize, &'static str, u64)>,
     /// Device objects, by the index their handles carry.
     devices: Vec<Device>,
+    /// Budgets, by the index their handles carry: true once destroyed.
+    budgets: Vec<bool>,
+    /// Launched processes, by the index their handles carry.
+    launched: Vec<Launched>,
+    /// Exit notices not yet received: (endpoint, notice).
+    exits_due: VecDeque<(usize, ExitNotice)>,
+    /// Every system call, by process: its name.
+    calls: Vec<(usize, &'static str)>,
+    /// Calls to refuse once: (process, call name, error).
+    refusals: Vec<(usize, &'static str, Error)>,
 }
 
 pub struct Fake {
@@ -263,6 +299,54 @@ impl Fake {
         self.lock().open.values().filter(|(p, _)| *p == pid).count()
     }
 
+    /// A new budget whose handle goes into `owner`'s table: what a launcher carves for a child.
+    pub fn budget(&self, owner: usize) -> Handle {
+        let mut s = self.lock();
+        s.budgets.push(false);
+        let index = s.budgets.len() - 1;
+        install(&mut s, owner, Object::Budget(index))
+    }
+
+    /// Whether the budget `owner` holds as `budget` was destroyed.
+    pub fn destroyed(&self, owner: usize, budget: Handle) -> bool {
+        let s = self.lock();
+        let Ok(Object::Budget(index)) = lookup(&s, owner, budget) else { panic!("not a budget handle") };
+        s.budgets[index]
+    }
+
+    /// What `owner`'s child `process` was given.
+    pub fn launched(&self, owner: usize, process: Handle) -> Launched {
+        let s = self.lock();
+        let Ok(Object::Process(index)) = lookup(&s, owner, process) else { panic!("not a process handle") };
+        s.launched[index].clone()
+    }
+
+    /// Whether the `slot`th handle (from 0) `owner`'s child `process` was started with is the object
+    /// `owner`'s `handle` names.
+    pub fn installed(&self, owner: usize, process: Handle, slot: usize, handle: Handle) -> bool {
+        let s = self.lock();
+        let Ok(Object::Process(index)) = lookup(&s, owner, process) else { panic!("not a process handle") };
+        lookup(&s, owner, handle).ok() == s.launched[index].handles.get(slot).copied()
+    }
+
+    /// `owner`'s child `process` exits with `code`: its exit notice goes to its exit endpoint.
+    pub fn exit(&self, owner: usize, process: Handle, code: u32) {
+        let mut s = self.lock();
+        let Ok(Object::Process(index)) = lookup(&s, owner, process) else { panic!("not a process handle") };
+        end(&mut s, index, Cause::Exited, code);
+        self.changed.notify_all();
+    }
+
+    /// The system calls `pid` made, by name, in order.
+    pub fn calls(&self, pid: usize) -> Vec<&'static str> {
+        self.lock().calls.iter().filter(|(p, _)| *p == pid).map(|(_, call)| *call).collect()
+    }
+
+    /// Refuses `pid`'s next call named `call` with `error`, before it does anything.
+    pub fn refuse(&self, pid: usize, call: &'static str, error: Error) {
+        self.lock().refusals.push((pid, call, error));
+    }
+
     /// Runs `body` as process `pid` on its own thread; the handle yields its exit code.
     pub fn run<F: FnOnce() -> u32 + Send + 'static>(
         &'static self,
@@ -340,6 +424,19 @@ fn lookup(s: &State, pid: usize, h: Handle) -> Result<Object, Error> {
 /// The endpoint `h` names in `pid`, or `WrongObject` if it names a device.
 fn as_endpoint(s: &State, pid: usize, h: Handle) -> Result<Endpoint, Error> { lookup(s, pid, h)?.endpoint() }
 
+/// Ends launched process `index`, once: its exit notice is queued on its exit endpoint.
+fn end(s: &mut State, index: usize, cause: Cause, code: u32) {
+    let child = &mut s.launched[index];
+    if child.ended {
+        return;
+    }
+    child.ended = true;
+    let notice =
+        ExitNotice { pid: 1000 + index as u32, cause, code, blamed_account: 0, blamed_labels: Labels::new() };
+    let exit = child.exit;
+    s.exits_due.push_back((exit, notice));
+}
+
 /// Frees a mapping this kernel made, which its process no longer holds.
 fn free(addr: usize, len: usize) {
     // SAFETY: `addr` was returned by `alloc_zeroed` with exactly this layout (MapAnon, or a
@@ -378,6 +475,14 @@ fn write_body(addr: usize, body: &Body) {
 impl redoubt_rt::HostKernel for Fake {
     fn syscall(&self, call: &Call) -> Result<Return, Error> {
         let pid = current();
+        {
+            let name = call.number().name();
+            let mut s = self.lock();
+            s.calls.push((pid, name));
+            if let Some(i) = s.refusals.iter().position(|(p, c, _)| *p == pid && *c == name) {
+                return Err(s.refusals.remove(i).2);
+            }
+        }
         match *call {
             Call::MapAnon { len, .. } => {
                 if len == 0 || len % PAGE_SIZE != 0 {
@@ -522,6 +627,73 @@ impl redoubt_rt::HostKernel for Fake {
                     _ => Err(Error::InvalidArgument),
                 }
             }
+            Call::ProcessCreate { budget, exit_endpoint } => {
+                let mut s = self.lock();
+                let Object::Budget(budget) = lookup(&s, pid, budget)? else { return Err(Error::WrongObject) };
+                if s.budgets[budget] {
+                    return Err(Error::BadHandle);
+                }
+                let exit = as_endpoint(&s, pid, exit_endpoint)?;
+                if exit.badge != 0 {
+                    return Err(Error::NotPermitted);
+                }
+                s.launched.push(Launched { budget, exit: exit.id, ..Launched::default() });
+                let index = s.launched.len() - 1;
+                Ok(Return::Handle(install(&mut s, pid, Object::Process(index))))
+            }
+            Call::ProcessMap { process, src, dst, len, flags } => {
+                let mut s = self.lock();
+                let Object::Process(index) = lookup(&s, pid, process)? else {
+                    return Err(Error::WrongObject);
+                };
+                if s.launched[index].start.is_some() {
+                    return Err(Error::NotPermitted);
+                }
+                if s.processes[pid].mappings.get(&src) != Some(&len) {
+                    return Err(Error::InvalidArgument);
+                }
+                s.processes[pid].mappings.remove(&src);
+                // SAFETY: `src..src + len` is a whole mapping this kernel made for `pid` (checked
+                // just above) and has just left its table, so nothing else reads or frees it.
+                let bytes = unsafe { std::slice::from_raw_parts(src as *const u8, len) }.to_vec();
+                free(src, len);
+                s.launched[index].maps.push((dst, flags, bytes));
+                Ok(Return::Nothing)
+            }
+            Call::ProcessStart { process, entry, sp, arg, handles_rec, count } => {
+                // SAFETY: the runtime passes the address of a live, 8-aligned
+                // `[u64; MAX_START_HANDLES]` record it owns for the call (`Process::start`).
+                let raw = unsafe { (handles_rec as *const [u64; MAX_START_HANDLES]).read() };
+                let mut s = self.lock();
+                let Object::Process(index) = lookup(&s, pid, process)? else {
+                    return Err(Error::WrongObject);
+                };
+                if s.launched[index].start.is_some() {
+                    return Err(Error::NotPermitted);
+                }
+                let handles = raw
+                    .get(..count as usize)
+                    .ok_or(Error::TooLarge)?
+                    .iter()
+                    .map(|raw| lookup(&s, pid, Handle::from_raw(*raw)?))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let child = &mut s.launched[index];
+                child.handles = handles;
+                child.start = Some((entry, sp, arg));
+                Ok(Return::Nothing)
+            }
+            Call::BudgetDestroy { budget } => {
+                let mut s = self.lock();
+                let Object::Budget(index) = lookup(&s, pid, budget)? else { return Err(Error::WrongObject) };
+                s.budgets[index] = true;
+                let children: Vec<usize> =
+                    (0..s.launched.len()).filter(|&i| s.launched[i].budget == index).collect();
+                for child in children {
+                    end(&mut s, child, Cause::Killed, 0);
+                }
+                self.changed.notify_all();
+                Ok(Return::Nothing)
+            }
             other => panic!("the fake kernel does not model {:?}", other.number().name()),
         }
     }
@@ -646,6 +818,12 @@ impl Fake {
                 return Err(Error::Dead);
             }
             // Notices before messages.
+            if let Some(i) = s.exits_due.iter().position(|(e, _)| *e == ep.id) {
+                let (_, notice) = s.exits_due.remove(i).unwrap();
+                // SAFETY: as below, the runtime's live, 8-aligned receive record.
+                unsafe { (rec as *mut [u64; RECEIVED_SLOTS]).write(Received::Exit(notice).encode()) };
+                return Ok(Return::Nothing);
+            }
             if let Some(i) = s.notices.iter().position(|(p, e, _)| *p == pid && *e == ep.id) {
                 let (_, _, id) = s.notices.remove(i).unwrap();
                 let notice = Received::Abandoned(NonZeroU64::new(id).unwrap());
