@@ -67,6 +67,7 @@ exclude = [
   "vendor/hash32",
   "vendor/stable_deref_trait",
   "vendor/byteorder",
+  "vendor/ed25519-compact",
 ]
 
 [profile.release]
@@ -101,6 +102,9 @@ path = "vendor/hash32"
 path = "vendor/stable_deref_trait"
 [patch.crates-io.byteorder]
 path = "vendor/byteorder"
+# The loader's and keyd's Ed25519, the same way.
+[patch.crates-io.ed25519-compact]
+path = "vendor/ed25519-compact"
 
 # Arithmetic overflow remains an invariant failure in the executable model.
 [profile.release.package.redoubt-model]

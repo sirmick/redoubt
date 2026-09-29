@@ -1,4 +1,4 @@
-description = "ipd's vendored TCP/IP stack (smoltcp with alloc, medium-ethernet, proto-ipv4, socket-tcp, and its dependencies) builds no_std for both widths"
+description = "The vendored crates build no_std for both widths: ipd's TCP/IP stack (smoltcp with alloc, medium-ethernet, proto-ipv4, socket-tcp, and its dependencies) and the loader's and keyd's ed25519-compact"
 arch = ["rv64", "rv32"]
 kind = "build"
 package = "redoubt-vendor-check"

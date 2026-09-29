@@ -15,6 +15,7 @@ const VENDORED: &[(&str, &str, &str)] = &[
     ("hash32", "0.3.1", "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"),
     ("stable_deref_trait", "1.2.1", "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"),
     ("byteorder", "1.5.0", "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"),
+    ("ed25519-compact", "2.4.2", "f05391a505666bdf2b5d2626f41b7f0f49052b1e33cceac960eaa818008141da"),
 ];
 
 /// smoltcp's dependencies left to `Cargo.lock` (vendor/README.md says why): already locked

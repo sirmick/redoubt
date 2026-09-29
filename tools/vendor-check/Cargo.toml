@@ -6,10 +6,12 @@ license = "MIT OR Apache-2.0"
 description = "Host-only checks that the vendored crates are the published ones and the ones that build"
 publish = false
 
-# The same smoltcp, with exactly ipd's features, so the lockfile resolves the
-# vendored stack here too and `tests/vendored.rs` can prove the path copies are used.
+# The same smoltcp, with exactly ipd's features, and the same ed25519-compact as the loader and
+# keyd, so the lockfile resolves the vendored crates here too and `tests/vendored.rs` can prove
+# the path copies are used.
 [dependencies]
 smoltcp = { version = "=0.14.0", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp"] }
+ed25519-compact = { version = "=2.4.2", default-features = false }
 
 [dev-dependencies]
 # SHA-256, already in the tree and tested against its vectors (keyd).

@@ -202,8 +202,6 @@ dependencies = [
 [[package]]
 name = "ed25519-compact"
 version = "2.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f05391a505666bdf2b5d2626f41b7f0f49052b1e33cceac960eaa818008141da"
 
 [[package]]
 name = "elf"
@@ -571,6 +569,7 @@ version = "0.1.0"
 name = "redoubt-vendor-check"
 version = "0.1.0"
 dependencies = [
+ "ed25519-compact",
  "redoubt-keyd",
  "smoltcp",
 ]

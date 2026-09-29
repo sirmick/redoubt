@@ -10,10 +10,11 @@
 //! That the tree is what crates.io published is checked by `provenance.sh`, which needs the
 //! network and is run in the review of any change to `vendor/` (vendor/README.md).
 //!
-//! It depends on `smoltcp` with exactly `ipd`'s features so the lockfile resolves the vendored
-//! stack whether or not `ipd` is being built. The library is `no_std`, so building it for
-//! both RISC-V targets builds that stack for both widths (the `vendor-build` bench case).
+//! It depends on `smoltcp` with exactly `ipd`'s features, and on `ed25519-compact` as the loader
+//! and `keyd` do, so the lockfile resolves the vendored crates whether or not their users are
+//! being built. The library is `no_std`, so building it for both RISC-V targets builds them for
+//! both widths (the `vendor-build` bench case).
 
 #![no_std]
 
-pub use smoltcp;
+pub use {ed25519_compact, smoltcp};

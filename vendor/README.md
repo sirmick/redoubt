@@ -18,9 +18,11 @@ crates.io index records it.
 | `hash32` | 0.3.1 | MIT (of MIT OR Apache-2.0) | `47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606` |
 | `stable_deref_trait` | 1.2.1 | MIT (of MIT OR Apache-2.0) | `6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596` |
 | `byteorder` | 1.5.0 | MIT (of Unlicense OR MIT) | `1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b` |
+| `ed25519-compact` | 2.4.2 | MIT | `f05391a505666bdf2b5d2626f41b7f0f49052b1e33cceac960eaa818008141da` |
 
-Their licence texts are in `LICENSES/` (`smoltcp-0BSD.txt`, `heapless-MIT.txt`, ...), as well as
-in each directory.
+The last row is not `ipd`'s: it is the loader's and `keyd`'s Ed25519
+([below](#the-loaders-and-keyds-ed25519)), checked the same way. Their licence texts are in
+`LICENSES/` (`smoltcp-0BSD.txt`, `heapless-MIT.txt`, ...), as well as in each directory.
 
 **Left to `Cargo.lock`, not vendored.** smoltcp also needs these two. Both are already locked
 from crates.io for other packages: `cfg-if` reaches the bench through `filetime`, and
@@ -64,11 +66,12 @@ so the bench does not run it; **the review of any change under `vendor/` must ru
 its output. It passed for 737a0a41a (the red team's independent run, QA D3-code-review-1) and at
 the provenance commit that added it.
 
-**Not workspace members.** The six directories are in the root manifest's `exclude`, not in
+**Not workspace members.** The vendored directories are in the root manifest's `exclude`, not in
 `members`. Were they members, `Cargo.lock` would take in their dev-dependencies (test
 frameworks, `rand`, `url`, ...), and `cargo test --workspace` would build their default `std`
-and `libc` features. As path dependencies they build only with the features `ipd` asks for:
-`alloc`, `medium-ethernet`, `proto-ipv4` and `socket-tcp`.
+and `libc` features. As path dependencies they build only with the features their users ask
+for: `ipd`'s `alloc`, `medium-ethernet`, `proto-ipv4` and `socket-tcp`, and none of
+`ed25519-compact`'s.
 
 **Outside the unsafe ratchet and rustfmt.** `tests/unsafe-budget.toml` counts code this
 repository owns, and these crates are third-party code pinned by these checksums. What that
@@ -77,6 +80,7 @@ leaves:
   `ipd` does not compile.
 - `heapless` does use `unsafe`. smoltcp uses it only through `Vec` and `LinearMap`. Those two
   were read with `ipd`'s stack commit; see "What of heapless ipd runs" below.
+- `ed25519-compact` has one `unsafe` block: see its section below.
 
 rustfmt ignores `vendor/`.
 
@@ -121,12 +125,32 @@ compiled.
 index. Unpack each over an emptied directory, then regenerate the sums:
 
 ```
-(cd vendor && find smoltcp managed heapless hash32 stable_deref_trait byteorder -type f \
+(cd vendor && find smoltcp managed heapless hash32 stable_deref_trait byteorder ed25519-compact -type f \
     | LC_ALL=C sort | xargs sha256sum) > vendor/SHA256SUMS
 ```
 
 Update both tables here and the constants in `tools/vendor-check/tests/vendored.rs` in the same
 commit, run `tools/vendor-check/provenance.sh`, and read the diff.
+
+## The loader's and keyd's Ed25519
+
+The loader verifies the boot bundle's signature and `keyd` signs with `ed25519-compact`
+([keyd](../docs/servers/keyd.md#keys-and-purposes)). They took it from crates.io through
+`Cargo.lock`, pinned by checksum but not in the tree; it is vendored now because `sshd` will link
+it too, for X25519 and for verifying login signatures
+([sshd](../docs/servers/sshd.md#the-core-and-its-platforms)), and one copy read here serves all
+three. The version is the one already locked, so the loader and `keyd` build the same code as
+before, with no source change: only the `[patch.crates-io]` entry is new.
+
+- **No dependencies and no build script.** Its three optional dependencies (`ct-codecs` for
+  `pem`, `ed25519` for `traits`, `getrandom` for `random`) belong to features nobody here turns
+  on; every user takes `default-features = false`.
+- **One `unsafe` block,** in `common.rs`: `Mem::wipe` writes `T::default()` over each element of
+  a slice it was handed as `&mut [T]`, with `write_volatile` at `as_mut_ptr().add(i)` for
+  `i < len`, so every write is in bounds; the fences keep the compiler from dropping the writes.
+  It clears secret keys, seeds, signing state and X25519 shared secrets on drop.
+- The crate ships its author's `AGENTS.md`, contributor notes for that repository; it is part of
+  the published bytes, not guidance for this one.
 
 ## Patched crates (planned)
 
@@ -154,8 +178,8 @@ leaves the patch with the release that carries it.
 
 The first two are offered to `sunset`'s author once they have been reviewed here; the third is
 ours. Vendoring `sunset` brings its dependencies (the RustCrypto ciphers, MACs and hashes it
-uses, `heapless` and the rest, about thirty crates), and `ed25519-compact` itself, which the
-loader and `keyd` today take from crates.io through `Cargo.lock`. Their `unsafe` is mostly SIMD
+uses, `heapless` and the rest, about thirty crates); `ed25519-compact` is already here. Their
+`unsafe` is mostly SIMD
 backends RISC-V never compiles; the paths it does compile are checked under Miri with each
 crate's software backend forced (`aes_backend="soft"`, `chacha20_force_soft`,
 `poly1305_backend="soft"`, `sha2_256_backend="soft"`).
