@@ -447,9 +447,10 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
 
 - **Destruction costs time nobody can interrupt.** Destroying a budget scans every kernel-object
   page, several times, with interrupts off. Destroying a budget holding two processes takes about
-  21 ms of virtual time, and its p99 is within a few milliseconds of the 30 ms target
-  `bench:sched-latency` holds it to. The cost grows with the kernel-object pages in the whole
-  system, which any budget can add to by creating objects, and every interrupt and timeout on the
+  21 ms of virtual time, and its p99 is over 30 ms: `bench:sched-latency` holds it to 39 ms, set
+  from a seed sweep. The cost grows with the kernel-object pages in the whole system, which any
+  budget can add to by creating objects, and with every live process's handle pages, which a
+  freed process object's handle sweep walks; every interrupt and timeout on the
   machine waits for it. It dominates driver-wake and lease-end latency whenever a lease ends,
   and must be brought well inside the target before the steward is built, in
   M1 (separation and containment). Follow-up: [todo](../todo/budget-destroy-cost.md).

@@ -282,14 +282,14 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
 | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
 | steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 20 ms, p99 <= 115 ms (from the sweep below; 15 and 50 ms before it) |
-| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 30 ms |
-| R10 kernel time of one destruction, from the trace | p99 <= 30 ms |
-| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 115 + 30 = 145 ms, asserted as one sum by the post-check (80 ms before the sweep) |
-| `budget_destroy`, call to return | recorded against one round: 30 ms plus (runnable budgets + 2) slices |
+| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 54 ms (from the second sweep below; 30 ms before it) |
+| R10 kernel time of one destruction, from the trace | p99 <= 39 ms (from the second sweep below; 30 ms before it) |
+| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 115 + 39 = 154 ms, asserted as one sum by the post-check (80 ms before the first sweep, 145 ms before the second) |
+| `budget_destroy`, call to return | recorded against one round: R10's 39 ms plus (runnable budgets + 2) slices |
 | the 1000-weight server's share of the spinning CPU at N = 16 | at least 384 less 30 per thousand |
 
-In instructions: 15 ms is 1,875,000, 20 ms is 2,500,000, 30 ms is 3,750,000, 50 ms is 6,250,000,
-115 ms is 14,375,000, 145 ms is 18,125,000, and one 10 ms slice is 1,250,000.
+In instructions: 15 ms is 1,875,000, 20 ms is 2,500,000, 39 ms is 4,875,000, 50 ms is 6,250,000,
+54 ms is 6,750,000, 115 ms is 14,375,000, 154 ms is 19,250,000, and one 10 ms slice is 1,250,000.
 
 The decision wake is measured by the stand-in itself (`time_now` against its own deadline) and
 read from its console lines, while R10's time comes from the kernel's trace: that half of the
@@ -325,6 +325,40 @@ sweep sets them at the worst case plus a margin of a tenth, rounded up to 5 ms: 
 19.7, so 20 ms; p99 104 x 1.1 = 114.4, so 115 ms. Every other measure met its fixed target on every seed; their worst p99s
 were driver wake 33.3 ms, steward timer wake 34.2 ms and deadline notice 23.7 ms (all rv32), and
 the server's share never fell below 380 of 1000.
+
+**The second sweep** (2026-09-29, the same seeds and widths) followed a change that found process
+objects by index instead of scanning frames. The change made most destructions cheaper, which
+moved the workload's timeline: the last lease destructions at N = 16 now overlap the live
+sessions. There, taking a lease's exit notice inside R10 frees its process object, and that
+object's handle sweep walks every live process's handle pages. The N = 16 deadline notice and
+R10's kernel time, p99 in µs, and a lease's end:
+
+| Seed | rv64 notice | rv64 R10 | rv64 lease end | rv32 notice | rv32 R10 | rv32 lease end |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 36195 | 33863 | 73287 | 37902 | 35107 | 86435 |
+| 2 | 36316 | 33985 | 73409 | 38023 | 35235 | 86561 |
+| 3 | 36287 | 33943 | 94886 | 37989 | 35190 | 86530 |
+| 4 | 36331 | 34000 | 94941 | 38042 | 35251 | 97523 |
+| 5 | 36156 | 33823 | 73245 | 37868 | 35069 | 75474 |
+| 6 | 36495 | 34164 | 84347 | 38220 | 35421 | 86759 |
+| 7 | 37940 | 34116 | 84297 | 38164 | 35370 | 75771 |
+| 8 | 37836 | 34084 | 105786 | 38144 | 35337 | 97606 |
+| 9 | 36174 | 33843 | 73264 | 37882 | 35089 | 86413 |
+| 10 | 36198 | 33866 | 94809 | 39346 | 35113 | 86447 |
+| 11 | 37919 | 34131 | 84313 | 38177 | 35386 | 75790 |
+| 12 | 36486 | 34156 | 73581 | 38203 | 35412 | 86748 |
+| 13 | 36432 | 34101 | 73522 | 38146 | 35355 | 75757 |
+| 14 | 36177 | 33844 | 94786 | 37885 | 35090 | 86416 |
+| 15 | 36291 | 33948 | 105650 | 48851 | 35196 | 75600 |
+| 16 | 38661 | 33878 | 73301 | 37924 | 35124 | 86458 |
+
+The worst are the deadline notice at 48,851 µs (rv32, seed 15) and R10 at 35,421 µs (rv32, seed
+6). Their targets are the worst case plus a tenth, rounded up to 1 ms: 48.9 x 1.1 = 53.7, so
+54 ms, and 35.4 x 1.1 = 39.0, so 39 ms. The lease end's bound moves with R10's, to 154 ms; its
+worst is 105.8 ms. The difference from 30 ms is the handle-sweep term of
+[budget destruction's cost](../todo/budget-destroy-cost.md), which brings R10's target back to
+30 ms and the deadline notice's to 40 ms. Every other measure met its target on every seed. The
+gate stays on seed 3.
 
 The case fails on any `missed`. `bench:sched-latency-tcg` runs the same workload in host time and
 only reports, with the oracle still checking every pick.
@@ -456,14 +490,15 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   wakes with a lead of a few milliseconds of its own runtime and lands behind several weight-100
   spinners' slices: on rv64 its decision-wake p50 is 17.9 ms on every seed and its p99 reaches
   104 ms, against 15 and 50 ms for its timer wakes. The targets (20 and 115 ms) are set from the
-  sweep, so the gate passes, but a lease's end from the steward's decision is 145 ms, not 80.
+  sweep, so the gate passes, but a lease's end from the steward's decision is 154 ms, not 80.
   A pinned seed repeats one run; a change that moves the phase can land on a worse one than the
   sweep saw, which the margin covers and a new sweep re-measures. The rv64 median is structural, not noise:
   follow-up: [todo](../todo/sched-rv64-decision-wake.md).
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   is the stated exception: it dominates lease termination and grows with the objects it walks
-  ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
+  and with every live process's handle pages, so its target and the deadline notice's are 39 and
+  54 ms, not 30 ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
