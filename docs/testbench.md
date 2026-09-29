@@ -328,6 +328,8 @@ The guest's own claims about the network are never trusted.
 
 ## SSH sessions
 
+### Sessions and the loopback server
+
 Status: built · partly tested: the loopback self-checks cannot run on the development host while the bench runs in a service's SELinux context ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback-deadlock, bench:bench-ssh-guest, host:testbench::only_the_selinux_exec_refusal_is_the_hosts
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
@@ -365,6 +367,33 @@ OpenSSH, and `--allow-skip` skips them. The match is loose: on a host whose `ssh
 context change, any `/<path>: Permission denied` from `ssh` counts as the host's, not only the
 shell's. Any other probe failure fails every loopback case
 (`host:testbench::only_the_selinux_exec_refusal_is_the_hosts`).
+
+### Against Redoubt's sshd
+
+Status: planned · M1 (separation and containment)
+
+`ssh-loopback` cases run the host's OpenSSH `ssh` against Redoubt's own `sshd` on its host
+platform ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)), started
+by `ssh` as its `ProxyCommand` as the host's `sshd` is today. Nothing there needs a shell or a
+login context, so the SELinux refusal above no longer touches them.
+
+- **The self-checks move** to it, their steps written for its scripted console, and their
+  `server_log` patterns for its log.
+- **New cases, verdicts from `ssh`'s exit status and the server's log:** a login key the
+  server's `keyd` holds is refused, and so is an unknown principal; `alice+secrets` gets the
+  labels `{alice-secrets}`; on a labelled channel `exec`, a subsystem, port forwarding and agent
+  forwarding are refused ([R67 (a channel keeps its labels)](servers/sshd.md#r67-a-channel-keeps-its-labels));
+  a window change and a break reach the console; one connection's end leaves another's session
+  running; a host key other than `net.host_key` is refused.
+- **One reference case stays on OpenSSH's own `sshd`,** with `server = "openssh"`: concurrent
+  sessions, marks, exit statuses, a pty and a refused key. It is the session runner's independent
+  witness, so a bug the runner shares with Redoubt's server cannot pass every self-check. It keeps
+  the SELinux probe, and runs from a login session
+  ([todo](todo/ssh-loopback-host.md)).
+- `ssh` gets `WarnWeakCrypto=no-pq-kex` against Redoubt's server, whose exchange is not
+  post-quantum: OpenSSH's warning would otherwise be session output.
+
+**Open:** none.
 
 ## Self-checks
 
@@ -434,6 +463,8 @@ with, so a raise there passes unchecked.
 
 ## Vendored dependencies
 
+### Crates as published
+
 Status: built · partly tested: provenance against crates.io needs the network, so no bench case runs it; it is run by hand in the review of any change to `vendor/` · tested: bench:vendor-check, bench:vendor-build, host:redoubt-vendor-check::the_real_structure_passes, host:redoubt-vendor-check::a_renamed_header_fails_before_any_download, host:redoubt-vendor-check::a_missing_row_fails, host:redoubt-vendor-check::a_row_without_its_directory_and_a_stray_directory_fail, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::the_vendored_copies_are_the_ones_that_build, host:redoubt-vendor-check::the_patches_point_at_vendor, host:redoubt-vendor-check::the_readme_records_each_crate
 
 `vendor/` holds third-party crates exactly as crates.io published them, each used through a
@@ -454,6 +485,27 @@ checksum. Two checks guard them, and they prove different things:
 The residuals: provenance is only as current as the last review that ran it, and the vendored
 crates' `unsafe` is checked by recorded Miri runs, not by a bench case
 ([ipd under Miri](servers/ipd.md#under-miri)).
+
+### Patched crates
+
+Status: planned · M1 (separation and containment)
+
+A crate we must change is still vendored from its published bytes, with exactly one patch file,
+`vendor/patches/<crate>.patch`, holding every change. `vendor/<crate>/` is the published crate
+with that patch applied, since that is what Cargo builds, and nothing else differs.
+
+- **Integrity:** `vendor/SHA256SUMS` records the published bytes. `vendor-check` copies the
+  crate, reverses the patch on the copy, and requires the result to match the sums byte for byte,
+  so the patch file is the whole difference.
+- **Provenance:** `provenance.sh` downloads the published crate, applies the patch, and compares
+  the result with `vendor/<crate>/`.
+- **The README** records each patched crate's patch: what it changes and why, as its own section.
+- A new release of the crate means taking the published bytes again and redoing the patch on
+  them; a patch the crate's author has taken goes away with the release that carries it.
+
+`sunset` is the first ([sshd](servers/sshd.md#the-core-and-its-platforms)).
+
+**Open:** none.
 
 ## The no-cruft gate
 

@@ -17,6 +17,10 @@ These cases are the self-checks of the bench's SSH session runner: that `expect`
 `wait`, exit statuses and host keys each fail when they should. While they cannot run, a broken
 session runner would go unnoticed, and every future SSH attack case rests on it.
 
+The self-checks are planned to move to Redoubt's own `sshd` on its host platform, which needs no
+login context ([against Redoubt's sshd](../testbench.md#against-redoubts-sshd)). One reference
+case stays on OpenSSH's `sshd` and keeps needing this.
+
 ## Where
 
 The host, not the tree: how the bench is started, or its SELinux policy.

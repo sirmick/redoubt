@@ -131,3 +131,35 @@ commit, run `tools/vendor-check/provenance.sh`, and read the diff.
 ## `getrandom`
 
 Vendored earlier for the kernel's `rand`; not covered by `vendor-check`.
+
+## Patched crates (planned)
+
+A crate we must change is vendored from its published bytes plus exactly one patch file,
+`vendor/patches/<crate>.patch`. The directory holds the published crate with the patch applied,
+because that is what Cargo builds; `SHA256SUMS` records the published bytes, and `vendor-check`
+reverses the patch on a copy and checks that copy against them, so the patch is the whole
+difference. `provenance.sh` applies the patch to the downloaded crate and compares. The rule is
+the book's: [patched crates](../docs/testbench.md#patched-crates).
+
+Each patched crate gets a section here saying what its patch changes and why. A new release
+means taking the published bytes again and redoing the patch; a change the author has taken
+leaves the patch with the release that carries it.
+
+### `sunset` (planned)
+
+`sshd`'s SSH library, 0BSD, `#![forbid(unsafe_code)]`, built with `default-features = false`
+([sshd](../docs/servers/sshd.md#the-core-and-its-platforms)). Its patch:
+- **the server's host key signs outside it:** a server event hands out the exchange's parts for
+  `keyd` to sign, as `sunset`'s client already does for an agent;
+- **a server receives `window-change`, `signal` and `break`**, which published `sunset` drops;
+- **X25519 and Ed25519 verification through `ed25519-compact`**, the loader's and `keyd`'s
+  crate, in place of `x25519-dalek`, `ed25519-dalek` and so `curve25519-dalek`, `ed25519` and
+  `signature`.
+
+The first two are offered to `sunset`'s author once they have been reviewed here; the third is
+ours. Vendoring `sunset` brings its dependencies (the RustCrypto ciphers, MACs and hashes it
+uses, `heapless` and the rest, about thirty crates), and `ed25519-compact` itself, which the
+loader and `keyd` today take from crates.io through `Cargo.lock`. Their `unsafe` is mostly SIMD
+backends RISC-V never compiles; the paths it does compile are checked under Miri with each
+crate's software backend forced (`aes_backend="soft"`, `chacha20_force_soft`,
+`poly1305_backend="soft"`, `sha2_256_backend="soft"`).

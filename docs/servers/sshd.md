@@ -17,6 +17,59 @@ steward started.
 
 ## Interface
 
+### The core and its platforms
+
+Status: planned · M1 (separation and containment)
+
+`sshd` is a core and a platform. The core runs `sunset` over byte slices and makes every decision
+this page states: the login name, the key checks, a channel's labels, and what a channel may not
+do. The platform is only what the core asks for, and is one trait:
+
+- **sign an exchange:** `keyd`'s `sign_ssh_exchange`, given the transcript's parts
+  ([keyd](keyd.md#messages));
+- **`holds(key)`:** `keyd`'s answer;
+- **login:** the steward's answer, a session and its labels or a refusal
+  ([steward](steward.md#authentication-and-sessions));
+- **a session's console:** its bytes each way, the window size, the interrupt, and its end.
+
+The connection's bytes are not in the trait: the core takes and gives slices, and the platform
+moves them. On the box the platform is `ipd`'s listen scope, `keyd`'s `ssh_host` badge, the
+steward and `/dev/cons`. On the build host it is a host tool, so the bench logs in with OpenSSH's
+`ssh` long before `init` and the steward exist
+([against Redoubt's sshd](../testbench.md#against-redoubts-sshd)):
+
+- **Transport:** standard input and output, one connection per process, as `ssh` starts it for
+  a `ProxyCommand`; a log file of the server's own lines.
+- **Signer:** `keyd`'s own server code, in the same process, given one key in `keyd`'s argument
+  form, `name,ssh_host,seed`. So OpenSSH verifies a signature over the exchange hash `keyd`
+  built, end to end. The host tool tests the protocol, the login flow and the channel rules, not
+  key separation: its `keyd` shares its memory, where on the box it is a separate process.
+- **Logins:** a fixed table. Principal `P` logs in with its test key from `tests/keys/`, as `P`
+  (no labels) or `P+L` (labels `{P-L}`); anything else is refused.
+- **Console:** a scripted line console, no shell: `echo`, `sleep`, `tty` (whether the channel has
+  a pty), `labels` (the channel's labels), `exit N`, with `;` between commands. It logs each window
+  change and interrupt it receives.
+
+The key exchange is `curve25519-sha256` only, the one `keyd` signs, with Ed25519 host and login
+keys. `sunset` is used as published with one patch ([patched
+crates](../testbench.md#patched-crates)), which changes three things:
+
+- **The server's host key signs outside it.** Given a host key's public half only, `sunset`
+  hands out the exchange's parts (`V_C`, `V_S`, `I_C`, `I_S`, `Q_C`, `Q_S`, `K`) and waits for the
+  signature, as its client already does for an SSH agent. It keeps a bounded copy of the peer's
+  `KEXINIT` for this, since after the first exchange only `sunset` sees one in the clear, and
+  refuses a larger one. It still computes the hash itself for the session keys; the client checks
+  the signature, so a disagreement fails the exchange.
+- **A client's `window-change`, `signal` and `break` requests reach the core**; published
+  `sunset` drops them on a server.
+- **Its X25519 and Ed25519 verification use `ed25519-compact`,** the crate the loader and `keyd`
+  already link, in place of the `dalek` crates. The box then has one implementation of each
+  curve operation.
+
+**Open:** whether the box's platform lets a call to the steward or `keyd` hold up other
+connections; a post-quantum key exchange (`mlkem768x25519-sha256`), which changes the transcript
+`keyd` signs.
+
 ### Sessions over SSH
 
 Status: planned · M1 (separation and containment)
@@ -30,6 +83,12 @@ Status: planned · M1 (separation and containment)
   holds (`holds`), then asks the steward whose key it is; the steward answers with a session, or
   refuses ([steward](steward.md#authentication-and-sessions)). Login keys are the person's own and
   never live in `keyd` ([R35 (key separation)](init.md#r35-key-separation)).
+- **A key is tried twice.** A client first asks whether a key would do, then sends a signature
+  with it. `sshd` answers the question with `holds` alone: a key `keyd` holds is refused, any other
+  may be tried. It asks the steward only once the signature has verified. So the steward never
+  weighs a key whose private half the client has not shown, and a client that has not
+  authenticated learns nothing about whose keys are whose. Passwords, keyboard-interactive and
+  `none` authentication are refused.
 - **A pty session.** A session gets one channel with a pty, on which `sshd` serves its `/dev/cons`
   ([consoled](consoled.md#the-consol-protocol) has the same protocol): input from the channel,
   output to it, and the window's size and its changes. The channel's `signal` request (INT) and
@@ -189,6 +248,10 @@ Status: planned · M1 (separation and containment)
   anyway.
 - **An `ssh_host` badge speaks as the box.** A compromised `sshd` can complete key exchanges as the box
   for as long as it runs.
+- **`sunset` carries our patch.** The patch is ours to read and keep: a `sunset` release that
+  changes the code it touches needs it redone and read again.
+- **The key exchange is not post-quantum.** Traffic recorded now could be read by whoever later
+  breaks X25519.
 
 ## Why
 
@@ -198,8 +261,14 @@ Status: planned · M1 (separation and containment)
   place that knows them.
 - **One cleared sink.** A vault's output must reach its owner somewhere; one sink, one kind of
   channel, the owner's own authentication, and nothing else keeps the exemption as narrow as it can be.
-- **`sunset`.** An SSH implementation in `no_std` Rust with no allocation, by an author of dropbear,
-  is small enough to read.
+- **`sunset`.** An SSH implementation in `no_std` Rust with no allocation and no `unsafe`, by an
+  author of dropbear, is small enough to read. Its core does no I/O, so the platform is a thin
+  trait, and the host tool tests the same core the box runs.
+- **A patch, not a fork.** Carrying the published crate and one patch keeps what we changed
+  visible and small; its signer and channel-request changes are offered to `sunset`'s author.
+- **One curve implementation.** `ed25519-compact` is already read for the loader and `keyd`, has
+  no dependencies, and does X25519 as well; the `dalek` crates would add about 30,000 lines for
+  the same arithmetic.
 - **Relay, never parse, transfers.** An SFTP parser inside `sshd` would put a second protocol in the
   process that carries every channel; a transfer server per channel, holding only that session's
   file binds and its audit connection, keeps a bug in it inside one session's own files. Running SFTP in the session's own VM
