@@ -162,13 +162,15 @@ any answer is yes:
 - does it render or carry an approval;
 - does it run outside one session's own budget: the kernel, the loader, the stub, the runtime
   library, the wire formats, the model, the drivers, `init`, the steward, `keyd`, `sshd`, `ipd`,
-  the resolver, `gatewayd`, the bench and the checker, and the beamlet VM itself, which runs
-  hostile code.
+  the resolver, `gatewayd`, the bench and the checker.
 
 Everything else is **Tier B**: code that runs inside one session's budget with that session's
 authority, where a bug hurts one principal and the walls below hold. Most Elixir is Tier B: the
-shell, the editor, helpers and client bindings. The agent harness, approval rendering and the
-transfer server are Elixir or Rust and Tier A, because they answer yes above.
+shell, the editor, helpers and client bindings. So is the beamlet VM's interpreter and loader:
+one VM is one trust domain ([beamlet](../docs/userland/beamlet.md#limits-inside-one-vm)), so
+hostile code that breaks it gains only the session's own authority. The agent harness, approval
+rendering, the transfer server, and beamlet's platform boundary and the natives that hold
+capabilities are Elixir or Rust and Tier A, because they answer yes above.
 
 | | Tier A | Tier B |
 | --- | --- | --- |
