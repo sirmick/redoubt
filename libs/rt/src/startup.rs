@@ -257,7 +257,7 @@ fn push<'a>(entries: &mut Vec<Entry<'a>>, entry: Entry<'a>) -> Result<(), Startu
 ///
 /// **A launcher never passes its own connection to a child** (servers/init.md): every handle
 /// named in a child's namespace is a fresh connection the server made for that child
-/// (`new_connection`, [`crate::client::Client::new_connection`]), which the launcher disconnects
+/// (`new_connection`, [`crate::client::Connection::new_connection`]), which the launcher disconnects
 /// when the child exits. A copied connection would share the launcher's fids and admission with
 /// the child.
 ///

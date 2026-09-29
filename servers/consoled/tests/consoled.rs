@@ -16,7 +16,7 @@ use redoubt_consoled::MAX_INPUT;
 use redoubt_consoled::uart::FIFO;
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
-use redoubt_rt::client::{Client, ClientError};
+use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::mode;
 use redoubt_rt::startup::{Startup, StartupBuilder};
@@ -146,15 +146,17 @@ fn typing_on_the_uart_reaches_a_ninep_reader() {
     let (reader, conn) = b.client();
     // Attached and opened first, so that the read is the reader's only call below.
     f.as_process(reader, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        c.attach(0, "").unwrap();
-        c.open(0, mode::OREAD).unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.open(&mut lend, 0, mode::OREAD).unwrap();
     });
 
     let reading = f.run(reader, move || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
         let mut got = [0u8; 1];
-        assert_eq!(c.read(0, 0, &mut got).unwrap(), 1);
+        assert_eq!(c.read(&mut lend, 0, 0, &mut got).unwrap(), 1);
         u32::from(got[0])
     });
 
@@ -163,10 +165,11 @@ fn typing_on_the_uart_reaches_a_ninep_reader() {
     // And the server is not blocked by it: another client is served while it waits.
     let (writer, wconn) = b.client();
     f.as_process(writer, || {
-        let mut c = Client::new(Endpoint::from_handle(wconn), 4).unwrap();
-        c.attach(1, "").unwrap();
-        c.open(1, mode::OWRITE).unwrap();
-        assert_eq!(c.write(1, 0, b"!").unwrap(), 1);
+        let c = Connection::new(Endpoint::from_handle(wconn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 1, "").unwrap();
+        c.open(&mut lend, 1, mode::OWRITE).unwrap();
+        assert_eq!(c.write(&mut lend, 1, 0, b"!").unwrap(), 1);
     });
     assert_eq!(b.printed(), b'!', "a 9P write goes out of the UART");
     assert_eq!(f.open_calls(b.server), 1, "the read is still parked");
@@ -189,13 +192,17 @@ fn a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up() {
     let (reader, conn) = b.client();
 
     f.as_process(reader, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
         c.timeout = 150_000;
-        c.attach(0, "").unwrap();
-        c.open(0, mode::OREAD).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.open(&mut lend, 0, mode::OREAD).unwrap();
         let mut got = [0u8; 8];
         // It waited rather than answering; the wait is the client's timeout, not a short read.
-        assert_eq!(c.read(0, 0, &mut got).unwrap_err(), ClientError::Sys(redoubt_rt::abi::Error::Timeout));
+        assert_eq!(
+            c.read(&mut lend, 0, 0, &mut got).unwrap_err(),
+            ClientError::Sys(redoubt_rt::abi::Error::Timeout)
+        );
     });
     // The server was told the call was abandoned and replied, which frees it and its lend (R3).
     wait_until("the abandoned call to be freed", || f.open_calls(b.server) == 0);
@@ -203,10 +210,11 @@ fn a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up() {
     // Still serving.
     let (writer, wconn) = b.client();
     f.as_process(writer, || {
-        let mut c = Client::new(Endpoint::from_handle(wconn), 4).unwrap();
-        c.attach(1, "").unwrap();
-        c.open(1, mode::OWRITE).unwrap();
-        assert_eq!(c.write(1, 0, b"k").unwrap(), 1);
+        let c = Connection::new(Endpoint::from_handle(wconn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 1, "").unwrap();
+        c.open(&mut lend, 1, mode::OWRITE).unwrap();
+        assert_eq!(c.write(&mut lend, 1, 0, b"k").unwrap(), 1);
     });
     assert_eq!(b.printed(), b'k');
 
@@ -221,11 +229,12 @@ fn writes_go_out_of_the_uart_in_order() {
     let f = fake();
     let (writer, conn) = b.client();
     f.as_process(writer, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        c.attach(0, "").unwrap();
-        c.open(0, mode::ORDWR).unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.open(&mut lend, 0, mode::ORDWR).unwrap();
         for (i, byte) in b"hello, world\n".iter().enumerate() {
-            assert_eq!(c.write(0, i as u64, &[*byte]).unwrap(), 1);
+            assert_eq!(c.write(&mut lend, 0, i as u64, &[*byte]).unwrap(), 1);
             assert_eq!(b.printed(), *byte, "byte {i}");
         }
     });
@@ -242,17 +251,18 @@ fn a_device_stuck_on_data_ready_does_not_hang_the_server() {
     b.holds(b'x');
     let (client, conn) = b.client();
     f.as_process(client, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        c.attach(0, "").unwrap();
-        c.open(0, mode::ORDWR).unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.open(&mut lend, 0, mode::ORDWR).unwrap();
         // Reads are answered (with the byte the device keeps handing over) rather than hanging.
         for _ in 0..8 {
             let mut got = [0u8; 8];
-            let n = c.read(0, 0, &mut got).unwrap();
+            let n = c.read(&mut lend, 0, 0, &mut got).unwrap();
             assert!(n > 0 && got[..n].iter().all(|b| *b == b'x'));
         }
         // And writes still get through.
-        assert_eq!(c.write(0, 0, b"#").unwrap(), 1);
+        assert_eq!(c.write(&mut lend, 0, 0, b"#").unwrap(), 1);
     });
     assert_eq!(b.printed(), b'#');
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
@@ -277,23 +287,24 @@ fn a_flood_of_input_keeps_what_was_typed_first() {
     let f = fake();
     let (client, conn) = b.client();
     f.as_process(client, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        c.attach(0, "").unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
         let typed: Vec<u8> = (0..=(MAX_INPUT / FIFO) as u8).map(|i| b'0' + i).collect();
         for byte in &typed {
             b.holds(*byte);
             // Two answered calls, with the server's drain between them. Refused walks, not
             // writes: a write would put its byte in the same register.
             for _ in 0..8 {
-                assert_eq!(c.walk(0, 1, "anything").unwrap_err(), ClientError::Remote);
+                assert_eq!(c.walk(&mut lend, 0, 1, "anything").unwrap_err(), ClientError::Remote);
             }
         }
         b.line_quiet();
 
         // Room for one byte more than the ring may hold, and exactly the ring's limit comes back.
-        c.open(0, mode::OREAD).unwrap();
+        c.open(&mut lend, 0, mode::OREAD).unwrap();
         let mut got = vec![0u8; MAX_INPUT + 1];
-        assert_eq!(c.read(0, 0, &mut got).unwrap(), MAX_INPUT);
+        assert_eq!(c.read(&mut lend, 0, 0, &mut got).unwrap(), MAX_INPUT);
         got.truncate(MAX_INPUT);
         // A run of each byte in the order it was typed, from the very first: nothing skipped or
         // overwritten.
@@ -305,7 +316,7 @@ fn a_flood_of_input_keeps_what_was_typed_first() {
         // Once read, the ring has room again.
         b.holds(b'!');
         let mut next = [0u8; 1];
-        assert_eq!(c.read(0, 0, &mut next).unwrap(), 1);
+        assert_eq!(c.read(&mut lend, 0, 0, &mut next).unwrap(), 1);
         assert_eq!(next[0], b'!');
         b.line_quiet();
     });
@@ -320,18 +331,19 @@ fn the_console_refuses_what_it_is_not() {
     let f = fake();
     let (client, conn) = b.client();
     f.as_process(client, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        c.attach(0, "").unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
         for bad in [mode::OEXEC, mode::OREAD | mode::OTRUNC, mode::OWRITE | mode::OTRUNC] {
-            assert_eq!(c.open(0, bad).unwrap_err(), ClientError::Remote, "{bad:#x}");
+            assert_eq!(c.open(&mut lend, 0, bad).unwrap_err(), ClientError::Remote, "{bad:#x}");
         }
         // There is nothing below /dev/cons.
-        assert_eq!(c.walk(0, 1, "anything").unwrap_err(), ClientError::Remote);
+        assert_eq!(c.walk(&mut lend, 0, 1, "anything").unwrap_err(), ClientError::Remote);
         // A read of an unopened fid, and a write to one opened for reading.
         let mut got = [0u8; 4];
-        assert_eq!(c.read(0, 0, &mut got).unwrap_err(), ClientError::Remote);
-        c.open(0, mode::OREAD).unwrap();
-        assert_eq!(c.write(0, 0, b"x").unwrap_err(), ClientError::Remote);
+        assert_eq!(c.read(&mut lend, 0, 0, &mut got).unwrap_err(), ClientError::Remote);
+        c.open(&mut lend, 0, mode::OREAD).unwrap();
+        assert_eq!(c.write(&mut lend, 0, 0, b"x").unwrap_err(), ClientError::Remote);
     });
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }

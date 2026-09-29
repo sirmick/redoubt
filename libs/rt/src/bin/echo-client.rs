@@ -8,7 +8,7 @@
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
 use redoubt_rt::abi::{FOREVER, Handle, MAX_LEND_PAGES};
-use redoubt_rt::client::Client;
+use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::MALFORMED;
 use redoubt_rt::server::ninep::mode;
@@ -38,15 +38,16 @@ fn check(startup: &Startup) -> Result<(), u32> {
     if rest != "echo" {
         return Err(10);
     }
-    let mut echo = Client::new(Endpoint::from_handle(server), MAX_LEND_PAGES).map_err(|_| 11u32)?;
-    echo.version().map_err(|_| 12u32)?;
-    echo.attach(ROOT, "").map_err(|_| 13u32)?;
+    let echo = Connection::new(Endpoint::from_handle(server));
+    let mut lend = Lend::new(MAX_LEND_PAGES).map_err(|_| 11u32)?;
+    echo.version(&mut lend).map_err(|_| 12u32)?;
+    echo.attach(&mut lend, ROOT, "").map_err(|_| 13u32)?;
     // `..` never climbs above the root: the client cleans it away, and the server would too.
-    echo.walk(ROOT, FILE, "../../echo").map_err(|_| 14u32)?;
-    echo.open(FILE, mode::ORDWR | mode::OTRUNC).map_err(|_| 15u32)?;
+    echo.walk(&mut lend, ROOT, FILE, "../../echo").map_err(|_| 14u32)?;
+    echo.open(&mut lend, FILE, mode::ORDWR | mode::OTRUNC).map_err(|_| 15u32)?;
     let mut sent = 0;
     while sent < MESSAGE.len() {
-        let n = echo.write(FILE, sent as u64, &MESSAGE[sent..]).map_err(|_| 16u32)?;
+        let n = echo.write(&mut lend, FILE, sent as u64, &MESSAGE[sent..]).map_err(|_| 16u32)?;
         if n == 0 {
             return Err(16);
         }
@@ -55,7 +56,7 @@ fn check(startup: &Startup) -> Result<(), u32> {
     let mut back = [0u8; 6000];
     let mut got = 0;
     loop {
-        let n = echo.read(FILE, got as u64, &mut back[got..]).map_err(|_| 17u32)?;
+        let n = echo.read(&mut lend, FILE, got as u64, &mut back[got..]).map_err(|_| 17u32)?;
         if n == 0 {
             break;
         }
@@ -64,7 +65,7 @@ fn check(startup: &Startup) -> Result<(), u32> {
     if &back[..got] != MESSAGE {
         return Err(18);
     }
-    echo.clunk(FILE).map_err(|_| 19u32)?;
+    echo.clunk(&mut lend, FILE).map_err(|_| 19u32)?;
     // A call with words that are not 9P's is malformed (status 1), not served.
     let endpoint = echo.into_endpoint();
     let (reply, _) = endpoint.call(&[1, 2, 3, 4], &[], None, FOREVER).into_result().map_err(|_| 20u32)?;
@@ -75,9 +76,10 @@ fn check(startup: &Startup) -> Result<(), u32> {
 }
 
 fn print(console: Handle, text: &[u8]) -> Result<(), redoubt_rt::client::ClientError> {
-    let mut cons = Client::new(Endpoint::from_handle(console), 1)?;
-    cons.attach(ROOT, "")?;
-    cons.open(ROOT, mode::OWRITE)?;
-    cons.write(ROOT, 0, text)?;
-    cons.clunk(ROOT)
+    let cons = Connection::new(Endpoint::from_handle(console));
+    let mut lend = Lend::new(1)?;
+    cons.attach(&mut lend, ROOT, "")?;
+    cons.open(&mut lend, ROOT, mode::OWRITE)?;
+    cons.write(&mut lend, ROOT, 0, text)?;
+    cons.clunk(&mut lend, ROOT)
 }

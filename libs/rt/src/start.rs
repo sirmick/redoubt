@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use redoubt_sys::Handle;
 
-use crate::client::{Client, ClientError};
+use crate::client::{ClientError, Connection, Lend};
 use crate::handle::Endpoint;
 use crate::server::ninep::mode;
 use crate::startup::Startup;
@@ -178,12 +178,14 @@ fn write_console(console: Handle, message: fmt::Arguments) -> Result<(), ClientE
     // Too long a message is cut, never an error.
     let _ = writeln!(text, "panicked: {message}");
     // One page of lend, from map_anon rather than the heap.
-    let mut client = Client::new(Endpoint::from_handle(console), 1)?;
-    client.timeout = PANIC_TIMEOUT;
-    client.attach(PANIC_FID, "")?;
-    let written =
-        client.open(PANIC_FID, mode::OWRITE).and_then(|_| client.write(PANIC_FID, 0, text.as_bytes()));
-    let _ = client.clunk(PANIC_FID);
+    let mut lend = Lend::new(1)?;
+    let mut console = Connection::new(Endpoint::from_handle(console));
+    console.timeout = PANIC_TIMEOUT;
+    console.attach(&mut lend, PANIC_FID, "")?;
+    let written = console
+        .open(&mut lend, PANIC_FID, mode::OWRITE)
+        .and_then(|_| console.write(&mut lend, PANIC_FID, 0, text.as_bytes()));
+    let _ = console.clunk(&mut lend, PANIC_FID);
     written.map(|_| ())
 }
 

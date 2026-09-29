@@ -32,7 +32,7 @@ use redoubt_net_client::{REPORT, code, event};
 use redoubt_rt::abi::{
     BudgetSpec, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels, MemFlags, PAGE_SIZE, ResetKind,
 };
-use redoubt_rt::client::Client;
+use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::{Budget, Endpoint, Irq, Mmio, Process, Registers, Reset};
 use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::server::ninep::mode;
@@ -193,7 +193,7 @@ struct Rig {
     next_account: u64,
     /// The rig's root connection to `ipd`, and a 9P client on it.
     root: Handle,
-    nine: Option<Client>,
+    nine: Option<Connection>,
     netd: Option<Child>,
     ipd: Option<Child>,
     /// Programs that must outlive the rig's checks (the bucket holders).
@@ -412,23 +412,23 @@ impl Rig {
     /// `listen` answers `unreachable` until `ipd` has asked `netd` for the MAC; the rig listens on
     /// its probe port until it does not, then closes that socket. Nothing goes on the wire.
     fn wait_for_link(&mut self) -> Result<(), String> {
-        let mut nine =
-            Client::new(Endpoint::from_handle(self.root), 1).map_err(|e| format!("root client: {e:?}"))?;
-        nine.attach(0, "").map_err(|e| format!("root attach: {e:?}"))?;
-        nine.walk(0, 1, "tcp/clone").map_err(|e| format!("root clone: {e:?}"))?;
-        nine.open(1, mode::OREAD).map_err(|e| format!("root clone: {e:?}"))?;
+        let nine = Connection::new(Endpoint::from_handle(self.root));
+        let mut lend = Lend::new(1).map_err(|e| format!("root client: {e:?}"))?;
+        nine.attach(&mut lend, 0, "").map_err(|e| format!("root attach: {e:?}"))?;
+        nine.walk(&mut lend, 0, 1, "tcp/clone").map_err(|e| format!("root clone: {e:?}"))?;
+        nine.open(&mut lend, 1, mode::OREAD).map_err(|e| format!("root clone: {e:?}"))?;
         let mut n = [0u8; 4];
-        nine.read(1, 0, &mut n).map_err(|e| format!("root clone read: {e:?}"))?;
-        nine.clunk(1).map_err(|e| format!("root clunk: {e:?}"))?;
+        nine.read(&mut lend, 1, 0, &mut n).map_err(|e| format!("root clone read: {e:?}"))?;
+        nine.clunk(&mut lend, 1).map_err(|e| format!("root clunk: {e:?}"))?;
         let ctl = format!("tcp/{}/ctl", u32::from_le_bytes(n));
-        nine.walk(0, 2, &ctl).map_err(|e| format!("root ctl: {e:?}"))?;
-        nine.open(2, mode::ORDWR).map_err(|e| format!("root ctl: {e:?}"))?;
+        nine.walk(&mut lend, 0, 2, &ctl).map_err(|e| format!("root ctl: {e:?}"))?;
+        nine.open(&mut lend, 2, mode::ORDWR).map_err(|e| format!("root ctl: {e:?}"))?;
         let listen = encode(net_ctl::Message::Listen(net_ctl::Listen { port: PROBE_PORT, backlog: 1 }));
         let started = now();
         let mut tries = 0u32;
         loop {
             tries += 1;
-            if nine.write(2, 0, &listen).is_ok() {
+            if nine.write(&mut lend, 2, 0, &listen).is_ok() {
                 break;
             }
             if now().saturating_sub(started) > LINK_WAIT {
@@ -436,8 +436,8 @@ impl Rig {
             }
         }
         let close = encode(net_ctl::Message::Close(net_ctl::Close {}));
-        nine.write(2, 0, &close).map_err(|e| format!("closing the probe: {e:?}"))?;
-        nine.clunk(2).map_err(|e| format!("root clunk: {e:?}"))?;
+        nine.write(&mut lend, 2, 0, &close).map_err(|e| format!("closing the probe: {e:?}"))?;
+        nine.clunk(&mut lend, 2).map_err(|e| format!("root clunk: {e:?}"))?;
         say!(self, "[net-rig] ipd has a link ({tries} probes)");
         self.nine = Some(nine);
         Ok(())
@@ -464,7 +464,7 @@ impl Rig {
     }
 
     fn disconnect(&mut self, id: u64) {
-        let done = self.nine.as_mut().map(|nine| nine.disconnect(id));
+        let done = self.nine.as_ref().map(|nine| nine.disconnect(id));
         if !matches!(done, Some(Ok(()))) {
             self.fail(&format!("disconnect {id}: {done:?}"));
         }

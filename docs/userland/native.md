@@ -174,7 +174,7 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 
 ### `redoubt-rt`, the native runtime
 
-Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested: bench:rt-build, bench:net-tcp, host:redoubt-rt::echo_pair_runs_on_the_runtime, host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it, host:redoubt-rt::exit_codes_reach_the_parent, host:redoubt-rt::a_panic_is_reported_on_the_console_once, host:redoubt-rt::heap_over_map_anon, host:redoubt-rt::call_lend_and_reply, host:redoubt-rt::send_transfers_pages_for_good, host:redoubt-rt::timeouts_dead_endpoints_and_refusals, host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::the_9p_client_closes_handles_a_hostile_server_sends
+Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested: bench:rt-build, bench:net-tcp, host:redoubt-rt::echo_pair_runs_on_the_runtime, host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it, host:redoubt-rt::exit_codes_reach_the_parent, host:redoubt-rt::a_panic_is_reported_on_the_console_once, host:redoubt-rt::heap_over_map_anon, host:redoubt-rt::call_lend_and_reply, host:redoubt-rt::send_transfers_pages_for_good, host:redoubt-rt::timeouts_dead_endpoints_and_refusals, host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::the_9p_client_closes_handles_a_hostile_server_sends, host:redoubt-rt::threads_share_one_connection_with_their_own_lends, host:redoubt-rt::a_consumed_lend_is_replaced_by_fresh_pages
 
 `redoubt-rt` is everything a `no_std` Rust program or server needs between the system-call ABI
 (`redoubt-sys`) and its own logic ([`libs/rt/src/lib.rs`](../../libs/rt/src/lib.rs)). It builds
@@ -210,11 +210,12 @@ the loader stub.
   closes them, so an error never leaks a handle slot
   ([R13 (one outcome per call)](../kernel/ipc.md#r13-one-outcome-per-call)). Any facade above the
   runtime has to keep this accounting.
-- **The 9P client does not trust the server.** One request at a time in one lent buffer; a walk
-  of at most 16 components after cleaning, refused rather than split; a reply must decode, carry
-  the request's tag and be the matching reply, and every count is checked against what was asked.
-  A 9P reply carries no handles, so any that arrive are closed. For launchers it also has
-  `new_connection` and `disconnect`.
+- **The 9P client does not trust the server.** A `Connection` holds the endpoint and no buffer or
+  fids, so threads share it; each request lends its caller's `Lend`, one per thread, and a lend a
+  call consumed maps fresh pages on its next call. A walk is at most 16 components after cleaning,
+  refused rather than split; a reply must decode, carry the request's tag and be the matching
+  reply, and every count is checked against what was asked. A 9P reply carries no handles, so any
+  that arrive are closed. For launchers it also has `new_connection` and `disconnect`.
 - **Tested on the host against a fake kernel.** Every system call goes through one function; on
   the machine it is the `ecall`, on the host a `HostKernel` a test installs, so the runtime and
   programs built on it (the echo client and server) run in host tests.

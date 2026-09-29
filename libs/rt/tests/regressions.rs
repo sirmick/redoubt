@@ -3,7 +3,7 @@
 
 use redoubt_fake_kernel::{answer, fake};
 use redoubt_rt::abi::{FOREVER, Handle, Handles};
-use redoubt_rt::client::{Client, ClientError};
+use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event, Words};
 use redoubt_rt::server::ninep::WORDS_9P;
@@ -30,9 +30,10 @@ fn the_9p_client_closes_handles_a_hostile_server_sends() {
     });
     let before = f.held(client).0;
     let code = f.run(client, move || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 1).unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(1).unwrap();
         for _ in 0..20 {
-            assert_eq!(c.attach(0, "").err(), Some(ClientError::Unexpected));
+            assert_eq!(c.attach(&mut lend, 0, "").err(), Some(ClientError::Unexpected));
         }
         0
     });

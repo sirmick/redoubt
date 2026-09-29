@@ -8,7 +8,7 @@
 #![no_main]
 
 use redoubt_rt::abi::Handle;
-use redoubt_rt::client::Client;
+use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use test_programs::rd;
 use test_programs::{Logger, log};
@@ -21,7 +21,8 @@ pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
     let server = Endpoint::from_handle(Handle::new(1).expect("slot 1"));
     // The lend first: it is memory, not a handle, and there is no room for anything later.
-    let mut client = Client::new(server, 1).expect("a lend");
+    let client = Connection::new(server);
+    let mut lend = Lend::new(1).expect("a lend");
     let first = rd::endpoint_create().expect("room for one handle");
     let mut filled = 1;
     while rd::endpoint_create().is_ok() {
@@ -29,12 +30,12 @@ pub extern "C" fn _start() -> ! {
     }
     log!(logger, "[ninep-client] table full after {} endpoints", filled);
     for _ in 0..DISCARDED {
-        if client.new_connection("", 0).is_ok() {
+        if client.new_connection(&mut lend, "", 0).is_ok() {
             log!(logger, "[ninep-client] a capability arrived with the table full");
         }
     }
     rd::close(first).expect("close one");
-    match client.new_connection("", 0) {
+    match client.new_connection(&mut lend, "", 0) {
         Ok((_, id)) => {
             log!(logger, "[ninep-client] connected with one slot free");
             let _ = client.disconnect(id);

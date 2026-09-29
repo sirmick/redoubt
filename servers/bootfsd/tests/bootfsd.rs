@@ -8,7 +8,7 @@
 
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
-use redoubt_rt::client::{Client, ClientError};
+use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::MALFORMED;
@@ -103,39 +103,42 @@ fn a_session_reads_the_public_entries_and_sees_nothing_else() {
     // "Fresh connections per child").
     let session = f.process(1001, &[]);
     let (conn, id) = f
-        .as_process(init, || Client::new(Endpoint::from_handle(founding), 4).unwrap().new_connection("", 0))
+        .as_process(init, || {
+            Connection::new(Endpoint::from_handle(founding)).new_connection(&mut Lend::new(4).unwrap(), "", 0)
+        })
         .expect("a connection for the session");
     let conn = f.copy(init, conn.handle(), session);
     assert!(id != 0, "a connection id is random, never a counter");
 
     f.as_process(session, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 16).unwrap();
-        assert_eq!(c.version().unwrap(), redoubt_rt::wire::MSIZE as u32);
-        c.attach(0, "").unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(16).unwrap();
+        assert_eq!(c.version(&mut lend).unwrap(), redoubt_rt::wire::MSIZE as u32);
+        c.attach(&mut lend, 0, "").unwrap();
         for (i, (name, data)) in entries.iter().enumerate() {
             let fid = 10 + i as u32;
-            c.walk(0, fid, name).unwrap_or_else(|e| panic!("walk {name}: {e:?}"));
-            c.open(fid, mode::OREAD).unwrap();
+            c.walk(&mut lend, 0, fid, name).unwrap_or_else(|e| panic!("walk {name}: {e:?}"));
+            c.open(&mut lend, fid, mode::OREAD).unwrap();
             let mut got = vec![0u8; data.len()];
             let mut at = 0;
             while at < data.len() {
-                let n = c.read(fid, at as u64, &mut got[at..]).unwrap();
+                let n = c.read(&mut lend, fid, at as u64, &mut got[at..]).unwrap();
                 assert!(n > 0, "{name} stopped short at {at}");
                 at += n;
             }
             assert_eq!(&got, data, "{name} did not read back byte for byte");
             // Past the end: nothing, not an error.
-            assert_eq!(c.read(fid, data.len() as u64, &mut got).unwrap(), 0);
-            c.clunk(fid).unwrap();
+            assert_eq!(c.read(&mut lend, fid, data.len() as u64, &mut got).unwrap(), 0);
+            c.clunk(&mut lend, fid).unwrap();
         }
         // The attack case: the manifest's own name is refused exactly as a name the bundle
         // never held.
-        let never = c.walk(0, 30, "no-such-entry").unwrap_err();
-        assert_eq!(c.walk(0, 30, MANIFEST).unwrap_err(), never);
-        assert_eq!(c.walk(0, 30, "kernel").unwrap_err(), never);
+        let never = c.walk(&mut lend, 0, 30, "no-such-entry").unwrap_err();
+        assert_eq!(c.walk(&mut lend, 0, 30, MANIFEST).unwrap_err(), never);
+        assert_eq!(c.walk(&mut lend, 0, 30, "kernel").unwrap_err(), never);
         assert_eq!(never, ClientError::Remote);
         // And the directory lists exactly the public list, in the manifest's order.
-        assert_eq!(names(&mut c, 0), PUBLIC.map(String::from).to_vec());
+        assert_eq!(names(&c, &mut lend, 0), PUBLIC.map(String::from).to_vec());
     });
 
     f.destroy(server, receive);
@@ -143,13 +146,13 @@ fn a_session_reads_the_public_entries_and_sees_nothing_else() {
 }
 
 /// The names a directory read of `fid` lists.
-fn names(c: &mut Client, fid: u32) -> Vec<String> {
-    c.open(fid, mode::OREAD).unwrap();
+fn names(c: &Connection, lend: &mut Lend, fid: u32) -> Vec<String> {
+    c.open(lend, fid, mode::OREAD).unwrap();
     let mut out = Vec::new();
     let mut offset = 0u64;
     loop {
         let mut buf = vec![0u8; 8192];
-        let n = c.read(fid, offset, &mut buf).unwrap();
+        let n = c.read(lend, fid, offset, &mut buf).unwrap();
         if n == 0 {
             return out;
         }
@@ -178,7 +181,9 @@ fn a_client_cannot_publish_into_boot() {
     });
     let session = f.process(1001, &[]);
     let (conn, _) = f
-        .as_process(init, || Client::new(Endpoint::from_handle(founding), 4).unwrap().new_connection("", 0))
+        .as_process(init, || {
+            Connection::new(Endpoint::from_handle(founding)).new_connection(&mut Lend::new(4).unwrap(), "", 0)
+        })
         .unwrap();
     let conn = f.copy(init, conn.handle(), session);
     f.as_process(session, || {
@@ -194,20 +199,21 @@ fn a_client_cannot_publish_into_boot() {
         assert_eq!(setup(founding, Message::Seal(Seal {})), Err(ErrorCode::Refused));
     });
     f.as_process(session, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 16).unwrap();
-        c.attach(0, "").unwrap();
-        c.walk(0, 1, "keyd").unwrap();
-        c.open(1, mode::OREAD).unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(16).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.walk(&mut lend, 0, 1, "keyd").unwrap();
+        c.open(&mut lend, 1, mode::OREAD).unwrap();
         let mut got = [0u8; 16];
-        let n = c.read(1, 0, &mut got).unwrap();
+        let n = c.read(&mut lend, 1, 0, &mut got).unwrap();
         assert_eq!(&got[..n], b"good", "the client's bytes never reached /boot");
         // Nor can it write through 9P.
-        assert_eq!(c.open(2, mode::OWRITE).unwrap_err(), ClientError::Remote);
-        c.walk(0, 3, "keyd").unwrap();
-        assert_eq!(c.open(3, mode::OWRITE).unwrap_err(), ClientError::Remote);
-        assert_eq!(c.open(3, mode::ORDWR).unwrap_err(), ClientError::Remote);
-        c.open(3, mode::OREAD).unwrap();
-        assert_eq!(c.write(3, 0, b"evil").unwrap_err(), ClientError::Remote);
+        assert_eq!(c.open(&mut lend, 2, mode::OWRITE).unwrap_err(), ClientError::Remote);
+        c.walk(&mut lend, 0, 3, "keyd").unwrap();
+        assert_eq!(c.open(&mut lend, 3, mode::OWRITE).unwrap_err(), ClientError::Remote);
+        assert_eq!(c.open(&mut lend, 3, mode::ORDWR).unwrap_err(), ClientError::Remote);
+        c.open(&mut lend, 3, mode::OREAD).unwrap();
+        assert_eq!(c.write(&mut lend, 3, 0, b"evil").unwrap_err(), ClientError::Remote);
     });
 
     f.destroy(server, receive);

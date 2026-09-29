@@ -10,7 +10,7 @@ mod echo_server;
 
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle, PAGE_SIZE};
-use redoubt_rt::client::{Client, ClientError};
+use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::MALFORMED;
@@ -159,10 +159,11 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
     let handles_before = f.held(server).0;
 
     let (fresh, id) = f.as_process(launcher, || {
-        let mut client = Client::new(Endpoint::from_handle(connection), 1).unwrap();
-        let (fresh, id) = client.new_connection("", 0).unwrap();
+        let client = Connection::new(Endpoint::from_handle(connection));
+        let mut lend = Lend::new(1).unwrap();
+        let (fresh, id) = client.new_connection(&mut lend, "", 0).unwrap();
         // Rooted below the launcher's root; a file that is not there is refused.
-        assert_eq!(client.new_connection("nope", 0).err(), Some(ClientError::Remote));
+        assert_eq!(client.new_connection(&mut lend, "nope", 0).err(), Some(ClientError::Remote));
         (fresh.handle(), id)
     });
     // The server kept no handle: its copy of the minted one was closed once the reply carried it.
@@ -173,22 +174,26 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
 
     // Someone else cannot disconnect the child, even knowing its id.
     f.as_process(stranger, || {
-        let mut client = Client::new(Endpoint::from_handle(strangers_conn), 1).unwrap();
-        assert_eq!(client.disconnect(id), Err(ClientError::Remote));
+        assert_eq!(
+            Connection::new(Endpoint::from_handle(strangers_conn)).disconnect(id),
+            Err(ClientError::Remote)
+        );
     });
     f.as_process(child, || {
-        let mut client = Client::new(Endpoint::from_handle(fresh), 1).unwrap();
-        client.attach(7, "").unwrap(); // the echo client still holds fid 0
+        let client = Connection::new(Endpoint::from_handle(fresh));
+        let mut lend = Lend::new(1).unwrap();
+        client.attach(&mut lend, 7, "").unwrap(); // the echo client still holds fid 0
     });
     // The launcher can; then the child's connection is gone, its fid with it.
     f.as_process(launcher, || {
-        let mut client = Client::new(Endpoint::from_handle(connection), 1).unwrap();
+        let client = Connection::new(Endpoint::from_handle(connection));
         client.disconnect(id).unwrap();
         assert_eq!(client.disconnect(id), Err(ClientError::Remote), "an id is spent once used");
     });
     f.as_process(child, || {
-        let mut client = Client::new(Endpoint::from_handle(fresh), 1).unwrap();
-        assert_eq!(client.attach(1, ""), Err(ClientError::Remote));
+        let client = Connection::new(Endpoint::from_handle(fresh));
+        let mut lend = Lend::new(1).unwrap();
+        assert_eq!(client.attach(&mut lend, 1, ""), Err(ClientError::Remote));
         // A ninep_common call bringing handles it did not ask for: malformed, and closed.
         let junk = Endpoint::create().unwrap();
         let ep = Endpoint::from_handle(fresh);
