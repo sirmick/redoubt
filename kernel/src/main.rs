@@ -9,6 +9,12 @@
 #[cfg(not(feature = "sbi"))]
 compile_error!("the kernel runs under SBI firmware: enable the `sbi` feature (or `qemu-virt`)");
 
+// Test-only features build only into a checked kernel, which a shipped one (`./build`, release)
+// is not; each implies `test-only`, and the bench builds every case that turns one on with debug
+// assertions (R23).
+#[cfg(all(feature = "test-only", not(debug_assertions)))]
+compile_error!("a test-only kernel feature needs a checked build (debug assertions on)");
+
 #[macro_use]
 mod debug;
 
@@ -77,6 +83,18 @@ pub unsafe extern "C" fn init(
         // The bench's `debug_assertions` cases expect this line, so a build that silently
         // lost the checks fails instead of passing quietly (`bench-debug-assertions`).
         println!("kernel: checks on (debug assertions, overflow checks)");
+    }
+    // Test builds only: a print, then a panic, inside `print!` (debug/console.rs).
+    #[cfg(feature = "panic-in-print")]
+    {
+        struct Panics;
+        impl core::fmt::Display for Panics {
+            fn fmt(&self, _: &mut core::fmt::Formatter) -> core::fmt::Result {
+                println!("a Display printed inside print!");
+                panic!("a Display panicked inside print!")
+            }
+        }
+        println!("panic-in-print: {}", Panics);
     }
 
     // rand::init() already clears the initial pipe, but pump the TRNG a little more out of no other reason

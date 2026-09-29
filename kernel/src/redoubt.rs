@@ -194,7 +194,7 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
 fn budget_destroy(pid: Pid, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
     ProcessTable::with_mut(|ss| {
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
-        let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid), false);
+        let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid), None);
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })
     })
 }

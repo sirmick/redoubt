@@ -6,12 +6,12 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 7000
+max_lines = 7264
 
 [[crate]]
 name = "loader"
 paths = ["loader/src"]
-max_lines = 822
+max_lines = 952
 
 [[crate]]
 name = "stub"
@@ -26,7 +26,7 @@ max_lines = 1665
 [[crate]]
 name = "libs/layout"
 paths = ["libs/layout/src"]
-max_lines = 51
+max_lines = 77
 
 [[crate]]
 name = "libs/paging"
@@ -36,7 +36,7 @@ max_lines = 158
 [[crate]]
 name = "libs/stride"
 paths = ["libs/stride/src"]
-max_lines = 516
+max_lines = 550
 
 [[crate]]
 name = "libs/signing"
@@ -61,7 +61,7 @@ max_lines = 2277
 [[crate]]
 name = "model"
 paths = ["model/src"]
-max_lines = 10132
+max_lines = 10292
 
 [[crate]]
 name = "servers/keyd"

@@ -170,6 +170,18 @@ fn arguments(c: &mut Checker, image: &spawn::Image) {
         assert_eq!(rd::peek(src), 0x1122);
     }
     c.check(true, "hostile mapping ranges and W+X refused without moving source");
+    // Bad flags on a source page never touched: refused before the page is backed, so the
+    // caller's own budget (this loader program's, `system`) is charged nothing.
+    let untouched = rd::untouched_stack_page();
+    let own = rd::usage(rd::SYSTEM).unwrap();
+    for flags in [MemFlags::WRITE, MemFlags::NONE] {
+        assert_eq!(
+            rd::process_map(process, untouched, DEST, rd::PAGE_SIZE, flags),
+            Err(Error::InvalidArgument)
+        );
+        assert_eq!(rd::usage(rd::SYSTEM), Ok(own));
+    }
+    c.check(true, "bad flags refused before an untouched source page is backed");
     rd::process_map(process, src, DEST, rd::PAGE_SIZE, rd::rw()).unwrap();
     let second = rd::map_anon(rd::PAGE_SIZE, rd::rw()).unwrap();
     rd::poke(second, 0x5566);
@@ -255,7 +267,10 @@ fn pending_record(c: &mut Checker, image: &spawn::Image) {
     assert_eq!(execution.processes_usage, 1);
     assert!(execution.pages_usage > 0);
     rd::destroy(budget).unwrap(); // Notice is pending synchronously; no timing assumption.
-    let pending = rd::Usage { pages_usage: base.pages_usage + 1, ..base };
+    // The object's page is ours, and the PID it holds now counts here, the destroyed budget's
+    // parent (R10 step 8).
+    let pending =
+        rd::Usage { pages_usage: base.pages_usage + 1, processes_usage: base.processes_usage + 1, ..base };
     assert_eq!(rd::usage(rd::SYSTEM), Ok(pending));
     let bad_record = Call::Receive { from: Some(rd::h(exit)), timeout: 0, max_transfer: 0, received_rec: 0 };
     assert_eq!(redoubt_sys::syscall(&bad_record), Err(Error::InvalidArgument));

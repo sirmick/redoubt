@@ -92,7 +92,7 @@ threads. A fault in any thread ends the whole process.
 
 ### Creating and starting
 
-Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` are not attacked by a case, and the kernel departs from the PID count (Residual risks) · tested: bench:process, bench:process-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget
+Status: built · partly tested: `OutOfMemory` from `process_start` is not attacked by a case · tested: bench:process, bench:process-attack, bench:pid-pinning-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6PidUncountedAtEnd, mutation:R10HeldPidsDropped, mutation:R11ProcessMapSkipsFlags
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -129,18 +129,17 @@ destroyed budget's parent once the carve has come back
 ([R10 (destruction)](budgets.md#r10-destruction)), so it stays inside the carve that bounded
 it. Because every process limit is carved from `root`'s, which is every PID but the kernel's, a
 `process_create` into a budget under its limit always finds a free PID, and no budget can take
-another's. The kernel departs from this: it counts a process only while it lives, so an ended
-process's PID is held outside every limit until its notice goes (Residual risks).
+another's.
 
 **`process_map`** moves pages from the caller into a process that has not started. The source
 must be whole pages of the caller's own RAM, not lent (a reserved page is backed first); device
-and DMA pages stay put. Every check runs before any page moves. The ranges, the source and the
-flags are `InvalidArgument` (flags never empty, never writable and executable together, never
-writable without readable: [R11 (memory)](memory.md#r11-memory)); a process that has ended
-(its address space gone) is `NotPermitted`; a destination page already in use is
-`InvalidArgument`; a process that has started is `NotPermitted`; last, the
-process's budget must pay for the page tables and, unless parent and child share a budget, the
-pages (`OutOfMemory`). The exact order is in the
+and DMA pages stay put. Every check runs before any page moves. The ranges, the flags and the
+source, in that order, are `InvalidArgument` (flags never empty, never writable and executable
+together, never writable without readable: [R11 (memory)](memory.md#r11-memory)), so bad flags
+back no page of the source; a process that has ended (its address space gone) is
+`NotPermitted`; a destination page already in use is `InvalidArgument`; a process that has
+started is `NotPermitted`; last, the process's budget must pay for the page tables and, unless
+parent and child share a budget, the pages (`OutOfMemory`). The exact order is in the
 [ABI reference](abi.md#errors-and-the-order-of-checks). The pages then belong to the process and
 are charged to its budget; the page rules are in [memory](memory.md#the-mapping-calls). The
 image and the startup block reach a process this way.
@@ -346,30 +345,11 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
   budget the process ran in, not those of the blamed sender. A `system`-class server's notice
   can carry a labelled caller's account and labels to a `user`-class owner of its exit endpoint.
   Only a creator holding a `system`-class budget handle can set this up.
-- **PIDs are one global pool of 63, and untaken notices hold them outside every limit.** The
-  kernel departs from the PID count: an ended process's PID stays held while its notice is
-  untaken, and it no longer counts against any process limit. What bounds these PIDs is the
-  creator's pages, so one creator can hold every free PID with a single one-process budget, and
-  every other `process_create`, in any part of the budget tree, then gets `OutOfProcesses`.
-  Follow-up: [todo](../todo/pid-pool-pinning.md).
 - **A creator's untaken notices hold PIDs in budgets it was given.** A process created into
   another's budget counts there until its creator takes the notice, and after that budget is
   destroyed, in its parent. The loss is bounded by the process limit of the budget whose handle
   the creator was given, and a budget handle is already the right to spend that limit; the
   creators that launch into others' budgets are `init` and the steward.
-- **Finding a process object scans every object frame.** Drawing a PID looks for a process
-  object naming each candidate PID, and matching a notice to its endpoint looks for one owing a
-  notice there; each walks every kernel-object frame up to the highest one ever used, a mark
-  bounded only by RAM that any budget raises by creating objects. The time is billed to the
-  caller, as every call's is, but the kernel runs it with interrupts off, so every wake waits
-  for it; this departs from R12 (scheduling)'s bound on a call's kernel time
-  ([scheduling](scheduling.md#r12-scheduling)). Follow-up:
-  [todo](../todo/kernel-scan-bounds.md).
-- **`process_map` backs its source before it checks the flags.** A `process_map` with bad flags
-  may first make the caller's untouched source pages real, at the caller's cost, before it
-  refuses. The model's proof of the write-without-read refusal goes through `set_flags`, not
-  `process_map` ([todo](../todo/write-only-mutation-split.md)). Follow-up:
-  [todo](../todo/process-map-flag-order.md).
 - **The loader's own programs send no notice.** Nothing hears when one of them ends
   ([boot](boot.md)).
 

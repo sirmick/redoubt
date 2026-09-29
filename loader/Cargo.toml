@@ -5,10 +5,21 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Redoubt loader for RISC-V (RV32/RV64) SBI + device-tree platforms (QEMU virt, FPGA softcores)"
 
+# The device-tree read and the console are a library, so host unit tests reach `dt.rs` with no
+# boot (src/lib.rs). The binary is the loader itself and only builds for the machine.
+[lib]
+name = "loader"
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "loader"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 redoubt-layout = { path = "../libs/layout" }                  # the kernel-half map and PIDs, shared with the kernel
 fdt-rs = { version = "0.4", default-features = false }
-sbi-rt = "0.0.3"
 elf = { version = "0.8", default-features = false }
 tar-no-std = { version = "0.5", default-features = false }
 crc = { version = "3", default-features = false }
@@ -16,3 +27,7 @@ paging = { path = "../libs/paging" }
 redoubt-sys = { path = "../libs/sys" }
 ed25519-compact = { version = "2", default-features = false }
 redoubt-signing = { path = "../libs/signing" }              # the bundle signature's preimage
+
+# The firmware's calls are RISC-V `ecall`s, so the host tests build without them.
+[target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
+sbi-rt = "0.0.3"

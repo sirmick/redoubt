@@ -147,15 +147,24 @@ impl Scheduler {
         }
     }
 
-    /// `b`'s stride weight is about to change to `new` (a carve, or a returned carve): fold at the
-    /// old weight first, then rescale the remainder (error below one pass unit).
+    /// `b`'s stride weight has changed from `old` to `new` (a carve, or a returned carve), its
+    /// runtime folded at `old`: what it owes, `W = (pass − floor)⁺·old + rem`, is restated exactly
+    /// at the new weight, `pass = floor + W / new`, `rem = W mod new`. A weight of 0 is stated as 1,
+    /// so what a budget owes is carried exactly through 0.
     fn reweigh(&mut self, b: u64, old: u64, new: u64) {
-        let rescale = |rem: u64| {
-            if old == 0 { 0 } else { ((u128::from(rem) * u128::from(new)) / u128::from(old)) as u64 }
-        };
-        if let Some(e) = self.budgets.get_mut(&b) {
-            e.rem = rescale(e.rem).min(new.saturating_sub(1));
+        let (old, new) = (old.max(1), new.max(1));
+        // Broken: a carve rescales only the remainder, so a lead does not grow when the weight
+        // goes and still shrinks when it comes back.
+        let only_on_return = self.broken(Mutation::R12RescaleOnlyOnReturn) && new < old;
+        let floor = self.floor;
+        let Some(e) = self.budgets.get_mut(&b) else { return };
+        if only_on_return {
+            e.rem = ((u128::from(e.rem) * u128::from(new)) / u128::from(old)) as u64;
+            return;
         }
+        let owed = e.pass.saturating_sub(floor) * u128::from(old) + u128::from(e.rem);
+        e.pass = floor + owed / u128::from(new);
+        e.rem = (owed % u128::from(new)) as u64;
     }
 
     /// A new budget `id` with weight limit `limit` is carved from `parent` (none for a root).
@@ -217,6 +226,34 @@ impl Scheduler {
         let new = self.weight(p);
         self.reweigh(p, old, new);
         self.budgets.get_mut(&b).unwrap().returned = true;
+    }
+
+    /// Who pays for `top`'s destruction when its deadline passes (R10, R12): its parent, or else
+    /// the nearest ancestor with stride weight above 0, or the root if none has. Asked once
+    /// [`Scheduler::return_carve`] has given `top`'s carve back.
+    pub fn destruction_payer(&self, top: u64) -> Option<u64> {
+        let mut payer = self.budgets.get(&top)?.parent?;
+        while self.weight(payer) == 0 {
+            let Some(up) = self.budgets.get(&payer).and_then(|e| e.parent) else { break };
+            payer = up;
+        }
+        Some(payer)
+    }
+
+    /// The kernel spent `work` destroying a budget on its deadline: all of it is billed to the
+    /// payer ([`Scheduler::destruction_payer`]) once the subtree is gone, as runtime at the
+    /// payer's weight then (the running budget's joins its pending runtime).
+    pub fn bill_destruction(&mut self, payer: u64, work: u64) {
+        if self.broken(Mutation::R12DeadlineWorkUnbilled) {
+            return;
+        }
+        match self.current.as_mut() {
+            Some(c) if c.budget == payer => c.pending = c.pending.saturating_add(work),
+            _ => {
+                self.charge(payer, work);
+                self.raise_floor();
+            }
+        }
     }
 
     /// Budget `b` is destroyed; its descendants already were (bottom-up, R10 order), and every

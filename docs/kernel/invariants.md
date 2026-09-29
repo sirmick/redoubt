@@ -281,16 +281,17 @@ reads the account the kernel attaches to the child's messages; the same probe, i
 
 ### I9 (pages W^X, zeroed, lends unmapped)
 
-Status: built · partly tested: reuse of a freed frame, and a lender touching its own lent page, are attacked only in the model · tested: bench:wx, bench:write-only-attack, bench:mem-attack, bench:map-fixed-attack, bench:return-lent-unmapped, bench:uaf-lent-page, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped
+Status: built · partly tested: reuse of a freed frame, and a lender touching its own lent page, are attacked only in the model · tested: bench:wx, bench:write-only-attack, bench:mem-attack, bench:map-fixed-attack, bench:return-lent-unmapped, bench:uaf-lent-page, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11SetFlagsAllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11ExecOnDeviceMemory
 
-No user page is ever mapped writable and executable, or writable without being readable. Every
-page is zeroed before a process first sees it. A lent page is unmapped from its lender until the
-call ends, so a page is reachable from at most one address space at a time. This is R11's
-state-level form; the kernel's own mappings are R19 (kernel W^X)'s
-([memory](memory.md)).
+No user page is ever mapped writable and executable, or writable without being readable, and no
+page of device registers or DMA frame is ever mapped executable. Every page is zeroed before a
+process first sees it. A lent page is unmapped from its lender until the call ends, so a page is
+reachable from at most one address space at a time. This is R11's state-level form; the
+kernel's own mappings are R19 (kernel W^X)'s ([memory](memory.md)).
 
 **Kept in** `check_permissions` ([`kernel/src/arch/riscv/mem.rs`](../../kernel/src/arch/riscv/mem.rs):
-every user mapping; decoding refuses W+X flags before that); zeroing through the physmap before a
+every user mapping; decoding refuses W+X flags before that); `set_flags`'s refusal of `EXECUTE`
+on a frame that is not RAM or is a `dma_alloc` frame; zeroing through the physmap before a
 mapping exists (`map_anon` and `map_fixed` in [`kernel/src/mem.rs`](../../kernel/src/mem.rs),
 `alloc_contiguous` for DMA, `ensure_page_exists_inner` for a page backed on first touch);
 `lend_out`, which clears the lender's valid bit and
@@ -318,7 +319,8 @@ process object is charged to its creator until its notice is taken.
 
 **Kept in** `return_carve` (`kernel/src/budget.rs`: the child's limits and its own page back to
 the parent) and `mark_dying` (its weight, first); `free_object` (`kernel/src/process.rs`: a
-process object's page back to its creator when its notice is received or dropped).
+process object's page back to its creator, and its PID's count back to the budget it counts in,
+when its notice is received or dropped).
 
 **Model check:** `check::budget_lifecycle`: after a random prefix, a thread creates a child,
 starts a process in it, lets only the child's subtree act, destroys it and receives the notices;
@@ -397,7 +399,7 @@ side 200 times.
 
 ### I14 (no call panics the kernel)
 
-Status: built · partly tested: two breaches are stated and not yet closed: under exhaustion the boot tree's uncharged page leaves the last allocation with no frame, and on a machine with more RAM than the physmap the first frame past it stops the kernel (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:redoubt-tight, host:redoubt-sys::malformed_calls_are_refused, fuzz:redoubt-sys/decode, host:redoubt-model::kernel_sequences
+Status: built · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:redoubt-tight, bench:pages-exhaustion, host:redoubt-sys::malformed_calls_are_refused, fuzz:redoubt-sys/decode, host:redoubt-model::kernel_sequences
 
 No sequence of system calls, with any arguments, panics the kernel. A malformed value is an
 error, never a stop.
@@ -421,7 +423,7 @@ and the kernel must survive to power off; `syscall-attack` makes an oversized le
 
 ### I15 (abandoned calls reported once)
 
-Status: built · partly tested: one breach is stated and not yet closed: a notice owed to a thread whose record became unwritable while it waited is consumed, not kept pending (IPC, a bad record takes nothing, planned) · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated
+Status: built · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, bench:receive-bad-record, bench:endpoint-destroy-open-calls, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice, mutation:EndpointDestroyNoticeKept
 
 Every abandoned call is reported to the thread holding it exactly once, and stays open until that
 thread replies; the reply reaches nobody. The report is an abandoned-call notice, delivered on the
@@ -435,7 +437,9 @@ written takes nothing, so the notice stays for the holder's next good `receive`
 sets the call's notice flag in the same step that clears its waiting flag; `pump` delivers the
 notice to the holding thread before any exit notice or message and clears the flag; `reply` to a
 call whose caller no longer waits frees the lend and reports `discarded`, and since the call
-leaves the thread's open calls there, no notice is left to deliver. Each step runs to its end
+leaves the thread's open calls there, no notice is left to deliver; `destroy_endpoint` clears the
+notices owed on the endpoint it destroys, whose `Dead` is the holder's report, and `reply` checks,
+in a checked build, that none is owed on a destroyed endpoint. Each step runs to its end
 with interrupts off, holding the memory manager, so a reply and an abandonment cannot both
 win.
 
@@ -452,7 +456,7 @@ caller's death.
 
 ### I16 (DMA pages reset before reuse)
 
-Status: built · partly tested: a co-holder that still reaches a device reset at another holder's death is attacked only in the model, and the reset and quarantine cases boot rv64 only (`dma-rules` runs on both widths) · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::exit_pools_after_reset, mutation:DmaFreeBeforeReset, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaResetClearsCoHolderReach, mutation:DmaUnmapFrees
+Status: built · partly tested: a co-holder that still reaches a device reset at another holder's death is attacked only in the model · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::exit_pools_after_reset, mutation:DmaFreeBeforeReset, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaResetClearsCoHolderReach, mutation:DmaUnmapFrees
 
 A page `dma_alloc` handed out goes back to the free pool only after every device that could still
 write it has confirmed a reset: the device it was allocated through and every DMA device its
@@ -504,11 +508,6 @@ cases.
   behind I5 stop the kernel when they fail. A bug that breaks them halts the machine for every
   principal on the box, though it does not hand one process another's memory or objects. No
   argument reaches those checks (I14), but a kernel bug can.
-- **Two stated breaches of I14.** The boot tree promises one page more than there is, so when
-  every budget fills to its limit the last allocation finds no frame and the kernel stops
-  ([budgets](budgets.md#residual-risks)); and a machine with more RAM than the physmap boots, and
-  stops the first time a process's allocation reaches a frame past it
-  ([memory layout](memory-layout.md#residual-risks)).
 - **System-class servers are trusted with I7.** R1 does not check a flow into or out of a
   `system` budget, so a system server that hands a receive right across label sets, or mixes two
   label sets' data, breaks label separation and the kernel cannot see it

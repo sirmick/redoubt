@@ -28,7 +28,8 @@ max_undocumented = 0
 [[budget]]
 name = "loader"
 paths = ["loader/src"]
-max_unsafe = 17 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer, and Platform::read
+max_unsafe = 18 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer, and Platform::read;
+# +1: the host tests' DevTree::new over a fixture (dt.rs, test builds only)
 max_undocumented = 0
 
 [[budget]]
@@ -62,7 +63,9 @@ paths = [
 ]
 # Includes smp.rs's hart-block `Sync`, its write of the block and the parked hart's `wfi` (the
 # `smp` spike), and syscall.rs's hand-made S-mode trap, `kmain`'s private switch (`switch_trap`).
-max_unsafe = 12
+# And irq.rs's `sum-probe` load (test builds only): a stray load through a user address is the
+# fault R24 must produce, and only a raw pointer read can make it.
+max_unsafe = 13
 max_undocumented = 0
 
 [[budget]]

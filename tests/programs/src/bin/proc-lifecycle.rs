@@ -162,7 +162,8 @@ pub extern "C" fn _start() -> ! {
         redoubt_sys::syscall(&Call::Reply { msg_id: m.msg_id, body_rec: rec.as_ptr() as usize }).unwrap();
     assert_eq!(result, Return::Reply(redoubt_sys::ReplyOutcome { delivered: false, installed: 0 }));
     let after = rd::usage(rd::SYSTEM).unwrap();
-    assert_eq!(before.pages_usage - after.pages_usage, 2); // one open call, one consumed lend
+    // One open call, one consumed lend, and the page table that mapped it, now empty.
+    assert_eq!(before.pages_usage - after.pages_usage, 3);
     assert_eq!(rd::unmap(loan.addr, rd::PAGE_SIZE), Err(Error::InvalidArgument));
     writeln!(out, "[lifecycle] caller death abandons once and discarded reply frees loan and call").ok();
 

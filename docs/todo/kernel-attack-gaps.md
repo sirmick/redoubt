@@ -9,7 +9,7 @@ gap: the page's section, the claim, and what no case attacks.
 ### ipc.md
 - R1 (flow): a call or send between user budgets with different labels is attacked only in the model.
 - R2 (fair waiting): turns between several groups, and the keying of groups by account, label set and (for account 0) budget, are attacked only in the model; `redoubt-ipc` fills one group's cap.
-- What `receive` returns: a record made unwritable while its thread waits is attacked only for an exit notice (`process-attack`'s late record); for a message it is not attacked (an interrupt and an abandoned-call notice get their case with [a bad record takes nothing](../kernel/ipc.md#a-bad-record-takes-nothing)).
+- What `receive` returns: a record made unwritable while its thread waits is attacked for an exit notice (`process-attack`'s late record), an interrupt and an abandoned-call notice (`receive-bad-record`); for a message it is not attacked.
 - How a call completes, R13 (one outcome per call): completion races between harts are not attacked.
 - R14 (unforgeable sender): every case delivers account 0 and no labels; a non-zero account or a label set reaching the receiver unchanged is attacked only in the model (`MsgNoLabels`, `MsgAccountZero`).
 
@@ -30,13 +30,10 @@ gap: the page's section, the claim, and what no case attacks.
 ### budgets.md
 - R6 (charging): an endpoint's page charge is attacked only in the model; the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case.
 - R10 (destruction): timeouts before deadlines at an equal instant is attacked only in the model (`ExpireBudgetsFirst`).
-- Deadlines: floods of weight-0 deadline budgets past the 64 of `sched-timer-flood` are not attacked ([deadline destruction billing](deadline-destroy-billing.md)).
 - Class is trust, not order: that the scheduler never reads class is argued from the code.
 - Deadlines: a process entering the kernel in a tight loop to put its deadline off is not attacked.
 - Root, system and users: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`).
 - R10 (destruction): destroying the budget a device object is charged to (the device destroyed, every handle closed) is not checked by a case.
-- R10: no case destroys an endpoint's owner while a receiver waits on it, and no program checks `receive` returning `Dead` ([endpoint destroyed with open calls](endpoint-destroyed-open-calls.md)).
-- R6 (charging): `root`'s own page charged to no one, and a process object's PID outside every process limit, have no case ([root's own page](boot-root-frame.md), [PID pool pinning](pid-pool-pinning.md)).
 
 ### timer.md
 - Time: that `time_now` counts from the kernel's start is not checked (only monotonic, never early, linear with `rdtime`).
@@ -49,7 +46,7 @@ gap: the page's section, the claim, and what no case attacks.
 ### devices.md
 - Device objects: the one page a device object costs its owner is not measured; a DMA device past `MAX_DMA_DEVICES` (16) getting no object is not attacked.
 - `dma_alloc`: the `MAX_RUNS` (32) runs-per-device limit is not reached by a case.
-- Reset before reuse: that the reset precedes pooling inside the kernel is attacked only in the model; the reset and quarantine cases run only on rv64.
+- Reset before reuse: that the reset precedes pooling inside the kernel is attacked only in the model.
 - Devices handed to the first program: the loader's refusal of a device tree with no console, or a console with no interrupt, is not attacked.
 - R5 (interrupts): masking a fired source is attacked only in the model (QEMU's 16550 raises per byte); completing the claim before masking, and billing interrupt time to the IRQ object's owner, are not attacked.
 - R18 (device authority): the kernel's refusal of a malformed `Devs` entry and of a `Grnt` boot argument is not attacked.
@@ -58,10 +55,9 @@ gap: the page's section, the claim, and what no case attacks.
 ### processes.md
 - Processes and PIDs: that PIDs are drawn at random is not attacked.
 - Threads: `thread_create` refused with `OutOfMemory`, and the first thread returning from its entry (a fault), have no case.
-- Creating and starting: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` have no case.
+- Creating and starting: `OutOfMemory` from `process_start` has no case.
 - Exit notices: a notice dropped because its exit endpoint was destroyed has no case.
 - R21 (crash blame): blame after the blamed sender's budget is destroyed has no case; a thread holding a parked call that receives a send and then faults (blames nobody) is covered only in parts.
-- PID pinning by untaken notices (a cross-budget `OutOfProcesses`) has no case ([PID pool pinning](pid-pool-pinning.md)).
 
 ### memory.md
 - Backing and zeroing: that a frame freed with data comes back zero is attacked only in the model (`R11NoZeroing`); no case can tell which frames it was handed.
@@ -69,7 +65,7 @@ gap: the page's section, the claim, and what no case attacks.
 - `map_fixed`: `map-fixed-attack` and `map-fixed-tables` run on rv64 only; on rv32 only `return-lent-unmapped` calls it.
 - Instruction fetch after mapping: no case can see a missing `fence.i` (QEMU keeps fetch coherent).
 - Lending at the page-table level: a lend within one process is not attacked across harts.
-- R11 (memory): W^X on device registers and `dma_alloc` pages is not attacked, and does not hold ([device mapping exec](device-mapping-exec.md)); the absence of any physical-address argument is argued from the call table.
+- R11 (memory): the absence of any physical-address argument is argued from the call table.
 - R19 (kernel W^X): no case plants a writable kernel code page to show the boot check stops; the case boots rv64 only.
 - R22 (range cost): only `map_fixed`'s huge length is attacked; `unmap`, `set_flags`, `process_map` and lends with huge ranges are not, and `map_anon`'s search is an exception no case measures.
 
@@ -79,8 +75,7 @@ gap: the page's section, the claim, and what no case attacks.
 - The current minimum and ties: clauses 1 and 4 are checked on the target only when a run happens to tie; the host tests and model attack them.
 - Charging: interrupt handling billed to the device object's owner is not attacked.
 - Responsiveness: `budget_destroy` call-to-return is recorded, not asserted.
-- Charging: floods of weight-0 budgets with deadlines beyond the 64 of `sched-timer-flood` are not attacked (their destruction is billed to nobody).
-- R12 (scheduling): the bound on a call's kernel time is not attacked; `map_anon`'s search departs from it ([map_anon's search cost](map-anon-search-cost.md)).
+- R12 (scheduling): the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range.
 - R23 (no test channels): no case builds the production kernel and scans it for the trace.
 - Failure and restart: a picked thread dying before the switch, and a full queue, are not attacked.
 
@@ -104,7 +99,6 @@ gap: the page's section, the claim, and what no case attacks.
 
 ### abi.md
 - The kernel keeps every register outside a0-a7 across an `ecall`: no case attacks it.
-- A record at a device mapping: attacked (`bench:ipc-outcomes`) only as a `call` body and as `budget_create` and `budget_usage` records; `send`, `reply`, `receive` and `process_start` records at a device mapping are not attacked ([MMIO record frames](mmio-record-frames.md)).
 - The order of checks after decoding: pinned by a case only for the first checks of `budget_create`, `budget_usage` (records before the handle: `budget-syscall-attack`), `call` (record before endpoint lookup: `ipc-outcomes`), `receive` (`WrongObject`), `serve`, `process_start` (count before record: `process-attack`). The rest of each row (stages 2 to 5) is not attacked.
 - The kernel's order against the model's: no trace replay (planned for M1 (separation and containment)), so the rows that differ were found by reading only.
 - A valid call number with bit 32 set on rv64: not attacked (`legacy-gone` does it for 0..=46 only).
@@ -117,7 +111,6 @@ gap: the page's section, the claim, and what no case attacks.
 - I12 (ids never reused): budget and message ids never reused: invisible to a process, model only; endpoint, device and process-object ids: nothing attacks them, not even the model (it checks budget ids only).
 - I13 (every blocking call returns by its timeout): timeouts on a multi-hart boot: `timeouts` has no `smp` key.
 - I16 (DMA pages reset before reuse): a live co-holder that still reaches a device reset at another holder's death: model only (`reset_at_one_death_does_not_cover_a_co_holder`).
-- I16: `dma-reset-reuse` and `dma-reset-quarantine` are rv64 only ([DMA reset on rv32](dma-reset-rv32.md)).
 - I1 (handles name live objects) and I10 (create-destroy leaves the parent unchanged): no mutation targets I1 alone; I10's `R10KeepCarvedLimits` is caught first by the per-step R6 recount, so `budget_lifecycle`'s own check may be doing no unique work. Not a gap in the kernel, a note on the model.
 
 ### model.md

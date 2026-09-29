@@ -145,6 +145,10 @@ global_asm!(
 _start:
     la      t0, _start_trap
     csrw    stvec, t0
+    // sstatus.SUM (bit 18) and MXR (bit 19) clear, whatever the firmware left: the kernel
+    // never loads or stores through a user mapping (R24), and nothing sets either again.
+    li      t0, (1 << 18) | (1 << 19)
+    csrc    sstatus, t0
     call    init
     j       kmain
 

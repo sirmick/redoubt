@@ -166,6 +166,12 @@ pub struct Objects {
     /// (`Budget::next_deadline`), so finding the next deadline never scans every frame.
     deadlines: Option<BudgetFrame>,
     accounts: [Account; MAX_PROCESS_COUNT],
+    /// Each PID's process object, by `account_index`: kept at `process_create` and `free_object`
+    /// (`process.rs`), so finding one is a lookup, never a scan of the object frames (R12).
+    pub(crate) processes: [Option<u32>; MAX_PROCESS_COUNT],
+    /// Each interrupt's IRQ object: kept at `boot_devices` and `free_device` (`device.rs`), so an
+    /// interrupt finds its object in one lookup (R12).
+    pub(crate) irqs: [Option<u32>; crate::device::MAX_IRQS],
 }
 
 impl Objects {
@@ -176,11 +182,13 @@ impl Objects {
             high_frame: 0,
             deadlines: None,
             accounts: [Account::NONE; MAX_PROCESS_COUNT],
+            processes: [None; MAX_PROCESS_COUNT],
+            irqs: [None; crate::device::MAX_IRQS],
         }
     }
 }
 
-fn account_index(pid: Pid) -> Option<usize> {
+pub(crate) fn account_index(pid: Pid) -> Option<usize> {
     let index = usize::from(pid.get()) - 1;
     (index < MAX_PROCESS_COUNT).then_some(index)
 }
@@ -439,29 +447,47 @@ impl MemoryManager {
 
     // --- Processes and threads ------------------------------------------------------------------
 
-    /// Put new process `pid` in `budget`: one process from its process limit, and an account of
-    /// its own, with no threads yet. Its address space is charged to `budget` frame by frame as
-    /// it is built (`process.rs`; kernel/objects.md); its object page is the *creator's*, which
-    /// `process_create` charges separately. Nothing changes on an error.
-    pub fn process_created(&mut self, pid: Pid, budget: BudgetFrame) -> Result<(), Error> {
-        let index = account_index(pid).ok_or(Error::InvalidArgument)?;
+    /// One more PID held against `budget`'s process limit (R6): a created process's from
+    /// `process_create` until its object is freed, a program the loader started while it lives,
+    /// in the budget it runs in either way. Every held PID counts once, and limits are carved from
+    /// `root`'s, which is every free PID, so a budget under its limit always finds one free.
+    /// Nothing changes on an error.
+    pub fn count_process(&mut self, budget: BudgetFrame) -> Result<(), Error> {
         let mut b = self.budget(budget);
-        // A budget with no free weight holds no process (R12: its stride weight is its free
-        // weight).
-        if b.free_weight() == 0 {
-            return Err(Error::InvalidArgument);
-        }
         if b.free_processes() == 0 {
             return Err(Error::OutOfProcesses);
         }
         b.processes_used += 1;
         self.store(budget, &b);
+        Ok(())
+    }
+
+    /// A PID [`MemoryManager::count_process`] counted against `budget` is free again.
+    pub fn uncount_process(&mut self, budget: BudgetFrame) {
+        let mut b = self.budget(budget);
+        b.processes_used = b.processes_used.checked_sub(1).expect("I5: process count underflow");
+        self.store(budget, &b);
+    }
+
+    /// Put new process `pid` in `budget`: an account of its own, with no threads yet. Its PID is
+    /// counted there first ([`MemoryManager::count_process`]); its address space is charged
+    /// there frame by frame as it is built (`process.rs`; kernel/objects.md); its object page is
+    /// the *creator's*, which `process_create` charges separately. Nothing changes on an error.
+    pub fn process_created(&mut self, pid: Pid, budget: BudgetFrame) -> Result<(), Error> {
+        let index = account_index(pid).ok_or(Error::InvalidArgument)?;
+        // A budget with no free weight holds no process (R12: its stride weight is its free
+        // weight).
+        if self.budget(budget).free_weight() == 0 {
+            return Err(Error::InvalidArgument);
+        }
         self.objects.accounts[index] = Account { budget: Some(budget), ..Account::NONE };
         Ok(())
     }
 
     /// Everything the process still has charged goes back to its budget. Its frames were
-    /// released just before (`uncharge_all_frames`); its handle table goes here.
+    /// released just before (`uncharge_all_frames`); its handle table goes here. Its PID stops
+    /// counting only if no process object holds it; one that does counts until it is freed
+    /// (`process::free_object`).
     pub fn process_ended(&mut self, pid: Pid) {
         let Some(budget) = self.budget_of(pid) else { return };
         self.close_all_handles(pid);
@@ -472,9 +498,9 @@ impl MemoryManager {
         let pages = account.threads * THREAD_PAGES + account.frames;
         *account = Account::NONE;
         self.uncharge(budget, pages);
-        let mut b = self.budget(budget);
-        b.processes_used = b.processes_used.checked_sub(1).expect("I5: process count underflow");
-        self.store(budget, &b);
+        if crate::process::object_of(self, pid).is_none() {
+            self.uncount_process(budget);
+        }
     }
 
     pub fn thread_created(&mut self, pid: Pid, tid: usize) -> Result<(), Error> {
@@ -511,18 +537,19 @@ impl MemoryManager {
     /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
     /// kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
-        // Every RAM page the kernel did not keep for itself. Nothing is held back: a process's
-        // saved contexts and its root page table are charged to the budget it runs in as they
-        // are allocated, like any other frame it owns, so every charged page has a real frame
-        // behind it without a reservation.
-        let pages = self.ram_frames() - self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) as u64;
+        // Every RAM page the kernel did not keep for itself, less `root`'s own page, which no
+        // budget pays for (R6): `root`'s limit bounds every charge in the tree, so the charges and
+        // `root`'s page together never exceed the free frames. Nothing else is held back: a
+        // process's saved contexts and its root page table are charged to the budget it runs in
+        // as they are allocated, like any other frame it owns, so every charged page has a real
+        // frame behind it without a reservation.
+        let kept = self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) as u64;
+        let pages = self.ram_frames() - kept - BUDGET_PAGES;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
         // `users` gets the rest of the weight but what `root` keeps for `init`.
         let users_weight = ROOT_WEIGHT - sys_weight - INIT_WEIGHT;
-        // Root pays for the two budgets' own pages. Root's own page is charged to no one: it has
-        // no parent, and its frame is one of the RAM pages counted in its limit, taken for the tree
-        // itself.
+        // Root pays for the two budgets' own pages; its own page is the one left out of `pages`.
         let users_pages = pages - 2 * BUDGET_PAGES - sys_pages;
         // `root` and `system` are class `system`; `users` is class `user`. Nothing runs before
         // anything else: one stride queue, and weight decides (kernel/scheduling.md).
@@ -540,6 +567,10 @@ impl MemoryManager {
         let root = boot(self, None, Class::System, pages, processes, ROOT_WEIGHT);
         let system = boot(self, Some(root), Class::System, sys_pages, sys_processes, sys_weight);
         let users = boot(self, Some(root), Class::User, users_pages, processes - sys_processes, users_weight);
+        assert!(
+            self.budget(root).pages_limit + BUDGET_PAGES + kept <= self.ram_frames(),
+            "R6: root's limit, its own page and the kernel's frames exceed RAM"
+        );
         let mut first = None;
         let mut bundle = [None; MAX_PROCESS_COUNT];
         let mut nbundle = 0;
@@ -554,6 +585,7 @@ impl MemoryManager {
             nbundle += 1;
             // Everything the loader gave it: its image, its stack, its page tables, its root
             // table and its saved contexts, all owned by the PID in the ownership table.
+            self.count_process(system).expect("boot: the loader's processes do not fit in system");
             self.process_created(pid, system).expect("boot: the loader's processes do not fit in system");
             self.charge(system, frames).expect("boot: the loader's processes do not fit in system");
             self.account_mut(pid).expect("account").frames = frames;
@@ -826,6 +858,28 @@ impl MemoryManager {
         }
     }
 
+    /// Who pays for `top`'s destruction when its deadline passes (R10, R12): its parent, or else
+    /// the nearest ancestor whose free weight is above 0, or `root` if none is. Asked after
+    /// `mark_dying`, so the parent's free weight counts the carve `top` gave back. The walk is at
+    /// most `MAX_DEPTH` long. `None` only for a top with no parent (`root`, which has no deadline).
+    pub fn destruction_payer(&self, top: BudgetFrame) -> Option<BudgetRef> {
+        let mut payer = self.budget(top).parent?;
+        while self.free_weight_of(payer) == 0 {
+            let Some(up) = self.budget(payer).parent else { break };
+            payer = up;
+        }
+        Some(BudgetRef { frame: payer, id: self.budget_id(payer) })
+    }
+
+    /// A checked build's proof that a destroyed top with no parent was `root`: every budget is
+    /// dying.
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_all_dying(&self) {
+        for frame in 0..=self.objects.high_frame {
+            assert!(!self.is_budget_frame(frame) || self.budget(frame).dying, "a budget outlives root");
+        }
+    }
+
     /// Whether `pid` lives in a budget that is being destroyed.
     pub fn process_is_doomed(&self, pid: Pid) -> bool {
         self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
@@ -833,8 +887,10 @@ impl MemoryManager {
 
     /// Last step of `budget_destroy`, once the doomed budgets' processes are gone: close every
     /// handle naming a doomed budget or stamped with one, in every table (R10, I2); give the
-    /// parent back what `top` carved from it (I10); free the doomed budgets (marked, with no
-    /// processes and no handles left; nothing reads a dying frame's tree links after this).
+    /// parent back what `top` carved from it (I10), then charge it the quarantined DMA pages and
+    /// count in it the held PIDs that outlive the subtree (step 8); free the doomed budgets
+    /// (marked, with no processes and no handles left; nothing reads a dying frame's tree links
+    /// after this).
     pub fn destroy_marked(&mut self, top: BudgetFrame) {
         self.sweep_handles(|mm, h| {
             let object_dying = match h.object {
@@ -853,6 +909,8 @@ impl MemoryManager {
         // Then, and only then, quarantined DMA pages charged in the subtree move to the parent,
         // which has just got back at least that much (kernel/devices.md, "Quarantine").
         self.dma_migrate_quarantine(self.budget(top).parent);
+        // And so does every PID still held for a process that ran in the subtree (R6).
+        self.migrate_held_pids(self.budget(top).parent);
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.budget(frame).dying {
                 self.unlink_deadline(frame);
@@ -943,9 +1001,18 @@ impl MemoryManager {
 /// caller last if it is one of them; the process objects charged to it are freed; messages in
 /// flight are failed or abandoned and its endpoints and devices destroyed; then its handles are
 /// swept and its frames freed. `caller` is the process whose call or whose interrupted run this
-/// is, if any. Returns whether the caller is gone (it must not be resumed).
-pub fn destroy_subtree(ss: &mut ProcessTable, top: BudgetFrame, caller: Option<Pid>, bill: bool) -> bool {
-    let started = crate::sched::now_ticks();
+/// is, if any. `deadline_since` is the tick a deadline's handling began, whose whole cost is
+/// billed at the end to the payer (`destruction_payer`); `None` for `budget_destroy`, whose caller
+/// pays for the call as system-call time. Returns whether the caller is gone (it must not be
+/// resumed).
+pub fn destroy_subtree(
+    ss: &mut ProcessTable,
+    top: BudgetFrame,
+    caller: Option<Pid>,
+    deadline_since: Option<u64>,
+) -> bool {
+    // Named now, while `top` still links to its parent, and after `mark_dying` gave its carve back.
+    let payer = deadline_since.and_then(|_| MemoryManager::with(|mm| mm.destruction_payer(top)));
     #[cfg(feature = "sched-trace")]
     let top_id = MemoryManager::with(|mm| mm.budget_id(top));
     #[cfg(feature = "sched-trace")]
@@ -985,14 +1052,13 @@ pub fn destroy_subtree(ss: &mut ProcessTable, top: BudgetFrame, caller: Option<P
     // message sent through a handle stamped with it fails its sender with `Dead`.
     MemoryManager::with_mut(|mm| {
         crate::message::budgets_dying(ss, mm);
-        // A deadline's work so far is the dying budget's own, and moves up with its debt.
-        if bill {
-            let top_ref = BudgetRef { frame: top, id: mm.budget(top).id };
-            crate::sched::bill(mm, top_ref, crate::sched::now_ticks().saturating_sub(started));
-        }
         // Each budget's work since entry moves to its parent, bottom-up, and its carve returns.
         mm.lift_dying(top);
         mm.destroy_marked(top);
+        // A deadline's whole cost, the walk that found it included, is its payer's (R10, R12).
+        if let (Some(started), Some(payer)) = (deadline_since, payer) {
+            crate::sched::bill(mm, payer, crate::sched::now_ticks().saturating_sub(started));
+        }
     });
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);

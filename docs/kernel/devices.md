@@ -92,7 +92,7 @@ process only at its end.
 
 ### Reset before reuse
 
-Status: built · partly tested: that the reset precedes the pooling inside the kernel is attacked only in the model; the case runs only on rv64 · tested: bench:dma-reset-reuse, bench:dma-rules, host:redoubt-model::exit_pools_after_reset, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:DmaFreeBeforeReset, mutation:DmaResetClearsCoHolderReach
+Status: built · partly tested: that the reset precedes the pooling inside the kernel is attacked only in the model · tested: bench:dma-reset-reuse, bench:dma-rules, host:redoubt-model::exit_pools_after_reset, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:DmaFreeBeforeReset, mutation:DmaResetClearsCoHolderReach
 
 A DMA device may still hold the physical address of a run after the process that programmed it
 has died. So no DMA page goes back to the pool until every device that could hold its address has
@@ -135,7 +135,7 @@ stateDiagram-v2
 
 ### Quarantine
 
-Status: built · partly tested: the cases run only on rv64 · tested: bench:dma-reset-quarantine, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaQuarantineChargeDropped, mutation:DmaQuarantinedDeviceUsable
+Status: built · tested: bench:dma-reset-quarantine, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaQuarantineChargeDropped, mutation:DmaQuarantinedDeviceUsable
 
 When a device in the reset set does not confirm, every run the ending process held is
 **quarantined**, the runs through devices that did confirm included: their pages are never
@@ -218,7 +218,7 @@ Status: built · tested: bench:irq-attack, bench:device, bench:dma-rules, bench:
 
 ### R5 (interrupts)
 
-Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested: bench:uart-irq, mutation:R5NoMaskOnFire, mutation:R5NoUnmaskOnReceive
+Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested: bench:uart-irq, bench:irq-first-receive, bench:receive-bad-record, mutation:R5NoMaskOnFire, mutation:R5NoUnmaskOnReceive, mutation:R5BadRecordConsumesInterrupt
 
 When an interrupt fires, the kernel masks its source and sets the IRQ object's `fired` flag.
 `receive` on the IRQ handle unmasks the source when it begins, then returns an `interrupt`
@@ -239,9 +239,12 @@ level-triggered source still asserted when the driver receives fires again at on
 - The kernel's time handling an interrupt is billed to the budget that owns the IRQ object
   ([scheduling](scheduling.md)), not to whichever budget it interrupted.
 
-An interrupt raised while its object is masked, before the driver's first `receive`, was lost
-in one diagnostic run on QEMU; the cause is not found. Follow-up:
-[todo](../todo/irq-level-latch.md).
+An interrupt raised while its object is masked stays pending in the controller, and the unmask
+at the next `receive`, the first after a handle is handed over included, delivers it. Masking
+clears the source's enable bit and leaves its priority. Every unmask, the re-arm after a claim
+included, is that `receive`'s, and it enables the source before it writes the source's priority,
+last, because QEMU's PLIC looks at its pending sources again when a priority changes but not when
+an enable bit does.
 
 ```mermaid
 sequenceDiagram
@@ -284,7 +287,9 @@ CLINT, the core-local timer block, could forge timer interrupts) and **RAM**. Th
 both out of the device list, but that is a reading of a device tree the kernel does not trust,
 so the kernel checks every `Devs` entry itself. It refuses to boot on an MMIO entry that
 overlaps RAM or a `Ctrl` range, wraps the address space, is empty or is not whole pages, and on
-an IRQ entry for interrupt 0 (the hart timer, a hart resource and not a device). The kernel maps
+an IRQ entry for interrupt 0 (the hart timer, a hart resource and not a device) or for one at or
+above `MAX_IRQS` (1024: the PLIC numbers its sources 1 to 1023, and the kernel's IRQ index has a
+slot for each). The kernel maps
 the PLIC for itself alone.
 
 ## Failure and restart
@@ -341,28 +346,13 @@ Status: built · partly tested: destroying a device object's owner budget, and a
   status after `dma_alloc` has handed a frame to a new holder, so it shows the reset came before
   the new holder's use. That the reset strictly precedes the pooling rests on the kernel's own
   assertion and the model's I16 check.
-- **DMA reset and quarantine are attacked only on rv64.** On rv32 the test build that makes a
-  first reset fail is compiled, never run. Follow-up: [todo](../todo/dma-reset-rv32.md).
 - **Two halves of R5 are not attacked on QEMU.** Its 16550 console raises the controller once
   per byte, not from a held level, so a kernel that never masked a fired source passes
   `uart-irq`; and QEMU accepts a completion for a masked source, so the completion order cannot
   be told apart. The mask is attacked in the model; the order is argued from the code.
-- **An interrupt can be lost before the first `receive`:** seen once on QEMU, cause not found.
-  Drivers drain their rings after every `receive`. Follow-up: [todo](../todo/irq-level-latch.md).
-- **A device mapping or DMA page can be made executable.** `set_flags` refuses writable and
-  executable together, but not executable on a device range or a DMA page, which R11 forbids.
-  Two `map_device` mappings of one range can be one writable and one executable, and a device
-  can write a DMA page that is executable
-  ([memory](memory.md#residual-risks)). Follow-up: [todo](../todo/device-mapping-exec.md).
-- **Page tables stay after `unmap`.** The tables that mapped a device range or a run stay
-  charged to the process until it ends. Follow-up: [todo](../todo/page-table-freeing.md).
 - **An interrupt's kernel time is billed to the IRQ object's owner** (`system` at boot), not to
   the driver that holds the handle. Masking bounds it to one interrupt per `receive`, at the
   driver's pace.
-- **Finding an interrupt's IRQ object scans every kernel-object frame** up to the highest one
-  ever used, on every interrupt, so interrupt latency grows with the objects other budgets
-  create ([scheduling](scheduling.md#residual-risks)). Follow-up:
-  [todo](../todo/kernel-scan-bounds.md).
 
 ## Why
 

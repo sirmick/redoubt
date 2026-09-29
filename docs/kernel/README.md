@@ -190,7 +190,7 @@ two, where a file serves two mechanisms).
 | `arch/riscv/mem.rs`, `physmap.rs`, `mmu_flags.rs` | page tables, the physmap, PTE flags, the kernel's W^X check | [memory](memory.md), [memory layout](memory-layout.md) |
 | `arch/riscv/process.rs` | saved thread contexts, PID slots | [processes](processes.md), [memory layout](memory-layout.md) |
 | `arch/riscv/smp.rs` | the two-hart spike (feature `smp`) | [this page](#residual-risks) |
-| `arch/riscv/panic.rs` | a kernel panic prints and powers off | [invariants](invariants.md) |
+| `arch/riscv/panic.rs` | a kernel panic prints and powers off | [boot](boot.md#failure-and-restart) |
 | `libs/sys` (`redoubt-sys`) | call numbers, registers, records, errors | [ABI](abi.md) |
 | `libs/paging` (`paging`) | typed Sv32/Sv39 page tables, shared with the loader | [memory layout](memory-layout.md) |
 | `libs/layout` (`redoubt-layout`) | the kernel-half address map and PIDs, shared with the loader | [memory layout](memory-layout.md) |
@@ -224,11 +224,8 @@ two, where a file serves two mechanisms).
   overlap RAM or an interrupt controller), and it checks its own mappings are W^X before the
   first process runs ([R19 (kernel W^X)](memory.md#r19-kernel-wx)). The loader is TCB for the
   rest ([boot](boot.md)).
-- **A panic while printing re-enters the console.** A panic inside `print!` reaches the panic
-  handler's own `println!` while the first write still holds the console; the handler then powers
-  off. Follow-up: [todo](../todo/print-panic-reentry.md).
 - **Test builds carry more.** The kernel source has features only some bench cases turn on:
-  `sched-trace`, `dma-reset-deaf` and `smp`, and `sched-inject-tie-fault` for a recorded negative
+  `sched-trace`, `dma-reset-deaf`, `sum-probe`, `panic-in-print` and `smp`, and `sched-inject-tie-fault` for a recorded negative
   run. A production build leaves them off
   ([R23 (no test channels)](scheduling.md#r23-no-test-channels)); a kernel built with them is
   not the kernel this page measures.

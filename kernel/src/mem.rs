@@ -325,8 +325,19 @@ impl MemoryManager {
         self.allocations.iter().filter(|owner| **owner == Some(pid)).count()
     }
 
-    /// Find a virtual address in the current process that is big enough
-    /// to fit `size` bytes.
+    /// Find a virtual address in the current process's area `kind` where `size` bytes of free
+    /// pages fit, and remember it as the area's last placement.
+    ///
+    /// Every start in `[area start, area end - size]` is a candidate, the last one included, so a
+    /// run that fits only at the area's end is found, and so is a request for the whole of an
+    /// empty area. The scan begins at the lower of the last placement and the last start that
+    /// fits, runs up to that last start, then wraps once to the area's start and runs up to where
+    /// it began. It skips ahead: when page `p` is taken, no run through `p` fits, so the next
+    /// candidate is `p` plus one page. Each page of the area is therefore looked at once, and a
+    /// missing page table skips its whole span (`first_occupied_page`). So the search costs at
+    /// most the area's pages, a fixed size, and never the area's pages times the request's
+    /// (R12's bound on a call's kernel time, kernel/scheduling.md). Every run returned lies
+    /// inside the area.
     pub fn find_virtual_address(
         &mut self,
         virt_ptr: *mut u8,
@@ -339,7 +350,7 @@ impl MemoryManager {
         }
 
         Process::with_inner_mut(|process_inner| {
-            let (start, end, initial) = match kind {
+            let (start, end, last) = match kind {
                 MemoryType::Default => (
                     process_inner.mem_default_base,
                     process_inner.mem_default_base + 0x1000_0000,
@@ -356,41 +367,49 @@ impl MemoryManager {
             let Some(last_start) = end.checked_sub(size).filter(|last| *last >= start) else {
                 return Err(PageError::NoSpace);
             };
-            // Look for a sequence of `size` pages that are free.
-            for potential_start in (initial..last_start).step_by(PAGE_SIZE) {
-                let mut all_free = true;
-                for check_page in (potential_start..potential_start + size).step_by(PAGE_SIZE) {
-                    if !crate::arch::mem::address_available(check_page) {
-                        all_free = false;
-                        break;
+            let first = last.clamp(start, last_start);
+            let taken = |at: usize, until: usize| crate::arch::mem::first_occupied_page(at, until);
+            // From `first` up to the last start. The first page taken at or after `first`
+            // (within one run of it) is remembered for the wrap.
+            let mut candidate = first;
+            let mut taken_after_first = None;
+            let found = loop {
+                if candidate > last_start {
+                    break None;
+                }
+                match taken(candidate, candidate + size) {
+                    None => break Some(candidate),
+                    Some(page) => {
+                        taken_after_first.get_or_insert(page);
+                        candidate = page + PAGE_SIZE;
                     }
                 }
-                if all_free {
-                    match kind {
-                        MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        MemoryType::Messages => process_inner.mem_message_last = potential_start,
+            };
+            // Then from the area's start up to `first`. `[first, taken_after_first)` is known to
+            // be free and `taken_after_first` taken, so a run reaching into it is decided without
+            // looking at those pages again.
+            let found = found.or_else(|| {
+                let mut candidate = start;
+                while candidate < first {
+                    let run_end = candidate + size;
+                    match taken(candidate, run_end.min(first)) {
+                        Some(page) => candidate = page + PAGE_SIZE,
+                        None if taken_after_first.is_none_or(|page| run_end <= page) => {
+                            return Some(candidate);
+                        }
+                        // The run reaches a taken page at or past `first`; so does every later
+                        // start below `first`.
+                        None => return None,
                     }
-                    return Ok(potential_start as *mut u8);
                 }
+                None
+            });
+            let at = found.ok_or(PageError::NoSpace)?;
+            match kind {
+                MemoryType::Default => process_inner.mem_default_last = at,
+                MemoryType::Messages => process_inner.mem_message_last = at,
             }
-
-            for potential_start in (start..initial).step_by(PAGE_SIZE) {
-                let mut all_free = true;
-                for check_page in (potential_start..potential_start + size).step_by(PAGE_SIZE) {
-                    if !crate::arch::mem::address_available(check_page) {
-                        all_free = false;
-                        break;
-                    }
-                }
-                if all_free {
-                    match kind {
-                        MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        MemoryType::Messages => process_inner.mem_message_last = potential_start,
-                    }
-                    return Ok(potential_start as *mut u8);
-                }
-            }
-            Err(PageError::NoSpace)
+            Ok(at as *mut u8)
         })
     }
 
@@ -503,6 +522,15 @@ impl MemoryManager {
     /// Free a frame `pid` owns (an abandoned lend the server replied to, R3).
     pub fn free_frame_of(&mut self, phys: usize, pid: Pid) -> Result<(), PageError> {
         self.release_page(phys as *mut usize, pid)
+    }
+
+    /// Who owns RAM frame `phys` in the ownership table: the budget of that PID pays for it.
+    /// `None` for a free frame or one outside RAM.
+    pub fn ram_owner(&self, phys: usize) -> Option<Pid> {
+        if !self.is_main_memory(phys as *mut u8) {
+            return None;
+        }
+        self.allocations[(phys - self.ram_start) / PAGE_SIZE]
     }
 
     /// Back every demand-paged page of `[address, address + len)` in the current address
@@ -825,7 +853,9 @@ impl MemoryManager {
         Ok(at)
     }
 
-    /// Give back what a failed `map_run` had already mapped, and the pages it had allocated.
+    /// Give back what a failed `map_run` had already mapped, the pages it had allocated, and the
+    /// page tables it made, the failed page's included (`map_page_inner` may have made a table
+    /// before it ran out).
     fn undo_run(&mut self, pid: Pid, at: usize, done: usize, ours: bool) -> redoubt_sys::Error {
         for offset in (0..done).step_by(PAGE_SIZE) {
             if let Ok(frame) = crate::arch::mem::unmap_page_inner(self, at + offset) {
@@ -834,6 +864,8 @@ impl MemoryManager {
                 }
             }
         }
+        // One page past `done`: the failed page's table may exist though nothing in it is mapped.
+        crate::arch::mem::free_empty_tables(self, &MemoryMapping::current(), at, at + done + PAGE_SIZE);
         redoubt_sys::Error::OutOfMemory
     }
 
@@ -842,7 +874,8 @@ impl MemoryManager {
     /// caller's budget; a device's registers are not RAM and only lose their mapping -- the
     /// MMIO page-ownership table is left alone, as `map_device` left it alone (the handle, not
     /// a page owner, is the authority there). A `dma_alloc` frame only loses its mapping too: it
-    /// stays held, and charged, until the process ends (kernel/devices.md, `dma_alloc`).
+    /// stays held, and charged, until the process ends (kernel/devices.md, `dma_alloc`). A page
+    /// table the range leaves mapping nothing is freed, and uncharged, too.
     pub fn unmap(&mut self, pid: Pid, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
         let end = Self::user_range(addr, len)?;
         for page in (addr..end).step_by(PAGE_SIZE) {
@@ -854,11 +887,14 @@ impl MemoryManager {
                 self.release_page(phys as *mut usize, pid).ok();
             }
         }
+        crate::arch::mem::free_empty_tables(self, &MemoryMapping::current(), addr, end);
         Ok(())
     }
 
     /// `set_flags(addr, len, flags)`: the same range rules, then each page gets exactly the
-    /// permissions asked for. W+X cannot be decoded and `Pte::leaf` refuses it again.
+    /// permissions asked for. W+X cannot be decoded and `Pte::leaf` refuses it again. W^X holds
+    /// per frame too (R11): `EXECUTE` only on RAM the caller owns, never on device registers or a
+    /// `dma_alloc` frame, which the device or another mapping of the same registers can write.
     pub fn set_flags(
         &mut self,
         pid: Pid,
@@ -872,7 +908,11 @@ impl MemoryManager {
             return Err(bad);
         }
         for page in (addr..end).step_by(PAGE_SIZE) {
-            self.owned_mapping(pid, page)?;
+            let phys = self.owned_mapping(pid, page)?;
+            let device_memory = !self.is_main_memory(phys as *mut u8) || self.is_dma_frame(phys);
+            if flags.contains(MemFlags::EXECUTE) && device_memory {
+                return Err(bad);
+            }
         }
         for page in (addr..end).step_by(PAGE_SIZE) {
             crate::arch::mem::set_user_page_flags(page, flags).map_err(|_| bad)?;
@@ -884,13 +924,14 @@ impl MemoryManager {
     /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr` (R11;
     /// kernel/memory.md, `map_fixed`) -- zeroed pages, charged to the caller's budget, that never
     /// replace a mapping. Checked in the order kernel/abi.md's row gives: the range
-    /// (`user_range`), then that range's overlap with any of the caller's mappings
-    /// (`range_available_in`, over the whole range before anything is charged or allocated --
-    /// `undo_run`'s rollback leaks page tables, so nothing here may need it), then the flags
-    /// (`check_map_flags`, shared with `process_map`, so W+X and W-without-R are refused here and
-    /// can never reach `map_page_inner`'s `.expect` below), then a charge check for the pages and
-    /// the page tables they need. Only once all of that holds does the guaranteed-success mapping
-    /// loop run, so a failure never leaves anything mapped or charged.
+    /// (`user_range`), then the flags (`check_map_flags`, shared with `process_map`, so W+X and
+    /// W-without-R are refused here and can never reach `map_page_inner`'s `.expect` below), then
+    /// the pages alone against the budget, by arithmetic, so a length no budget can pay for never
+    /// buys a walk (R22), then that range's overlap with any of the caller's mappings
+    /// (`range_available_in`, over the whole range before anything is charged or allocated, so
+    /// nothing here needs a rollback), then the pages and the page tables they need. Only once
+    /// all of that holds does the guaranteed-success mapping loop run, so a failure never leaves
+    /// anything mapped or charged.
     pub fn map_fixed(
         &mut self,
         pid: Pid,
@@ -900,19 +941,19 @@ impl MemoryManager {
     ) -> Result<(), redoubt_sys::Error> {
         let oom = redoubt_sys::Error::OutOfMemory;
         Self::user_range(addr, len)?;
-        let space = MemoryMapping::current();
-        if !crate::arch::mem::range_available_in(&space, addr, len) {
-            return Err(redoubt_sys::Error::InvalidArgument);
-        }
         check_map_flags(flags)?;
         let npages = (len / PAGE_SIZE) as u64;
         // `pid` is the running caller, and only the kernel (which makes no syscalls) has no
         // budget. Not an error: map_fixed's error set is InvalidArgument and OutOfMemory only.
         let budget = self.budget_of(pid).expect("map_fixed: the running process has a budget");
-        // "OutOfMemory (pages, then page tables)": the pages alone first, cheaply, so a huge
-        // `len` that the budget could never pay for is refused before `tables_needed` walks it.
+        // The pages alone first, cheaply, so a huge `len` that the budget could never pay for is
+        // refused before the overlap check or `tables_needed` walks it.
         if npages > self.free_pages(budget) {
             return Err(oom);
+        }
+        let space = MemoryMapping::current();
+        if !crate::arch::mem::range_available_in(&space, addr, len) {
+            return Err(redoubt_sys::Error::InvalidArgument);
         }
         let tables = crate::arch::mem::tables_needed(&space, addr, len / PAGE_SIZE) as u64;
         if npages + tables > self.free_pages(budget) {
@@ -921,10 +962,17 @@ impl MemoryManager {
         // From here nothing fails: the range was free, the flags are good, and the check above
         // found the budget able to pay for exactly this many pages and page tables, which
         // `alloc_page` charges as it takes them.
+        let free_before = self.free_pages(budget);
         for offset in (0..len).step_by(PAGE_SIZE) {
             crate::arch::mem::prepare_map(self, &space, pid, addr + offset)
                 .expect("map_fixed: range_available_in found this page empty, so prepare_map's own (weaker) occupancy check cannot fail, and the charge check above paid for its page table");
         }
+        // The count the charge check trusted is the count `prepare_map` made (a checked build).
+        debug_assert_eq!(
+            free_before - self.free_pages(budget),
+            tables,
+            "map_fixed: tables_needed miscounted"
+        );
         for offset in (0..len).step_by(PAGE_SIZE) {
             // Zeroed through the physmap, before the mapping exists at all (R11). The charge
             // check above guarantees the budget can pay for `npages` pages. That a free frame
@@ -934,7 +982,7 @@ impl MemoryManager {
             // nothing is held back. `process_map` relies on the same thing only
             // for page tables (its `prepare_map` `.expect`, which allocates through `walk`);
             // failing on data frames with `.expect` is new here. `map_run` instead treats a
-            // failed `alloc_page` as live and unwinds, which leaks page tables (see above).
+            // failed `alloc_page` as live and unwinds (`undo_run`).
             let frame = self.alloc_page(pid).expect("map_fixed: charged for above");
             crate::kframe::zero(frame);
             crate::arch::mem::map_page_inner(self, pid, frame, addr + offset, flags, true)

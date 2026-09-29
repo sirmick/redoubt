@@ -29,6 +29,12 @@
 //! (`post_check = "sched_oracle r10_p99_us=30000"`) and, adding the worst steward decision-wake
 //! p99 the program printed, a lease's end (`lease_end_p99_us=145000`).
 //!
+//! A weight change (a carve, or a carve returned) is recorded as a group of six records ahead of
+//! the pass it sets, and recomputed from the rule as the spec states it (kernel/scheduling.md
+//! R12, "The lead follows the weight"): W = (pass - floor)+ x old weight + remainder; the budget
+//! becomes floor + W / new weight, remainder W mod new weight; a weight of 0 on either side is
+//! stated as 1, so what a budget owes is carried through 0. That is the one place a pass may fall.
+//!
 //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
 //! saw nothing proves nothing.
 
@@ -74,7 +80,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaXYZ".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZ".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -137,11 +143,47 @@ fn check_lift(records: &[Record]) -> Result<(usize, bool), String> {
     Ok((LIFT.len(), work / wp > 0 && pb > f))
 }
 
+/// The kinds of a weight change's group, in order.
+const REWEIGH: &str = "GgvfNn";
+
+/// Check the weight-change group starting at `records[0]` against the rule; (records used, the
+/// budget's pass after).
+fn check_reweigh(records: &[Record]) -> Result<(usize, u128), String> {
+    let g = records
+        .get(..REWEIGH.len())
+        .ok_or_else(|| format!("record {}: a weight change cut short", records[0].seq))?;
+    let kinds: String = g.iter().map(|r| r.kind).collect();
+    if kinds != REWEIGH || g.iter().any(|r| r.id != g[0].id) {
+        return Err(format!(
+            "record {}: a weight change of kinds {kinds}, not {REWEIGH} for one budget",
+            g[0].seq
+        ));
+    }
+    let [pb, rb, w, f, pa, ra] = [0, 1, 2, 3, 4, 5].map(|i| g[i].pass);
+    let (old, new) = (w >> 32, w & 0xffff_ffff);
+    // A weight of 0 is stated as 1, so what a budget owes is carried through 0.
+    let want = {
+        let (old, new) = (old.max(1), new.max(1));
+        let owed = pb.saturating_sub(f) * old + rb;
+        (f + owed / new, owed % new)
+    };
+    if (pa, ra) != want {
+        return Err(format!(
+            "record {}: budget {}'s weight change {old} to {new} gave pass {pa:#x} rem {ra}, but the rule gives {:#x} rem {} \
+             (pass {pb:#x} rem {rb}, floor {f:#x})",
+            g[0].seq, g[0].id, want.0, want.1
+        ));
+    }
+    Ok((REWEIGH.len(), pa))
+}
+
 /// What a check covered.
 #[derive(Debug, Default)]
 pub struct Summary {
     pub picks: usize,
     pub lifts: usize,
+    /// Weight changes recomputed.
+    pub reweighs: usize,
     /// Lifts a `max` rule would have got wrong (a leading parent, work to move).
     pub telling: usize,
     /// Each destruction's duration, µs, in trace order.
@@ -202,8 +244,15 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 sum.lifts += 1;
                 sum.telling += usize::from(tells);
             }
-            'l' | 'e' | 'f' | 'r' | 'q' | 'w' | 'A' | 'a' => {
-                return Err(format!("record {}: a lift record outside a lift group", r.seq));
+            'G' => {
+                let (used, after) = check_reweigh(&records[i - 1..])?;
+                i += used - 1;
+                // The one place a pass may fall: the rule just checked set it.
+                last_pass.insert(r.id, after);
+                sum.reweighs += 1;
+            }
+            'l' | 'e' | 'f' | 'r' | 'q' | 'w' | 'A' | 'a' | 'g' | 'v' | 'N' | 'n' => {
+                return Err(format!("record {}: a group's record outside its group", r.seq));
             }
             'W' => {
                 queued.insert(r.id, (r.pass, (0, -i128::from(r.entry))));
@@ -311,11 +360,12 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         }
     }
     Ok(format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling; {} lifts by the rule ({} with a leading parent and work to move); R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}{lease_end}",
         records.len(),
         sum.picks,
         sum.lifts,
         sum.telling,
+        sum.reweighs,
         sum.r10_frames
     ))
 }
@@ -427,6 +477,41 @@ mod tests {
             (1, 'W', 1, pa),
             (1, 'K', 1, pa),
         ])
+    }
+
+    /// A weight change for budget 1, then its pass, a wake and a pick so the trace is complete:
+    /// pass `pb` rem `rb`, weights `old` to `new`, floor `f`, pass after `pa` rem `ra`.
+    fn reweigh_trace(pb: u128, rb: u128, old: u128, new: u128, f: u128, pa: u128, ra: u128) -> String {
+        trace(&[
+            (1, 'W', 1, pb),
+            (1, 'G', 1, pb),
+            (1, 'g', 1, rb),
+            (1, 'v', 1, old << 32 | new),
+            (1, 'f', 1, f),
+            (1, 'N', 1, pa),
+            (1, 'n', 1, ra),
+            (1, 'P', 1, pa),
+            (1, 'K', 1, pa),
+        ])
+    }
+
+    #[test]
+    fn weight_changes_are_recomputed() {
+        // A carve: lead 20 over floor 100 at weight 10, remainder 3: W = 203; at weight 1, 100 +
+        // 203. Its return: back to exactly where it was, the one place a pass falls.
+        assert!(run(&reweigh_trace(120, 3, 10, 1, 100, 303, 0), "").is_ok());
+        assert!(run(&reweigh_trace(303, 0, 1, 10, 100, 120, 3), "").is_ok());
+        // A remainder-only rescale (the old rule) is caught, and so is a pass that falls with no
+        // weight change behind it.
+        let rem_only = run(&reweigh_trace(303, 0, 1, 10, 100, 303, 0), "");
+        assert!(rem_only.as_ref().is_err_and(|e| e.contains("the rule gives")), "{rem_only:?}");
+        let fell = run(&trace(&[(1, 'W', 1, 303), (1, 'P', 1, 120), (1, 'K', 1, 120)]), "");
+        assert!(fell.as_ref().is_err_and(|e| e.contains("fell")), "{fell:?}");
+        // Weight 0 is stated as 1: 10 to 0 holds W = 203 as 100 + 203; 0 to 5 restates it.
+        assert!(run(&reweigh_trace(120, 3, 10, 0, 100, 303, 0), "").is_ok());
+        assert!(run(&reweigh_trace(303, 0, 0, 5, 100, 140, 3), "").is_ok());
+        let dropped = run(&reweigh_trace(120, 3, 10, 0, 100, 120, 0), "");
+        assert!(dropped.as_ref().is_err_and(|e| e.contains("the rule gives")), "{dropped:?}");
     }
 
     #[test]

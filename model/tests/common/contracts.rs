@@ -1,6 +1,6 @@
 use redoubt_model::{
     invariants::Checker,
-    kernel::{Boot, Kernel, Note, Step},
+    kernel::{Boot, DeviceKind, Kernel, Note, Object, Step},
     mutation::Mutation,
     spec::*,
     syscall::*,
@@ -83,8 +83,63 @@ pub fn completion(s: &Step) -> Result<&CallCompletion, String> {
         .ok_or("missing call completion".into())
 }
 
+/// A bad record takes nothing (kernel/ipc.md): a receiver whose record went bad while it waited
+/// gets `InvalidArgument`, and the abandoned-call notice or interrupt it would have taken arrives
+/// on its next `receive` with a good record.
+fn bad_record_takes_nothing(mutation: Option<Mutation>) -> Result<(), String> {
+    trace_roundtrip(&bad_record_notice(mutation)?, mutation)?;
+    trace_roundtrip(&bad_record_interrupt(mutation)?, mutation)
+}
+
+/// The traces of [`bad_record_takes_nothing`], for replay.
+pub fn bad_record_traces() -> Vec<String> {
+    [bad_record_notice(None), bad_record_interrupt(None)]
+        .into_iter()
+        .map(|w| trace::record(&Boot::default(), &w.unwrap().ops, None).unwrap())
+        .collect()
+}
+
+fn bad_record_notice(mutation: Option<Mutation>) -> Result<World, String> {
+    let mut w = World::new(mutation);
+    let (ep, h, server) = w.setup()?;
+    w.call(h, None, 1)?;
+    let msg = w.take(ep, server)?;
+    w.sys(server, Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 0 })?;
+    w.op(Op::Record { pid: 1, tid: server, record: Record::Unmapped })?;
+    let s = w.op(Op::Tick { dt: 1 })?;
+    let told = s.wakes.iter().any(|x| x.tid == server && x.result == Err(Error::InvalidArgument));
+    expect(told, "a bad record while an abandoned-call notice arrives: InvalidArgument")?;
+    w.op(Op::Record { pid: 1, tid: server, record: Record::Owned })?;
+    let r = w.value(server, Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 0 })?;
+    expect(matches!(r, Ret::Abandoned { msg_id } if msg_id == msg.msg_id), "the notice stays owed")?;
+    Ok(w)
+}
+
+fn bad_record_interrupt(mutation: Option<Mutation>) -> Result<World, String> {
+    let mut w = World::new(mutation);
+    let (_, _, server) = w.setup()?;
+    let irq = w.k.processes[&1]
+        .handles
+        .iter()
+        .find(|(_, x)| {
+            matches!(x.object, Object::Device(d) if matches!(w.k.devices[&d].kind, DeviceKind::Irq { n: 10, .. }))
+        })
+        .map(|(i, _)| *i)
+        .ok_or("no IRQ handle")?;
+    w.sys(server, Syscall::Receive { h: Some(irq), timeout: FOREVER, max_transfer: 0 })?;
+    w.op(Op::Record { pid: 1, tid: server, record: Record::Unmapped })?;
+    let s = w.op(Op::Irq { n: 10 })?;
+    let told = s.wakes.iter().any(|x| x.tid == server && x.result == Err(Error::InvalidArgument));
+    expect(told, "a bad record while an interrupt fires: InvalidArgument")?;
+    w.op(Op::Record { pid: 1, tid: server, record: Record::Owned })?;
+    let r = w.value(server, Syscall::Receive { h: Some(irq), timeout: FOREVER, max_transfer: 0 })?;
+    expect(r == Ret::Interrupt { h: irq }, "the interrupt stays fired")?;
+    Ok(w)
+}
+
 /// Independent examples from the completion table, not kernel-derived expectations.
 pub fn ipc_contracts(mutation: Option<Mutation>) -> Result<(), String> {
+    bad_record_takes_nothing(mutation)?;
     for taken in [false, true] {
         let mut w = World::new(mutation);
         let (ep, h, server) = w.setup()?;

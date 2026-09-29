@@ -32,6 +32,11 @@ covers the physical addresses below RAM, where the devices sit. On Sv32 it start
 (`0x8000_0000` on QEMU `virt`), which is also the start of the kernel half, so the map is the
 identity there.
 
+The window is `PHYSMAP_SIZE` long (128 GiB on Sv39, 2032 MiB on Sv32). The loader refuses a
+machine whose RAM does not fit in it ([R17 (fail closed)](boot.md#r17-fail-closed)): the kernel hands out
+frames lowest first, so RAM past the window would stop the kernel the first time a process
+allocated a frame there.
+
 Every physmap entry is readable, global and supervisor-only: no `U` bit and never `X`. All are
 writable but the kernel's read-only frames. The map is built from the largest leaves (1 GiB on
 Sv39, 4 MiB on Sv32), except around those frames: for every kernel page that is not writable
@@ -191,7 +196,7 @@ any other address there is an ordinary fault.
 
 ### Regions
 
-Status: built · partly tested: the placement areas and the stack are conventions of the kernel and loader that no case attacks as addresses · tested: bench:map-fixed-attack, bench:map-fixed-tables
+Status: built · partly tested: the message area and the stack are conventions of the kernel and loader that no case attacks as addresses · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:map-anon-search-bound
 
 User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the rest, up to
 256 GiB, is free for `map_fixed` and `process_map` and nothing is placed there by default.
@@ -201,8 +206,8 @@ User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the 
 | `0x0`..`0x1_0000` | free; page 0 is user space | nobody |
 | `0x1_0000`..`0x1FF0_0000` | the program image: the link range | the program's linker |
 | `0x1FF0_0000`..`0x1FF4_0000` | the loader stub, in a launched process (at most 256 KiB) | the launcher |
-| `0x4000_0000`..`0x4040_0000` | the message area (4 MiB): where the kernel maps a lend or transfer the process receives | the kernel |
-| `0x6000_0000`..`0x7000_0000` | the `map_anon` area (256 MiB): where `map_anon` places pages | the kernel |
+| `0x4000_0000`..`0x4040_0000` | the message area (4 MiB): where the kernel maps a lend or transfer the process receives, every one inside it | the kernel |
+| `0x6000_0000`..`0x7000_0000` | the `map_anon` area (256 MiB): where `map_anon`, `map_device` and `dma_alloc` place pages, every run inside it | the kernel |
 | `0x7FF0_0000` | the startup block, in a launched process | the launcher |
 | `0x7FFE_0000`..`0x8000_0000` | the first thread's stack: 32 pages (128 KiB) reserved, only the top one backed; the rest are backed on first touch | the loader for a boot process; a launcher places its own |
 
@@ -380,17 +385,15 @@ mapping, reservation or unmap overwrites it (I9 (pages W^X, zeroed, lends unmapp
 
 ### R24 (SUM and MXR clear)
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: no probe covers `MXR` (Residual risks); the firmware already enters S-mode with both bits clear, so no case shows the kernel's own clear doing work · tested: bench:sum-clear
 
-The kernel clears `sstatus.SUM` and `sstatus.MXR` at entry and never sets either. So S-mode
-cannot load or store through a user mapping, and a stray kernel dereference of a user address
-faults. `MXR` is included because with it set, kernel loads could read pages that are
-execute-only. The kernel reaches user memory only by walking the caller's tables and copying
-through the physmap, so no path needs either bit. A boot assertion checks both are clear, and a
-kernel test shows a kernel load through a user address faults
-([todo](../todo/clear-sum-at-entry.md)).
-
-**Open:** none.
+The kernel clears `sstatus.SUM` and `sstatus.MXR` at entry, in `_start` before any Rust runs,
+and never sets either. So S-mode cannot load or store through a user mapping, and a stray kernel
+dereference of a user address faults. `MXR` is included because with it set, kernel loads could
+read pages that are execute-only. The kernel reaches user memory only by walking the caller's
+tables and copying through the physmap, so no path needs either bit. A boot assertion checks
+both are clear. A test build (`sum-probe`) loads the first caller's `ecall` straight through its
+user address, and the load faults as a kernel failure.
 
 ## Residual risks
 
@@ -402,13 +405,6 @@ kernel test shows a kernel load through a user address faults
   the current process maps. On Sv39 the physmap also covers the physical range below RAM, where
   device registers sit, as ordinary kernel read-write memory; the kernel never uses those
   addresses, but a stray write through them reaches a device.
-- **RAM larger than the physmap is not refused.** The loader maps the physmap to the end of RAM,
-  but the kernel's window stops at `PHYSMAP_SIZE` (128 GiB on Sv39, 2032 MiB on Sv32), and the
-  loader never compares the two. The kernel hands out frames lowest first, so a larger machine
-  boots, and the kernel stops at run time the first time it uses a frame past the bound, which a
-  process can cause by allocating (a breach of I14 (no call panics the kernel) on such a
-  machine). The rule is that the loader refuses to boot it ([boot](boot.md)). Follow-up:
-  [todo](../todo/physmap-ram-bound.md).
 - **Every change flushes everything.** Each map, unmap, lend and address-space switch runs a
   global `sfence.vma`, so ASIDs save no work, and each flush costs page-table walks afterwards.
   It is also a flush of this hart only: with more than one hart, another hart's cached
@@ -417,11 +413,9 @@ kernel test shows a kernel load through a user address faults
   and a thread's return to `EXIT_THREAD` are both instruction page faults the kernel must take.
   The vendored RustSBI delegates them; with a firmware that did not, the boot would never reach
   the kernel. The firmware is in the TCB ([boot](boot.md)).
-- **`SUM` and `MXR` are clear by default, not by the kernel's hand.** The kernel never writes
-  `sstatus.SUM` or `sstatus.MXR`: it relies on the firmware entering S-mode with both clear, which
-  [R24](#r24-sum-and-mxr-clear) says the kernel does itself. With `SUM` set, a kernel bug that
-  dereferenced a user address would read the process's memory instead of faulting. Follow-up:
-  [todo](../todo/clear-sum-at-entry.md).
+- **No probe covers `MXR`.** The `sum-clear` probe loads from a readable user page, so it shows
+  `SUM` is clear, not `MXR`: a set `MXR` would let a kernel load read an execute-only page, and
+  only the boot assertion would notice ([R24](#r24-sum-and-mxr-clear)).
 - **No guard gap between a segment and the stack.** The stub checks segments against the stub,
   the startup block and the image, not against the stack, and the kernel refuses only an
   overlap. A launcher that puts the stack inside the link range can get a child whose data ends

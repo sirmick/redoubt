@@ -92,7 +92,8 @@ charged, its pass rises above the floor, and it no longer ties.
 `bench:sched-ties` runs a kernel built with the scheduling trace ([R23](#r23-no-test-channels)).
 The bench's own oracle (`tools/testbench/src/sched_oracle.rs`) rebuilds the order from the trace's
 events with its own reading of the four clauses and checks every pick, keeps its own floor, and
-requires every pass never to fall.
+requires every pass never to fall but at a weight change, which it recomputes
+([the lead follows the weight](#the-lead-follows-the-weight)).
 
 ```mermaid
 flowchart TD
@@ -113,7 +114,7 @@ flowchart TD
 
 ### Charging
 
-Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case, and the kernel departs from whole-cost billing on a deadline's destruction (Residual risks) · tested: bench:sched-sleep-gaming, bench:sched-exit-churn, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-destroy-billing, host:redoubt-stride::a_split_charge_equals_the_whole, host:redoubt-stride::every_charge_counts_at_any_weight, host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12NoMinimumCharge, mutation:R12FoldAtNewWeight
+Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested: bench:sched-sleep-gaming, bench:sched-exit-churn, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-destroy-billing, bench:deadline-flood-billed, host:redoubt-stride::a_split_charge_equals_the_whole, host:redoubt-stride::every_charge_counts_at_any_weight, host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12NoMinimumCharge, mutation:R12FoldAtNewWeight, mutation:R12DeadlineWorkUnbilled
 
 Runtime is counted in timebase ticks at the trap boundary. There are two ways into user mode
 (resuming a thread, returning from a call) and one way out (the trap handler). On every trap from
@@ -149,7 +150,7 @@ Kernel time is billed as well:
 
 The top of a destruction returns its carve to its parent before any of the destruction's work is
 billed. So the parent, often the caller of `budget_destroy`, pays for the destruction at the
-weight it has once the child is gone (on a deadline the kernel departs from this; see below), not at the sliver it kept while the child held the rest.
+weight it has once the child is gone, not at the sliver it kept while the child held the rest.
 In `bench:sched-destroy-billing` a parent that kept 10 of 1000 destroys the child holding 990 and
 is back on the CPU within twice the destruction's cost and four slices; billed at 10, it would wait
 for seconds.
@@ -157,14 +158,18 @@ for seconds.
 Every destruction's whole cost is billed to someone. For `budget_destroy` that is the caller, as
 the call's own kernel time. For a deadline it is the top's parent, after its carve returns, or the
 nearest ancestor with free weight above 0 if the parent has none; `root` always has. No part of a
-destruction is billed to nobody ([R10 (destruction)](budgets.md#r10-destruction)). The kernel
-departs from this on a deadline: it bills the dying budget up to the lift, whose debt then moves
-to its parent ([Inheritance](#inheritance)), and the rest to nobody (Residual risks).
+destruction is billed to nobody ([R10 (destruction)](budgets.md#r10-destruction)). On a
+deadline the kernel names the payer once the carve is back, and bills it after the subtree is
+gone for everything from the walk that found the deadline. In `bench:deadline-flood-billed` a
+creator floods its own budget with empty weight-0 budgets on short deadlines: its count falls as
+the flood grows from 16 to 64 a round, and an equal-weight victim keeps its half. With the bill
+planted out, the victim fell to 137 of 1000.
 
 A server that works for a caller spends its own budget's CPU: no time is donated
 ([Residual risks](#residual-risks)). CPU charging is separate from page charging
-([R6 (charging)](budgets.md#r6-charging)). The model charges runtime only; billing kernel work is the
-kernel's alone, and the boot cases are its only check.
+([R6 (charging)](budgets.md#r6-charging)). The model charges runtime, and a deadline's
+destruction as work billed to its payer (`R12DeadlineWorkUnbilled`); billing other kernel work is
+the kernel's alone, and the boot cases are its only check.
 
 ### Inheritance
 
@@ -196,7 +201,7 @@ run between, leaves the victim neither more nor less than half.
 
 ### Running while carved down
 
-Status: built · partly tested: one breach is stated and not yet closed: a weight change rescales only the remainder, so a lead accrued while carved down is not rescaled when the weight returns, which over-charges the budget that carved (the lead follows the weight, planned) · tested: bench:sched-carve-inflation, bench:sched-budget-churn, bench:sched-destroy-billing, host:redoubt-stride::a_rescale_loses_under_one_unit, mutation:R12StrideWeightIsLimit, mutation:R12FoldAtNewWeight
+Status: built · tested: bench:sched-carve-inflation, bench:sched-carve-return, bench:sched-budget-churn, bench:sched-destroy-billing, host:redoubt-stride::a_carve_and_its_return_leave_the_state, mutation:R12StrideWeightIsLimit, mutation:R12FoldAtNewWeight, mutation:R12RescaleOnlyOnReturn
 
 A budget that runs while most of its weight is carved away accrues its lead at the small weight
 it kept, and owes that runtime at whatever weight it has later
@@ -212,7 +217,7 @@ carved ([R7](budgets.md#r7-carving)).
 
 ### The lead follows the weight
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:sched-carve-return, bench:sched-budget-churn, host:redoubt-stride::a_carve_and_its_return_leave_the_state, host:redoubt-stride::the_crate_and_the_model_agree, host:testbench::weight_changes_are_recomputed, mutation:R12RescaleOnlyOnReturn
 
 What a budget owes is runtime, and a weight change keeps it exactly. Every weight change, a
 carve and a carve returned alike, folds at the old weight and then converts the budget's lead
@@ -224,18 +229,24 @@ pass = floor + W / w_new;   rem = W mod w_new
 ```
 
 So a carve raises the lead by the ratio of the weights and its return lowers it by the same
-ratio, and a carve returned with no run between leaves the budget where it was. Both directions
+ratio, and a carve returned with no run between leaves the budget where it was. If the carve
+raised the floor (the budget had the lowest pass), the return converts from the higher floor and
+the budget ends a little higher: over-charged, never ahead. Both directions
 are needed: rescaling only on a return would let a budget carve just before a burst and return
 just after, and its lead would shrink at the return without having grown at the carve. A budget
 at or below the floor owes only its remainder, and waking would lift it to the floor anyway. At a
 destruction the carve returns first, so the parent's lead is converted before the child's work
-is lifted onto it at the parent's restored weight ([inheritance](#inheritance)).
+is lifted onto it at the parent's restored weight ([inheritance](#inheritance)). A budget at
+weight 0 holds no process, and what it owes is stated at weight 1 meanwhile, so it is carried
+exactly through 0: carving everything away and then getting back only part of it is the same as
+the one carve from the old weight to the new.
 
-The crate, the model and the oracle convert alike. A host test checks that a carve and its return
-leave pass and remainder unchanged, and a bench case has a budget carve most of its weight away
-while it runs, then return it, and get its share back against an equal victim.
-
-**Open:** none.
+`libs/stride`'s `rescale` is the conversion; the model makes the same one, and the bench's oracle
+recomputes every weight change a traced kernel records, the one place it lets a pass fall. A host
+test checks that a carve and its return leave pass and remainder unchanged. In
+`bench:sched-carve-return` a budget of weight 1000 carves 999 away, runs 9 ms on the 1 it kept,
+and takes the weight back: it then gets 492 to 494 of 1000 against an equal victim. With the
+remainder alone rescaled, as before, it got 0.
 
 ### Responsiveness
 
@@ -271,14 +282,14 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
 | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
 | steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 20 ms, p99 <= 115 ms (from the sweep below; 15 and 50 ms before it) |
-| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 30 ms |
-| R10 kernel time of one destruction, from the trace | p99 <= 30 ms |
-| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 115 + 30 = 145 ms, asserted as one sum by the post-check (80 ms before the sweep) |
-| `budget_destroy`, call to return | recorded against one round: 30 ms plus (runnable budgets + 2) slices |
+| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 54 ms (from the second sweep below; 30 ms before it) |
+| R10 kernel time of one destruction, from the trace | p99 <= 39 ms (from the second sweep below; 30 ms before it) |
+| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 115 + 39 = 154 ms, asserted as one sum by the post-check (80 ms before the first sweep, 145 ms before the second) |
+| `budget_destroy`, call to return | recorded against one round: R10's 39 ms plus (runnable budgets + 2) slices |
 | the 1000-weight server's share of the spinning CPU at N = 16 | at least 384 less 30 per thousand |
 
-In instructions: 15 ms is 1,875,000, 20 ms is 2,500,000, 30 ms is 3,750,000, 50 ms is 6,250,000,
-115 ms is 14,375,000, 145 ms is 18,125,000, and one 10 ms slice is 1,250,000.
+In instructions: 15 ms is 1,875,000, 20 ms is 2,500,000, 39 ms is 4,875,000, 50 ms is 6,250,000,
+54 ms is 6,750,000, 115 ms is 14,375,000, 154 ms is 19,250,000, and one 10 ms slice is 1,250,000.
 
 The decision wake is measured by the stand-in itself (`time_now` against its own deadline) and
 read from its console lines, while R10's time comes from the kernel's trace: that half of the
@@ -315,6 +326,40 @@ sweep sets them at the worst case plus a margin of a tenth, rounded up to 5 ms: 
 were driver wake 33.3 ms, steward timer wake 34.2 ms and deadline notice 23.7 ms (all rv32), and
 the server's share never fell below 380 of 1000.
 
+**The second sweep** (2026-09-29, the same seeds and widths) followed a change that found process
+objects by index instead of scanning frames. The change made most destructions cheaper, which
+moved the workload's timeline: the last lease destructions at N = 16 now overlap the live
+sessions. There, taking a lease's exit notice inside R10 frees its process object, and that
+object's handle sweep walks every live process's handle pages. The N = 16 deadline notice and
+R10's kernel time, p99 in µs, and a lease's end:
+
+| Seed | rv64 notice | rv64 R10 | rv64 lease end | rv32 notice | rv32 R10 | rv32 lease end |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 36195 | 33863 | 73287 | 37902 | 35107 | 86435 |
+| 2 | 36316 | 33985 | 73409 | 38023 | 35235 | 86561 |
+| 3 | 36287 | 33943 | 94886 | 37989 | 35190 | 86530 |
+| 4 | 36331 | 34000 | 94941 | 38042 | 35251 | 97523 |
+| 5 | 36156 | 33823 | 73245 | 37868 | 35069 | 75474 |
+| 6 | 36495 | 34164 | 84347 | 38220 | 35421 | 86759 |
+| 7 | 37940 | 34116 | 84297 | 38164 | 35370 | 75771 |
+| 8 | 37836 | 34084 | 105786 | 38144 | 35337 | 97606 |
+| 9 | 36174 | 33843 | 73264 | 37882 | 35089 | 86413 |
+| 10 | 36198 | 33866 | 94809 | 39346 | 35113 | 86447 |
+| 11 | 37919 | 34131 | 84313 | 38177 | 35386 | 75790 |
+| 12 | 36486 | 34156 | 73581 | 38203 | 35412 | 86748 |
+| 13 | 36432 | 34101 | 73522 | 38146 | 35355 | 75757 |
+| 14 | 36177 | 33844 | 94786 | 37885 | 35090 | 86416 |
+| 15 | 36291 | 33948 | 105650 | 48851 | 35196 | 75600 |
+| 16 | 38661 | 33878 | 73301 | 37924 | 35124 | 86458 |
+
+The worst are the deadline notice at 48,851 µs (rv32, seed 15) and R10 at 35,421 µs (rv32, seed
+6). Their targets are the worst case plus a tenth, rounded up to 1 ms: 48.9 x 1.1 = 53.7, so
+54 ms, and 35.4 x 1.1 = 39.0, so 39 ms. The lease end's bound moves with R10's, to 154 ms; its
+worst is 105.8 ms. The difference from 30 ms is the handle-sweep term of
+[budget destruction's cost](../todo/budget-destroy-cost.md), which brings R10's target back to
+30 ms and the deadline notice's to 40 ms. Every other measure met its target on every seed. The
+gate stays on seed 3.
+
 The case fails on any `missed`. `bench:sched-latency-tcg` runs the same workload in host time and
 only reports, with the oracle still checking every pick.
 
@@ -341,7 +386,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-Status: built · partly tested: the bound on a call's kernel time is not attacked by a case, and the kernel departs from it in `map_anon`'s search and in three scans of every kernel-object frame (the PID draw, the search for an owed exit notice, the search for an interrupt's IRQ object); a deadline's destruction is billed only in part · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge
+Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range and `process_create` · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:deadline-flood-billed, bench:sched-carve-return, bench:map-anon-search-bound, bench:scan-bounds, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge, mutation:R12DeadlineWorkUnbilled, mutation:R12RescaleOnlyOnReturn
 
 A budget's CPU follows its free weight, in one queue with no priority. While it has a runnable
 thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No
@@ -351,17 +396,20 @@ free weight, the preemption points, the wake rule and ranks, charging and inheri
 
 A system call's kernel time is bounded by a constant plus a term linear in the pages it maps or
 the objects it names. It never depends on the extent of an address area or on what other
-processes hold. A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the platform's
+processes hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant,
+and never in `len` (`bench:map-anon-search-bound`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the platform's
 interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in RAM
 frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
 every wake waits for it. R10 (destruction)'s sweeps are the one stated exception
-([todo](../todo/budget-destroy-cost.md)). The kernel departs from this bound in `map_anon`'s
-address search ([memory](memory.md#residual-risks)), and in three more scans of every
-kernel-object frame up to the highest one ever used, a mark that grows with the objects every
-other budget creates: `process_create`'s PID draw, which looks for a process object naming each
-candidate PID; the search for an exit notice owed on an endpoint, at each delivery there; and the
-search for an interrupt's IRQ object, on every interrupt
-([todo](../todo/kernel-scan-bounds.md)).
+([todo](../todo/budget-destroy-cost.md)). What a call looks up by PID or by interrupt number
+it finds in an index the kernel keeps as objects are made and freed: a process object in one of
+`MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's sources; a boot
+naming a higher interrupt stops). So `process_create`'s PID draw looks at most at 63 slots, an
+owed exit notice is sought among at most 63 process objects, and an interrupt finds its object
+in one lookup; a checked build proves each index against a scan of every object frame. In
+`bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
+its exit notice and an interrupt take what they took on an empty system; with the old scans, the
+first took 1.2 s against 22 ms.
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
@@ -381,7 +429,7 @@ It is attacked three ways:
 
 ### R23 (no test channels)
 
-Status: built · partly tested: no case builds the production kernel and checks that it carries no trace
+Status: built · partly tested: no case builds the production kernel and checks that it carries no trace, or that a test-only feature is refused without debug assertions
 
 The production kernel carries no test-only diagnostic channel. The scheduling trace is one: a
 record of every budget's id and pass at every wake, requeue, pass change, pick and lift, which
@@ -399,7 +447,11 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
 debug-only break of the tie rule that implies the trace, and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
-([devices](devices.md)).
+([devices](devices.md)), and so are `sum-probe`, a stray kernel load that must fault
+([R24 (SUM and MXR clear)](memory-layout.md#r24-sum-and-mxr-clear)), and `panic-in-print`, a
+panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these implies the feature
+`test-only`, which the kernel refuses to compile without debug assertions, so the release build
+`./build` makes cannot carry one; a checked build, as `./build --debug` makes, still can.
 
 ## Failure and restart
 
@@ -438,30 +490,16 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   wakes with a lead of a few milliseconds of its own runtime and lands behind several weight-100
   spinners' slices: on rv64 its decision-wake p50 is 17.9 ms on every seed and its p99 reaches
   104 ms, against 15 and 50 ms for its timer wakes. The targets (20 and 115 ms) are set from the
-  sweep, so the gate passes, but a lease's end from the steward's decision is 145 ms, not 80.
+  sweep, so the gate passes, but a lease's end from the steward's decision is 154 ms, not 80.
   A pinned seed repeats one run; a change that moves the phase can land on a worse one than the
   sweep saw, which the margin covers and a new sweep re-measures. The rv64 median is structural, not noise:
   follow-up: [todo](../todo/sched-rv64-decision-wake.md).
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   is the stated exception: it dominates lease termination and grows with the objects it walks
-  ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). `map_anon`'s
-  search breaks the bound ([memory](memory.md#residual-risks); follow-up:
-  [todo](../todo/map-anon-search-cost.md)), and so do the PID draw, the search for an owed exit
-  notice and the search for an interrupt's IRQ object, each a scan of every kernel-object frame
-  up to the highest one used, which other budgets raise by creating objects. Their time is
-  billed (to the caller, or for an interrupt to the IRQ object's owner), but every wake waits
-  for it. Follow-up: [todo](../todo/kernel-scan-bounds.md). Ending a DMA driver
-  adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
+  and with every live process's handle pages, so its target and the deadline notice's are 39 and
+  54 ms, not 30 ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
-- **A deadline's last steps are billed to nobody.** The kernel departs from the whole-cost
-  billing rule ([Charging](#charging)). On a deadline the dying budget is billed for
-  the destruction's work up to the lift. The rest (closing handles in every table, freeing
-  frames) comes after the bill and is charged to no budget. A budget of free weight 0 is charged
-  nothing at all, so the deadline of an empty revocation scope costs its creator only the
-  `budget_create`. The 64 staggered weight-0 deadlines of `bench:sched-timer-flood` leave the
-  victim its half; larger floods are not attacked. Follow-up:
-  [todo](../todo/deadline-destroy-billing.md).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
   decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to

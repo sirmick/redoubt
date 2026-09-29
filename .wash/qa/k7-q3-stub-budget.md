@@ -1,0 +1,21 @@
+<!-- wash-qa-thread: k7-q3-stub-budget -->
+
+## K7 · k7-q3-stub-budget — K7 Q3: stub-unsafe-budget, gate change owner
+
+Status: **resolved** · Assigned to: Orchestrator · Revision: 2
+
+Evidence: Orchestrator ruling: docs/todo/stub-unsafe-budget.md moves whole to package B2 (tools/testbench owner); K7 makes no stub or budget-config change for it. One owner for the page.
+
+### Implementer · Question
+
+Event: `dbc006eed0a72838dafef1d69de68e0d` · 2026-09-28T02:29:41Z
+
+> By my reading, stub/src needs no code change: every unsafe already has a SAFETY justification. Bullet 1 is a [[budget]] in tests/unsafe-budget.toml, which I take. Bullet 2 makes the ratchet or no-cruft gate fail when an on-target crate's source directory is in no budget. That is a change in tools/testbench, which looks like B2's area. Mine or B2's? Detail: K7-plan.md, Q3.
+
+### Orchestrator · Resolved
+
+Event: `f0c70c9647c83c439ae8d517a4835ee9` · 2026-09-28T02:31:52Z
+
+> Evidence: Orchestrator ruling: docs/todo/stub-unsafe-budget.md moves whole to package B2 (tools/testbench owner); K7 makes no stub or budget-config change for it. One owner for the page.
+
+<!-- wash-qa-checkpoint-v2: eyJ0aHJlYWQiOnsiaWQiOiJrNy1xMy1zdHViLWJ1ZGdldCIsIm5vZGUiOiJLNyIsInRpdGxlIjoiSzcgUTM6IHN0dWItdW5zYWZlLWJ1ZGdldCwgZ2F0ZSBjaGFuZ2Ugb3duZXIiLCJjcmVhdG9yIjoiYmU0NmI1NWFmZTdiMGY3OGM1YWVkN2ViNTg5NTVmMWEiLCJhc3NpZ25lZSI6ImQwNzQ0NGQ3ZTE0ZmVlMzI3OWNlMGQwYWIyMWE0ZTY3Iiwic3RhdGUiOiJyZXNvbHZlZCIsImJsb2NraW5nIjpmYWxzZSwicmV2aXNpb24iOjIsImRlY2lzaW9uX3JlZnMiOm51bGwsImV2aWRlbmNlIjoiT3JjaGVzdHJhdG9yIHJ1bGluZzogZG9jcy90b2RvL3N0dWItdW5zYWZlLWJ1ZGdldC5tZCBtb3ZlcyB3aG9sZSB0byBwYWNrYWdlIEIyICh0b29scy90ZXN0YmVuY2ggb3duZXIpOyBLNyBtYWtlcyBubyBzdHViIG9yIGJ1ZGdldC1jb25maWcgY2hhbmdlIGZvciBpdC4gT25lIG93bmVyIGZvciB0aGUgcGFnZS4iLCJldmVudHMiOlt7ImlkIjoiZGJjMDA2ZWVkMGE3MjgzOGRhZmVmMWQ2OWRlNjhlMGQiLCJhdXRob3IiOiJiZTQ2YjU1YWZlN2IwZjc4YzVhZWQ3ZWI1ODk1NWYxYSIsImtpbmQiOiJvcGVuIiwiYm9keSI6IkJ5IG15IHJlYWRpbmcsIHN0dWIvc3JjIG5lZWRzIG5vIGNvZGUgY2hhbmdlOiBldmVyeSB1bnNhZmUgYWxyZWFkeSBoYXMgYSBTQUZFVFkganVzdGlmaWNhdGlvbi4gQnVsbGV0IDEgaXMgYSBbW2J1ZGdldF1dIGluIHRlc3RzL3Vuc2FmZS1idWRnZXQudG9tbCwgd2hpY2ggSSB0YWtlLiBCdWxsZXQgMiBtYWtlcyB0aGUgcmF0Y2hldCBvciBuby1jcnVmdCBnYXRlIGZhaWwgd2hlbiBhbiBvbi10YXJnZXQgY3JhdGUncyBzb3VyY2UgZGlyZWN0b3J5IGlzIGluIG5vIGJ1ZGdldC4gVGhhdCBpcyBhIGNoYW5nZSBpbiB0b29scy90ZXN0YmVuY2gsIHdoaWNoIGxvb2tzIGxpa2UgQjIncyBhcmVhLiBNaW5lIG9yIEIyJ3M/IERldGFpbDogSzctcGxhbi5tZCwgUTMuIiwiY3JlYXRlZF9hdCI6MTc5MDU2MjU4MTE5OH0seyJpZCI6ImYwYzcwYzk2NDdjODNjNDM5YWU4ZDUxN2E0ODM1ZWU5IiwiYXV0aG9yIjoiZDA3NDQ0ZDdlMTRmZWUzMjc5Y2UwZDBhYjIxYTRlNjciLCJraW5kIjoicmVzb2x2ZSIsImJvZHkiOiJFdmlkZW5jZTogT3JjaGVzdHJhdG9yIHJ1bGluZzogZG9jcy90b2RvL3N0dWItdW5zYWZlLWJ1ZGdldC5tZCBtb3ZlcyB3aG9sZSB0byBwYWNrYWdlIEIyICh0b29scy90ZXN0YmVuY2ggb3duZXIpOyBLNyBtYWtlcyBubyBzdHViIG9yIGJ1ZGdldC1jb25maWcgY2hhbmdlIGZvciBpdC4gT25lIG93bmVyIGZvciB0aGUgcGFnZS4iLCJjcmVhdGVkX2F0IjoxNzkwNTYyNzEyOTMzfV19LCJhdXRob3JzIjp7ImJlNDZiNTVhZmU3YjBmNzhjNWFlZDdlYjU4OTU1ZjFhIjoiSW1wbGVtZW50ZXIiLCJkMDc0NDRkN2UxNGZlZTMyNzljZTBkMGFiMjFhNGU2NyI6Ik9yY2hlc3RyYXRvciJ9fQ== -->

@@ -1,0 +1,16 @@
+description = "A call's kernel time does not grow with what other budgets hold (R12): process_create with its exit notice, and an interrupt, stay within twice their empty-system time and the wake target after one budget fills its page limit with endpoints (virtual time, release build)"
+arch = ["rv64"]
+kind = "boot"
+# A release build: a checked build re-scans every object frame to prove the indexes, which is
+# what would be measured.
+icount = "shift=3,sleep=off"
+programs = ["scan-bounds"]
+timeout_secs = 600
+expect = [
+    '^\[scan-bounds\] ok: the filler filled its budget with endpoints',
+    '^\[scan-bounds\] ok: process_create to notice stays bounded',
+    '^\[scan-bounds\] ok: interrupt stays bounded',
+    '^SCAN-BOUNDS TEST PASSED$',
+]
+forbid = ['\[scan-bounds\] FAIL', 'PANIC']
+poweroff = true

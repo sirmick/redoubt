@@ -469,13 +469,11 @@ fn wake(ss: &mut ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID, result: R
 }
 
 /// Write `slots` into `(pid, tid)`'s record, in its own address space, and wake it with
-/// `result`. A record that is no longer the thread's writable memory is `InvalidArgument`: the
-/// record is part of decoding, whose error every call's row carries.
-/// Write a blocked thread's record in its own memory and wake it with `result`, or with the
-/// error the record earned. By the time this runs the message is consumed -- taken from the
-/// queue, its handles installed, its buffer mapped -- so a record that has gone unwritable
-/// since is the receiver's own loss, not the sender's; delivery re-checks it beforehand
-/// (`check_receive_record`) so that this is a narrow race, not the usual way.
+/// `result`, or with the error the record earned: a record that is no longer the thread's
+/// writable memory is `InvalidArgument`, the error of decoding, which every call's row carries.
+/// Every delivery checks the record first (`check_receive_record`) and takes nothing if it fails
+/// (kernel/ipc.md, "A bad record takes nothing"), so by the time this runs the record was good a
+/// moment ago.
 fn answer_record<const N: usize>(
     ss: &mut ProcessTable,
     mm: &MemoryManager,
@@ -826,7 +824,9 @@ fn receive_irq(
 
 /// Hand the interrupt to a thread waiting in `receive` on device `frame`, if one is waiting
 /// and the device has fired. Clearing `fired` here is R5's "returns when `fired` is set
-/// (clearing it)", and it happens exactly once per waiting thread.
+/// (clearing it)", and it happens exactly once per waiting thread, and only once its record is
+/// known to be writable: a bad record takes nothing, so the device stays fired (and masked) for
+/// the next `receive`.
 pub fn irq_ready(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     if !mm.device(frame).fired {
         return;
@@ -837,6 +837,10 @@ pub fn irq_ready(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
         (s.wait == Wait::Irq && s.irq == Some(DeviceRef { frame, id })).then_some((pid, tid))
     });
     let Some((pid, tid)) = waiting else { return };
+    if let Err(error) = check_receive_record(ss, pid, tid, mm) {
+        wake(ss, mm, pid, tid, Err(error));
+        return;
+    }
     let mut d = mm.device(frame);
     d.fired = false;
     mm.store_device(frame, &d);
@@ -928,6 +932,11 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
             })
         });
         if let Some((pid, tid, frame, rid)) = notice {
+            // A bad record takes nothing: the notice stays owed for the next `receive`.
+            if let Err(error) = check_receive_record(ss, pid, tid, mm) {
+                wake(ss, mm, pid, tid, Err(error));
+                continue;
+            }
             // I15: reported exactly once.
             let mut c = open_call_at(mm, frame);
             c.flags &= !F_NOTICE;
@@ -1264,6 +1273,12 @@ fn move_buffer(ss: &ProcessTable, mm: &mut MemoryManager, m: &Msg, spid: Pid, rp
             mm.move_frame(phys, spid, rpid).expect("R4: the pages were charged above");
         }
     }
+    // Only now, with every page mapped: a self-send's receiving tables are the sender's, and one
+    // prepared but not yet filled would look empty.
+    if m.kind == MsgKind::Send {
+        let end = m.buf_addr + m.buf_pages * PAGE_SIZE;
+        crate::arch::mem::free_empty_tables(mm, &sender_space, m.buf_addr, end);
+    }
 }
 
 /// Put a queued message's buffer back in its sender's address space.
@@ -1301,6 +1316,12 @@ pub fn reply(
     // exactly this reply).
     drop_open_call(mm, pid, tid, frame);
     if call.flags & F_WAITING == 0 {
+        // A notice owed here waits on a live endpoint: one destroyed took its notices with it
+        // (`destroy_endpoint`).
+        debug_assert!(
+            call.flags & F_NOTICE == 0 || mm.is_live_endpoint(call.endpoint),
+            "I15: an abandoned call owes a notice on a destroyed endpoint"
+        );
         // R3: the reply to an abandoned call reaches nobody, and its lend is freed.
         free_abandoned_lend(ss, mm, &call);
     } else {
@@ -1366,6 +1387,8 @@ fn return_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCall) {
         )
         .expect("an open call retains both aliases of its lend");
     }
+    let end = call.lend_server + call.lend_pages * PAGE_SIZE;
+    crate::arch::mem::free_empty_tables(mm, &server, call.lend_server, end);
 }
 
 /// The lend of an abandoned call: its pages are the server's alone, so replying frees them.
@@ -1379,6 +1402,8 @@ fn free_abandoned_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCal
             .expect("an abandoned call retains its protected borrower alias");
         mm.free_frame_of(phys, call.server.0).expect("an abandoned lend's frame remains owned by its server");
     }
+    let end = call.lend_server + call.lend_pages * PAGE_SIZE;
+    crate::arch::mem::free_empty_tables(mm, &space, call.lend_server, end);
 }
 
 /// Free an open call's page and the charges it carried (R4a).
@@ -1421,6 +1446,8 @@ fn abandon(ss: &ProcessTable, mm: &mut MemoryManager, frame: u32) {
                 .expect("R3: the receiver has paid for this lend since it took the call");
         }
     }
+    let end = call.lend_caller + call.lend_pages * PAGE_SIZE;
+    crate::arch::mem::free_empty_tables(mm, &space, call.lend_caller, end);
 }
 
 // --- Teardown: R4b, R10, and timeouts --------------------------------------------------------------
@@ -1533,6 +1560,20 @@ fn destroy_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
         let s = slot(mm, pid, tid);
         s.wait == Wait::Reply && open_call_at(mm, s.open).endpoint == e
     });
+    // Every call taken through it is abandoned now, and no notice follows: there is no endpoint
+    // left to receive one on. `Dead` from `receive` on it is the holder's cue (R3); a reply to
+    // one of them is `discarded`, as to any abandoned call.
+    while let Some(frame) = find_thread(mm, |mm, pid, tid| {
+        let s = slot(mm, pid, tid);
+        (0..s.ncalls).map(|i| nth_call(mm, pid, tid, i)).find(|f| {
+            let c = open_call_at(mm, *f);
+            c.flags & F_NOTICE != 0 && c.endpoint == e
+        })
+    }) {
+        let mut c = open_call_at(mm, frame);
+        c.flags &= !F_NOTICE;
+        store_open_call(mm, frame, &c);
+    }
     // Every exit notice owed here is dropped, and a process still running loses the ear it was
     // to report to (R10; `process.rs`).
     crate::process::endpoint_dying(mm, e);

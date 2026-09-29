@@ -59,8 +59,7 @@ Status: built · tested: host:redoubt-netd::an_honest_device_comes_up_with_two_f
   ([R56 (no earlier frame leaks)](#r56-no-earlier-frame-leaks)). The transmit queue asks for no
   interrupts.
 - **Interrupts only say when to look.** The receive queue is drained before every wait, so a lost
-  interrupt delays nothing and a spurious one delivers nothing (an interrupt raised before the
-  first receive is a kernel follow-up: [todo](../todo/irq-level-latch.md)).
+  interrupt delays nothing and a spurious one delivers nothing.
 - **A DMA page never leaves `netd`.** No path lends, transfers or maps one; the kernel refuses to
   anyway ([devices](../kernel/devices.md#dma_alloc)).
 

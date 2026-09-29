@@ -19,6 +19,9 @@ pub mod syscall;
 pub fn current_pid() -> Pid { Pid::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
 
 pub fn init() {
+    // R24: `_start` cleared both, and nothing sets them again.
+    let status = sstatus::read();
+    assert!(!status.sum() && !status.mxr(), "sstatus.SUM or MXR is set at boot (R24)");
     irq::init();
 
     println!(

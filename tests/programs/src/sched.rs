@@ -83,6 +83,12 @@ pub enum Role {
     /// deadlines; report [`Stats::TIMER_WAKE`], [`Stats::DESTROY`], [`Stats::DECISION_WAKE`] and
     /// [`Stats::DEADLINE`].
     Steward = 15,
+    /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from 200 µs
+    /// ahead, each round then counting for 1 ms; report the count.
+    DeadlineFlood = 19,
+    /// Carve p0 of this budget's weight (slot 3) to an empty child, count 9 ms, destroy the child
+    /// so the weight comes back, then count until the window ends; report that last count.
+    CarveSpin = 20,
 }
 
 impl Role {
@@ -107,6 +113,8 @@ impl Role {
             TieReceiver,
             WakeDelay,
             DestroyThenCount,
+            DeadlineFlood,
+            CarveSpin,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -396,7 +404,25 @@ pub extern "C" fn child(arg: usize) -> ! {
             TOTAL.load(SeqCst) as u64
         }
         Some(Role::ProcessChurn) => process_churn(end),
+        Some(Role::DeadlineFlood) => {
+            let mut n = 0;
+            while ticks() < end {
+                let now = rd::time_now().unwrap_or(0);
+                for i in 0..param(0) {
+                    let spec = rd::BudgetSpec { deadline: now + 200 + i, ..rd::spec(1, 0, 0) };
+                    let _ = rd::create(3, &spec);
+                }
+                n += spin_until((ticks() + 1_000 * tpu).min(end));
+            }
+            n
+        }
         Some(Role::BudgetChurn) => budget_churn(end, tpu),
+        Some(Role::CarveSpin) => {
+            let child = rd::create(3, &rd::spec(0, 0, param(0) as u32)).expect("the carve");
+            spin_until(ticks() + 9_000 * tpu);
+            rd::destroy(child).expect("the carve's return");
+            spin_until(end)
+        }
         Some(Role::TimerFlood) => {
             let threads = param(2).max(1) as usize;
             for i in 0..threads {
@@ -709,7 +735,8 @@ pub mod rtc {
     /// device that is not virtio and whose first word (its time's low half, in ns) moves by half
     /// a million to a hundred million over a millisecond's sleep: nothing else of the others is
     /// read, since some fault on reads they do not expect. The interrupt is the one a `receive`
-    /// on which returns when the alarm fires.
+    /// on which returns when the alarm fires. The probing's alarms are all taken before this
+    /// returns, so the caller's first `receive` on it meets only an alarm the caller set.
     pub fn find(devices: core::ops::Range<u32>) -> Option<(u32, usize, u32)> {
         let (mmio, base) = devices.clone().find_map(|h| {
             let (addr, len) = rd::map_device(h).ok()?;
@@ -731,8 +758,16 @@ pub mod rtc {
             let fired = matches!(rd::receive(Some(*h), 3_000, 0), Ok(Received::Interrupt));
             clear(base);
             fired
-        });
-        Some((mmio, base, irq?))
+        })?;
+        // A probe's alarm can still be raised on the found source (the kernel reports it at the
+        // next unmask): take them all, until 20 ms pass quietly.
+        loop {
+            clear(base);
+            if rd::receive(Some(irq), 20_000, 0).is_err() {
+                break;
+            }
+        }
+        Some((mmio, base, irq))
     }
 }
 

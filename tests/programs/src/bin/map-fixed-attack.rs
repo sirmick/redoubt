@@ -217,8 +217,7 @@ fn page_table_charge(c: &mut Checker) {
     const TABLES: u64 = 4;
     // Filler: 2 MiB level-0 tables in gigabyte 2, each opened by mapping its first page, then
     // filled a slot at a time. Once a table exists, each page in it costs exactly one page,
-    // so the budget can be brought to an exact count. Below 4 GiB, so the tables it leaves
-    // behind are not in `huge_len_is_prompt`'s range.
+    // so the budget can be brought to an exact count.
     const FILL: usize = 0x8000_0000;
     const SPAN: usize = 2 << 20;
     const SLOTS: usize = SPAN / PAGE_SIZE - 1;
@@ -248,8 +247,8 @@ fn page_table_charge(c: &mut Checker) {
     c.check(r == Err(Error::OutOfMemory), "pages fit, their page tables do not");
     c.check(usage_pages() == before, "nothing charged");
 
-    // Give back exactly one page: the first filler table's first page (the kernel keeps the
-    // table, so only the page returns).
+    // Give back exactly one page: the first filler table's first page (the table still maps the
+    // slots filled after it, so only the page returns).
     rd::unmap(FILL, PAGE_SIZE).expect("free one filler page");
     c.check(rd::free(rd::SYSTEM) == PAGES + TABLES, "one page freed");
     let before = usage_pages();
@@ -275,16 +274,20 @@ fn page_table_charge(c: &mut Checker) {
 
 /// A range of about 2^26 pages (4 GiB to USER_AREA_END, 252 GiB) must be refused at once: the
 /// overlap walk skips absent subtrees and the pages check runs before `tables_needed` ever
-/// walks the range (R22). The range is free (everything else here is below 4 GiB; the only
-/// tables in it are the two `page_table_charge` left at 4 GiB, which the kernel does not free
-/// on `unmap`), so it is the budget check that refuses it, not an occupied page.
+/// walks the range (R22). The range is free (everything else here is below 4 GiB, and
+/// `page_table_charge`'s tables at 4 GiB went with its `unmap`), so it is the budget check that
+/// refuses it, not an occupied page.
 ///
-/// The bound is 10 ms. The fixed path reads 252 root entries plus those two tables' 1024
-/// entries (under 1300 PTE reads, far under a millisecond even under QEMU TCG), plus one
-/// syscall. A regression to one walk per page does 2^26 walks: at even 100 ns each that is
-/// ~7 s, and a per-page `tables_needed` is 2^26 x 3 levels. 10 ms sits two orders above the
-/// first and nearly three below the second, and absorbs a timer tick or two (the kernel's
-/// slice is milliseconds). `time_now` is in microseconds (kernel/timer.md, "Time").
+/// The bound is 10 ms. The fixed path reads 252 root entries (far under a millisecond even
+/// under QEMU TCG), plus one syscall. A regression to one walk per page does 2^26 walks: at
+/// even 100 ns each that is ~7 s, and a per-page `tables_needed` is 2^26 x 3 levels. 10 ms sits
+/// two orders above the first and nearly three below the second, and absorbs a timer tick or
+/// two (the kernel's slice is milliseconds). `time_now` is in microseconds (kernel/timer.md, "Time").
+///
+/// Then the whole of user space from page 0, over this process's own image, heap and stack: the
+/// pages-alone check comes before the overlap walk (kernel/abi.md, `map_fixed`'s row), so it is
+/// `OutOfMemory`, not the overlap's `InvalidArgument`, and a length no budget can pay for never
+/// buys a walk of what is mapped.
 #[cfg(target_pointer_width = "64")]
 fn huge_len_is_prompt(c: &mut Checker) {
     const BOUND_US: u64 = 10_000;
@@ -297,6 +300,14 @@ fn huge_len_is_prompt(c: &mut Checker) {
     c.check(usage_pages() == before, "nothing charged");
     writeln!(c.0, "[map-fixed] huge len took {} us", elapsed).ok();
     c.check(elapsed < BOUND_US, "a huge len is refused within 10 ms");
+
+    let before = usage_pages();
+    let t0 = rd::time_now().unwrap();
+    let r = rd::map_fixed(0, USER_AREA_END, rd::rw());
+    let elapsed = rd::time_now().unwrap() - t0;
+    c.check(r == Err(Error::OutOfMemory), "a huge len over mappings is refused before the overlap walk");
+    c.check(usage_pages() == before, "nothing charged");
+    c.check(elapsed < BOUND_US, "a huge len over mappings is refused within 10 ms");
 }
 
 fn success_and_addr_zero(c: &mut Checker) {

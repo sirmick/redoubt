@@ -1,0 +1,20 @@
+description = "A page table that maps nothing is freed and uncharged by the call that emptied it (R6): 50 rounds of map_anon and unmap each charge a table and give it back, a map_anon refused at the budget's edge leaves usage unchanged, a transfer, a lend with its reply, an abandoned lend and a process_map source leave no table behind (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The first program, alone: every verdict is system's usage as the kernel reports it
+# (docs/testbench.md, "Rule F"). 256 MiB, so system's free pages fit the map_anon area.
+programs = ["page-table-reclaim"]
+memory_mib = 256
+timeout_secs = 60
+expect = [
+    '^\[pt-reclaim\] ok: each map_anon charged a page table, and its unmap gave it back$',
+    '^\[pt-reclaim\] ok: a map_anon refused at the budget.s edge leaves usage where it was$',
+    '^\[pt-reclaim\] ok: a transfer and its unmap leave no page table behind$',
+    '^\[pt-reclaim\] ok: a lend and its reply leave the server.s usage where it was$',
+    '^\[pt-reclaim\] ok: an abandoned lend, once replied to, leaves no page table behind$',
+    '^\[pt-reclaim\] ok: a process_map into another budget leaves no page table behind in the source$',
+    '^\[pt-reclaim\] PAGE TABLE RECLAIM PASSED$',
+]
+forbid = ['\[pt-reclaim\] FAIL', 'PANIC']
+poweroff = true

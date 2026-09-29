@@ -155,6 +155,9 @@ pub struct Ghost {
     /// I6: each budget's labels when it was created, and its creator's class.
     pub labels_at_creation: BTreeMap<u64, Vec<u64>>,
     pub creator_class: BTreeMap<u64, Class>,
+    /// Each budget's parent when it was created, kept after it is destroyed: where a PID held
+    /// for a process that ran in it counts once it is gone (R6, R10 step 8).
+    pub parent_at_creation: BTreeMap<u64, u64>,
     /// I12: every budget id ever issued.
     pub ever_budgets: BTreeSet<u64>,
     /// I11, keyed by (endpoint, waiting key).
@@ -191,12 +194,15 @@ pub struct Ghost {
 impl Ghost {
     pub fn begin_step(&mut self) { self.flows.clear(); }
 
-    pub fn budget_created(&mut self, id: u64, labels: &[u64], creator: Class) {
+    pub fn budget_created(&mut self, id: u64, parent: Option<u64>, labels: &[u64], creator: Class) {
         if !self.ever_budgets.insert(id) {
             self.violations.push(format!("I12: budget id {id} reused"));
         }
         self.labels_at_creation.insert(id, labels.to_vec());
         self.creator_class.insert(id, creator);
+        if let Some(p) = parent {
+            self.parent_at_creation.insert(id, p);
+        }
     }
 
     /// Labels of budget `b` as created (empty if unknown).

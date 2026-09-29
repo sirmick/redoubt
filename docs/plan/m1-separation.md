@@ -85,34 +85,12 @@ page.
 
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
-   - **Kernel:** [executable device and DMA pages](../todo/device-mapping-exec.md),
-     [`map_anon`'s search cost](../todo/map-anon-search-cost.md),
-     [root's own page](../todo/boot-root-frame.md),
-     [billing a deadline's destruction](../todo/deadline-destroy-billing.md),
-     [PID pool pinning](../todo/pid-pool-pinning.md),
-     [RAM beyond the physmap](../todo/physmap-ram-bound.md),
-     [clearing SUM and MXR at entry](../todo/clear-sum-at-entry.md)
-     ([R24 (SUM and MXR clear)](../kernel/memory-layout.md#r24-sum-and-mxr-clear)),
-     [the boot hart's interrupt context](../todo/boot-hart-context.md),
-     [scans of every kernel-object frame](../todo/kernel-scan-bounds.md),
-     [the kernel's print on a panic](../todo/print-panic-reentry.md),
-     [the kernel crate's host test target](../todo/hosted-kernel-tests.md),
-     [a stray file in the kernel's tree](../todo/kernel-test-hello.md),
-     [`process_map`'s flag order](../todo/process-map-flag-order.md),
-     [an interrupt before the first receive](../todo/irq-level-latch.md),
-     [freeing empty page tables](../todo/page-table-freeing.md),
-     [records at a device mapping](../todo/mmio-record-frames.md),
-     [DMA reset on rv32](../todo/dma-reset-rv32.md),
-     [calls abandoned by an endpoint's destruction](../todo/endpoint-destroyed-open-calls.md),
-     [reclaiming an endpoint](../todo/endpoint-reclaim.md),
-     [rescaling a carved-down lead](../todo/carve-lead-rescale.md),
-     [the steward's decision wake on rv64, and R10's thin margin](../todo/sched-rv64-decision-wake.md), and
-     [a notice lost to a bad receive record](../todo/receive-output-late-invalid.md).
+   - **Kernel:** [a host test build of the workspace](../todo/workspace-host-tests.md) and
+     [the steward's decision wake on rv64, and R10's thin margin](../todo/sched-rv64-decision-wake.md).
    - **The bench and its tools**, with the kernel package:
      [tests that behaved differently under load](../todo/bench-load-flakes.md),
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
-     [the unsafe budget's stated reason](../todo/unsafe-ratchet-reason.md),
-     and [the write-only mutation](../todo/write-only-mutation-split.md).
+     and [the unsafe budget's stated reason](../todo/unsafe-ratchet-reason.md).
    - **Servers:** [a request answered outside `finish`](../todo/request-raw-reply.md),
      [starting a thread from safe code](../todo/raw-thread-create.md),
      [the raw system call beside the runtime](../todo/raw-abi-syscall.md).

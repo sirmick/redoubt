@@ -40,7 +40,7 @@ pub struct MmioRegion {
 
 pub struct Plic {
     pub range: Range<usize>,
-    /// Index of the (this hart, S-mode) context in the PLIC's `interrupts-extended`.
+    /// Index of the (boot hart, S-mode) context in the PLIC's `interrupts-extended`.
     pub context: usize,
 }
 
@@ -119,18 +119,25 @@ fn console_name<'dt>(root: &Node<'_, '_, 'dt>) -> Option<&'dt str> {
 }
 
 impl Platform {
+    /// Read the tree at `dtb` for a boot on hart `hart`.
+    ///
     /// # Safety
     /// `dtb` must point at a device-tree blob (the SBI boot protocol's `a1`).
-    pub unsafe fn read(dtb: usize) -> Platform {
+    pub unsafe fn read(dtb: usize, hart: usize) -> Platform {
         // SAFETY: forwarded from the caller.
         let dt = unsafe { DevTree::from_raw_pointer(dtb as *const u8) }.expect("invalid device tree");
-        let total_size = dt.totalsize();
-
         // The index needs a scratch buffer. One static buffer, sized for large trees.
         static mut INDEX_BUF: [u8; 512 * 1024] = [0; 512 * 1024];
         // SAFETY: the loader is single-threaded and reads the tree once at boot, so this
         // buffer has no other user.
         let buf = unsafe { &mut *core::ptr::addr_of_mut!(INDEX_BUF) };
+        Platform::parse(dt, dtb, hart, buf)
+    }
+
+    /// Everything the loader needs from `dt`, found at `dtb`, for a boot on hart `hart`, with
+    /// `buf` as the index's scratch space.
+    pub fn parse(dt: DevTree, dtb: usize, hart: usize, buf: &mut [u8]) -> Platform {
+        let total_size = dt.totalsize();
         let idx = DevTreeIndex::new(dt, buf).expect("device tree too large for the index buffer");
         let root = idx.root();
 
@@ -257,7 +264,7 @@ impl Platform {
         }
         platform.irq[..platform.irq_len].sort_unstable();
 
-        platform.plic = read_plic(&idx, &root, ac, sc);
+        platform.plic = read_plic(&idx, &root, ac, sc, hart);
         platform.clint = idx.nodes().find(|n| compatible_has(n, b"clint")).and_then(|n| {
             let reg = prop(&n, "reg")?;
             let base = read_cells(reg, 0, ac) as usize;
@@ -271,33 +278,172 @@ impl Platform {
     pub fn rng_seed(&self) -> &[u8] { &self.rng_seed[..self.rng_seed_len] }
 }
 
-/// Locate the PLIC and the S-mode context wired to the boot hart (hart 0).
+/// Locate the PLIC and the S-mode context wired to the boot hart, the cpu whose `reg` is
+/// `hart` (the hart ID the firmware passed in `a0`). `None` if the tree has no PLIC.
 ///
 /// `interrupts-extended` is a list of (hart-interrupt-controller phandle, hart interrupt
-/// number) pairs, one per context in order. Supervisor external interrupt is number 9.
-fn read_plic(idx: &DevTreeIndex, root: &Node, _ac: usize, _sc: usize) -> Option<Plic> {
+/// number) pairs, one per context in order. Supervisor external interrupt is number 9. A PLIC
+/// with no such context for the boot hart stops the boot (kernel/boot.md, R17): booting on
+/// would leave every driver deaf, or enable interrupts on a hart that never takes them.
+fn read_plic(idx: &DevTreeIndex, root: &Node, ac: usize, sc: usize, hart: usize) -> Option<Plic> {
     const SUPERVISOR_EXTERNAL: u32 = 9;
     let plic =
         idx.nodes().find(|n| prop(n, "compatible").map_or(false, |b| b.windows(4).any(|w| w == b"plic")))?;
-    let reg = prop(&plic, "reg")?;
-    let base = read_cells(reg, 0, _ac) as usize;
-    let range = base..base + read_cells(reg, _ac, _sc) as usize;
+    let reg = prop(&plic, "reg").expect("the PLIC has no reg");
+    let base = read_cells(reg, 0, ac) as usize;
+    let range = base..base + read_cells(reg, ac, sc) as usize;
 
-    // Boot hart is hart 0. Find its interrupt-controller child's phandle.
-    let cpus = root.children().find(|n| n.name() == Ok("cpus"))?;
-    let boot_phandle = cpus.children().find_map(|cpu| {
-        if cell(prop(&cpu, "reg"))? != 0 {
-            return None;
-        }
-        let intc = cpu.children().find(|c| c.name().unwrap_or("").starts_with("interrupt-controller"))?;
-        Some(cell(prop(&intc, "phandle"))? as u32)
-    })?;
+    // The boot hart's interrupt-controller child's phandle.
+    let cpus = root.children().find(|n| n.name() == Ok("cpus"));
+    let boot_phandle = cpus.and_then(|cpus| {
+        cpus.children().find_map(|cpu| {
+            if cell(prop(&cpu, "reg"))? != hart as u64 {
+                return None;
+            }
+            let intc = cpu.children().find(|c| c.name().unwrap_or("").starts_with("interrupt-controller"))?;
+            Some(cell(prop(&intc, "phandle"))? as u32)
+        })
+    });
 
-    let extended = prop(&plic, "interrupts-extended")?;
-    let context = extended.chunks_exact(8).position(|pair| {
-        let phandle = u32::from_be_bytes(pair[..4].try_into().unwrap());
-        let irq = u32::from_be_bytes(pair[4..].try_into().unwrap());
-        phandle == boot_phandle && irq == SUPERVISOR_EXTERNAL
-    })?;
+    let extended = prop(&plic, "interrupts-extended").unwrap_or(&[]);
+    let context = boot_phandle.and_then(|boot| {
+        extended.chunks_exact(8).position(|pair| {
+            let phandle = u32::from_be_bytes([pair[0], pair[1], pair[2], pair[3]]);
+            let irq = u32::from_be_bytes([pair[4], pair[5], pair[6], pair[7]]);
+            phandle == boot && irq == SUPERVISOR_EXTERNAL
+        })
+    });
+    let context = context.unwrap_or_else(|| panic!("the PLIC has no S-mode context for boot hart {}", hart));
     Some(Plic { range, context })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::vec::Vec;
+
+    use super::*;
+
+    /// A flattened device tree, written by hand (the bench does not depend on `dtc`): the
+    /// header, an empty reservation map, the structure block and the strings.
+    #[derive(Default)]
+    struct Fdt {
+        structure: Vec<u8>,
+        strings: Vec<u8>,
+    }
+
+    impl Fdt {
+        fn word(&mut self, w: u32) { self.structure.extend(w.to_be_bytes()); }
+
+        fn pad(&mut self) { self.structure.resize(self.structure.len().next_multiple_of(4), 0); }
+
+        fn begin(&mut self, name: &str) -> &mut Self {
+            self.word(1);
+            self.structure.extend(name.as_bytes());
+            self.structure.push(0);
+            self.pad();
+            self
+        }
+
+        fn end(&mut self) -> &mut Self {
+            self.word(2);
+            self
+        }
+
+        fn prop(&mut self, name: &str, value: &[u8]) -> &mut Self {
+            let offset = self.strings.len() as u32;
+            self.strings.extend(name.as_bytes());
+            self.strings.push(0);
+            self.word(3);
+            self.word(value.len() as u32);
+            self.word(offset);
+            self.structure.extend(value);
+            self.pad();
+            self
+        }
+
+        fn cells(&mut self, name: &str, cells: &[u32]) -> &mut Self {
+            let value: Vec<u8> = cells.iter().flat_map(|c| c.to_be_bytes()).collect();
+            self.prop(name, &value)
+        }
+
+        /// The blob, copied to a 4-byte boundary inside `storage` as the parser requires.
+        fn finish<'a>(&mut self, storage: &'a mut Vec<u8>) -> &'a [u8] {
+            self.word(9);
+            const HEADER: usize = 40;
+            const RESERVE_MAP: usize = 16;
+            let strings_at = HEADER + RESERVE_MAP + self.structure.len();
+            let total = strings_at + self.strings.len();
+            let header = [
+                0xd00d_feed,
+                total as u32,
+                (HEADER + RESERVE_MAP) as u32,
+                strings_at as u32,
+                HEADER as u32,
+                17,
+                16,
+                0,
+                self.strings.len() as u32,
+                self.structure.len() as u32,
+            ];
+            let mut blob: Vec<u8> = header.iter().flat_map(|w: &u32| w.to_be_bytes()).collect();
+            blob.resize(HEADER + RESERVE_MAP, 0);
+            blob.extend(&self.structure);
+            blob.extend(&self.strings);
+            storage.resize(total + 3, 0);
+            let at = storage.as_ptr().align_offset(4);
+            storage[at..at + total].copy_from_slice(&blob);
+            &storage[at..at + total]
+        }
+    }
+
+    /// A QEMU `virt`-like machine with two harts, whose PLIC wires the contexts in `extended`
+    /// ((hart intc phandle, hart interrupt) pairs; hart 0's phandle is 1, hart 1's is 2).
+    fn machine(extended: &[u32], hart: usize) -> Platform {
+        let mut t = Fdt::default();
+        t.begin("").cells("#address-cells", &[2]).cells("#size-cells", &[2]);
+        t.begin("memory@80000000").prop("device_type", b"memory\0");
+        t.cells("reg", &[0, 0x8000_0000, 0, 0x800_0000]).end();
+        t.begin("chosen")
+            .cells("linux,initrd-start", &[0x8800_0000])
+            .cells("linux,initrd-end", &[0x8810_0000]);
+        t.prop("rng-seed", &[7; 32]).end();
+        t.begin("cpus").cells("#address-cells", &[1]).cells("#size-cells", &[0]);
+        t.cells("timebase-frequency", &[10_000_000]);
+        for (reg, phandle) in [(0, 1), (1, 2)] {
+            t.begin(if reg == 0 { "cpu@0" } else { "cpu@1" }).cells("reg", &[reg]);
+            t.begin("interrupt-controller").cells("phandle", &[phandle]).end();
+            t.end();
+        }
+        t.end();
+        t.begin("soc").begin("plic@c000000").prop("compatible", b"riscv,plic0\0");
+        t.prop("interrupt-controller", &[]).cells("reg", &[0, 0xc00_0000, 0, 0x60_0000]);
+        t.cells("interrupts-extended", extended).end().end();
+        t.end();
+        let mut storage = Vec::new();
+        let blob = t.finish(&mut storage);
+        // SAFETY: `finish` put the blob on a 4-byte boundary, and the slice is exactly its
+        // `totalsize` long, which is what `DevTree::new` asks of its caller.
+        let dt = unsafe { DevTree::new(blob) }.expect("a well-formed fixture");
+        let mut index = std::vec![0u8; 64 * 1024];
+        Platform::parse(dt, 0, hart, &mut index)
+    }
+
+    const M: u32 = 11;
+    const S: u32 = 9;
+
+    #[test]
+    fn booting_on_hart_1_takes_hart_1s_s_mode_context() {
+        let platform = machine(&[1, M, 1, S, 2, M, 2, S], 1);
+        assert_eq!(platform.plic.expect("a PLIC").context, 3);
+    }
+
+    #[test]
+    fn hart_0_without_an_s_mode_context_does_not_stop_a_boot_on_hart_1() {
+        let platform = machine(&[1, M, 2, M, 2, S], 1);
+        assert_eq!(platform.plic.expect("a PLIC").context, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "no S-mode context for boot hart 1")]
+    fn a_boot_hart_without_an_s_mode_context_is_refused() { machine(&[1, M, 1, S, 2, M], 1); }
 }

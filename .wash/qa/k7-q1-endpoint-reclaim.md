@@ -1,0 +1,50 @@
+<!-- wash-qa-thread: k7-q1-endpoint-reclaim -->
+
+## K7 · k7-q1-endpoint-reclaim — K7 Q1: endpoint-reclaim, docs close or new call
+
+Status: **resolved** · Assigned to: Orchestrator · Revision: 5
+
+Decision references: docs/kernel/objects.md
+
+Evidence: Architect decided (a): rule on docs/kernel/objects.md Why 'An endpoint dies only with its owner', committed 4465550ec; K7 deletes the todo page and its links in G3.
+
+### Implementer · Question
+
+Event: `3761312e49f1be19dac6637e388af6e0` · 2026-09-28T02:29:41Z
+
+> docs/todo/endpoint-reclaim.md 'Done when' offers two options. (a) Close it with one paragraph in docs/servers/README.md, the servers overview: one endpoint per service, one minted badge per client. The todo page goes. The overview is in S2's area, so who writes it? (Recommended.) (b) A new endpoint_destroy call, with its open calls handled as a destruction: an ABI row, model and mutation work, L-sized on its own. Detail: .worktrees/k7/.wash/local/K7-plan.md, Q1.
+
+### Orchestrator · Question
+
+Event: `262608fd5cda59857407d41e3dec2ccb` · 2026-09-28T02:31:51Z
+
+> K7 Q1, from ./.worktrees/k7/.wash/local/K7-plan.md (section Q1) on docs/todo/endpoint-reclaim.md: close in the docs, or add endpoint_destroy? Implementer recommends (a): docs/servers/README.md states the pattern (one endpoint per service, one badge per client) and the todo page goes; no server needs per-client endpoints today. My view: (a), per tenet 1 (no new kernel mechanism without need), with the cost of never reclaiming an endpoint stated as a residual bounded by R6. Please decide, write the rule on its owning page yourself (main checkout, docs only, don't stage), and answer on this thread; K7 then deletes the todo page with its links.
+
+### Architect · Answer
+
+Event: `9ebfedff3ada19e65da47b47ad81c9ff` · 2026-09-28T02:32:27Z
+
+> Decided: (a). No endpoint_destroy. This isn't an owner choice: no guarantee or wall changes, and the pages already settle it. The servers overview states the pattern at docs/servers/README.md#connections ("one endpoint per service and one badge per client") and gives its reason in Why. Tenet 1: the kernel doesn't grow a destruction path that no server needs, and the cost falls only on the owner's own budget, bounded by its page limit (R6).
+> 
+> Rule written on its owning page, docs/kernel/objects.md (main checkout, unstaged):
+> - Why gains "An endpoint dies only with its owner.": servers serve every client on one endpoint by badge (linking the servers overview), so no server needs to free one on its own; a call that did would add a destruction path for a cost already confined to the owner's budget.
+> - The Residual risks bullet "No call destroys an endpoint" keeps the stated cost. Its "Whether … is open" and its follow-up link are replaced by "Servers make one per service instead (Why)."
+> The servers overview needed no edit, because it already states the pattern.
+> 
+> Checks: mdbook build docs exit 0; cargo run -q -p redoubt-doccheck exit 0.
+> 
+> For K7: delete docs/todo/endpoint-reclaim.md, its docs/SUMMARY.md entry (line 82) and its docs/plan/m1-separation.md link (line 107). The objects.md link is already gone.
+
+### Orchestrator · Answer
+
+Event: `9ead232eb26eee06a11b6a17074f4703` · 2026-09-28T02:32:40Z
+
+> Q1 decided: (a), no endpoint_destroy. The rule is on docs/kernel/objects.md (Why: 'An endpoint dies only with its owner'), committed on redoubt as the commit after b53c0a896's successors; rebase wp-k7 onto redoubt when convenient (between commits, not mid-group). Your part, in G3: delete docs/todo/endpoint-reclaim.md, its docs/SUMMARY.md entry and its docs/plan/m1-separation.md link. No code.
+
+### Orchestrator · Resolved
+
+Event: `a011573f5ea0d175a3d8705cb5d9a339` · 2026-09-28T02:32:46Z
+
+> Evidence: Architect decided (a): rule on docs/kernel/objects.md Why 'An endpoint dies only with its owner', committed 4465550ec; K7 deletes the todo page and its links in G3.
+
+<!-- wash-qa-checkpoint-v2: eyJ0aHJlYWQiOnsiaWQiOiJrNy1xMS1lbmRwb2ludC1yZWNsYWltIiwibm9kZSI6Iks3IiwidGl0bGUiOiJLNyBRMTogZW5kcG9pbnQtcmVjbGFpbSwgZG9jcyBjbG9zZSBvciBuZXcgY2FsbCIsImNyZWF0b3IiOiJiZTQ2YjU1YWZlN2IwZjc4YzVhZWQ3ZWI1ODk1NWYxYSIsImFzc2lnbmVlIjoiZDA3NDQ0ZDdlMTRmZWUzMjc5Y2UwZDBhYjIxYTRlNjciLCJzdGF0ZSI6InJlc29sdmVkIiwiYmxvY2tpbmciOmZhbHNlLCJyZXZpc2lvbiI6NSwiZGVjaXNpb25fcmVmcyI6WyJkb2NzL2tlcm5lbC9vYmplY3RzLm1kIl0sImV2aWRlbmNlIjoiQXJjaGl0ZWN0IGRlY2lkZWQgKGEpOiBydWxlIG9uIGRvY3Mva2VybmVsL29iamVjdHMubWQgV2h5ICdBbiBlbmRwb2ludCBkaWVzIG9ubHkgd2l0aCBpdHMgb3duZXInLCBjb21taXR0ZWQgNDQ2NTU1MGVjOyBLNyBkZWxldGVzIHRoZSB0b2RvIHBhZ2UgYW5kIGl0cyBsaW5rcyBpbiBHMy4iLCJldmVudHMiOlt7ImlkIjoiMzc2MTMxMmU0OWYxYmUxOWRhYzY2MzdlMzg4YWY2ZTAiLCJhdXRob3IiOiJiZTQ2YjU1YWZlN2IwZjc4YzVhZWQ3ZWI1ODk1NWYxYSIsImtpbmQiOiJvcGVuIiwiYm9keSI6ImRvY3MvdG9kby9lbmRwb2ludC1yZWNsYWltLm1kICdEb25lIHdoZW4nIG9mZmVycyB0d28gb3B0aW9ucy4gKGEpIENsb3NlIGl0IHdpdGggb25lIHBhcmFncmFwaCBpbiBkb2NzL3NlcnZlcnMvUkVBRE1FLm1kLCB0aGUgc2VydmVycyBvdmVydmlldzogb25lIGVuZHBvaW50IHBlciBzZXJ2aWNlLCBvbmUgbWludGVkIGJhZGdlIHBlciBjbGllbnQuIFRoZSB0b2RvIHBhZ2UgZ29lcy4gVGhlIG92ZXJ2aWV3IGlzIGluIFMyJ3MgYXJlYSwgc28gd2hvIHdyaXRlcyBpdD8gKFJlY29tbWVuZGVkLikgKGIpIEEgbmV3IGVuZHBvaW50X2Rlc3Ryb3kgY2FsbCwgd2l0aCBpdHMgb3BlbiBjYWxscyBoYW5kbGVkIGFzIGEgZGVzdHJ1Y3Rpb246IGFuIEFCSSByb3csIG1vZGVsIGFuZCBtdXRhdGlvbiB3b3JrLCBMLXNpemVkIG9uIGl0cyBvd24uIERldGFpbDogLndvcmt0cmVlcy9rNy8ud2FzaC9sb2NhbC9LNy1wbGFuLm1kLCBRMS4iLCJjcmVhdGVkX2F0IjoxNzkwNTYyNTgxMTk4fSx7ImlkIjoiMjYyNjA4ZmQ1Y2RhNTk4NTc0MDdkNDFlM2RlYzJjY2IiLCJhdXRob3IiOiJkMDc0NDRkN2UxNGZlZTMyNzljZTBkMGFiMjFhNGU2NyIsImtpbmQiOiJxdWVzdGlvbiIsImJvZHkiOiJLNyBRMSwgZnJvbSAuLy53b3JrdHJlZXMvazcvLndhc2gvbG9jYWwvSzctcGxhbi5tZCAoc2VjdGlvbiBRMSkgb24gZG9jcy90b2RvL2VuZHBvaW50LXJlY2xhaW0ubWQ6IGNsb3NlIGluIHRoZSBkb2NzLCBvciBhZGQgZW5kcG9pbnRfZGVzdHJveT8gSW1wbGVtZW50ZXIgcmVjb21tZW5kcyAoYSk6IGRvY3Mvc2VydmVycy9SRUFETUUubWQgc3RhdGVzIHRoZSBwYXR0ZXJuIChvbmUgZW5kcG9pbnQgcGVyIHNlcnZpY2UsIG9uZSBiYWRnZSBwZXIgY2xpZW50KSBhbmQgdGhlIHRvZG8gcGFnZSBnb2VzOyBubyBzZXJ2ZXIgbmVlZHMgcGVyLWNsaWVudCBlbmRwb2ludHMgdG9kYXkuIE15IHZpZXc6IChhKSwgcGVyIHRlbmV0IDEgKG5vIG5ldyBrZXJuZWwgbWVjaGFuaXNtIHdpdGhvdXQgbmVlZCksIHdpdGggdGhlIGNvc3Qgb2YgbmV2ZXIgcmVjbGFpbWluZyBhbiBlbmRwb2ludCBzdGF0ZWQgYXMgYSByZXNpZHVhbCBib3VuZGVkIGJ5IFI2LiBQbGVhc2UgZGVjaWRlLCB3cml0ZSB0aGUgcnVsZSBvbiBpdHMgb3duaW5nIHBhZ2UgeW91cnNlbGYgKG1haW4gY2hlY2tvdXQsIGRvY3Mgb25seSwgZG9uJ3Qgc3RhZ2UpLCBhbmQgYW5zd2VyIG9uIHRoaXMgdGhyZWFkOyBLNyB0aGVuIGRlbGV0ZXMgdGhlIHRvZG8gcGFnZSB3aXRoIGl0cyBsaW5rcy4iLCJtZXNzYWdlX2lkIjoiMzAwMzAxM2M3OWM2YmJiM2MwZGFlMzA3MmRjMzdkMGQiLCJjcmVhdGVkX2F0IjoxNzkwNTYyNzExNzU3fSx7ImlkIjoiOWViZmVkZmYzYWRhMTllNjVkYTQ3YjQ3YWQ4MWM5ZmYiLCJhdXRob3IiOiI0ZjVmYzMyODUwOTdhODllYWMyYTUwMDVhMmEzMjlmMyIsImtpbmQiOiJhbnN3ZXIiLCJib2R5IjoiRGVjaWRlZDogKGEpLiBObyBlbmRwb2ludF9kZXN0cm95LiBUaGlzIGlzbid0IGFuIG93bmVyIGNob2ljZTogbm8gZ3VhcmFudGVlIG9yIHdhbGwgY2hhbmdlcywgYW5kIHRoZSBwYWdlcyBhbHJlYWR5IHNldHRsZSBpdC4gVGhlIHNlcnZlcnMgb3ZlcnZpZXcgc3RhdGVzIHRoZSBwYXR0ZXJuIGF0IGRvY3Mvc2VydmVycy9SRUFETUUubWQjY29ubmVjdGlvbnMgKFwib25lIGVuZHBvaW50IHBlciBzZXJ2aWNlIGFuZCBvbmUgYmFkZ2UgcGVyIGNsaWVudFwiKSBhbmQgZ2l2ZXMgaXRzIHJlYXNvbiBpbiBXaHkuIFRlbmV0IDE6IHRoZSBrZXJuZWwgZG9lc24ndCBncm93IGEgZGVzdHJ1Y3Rpb24gcGF0aCB0aGF0IG5vIHNlcnZlciBuZWVkcywgYW5kIHRoZSBjb3N0IGZhbGxzIG9ubHkgb24gdGhlIG93bmVyJ3Mgb3duIGJ1ZGdldCwgYm91bmRlZCBieSBpdHMgcGFnZSBsaW1pdCAoUjYpLlxuXG5SdWxlIHdyaXR0ZW4gb24gaXRzIG93bmluZyBwYWdlLCBkb2NzL2tlcm5lbC9vYmplY3RzLm1kIChtYWluIGNoZWNrb3V0LCB1bnN0YWdlZCk6XG4tIFdoeSBnYWlucyBcIkFuIGVuZHBvaW50IGRpZXMgb25seSB3aXRoIGl0cyBvd25lci5cIjogc2VydmVycyBzZXJ2ZSBldmVyeSBjbGllbnQgb24gb25lIGVuZHBvaW50IGJ5IGJhZGdlIChsaW5raW5nIHRoZSBzZXJ2ZXJzIG92ZXJ2aWV3KSwgc28gbm8gc2VydmVyIG5lZWRzIHRvIGZyZWUgb25lIG9uIGl0cyBvd247IGEgY2FsbCB0aGF0IGRpZCB3b3VsZCBhZGQgYSBkZXN0cnVjdGlvbiBwYXRoIGZvciBhIGNvc3QgYWxyZWFkeSBjb25maW5lZCB0byB0aGUgb3duZXIncyBidWRnZXQuXG4tIFRoZSBSZXNpZHVhbCByaXNrcyBidWxsZXQgXCJObyBjYWxsIGRlc3Ryb3lzIGFuIGVuZHBvaW50XCIga2VlcHMgdGhlIHN0YXRlZCBjb3N0LiBJdHMgXCJXaGV0aGVyIOKApiBpcyBvcGVuXCIgYW5kIGl0cyBmb2xsb3ctdXAgbGluayBhcmUgcmVwbGFjZWQgYnkgXCJTZXJ2ZXJzIG1ha2Ugb25lIHBlciBzZXJ2aWNlIGluc3RlYWQgKFdoeSkuXCJcblRoZSBzZXJ2ZXJzIG92ZXJ2aWV3IG5lZWRlZCBubyBlZGl0LCBiZWNhdXNlIGl0IGFscmVhZHkgc3RhdGVzIHRoZSBwYXR0ZXJuLlxuXG5DaGVja3M6IG1kYm9vayBidWlsZCBkb2NzIGV4aXQgMDsgY2FyZ28gcnVuIC1xIC1wIHJlZG91YnQtZG9jY2hlY2sgZXhpdCAwLlxuXG5Gb3IgSzc6IGRlbGV0ZSBkb2NzL3RvZG8vZW5kcG9pbnQtcmVjbGFpbS5tZCwgaXRzIGRvY3MvU1VNTUFSWS5tZCBlbnRyeSAobGluZSA4MikgYW5kIGl0cyBkb2NzL3BsYW4vbTEtc2VwYXJhdGlvbi5tZCBsaW5rIChsaW5lIDEwNykuIFRoZSBvYmplY3RzLm1kIGxpbmsgaXMgYWxyZWFkeSBnb25lLiIsIm1lc3NhZ2VfaWQiOiIwZWZiZTFjZTBjYWEzOTA2ODI4ODliYzhmMTU4NWE0YyIsImNyZWF0ZWRfYXQiOjE3OTA1NjI3NDczMTB9LHsiaWQiOiI5ZWFkMjMyZWIyNmVlZTA2YTExYjZhMTcwNzRmNDcwMyIsImF1dGhvciI6ImQwNzQ0NGQ3ZTE0ZmVlMzI3OWNlMGQwYWIyMWE0ZTY3Iiwia2luZCI6ImFuc3dlciIsImJvZHkiOiJRMSBkZWNpZGVkOiAoYSksIG5vIGVuZHBvaW50X2Rlc3Ryb3kuIFRoZSBydWxlIGlzIG9uIGRvY3Mva2VybmVsL29iamVjdHMubWQgKFdoeTogJ0FuIGVuZHBvaW50IGRpZXMgb25seSB3aXRoIGl0cyBvd25lcicpLCBjb21taXR0ZWQgb24gcmVkb3VidCBhcyB0aGUgY29tbWl0IGFmdGVyIGI1M2MwYTg5NidzIHN1Y2Nlc3NvcnM7IHJlYmFzZSB3cC1rNyBvbnRvIHJlZG91YnQgd2hlbiBjb252ZW5pZW50IChiZXR3ZWVuIGNvbW1pdHMsIG5vdCBtaWQtZ3JvdXApLiBZb3VyIHBhcnQsIGluIEczOiBkZWxldGUgZG9jcy90b2RvL2VuZHBvaW50LXJlY2xhaW0ubWQsIGl0cyBkb2NzL1NVTU1BUlkubWQgZW50cnkgYW5kIGl0cyBkb2NzL3BsYW4vbTEtc2VwYXJhdGlvbi5tZCBsaW5rLiBObyBjb2RlLiIsIm1lc3NhZ2VfaWQiOiIxNzYwMDlmYzY4MGE4ZjM2NzFlODFkZGFlZjg4MjE4MSIsImNyZWF0ZWRfYXQiOjE3OTA1NjI3NjAwNTB9LHsiaWQiOiJhMDExNTczZjVlYTBkMTc1YTNkODcwNWNiNWQ5YTMzOSIsImF1dGhvciI6ImQwNzQ0NGQ3ZTE0ZmVlMzI3OWNlMGQwYWIyMWE0ZTY3Iiwia2luZCI6InJlc29sdmUiLCJib2R5IjoiRXZpZGVuY2U6IEFyY2hpdGVjdCBkZWNpZGVkIChhKTogcnVsZSBvbiBkb2NzL2tlcm5lbC9vYmplY3RzLm1kIFdoeSAnQW4gZW5kcG9pbnQgZGllcyBvbmx5IHdpdGggaXRzIG93bmVyJywgY29tbWl0dGVkIDQ0NjU1NTBlYzsgSzcgZGVsZXRlcyB0aGUgdG9kbyBwYWdlIGFuZCBpdHMgbGlua3MgaW4gRzMuIiwiY3JlYXRlZF9hdCI6MTc5MDU2Mjc2NjY1M31dfSwiYXV0aG9ycyI6eyI0ZjVmYzMyODUwOTdhODllYWMyYTUwMDVhMmEzMjlmMyI6IkFyY2hpdGVjdCIsImJlNDZiNTVhZmU3YjBmNzhjNWFlZDdlYjU4OTU1ZjFhIjoiSW1wbGVtZW50ZXIiLCJkMDc0NDRkN2UxNGZlZTMyNzljZTBkMGFiMjFhNGU2NyI6Ik9yY2hlc3RyYXRvciJ9fQ== -->

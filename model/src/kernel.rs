@@ -117,6 +117,9 @@ pub struct Boot {
     /// In `init`'s handle order after the three budgets.
     pub devices: Vec<DeviceSpec>,
     pub costs: Costs,
+    /// The RAM frames the kernel did not keep: what every charge in the tree, and `root`'s own
+    /// page, which no budget pays for, must fit in (R6).
+    pub ram_frames: u64,
 }
 
 impl Default for Boot {
@@ -142,6 +145,8 @@ impl Default for Boot {
                 DeviceSpec::Mmio { base: 0x1000_3000, pages: 1, dma: true, resets: Resets::Always },
             ],
             costs: Costs::default(),
+            // `root`'s limit and its own page (the default `Costs::budget`, 1).
+            ram_frames: 1025,
         }
     }
 }
@@ -202,6 +207,10 @@ fn check_boot(b: &Boot) -> Result<(), String> {
     .try_fold(0u64, |acc, x| acc.checked_add(*x));
     if pages.is_none_or(|p| p > b.root.pages) {
         return Err("boot: system, users and init do not fit in root's pages".into());
+    }
+    // R6: `root`'s own page is charged to no budget, so its limit leaves room for it.
+    if b.root.pages.checked_add(c.budget).is_none_or(|p| p > b.ram_frames) {
+        return Err("boot: root's pages and its own page do not fit in RAM".into());
     }
     let procs = b.system.processes.checked_add(b.users.processes).and_then(|x| x.checked_add(1));
     if procs.is_none_or(|p| p > b.root.processes) {
@@ -433,6 +442,9 @@ pub struct ExitNotice {
     pub budget: u64,
     /// The budget its process object is charged to (its creator's).
     pub payer: u64,
+    /// The budget whose process limit counts its PID: the exiting process's, or once that one is
+    /// destroyed its parent (R6, R10 step 8).
+    pub counted: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -503,6 +515,8 @@ pub struct Step {
 pub struct Kernel {
     pub mutation: Option<Mutation>,
     pub costs: Costs,
+    /// `Boot::ram_frames`.
+    pub ram_frames: u64,
     pub now: u64,
     pub budgets: BTreeMap<u64, Budget>,
     pub processes: BTreeMap<u64, Process>,
@@ -572,7 +586,8 @@ fn decode_range(b: Option<Buffer>) -> R<Option<Buffer>> {
 }
 
 /// Kernel check of mapping flags: some access, and write only with read (RISC-V has no
-/// write-only pages). `allow_write_only` is the R11AllowsWriteOnly mutation.
+/// write-only pages). `allow_write_only` is `set_flags`'s R11SetFlagsAllowsWriteOnly mutation;
+/// `process_map`'s flag check is broken whole by R11ProcessMapSkipsFlags.
 fn check_flags(flags: u64, allow_write_only: bool) -> R<()> {
     if flags == 0 || (flags & FLAG_W != 0 && flags & FLAG_R == 0 && !allow_write_only) {
         Err(Error::InvalidArgument)
@@ -610,6 +625,7 @@ impl Kernel {
         let mut k = Kernel {
             mutation,
             costs: boot.costs,
+            ram_frames: boot.ram_frames,
             now: 0,
             budgets: BTreeMap::new(),
             processes: BTreeMap::new(),
@@ -633,7 +649,10 @@ impl Kernel {
             to_pump: BTreeSet::new(),
         };
         let c = k.costs;
-        let (r, s, u) = (boot.root, boot.system, boot.users);
+        let (mut r, s, u) = (boot.root, boot.system, boot.users);
+        if mutation == Some(Mutation::R6RootPageUncounted) {
+            r.pages = boot.ram_frames;
+        }
         let (sys, user) = (Class::System, Class::User);
         // `root` and `system` are class system; all budgets share one stride queue.
         let root = k.new_budget(None, sys, Vec::new(), 0, None, r, sys);
@@ -863,7 +882,7 @@ impl Kernel {
     ) -> u64 {
         let id = self.next_budget;
         self.next_budget += 1;
-        self.ghost.budget_created(id, &labels, creator);
+        self.ghost.budget_created(id, parent, &labels, creator);
         let depth = parent.and_then(|p| self.budgets.get(&p)).map_or(0, |p| p.depth + 1);
         let own_page = if parent.is_some() { self.costs.budget } else { 0 };
         let to_itself = self.broken(Mutation::R6OwnPageChargedToItself);
@@ -1084,10 +1103,11 @@ impl Kernel {
         let p = self.processes.get_mut(&pid)?;
         let m = p.space.remove(&v)?;
         let mut freed = 0;
+        let keep = self.mutation == Some(Mutation::R6EmptyTableKept);
         for k in table_keys(v) {
             let n = p.tables.get_mut(&k).unwrap();
             *n -= 1;
-            if *n == 0 {
+            if *n == 0 && !keep {
                 p.tables.remove(&k);
                 freed += pt;
             }
@@ -1099,6 +1119,15 @@ impl Kernel {
 
     /// Every page in `[first, first + n)` is an accessible mapping of `pid` that it owns
     /// (not lent out, not lent in).
+    /// Whether `m` maps device registers or a `dma_alloc` frame: memory a device, or another
+    /// mapping of the same registers, can write underneath (R11: never executable).
+    pub fn is_device_memory(&self, m: &Mapping) -> bool {
+        match m.backing {
+            Backing::Device { .. } => true,
+            Backing::Frame(f) => self.frames.get(&f).is_some_and(|fr| fr.dma.is_some()),
+        }
+    }
+
     fn own_range(&self, pid: u64, first: u64, n: u64, want: impl Fn(&Mapping) -> bool) -> R<()> {
         let p = self.processes.get(&pid).ok_or(Error::Dead)?;
         for v in first..first + n {
@@ -1172,6 +1201,22 @@ impl Kernel {
             }
             _ => false,
         }
+    }
+
+    /// Whether a thread blocked in `receive` can still be told what it takes: its record is
+    /// checked just before anything is delivered, and a bad one takes nothing (kernel/ipc.md, "A
+    /// bad record takes nothing").
+    fn receive_record_valid(&self, tid: u64) -> bool {
+        self.threads.get(&tid).is_some_and(|t| self.record_valid(t.pid, tid, true))
+    }
+
+    /// A receiver whose record went bad while it waited leaves `e`'s queue with `InvalidArgument`,
+    /// having taken nothing.
+    fn fail_bad_record(&mut self, e: u64, tid: u64) {
+        if let Some(ep) = self.endpoints.get_mut(&e) {
+            ep.receivers.retain(|x| *x != tid);
+        }
+        self.wake(tid, Err(Error::InvalidArgument));
     }
 
     fn input_record_valid(&self, pid: u64, tid: u64) -> bool {
@@ -1459,6 +1504,14 @@ impl Kernel {
             // Abandoned-call notices go to the thread holding the call.
             if let Some((rtid, mid)) = receivers.iter().find_map(|t| self.notice_for(*t, e).map(|m| (*t, m)))
             {
+                if !self.receive_record_valid(rtid) {
+                    // The notice stays owed for the next `receive` that can be told.
+                    if self.broken(Mutation::BadRecordConsumesNotice) {
+                        self.msgs.get_mut(&mid).unwrap().notice = false;
+                    }
+                    self.fail_bad_record(e, rtid);
+                    continue;
+                }
                 self.endpoints.get_mut(&e).unwrap().receivers.retain(|x| *x != rtid);
                 let again = self.broken(Mutation::AbandonNoticeRepeated);
                 let m = self.msgs.get_mut(&mid).unwrap();
@@ -1470,11 +1523,15 @@ impl Kernel {
             }
 
             let rtid = receivers[0];
+            if !self.endpoints[&e].exits.is_empty() && !self.receive_record_valid(rtid) {
+                self.fail_bad_record(e, rtid);
+                continue;
+            }
             if let Some(n) = self.endpoints.get_mut(&e).unwrap().exits.pop_front() {
                 // The label check was made when the notice was queued (R1).
                 self.endpoints.get_mut(&e).unwrap().receivers.pop_front();
                 let want = self.ghost.owed.remove(&n.pid).map(|o| o.want);
-                self.free_process_object(n.pid, n.payer);
+                self.free_process_object(n.pid, n.payer, n.counted);
                 let got =
                     Blame { cause: n.cause, account: n.blamed_account, labels: n.blamed_labels.clone() };
                 self.ghost.flows.push(Flow::Exit {
@@ -1505,6 +1562,10 @@ impl Kernel {
                 self.next_sender(e, !full).map(|m| (*t, m))
             });
             let Some((rtid, mid)) = pick else { return };
+            if !self.receive_record_valid(rtid) {
+                self.fail_bad_record(e, rtid);
+                continue;
+            }
             if self.deliver(e, rtid, mid) {
                 continue;
             }
@@ -1745,12 +1806,18 @@ impl Kernel {
         self.close_call(mid);
     }
 
-    /// Free a process object charged to `payer`, once its exit notice is received or dropped.
-    fn free_process_object(&mut self, pid: u64, payer: u64) {
+    /// Free a process object charged to `payer`, once its exit notice is received or dropped; its
+    /// PID stops counting in `counted` (R6).
+    fn free_process_object(&mut self, pid: u64, payer: u64, counted: u64) {
         self.sweep(|h| h.object == Object::Process(pid));
         self.ghost.process_freed(pid);
         if !self.broken(Mutation::R6ProcessObjectFree) {
             self.uncharge(payer, self.costs.process);
+        }
+        if !self.broken(Mutation::R6PidUncountedAtEnd) {
+            if let Some(b) = self.budgets.get_mut(&counted) {
+                b.processes_used = b.processes_used.saturating_sub(1);
+            }
         }
     }
 
@@ -1796,9 +1863,11 @@ impl Kernel {
             p.handles.keys().map(|h| (h - 1) / self.costs.handles_per_page).collect::<BTreeSet<_>>().len()
                 as u64;
         self.uncharge(p.budget, table + self.page_table_cost() + self.costs.contexts);
-        // It stops counting against its budget's process limit now.
-        if let Some(b) = self.budgets.get_mut(&p.budget) {
-            b.processes_used = b.processes_used.saturating_sub(1);
+        // Its PID keeps counting in its budget until its object is freed (R6).
+        if self.broken(Mutation::R6PidUncountedAtEnd) {
+            if let Some(b) = self.budgets.get_mut(&p.budget) {
+                b.processes_used = b.processes_used.saturating_sub(1);
+            }
         }
         // Ghost: the notice is owed if its object's payer, the exit endpoint and the stamp of the
         // handle naming it are alive, and the label rule allows it, judged from the ghost's records.
@@ -1823,13 +1892,13 @@ impl Kernel {
         let payer = p.creator;
         if !self.budgets.contains_key(&payer) {
             self.ghost.owed.remove(&p.pid);
-            self.free_process_object(p.pid, payer);
+            self.free_process_object(p.pid, payer, p.budget);
             return;
         }
         let e = match p.exit_endpoint.map(|h| h.object) {
             Some(Object::Endpoint(e)) if self.endpoints.contains_key(&e) => e,
             _ => {
-                self.free_process_object(p.pid, payer);
+                self.free_process_object(p.pid, payer, p.budget);
                 return;
             }
         };
@@ -1849,7 +1918,7 @@ impl Kernel {
         let dropped =
             self.broken(Mutation::ExitNoticeDroppedIfNoReceiver) && self.endpoints[&e].receivers.is_empty();
         if !allowed || dropped {
-            self.free_process_object(p.pid, payer);
+            self.free_process_object(p.pid, payer, p.budget);
             return;
         }
         let n = ExitNotice {
@@ -1860,6 +1929,7 @@ impl Kernel {
             blamed_labels: blame.labels,
             budget: p.budget,
             payer,
+            counted: p.budget,
         };
         self.endpoints.get_mut(&e).unwrap().exits.push_back(n);
         self.poke(e);
@@ -1883,7 +1953,7 @@ impl Kernel {
         }
         for n in exits {
             self.ghost.owed.remove(&n.pid);
-            self.free_process_object(n.pid, n.payer);
+            self.free_process_object(n.pid, n.payer, n.counted);
         }
         let in_flight: Vec<u64> = self
             .msgs
@@ -1896,6 +1966,13 @@ impl Kernel {
                 let caller = self.msgs[&mid].sender_tid;
                 self.abandon(mid);
                 self.wake(caller, Err(Error::Dead));
+            }
+        }
+        // No notice follows for a call taken here: there is no endpoint left to receive one on,
+        // and `Dead` from `receive` on it was the holder's cue (R3).
+        if !self.broken(Mutation::EndpointDestroyNoticeKept) {
+            for m in self.msgs.values_mut().filter(|m| m.endpoint == e) {
+                m.notice = false;
             }
         }
         self.endpoints.remove(&e);
@@ -1956,14 +2033,14 @@ impl Kernel {
                 .values()
                 .flat_map(|ep| ep.exits.iter())
                 .filter(|n| doomed.contains(&n.payer))
-                .map(|n| (n.pid, n.payer))
+                .map(|n| (n.pid, n.payer, n.counted))
                 .collect();
             for ep in self.endpoints.values_mut() {
                 ep.exits.retain(|n| !doomed.contains(&n.payer));
             }
-            for (pid, payer) in freed {
+            for (pid, payer, counted) in freed {
                 self.ghost.owed.remove(&pid);
-                self.free_process_object(pid, payer);
+                self.free_process_object(pid, payer, counted);
             }
         }
         // Revocation reaches messages already sent through a doomed stamp: a queued one fails its
@@ -2026,6 +2103,21 @@ impl Kernel {
                     }
                 }
             }
+        }
+        // Step 8 again: every PID still held for a process that ran in the subtree, by a notice its
+        // creator outside the subtree has not taken, counts in b's parent from now on. Those PIDs
+        // were inside the carve that just came back, so the parent stays within its limit (I5).
+        let held_move =
+            !self.broken(Mutation::R10HeldPidsDropped) && !self.broken(Mutation::R6PidUncountedAtEnd);
+        if let Some(p) = bb.parent.filter(|_| held_move) {
+            let mut moved = 0;
+            for ep in self.endpoints.values_mut() {
+                for n in ep.exits.iter_mut().filter(|n| doomed.contains(&n.counted)) {
+                    n.counted = p;
+                    moved += 1;
+                }
+            }
+            self.budgets.get_mut(&p).unwrap().processes_used += moved;
         }
         // Bottom-up (R10 order): each budget's work since entry moves to its parent, and its
         // carve returns there.
@@ -2186,18 +2278,24 @@ impl Kernel {
         if !no_mask {
             *masked = true;
         }
-        // A waiting receiver takes it at once, clearing `fired`.
+        // A waiting receiver takes it at once, clearing `fired`, if its record can be written; a
+        // bad record takes nothing, and the source stays fired and masked for the next receive.
         let waiter = d.waiters.pop_front();
-        if waiter.is_some() {
-            if let DeviceKind::Irq { fired, .. } = &mut d.kind {
+        self.ghost.irq_fired(id);
+        let Some(tid) = waiter else { return };
+        let wait = self.threads.get(&tid).and_then(|t| t.wait);
+        let good = self.receive_record_valid(tid);
+        if good || self.broken(Mutation::R5BadRecordConsumesInterrupt) {
+            if let DeviceKind::Irq { fired, .. } = &mut self.devices.get_mut(&id).unwrap().kind {
                 *fired = false;
             }
         }
-        self.ghost.irq_fired(id);
-        if let Some(tid) = waiter {
-            if let Some(Wait::Irq { h, .. }) = self.threads.get(&tid).and_then(|t| t.wait) {
+        if let Some(Wait::Irq { h, .. }) = wait {
+            if good {
                 self.ghost.irq_delivered(id);
                 self.wake(tid, Ok(Ret::Interrupt { h }));
+            } else {
+                self.wake(tid, Err(Error::InvalidArgument));
             }
         }
     }
@@ -2208,42 +2306,11 @@ impl Kernel {
     /// Apply one op. `None` if the op is not a legal event (it names a thread that does not
     /// exist or is blocked, a tick is longer than `MAX_TICK`, or the machine is halted); the
     /// state is then unchanged.
-    /// These events would require choosing a late-invalid receive result
-    /// (todo/receive-output-late-invalid.md); keep them outside the oracle until that is settled.
+    /// A `receive` whose record passes decoding but faults when written (`Record::CopyFault`) has
+    /// no kernel counterpart to replay against, so it stays outside the oracle.
     pub fn unsupported_receive_output(&self, op: &Op) -> bool {
-        if let Op::Sys { tid, call: Syscall::Receive { .. }, .. } = op {
-            if self.threads.get(tid).is_some_and(|t| t.record == Record::CopyFault) {
-                return true;
-            }
-        }
-        for t in self
-            .threads
-            .values()
-            .filter(|t| matches!(t.wait, Some(Wait::Receive { .. } | Wait::Irq { .. } | Wait::Sleep)))
-        {
-            if let Op::Record { tid, record, .. } = op {
-                if *tid == t.tid && *record != t.record {
-                    return true;
-                }
-            }
-            let Record::Memory(address) = t.record else { continue };
-            let Op::Sys { pid, call, .. } = op else { continue };
-            if *pid != t.pid {
-                continue;
-            }
-            let range = match call {
-                Syscall::Unmap { addr, len } | Syscall::SetFlags { addr, len, .. } => Some((*addr, *len)),
-                Syscall::ProcessMap { src, len, .. } => Some((*src, *len)),
-                Syscall::Call { lend: Some(b), .. } | Syscall::Send { transfer: Some(b), .. } => {
-                    Some((b.addr, b.npages.saturating_mul(PAGE_SIZE)))
-                }
-                _ => None,
-            };
-            if range.is_some_and(|(start, len)| address >= start && address < start.saturating_add(len)) {
-                return true;
-            }
-        }
-        false
+        let Op::Sys { tid, call: Syscall::Receive { .. }, .. } = op else { return false };
+        self.threads.get(tid).is_some_and(|t| t.record == Record::CopyFault)
     }
 
     pub fn step(&mut self, op: &Op) -> Option<Step> {
@@ -2521,8 +2588,11 @@ impl Kernel {
     pub fn set_flags(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, self.broken(Mutation::R11SetFlagsAllowsWx))?;
         let (first, n) = user_range(addr, len)?;
-        check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
-        self.own_range(pid, first, n, |_| true)?;
+        check_flags(flags, self.broken(Mutation::R11SetFlagsAllowsWriteOnly))?;
+        // W^X per frame (R11): `EXECUTE` only on RAM the caller owns, never on device registers
+        // or a `dma_alloc` frame.
+        let exec_ok = flags & FLAG_X == 0 || self.broken(Mutation::R11ExecOnDeviceMemory);
+        self.own_range(pid, first, n, |m| exec_ok || !self.is_device_memory(m))?;
         let p = self.processes.get_mut(&pid).unwrap();
         for v in first..first + n {
             p.space.get_mut(&v).unwrap().flags = flags;
@@ -2539,13 +2609,13 @@ impl Kernel {
     pub fn map_fixed(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, false)?;
         let (first, n) = user_range(addr, len)?;
-        if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
-            return Err(Error::InvalidArgument);
-        }
         check_flags(flags, false)?;
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
         if n > self.free_pages(b) {
             return Err(Error::OutOfMemory);
+        }
+        if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
+            return Err(Error::InvalidArgument);
         }
         let tables = self.tables_needed(pid, first..first + n);
         self.charge(b, n.checked_add(tables).ok_or(Error::OutOfMemory)?)?;
@@ -2846,16 +2916,18 @@ impl Kernel {
         let child = self.lookup_process(pid, process)?;
         let (s, n) = user_range(src, len)?;
         let (d, _) = user_range(dst, len)?;
+        // The flags before the source, as the kernel checks them before it backs any page.
+        if !self.broken(Mutation::R11ProcessMapSkipsFlags) {
+            check_flags(flags, false)?;
+        }
         self.own_range(pid, s, n, |m| match m.backing {
             Backing::Frame(f) => self.frames[&f].dma.is_none(),
             _ => false,
         })?;
-        let cp = self.processes.get(&child);
-        if cp.is_some_and(|p| (d..d + n).any(|v| p.space.contains_key(&v))) {
+        let cp = self.processes.get(&child).ok_or(Error::NotPermitted)?;
+        if (d..d + n).any(|v| cp.space.contains_key(&v)) {
             return Err(Error::InvalidArgument);
         }
-        check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
-        let cp = cp.ok_or(Error::NotPermitted)?;
         if cp.started {
             return Err(Error::NotPermitted);
         }

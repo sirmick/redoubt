@@ -1,0 +1,17 @@
+description = "Every budget full at once (R6, I14): root's limit leaves out root's own page, so with users and system each filled to exactly its limit the last map_fixed is refused with OutOfMemory and the kernel still carries a reply (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The first program, alone, in system; its child fills users. Every verdict is a budget's usage,
+# an error or a reply from the kernel (docs/testbench.md, "Rule F"). Small RAM, so filling is quick.
+programs = ["pages-exhaustion"]
+memory_mib = 32
+timeout_secs = 60
+expect = [
+    '^\[exhaust\] ok: users filled to its limit; its last map_fixed is OutOfMemory$',
+    '^\[exhaust\] ok: system filled to its limit; its last map_fixed is OutOfMemory$',
+    '^\[exhaust\] ok: the kernel still carries a reply$',
+    '^\[exhaust\] PAGES EXHAUSTION PASSED$',
+]
+forbid = ['\[exhaust\] FAIL', 'PANIC']
+poweroff = true

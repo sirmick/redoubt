@@ -18,8 +18,8 @@ nothing needs the speed.
 
 ## What it would need
 
-- **Any boot hart.** The firmware may choose any hart; nothing assumes hart 0 or that the boot hart
-  owns the interrupt context it happens to use ([boot-hart context](../todo/boot-hart-context.md)).
+- **Any boot hart.** The firmware may choose any hart; nothing assumes hart 0. The loader
+  already takes the boot hart's own PLIC context ([boot](../kernel/boot.md#the-argument-block)).
 - **Per-hart kernel state**: a trap stack and the current process and thread per hart, reached
   through `sscratch`; scheduling on every hart.
 - **One big kernel lock** taken at trap entry, and one global run queue, before anything finer

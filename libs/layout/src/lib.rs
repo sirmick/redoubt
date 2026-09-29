@@ -25,9 +25,10 @@ pub const KERNEL_PID: Pid = match Pid::new(1) {
 
 /// Sv32 layout. The physmap design of `docs/kernel/memory-layout.md` scaled to two
 /// levels: the kernel half is the upper 2 GiB (root entries 512..=1023, 4 MiB each), and
-/// RAM is identity-mapped low in it so `PHYSMAP_BASE == PHYSMAP_PHYS_BASE`.
-#[cfg(target_pointer_width = "32")]
-mod width {
+/// RAM is identity-mapped low in it so `PHYSMAP_BASE == PHYSMAP_PHYS_BASE`. Host tests read it
+/// too, so the rv32 values are checked on the build host.
+#[cfg(any(target_pointer_width = "32", test))]
+pub mod sv32 {
     /// Root entries 512..=1019: physical RAM `[PHYSMAP_PHYS_BASE, +PHYSMAP_SIZE)` mapped at
     /// `virt = PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE)`, 4 MiB megapage leaves. On QEMU
     /// `virt` RAM starts at 0x8000_0000, exactly the kernel-half boundary, so the map is the
@@ -55,7 +56,7 @@ mod width {
 
 /// Sv39 layout. See `docs/kernel/memory-layout.md`.
 #[cfg(target_pointer_width = "64")]
-mod width {
+mod sv39 {
     /// Root entries 256..=383: physical memory `[PHYSMAP_PHYS_BASE, +PHYSMAP_SIZE)` mapped
     /// at `virt = PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE)`. rv64 maps from physical 0.
     pub const PHYSMAP_BASE: usize = 0xffff_ffc0_0000_0000;
@@ -77,7 +78,13 @@ mod width {
     pub const TRAP_STACK_TOP: usize = 0xffff_ffff_ffff_0000;
     pub const TRAP_STACK_PAGES: usize = 8;
 }
-pub use width::*;
+#[cfg(target_pointer_width = "32")]
+pub use sv32::*;
+#[cfg(target_pointer_width = "64")]
+pub use sv39::*;
+
+// The physmap's end is an address of this width: `physmap_covers` adds the two unchecked.
+const _: () = assert!(PHYSMAP_PHYS_BASE.checked_add(PHYSMAP_SIZE).is_some(), "the physmap ends past usize");
 
 /// Pages in the DMA register window: one per DMA device the kernel can reset
 /// (`docs/kernel/devices.md`).
@@ -97,4 +104,36 @@ const _: () = {
 /// (`PHYSMAP_PHYS_BASE == 0`), so the subtraction matters only on rv32.
 pub const fn physmap_virt(phys: usize) -> usize {
     PHYSMAP_BASE.wrapping_add(phys.wrapping_sub(PHYSMAP_PHYS_BASE))
+}
+
+/// Whether the physmap covers all of `ram`. The kernel hands out frames lowest first and reaches
+/// each through the physmap, so RAM past its end would stop the kernel the first time a process
+/// allocated a frame there; the loader refuses such a machine at boot instead (R17).
+pub fn physmap_covers(ram: &core::ops::Range<usize>) -> bool {
+    ram.start >= PHYSMAP_PHYS_BASE && ram.end <= PHYSMAP_PHYS_BASE + PHYSMAP_SIZE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const END: usize = PHYSMAP_PHYS_BASE + PHYSMAP_SIZE;
+
+    #[test]
+    fn ram_ending_at_the_physmap_end_is_covered() {
+        assert!(physmap_covers(&(PHYSMAP_PHYS_BASE..END)));
+        assert!(physmap_covers(&(END - PAGE_SIZE..END)));
+    }
+
+    #[test]
+    fn ram_one_page_past_the_physmap_end_is_refused() {
+        assert!(!physmap_covers(&(PHYSMAP_PHYS_BASE..END + PAGE_SIZE)));
+    }
+
+    /// The rv32 constants, on the host: the physmap's end fits in a 32-bit address.
+    #[test]
+    fn the_sv32_physmap_ends_inside_32_bits() {
+        let end = sv32::PHYSMAP_PHYS_BASE as u64 + sv32::PHYSMAP_SIZE as u64;
+        assert!(end <= u64::from(u32::MAX), "the Sv32 physmap ends at {end:#x}");
+    }
 }

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 22
+revision = 23
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -39,8 +39,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work, the Kernel bullet: every docs/todo/ page it links, plus docs/todo/receive-output-late-invalid.md (rule: docs/kernel/ipc.md#a-bad-record-takes-nothing) and the IPC1 review's note (a dangling comment at kernel/src/arch/riscv/mem.rs map_into_with). Tier A."
-  state = "active"
-  revision = 20
+  state = "done"
+  revision = 23
 
 [[node]]
   id = "M1"

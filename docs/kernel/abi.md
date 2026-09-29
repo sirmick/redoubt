@@ -115,7 +115,7 @@ result (an address, a length) is one register; a handle or TID is one register h
 
 ## Records
 
-Status: built · partly tested: a record at a device mapping is attacked by a case only as a `call` body and as `budget_create` and `budget_usage` records · tested: host:redoubt-sys::records_round_trip, host:redoubt-sys::malformed_records_are_refused, host:redoubt-sys::random_records, fuzz:redoubt-sys/decode, bench:budget-syscall-attack, bench:ipc-outcomes, bench:process-attack
+Status: built · tested: host:redoubt-sys::records_round_trip, host:redoubt-sys::malformed_records_are_refused, host:redoubt-sys::random_records, fuzz:redoubt-sys/decode, bench:budget-syscall-attack, bench:ipc-outcomes, bench:process-attack
 
 ### Layouts
 
@@ -224,7 +224,7 @@ at 1.
 | 2 | `WrongObject` | the handle names the wrong kind of object for this call |
 | 3 | `InvalidArgument` | a malformed or out-of-range value: an unknown number, tag or flag bit, a bad range, a bad record, a message id that is not an open call |
 | 4 | `OutOfMemory` | the paying budget's page limit, or no room in the address space, no free frame, no free DMA run |
-| 5 | `OutOfProcesses` | a budget's process limit, or no free PID |
+| 5 | `OutOfProcesses` | a budget's process limit |
 | 6 | `TooManyThreads` | the process has `MAX_THREADS` (31) threads |
 | 7 | `NotPermitted` | the right object, without the standing: a badged handle where badge 0 is needed, a started process, a `mint` budget outside the default stamp, `dma_alloc` on a device without DMA |
 | 8 | `ClassDenied` | labels added by a caller whose budget is not of class `system` |
@@ -248,7 +248,7 @@ one wrong code on their way out.
 
 ## Errors and the order of checks
 
-Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the kernel and the model are compared by reading, not by replaying traces, and differ in two rows and in several details (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, fuzz:redoubt-sys/decode
+Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the kernel and the model are compared by reading, not by replaying traces, and differ in one row and in several details (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, fuzz:redoubt-sys/decode
 
 A call with several faults returns the first one found, in a fixed order, so that the kernel,
 the model and a replayed trace agree exactly. Checks go in stages, and within a stage by
@@ -289,14 +289,14 @@ list, in order.
 | --- | --- | --- |
 | `map_anon` | flags: `InvalidArgument` | `InvalidArgument` (len 0 or not page-aligned), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (no room in the placement area; then each page and its page tables) |
 | `unmap` | - | `InvalidArgument` (range: len 0, not page-aligned, wraps, or past `USER_AREA_END`), `InvalidArgument` (a page that is not a live mapping of the caller's, is either side of a lend, or is RAM not credited to the caller; the whole range before any page goes) |
-| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range), `InvalidArgument` (flags 0), `InvalidArgument` (a page not the caller's own mapping, as for `unmap`), `InvalidArgument` (W without R) |
+| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range), `InvalidArgument` (flags 0), `InvalidArgument` (a page not the caller's own mapping, as for `unmap`, or `EXECUTE` on a page of device registers or a `dma_alloc` page; the whole range before any page changes), `InvalidArgument` (W without R) |
 | `map_device` | device: `BadHandle` | `BadHandle`, `WrongObject` (not an MMIO device), `OutOfMemory` (no room in the placement area, or the page tables) |
 | `dma_alloc` | device: `BadHandle` | `BadHandle`, `WrongObject` (not an MMIO device), `InvalidArgument` (pages 0), `NotPermitted` (the device has no DMA flag), `OutOfMemory` (all 32 of the device's runs in use; then the pages; then no contiguous frames; then the placement area and page tables) |
 | `thread_create` | - | `TooManyThreads`, `OutOfMemory` (the thread's page) |
 | `thread_exit` | - | - |
 | `process_exit` | code wider than 32 bits: `InvalidArgument` | - |
-| `process_create` | each handle: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (the budget's free weight is 0), `NotPermitted` (the exit endpoint's badge is not 0), `OutOfProcesses` (no free PID; then the budget's process limit), `OutOfMemory` (the budget: page tables; then the caller: the process object), handle table |
-| `process_map` | process: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (source or destination range), `InvalidArgument` (a source page unmapped, lent, not the caller's own RAM, or a `dma_alloc` page; untouched source pages are backed first), `InvalidArgument` (flags 0, or W without R), `NotPermitted` (the process has ended), `InvalidArgument` (a destination page occupied), `NotPermitted` (started), `OutOfMemory` (the child's budget: page tables, and the pages unless the budget is the caller's) |
+| `process_create` | each handle: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (the budget's free weight is 0), `NotPermitted` (the exit endpoint's badge is not 0), `OutOfProcesses` (the budget's process limit, which the new PID counts against; with room there a free PID exists), `OutOfMemory` (the budget: page tables; then the caller: the process object), handle table |
+| `process_map` | process: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (source or destination range), `InvalidArgument` (flags 0, or W without R), `InvalidArgument` (a source page unmapped, lent, not the caller's own RAM, or a `dma_alloc` page; untouched source pages are backed first), `NotPermitted` (the process has ended), `InvalidArgument` (a destination page occupied), `NotPermitted` (started), `OutOfMemory` (the child's budget: page tables, and the pages unless the budget is the caller's) |
 | `process_start` | process: `BadHandle`; entry, stack pointer, argument: not checked; count over `MAX_START_HANDLES`: `TooLarge`; handle list: the record, then each slot `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each handle), `NotPermitted` (started or ended), `TooLarge` (the child's table past `MAX_HANDLES`), `OutOfMemory` (the child's budget: its first thread and table pages) |
 | `endpoint_create` | - | `OutOfMemory` (the endpoint's page), handle table |
 | `mint` | source: each half too wide `InvalidArgument` (both halves are read before the tag), then an unknown tag `InvalidArgument`, a message id of 0 `InvalidArgument`, or a handle of 0 or wider than 32 bits `BadHandle`; badge 0: `InvalidArgument`; budget: `BadHandle` | source: a message id that is not an open call of the caller's thread (a `send`'s id included) `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject` (not an endpoint); budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge is not 0), `NotPermitted` (the budget is not the default stamp or below it), handle table |
@@ -312,7 +312,7 @@ list, in order.
 | `time_now` | - | - |
 | `random` | - | - |
 | `system_reset` | device: `BadHandle`; kind: `InvalidArgument` | `BadHandle`, `WrongObject` (not the Reset device) |
-| `map_fixed` | flags: `InvalidArgument` | `InvalidArgument` (range: address or len not page-aligned, len 0, wraps, or past `USER_AREA_END`), `InvalidArgument` (overlaps any mapping or reservation of the caller's, lent pages included), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (the pages alone), `OutOfMemory` (the pages and the page tables they need); nothing mapped or charged on failure |
+| `map_fixed` | flags: `InvalidArgument` | `InvalidArgument` (range: address or len not page-aligned, len 0, wraps, or past `USER_AREA_END`), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (the pages alone), `InvalidArgument` (overlaps any mapping or reservation of the caller's, lent pages included), `OutOfMemory` (the pages and the page tables they need); nothing mapped or charged on failure |
 
 Every call can also fail decoding in the general ways of stage 1 (a non-zero unused register, a
 value too wide). "Handle table" is stage 4's last check. Three rows depart from the stages, and
@@ -324,9 +324,9 @@ record check and every later stage, whatever it then returns
 are decoded (a handle wider than 32 bits, a non-zero unused register) leaves the current call
 as it was.
 
-`map_fixed`'s order keeps its cost bounded: the overlap walk skips page-table subtrees that are
-absent, and the charge for the pages alone comes before the walk that counts page tables, so a
-huge length the budget could never pay for is refused by arithmetic
+`map_fixed`'s order keeps its cost bounded: the charge for the pages alone comes before any
+walk, so a huge length the budget could never pay for is refused by arithmetic, and the overlap
+walk that follows skips page-table subtrees that are absent
 ([R22 (range cost)](memory.md#r22-range-cost)).
 
 ## Unknown call numbers
@@ -354,13 +354,10 @@ interrupt fires, and a child jumping to a fixed kernel return address faults.
 
 ## Residual risks
 
-- **The kernel and the model differ in two rows, and in details.** `budget_create`: the kernel decodes the spec
+- **The kernel and the model differ in one row, and in details.** `budget_create`: the kernel decodes the spec
   record in slot order, so a spec with a process count wider than 32 bits and more than
   `MAX_LABELS` labels is `InvalidArgument`; the model checks the label count first and says
-  `TooLarge`. `process_create`: the kernel checks for a free PID before the budget's process
-  limit and before any charge; the model checks it last, so with no free PID and too little
-  memory the kernel says `OutOfProcesses` and the model `OutOfMemory`. The table above is the
-  kernel's. In details: the model clears a `receive`'s current call only after the record check,
+  `TooLarge`. The table above is the kernel's. In details: the model clears a `receive`'s current call only after the record check,
   checks only a record's first page, and does not model the 32-run limit of `dma_alloc` or the
   size of the placement area. No trace has been replayed on the kernel to find more such
   differences ([model](model.md)). Follow-up: [todo](../todo/abi-model-disagreements.md).
@@ -369,11 +366,6 @@ interrupt fires, and a child jumping to a fixed kernel return address faults.
   `receive`, `serve` and `process_start`; most later positions in most rows are read from the
   kernel, not attacked. A wrong order is a replay mismatch, not a way past a check: every
   check in a row is still made.
-- **A record at a device mapping is attacked for only some calls.** The record check confirms
-  every slot is RAM credited to the caller, by its physical address, so a device mapping is
-  refused as a record. A case attacks this for a `call` body and for `budget_create` and `budget_usage` records at a device
-  mapping, not for `send`, `reply`, `receive` or `process_start` records, which share the same
-  check. Follow-up: [todo](../todo/mmio-record-frames.md).
 - **An error may leave a page backed.** Stage 1 never allocates, but stage 2 backs untouched
   pages of a lend, a transfer or a `process_map` source before later checks run; if the call
   then fails (`LabelDenied`, `Busy`), those pages stay backed and charged to the caller, as if it

@@ -10,7 +10,9 @@ pub mod rand;
 
 use crate::io::SerialWrite;
 
-struct SbiConsole;
+/// The SBI debug console. It keeps no state, so a print or a panic that strikes inside `print!`
+/// may write to a fresh one at any time (`debug::console`).
+pub struct SbiConsole;
 
 impl SerialWrite for SbiConsole {
     fn putc(&mut self, b: u8) { sbi_rt::console_write_byte(b); }

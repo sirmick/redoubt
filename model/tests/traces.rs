@@ -74,6 +74,8 @@ fn a_rule_breaking_kernel_fails_replay() {
     texts.push(common::contracts::expiry_order_trace());
     // A quarantined device named again (kernel/devices.md, "Quarantine").
     texts.push(common::contracts::dma_quarantine_trace());
+    // A record gone bad while its thread waits, as an abandoned-call notice or an interrupt comes.
+    texts.extend(common::contracts::bad_record_traces());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
         m.is_policy()
@@ -85,6 +87,9 @@ fn a_rule_breaking_kernel_fails_replay() {
             // Ghost-only: while the dropped device's resets confirm, every answer is the same; only
             // I16 (kernel_sequence, dma_contracts) sees the frame pooled while still armed.
             || *m == Mutation::DmaResetClearsCoHolderReach
+            // Ghost-only: a notice owed on a destroyed endpoint can never be received, so no answer
+            // shows it; I15's check in the random families and the kernel's checked build do.
+            || *m == Mutation::EndpointDestroyNoticeKept
     };
     for m in Mutation::ALL.into_iter().filter(|m| !invisible(m)) {
         let detected = texts.iter().position(|text| {

@@ -69,6 +69,8 @@ fn preempt() -> ! {
 /// It never returns to the trap handler: the caller resumes past its `ecall` with the result,
 /// or whatever is current runs.
 fn system_call(pid: redoubt_layout::Pid, regs: [usize; 8]) -> ! {
+    #[cfg(feature = "sum-probe")]
+    sum_probe(sepc::read());
     let tid = ArchProcess::with_current_mut(|p| {
         p.current_thread_mut().sepc += 4;
         p.current_tid()
@@ -80,6 +82,24 @@ fn system_call(pid: redoubt_layout::Pid, regs: [usize; 8]) -> ! {
         }
         crate::redoubt::Outcome::Resume => resume_current(),
     }
+}
+
+/// Test builds only: at the first system call, load the caller's `ecall` at `epc` straight
+/// through its user mapping. With `sstatus.SUM` clear (R24) the load faults and the kernel stops
+/// with a kernel failure; with it set, the load succeeds and the probe says so.
+#[cfg(feature = "sum-probe")]
+fn sum_probe(epc: usize) {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    println!("sum-probe: loading {:#x} through the caller's user mapping", epc);
+    // SAFETY: a test build's deliberate stray access. `epc` is the caller's `ecall`, in a live,
+    // readable user mapping, 2-byte aligned, and nothing writes it meanwhile, so if the load
+    // does not fault it reads an initialised `u16`.
+    let half = unsafe { core::ptr::read_volatile(epc as *const u16) };
+    println!("sum-probe: read {:#x} through a user mapping", half);
 }
 
 /// Trap entry point rust (_start_trap_rust)

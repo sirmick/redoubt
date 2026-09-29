@@ -428,6 +428,7 @@ impl Steward {
             root: Limits { pages: 4096, processes: 64, weight: 1000 },
             system: Limits { pages: 512, processes: 8, weight: 250 },
             users: Limits { pages: 3000, processes: 48, weight: 500 },
+            ram_frames: 4097,
             ..Boot::default()
         };
         let mut k = Kernel::boot(&boot, mutation).map_err(|_| Denied::BadManifest)?;

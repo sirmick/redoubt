@@ -1,0 +1,18 @@
+description = "Untaken exit notices pin no PIDs outside a limit (R6, R7, R10): Alice, never taking her children's notices, is refused at her own process limit, which the kernel counts them in, and Bob in another budget still starts a process; PIDs held when their budget is destroyed count in its parent (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# PID 2 alone judges, from what the kernel reports: exit notices, budget_usage and
+# process_create's results. Alice's own code only feeds the first log line.
+programs = ["pid-pinning-attack"]
+timeout_secs = 60
+expect = [
+    '^\[pid 2\] \[pid-pinning\] Alice started 3 children, then got error 5$',
+    '^\[pid 2\] \[pid-pinning\] Alice.s budget counts 3 PIDs held by untaken notices$',
+    '^\[pid 2\] \[pid-pinning\] Bob.s process started and exited: true$',
+    '^\[pid 2\] \[pid-pinning\] after its child.s destruction P counts 2 PIDs$',
+    '^\[pid 2\] \[pid-pinning\] P.s next two process_create: Ok\(\(\)\), Err\(OutOfProcesses\)$',
+    '^\[pid 2\] PID PINNING ATTACK TEST PASSED$',
+]
+forbid = ['PANIC']
+poweroff = true

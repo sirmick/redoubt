@@ -109,6 +109,9 @@ impl Budgets<BudgetRef> for MemoryManager {
     fn lifted(&mut self, parent: BudgetRef, child: BudgetRef, l: &redoubt_stride::Lift) {
         trace::lift(parent.id, child.id, l)
     }
+
+    #[cfg(feature = "sched-trace")]
+    fn reweighed(&mut self, b: BudgetRef, r: &redoubt_stride::Reweigh) { trace::reweigh(b.id, r) }
 }
 
 fn budget_ref(mm: &MemoryManager, frame: BudgetFrame) -> BudgetRef {
@@ -324,7 +327,8 @@ pub fn create(mm: &mut MemoryManager, child: BudgetFrame, parent: Option<BudgetF
 }
 
 /// `b`'s stride weight changes by `change` (a carve, or a carve returned): what it ran is charged
-/// at the old weight first, then its remainder is rescaled.
+/// at the old weight first, then its lead and remainder are converted to the new weight
+/// (kernel/scheduling.md, "The lead follows the weight").
 pub fn change_weight(mm: &mut MemoryManager, b: BudgetFrame, change: impl FnOnce(&mut MemoryManager)) {
     let b = budget_ref(mm, b);
     SCHED.with(|s| {
@@ -503,6 +507,24 @@ pub mod trace {
             (b'a', parent, u128::from(l.after.rem)),
         ] {
             record(kind, id, value);
+        }
+    }
+
+    /// A budget's weight changed and its lead and remainder were converted: every operand and
+    /// the result, as a group of six records the oracle recomputes, ahead of the pass it may
+    /// lower (`G` pass before, `g` remainder before, `v` the old and the new weight (high and low
+    /// 32 bits), `f` floor, `N` pass after, `n` remainder after).
+    pub fn reweigh(b: u64, r: &redoubt_stride::Reweigh) {
+        let weights = (r.old << 32 | r.new & 0xffff_ffff) as u128;
+        for (kind, value) in [
+            (b'G', r.before.pass),
+            (b'g', u128::from(r.before.rem)),
+            (b'v', weights),
+            (b'f', r.floor),
+            (b'N', r.after.pass),
+            (b'n', u128::from(r.after.rem)),
+        ] {
+            record(kind, b, value);
         }
     }
 

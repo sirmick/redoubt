@@ -57,6 +57,7 @@ impl Checker {
         serving(k)?;
         i1_i2_i3_i4_handles(k)?;
         i5_charging(k)?;
+        ledger_backed(k)?;
         i6_i8_budgets(k)?;
         self.flows(k)?;
         for flow in &k.ghost.flows {
@@ -266,6 +267,12 @@ impl Checker {
     fn i15_abandoned(&mut self, k: &Kernel) -> Check {
         self.reported.retain(|m| k.msgs.contains_key(m));
         for m in k.msgs.values() {
+            ensure!(
+                !m.notice || k.endpoints.contains_key(&m.endpoint),
+                "I15: call {} owes a notice on endpoint {}, which is gone",
+                m.id,
+                m.endpoint
+            );
             let Some((_, stid)) = m.server else { continue };
             if m.kind != MsgKind::Call || awaited(k, m.id) || self.reported.contains(&m.id) {
                 continue;
@@ -283,11 +290,11 @@ impl Checker {
         Ok(())
     }
 
-    /// I9 (R11): no mapping is writable and executable, or writable without being readable; a
-    /// frame read zero when first handed out; a page is accessible in at most one address
-    /// space, so a lent page is not the lender's until the call ends. R6 and R3: each frame is
-    /// charged to whoever holds it (the lender while its call lasts, the server once the call is
-    /// abandoned).
+    /// I9 (R11): no mapping is writable and executable, or writable without being readable, and
+    /// none of device registers or a DMA frame is executable; a frame read zero when first
+    /// handed out; a page is accessible in at most one address space, so a lent page is not the
+    /// lender's until the call ends. R6 and R3: each frame is charged to whoever holds it (the
+    /// lender while its call lasts, the server once the call is abandoned).
     fn i9_memory(&mut self, k: &Kernel) -> Check {
         #[derive(Default)]
         struct Seen {
@@ -316,6 +323,11 @@ impl Checker {
                 ensure!(
                     !(m.flags & FLAG_W != 0 && m.flags & FLAG_X != 0),
                     "I9: page {v:#x} of process {} is W+X",
+                    p.pid
+                );
+                ensure!(
+                    !(m.flags & FLAG_X != 0 && k.is_device_memory(m)),
+                    "I9: page {v:#x} of process {} is executable device or DMA memory",
                     p.pid
                 );
                 ensure!(
@@ -845,6 +857,16 @@ fn i5_charging(k: &Kernel) -> Check {
             add(s.payer, c.process);
         }
     }
+    // A PID held by an untaken notice counts where its process ran, or, that budget destroyed,
+    // in its nearest live ancestor, from the ghost's record of the tree (R6, R10 step 8).
+    for n in k.endpoints.values().flat_map(|e| e.exits.iter()) {
+        let mut b = n.budget;
+        while !k.budgets.contains_key(&b) {
+            let Some(p) = k.ghost.parent_at_creation.get(&b) else { break };
+            b = *p;
+        }
+        *procs.entry(b).or_default() += 1;
+    }
     for e in k.endpoints.values() {
         add(e.owner, c.endpoint);
     }
@@ -900,6 +922,21 @@ fn i5_charging(k: &Kernel) -> Check {
 /// I6: labels never change, contain the parent's, and only a system-class creator adds labels.
 /// I8: class(child) = class(parent); account is inherited unless the parent's is 0.
 /// I12: budget ids ascend.
+/// R6: every charged page has a frame behind it. `root`'s limit bounds every charge in the tree,
+/// and `root`'s own page is charged to no budget, so the two together fit in the RAM frames the
+/// kernel did not keep.
+fn ledger_backed(k: &Kernel) -> Check {
+    // A destroyed `root` takes the whole tree, and every charge, with it.
+    let Some(root) = k.budgets.get(&crate::kernel::ROOT) else { return Ok(()) };
+    ensure!(
+        root.pages_limit.saturating_add(k.costs.budget) <= k.ram_frames,
+        "R6: root's limit {} and its own page exceed the {} free frames",
+        root.pages_limit,
+        k.ram_frames
+    );
+    Ok(())
+}
+
 fn i6_i8_budgets(k: &Kernel) -> Check {
     for b in k.budgets.values() {
         ensure!(

@@ -46,6 +46,11 @@ pub enum Mutation {
     AbandonNoticeMissing,
     /// An abandoned-call notice is delivered again on every `receive` (I15).
     AbandonNoticeRepeated,
+    /// A receiver whose record went bad while it waited takes its abandoned-call notice anyway,
+    /// and the notice is lost (I15).
+    BadRecordConsumesNotice,
+    /// An endpoint's destruction leaves the calls taken through it owing a notice there.
+    EndpointDestroyNoticeKept,
     // R4. Delivery.
     /// Transfers are delivered whatever `max_transfer` says.
     R4IgnoreMaxTransfer,
@@ -62,6 +67,9 @@ pub enum Mutation {
     R5NoMaskOnFire,
     /// `receive` on an IRQ handle does not unmask the source.
     R5NoUnmaskOnReceive,
+    /// A receiver whose record went bad while it waited clears `fired` anyway, and the interrupt
+    /// is lost.
+    R5BadRecordConsumesInterrupt,
     // R6. Charging.
     /// A parent's usage also counts its children's live usage (not only their limits).
     R6ChargeAncestors,
@@ -71,6 +79,8 @@ pub enum Mutation {
     R6EndpointsFree,
     /// Page-table pages cost nothing.
     R6PageTablesFree,
+    /// A page table left mapping nothing stays, and stays charged, until its process ends.
+    R6EmptyTableKept,
     /// Open calls cost nothing.
     R6OpenCallsFree,
     /// Process objects cost nothing.
@@ -79,6 +89,10 @@ pub enum Mutation {
     R6ProcessObjectChargedToBudget,
     /// A lend is charged to its caller only, not to the receiver as well.
     R6LendChargedOnce,
+    /// `root`'s limit is every free frame, so its own page is charged to no one.
+    R6RootPageUncounted,
+    /// A PID stops counting when its process ends, not when its object is freed.
+    R6PidUncountedAtEnd,
     // R7. Carving.
     /// Children may be carved beyond the parent's free limits.
     R7NoCarveCheck,
@@ -113,17 +127,24 @@ pub enum Mutation {
     R10SweptHandlesDropped,
     /// Destroying a creator's budget leaves the processes it created running.
     R10CreatorDeathSparesProcess,
+    /// Destroying a budget drops the count of the PIDs still held for its processes instead of
+    /// moving it to the parent.
+    R10HeldPidsDropped,
     // R11. Memory.
     /// Reused pages are not zeroed.
     R11NoZeroing,
     /// `set_flags` accepts writable and executable together (the decoder's refusal included).
     R11SetFlagsAllowsWx,
-    /// `set_flags` and `process_map` accept writable without readable.
-    R11AllowsWriteOnly,
+    /// `set_flags` accepts writable without readable.
+    R11SetFlagsAllowsWriteOnly,
     /// A lent page stays mapped in the lender during the call.
     R11LendStaysMapped,
     /// `map_fixed` skips the overlap check, so it can map over an existing mapping.
     R11MapFixedSkipsOverlap,
+    /// `set_flags` grants `EXECUTE` on device registers and `dma_alloc` frames.
+    R11ExecOnDeviceMemory,
+    /// `process_map` skips its own flag check (empty flags, and writable without readable).
+    R11ProcessMapSkipsFlags,
     /// Publishes no lend despite a supplied buffer.
     IpcWrongLend,
     /// Hides a committed partial reply behind its error.
@@ -177,6 +198,10 @@ pub enum Mutation {
     R12FoldAtNewWeight,
     /// A deschedule charges only what the clock saw: a run shorter than one unit is free.
     R12NoMinimumCharge,
+    /// A carve rescales only the remainder; only a carve's return converts the lead.
+    R12RescaleOnlyOnReturn,
+    /// A deadline's destruction is billed to no budget.
+    R12DeadlineWorkUnbilled,
     // kernel/ipc.md, Messages: what the kernel attaches, and notices.
     /// Messages carry no labels.
     MsgNoLabels,
@@ -301,7 +326,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 127] = {
+    pub const ALL: [Mutation; 138] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -320,6 +345,8 @@ impl Mutation {
             R3ChargeStaysWithCaller,
             AbandonNoticeMissing,
             AbandonNoticeRepeated,
+            BadRecordConsumesNotice,
+            EndpointDestroyNoticeKept,
             R4IgnoreMaxTransfer,
             R4OverdrawOnDelivery,
             R4aOpenCallsPerThread,
@@ -327,14 +354,18 @@ impl Mutation {
             R4bDeadServerFakesReply,
             R5NoMaskOnFire,
             R5NoUnmaskOnReceive,
+            R5BadRecordConsumesInterrupt,
             R6ChargeAncestors,
             R6OwnPageChargedToItself,
             R6EndpointsFree,
             R6PageTablesFree,
+            R6EmptyTableKept,
             R6OpenCallsFree,
             R6ProcessObjectFree,
             R6ProcessObjectChargedToBudget,
             R6LendChargedOnce,
+            R6RootPageUncounted,
+            R6PidUncountedAtEnd,
             R7NoCarveCheck,
             R8AccountFromArgument,
             R9ReceivedHandleRestamped,
@@ -348,11 +379,14 @@ impl Mutation {
             R10RevokedCallAnswered,
             R10SweptHandlesDropped,
             R10CreatorDeathSparesProcess,
+            R10HeldPidsDropped,
             R11NoZeroing,
             R11SetFlagsAllowsWx,
-            R11AllowsWriteOnly,
+            R11SetFlagsAllowsWriteOnly,
             R11LendStaysMapped,
             R11MapFixedSkipsOverlap,
+            R11ExecOnDeviceMemory,
+            R11ProcessMapSkipsFlags,
             IpcWrongLend,
             IpcDropPartial,
             IpcFalseDelivery,
@@ -378,6 +412,8 @@ impl Mutation {
             R12LiftCountsEntryWait,
             R12FoldAtNewWeight,
             R12NoMinimumCharge,
+            R12RescaleOnlyOnReturn,
+            R12DeadlineWorkUnbilled,
             MsgNoLabels,
             MsgBadgeZero,
             MsgAccountZero,
@@ -454,21 +490,27 @@ impl Mutation {
             | R2KeyByAccountOnly
             | R2KeyByStampLabels
             | R2SystemCallersShareGroup => "R2",
-            R3UnmapAbandonedLend | R3ChargeStaysWithCaller | AbandonNoticeMissing | AbandonNoticeRepeated => {
-                "R3"
-            }
+            R3UnmapAbandonedLend
+            | R3ChargeStaysWithCaller
+            | AbandonNoticeMissing
+            | AbandonNoticeRepeated
+            | BadRecordConsumesNotice
+            | EndpointDestroyNoticeKept => "R3",
             R4IgnoreMaxTransfer | R4OverdrawOnDelivery => "R4",
             R4aOpenCallsPerThread | R4aFullTakesNothing | OpenCallsUnlimited | ReceiveDropsOpenCalls => "R4a",
             R4bDeadServerFakesReply => "R4b",
-            R5NoMaskOnFire | R5NoUnmaskOnReceive => "R5",
+            R5NoMaskOnFire | R5NoUnmaskOnReceive | R5BadRecordConsumesInterrupt => "R5",
             R6ChargeAncestors
             | R6OwnPageChargedToItself
             | R6EndpointsFree
             | R6PageTablesFree
+            | R6EmptyTableKept
             | R6OpenCallsFree
             | R6ProcessObjectFree
             | R6ProcessObjectChargedToBudget
-            | R6LendChargedOnce => "R6",
+            | R6LendChargedOnce
+            | R6RootPageUncounted
+            | R6PidUncountedAtEnd => "R6",
             R7NoCarveCheck | R7CarveToZeroFree | ProcessInWeightlessBudget => "R7",
             R8AccountFromArgument => "R8",
             R9ReceivedHandleRestamped | R9MintStampsCaller | R9MsgStampIsSenderBudget => "R9",
@@ -480,12 +522,15 @@ impl Mutation {
             | R10RevokedCallAnswered
             | R10SweptHandlesDropped
             | R10CreatorDeathSparesProcess
+            | R10HeldPidsDropped
             | BudgetDeadlineIgnored => "R10",
             R11NoZeroing
             | R11SetFlagsAllowsWx
-            | R11AllowsWriteOnly
+            | R11SetFlagsAllowsWriteOnly
             | R11LendStaysMapped
-            | R11MapFixedSkipsOverlap => "R11",
+            | R11MapFixedSkipsOverlap
+            | R11ExecOnDeviceMemory
+            | R11ProcessMapSkipsFlags => "R11",
             R12PriorityById
             | R12IgnoreWeight
             | R12WakeBanksCredit
@@ -505,7 +550,9 @@ impl Mutation {
             | R12UnnormalizedLift
             | R12LiftCountsEntryWait
             | R12FoldAtNewWeight
-            | R12NoMinimumCharge => "R12",
+            | R12NoMinimumCharge
+            | R12RescaleOnlyOnReturn
+            | R12DeadlineWorkUnbilled => "R12",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "R13",
             MsgNoLabels | MsgBadgeZero | MsgAccountZero | MsgIdsGlobal => "R14",
             BlameNobody

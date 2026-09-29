@@ -35,16 +35,16 @@ A range is page-aligned and non-empty, and for every call but `map_anon` it lies
 on rv64). Flags are `READ`, `WRITE` and `EXECUTE`: at least one, never `WRITE` with
 `EXECUTE`, never `WRITE` without `READ`. "The caller's own page" is a live user mapping that is
 neither side of a loan and is credited to the caller in the kernel's frame ownership table (or
-is a `dma_alloc` page of its own, or device registers it mapped). A reservation not yet touched
-is not a mapping.
+is a `dma_alloc` page of its own, or device registers it mapped). Only the RAM among them can
+be made executable ([R11](#r11-memory)). A reservation not yet touched is not a mapping.
 
 Each call checks the whole range before it changes any page, so an error leaves every mapping
-as it was. Two can leave a charge behind: `map_anon`'s rollback keeps the page tables it
-allocated, and `process_map` backs untouched pages of its source before its later checks, so a
-refused one can leave them backed and charged to the caller (Residual risks;
-[processes](processes.md#residual-risks)). The errors are `InvalidArgument` and `OutOfMemory`, and for
-`process_map` also `BadHandle`, `WrongObject` and `NotPermitted` (the child has started). The
-order of the checks, the same in the kernel and the [model](model.md), is in the
+as it was. One can leave a charge behind: `process_map` backs untouched pages of its source
+before its checks of the child, so a refused one can leave them backed and charged to the
+caller (Residual risks; [ABI](abi.md#residual-risks)). It checks the flags first, so bad flags leave nothing charged.
+The errors are `InvalidArgument` and `OutOfMemory`, and for `process_map` also `BadHandle`,
+`WrongObject` and `NotPermitted` (the child has started). The order of the checks, the same in
+the kernel and the [model](model.md), is in the
 [ABI reference](abi.md#errors-and-the-order-of-checks).
 
 ### Backing and zeroing
@@ -64,17 +64,35 @@ touch: a load or store fault, or a call that lends, transfers or `process_map`s 
 started by `process_start` has no reservations: its parent gave it every page it has.
 
 Running out is the caller's error: `map_anon` of more than the budget or RAM can supply is
-`OutOfMemory`, and every page it had taken goes back.
+`OutOfMemory`, and every page and page table it had taken goes back.
+
+### Page tables
+
+Status: built · tested: bench:page-table-reclaim, mutation:R6EmptyTableKept
+
+A page table is made when a mapping first needs it, charged to the budget of the process it
+maps into, and freed, with its charge, by the call that leaves it mapping nothing: every entry
+empty, with no page, no reservation and neither side of a loan. So `unmap` frees the tables its
+range empties, and so do a failed `map_anon`'s rollback, `process_map` in its source, and a
+transfer in its sender. A lend's tables in the server go at the reply that returns it; an
+abandoned lend's go from the caller when the call is abandoned, and from the server at the reply
+that frees the lend. A call frees tables once it has finished, never between making a table and
+filling it. It reads at most `ENTRIES` entries for each table the range reaches, so the cost
+follows the pages it unmapped ([R22](#r22-range-cost)). The root table goes only with its
+process.
 
 ### Where `map_anon` puts pages
 
-Status: built · partly tested: no case attacks the placement itself (first fit from the last run, the wrap to the area's start, a full area, a run that fits only at the area's end, an oversize request, the message area); `touch-beyond-ram` exhausts RAM, not the area; the kernel departs from the placement rule at both ends of the area (Residual risks) · tested: bench:map-fixed-attack, bench:touch-beyond-ram
+Status: built · partly tested: the message area's placement is not attacked by a case, nor an oversize request; `touch-beyond-ram` exhausts RAM, not the area · tested: bench:map-anon-search-bound, bench:map-fixed-attack, bench:touch-beyond-ram
 
 The kernel chooses the address, and nothing may depend on it. `map_anon` takes the first free
 run of pages in its placement area, 256 MiB from `DEFAULT_BASE` (0x6000_0000 to 0x7000_0000),
-searching from the start of the run it placed last to the area's end, then from the area's
-start. A page is free only if its entry is empty: a reservation or either side of a loan is
-taken. A request that finds no run, or is larger than the area, is `OutOfMemory`.
+searching from the start of the run it placed last to the last start that fits, then from the
+area's start. Every start up to the last one that fits is tried, so a run that fits only at the
+area's end is found, and so is the whole of an empty area; every run placed lies inside the
+area. A page is free only if its entry is empty: a reservation or either side of a loan is
+taken. A request that finds no run, or is larger than the area, is `OutOfMemory`. The search
+looks at each page of the area at most once ([R22](#r22-range-cost)).
 `map_device` and `dma_alloc` place their mappings the same way ([devices](devices.md#map_device)). A
 receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAGE_BASE`
 (0x4000_0000), found the same way. The rest of the user layout is on
@@ -82,8 +100,7 @@ receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAG
 
 The [model](model.md) places runs differently: above the highest mapping, falling back to the
 first gap large enough. The two agree on outcomes, not addresses, except where the kernel's
-area is full, where a run fits only at its end, and where the kernel's search runs past the
-area's end (Residual risks).
+area is full (Residual risks).
 
 ### `map_fixed`
 
@@ -98,10 +115,10 @@ Unlike POSIX `MAP_FIXED` it **never replaces** a mapping. A range that touches a
 entry of the caller's (a mapping, a reservation, either side of a loan) is `InvalidArgument`,
 and nothing is mapped. The checks run in this order, all before anything is allocated:
 1. the range: aligned, non-empty, no overflow, below `USER_AREA_END` (page 0 is user space);
-2. the overlap, over the whole range;
-3. the flags;
-4. the charge: the pages alone first, then the pages and every page table the range still
-   lacks, counted across table boundaries.
+2. the flags;
+3. the pages alone against the budget, by arithmetic;
+4. the overlap, over the whole range;
+5. the pages and every page table the range still lacks, counted across table boundaries.
 
 Only then does the mapping loop run, and it cannot fail. So a `map_fixed` maps everything it
 was asked or nothing, and a refused one charges nothing.
@@ -191,7 +208,7 @@ Status: built · partly tested: that no call names a physical frame is argued fr
 
 ### R11 (memory)
 
-Status: built · partly tested: the kernel departs from per-frame W^X, because `set_flags` makes device registers and `dma_alloc` pages executable on request, and no case attacks it; that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap
+Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11SetFlagsAllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap, mutation:R11ExecOnDeviceMemory, mutation:R11ProcessMapSkipsFlags
 
 - **No RAM page is ever mapped writable and executable** ([W^X](../GLOSSARY.md#wx)): not by one
   entry, and not by two, since a RAM frame has at most one user entry at a time (the kernel's
@@ -203,13 +220,13 @@ Status: built · partly tested: the kernel departs from per-frame W^X, because `
   executable. Device registers and DMA frames are never mapped executable: the device, or
   another mapping of the same registers (in this process or a co-holder's, since a mapping
   outlives its handle), can write them underneath. `map_device` and `dma_alloc` map read-write
-  and never executable, and `process_map` refuses device and DMA pages. The kernel departs from
-  this in `set_flags`, which grants `EXECUTE` on both (Residual risks).
+  and never executable, `set_flags` refuses `EXECUTE` on either, and `process_map` refuses
+  device and DMA pages.
 - **Writable implies readable.** The privileged architecture reserves the write-only entry, so
   `map_anon`, `map_fixed`, `set_flags` and `process_map` refuse `WRITE` without `READ`.
 - **Flags are checked before anything is charged or moved** for the new mapping, so a step
-  that cannot fail never meets bad flags. (`process_map` backs a reserved source page before
-  it checks the flags, as touching the page would.)
+  that cannot fail never meets bad flags. `process_map` checks them before it backs any page
+  of its source.
 - **Every page is zeroed** before a process first sees it: anonymous and fixed pages, backed
   reservations, page tables, and `dma_alloc` pages. Pages moved by lend, transfer or
   `process_map` carry their contents, because moving them is the point.
@@ -245,24 +262,28 @@ device registers, is read-write and never executable.
 
 ### R22 (range cost)
 
-Status: built · partly tested: only `map_fixed`'s huge length is attacked, and `map_anon`'s search is an exception no case measures · tested: bench:map-fixed-attack, host:redoubt-model::huge_len_is_refused_promptly
+Status: built · partly tested: only `map_fixed`'s huge length and `map_anon`'s search are attacked · tested: bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly
 
 A call that takes a range costs what the page tables hold and what the budget can pay for,
 never what the length asks. A process could otherwise ask for a huge range for free, and the
 kernel, running the call to its end with interrupts off, would stall every other process.
 - `unmap`, `set_flags` and `process_map` check the range page by page and stop at the first
   page that is not the caller's, so their cost follows what is mapped there.
-- `map_fixed` checks overlap by walking the page-table tree and skipping every absent subtree
+- `map_fixed` first refuses a range the budget cannot pay for by arithmetic alone, before any
+  walk. It then checks overlap by walking the page-table tree and skipping every absent subtree
   whole: at most the root entries the range spans, plus `ENTRIES` (512 on Sv39, 1024 on Sv32)
-  for each table present in it. It then refuses a range the budget cannot pay for by
-  arithmetic alone, before counting page tables. A `map_fixed` of the whole of user space above
-  4 GiB, which no budget in the case can pay for, is refused well inside the case's 10 ms bound.
+  for each table present in it, and only then counts page tables. A `map_fixed` of the whole of
+  user space, which no budget in the case can pay for, is refused well inside the case's 10 ms
+  bound, over mappings or not.
 - A lend or transfer checks at most the pages mapped in its range, and a lend is at most
   `MAX_LEND_PAGES` (16).
-
-`map_anon` does not meet R22: its search is bounded by its 256 MiB area, not by what is mapped
-in it, so it also breaks the bound R12 (scheduling) sets on a call's kernel time (Residual
-risks).
+- `map_anon`'s search, which also places `map_device`, `dma_alloc` and a received message,
+  never tests a start twice: when a page is taken, the next start tried is the page after it,
+  and a missing page table skips its whole span. So it looks at each page of its fixed area at
+  most once, 65536 for `map_anon`'s and 1024 for the message area, whatever the request asks.
+  With every page table of the area present, the worst case, a refusal takes about 9.6 ms in a
+  checked build under virtual time; the case bounds it at 12 ms, and a timer wake during it at
+  15 ms.
 
 ## Failure and restart
 
@@ -270,8 +291,8 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 
 - **Out of memory is the caller's error.** A mapping call that cannot be paid for returns
   `OutOfMemory`; a process that exhausts RAM gets `OutOfMemory` and every other process keeps
-  running. A refused `map_fixed` charges nothing, and a refused `process_map` charges the child
-  nothing; `map_anon`'s rollback keeps the page tables it allocated (Residual risks).
+  running. A refused `map_fixed` charges nothing, a refused `process_map` charges the child
+  nothing, and a refused `map_anon` gives back every page and page table it took.
 - **A permission fault ends the process.** A store to a page that is not writable, or a fetch
   from one that is not executable, is never mistaken for a page to back. The process faults,
   and its exit notice carries the RISC-V cause (12 for an instruction page fault, 15 for a store
@@ -285,41 +306,9 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 
 ## Residual risks
 
-- **`unmap` keeps empty page tables.** A page table is freed only when its process ends, not
-  when it maps nothing, and `map_anon`'s rollback after a failure keeps the tables it allocated
-  too. Such tables stay charged to the process's own budget, so a process can strand only its
-  own pages, but its usage stays above what it has mapped. Follow-up:
-  [todo](../todo/page-table-freeing.md).
-- **`map_anon`'s search costs what the area allows, not what is mapped.** It runs before any
-  budget check. It tries each start in its 256 MiB area (65536 pages) and tests the pages of
-  the run from there until one is taken. One page mapped in the middle of the area makes a
-  request for half of it test about 5 × 10^8 pages before it fails. The search's kernel time is
-  billed to the caller, as every call's is, so the caller pays for it in CPU share. The harm is
-  latency: the kernel runs the search with interrupts off, so every wake, timeout, deadline and
-  interrupt on the machine waits for it, and a bill after the fact gives nobody that time back.
-  The kernel departs here from R12, which bounds a call's kernel time by what it
-  maps or names ([scheduling](scheduling.md#r12-scheduling)). The receiver's message area uses
-  the same search over 1024 pages. No case measures it. Follow-up:
-  [todo](../todo/map-anon-search-cost.md).
-- **`map_anon`'s search misses the area's last start and can run past its end.** Its first
-  pass stops one start short, so a run that fits only at the very end of the area, or a request
-  for the whole of an empty area, is `OutOfMemory`. Its second pass, from the area's start up to
-  the last placement, has no upper bound: when the last placement lies above the last start that
-  fits, a run can be placed there and extend past the area's end, into the caller's own user
-  space beyond it. Only the caller is affected. Follow-up:
-  [todo](../todo/map-anon-search-cost.md).
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`, where the
   [model](model.md), whose placement is unbounded, succeeds. It harms only that process.
-- **`set_flags` departs from R11 on device memory.** It accepts `EXECUTE` on mapped device
-  registers and on a held `dma_alloc` page, because both count as the caller's own pages. A
-  process that maps one device twice with `map_device` gets two mappings of the same physical
-  memory, and can make one read-write and the other read-execute. A DMA page made executable
-  is not writable through its mapping, but the device can still write it. So a process holding
-  a device object, such as a block or network driver, can make device registers or its DMA
-  buffers executable, and hostile device input can become injected code in a compromised
-  driver, where W^X would have left the attacker only the driver's own code to reuse. No case
-  attacks it. Follow-up: [todo](../todo/device-mapping-exec.md).
 - **User cache-block invalidation is not turned off.** The firmware enables `cbo.inval` below
   M-mode and the kernel never writes `senvcfg`, so on a hart with a write-back cache a process
   may be able to discard the kernel's zeroes on a page it was just given and read the previous
