@@ -10,12 +10,11 @@ with nothing added, removed or edited, except that a patched crate carries its o
 ([below](#patched-crates)). The checksum is the published `.crate` file's SHA-256, as the
 crates.io index records it. There are three users:
 
-- **`ipd`'s TCP/IP stack** (answer 174): `smoltcp` and the five crates after it. Mick chose to
-  vendor them (2026-09-24).
+- **`ipd`'s TCP/IP stack:** `smoltcp` and the five crates after it.
 - **The loader's and `keyd`'s Ed25519:** `ed25519-compact`, which `sshd` links too
   ([below](#the-loaders-and-keyds-ed25519)).
 - **`sshd`'s SSH library:** `sunset` and the rest of the table
-  ([below](#sshds-ssh-library)). The owner chose to vendor them with `sshd`'s core (2026-09-28).
+  ([below](#sshds-ssh-library)).
 
 | Crate | Version | License (ours to use under) | crates.io SHA-256 |
 | --- | --- | --- | --- |
@@ -119,8 +118,8 @@ For each crate in the first table it downloads the `.crate` from `static.crates.
 SHA-256 against the live crates.io index and against this table, unpacks it, applies the crate's
 patch if it has one, and `diff -r`s it against `vendor/<name>`. It exits 0 only if all agree for
 every crate. It needs the network, so the bench does not run it; **the review of any change
-under `vendor/` must run it** and quote its output. It passed for 737a0a41a (the red team's
-independent run, QA D3-code-review-1) and at the provenance commit that added it.
+under `vendor/` must run it** and quote its output. It passed for 737a0a41a, in an independent
+review run, and at the commit that added it.
 
 **Not workspace members.** The vendored directories are in the root manifest's `exclude`, not in
 `members`. Were they members, `Cargo.lock` would take in their dev-dependencies (test
@@ -173,7 +172,7 @@ and read the diff.
 - `heapless` does use `unsafe`. smoltcp uses it only through `Vec` and `LinearMap`. Those two
   were read with `ipd`'s stack commit, below.
 
-**What of heapless `ipd` runs** (read for `ipd`'s stack commit, answer 174). With `ipd`'s
+**What of heapless `ipd` runs** (read for `ipd`'s stack commit). With `ipd`'s
 features smoltcp compiles three heapless containers, all over `Copy` elements with no `Drop`:
 `Vec<IpCidr, 2>` (the interface's addresses, `iface/interface/mod.rs`), `Vec<Route, 2>` (its
 routes, `iface/route.rs`) and `LinearMap<IpAddress, Neighbor, 8>` (the neighbour cache,
