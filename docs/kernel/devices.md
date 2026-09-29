@@ -68,6 +68,27 @@ Mapping a DMA-flagged device adds it to the caller's **reset set**: the devices 
 must reset before its DMA pages are reused ([Reset before reuse](#reset-before-reuse)), because a
 process with the registers mapped could have programmed the device with any address it knows.
 
+### `device_info`
+
+Status: planned · M1 (separation and containment)
+
+`device_info(h(device)) -> kind, a, b, flags` says which device a handle names, in the form of
+the `Devs` entry the object was made from ([boot](boot.md#the-argument-block)). For MMIO it gives
+the physical base, the size in bytes and the DMA flag. For an IRQ it gives the interrupt number.
+For the Reset right it gives only the kind. Errors, in order: `BadHandle`, then `WrongObject` for
+anything that is not a device object. It maps nothing and changes nothing, and its kernel time
+is a constant.
+
+It is how `init` matches the manifest's devices to the handles the kernel gave it
+([which process gets which device](#which-process-gets-which-device)). It shows a holder where
+the device's registers are, which a holder that maps them could find out anyway. The address is
+not RAM and grants nothing, and no call takes a physical address
+([R11 (memory)](memory.md#r11-memory)). Once it is built, `map_device`'s "the kernel says nothing
+about it" no longer holds: the kernel says which device a handle names, and the launcher still
+decides which handles a driver gets.
+
+**Open:** none.
+
 ### `dma_alloc`
 
 Status: built · partly tested: the limit of `MAX_RUNS` runs per device is not attacked by a case · tested: bench:device, bench:dma-rules, host:redoubt-model::dma_pages_stay_put, mutation:DmaUnmapFrees
@@ -181,19 +202,34 @@ finds its DMA devices by asking: `dma_alloc` is `NotPermitted` without the flag 
 Status: planned · M1 (separation and containment)
 
 The loader loads only the kernel and `init`, and `init` holds every device object. The boot
-manifest's `devices` entry names each device object, its device-tree node and whether it may do
-DMA; each server's entry names the devices it gets ([init](../servers/init.md)). `init` places
+manifest's `devices` entry names each device object by its register base and interrupt, and
+says whether it may do DMA; each server's entry names the devices it gets ([init](../servers/init.md)). `init` places
 each driver's handles in its startup block, by name, so no driver depends on a handle's index.
 The Reset right stays with `init`. In a confined deployment `init` refuses a manifest that lets
-two label sets share a device. A driver that ends is restarted with the same handles, unless its
-device was quarantined, which only a reboot undoes.
+two label sets share a device.
 
-**Open:** which authority decides what becomes a device object and which devices may do DMA:
-the loader's device-tree reading, the manifest, or both checked against each other; how a
-driver learns which handle is which (named handles in the startup block, with the kernel saying
-nothing); whether `init` keeps its own copy of each handle it places, so it can restart a
-driver, and so stays a co-holder; what `init` does when a restarted driver's device was
-quarantined.
+- **The device tree and the manifest decide together.** The loader's reading of the device tree
+  decides what becomes a device object and which carry the DMA flag, because the kernel must know
+  both at boot to give each DMA device a reset slot. The manifest decides who gets each object. It
+  names each device by its register base and, if it has one, its interrupt number. `init` asks
+  [`device_info`](#device_info) about every device handle it holds and matches the answers to the
+  manifest. It refuses the boot if the manifest names a base or an interrupt no handle has, names
+  one twice, or says a device may do DMA when the kernel's object says it may not, or the other
+  way round. A device object the manifest does not name stays with `init` and is never placed.
+- **Drivers find their devices by name.** `init` installs a device's register region under the
+  name the server's entry gives it, and its interrupt under that name with `-irq` added
+  (`consoled` looks up `uart` and `uart-irq`, `blkd` `disk` and `disk-irq`, `netd` `net` and
+  `net-irq`). The kernel still says nothing about which device a handle names.
+- **`init` keeps a copy of every device handle it places,** so that it can place the handle again
+  when it restarts a driver. It never maps a device after it starts `consoled`, and a copy it
+  never maps never puts it in a reset set, so being a co-holder costs nothing at a driver's end
+  ([reset before reuse](#reset-before-reuse)).
+- **A driver whose device was quarantined is not restarted; `init` reboots the machine.** The
+  device's object is gone, and only a hardware reset can make a device whose reset was never
+  confirmed safe to hand out again. This is the same fail-closed reboot as a server that cannot
+  stay up ([init](../servers/init.md#restarts-and-reboots)).
+
+**Open:** none.
 
 ## Authority
 

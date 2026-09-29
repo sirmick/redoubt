@@ -140,20 +140,28 @@ from the boot manifest.*
 Status: planned · M1 (separation and containment)
 
 The loader starts only `init`, which runs in `root` on the weight and the one process `root`
-keeps free; what `init` launches counts in the budgets it launches into. The kernel
-creates `root`, `system` and `users` with the sizes the boot manifest sets for `system` (default a
-quarter of RAM) and gives `init` the three handles. `init` carves each server's budget from
-`system` with the pages, processes and weight its manifest entry names: 1,000 for `init`, the
-steward and the drivers, an ordinary weight for other servers, 100 for a session. Only `init` and
-the steward ever hold a handle to a `system`-class budget; a manifest that grants a server a budget
-handle is refused ([init](../servers/init.md)). The steward holds `users` and carves each
-principal's budget from it, then a fixed sub-budget per label set
-([steward](../servers/steward.md)).
+keeps free. What `init` launches counts in the budgets it launches into.
 
-**Open:** whether `system`'s share reaches the kernel in the argument block or the kernel keeps a
-fixed fraction and `init` carves the rest; how `ROOT_WEIGHT` and `INIT_WEIGHT` are chosen once
-`init` runs in `root` (until then every loader-started program shares `system`'s one free weight,
-so a program that yields in a busy loop takes that whole share).
+- **The kernel keeps its fixed split.** It creates `root`, `system` and `users` at boot, as in
+  the table above, except that `root` keeps one process for `init`: `system` gets 15 processes
+  and `users` 47. The boot manifest does not size `system`. The kernel reads no manifest and the
+  loader parses no JSON, so the split is set in one place, the kernel. `init` adds up what the
+  manifest's servers ask for and refuses the boot if it does not fit in `system`, before it
+  starts anything ([init](../servers/init.md#the-boot-manifest)).
+- **The weights stay.** `ROOT_WEIGHT` is 1,000,000 and `INIT_WEIGHT` is 1,000. `init`'s free
+  weight in `root` is a driver's, and the rest is split between `system` (250,000) and `users`
+  (749,000). Only the budgets that hold processes compete, so what matters is how their weights
+  compare: 1,000 for `init`, the steward and the drivers, an ordinary weight for other servers, and
+  100 for a session. Each server runs in a budget of its own, so no program takes a shared free
+  weight by yielding in a busy loop.
+
+`init` carves each server's budget from `system` with the pages, processes and weight its
+manifest entry names. Only `init` and the steward ever hold a handle to a `system`-class budget,
+and a manifest that grants a server a budget handle is refused ([init](../servers/init.md)). The
+steward holds `users` and carves each principal's budget from it, then a fixed sub-budget per
+label set ([steward](../servers/steward.md)).
+
+**Open:** none.
 
 ### Class is trust, not order
 

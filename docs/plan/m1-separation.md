@@ -116,9 +116,11 @@ page.
    ([serving](../servers/serving.md#replies-and-rollback)), and restarting a driver is a case of
    its own ([netd](../servers/netd.md#started-by-init)). Until `init` exists the loader's bundle
    programs run at `system`'s free weight, so one that busy-yields dominates the machine; the
-   measured cases keep them blocked, and `init`'s budget tree ends this. The bench's cases then
-   start their programs through `init`, and the log server's interim `TAKE_GIFTS` fixture goes
-   ([rule F](../testbench.md#rule-f-trusted-verdicts)).
+   measured cases keep them blocked, and a budget per program ends this. The kernel's cases then
+   start their programs from a tester in `init`'s place, with the budgets each case names, so the
+   log server's interim `TAKE_GIFTS` fixture goes; the servers' cases boot `init` itself with a
+   manifest of their own, and `consoled` says who wrote each line
+   ([starting a case's programs](../testbench.md#starting-a-cases-programs)).
 - **beamlet on Redoubt, and IEx on the console.** The VM runs on the kernel with its natives and
    asynchronous platform ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)); an interactive
    Elixir shell on the UART console, before SSH exists

@@ -95,8 +95,8 @@ program's three budgets (`root`, `system` and `users`), and never a device or a 
 first caller of `TAKE_GIFTS`, and refuses every later caller (`tests/programs/src/bin/log-server.rs`).
 The residual: a benign sibling that happens to call first takes the gifts; the attacker then fails
 loudly on `Refused`, never passes silently. That is acceptable only while the log server is the
-interim fixture; once `init` starts a case's programs, the gifts go
-([M1 (separation and containment)](plan/m1-separation.md#remaining-work)).
+interim fixture; once the log server starts a case's programs with the budgets the case names,
+the gifts go ([starting a case's programs](#starting-a-cases-programs)).
 
 Every verdict pattern is anchored with `^` and pinned to its writer, with a comment beside it saying
 why it cannot be forged. The attacker's own lines may be required as progress (so a refusal for the
@@ -177,6 +177,40 @@ A `post_check` judges the console after the boot has passed. `sched_oracle` rebu
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
 reading of the rules ([scheduling](kernel/scheduling.md)); a limit such as `r10_p99_us=30000`
 bounds a measured cost.
+
+### Starting a case's programs
+
+Status: planned · M1 (separation and containment)
+
+Once the loader loads only the kernel and `init`
+([boot](kernel/boot.md#the-loader-loads-only-the-kernel-and-init)), a boot case starts its
+programs in one of two ways:
+
+- **In `init`'s place, for the kernel's cases.** The case's first program is packed as the
+  bundle's second entry. It gets `init`'s handoff: the three budgets, the Reset right, every
+  device and the bundle. It is the trusted tester, as the first program is
+  today. When it is the log server, it starts the case's other programs itself, through the
+  loader stub and from the bundle's pages, each in a budget of its own carved from `system`. Each
+  program gets the handles in the slots it has today: the boot endpoint's receive right for the
+  second program, and the boot and log endpoints for the later ones. A program also gets the
+  budgets the case names for it (`budgets = ["system"]`), which replaces `TAKE_GIFTS`. The log
+  server badges each program's handles with the program's place in the case, 2 on, and names
+  programs by that place, because the kernel now draws every PID but the first. A case matches a
+  PID in a kernel line with a pattern.
+- **Under `init`, for the servers' cases.** The case boots the real `init` with a manifest of its
+  own, packed as the `manifest` entry, and its test programs are `servers` entries in that
+  manifest. `init` prints its own lines bare, and `consoled` starts every other program's line
+  with its connection id ([consoled](servers/consoled.md#started-by-init)). A case's `reporter`
+  names a manifest entry, and the bench reads that entry's connection id from `init`'s line
+  announcing it. Such a case ends at its last `expect`, since no test program holds the Reset
+  right.
+
+`init` itself never takes a case's place and has no mode for the bench. The kernel's cases need
+`root` and `system`, which no program under `init` may hold
+([R33 (no server holds a system budget)](servers/init.md#r33-no-server-holds-a-system-budget)),
+so they run a tester in `init`'s place instead.
+
+**Open:** none.
 
 ### The scheduler oracle
 
@@ -265,7 +299,9 @@ Once the loader loads only the kernel and `init`, `init` receives the verified b
 public entries to `bootfsd`, and a data entry is how a model trace reaches an in-guest replayer,
 which compares results itself and prints its verdict
 ([boot](kernel/boot.md#the-loader-loads-only-the-kernel-and-init)). `bench-bundle-file` then
-expects the entry's bytes read back in the guest.
+expects the entry's bytes read back in the guest. The program in `init`'s place reads them first,
+from the bundle's pages. Under `init`, a program reads them through `/boot` once the manifest's
+`public` list names the entry.
 
 **Open:** none.
 

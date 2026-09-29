@@ -25,11 +25,10 @@ and `init`'s only input. Its entries:
 
 | Entry | Holds |
 | --- | --- |
-| `system` | the `system` budget's pages, processes and weight |
-| `devices` | each device's name, its device-tree node path, and whether it may do DMA |
+| `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume, the endpoints it receives on, the endpoints it is handed, and arguments |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -42,12 +41,14 @@ and `init`'s only input. Its entries:
   `[a-z0-9_:+-]`, starting with a letter (`fsd:data`, `alice+secrets`), compared byte for byte.
   Names become endpoint names, volume names and 9P paths, so no empty name, NUL, U+FEFF or control
   character may reach them. The startup block applies the same rule (`valid_name`).
-- **One entry per device.** A `devices` entry names one device-tree node, and `init` hands that
-  node's objects together to the one server that holds the entry: `NAME` for the register region
-  and `NAME-irq` for the interrupt, whichever exist. Two entries for one device would let a
-  manifest split it between two holders, and the interrupt's holder could then mask the other's
-  device and time its activity. A device name is at most 60 bytes and may not end in `-irq`, so
-  `NAME-irq` never collides and fits the name rule; `consoled` takes `uart` and `uart-irq`.
+- **One entry per device.** A `devices` entry names one device, by its register region and its
+  interrupt, and `init` hands that device's objects together to the one server that holds the
+  entry. They go under the name the server's entry gives the device: `NAME` for the register region and `NAME-irq` for the
+  interrupt, whichever exist. Two entries for one device would let a manifest split it between
+  two holders, and the interrupt's holder could then mask the other's device and time its
+  activity. A device name, and a name a server looks a device up by, is at most 60 bytes and may
+  not end in `-irq`, so `NAME-irq` never collides and fits the name rule. `consoled` takes `uart`
+  and `uart-irq`, so two machines' manifests may call the same UART by different names.
 - **No server gets a budget handle.** A `servers` entry names the budget `init` creates for the
   server, never a handle to one; a manifest that grants a server a budget handle is refused
   ([R33 (no server holds a system budget)](#r33-no-server-holds-a-system-budget)).
@@ -68,6 +69,13 @@ and `init`'s only input. Its entries:
   a principal's 100), so they are served promptly without running ahead of the queue; the servers
   that work for principals (`bootfsd`, `fsd`, `ipd`, `keyd`, `sshd`) get ordinary weights and
   bound the work of one request. The weights carve the `system` budget like every other limit.
+  The kernel sizes `system`, not the manifest, and `init` refuses a manifest whose servers' pages,
+  processes or weights add up to more than `system` holds
+  ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
+- **Devices are matched by address.** `init` asks the kernel which device each of its handles
+  names, finds each `devices` entry's base and interrupt among the answers, and the DMA flags must
+  agree
+  ([devices](../kernel/devices.md#which-process-gets-which-device)).
 - **What `/boot` shows.** `bootfsd` serves exactly the entries `public` names, matched byte for
   byte, as one flat read-only directory. `init` pushes their bytes to `bootfsd` itself
   ([bootfsd](bootfsd.md)), and refuses a `public` list that names an entry the bundle does not
@@ -132,20 +140,29 @@ multi-tenancy and the serving library's residual risks apply.
 
 Status: planned · M1 (separation and containment)
 
-The kernel gives `init` the `root`, `system` and `users` budgets, every device object, the Reset
-right, and the bundle's pages, read-only ([boot](../kernel/boot.md)). `init` then:
+The kernel gives `init` the `root`, `system` and `users` budgets, every device object and the
+Reset right. The loader maps the bundle into it, read-only
+([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)). `init` then:
 
-1. parses and checks the manifest, refusing the boot on any error;
-2. creates the `system` budget's children and starts the drivers and the servers below the
-   steward: `consoled`, `bootfsd`, `blkd`, `fsd` (one per volume), `netd`, `ipd`, `keyd`, each
-   through the loader stub straight from the bundle's pages, so no file server is needed to start
-   anything;
-3. pushes the `public` entries to `bootfsd`;
-4. runs the [key-separation check](#the-key-separation-check) against `keyd`;
-5. starts the steward, handing it the `users` budget, and `sshd`.
+1. parses and checks the manifest, and refuses the boot on any error. Until `consoled` starts,
+   `init` writes its own lines to the UART, which it maps for itself. A refusal is printed there,
+   and the machine powers off with a system-failure status, before any other process has run;
+2. creates every endpoint the manifest's servers receive on. Each is owned by and charged to
+   `root`, so it outlives any one instance of its server, and R1 (flow) does not bind it because `root`
+   is `system` class ([IPC](../kernel/ipc.md#r1-flow)). `init` keeps the receive right, hands the
+   server a copy, and mints the badged handles the server's arguments name for its callers;
+3. starts `keyd` and runs the [key-separation check](#the-key-separation-check) against it;
+4. unmaps the UART and starts `consoled` with it. From then on, `init` writes through its own
+   connection to `consoled`, and it prints each child's console connection id when it starts
+   the child ([consoled](consoled.md#started-by-init));
+5. starts the rest of the drivers and the servers below the steward: `bootfsd`, `blkd`, `fsd`
+   (one per volume), `netd` and `ipd`, then pushes the `public` entries to `bootfsd`;
+6. starts the steward, handing it the `users` budget, and `sshd`.
 
-`init` holds every device and places each driver's handles, by name, in that driver's startup
-block (R33).
+Each server runs in a budget of its own, carved from `system`, and is started through the loader
+stub straight from the bundle's pages, so no file server is needed to start anything. `init`
+holds every device and places each driver's handles, by name, in that driver's startup block
+(R33).
 
 ```mermaid
 sequenceDiagram
@@ -158,12 +175,13 @@ sequenceDiagram
     participant SH as sshd
     Note over L,SH: planned
     L-->>K: verified bundle: kernel and init
-    K-->>I: root, system, users budgets,<br/>devices, Reset, bundle pages
-    I-->>I: parse and check the manifest
-    I-->>S: launch through the stub:<br/>consoled, bootfsd, blkd, fsd, netd, ipd
+    L-->>I: the bundle, read-only
+    K-->>I: root, system, users budgets,<br/>devices, Reset
+    I-->>I: parse and check the manifest;<br/>make the servers' endpoints
     I-->>KD: launch keyd with its keys
     I-->>KD: holds(each login, approval and bundle key)
     KD-->>I: no (a yes stops the boot)
+    I-->>S: launch through the stub:<br/>consoled, then bootfsd, blkd, fsd, netd, ipd
     I-->>ST: launch, with the users budget
     I-->>SH: launch, with keyd's host-key badge
     SH-->>ST: a login: whose key is this?
@@ -171,8 +189,11 @@ sequenceDiagram
 ```
 *Figure: the boot from the loader to the first session. All of it is planned.*
 
-**Open:** how the bundle's pages reach `init` and who pays for them (open on
-[boot](../kernel/boot.md)).
+The attack tests: a manifest whose servers do not fit in `system`, or whose device entries do not
+match the kernel's device objects, is refused before any server runs. The verdict is `init`'s
+refusal line, printed when nothing else has run, and the power-off status.
+
+**Open:** none.
 
 ### The key-separation check
 
@@ -299,6 +320,16 @@ Status: planned · M1 (separation and containment)
   server's own tables start empty, with a newly drawn first badge
   ([R27 (badge allocation)](serving.md#r27-badge-allocation)), so a client's old connection ids
   are dead.
+- **A fresh budget.** `init` destroys the dead instance's budget and carves a new one from the
+  manifest entry, so nothing the dead instance made or held outlives it
+  ([R10 (destruction)](../kernel/budgets.md#r10-destruction)). The receive endpoint is `init`'s,
+  owned by `root`, so the budget's destruction does not reach it, and every client's handle to it
+  stays good.
+- **A driver** gets its device handles again from `init`'s copies. The kernel reset the device at
+  the dead instance's end, before its DMA pages were reused
+  ([devices](../kernel/devices.md#reset-before-reuse)), and the new instance brings it up from a
+  reset of its own. A driver whose device was quarantined is not restarted: `init` reboots
+  ([devices](../kernel/devices.md#which-process-gets-which-device)).
 - **Blame.** Each exit notice for a fault names the account and label set of the call the faulting
   thread was serving ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)). `init` passes
   them to the steward in one typed call, `blame(account, labels, server)`, in the steward's table,
@@ -308,7 +339,8 @@ Status: planned · M1 (separation and containment)
   alone: anyone who could send it could have another principal's sessions ended by forging three
   crashes.
 - **A wedged steward cannot stall restarts.** `init` restarts the server first, then blames, with a
-  timeout; a blame lost to the timeout is reported on the console.
+  timeout; a blame lost to the timeout is reported on the console. A fault before the steward
+  runs is reported on the console and blamed on nobody.
 - **Reboot.** More than 5 restarts of one server within 60 seconds, not stopped by blame, reboots
   the machine: failing closed beats a server that cannot stay up.
 - **The steward** is part of the trusted base; its crash is a bug. If it dies, `init` destroys and
@@ -327,7 +359,9 @@ stateDiagram-v2
 *Figure: a system server's restarts. All of it is planned.*
 
 The attack tests: `blame` from any badge but `init`'s is refused; a restarted server's old
-connection ids are dead.
+connection ids are dead; a killed driver, `netd` among them, is restarted and its clients are
+served again ([netd](netd.md#started-by-init)); more than 5 restarts in 60 seconds reboot the
+machine.
 
 **Open:** none.
 
@@ -378,6 +412,9 @@ Status: planned · M1 (separation and containment)
 - `init` holds the `root`, `system` and `users` budgets, every device object, the Reset right and
   the bundle's pages. It gives each driver only its own device objects, each server only the
   endpoints the manifest names, and the steward the `users` budget.
+- It keeps what it needs to restart a server: the receive right of every endpoint it made, a copy
+  of every device handle it placed, and the bundle. It never receives on a server's endpoint, and
+  it maps no device once `consoled` has the UART.
 - It holds no keys and no cryptography, and parses no ELF: launching goes through the loader stub,
   inside the child.
 - It has no network and no user data, and after boot it receives only exit notices.

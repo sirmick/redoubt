@@ -131,9 +131,19 @@ carries; it hands `ipd` the matching handle to `netd` and `netd` a handle to `ip
 frames ([init](init.md#starting-the-servers)). The net rig (`tests/net/src/rig.rs`) does this in
 the bench, finding the card by its virtio device ID.
 
-**Open:** whether and how `init` restarts `netd` after a kill or a fault, which runs none of
-`netd`'s reset code: the kernel resets the device before its DMA pages are reused, but a restarted
-`netd` must bring the device up again and `ipd` must find the new instance.
+**A restart** is a driver's restart, like any other server's
+([init](init.md#restarts-and-reboots)). A killed or faulted `netd` runs none of its own reset
+code, but the kernel resets the card at its end, before its DMA pages are reused
+([devices](../kernel/devices.md#reset-before-reuse)). `init` starts a new instance in a fresh
+budget with the same device handles, the same argument and a handle to `ipd`'s endpoint, and
+`netd`'s bring-up begins with a reset of its own ([rings and slots](#rings-and-slots)). `ipd`
+finds the new instance without being told. `netd`'s endpoint is `init`'s and outlives the dead
+instance, and `ipd` meets the failure as `unreachable` and asks again with backoff
+([ipd](ipd.md#failure-and-restart)). Frames in flight are lost, and TCP resends them. If the
+card was quarantined, `init` reboots instead
+([devices](../kernel/devices.md#which-process-gets-which-device)).
+
+**Open:** none.
 
 ## Authority
 

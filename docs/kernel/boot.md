@@ -262,31 +262,43 @@ flowchart LR
 *Figure: the planned handoff. Dashed: planned.*
 
 The bundle holds the kernel, `init`, the [boot manifest](../servers/init.md), every other
-server's program and any data entries. The loader verifies it as it verifies every bundle, then
-loads exactly two images: the kernel and `init`. There is one initial process, so `IniE` goes.
+server's program and any data entries. The first entry is the kernel and the second is `init`,
+whatever their names. Every later entry is data to the loader. The loader verifies the bundle as
+it verifies every bundle, then loads exactly two images, the kernel and `init`. There is one
+initial process, so `IniE` goes.
 
-The kernel gives `init` the `root`, `system` and `users` budgets, every device object, the
-Reset right, and the bundle's pages, read-only. `init` reads only the verified boot manifest.
-The manifest names each device object, with its device-tree node path and whether it may do
-DMA, and `init` places each driver's handles by name in that driver's startup block. Positional
-indices end. `init` starts every other process through the loader stub, straight from the
-bundle's pages, and parses no ELF itself ([init](../servers/init.md)). It refuses a manifest
-that gives `keyd` the key the loader verifies the bundle with, since `keyd` cannot see that
-itself ([keyd](../servers/keyd.md)).
+The kernel gives `init` the handles the first program gets today, in the same slots: the
+`root`, `system` and `users` budgets, the Reset right and every device object
+([devices handed to the first program](#devices-handed-to-the-first-program)). `init` runs in
+`root`, on the process and the weight `root` keeps free for it
+([budgets](budgets.md#the-tree-from-the-boot-manifest)). The loader also maps the whole
+verified bundle into `init`, read-only: signature and archive, at an address the loader chooses
+outside `init`'s link range. Its frames are charged to `root` as part of what the loader gave
+`init`, and they are never freed, because `init` launches from them again when it restarts a
+server. `init`'s first thread starts with the bundle's address in `a0` and its length in `a1`.
+The archive was verified before the loader parsed it, and `init` reads it only within that
+length.
 
-Data entries, the bench's `[[file]]` entries among them, are then data: `init` or a program it
-starts reads them from the bundle's pages. The case that proves it boots cleanly and has a
-guest program read an injected entry back and compare its bytes; the refusal
-`bench-bundle-file` checks does not satisfy that. The bundle's contents come from one recipe,
-`image/boot.toml` (the kernel, `init`, `keyd`, `consoled`).
+`init` learns which device each handle names from the kernel, with
+[`device_info`](devices.md#device_info), and matches that to the manifest, which names each
+device by its register base and its interrupt
+([devices](devices.md#which-process-gets-which-device)). `init` places each driver's handles by
+name in that driver's startup block, and drivers use no positional indices. `init` starts every
+other process through the loader stub, straight from the bundle's pages, and parses no ELF
+itself ([init](../servers/init.md)). It refuses a manifest that gives `keyd` the key the loader
+verifies the bundle with, since `keyd` cannot see that itself ([keyd](../servers/keyd.md)).
 
-**Open:** how the bundle's pages reach `init` (pages mapped at boot, or a handle to a run of
-them) and who pays for them, given that the built loader leaves them unowned for reuse; how a
-device object is matched to the manifest's node path, since the kernel is given ranges and
-numbers, not paths; the named-handle form of `map_device`'s result
-([devices](devices.md)); the bench case that reads a data entry back after a clean boot; the
-tool that builds the bundle from `image/boot.toml`, which no tool reads (`./mkimage` uses the
-bench's builder).
+Data entries, the bench's `[[file]]` entries among them, are then data. `init` reads the
+manifest from the bundle's pages, and a program reads a public entry through `bootfsd`
+([bootfsd](../servers/bootfsd.md)). `bench-bundle-file` changes from a refusal to a read-back.
+The program in `init`'s place reads the injected entry from the bundle's pages and compares its
+bytes, and a case under `init` reads it again through `/boot`
+([test bench](../testbench.md#data-entries-for-init)). The bundle's contents come from one
+recipe, `image/boot.toml`: the kernel, `init`, the manifest and the servers. The bench's
+builder is the one tool that packs a bundle. It reads a case for the bench, and `image/boot.toml`
+for `./mkimage`.
+
+**Open:** none.
 
 ### Verified boot
 

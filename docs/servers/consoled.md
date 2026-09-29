@@ -83,11 +83,22 @@ The table: [libs/wire/tables/consol.md](../../libs/wire/tables/consol.md).
 
 Status: planned · M1 (separation and containment)
 
-`init` starts `consoled` first, with the UART's MMIO region and interrupt as named handles and its
-endpoint, placed from the boot manifest's `devices` list ([init](init.md#the-boot-manifest)).
-`consoled` parses no device tree; without both handles it does not start. Only one process ever
-holds the UART: two holders would both reach the registers, and two readers of one FIFO would each
-take half the line.
+`init` starts `consoled` once the manifest and the keys are checked, with the UART's MMIO region
+and interrupt as named handles and its endpoint, placed from the boot manifest's `devices` list
+([init](init.md#starting-the-servers)). `consoled` parses no device tree; without both handles it
+does not start. Only one process ever maps the UART: two would both reach the registers, and two
+readers of one FIFO would each take half the line. `init` writes to the UART itself only before
+`consoled` starts, and unmaps it first.
+
+**Every line says who wrote it.** A write through `init`'s own connection goes out as it is.
+`init` holds the only handle to the root, and it never hands the root to a child. A write through
+any connection minted under the root starts each of its lines with `[con N] `, where N is that
+connection's id. `init` prints the id of each child's connection, bare, when it starts the child,
+so a reader of the console can tell `init` from every program and each program from the others,
+as the bench's log server does today
+([rule F](../testbench.md#rule-f-trusted-verdicts)). If a write comes from a different connection
+than the one that left the last line unfinished, `consoled` ends that line first. So a line a
+program writes cannot come out bare, and it cannot carry another connection's id.
 
 The rule names the handles `NAME` and `NAME-irq` from one `devices` entry
 ([init](init.md#the-boot-manifest)); `consoled` takes `uart` and `uart-irq`.
