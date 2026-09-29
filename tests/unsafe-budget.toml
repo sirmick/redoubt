@@ -111,6 +111,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+name = "sshd (the network's first parser; carries every channel)"
+paths = ["servers/sshd/src"]
+# None, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # A DMA driver is TCB without DMA confinement (TENETS.md, tenet 7). The four unsafe
 # blocks in src/kernel.rs perform volatile MMIO register and DMA byte reads/writes.
 name = "blkd (virtio-blk driver; DMA, so TCB)"

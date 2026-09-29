@@ -689,6 +689,15 @@ name = "redoubt-signing"
 version = "0.1.0"
 
 [[package]]
+name = "redoubt-sshd"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "redoubt-keyd",
+ "sunset",
+]
+
+[[package]]
 name = "redoubt-stride"
 version = "0.1.0"
 dependencies = [

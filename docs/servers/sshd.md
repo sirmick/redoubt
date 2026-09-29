@@ -101,7 +101,11 @@ Status: planned · M1 (separation and containment)
   ([consoled](consoled.md#the-consol-protocol) has the same protocol): input from the channel,
   output to it, and the window's size and its changes. The channel's `signal` request (INT) and
   `break` request reach the session as the interrupt a 0x03 byte gives: protocol messages, not
-  signals, since nothing in Redoubt has signals.
+  signals, since nothing in Redoubt has signals. The core checks what arrives raw before the
+  session sees it: any other signal is refused, a break's length is not passed on, and a window
+  size over 1,024 columns or rows reaches the session cut to 1,024. A zero means no size, as
+  RFC 4254 says (a client whose input is not a terminal sends zeros): a `window-change` carrying
+  one is refused, and a pty asked for with one starts at 80 by 24.
 - **State is per channel**, and each channel carries its session's labels (`alice@`: none;
   `alice+secrets@`: `{alice-secrets}`); `sshd` applies the label check to them
   ([R25 (the label check)](serving.md#r25-the-label-check)). Channels are independent: one
@@ -258,6 +262,9 @@ Status: planned · M1 (separation and containment)
   for as long as it runs.
 - **`sunset` carries our patch.** The patch is ours to read and keep: a `sunset` release that
   changes the code it touches needs it redone and read again.
+- **A few unusual clients fail closed.** `sunset` hashes its own re-encoding of the peer's
+  `KEXINIT`, so a client whose `KEXINIT` does not re-encode to the same bytes fails the exchange;
+  and `ed25519-compact` refuses a non-canonical X25519 public value.
 - **The key exchange is not post-quantum.** Traffic recorded now could be read by whoever later
   breaks X25519.
 

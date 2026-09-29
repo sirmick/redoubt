@@ -1,0 +1,6 @@
+description = "sshd's core builds no_std for both widths (rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# The core has no binary yet: the box's platform comes with init and the steward
+# (docs/plan/m1-separation.md). Its behaviour is covered by sshd-host-tests.
+package = "redoubt-sshd"
