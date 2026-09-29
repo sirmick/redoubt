@@ -488,14 +488,21 @@ which is strongly protected`.
 
 ## The size budget
 
-Status: built · tested: bench:size-budget, host:testbench::only_code_lines_count, host:testbench::a_raise_needs_its_reason, host:testbench::the_ratchet_reads_the_commit_that_raised, host:testbench::a_merge_is_judged_against_its_first_parent
+Status: built · tested: bench:size-budget, host:testbench::only_code_lines_count, host:testbench::a_test_module_does_not_count, host:testbench::a_test_module_file_does_not_count, host:testbench::a_shipped_file_always_counts, host:testbench::a_form_the_case_cannot_follow_fails, host:testbench::a_raise_needs_its_reason, host:testbench::the_ratchet_reads_the_commit_that_raised, host:testbench::a_merge_is_judged_against_its_first_parent
 
 The size of the trusted computing base is budgeted, not observed
 ([the tenets](TENETS.md)). `size-budget.toml` lists each trusted crate (the kernel, the loader,
 the stub, the libraries they and the servers link, the model and the servers) with a ceiling in
 lines of code: every line of every `.rs` file under its paths that is not blank, a `//` comment
-(doc comments included) or inside a `/* */` comment, in-file tests included. The case fails when a
-crate is over its ceiling. The ceilings started at each crate's size when the case landed and only
+(doc comments included) or inside a `/* */` comment. Tests are left out, so writing them costs a
+crate nothing: a `#[cfg(test)]` item counts for nothing, and neither does a file only test modules
+reach (`mod tests;`, the modules it declares in turn, and those declared inside an inline test
+module). A file any other module declaration reaches counts, whatever else names it; a module is
+found by its name, its enclosing inline modules and its `#[path]` or `cfg_attr` path, and one whose
+file is not under the crate's paths fails the case. So does a form the case does not follow, which
+could reach a file past a test's `#[path]` to it: a `mod` whose name is not a plain identifier
+(`r#name`, a macro's `$name`) and the word `include`, however it is invoked. The case fails when
+a crate is over its ceiling. The ceilings started at each crate's size when the case landed and only
 fall: the case reads every commit that changed its file, merges included, and where one raised a
 ceiling over the file in its first parent, dropped a crate (a rename drops the old name) or
 narrowed a crate's paths (fewer lines counted under the same ceiling), requires a line
@@ -503,6 +510,12 @@ narrowed a crate's paths (fewer lines counted under the same ceiling), requires 
 it brings in. A raise not yet committed fails, and so does a path with no Rust source in it. The
 history check needs the history: in a shallow clone the oldest commit has no parent to compare
 with, so a raise there passes unchecked.
+
+The residual: a macro defined outside the budgeted paths, a dependency's `macro_rules!` or a
+proc macro, can emit `mod x;` or `include!` at a call site, and the case reads only the call. No
+trusted crate's dependencies are known to, and adding one is a `Cargo.toml` change reviewed as
+part of the trusted computing base
+([tenet 5](TENETS.md#5-dependencies-are-part-of-the-trusted-computing-base)).
 
 ## Vendored dependencies
 
