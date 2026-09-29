@@ -4,12 +4,12 @@
 mod common;
 
 use common::fake;
-use redoubt_rt::abi::{Error, FOREVER, Handle, Handles};
+use redoubt_rt::abi::{FOREVER, Handle, Handles};
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event, Words};
 use redoubt_rt::server::ninep::WORDS_9P;
-use redoubt_rt::server::typed::{Answer, Protocol, TypedServer, serve_call};
+use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, finish, serve_call};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::example::{ErrorCode, Grant, GrantReply, Message, Reply};
 
@@ -24,10 +24,9 @@ fn the_9p_client_closes_handles_a_hostile_server_sends() {
         for _ in 0..20 {
             let Ok(Event::Call(request)) = ep.receive(FOREVER, 0) else { return 1 };
             // Four handles the client never asked for, with 9P's words.
-            let junk: Vec<Endpoint> = (0..4).map(|_| Endpoint::create().unwrap()).collect();
-            let handles: Vec<Handle> = junk.iter().map(Endpoint::handle).collect();
-            request.reply(&WORDS_9P, &handles).unwrap();
-            junk.into_iter().for_each(|e| e.close().unwrap());
+            let junk: Vec<Handle> = (0..4).map(|_| Endpoint::create().unwrap().handle()).collect();
+            let junk = Handles::from_slice(&junk).unwrap();
+            finish(request, &Outcome { words: WORDS_9P, send: junk, close: junk }).unwrap();
         }
         0
     });
@@ -113,30 +112,33 @@ fn typed_replies_close_the_handles_made_for_the_caller() {
     assert_eq!(f.held(server).0, before, "one handle per reply used to stay in the server");
 }
 
+/// A request dropped unanswered is refused: the caller gets the malformed reply and the handle it
+/// sent does not stay in the server's table.
 #[test]
-fn a_reply_that_cannot_be_encoded_gives_the_request_back() {
+fn a_dropped_request_is_refused_and_closes_what_it_carried() {
     let f = fake();
     let (server, client) = (f.process(0, &[]), f.process(1001, &[]));
     let receive = f.endpoint(server);
     let conn = f.grant(server, receive, client, 1);
+    let before = f.held(server).0;
     let server_thread = f.run(server, move || {
-        let ep = Endpoint::from_handle(receive);
-        let Ok(Event::Call(request)) = ep.receive(FOREVER, 0) else { return 1 };
-        // Five handles do not fit a message: refused before anything is sent...
-        let five = [receive; 5];
-        let (error, request) = request.reply(&[0; 4], &five).unwrap_err();
-        assert_eq!(error, Error::TooLarge);
-        // ... and the server can still answer.
-        request.reply(&[1, 0, 0, 0], &[]).unwrap();
+        let Ok(Event::Call(request)) = Endpoint::from_handle(receive).receive(FOREVER, 0) else { return 1 };
+        assert!(request.handles.as_slice()[0].is_some());
+        drop(request);
         0
     });
     let code = f.run(client, move || {
-        let reply = Endpoint::from_handle(conn).call(&[0; 4], &[], None, FOREVER).into_result().unwrap().0;
-        assert_eq!(reply.words, [1, 0, 0, 0]);
+        let extra = Endpoint::create().unwrap();
+        let (reply, _) = Endpoint::from_handle(conn)
+            .call(&[0; 4], &[extra.handle()], None, FOREVER)
+            .into_result()
+            .unwrap();
+        assert_eq!(reply.words, redoubt_rt::server::MALFORMED);
         0
     });
     assert_eq!(code.join().unwrap(), 0);
     assert_eq!(server_thread.join().unwrap(), 0);
+    assert_eq!(f.held(server).0, before, "the carried handle stayed in the server");
 }
 
 /// A 9P call the skeleton hands back to be parked has already had whatever handles it
@@ -200,7 +202,7 @@ fn a_held_9p_call_closes_what_it_brought_exactly_once() {
         let limits = Limits { buckets: 2, in_flight: 2, files: 4, state: 0 };
         let mut nine = NineServer::new(WaitOnce { ready: false }, limits, 9).unwrap();
         let own = |_: &mut NineServer<WaitOnce>, r: redoubt_rt::ipc::Request| {
-            r.reply(&[1, 0, 0, 0], &[]).map(|_| ()).map_err(|(e, _)| e)
+            common::answer(r, [1, 0, 0, 0]).map(|_| ())
         };
         let mut verdict = 0;
         while let Ok(event) = ep.receive(FOREVER, 0) {
@@ -293,7 +295,7 @@ fn a_wait_without_serve_parking_is_refused_not_stranded() {
         let limits = Limits { buckets: 2, in_flight: 2, files: 4, state: 0 };
         let mut nine = NineServer::new(AlwaysWaits, limits, 9).unwrap();
         let own = |_: &mut NineServer<AlwaysWaits>, r: redoubt_rt::ipc::Request| {
-            r.reply(&[1, 0, 0, 0], &[]).map(|_| ()).map_err(|(e, _)| e)
+            common::answer(r, [1, 0, 0, 0]).map(|_| ())
         };
         let mut answered = 0;
         while let Ok(event) = ep.receive(FOREVER, 0) {

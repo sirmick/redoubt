@@ -30,9 +30,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use redoubt_consoled::server::{BUDGET, COST, Console, limits};
 use redoubt_consoled::uart::Uart;
-use redoubt_rt::abi::{Error, FOREVER, Handle, MemFlags, PAGE_SIZE};
+use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
-use redoubt_rt::ipc::{Event, Request};
+use redoubt_rt::ipc::{Buffer, Event, Request};
 use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse, refuse_malformed};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::startup::Startup;
@@ -72,8 +72,8 @@ pub const NO_RANDOM: u32 = 7;
 const WAKE_BADGE: u64 = 1;
 /// Word 0 of a wake-up. Word 0 of a 9P call is 0, so the two can never be confused.
 const WAKE: u64 = 1;
-/// The interrupt thread's stack.
-const IRQ_STACK: usize = 4 * PAGE_SIZE;
+/// The interrupt thread's stack, in pages.
+const IRQ_STACK_PAGES: usize = 4;
 
 /// The endpoint the interrupt thread sends its wake-ups to, put here by the serving thread
 /// before that thread exists. An atomic rather than a `static mut`: no `unsafe`, and the
@@ -104,12 +104,8 @@ extern "C" fn irq_thread(arg: usize) -> ! {
 /// Starts the interrupt thread with its own stack.
 fn start_irq_thread(irq: Irq, wake: Endpoint) -> Result<(), Error> {
     WAKE_ENDPOINT.store(wake.handle().index(), Ordering::Release);
-    let stack = redoubt_rt::handle::map_anon(IRQ_STACK, MemFlags::READ | MemFlags::WRITE)?;
-    // The stack grows down from the top of the mapping, which is page-aligned and so also
-    // aligned for any call frame.
-    let sp = stack + IRQ_STACK;
-    let entry = irq_thread as extern "C" fn(usize) -> ! as usize;
-    redoubt_rt::handle::thread_create(entry, sp, irq.handle().index() as usize).map(|_| ())
+    let stack = Buffer::new(IRQ_STACK_PAGES)?;
+    redoubt_rt::handle::thread_create(irq_thread, stack, irq.handle().index() as usize).map(|_| ())
 }
 
 /// Answers `request`, or parks it if the file server asked to wait. The one place a console

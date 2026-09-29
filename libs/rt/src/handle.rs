@@ -94,12 +94,23 @@ pub(crate) fn unmap(addr: usize, len: usize) -> Result<(), Error> {
     nothing(syscall(&Call::Unmap { addr, len }))
 }
 
-/// Starts a thread at `entry` with stack `sp` and `arg` in its first argument register.
-pub fn thread_create(entry: usize, sp: usize, arg: usize) -> Result<u32, Error> {
-    match syscall(&Call::ThreadCreate { entry, sp, arg })? {
-        Return::Tid(tid) => Ok(tid),
-        _ => Err(Error::InvalidArgument),
-    }
+/// Starts a thread at `entry` with `arg` in its first argument register, on `stack`, which it
+/// takes for good: the thread's stack grows down from the top of the pages, and they are never
+/// unmapped, even after it exits, so no owner can hand them out underneath it. If the thread
+/// cannot be started, the stack is dropped. The entry is a function and the stack a [`Buffer`],
+/// so there is no raw form to reach:
+///
+/// ```compile_fail
+/// redoubt_rt::handle::thread_create(0x1000, 0x2000, 0);
+/// ```
+pub fn thread_create(entry: extern "C" fn(usize) -> !, stack: Buffer, arg: usize) -> Result<u32, Error> {
+    // The top of page-aligned pages is aligned for any call frame.
+    let sp = stack.as_ptr() as usize + stack.len();
+    let Return::Tid(tid) = syscall(&Call::ThreadCreate { entry: entry as usize, sp, arg })? else {
+        return Err(Error::InvalidArgument);
+    };
+    stack.into_pages();
+    Ok(tid)
 }
 
 pub fn thread_exit() -> ! {
@@ -223,12 +234,42 @@ impl Mmio {
         Ok(Registers { base, len, _not_sync: core::marker::PhantomData })
     }
 
-    /// `npages` contiguous zeroed pages the device may DMA to: (address, physical address).
-    pub fn dma_alloc(&self, npages: usize) -> Result<(usize, u64), Error> {
+    /// `npages` contiguous zeroed pages the device may DMA to, held by a [`Dma`].
+    pub fn dma_alloc(&self, npages: usize) -> Result<Dma, Error> {
+        let len = npages.checked_mul(PAGE_SIZE).ok_or(Error::TooLarge)?;
         match syscall(&Call::DmaAlloc { device: self.0, npages })? {
-            Return::Dma { addr, phys } => Ok((addr, phys)),
+            Return::Dma { addr, phys } => Ok(Dma { addr, phys, len }),
             _ => Err(Error::InvalidArgument),
         }
+    }
+}
+
+/// A run of pages [`Mmio::dma_alloc`] mapped: their address in this process and the physical
+/// address the device is programmed with. The mapping is this value's alone and dropping it
+/// unmaps it, so no safe code can unmap it underneath a driver that holds one.
+///
+/// Dropping a `Dma` unmaps only this process's mapping: the frames stay put, held, charged and
+/// out of the pool until the process ends (kernel/devices.md, `dma_alloc`). It does not free
+/// the device's memory.
+#[derive(Debug)]
+pub struct Dma {
+    addr: usize,
+    phys: u64,
+    len: usize,
+}
+
+impl Dma {
+    /// Where the pages are mapped in this process.
+    pub fn addr(&self) -> usize { self.addr }
+
+    /// Their physical address, which is what the device is programmed with.
+    pub fn phys(&self) -> u64 { self.phys }
+}
+
+impl Drop for Dma {
+    fn drop(&mut self) {
+        // A failure means the pages are already gone; there is nothing else to do.
+        let _ = unmap(self.addr, self.len);
     }
 }
 

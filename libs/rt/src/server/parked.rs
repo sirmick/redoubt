@@ -167,12 +167,14 @@ impl<T> Parked<T> {
         words: &Words,
     ) -> Option<T> {
         let index = self.calls.iter().position(|c| c.request.id() == id)?;
-        let (request, state) = self.take(admission, index);
+        let (mut request, state) = self.take(admission, index);
         // Any handle the call still carries is closed: nobody is left to answer about it. The
+        // list is emptied with them, so a rejected reply's drop cannot close them again. The
         // call is open until this reply; the reply's words cannot fail to encode.
         for handle in super::typed::carried(&request).as_slice() {
             let _ = crate::handle::close(*handle);
         }
+        request.handles = redoubt_sys::ReceivedHandles::new();
         let _ = request.reply(words, &[]);
         Some(state)
     }

@@ -29,6 +29,8 @@ use redoubt_rt::abi::{
     MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
     ReplyOutcome, Return,
 };
+use redoubt_rt::ipc::{Request, Words};
+use redoubt_rt::server::typed::{Outcome, finish};
 
 /// What a handle names: an endpoint, or one of a device object's two forms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +133,11 @@ thread_local! {
 struct Exited(u32);
 
 /// Installs the fake for this test binary (once) and returns it.
+/// Answers `request` with `words` and no handles, the public way (`finish`).
+pub fn answer(request: Request, words: Words) -> Result<ReplyOutcome, Error> {
+    finish(request, &Outcome { words, send: Handles::new(), close: Handles::new() })
+}
+
 pub fn fake() -> &'static Fake {
     static FAKE: std::sync::OnceLock<&'static Fake> = std::sync::OnceLock::new();
     FAKE.get_or_init(|| {

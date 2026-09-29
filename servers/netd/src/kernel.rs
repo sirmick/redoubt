@@ -17,7 +17,8 @@ use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use redoubt_rt::abi::Error;
-use redoubt_rt::handle::{Irq, Mmio, time_now};
+use redoubt_rt::handle::{Dma, Irq, Mmio, time_now};
+use redoubt_rt::ipc::Buffer;
 
 use crate::RxPart;
 use crate::ring::{REGION_LEN, REGION_PAGES};
@@ -133,8 +134,7 @@ fn panic_reset() {
 /// the interrupt.
 pub struct Device {
     regs: Regs,
-    dma: usize,
-    dma_phys: u64,
+    dma: Dma,
     irq: Option<Irq>,
 }
 
@@ -142,15 +142,14 @@ impl Device {
     /// A view over `regs` with a fresh region of [`REGION_PAGES`] pages from `dma_alloc` on
     /// `mmio` (which must carry the DMA flag: `dma_alloc` refuses otherwise).
     pub fn new(regs: Regs, mmio: &Mmio, irq: Option<Irq>) -> Result<Device, Error> {
-        let (dma, dma_phys) = mmio.dma_alloc(REGION_PAGES)?;
-        Ok(Device { regs, dma, dma_phys, irq })
+        Ok(Device { regs, dma: mmio.dma_alloc(REGION_PAGES)?, irq })
     }
 
     fn dma_at(&self, off: usize, len: usize) -> Option<usize> {
         if off.checked_add(len)? > REGION_LEN {
             return None;
         }
-        self.dma.checked_add(off)
+        self.dma.addr().checked_add(off)
     }
 }
 
@@ -166,7 +165,7 @@ impl Transport for Device {
         for (i, byte) in out.iter_mut().enumerate() {
             // SAFETY: `dma_at` checked `off .. off + out.len()` against `REGION_LEN`, this crate's
             // own constant and the pages `dma_alloc` was asked for, and `i < out.len()`, so
-            // `at + i` is inside the region, which stays mapped for the life of this process.
+            // `at + i` is inside the region, which `self.dma` keeps mapped while `self` lives.
             // Volatile and a byte at a time, so no `&[u8]` of memory the device writes ever
             // exists and no read of it can be hoisted above the check that made it valid.
             *byte = unsafe { ((at + i) as *const u8).read_volatile() };
@@ -192,7 +191,7 @@ impl Transport for Device {
         Ok(())
     }
 
-    fn dma_phys(&self) -> u64 { self.dma_phys }
+    fn dma_phys(&self) -> u64 { self.dma.phys() }
 
     fn dma_len(&self) -> usize { REGION_LEN }
 
@@ -214,15 +213,15 @@ impl Transport for Device {
 /// or a pointer from `Box::into_raw` in [`start_rx_thread`].
 static RX_PART: AtomicPtr<RxPart> = AtomicPtr::new(null_mut());
 
-/// Starts the receive thread at `entry` on the stack whose top is `sp`, handing it `part`. No
+/// Starts the receive thread at `entry` on `stack`, handing it `part`. No
 /// address travels in a message: the part is moved in memory this process owns, before the thread
 /// that takes it exists. If the thread cannot be started, the part is taken back and dropped here
 /// (the `Box` reclaimed, never retried with); the caller resets the device.
-pub fn start_rx_thread(part: RxPart, entry: extern "C" fn(usize) -> !, sp: usize) -> Result<(), Error> {
+pub fn start_rx_thread(part: RxPart, entry: extern "C" fn(usize) -> !, stack: Buffer) -> Result<(), Error> {
     let raw = Box::into_raw(Box::new(part));
     let previous = RX_PART.swap(raw, Ordering::AcqRel);
     debug_assert!(previous.is_null(), "one receive thread per process");
-    redoubt_rt::handle::thread_create(entry as usize, sp, 0).map(|_| ()).inspect_err(|_| {
+    redoubt_rt::handle::thread_create(entry, stack, 0).map(|_| ()).inspect_err(|_| {
         drop(take_rx_part());
     })
 }

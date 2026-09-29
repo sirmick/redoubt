@@ -193,7 +193,10 @@ pub fn serve_call<P: Protocol, S: TypedServer<P>>(server: &mut S, mut request: R
 /// A rejected reply leaves the call open. Finish it with the universal handle-free Malformed
 /// reply, retaining the original error so provisional resources are rolled back. If even that
 /// valid fallback is rejected, exit under R4b rather than strand the caller and keep serving.
-pub fn finish(request: Request, outcome: &Outcome) -> Result<ReplyOutcome, Error> {
+pub fn finish(mut request: Request, outcome: &Outcome) -> Result<ReplyOutcome, Error> {
+    // `outcome` alone says what closes: the server may keep what the request carried, and a
+    // rejected reply's drop must not close it.
+    request.handles = ReceivedHandles::new();
     let (send, close) = (outcome.send.as_slice(), outcome.close.as_slice());
     for handle in close.iter().filter(|h| !send.contains(h)) {
         let _ = crate::handle::close(*handle);

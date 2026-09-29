@@ -29,7 +29,7 @@ use core::num::NonZeroU64;
 use redoubt_netd::kernel::{self, Device, Regs};
 use redoubt_netd::rxq::Frame;
 use redoubt_netd::{BROKEN, FIRST_MINTED_BADGE, NetServer, RxPart, bring_up, parse_client, receiver};
-use redoubt_rt::abi::{Error, FOREVER, MemFlags, PAGE_SIZE};
+use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::startup::Startup;
@@ -57,8 +57,8 @@ pub const IPD: &str = "ipd";
 
 /// How long the receive thread waits for `ipd` to take a frame before dropping it.
 pub const SEND_TIMEOUT_US: u64 = 50_000;
-/// The receive thread's stack.
-const RX_STACK: usize = 8 * PAGE_SIZE;
+/// The receive thread's stack, in pages.
+const RX_STACK_PAGES: usize = 8;
 
 /// The receive thread: never returns.
 extern "C" fn rx_thread(_arg: usize) -> ! {
@@ -165,10 +165,8 @@ fn start_receiving(
     let broken = NonZeroU64::new(badge)
         .ok_or(NO_RESOURCES)
         .and_then(|b| endpoint.mint(b, None).map_err(|_| NO_RESOURCES))?;
-    let stack =
-        redoubt_rt::handle::map_anon(RX_STACK, MemFlags::READ | MemFlags::WRITE).map_err(|_| NO_RESOURCES)?;
-    // The stack grows down from the top of the mapping, which is page-aligned.
-    kernel::start_rx_thread(RxPart { device, rx, ipd, broken }, rx_thread, stack + RX_STACK)
+    let stack = Buffer::new(RX_STACK_PAGES).map_err(|_| NO_RESOURCES)?;
+    kernel::start_rx_thread(RxPart { device, rx, ipd, broken }, rx_thread, stack)
         .map_err(|_| NO_RESOURCES)?;
     Ok(badge)
 }
