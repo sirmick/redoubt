@@ -78,7 +78,6 @@
   - [A host test build of the workspace](todo/workspace-host-tests.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
-  - [SMP](beyond/smp.md)
   - [rv32](beyond/rv32.md)
   - [Other runtimes](beyond/runtimes.md)
   - [The web stack](beyond/web-stack.md)

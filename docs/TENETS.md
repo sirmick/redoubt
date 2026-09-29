@@ -413,9 +413,13 @@ A configuration the bench does not boot is not supported.
 - **Widths.** Every milestone, M1 (separation and containment) to M5 (persist, install, share),
   requires rv64 boots and rv32 compilation. Most kernel cases boot on rv32 as well; a full rv32
   system is [beyond M5](beyond/rv32.md).
-- **Harts.** Redoubt runs on one hart; the others stay parked in the firmware. A checked-build case
-  starts a second hart to test the kernel lock, and a few cases boot with two or four harts to show
-  the extra harts change nothing. Running on several harts is [beyond M5](beyond/smp.md).
+- **Harts.** Through M1 (separation and containment) Redoubt runs on one hart; the others stay
+  parked in the firmware. A checked-build case starts a second hart to test the kernel lock, and a
+  few cases boot with two or four harts to show the extra harts change nothing. M2 (usable shell)
+  brings several harts: the kernel runs user code on every hart, first under one big lock
+  ([several harts](plan/m2-usable-shell.md#several-harts)). The reason: the FPGA platform's cores
+  have two hardware threads each, and by the end of M1 (separation and containment) the kernel's rules are attacked on one
+  hart, so a second hart multiplies what can go wrong only in rules already attacked.
 - **Firmware.** RustSBI's prototyper, built from source, on both widths.
 - **Machine.** QEMU's `virt` machine, with virtio block, network and console devices.
 

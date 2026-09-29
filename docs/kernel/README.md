@@ -218,7 +218,8 @@ two, where a file serves two mechanisms).
 - **One hart.** The kernel runs on one hart. The `smp` feature starts a second hart only to show
   that `KernelCell`'s spinlock holds under contention (`bench:smp-spike`); no user code runs on a
   second hart, and completion races between harts are not attacked by a case
-  ([IPC](ipc.md#residual-risks)).
+  ([IPC](ipc.md#residual-risks)). Running user code on several harts is M2 (usable shell)'s
+  ([several harts](../plan/m2-usable-shell.md#several-harts)).
 - **The kernel trusts the loader's handoff.** It reads the argument block through a pointer the
   loader passed and trusts the memory map in it. It checks the device list itself (no device may
   overlap RAM or an interrupt controller), and it checks its own mappings are W^X before the

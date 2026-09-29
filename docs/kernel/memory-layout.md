@@ -408,7 +408,7 @@ user address, and the load faults as a kernel failure.
 - **Every change flushes everything.** Each map, unmap, lend and address-space switch runs a
   global `sfence.vma`, so ASIDs save no work, and each flush costs page-table walks afterwards.
   It is also a flush of this hart only: with more than one hart, another hart's cached
-  translations would survive an unmap ([beyond M5: SMP](../beyond/smp.md)).
+  translations would survive an unmap (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
 - **The firmware must delegate instruction page faults to S-mode.** Kernel entry from the loader
   and a thread's return to `EXIT_THREAD` are both instruction page faults the kernel must take.
   The vendored RustSBI delegates them; with a firmware that did not, the boot would never reach

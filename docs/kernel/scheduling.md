@@ -512,7 +512,7 @@ Status: built · partly tested: a picked thread that dies before the switch, and
 - **Measured on QEMU, on one hart.** The targets are guest instructions under `icount`; no
   hardware run is measured, and a hardware run will characterise in cycles, not gate. A target
   set from a sweep holds for the seeds swept, not for every seed. The queue and its accounting
-  drive one hart. The cases that read the trace run a
+  drive one hart until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases that read the trace run a
   kernel built with it, which has a record at every queue event and 2 MiB less RAM for the budget
   tree.
 

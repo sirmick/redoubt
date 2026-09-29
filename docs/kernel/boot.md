@@ -44,7 +44,7 @@ sequenceDiagram
 The firmware runs in M-mode and enters the loader in S-mode on one boot hart, with the MMU
 off, `a0` = the hart id and `a1` = the physical address of the flattened device tree. The
 signed bundle is the initrd: the device tree's `/chosen` node names its range. The other harts
-stay parked in the firmware (multi-hart work: [smp](../beyond/smp.md)).
+stay parked in the firmware until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)).
 
 The loader ([`loader/src/main.rs`](../../loader/src/main.rs)) builds the kernel's address
 space and one per program, then turns paging on and enters the kernel at `init`

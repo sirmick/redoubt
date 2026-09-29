@@ -216,7 +216,8 @@ the OS's own are described on [the tenets](TENETS.md#the-walls).
 - PIDs are one global pool that untaken exit notices can hold
   ([processes](kernel/processes.md#residual-risks)).
 - The kernel runs on one hart; completion races and flushes across harts are argued, not attacked
-  ([the kernel](kernel/README.md#residual-risks)).
+  ([the kernel](kernel/README.md#residual-risks)), until M2 (usable shell) brings several harts
+  ([several harts](plan/m2-usable-shell.md#several-harts)).
 
 **The servers.**
 - The named mediators, the steward and `sshd`, are trusted across the labels they serve

@@ -9,7 +9,6 @@ recorded as ruled out, with the reason, so they are not proposed again without o
 | Page | The idea |
 | --- | --- |
 | [The FPGA platform](fpga-platform.md) | Redoubt on softcores: a DE10-Nano scale model and a Kintex-7 PCIe card with DMA confined in hardware |
-| [SMP](smp.md) | the kernel on several harts |
 | [rv32](rv32.md) | the full stack on 32-bit RISC-V, booted in every milestone |
 | [Other runtimes](runtimes.md) | Python and Java, ported to Rust |
 | [The web stack](web-stack.md) | serving HTTP through isolated TCP, TLS and HTTP servers, reached only through SSH forwarding |

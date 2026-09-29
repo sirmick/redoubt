@@ -135,7 +135,7 @@ before. It runs one more at boot, before the first process, for the images the l
 W^X makes one fence per call enough: a page is written while it is writable and not
 executable, and becomes executable only through one of these calls. The fence covers the one
 hart the kernel runs on. A kernel on several harts must also fence the others, and fence when a
-thread moves ([SMP](../beyond/smp.md)).
+thread moves (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
 
 ### Lending at the page-table level
 
@@ -316,7 +316,7 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
   [todo](../todo/user-cache-invalidate.md).
 - **One hart.** `fence.i` and the TLB flush act on the hart that runs the call. Running user
   code on several harts needs them on every hart, and when a thread moves
-  ([SMP](../beyond/smp.md)).
+  (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
 - **A lend within one process** (a thread calling an endpoint its own process receives on) is
   argued from the code, not attacked, when its threads run on several harts. `process-lifecycle`
   attacks it on one hart, the process ending with the call open included.

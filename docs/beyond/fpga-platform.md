@@ -182,8 +182,9 @@ Standard extensions that make Redoubt faster without weakening it, each testable
 
 ### Kernel work it implies
 
-- [SMP](smp.md): per-hart state, the big kernel lock, inter-processor interrupts and TLB
-  shootdowns.
+- Several harts, planned for M2 (usable shell)
+  ([several harts](../plan/m2-usable-shell.md#several-harts)): per-hart state, the big kernel
+  lock, inter-processor interrupts and TLB shootdowns.
 - `dma_alloc` drawing only from the DMA region, and the loader reading it from the device tree
   ([`loader/src/dt.rs`](../../loader/src/dt.rs)).
 - The ISA features above, and `senvcfg` written at boot.

@@ -14,6 +14,8 @@ writing Elixir by hand:
 - full-screen programs drawn as cells through the session;
 - the editor and file manager.
 
+And the kernel runs user code on every hart, not only the boot hart.
+
 ## Attack suite
 
 Every convenience is attacked for the authority it might add. Each case runs a hostile input or
@@ -54,10 +56,25 @@ party's own output.
 - **A parked console call is accounted.** The console's `resize`, parked as a typed call, holds
   exactly one admission slot of its caller's share
   ([R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting)).
+- **Several harts add no reach.** A page unmapped, lent or returned on one hart is never reachable
+  through another hart's TLB, and a page made executable on one hart never runs stale on another
+  ([memory](../kernel/memory.md#residual-risks)); completion races between harts on one call are
+  attacked, where on one hart they are argued
+  ([kernel attack gaps](../todo/kernel-attack-gaps.md)); and every scheduling case, rerun with
+  several harts, shows that no budget gains share by being spread across them
+  ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)).
 
 ## Remaining work
 
-In this order, after [M1 (separation and containment)](m1-separation.md):
+Two tracks, after [M1 (separation and containment)](m1-separation.md). They touch different code,
+the userland and the kernel, so they run side by side from the milestone's start, with the
+several-harts track begun first: the kernel has no other work in this milestone, and every shell
+case built after it then runs on several harts too. The milestone is done only when the bench's
+cases pass booted with several harts as well as with one.
+
+### The shell
+
+In this order:
 
 1. **Parking a typed call** in the serving library, then the console's `consol` protocol (`size`,
    `resize`) on it ([serving](../servers/serving.md#parking-a-typed-call),
@@ -81,9 +98,32 @@ In this order, after [M1 (separation and containment)](m1-separation.md):
 8. **Completion, help and resource use** ([the shell](../userland/shell.md#completion)).
 9. **The editor and file manager** ([the shell](../userland/shell.md#the-editor)).
 
+### Several harts
+
+A second hart changes every rule that assumes one running thread in the kernel: completions, TLB
+flushes, instruction fences and the scheduler's queue. So the steps go from coarse to fine, each
+attacked before the next, in this order:
+
+1. **Any boot hart.** The firmware may choose any hart, and nothing assumes hart 0. The loader
+   already takes the boot hart's own PLIC context ([boot](../kernel/boot.md#the-argument-block)).
+2. **Per-hart kernel state:** a trap stack and the current process and thread per hart, reached
+   through `sscratch`, and scheduling on every hart.
+3. **One big kernel lock** taken at trap entry, and one global run queue
+   ([scheduling](../kernel/scheduling.md)).
+4. **Cross-hart interrupts, shootdowns and fences.** Inter-processor interrupts to reschedule; a
+   TLB shootdown (SBI remote fences, by address-space id) on unmap, lend and return before a page
+   is reused; an instruction fence on every hart when a page becomes executable, and when a thread
+   moves ([memory](../kernel/memory.md#residual-risks),
+   [memory layout](../kernel/memory-layout.md#residual-risks)).
+5. **Finer locking:** the per-process thread-context pages first, and anything finer only once
+   the steps above are stable and attacked.
+
 ## Progress
 
 Nothing of this milestone is built. What it builds on: the serving library's parked calls
 ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
-([budgets](../kernel/budgets.md#r10-destruction)).
+([budgets](../kernel/budgets.md#r10-destruction)). For several harts: a two-hart spike, in which a
+second hart started through SBI's hart management contends with the first on the kernel lock
+without losing updates (`bench:smp-spike`, a checked build), and a few cases booted with two or
+four harts, where the extra harts stay parked.
