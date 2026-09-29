@@ -13,7 +13,7 @@ use core::fmt::Write;
 use core::mem::size_of;
 
 use redoubt_rt::startup::StartupBuilder;
-use stub::{MAX_IMAGE_LEN, STUB_ENTRY};
+use stub::{IMAGE_AT, MAX_IMAGE_LEN, STACK_TOP, STARTUP_AT, STUB_ENTRY};
 use test_programs::rd::{self, Cause, ExitNotice, Received, Usage};
 use uart_16550::MmioSerialPort;
 
@@ -22,10 +22,6 @@ static STUB_BIN: &[u8] = include_bytes!(env!("STUB_BIN"));
 /// A well-formed ELF the stub should map and jump to.
 static CHILD_ELF: &[u8] = include_bytes!(env!("STUB_CHILD_ELF"));
 
-/// Where this launcher puts the copied program image in the child: page-aligned and outside the
-/// program link range (`0x1_0000..STUB_ENTRY`, kernel/memory-layout.md). `fixture-child` maps a
-/// page here to see that the stub freed the copy, so the two must agree.
-const IMAGE_AT: usize = 0x4000_0000;
 const STACK_PAGES: usize = 8;
 const WAIT: u64 = 2_000_000;
 
@@ -57,8 +53,9 @@ struct Layout {
     startup_at: usize,
 }
 
-/// The launch convention: both outside the program link range, so no honest segment meets them.
-const OUTSIDE: Layout = Layout { stack_top: 0x8000_0000, startup_at: 0x7FF0_0000 };
+/// The launch convention (`stub::STACK_TOP`, `stub::STARTUP_AT`): both outside the program link
+/// range, so no honest segment meets them.
+const OUTSIDE: Layout = Layout { stack_top: STACK_TOP, startup_at: STARTUP_AT };
 /// Both inside the link range, so a hostile segment can name them: the startup page is caught by
 /// the stub's own `exclude` check, the stack only by the kernel's `map_fixed` overlap check.
 const INSIDE: Layout = Layout { stack_top: 0x1000_0000, startup_at: 0x0F00_0000 };

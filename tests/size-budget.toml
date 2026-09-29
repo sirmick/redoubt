@@ -16,7 +16,7 @@ max_lines = 952
 [[crate]]
 name = "stub"
 paths = ["stub/src"]
-max_lines = 578
+max_lines = 581
 
 [[crate]]
 name = "libs/sys"

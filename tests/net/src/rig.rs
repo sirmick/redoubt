@@ -39,7 +39,7 @@ use redoubt_rt::server::ninep::mode;
 use redoubt_rt::server::typed::{Outcome, finish};
 use redoubt_rt::startup::StartupBuilder;
 use redoubt_rt::wire::proto::{ipd, net_ctl};
-use stub::STUB_ENTRY;
+use stub::{IMAGE_AT, STACK_TOP, STARTUP_AT, STUB_ENTRY};
 
 use crate::SELF_ARGS;
 
@@ -49,13 +49,7 @@ static NETD: &[u8] = include_bytes!(env!("NET_RIG_NETD"));
 static IPD: &[u8] = include_bytes!(env!("NET_RIG_IPD"));
 static CLIENT: &[u8] = include_bytes!(env!("NET_RIG_CLIENT"));
 
-/// Where a launched program's image, startup page and stack go (kernel/memory-layout.md,
-/// "Launcher placement").
-pub const IMAGE_AT: usize = 0x4000_0000;
-pub const STARTUP_AT: usize = 0x7FF0_0000;
-pub const STACK_TOP: usize = 0x8000_0000;
 const STACK_PAGES: usize = 16;
-const _: () = assert!(IMAGE_AT >= STUB_ENTRY + 0x10_0000 && STARTUP_AT >= STUB_ENTRY + 0x10_0000);
 
 /// The handles the kernel gives the first program (kernel/boot.md, "Devices handed to the first
 /// program"; `tests/programs/src/rd.rs`).

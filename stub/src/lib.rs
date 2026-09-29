@@ -90,6 +90,16 @@ pub const STUB_ENTRY: usize = 0x1FF0_0000;
 /// convention, rather than only by `usize::MAX`/page-alignment overflow checks.
 pub const MAX_IMAGE_LEN: usize = STUB_ENTRY;
 
+/// Where a launcher maps the rest of a child (kernel/memory-layout.md, "Launcher placement"): the
+/// copy of the program's image, the startup page, and the top of the stack, which grows down from
+/// it with the unmapped page below as its guard. All three are clear of the stub and outside the
+/// program link range (`0x1_0000..STUB_ENTRY`), so no honest segment meets them. Like
+/// `STUB_ENTRY`, a convention every launcher shares, not a kernel constant.
+pub const IMAGE_AT: usize = 0x4000_0000;
+pub const STARTUP_AT: usize = 0x7FF0_0000;
+pub const STACK_TOP: usize = 0x8000_0000;
+const _: () = assert!(IMAGE_AT >= STUB_ENTRY + 0x10_0000 && STARTUP_AT >= STUB_ENTRY + 0x10_0000);
+
 /// Why an image was refused whole (servers/init.md R32: a hostile image hurts only its process
 /// -- every one of these is a refusal, never a panic).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

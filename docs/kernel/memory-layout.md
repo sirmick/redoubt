@@ -274,9 +274,11 @@ caps the image the startup block names at the same size.
 
 Status: built · tested: bench:stub-launch
 
-A launcher places the startup block and the child's stack outside the link range: `stub-launch`,
-the launcher the bench runs, puts the stack top at `0x8000_0000`, the startup block at
-`0x7FF0_0000` and the copy of the ELF image at `0x4000_0000`. The stub cannot see the stack. With
+A launcher places the startup block and the child's stack outside the link range. Every launcher
+takes the placement from one definition beside `STUB_ENTRY` in the stub crate
+([`stub/src/lib.rs`](../../stub/src/lib.rs)): the stack top at `STACK_TOP` (`0x8000_0000`), the
+startup block at `STARTUP_AT` (`0x7FF0_0000`) and the copy of the ELF image at `IMAGE_AT`
+(`0x4000_0000`). The stub cannot see the stack. With
 the stack outside the link range, no segment of an honest image can meet it; a hostile segment
 that names the stack's pages is still refused, by `map_fixed`, which never replaces a mapping
 ([R11](memory.md#r11-memory)). The stub does not check for a gap between a segment and the

@@ -10,20 +10,19 @@
 use core::panic::PanicInfo;
 
 use redoubt_sys::{Call, MemFlags, PAGE_SIZE, syscall};
-use stub::process_exit;
+use stub::{IMAGE_AT, process_exit};
 
 /// Proves this program's own entry ran, not the stub's own exit codes (110 to 112) or the
 /// kernel's default fault code (15).
 pub const OK: u32 = 77;
 /// The image copy was still mapped when this program started: the stub did not free it.
 pub const IMAGE_STILL_MAPPED: u32 = 78;
-/// Where `stub-launch` copies this program's image (its `IMAGE_AT`).
-const IMAGE_AT: usize = 0x4000_0000;
 
 #[no_mangle]
 pub extern "C" fn _start(_arg: usize) -> ! {
-    // `map_fixed` never replaces a mapping (kernel/memory.md), so it succeeds on the copy's first
-    // page only if the stub unmapped it before the jump (servers/init.md, launch step 5).
+    // `stub-launch` copied the image to `IMAGE_AT`. `map_fixed` never replaces a mapping (kernel/memory.md),
+    // so it succeeds on the copy's first page only if the stub unmapped it before the jump
+    // (servers/init.md, launch step 5).
     let free = syscall(&Call::MapFixed { addr: IMAGE_AT, len: PAGE_SIZE, flags: MemFlags::READ });
     process_exit(if free.is_ok() { OK } else { IMAGE_STILL_MAPPED })
 }
