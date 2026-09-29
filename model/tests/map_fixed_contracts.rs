@@ -56,7 +56,9 @@ fn map_fixed_near_user_top_does_not_starve_map_anon() {
 /// lookup and the pages-vs-budget check runs before `tables_needed` ever walks the range. The
 /// range matches the boot bench's (4 GiB to the top of user space, about 2^26 pages). The bound
 /// is generous for a debug build: the fixed path is microseconds, while a regression to one
-/// lookup per page, or to `tables_needed` first (2^26 vpns into a `BTreeSet`), takes seconds.
+/// lookup per page, or to `tables_needed` first (2^26 vpns into a `BTreeSet`), takes seconds. It is
+/// the one wall-clock bound the host tests keep: about 10^5 times what the call takes, which no
+/// load on the machine closes.
 #[test]
 fn huge_len_is_refused_promptly() {
     let mut w = World::new(None);

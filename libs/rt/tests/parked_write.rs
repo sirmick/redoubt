@@ -105,7 +105,8 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
         c.timeout = 50_000;
         assert_eq!(c.write(&mut lend, 0, 0, b"lost"), Err(ClientError::Sys(Error::Timeout)));
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Only a hang guard, so the fake kernel's own 60 s.
+    let deadline = Instant::now() + Duration::from_secs(60);
     while f.open_calls(server) != 0 {
         assert!(Instant::now() < deadline, "the abandoned write was never answered");
         std::thread::sleep(Duration::from_millis(1));

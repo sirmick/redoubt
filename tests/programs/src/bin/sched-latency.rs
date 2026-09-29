@@ -23,10 +23,10 @@
 //!   trace (records `X`, `Y`, `Z`); the bench's post-check reports and bounds them.
 //!
 //! The targets (kernel/scheduling.md, virtual time, N <= 16, this workload): driver and steward
-//! timer wakes p50 <= 15 ms and p99 <= 50 ms; the steward's decision wake p50 <= 20 ms and p99 <=
-//! 115 ms (from the seed sweep); deadline notice p99 <= 54 ms and R10 kernel time p99 <= 39 ms (from
+//! timer wakes p50 <= 15 ms and p99 <= 50 ms; the steward's decision wake p50 <= 25 ms and p99 <=
+//! 95 ms (from the seed sweep); deadline notice p99 <= 54 ms and R10 kernel time p99 <= 39 ms (from
 //! the seed sweep; R10's is the post-check); a lease's termination from the steward's decision,
-//! decision wake + R10, p99 <= 154 ms (the post-check adds the two); the 1000-weight server's share of the
+//! decision wake + R10, p99 <= 134 ms (the post-check adds the two); the 1000-weight server's share of the
 //! spinning CPU at N = 16 at least its weight's less 30/1000. Each is printed as `met` or `missed`; the
 //! virtual-time case requires `met`, and the plain-TCG reference case only reports. Adding objects moves the
 //! R10 terms (docs/todo/budget-destroy-cost.md).
@@ -49,8 +49,8 @@ const WAKE_P50: usize = 15_000;
 const WAKE_P99: usize = 50_000;
 /// The steward's decision wake, set from the seed sweep (kernel/scheduling.md, "Responsiveness"):
 /// its worst case over the seeds plus a tenth, rounded up to 5 ms.
-const DECISION_P50: usize = 20_000;
-const DECISION_P99: usize = 115_000;
+const DECISION_P50: usize = 25_000;
+const DECISION_P99: usize = 95_000;
 /// The deadline notice and R10's kernel time, set from the seed sweep the same way but rounded up
 /// to 1 ms; 30 ms before it (docs/todo/budget-destroy-cost.md brings them back).
 const NOTICE_P99: usize = 54_000;

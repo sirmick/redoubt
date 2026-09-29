@@ -1,7 +1,8 @@
 description = "Ratchet on `unsafe` in the trusted computing base, and on unsafe without a SAFETY comment"
 kind = "unsafe-budget"
 
-# Budgets only go down. Raising one needs a justification in the commit that does it.
+# Budgets only go down. Raising one needs an `Unsafe budget: <name>: <reason>` line in the commit
+# that does it (docs/testbench.md, "The unsafe budget").
 # Every component is at max_undocumented = 0: all `unsafe` in the
 # kernel's and loader's own crates carries a SAFETY comment or a `# Safety` doc. Keep it
 # that way. Third-party crates.io dependencies are outside the budget: the ratchet counts code

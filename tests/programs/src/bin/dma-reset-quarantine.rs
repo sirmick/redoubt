@@ -31,8 +31,11 @@ use uart_16550::MmioSerialPort;
 
 /// Pages of each driver's run.
 const RUN_PAGES: usize = 4;
-/// How long a check waits for anything, in microseconds.
-const WAIT: u64 = 2_000_000;
+/// How long a check waits for anything, in microseconds of guest time, which follows the host's
+/// clock. The longest wait is the checker's search of every free page, which on a loaded host
+/// took up to about 10 s. 60 s bounds that search, inside the case's 90 s timeout, so a check that
+/// runs out says which.
+const WAIT: u64 = 60_000_000;
 /// Empty virtio-mmio slots this program can use: QEMU `virt` has 8.
 const MAX_SLOTS: usize = 8;
 /// Badges on the report endpoint.

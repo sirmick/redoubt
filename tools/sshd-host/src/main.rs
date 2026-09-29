@@ -49,9 +49,18 @@ const TICK: Duration = Duration::from_millis(10);
 pub struct Log(Rc<RefCell<File>>);
 
 impl Log {
+    /// Appends to `path`: every session of a case runs its own server, and all log to one file.
+    fn append(path: &str) -> Result<Log> {
+        let file =
+            OpenOptions::new().create(true).append(true).open(path).with_context(|| path.to_string())?;
+        Ok(Log(Rc::new(RefCell::new(file))))
+    }
+
     pub fn line(&self, text: &str) {
-        // A lost log line fails the case that looks for it; the connection goes on.
-        let _ = writeln!(self.0.borrow_mut(), "{text}");
+        // One write per line, which an appending file keeps whole: `writeln!` writes the text and
+        // the newline apart, and another server's line could land between them. A lost log line
+        // fails the case that looks for it; the connection goes on.
+        let _ = self.0.borrow_mut().write_all(format!("{text}\n").as_bytes());
     }
 }
 
@@ -152,11 +161,7 @@ fn main() -> Result<()> {
                 let key = keyfile::public(&std::fs::read_to_string(path).with_context(|| path.to_string())?)?;
                 logins.push((principal.to_string(), key));
             }
-            // Appended to: every session of a case logs to one file.
-            "--log" => {
-                let file = OpenOptions::new().create(true).append(true).open(&value);
-                log = Some(file.with_context(|| value.clone())?)
-            }
+            "--log" => log = Some(Log::append(&value)?),
             _ => bail!("unknown argument {arg}"),
         }
     }
@@ -167,7 +172,7 @@ fn main() -> Result<()> {
     let public = *keys.get(0).context("no host key")?.public();
     let keyd =
         KeyServer::new(keys, limits(16), &COST, BUDGET, 1).map_err(|_| anyhow::anyhow!("keyd's limits"))?;
-    let log = Log(Rc::new(RefCell::new(log.context("--log is required")?)));
+    let log = log.context("--log is required")?;
     let mut host = Host { keyd, logins, log: log.clone() };
     let result = serve(&mut host, &public);
     if let Err(e) = &result {
@@ -214,6 +219,42 @@ fn serve(host: &mut Host, public: &PublicKey) -> Result<()> {
                 Progress::Idle if n > 0 && !pending.is_empty() => continue,
                 Progress::Idle => break,
                 Progress::Closed => return Ok(()),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Log;
+
+    /// Two servers appending to one log, as a case's sessions do: every line arrives whole, none
+    /// split and none joined to another.
+    #[test]
+    fn servers_sharing_a_log_keep_its_lines_whole() {
+        const LINES: usize = 2000;
+        let path = std::env::temp_dir().join(format!("redoubt-sshd-host-log-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let path = path.to_str().unwrap().to_string();
+        std::thread::scope(|scope| {
+            for server in ["alice+one", "alice+two"] {
+                let path = &path;
+                scope.spawn(move || {
+                    let log = Log::append(path).unwrap();
+                    for i in 0..LINES {
+                        log.line(&format!("login {server}: line {i} of a session long enough to split"));
+                    }
+                });
+            }
+        });
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2 * LINES, "a line was split or joined");
+        for server in ["alice+one", "alice+two"] {
+            for i in 0..LINES {
+                let want = format!("login {server}: line {i} of a session long enough to split");
+                assert!(lines.contains(&want.as_str()), "missing whole: {want}");
             }
         }
     }

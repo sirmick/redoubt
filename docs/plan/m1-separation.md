@@ -86,12 +86,8 @@ page.
 
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
-   - **Kernel:** [a host test build of the workspace](../todo/workspace-host-tests.md) and
-     [the steward's decision wake on rv64, and R10's thin margin](../todo/sched-rv64-decision-wake.md).
-   - **The bench and its tools**, with the kernel package:
-     [tests that behaved differently under load](../todo/bench-load-flakes.md),
-     [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
-     and [the unsafe budget's stated reason](../todo/unsafe-ratchet-reason.md).
+   - **The bench and its tools:**
+     [the SSH loopback self-checks](../todo/ssh-loopback-host.md).
 - **A kernel containment gate.** One boot on QEMU that proves the kernel's primitives alone,
    before the whole milestone is layered on them: hostile code preempted and ended at its
    deadline, a budget subtree revoked with messages and lends in flight, and a victim that stays

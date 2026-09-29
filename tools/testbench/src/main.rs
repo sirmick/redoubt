@@ -148,7 +148,8 @@ fn main() -> Result<()> {
             continue;
         }
         if let Kind::UnsafeBudget(check) = &case.kind {
-            let (failure, summary) = budget::check(&workspace, &check.budget)?;
+            let (failure, summary) =
+                budget::check(&workspace, &format!("tests/{}.toml", case.name), &check.budget)?;
             let failure = match failure {
                 None => budget::coverage(&workspace, &check.budget, &check.uncounted)?,
                 failure => failure,

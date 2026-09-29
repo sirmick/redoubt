@@ -166,7 +166,7 @@ The kinds, and the fields each takes besides `description` and `arch`:
 | --- | --- | --- |
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
-| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, and does not yet compile ([todo](todo/workspace-host-tests.md)). The kernel has no host tests (`test = false` on its binary) | `packages`, `tests` (the test files to run; default all), `miri` |
+| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri` |
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
@@ -459,14 +459,16 @@ and must fail on the SYN the capture then shows.
 
 ## The unsafe budget
 
-Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory, host:testbench::every_on_target_source_is_in_a_budget, host:testbench::a_long_safety_block_directly_above_justifies, bench:rt-miri, host:testbench::a_miri_case_runs_its_files_under_miri
+Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory, host:testbench::every_on_target_source_is_in_a_budget, host:testbench::a_long_safety_block_directly_above_justifies, host:testbench::a_raise_needs_its_unsafe_budget_line, bench:rt-miri, host:testbench::a_miri_case_runs_its_files_under_miri
 
 `unsafe-budget.toml` lists every source directory of the trusted computing base that runs on the
 target, each with the most uses of `unsafe` it may hold and the most that may lack a justification
 (zero everywhere): a `// SAFETY:` comment above an `unsafe` block, and a `# Safety` section in the
 doc comment of an `unsafe fn` or `unsafe impl`, in the comment block directly above or within a
 few lines. The case counts both and fails if either is over.
-Budgets only go down; raising one needs a stated reason in the change that does it.
+Budgets only go down. Raising either limit, dropping a budget or narrowing its paths needs a line
+`Unsafe budget: <name>: <reason>` in the commit that does it, which the case reads the way the
+size budget reads its own ([below](#the-size-budget)), with the same history check.
 
 A configured path with no Rust source in it fails. So does coverage left out: every workspace
 member that can be built for the target (its crate root is `no_std`) must have each of its Rust
@@ -488,21 +490,42 @@ which is strongly protected`.
 
 ## The size budget
 
-Status: built · tested: bench:size-budget, host:testbench::only_code_lines_count, host:testbench::a_raise_needs_its_reason, host:testbench::the_ratchet_reads_the_commit_that_raised, host:testbench::a_merge_is_judged_against_its_first_parent
+Status: built · tested: bench:size-budget, host:testbench::only_code_lines_count, host:testbench::a_test_module_does_not_count, host:testbench::a_test_module_file_does_not_count, host:testbench::a_shipped_file_always_counts, host:testbench::a_form_the_case_cannot_follow_fails, host:testbench::a_raise_needs_its_reason, host:testbench::the_ratchet_reads_the_commit_that_raised, host:testbench::a_merge_is_judged_against_its_first_parent, host:testbench::merged_history_is_not_read_again, host:testbench::a_new_budget_file_needs_every_reason, host:testbench::a_deleted_budget_file_fails
 
 The size of the trusted computing base is budgeted, not observed
 ([the tenets](TENETS.md)). `size-budget.toml` lists each trusted crate (the kernel, the loader,
 the stub, the libraries they and the servers link, the model and the servers) with a ceiling in
 lines of code: every line of every `.rs` file under its paths that is not blank, a `//` comment
-(doc comments included) or inside a `/* */` comment, in-file tests included. The case fails when a
-crate is over its ceiling. The ceilings started at each crate's size when the case landed and only
-fall: the case reads every commit that changed its file, merges included, and where one raised a
-ceiling over the file in its first parent, dropped a crate (a rename drops the old name) or
-narrowed a crate's paths (fewer lines counted under the same ceiling), requires a line
-`Size budget: <crate>: <reason>` for each such crate, in its message or, for a merge, in a commit
-it brings in. A raise not yet committed fails, and so does a path with no Rust source in it. The
-history check needs the history: in a shallow clone the oldest commit has no parent to compare
-with, so a raise there passes unchecked.
+(doc comments included) or inside a `/* */` comment. Tests are left out, so writing them costs a
+crate nothing: a `#[cfg(test)]` item counts for nothing, and neither does a file only test modules
+reach (`mod tests;`, the modules it declares in turn, and those declared inside an inline test
+module). A file any other module declaration reaches counts, whatever else names it; a module is
+found by its name, its enclosing inline modules and its `#[path]` or `cfg_attr` path, and one whose
+file is not under the crate's paths fails the case. So does a form the case does not follow, which
+could reach a file past a test's `#[path]` to it: a `mod` whose name is not a plain identifier
+(`r#name`, a macro's `$name`) and the word `include`, however it is invoked. The case fails when
+a crate is over its ceiling. The ceilings started at each crate's size when the case landed and only
+fall: the case reads the commits that changed its file on the branch it runs on, merges included,
+and where one raised a ceiling over the file in its first parent, dropped a crate (a rename drops
+the old name) or narrowed a crate's paths (fewer lines counted under the same ceiling), requires a
+line `Size budget: <crate>: <reason>` for each such crate, in its message or, for a merge, in a
+commit it brings in. A commit whose parent lacks the file is judged against the last version
+before it; where there is none, as for a file the main branch lacks (new or renamed), every entry
+in it needs its line. A commit that deletes the file fails the case, so deleting it and adding it
+back raised cannot escape. A raise not yet committed fails, and so does a path with no Rust source in
+it; uncommitted changes do not stop the committed ones being judged.
+
+A branch is judged on its own commits: those since its merge-base with the main branch
+(`redoubt`, or `origin/HEAD` in a clone that has no such branch), so a package is judged before it
+merges and merged history is never read again. On the main branch itself only a raise not yet
+committed is judged. With neither branch to measure from, as in a shallow clone that lacks the
+merge-base, the case fails rather than passing unchecked.
+
+The residual: a macro defined outside the budgeted paths, a dependency's `macro_rules!` or a
+proc macro, can emit `mod x;` or `include!` at a call site, and the case reads only the call. No
+trusted crate's dependencies are known to, and adding one is a `Cargo.toml` change reviewed as
+part of the trusted computing base
+([tenet 5](TENETS.md#5-dependencies-are-part-of-the-trusted-computing-base)).
 
 ## Vendored dependencies
 

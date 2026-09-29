@@ -52,6 +52,11 @@ rule = "*"
 reason = "legacy-gone's case, which names the old calls in its expected lines"
 
 [[allow]]
+path = "tests/programs/Cargo.toml"
+rule = "(?i)legacy"
+reason = "the test programs' manifest lists legacy-gone by name"
+
+[[allow]]
 path = "kernel/src/main.rs"
 rule = "Grnt"
 reason = "the kernel refuses a boot argument carrying a device grant (Grnt): the refusal names it"

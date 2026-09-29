@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 51
+revision = 62
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -131,10 +131,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "Kernel containment gate"
   template = "step"
   parent = "M1"
-  needs = ["K7", "K8", "S3", "BL1"]
+  needs = ["K7", "K8", "S3", "BL1", "GATE1"]
   body = "docs/plan/m1-separation.md#remaining-work: A kernel containment gate."
   state = "todo"
-  revision = 3
+  revision = 55
 
 [[node]]
   id = "host-shell-scripts"
@@ -150,10 +150,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "init and the boot manifest"
   template = "step"
   parent = "M1"
-  needs = ["gate", "API1"]
+  needs = ["gate", "API1", "INIT4"]
   body = "docs/plan/m1-separation.md#remaining-work; docs/servers/init.md"
   state = "todo"
-  revision = 42
+  revision = 57
 
 [[node]]
   id = "model-replay"
@@ -208,12 +208,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 [[node]]
   id = "K8"
   title = "Kernel and bench follow-ups after K7"
+  emoji = "🧪"
   template = "package"
   parent = "M1"
   needs = ["K7"]
-  body = "Closes, from docs/plan/m1-separation.md#remaining-work: docs/todo/workspace-host-tests.md and docs/todo/sched-rv64-decision-wake.md (Kernel bullet); docs/todo/bench-load-flakes.md and docs/todo/unsafe-ratchet-reason.md (bench bullet). Also the size budget's question from K7: should in-file host tests count toward a trusted crate's ceiling. Not K8's: ssh-loopback-host (SSH1 and its reference case) and budget-destroy-cost (the steward step). Tier A (the bench). Ready; awaiting the owner's go."
-  state = "active"
-  revision = 45
+  body = "Closed so far on wp-k8 (base fbc53ff4a): workspace-host-tests; size budget leaves out #[cfg(test)]; unsafe-budget reason lines on the merge-base range (unsafe-ratchet-reason); sched-rv64-decision-wake closed as a residual with new targets (p50 25, p99 95, lease end 134). Step 5, bench-load-flakes: wait fixes, then the loaded proof run, which waits on the owner's choice of scope. Implementer handed off; a fresh one continues. Rebase onto redoubt (SSH1, API1 merged) before the merge run. Tier A (the bench)."
+  state = "done"
+  revision = 62
 
 [[node]]
   id = "S3"
@@ -246,9 +247,58 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 [[node]]
   id = "API1"
   title = "The client library: one API for every userland"
-  emoji = "🧪"
   template = "package"
   parent = "M1"
   body = "docs/userland/native.md#the-client-library; docs/userland/beamlet.md#beamlet-on-redoubt and #natives (the adapters' shape); docs/plan/m1-separation.md#remaining-work. Tier A, size M."
   state = "done"
-  revision = 51
+  revision = 53
+
+[[node]]
+  id = "GATE1"
+  title = "The kernel containment gate: one composite boot"
+  template = "package"
+  parent = "M1"
+  needs = ["K8"]
+  body = "Builds docs/kernel/README.md#containment (a926fd1c3; bench:kernel-containment; rv64 and rv32, checked build, virtual time, tracing kernel, pinned seed from a 16-seed sweep); docs/plan/m1-separation.md Kernel cases, the Containment row. Brief: .wash/local/GATE1-implementer.md. Design: QA GATE1-design. Owner: a missed responsiveness target stops GATE1 and pulls docs/todo/budget-destroy-cost.md forward as its own kernel package first. Tier A, size M."
+  state = "todo"
+  revision = 56
+
+[[node]]
+  id = "INIT1"
+  title = "The loader loads only the kernel and init; kernel cases start from a tester in init's place"
+  template = "package"
+  parent = "M1"
+  needs = ["GATE1", "API1"]
+  body = "Builds docs/kernel/boot.md#the-loader-loads-only-the-kernel-and-init (the bundle mapped into init, a0/a1), docs/kernel/devices.md#device_info (a new kernel call: which device a handle names; owner's choice), docs/kernel/budgets.md#the-tree-from-the-boot-manifest (root keeps init's process), docs/testbench.md#starting-a-cases-programs (the in-init's-place half: the log server launches the case's programs with named budgets; TAKE_GIFTS goes) and #data-entries-for-init (read-back from the bundle's pages). Brief: .wash/local/INIT1-implementer.md. Design: QA INIT1-design. Tier A (loader, kernel ABI, bench builder), size L."
+  state = "todo"
+  revision = 58
+
+[[node]]
+  id = "INIT2"
+  title = "init: the manifest, its checks and the boot"
+  template = "package"
+  parent = "M1"
+  needs = ["INIT1"]
+  body = "Builds docs/servers/init.md (the boot manifest, devices by register base and interrupt, confinement, starting the servers, key separation, fresh connections, authority, R33-R35), docs/kernel/devices.md#which-process-gets-which-device (placement matched with device_info), docs/servers/consoled.md#started-by-init (lines attributed by connection), docs/todo/server-bucket-counts.md (closed), docs/testbench.md#starting-a-cases-programs (the under-init half), image/boot.toml read by the builder for ./mkimage. Design: QA INIT1-design. Tier A, size L."
+  state = "todo"
+  revision = 58
+
+[[node]]
+  id = "INIT3"
+  title = "init: restarts, and a launcher releases its children's grants"
+  template = "package"
+  parent = "M1"
+  needs = ["INIT2"]
+  body = "Builds docs/servers/init.md#restarts-and-reboots (fresh budget, same endpoint, reboot rule; blame is the steward step's), docs/servers/wire.md#a-launcher-releases-its-childs-grants, docs/servers/serving.md#replies-and-rollback in a boot, docs/servers/netd.md#started-by-init (a driver restart case), docs/kernel/devices.md (a quarantined driver reboots). Design: QA INIT1-design. Tier A, size M."
+  state = "todo"
+  revision = 57
+
+[[node]]
+  id = "INIT4"
+  title = "The servers' cases under init; the net rig goes"
+  template = "package"
+  parent = "M1"
+  needs = ["INIT3"]
+  body = "docs/plan/m1-separation.md#remaining-work (netd, ipd and the rest move from the bench's rigs to init): the net-* and bench-net-* cases boot init with a case manifest, their in-guest checks become test programs judged through consoled's attribution; tests/net/src/rig.rs deleted. docs/testbench.md#starting-a-cases-programs, #devices-and-the-network. Design: QA INIT1-design. Tier A (the bench), size M."
+  state = "todo"
+  revision = 57
