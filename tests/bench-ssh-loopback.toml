@@ -1,15 +1,14 @@
-description = "Bench self-check: concurrent scripted SSH sessions, ordered by marks, exit statuses checked, against a host OpenSSH server"
+description = "Bench self-check: concurrent scripted SSH sessions, ordered by marks, exit statuses checked, against Redoubt's sshd on its host platform"
 kind = "ssh-loopback"
 timeout_secs = 20
-# ssh runs the host sshd itself (inetd mode), which runs /bin/sh for every login and accepts
-# only these test keys. It can log in only the user running the bench, so `user` here only
-# chooses the key and names the log (see README).
+# ssh runs redoubt-sshd-host itself, one process per session, which logs in each of these test
+# keys as the principal of its name and runs a scripted console, not a shell.
 authorized = ["alice", "bob"]
 
 [[session]]
 user = "alice"
 steps = [
-    { send = "echo alice-$((6 * 7))\n" },
+    { send = "echo alice-42\n" },
     { expect = '^alice-42$' },
     { mark = "alice-in" },
     { wait = "bob-done" },
@@ -33,7 +32,7 @@ user = "alice+tty"
 pty = true
 steps = [
     { send = "tty; exit\n" },
-    { expect = '/dev/pts/\d+' },
+    { expect = '^pty$' },
 ]
 
 # A key the server does not accept: ssh's refusal is output, and its status is checked.

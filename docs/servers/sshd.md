@@ -19,7 +19,7 @@ steward started.
 
 ### The core and its platforms
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested: bench:sshd-host-tests, bench:sshd-build, bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:bench-ssh-loopback
 
 `sshd` is a core and a platform. The core runs `sunset` over byte slices and makes every decision
 this page states: the login name, the key checks, a channel's labels, and what a channel may not
@@ -58,17 +58,21 @@ crates](../testbench.md#patched-crates)), which changes three things:
   hands out the exchange's parts (`V_C`, `V_S`, `I_C`, `I_S`, `Q_C`, `Q_S`, `K`) and waits for the
   signature, as its client already does for an SSH agent. It keeps a bounded copy of the peer's
   `KEXINIT` for this, since after the first exchange only `sunset` sees one in the clear, and
-  refuses a larger one. It still computes the hash itself for the session keys; the client checks
-  the signature, so a disagreement fails the exchange.
-- **A client's `window-change`, `signal` and `break` requests reach the core**; published
-  `sunset` drops them on a server.
+  refuses a larger one (over 4 KiB). It still computes the hash itself for the session keys, and
+  checks the signature against it before sending it, so a disagreement fails the exchange on the
+  server; the client checks it too.
+- **A client's `window-change`, `signal` and `break` requests reach the core**, and so does a
+  pty's starting size; published `sunset` drops the three requests on a server, and does not hand
+  out the size. Its client gains `term_signal`, beside the `term_break` and
+  `term_window_change` it has, so the patch's tests send all three. The server gains
+  `session_exit`, which sends a session's exit status, then its EOF, then its close, where
+  published `sunset` sends EOF and close only as echoes of the client's. The server no longer
+  echoes the client's EOF, which is one direction only (RFC 4254): published `sunset` would end
+  the session's output there. A public key request gains `signed()`, which tells a signed
+  request from a query.
 - **Its X25519 and Ed25519 verification use `ed25519-compact`,** the crate the loader and `keyd`
   already link, in place of the `dalek` crates. The box then has one implementation of each
   curve operation.
-
-**Open:** whether the box's platform lets a call to the steward or `keyd` hold up other
-connections; a post-quantum key exchange (`mlkem768x25519-sha256`), which changes the transcript
-`keyd` signs.
 
 ### Sessions over SSH
 
@@ -93,7 +97,11 @@ Status: planned · M1 (separation and containment)
   ([consoled](consoled.md#the-consol-protocol) has the same protocol): input from the channel,
   output to it, and the window's size and its changes. The channel's `signal` request (INT) and
   `break` request reach the session as the interrupt a 0x03 byte gives: protocol messages, not
-  signals, since nothing in Redoubt has signals.
+  signals, since nothing in Redoubt has signals. The core checks what arrives raw before the
+  session sees it: any other signal is refused, a break's length is not passed on, and a window
+  size over 1,024 columns or rows reaches the session cut to 1,024. A zero means no size, as
+  RFC 4254 says (a client whose input is not a terminal sends zeros): a `window-change` carrying
+  one is refused, and a pty asked for with one starts at 80 by 24.
 - **State is per channel**, and each channel carries its session's labels (`alice@`: none;
   `alice+secrets@`: `{alice-secrets}`); `sshd` applies the label check to them
   ([R25 (the label check)](serving.md#r25-the-label-check)). Channels are independent: one
@@ -127,7 +135,9 @@ sequenceDiagram
 ```
 *Figure: an SSH login to a vault session. All of it is planned.*
 
-**Open:** how many channels and connections one principal may hold at once. The operations
+**Open:** how many channels and connections one principal may hold at once; whether the box's
+platform lets a call to the steward or `keyd` hold up other connections; a post-quantum key
+exchange (`mlkem768x25519-sha256`), which changes the transcript `keyd` signs. The operations
 `sshd` sends the steward are in the steward's table ([steward](steward.md#the-stewards-protocol)).
 
 ### `approve@box`
@@ -250,6 +260,9 @@ Status: planned · M1 (separation and containment)
   for as long as it runs.
 - **`sunset` carries our patch.** The patch is ours to read and keep: a `sunset` release that
   changes the code it touches needs it redone and read again.
+- **A few unusual clients fail closed.** `sunset` hashes its own re-encoding of the peer's
+  `KEXINIT`, so a client whose `KEXINIT` does not re-encode to the same bytes fails the exchange;
+  and `ed25519-compact` refuses a non-canonical X25519 public value.
 - **The key exchange is not post-quantum.** Traffic recorded now could be read by whoever later
   breaks X25519.
 

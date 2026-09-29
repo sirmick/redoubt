@@ -1,0 +1,31 @@
+description = "sshd's logins, on its host platform: a login key keyd holds is refused before the steward is asked, an unknown principal is refused, principal+label gets the label {principal-label}, and a plain principal none"
+kind = "ssh-loopback"
+timeout_secs = 20
+# loopback-host is the server's host key, which its keyd holds; the login table also lists it
+# as a principal's key, so only the holds check stands between it and a login.
+authorized = ["alice", "loopback-host"]
+server_log = [
+    '^keyd holds the key offered$',
+    '^login mallory: refused$',
+    '^login alice\+secrets: labels \{alice-secrets\}$',
+    '^login alice: labels \{\}$',
+]
+# The steward (the login table) is never asked about a key keyd holds.
+server_log_forbid = ['^login loopback-host']
+
+[[session]]
+user = "loopback-host"
+steps = [{ expect = 'Permission denied \(publickey\)' }, { exit = 255 }]
+
+[[session]]
+user = "mallory"
+steps = [{ expect = 'Permission denied \(publickey\)' }, { exit = 255 }]
+
+[[session]]
+user = "alice+secrets"
+pty = true
+steps = [{ send = "labels\n" }, { expect = '^\{alice-secrets\}$' }]
+
+[[session]]
+user = "alice"
+steps = [{ send = "labels\n" }, { expect = '^\{\}$' }]

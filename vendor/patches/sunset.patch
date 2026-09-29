@@ -1,0 +1,1429 @@
+Redoubt's patch to sunset 0.6.0 as crates.io published it (vendor/README.md, "sunset").
+Apply with: patch -p1 -d vendor/sunset < vendor/patches/sunset.patch
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 42e733b..3c9a037 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -35,6 +35,8 @@ repository = "https://github.com/mkj/sunset"
+ _ecdsa = [
+     "dep:ecdsa",
+     "ssh-key?/ecdsa",
++    "dep:rand_core",
++    "getrandom/sys_rng",
+ ]
+ alloc = ["ssh-key?/alloc"]
+ arbitrary = [
+@@ -55,6 +57,8 @@ openssh-key = ["ssh-key"]
+ rsa = [
+     "dep:rsa",
+     "ssh-key?/rsa",
++    "dep:rand_core",
++    "getrandom/sys_rng",
+ ]
+ std = [
+     "snafu/std",
+@@ -82,7 +86,7 @@ version = "1.0"
+ default-features = false
+ 
+ [dependencies.chacha20]
+-version = "0.9"
++version = "0.10"
+ features = ["zeroize"]
+ 
+ [dependencies.cipher]
+@@ -102,12 +106,9 @@ features = ["algorithm"]
+ optional = true
+ default-features = false
+ 
+-[dependencies.ed25519-dalek]
+-version = "3.0"
+-features = [
+-    "zeroize",
+-    "rand_core",
+-]
++[dependencies.ed25519-compact]
++version = "2.4"
++features = ["x25519"]
+ default-features = false
+ 
+ [dependencies.embedded-io]
+@@ -116,7 +117,6 @@ optional = true
+ 
+ [dependencies.getrandom]
+ version = "0.4"
+-features = ["sys_rng"]
+ 
+ [dependencies.heapless]
+ version = "0.9"
+@@ -144,6 +144,7 @@ version = "0.9"
+ 
+ [dependencies.rand_core]
+ version = "0.10"
++optional = true
+ default-features = false
+ 
+ [dependencies.rsa]
+@@ -173,11 +174,6 @@ default-features = false
+ [dependencies.sunset-sshwire-derive]
+ version = "0.3"
+ 
+-[dependencies.x25519-dalek]
+-version = "3.0"
+-features = ["zeroize"]
+-default-features = false
+-
+ [dependencies.zeroize]
+ version = "1"
+ features = ["derive"]
+diff --git a/src/channel.rs b/src/channel.rs
+index a136e97..be62ef1 100644
+--- a/src/channel.rs
++++ b/src/channel.rs
+@@ -294,6 +294,45 @@ impl Channels {
+         }
+     }
+ 
++    pub(crate) fn term_signal(
++        &self,
++        num: ChanNum,
++        sig: &str,
++        s: &mut TrafSend,
++    ) -> Result<()> {
++        let ch = self.get(num)?;
++        match ch.ty {
++            ChanType::Session => Req::Signal(sig).send(ch, s),
++            _ => error::BadChannelData.fail(),
++        }
++    }
++
++    pub(crate) fn session_exit(
++        &mut self,
++        num: ChanNum,
++        status: u32,
++        s: &mut TrafSend,
++    ) -> Result<()> {
++        let ch = self.get_mut(num)?;
++        if !matches!(ch.ty, ChanType::Session) || ch.sent_close {
++            return error::BadChannelData.fail();
++        }
++        // Sent first: it cannot be deferred, so a full output fails here
++        // with nothing sent. The EOF and close that follow can be deferred.
++        // Each is sent once, so a call again after a failure sends the rest.
++        if !ch.sent_exit {
++            Req::ExitStatus(packets::ExitStatus { status }).send(ch, s)?;
++            ch.sent_exit = true;
++        }
++        if !ch.sent_eof {
++            s.send(packets::ChannelEof { num: ch.send_num()? })?;
++            ch.sent_eof = true;
++        }
++        s.send(packets::ChannelClose { num: ch.send_num()? })?;
++        ch.sent_close = true;
++        Ok(())
++    }
++
+     fn dispatch_open(
+         &mut self,
+         p: &ChannelOpen<'_>,
+@@ -585,6 +624,46 @@ impl Channels {
+             _ => Error::bug(),
+         }
+     }
++
++    pub fn fetch_pty(&self, p: &Packet) -> Result<Pty> {
++        match p {
++            Packet::ChannelRequest(ChannelRequest {
++                req: ChannelReqType::Pty(pty),
++                ..
++            }) => pty.try_into(),
++            _ => Error::bug(),
++        }
++    }
++
++    pub fn fetch_winchange(&self, p: &Packet) -> Result<packets::WinChange> {
++        match p {
++            Packet::ChannelRequest(ChannelRequest {
++                req: ChannelReqType::WinChange(w),
++                ..
++            }) => Ok(w.clone()),
++            _ => Error::bug(),
++        }
++    }
++
++    pub fn fetch_signal<'p>(&self, p: &Packet<'p>) -> Result<&'p str> {
++        match p {
++            Packet::ChannelRequest(ChannelRequest {
++                req: ChannelReqType::Signal(packets::Signal { sig }),
++                ..
++            }) => Ok(sig),
++            _ => Error::bug(),
++        }
++    }
++
++    pub fn fetch_break(&self, p: &Packet) -> Result<u32> {
++        match p {
++            Packet::ChannelRequest(ChannelRequest {
++                req: ChannelReqType::Break(packets::Break { length }),
++                ..
++            }) => Ok(*length),
++            _ => Error::bug(),
++        }
++    }
+ }
+ 
+ #[derive(Debug, Clone, Copy)]
+@@ -648,8 +727,8 @@ pub enum Req<'a> {
+     Pty(Pty),
+     WinChange(packets::WinChange),
+     Break(packets::Break),
+-    // Signal,
+-    // ExitStatus,
++    Signal(&'a str),
++    ExitStatus(packets::ExitStatus),
+     // ExitSignal,
+ }
+ 
+@@ -678,6 +757,8 @@ impl Req<'_> {
+             }),
+             Req::WinChange(rt) => ChannelReqType::WinChange(rt),
+             Req::Break(rt) => ChannelReqType::Break(rt),
++            Req::Signal(sig) => ChannelReqType::Signal(packets::Signal { sig }),
++            Req::ExitStatus(st) => ChannelReqType::ExitStatus(st),
+         };
+ 
+         let p = ChannelRequest {
+@@ -741,6 +822,8 @@ pub(crate) struct Channel {
+     state: ChanState,
+     sent_eof: bool,
+     sent_close: bool,
++    /// Set once `session_exit()` has sent the exit status.
++    sent_exit: bool,
+ 
+     recv: ChanDir,
+     /// populated in all states except `Opening`
+@@ -777,6 +860,7 @@ impl Channel {
+             state: ChanState::Opening,
+             sent_close: false,
+             sent_eof: false,
++            sent_exit: false,
+             recv: ChanDir {
+                 num: num.0,
+                 // TODO these should depend on SSH rx buffer size minus overhead
+@@ -937,6 +1021,15 @@ impl Channel {
+             ChannelReqType::Environment(_) => {
+                 Ok(DispatchEvent::ServEvent(ServEventId::Environment { num }))
+             }
++            ChannelReqType::WinChange(_) => {
++                Ok(DispatchEvent::ServEvent(ServEventId::SessionWinChange { num }))
++            }
++            ChannelReqType::Signal(_) => {
++                Ok(DispatchEvent::ServEvent(ServEventId::SessionSignal { num }))
++            }
++            ChannelReqType::Break(_) => {
++                Ok(DispatchEvent::ServEvent(ServEventId::SessionBreak { num }))
++            }
+             _ => {
+                 if let ChannelReqType::Unknown(u) = &p.req {
+                     warn!("Unknown channel req type \"{}\"", u)
+@@ -986,7 +1079,9 @@ impl Channel {
+ 
+     fn handle_eof(&mut self, s: &mut TrafSend, is_client: bool) -> Result<()> {
+         //TODO: check existing state?
+-        if !self.sent_eof {
++        // EOF is one direction (RFC 4254 5.3): a server keeps writing after
++        // the client's, and sends its own with `session_exit()`.
++        if is_client && !self.sent_eof {
+             s.send(packets::ChannelEof { num: self.send_num()? })?;
+             self.sent_eof = true;
+         }
+@@ -1032,8 +1127,11 @@ impl Channel {
+         matches!(self.state, ChanState::RecvClose)
+     }
+ 
+-    // None on close
++    // None on close, or once this side has sent its EOF
+     fn send_allowed(&self) -> Option<usize> {
++        if self.sent_eof {
++            return None;
++        }
+         let r = self.send.as_ref().map(|s| usize::min(s.window, s.max_packet));
+         trace!("send_allowed {r:?}");
+         r
+diff --git a/src/conn.rs b/src/conn.rs
+index 677206d..fe47136 100644
+--- a/src/conn.rs
++++ b/src/conn.rs
+@@ -15,7 +15,7 @@ use {
+ use crate::*;
+ use channel::{Channels, CliSessionExit};
+ use client::Client;
+-use event::{CliEventId, ServEventId};
++use event::{CliEventId, ExchangeTranscript, ServEventId};
+ use kex::{AlgoConfig, Kex, SessId};
+ use packets::{Packet, ParseContext};
+ use server::Server;
+@@ -630,7 +630,7 @@ impl Conn<Server> {
+         payload: &[u8],
+         s: &mut TrafSend,
+         keys: &[&SignKey],
+-    ) -> Result<()> {
++    ) -> Result<DispatchEvent> {
+         let packet = self.packet(payload)?;
+         if let Packet::KexDHInit(p) = packet {
+             self.kex.resume_kexdhinit(
+@@ -645,6 +645,22 @@ impl Conn<Server> {
+         }
+     }
+ 
++    pub(crate) fn fetch_exchange_transcript(
++        &self,
++    ) -> Result<ExchangeTranscript<'_>> {
++        let v_c = self.remote_version.version().trap()?;
++        self.kex.exchange_transcript(v_c)
++    }
++
++    pub(crate) fn resume_signexchange(
++        &mut self,
++        sig: &OwnedSig,
++        s: &mut TrafSend,
++    ) -> Result<()> {
++        let first_kex = self.is_first_kex();
++        self.kex.resume_signexchange(sig, first_kex, &mut self.sess_id, s)
++    }
++
+     pub(crate) fn fetch_servpassword<'f>(
+         &self,
+         payload: &'f [u8],
+diff --git a/src/event.rs b/src/event.rs
+index f1828ec..e326ebd 100644
+--- a/src/event.rs
++++ b/src/event.rs
+@@ -257,6 +257,11 @@ impl CliEventId {
+ pub enum ServEvent<'g, 'a> {
+     /// Request hostkeys to use for the session
+     Hostkeys(ServHostkeys<'g, 'a>),
++    /// Sign the exchange with a host key held outside sunset.
++    ///
++    /// Follows `Hostkeys` when the key chosen is public-only
++    /// ([`SignKey::from_agent_pubkey`]).
++    SignExchange(ServSignExchange<'g, 'a>),
+     /// Client's first authentication attempt.
+     ///
+     /// This can be used to capture the username.
+@@ -300,6 +305,12 @@ pub enum ServEvent<'g, 'a> {
+     /// Server has received one environment variable.
+     /// Note: input strings are not sanitised.
+     SessionEnv(ServEnvironmentRequest<'g, 'a>),
++    /// Client's terminal window changed size.
++    SessionWinChange(ServWinChangeRequest<'g, 'a>),
++    /// Client sent a signal to the channel's process.
++    SessionSignal(ServSignalRequest<'g, 'a>),
++    /// Client sent a break (RFC 4335).
++    SessionBreak(ServBreakRequest<'g, 'a>),
+ 
+     /// The SSH session is no longer running
+     Defunct,
+@@ -316,6 +327,7 @@ impl Debug for ServEvent<'_, '_> {
+     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+         let e = match self {
+             Self::Hostkeys(_) => "Hostkeys",
++            Self::SignExchange(_) => "SignExchange",
+             Self::PasswordAuth(_) => "PasswordAuth",
+             Self::PubkeyAuth(_) => "PubkeyAuth",
+             Self::FirstAuth(_) => "FirstAuth",
+@@ -326,6 +338,9 @@ impl Debug for ServEvent<'_, '_> {
+             Self::SessionSubsystem(_) => "SessionSubsystem",
+             Self::SessionPty(_) => "SessionPty",
+             Self::SessionEnv(_) => "Environment",
++            Self::SessionWinChange(_) => "SessionWinChange",
++            Self::SessionSignal(_) => "SessionSignal",
++            Self::SessionBreak(_) => "SessionBreak",
+             Self::Defunct => "Defunct",
+             Self::PollAgain => "PollAgain",
+         };
+@@ -349,6 +364,48 @@ impl<'g, 'a> ServHostkeys<'g, 'a> {
+     }
+ }
+ 
++/// The parts of an exchange hash (RFC 4253 section 8) but the host key
++/// `K_S`, which the signer takes from its own key.
++#[derive(Debug, Clone, Copy)]
++pub struct ExchangeTranscript<'a> {
++    /// The client's identification string.
++    pub v_c: &'a [u8],
++    /// The server's identification string.
++    pub v_s: &'a [u8],
++    /// The client's `SSH_MSG_KEXINIT` payload.
++    pub i_c: &'a [u8],
++    /// The server's `SSH_MSG_KEXINIT` payload.
++    pub i_s: &'a [u8],
++    /// The client's ephemeral public key.
++    pub q_c: &'a [u8],
++    /// The server's ephemeral public key.
++    pub q_s: &'a [u8],
++    /// The shared secret as an `mpint` body: no leading zeros, and a zero
++    /// byte before a set top bit.
++    pub k: &'a [u8],
++}
++
++/// Sign the exchange hash with a host key held outside sunset.
++///
++/// `signed()` must be called: dropping this fails the next `progress()`,
++/// which ends the connection. The signature is checked against sunset's
++/// own exchange hash before it is sent.
++pub struct ServSignExchange<'g, 'a> {
++    runner: &'g mut Runner<'a, server::Server>,
++}
++
++impl ServSignExchange<'_, '_> {
++    /// The parts to sign from.
++    pub fn transcript(&self) -> Result<ExchangeTranscript<'_>> {
++        self.runner.fetch_exchange_transcript()
++    }
++
++    /// Provide the signature, which sends `KEXDH_REPLY`.
++    pub fn signed(self, sig: &OwnedSig) -> Result<()> {
++        self.runner.resume_signexchange(sig)
++    }
++}
++
+ pub struct ServPasswordAuth<'g, 'a> {
+     runner: &'g mut ServRunner<'a>,
+     done: bool,
+@@ -490,6 +547,12 @@ impl<'g, 'a> ServPubkeyAuth<'g, 'a> {
+         self.runner.fetch_servpubkey()
+     }
+ 
++    /// Whether the client signed with the key (the signature is already
++    /// verified), rather than only asking whether the key would do.
++    pub fn signed(&self) -> bool {
++        self.real_sig
++    }
++
+     /// Accept the presented public key.
+     pub fn allow(mut self) -> Result<()> {
+         self.done = true;
+@@ -798,7 +861,7 @@ impl Drop for ServExecRequest<'_, '_> {
+ 
+ /// A PTY request
+ ///
+-/// Placeholder, doesn't yet return the PTY information.
++/// Terminal modes are not yet parsed.
+ pub struct ServPtyRequest<'g, 'a> {
+     runner: &'g mut Runner<'a, Server>,
+     num: ChanNum,
+@@ -810,7 +873,11 @@ impl<'g, 'a> ServPtyRequest<'g, 'a> {
+         Self { runner, num, done: false }
+     }
+ 
+-    // TODO return PTY information to the caller
++    /// The terminal's name and starting size, with no modes. Fails for a
++    /// name longer than `config::MAX_TERM` or not ASCII.
++    pub fn pty(&self) -> Result<Pty> {
++        self.runner.fetch_pty()
++    }
+ 
+     /// Indicate that the request succeeded.
+     ///
+@@ -916,11 +983,147 @@ impl<'g, 'a> ServEnvironmentRequest<'g, 'a> {
+     // TODO: does the app care about wantreply?
+ }
+ 
++/// A `window-change` request.
++pub struct ServWinChangeRequest<'g, 'a> {
++    runner: &'g mut Runner<'a, Server>,
++    num: ChanNum,
++    done: bool,
++}
++
++impl<'g, 'a> ServWinChangeRequest<'g, 'a> {
++    fn new(runner: &'g mut Runner<'a, Server>, num: ChanNum) -> Self {
++        Self { runner, num, done: false }
++    }
++
++    /// The new size, in characters and in pixels.
++    pub fn size(&self) -> Result<packets::WinChange> {
++        self.runner.fetch_winchange()
++    }
++
++    /// Indicate that the request succeeded.
++    pub fn succeed(mut self) -> Result<()> {
++        self.done = true;
++        self.runner.resume_chanreq(true)
++    }
++
++    /// Indicate that the request failed. Also occurs on drop.
++    pub fn fail(mut self) -> Result<()> {
++        self.done = true;
++        self.runner.resume_chanreq(false)
++    }
++
++    /// Return the associated channel number.
++    pub fn channel(&self) -> ChanNum {
++        self.num
++    }
++}
++
++impl Drop for ServWinChangeRequest<'_, '_> {
++    fn drop(&mut self) {
++        if !self.done {
++            if let Err(e) = self.runner.resume_chanreq(false) {
++                trace!("Error for winchange: {e}")
++            }
++        }
++    }
++}
++
++/// A `signal` request.
++pub struct ServSignalRequest<'g, 'a> {
++    runner: &'g mut Runner<'a, Server>,
++    num: ChanNum,
++    done: bool,
++}
++
++impl<'g, 'a> ServSignalRequest<'g, 'a> {
++    fn new(runner: &'g mut Runner<'a, Server>, num: ChanNum) -> Self {
++        Self { runner, num, done: false }
++    }
++
++    /// The signal's name without "SIG", such as "INT". Not sanitised.
++    pub fn signal(&self) -> Result<&str> {
++        self.runner.fetch_signal()
++    }
++
++    /// Indicate that the request succeeded.
++    pub fn succeed(mut self) -> Result<()> {
++        self.done = true;
++        self.runner.resume_chanreq(true)
++    }
++
++    /// Indicate that the request failed. Also occurs on drop.
++    pub fn fail(mut self) -> Result<()> {
++        self.done = true;
++        self.runner.resume_chanreq(false)
++    }
++
++    /// Return the associated channel number.
++    pub fn channel(&self) -> ChanNum {
++        self.num
++    }
++}
++
++impl Drop for ServSignalRequest<'_, '_> {
++    fn drop(&mut self) {
++        if !self.done {
++            if let Err(e) = self.runner.resume_chanreq(false) {
++                trace!("Error for signal: {e}")
++            }
++        }
++    }
++}
++
++/// A `break` request (RFC 4335).
++pub struct ServBreakRequest<'g, 'a> {
++    runner: &'g mut Runner<'a, Server>,
++    num: ChanNum,
++    done: bool,
++}
++
++impl<'g, 'a> ServBreakRequest<'g, 'a> {
++    fn new(runner: &'g mut Runner<'a, Server>, num: ChanNum) -> Self {
++        Self { runner, num, done: false }
++    }
++
++    /// The break's length in milliseconds, as the client sent it.
++    pub fn length(&self) -> Result<u32> {
++        self.runner.fetch_break()
++    }
++
++    /// Indicate that the break was performed.
++    pub fn succeed(mut self) -> Result<()> {
++        self.done = true;
++        self.runner.resume_chanreq(true)
++    }
++
++    /// Indicate that the break was not performed. Also occurs on drop.
++    pub fn fail(mut self) -> Result<()> {
++        self.done = true;
++        self.runner.resume_chanreq(false)
++    }
++
++    /// Return the associated channel number.
++    pub fn channel(&self) -> ChanNum {
++        self.num
++    }
++}
++
++impl Drop for ServBreakRequest<'_, '_> {
++    fn drop(&mut self) {
++        if !self.done {
++            if let Err(e) = self.runner.resume_chanreq(false) {
++                trace!("Error for break: {e}")
++            }
++        }
++    }
++}
++
+ // Only small values should be stored inline.
+ // Larger state is retrieved from the current packet via Runner::fetch_*()
+ #[derive(Debug, Clone)]
+ pub(crate) enum ServEventId {
+     Hostkeys,
++    SignExchange,
+     PasswordAuth,
+     PubkeyAuth {
+         real_sig: bool,
+@@ -945,6 +1148,15 @@ pub(crate) enum ServEventId {
+     Environment {
+         num: ChanNum,
+     },
++    SessionWinChange {
++        num: ChanNum,
++    },
++    SessionSignal {
++        num: ChanNum,
++    },
++    SessionBreak {
++        num: ChanNum,
++    },
+     #[expect(unused)]
+     Defunct,
+     // TODO:
+@@ -966,6 +1178,10 @@ impl ServEventId {
+                 debug_assert!(matches!(p, Some(Packet::KexDHInit(_))));
+                 Ok(ServEvent::Hostkeys(ServHostkeys { runner }))
+             }
++            Self::SignExchange => {
++                // Emitted by the Runner after Hostkeys, not from a packet.
++                Ok(ServEvent::SignExchange(ServSignExchange { runner }))
++            }
+             Self::PasswordAuth => {
+                 debug_assert!(matches!(p, Some(Packet::UserauthRequest(_))));
+                 Ok(ServEvent::PasswordAuth(ServPasswordAuth::new(runner)))
+@@ -1006,6 +1222,20 @@ impl ServEventId {
+                 debug_assert!(matches!(p, Some(Packet::ChannelRequest(_))));
+                 Ok(ServEvent::SessionEnv(ServEnvironmentRequest::new(runner, num)))
+             }
++            Self::SessionWinChange { num } => {
++                debug_assert!(matches!(p, Some(Packet::ChannelRequest(_))));
++                Ok(ServEvent::SessionWinChange(ServWinChangeRequest::new(
++                    runner, num,
++                )))
++            }
++            Self::SessionSignal { num } => {
++                debug_assert!(matches!(p, Some(Packet::ChannelRequest(_))));
++                Ok(ServEvent::SessionSignal(ServSignalRequest::new(runner, num)))
++            }
++            Self::SessionBreak { num } => {
++                debug_assert!(matches!(p, Some(Packet::ChannelRequest(_))));
++                Ok(ServEvent::SessionBreak(ServBreakRequest::new(runner, num)))
++            }
+             Self::Defunct => Ok(ServEvent::Defunct),
+         }
+     }
+@@ -1016,6 +1246,7 @@ impl ServEventId {
+         match self {
+             Self::Defunct | Self::Authenticated => false,
+             Self::Hostkeys
++            | Self::SignExchange
+             | Self::FirstAuth
+             | Self::PasswordAuth
+             | Self::PubkeyAuth { .. }
+@@ -1024,6 +1255,9 @@ impl ServEventId {
+             | Self::SessionExec { .. }
+             | Self::SessionSubsystem { .. }
+             | Self::Environment { .. }
++            | Self::SessionWinChange { .. }
++            | Self::SessionSignal { .. }
++            | Self::SessionBreak { .. }
+             | Self::SessionPty { .. } => true,
+         }
+     }
+diff --git a/src/kex.rs b/src/kex.rs
+index eb4bff7..a48ca93 100644
+--- a/src/kex.rs
++++ b/src/kex.rs
+@@ -13,24 +13,26 @@ use {
+ use core::{fmt, marker::PhantomData};
+ 
+ use digest::Digest;
++use ed25519_compact::x25519;
+ #[cfg(feature = "mlkem")]
+ use ml_kem::{
+     B32, Ciphertext, DecapsulationKey, Key, KeyExport, MlKem768, Seed,
+     kem::{Decapsulate, EncapsulationKey},
+ };
+ use sha2::Sha256;
+-use zeroize::ZeroizeOnDrop;
++use zeroize::{Zeroize, ZeroizeOnDrop};
+ 
+ use crate::*;
+ use encrypt::{Cipher, Integ, KeysRecv, KeysSend};
+-use event::ServEventId;
++use event::{ExchangeTranscript, ServEventId};
+ use ident::RemoteVersion;
+ use namelist::{LocalNames, NameList};
+ use packets::{KexCookie, Packet, PubKey, Signature};
+ use sign::SigType;
+ use sshnames::*;
+ use sshwire::{
+-    BinString, Blob, SSHWireDigestUpdate, hash_mpint, hash_ser, hash_ser_length,
++    BinString, Blob, Mpint, SSHWireDigestUpdate, hash_mpint, hash_ser,
++    hash_ser_length,
+ };
+ use traffic::TrafSend;
+ 
+@@ -38,6 +40,13 @@ use traffic::TrafSend;
+ const MAX_SESSID: usize = 32;
+ pub type SessId = heapless::Vec<u8, MAX_SESSID>;
+ 
++/// The longest peer `KEXINIT` payload a server takes: it keeps a copy for a
++/// host key that signs outside sunset ([`event::ServSignExchange`]).
++/// OpenSSH's is about 1.3 KiB; a larger one is refused.
++pub const MAX_PEER_KEXINIT: usize = 4096;
++/// Our own `KEXINIT` payload, which `AlgoConfig` fixes well under this.
++const MAX_OWN_KEXINIT: usize = 512;
++
+ // TODO this will be configurable.
+ const fixed_options_kex: &[&str] = &[
+     #[cfg(feature = "mlkem")]
+@@ -132,6 +141,9 @@ pub(crate) enum Kex<CS: CliServ> {
+ 
+     /// Waiting for KexDHInit (server) or KexDHReply (client)
+     KexDH { algos: Algos<CS>, kex_hash: KexHash },
++    /// Server only: waiting for the application to sign the exchange hash
++    /// with a host key held outside sunset. `output` is computed.
++    SignExchange { output: KexOutput, algos: Algos<CS>, parts: ExchangeParts },
+     /// Waiting for NewKeys. `output` is new keys to take into use
+     ///
+     /// Our own NewKeys message has been sent.
+@@ -150,6 +162,64 @@ pub(crate) enum Kex<CS: CliServ> {
+ pub(crate) struct KexHash {
+     // Could be made generic if we add other kex methods
+     hash_ctx: Sha256,
++    // A server's copies of both KEXINIT payloads, the bytes hashed.
++    kexinits: Kexinits,
++}
++
++/// Both `KEXINIT` payloads, kept by a server for a signer outside sunset.
++/// Empty for a client.
++#[derive(Default)]
++pub(crate) struct Kexinits {
++    peer: heapless::Vec<u8, MAX_PEER_KEXINIT>,
++    own: heapless::Vec<u8, MAX_OWN_KEXINIT>,
++}
++
++impl fmt::Debug for Kexinits {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("Kexinits")
++            .field("peer", &self.peer.len())
++            .field("own", &self.own.len())
++            .finish()
++    }
++}
++
++impl Kexinits {
++    /// A packet's payload, or `BigPacket` if it is longer than `N`.
++    fn copy<const N: usize>(p: &Packet) -> Result<heapless::Vec<u8, N>> {
++        let size = sshwire::length_enc(p)? as usize;
++        let mut v = heapless::Vec::new();
++        v.resize(size, 0).map_err(|_| Error::BigPacket { size })?;
++        sshwire::write_ssh(&mut v, p)?;
++        Ok(v)
++    }
++}
++
++/// What a signer outside sunset needs beyond `Kexinits` and the
++/// identification strings, kept from `KEXDH_INIT` until it signs.
++pub(crate) struct ExchangeParts {
++    kexinits: Kexinits,
++    q_c: [u8; 32],
++    q_s: [u8; 32],
++    /// `K` as an `mpint` body: no leading zeros, a zero byte before a set
++    /// top bit. At most 33 bytes for Curve25519.
++    k: [u8; 33],
++    k_len: usize,
++    hostkey: SignKey,
++}
++
++impl fmt::Debug for ExchangeParts {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("ExchangeParts")
++            .field("kexinits", &self.kexinits)
++            .field("hostkey", &self.hostkey)
++            .finish_non_exhaustive()
++    }
++}
++
++impl Drop for ExchangeParts {
++    fn drop(&mut self) {
++        self.k.zeroize();
++    }
+ }
+ 
+ // kexhash state. progessively include version idents, kexinit payloads, hostsig, e/f, secret
+@@ -174,7 +244,8 @@ impl KexHash {
+         //    mpint     f, exchange value sent by the server (aka q_s)
+         //    mpint     K, the shared secret
+ 
+-        let mut kh = KexHash { hash_ctx: Sha256::new() };
++        let mut kh =
++            KexHash { hash_ctx: Sha256::new(), kexinits: Kexinits::default() };
+         let remote_version = remote_version.version().trap()?;
+         // Recreate our own kexinit packet to hash.
+         let own_kexinit = make_kexinit(our_cookie, algo_conf);
+@@ -184,10 +255,17 @@ impl KexHash {
+             hash_ser_length(&mut kh.hash_ctx, &own_kexinit)?;
+             hash_ser_length(&mut kh.hash_ctx, remote_kexinit)?;
+         } else {
++            // The copies are what is hashed, so a signer given them
++            // hashes the same bytes.
++            let kexinits = Kexinits {
++                peer: Kexinits::copy(remote_kexinit)?,
++                own: Kexinits::copy(&own_kexinit)?,
++            };
+             kh.hash_slice(remote_version);
+             kh.hash_slice(ident::OUR_VERSION);
+-            hash_ser_length(&mut kh.hash_ctx, remote_kexinit)?;
+-            hash_ser_length(&mut kh.hash_ctx, &own_kexinit)?
++            kh.hash_slice(&kexinits.peer);
++            kh.hash_slice(&kexinits.own);
++            kh.kexinits = kexinits;
+         }
+         // The remainder of hash_ctx is updated after kexdhreply
+ 
+@@ -341,7 +419,10 @@ impl<CS: CliServ> Kex<CS> {
+     /// has been sent and before NewKeys has been sent.
+     /// During that interval non-KEX packets are disallowed.
+     pub fn is_sending(&self) -> bool {
+-        matches!(self, Kex::KexInit { .. } | Kex::KexDH { .. })
++        matches!(
++            self,
++            Kex::KexInit { .. } | Kex::KexDH { .. } | Kex::SignExchange { .. }
++        )
+     }
+ 
+     /// Test if a KEX is in progress from a receiving perspective.
+@@ -350,7 +431,10 @@ impl<CS: CliServ> Kex<CS> {
+     pub fn is_receiving(&self) -> bool {
+         matches!(
+             self,
+-            Kex::KexDH { .. } | Kex::StartKexDH { .. } | Kex::NewKeys { .. }
++            Kex::KexDH { .. }
++                | Kex::StartKexDH { .. }
++                | Kex::SignExchange { .. }
++                | Kex::NewKeys { .. }
+         )
+     }
+ 
+@@ -389,7 +473,10 @@ impl<CS: CliServ> Kex<CS> {
+                     *self = Kex::KexDH { algos, kex_hash };
+                 }
+             }
+-            Kex::KexInit { .. } | Kex::KexDH { .. } | Kex::NewKeys { .. } => {
++            Kex::KexInit { .. }
++            | Kex::KexDH { .. }
++            | Kex::SignExchange { .. }
++            | Kex::NewKeys { .. } => {
+                 // waiting for incoming packets, no progress
+             }
+             Kex::Taken => return Error::bug(),
+@@ -590,6 +677,7 @@ impl<CS: CliServ> Kex<CS> {
+         match self {
+             Kex::StartKexDH { algos, .. }
+             | Kex::KexDH { algos, .. }
++            | Kex::SignExchange { algos, .. }
+             | Kex::NewKeys { algos, .. } => algos.strict_kex,
+             _ => false,
+         }
+@@ -678,6 +766,8 @@ impl Kex<Client> {
+ }
+ 
+ impl Kex<Server> {
++    /// Returns a `SignExchange` event for a host key that signs outside
++    /// sunset, which `resume_signexchange()` completes.
+     pub fn resume_kexdhinit(
+         &mut self,
+         p: &packets::KexDHInit,
+@@ -685,24 +775,88 @@ impl Kex<Server> {
+         keys: &[&SignKey],
+         sess_id: &mut Option<SessId>,
+         s: &mut TrafSend,
+-    ) -> Result<()> {
++    ) -> Result<DispatchEvent> {
+         if let Kex::KexDH { mut algos, kex_hash } = self.take() {
+-            let ext_info = algos.send_ext_info;
++            let hostkey = SharedSecret::choose_hostkey(&algos, keys)?;
++            if hostkey.is_agent() {
++                let (output, parts) = SharedSecret::exchange_for_signer(
++                    &mut algos, kex_hash, hostkey, p,
++                )?;
++                *self = Kex::SignExchange { output, algos, parts };
++                return Ok(DispatchEvent::ServEvent(ServEventId::SignExchange));
++            }
+ 
+             let output =
+-                SharedSecret::handle_kexdhinit(&mut algos, kex_hash, keys, p, s)?;
+-            self.send_newkeys(output, algos, sess_id, s)?;
+-
+-            if first_kex && ext_info {
+-                self.send_ext_info(s)?;
+-            }
+-            Ok(())
++                SharedSecret::handle_kexdhinit(&mut algos, kex_hash, hostkey, p, s)?;
++            self.finish_kexdhreply(output, algos, first_kex, sess_id, s)?;
++            Ok(DispatchEvent::None)
+         } else {
+             // Already checked in handle_kexdhinit
+             Error::bug()
+         }
+     }
+ 
++    /// The parts of the exchange hash a signer outside sunset takes.
++    pub fn exchange_transcript<'f>(
++        &'f self,
++        v_c: &'f [u8],
++    ) -> Result<ExchangeTranscript<'f>> {
++        let Kex::SignExchange { parts, .. } = self else {
++            return Error::bug();
++        };
++        Ok(ExchangeTranscript {
++            v_c,
++            v_s: ident::OUR_VERSION,
++            i_c: &parts.kexinits.peer,
++            i_s: &parts.kexinits.own,
++            q_c: &parts.q_c,
++            q_s: &parts.q_s,
++            k: &parts.k[..parts.k_len],
++        })
++    }
++
++    /// Sends `KEXDH_REPLY` with a signature made outside sunset, once it is
++    /// checked against this exchange's hash.
++    pub fn resume_signexchange(
++        &mut self,
++        sig: &OwnedSig,
++        first_kex: bool,
++        sess_id: &mut Option<SessId>,
++        s: &mut TrafSend,
++    ) -> Result<()> {
++        if let Kex::SignExchange { output, algos, parts } = self.take() {
++            // OK unwrap, hash is always sha256.
++            let h: &[u8; 32] = output.h.as_slice().try_into().unwrap();
++            let checked: Signature = sig.into();
++            algos
++                .hostsig
++                .verify(&parts.hostkey.pubkey(), &h, &checked)
++                .inspect_err(|_| warn!("Signature is not over this exchange"))?;
++            SharedSecret::send_kexdhreply(&parts.q_s, &parts.hostkey, sig, s)?;
++            self.finish_kexdhreply(output, algos, first_kex, sess_id, s)
++        } else {
++            Error::bug()
++        }
++    }
++
++    /// NewKeys after `KEXDH_REPLY`, and ext-info after the first exchange.
++    fn finish_kexdhreply(
++        &mut self,
++        output: KexOutput,
++        algos: Algos<Server>,
++        first_kex: bool,
++        sess_id: &mut Option<SessId>,
++        s: &mut TrafSend,
++    ) -> Result<()> {
++        let ext_info = algos.send_ext_info;
++        self.send_newkeys(output, algos, sess_id, s)?;
++
++        if first_kex && ext_info {
++            self.send_ext_info(s)?;
++        }
++        Ok(())
++    }
++
+     // Not inherently server-only, but no client use yet in sunset.
+     pub fn send_ext_info(&self, s: &mut TrafSend) -> Result<()> {
+         if cfg!(feature = "rsa") {
+@@ -794,28 +948,74 @@ impl SharedSecret {
+         Ok(kex_out)
+     }
+ 
+-    // server only. consumes algos and kex_hash
+-    fn handle_kexdhinit(
+-        algos: &mut Algos<Server>,
+-        mut kex_hash: KexHash,
+-        keys: &[&SignKey],
+-        p: &packets::KexDHInit,
+-        s: &mut TrafSend,
+-    ) -> Result<KexOutput> {
++    // server only
++    fn choose_hostkey<'k>(
++        algos: &Algos<Server>,
++        keys: &[&'k SignKey],
++    ) -> Result<&'k SignKey> {
+         if keys.is_empty() {
+             debug!("Hostkey list is empty");
+             return error::BadUsage.fail();
+         }
+ 
+         let hostkey = keys.iter().find(|k| k.can_sign(algos.hostsig));
+-        let hostkey = hostkey.ok_or_else(|| {
++        hostkey.copied().ok_or_else(|| {
+             // TODO: hostkeys should be requested
+             // earlier and used for kexinit algorithm negotiation too,
+             // so then this shouldn't fail here.
+             debug!("No suitable hostkey provided");
+             error::BadUsage.build()
+-        })?;
++        })
++    }
+ 
++    // server only, for a host key that signs outside sunset. consumes kex_hash
++    fn exchange_for_signer(
++        algos: &mut Algos<Server>,
++        mut kex_hash: KexHash,
++        hostkey: &SignKey,
++        p: &packets::KexDHInit,
++    ) -> Result<(KexOutput, ExchangeParts)> {
++        // The signer's transcript is RFC 8731's, curve25519 only.
++        let k = match &mut algos.kex {
++            SharedSecret::KexCurve25519(k) => k,
++            #[cfg(feature = "mlkem")]
++            SharedSecret::KexMlkemX25519(_) => {
++                debug!("A signer outside sunset takes curve25519 only");
++                return error::BadUsage.fail();
++            }
++        };
++        let q_c: [u8; 32] = p.q_c.0.try_into().map_err(|_| Error::BadKex)?;
++        let q_s = k.pubkey;
++
++        kex_hash.hash_hostkey(&hostkey.pubkey())?;
++        kex_hash.hash_pubkeys(&q_c, &q_s)?;
++        let kexinits = core::mem::take(&mut kex_hash.kexinits);
++        let shsec = k.raw_secret(&q_c)?;
++
++        // K as hashed, less its length.
++        let mut k_enc = [0u8; 4 + 33];
++        let l = sshwire::write_ssh(&mut k_enc, &Mpint::new(&*shsec))?;
++        let mut parts = ExchangeParts {
++            kexinits,
++            q_c,
++            q_s,
++            k: [0; 33],
++            k_len: l - 4,
++            hostkey: hostkey.clone(),
++        };
++        parts.k[..l - 4].copy_from_slice(&k_enc[4..l]);
++        k_enc.zeroize();
++        Ok((KexOutput::new(KexKey::Mpint(&*shsec), kex_hash), parts))
++    }
++
++    // server only. consumes algos and kex_hash
++    fn handle_kexdhinit(
++        algos: &mut Algos<Server>,
++        mut kex_hash: KexHash,
++        hostkey: &SignKey,
++        p: &packets::KexDHInit,
++        s: &mut TrafSend,
++    ) -> Result<KexOutput> {
+         kex_hash.hash_hostkey(&hostkey.pubkey())?;
+ 
+         #[cfg(feature = "mlkem")]
+@@ -832,25 +1032,25 @@ impl SharedSecret {
+             }
+         };
+ 
+-        Self::send_kexdhreply(&kex_out, pubkey, hostkey, s)?;
++        trace!("sign kexreply h {:02x?}", kex_out.h.as_slice());
++        // OK unwrap, hash is always sha256.
++        let h: &[u8; 32] = kex_out.h.as_slice().try_into().unwrap();
++        let sig = hostkey.sign(h)?;
++        Self::send_kexdhreply(pubkey, hostkey, &sig, s)?;
+         Ok(kex_out)
+     }
+ 
+     // server only
+     pub fn send_kexdhreply(
+-        ko: &KexOutput,
+         kex_pub: &[u8],
+         hostkey: &SignKey,
++        sig: &OwnedSig,
+         s: &mut TrafSend,
+     ) -> Result<()> {
+         let q_s = BinString(kex_pub);
+ 
+         let k_s = Blob(hostkey.pubkey());
+-        trace!("sign kexreply h {:02x?}", ko.h.as_slice());
+-        // OK unwrap, hash is always sha256.
+-        let h: &[u8; 32] = ko.h.as_slice().try_into().unwrap();
+-        let sig = hostkey.sign(h)?;
+-        let sig: Signature = (&sig).into();
++        let sig: Signature = sig.into();
+         let sig = Blob(sig);
+         s.send(packets::KexDHReply { k_s, q_s, sig })
+     }
+@@ -961,8 +1161,10 @@ impl KexOutput {
+ 
+ #[derive(ZeroizeOnDrop)]
+ pub(crate) struct KexCurve25519 {
+-    // Initialised in `new()`, cleared after deriving the secret
+-    ours: Option<x25519_dalek::EphemeralSecret>,
++    // Initialised in `new()`, cleared after deriving the secret.
++    // ed25519-compact wipes the secret when it is dropped.
++    #[zeroize(skip)]
++    ours: Option<x25519::SecretKey>,
+     // pubkey is relatively expensive to compute from the secret key
+     pubkey: [u8; 32],
+ }
+@@ -978,10 +1180,11 @@ impl core::fmt::Debug for KexCurve25519 {
+ 
+ impl KexCurve25519 {
+     fn new() -> Result<Self> {
+-        let ours =
+-            x25519_dalek::EphemeralSecret::random_from_rng(&mut random::rng());
+-        let pubkey = x25519_dalek::PublicKey::from(&ours);
+-        let pubkey = pubkey.to_bytes();
++        let mut seed = [0u8; x25519::SecretKey::BYTES];
++        random::fill_random(&mut seed)?;
++        let ours = x25519::SecretKey::new(seed);
++        seed.zeroize();
++        let pubkey = *ours.recover_public_key().map_err(|_| Error::build_bug())?;
+         Ok(KexCurve25519 { ours: Some(ours), pubkey })
+     }
+ 
+@@ -989,10 +1192,11 @@ impl KexCurve25519 {
+         &self.pubkey
+     }
+ 
+-    fn raw_secret(&mut self, theirs: &[u8]) -> Result<x25519_dalek::SharedSecret> {
+-        let theirs: [u8; 32] = theirs.try_into().map_err(|_| Error::BadKex)?;
+-        let theirs = theirs.into();
+-        Ok(self.ours.take().trap()?.diffie_hellman(&theirs))
++    /// Fails for a peer's point of small order, whose shared secret would be zero.
++    fn raw_secret(&mut self, theirs: &[u8]) -> Result<x25519::DHOutput> {
++        let theirs =
++            x25519::PublicKey::from_slice(theirs).map_err(|_| Error::BadKex)?;
++        theirs.dh(&self.ours.take().trap()?).map_err(|_| Error::BadKex)
+     }
+ 
+     fn secret(
+@@ -1007,7 +1211,7 @@ impl KexCurve25519 {
+             kex_hash.hash_pubkeys(theirs, self.pubkey())?;
+         }
+         let shsec = self.raw_secret(theirs)?;
+-        Ok(KexOutput::new(KexKey::Mpint(shsec.as_bytes()), kex_hash))
++        Ok(KexOutput::new(KexKey::Mpint(&*shsec), kex_hash))
+     }
+ }
+ 
+@@ -1149,7 +1353,7 @@ impl KexMlkemX25519 {
+         // K = HASH(K_PQ || K_CL)
+         let mut combiner = sha2::Sha256::new();
+         combiner.update(pq_secret);
+-        combiner.update(&ec_secret);
++        combiner.update(ec_secret.as_slice());
+         // TODO zeroize
+         let comb_sec = combiner.finalize();
+         Ok(KexOutput::new(KexKey::String(&comb_sec), kex_hash))
+diff --git a/src/lib.rs b/src/lib.rs
+index 5bad1df..7dc5912 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -79,7 +79,7 @@ pub use embedded_io;
+ // Re-exports.
+ // Crypto formats so that applications can handle
+ // private keys themselves.
+-pub use ed25519_dalek;
++pub use ed25519_compact;
+ 
+ #[cfg(feature = "_ecdsa")]
+ pub use ecdsa;
+diff --git a/src/random.rs b/src/random.rs
+index d7a7945..81bf388 100644
+--- a/src/random.rs
++++ b/src/random.rs
+@@ -1,3 +1,4 @@
++#[cfg(any(feature = "rsa", feature = "_ecdsa"))]
+ use rand_core::{CryptoRng, UnwrapErr};
+ #[allow(unused_imports)]
+ use {
+@@ -5,6 +6,9 @@ use {
+     log::{debug, error, info, log, trace, warn},
+ };
+ 
++// Only RSA and ECDSA key generation need a `CryptoRng`; Ed25519 and X25519
++// keys are made from `fill_random` seeds.
++#[cfg(any(feature = "rsa", feature = "_ecdsa"))]
+ pub(crate) fn rng() -> impl CryptoRng {
+     UnwrapErr(getrandom::SysRng)
+ }
+diff --git a/src/runner.rs b/src/runner.rs
+index 8f5568e..182a3e6 100644
+--- a/src/runner.rs
++++ b/src/runner.rs
+@@ -83,6 +83,15 @@ impl<'a> Runner<'a, client::Client> {
+         self.conn.channels.term_break(chan.0, length, &mut s)
+     }
+ 
++    /// Send a signal to a session channel
++    ///
++    /// `sig` is the name without "SIG", such as "INT".
++    /// Only call on a client session.
++    pub fn term_signal(&mut self, chan: &ChanHandle, sig: &str) -> Result<()> {
++        let mut s = self.traf_out.sender(&mut self.keys);
++        self.conn.channels.term_signal(chan.0, sig, &mut s)
++    }
++
+     pub(crate) fn fetch_cli_session_exit(&mut self) -> Result<CliSessionExit<'_>> {
+         let (payload, _seq) = self.traf_in.payload().trap()?;
+         self.conn.fetch_cli_session_exit(payload)
+@@ -194,11 +203,44 @@ impl<'a> Runner<'a, server::Server> {
+     pub(crate) fn resume_servhostkeys(&mut self, keys: &[&SignKey]) -> Result<()> {
+         let (payload, _seq) = self.traf_in.payload().trap()?;
+         let mut s = self.traf_out.sender(&mut self.keys);
+-        self.conn.resume_servhostkeys(payload, &mut s, keys)?;
++        let ev = self.conn.resume_servhostkeys(payload, &mut s, keys)?;
++        self.set_extra_resume(ev);
+         self.resume(&DispatchEvent::ServEvent(ServEventId::Hostkeys));
+         Ok(())
+     }
+ 
++    pub(crate) fn fetch_exchange_transcript(
++        &self,
++    ) -> Result<event::ExchangeTranscript<'_>> {
++        self.check_resume(&DispatchEvent::ServEvent(ServEventId::SignExchange));
++        self.conn.fetch_exchange_transcript()
++    }
++
++    pub(crate) fn resume_signexchange(&mut self, sig: &OwnedSig) -> Result<()> {
++        let mut s = self.traf_out.sender(&mut self.keys);
++        let r = self.conn.resume_signexchange(sig, &mut s);
++        // No payload is this event's: the KEXDH_INIT was done with at
++        // Hostkeys, and a packet read since is still to be handled.
++        let prev_event = self.resume_event.take();
++        self.check_resume_inner(
++            &DispatchEvent::ServEvent(ServEventId::SignExchange),
++            &prev_event,
++        );
++        r
++    }
++
++    /// End a session channel: send its exit status, then EOF, then close.
++    ///
++    /// Writes to the channel fail afterwards; still call `channel_done()`.
++    /// Fails with `BusySend` when the output has no room: call again once
++    /// output has drained, and it sends only what it has not yet sent.
++    pub fn session_exit(&mut self, chan: &ChanHandle, status: u32) -> Result<()> {
++        let mut s = self.traf_out.sender(&mut self.keys);
++        self.conn.channels.session_exit(chan.0, status, &mut s)?;
++        self.wake();
++        Ok(())
++    }
++
+     pub(crate) fn fetch_servusername(&self) -> Result<TextString<'_>> {
+         let u = self.conn.server()?.auth.username.as_ref().trap()?;
+         Ok(TextString(u.as_slice()))
+@@ -833,6 +875,9 @@ impl<'a, CS: CliServ> Runner<'a, CS> {
+                 | DispatchEvent::ServEvent(ServEventId::SessionSubsystem { .. })
+                 | DispatchEvent::ServEvent(ServEventId::SessionPty { .. })
+                 | DispatchEvent::ServEvent(ServEventId::Environment { .. })
++                | DispatchEvent::ServEvent(ServEventId::SessionWinChange { .. })
++                | DispatchEvent::ServEvent(ServEventId::SessionSignal { .. })
++                | DispatchEvent::ServEvent(ServEventId::SessionBreak { .. })
+         ));
+     }
+ 
+@@ -868,6 +913,34 @@ impl<'a, CS: CliServ> Runner<'a, CS> {
+         let p = self.conn.packet(payload)?;
+         self.conn.channels.fetch_env_value(&p)
+     }
++
++    pub(crate) fn fetch_pty(&self) -> Result<Pty> {
++        Self::check_chanreq(&self.resume_event);
++        let (payload, _seq) = self.traf_in.payload().trap()?;
++        let p = self.conn.packet(payload)?;
++        self.conn.channels.fetch_pty(&p)
++    }
++
++    pub(crate) fn fetch_winchange(&self) -> Result<packets::WinChange> {
++        Self::check_chanreq(&self.resume_event);
++        let (payload, _seq) = self.traf_in.payload().trap()?;
++        let p = self.conn.packet(payload)?;
++        self.conn.channels.fetch_winchange(&p)
++    }
++
++    pub(crate) fn fetch_signal(&self) -> Result<&str> {
++        Self::check_chanreq(&self.resume_event);
++        let (payload, _seq) = self.traf_in.payload().trap()?;
++        let p = self.conn.packet(payload)?;
++        self.conn.channels.fetch_signal(&p)
++    }
++
++    pub(crate) fn fetch_break(&self) -> Result<u32> {
++        Self::check_chanreq(&self.resume_event);
++        let (payload, _seq) = self.traf_in.payload().trap()?;
++        let p = self.conn.packet(payload)?;
++        self.conn.channels.fetch_break(&p)
++    }
+ }
+ 
+ #[cfg(feature = "alloc")]
+diff --git a/src/sign.rs b/src/sign.rs
+index c7bbed3..5b2bd36 100644
+--- a/src/sign.rs
++++ b/src/sign.rs
+@@ -8,9 +8,8 @@ use {
+     log::{debug, error, info, log, trace, warn},
+ };
+ 
+-use ed25519_dalek as dalek;
+-use ed25519_dalek::{Signer, Verifier};
+-use zeroize::ZeroizeOnDrop;
++use ed25519_compact as ed25519;
++use zeroize::{Zeroize, ZeroizeOnDrop};
+ 
+ use crate::*;
+ use packets::{Ed25519PubKey, Ed25519Sig, PubKey, Signature};
+@@ -168,21 +167,9 @@ impl SigType {
+         msg: &dyn SSHEncode,
+         s: &Ed25519Sig,
+     ) -> Result<()> {
+-        let k: &[u8; 32] = &k.key.0;
+-        let k = dalek::VerifyingKey::from_bytes(k).map_err(|_| Error::BadKey)?;
+-
+-        let s: &[u8; 64] = s.sig.0.try_into().map_err(|_| Error::BadSig)?;
+-        let s: dalek::Signature = s.into();
+-        // TODO: pending merge of https://github.com/dalek-cryptography/curve25519-dalek/pull/556
+-        // In the interim we use a fixed buffer.
+-        // dalek::hazmat::raw_verify_byupdate(
+-        //     &k,
+-        //     |h: &mut sha2::Sha512| {
+-        //         sshwire::hash_ser(h, msg).map_err(|_| dalek::SignatureError::new())
+-        //     },
+-        //     &s,
+-        // )
+-        // .map_err(|_| Error::BadSig)
++        let k = ed25519::PublicKey::new(k.key.0);
++        let s =
++            ed25519::Signature::from_slice(s.sig.0).map_err(|_| Error::BadSig)?;
+         let mut buf = [0; MAX_ED25519_SIG_MSG];
+         let l = sshwire::write_ssh(&mut buf, msg)?;
+         let buf = &buf[..l];
+@@ -334,10 +321,12 @@ pub enum KeyType {
+ pub enum SignKey {
+     // TODO: we could just have the 32 byte seed here to save memory, but
+     // computing the public part may be slow.
+-    Ed25519(dalek::SigningKey),
++    // ed25519-compact wipes the secret half when it is dropped.
++    #[zeroize(skip)]
++    Ed25519(ed25519::KeyPair),
+ 
+     #[zeroize(skip)]
+-    AgentEd25519(dalek::VerifyingKey),
++    AgentEd25519(ed25519::PublicKey),
+ 
+     #[cfg(feature = "rsa")]
+     // TODO zeroize doesn't seem supported? though BigUint has Zeroize
+@@ -362,7 +351,10 @@ impl SignKey {
+                 if bits.unwrap_or(256) != 256 {
+                     return Err(Error::msg("Bad key size"));
+                 }
+-                let k = dalek::SigningKey::generate(&mut random::rng());
++                let mut seed = [0u8; ed25519::Seed::BYTES];
++                random::fill_random(&mut seed)?;
++                let k = ed25519::KeyPair::from_seed(ed25519::Seed::new(seed));
++                seed.zeroize();
+                 Ok(Self::Ed25519(k))
+             }
+ 
+@@ -397,12 +389,11 @@ impl SignKey {
+     pub fn pubkey(&self) -> PubKey<'_> {
+         match self {
+             SignKey::Ed25519(k) => {
+-                let pubk = k.verifying_key().to_bytes();
+-                PubKey::Ed25519(Ed25519PubKey { key: Blob(pubk) })
++                PubKey::Ed25519(Ed25519PubKey { key: Blob(*k.pk) })
+             }
+ 
+             SignKey::AgentEd25519(pk) => {
+-                PubKey::Ed25519(Ed25519PubKey { key: Blob(pk.to_bytes()) })
++                PubKey::Ed25519(Ed25519PubKey { key: Blob(**pk) })
+             }
+ 
+             #[cfg(feature = "rsa")]
+@@ -430,9 +421,7 @@ impl SignKey {
+     pub fn from_agent_pubkey(pk: &PubKey) -> Result<Self> {
+         match pk {
+             PubKey::Ed25519(k) => {
+-                let k: dalek::VerifyingKey =
+-                    k.key.0.as_slice().try_into().map_err(|_| Error::BadKey)?;
+-                Ok(Self::AgentEd25519(k))
++                Ok(Self::AgentEd25519(ed25519::PublicKey::new(k.key.0)))
+             }
+ 
+             #[cfg(feature = "rsa")]
+@@ -465,23 +454,12 @@ impl SignKey {
+     pub(crate) fn sign(&self, msg: &impl SSHEncode) -> Result<OwnedSig> {
+         let sig: OwnedSig = match self {
+             SignKey::Ed25519(k) => {
+-                // TODO: pending merge of https://github.com/dalek-cryptography/curve25519-dalek/pull/556
+-                // let exk: dalek::hazmat::ExpandedSecretKey = (&k.to_bytes()).into();
+-                // let sig = dalek::hazmat::raw_sign_byupdate(
+-                //     &exk,
+-                //     |h: &mut sha2::Sha512| {
+-                //         sshwire::hash_ser(h, msg)
+-                //             .map_err(|_| dalek::SignatureError::new())
+-                //     },
+-                //     &k.verifying_key(),
+-                // )
+-                // .trap()?;
+                 let mut buf = [0; MAX_ED25519_SIG_MSG];
+                 let l = sshwire::write_ssh(&mut buf, msg)?;
+                 let buf = &buf[..l];
+-                let sig = k.sign(buf);
++                let sig = k.sk.sign(buf, None);
+ 
+-                OwnedSig::Ed25519(sig.to_bytes())
++                OwnedSig::Ed25519(*sig)
+             }
+ 
+             #[cfg(feature = "rsa")]
+@@ -578,7 +556,10 @@ impl sshwire::SSHEncode for SignKey {
+         match self {
+             SignKey::Ed25519(k) => {
+                 SSH_NAME_ED25519.enc(s)?;
+-                BinString(&k.to_bytes()).enc(s)?;
++                let seed = k.sk.seed();
++                let r = BinString(&*seed).enc(s);
++                seed.wipe();
++                r?;
+             }
+             #[cfg(feature = "rsa")]
+             SignKey::RSA(k) => {
+@@ -621,9 +602,13 @@ impl<'de> SSHDecode<'de> for SignKey {
+         Ok(match t {
+             SSH_NAME_ED25519 => {
+                 let k = BinString::dec(s)?;
+-                let k = k.0.try_into().map_err(|_| WireError::BadKey)?;
+-                let k = dalek::SigningKey::from_bytes(k);
+-                Self::Ed25519(k)
++                // KeyPair::from_seed panics on an all-zero seed
++                if k.0.iter().all(|b| *b == 0) {
++                    return Err(WireError::BadKey);
++                }
++                let k =
++                    ed25519::Seed::from_slice(k.0).map_err(|_| WireError::BadKey)?;
++                Self::Ed25519(ed25519::KeyPair::from_seed(k))
+             }
+             #[cfg(feature = "rsa")]
+             SSH_NAME_RSA => {
+@@ -657,7 +642,8 @@ impl TryFrom<ssh_key::PrivateKey> for SignKey {
+     fn try_from(k: ssh_key::PrivateKey) -> Result<Self> {
+         match k.key_data() {
+             ssh_key::private::KeypairData::Ed25519(k) => {
+-                Ok(SignKey::Ed25519(k.private.to_bytes().into()))
++                let seed = ed25519::Seed::new(k.private.to_bytes());
++                Ok(SignKey::Ed25519(ed25519::KeyPair::from_seed(seed)))
+             }
+ 
+             #[cfg(feature = "rsa")]

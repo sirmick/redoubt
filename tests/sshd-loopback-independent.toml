@@ -1,0 +1,26 @@
+description = "sshd on its host platform: one connection's end leaves another's session running"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice", "bob"]
+# The server saw both logins, and alice's session end while bob's went on to answer.
+server_log = ['^login alice: labels \{\}$', '^login bob: labels \{\}$', '^session alice ended$']
+
+[[session]]
+user = "alice"
+steps = [
+    { wait = "bob-in" },
+    { send = "exit 0\n" },
+    { mark = "alice-leaving" },
+    { exit = 0 },
+]
+
+[[session]]
+user = "bob"
+steps = [
+    { send = "echo bob-in\n" },
+    { expect = '^bob-in$' },
+    { mark = "bob-in" },
+    { wait = "alice-leaving" },
+    { send = "sleep 0.3; echo still-here\n" },
+    { expect = '^still-here$' },
+]

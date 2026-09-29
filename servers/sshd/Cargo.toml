@@ -1,0 +1,17 @@
+[package]
+name = "redoubt-sshd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "sshd's core: SSH on a patched sunset, every decision servers/sshd.md states, behind a platform trait"
+
+[dependencies]
+# TENETS.md 5: sunset 0.6.0, vendored and patched (vendor/README.md, "sunset"). Without its
+# default features: curve25519-sha256 and Ed25519 only, the exchange keyd signs.
+sunset = { version = "=0.6.0", default-features = false }
+
+[dev-dependencies]
+# sunset's `Pty` names its terminal in a heapless string.
+heapless = { version = "=0.9.3", default-features = false }
+# The tests' stand-in for keyd signs keyd's own exchange hash.
+redoubt-keyd = { path = "../keyd" }

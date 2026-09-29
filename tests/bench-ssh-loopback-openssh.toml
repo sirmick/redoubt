@@ -1,0 +1,46 @@
+description = "Bench self-check, the reference case: concurrent scripted SSH sessions, ordered by marks, exit statuses checked, a pty and a refused key, against the host's OpenSSH server, the session runner's independent witness"
+kind = "ssh-loopback"
+server = "openssh"
+timeout_secs = 20
+# ssh runs the host sshd itself (inetd mode), which runs /bin/sh for every login and accepts
+# only these test keys. It can log in only the user running the bench, so `user` here only
+# chooses the key and names the log (see README).
+authorized = ["alice", "bob"]
+
+[[session]]
+user = "alice"
+steps = [
+    { send = "echo alice-$((6 * 7))\n" },
+    { expect = '^alice-42$' },
+    { mark = "alice-in" },
+    { wait = "bob-done" },
+    { send = "exit 3\n" },
+    { exit = 3 },
+]
+
+# Ends the default way: input closed, and ssh must exit with status 0.
+[[session]]
+user = "bob"
+steps = [
+    { wait = "alice-in" },
+    { send = "echo bob-was-here\n" },
+    { expect = '^bob-was-here$' },
+    { mark = "bob-done" },
+]
+
+# A terminal session: the login name's `+label` is not part of the key's name.
+[[session]]
+user = "alice+tty"
+pty = true
+steps = [
+    { send = "tty; exit\n" },
+    { expect = '/dev/pts/\d+' },
+]
+
+# A key the server does not accept: ssh's refusal is output, and its status is checked.
+[[session]]
+user = "mallory"
+steps = [
+    { expect = 'Permission denied \(publickey\)' },
+    { exit = 255 },
+]

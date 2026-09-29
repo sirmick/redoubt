@@ -69,6 +69,11 @@ paths = ["servers/keyd/src"]
 max_lines = 1526
 
 [[crate]]
+name = "servers/sshd"
+paths = ["servers/sshd/src"]
+max_lines = 334
+
+[[crate]]
 name = "servers/bootfsd"
 paths = ["servers/bootfsd/src"]
 max_lines = 387

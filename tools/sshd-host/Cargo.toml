@@ -1,0 +1,14 @@
+[package]
+name = "redoubt-sshd-host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "sshd's core on the build host: one connection on stdin and stdout, keyd in process, a fixed login table and a scripted console, for the bench"
+publish = false
+
+[dependencies]
+anyhow = "1"
+redoubt-sshd = { path = "../../servers/sshd" }
+# keyd's own server code signs the exchange and answers `holds`, in this process.
+redoubt-keyd = { path = "../../servers/keyd" }
+redoubt-rt = { path = "../../libs/rt" }

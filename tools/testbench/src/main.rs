@@ -24,7 +24,7 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 use crate::build::{Builder, Profile};
-use crate::case::{Case, Kind, Program};
+use crate::case::{Case, Kind, LoopbackServer, Program};
 use crate::qemu::{Image, Verdict};
 use crate::target::{Machine, Target};
 
@@ -209,12 +209,18 @@ fn main() -> Result<()> {
         }
         if let Kind::SshLoopback(loopback) = &case.kind {
             let started = Instant::now();
-            let usable = loopback_usable.get_or_insert_with(|| {
-                ssh_available(true)
-                    .map_err(ssh::Unusable::Host)
-                    .and_then(|()| ssh::loopback_usable(&workspace, &logs.join("ssh")))
-            });
-            let outcome = match usable.clone() {
+            // Only OpenSSH's server needs the host's login context; Redoubt's needs only `ssh`.
+            let usable = match loopback.server {
+                LoopbackServer::Openssh => loopback_usable
+                    .get_or_insert_with(|| {
+                        ssh_available(true)
+                            .map_err(ssh::Unusable::Host)
+                            .and_then(|()| ssh::loopback_usable(&workspace, &logs.join("ssh")))
+                    })
+                    .clone(),
+                LoopbackServer::Redoubt => ssh_available(false).map_err(ssh::Unusable::Host),
+            };
+            let outcome = match usable {
                 Err(ssh::Unusable::Host(why)) => missing(why),
                 Err(ssh::Unusable::Broken(why)) => Outcome::Fail(why),
                 Ok(()) => match ssh_loopback(&workspace, case, loopback, &logs) {
@@ -514,17 +520,16 @@ fn ssh_available(server_too: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Run an `ssh-loopback` case: its sessions against a host sshd accepting its keys. An error
+/// Run an `ssh-loopback` case: its sessions against a host server accepting its keys. An error
 /// is the bench's own trouble; the outcome is the sessions' verdict.
 fn ssh_loopback(workspace: &Path, case: &Case, loopback: &case::SshLoopback, logs: &Path) -> Result<Outcome> {
     let deadline = Instant::now() + std::time::Duration::from_secs_f64(loopback.timeout_secs);
-    let server = ssh::loopback(
-        workspace,
-        &logs.join("ssh"),
-        &case.name,
-        &loopback.authorized,
-        loopback.host_key.as_deref(),
-    )?;
+    let serve = match loopback.server {
+        LoopbackServer::Redoubt => ssh::redoubt,
+        LoopbackServer::Openssh => ssh::loopback,
+    };
+    let server =
+        serve(workspace, &logs.join("ssh"), &case.name, &loopback.authorized, loopback.host_key.as_deref())?;
     let abort = std::sync::atomic::AtomicBool::new(false);
     let sessions = ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort)?;
     // What the server saw comes first: a case that fails as its `must_fail` expects still fails if
@@ -534,6 +539,12 @@ fn ssh_loopback(workspace: &Path, case: &Case, loopback: &case::SshLoopback, log
         let re = regex::Regex::new(pattern)?;
         if !server_log.lines().any(|line| re.is_match(line)) {
             return Ok(Outcome::Fail(format!("the server's log has no line matching /{pattern}/")));
+        }
+    }
+    for pattern in &loopback.server_log_forbid {
+        let re = regex::Regex::new(pattern)?;
+        if let Some(line) = server_log.lines().find(|line| re.is_match(line)) {
+            return Ok(Outcome::Fail(format!("the server's log has a forbidden line /{pattern}/: {line}")));
         }
     }
     Ok(match sessions {

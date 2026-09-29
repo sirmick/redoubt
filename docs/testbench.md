@@ -331,7 +331,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-Status: built · partly tested: the loopback self-checks cannot run on the development host while the bench runs in a service's SELinux context ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback-deadlock, bench:bench-ssh-guest, host:testbench::only_the_selinux_exec_refusal_is_the_hosts
+Status: built · partly tested: the OpenSSH reference case cannot run on the development host while the bench runs in a service's SELinux context ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback, bench:bench-ssh-loopback-deadlock, bench:bench-ssh-loopback-forbid, bench:bench-ssh-loopback-exit, bench:bench-ssh-loopback-host-key, bench:bench-ssh-loopback-aborted-text, bench:bench-ssh-guest, host:testbench::only_the_selinux_exec_refusal_is_the_hosts
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
 while the bench keeps watching the console. Each drives the host's OpenSSH `ssh`, an implementation
@@ -350,51 +350,57 @@ steps = [
     { wait = "bob-ready" },      # wait for another session's mark
     { exit = 0 },                # close input, read until ssh exits, require this status
 ]
+ssh_args = ["-W", "host:9"]  # optional: more ssh arguments, before the host
+command = "echo hi"          # optional: a command (with `-s`, a subsystem) in place of a shell
 ```
 
 Every session's exit status is checked and all of its output passes `forbid`; a session that fails
 stops the others. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in
 `tests/keys/`; they are public and marked not for production, and a boot manifest that lists one
-must never ship. The `ssh-loopback` kind runs sessions against a host OpenSSH server that `ssh`
-starts itself for each session, in inetd mode, so nothing listens on a port. Its log goes to a file
-beside the transcripts, never to `ssh`'s output, so a late line of the server's cannot stand in for
-the session's last output; a case's `server_log` asks what the server saw (a refused key, say), not
-only what the client printed. Before the first loopback case the bench logs in once and runs
-`exit 0`. One failure of that probe is named as the host's: under SELinux, `sshd` moves the shell
+must never ship. The `ssh-loopback` kind runs sessions against a server that `ssh` starts itself
+for each session as its `ProxyCommand`, so nothing listens on a port: Redoubt's `sshd` on its host
+platform ([against Redoubt's sshd](#against-redoubts-sshd)), or with `server = "openssh"` the
+host's OpenSSH server in inetd mode. Its log goes to a file beside the transcripts, never to
+`ssh`'s output, so a late line of the server's cannot stand in for the session's last output; a
+case's `server_log` asks what the server saw (a refused key, say), not only what the client
+printed, and its `server_log_forbid` what the server must not have done (a console started, say).
+Before the first OpenSSH loopback case the bench logs in once and runs `exit 0`. One failure of that probe is named as the host's: under SELinux, `sshd` moves the shell
 into the user's default context, which a bench running in a service's context may not enter, and
 the shell's exec is refused. When `ssh` reports `<shell>: Permission denied` and the server's log
 shows the context change, every loopback case fails with that reason, as on a host without
 OpenSSH, and `--allow-skip` skips them. The match is loose: on a host whose `sshd` logs that
 context change, any `/<path>: Permission denied` from `ssh` counts as the host's, not only the
-shell's. Any other probe failure fails every loopback case
+shell's. Any other probe failure fails every OpenSSH loopback case
 (`host:testbench::only_the_selinux_exec_refusal_is_the_hosts`).
 
 ### Against Redoubt's sshd
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: a window change reaches the console only in `sshd`'s host tests, since `ssh` reports one only from a terminal and the bench gives it pipes; agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply · tested: bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:bench-ssh-loopback, bench:bench-ssh-loopback-host-key, bench:sshd-host-tests
 
 `ssh-loopback` cases run the host's OpenSSH `ssh` against Redoubt's own `sshd` on its host
-platform ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)), started
-by `ssh` as its `ProxyCommand` as the host's `sshd` is today. Nothing there needs a shell or a
-login context, so the SELinux refusal above no longer touches them.
+platform, `redoubt-sshd-host` ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)),
+which the bench builds and `ssh` starts as its `ProxyCommand`. Its host key is `loopback-host`,
+and each of the case's `authorized` keys is a principal of the same name. Nothing there needs a
+shell or a login context, so the SELinux refusal above does not touch them.
 
-- **The self-checks move** to it, their steps written for its scripted console, and their
+- **The self-checks run on it,** their steps written for its scripted console, and their
   `server_log` patterns for its log.
-- **New cases, verdicts from `ssh`'s exit status and the server's log:** a login key the
-  server's `keyd` holds is refused, and so is an unknown principal; `alice+secrets` gets the
-  labels `{alice-secrets}`; on a labelled channel `exec`, a subsystem, port forwarding and agent
-  forwarding are refused ([R67 (a channel keeps its labels)](servers/sshd.md#r67-a-channel-keeps-its-labels));
-  a window change and a break reach the console; one connection's end leaves another's session
-  running; a host key other than `net.host_key` is refused.
+- **Cases, verdicts from `ssh`'s exit status and the server's log:** a login key the server's
+  `keyd` holds is refused and never reaches the login table, and so is an unknown principal;
+  `alice+secrets` gets the labels `{alice-secrets}`; on a labelled channel a shell without a
+  pty, `exec`, a subsystem, and remote and local port forwarding are refused, and no console
+  starts ([R67 (a channel keeps its labels)](servers/sshd.md#r67-a-channel-keeps-its-labels));
+  a break reaches the console as its interrupt; one connection's end leaves another's session
+  running; a host key other than the case's is refused. A window change is the host tests'
+  alone, and the refusal of `env` and of agent forwarding shows in no verdict
+  ([todo](todo/sshd-unseen-requests.md)).
 - **One reference case stays on OpenSSH's own `sshd`,** with `server = "openssh"`: concurrent
   sessions, marks, exit statuses, a pty and a refused key. It is the session runner's independent
-  witness, so a bug the runner shares with Redoubt's server cannot pass every self-check. It keeps
-  the SELinux probe, and runs from a login session
+  witness, so a bug the runner shares with Redoubt's server cannot pass every self-check
+  (`bench-ssh-loopback-openssh`). It keeps the SELinux probe, and runs from a login session
   ([todo](todo/ssh-loopback-host.md)).
 - `ssh` gets `WarnWeakCrypto=no-pq-kex` against Redoubt's server, whose exchange is not
   post-quantum: OpenSSH's warning would otherwise be session output.
-
-**Open:** none.
 
 ## Self-checks
 
@@ -466,11 +472,12 @@ with, so a raise there passes unchecked.
 
 ### Crates as published
 
-Status: built · partly tested: provenance against crates.io needs the network, so no bench case runs it; it is run by hand in the review of any change to `vendor/` · tested: bench:vendor-check, bench:vendor-build, host:redoubt-vendor-check::the_real_structure_passes, host:redoubt-vendor-check::a_renamed_header_fails_before_any_download, host:redoubt-vendor-check::a_missing_row_fails, host:redoubt-vendor-check::a_row_without_its_directory_and_a_stray_directory_fail, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::the_vendored_copies_are_the_ones_that_build, host:redoubt-vendor-check::the_patches_point_at_vendor, host:redoubt-vendor-check::the_readme_records_each_crate
+Status: built · partly tested: provenance against crates.io needs the network, so no bench case runs it; it is run by hand in the review of any change to `vendor/` · tested: bench:vendor-check, bench:vendor-build, host:redoubt-vendor-check::the_real_structure_passes, host:redoubt-vendor-check::a_renamed_header_fails_before_any_download, host:redoubt-vendor-check::a_missing_row_fails, host:redoubt-vendor-check::a_row_without_its_directory_and_a_stray_directory_fail, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::the_vendored_copies_are_the_ones_that_build, host:redoubt-vendor-check::the_patches_point_at_vendor, host:redoubt-vendor-check::the_readme_records_each_crate, host:redoubt-vendor-check::every_vendored_file_is_tracked
 
 `vendor/` holds third-party crates exactly as crates.io published them, each used through a
 `[patch.crates-io]` path, and `vendor/README.md` records each one's version, license and published
-checksum. Two checks guard them, and they prove different things:
+checksum. Git must track every vendored file: a crate's own `.gitignore` applies inside `vendor/`,
+and many name `Cargo.lock`. Two checks guard them, and they prove different things:
 
 - **Integrity since vendoring** (`vendor-check`, every bench run): every file is byte for byte what
   `vendor/SHA256SUMS` records, nothing is added or removed, and the build takes the crates from
@@ -485,11 +492,12 @@ checksum. Two checks guard them, and they prove different things:
 
 The residuals: provenance is only as current as the last review that ran it, and the vendored
 crates' `unsafe` is checked by recorded Miri runs, not by a bench case
-([ipd under Miri](servers/ipd.md#under-miri)).
+([ipd under Miri](servers/ipd.md#under-miri)); `sshd`'s crates have no such record yet
+([todo](todo/sshd-vendored-miri.md)).
 
 ### Patched crates
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:vendor-check, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::a_patched_crate_differs_only_by_its_patch, host:redoubt-vendor-check::every_patch_is_a_vendored_crates_and_recorded
 
 A crate we must change is still vendored from its published bytes, with exactly one patch file,
 `vendor/patches/<crate>.patch`, holding every change. `vendor/<crate>/` is the published crate
@@ -504,9 +512,10 @@ with that patch applied, since that is what Cargo builds, and nothing else diffe
 - A new release of the crate means taking the published bytes again and redoing the patch on
   them; a patch the crate's author has taken goes away with the release that carries it.
 
-`sunset` is the first ([sshd](servers/sshd.md#the-core-and-its-platforms)).
-
-**Open:** none.
+`sunset` is patched ([sshd](servers/sshd.md#the-core-and-its-platforms)), and what its patch does
+is tested through its public API (`tools/vendor-check/tests/sunset_patch.rs`). `ascii` is patched
+too: rustc 1.98 refuses to build it from a path as published, since Cargo caps a registry crate's
+lints, not a vendored one's.
 
 ## The no-cruft gate
 
