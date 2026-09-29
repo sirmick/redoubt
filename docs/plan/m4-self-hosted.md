@@ -73,7 +73,9 @@ In this order, after [M3 (files in and out)](m3-files.md):
 4. **Development on the box:** the compilers on beamlet, `git` through the gateway, Rust built off
    the box and shipped signed ([development](../userland/development.md)).
 5. **The audit log** for every steward action ([the steward](../servers/steward.md#the-audit-log)).
-6. **The agent harness** ([agents](../userland/agents.md#the-agent-harness)).
+6. **The agent harness and the agent loop**, on `gatewayd`'s typed events
+   ([agents](../userland/agents.md#the-agent-harness),
+   [the agent loop](../userland/agents.md#the-agent-loop)).
 7. **The escape room**, run continuously, with its findings turned into cases.
 
 ## Progress

@@ -232,6 +232,36 @@ the loader stub.
   code as well, so it can run a function on memory an owner still holds: a follow-up
   ([todo](../todo/raw-thread-create.md)).
 
+### Libraries for native programs
+
+Status: planned · M2 (usable shell)
+
+Native programs are `no_std` with `alloc`, so most of Rust's command-line crates, built on `std`'s
+files, processes and threads, do not build for them. These do: each builds for
+`riscv64imac-unknown-none-elf` with the features named, and none has C in its tree. Applications
+have more latitude than servers ([the tenets](../TENETS.md#5-dependencies-are-part-of-the-trusted-computing-base)),
+but each is vendored under `vendor/` when a program first uses it, with its provenance recorded as
+the others' is ([vendored dependencies](../testbench.md#vendored-dependencies)).
+
+| Purpose | Crates |
+| --- | --- |
+| Screens | `ratatui-core`, `ratatui-widgets` (default features off), `unicode-width`, `unicode-segmentation`, `vte` (escape-sequence parsing) |
+| Text | `crop` (a rope), `regex`, `memchr`, `aho-corasick` |
+| Compression | `miniz_oxide` (deflate, as beamlet uses), `ruzstd` (zstd), `lzma-rust2` (xz), `lz4_flex` |
+| Archives | `tar-no-std` (reading; writing is ours) |
+| Data | `serde_json` (`alloc`), `jaq-core`, `jaq-std`, `jaq-json` (a jq in pure Rust) |
+| Hashing | `sha2`, `blake3` (feature `pure`, which skips its assembly) |
+| Time | `jiff` |
+
+Three more need a small patch before they build, each only a missing `no_std` attribute or one
+`std` path: `imara-diff` (diff), `wildmatch` (glob patterns) and `nucleo-matcher` (fuzzy
+matching). Argument parsing (after `lexopt`, over the startup block's arguments) and a zip reader
+over `miniz_oxide` are ours to write.
+
+Every one is also to build for rv32, where the vendored crates are checked too, after rv64.
+
+**Open:** which of these build for rv32 as they stand; none has been tried there.
+
 ### Client crates and the Rust `std` target
 
 Status: planned · M4 (self-hosted development)

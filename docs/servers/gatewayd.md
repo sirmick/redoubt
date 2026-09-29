@@ -32,7 +32,10 @@ Status: planned · M4 (self-hosted development)
   ([steward](steward.md#leases)).
 - **Model requests are typed**, one message per operation, never raw HTTP: `gatewayd` builds the
   outgoing request itself from the checked fields, so a holder cannot reach another path, host or
-  header of the service. **Git is the one protocol relayed:** the client speaks git's smart HTTP to
+  header of the service. The reply comes back as a stream of typed events (text, a tool call, the
+  end of a turn, the usage), which `gatewayd` decodes from the provider's own stream, so no
+  provider's wire format reaches an agent's VM ([agents](../userland/agents.md#the-agent-loop)).
+  **Git is the one protocol relayed:** the client speaks git's smart HTTP to
   `gatewayd`, which parses each request and checks its remote, operation, refs and force against the
   grant before forwarding it with the credential, and passes nothing through unchecked.
 - **Every request is checked** against the capability before anything leaves the box: the service,

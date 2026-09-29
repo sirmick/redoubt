@@ -250,6 +250,42 @@ What the harness cannot be made to do:
 - **Parse model output.** The model's replies reach the agent's VM, not the launcher's.
 - **Hand the agent the sponsor's things.** The agent never gets the sponsor's `/dev/cons`, keys
   or any budget handle but its own.
+- **Drive the sponsor's terminal.** What the harness shows of an agent's replies it draws as cells
+  through `Redoubt.Term`, so a control sequence in a reply is drawn visibly and never acts
+  ([the shell](shell.md#the-terminal-library)).
+
+**Open:** none.
+
+### The agent loop
+
+Status: planned · M4 (self-hosted development)
+
+The model loop that runs in an agent's VM is small by design, after Mario Zechner's `pi`: a system
+prompt under 1,000 tokens, four tools, and nothing else in the loop.
+
+| Tool | What it does |
+| --- | --- |
+| `read` | a file's contents, by the shell's `cat` |
+| `write` | a whole file, by `w` (a temporary file and a rename) |
+| `edit` | replace one exact span of a file with another, failing if the span is absent or not unique |
+| `eval` | an Elixir expression or a command-mode line, evaluated in the agent's own VM in a monitored process with a timeout, its output captured |
+
+- **`eval` is the agent's shell.** Where `pi` gives a model `bash`, a Redoubt agent gets the same
+  shell a person does ([the shell](shell.md)): helpers, command mode, native pipes, and
+  `Redoubt.Agent` for sub-agents when its grants allow them. It adds no authority: whatever `eval`
+  runs, runs with the agent's handles, inside its lease.
+- **Nothing more in the loop.** No MCP, no plan mode, no to-do list, no tools beyond the four.
+  What an agent can be told to do is bounded by what it holds, and a short loop leaves little to
+  review in how it is told.
+- **The model is a stream from `gatewayd`.** The loop sends the conversation through its
+  `gatewayd` capability and receives the reply as a stream of typed events (text, a tool call, the
+  end of a turn), which `gatewayd` decoded from the provider's own stream; it opens no socket,
+  holds no key and parses no provider's format ([gatewayd](../servers/gatewayd.md)).
+  Compaction shortens a conversation that nears the model's context.
+- **No dependencies.** The loop is plain Elixir, about 1,500 lines, with no Hex packages: JSON is
+  Elixir's own `JSON`, and there is no HTTP client because there is no HTTP. The `pie` project, a
+  rewrite of `pi` in Elixir, is the model for its structure and is not copied: it has no licence.
+  Its `eval` follows Tidewave's (Apache-2.0).
 
 **Open:** none.
 

@@ -17,7 +17,7 @@ person or agent does:
 | --- | --- |
 | [Sessions and namespaces](sessions.md) | logging in, the session VM and its budget, vault sessions, namespaces, `approve@` |
 | [beamlet, the Elixir VM](beamlet.md) | the BEAM interpreter every session and agent runs in, and its boundary with the system |
-| [The shell](shell.md) | IEx as the shell: helpers, command mode, jobs, line editing, completion, help, the editor |
+| [The shell](shell.md) | IEx as the shell: helpers, command mode, jobs, line editing, completion, help, full-screen programs, the editor and file manager |
 | [Files and binds](files.md) | files over 9P, what `File` and `Path` do, labels on files, binds, sharing |
 | [Native programs](native.md) | launching Rust programs, standard I/O and pipes, killing jobs, `redoubt-rt` |
 | [Agents, leases and labels](agents.md) | an agent as a principal with a sponsor, leases, delegation, the agent harness |

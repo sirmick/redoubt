@@ -11,7 +11,8 @@ writing Elixir by hand:
 - interrupting and killing jobs, by budget destruction, with no signals;
 - line editing, history, completion and help;
 - showing resource use;
-- the editor.
+- full-screen programs drawn as cells through the session;
+- the editor and file manager.
 
 ## Attack suite
 
@@ -38,6 +39,13 @@ party's own output.
 - **Completion and help reveal nothing unreadable.** Completion lists only entries the caller's
   labels may read, launches nothing and writes nothing
   ([the shell](../userland/shell.md#completion)).
+- **Hostile text never drives the terminal.** A file, a file name or a program's output holding
+  control sequences (OSC 52, OSC 8, a title report, a bare ESC) reaches `/dev/cons` only as
+  visible characters; the case judges the bytes the session wrote
+  ([the shell](../userland/shell.md#the-terminal-library)).
+- **A full-screen program holds nothing.** `render` and the editor never reach `/dev/cons`, and a
+  hostile `render` or a file crafted against the editor reaches only what that program was bound
+  ([the shell](../userland/shell.md#full-screen-programs)).
 - **A paste is one event.** Pasted text arrives as one bracketed event and never triggers
   completion ([the shell](../userland/shell.md#the-terminal-library)).
 - **Binds add nothing.** A bind makes a held capability appear at another path and cannot point
@@ -67,8 +75,11 @@ In this order, after [M1 (separation and containment)](m1-separation.md):
 6. **Jobs**: one budget per native stage, `Job.kill`, the interrupt key over the console and SSH
    ([native programs](../userland/native.md#killing-a-job),
    [the shell](../userland/shell.md#interrupting-and-killing-jobs)).
-7. **Completion, help and resource use** ([the shell](../userland/shell.md#completion)).
-8. **The editor** ([the shell](../userland/shell.md#the-editor)).
+7. **Full-screen programs**: `render` with the cell backend, the vendored crates it needs
+   ([the shell](../userland/shell.md#full-screen-programs),
+   [libraries](../userland/native.md#libraries-for-native-programs)).
+8. **Completion, help and resource use** ([the shell](../userland/shell.md#completion)).
+9. **The editor and file manager** ([the shell](../userland/shell.md#the-editor)).
 
 ## Progress
 

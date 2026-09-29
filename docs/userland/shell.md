@@ -4,8 +4,9 @@ The shell is IEx, Elixir's interactive prompt, running in the session's beamlet 
 POSIX shell and no second language: a line at the prompt is Elixir, with short helpers for the
 everyday work (`cat`, `ls`, `cp`, `grep`), a command mode that lets bare words stand in for
 quoted arguments, and native programs joined by pipes when a stage must run in a budget of its
-own. Line editing, history, completion, help, a pager and an editor are Elixir too, drawn on the
-person's own terminal through `/dev/cons`.
+own. Line editing, history, completion, help and a pager are Elixir too. The editor and file
+manager is one native program, and its screen reaches the person's terminal only as cells the
+session draws: nothing but the session ever writes a control sequence to `/dev/cons`.
 
 ## Purpose
 
@@ -14,6 +15,10 @@ runs away, and find out how. On a box with no Unix, IEx is the natural shell (th
 uses it the same way on devices), and Elixir is a better scripting language than any shell
 language. What IEx lacks is the short surface a shell gives, launching and piping programs, job
 control, and line editing on a console nobody echoes for. This page describes that surface.
+
+The scope is three things done well: the command line, an editor with a file manager, and the
+agent ([agents](agents.md#the-agent-loop)). Everything else keeps to plain lines on the terminal,
+and the terminal is the only front end there is.
 
 ## How to use it
 
@@ -46,7 +51,7 @@ iex(6)> help cp
 ```
 
 Stop a runaway job with Ctrl+C. See what the session is using with `top()`. Edit a file with
-`ed("notes.txt")`.
+`ed notes.txt`; browse and copy files in two panes with `fm ~/project`.
 
 ## What it can and cannot do
 
@@ -221,6 +226,8 @@ The interrupt key:
 - **Ctrl+C at an idle prompt** clears the line. The BEAM's break menu is never reachable, and a
   session ends only by `exit` or Ctrl+D.
 - **Ctrl+G** is `edlin`'s job-control menu.
+- **With a full-screen program in front**, Ctrl+C is the program's key; the key the session keeps
+  for itself is open ([full-screen programs](#full-screen-programs)).
 - **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the same
   interrupt a 0x03 byte gives. It is a protocol message, not a Unix signal; nothing inside Redoubt
   has signals ([sshd](../servers/sshd.md)).
@@ -244,9 +251,21 @@ Status: planned · M2 (usable shell)
 
 Nothing between the keyboard and IEx edits a line: `consoled` and `sshd` serve `/dev/cons` as a
 raw byte stream with no echo. So the shell owns the terminal, through one pure-Elixir library,
-`Redoubt.Term`, that every screen program uses (the line editor, the pager, `top`, the editor).
+`Redoubt.Term`, that everything drawn on it goes through (the line editor, the pager, `top`, the
+agent's output, and the cells of [full-screen programs](#full-screen-programs)).
+- **The only writer of control sequences.** `Redoubt.Term` is the one code in a session that
+  emits escape sequences, and what it draws is cells: a grapheme with a colour and attributes,
+  never bytes passed through. A control character in the text of a cell, from a file's contents,
+  a file name or a model's reply, is drawn visibly (`^[`, `^G`), as `less` does, so hostile text
+  can never drive the person's terminal: set their clipboard (OSC 52), retitle the window, forge
+  a link (OSC 8) or make the terminal answer as if typed. There is no raw pass-through; bytes are
+  looked at with `hexdump`.
 - **Output:** cursor movement, erasing, scroll regions, the alternate screen, colour and
-  attributes, bracketed paste, and synchronized update so a redraw does not flicker.
+  attributes, bracketed paste, and synchronized update so a redraw does not flicker. Drawing is a
+  diff: the library keeps the screen's cells and sends only what changed.
+- **Glyphs:** 24-bit colour, box drawing, block elements and Braille patterns (a 2×4 dot grid per
+  cell, for sparklines and graphs), with a 16-colour ASCII fallback a session can choose, for a
+  UART or a console font without them.
 - **Input:** a key decoder for VT100, xterm and Linux sequences, including modifier forms
   (`ESC [1;5C` is Ctrl+Right), UTF-8, and bracketed paste as one event, so a paste can never
   trigger completion.
@@ -264,6 +283,57 @@ raw byte stream with no echo. So the shell owns the terminal, through one pure-E
 [the serving library](../servers/serving.md); and whether the shell sends a terminal
 query at login and adapts, or assumes the VT102 and xterm target (the recommendation: assume,
 because a query on a UART that never answers costs a timeout at every login).
+
+### Full-screen programs
+
+Status: planned · M2 (usable shell)
+
+```mermaid
+flowchart LR
+    APP["Elixir app: init, update, view"] -.->|"a view tree per frame"| R["render: ratatui, a budget of its own"]
+    NP["a native TUI program (the editor)"] -.->|"the same backend"| CELLS
+    R -.->|"changed cells"| CELLS["Redoubt.Term in the session"]
+    CELLS -.->|"escape sequences"| C["/dev/cons"]
+    C -.->|"raw bytes"| K["the session's key decoder"]
+    K -.->|"key events"| APP
+    K -.->|"key events"| NP
+```
+*Figure: how a full-screen program reaches the terminal. Every part is planned (dashed). Only the
+session's `Redoubt.Term` writes to `/dev/cons`; everything else hands it cells.*
+
+Screens with layout (a table, panes, a chart) are drawn by ratatui, a Rust TUI library, running
+nearly unchanged as a native program, `render`, in a budget of its own. ratatui already splits its
+work at its `Backend` trait: above it, widgets, layout, the cell buffer and the diff between
+frames; below it, the terminal. Redoubt's backend writes no escape sequences: it sends the changed
+cells (position, grapheme, colours, attributes) down a pipe, and the session draws them through
+`Redoubt.Term`.
+- **Driven from Elixir.** An Elixir screen program is three functions, `init`, `update` and `view`,
+  in the Elm style. Each frame the session sends `view`'s tree of widgets (block, list, table,
+  paragraph, gauge, sparkline, a Braille canvas) to `render`, which lays it out and answers with
+  the cells that changed. `top`, the pager and `help` are written this way.
+- **Native programs use the same backend.** A Rust program with a screen (the editor below) links
+  the backend itself, so its screen, too, reaches the terminal only as cells.
+- **Keys come from the session.** The session decodes every key from `/dev/cons` and sends the
+  program events; ratatui never did input, which was its terminal crate's job.
+- **Small things skip it.** A spinner, a progress line or a single status line is drawn by
+  `Redoubt.Term` directly, with no `render`.
+
+What a full-screen program cannot do:
+- **Write to the terminal.** It holds two pipes and its budget, no `/dev/cons`, and a cell cannot
+  carry a control sequence. A hijacked or buggy `render` can draw wrong cells, or crash and have
+  its budget reclaimed, and nothing more.
+- **Reach anything.** `render` holds no files, no network and no launch; the editor holds the
+  files it was started on ([the editor](#the-editor)).
+- **Grow the trusted base.** ratatui and its crates are a native program's dependencies, not the
+  VM's, the kernel's or a server's ([libraries](native.md#libraries-for-native-programs)); what is
+  trusted is the cell protocol and `Redoubt.Term`'s encoder.
+
+- **Keep the session's interrupt key.** A full-screen program receives Ctrl+C as a key (the editor
+  copies with it), so the session keeps one other key for itself, never forwards it, and destroys
+  the foreground job's budgets on it, as Ctrl+C does at the prompt. The key is configurable per
+  principal.
+
+**Open:** the default interrupt key for full-screen programs.
 
 ### Line editing and history
 
@@ -355,15 +425,39 @@ are drawn at random for the same reason ([processes](../kernel/processes.md#proc
 
 Status: planned · M2 (usable shell)
 
-`Redoubt.Ed` is a text editor in Elixir, running inside the session's VM and drawing through
-`Redoubt.Term` on `/dev/cons`: `ed("config.txt")` opens a file, with `hjkl` movement, `i` to
-insert, `:w` to save and `:q` to quit. Because it is Elixir, it can be scripted:
+The editor and the file manager are one native program with two views, in the manner of Midnight
+Commander: `ed notes.txt` opens the editor on a file, and `fm ~/project` opens two panes on a
+directory, from which F4 edits the selected file and closing the editor returns to the panes.
+- **Modeless, with the keys people expect.** The editor keeps micro's keys: Ctrl+S saves, Ctrl+Q
+  quits, Ctrl+F finds, Ctrl+Z undoes, Ctrl+C and Ctrl+V copy and paste, and the mouse is not used.
+  The panes keep Midnight Commander's: F3 views, F4 edits, F5 copies, F6 moves, F7 makes a
+  directory, F8 removes.
+- **What it edits well:** large files through a rope, search and replace by regular expression,
+  syntax highlighting for the languages of the box (Elixir, Erlang, Rust, Markdown, TOML, JSON),
+  undo and redo, and several files open at once.
+- **Scripted edits are the helpers'.** A script changes a file with `cat |> sub |> w`
+  ([viewing and searching](#viewing-and-searching)), not by driving the editor.
 
-```elixir
-Ed.open("log.txt"); Ed.goto(42); Ed.replace("foo", "bar"); Ed.save(); Ed.quit()
-```
+It runs in a budget of its own carved from the session's, drawn as cells through the session
+([full-screen programs](#full-screen-programs)), and holds only what it was started on: `ed f`
+binds `f`'s directory (a save writes a temporary file and renames it) and `fm d` binds `d`, each
+read-write, into its namespace, and nothing else.
+It has no console, no network and no launch, so a file crafted to take over the editor takes a
+process that can reach that directory and no more.
 
-It needs no process of its own and no authority beyond the file it opens.
+It is built from these crates, each of which builds `no_std` for rv64 with no C
+([libraries](native.md#libraries-for-native-programs)):
+
+| Crate | What for |
+| --- | --- |
+| `ratatui-core`, `ratatui-widgets` | layout, widgets and the frame diff, with Redoubt's cell backend |
+| `crop` | the buffer: a rope, so a large file edits in logarithmic time |
+| `regex` | search, replace and highlighting, in linear time for every pattern |
+| `unicode-width`, `unicode-segmentation` | cursor arithmetic over graphemes and wide characters |
+
+Two parts are forked rather than taken whole: the editing logic from `ratatui-textarea` (MIT,
+`forbid(unsafe_code)`, whose `std` use is only files and paths), and the highlighter from
+`synoptic`, moved onto `regex`.
 
 **Open:** none.
 
@@ -385,6 +479,29 @@ lend.
 library, is read for its state machine and key tables and is never built or linked: Redoubt has no
 C in its build. Terminal code is a parser of untrusted bytes (anything that reaches `/dev/cons`
 can be typed or pasted), which is one more reason to keep it in a memory-safe language.
+
+**Cells, not bytes.** Whatever reaches the person's terminal can drive the terminal program on
+their own machine, and on Redoubt much of what is shown was written by a hostile party: an agent's
+reply, a file it made, a name it chose. Sanitising at every place that prints would be one check
+to forget per program. Making the session's encoder the only writer, and cells the only thing
+anyone else can hand it, leaves no path for a control sequence to take.
+
+**ratatui, kept out.** Writing widgets, layout and a frame diff again would be work already done
+well. Linking ratatui into beamlet would put its crates in every session's VM and make the VM
+decode widget trees. Cutting it at its `Backend` trait keeps all of it in a native program that
+holds nothing, and speeds up the one part an interpreter does slowly, diffing a screen of cells.
+
+**A new editor.** No existing Rust editor or file manager ports: helix, zee, amp and Ox bring C
+(tree-sitter, Lua, oniguruma), and yazi, xplr, joshuto and broot are built on `std`'s files,
+processes and threads throughout. A rope, ratatui and a regex engine are most of an editor, and
+writing the rest on them is smaller than porting any of those. `fancy-regex` is not taken, though
+it builds: it backtracks, and a pattern should cost linear time wherever Redoubt matches one
+([beamlet](beamlet.md#what-runs-on-it)).
+
+**The terminal is the only front end.** A web interface for administration would be an inbound
+service and a GUI, both non-goals ([the tenets](../TENETS.md#non-goals)), and it would render
+agent-written text in the most privileged person's browser. The design it would need is recorded
+beyond M5 ([a browser GUI](../beyond/browser-gui.md)).
 
 **No resize callback.** IPC is caller-initiated, so a server tells a client something by
 answering a call the client made and the server parked. A callback would need the console server
