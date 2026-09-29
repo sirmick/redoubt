@@ -276,9 +276,34 @@ leaves the patch with the release that carries it.
   builds. `rand_core`, which only RSA and ECDSA key generation still need, is optional behind
   those features.
 
-The patch's other two parts, the server's signing event and its channel requests, come with
-`sshd`'s core. They are offered to `sunset`'s author once they have been reviewed here; the
-curve change is ours.
+- **A host key signed outside `sunset`.** Given a public-only host key
+  (`SignKey::AgentEd25519`), the server raises `ServEvent::SignExchange` after `Hostkeys`, where
+  published `sunset` would panic: it hands out `V_C`, `V_S`, `I_C`, `I_S`, `Q_C`, `Q_S` and `K`
+  (as an `mpint` body), exactly `keyd`'s `sign_ssh_exchange` fields, and `signed()` sends
+  `KEXDH_REPLY` once the signature checks against `sunset`'s own hash. A server keeps copies of
+  both `KEXINIT` payloads for this, and hashes the copies, so the signer is given the bytes hashed;
+  a peer's over 4 KiB is refused. Curve25519 only, the exchange `keyd` signs.
+- **Channel requests.** A client's `window-change`, `signal` and `break` reach a server as
+  `SessionWinChange`, `SessionSignal` and `SessionBreak` events, where published `sunset` drops
+  them, and `SessionPty` gains `pty()`, the terminal's name (at most `MAX_TERM` bytes of ASCII)
+  and starting size, where published `sunset` returns nothing. The client gains `term_signal`,
+  beside its `term_break`, filling a slot `sunset` leaves for it. The server's runner gains
+  `session_exit`, which sends `exit-status` (filling the slot `sunset` leaves for it), then EOF,
+  then close, where published `sunset`'s server sends EOF and close only as echoes; on a full
+  output it fails `BusySend`, and called again sends only what it has not sent. A channel that
+  has sent its EOF takes no more writes. The server no longer echoes a client's EOF (RFC 4254,
+  5.3: EOF is one direction), so a session's output goes on after it; close is still echoed.
+  `ServPubkeyAuth` gains `signed()`, whether the request carried a verified signature or was a
+  query.
+
+`tools/vendor-check/tests/sunset_patch.rs` runs a `sunset` client against the patched server through
+the public API: `keyd`'s `exchange_hash` over the handed-out parts is the hash the client checks, a
+signature over another hash is refused, the 4 KiB bound holds at 4,096 and 4,097 bytes, a pty's
+starting size and the three requests arrive, `signed()` tells the client's query from its signed
+request, and `session_exit` delivers the status and then the close, with no write after, and on a
+full output delivers the status once, when the output drains. The signing event and the channel
+requests are offered to `sunset`'s author once they have been reviewed here; the curve change is
+ours.
 
 ### `ascii`
 

@@ -58,10 +58,18 @@ crates](../testbench.md#patched-crates)), which changes three things:
   hands out the exchange's parts (`V_C`, `V_S`, `I_C`, `I_S`, `Q_C`, `Q_S`, `K`) and waits for the
   signature, as its client already does for an SSH agent. It keeps a bounded copy of the peer's
   `KEXINIT` for this, since after the first exchange only `sunset` sees one in the clear, and
-  refuses a larger one. It still computes the hash itself for the session keys; the client checks
-  the signature, so a disagreement fails the exchange.
-- **A client's `window-change`, `signal` and `break` requests reach the core**; published
-  `sunset` drops them on a server.
+  refuses a larger one (over 4 KiB). It still computes the hash itself for the session keys, and
+  checks the signature against it before sending it, so a disagreement fails the exchange on the
+  server; the client checks it too.
+- **A client's `window-change`, `signal` and `break` requests reach the core**, and so does a
+  pty's starting size; published `sunset` drops the three requests on a server, and does not hand
+  out the size. Its client gains `term_signal`, beside the `term_break` and
+  `term_window_change` it has, so the patch's tests send all three. The server gains
+  `session_exit`, which sends a session's exit status, then its EOF, then its close, where
+  published `sunset` sends EOF and close only as echoes of the client's. The server no longer
+  echoes the client's EOF, which is one direction only (RFC 4254): published `sunset` would end
+  the session's output there. A public key request gains `signed()`, which tells a signed
+  request from a query.
 - **Its X25519 and Ed25519 verification use `ed25519-compact`,** the crate the loader and `keyd`
   already link, in place of the `dalek` crates. The box then has one implementation of each
   curve operation.

@@ -15,5 +15,7 @@ ed25519-compact = { version = "=2.4.2", default-features = false }
 sunset = { version = "=0.6.0", default-features = false }
 
 [dev-dependencies]
+# sunset's `Pty` names its terminal in a heapless string.
+heapless = { version = "=0.9.3", default-features = false }
 # SHA-256, already in the tree and tested against its vectors (keyd).
 redoubt-keyd = { path = "../../servers/keyd" }

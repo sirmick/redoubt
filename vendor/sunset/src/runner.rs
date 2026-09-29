@@ -83,6 +83,15 @@ impl<'a> Runner<'a, client::Client> {
         self.conn.channels.term_break(chan.0, length, &mut s)
     }
 
+    /// Send a signal to a session channel
+    ///
+    /// `sig` is the name without "SIG", such as "INT".
+    /// Only call on a client session.
+    pub fn term_signal(&mut self, chan: &ChanHandle, sig: &str) -> Result<()> {
+        let mut s = self.traf_out.sender(&mut self.keys);
+        self.conn.channels.term_signal(chan.0, sig, &mut s)
+    }
+
     pub(crate) fn fetch_cli_session_exit(&mut self) -> Result<CliSessionExit<'_>> {
         let (payload, _seq) = self.traf_in.payload().trap()?;
         self.conn.fetch_cli_session_exit(payload)
@@ -194,8 +203,41 @@ impl<'a> Runner<'a, server::Server> {
     pub(crate) fn resume_servhostkeys(&mut self, keys: &[&SignKey]) -> Result<()> {
         let (payload, _seq) = self.traf_in.payload().trap()?;
         let mut s = self.traf_out.sender(&mut self.keys);
-        self.conn.resume_servhostkeys(payload, &mut s, keys)?;
+        let ev = self.conn.resume_servhostkeys(payload, &mut s, keys)?;
+        self.set_extra_resume(ev);
         self.resume(&DispatchEvent::ServEvent(ServEventId::Hostkeys));
+        Ok(())
+    }
+
+    pub(crate) fn fetch_exchange_transcript(
+        &self,
+    ) -> Result<event::ExchangeTranscript<'_>> {
+        self.check_resume(&DispatchEvent::ServEvent(ServEventId::SignExchange));
+        self.conn.fetch_exchange_transcript()
+    }
+
+    pub(crate) fn resume_signexchange(&mut self, sig: &OwnedSig) -> Result<()> {
+        let mut s = self.traf_out.sender(&mut self.keys);
+        let r = self.conn.resume_signexchange(sig, &mut s);
+        // No payload is this event's: the KEXDH_INIT was done with at
+        // Hostkeys, and a packet read since is still to be handled.
+        let prev_event = self.resume_event.take();
+        self.check_resume_inner(
+            &DispatchEvent::ServEvent(ServEventId::SignExchange),
+            &prev_event,
+        );
+        r
+    }
+
+    /// End a session channel: send its exit status, then EOF, then close.
+    ///
+    /// Writes to the channel fail afterwards; still call `channel_done()`.
+    /// Fails with `BusySend` when the output has no room: call again once
+    /// output has drained, and it sends only what it has not yet sent.
+    pub fn session_exit(&mut self, chan: &ChanHandle, status: u32) -> Result<()> {
+        let mut s = self.traf_out.sender(&mut self.keys);
+        self.conn.channels.session_exit(chan.0, status, &mut s)?;
+        self.wake();
         Ok(())
     }
 
@@ -833,6 +875,9 @@ impl<'a, CS: CliServ> Runner<'a, CS> {
                 | DispatchEvent::ServEvent(ServEventId::SessionSubsystem { .. })
                 | DispatchEvent::ServEvent(ServEventId::SessionPty { .. })
                 | DispatchEvent::ServEvent(ServEventId::Environment { .. })
+                | DispatchEvent::ServEvent(ServEventId::SessionWinChange { .. })
+                | DispatchEvent::ServEvent(ServEventId::SessionSignal { .. })
+                | DispatchEvent::ServEvent(ServEventId::SessionBreak { .. })
         ));
     }
 
@@ -867,6 +912,34 @@ impl<'a, CS: CliServ> Runner<'a, CS> {
         let (payload, _seq) = self.traf_in.payload().trap()?;
         let p = self.conn.packet(payload)?;
         self.conn.channels.fetch_env_value(&p)
+    }
+
+    pub(crate) fn fetch_pty(&self) -> Result<Pty> {
+        Self::check_chanreq(&self.resume_event);
+        let (payload, _seq) = self.traf_in.payload().trap()?;
+        let p = self.conn.packet(payload)?;
+        self.conn.channels.fetch_pty(&p)
+    }
+
+    pub(crate) fn fetch_winchange(&self) -> Result<packets::WinChange> {
+        Self::check_chanreq(&self.resume_event);
+        let (payload, _seq) = self.traf_in.payload().trap()?;
+        let p = self.conn.packet(payload)?;
+        self.conn.channels.fetch_winchange(&p)
+    }
+
+    pub(crate) fn fetch_signal(&self) -> Result<&str> {
+        Self::check_chanreq(&self.resume_event);
+        let (payload, _seq) = self.traf_in.payload().trap()?;
+        let p = self.conn.packet(payload)?;
+        self.conn.channels.fetch_signal(&p)
+    }
+
+    pub(crate) fn fetch_break(&self) -> Result<u32> {
+        Self::check_chanreq(&self.resume_event);
+        let (payload, _seq) = self.traf_in.payload().trap()?;
+        let p = self.conn.packet(payload)?;
+        self.conn.channels.fetch_break(&p)
     }
 }
 

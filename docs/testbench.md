@@ -506,9 +506,10 @@ with that patch applied, since that is what Cargo builds, and nothing else diffe
 - A new release of the crate means taking the published bytes again and redoing the patch on
   them; a patch the crate's author has taken goes away with the release that carries it.
 
-`sunset` is patched ([sshd](servers/sshd.md#the-core-and-its-platforms)), and so is `ascii`,
-which rustc 1.98 refuses to build from a path as published: Cargo caps a registry crate's lints,
-not a vendored one's.
+`sunset` is patched ([sshd](servers/sshd.md#the-core-and-its-platforms)), and what its patch does
+is tested through its public API (`tools/vendor-check/tests/sunset_patch.rs`). `ascii` is patched
+too: rustc 1.98 refuses to build it from a path as published, since Cargo caps a registry crate's
+lints, not a vendored one's.
 
 ## The no-cruft gate
 

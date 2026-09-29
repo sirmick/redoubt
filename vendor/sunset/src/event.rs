@@ -257,6 +257,11 @@ impl CliEventId {
 pub enum ServEvent<'g, 'a> {
     /// Request hostkeys to use for the session
     Hostkeys(ServHostkeys<'g, 'a>),
+    /// Sign the exchange with a host key held outside sunset.
+    ///
+    /// Follows `Hostkeys` when the key chosen is public-only
+    /// ([`SignKey::from_agent_pubkey`]).
+    SignExchange(ServSignExchange<'g, 'a>),
     /// Client's first authentication attempt.
     ///
     /// This can be used to capture the username.
@@ -300,6 +305,12 @@ pub enum ServEvent<'g, 'a> {
     /// Server has received one environment variable.
     /// Note: input strings are not sanitised.
     SessionEnv(ServEnvironmentRequest<'g, 'a>),
+    /// Client's terminal window changed size.
+    SessionWinChange(ServWinChangeRequest<'g, 'a>),
+    /// Client sent a signal to the channel's process.
+    SessionSignal(ServSignalRequest<'g, 'a>),
+    /// Client sent a break (RFC 4335).
+    SessionBreak(ServBreakRequest<'g, 'a>),
 
     /// The SSH session is no longer running
     Defunct,
@@ -316,6 +327,7 @@ impl Debug for ServEvent<'_, '_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let e = match self {
             Self::Hostkeys(_) => "Hostkeys",
+            Self::SignExchange(_) => "SignExchange",
             Self::PasswordAuth(_) => "PasswordAuth",
             Self::PubkeyAuth(_) => "PubkeyAuth",
             Self::FirstAuth(_) => "FirstAuth",
@@ -326,6 +338,9 @@ impl Debug for ServEvent<'_, '_> {
             Self::SessionSubsystem(_) => "SessionSubsystem",
             Self::SessionPty(_) => "SessionPty",
             Self::SessionEnv(_) => "Environment",
+            Self::SessionWinChange(_) => "SessionWinChange",
+            Self::SessionSignal(_) => "SessionSignal",
+            Self::SessionBreak(_) => "SessionBreak",
             Self::Defunct => "Defunct",
             Self::PollAgain => "PollAgain",
         };
@@ -346,6 +361,48 @@ impl<'g, 'a> ServHostkeys<'g, 'a> {
     /// This function must be called, with at least one hostkey.
     pub fn hostkeys(self, keys: &[&SignKey]) -> Result<()> {
         self.runner.resume_servhostkeys(keys)
+    }
+}
+
+/// The parts of an exchange hash (RFC 4253 section 8) but the host key
+/// `K_S`, which the signer takes from its own key.
+#[derive(Debug, Clone, Copy)]
+pub struct ExchangeTranscript<'a> {
+    /// The client's identification string.
+    pub v_c: &'a [u8],
+    /// The server's identification string.
+    pub v_s: &'a [u8],
+    /// The client's `SSH_MSG_KEXINIT` payload.
+    pub i_c: &'a [u8],
+    /// The server's `SSH_MSG_KEXINIT` payload.
+    pub i_s: &'a [u8],
+    /// The client's ephemeral public key.
+    pub q_c: &'a [u8],
+    /// The server's ephemeral public key.
+    pub q_s: &'a [u8],
+    /// The shared secret as an `mpint` body: no leading zeros, and a zero
+    /// byte before a set top bit.
+    pub k: &'a [u8],
+}
+
+/// Sign the exchange hash with a host key held outside sunset.
+///
+/// `signed()` must be called: dropping this fails the next `progress()`,
+/// which ends the connection. The signature is checked against sunset's
+/// own exchange hash before it is sent.
+pub struct ServSignExchange<'g, 'a> {
+    runner: &'g mut Runner<'a, server::Server>,
+}
+
+impl ServSignExchange<'_, '_> {
+    /// The parts to sign from.
+    pub fn transcript(&self) -> Result<ExchangeTranscript<'_>> {
+        self.runner.fetch_exchange_transcript()
+    }
+
+    /// Provide the signature, which sends `KEXDH_REPLY`.
+    pub fn signed(self, sig: &OwnedSig) -> Result<()> {
+        self.runner.resume_signexchange(sig)
     }
 }
 
@@ -488,6 +545,12 @@ impl<'g, 'a> ServPubkeyAuth<'g, 'a> {
     /// Retrieve the public key presented by a client.
     pub fn pubkey(&self) -> Result<PubKey<'_>> {
         self.runner.fetch_servpubkey()
+    }
+
+    /// Whether the client signed with the key (the signature is already
+    /// verified), rather than only asking whether the key would do.
+    pub fn signed(&self) -> bool {
+        self.real_sig
     }
 
     /// Accept the presented public key.
@@ -798,7 +861,7 @@ impl Drop for ServExecRequest<'_, '_> {
 
 /// A PTY request
 ///
-/// Placeholder, doesn't yet return the PTY information.
+/// Terminal modes are not yet parsed.
 pub struct ServPtyRequest<'g, 'a> {
     runner: &'g mut Runner<'a, Server>,
     num: ChanNum,
@@ -810,7 +873,11 @@ impl<'g, 'a> ServPtyRequest<'g, 'a> {
         Self { runner, num, done: false }
     }
 
-    // TODO return PTY information to the caller
+    /// The terminal's name and starting size, with no modes. Fails for a
+    /// name longer than `config::MAX_TERM` or not ASCII.
+    pub fn pty(&self) -> Result<Pty> {
+        self.runner.fetch_pty()
+    }
 
     /// Indicate that the request succeeded.
     ///
@@ -916,11 +983,147 @@ impl<'g, 'a> ServEnvironmentRequest<'g, 'a> {
     // TODO: does the app care about wantreply?
 }
 
+/// A `window-change` request.
+pub struct ServWinChangeRequest<'g, 'a> {
+    runner: &'g mut Runner<'a, Server>,
+    num: ChanNum,
+    done: bool,
+}
+
+impl<'g, 'a> ServWinChangeRequest<'g, 'a> {
+    fn new(runner: &'g mut Runner<'a, Server>, num: ChanNum) -> Self {
+        Self { runner, num, done: false }
+    }
+
+    /// The new size, in characters and in pixels.
+    pub fn size(&self) -> Result<packets::WinChange> {
+        self.runner.fetch_winchange()
+    }
+
+    /// Indicate that the request succeeded.
+    pub fn succeed(mut self) -> Result<()> {
+        self.done = true;
+        self.runner.resume_chanreq(true)
+    }
+
+    /// Indicate that the request failed. Also occurs on drop.
+    pub fn fail(mut self) -> Result<()> {
+        self.done = true;
+        self.runner.resume_chanreq(false)
+    }
+
+    /// Return the associated channel number.
+    pub fn channel(&self) -> ChanNum {
+        self.num
+    }
+}
+
+impl Drop for ServWinChangeRequest<'_, '_> {
+    fn drop(&mut self) {
+        if !self.done {
+            if let Err(e) = self.runner.resume_chanreq(false) {
+                trace!("Error for winchange: {e}")
+            }
+        }
+    }
+}
+
+/// A `signal` request.
+pub struct ServSignalRequest<'g, 'a> {
+    runner: &'g mut Runner<'a, Server>,
+    num: ChanNum,
+    done: bool,
+}
+
+impl<'g, 'a> ServSignalRequest<'g, 'a> {
+    fn new(runner: &'g mut Runner<'a, Server>, num: ChanNum) -> Self {
+        Self { runner, num, done: false }
+    }
+
+    /// The signal's name without "SIG", such as "INT". Not sanitised.
+    pub fn signal(&self) -> Result<&str> {
+        self.runner.fetch_signal()
+    }
+
+    /// Indicate that the request succeeded.
+    pub fn succeed(mut self) -> Result<()> {
+        self.done = true;
+        self.runner.resume_chanreq(true)
+    }
+
+    /// Indicate that the request failed. Also occurs on drop.
+    pub fn fail(mut self) -> Result<()> {
+        self.done = true;
+        self.runner.resume_chanreq(false)
+    }
+
+    /// Return the associated channel number.
+    pub fn channel(&self) -> ChanNum {
+        self.num
+    }
+}
+
+impl Drop for ServSignalRequest<'_, '_> {
+    fn drop(&mut self) {
+        if !self.done {
+            if let Err(e) = self.runner.resume_chanreq(false) {
+                trace!("Error for signal: {e}")
+            }
+        }
+    }
+}
+
+/// A `break` request (RFC 4335).
+pub struct ServBreakRequest<'g, 'a> {
+    runner: &'g mut Runner<'a, Server>,
+    num: ChanNum,
+    done: bool,
+}
+
+impl<'g, 'a> ServBreakRequest<'g, 'a> {
+    fn new(runner: &'g mut Runner<'a, Server>, num: ChanNum) -> Self {
+        Self { runner, num, done: false }
+    }
+
+    /// The break's length in milliseconds, as the client sent it.
+    pub fn length(&self) -> Result<u32> {
+        self.runner.fetch_break()
+    }
+
+    /// Indicate that the break was performed.
+    pub fn succeed(mut self) -> Result<()> {
+        self.done = true;
+        self.runner.resume_chanreq(true)
+    }
+
+    /// Indicate that the break was not performed. Also occurs on drop.
+    pub fn fail(mut self) -> Result<()> {
+        self.done = true;
+        self.runner.resume_chanreq(false)
+    }
+
+    /// Return the associated channel number.
+    pub fn channel(&self) -> ChanNum {
+        self.num
+    }
+}
+
+impl Drop for ServBreakRequest<'_, '_> {
+    fn drop(&mut self) {
+        if !self.done {
+            if let Err(e) = self.runner.resume_chanreq(false) {
+                trace!("Error for break: {e}")
+            }
+        }
+    }
+}
+
 // Only small values should be stored inline.
 // Larger state is retrieved from the current packet via Runner::fetch_*()
 #[derive(Debug, Clone)]
 pub(crate) enum ServEventId {
     Hostkeys,
+    SignExchange,
     PasswordAuth,
     PubkeyAuth {
         real_sig: bool,
@@ -945,6 +1148,15 @@ pub(crate) enum ServEventId {
     Environment {
         num: ChanNum,
     },
+    SessionWinChange {
+        num: ChanNum,
+    },
+    SessionSignal {
+        num: ChanNum,
+    },
+    SessionBreak {
+        num: ChanNum,
+    },
     #[expect(unused)]
     Defunct,
     // TODO:
@@ -965,6 +1177,10 @@ impl ServEventId {
             Self::Hostkeys => {
                 debug_assert!(matches!(p, Some(Packet::KexDHInit(_))));
                 Ok(ServEvent::Hostkeys(ServHostkeys { runner }))
+            }
+            Self::SignExchange => {
+                // Emitted by the Runner after Hostkeys, not from a packet.
+                Ok(ServEvent::SignExchange(ServSignExchange { runner }))
             }
             Self::PasswordAuth => {
                 debug_assert!(matches!(p, Some(Packet::UserauthRequest(_))));
@@ -1006,6 +1222,20 @@ impl ServEventId {
                 debug_assert!(matches!(p, Some(Packet::ChannelRequest(_))));
                 Ok(ServEvent::SessionEnv(ServEnvironmentRequest::new(runner, num)))
             }
+            Self::SessionWinChange { num } => {
+                debug_assert!(matches!(p, Some(Packet::ChannelRequest(_))));
+                Ok(ServEvent::SessionWinChange(ServWinChangeRequest::new(
+                    runner, num,
+                )))
+            }
+            Self::SessionSignal { num } => {
+                debug_assert!(matches!(p, Some(Packet::ChannelRequest(_))));
+                Ok(ServEvent::SessionSignal(ServSignalRequest::new(runner, num)))
+            }
+            Self::SessionBreak { num } => {
+                debug_assert!(matches!(p, Some(Packet::ChannelRequest(_))));
+                Ok(ServEvent::SessionBreak(ServBreakRequest::new(runner, num)))
+            }
             Self::Defunct => Ok(ServEvent::Defunct),
         }
     }
@@ -1016,6 +1246,7 @@ impl ServEventId {
         match self {
             Self::Defunct | Self::Authenticated => false,
             Self::Hostkeys
+            | Self::SignExchange
             | Self::FirstAuth
             | Self::PasswordAuth
             | Self::PubkeyAuth { .. }
@@ -1024,6 +1255,9 @@ impl ServEventId {
             | Self::SessionExec { .. }
             | Self::SessionSubsystem { .. }
             | Self::Environment { .. }
+            | Self::SessionWinChange { .. }
+            | Self::SessionSignal { .. }
+            | Self::SessionBreak { .. }
             | Self::SessionPty { .. } => true,
         }
     }

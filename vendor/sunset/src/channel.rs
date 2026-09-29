@@ -294,6 +294,45 @@ impl Channels {
         }
     }
 
+    pub(crate) fn term_signal(
+        &self,
+        num: ChanNum,
+        sig: &str,
+        s: &mut TrafSend,
+    ) -> Result<()> {
+        let ch = self.get(num)?;
+        match ch.ty {
+            ChanType::Session => Req::Signal(sig).send(ch, s),
+            _ => error::BadChannelData.fail(),
+        }
+    }
+
+    pub(crate) fn session_exit(
+        &mut self,
+        num: ChanNum,
+        status: u32,
+        s: &mut TrafSend,
+    ) -> Result<()> {
+        let ch = self.get_mut(num)?;
+        if !matches!(ch.ty, ChanType::Session) || ch.sent_close {
+            return error::BadChannelData.fail();
+        }
+        // Sent first: it cannot be deferred, so a full output fails here
+        // with nothing sent. The EOF and close that follow can be deferred.
+        // Each is sent once, so a call again after a failure sends the rest.
+        if !ch.sent_exit {
+            Req::ExitStatus(packets::ExitStatus { status }).send(ch, s)?;
+            ch.sent_exit = true;
+        }
+        if !ch.sent_eof {
+            s.send(packets::ChannelEof { num: ch.send_num()? })?;
+            ch.sent_eof = true;
+        }
+        s.send(packets::ChannelClose { num: ch.send_num()? })?;
+        ch.sent_close = true;
+        Ok(())
+    }
+
     fn dispatch_open(
         &mut self,
         p: &ChannelOpen<'_>,
@@ -585,6 +624,46 @@ impl Channels {
             _ => Error::bug(),
         }
     }
+
+    pub fn fetch_pty(&self, p: &Packet) -> Result<Pty> {
+        match p {
+            Packet::ChannelRequest(ChannelRequest {
+                req: ChannelReqType::Pty(pty),
+                ..
+            }) => pty.try_into(),
+            _ => Error::bug(),
+        }
+    }
+
+    pub fn fetch_winchange(&self, p: &Packet) -> Result<packets::WinChange> {
+        match p {
+            Packet::ChannelRequest(ChannelRequest {
+                req: ChannelReqType::WinChange(w),
+                ..
+            }) => Ok(w.clone()),
+            _ => Error::bug(),
+        }
+    }
+
+    pub fn fetch_signal<'p>(&self, p: &Packet<'p>) -> Result<&'p str> {
+        match p {
+            Packet::ChannelRequest(ChannelRequest {
+                req: ChannelReqType::Signal(packets::Signal { sig }),
+                ..
+            }) => Ok(sig),
+            _ => Error::bug(),
+        }
+    }
+
+    pub fn fetch_break(&self, p: &Packet) -> Result<u32> {
+        match p {
+            Packet::ChannelRequest(ChannelRequest {
+                req: ChannelReqType::Break(packets::Break { length }),
+                ..
+            }) => Ok(*length),
+            _ => Error::bug(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -648,8 +727,8 @@ pub enum Req<'a> {
     Pty(Pty),
     WinChange(packets::WinChange),
     Break(packets::Break),
-    // Signal,
-    // ExitStatus,
+    Signal(&'a str),
+    ExitStatus(packets::ExitStatus),
     // ExitSignal,
 }
 
@@ -678,6 +757,8 @@ impl Req<'_> {
             }),
             Req::WinChange(rt) => ChannelReqType::WinChange(rt),
             Req::Break(rt) => ChannelReqType::Break(rt),
+            Req::Signal(sig) => ChannelReqType::Signal(packets::Signal { sig }),
+            Req::ExitStatus(st) => ChannelReqType::ExitStatus(st),
         };
 
         let p = ChannelRequest {
@@ -741,6 +822,8 @@ pub(crate) struct Channel {
     state: ChanState,
     sent_eof: bool,
     sent_close: bool,
+    /// Set once `session_exit()` has sent the exit status.
+    sent_exit: bool,
 
     recv: ChanDir,
     /// populated in all states except `Opening`
@@ -777,6 +860,7 @@ impl Channel {
             state: ChanState::Opening,
             sent_close: false,
             sent_eof: false,
+            sent_exit: false,
             recv: ChanDir {
                 num: num.0,
                 // TODO these should depend on SSH rx buffer size minus overhead
@@ -937,6 +1021,15 @@ impl Channel {
             ChannelReqType::Environment(_) => {
                 Ok(DispatchEvent::ServEvent(ServEventId::Environment { num }))
             }
+            ChannelReqType::WinChange(_) => {
+                Ok(DispatchEvent::ServEvent(ServEventId::SessionWinChange { num }))
+            }
+            ChannelReqType::Signal(_) => {
+                Ok(DispatchEvent::ServEvent(ServEventId::SessionSignal { num }))
+            }
+            ChannelReqType::Break(_) => {
+                Ok(DispatchEvent::ServEvent(ServEventId::SessionBreak { num }))
+            }
             _ => {
                 if let ChannelReqType::Unknown(u) = &p.req {
                     warn!("Unknown channel req type \"{}\"", u)
@@ -986,7 +1079,9 @@ impl Channel {
 
     fn handle_eof(&mut self, s: &mut TrafSend, is_client: bool) -> Result<()> {
         //TODO: check existing state?
-        if !self.sent_eof {
+        // EOF is one direction (RFC 4254 5.3): a server keeps writing after
+        // the client's, and sends its own with `session_exit()`.
+        if is_client && !self.sent_eof {
             s.send(packets::ChannelEof { num: self.send_num()? })?;
             self.sent_eof = true;
         }
@@ -1032,8 +1127,11 @@ impl Channel {
         matches!(self.state, ChanState::RecvClose)
     }
 
-    // None on close
+    // None on close, or once this side has sent its EOF
     fn send_allowed(&self) -> Option<usize> {
+        if self.sent_eof {
+            return None;
+        }
         let r = self.send.as_ref().map(|s| usize::min(s.window, s.max_packet));
         trace!("send_allowed {r:?}");
         r

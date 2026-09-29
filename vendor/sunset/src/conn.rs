@@ -15,7 +15,7 @@ use {
 use crate::*;
 use channel::{Channels, CliSessionExit};
 use client::Client;
-use event::{CliEventId, ServEventId};
+use event::{CliEventId, ExchangeTranscript, ServEventId};
 use kex::{AlgoConfig, Kex, SessId};
 use packets::{Packet, ParseContext};
 use server::Server;
@@ -630,7 +630,7 @@ impl Conn<Server> {
         payload: &[u8],
         s: &mut TrafSend,
         keys: &[&SignKey],
-    ) -> Result<()> {
+    ) -> Result<DispatchEvent> {
         let packet = self.packet(payload)?;
         if let Packet::KexDHInit(p) = packet {
             self.kex.resume_kexdhinit(
@@ -643,6 +643,22 @@ impl Conn<Server> {
         } else {
             Error::bug()
         }
+    }
+
+    pub(crate) fn fetch_exchange_transcript(
+        &self,
+    ) -> Result<ExchangeTranscript<'_>> {
+        let v_c = self.remote_version.version().trap()?;
+        self.kex.exchange_transcript(v_c)
+    }
+
+    pub(crate) fn resume_signexchange(
+        &mut self,
+        sig: &OwnedSig,
+        s: &mut TrafSend,
+    ) -> Result<()> {
+        let first_kex = self.is_first_kex();
+        self.kex.resume_signexchange(sig, first_kex, &mut self.sess_id, s)
     }
 
     pub(crate) fn fetch_servpassword<'f>(

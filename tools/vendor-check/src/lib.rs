@@ -10,6 +10,8 @@
 //! That the tree is what crates.io published is checked by `provenance.sh`, which needs the
 //! network and is run in the review of any change to `vendor/` (vendor/README.md).
 //!
+//! `tests/sunset_patch.rs` tests what `sunset`'s patch does, through its public API.
+//!
 //! It depends on `smoltcp` with exactly `ipd`'s features, and on `ed25519-compact` as the loader
 //! and `keyd` do, so the lockfile resolves the vendored crates whether or not their users are
 //! being built. The library is `no_std`, so building it for both RISC-V targets builds them for

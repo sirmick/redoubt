@@ -704,6 +704,7 @@ name = "redoubt-vendor-check"
 version = "0.1.0"
 dependencies = [
  "ed25519-compact",
+ "heapless",
  "redoubt-keyd",
  "smoltcp",
  "sunset",

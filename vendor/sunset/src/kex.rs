@@ -24,20 +24,28 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::*;
 use encrypt::{Cipher, Integ, KeysRecv, KeysSend};
-use event::ServEventId;
+use event::{ExchangeTranscript, ServEventId};
 use ident::RemoteVersion;
 use namelist::{LocalNames, NameList};
 use packets::{KexCookie, Packet, PubKey, Signature};
 use sign::SigType;
 use sshnames::*;
 use sshwire::{
-    BinString, Blob, SSHWireDigestUpdate, hash_mpint, hash_ser, hash_ser_length,
+    BinString, Blob, Mpint, SSHWireDigestUpdate, hash_mpint, hash_ser,
+    hash_ser_length,
 };
 use traffic::TrafSend;
 
 // at present we only have curve25519 with sha256
 const MAX_SESSID: usize = 32;
 pub type SessId = heapless::Vec<u8, MAX_SESSID>;
+
+/// The longest peer `KEXINIT` payload a server takes: it keeps a copy for a
+/// host key that signs outside sunset ([`event::ServSignExchange`]).
+/// OpenSSH's is about 1.3 KiB; a larger one is refused.
+pub const MAX_PEER_KEXINIT: usize = 4096;
+/// Our own `KEXINIT` payload, which `AlgoConfig` fixes well under this.
+const MAX_OWN_KEXINIT: usize = 512;
 
 // TODO this will be configurable.
 const fixed_options_kex: &[&str] = &[
@@ -133,6 +141,9 @@ pub(crate) enum Kex<CS: CliServ> {
 
     /// Waiting for KexDHInit (server) or KexDHReply (client)
     KexDH { algos: Algos<CS>, kex_hash: KexHash },
+    /// Server only: waiting for the application to sign the exchange hash
+    /// with a host key held outside sunset. `output` is computed.
+    SignExchange { output: KexOutput, algos: Algos<CS>, parts: ExchangeParts },
     /// Waiting for NewKeys. `output` is new keys to take into use
     ///
     /// Our own NewKeys message has been sent.
@@ -151,6 +162,64 @@ pub(crate) enum Kex<CS: CliServ> {
 pub(crate) struct KexHash {
     // Could be made generic if we add other kex methods
     hash_ctx: Sha256,
+    // A server's copies of both KEXINIT payloads, the bytes hashed.
+    kexinits: Kexinits,
+}
+
+/// Both `KEXINIT` payloads, kept by a server for a signer outside sunset.
+/// Empty for a client.
+#[derive(Default)]
+pub(crate) struct Kexinits {
+    peer: heapless::Vec<u8, MAX_PEER_KEXINIT>,
+    own: heapless::Vec<u8, MAX_OWN_KEXINIT>,
+}
+
+impl fmt::Debug for Kexinits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Kexinits")
+            .field("peer", &self.peer.len())
+            .field("own", &self.own.len())
+            .finish()
+    }
+}
+
+impl Kexinits {
+    /// A packet's payload, or `BigPacket` if it is longer than `N`.
+    fn copy<const N: usize>(p: &Packet) -> Result<heapless::Vec<u8, N>> {
+        let size = sshwire::length_enc(p)? as usize;
+        let mut v = heapless::Vec::new();
+        v.resize(size, 0).map_err(|_| Error::BigPacket { size })?;
+        sshwire::write_ssh(&mut v, p)?;
+        Ok(v)
+    }
+}
+
+/// What a signer outside sunset needs beyond `Kexinits` and the
+/// identification strings, kept from `KEXDH_INIT` until it signs.
+pub(crate) struct ExchangeParts {
+    kexinits: Kexinits,
+    q_c: [u8; 32],
+    q_s: [u8; 32],
+    /// `K` as an `mpint` body: no leading zeros, a zero byte before a set
+    /// top bit. At most 33 bytes for Curve25519.
+    k: [u8; 33],
+    k_len: usize,
+    hostkey: SignKey,
+}
+
+impl fmt::Debug for ExchangeParts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExchangeParts")
+            .field("kexinits", &self.kexinits)
+            .field("hostkey", &self.hostkey)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ExchangeParts {
+    fn drop(&mut self) {
+        self.k.zeroize();
+    }
 }
 
 // kexhash state. progessively include version idents, kexinit payloads, hostsig, e/f, secret
@@ -175,7 +244,8 @@ impl KexHash {
         //    mpint     f, exchange value sent by the server (aka q_s)
         //    mpint     K, the shared secret
 
-        let mut kh = KexHash { hash_ctx: Sha256::new() };
+        let mut kh =
+            KexHash { hash_ctx: Sha256::new(), kexinits: Kexinits::default() };
         let remote_version = remote_version.version().trap()?;
         // Recreate our own kexinit packet to hash.
         let own_kexinit = make_kexinit(our_cookie, algo_conf);
@@ -185,10 +255,17 @@ impl KexHash {
             hash_ser_length(&mut kh.hash_ctx, &own_kexinit)?;
             hash_ser_length(&mut kh.hash_ctx, remote_kexinit)?;
         } else {
+            // The copies are what is hashed, so a signer given them
+            // hashes the same bytes.
+            let kexinits = Kexinits {
+                peer: Kexinits::copy(remote_kexinit)?,
+                own: Kexinits::copy(&own_kexinit)?,
+            };
             kh.hash_slice(remote_version);
             kh.hash_slice(ident::OUR_VERSION);
-            hash_ser_length(&mut kh.hash_ctx, remote_kexinit)?;
-            hash_ser_length(&mut kh.hash_ctx, &own_kexinit)?
+            kh.hash_slice(&kexinits.peer);
+            kh.hash_slice(&kexinits.own);
+            kh.kexinits = kexinits;
         }
         // The remainder of hash_ctx is updated after kexdhreply
 
@@ -342,7 +419,10 @@ impl<CS: CliServ> Kex<CS> {
     /// has been sent and before NewKeys has been sent.
     /// During that interval non-KEX packets are disallowed.
     pub fn is_sending(&self) -> bool {
-        matches!(self, Kex::KexInit { .. } | Kex::KexDH { .. })
+        matches!(
+            self,
+            Kex::KexInit { .. } | Kex::KexDH { .. } | Kex::SignExchange { .. }
+        )
     }
 
     /// Test if a KEX is in progress from a receiving perspective.
@@ -351,7 +431,10 @@ impl<CS: CliServ> Kex<CS> {
     pub fn is_receiving(&self) -> bool {
         matches!(
             self,
-            Kex::KexDH { .. } | Kex::StartKexDH { .. } | Kex::NewKeys { .. }
+            Kex::KexDH { .. }
+                | Kex::StartKexDH { .. }
+                | Kex::SignExchange { .. }
+                | Kex::NewKeys { .. }
         )
     }
 
@@ -390,7 +473,10 @@ impl<CS: CliServ> Kex<CS> {
                     *self = Kex::KexDH { algos, kex_hash };
                 }
             }
-            Kex::KexInit { .. } | Kex::KexDH { .. } | Kex::NewKeys { .. } => {
+            Kex::KexInit { .. }
+            | Kex::KexDH { .. }
+            | Kex::SignExchange { .. }
+            | Kex::NewKeys { .. } => {
                 // waiting for incoming packets, no progress
             }
             Kex::Taken => return Error::bug(),
@@ -591,6 +677,7 @@ impl<CS: CliServ> Kex<CS> {
         match self {
             Kex::StartKexDH { algos, .. }
             | Kex::KexDH { algos, .. }
+            | Kex::SignExchange { algos, .. }
             | Kex::NewKeys { algos, .. } => algos.strict_kex,
             _ => false,
         }
@@ -679,6 +766,8 @@ impl Kex<Client> {
 }
 
 impl Kex<Server> {
+    /// Returns a `SignExchange` event for a host key that signs outside
+    /// sunset, which `resume_signexchange()` completes.
     pub fn resume_kexdhinit(
         &mut self,
         p: &packets::KexDHInit,
@@ -686,22 +775,86 @@ impl Kex<Server> {
         keys: &[&SignKey],
         sess_id: &mut Option<SessId>,
         s: &mut TrafSend,
-    ) -> Result<()> {
+    ) -> Result<DispatchEvent> {
         if let Kex::KexDH { mut algos, kex_hash } = self.take() {
-            let ext_info = algos.send_ext_info;
+            let hostkey = SharedSecret::choose_hostkey(&algos, keys)?;
+            if hostkey.is_agent() {
+                let (output, parts) = SharedSecret::exchange_for_signer(
+                    &mut algos, kex_hash, hostkey, p,
+                )?;
+                *self = Kex::SignExchange { output, algos, parts };
+                return Ok(DispatchEvent::ServEvent(ServEventId::SignExchange));
+            }
 
             let output =
-                SharedSecret::handle_kexdhinit(&mut algos, kex_hash, keys, p, s)?;
-            self.send_newkeys(output, algos, sess_id, s)?;
-
-            if first_kex && ext_info {
-                self.send_ext_info(s)?;
-            }
-            Ok(())
+                SharedSecret::handle_kexdhinit(&mut algos, kex_hash, hostkey, p, s)?;
+            self.finish_kexdhreply(output, algos, first_kex, sess_id, s)?;
+            Ok(DispatchEvent::None)
         } else {
             // Already checked in handle_kexdhinit
             Error::bug()
         }
+    }
+
+    /// The parts of the exchange hash a signer outside sunset takes.
+    pub fn exchange_transcript<'f>(
+        &'f self,
+        v_c: &'f [u8],
+    ) -> Result<ExchangeTranscript<'f>> {
+        let Kex::SignExchange { parts, .. } = self else {
+            return Error::bug();
+        };
+        Ok(ExchangeTranscript {
+            v_c,
+            v_s: ident::OUR_VERSION,
+            i_c: &parts.kexinits.peer,
+            i_s: &parts.kexinits.own,
+            q_c: &parts.q_c,
+            q_s: &parts.q_s,
+            k: &parts.k[..parts.k_len],
+        })
+    }
+
+    /// Sends `KEXDH_REPLY` with a signature made outside sunset, once it is
+    /// checked against this exchange's hash.
+    pub fn resume_signexchange(
+        &mut self,
+        sig: &OwnedSig,
+        first_kex: bool,
+        sess_id: &mut Option<SessId>,
+        s: &mut TrafSend,
+    ) -> Result<()> {
+        if let Kex::SignExchange { output, algos, parts } = self.take() {
+            // OK unwrap, hash is always sha256.
+            let h: &[u8; 32] = output.h.as_slice().try_into().unwrap();
+            let checked: Signature = sig.into();
+            algos
+                .hostsig
+                .verify(&parts.hostkey.pubkey(), &h, &checked)
+                .inspect_err(|_| warn!("Signature is not over this exchange"))?;
+            SharedSecret::send_kexdhreply(&parts.q_s, &parts.hostkey, sig, s)?;
+            self.finish_kexdhreply(output, algos, first_kex, sess_id, s)
+        } else {
+            Error::bug()
+        }
+    }
+
+    /// NewKeys after `KEXDH_REPLY`, and ext-info after the first exchange.
+    fn finish_kexdhreply(
+        &mut self,
+        output: KexOutput,
+        algos: Algos<Server>,
+        first_kex: bool,
+        sess_id: &mut Option<SessId>,
+        s: &mut TrafSend,
+    ) -> Result<()> {
+        let ext_info = algos.send_ext_info;
+        self.send_newkeys(output, algos, sess_id, s)?;
+
+        if first_kex && ext_info {
+            self.send_ext_info(s)?;
+        }
+        Ok(())
     }
 
     // Not inherently server-only, but no client use yet in sunset.
@@ -795,28 +948,74 @@ impl SharedSecret {
         Ok(kex_out)
     }
 
-    // server only. consumes algos and kex_hash
-    fn handle_kexdhinit(
-        algos: &mut Algos<Server>,
-        mut kex_hash: KexHash,
-        keys: &[&SignKey],
-        p: &packets::KexDHInit,
-        s: &mut TrafSend,
-    ) -> Result<KexOutput> {
+    // server only
+    fn choose_hostkey<'k>(
+        algos: &Algos<Server>,
+        keys: &[&'k SignKey],
+    ) -> Result<&'k SignKey> {
         if keys.is_empty() {
             debug!("Hostkey list is empty");
             return error::BadUsage.fail();
         }
 
         let hostkey = keys.iter().find(|k| k.can_sign(algos.hostsig));
-        let hostkey = hostkey.ok_or_else(|| {
+        hostkey.copied().ok_or_else(|| {
             // TODO: hostkeys should be requested
             // earlier and used for kexinit algorithm negotiation too,
             // so then this shouldn't fail here.
             debug!("No suitable hostkey provided");
             error::BadUsage.build()
-        })?;
+        })
+    }
 
+    // server only, for a host key that signs outside sunset. consumes kex_hash
+    fn exchange_for_signer(
+        algos: &mut Algos<Server>,
+        mut kex_hash: KexHash,
+        hostkey: &SignKey,
+        p: &packets::KexDHInit,
+    ) -> Result<(KexOutput, ExchangeParts)> {
+        // The signer's transcript is RFC 8731's, curve25519 only.
+        let k = match &mut algos.kex {
+            SharedSecret::KexCurve25519(k) => k,
+            #[cfg(feature = "mlkem")]
+            SharedSecret::KexMlkemX25519(_) => {
+                debug!("A signer outside sunset takes curve25519 only");
+                return error::BadUsage.fail();
+            }
+        };
+        let q_c: [u8; 32] = p.q_c.0.try_into().map_err(|_| Error::BadKex)?;
+        let q_s = k.pubkey;
+
+        kex_hash.hash_hostkey(&hostkey.pubkey())?;
+        kex_hash.hash_pubkeys(&q_c, &q_s)?;
+        let kexinits = core::mem::take(&mut kex_hash.kexinits);
+        let shsec = k.raw_secret(&q_c)?;
+
+        // K as hashed, less its length.
+        let mut k_enc = [0u8; 4 + 33];
+        let l = sshwire::write_ssh(&mut k_enc, &Mpint::new(&*shsec))?;
+        let mut parts = ExchangeParts {
+            kexinits,
+            q_c,
+            q_s,
+            k: [0; 33],
+            k_len: l - 4,
+            hostkey: hostkey.clone(),
+        };
+        parts.k[..l - 4].copy_from_slice(&k_enc[4..l]);
+        k_enc.zeroize();
+        Ok((KexOutput::new(KexKey::Mpint(&*shsec), kex_hash), parts))
+    }
+
+    // server only. consumes algos and kex_hash
+    fn handle_kexdhinit(
+        algos: &mut Algos<Server>,
+        mut kex_hash: KexHash,
+        hostkey: &SignKey,
+        p: &packets::KexDHInit,
+        s: &mut TrafSend,
+    ) -> Result<KexOutput> {
         kex_hash.hash_hostkey(&hostkey.pubkey())?;
 
         #[cfg(feature = "mlkem")]
@@ -833,25 +1032,25 @@ impl SharedSecret {
             }
         };
 
-        Self::send_kexdhreply(&kex_out, pubkey, hostkey, s)?;
+        trace!("sign kexreply h {:02x?}", kex_out.h.as_slice());
+        // OK unwrap, hash is always sha256.
+        let h: &[u8; 32] = kex_out.h.as_slice().try_into().unwrap();
+        let sig = hostkey.sign(h)?;
+        Self::send_kexdhreply(pubkey, hostkey, &sig, s)?;
         Ok(kex_out)
     }
 
     // server only
     pub fn send_kexdhreply(
-        ko: &KexOutput,
         kex_pub: &[u8],
         hostkey: &SignKey,
+        sig: &OwnedSig,
         s: &mut TrafSend,
     ) -> Result<()> {
         let q_s = BinString(kex_pub);
 
         let k_s = Blob(hostkey.pubkey());
-        trace!("sign kexreply h {:02x?}", ko.h.as_slice());
-        // OK unwrap, hash is always sha256.
-        let h: &[u8; 32] = ko.h.as_slice().try_into().unwrap();
-        let sig = hostkey.sign(h)?;
-        let sig: Signature = (&sig).into();
+        let sig: Signature = sig.into();
         let sig = Blob(sig);
         s.send(packets::KexDHReply { k_s, q_s, sig })
     }
