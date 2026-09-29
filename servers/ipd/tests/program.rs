@@ -21,11 +21,12 @@ use std::time::{Duration, Instant};
 
 use kernel::fake;
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
-use redoubt_rt::abi::{FOREVER, Handle};
+use redoubt_rt::abi::{FOREVER, Handle, Handles};
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::server::ninep::mode;
+use redoubt_rt::server::typed::{Outcome, finish};
 use redoubt_rt::startup::{Startup, StartupBuilder};
 use redoubt_rt::wire::proto::{ipd, net_ctl, netif};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
@@ -165,7 +166,8 @@ fn serve_netd(ep: Endpoint, out: Sender<Vec<u8>>, log: Arc<Mutex<Vec<Vec<u8>>>>)
                     }
                     Err(_) => redoubt_rt::server::MALFORMED,
                 };
-                let _ = request.reply(&reply, &[]);
+                let _ =
+                    finish(request, &Outcome { words: reply, send: Handles::new(), close: Handles::new() });
             }
             Ok(_) => {}
             Err(_) => return 0,

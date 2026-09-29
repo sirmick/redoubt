@@ -7,10 +7,11 @@ use std::alloc::{GlobalAlloc, Layout};
 use std::num::NonZeroU64;
 
 use common::fake;
-use redoubt_rt::abi::{Error, FOREVER, PAGE_SIZE};
+use redoubt_rt::abi::{Error, FOREVER, Handles, PAGE_SIZE};
 use redoubt_rt::handle::{self, Endpoint};
 use redoubt_rt::heap::Heap;
 use redoubt_rt::ipc::{Buffer, Event};
+use redoubt_rt::server::typed::{Outcome, finish};
 
 fn nz(v: u64) -> NonZeroU64 { NonZeroU64::new(v).unwrap() }
 
@@ -36,10 +37,9 @@ fn call_lend_and_reply() {
         lend[..5].copy_from_slice(b"HELLO");
         // A handle to the same endpoint, minted from the message, goes back in the reply.
         let minted = request.mint(nz(77), None).unwrap();
-        request.reply(&[1, 2, 3, u64::from(u32::MAX)], &[minted.handle(), brought]).unwrap();
-        // The reply carried copies: ours are still here, and are not ours to keep.
-        minted.close().unwrap();
-        redoubt_rt::handle::close(brought).unwrap();
+        // The reply carries copies; `finish` closes ours once it has sent them.
+        let both = Handles::from_slice(&[minted.handle(), brought]).unwrap();
+        finish(request, &Outcome { words: [1, 2, 3, u64::from(u32::MAX)], send: both, close: both }).unwrap();
         0
     });
 

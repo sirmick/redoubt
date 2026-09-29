@@ -9,6 +9,7 @@ use redoubt_rt::HostKernel;
 use redoubt_rt::abi::*;
 use redoubt_rt::handle::{Endpoint, map_anon};
 use redoubt_rt::ipc::{Buffer, Event};
+use redoubt_rt::server::typed::{Outcome, finish};
 
 #[test]
 fn mapping_reborrows_and_failed_reply_recovery() {
@@ -32,20 +33,19 @@ fn mapping_reborrows_and_failed_reply_recovery() {
     kernel.request([0; WORDS], Some(Pages { addr, npages: NonZeroUsize::new(1).unwrap() }));
     let Event::Call(mut request) = endpoint.receive(FOREVER, 0).unwrap() else { panic!("not a call") };
     request.lend()[0] = 91;
-    // A local encoding rejection retains the existing view without entering the kernel.
-    let (error, mut request) = request.reply(&[0; WORDS], &[endpoint.handle(); 5]).unwrap_err();
-    assert_eq!(error, Error::TooLarge);
     assert_eq!(request.lend()[0], 91);
-    assert!(kernel.0.lock().unwrap().replies.is_empty());
-    // A kernel rejection leaves the lend mapped, so the returned Request can adopt it again.
+    // A kernel rejection leaves the lend mapped for the fallback: `finish` answers malformed
+    // and returns the first error, and the call is closed.
     kernel.0.lock().unwrap().reply = Err(Error::InvalidArgument);
-    let (error, mut request) = request.reply(&[0; WORDS], &[]).unwrap_err();
-    assert_eq!(error, Error::InvalidArgument);
-    assert_eq!(request.lend()[0], 91);
-    request.lend()[PAGE_SIZE - 1] = 29;
-    assert_eq!(kernel.0.lock().unwrap().open_calls, 1);
-    assert!(request.reply(&[0; WORDS], &[]).unwrap().delivered);
-    assert_eq!(kernel.0.lock().unwrap().open_calls, 0);
+    let answer = Outcome { words: [0; WORDS], send: Handles::new(), close: Handles::new() };
+    assert_eq!(finish(request, &answer), Err(Error::InvalidArgument));
+    {
+        let s = kernel.0.lock().unwrap();
+        assert_eq!(s.replies.len(), 2);
+        assert_eq!(s.replies[1].words, redoubt_rt::server::MALFORMED.map(|word| word as usize));
+        assert!(s.replies[1].handles.as_slice().is_empty());
+        assert_eq!((s.open_calls, s.lent_pages), (0, 0), "the call is closed and its lend returned");
+    }
     // The seam does not perform the real kernel's lend unmap; release its backing page now, as
     // the kernel would (the runtime's own unmap is its owners' alone).
     kernel.syscall(&Call::Unmap { addr, len: PAGE_SIZE }).unwrap();

@@ -39,7 +39,7 @@ pub struct Buffer {
 
 /// Writable RAM that the kernel has mapped into this process, held by its address alone.
 /// Private: only freshly mapped, received, or explicitly returned pages may be adopted. It does
-/// not unmap on drop: a received lend is released by `reply`, not by dropping a Request.
+/// not unmap on drop: a received lend is released by the reply, which dropping a Request sends too.
 ///
 /// It holds no reference to the pages, only makes one for each borrow of itself. A stored
 /// reference would stay live for as long as the `Buffer` holding it, including across the
@@ -330,27 +330,36 @@ impl Request {
     /// Replies, which returns the lend to the caller.
     ///
     /// The handles are **copied** into the caller (kernel/ipc.md, "Messages"): this process keeps
-    /// its own, and must close any it does not mean to keep (a handle minted for the caller,
-    /// say), or its handle table grows by one per reply.
-    /// It closes none of the handles the request carried either: a server answers through
-    /// `server::typed::finish` or a refusal built on it (servers/serving.md, "Authority"), which
-    /// do.
+    /// its own. It closes none of the handles the request carried either, so it is the library's
+    /// alone: a server answers through `server::typed::finish` or a refusal built on it
+    /// (servers/serving.md, "Authority"), which close what does not travel.
     ///
     /// On failure the request comes back with the error, so the server can still answer it:
     /// words or handles that cannot be encoded (more than `MAX_MSG_HANDLES` handles, or on rv32 a
-    /// word wider than 32 bits) are refused before anything is sent. A request dropped unanswered
-    /// keeps its caller waiting and its open-call slot taken.
+    /// word wider than 32 bits) are refused before anything is sent.
+    ///
+    /// ```compile_fail
+    /// fn answer(request: redoubt_rt::ipc::Request) { let _ = request.reply(&[0; 4], &[]); }
+    /// ```
     // The error carries the request back by value, which is its purpose; it is not boxed
     // because boxing allocates, and a server short of memory must still be able to answer.
     #[allow(clippy::result_large_err)]
-    pub fn reply(mut self, words: &Words, handles: &[Handle]) -> Result<ReplyOutcome, (Error, Request)> {
+    pub(crate) fn reply(
+        mut self,
+        words: &Words,
+        handles: &[Handle],
+    ) -> Result<ReplyOutcome, (Error, Request)> {
         let rec = match body(words, handles) {
             Ok(body) => Record::<BODY_SLOTS>(body.encode()),
             Err(e) => return Err((e, self)),
         };
         let lend = self.lend.take().map(|mapping| mapping.pages);
         match syscall(&Call::Reply { msg_id: self.id, body_rec: rec.addr() }) {
-            Ok(Return::Reply(outcome)) => Ok(outcome.validate(handles.len()).expect("invalid reply mask")),
+            Ok(Return::Reply(outcome)) => {
+                // Answered: nothing is left for `drop` to refuse.
+                core::mem::forget(self);
+                Ok(outcome.validate(handles.len()).expect("invalid reply mask"))
+            }
             Ok(_) => panic!("invalid IPC reply outcome"),
             Err(e) => {
                 // Rejected replies leave the open call and its lend in the server.
@@ -358,6 +367,20 @@ impl Request {
                 Err((e, self))
             }
         }
+    }
+}
+
+/// A request dropped unanswered is refused: the handles it carried are closed and it is answered
+/// as malformed (servers/wire.md), so no drop leaves a handle with no owner or a caller waiting.
+impl Drop for Request {
+    fn drop(&mut self) {
+        // Not `finish`: it takes the request by value, and its fallback exits the process.
+        for handle in crate::server::typed::carried(self).as_slice() {
+            let _ = crate::handle::close(*handle);
+        }
+        let rec =
+            Record::<BODY_SLOTS>(body(&crate::server::MALFORMED, &[]).expect("malformed encodes").encode());
+        let _ = syscall(&Call::Reply { msg_id: self.id, body_rec: rec.addr() });
     }
 }
 

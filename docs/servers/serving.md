@@ -157,7 +157,7 @@ stateDiagram-v2
 
 ### Typed dispatch
 
-Status: built · tested: host:redoubt-rt::requests_replies_and_errors, host:redoubt-rt::handles_travel_and_unread_ones_come_back, host:redoubt-rt::malformed_requests_and_oversized_replies, host:redoubt-rt::random_words_never_panic, host:redoubt-rt::typed_replies_close_the_handles_made_for_the_caller, host:redoubt-rt::a_reply_that_cannot_be_encoded_gives_the_request_back
+Status: built · tested: host:redoubt-rt::requests_replies_and_errors, host:redoubt-rt::handles_travel_and_unread_ones_come_back, host:redoubt-rt::malformed_requests_and_oversized_replies, host:redoubt-rt::random_words_never_panic, host:redoubt-rt::typed_replies_close_the_handles_made_for_the_caller
 
 A typed server (`libs/rt/src/server/typed.rs`) names its protocol by implementing `Protocol`, a
 few lines over the codecs generated from its wire table ([wire](wire.md)), and answers requests
@@ -294,7 +294,7 @@ or decoded again when it is served; which typed operations may park at all
 
 ## Authority
 
-Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist, host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::a_hostile_client_does_not_hurt_the_server_or_other_clients, host:redoubt-rt::parked_calls_are_served_abandoned_and_expired, host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
+Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist, host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::a_hostile_client_does_not_hurt_the_server_or_other_clients, host:redoubt-rt::parked_calls_are_served_abandoned_and_expired, host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind, host:redoubt-rt::a_dropped_request_is_refused_and_closes_what_it_carried, host:redoubt-rt::a_rejected_reply_closes_no_carried_handle_twice
 
 - **The library adds no authority.** It uses the server's own handles and the facts the kernel
   attaches to each message: badge, account and labels. It trusts nothing a request says about who
@@ -325,8 +325,9 @@ Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_tha
   - Every server's `Event::Send` arm closes the delivery's handles itself; a `Delivery` owns
     none of them. Sound. `serve_parking` closes a held call's handles and empties its list, so
     serving it again cannot close them twice. Sound.
-  - `Request::reply` stays public and a dropped `Request` closes nothing, so a new raw reply
-    would leak again: [todo](../todo/request-raw-reply.md).
+  - `Request::reply` is the library's alone (a `compile_fail` test in `ipc.rs`), so there is no
+    raw reply left to add, and a `Request` dropped unanswered is refused: its carried handles
+    are closed and the caller gets the malformed reply.
 
 ## Security properties
 
@@ -390,7 +391,7 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
 
 ## Failure and restart
 
-Status: built · partly tested: the exit after a rejected fallback reply is argued from the code, not attacked · tested: host:redoubt-rt::a_reply_that_cannot_be_encoded_gives_the_request_back, host:redoubt-rt::a_held_9p_call_closes_what_it_brought_exactly_once, host:redoubt-rt::disconnect_all_frees_everything_one_holder_minted, host:redoubt-rt::a_panic_is_reported_on_the_console_once
+Status: built · partly tested: the exit after a rejected fallback reply is argued from the code, not attacked · tested: host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::a_held_9p_call_closes_what_it_brought_exactly_once, host:redoubt-rt::disconnect_all_frees_everything_one_holder_minted, host:redoubt-rt::a_panic_is_reported_on_the_console_once
 
 - **A request the server cannot answer** (it does not decode, its reply does not fit) gets the
   malformed reply; a reply the kernel rejects is replaced by it; if that too is rejected the
@@ -407,9 +408,6 @@ Status: built · partly tested: the exit after a rejected fallback reply is argu
 
 ## Residual risks
 
-- **A raw reply would leak.** `Request::reply` is public and a dropped `Request` closes nothing;
-  the audit under [Authority](#authority) found no place left that answers outside `finish`, but
-  nothing enforces it: [todo](../todo/request-raw-reply.md).
 - **An undersized server is a channel.** A server sized for fewer buckets than the (account,
   label set)s it serves refuses the latecomers, which tells them others hold state: across
   accounts, and between the label sets of one account, where it is a channel out of a vault. The

@@ -13,7 +13,7 @@ use redoubt_rt::handle::{self, Endpoint};
 use redoubt_rt::ipc::{Caller, Event};
 use redoubt_rt::server::Limits;
 use redoubt_rt::server::ninep::{
-    FileServer, FileStat, MALFORMED, NineError, NineServer, Qid, Read, Write, mode, refuse,
+    FileServer, FileStat, MALFORMED, NineError, NineServer, Qid, Read, Write, mode, refuse, refuse_malformed,
 };
 use redoubt_rt::server::parked::{NotParked, Parked};
 
@@ -69,9 +69,7 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
         let limits = Limits { buckets: 2, in_flight: 4, files: 4, state: 0 };
         let mut nine = NineServer::new(Full, limits, 5).unwrap();
         let mut parked: Parked<()> = Parked::new(LONGEST);
-        let own = |_: &mut NineServer<Full>, r: redoubt_rt::ipc::Request| {
-            r.reply(&MALFORMED, &[]).map(|_| ()).map_err(|(e, _)| e)
-        };
+        let own = |_: &mut NineServer<Full>, r: redoubt_rt::ipc::Request| refuse_malformed(r);
         let (mut abandoned, mut expired) = (0, 0);
         loop {
             let now = handle::time_now().unwrap();
