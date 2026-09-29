@@ -1,9 +1,8 @@
 //! The code path: directories of the VM's own file system where modules are looked for, as well
 //! as the platform (`code:add_patha/1`, `code:get_path/0`, ...). OTP keeps this in the
-//! `code_server` process; here it is VM state. Directories added in front (`add_patha`) are
-//! searched before the platform's modules, as in BEAM (so a consolidated protocol written to
-//! one replaces the platform's); the others after them. Code that can change the path can load
-//! any code anyway (`code:load_binary/3`), so this grants nothing.
+//! `code_server` process; here it is VM state. Unlike BEAM, the platform's modules (the system
+//! bundle) are always looked for first, so a directory added in front (`add_patha`) finds only
+//! names the bundle lacks and never shadows a system module.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -15,9 +14,6 @@ use crate::term::Term;
 use crate::vm::Found;
 
 type R = Result<Term, Exception>;
-
-/// Most directories on the code path.
-const MAX_PATHS: usize = 1024;
 
 /// A directory argument, resolved against the working directory: `Err(())` if it is not a
 /// directory the file system has.
@@ -39,29 +35,10 @@ fn add(c: &mut Ctx, t: &Term, front: bool) -> Result<bool, Exception> {
     let Ok(dir) = directory(c, t)? else {
         return Ok(false);
     };
-    remove(c, &dir);
-    if c.sys().code_path.len() >= MAX_PATHS {
+    if !c.sys().add_code_path(dir, front) {
         return Err(c.system_limit());
     }
-    if front {
-        c.sys().code_path.insert(0, dir);
-        c.sys().platform_at += 1;
-    } else {
-        c.sys().code_path.push(dir);
-    }
     Ok(true)
-}
-
-/// Take `dir` off the path: whether it was on it.
-fn remove(c: &mut Ctx, dir: &str) -> bool {
-    let Some(i) = c.sys().code_path.iter().position(|p| p == dir) else {
-        return false;
-    };
-    c.sys().code_path.remove(i);
-    if i < c.sys().platform_at {
-        c.sys().platform_at -= 1;
-    }
-    true
 }
 
 fn added(c: &mut Ctx, ok: bool) -> Term {
@@ -109,7 +86,7 @@ pub fn del_path(c: &mut Ctx, a: &[Term]) -> R {
     let Ok(dir) = super::file::resolve(&cwd, &name) else {
         return Ok(c.bool(false));
     };
-    let removed = remove(c, &dir);
+    let removed = c.sys().remove_code_path(&dir);
     Ok(c.bool(removed))
 }
 
@@ -136,12 +113,10 @@ pub fn set_path(c: &mut Ctx, a: &[Term]) -> R {
             Err(()) => return Ok(added(c, false)),
         }
     }
-    if paths.len() > MAX_PATHS {
+    if paths.len() > crate::vm::MAX_PATHS {
         return Err(c.system_limit());
     }
-    // A path set whole comes after the platform's modules.
     c.sys().code_path = paths;
-    c.sys().platform_at = 0;
     Ok(c.bool(true))
 }
 

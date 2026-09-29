@@ -127,9 +127,6 @@ pub struct System {
     /// Directories of the VM's own file system searched for `.beam` files after the platform
     /// (`code:add_patha/1` and friends), in order.
     pub(crate) code_path: Vec<String>,
-    /// Where the platform's modules come in the code path: directories before this index
-    /// (added with `code:add_patha/1`) are searched before the platform, the rest after it.
-    pub(crate) platform_at: usize,
     /// Directories of the VM's file system holding applications as `App` or `App-Vsn`
     /// directories (OTP's `lib`), for `code:lib_dir/1` and `code:priv_dir/1`.
     pub(crate) lib_roots: Vec<String>,
@@ -162,6 +159,9 @@ pub struct System {
     /// Nothing can ever run again.
     stuck: bool,
 }
+
+/// Most directories on the code path.
+pub(crate) const MAX_PATHS: usize = 1024;
 
 /// Where [`System::locate_module`] found a module: a file of the VM's code path, or the
 /// platform.
@@ -539,7 +539,6 @@ impl Vm {
                 console_reader: None,
                 backtrace_depth: 8,
                 code_path: Vec::new(),
-                platform_at: 0,
                 lib_roots: Vec::new(),
                 module_files: BTreeMap::new(),
                 profile: None,
@@ -841,30 +840,49 @@ impl System {
         self.modules.get(name.as_str()).cloned()
     }
 
-    /// Where `module`'s code is, in code path order: the directories added in front of the
-    /// platform's modules, the platform, then the other directories.
-    pub(crate) fn locate_module(&mut self, module: &str) -> Option<Found> {
-        if let Some((path, bytes)) = self.find_in_code_path(module, true) {
-            return Some(Found::Path(path, bytes));
+    /// Put `dir` on the code path, in front (`code:add_patha/1`) or at the end, taking it off
+    /// where it was: `false` if the path is full.
+    pub(crate) fn add_code_path(&mut self, dir: String, front: bool) -> bool {
+        self.remove_code_path(&dir);
+        if self.code_path.len() >= MAX_PATHS {
+            return false;
         }
+        if front {
+            self.code_path.insert(0, dir);
+        } else {
+            self.code_path.push(dir);
+        }
+        true
+    }
+
+    /// Take `dir` off the code path: whether it was on it.
+    pub(crate) fn remove_code_path(&mut self, dir: &str) -> bool {
+        let Some(i) = self.code_path.iter().position(|p| p == dir) else {
+            return false;
+        };
+        self.code_path.remove(i);
+        true
+    }
+
+    /// Where `module`'s code is: the platform's modules (the system bundle) first, whatever the
+    /// code path holds, so no directory shadows a system module; then the code path, in order.
+    pub(crate) fn locate_module(&mut self, module: &str) -> Option<Found> {
         if let Some(bytes) = self.platform.lock().load_module(module) {
             return Some(Found::Platform(bytes));
         }
-        self.find_in_code_path(module, false).map(|(path, bytes)| Found::Path(path, bytes))
+        self.find_in_code_path(module).map(|(path, bytes)| Found::Path(path, bytes))
     }
 
-    /// `Module.beam` from the first directory of the VM's code path that has it, among those
-    /// before the platform (`front`) or after it: its path and its bytes.
-    fn find_in_code_path(&mut self, module: &str, front: bool) -> Option<(String, Vec<u8>)> {
+    /// `Module.beam` from the first directory of the VM's code path that has it: its path and
+    /// its bytes.
+    fn find_in_code_path(&mut self, module: &str) -> Option<(String, Vec<u8>)> {
         let max = self.limits.max_binary_bits / 8;
-        let dirs =
-            if front { &self.code_path[..self.platform_at] } else { &self.code_path[self.platform_at..] };
-        if dirs.is_empty() {
+        if self.code_path.is_empty() {
             return None;
         }
         let mut platform = self.platform.lock();
         let files = platform.files()?;
-        for dir in dirs {
+        for dir in &self.code_path {
             let path = alloc::format!("{}/{}.beam", dir.trim_end_matches('/'), module);
             if let Ok(bytes) = crate::bif::read_whole_file(files, &path, max) {
                 return Some((path, bytes));
@@ -1499,4 +1517,132 @@ fn schedule(sched: &mut Sched<'_>) -> bool {
 pub enum Target {
     Native(Native),
     Code(Cp),
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::boxed::Box;
+
+    use super::*;
+    use crate::platform::{FileError, FileInfo, FileKind, Files, OpenMode, PlatformError, SeekFrom};
+
+    /// A bundle holding module `m`, and a file system holding `/home/p/m.beam` and
+    /// `/home/p/own.beam`, as a session's own directory would.
+    struct Bundle {
+        files: Home,
+    }
+
+    struct Home {
+        reading: Option<(Vec<u8>, bool)>,
+    }
+
+    impl Home {
+        fn file(path: &str) -> Result<Vec<u8>, FileError> {
+            match path {
+                "/home/p/m.beam" => Ok(b"planted".to_vec()),
+                "/home/p/own.beam" => Ok(b"own".to_vec()),
+                _ => Err(FileError::Enoent),
+            }
+        }
+    }
+
+    impl Files for Home {
+        fn open(&mut self, path: &str, _mode: OpenMode) -> Result<u64, FileError> {
+            self.reading = Some((Home::file(path)?, false));
+            Ok(0)
+        }
+
+        fn close(&mut self, _handle: u64) { self.reading = None; }
+
+        fn read(&mut self, _handle: u64, _len: usize) -> Result<Vec<u8>, FileError> {
+            let (bytes, done) = self.reading.as_mut().ok_or(FileError::Ebadf)?;
+            Ok(if core::mem::replace(done, true) { Vec::new() } else { bytes.clone() })
+        }
+
+        fn info(&mut self, path: &str, _follow: bool) -> Result<FileInfo, FileError> {
+            let size = Home::file(path)?.len() as u64;
+            Ok(FileInfo {
+                size,
+                kind: FileKind::Regular,
+                readable: true,
+                writable: true,
+                atime: 0,
+                mtime: 0,
+                ctime: 0,
+                mode: 0o644,
+                links: 1,
+                inode: 0,
+                uid: 0,
+                gid: 0,
+            })
+        }
+
+        fn write(&mut self, _: u64, _: &[u8]) -> Result<(), FileError> { Err(FileError::Enotsup) }
+
+        fn pread(&mut self, _: u64, _: u64, _: usize) -> Result<Vec<u8>, FileError> {
+            Err(FileError::Enotsup)
+        }
+
+        fn pwrite(&mut self, _: u64, _: u64, _: &[u8]) -> Result<(), FileError> { Err(FileError::Enotsup) }
+
+        fn seek(&mut self, _: u64, _: SeekFrom) -> Result<u64, FileError> { Err(FileError::Enotsup) }
+
+        fn truncate(&mut self, _: u64) -> Result<(), FileError> { Err(FileError::Enotsup) }
+
+        fn sync(&mut self, _: u64) -> Result<(), FileError> { Err(FileError::Enotsup) }
+
+        fn handle_info(&mut self, _: u64) -> Result<FileInfo, FileError> { Err(FileError::Enotsup) }
+
+        fn list_dir(&mut self, _: &str) -> Result<Vec<Vec<u8>>, FileError> { Err(FileError::Enotsup) }
+
+        fn make_dir(&mut self, _: &str) -> Result<(), FileError> { Err(FileError::Enotsup) }
+
+        fn delete(&mut self, _: &str) -> Result<(), FileError> { Err(FileError::Enotsup) }
+
+        fn del_dir(&mut self, _: &str) -> Result<(), FileError> { Err(FileError::Enotsup) }
+
+        fn rename(&mut self, _: &str, _: &str) -> Result<(), FileError> { Err(FileError::Enotsup) }
+    }
+
+    impl Platform for Bundle {
+        fn monotonic_us(&mut self) -> u64 { 0 }
+
+        fn system_time_us(&mut self) -> Option<u64> { None }
+
+        fn idle(&mut self, _deadline: Option<u64>) {}
+
+        fn console_write(&mut self, _bytes: &[u8]) {}
+
+        fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
+
+        fn load_module(&mut self, module: &str) -> Option<Vec<u8>> {
+            (module == "m").then(|| b"bundle".to_vec())
+        }
+
+        fn files(&mut self) -> Option<&mut dyn Files> { Some(&mut self.files) }
+    }
+
+    /// A VM whose code path has the session's directory in front, put there by what
+    /// `code:add_patha/1` calls, behind a directory already on the path.
+    fn vm() -> Vm {
+        let mut vm = Vm::new(Box::new(Bundle { files: Home { reading: None } }));
+        let sys = vm.sys.get_mut();
+        assert!(sys.add_code_path("/lib".into(), false));
+        assert!(sys.add_code_path("/home/p".into(), true));
+        vm
+    }
+
+    #[test]
+    fn the_bundle_wins_over_a_front_directory() {
+        let mut vm = vm();
+        let found = vm.sys.get_mut().locate_module("m");
+        assert!(matches!(found, Some(Found::Platform(b)) if b == b"bundle"));
+    }
+
+    #[test]
+    fn a_name_the_bundle_lacks_is_found_on_the_path() {
+        let mut vm = vm();
+        let found = vm.sys.get_mut().locate_module("own");
+        assert!(matches!(found, Some(Found::Path(p, b)) if p == "/home/p/own.beam" && b == b"own"));
+    }
 }

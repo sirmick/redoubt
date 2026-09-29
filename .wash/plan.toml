@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 59
+revision = 22
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -10,9 +10,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["HIST1", "FMT1"]
-  body = "docs/todo/module-search-order.md"
-  state = "todo"
-  revision = 9
+  body = "Closes docs/todo/module-search-order.md (deleted in the package); rule on docs/userland/packages.md#profiles-and-upgrades, built on docs/userland/beamlet.md#the-platform-boundary. Tier B since the owner's decision of 2026-09-29 (SWARM 23c497a38: the VM's interpreter and loader are one trust domain); it was reviewed by the full Tier A panel anyway."
+  state = "done"
+  revision = 22
 
 [[node]]
   id = "HIST1"
@@ -21,7 +21,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = ".wash/history-rewrite.md: the one rewrite of the history, and how to check it. Force-pushed; origin/main at e3141503b."
   state = "done"
-  revision = 3
+  revision = 2
 
 [[node]]
   id = "IPC1"
@@ -30,7 +30,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Built in cf445aa0c: docs/kernel/ipc.md#r13-one-outcome-per-call, docs/kernel/memory.md (a loan within one process). Owed: one red review of the completion path as it is now, including the same-process lend return the last round blocked on. Cross-hart races: docs/todo/kernel-attack-gaps.md; model replay: node model-replay."
   state = "done"
-  revision = 11
+  revision = 2
 
 [[node]]
   id = "K7"
@@ -39,8 +39,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work, the Kernel bullet: every docs/todo/ page it links, plus docs/todo/receive-output-late-invalid.md (rule: docs/kernel/ipc.md#a-bad-record-takes-nothing) and the IPC1 review's note (a dangling comment at kernel/src/arch/riscv/mem.rs map_into_with). Tier A."
-  state = "reported"
-  revision = 56
+  state = "active"
+  revision = 20
 
 [[node]]
   id = "M1"
@@ -94,7 +94,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["HIST1", "FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work: the Servers bullet."
   state = "done"
-  revision = 47
+  revision = 2
 
 [[node]]
   id = "agent-suite"
@@ -131,10 +131,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "Kernel containment gate"
   template = "step"
   parent = "M1"
-  needs = ["K7", "B2", "S2", "BL1"]
+  needs = ["K7", "K8", "S3", "BL1"]
   body = "docs/plan/m1-separation.md#remaining-work: A kernel containment gate."
   state = "todo"
-  revision = 22
+  revision = 3
 
 [[node]]
   id = "host-shell-scripts"
@@ -143,7 +143,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Owner decision 2026-09-27: the build host may run shell scripts. Written on docs/TENETS.md#3-rust-and-assembly-only-where-rust-cannot-reach."
   state = "done"
-  revision = 4
+  revision = 2
 
 [[node]]
   id = "init"
@@ -170,10 +170,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "sshd"
   template = "step"
   parent = "M1"
-  needs = ["steward"]
-  body = "docs/servers/sshd.md; docs/userland/sessions.md"
+  needs = ["steward", "SSH1"]
+  body = "docs/servers/sshd.md (the box's platform, approve@box; the core is SSH1's); docs/userland/sessions.md"
   state = "todo"
-  revision = 2
+  revision = 15
 
 [[node]]
   id = "steward"
@@ -193,7 +193,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["HIST1"]
   body = "docs/todo/rustfmt-nightly-drift.md. Owner decision 2026-09-27: reformat once now, before K7, S2 and BL1 branch; a bench case keeps it. Tooling only: implementer plus the editor."
   state = "done"
-  revision = 21
+  revision = 2
 
 [[node]]
   id = "B2"
@@ -203,4 +203,34 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work, the bench and its tools bullet (bench-load-flakes, programs-build-rerun, ssh-loopback-host, write-only-mutation-split, miri-vendored-unsafe, doccheck-stale-paths, size-budget), the documentation switch-over (docs/todo/verdict-strings.md) and docs/todo/sched-latency-target.md. First goal: a green whole bench. Tier A (the bench)."
   state = "done"
-  revision = 59
+  revision = 2
+
+[[node]]
+  id = "K8"
+  title = "Kernel and bench follow-ups after K7"
+  template = "package"
+  parent = "M1"
+  needs = ["K7"]
+  body = "docs/plan/m1-separation.md#remaining-work as it stands after K7 merges: the Kernel bullet (docs/todo/workspace-host-tests.md, docs/todo/sched-rv64-decision-wake.md) and the bench bullet (docs/todo/bench-load-flakes.md, docs/todo/unsafe-ratchet-reason.md; docs/todo/ssh-loopback-host.md waits on an owner host change). Tier A (the bench)."
+  state = "todo"
+  revision = 3
+
+[[node]]
+  id = "S3"
+  title = "Runtime follow-ups: no raw paths from safe code"
+  emoji = "🧪"
+  template = "package"
+  parent = "M1"
+  needs = ["S2"]
+  body = "Closes docs/todo/raw-abi-syscall.md, raw-thread-create.md, request-raw-reply.md (deleted in the package); claims on docs/userland/native.md#redoubt-rt-the-native-runtime and docs/servers/serving.md#authority. Tier A. wp-s3 5eeb9f4e3, three commits. Reviewed: red OK with notes (2 rounds, fixes applied and read by the orchestrator), simplifier OK with notes, editor OK. Merges after K7 and BL1: rebase and the whole bench."
+  state = "reported"
+  revision = 19
+
+[[node]]
+  id = "SSH1"
+  title = "sshd's core on sunset, and its host platform for the bench"
+  template = "package"
+  parent = "M1"
+  body = "docs/servers/sshd.md#the-core-and-its-platforms (and its Login bullet); docs/testbench.md#against-redoubts-sshd; docs/testbench.md#patched-crates; vendor/README.md (Patched crates); narrows docs/todo/ssh-loopback-host.md to the reference case. Tier A, size L."
+  state = "active"
+  revision = 20

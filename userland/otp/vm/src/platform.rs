@@ -44,8 +44,9 @@ pub trait Platform: crate::sync::Sendable {
     /// using a weaker source.
     fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError>;
 
-    /// The bytes of the `.beam` file for `module`, if this VM may load it. This is the only way
-    /// code enters the VM, so it is where a platform enforces signing or an allowlist.
+    /// The bytes of the `.beam` file for `module` among the system's modules, if any. This is
+    /// the first step of the VM's lookup of a module name, before the code path; it is not a
+    /// gate, since code in the VM can load any bytes it holds with `code:load_binary/3`.
     fn load_module(&mut self, module: &str) -> Option<Vec<u8>>;
 
     /// The `.app` specification of application `app` (the text of `app.app`), if this VM may

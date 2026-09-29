@@ -113,9 +113,9 @@ Status: planned · M5 (persist, install, share)
   or a load with their authority.
 - **No shadowing.** A package may not define a module the system bundle defines (the pkg server
   refuses it at install), and two packages in one profile may not define the same module (the
-  steward refuses it at `use`); the system bundle always resolves first. The VM departs from this
-  for a directory a session adds to the front of its own code path, which shadows a system module
-  in that VM; it grants nothing the session lacked, and is a follow-up on the VM's side.
+  steward refuses it at `use`); the system bundle always resolves first, even before a directory
+  a session adds to the front of its own code path
+  ([beamlet](../userland/beamlet.md#the-platform-boundary)).
 - **Code one loads oneself** (compiling a string, requiring one's own file) runs within one's own
   authority; the code-path rule is not a wall against it.
 - A project has its own package directory, so a shared toolchain is installed once.
