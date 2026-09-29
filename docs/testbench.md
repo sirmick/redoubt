@@ -466,11 +466,12 @@ with, so a raise there passes unchecked.
 
 ### Crates as published
 
-Status: built · partly tested: provenance against crates.io needs the network, so no bench case runs it; it is run by hand in the review of any change to `vendor/` · tested: bench:vendor-check, bench:vendor-build, host:redoubt-vendor-check::the_real_structure_passes, host:redoubt-vendor-check::a_renamed_header_fails_before_any_download, host:redoubt-vendor-check::a_missing_row_fails, host:redoubt-vendor-check::a_row_without_its_directory_and_a_stray_directory_fail, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::the_vendored_copies_are_the_ones_that_build, host:redoubt-vendor-check::the_patches_point_at_vendor, host:redoubt-vendor-check::the_readme_records_each_crate
+Status: built · partly tested: provenance against crates.io needs the network, so no bench case runs it; it is run by hand in the review of any change to `vendor/` · tested: bench:vendor-check, bench:vendor-build, host:redoubt-vendor-check::the_real_structure_passes, host:redoubt-vendor-check::a_renamed_header_fails_before_any_download, host:redoubt-vendor-check::a_missing_row_fails, host:redoubt-vendor-check::a_row_without_its_directory_and_a_stray_directory_fail, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::the_vendored_copies_are_the_ones_that_build, host:redoubt-vendor-check::the_patches_point_at_vendor, host:redoubt-vendor-check::the_readme_records_each_crate, host:redoubt-vendor-check::every_vendored_file_is_tracked
 
 `vendor/` holds third-party crates exactly as crates.io published them, each used through a
 `[patch.crates-io]` path, and `vendor/README.md` records each one's version, license and published
-checksum. Two checks guard them, and they prove different things:
+checksum. Git must track every vendored file: a crate's own `.gitignore` applies inside `vendor/`,
+and many name `Cargo.lock`. Two checks guard them, and they prove different things:
 
 - **Integrity since vendoring** (`vendor-check`, every bench run): every file is byte for byte what
   `vendor/SHA256SUMS` records, nothing is added or removed, and the build takes the crates from
@@ -485,11 +486,12 @@ checksum. Two checks guard them, and they prove different things:
 
 The residuals: provenance is only as current as the last review that ran it, and the vendored
 crates' `unsafe` is checked by recorded Miri runs, not by a bench case
-([ipd under Miri](servers/ipd.md#under-miri)).
+([ipd under Miri](servers/ipd.md#under-miri)); `sshd`'s crates have no such record yet
+([todo](todo/sshd-vendored-miri.md)).
 
 ### Patched crates
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:vendor-check, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::a_patched_crate_differs_only_by_its_patch, host:redoubt-vendor-check::every_patch_is_a_vendored_crates_and_recorded
 
 A crate we must change is still vendored from its published bytes, with exactly one patch file,
 `vendor/patches/<crate>.patch`, holding every change. `vendor/<crate>/` is the published crate
@@ -504,9 +506,9 @@ with that patch applied, since that is what Cargo builds, and nothing else diffe
 - A new release of the crate means taking the published bytes again and redoing the patch on
   them; a patch the crate's author has taken goes away with the release that carries it.
 
-`sunset` is the first ([sshd](servers/sshd.md#the-core-and-its-platforms)).
-
-**Open:** none.
+`sunset` is patched ([sshd](servers/sshd.md#the-core-and-its-platforms)), and so is `ascii`,
+which rustc 1.98 refuses to build from a path as published: Cargo caps a registry crate's lints,
+not a vendored one's.
 
 ## The no-cruft gate
 

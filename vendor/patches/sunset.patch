@@ -1,0 +1,352 @@
+Redoubt's patch to sunset 0.6.0 as crates.io published it (vendor/README.md, "sunset").
+Apply with: patch -p1 -d vendor/sunset < vendor/patches/sunset.patch
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 42e733b..3c9a037 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -35,6 +35,8 @@ repository = "https://github.com/mkj/sunset"
+ _ecdsa = [
+     "dep:ecdsa",
+     "ssh-key?/ecdsa",
++    "dep:rand_core",
++    "getrandom/sys_rng",
+ ]
+ alloc = ["ssh-key?/alloc"]
+ arbitrary = [
+@@ -55,6 +57,8 @@ openssh-key = ["ssh-key"]
+ rsa = [
+     "dep:rsa",
+     "ssh-key?/rsa",
++    "dep:rand_core",
++    "getrandom/sys_rng",
+ ]
+ std = [
+     "snafu/std",
+@@ -82,7 +86,7 @@ version = "1.0"
+ default-features = false
+ 
+ [dependencies.chacha20]
+-version = "0.9"
++version = "0.10"
+ features = ["zeroize"]
+ 
+ [dependencies.cipher]
+@@ -102,12 +106,9 @@ features = ["algorithm"]
+ optional = true
+ default-features = false
+ 
+-[dependencies.ed25519-dalek]
+-version = "3.0"
+-features = [
+-    "zeroize",
+-    "rand_core",
+-]
++[dependencies.ed25519-compact]
++version = "2.4"
++features = ["x25519"]
+ default-features = false
+ 
+ [dependencies.embedded-io]
+@@ -116,7 +117,6 @@ optional = true
+ 
+ [dependencies.getrandom]
+ version = "0.4"
+-features = ["sys_rng"]
+ 
+ [dependencies.heapless]
+ version = "0.9"
+@@ -144,6 +144,7 @@ version = "0.9"
+ 
+ [dependencies.rand_core]
+ version = "0.10"
++optional = true
+ default-features = false
+ 
+ [dependencies.rsa]
+@@ -173,11 +174,6 @@ default-features = false
+ [dependencies.sunset-sshwire-derive]
+ version = "0.3"
+ 
+-[dependencies.x25519-dalek]
+-version = "3.0"
+-features = ["zeroize"]
+-default-features = false
+-
+ [dependencies.zeroize]
+ version = "1"
+ features = ["derive"]
+diff --git a/src/kex.rs b/src/kex.rs
+index eb4bff7..b397630 100644
+--- a/src/kex.rs
++++ b/src/kex.rs
+@@ -13,13 +13,14 @@ use {
+ use core::{fmt, marker::PhantomData};
+ 
+ use digest::Digest;
++use ed25519_compact::x25519;
+ #[cfg(feature = "mlkem")]
+ use ml_kem::{
+     B32, Ciphertext, DecapsulationKey, Key, KeyExport, MlKem768, Seed,
+     kem::{Decapsulate, EncapsulationKey},
+ };
+ use sha2::Sha256;
+-use zeroize::ZeroizeOnDrop;
++use zeroize::{Zeroize, ZeroizeOnDrop};
+ 
+ use crate::*;
+ use encrypt::{Cipher, Integ, KeysRecv, KeysSend};
+@@ -961,8 +962,10 @@ impl KexOutput {
+ 
+ #[derive(ZeroizeOnDrop)]
+ pub(crate) struct KexCurve25519 {
+-    // Initialised in `new()`, cleared after deriving the secret
+-    ours: Option<x25519_dalek::EphemeralSecret>,
++    // Initialised in `new()`, cleared after deriving the secret.
++    // ed25519-compact wipes the secret when it is dropped.
++    #[zeroize(skip)]
++    ours: Option<x25519::SecretKey>,
+     // pubkey is relatively expensive to compute from the secret key
+     pubkey: [u8; 32],
+ }
+@@ -978,10 +981,11 @@ impl core::fmt::Debug for KexCurve25519 {
+ 
+ impl KexCurve25519 {
+     fn new() -> Result<Self> {
+-        let ours =
+-            x25519_dalek::EphemeralSecret::random_from_rng(&mut random::rng());
+-        let pubkey = x25519_dalek::PublicKey::from(&ours);
+-        let pubkey = pubkey.to_bytes();
++        let mut seed = [0u8; x25519::SecretKey::BYTES];
++        random::fill_random(&mut seed)?;
++        let ours = x25519::SecretKey::new(seed);
++        seed.zeroize();
++        let pubkey = *ours.recover_public_key().map_err(|_| Error::build_bug())?;
+         Ok(KexCurve25519 { ours: Some(ours), pubkey })
+     }
+ 
+@@ -989,10 +993,11 @@ impl KexCurve25519 {
+         &self.pubkey
+     }
+ 
+-    fn raw_secret(&mut self, theirs: &[u8]) -> Result<x25519_dalek::SharedSecret> {
+-        let theirs: [u8; 32] = theirs.try_into().map_err(|_| Error::BadKex)?;
+-        let theirs = theirs.into();
+-        Ok(self.ours.take().trap()?.diffie_hellman(&theirs))
++    /// Fails for a peer's point of small order, whose shared secret would be zero.
++    fn raw_secret(&mut self, theirs: &[u8]) -> Result<x25519::DHOutput> {
++        let theirs =
++            x25519::PublicKey::from_slice(theirs).map_err(|_| Error::BadKex)?;
++        theirs.dh(&self.ours.take().trap()?).map_err(|_| Error::BadKex)
+     }
+ 
+     fn secret(
+@@ -1007,7 +1012,7 @@ impl KexCurve25519 {
+             kex_hash.hash_pubkeys(theirs, self.pubkey())?;
+         }
+         let shsec = self.raw_secret(theirs)?;
+-        Ok(KexOutput::new(KexKey::Mpint(shsec.as_bytes()), kex_hash))
++        Ok(KexOutput::new(KexKey::Mpint(&*shsec), kex_hash))
+     }
+ }
+ 
+@@ -1149,7 +1154,7 @@ impl KexMlkemX25519 {
+         // K = HASH(K_PQ || K_CL)
+         let mut combiner = sha2::Sha256::new();
+         combiner.update(pq_secret);
+-        combiner.update(&ec_secret);
++        combiner.update(ec_secret.as_slice());
+         // TODO zeroize
+         let comb_sec = combiner.finalize();
+         Ok(KexOutput::new(KexKey::String(&comb_sec), kex_hash))
+diff --git a/src/lib.rs b/src/lib.rs
+index 5bad1df..7dc5912 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -79,7 +79,7 @@ pub use embedded_io;
+ // Re-exports.
+ // Crypto formats so that applications can handle
+ // private keys themselves.
+-pub use ed25519_dalek;
++pub use ed25519_compact;
+ 
+ #[cfg(feature = "_ecdsa")]
+ pub use ecdsa;
+diff --git a/src/random.rs b/src/random.rs
+index d7a7945..81bf388 100644
+--- a/src/random.rs
++++ b/src/random.rs
+@@ -1,3 +1,4 @@
++#[cfg(any(feature = "rsa", feature = "_ecdsa"))]
+ use rand_core::{CryptoRng, UnwrapErr};
+ #[allow(unused_imports)]
+ use {
+@@ -5,6 +6,9 @@ use {
+     log::{debug, error, info, log, trace, warn},
+ };
+ 
++// Only RSA and ECDSA key generation need a `CryptoRng`; Ed25519 and X25519
++// keys are made from `fill_random` seeds.
++#[cfg(any(feature = "rsa", feature = "_ecdsa"))]
+ pub(crate) fn rng() -> impl CryptoRng {
+     UnwrapErr(getrandom::SysRng)
+ }
+diff --git a/src/sign.rs b/src/sign.rs
+index c7bbed3..5b2bd36 100644
+--- a/src/sign.rs
++++ b/src/sign.rs
+@@ -8,9 +8,8 @@ use {
+     log::{debug, error, info, log, trace, warn},
+ };
+ 
+-use ed25519_dalek as dalek;
+-use ed25519_dalek::{Signer, Verifier};
+-use zeroize::ZeroizeOnDrop;
++use ed25519_compact as ed25519;
++use zeroize::{Zeroize, ZeroizeOnDrop};
+ 
+ use crate::*;
+ use packets::{Ed25519PubKey, Ed25519Sig, PubKey, Signature};
+@@ -168,21 +167,9 @@ impl SigType {
+         msg: &dyn SSHEncode,
+         s: &Ed25519Sig,
+     ) -> Result<()> {
+-        let k: &[u8; 32] = &k.key.0;
+-        let k = dalek::VerifyingKey::from_bytes(k).map_err(|_| Error::BadKey)?;
+-
+-        let s: &[u8; 64] = s.sig.0.try_into().map_err(|_| Error::BadSig)?;
+-        let s: dalek::Signature = s.into();
+-        // TODO: pending merge of https://github.com/dalek-cryptography/curve25519-dalek/pull/556
+-        // In the interim we use a fixed buffer.
+-        // dalek::hazmat::raw_verify_byupdate(
+-        //     &k,
+-        //     |h: &mut sha2::Sha512| {
+-        //         sshwire::hash_ser(h, msg).map_err(|_| dalek::SignatureError::new())
+-        //     },
+-        //     &s,
+-        // )
+-        // .map_err(|_| Error::BadSig)
++        let k = ed25519::PublicKey::new(k.key.0);
++        let s =
++            ed25519::Signature::from_slice(s.sig.0).map_err(|_| Error::BadSig)?;
+         let mut buf = [0; MAX_ED25519_SIG_MSG];
+         let l = sshwire::write_ssh(&mut buf, msg)?;
+         let buf = &buf[..l];
+@@ -334,10 +321,12 @@ pub enum KeyType {
+ pub enum SignKey {
+     // TODO: we could just have the 32 byte seed here to save memory, but
+     // computing the public part may be slow.
+-    Ed25519(dalek::SigningKey),
++    // ed25519-compact wipes the secret half when it is dropped.
++    #[zeroize(skip)]
++    Ed25519(ed25519::KeyPair),
+ 
+     #[zeroize(skip)]
+-    AgentEd25519(dalek::VerifyingKey),
++    AgentEd25519(ed25519::PublicKey),
+ 
+     #[cfg(feature = "rsa")]
+     // TODO zeroize doesn't seem supported? though BigUint has Zeroize
+@@ -362,7 +351,10 @@ impl SignKey {
+                 if bits.unwrap_or(256) != 256 {
+                     return Err(Error::msg("Bad key size"));
+                 }
+-                let k = dalek::SigningKey::generate(&mut random::rng());
++                let mut seed = [0u8; ed25519::Seed::BYTES];
++                random::fill_random(&mut seed)?;
++                let k = ed25519::KeyPair::from_seed(ed25519::Seed::new(seed));
++                seed.zeroize();
+                 Ok(Self::Ed25519(k))
+             }
+ 
+@@ -397,12 +389,11 @@ impl SignKey {
+     pub fn pubkey(&self) -> PubKey<'_> {
+         match self {
+             SignKey::Ed25519(k) => {
+-                let pubk = k.verifying_key().to_bytes();
+-                PubKey::Ed25519(Ed25519PubKey { key: Blob(pubk) })
++                PubKey::Ed25519(Ed25519PubKey { key: Blob(*k.pk) })
+             }
+ 
+             SignKey::AgentEd25519(pk) => {
+-                PubKey::Ed25519(Ed25519PubKey { key: Blob(pk.to_bytes()) })
++                PubKey::Ed25519(Ed25519PubKey { key: Blob(**pk) })
+             }
+ 
+             #[cfg(feature = "rsa")]
+@@ -430,9 +421,7 @@ impl SignKey {
+     pub fn from_agent_pubkey(pk: &PubKey) -> Result<Self> {
+         match pk {
+             PubKey::Ed25519(k) => {
+-                let k: dalek::VerifyingKey =
+-                    k.key.0.as_slice().try_into().map_err(|_| Error::BadKey)?;
+-                Ok(Self::AgentEd25519(k))
++                Ok(Self::AgentEd25519(ed25519::PublicKey::new(k.key.0)))
+             }
+ 
+             #[cfg(feature = "rsa")]
+@@ -465,23 +454,12 @@ impl SignKey {
+     pub(crate) fn sign(&self, msg: &impl SSHEncode) -> Result<OwnedSig> {
+         let sig: OwnedSig = match self {
+             SignKey::Ed25519(k) => {
+-                // TODO: pending merge of https://github.com/dalek-cryptography/curve25519-dalek/pull/556
+-                // let exk: dalek::hazmat::ExpandedSecretKey = (&k.to_bytes()).into();
+-                // let sig = dalek::hazmat::raw_sign_byupdate(
+-                //     &exk,
+-                //     |h: &mut sha2::Sha512| {
+-                //         sshwire::hash_ser(h, msg)
+-                //             .map_err(|_| dalek::SignatureError::new())
+-                //     },
+-                //     &k.verifying_key(),
+-                // )
+-                // .trap()?;
+                 let mut buf = [0; MAX_ED25519_SIG_MSG];
+                 let l = sshwire::write_ssh(&mut buf, msg)?;
+                 let buf = &buf[..l];
+-                let sig = k.sign(buf);
++                let sig = k.sk.sign(buf, None);
+ 
+-                OwnedSig::Ed25519(sig.to_bytes())
++                OwnedSig::Ed25519(*sig)
+             }
+ 
+             #[cfg(feature = "rsa")]
+@@ -578,7 +556,10 @@ impl sshwire::SSHEncode for SignKey {
+         match self {
+             SignKey::Ed25519(k) => {
+                 SSH_NAME_ED25519.enc(s)?;
+-                BinString(&k.to_bytes()).enc(s)?;
++                let seed = k.sk.seed();
++                let r = BinString(&*seed).enc(s);
++                seed.wipe();
++                r?;
+             }
+             #[cfg(feature = "rsa")]
+             SignKey::RSA(k) => {
+@@ -621,9 +602,13 @@ impl<'de> SSHDecode<'de> for SignKey {
+         Ok(match t {
+             SSH_NAME_ED25519 => {
+                 let k = BinString::dec(s)?;
+-                let k = k.0.try_into().map_err(|_| WireError::BadKey)?;
+-                let k = dalek::SigningKey::from_bytes(k);
+-                Self::Ed25519(k)
++                // KeyPair::from_seed panics on an all-zero seed
++                if k.0.iter().all(|b| *b == 0) {
++                    return Err(WireError::BadKey);
++                }
++                let k =
++                    ed25519::Seed::from_slice(k.0).map_err(|_| WireError::BadKey)?;
++                Self::Ed25519(ed25519::KeyPair::from_seed(k))
+             }
+             #[cfg(feature = "rsa")]
+             SSH_NAME_RSA => {
+@@ -657,7 +642,8 @@ impl TryFrom<ssh_key::PrivateKey> for SignKey {
+     fn try_from(k: ssh_key::PrivateKey) -> Result<Self> {
+         match k.key_data() {
+             ssh_key::private::KeypairData::Ed25519(k) => {
+-                Ok(SignKey::Ed25519(k.private.to_bytes().into()))
++                let seed = ed25519::Seed::new(k.private.to_bytes());
++                Ok(SignKey::Ed25519(ed25519::KeyPair::from_seed(seed)))
+             }
+ 
+             #[cfg(feature = "rsa")]

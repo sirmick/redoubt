@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Provenance of vendor/ (vendor/README.md, "Provenance"): for each vendored crate, download the
 # published .crate from static.crates.io, check its SHA-256 against the live crates.io index and
-# against the checksum recorded in vendor/README.md, unpack it, and `diff -r` it against
-# vendor/<name>. Needs the network, so the bench never runs it; the review of any change to
+# against the checksum recorded in vendor/README.md, unpack it, apply vendor/patches/<name>.patch
+# if the crate has one, and `diff -r` it against vendor/<name>. Needs the network, so the bench never runs it; the review of any change to
 # vendor/ does. Exit 0 only if every crate matches on all three counts. Before any download it
 # checks that the table and vendor/ name the same crates, and fails if not; `--structure-only`
 # does just that, offline (tests/provenance.rs).
@@ -25,7 +25,8 @@ index_path() {
 }
 
 # Structure first, with no network: the table must be there, every row must name a vendored
-# directory, and every vendored directory (derived from vendor/ itself) must have a row. Anything
+# directory, and every vendored directory (derived from vendor/ itself; patches/ holds the patch
+# files, not a crate) must have a row. Anything
 # else fails closed, before any download, so a table that cannot be read never checks nothing and
 # passes. `--structure-only` stops here.
 header='^| Crate | Version | License (ours to use under)'
@@ -46,7 +47,7 @@ failed=0
 dirs=()
 for dir in "$root"/vendor/*/; do
     name="$(basename "$dir")"
-    dirs+=("$name")
+    [ "$name" = patches ] || dirs+=("$name")
 done
 for name in "${names[@]}"; do
     if [ ! -d "$root/vendor/$name" ]; then
@@ -88,6 +89,13 @@ for i in "${!names[@]}"; do
     if [ "$recorded" != "$indexed" ]; then verdict="README $recorded != index $indexed"; fi
     mkdir -p "$work/unpacked"
     tar -xzf "$crate" -C "$work/unpacked"
+    patch_file="$root/vendor/patches/$name.patch"
+    if [ -f "$patch_file" ] \
+        && ! patch --forward --force --silent --no-backup-if-mismatch -p1 \
+            -d "$work/unpacked/$name-$version" -i "$patch_file" >"$work/$name.patch.log" 2>&1; then
+        verdict="vendor/patches/$name.patch does not apply to the published crate"
+        cat "$work/$name.patch.log" >&2
+    fi
     if ! diff -r "$work/unpacked/$name-$version" "$root/vendor/$name" >"$work/$name.diff"; then
         verdict="vendor/$name differs from the published crate: $(wc -l <"$work/$name.diff") diff lines"
         cat "$work/$name.diff" >&2

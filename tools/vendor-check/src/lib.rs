@@ -17,4 +17,4 @@
 
 #![no_std]
 
-pub use {ed25519_compact, smoltcp};
+pub use {ed25519_compact, smoltcp, sunset};

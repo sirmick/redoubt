@@ -68,6 +68,33 @@ exclude = [
   "vendor/stable_deref_trait",
   "vendor/byteorder",
   "vendor/ed25519-compact",
+  "vendor/sunset",
+  "vendor/aes",
+  "vendor/ascii",
+  "vendor/block-buffer",
+  "vendor/chacha20",
+  "vendor/cipher",
+  "vendor/cmov",
+  "vendor/cpubits",
+  "vendor/crypto-common",
+  "vendor/ctr",
+  "vendor/ctutils",
+  "vendor/digest",
+  "vendor/getrandom",
+  "vendor/hmac",
+  "vendor/hybrid-array",
+  "vendor/inout",
+  "vendor/poly1305",
+  "vendor/sha2",
+  "vendor/snafu",
+  "vendor/subtle",
+  "vendor/typenum",
+  "vendor/universal-hash",
+  "vendor/zeroize",
+  "vendor/sunset-sshwire-derive",
+  "vendor/snafu-derive",
+  "vendor/zeroize_derive",
+  "vendor/virtue",
 ]
 
 [profile.release]
@@ -105,6 +132,61 @@ path = "vendor/byteorder"
 # The loader's and keyd's Ed25519, the same way.
 [patch.crates-io.ed25519-compact]
 path = "vendor/ed25519-compact"
+# sshd's SSH library (patched: vendor/patches/sunset.patch) and its dependencies.
+[patch.crates-io.sunset]
+path = "vendor/sunset"
+[patch.crates-io.aes]
+path = "vendor/aes"
+[patch.crates-io.ascii]
+path = "vendor/ascii"
+[patch.crates-io.block-buffer]
+path = "vendor/block-buffer"
+[patch.crates-io.chacha20]
+path = "vendor/chacha20"
+[patch.crates-io.cipher]
+path = "vendor/cipher"
+[patch.crates-io.cmov]
+path = "vendor/cmov"
+[patch.crates-io.cpubits]
+path = "vendor/cpubits"
+[patch.crates-io.crypto-common]
+path = "vendor/crypto-common"
+[patch.crates-io.ctr]
+path = "vendor/ctr"
+[patch.crates-io.ctutils]
+path = "vendor/ctutils"
+[patch.crates-io.digest]
+path = "vendor/digest"
+[patch.crates-io.getrandom]
+path = "vendor/getrandom"
+[patch.crates-io.hmac]
+path = "vendor/hmac"
+[patch.crates-io.hybrid-array]
+path = "vendor/hybrid-array"
+[patch.crates-io.inout]
+path = "vendor/inout"
+[patch.crates-io.poly1305]
+path = "vendor/poly1305"
+[patch.crates-io.sha2]
+path = "vendor/sha2"
+[patch.crates-io.snafu]
+path = "vendor/snafu"
+[patch.crates-io.subtle]
+path = "vendor/subtle"
+[patch.crates-io.typenum]
+path = "vendor/typenum"
+[patch.crates-io.universal-hash]
+path = "vendor/universal-hash"
+[patch.crates-io.zeroize]
+path = "vendor/zeroize"
+[patch.crates-io.sunset-sshwire-derive]
+path = "vendor/sunset-sshwire-derive"
+[patch.crates-io.snafu-derive]
+path = "vendor/snafu-derive"
+[patch.crates-io.zeroize_derive]
+path = "vendor/zeroize_derive"
+[patch.crates-io.virtue]
+path = "vendor/virtue"
 
 # Arithmetic overflow remains an invariant failure in the executable model.
 [profile.release.package.redoubt-model]

@@ -71,6 +71,7 @@
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
+  - [sshd's vendored crates under Miri](todo/sshd-vendored-miri.md)
   - [The unsafe budget's stated reason](todo/unsafe-ratchet-reason.md)
   - [User cache-block invalidation](todo/user-cache-invalidate.md)
   - [A host test build of the workspace](todo/workspace-host-tests.md)

@@ -1,0 +1,18 @@
+Redoubt's patch to ascii 1.1.0 as crates.io published it (vendor/README.md, "ascii").
+Apply with: patch -p1 -d vendor/ascii < vendor/patches/ascii.patch
+
+diff --git a/src/ascii_char.rs b/src/ascii_char.rs
+index 5011949..6204bae 100644
+--- a/src/ascii_char.rs
++++ b/src/ascii_char.rs
+@@ -756,8 +756,8 @@ macro_rules! impl_into_partial_eq_ord {
+     ($wider:ty, $to_wider:expr) => {
+         impl From<AsciiChar> for $wider {
+             #[inline]
+-            fn from(a: AsciiChar) -> $wider {
+-                $to_wider(a)
++            fn from(ch: AsciiChar) -> $wider {
++                $to_wider(ch)
+             }
+         }
+         impl PartialEq<$wider> for AsciiChar {
