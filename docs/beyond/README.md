@@ -13,7 +13,6 @@ recorded as ruled out, with the reason, so they are not proposed again without o
 | [Other runtimes](runtimes.md) | Python and Java, ported to Rust |
 | [The web stack](web-stack.md) | serving HTTP through isolated TCP, TLS and HTTP servers, reached only through SSH forwarding |
 | [Unattended operation](unattended.md) | backup, crash records, field updates, monitoring and a rescue console |
-| [A Rust OS facade](rust-os-facade.md) | one blocking client library over every server |
 | [Swap](swap.md) | a userspace swapper under per-budget limits |
 | [Disk encryption](disk-encryption.md) | authenticated encryption of every block, for a disk outside the trust boundary |
 | [Linux on reserved cores](linux-cores.md) | Linux driving messy hardware and serving virtio to Redoubt |

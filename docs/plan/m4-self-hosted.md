@@ -68,8 +68,8 @@ In this order, after [M3 (files in and out)](m3-files.md):
    ([the resolver](../servers/resolver.md), [ipd](../servers/ipd.md#name-scoped-connections)).
 2. **`gatewayd`** with keys and TLS, one model provider, and the `git` relay
    ([gatewayd](../servers/gatewayd.md)).
-3. **The server APIs, client crates and the Rust `std` target**
-   ([native programs](../userland/native.md#client-crates-and-the-rust-std-target)).
+3. **The client library's further modules and the Rust `std` target**
+   ([native programs](../userland/native.md#the-rust-std-target)).
 4. **Development on the box:** the compilers on beamlet, `git` through the gateway, Rust built off
    the box and shipped signed ([development](../userland/development.md)).
 5. **The audit log** for every steward action ([the steward](../servers/steward.md#the-audit-log)).

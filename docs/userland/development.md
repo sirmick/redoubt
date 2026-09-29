@@ -4,9 +4,9 @@ Redoubt is developed on Redoubt. A developer, or a developer's agent, works in a
 lives in their home volume, `git` reaches its remotes through a gateway, and the Elixir and Erlang
 compilers run on the box in beamlet. Rust, including the kernel and the servers, is built off the
 box, because the Rust compiler is not ported: system code ships in the signed boot bundle, and a
-developer's own program arrives by SFTP. The server APIs and client crates let programs written for
-the box use the system; whether Rust's `std` gets a Redoubt target is open
-([native programs](native.md#client-crates-and-the-rust-std-target)).
+developer's own program arrives by SFTP. The client library lets programs written for the box use
+the system; whether Rust's `std` gets a Redoubt target is open
+([native programs](native.md#the-rust-std-target)).
 
 ## Purpose
 
@@ -99,8 +99,8 @@ for people and agents alike ([gatewayd](../servers/gatewayd.md)).
 Status: planned · M4 (self-hosted development)
 
 The Rust compiler is not ported, so native programs, servers and the kernel are built off the box
-with the `riscv64gc-unknown-redoubt-elf` target, against the client crates ([native
-programs](native.md#client-crates-and-the-rust-std-target)). "Shipped signed" means signed where a
+with the `riscv64gc-unknown-redoubt-elf` target, against the client library ([native
+programs](native.md#the-client-library)). "Shipped signed" means signed where a
 signature gates something:
 - **System Rust** (servers, drivers, beamlet, the kernel) reaches the box in the signed boot
   bundle, checked by verified boot ([boot](../kernel/boot.md)).

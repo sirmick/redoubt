@@ -83,7 +83,7 @@ and a well-formed child still runs afterwards.
 
 Status: planned · M1 (separation and containment)
 
-A session launches a native program through beamlet's launch natives
+A session launches a native program through beamlet's launch native
 ([beamlet](beamlet.md#natives)). The namespace, the handles and the budget come from the Elixir
 caller, so every authority the child gets is on that one call.
 - **The launcher reads the program.** There is no kernel path lookup: a session that cannot read
@@ -98,9 +98,9 @@ caller, so every authority the child gets is on that one call.
 - **No dynamic linking.** Code shared at run time is a server, not a library. The dynamic part of
   the system is the BEAM, whose modules load at run time.
 
-**Open:** how the launch natives divide the work. The recommendation: the three process calls as
-natives, with Rust writing the startup block (the encoder exists in `redoubt-wire`) from the
-namespace and handles the Elixir caller gives, so policy stays in Elixir and encoding in Rust.
+**Open:** none. The launch native is the client library's `launch`: the namespace, the handles
+and the budget come from the Elixir caller, and Rust makes the calls and writes the startup block
+([the client library](#the-client-library)).
 
 ### Standard input and output, and pipes
 
@@ -266,21 +266,79 @@ Every one is also to build for rv32, where the vendored crates are checked too, 
 
 **Open:** which of these build for rv32 as they stand; none has been tried there.
 
-### Client crates and the Rust `std` target
+### The client library
+
+Status: planned · M1 (separation and containment)
+
+`redoubt-client` (`libs/client`) is the one client API every userland binds to: native programs
+link it, beamlet's Redoubt platform and natives are thin adapters over it
+([beamlet](beamlet.md#beamlet-on-redoubt)), and `init` launches and asks its servers through it.
+It is `no_std` with `alloc`, has no `unsafe`, and sits on the runtime and the wire codecs, adding
+what is more than one typed call. Its calls block, one per thread; beamlet makes them from its
+pool of I/O threads ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)).
+
+| Module | What it gives |
+| --- | --- |
+| `ns` | the namespace, built from the startup block: the longest matching prefix, `bind`, the listing |
+| `file` | files over 9P on a connection: walk, open, create, read, write, stat, read a directory, remove; one fid per open file |
+| `fsd` | the file server's typed operations that name open files' fids: `rename`, `copy_file`, `set_attr`, `get_attr` ([fsd](../servers/fsd.md#typed-operations)) |
+| `console` | `/dev/cons`: read, write, `size`, and the parked `resize` ([consoled](../servers/consoled.md#the-consol-protocol)) |
+| `launch` | the process builder: the image bytes the caller read, a budget the caller carved, the endpoint for the exit notice, namespace entries, named handles and arguments, written by the runtime's `StartupBuilder`; it returns a job, whose exit notice the caller waits for and whose budget ends it |
+| `grants` | the launcher's ledger of what servers granted a child, released and disconnected when the child's exit notice arrives ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)) |
+| `typed` | one call for any typed protocol, over the module the generator wrote from its table ([wire](../servers/wire.md#wire-tables-and-the-generator)) |
+
+Time and randomness are the runtime's kernel calls, and raw `call`, `send` and `serve` are the
+runtime's `ipc`, which beamlet's natives use directly. `/net` is files, so `file` covers it. There
+is no module per typed server beyond `fsd`, whose operations name fids that live in Rust: for
+every other server `typed` with the generated module is the binding, and beamlet binds the same
+tables through their generated Elixir codecs.
+
+- **A namespace owns its connections.** A `bind` puts the same connection under another prefix:
+  one connection, one badge, as a copied handle is in beamlet. An open file keeps its connection
+  for as long as it is open.
+- **Nothing is buffered, cached or retried.** One read or write is one 9P request of at most the
+  connection's `iounit`, and its error is its own, never deferred. Every open walks from the
+  connection's root, so a rename, a removal or a revoked connection shows on the next open. A
+  connection whose server has gone is `Disconnected` on every call; the library never reconnects,
+  since a new connection is its launcher's to grant ([init](../servers/init.md#restarts-and-reboots)).
+- **A connection is shared by threads.** Its fids come from one allocator, and each request lends
+  its own buffer, so several threads use one connection at once.
+- **Policy is the servers'.** The library holds none and makes no check a server does not make:
+  the label check is the server's ([R25 (the label check)](../servers/serving.md#r25-the-label-check)).
+- **One error type** tells apart the kernel's error, a reply that does not decode, the server's
+  protocol error (a typed error code or a 9P `Rerror`) and `Disconnected`. No error path drops a
+  handle: the runtime's accounting of a call's outcome is kept whole
+  ([R13 (one outcome per call)](../kernel/ipc.md#r13-one-outcome-per-call)).
+- **No second copy** of the ABI, the startup encoder or a wire format: `launch` calls
+  `StartupBuilder`, and `typed` calls the generated codecs.
+- **Tested on the host** against the real servers: the runtime's fake kernel is a crate of its own
+  for tests, and `bootfsd`, `consoled` and `keyd` run on it, so each userland's bindings, beamlet's
+  platform included, are tested long before `init` boots them.
+- **One scripting language.** Elixir on beamlet is the box's scripting language; no embedded
+  script language is taken as a further userland, and the library binds any language that might
+  be ([other runtimes](../beyond/runtimes.md)).
+
+The attack cases: no call succeeds where the underlying call is refused (a label, a quota, a walk
+above a connection's root, a launch with `MAX_START_HANDLES` + 1 handles refused before any kernel
+call); an error path never leaks a handle (a partial reply, a server that dies mid-call, a hostile
+reply carrying handles); a child's grants are released at every server when its exit notice
+arrives.
+
+**Open:** none.
+
+### The Rust `std` target
 
 Status: planned · M4 (self-hosted development)
 
-For Redoubt to be developed on Redoubt, native programs need more than the runtime: a client
-crate for each server's API (the file server's typed calls, `keyd`, the steward, `ipd`'s
-`/net`), speaking the servers' own wire protocol ([the wire protocol](../servers/wire.md)), and
-perhaps a Rust `std` target so ordinary crates build for the box. Programs are built off the box
-([development](development.md)).
+For Redoubt to be developed on Redoubt, native programs need more of the client library: modules
+for servers whose use is more than one typed call (the steward's sessions and leases, `ipd`'s
+scopes), grown into it from what their callers need, and perhaps a Rust `std` target so ordinary
+crates build for the box. Programs are
+built off the box ([development](development.md)).
 
-**Open:** the shape of the client API and of `std`. The recommendation is to grow one client API
-from the operations real callers need, not from a speculative facade, and to settle in one place
-whether `std` gets a backend (`std::fs` over 9P) or is rejected in favour of explicit capability
-calls; the runtime's ownership and error contract above is the base either way. A general Rust
-operating-system facade is beyond M5 ([beyond](../beyond/rust-os-facade.md)).
+**Open:** whether `std` gets a backend (`std::fs` over the client library's files) or is rejected
+in favour of explicit capability calls; the runtime's ownership and error contract and the client
+library are the base either way.
 
 ## Why
 

@@ -82,7 +82,6 @@
   - [Other runtimes](beyond/runtimes.md)
   - [The web stack](beyond/web-stack.md)
   - [Unattended operation](beyond/unattended.md)
-  - [A Rust OS facade](beyond/rust-os-facade.md)
   - [Swap](beyond/swap.md)
   - [Disk encryption](beyond/disk-encryption.md)
   - [Linux on reserved cores](beyond/linux-cores.md)

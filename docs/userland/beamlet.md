@@ -150,19 +150,20 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
 
 Status: planned · M1 (separation and containment)
 
-On Redoubt, beamlet is a native program whose `Platform` is written against the system: one 9P
-client over the connections in the VM's namespace, and the kernel's calls for the rest.
+On Redoubt, beamlet is a native program whose `Platform` is written against the system: thin
+adapters over the client library ([native programs](native.md#the-client-library)) for the
+namespace, files, the console and launching, and the kernel's calls for the rest.
 
 | Method | On Redoubt |
 | --- | --- |
 | `monotonic_us`, `idle` | the kernel's `time_now` (microseconds since boot); `idle` is a `receive` with a timeout ([timer](../kernel/timer.md)) |
 | `system_time_us` | `None` until wall-clock time and time sync exist, in M5 (persist, install, share) |
-| `console_write`, `console_read` | writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
+| `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
 | `load_module`, `load_app` | looks names up in the boot bundle (`/boot`, served by `bootfsd`) and, from M5 (persist, install, share), the principal's profile ([packages](packages.md)), never in the session's writable namespace; this decides which module a name finds, not what code may run |
-| `files` | the 9P client: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
-| `programs` | launching native programs in carved budgets ([native programs](native.md)) |
+| `files` | the client library's `file`: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
+| `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)) |
 
 TCP is Plan 9's `/net`, served by `ipd`: `gen_tcp` works unchanged over a backend that opens
 `/net/tcp/clone` and reads and writes the data file, and framing stays in Erlang, so the Rust side
@@ -190,7 +191,7 @@ every server binding is pure Elixir over them:
 | `serve/1`, `reply/2` | serve an endpoint: requests arrive as messages carrying badge, account and labels |
 | `budget_create/1`, `budget_destroy/1`, `budget_usage/1` | carve and end budgets; a deadline makes one a lease |
 | `labels/0` | this VM's label set, fixed when its budget was made |
-| `process_create/2`, `process_map`, `process_start/3` | launching native programs |
+| `launch/1` | launching a native program: the image, budget, namespace, handles and arguments come from the Elixir caller, and the client library's `launch` makes the calls and writes the startup block |
 
 Handles are resource terms: unforgeable, collected, and never serialisable. A copy of a handle
 inside the VM is the same connection (one badge, one client), so passing one to another Erlang
@@ -199,14 +200,15 @@ as a plain reference, with no state behind it, so a decoded copy grants nothing,
 crosses between processes only in a kernel call that names it. Delegation is
 always `new_connection`, a typed call on a connection, not a native ([sessions](sessions.md)).
 
-**Open:** two layout choices.
-- Launching: the three process calls as natives, with the startup block written by Rust (the
-  encoder exists in `redoubt-wire`) from a namespace and handles the Elixir caller gives, so policy
-  stays in Elixir and encoding in Rust. Recommended; undecided.
-- Where the Elixir modules over the natives (`Redoubt.Namespace`, `Redoubt.Process`,
-  `Redoubt.Budget` and the rest) live: a Mix package versioned with the system and loaded from the
-  boot bundle, with only what the VM needs at boot embedded in it (recommended), or all embedded
-  in the VM.
+The namespace and launching natives are the client library's `ns` and `launch`, so policy stays
+in Elixir and encoding in Rust. The file server's operations that name fids (`Redoubt.File`'s
+`rename`, `copy_file` and attributes) go through the library's `fsd` beside the file natives,
+since the fids are the platform's, not Elixir's ([native programs](native.md#the-client-library)).
+
+**Open:** where the Elixir modules over the natives (`Redoubt.Namespace`, `Redoubt.Process`,
+`Redoubt.Budget` and the rest) live: a Mix package versioned with the system and loaded from the
+boot bundle, with only what the VM needs at boot embedded in it (recommended), or all embedded
+in the VM.
 
 ### Asynchronous underneath, synchronous on top
 

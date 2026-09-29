@@ -96,6 +96,11 @@ page.
    deadline, a budget subtree revoked with messages and lends in flight, and a victim that stays
    responsive throughout. It proves kernel primitives only; it is not evidence for the steward,
    approvals, the network or a session.
+- **The client library.** `redoubt-client`: the namespace, files over 9P, the file server's
+  typed operations, the console, launching, a launcher's grants and one typed call, the API every
+  userland binds to, tested on the host against real servers
+  ([native programs](../userland/native.md#the-client-library)). `init` and beamlet's platform are
+  built on it.
 - **`init` and the boot manifest.** The loader loads only the kernel and `init`
    ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)); `init` reads the
    manifest, builds the budget tree from it
