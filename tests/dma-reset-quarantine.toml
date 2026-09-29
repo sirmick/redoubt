@@ -5,7 +5,8 @@ debug_assertions = true
 kernel_features = ["dma-reset-deaf"]
 # The first program, so it holds every device object (kernel/devices.md).
 programs = ["dma-reset-quarantine"]
-timeout_secs = 30
+# Beyond the program's 60 s wait for the checker's search, so a stuck check reports itself.
+timeout_secs = 90
 expect = [
     # The first driver's fault, as the kernel reports every one.
     '^PROGRAM HALT: CPU Exception on PID [0-9]+: Store page fault of 0x00000000 ',
