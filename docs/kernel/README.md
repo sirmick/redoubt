@@ -115,6 +115,75 @@ flowchart LR
 *Figure: the kernel's objects and what each refers to. An arrow points from the one that holds
 the reference to the one it names.*
 
+## Containment
+
+Status: planned · M1 (separation and containment)
+
+One boot, `bench:kernel-containment`, shows that the kernel's primitives alone contain hostile
+code before `init`, the steward or any server is built on them. Hostile code in a lease is
+preempted, then ended at its deadline or revoked by hand while its messages and lends are in
+flight, and its victims stay responsive the whole time. The boot is evidence for the kernel only.
+The steward's leases, approvals, the network and sessions have their own cases
+([M1 (separation and containment)](../plan/m1-separation.md#attack-suite)).
+
+**What runs.** The loader starts one program. It holds `root`, `system`, `users`, the console
+and the Reset right. It builds the budget tree at the weights `init` gives
+([init](../servers/init.md)) and starts copies of itself in the tree, as the latency workload does
+([responsiveness](scheduling.md#responsiveness)):
+- in `system`: the workload's driver stand-in and steward stand-in, and a victim server that
+  takes the hostile agents' calls and holds them open;
+- in `users`: a bystander session, and a sessions budget the steward stand-in holds. The steward
+  stand-in carves each lease from that budget and starts a hostile agent in it, as the steward
+  will.
+
+Each hostile agent runs in a lease the size of the workload's leases, with room added for a full
+handle table and one sub-agent. It does all of these at once:
+- some of its threads spin and never enter the kernel, and one enters the kernel in a tight
+  loop;
+- some threads call the victim server with lends, which the server takes and holds open, and
+  others are blocked in `send` to it. All of them go through handles minted into the lease's
+  revocation scope;
+- a sub-agent runs in a budget the agent carves from its lease. That budget has a later deadline
+  of its own, and the sub-agent's process churns threads and processes;
+- the agent fills the rest of its lease with endpoints and its handle table up to `MAX_HANDLES`,
+  so the destruction walks as much as a lease of its size can make it walk.
+
+The bystander also holds a message queued at the victim server that carries a handle stamped with
+a live lease. Two hostile leases are live at any time. One ends at its deadline. The steward
+stand-in ends the other with `budget_destroy` after a timeout, which is its decision. Each lease is
+replaced when it ends, until eight of each kind have ended.
+
+**Verdicts.** None of them comes from a hostile agent:
+
+| What is judged | Rules | Judged by |
+| --- | --- | --- |
+| Every process in a lease, its sub-agent's included, is killed at the lease's deadline or at the decision, and each gets a `killed` notice that blames nobody. The tight loop does not put the deadline off | [R10 (destruction)](budgets.md#r10-destruction), [deadlines](budgets.md#deadlines), [R21 (crash blame)](processes.md#r21-crash-blame) | the kernel's exit notices, taken by the steward stand-in |
+| Each call the victim server took from a lease is abandoned, with one notice. Its lend stays mapped in the server with the bytes the agent wrote, while the next lease reuses freed frames. The server's reply is discarded with mask 0, and its usage returns to where it started | [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls), [I15 (abandoned calls reported once)](invariants.md#i15-abandoned-calls-reported-once), [I9 (pages W^X, zeroed, lends unmapped)](invariants.md#i9-pages-wx-zeroed-lends-unmapped) | the victim server |
+| Every blocked send fails, and nothing sent through a lease's handles is received after the lease ends. The bystander's queued message arrives with the stamped handle as 0 | R10, [R9 (stamps)](objects.md#r9-stamps), [I2 (revocation is complete)](invariants.md#i2-revocation-is-complete) | the victim server |
+| Every handle the steward stand-in holds to a lease is closed. Once the lease's notices are taken, the sessions budget's usage is what it was before the lease was made. The sub-agent's later deadline never fires | R10, I2, [I10 (create-destroy leaves the parent unchanged)](invariants.md#i10-create-destroy-leaves-the-parent-unchanged) | the steward stand-in, from `budget_usage` and the results of its calls |
+| The victims stay responsive: the driver wake, the steward's timer and decision wakes, the deadline notice, R10's kernel time and a lease's end are all within the targets in [responsiveness](scheduling.md#responsiveness) | [R12 (scheduling)](scheduling.md#r12-scheduling), R10 | the RTC (driver), `time_now` (steward), the kernel's trace (R10) and the bench's post-check |
+| Every pick is in rank order, and the bystander keeps its weight's share | R12 | the scheduler oracle over the kernel's trace; the program, from the bystander's count |
+| The kernel does not panic, and no assertion of a checked build fails | [I14 (no call panics the kernel)](invariants.md#i14-no-call-panics-the-kernel) | the kernel |
+
+The program's lines are trusted ([rule F](../testbench.md#rule-f-trusted-verdicts)) because it
+owns the console and holds the reset. Its children hold no device and have no path to the
+console, so no line on it can come from a hostile agent. Each victim reports through a handle the
+program badged for it, and the program never counts a hostile agent's report as a verdict.
+
+**The run.** The boot runs on rv64 and rv32, on one hart, in a checked build with the tracing
+kernel ([R23 (no test channels)](scheduling.md#r23-no-test-channels)). It uses the latency
+workload's virtual time and one pinned seed. A sweep of 16 seeds on both widths sets which seed
+the gate runs, and this page records the sweep. The targets are the ones in
+[responsiveness](scheduling.md#responsiveness), and the gate adds none. If the gate misses one of
+them, that is a finding against the kernel, not a reason to set a new target.
+
+The gate replaces none of the focused cases. `budget-deadline`, `redoubt-revoke`,
+`uaf-lent-page`, `endpoint-destroy-open-calls` and `sched-latency` each attack one clause alone,
+and each fails with a narrower message. The gate shows that all of those clauses hold together,
+under load, against one party that tries them all at once.
+
+**Open:** none.
+
 ## The TCB and its size
 
 Status: built · partly tested: the line counts are measured, not pinned by a case · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::every_configured_root_must_contain_rust_source
@@ -220,6 +289,12 @@ two, where a file serves two mechanisms).
   second hart, and completion races between harts are not attacked by a case
   ([IPC](ipc.md#residual-risks)). Running user code on several harts is M2 (usable shell)'s
   ([several harts](../plan/m2-usable-shell.md#several-harts)).
+- **The containment gate is one workload.** [Containment](#containment) runs hostile leases of
+  one size, against stand-ins for the steward and a driver, on one hart and under one pinned
+  seed. It shows that the kernel's primitives hold together for that workload. It does not bound
+  every workload, and it says nothing about the real steward. The steward reruns the
+  responsiveness measures with its real servers
+  ([M1 (separation and containment)](../plan/m1-separation.md#remaining-work)).
 - **The kernel trusts the loader's handoff.** It reads the argument block through a pointer the
   loader passed and trusts the memory map in it. It checks the device list itself (no device may
   overlap RAM or an interrupt controller), and it checks its own mappings are W^X before the

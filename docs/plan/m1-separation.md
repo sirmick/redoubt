@@ -71,6 +71,7 @@ Bob, attacking Alice.
 | The timer: every blocking call returns by its timeout | [I13 (every blocking call returns by its timeout)](../kernel/invariants.md#i13-every-blocking-call-returns-by-its-timeout) | `timeouts`, `budget-deadline` |
 | Memory: W^X, zeroed pages, no replacement by `map_fixed` | [R11 (memory)](../kernel/memory.md#r11-memory) | `wx`, `kernel-wx`, `mem-attack`, `write-only-attack`, `map-fixed-attack` |
 | Devices: no device authority without a device object; DMA pages reset before reuse | [R18 (device authority)](../kernel/devices.md#r18-device-authority), [I16 (DMA pages reset before reuse)](../kernel/invariants.md#i16-dma-pages-reset-before-reuse) | `irq-attack`, `dma-rules`, `dma-reset-reuse`, `dma-reset-quarantine` |
+| Containment: hostile agents in leases are preempted, then ended at their deadlines or revoked by hand with their messages and lends in flight, while the driver, the steward and a victim server stay responsive | R10, R12, R3, [I2 (revocation is complete)](../kernel/invariants.md#i2-revocation-is-complete), [I10 (create-destroy leaves the parent unchanged)](../kernel/invariants.md#i10-create-destroy-leaves-the-parent-unchanged) | not yet ([containment](../kernel/README.md#containment)) |
 | Boot: a tampered or confused bundle does not run | [R15 (verified boot)](../kernel/boot.md#r15-verified-boot), [R16 (image confinement)](../kernel/boot.md#r16-image-confinement) | `verified-boot-rejects-tamper`, `verified-boot-rejects-bare-archive`, `loader-rejects-kernel-address`, `loader-rejects-kernel-entry`, `loader-rejects-truncated-elf` |
 
 The gaps the kernel's own cases leave (R1 (flow) across label sets on the real kernel, R2's turns
@@ -95,7 +96,7 @@ page.
    before the whole milestone is layered on them: hostile code preempted and ended at its
    deadline, a budget subtree revoked with messages and lends in flight, and a victim that stays
    responsive throughout. It proves kernel primitives only; it is not evidence for the steward,
-   approvals, the network or a session.
+   approvals, the network or a session ([containment](../kernel/README.md#containment)).
 - **The client library.** `redoubt-client`: the namespace, files over 9P, the file server's
   typed operations, the console, launching, a launcher's grants and one typed call, the API every
   userland binds to, tested on the host against real servers
