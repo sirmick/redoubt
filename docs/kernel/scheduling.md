@@ -281,22 +281,22 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | --- | --- |
 | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
 | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
-| steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 20 ms, p99 <= 115 ms (from the sweep below; 15 and 50 ms before it) |
+| steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 25 ms, p99 <= 95 ms (from the third sweep below; 20 and 115 ms before it, 15 and 50 ms before the first) |
 | deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 54 ms (from the second sweep below; 30 ms before it) |
 | R10 kernel time of one destruction, from the trace | p99 <= 39 ms (from the second sweep below; 30 ms before it) |
-| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 115 + 39 = 154 ms, asserted as one sum by the post-check (80 ms before the first sweep, 145 ms before the second) |
+| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 95 + 39 = 134 ms, asserted as one sum by the post-check (154 ms before the third sweep, 145 ms before the second, 80 ms before the first) |
 | `budget_destroy`, call to return | recorded against one round: R10's 39 ms plus (runnable budgets + 2) slices |
 | the 1000-weight server's share of the spinning CPU at N = 16 | at least 384 less 30 per thousand |
 
-In instructions: 15 ms is 1,875,000, 20 ms is 2,500,000, 39 ms is 4,875,000, 50 ms is 6,250,000,
-54 ms is 6,750,000, 115 ms is 14,375,000, 154 ms is 19,250,000, and one 10 ms slice is 1,250,000.
+In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 39 ms is 4,875,000, 50 ms is 6,250,000,
+54 ms is 6,750,000, 95 ms is 11,875,000, 134 ms is 16,750,000, and one 10 ms slice is 1,250,000.
 
 The decision wake is measured by the stand-in itself (`time_now` against its own deadline) and
 read from its console lines, while R10's time comes from the kernel's trace: that half of the
 lease-end sum is the program's own report, not the kernel's.
 
 **The sweep** (2026-09-27, seeds 1 to 16, on rv64 and rv32, `TESTBENCH_QEMU_SEED`; the gate runs
-seed 3, the worst, and no gate sets the variable). The steward decision wake, p50 / p99 in µs at N = 1, 4 and 16, and a lease's end (the
+seed 3, this sweep's worst, and no gate sets the variable). The steward decision wake, p50 / p99 in µs at N = 1, 4 and 16, and a lease's end (the
 worst decision-wake p99 plus R10's p99 from the trace):
 
 | Seed | rv64 N=1 | rv64 N=4 | rv64 N=16 | rv64 lease end | rv32 N=1 | rv32 N=4 | rv32 N=16 | rv32 lease end |
@@ -359,6 +359,37 @@ worst is 105.8 ms. The difference from 30 ms is the handle-sweep term of
 [budget destruction's cost](../todo/budget-destroy-cost.md), which brings R10's target back to
 30 ms and the deadline notice's to 40 ms. Every other measure met its target on every seed. The
 gate stays on seed 3.
+
+**The third sweep** (2026-09-29, the same seeds and widths) followed a change that frees a page
+table once it maps nothing. It found the first sweep's rv64 median was one phase, not a property
+of rv64: the N = 16 decision wake's p50 is about 7 ms on most seeds and about 18 ms on some, on
+either width (rv64 on seeds 6, 7, 11, 12 and 16, rv32 on seeds 5 and 9). The decision wake, p50 /
+p99 in µs, and a lease's end:
+
+| Seed | rv64 N=1 | rv64 N=4 | rv64 N=16 | rv64 lease end | rv32 N=1 | rv32 N=4 | rv32 N=16 | rv32 lease end |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 5919 / 5920 | 6130 / 16511 | 7143 / 39423 | 73286 | 6155 / 6157 | 6395 / 16883 | 7599 / 51328 | 86437 |
+| 2 | 5919 / 5920 | 6130 / 16512 | 7142 / 50181 | 84166 | 6155 / 6157 | 6395 / 16883 | 7598 / 51335 | 86570 |
+| 3 | 5919 / 5920 | 6130 / 16512 | 7143 / 50182 | 84125 | 6155 / 6157 | 6395 / 16884 | 7598 / 51340 | 86530 |
+| 4 | 5919 / 5920 | 6130 / 16512 | 7142 / 60941 | 94941 | 6155 / 6157 | 6395 / 16881 | 7598 / 62271 | 97522 |
+| 5 | 5919 / 5920 | 6130 / 16510 | 7143 / 39422 | 73246 | 6154 / 6157 | 6395 / 16883 | 18523 / 40403 | 75472 |
+| 6 | 5919 / 5920 | 6130 / 16512 | 17899 / 50182 | 84346 | 6155 / 6157 | 6396 / 16884 | 7599 / 51336 | 86756 |
+| 7 | 5919 / 5920 | 6130 / 16512 | 17900 / 50181 | 84297 | 6155 / 6157 | 6395 / 16881 | 7598 / 40400 | 75770 |
+| 8 | 5919 / 5920 | 6130 / 16512 | 7143 / 71702 | 105786 | 6155 / 6157 | 6395 / 16881 | 7599 / 40402 | 75739 |
+| 9 | 5919 / 5920 | 6130 / 16512 | 7142 / 39421 | 73264 | 6155 / 6158 | 6395 / 16881 | 18529 / 51325 | 86413 |
+| 10 | 5919 / 5920 | 6130 / 16512 | 7143 / 39422 | 73288 | 6155 / 6157 | 6395 / 16883 | 7599 / 40403 | 75516 |
+| 11 | 5919 / 5920 | 6130 / 16511 | 17900 / 50182 | 84313 | 6155 / 6157 | 6395 / 16881 | 7599 / 40404 | 75789 |
+| 12 | 5919 / 5920 | 6130 / 16511 | 17900 / 50184 | 84340 | 6155 / 6157 | 6395 / 16883 | 7598 / 40407 | 75818 |
+| 13 | 5919 / 5920 | 6130 / 16512 | 7141 / 82463 | 116564 | 6155 / 6158 | 6395 / 16882 | 7597 / 40398 | 75752 |
+| 14 | 5919 / 5920 | 6130 / 16511 | 7143 / 60942 | 94786 | 6155 / 6157 | 6395 / 16885 | 7599 / 51342 | 86433 |
+| 15 | 5919 / 5920 | 6130 / 16512 | 7143 / 71701 | 105649 | 6154 / 6157 | 6395 / 16883 | 7599 / 51332 | 86527 |
+| 16 | 5919 / 5920 | 6130 / 16512 | 17899 / 39423 | 73301 | 6155 / 6157 | 6395 / 16883 | 7599 / 51334 | 86458 |
+
+The worst are p50 18,529 µs (rv32, seed 9) and p99 82,463 µs (rv64, seed 13). By the same rule, a
+tenth over the worst rounded up to 5 ms: p50 18.5 x 1.1 = 20.4, so 25 ms; p99 82.5 x 1.1 = 90.7,
+so 95 ms. The lease end's bound follows, to 95 + 39 = 134 ms; its worst is 116.6 ms. Every other
+measure met its target on every seed. The gate stays on seed 3, which is no longer the worst
+seed; the targets come from the sweep, not from the seed the gate runs.
 
 The case fails on any `missed`. `bench:sched-latency-tcg` runs the same workload in host time and
 only reports, with the oracle still checking every pick.
@@ -486,14 +517,16 @@ Status: built · partly tested: a picked thread that dies before the switch, and
 - **Wakeup is prompt but not bounded.** A wake waits out the running slice, may keep a larger
   pass, and may tie. Human control rests on a measured steward lease-termination latency, not a
   proven bound, until something needs a real-time rule ([TENETS](../TENETS.md#guarantees)).
-- **The steward decision wake is slower than its other wakes.** At N = 16 the steward stand-in
-  wakes with a lead of a few milliseconds of its own runtime and lands behind several weight-100
-  spinners' slices: on rv64 its decision-wake p50 is 17.9 ms on every seed and its p99 reaches
-  104 ms, against 15 and 50 ms for its timer wakes. The targets (20 and 115 ms) are set from the
-  sweep, so the gate passes, but a lease's end from the steward's decision is 154 ms, not 80.
-  A pinned seed repeats one run; a change that moves the phase can land on a worse one than the
-  sweep saw, which the margin covers and a new sweep re-measures. The rv64 median is structural, not noise:
-  follow-up: [todo](../todo/sched-rv64-decision-wake.md).
+- **The steward decision wake is late by whole slices.** A wake never preempts: at N = 16 the
+  steward stand-in waits out the running slice, then the slices of any budgets that rank ahead of
+  it. Its p50 is one or two slices late, depending on where its timeout lands against the running
+  slice: about 7 ms or about 18 ms, and any seed on either width can show the 18 ms mode (the
+  third sweep above). Its p99 is a wake that lands behind several of the sixteen budgets, so it
+  falls in steps of one slice (about 10.8 ms), from about 39 ms to about 82 ms, about 8 slices
+  (rv64, seed 13). The exact chain from a seed to its mode was not traced. The targets (25 and 95 ms) are set from the sweep, and
+  a lease's end from the steward's decision is 134 ms, not 80. A pinned seed repeats one run; a
+  change that moves the phase can land on a worse one than the sweep saw, which the margin covers
+  and a new sweep re-measures.
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   is the stated exception: it dominates lease termination and grows with the objects it walks
