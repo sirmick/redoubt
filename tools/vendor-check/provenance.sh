@@ -25,9 +25,9 @@ index_path() {
 }
 
 # Structure first, with no network: the table must be there, every row must name a vendored
-# directory, and every vendored directory (derived from vendor/ itself, getrandom aside: it has its
-# own section, "getrandom") must have a row. Anything else fails closed, before any download, so a
-# table that cannot be read never checks nothing and passes. `--structure-only` stops here.
+# directory, and every vendored directory (derived from vendor/ itself) must have a row. Anything
+# else fails closed, before any download, so a table that cannot be read never checks nothing and
+# passes. `--structure-only` stops here.
 header='^| Crate | Version | License (ours to use under)'
 if ! grep -q "$header" "$readme"; then
     echo "provenance: no vendored table in $readme" >&2
@@ -46,7 +46,7 @@ failed=0
 dirs=()
 for dir in "$root"/vendor/*/; do
     name="$(basename "$dir")"
-    [ "$name" = getrandom ] || dirs+=("$name")
+    dirs+=("$name")
 done
 for name in "${names[@]}"; do
     if [ ! -d "$root/vendor/$name" ]; then

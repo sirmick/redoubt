@@ -23,7 +23,7 @@ Their licence texts are in `LICENSES/` (`smoltcp-0BSD.txt`, `heapless-MIT.txt`, 
 in each directory.
 
 **Left to `Cargo.lock`, not vendored.** smoltcp also needs these two. Both are already locked
-from crates.io for other packages: `cfg-if` reaches the kernel through `getrandom`, and
+from crates.io for other packages: `cfg-if` reaches the bench through `filetime`, and
 `bitflags` reaches the test programs through `uart_16550`. A patch applies to every user, so
 vendoring them would move those packages' dependencies as well. Both are small and
 macro-only. They stay pinned by version and checksum instead.
@@ -127,10 +127,6 @@ index. Unpack each over an emptied directory, then regenerate the sums:
 
 Update both tables here and the constants in `tools/vendor-check/tests/vendored.rs` in the same
 commit, run `tools/vendor-check/provenance.sh`, and read the diff.
-
-## `getrandom`
-
-Vendored earlier for the kernel's `rand`; not covered by `vendor-check`.
 
 ## Patched crates (planned)
 
