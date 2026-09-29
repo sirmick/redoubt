@@ -12,3 +12,6 @@ path = "src/bin/bootfsd.rs"
 # Only the runtime: nothing here parses a format of its own (TENETS.md 5).
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
+
+[dev-dependencies]
+redoubt-fake-kernel = { path = "../../libs/rt/fake" }

@@ -6,9 +6,6 @@
 //! The loop checks at every poll that no call is current (a `debug_assert!`, on in these tests),
 //! so a poll with a current call fails the test by panicking `ipd`'s thread.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod kernel;
-
 #[allow(dead_code)]
 #[path = "../src/bin/ipd.rs"]
 mod ipd_bin;
@@ -19,10 +16,10 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use kernel::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
 use redoubt_rt::abi::{FOREVER, Handle, Handles};
-use redoubt_rt::client::{Client, ClientError};
+use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::server::ninep::mode;
@@ -283,24 +280,24 @@ fn op(message: net_ctl::Message<'_>) -> Vec<u8> {
 }
 
 /// Attaches, makes a socket and opens its ctl (fid 2) and data (fid 3); returns its number.
-fn socket(c: &mut Client) -> u32 {
-    c.attach(0, "").unwrap();
-    c.walk(0, 1, "tcp/clone").unwrap();
-    c.open(1, mode::OREAD).unwrap();
+fn socket(c: &Connection, lend: &mut Lend) -> u32 {
+    c.attach(lend, 0, "").unwrap();
+    c.walk(lend, 0, 1, "tcp/clone").unwrap();
+    c.open(lend, 1, mode::OREAD).unwrap();
     let mut n = [0u8; 4];
-    assert_eq!(c.read(1, 0, &mut n).unwrap(), 4);
-    c.clunk(1).unwrap();
+    assert_eq!(c.read(lend, 1, 0, &mut n).unwrap(), 4);
+    c.clunk(lend, 1).unwrap();
     let n = u32::from_le_bytes(n);
-    c.walk(0, 2, &format!("tcp/{n}/ctl")).unwrap();
-    c.open(2, mode::ORDWR).unwrap();
-    c.walk(0, 3, &format!("tcp/{n}/data")).unwrap();
-    c.open(3, mode::ORDWR).unwrap();
+    c.walk(lend, 0, 2, &format!("tcp/{n}/ctl")).unwrap();
+    c.open(lend, 2, mode::ORDWR).unwrap();
+    c.walk(lend, 0, 3, &format!("tcp/{n}/data")).unwrap();
+    c.open(lend, 3, mode::ORDWR).unwrap();
     n
 }
 
-fn connect(c: &mut Client, addr: [u8; 4], port: u16) -> Result<(), ClientError> {
+fn connect(c: &Connection, lend: &mut Lend, addr: [u8; 4], port: u16) -> Result<(), ClientError> {
     let bytes = op(net_ctl::Message::Connect(net_ctl::Connect { addr: &addr, port }));
-    c.write(2, 0, &bytes).map(|_| ())
+    c.write(lend, 2, 0, &bytes).map(|_| ())
 }
 
 /// The real program: connect (the ctl read waits for the handshake), bytes out and back (the data
@@ -312,17 +309,18 @@ fn a_client_connects_and_echoes_through_the_program() {
     let f = fake();
     let (pid, conn) = net.client(1, &[], ANY);
     f.as_process(pid, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        socket(&mut c);
-        connect(&mut c, PEER_ADDR, 7).unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        socket(&c, &mut lend);
+        connect(&c, &mut lend, PEER_ADDR, 7).unwrap();
         let mut status = [0u8; 8];
-        assert_eq!(c.read(2, 0, &mut status).unwrap(), 8);
+        assert_eq!(c.read(&mut lend, 2, 0, &mut status).unwrap(), 8);
         assert_eq!(u32::from_le_bytes(status[..4].try_into().unwrap()), 2, "established");
-        assert_eq!(c.write(3, 0, b"round trip").unwrap(), 10);
+        assert_eq!(c.write(&mut lend, 3, 0, b"round trip").unwrap(), 10);
         let mut got = [0u8; 64];
-        let n = c.read(3, 0, &mut got).unwrap();
+        let n = c.read(&mut lend, 3, 0, &mut got).unwrap();
         assert_eq!(&got[..n], b"round trip");
-        c.write(2, 0, &op(net_ctl::Message::Close(net_ctl::Close {}))).unwrap();
+        c.write(&mut lend, 2, 0, &op(net_ctl::Message::Close(net_ctl::Close {}))).unwrap();
     });
     wait_until("ipd to hold no call", || f.open_calls(net.ipd) == 0);
     assert_eq!(net.shut_down(), redoubt_rt::exit::OK);
@@ -339,9 +337,10 @@ fn a_labelled_caller_gets_nothing_and_holds_no_bucket() {
     let f = fake();
     let (vault, conn) = net.client(1, &[7], ANY);
     f.as_process(vault, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        assert!(c.attach(0, "").is_err(), "a labelled attach");
-        assert!(c.new_connection("", 0).is_err(), "a labelled new_connection");
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        assert!(c.attach(&mut lend, 0, "").is_err(), "a labelled attach");
+        assert!(c.new_connection(&mut lend, "", 0).is_err(), "a labelled new_connection");
         let ep = c.into_endpoint();
         let scope = Scope::new(&[Rule::Connect(Prefix::new(0, 0).unwrap(), Ports::new(1, 65535).unwrap())])
             .unwrap()
@@ -360,14 +359,16 @@ fn a_labelled_caller_gets_nothing_and_holds_no_bucket() {
     for account in [11, 12] {
         let (pid, conn) = net.client(account, &[], ANY);
         f.as_process(pid, || {
-            let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-            c.attach(0, "").unwrap();
+            let c = Connection::new(Endpoint::from_handle(conn));
+            let mut lend = Lend::new(4).unwrap();
+            c.attach(&mut lend, 0, "").unwrap();
         });
     }
     let (pid, conn) = net.client(13, &[], ANY);
     f.as_process(pid, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        assert!(c.attach(0, "").is_err(), "a third bucket with two");
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        assert!(c.attach(&mut lend, 0, "").is_err(), "a third bucket with two");
     });
     assert_eq!(net.shut_down(), redoubt_rt::exit::OK);
 }
@@ -400,13 +401,14 @@ fn grant_mints_a_narrower_connection() {
     let principal = f.process(1, &[]);
     let handle = f.copy(steward, granted, principal);
     f.as_process(principal, || {
-        let mut c = Client::new(Endpoint::from_handle(handle), 4).unwrap();
-        socket(&mut c);
-        assert!(connect(&mut c, [10, 1, 9, 101], 7).is_err(), "outside the grant");
-        assert!(connect(&mut c, PEER_ADDR, 8).is_err(), "another port");
-        connect(&mut c, PEER_ADDR, 7).unwrap();
+        let c = Connection::new(Endpoint::from_handle(handle));
+        let mut lend = Lend::new(4).unwrap();
+        socket(&c, &mut lend);
+        assert!(connect(&c, &mut lend, [10, 1, 9, 101], 7).is_err(), "outside the grant");
+        assert!(connect(&c, &mut lend, PEER_ADDR, 8).is_err(), "another port");
+        connect(&c, &mut lend, PEER_ADDR, 7).unwrap();
         let mut status = [0u8; 8];
-        c.read(2, 0, &mut status).unwrap();
+        c.read(&mut lend, 2, 0, &mut status).unwrap();
         assert_eq!(status[0], 2);
         // A grant from the grant, wider than it: refused.
         let ep = c.into_endpoint();
@@ -430,35 +432,41 @@ fn parked_calls_are_freed_when_abandoned_and_capped_by_the_share() {
     let f = fake();
     let (pid, conn) = net.client(1, &[], ANY);
     f.as_process(pid, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        socket(&mut c);
-        connect(&mut c, PEER_ADDR, 7).unwrap();
+        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        socket(&c, &mut lend);
+        connect(&c, &mut lend, PEER_ADDR, 7).unwrap();
         let mut status = [0u8; 8];
-        c.read(2, 0, &mut status).unwrap();
+        c.read(&mut lend, 2, 0, &mut status).unwrap();
         c.timeout = 150_000;
         let mut got = [0u8; 8];
-        assert_eq!(c.read(3, 0, &mut got).unwrap_err(), ClientError::Sys(redoubt_rt::abi::Error::Timeout));
+        assert_eq!(
+            c.read(&mut lend, 3, 0, &mut got).unwrap_err(),
+            ClientError::Sys(redoubt_rt::abi::Error::Timeout)
+        );
     });
     wait_until("the abandoned read to be answered", || f.open_calls(net.ipd) == 0);
     // Three readers of one badge: two park, the third is refused at once.
     let readers: Vec<_> = (0..2)
         .map(|_| {
             f.run(pid, move || {
-                let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+                let mut c = Connection::new(Endpoint::from_handle(conn));
+                let mut lend = Lend::new(4).unwrap();
                 c.timeout = 2_000_000;
                 let mut got = [0u8; 8];
-                u32::from(c.read(3, 0, &mut got).is_err())
+                u32::from(c.read(&mut lend, 3, 0, &mut got).is_err())
             })
         })
         .collect();
     wait_until("two reads to park", || f.open_calls(net.ipd) == 2);
     f.as_process(pid, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
         let mut got = [0u8; 8];
         // Refused at once (an `Rerror`), not held: the client's timeout never runs out.
         c.timeout = 2_000_000;
         let started = Instant::now();
-        assert_eq!(c.read(3, 0, &mut got), Err(ClientError::Remote), "a third parked read");
+        assert_eq!(c.read(&mut lend, 3, 0, &mut got), Err(ClientError::Remote), "a third parked read");
         assert!(started.elapsed() < Duration::from_secs(1));
         assert_eq!(f.open_calls(net.ipd), 2);
     });
@@ -479,19 +487,21 @@ fn two_reads_one_byte_one_answer_and_ipd_goes_on() {
     let f = fake();
     let (pid, conn) = net.client(0, &[], ANY);
     f.as_process(pid, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        socket(&mut c);
-        connect(&mut c, PEER_ADDR, 7).unwrap();
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        socket(&c, &mut lend);
+        connect(&c, &mut lend, PEER_ADDR, 7).unwrap();
         let mut status = [0u8; 8];
-        c.read(2, 0, &mut status).unwrap();
+        c.read(&mut lend, 2, 0, &mut status).unwrap();
     });
     let readers: Vec<_> = (0..2)
         .map(|_| {
             f.run(pid, move || {
-                let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+                let mut c = Connection::new(Endpoint::from_handle(conn));
+                let mut lend = Lend::new(4).unwrap();
                 c.timeout = 1_500_000;
                 let mut got = [0u8; 8];
-                match c.read(3, 0, &mut got) {
+                match c.read(&mut lend, 3, 0, &mut got) {
                     Ok(n) => n as u32,
                     Err(_) => 100,
                 }
@@ -500,16 +510,18 @@ fn two_reads_one_byte_one_answer_and_ipd_goes_on() {
         .collect();
     wait_until("both reads to park", || f.open_calls(net.ipd) == 2);
     f.as_process(pid, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
         c.timeout = 1_000_000;
-        assert_eq!(c.write(3, 0, b"!").unwrap(), 1);
+        assert_eq!(c.write(&mut lend, 3, 0, b"!").unwrap(), 1);
     });
     wait_until("one read to be answered", || f.open_calls(net.ipd) == 1);
     // ipd is not stuck: it answers another call at once.
     f.as_process(pid, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
         c.timeout = 500_000;
-        c.walk(0, 9, "tcp").unwrap();
+        c.walk(&mut lend, 0, 9, "tcp").unwrap();
     });
     let mut results: Vec<u32> = readers.into_iter().map(|r| r.join().unwrap()).collect();
     results.sort_unstable();
@@ -559,10 +571,11 @@ fn frames_count_only_from_the_unlabelled_ingress_badge() {
     let f = fake();
     let (pid, conn) = net.client(1, &[], ANY);
     f.as_process(pid, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        let _ = socket(&mut c);
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        let _ = socket(&c, &mut lend);
         let listen = op(net_ctl::Message::Listen(net_ctl::Listen { port: 8000, backlog: 2 }));
-        c.write(2, 0, &listen).unwrap();
+        c.write(&mut lend, 2, 0, &listen).unwrap();
     });
     // A client forging a frame on its own (unlabelled, scoped) badge.
     f.as_process(pid, || send_frame(&Endpoint::from_handle(conn), &forged_syn(43001)));

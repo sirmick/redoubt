@@ -1,6 +1,4 @@
-#[path = "../../../libs/rt/tests/common/outcomes.rs"]
-mod seam;
-
+use redoubt_fake_kernel::scripted as seam;
 use redoubt_keyd::keys::Keys;
 use redoubt_keyd::server::{BUDGET, COST, KeyServer, limits};
 use redoubt_rt::abi::*;

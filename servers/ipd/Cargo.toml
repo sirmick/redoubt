@@ -18,6 +18,7 @@ redoubt-rt = { path = "../../libs/rt" }
 smoltcp = { version = "=0.14.0", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp"] }
 
 [dev-dependencies]
+redoubt-fake-kernel = { path = "../../libs/rt/fake" }
 # The tests' peer: a second smoltcp stack with exactly ipd's features, so feature unification
 # adds nothing to what ipd builds.
 smoltcp = { version = "=0.14.0", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp"] }

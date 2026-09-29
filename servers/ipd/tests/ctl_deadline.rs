@@ -2,20 +2,17 @@
 //! is answered `timeout`: driven through `Ipd::on_call` and `Ipd::expire` on the rt fake kernel,
 //! with the clock the test chooses.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod kernel;
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use kernel::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_ipd::fake::{ADDR, ANY, GATEWAY, INGRESS, IPD_MAC, LEN, Pipe, Seeds, Wire, anywhere, selfset};
 use redoubt_ipd::fs::{NetFs, SocketCaps};
 use redoubt_ipd::link::Link;
 use redoubt_ipd::server::{CTL_WAIT_US, Ipd};
 use redoubt_ipd::stack::{Net, Stack};
 use redoubt_rt::abi::{FOREVER, Handle};
-use redoubt_rt::client::{Client, ClientError};
+use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Event;
 use redoubt_rt::server::Limits;
@@ -39,22 +36,23 @@ fn ipd() -> Ipd<Pipe, Seeds> {
 
 /// Listens on 8000 and reads its `ctl`, waiting as long as ipd lets it: what the read ended with.
 fn accept_nobody(conn: Handle) -> Result<usize, ClientError> {
-    let mut c = Client::new(Endpoint::from_handle(conn), 2).unwrap();
-    c.attach(0, "").unwrap();
-    c.walk(0, 1, "tcp/clone").unwrap();
-    c.open(1, mode::OREAD).unwrap();
+    let mut c = Connection::new(Endpoint::from_handle(conn));
+    let mut lend = Lend::new(2).unwrap();
+    c.attach(&mut lend, 0, "").unwrap();
+    c.walk(&mut lend, 0, 1, "tcp/clone").unwrap();
+    c.open(&mut lend, 1, mode::OREAD).unwrap();
     let mut n = [0u8; 4];
-    c.read(1, 0, &mut n).unwrap();
-    c.walk(0, 2, &format!("tcp/{}/ctl", u32::from_le_bytes(n))).unwrap();
-    c.open(2, mode::ORDWR).unwrap();
+    c.read(&mut lend, 1, 0, &mut n).unwrap();
+    c.walk(&mut lend, 0, 2, &format!("tcp/{}/ctl", u32::from_le_bytes(n))).unwrap();
+    c.open(&mut lend, 2, mode::ORDWR).unwrap();
     let mut listen = [0u8; 16];
     let len = net_ctl::Message::Listen(net_ctl::Listen { port: 8000, backlog: 1 })
         .encode_file(&mut listen)
         .unwrap();
-    c.write(2, 0, &listen[..len]).unwrap();
+    c.write(&mut lend, 2, 0, &listen[..len]).unwrap();
     c.timeout = FOREVER;
     let mut status = [0u8; 8];
-    c.read(2, 0, &mut status)
+    c.read(&mut lend, 2, 0, &mut status)
 }
 
 #[test]

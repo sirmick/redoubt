@@ -2,13 +2,11 @@
 //! a waiting read, charged to the same admission, answered at once when its caller gives up, and
 //! refused with the server's timeout when its deadline passes.
 
-mod common;
-
 use std::time::{Duration, Instant};
 
-use common::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, FOREVER};
-use redoubt_rt::client::{Client, ClientError};
+use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::{self, Endpoint};
 use redoubt_rt::ipc::{Caller, Event};
 use redoubt_rt::server::Limits;
@@ -99,12 +97,13 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
     });
 
     f.as_process(client, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
-        c.attach(0, "").unwrap();
-        c.open(0, mode::OWRITE).unwrap();
+        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.open(&mut lend, 0, mode::OWRITE).unwrap();
         // Its caller gives up first: the write is answered at once, freeing it.
         c.timeout = 50_000;
-        assert_eq!(c.write(0, 0, b"lost"), Err(ClientError::Sys(Error::Timeout)));
+        assert_eq!(c.write(&mut lend, 0, 0, b"lost"), Err(ClientError::Sys(Error::Timeout)));
     });
     let deadline = Instant::now() + Duration::from_secs(10);
     while f.open_calls(server) != 0 {
@@ -112,11 +111,12 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
         std::thread::sleep(Duration::from_millis(1));
     }
     f.as_process(client, || {
-        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
         // This one waits it out: the server's deadline answers it, with an Rerror.
         c.timeout = FOREVER;
         let started = Instant::now();
-        assert_eq!(c.write(0, 0, b"late"), Err(ClientError::Remote));
+        assert_eq!(c.write(&mut lend, 0, 0, b"late"), Err(ClientError::Remote));
         assert!(started.elapsed() >= Duration::from_micros(LONGEST), "answered before its deadline");
     });
     f.destroy(server, receive);

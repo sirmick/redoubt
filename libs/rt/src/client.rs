@@ -1,11 +1,13 @@
 //! A minimal synchronous 9P client over one connection (one endpoint handle), for native
-//! programs and the panic handler. The words are [`crate::server::ninep`]'s.
+//! programs, the client library and the panic handler. The words are [`crate::server::ninep`]'s.
 //!
 //! What it does and does not do:
-//! - One request at a time, in one lent buffer of the client's own; the buffer bounds each read and write
-//!   ([`Client::iounit`]).
-//! - Only what native programs use today: version, attach, walk, open, read, write, clunk; and
-//!   `ninep_common`'s `new_connection` and `disconnect`, for launchers.
+//! - A [`Connection`] is shared: it holds the endpoint, a tag counter and a timeout, and no buffer and no
+//!   fids, so several threads call on one connection at once. Which fids are in use is its caller's to track.
+//! - Each request lends the caller's [`Lend`], one per thread, reused call after call; its size bounds each
+//!   read and write ([`Lend::iounit`]).
+//! - version, attach, walk, open, create, read, write, stat, remove, clunk; and `ninep_common`'s
+//!   `new_connection` and `disconnect`, for launchers.
 //! - A walk is one `Twalk`: at most `MAXWELEM` (16) components after cleaning; a longer path is refused
 //!   (`BadPath`) rather than split, so a failed walk never leaves a fid behind.
 //! - The server is not trusted: a reply must decode, carry the request's tag and be the matching R-message,
@@ -13,12 +15,14 @@
 //!   arrive are closed.
 //! - An `Rerror`'s text is not kept (`Remote` says only that the server refused).
 
-use redoubt_sys::Error;
-use redoubt_wire::ninep::{Body, IOHDRSZ, Message, NOFID, NOTAG, Names, Qid, VERSION};
+use core::sync::atomic::{AtomicU16, Ordering};
+
+use redoubt_sys::{Error, Handle};
+use redoubt_wire::ninep::{Body, IOHDRSZ, Message, NOFID, NOTAG, Names, Qid, Stat, VERSION};
 use redoubt_wire::proto::ninep_common;
 
 use crate::handle::Endpoint;
-use crate::ipc::Buffer;
+use crate::ipc::{Buffer, CallOutcome, Words};
 use crate::path;
 use crate::server::ninep::WORDS_9P;
 
@@ -27,14 +31,26 @@ use crate::server::ninep::WORDS_9P;
 pub enum ClientError {
     /// The call itself failed.
     Sys(Error),
-    /// The request did not encode (too large for the buffer), or the reply did not decode.
+    /// The reply did not decode.
     Wire(redoubt_wire::Error),
+    /// The request did not encode (too large for the lend, or the msize): nothing was sent.
+    Encode(redoubt_wire::Error),
+    /// The lend's pages could not be mapped: nothing was sent.
+    Pages(Error),
     /// The server answered `Rerror`, or walked only part of the path.
     Remote,
     /// The server's reply does not answer the request (wrong words, handles, tag, type or count).
     Unexpected,
-    /// A path that does not clean ([`path::clean`]), or has more than `MAXWELEM` components.
+    /// A path that does not clean ([`path::clean`]), or has more than `MAXWELEM` components:
+    /// nothing was sent.
     BadPath,
+}
+
+impl ClientError {
+    /// Whether the request was refused here, so the server never saw it.
+    pub fn unsent(&self) -> bool {
+        matches!(self, ClientError::Encode(_) | ClientError::Pages(_) | ClientError::BadPath)
+    }
 }
 
 impl From<Error> for ClientError {
@@ -45,57 +61,91 @@ impl From<redoubt_wire::Error> for ClientError {
     fn from(e: redoubt_wire::Error) -> Self { ClientError::Wire(e) }
 }
 
-/// One 9P connection.
-pub struct Client {
-    endpoint: Endpoint,
+/// One call's lent buffer, reused call after call by one thread. The call it is lent to takes it,
+/// and gives it back or consumes it (the server took the call and it was then abandoned: R3), never
+/// both (kernel/ipc.md R13). A consumed lend is empty, and the next call made with it maps fresh
+/// pages: the old address is never used again.
+pub struct Lend {
     buf: Option<Buffer>,
-    tag: u16,
+    npages: usize,
+}
+
+impl Lend {
+    /// A lend of `npages` pages (at most `MAX_LEND_PAGES`, the msize).
+    pub fn new(npages: usize) -> Result<Lend, ClientError> {
+        Ok(Lend { buf: Some(Buffer::new(npages).map_err(ClientError::Pages)?), npages })
+    }
+
+    /// The most data one read or write carries in this lend.
+    pub fn iounit(&self) -> usize {
+        (self.npages * redoubt_sys::PAGE_SIZE).min(redoubt_wire::MSIZE).saturating_sub(IOHDRSZ)
+    }
+
+    /// What the last reply wrote; nothing if its call consumed the pages (it then failed).
+    pub fn bytes(&self) -> &[u8] { self.buf.as_deref().unwrap_or(&[]) }
+
+    /// The pages, to write a request into: mapped afresh if the last call consumed them.
+    pub fn pages(&mut self) -> Result<&mut [u8], ClientError> { Ok(self.buffer()?) }
+
+    /// Calls `to`, lending these pages. The outcome's buffer is back in the lend, or consumed;
+    /// its status and reply are the caller's, as [`Endpoint::call`] gives them.
+    pub fn call(&mut self, to: &Endpoint, words: &Words, handles: &[Handle], timeout: u64) -> CallOutcome {
+        let mut outcome = to.call(words, handles, self.buf.take(), timeout);
+        self.buf = outcome.buffer.take();
+        outcome
+    }
+
+    fn buffer(&mut self) -> Result<&mut Buffer, ClientError> {
+        let buf = match self.buf.take() {
+            Some(buf) => buf,
+            None => Buffer::new(self.npages).map_err(ClientError::Pages)?,
+        };
+        Ok(self.buf.insert(buf))
+    }
+}
+
+/// One 9P connection, shared by the threads that call on it.
+pub struct Connection {
+    endpoint: Endpoint,
+    tag: AtomicU16,
     /// Relative µs each request may take; `FOREVER` by default.
     pub timeout: u64,
 }
 
-impl Client {
-    /// A client on `endpoint` with a lend of `npages` pages (at most `MAX_LEND_PAGES`, the msize).
-    pub fn new(endpoint: Endpoint, npages: usize) -> Result<Client, ClientError> {
-        let buf = Buffer::new(npages)?;
-        Ok(Client { endpoint, buf: Some(buf), tag: 0, timeout: redoubt_sys::FOREVER })
+impl Connection {
+    /// A connection on `endpoint`, with no timeout.
+    pub fn new(endpoint: Endpoint) -> Connection {
+        Connection { endpoint, tag: AtomicU16::new(0), timeout: redoubt_sys::FOREVER }
     }
+
+    pub fn endpoint(&self) -> &Endpoint { &self.endpoint }
 
     /// Gives the endpoint back.
     pub fn into_endpoint(self) -> Endpoint { self.endpoint }
 
-    /// The most data one read or write carries with this client's buffer.
-    pub fn iounit(&self) -> usize {
-        self.buf.as_ref().map_or(0, |buf| buf.len().min(redoubt_wire::MSIZE).saturating_sub(IOHDRSZ))
-    }
-
-    fn buffer(&mut self) -> Result<&mut Buffer, ClientError> {
-        self.buf.as_mut().ok_or(ClientError::Sys(Error::Dead))
-    }
-
-    fn call(&mut self, words: &crate::ipc::Words) -> Result<crate::ipc::Reply, ClientError> {
-        // Restore retained ownership even on error, before translating status. Once consumed,
-        // the client has no buffer and refuses later buffer operations (it never reuses a VA).
-        self.buffer()?;
-        let mut outcome = self.endpoint.call(words, &[], self.buf.take(), self.timeout);
-        self.buf = outcome.buffer.take();
-        Ok(outcome.into_result()?.0)
+    /// Calls with `lend`'s pages.
+    fn call(&self, lend: &mut Lend, words: &Words) -> Result<crate::ipc::Reply, ClientError> {
+        lend.buffer()?;
+        Ok(lend.call(&self.endpoint, words, &[], self.timeout).into_result()?.0)
     }
 
     /// Sends `body` and returns the reply's body, which must be `body`'s R-message.
-    fn rpc(&mut self, body: Body<'_>) -> Result<Body<'_>, ClientError> {
-        // Tags are for matching replies; one request at a time needs only a fresh one each time.
-        self.tag = self.tag.wrapping_add(1) % NOTAG;
-        let tag = if matches!(body, Body::Tversion { .. }) { NOTAG } else { self.tag };
+    fn rpc<'l>(&self, lend: &'l mut Lend, body: Body<'_>) -> Result<Body<'l>, ClientError> {
+        // Tags are for matching a reply to its request in one lend; a fresh one each time is enough.
+        let tag = if matches!(body, Body::Tversion { .. }) {
+            NOTAG
+        } else {
+            self.tag.fetch_add(1, Ordering::Relaxed) % NOTAG
+        };
         let want = body.kind() + 1;
-        Message { tag, body }.encode(self.buffer()?)?;
-        let reply = self.call(&WORDS_9P)?;
+        Message { tag, body }.encode(lend.buffer()?).map_err(ClientError::Encode)?;
+        let reply = self.call(lend, &WORDS_9P)?;
         // No 9P reply carries handles: close any a hostile server sent, before anything else.
         close_all(reply.handles.as_slice());
         if reply.words != WORDS_9P || !reply.handles.as_slice().is_empty() {
             return Err(ClientError::Unexpected);
         }
-        let reply = Message::decode(self.buffer()?)?;
+        let reply = Message::decode(lend.bytes())?;
         if reply.tag != tag {
             return Err(ClientError::Unexpected);
         }
@@ -107,17 +157,17 @@ impl Client {
     }
 
     /// `Tversion`: returns the msize the server accepts.
-    pub fn version(&mut self) -> Result<u32, ClientError> {
+    pub fn version(&self, lend: &mut Lend) -> Result<u32, ClientError> {
         let msize = redoubt_wire::MSIZE as u32;
-        match self.rpc(Body::Tversion { msize, version: VERSION })? {
+        match self.rpc(lend, Body::Tversion { msize, version: VERSION })? {
             Body::Rversion { msize: m, version } if m <= msize && version == VERSION => Ok(m),
             _ => Err(ClientError::Unexpected),
         }
     }
 
     /// `Tattach` without authentication: `fid` becomes the connection's root.
-    pub fn attach(&mut self, fid: u32, aname: &str) -> Result<Qid, ClientError> {
-        match self.rpc(Body::Tattach { fid, afid: NOFID, uname: "", aname })? {
+    pub fn attach(&self, lend: &mut Lend, fid: u32, aname: &str) -> Result<Qid, ClientError> {
+        match self.rpc(lend, Body::Tattach { fid, afid: NOFID, uname: "", aname })? {
             Body::Rattach { qid } => Ok(qid),
             _ => Err(ClientError::Unexpected),
         }
@@ -125,10 +175,10 @@ impl Client {
 
     /// Walks `newfid` from `fid` along `path`, cleaned first, so `..` never climbs above `fid`.
     /// Succeeds only if the whole path was walked; on failure `newfid` is not in use (intro(5)).
-    pub fn walk(&mut self, fid: u32, newfid: u32, path: &str) -> Result<Qid, ClientError> {
+    pub fn walk(&self, lend: &mut Lend, fid: u32, newfid: u32, path: &str) -> Result<Qid, ClientError> {
         let names = path::clean(path).map_err(|_| ClientError::BadPath)?;
         let wnames = Names::new(&names).map_err(|_| ClientError::BadPath)?;
-        match self.rpc(Body::Twalk { fid, newfid, wnames })? {
+        match self.rpc(lend, Body::Twalk { fid, newfid, wnames })? {
             Body::Rwalk { qids } if qids.as_slice().len() == names.len() => {
                 Ok(qids.as_slice().last().copied().unwrap_or_default())
             }
@@ -137,18 +187,51 @@ impl Client {
         }
     }
 
-    pub fn open(&mut self, fid: u32, mode: u8) -> Result<Qid, ClientError> {
-        match self.rpc(Body::Topen { fid, mode })? {
+    pub fn open(&self, lend: &mut Lend, fid: u32, mode: u8) -> Result<Qid, ClientError> {
+        match self.rpc(lend, Body::Topen { fid, mode })? {
             Body::Ropen { qid, .. } => Ok(qid),
             _ => Err(ClientError::Unexpected),
         }
     }
 
-    /// Reads at most `out.len()` bytes (and at most [`Client::iounit`]) at `offset`.
-    pub fn read(&mut self, fid: u32, offset: u64, out: &mut [u8]) -> Result<usize, ClientError> {
-        let count = out.len().min(self.iounit());
+    /// `Tcreate`: creates `name` in the directory `fid` and opens it with `mode`; `fid` becomes
+    /// the new file. Which names are refused is the server's to say.
+    pub fn create(
+        &self,
+        lend: &mut Lend,
+        fid: u32,
+        name: &str,
+        perm: u32,
+        mode: u8,
+    ) -> Result<Qid, ClientError> {
+        match self.rpc(lend, Body::Tcreate { fid, name, perm, mode })? {
+            Body::Rcreate { qid, .. } => Ok(qid),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
+    /// `Tstat`: the file's directory entry, in `lend` until its next call.
+    pub fn stat<'l>(&self, lend: &'l mut Lend, fid: u32) -> Result<Stat<'l>, ClientError> {
+        match self.rpc(lend, Body::Tstat { fid })? {
+            Body::Rstat { stat } => Ok(stat),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
+    /// `Tremove`: removes the file and clunks `fid`, whether or not the removal succeeds
+    /// (intro(5)).
+    pub fn remove(&self, lend: &mut Lend, fid: u32) -> Result<(), ClientError> {
+        match self.rpc(lend, Body::Tremove { fid })? {
+            Body::Rremove => Ok(()),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
+    /// Reads at most `out.len()` bytes (and at most [`Lend::iounit`]) at `offset`.
+    pub fn read(&self, lend: &mut Lend, fid: u32, offset: u64, out: &mut [u8]) -> Result<usize, ClientError> {
+        let count = out.len().min(lend.iounit());
         // `count` is at most the msize, so it fits.
-        match self.rpc(Body::Tread { fid, offset, count: count as u32 })? {
+        match self.rpc(lend, Body::Tread { fid, offset, count: count as u32 })? {
             Body::Rread { data } if data.len() <= count => {
                 out[..data.len()].copy_from_slice(data);
                 Ok(data.len())
@@ -157,11 +240,11 @@ impl Client {
         }
     }
 
-    /// Writes at most [`Client::iounit`] bytes of `data` at `offset`; returns how many the
+    /// Writes at most [`Lend::iounit`] bytes of `data` at `offset`; returns how many the
     /// server took.
-    pub fn write(&mut self, fid: u32, offset: u64, data: &[u8]) -> Result<usize, ClientError> {
-        let data = &data[..data.len().min(self.iounit())];
-        match self.rpc(Body::Twrite { fid, offset, data })? {
+    pub fn write(&self, lend: &mut Lend, fid: u32, offset: u64, data: &[u8]) -> Result<usize, ClientError> {
+        let data = &data[..data.len().min(lend.iounit())];
+        match self.rpc(lend, Body::Twrite { fid, offset, data })? {
             Body::Rwrite { count } if count as usize <= data.len() => Ok(count as usize),
             _ => Err(ClientError::Unexpected),
         }
@@ -174,12 +257,17 @@ impl Client {
     /// connections per child").
     /// A refusal is `Remote`, whatever its reason: which root exists, which cap was reached and
     /// which quota was refused are the server's business, not the caller's.
-    pub fn new_connection(&mut self, root: &str, quota: u64) -> Result<(Endpoint, u64), ClientError> {
+    pub fn new_connection(
+        &self,
+        lend: &mut Lend,
+        root: &str,
+        quota: u64,
+    ) -> Result<(Endpoint, u64), ClientError> {
         let request = ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
-        let words = request.encode(self.buffer()?)?;
-        let reply = self.call(&words)?;
+        let words = request.encode(lend.buffer()?).map_err(ClientError::Encode)?;
+        let reply = self.call(lend, &words)?;
         let handles = reply.handles.as_slice();
-        match ninep_common::Reply::decode(2, &reply.words, self.buffer()?, handles.len()) {
+        match ninep_common::Reply::decode(2, &reply.words, lend.bytes(), handles.len()) {
             Ok(Ok(ninep_common::Reply::NewConnection(r))) => match handles {
                 [Some(conn)] => Ok((Endpoint::from_handle(*conn), r.id)),
                 _ => {
@@ -199,13 +287,16 @@ impl Client {
     }
 
     /// `disconnect`: frees the connection with `id`, which this connection received from
-    /// [`Client::new_connection`], and every connection minted under it. A `Remote` error is all
+    /// [`Connection::new_connection`], and every connection minted under it. A `Remote` error is all
     /// a caller learns: a server answers an id belonging to someone else exactly as it answers
     /// one that never existed (servers/wire.md, `ninep_common`), so a client cannot probe for
-    /// other clients' ids.
-    pub fn disconnect(&mut self, id: u64) -> Result<(), ClientError> {
-        let words = ninep_common::Message::Disconnect(ninep_common::Disconnect { id }).encode(&mut [])?;
-        let (reply, _) = self.endpoint.call(&words, &[], None, self.timeout).into_result()?;
+    /// other clients' ids. Waits at most `timeout` µs, not the connection's own: a launcher reaping
+    /// a child bounds each release, however the connection's requests are timed.
+    pub fn disconnect(&self, id: u64, timeout: u64) -> Result<(), ClientError> {
+        let words = ninep_common::Message::Disconnect(ninep_common::Disconnect { id })
+            .encode(&mut [])
+            .map_err(ClientError::Encode)?;
+        let (reply, _) = self.endpoint.call(&words, &[], None, timeout).into_result()?;
         close_all(reply.handles.as_slice());
         match ninep_common::Reply::decode(3, &reply.words, &[], reply.handles.as_slice().len()) {
             Ok(Ok(_)) => Ok(()),
@@ -214,8 +305,8 @@ impl Client {
         }
     }
 
-    pub fn clunk(&mut self, fid: u32) -> Result<(), ClientError> {
-        match self.rpc(Body::Tclunk { fid })? {
+    pub fn clunk(&self, lend: &mut Lend, fid: u32) -> Result<(), ClientError> {
+        match self.rpc(lend, Body::Tclunk { fid })? {
             Body::Rclunk => Ok(()),
             _ => Err(ClientError::Unexpected),
         }
@@ -224,7 +315,7 @@ impl Client {
 
 /// Closes every handle a reply brought that the client will not keep; a slot that arrived
 /// empty (revoked on its way) has nothing to close.
-fn close_all(handles: &[Option<redoubt_sys::Handle>]) {
+fn close_all(handles: &[Option<Handle>]) {
     for handle in handles.iter().flatten() {
         let _ = crate::handle::close(*handle);
     }

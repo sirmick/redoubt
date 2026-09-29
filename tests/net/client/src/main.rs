@@ -14,7 +14,7 @@ use alloc::format;
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
 use redoubt_net_client::{Args, NET, REPORT, RIG, Role, code, event};
 use redoubt_rt::abi::FOREVER;
-use redoubt_rt::client::{Client, ClientError};
+use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::ninep::mode;
@@ -38,8 +38,8 @@ fn run(startup: &Startup) -> u32 {
     let Some(args) = Args::parse(startup.args()) else { return code::BAD_ARGS };
     let rig = startup.handle(RIG).map(Endpoint::from_handle);
     let Some(net) = startup.handle(NET) else { return code::NO_NET };
-    let Ok(client) = Client::new(Endpoint::from_handle(net), 2) else { return code::NO_MEMORY };
-    let mut me = Me { c: client, net, rig, next_fid: 10 };
+    let Ok(lend) = Lend::new(2) else { return code::NO_MEMORY };
+    let mut me = Me { c: Connection::new(Endpoint::from_handle(net)), lend, net, rig, next_fid: 10 };
     let done = match args.role {
         Role::Echo => me.echo(&args),
         Role::Listen => me.listen(&args),
@@ -55,7 +55,8 @@ fn run(startup: &Startup) -> u32 {
 }
 
 struct Me {
-    c: Client,
+    c: Connection,
+    lend: Lend,
     /// The same connection as `c`'s, for a typed call beside 9P.
     net: redoubt_rt::abi::Handle,
     rig: Option<Endpoint>,
@@ -91,20 +92,20 @@ impl Me {
     /// Opens socket `n`'s `ctl` and `data`.
     fn open(&mut self, n: u32) -> Result<Socket, u32> {
         let (ctl, data) = (self.fid(), self.fid());
-        self.c.walk(ROOT, ctl, &format!("tcp/{n}/ctl")).map_err(|_| code::OPEN)?;
-        self.c.open(ctl, mode::ORDWR).map_err(|_| code::OPEN)?;
-        self.c.walk(ROOT, data, &format!("tcp/{n}/data")).map_err(|_| code::OPEN)?;
-        self.c.open(data, mode::ORDWR).map_err(|_| code::OPEN)?;
+        self.c.walk(&mut self.lend, ROOT, ctl, &format!("tcp/{n}/ctl")).map_err(|_| code::OPEN)?;
+        self.c.open(&mut self.lend, ctl, mode::ORDWR).map_err(|_| code::OPEN)?;
+        self.c.walk(&mut self.lend, ROOT, data, &format!("tcp/{n}/data")).map_err(|_| code::OPEN)?;
+        self.c.open(&mut self.lend, data, mode::ORDWR).map_err(|_| code::OPEN)?;
         Ok(Socket { ctl, data })
     }
 
     /// A new socket: `clone` read once.
     fn socket(&mut self) -> Result<Socket, u32> {
-        self.c.walk(ROOT, CLONE, "tcp/clone").map_err(|_| code::CLONE)?;
-        self.c.open(CLONE, mode::OREAD).map_err(|_| code::CLONE)?;
+        self.c.walk(&mut self.lend, ROOT, CLONE, "tcp/clone").map_err(|_| code::CLONE)?;
+        self.c.open(&mut self.lend, CLONE, mode::OREAD).map_err(|_| code::CLONE)?;
         let mut n = [0u8; 4];
-        let read = self.c.read(CLONE, 0, &mut n);
-        let _ = self.c.clunk(CLONE);
+        let read = self.c.read(&mut self.lend, CLONE, 0, &mut n);
+        let _ = self.c.clunk(&mut self.lend, CLONE);
         if read != Ok(4) {
             return Err(code::CLONE);
         }
@@ -113,14 +114,14 @@ impl Me {
 
     fn ctl(&mut self, s: &Socket, message: net_ctl::Message<'_>, failed: u32) -> Result<(), u32> {
         let (bytes, n) = op(message);
-        self.c.write(s.ctl, 0, &bytes[..n]).map(|_| ()).map_err(|_| failed)
+        self.c.write(&mut self.lend, s.ctl, 0, &bytes[..n]).map(|_| ()).map_err(|_| failed)
     }
 
     /// A `ctl` read: (state, number). It waits in `ipd`; a wait that ran out is asked again.
     fn status(&mut self, s: &Socket) -> Result<(u32, u32), u32> {
         for _ in 0..WAITS {
             let mut words = [0u8; 8];
-            match self.c.read(s.ctl, 0, &mut words) {
+            match self.c.read(&mut self.lend, s.ctl, 0, &mut words) {
                 Ok(8) => {
                     let word =
                         |i: usize| u32::from_le_bytes([words[i], words[i + 1], words[i + 2], words[i + 3]]);
@@ -137,7 +138,7 @@ impl Me {
     fn read_exact(&mut self, s: &Socket, out: &mut [u8]) -> Result<(), u32> {
         let (mut got, mut waits) = (0, 0);
         while got < out.len() {
-            match self.c.read(s.data, 0, &mut out[got..]) {
+            match self.c.read(&mut self.lend, s.data, 0, &mut out[got..]) {
                 Ok(0) => return Err(code::READ),
                 Ok(n) => got += n,
                 Err(ClientError::Remote) if waits < WAITS => waits += 1,
@@ -149,7 +150,7 @@ impl Me {
 
     fn write_all(&mut self, s: &Socket, mut bytes: &[u8]) -> Result<(), u32> {
         while !bytes.is_empty() {
-            let n = self.c.write(s.data, 0, bytes).map_err(|_| code::WRITE)?;
+            let n = self.c.write(&mut self.lend, s.data, 0, bytes).map_err(|_| code::WRITE)?;
             if n == 0 {
                 return Err(code::WRITE);
             }
@@ -164,7 +165,7 @@ impl Me {
     }
 
     fn echo(&mut self, args: &Args) -> Result<(), u32> {
-        self.c.attach(ROOT, "").map_err(|_| code::ATTACH)?;
+        self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
         for round in 0..args.times {
             let s = self.socket()?;
             self.connect(&s, args)?;
@@ -187,7 +188,7 @@ impl Me {
     /// Listens and serves for ever: each accepted connection gets back what it sends first, then
     /// is closed, then reported.
     fn listen(&mut self, args: &Args) -> Result<(), u32> {
-        self.c.attach(ROOT, "").map_err(|_| code::ATTACH)?;
+        self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
         let listener = self.socket()?;
         let listen = net_ctl::Message::Listen(net_ctl::Listen { port: args.port, backlog: args.backlog });
         self.ctl(&listener, listen, code::LISTEN)?;
@@ -202,7 +203,7 @@ impl Me {
             // One line, echoed as it comes: whatever the segments, the sender gets its line back.
             let (mut buf, mut waits, mut line_done) = ([0u8; 256], 0, false);
             while !line_done {
-                let got = match self.c.read(s.data, 0, &mut buf) {
+                let got = match self.c.read(&mut self.lend, s.data, 0, &mut buf) {
                     Ok(0) => break,
                     Ok(n) => n,
                     Err(ClientError::Remote) if waits < WAITS => {
@@ -223,12 +224,12 @@ impl Me {
     /// One connect: refused (`REFUSED`), or the state it reached (`CONNECTED + state`), after
     /// which the socket is aborted.
     fn connect_once(&mut self, args: &Args) -> Result<(), u32> {
-        self.c.attach(ROOT, "").map_err(|_| code::ATTACH)?;
+        self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
         let s = self.socket()?;
         self.connect(&s, args)?;
         // One wait: if nobody answers, it ends with `ipd`'s `ctl` deadline (or smoltcp's own).
         let mut words = [0u8; 8];
-        let state = match self.c.read(s.ctl, 0, &mut words) {
+        let state = match self.c.read(&mut self.lend, s.ctl, 0, &mut words) {
             Ok(8) => u32::from_le_bytes([words[0], words[1], words[2], words[3]]),
             Err(ClientError::Remote) => return Err(code::TIMED_OUT),
             _ => return Err(code::STATUS),
@@ -243,7 +244,7 @@ impl Me {
     /// once); then a read with no timeout of its own, which `ipd`'s 30 s deadline must end; then
     /// the echo still works.
     fn pin(&mut self, args: &Args) -> Result<(), u32> {
-        self.c.attach(ROOT, "").map_err(|_| code::ATTACH)?;
+        self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
         let s = self.socket()?;
         self.connect(&s, args)?;
         if self.status(&s)?.0 != ESTABLISHED {
@@ -252,19 +253,15 @@ impl Me {
         let mut buf = [0u8; 64];
         self.c.timeout = 20_000;
         for _ in 0..args.times {
-            match self.c.read(s.data, 0, &mut buf) {
-                Err(ClientError::Sys(redoubt_rt::abi::Error::Timeout)) => {
-                    // The abandoned call keeps the lend: a new client, on the same connection
-                    // (whose fids are ipd's), lends a fresh one.
-                    self.c = Client::new(Endpoint::from_handle(self.net), 2).map_err(|_| code::NO_MEMORY)?;
-                    self.c.timeout = 20_000;
-                }
+            match self.c.read(&mut self.lend, s.data, 0, &mut buf) {
+                // The abandoned call keeps the lend; the next call maps a fresh one.
+                Err(ClientError::Sys(redoubt_rt::abi::Error::Timeout)) => {}
                 Err(ClientError::Remote) => return Err(code::PIN_REFUSED),
                 _ => return Err(code::READ),
             }
         }
         self.c.timeout = FOREVER;
-        if self.c.read(s.data, 0, &mut buf) != Err(ClientError::Remote) {
+        if self.c.read(&mut self.lend, s.data, 0, &mut buf) != Err(ClientError::Remote) {
             return Err(code::NO_DEADLINE);
         }
         let sent = b"d3 still echoing after the pins\n";
@@ -280,7 +277,7 @@ impl Me {
         let listen = net_ctl::Message::Listen(net_ctl::Listen { port: code::PIN_LISTEN_PORT, backlog: 1 });
         self.ctl(&listener, listen, code::LISTEN)?;
         let mut words = [0u8; 8];
-        if self.c.read(listener.ctl, 0, &mut words) != Err(ClientError::Remote) {
+        if self.c.read(&mut self.lend, listener.ctl, 0, &mut words) != Err(ClientError::Remote) {
             return Err(code::NO_CTL_DEADLINE);
         }
         Ok(())
@@ -295,19 +292,19 @@ impl Me {
                 opened |= 1 << n;
             }
         };
-        tried(0, self.c.attach(ROOT, "").is_ok());
-        tried(1, self.c.walk(ROOT, CLONE, "tcp/clone").is_ok());
-        tried(2, self.c.open(CLONE, mode::OREAD).is_ok());
+        tried(0, self.c.attach(&mut self.lend, ROOT, "").is_ok());
+        tried(1, self.c.walk(&mut self.lend, ROOT, CLONE, "tcp/clone").is_ok());
+        tried(2, self.c.open(&mut self.lend, CLONE, mode::OREAD).is_ok());
         let mut n = [0u8; 4];
-        let cloned = self.c.read(CLONE, 0, &mut n) == Ok(4);
+        let cloned = self.c.read(&mut self.lend, CLONE, 0, &mut n) == Ok(4);
         tried(3, cloned);
         // A real connect, on the socket's own `ctl` (socket 0 if clone gave nothing), so that if
         // ipd let a labelled caller through, the SYN would reach its peer, 10.0.9.112:7, and the
         // bench's count of 0 would catch it.
         let number = if cloned { u32::from_le_bytes(n) } else { 0 };
         let ctl = self.fid();
-        let opened_ctl = self.c.walk(ROOT, ctl, &format!("tcp/{number}/ctl")).is_ok()
-            && self.c.open(ctl, mode::ORDWR).is_ok();
+        let opened_ctl = self.c.walk(&mut self.lend, ROOT, ctl, &format!("tcp/{number}/ctl")).is_ok()
+            && self.c.open(&mut self.lend, ctl, mode::ORDWR).is_ok();
         let wide = Args { role: Role::Connect, addr: [10, 0, 9, 112], port: 7, backlog: 1, times: 1 };
         let connected = self.connect(&Socket { ctl, data: ctl }, &wide).is_ok();
         tried(4, opened_ctl && connected);
@@ -315,7 +312,7 @@ impl Me {
             // Wait for it to finish, so the connection is made (and counted) before the rig goes on.
             let _ = self.status(&Socket { ctl, data: ctl });
         }
-        tried(5, self.c.new_connection("", 0).is_ok());
+        tried(5, self.c.new_connection(&mut self.lend, "", 0).is_ok());
         tried(6, self.grant_anything());
         self.report(event::LABELLED, opened)?;
         loop {
@@ -344,7 +341,7 @@ impl Me {
     }
 
     fn hold(&mut self) -> Result<(), u32> {
-        let attached = self.c.attach(ROOT, "").is_ok();
+        let attached = self.c.attach(&mut self.lend, ROOT, "").is_ok();
         self.report(event::ATTACH, u64::from(!attached))?;
         if !attached {
             return Err(code::ATTACH);

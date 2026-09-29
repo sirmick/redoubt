@@ -3,10 +3,8 @@
 //! knows: a run of hostile and well-formed messages publishes nothing, changes nothing and
 //! leaves every entry exactly as `init` sealed it.
 
-#[path = "../../../libs/rt/tests/common/vectors.rs"]
-mod vectors;
-
 use redoubt_bootfsd::server::{BootFs, limits};
+use redoubt_fake_kernel::vectors;
 use redoubt_rt::abi::Labels;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{FIRST_MINTED_BADGE, NineServer};

@@ -72,7 +72,9 @@ use redoubt_wire::Error as WireError;
 
 use crate::ipc::{Caller, Request, Words};
 
-/// A generated protocol: its request, reply and error types and their codecs.
+/// A generated protocol: its request, reply and error types and their codecs, in the server's
+/// direction (decode a request, encode a reply). The caller's direction is
+/// [`redoubt_wire::typed::Protocol`], which the generator implements for every module.
 pub trait Protocol {
     /// `proto::NAME::Message`.
     type Request<'a>;

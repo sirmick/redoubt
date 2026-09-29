@@ -229,7 +229,7 @@ makes the second serving an `Rerror`. A server that asks to wait through `serve_
 hand a call back, gets the call refused, never stranded.
 
 **The conformance corpus.** `libs/wire/vectors/9p.txt` holds 9P2000 request and reply vectors.
-Every 9P server runs them against its own skeleton (`libs/rt/tests/common/vectors.rs`): no vector
+Every 9P server runs them against its own skeleton (`libs/rt/fake/src/vectors.rs`): no vector
 panics, every answer decodes and carries the request's tag, a malformed request gets an `Rerror`,
 an R-message sent to a server is refused, and nothing a vector sends mints a connection.
 `r4-host-tests` runs them for `bootfsd` and `consoled`.

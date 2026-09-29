@@ -1,12 +1,11 @@
 //! The server's ownership refusal must be recognized by the generated protocol codec.
-mod common;
 
 #[path = "../src/bin/echo-server.rs"]
 mod echo_server;
 
-use common::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::FOREVER;
-use redoubt_rt::client::Client;
+use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::startup::{Startup, StartupBuilder};
 use redoubt_rt::wire::proto::ninep_common;
@@ -24,8 +23,9 @@ fn wrong_owner_disconnect_is_a_recognized_not_yours_reply() {
     let block = StartupBuilder::new(receive.index()).handle("echo", receive).finish().unwrap();
     let serving = f.run(server, move || echo_server::serve(&Startup::parse(&block).unwrap()));
     let id = f.as_process(owner, || {
-        let mut client = Client::new(Endpoint::from_handle(owner_connection), 1).unwrap();
-        client.new_connection("", 0).unwrap().1
+        let client = Connection::new(Endpoint::from_handle(owner_connection));
+        let mut lend = Lend::new(1).unwrap();
+        client.new_connection(&mut lend, "", 0).unwrap().1
     });
     f.as_process(stranger, || {
         let request = ninep_common::Message::Disconnect(ninep_common::Disconnect { id });
@@ -47,8 +47,7 @@ fn wrong_owner_disconnect_is_a_recognized_not_yours_reply() {
     });
     // The refusal neither consumes the owner's id nor disconnects its child.
     f.as_process(owner, || {
-        let mut client = Client::new(Endpoint::from_handle(owner_connection), 1).unwrap();
-        client.disconnect(id).unwrap();
+        Connection::new(Endpoint::from_handle(owner_connection)).disconnect(id, FOREVER).unwrap();
     });
     f.destroy(server, receive);
     assert_eq!(serving.join().unwrap(), 0);

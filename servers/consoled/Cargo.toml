@@ -14,3 +14,6 @@ path = "src/bin/consoled.rs"
 # audited place.
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
+
+[dev-dependencies]
+redoubt-fake-kernel = { path = "../../libs/rt/fake" }

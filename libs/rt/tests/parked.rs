@@ -2,9 +2,7 @@
 //! resumed under `serve`, an abandoned one is replied to at once, and one past its server-side
 //! deadline is answered with a timeout.
 
-mod common;
-
-use common::fake;
+use redoubt_fake_kernel::{answer, fake};
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{self, Endpoint};
 use redoubt_rt::ipc::Event;
@@ -31,7 +29,7 @@ fn serve(ep: Endpoint) -> (u32, u32) {
         let now = handle::time_now().unwrap();
         while let Some(call) = parked.expired(&mut admission, now) {
             let (request, _) = call.unwrap();
-            common::answer(request, [TIMED_OUT, 0, 0, 0]).unwrap();
+            answer(request, [TIMED_OUT, 0, 0, 0]).unwrap();
             expired += 1;
         }
         let timeout = parked.next_deadline().map_or(FOREVER, |d| d.saturating_sub(now).max(1));
@@ -40,22 +38,22 @@ fn serve(ep: Endpoint) -> (u32, u32) {
                 let badge = request.caller.badge;
                 let key = AdmitKey::of(&request.caller);
                 if let Err(refused) = parked.park(&mut admission, request, (key, badge), badge, now) {
-                    common::answer(refused.0, [9, 0, 0, 0]).unwrap();
+                    answer(refused.0, [9, 0, 0, 0]).unwrap();
                 }
             }
             Ok(Event::Call(request)) if request.words[0] == WAKE => {
                 let woken = match parked.resume_first(&mut admission, |_| true) {
                     Some(call) => {
                         let (waiting, _) = call.unwrap();
-                        common::answer(waiting, [0, 42, 0, 0]).unwrap();
+                        answer(waiting, [0, 42, 0, 0]).unwrap();
                         1
                     }
                     None => 0,
                 };
-                common::answer(request, [0, woken, 0, 0]).unwrap();
+                answer(request, [0, woken, 0, 0]).unwrap();
             }
             Ok(Event::Call(request)) => {
-                common::answer(request, [1, 0, 0, 0]).unwrap();
+                answer(request, [1, 0, 0, 0]).unwrap();
             }
             Ok(Event::Abandoned(id)) => {
                 assert!(
@@ -159,12 +157,12 @@ fn parking_is_admitted_per_bucket_and_share() {
                 let now = handle::time_now().unwrap();
                 let key = AdmitKey::of(&request.caller);
                 if let Err(back) = parked.park(&mut admission, request, (key, 7), (), now) {
-                    common::answer(back.0, [9, 0, 0, 0]).unwrap();
+                    answer(back.0, [9, 0, 0, 0]).unwrap();
                     refused += 1;
                     if refused == 1 {
                         // Answer the parked ones so the clients finish.
                         while let Some(call) = parked.resume_first(&mut admission, |_| true) {
-                            common::answer(call.unwrap().0, [0; 4]).unwrap();
+                            answer(call.unwrap().0, [0; 4]).unwrap();
                         }
                     }
                 }
@@ -216,15 +214,15 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
                 // Ahead of admission: no slot taken, answered at once; then every parked call
                 // is answered, so the clients finish.
                 END_LEASE => {
-                    common::answer(request, [0, parked.len() as u64, 0, 0]).unwrap();
+                    answer(request, [0, parked.len() as u64, 0, 0]).unwrap();
                     while let Some(call) = parked.resume_first(&mut admission, |_| true) {
-                        common::answer(call.unwrap().0, [0; 4]).unwrap();
+                        answer(call.unwrap().0, [0; 4]).unwrap();
                     }
                 }
                 _ => {
                     let key = AdmitKey::of(&request.caller);
                     if let Err(back) = parked.park(&mut admission, request, (key, share), (), now) {
-                        common::answer(back.0, [9, 0, 0, 0]).unwrap();
+                        answer(back.0, [9, 0, 0, 0]).unwrap();
                     }
                 }
             }

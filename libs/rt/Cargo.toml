@@ -9,3 +9,6 @@ description = "The native runtime for Redoubt programs: startup, handles, IPC, h
 [dependencies]
 redoubt-sys = { path = "../sys" }
 redoubt-wire = { path = "../wire" }
+
+[dev-dependencies]
+redoubt-fake-kernel = { path = "fake" }

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 40
+revision = 51
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -111,10 +111,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "beamlet on Redoubt; IEx on the console"
   template = "step"
   parent = "M1"
-  needs = ["init"]
+  needs = ["init", "API1"]
   body = "docs/userland/beamlet.md#beamlet-on-redoubt; docs/userland/shell.md#iex-in-a-session"
   state = "todo"
-  revision = 2
+  revision = 42
 
 [[node]]
   id = "fsd"
@@ -150,10 +150,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "init and the boot manifest"
   template = "step"
   parent = "M1"
-  needs = ["gate"]
+  needs = ["gate", "API1"]
   body = "docs/plan/m1-separation.md#remaining-work; docs/servers/init.md"
   state = "todo"
-  revision = 2
+  revision = 42
 
 [[node]]
   id = "model-replay"
@@ -212,8 +212,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K7"]
   body = "Closes, from docs/plan/m1-separation.md#remaining-work: docs/todo/workspace-host-tests.md and docs/todo/sched-rv64-decision-wake.md (Kernel bullet); docs/todo/bench-load-flakes.md and docs/todo/unsafe-ratchet-reason.md (bench bullet). Also the size budget's question from K7: should in-file host tests count toward a trusted crate's ceiling. Not K8's: ssh-loopback-host (SSH1 and its reference case) and budget-destroy-cost (the steward step). Tier A (the bench). Ready; awaiting the owner's go."
-  state = "reported"
-  revision = 38
+  state = "active"
+  revision = 45
 
 [[node]]
   id = "S3"
@@ -228,9 +228,27 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 [[node]]
   id = "SSH1"
   title = "sshd's core on sunset, and its host platform for the bench"
-  emoji = "🧪"
   template = "package"
   parent = "M1"
   body = "Builds docs/servers/sshd.md#the-core-and-its-platforms (core and host platform; the box platform stays planned for the sshd step), docs/testbench.md#against-redoubts-sshd and #patched-crates, vendor/README.md; narrows docs/todo/ssh-loopback-host.md to the OpenSSH reference case. Tier A, L. All steps done at 6c164962b: whole bench 207 PASS, 1 SKIP (the OpenSSH reference case, SELinux); the loopback self-checks now run on Redoubt's own sshd. Networked provenance.sh run by the orchestrator: every vendored crate is the published one. Review round 2 (red, simplifier, editor) in progress; then fold the patch commits into 59cf994a3, rebase and merge."
   state = "done"
-  revision = 40
+  revision = 45
+
+[[node]]
+  id = "smp"
+  title = "Several harts"
+  template = "step"
+  parent = "M2"
+  body = "docs/plan/m2-usable-shell.md#several-harts"
+  state = "todo"
+  revision = 41
+
+[[node]]
+  id = "API1"
+  title = "The client library: one API for every userland"
+  emoji = "🧪"
+  template = "package"
+  parent = "M1"
+  body = "docs/userland/native.md#the-client-library; docs/userland/beamlet.md#beamlet-on-redoubt and #natives (the adapters' shape); docs/plan/m1-separation.md#remaining-work. Tier A, size M."
+  state = "done"
+  revision = 51

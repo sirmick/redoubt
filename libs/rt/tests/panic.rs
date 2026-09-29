@@ -3,11 +3,9 @@
 //! `report_panic` and then exits with `exit::PANIC`). Its own test binary, because the runtime
 //! reports only the first panic of a process.
 
-mod common;
-
 use std::sync::{Arc, Mutex};
 
-use common::fake;
+use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::FOREVER;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event};

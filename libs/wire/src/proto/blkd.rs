@@ -269,3 +269,5 @@ impl ErrorCode {
         typed::error_reply(self.code())
     }
 }
+
+typed::protocol!('a, Message<'a>, Reply<'a>);

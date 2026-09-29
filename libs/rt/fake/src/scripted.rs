@@ -1,5 +1,4 @@
 //! Scripted ABI seam, not a kernel model or evidence of kernel isolation. One test per binary.
-#![allow(dead_code)]
 
 use std::sync::Mutex;
 

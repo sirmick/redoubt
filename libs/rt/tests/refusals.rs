@@ -1,11 +1,9 @@
 //! A rejected reply never closes a carried handle twice, nor one the server kept: `finish` and
 //! `Parked::abandoned` empty the request's list before they reply, so the refusal a failed
 //! reply's drop sends closes nothing. Against the scripted seam, which records every close.
-#[path = "common/outcomes.rs"]
-mod seam;
-
 use std::num::NonZeroU64;
 
+use redoubt_fake_kernel::scripted as seam;
 use redoubt_rt::abi::*;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Event, Request};

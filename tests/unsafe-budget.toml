@@ -95,6 +95,14 @@ max_unsafe = 1
 max_undocumented = 0
 
 [[budget]]
+# The client library every userland binds to (userland/native.md, "The client library").
+# `#![forbid(unsafe_code)]`: all its unsafe is the runtime's, below.
+name = "redoubt-client (the userland client API)"
+paths = ["libs/client/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page"
 paths = ["libs/rt/src"]
 # Includes start.rs turning the panic hook's stored address back into its `fn()`,

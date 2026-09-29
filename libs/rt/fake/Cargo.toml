@@ -1,0 +1,10 @@
+[package]
+name = "redoubt-fake-kernel"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The host tests' fake kernel behind redoubt-rt's HostKernel, the scripted ABI seam, and the 9P conformance runner: dev-only, never linked into anything that runs on the machine"
+publish = false
+
+[dependencies]
+redoubt-rt = { path = ".." }

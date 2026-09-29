@@ -5,11 +5,8 @@
 //!
 //! The property tests that do not need a kernel are in `src/server_tests.rs`.
 
-#[path = "../../../libs/rt/tests/common/mod.rs"]
-mod common;
-
-use common::fake;
 use ed25519_compact::{PublicKey, Signature};
+use redoubt_fake_kernel::fake;
 use redoubt_keyd::keys::Keys;
 use redoubt_keyd::server::{BUDGET, COST, KeyServer, audit_digest, limits};
 use redoubt_rt::abi::{FOREVER, Handle};
