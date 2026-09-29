@@ -75,7 +75,6 @@
   - [sshd's vendored crates under Miri](todo/sshd-vendored-miri.md)
   - [The unsafe budget's stated reason](todo/unsafe-ratchet-reason.md)
   - [User cache-block invalidation](todo/user-cache-invalidate.md)
-  - [A host test build of the workspace](todo/workspace-host-tests.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [rv32](beyond/rv32.md)
