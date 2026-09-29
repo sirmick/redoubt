@@ -30,7 +30,7 @@ use core::num::NonZeroU64;
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
 use redoubt_net_client::{REPORT, code, event};
 use redoubt_rt::abi::{
-    BudgetSpec, Call, Cause, Error, ExitNotice, FOREVER, Handle, Labels, MemFlags, PAGE_SIZE, ResetKind,
+    BudgetSpec, Cause, Error, ExitNotice, FOREVER, Handle, Labels, MemFlags, PAGE_SIZE, ResetKind,
 };
 use redoubt_rt::client::Client;
 use redoubt_rt::handle::{Budget, Endpoint, Irq, Mmio, Process, Registers, Reset};
@@ -285,9 +285,8 @@ impl Rig {
                 _ => {
                     // Only virtio-mmio is DMA-capable (the loader's rule): one page tells.
                     let mmio = Mmio::from_handle(handle);
-                    if let Ok((addr, _)) = mmio.dma_alloc(1) {
-                        // The probe's page has no owner in the runtime: freed by the raw call.
-                        let _ = redoubt_rt::abi::syscall(&Call::Unmap { addr, len: PAGE_SIZE });
+                    // The probe's page is unmapped as its owner drops.
+                    if mmio.dma_alloc(1).is_ok() {
                         virtio.push(handle);
                     }
                 }

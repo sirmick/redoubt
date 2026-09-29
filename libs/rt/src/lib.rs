@@ -44,12 +44,21 @@ pub mod start;
 pub mod startup;
 mod sys;
 
-/// The kernel's ABI, raw: its types, and on the machine `abi::syscall`, which makes any call.
-/// **Outside the runtime's guarantees.** The runtime's owning types (the heap, a
-/// [`ipc::Buffer`], a lend) promise that safe code never holds memory it no longer has; a raw
-/// `unmap`, `set_flags` or `process_map` made through `abi::syscall` can break that promise, so a
-/// program that makes one keeps it by hand (userland/native.md, "redoubt-rt").
-pub use redoubt_sys as abi;
+/// The kernel's ABI: its types and limits, without the raw call. Every call goes through the
+/// runtime, whose owning types (the heap, a [`ipc::Buffer`], a lend, a [`handle::Dma`]) promise
+/// that safe code never holds memory it no longer has; a raw `unmap`, `set_flags` or
+/// `process_map` could break that promise, so a program built on the runtime cannot make one
+/// (the no-cruft case refuses a wholesale re-export; review keeps `syscall` off this list).
+pub mod abi {
+    pub use redoubt_sys::{
+        BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BodyOf, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice,
+        FOREVER, Handle, Handles, Labels, LendDisposition, List, MAX_DEPTH, MAX_HANDLES, MAX_LABELS,
+        MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MAX_THREADS, MemFlags, Message,
+        MessageKind, MintSource, NUMBER_BASE, Number, PAGE_SIZE, Pages, RECEIVED_SLOTS, REGS, Received,
+        ReceivedBody, ReceivedHandles, ReplyOutcome, ResetKind, Return, SLICE, STRIDE, Slot, USAGE_SLOTS,
+        USER_AREA_END, Usage, WAIT_CAP, WORDS, decode_result, encode_result, rv32, rv64,
+    };
+}
 pub use redoubt_wire as wire;
 pub use start::exit;
 #[cfg(target_os = "none")]

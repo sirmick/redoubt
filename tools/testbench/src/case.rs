@@ -141,6 +141,8 @@ pub struct Forbidden {
     pub pattern: String,
     /// A line that also matches this is not a finding.
     pub unless: Option<String>,
+    /// Only files under this path, relative to the workspace root, are held to the pattern.
+    pub within: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

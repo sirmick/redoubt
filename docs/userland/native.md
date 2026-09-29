@@ -223,13 +223,16 @@ the loader stub.
   `set_flags` is not offered at all, and `Process::map` moves pages only by taking the `Buffer`
   that owns them, so the raw address it once took is no longer a way round. `map_anon` only makes
   memory, and hands back an address that takes `unsafe` to use. A public `unmap` does not compile
-  (a `compile_fail` test in `handle.rs`).
-- **The raw ABI is outside these guarantees.** `redoubt_rt::abi` is `redoubt-sys` itself, and on
-  the machine its `syscall` makes any call, `unmap` and `process_map` included, from safe code.
-  A program that makes one keeps the owners' promises by hand; the test rig's DMA probe is the
-  one place that does. Closing that route is a follow-up ([todo](../todo/raw-abi-syscall.md)).
-  Starting a thread (`thread_create`) takes any entry and stack from safe
-  code as well, so it can run a function on memory an owner still holds: a follow-up
+  (a `compile_fail` test in `handle.rs`). A `dma_alloc` run is held by a `Dma`, which unmaps
+  it on drop and not before; the frames stay the kernel's until the process ends.
+- **No raw call from safe code.** `redoubt_rt::abi` is the kernel's types and limits without
+  `redoubt-sys`'s `syscall`, so a program built on the runtime makes every call through it. The
+  no-cruft case refuses a wholesale re-export and a single-line re-export or `pub` item naming
+  `syscall`; a multi-line re-export list, and a `pub fn` that wraps the call, are review's. The
+  loader stub and the bench's test programs call `redoubt-sys` directly and are not built on the
+  runtime.
+- **A thread's stack is unchecked.** Starting a thread (`thread_create`) takes any entry and
+  stack from safe code, so it can run a function on memory an owner still holds: a follow-up
   ([todo](../todo/raw-thread-create.md)).
 
 ### Libraries for native programs

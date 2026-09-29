@@ -170,7 +170,7 @@ The kinds, and the fields each takes besides `description` and `arch`:
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
-| `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
+| `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`, `within`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
 | `fmt` | the formatting gate ([below](#the-formatting-gate)) | `roots`, `[[skip]]` (`path`, `reason`) |
 
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
@@ -510,10 +510,14 @@ with that patch applied, since that is what Cargo builds, and nothing else diffe
 
 ## The no-cruft gate
 
-Status: built · tested: bench:no-cruft
+Status: built · tested: bench:no-cruft, host:testbench::a_rule_scoped_where_nothing_is_searched_fails
 
 `no-cruft.toml` reads the sources and boots nothing. It fails on:
 - a name of an interface the tree has dropped (its `forbidden` patterns);
+- the native runtime handing out the raw call: `libs/rt/src` re-exporting `redoubt-sys` whole
+  (alias, glob, `self` or `extern crate`), or a `pub` item or one-line re-export there naming
+  `syscall` (`forbidden` patterns held `within` that path; a `within` that is missing or outside
+  the case's `paths` fails the case);
 - `allow(dead_code)` or `allow(unused...)` in the kernel, the loader, the layout and paging crates
   or the test programs;
 - a Cargo feature that no `cfg(feature)` reads;

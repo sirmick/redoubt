@@ -16,7 +16,7 @@
 //! when it was built, so no offset the driver names can reach past the mapping.
 
 use redoubt_rt::abi::Error;
-use redoubt_rt::handle::{Irq, Mmio, time_now};
+use redoubt_rt::handle::{Dma, Irq, Mmio, time_now};
 
 use crate::queue::DMA_LEN;
 use crate::transport::{Fault, Transport};
@@ -37,12 +37,11 @@ pub struct Device {
     /// device's configuration in, so `blkd` never reads past the device object it was given and
     /// never has to guess how big one is.
     regs_len: usize,
-    /// Where `dma_alloc` put the region, in this process's address space.
-    dma: usize,
-    /// The same region's physical address, which is what the device is programmed with. A driver
-    /// is told the physical address of pages the kernel gave it and can never map RAM by physical
-    /// address (R11).
-    dma_phys: u64,
+    /// The region `dma_alloc` gave: where it is in this process's address space, and its
+    /// physical address, which is what the device is programmed with. A driver is told the
+    /// physical address of pages the kernel gave it and can never map RAM by physical address
+    /// (R11).
+    dma: Dma,
     dma_len: usize,
     irq: Irq,
     /// The handle the mapping and the DMA region came from. Owned, not borrowed, because both
@@ -64,8 +63,8 @@ impl Device {
         if regs_len < REGS_NEEDED {
             return Err(Error::WrongObject);
         }
-        let (dma, dma_phys) = mmio.dma_alloc(crate::queue::DMA_PAGES)?;
-        Ok(Device { regs, regs_len, dma, dma_phys, dma_len: DMA_LEN, irq, _mmio: mmio })
+        let dma = mmio.dma_alloc(crate::queue::DMA_PAGES)?;
+        Ok(Device { regs, regs_len, dma, dma_len: DMA_LEN, irq, _mmio: mmio })
     }
 
     /// The address of `off` in the register window, if a 32-bit access there is inside it and
@@ -82,7 +81,7 @@ impl Device {
         if off.checked_add(len)? > self.dma_len {
             return None;
         }
-        self.dma.checked_add(off)
+        self.dma.addr().checked_add(off)
     }
 }
 
@@ -111,7 +110,7 @@ impl Transport for Device {
             // SAFETY: `dma_at` checked `off .. off + out.len()` against `DMA_LEN` -- this
             // crate's own constant, the pages `dma_alloc` was asked for, not a length any other
             // party reported -- and `i < out.len()`, so `at + i` is inside the region, which
-            // stays mapped for the life of this process. Volatile, and a byte at a time, so no
+            // `self.dma` keeps mapped while `self` lives. Volatile, and a byte at a time, so no
             // `&[u8]` of memory the device is writing ever exists and no read of it can be
             // hoisted above the completion check or folded with an earlier one.
             *byte = unsafe { ((at + i) as *const u8).read_volatile() };
@@ -129,7 +128,7 @@ impl Transport for Device {
         Ok(())
     }
 
-    fn dma_phys(&self) -> u64 { self.dma_phys }
+    fn dma_phys(&self) -> u64 { self.dma.phys() }
 
     fn dma_len(&self) -> usize { self.dma_len }
 

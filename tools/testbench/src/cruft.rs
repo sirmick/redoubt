@@ -59,7 +59,10 @@ pub fn check(workspace: &Path, gate: &NoCruft) -> Result<Option<String>> {
     let rules = gate
         .forbidden
         .iter()
-        .map(|f| Ok((f, Regex::new(&f.pattern)?, f.unless.as_deref().map(Regex::new).transpose()?)))
+        .map(|f| {
+            let within = f.within.as_ref().map(|w| workspace.join(w));
+            Ok((f, Regex::new(&f.pattern)?, f.unless.as_deref().map(Regex::new).transpose()?, within))
+        })
         .collect::<Result<Vec<_>>>()?;
     let allow_dead = Regex::new(r"allow\((dead_code|unused)")?;
     let dead_scope: Vec<PathBuf> = gate.no_allow_dead.iter().map(|p| workspace.join(p)).collect();
@@ -69,8 +72,9 @@ pub fn check(workspace: &Path, gate: &NoCruft) -> Result<Option<String>> {
         let is_rust = path.extension().is_some_and(|e| e == "rs");
         let dead_checked = is_rust && dead_scope.iter().any(|d| path.starts_with(d));
         for (number, line) in text.lines().enumerate() {
-            for (rule, pattern, unless) in &rules {
-                if pattern.is_match(line) && !unless.as_ref().is_some_and(|u| u.is_match(line)) {
+            for (rule, pattern, unless, within) in &rules {
+                let held = within.as_ref().is_none_or(|w| path.starts_with(w));
+                if held && pattern.is_match(line) && !unless.as_ref().is_some_and(|u| u.is_match(line)) {
                     found.push(Finding {
                         rule: rule.pattern.clone(),
                         file: file.clone(),
@@ -98,6 +102,16 @@ pub fn check(workspace: &Path, gate: &NoCruft) -> Result<Option<String>> {
         .filter(|f| !allowed(gate, f))
         .map(|f| format!("{}:{}: [{}] {}", f.file, f.line, f.rule, f.text.trim()))
         .collect();
+    // A rule scoped to a path that is gone, or that the case does not search, holds nothing.
+    for f in &gate.forbidden {
+        let Some(within) = &f.within else { continue };
+        if !workspace.join(within).exists() {
+            report
+                .push(format!("{within}: [within] `{}` is scoped to a path that does not exist", f.pattern));
+        } else if !gate.paths.iter().any(|p| Path::new(within).starts_with(p)) {
+            report.push(format!("{within}: [within] `{}` is scoped outside the case's paths", f.pattern));
+        }
+    }
     // An exemption needs its reason, and one that covers nothing has outlived it.
     for a in &gate.allow {
         if a.reason.trim().is_empty() {
@@ -207,4 +221,36 @@ fn one_definition(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::case::Forbidden;
+
+    /// A rule scoped to a missing path, or to one outside the case's paths, fails the case; one
+    /// scoped inside them holds only there.
+    #[test]
+    fn a_rule_scoped_where_nothing_is_searched_fails() {
+        let w = std::env::temp_dir().join(format!("redoubt-cruft-{}", std::process::id()));
+        std::fs::create_dir_all(w.join("in")).unwrap();
+        std::fs::create_dir_all(w.join("out")).unwrap();
+        std::fs::write(w.join("in/a.rs"), "bad\n").unwrap();
+        std::fs::write(w.join("out/a.rs"), "bad\n").unwrap();
+        let gate = |within: &str| NoCruft {
+            paths: vec!["in".into()],
+            forbidden: vec![Forbidden { pattern: "bad".into(), unless: None, within: Some(within.into()) }],
+            no_allow_dead: vec![],
+            one_definition: vec![],
+            definition_paths: vec![],
+            allow: vec![],
+        };
+        let missing = check(&w, &gate("gone")).unwrap().unwrap();
+        let outside = check(&w, &gate("out")).unwrap().unwrap();
+        let inside = check(&w, &gate("in")).unwrap().unwrap();
+        std::fs::remove_dir_all(&w).unwrap();
+        assert!(missing.contains("does not exist"), "{missing}");
+        assert!(outside.contains("outside the case's paths"), "{outside}");
+        assert!(inside.starts_with("in/a.rs:1: [bad]") && !inside.contains("[within]"), "{inside}");
+    }
 }

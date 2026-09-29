@@ -28,6 +28,12 @@ forbidden = [
     { pattern = 'baremetal' }, { pattern = 'cfg\(ci\)' }, { pattern = 'crossbeam_no_atomic_64' },
     # "legacy" survives only where it names virtio-mmio v1's own legacy interface.
     { pattern = '(?i)legacy', unless = '(?i)virtio' },
+    # The runtime keeps the raw call its own (userland/native.md, "redoubt-rt"): it never
+    # re-exports redoubt-sys wholesale (alias, glob, `self` or `extern crate`), and no pub item
+    # or one-line re-export names `syscall`. A multi-line list is review's: a line alone cannot
+    # tell a pub one from a private import.
+    { pattern = 'pub\s+(extern\s+crate\s+redoubt_sys\b|use\s+(::)?redoubt_sys(\s+as\b|\s*;|::\*|::\{[^}]*(\*|\bself\b)))', within = "libs/rt/src" },
+    { pattern = '\bpub\s+((fn|static|const|mod)\s+syscall\b|use\b.*\bsyscall\b)', within = "libs/rt/src" },
 ]
 
 [[allow]]

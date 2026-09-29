@@ -223,12 +223,42 @@ impl Mmio {
         Ok(Registers { base, len, _not_sync: core::marker::PhantomData })
     }
 
-    /// `npages` contiguous zeroed pages the device may DMA to: (address, physical address).
-    pub fn dma_alloc(&self, npages: usize) -> Result<(usize, u64), Error> {
+    /// `npages` contiguous zeroed pages the device may DMA to, held by a [`Dma`].
+    pub fn dma_alloc(&self, npages: usize) -> Result<Dma, Error> {
+        let len = npages.checked_mul(PAGE_SIZE).ok_or(Error::TooLarge)?;
         match syscall(&Call::DmaAlloc { device: self.0, npages })? {
-            Return::Dma { addr, phys } => Ok((addr, phys)),
+            Return::Dma { addr, phys } => Ok(Dma { addr, phys, len }),
             _ => Err(Error::InvalidArgument),
         }
+    }
+}
+
+/// A run of pages [`Mmio::dma_alloc`] mapped: their address in this process and the physical
+/// address the device is programmed with. The mapping is this value's alone and dropping it
+/// unmaps it, so no safe code can unmap it underneath a driver that holds one.
+///
+/// Dropping a `Dma` unmaps only this process's mapping: the frames stay put, held, charged and
+/// out of the pool until the process ends (kernel/devices.md, `dma_alloc`). It does not free
+/// the device's memory.
+#[derive(Debug)]
+pub struct Dma {
+    addr: usize,
+    phys: u64,
+    len: usize,
+}
+
+impl Dma {
+    /// Where the pages are mapped in this process.
+    pub fn addr(&self) -> usize { self.addr }
+
+    /// Their physical address, which is what the device is programmed with.
+    pub fn phys(&self) -> u64 { self.phys }
+}
+
+impl Drop for Dma {
+    fn drop(&mut self) {
+        // A failure means the pages are already gone; there is nothing else to do.
+        let _ = unmap(self.addr, self.len);
     }
 }
 
