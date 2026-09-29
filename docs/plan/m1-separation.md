@@ -87,8 +87,7 @@ page.
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
    - **The bench and its tools:**
-     [tests that behaved differently under load](../todo/bench-load-flakes.md),
-     and [the SSH loopback self-checks](../todo/ssh-loopback-host.md).
+     [the SSH loopback self-checks](../todo/ssh-loopback-host.md).
 - **A kernel containment gate.** One boot on QEMU that proves the kernel's primitives alone,
    before the whole milestone is layered on them: hostile code preempted and ended at its
    deadline, a budget subtree revoked with messages and lends in flight, and a victim that stays
