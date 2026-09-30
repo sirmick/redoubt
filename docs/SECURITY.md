@@ -233,6 +233,22 @@ the OS's own are described on [the tenets](TENETS.md#the-walls).
 - `blkd`, `bootfsd`, `consoled` and `keyd` do not boot in the bench (their host tests run in it), and `netd` and `ipd` boot only under a test rig
   ([the servers](servers/README.md#residual-risks)).
 
+**The session.** A session is per-principal code: a bug in it reaches that principal's own
+capabilities, which the kernel contains ([trust tiers](servers/README.md#trust-tiers)).
+- beamlet's own code is memory-safe, but crates it links hold `unsafe` and parse hostile data
+  (compressed streams, patterns, certificates) with the session's authority, as any program's
+  libraries do. A memory bug there, reached by a file another principal wrote, an agent's opened
+  by its sponsor above all, has the sponsor's session, whichever of its tools read it; the kernel
+  keeps it to that principal, and keys and approvals out of its reach
+  ([beamlet](userland/beamlet.md#why), [the shell](userland/shell.md#why)).
+- The terminal guard stops hostile text, not the session's own code, which can write to its own
+  console; and it draws the bidirectional marks, which only settle weak and neutral characters
+  ([the shell](userland/shell.md#hostile-text-never-drives-the-terminal)).
+- A session makes a fixed number of waiting calls at once, and one past it is refused; memory off
+  the Erlang heap, a large binary, is bounded only by the session's own page limit
+  ([beamlet](userland/beamlet.md#asynchronous-underneath-synchronous-on-top),
+  [the shell](userland/shell.md#interrupting-and-killing-jobs)).
+
 **The supply chain.**
 - Vendored crates are checked against checksums taken from the tree itself: that proves they have
   not changed since vendoring, not that they match their upstream release

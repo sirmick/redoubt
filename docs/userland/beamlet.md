@@ -11,9 +11,9 @@ and runs on the host, where its tests run; running it on Redoubt, over 9P, is pl
 
 A session needs a language, a standard library and a prompt, and it needs them without C, without
 a POSIX kernel underneath, and small enough to audit. The BEAM gives Elixir and Erlang, OTP's
-libraries, IEx, supervision and message passing; beamlet gives the BEAM in a form Redoubt can
-trust: one crate with no `unsafe`, a loader that checks everything before code runs, limits that
-fail closed, and one narrow boundary where the operating system comes in. The code is in
+libraries, the compilers, supervision and message passing; beamlet gives the BEAM in a form
+Redoubt can trust: its own crates hold no `unsafe`, a loader checks everything before code runs,
+limits fail closed, and one narrow boundary is where the operating system comes in. The code is in
 [`userland/otp`](../../userland/otp).
 
 ## How to use it
@@ -126,7 +126,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 
 ### What runs on it
 
-Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching and crypto's refusal without randomness are not attacked by a named test · tested: host:beamlet-vm::decodes_otp_output, host:beamlet-vm::encodes_like_otp, host:beamlet-vm::printing_matches_otp, host:beamlet-vm::matches_otp, host:beamlet-vm::block_hash_handles_every_tail_length, host:beamlet-re::pcre_spellings, host:beamlet-re::braces_are_quantifiers_only_when_counted, host:beamlet-crypto::certificates_round_trip, host:beamlet-crypto::nesting_is_bounded, host:beamlet-crypto::mutants_never_panic
+Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness and the bound on a zlib stream are not attacked by a named test · tested: host:beamlet-vm::decodes_otp_output, host:beamlet-vm::encodes_like_otp, host:beamlet-vm::printing_matches_otp, host:beamlet-vm::matches_otp, host:beamlet-vm::block_hash_handles_every_tail_length, host:beamlet-re::pcre_spellings, host:beamlet-re::braces_are_quantifiers_only_when_counted, host:beamlet-crypto::certificates_round_trip, host:beamlet-crypto::nesting_is_bounded, host:beamlet-crypto::mutants_never_panic, host:beamlet-vm::compressed_terms_round_trip
 
 Where beamlet implements something, it behaves as the real BEAM does, and the differential suite
 checks it: each test runs on BEAM and on beamlet and the printed results must be identical.
@@ -143,8 +143,26 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
   dalek), so `crypto.erl`, `public_key`, `ssl` and `ssh` run on it. It takes randomness only from
   `Platform::random`, and a failure to get it fails the operation. Its `rsa` crate has a known
   timing side channel in decryption; side channels are a stated wall, not one the design closes.
+- **Compression** is OTP's `zlib`, whose natives run on `miniz_oxide`: deflate and inflate in raw,
+  zlib and gzip formats, so `:zlib`, `:zip` and compressed external terms work unchanged. Each
+  stream bounds what it holds queued, so a hostile archive cannot make one call allocate without
+  limit.
 - **Not supported:** NIFs and port drivers (foreign code runs as a separate program), distribution,
   hot code upgrade, and any OTP version but the pinned one.
+
+### The console on a host
+
+Status: planned · M2 (usable shell)
+
+On a host, beamlet's command line puts the terminal in raw mode for as long as the VM runs and
+restores it on every exit, a panic included. `console_size` is the terminal's size, and a change
+of size reaches the shell as the message `{:console_resize, cols, rows}`, as the console's parked
+`resize` delivers it on Redoubt ([the shell](shell.md#the-terminal-library)). Console input goes
+to one Erlang process, the shell's driver, which takes it with `beamlet:console_subscribe/0`; a
+second subscription is refused, so no code run at the prompt can take the keyboard, or the
+interrupt key with it, from the driver.
+
+**Open:** none.
 
 ### beamlet on Redoubt
 
@@ -157,7 +175,7 @@ namespace, files, the console and launching, and the kernel's calls for the rest
 | Method | On Redoubt |
 | --- | --- |
 | `monotonic_us`, `idle` | the kernel's `time_now` (microseconds since boot); `idle` is a `receive` with a timeout ([timer](../kernel/timer.md)) |
-| `system_time_us` | `None` until wall-clock time and time sync exist, in M5 (persist, install, share) |
+| `system_time_us` | `None` until wall-clock time and time sync exist, in M5 (persist, install, share); the VM then counts system time from the Unix epoch at boot, so the logger and anything else that stamps a time works and a date says 1970. A check that a date has begun (a certificate's `notBefore`) then fails, a check only that one has not passed (a token's expiry) passes, and times from two boots cannot be ordered |
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
@@ -179,6 +197,21 @@ a new call.
 ### Natives
 
 Status: planned · M1 (separation and containment)
+
+A native is one of three kinds, and no other:
+- **OTP's own**, reimplemented in Rust where BEAM has C (`crypto`, `re`, `zlib`, the file and
+  buffer primitives): the API is OTP's, so the differential test holds each to the real BEAM
+  ([what runs on it](#what-runs-on-it)).
+- **The system's:** what has no POSIX equivalent, the small fixed set below.
+- **A primitive the interpreter is too slow for**, and no more than the primitive: the screen
+  buffer ([screen natives](#screen-natives)).
+
+Anything else is Elixir. Every native's own code holds no `unsafe`; it bounds the work one call
+does, since a native is not preempted by reductions; it reaches no panic from any argument; and it
+is attacked with hostile arguments, fuzzed where it parses. OTP's own natives parse what OTP's do
+(certificates, compressed streams, patterns), held to BEAM by the differential test; a native of
+the other two kinds never parses a large untrusted format, which goes to a native program in a
+budget of its own instead ([native programs](native.md)).
 
 What has no POSIX equivalent reaches Elixir through a small fixed set of beamlet natives, and
 every server binding is pure Elixir over them:
@@ -205,10 +238,52 @@ in Elixir and encoding in Rust. The file server's operations that name fids (`Re
 `rename`, `copy_file` and attributes) go through the library's `fsd` beside the file natives,
 since the fids are the platform's, not Elixir's ([native programs](native.md#the-client-library)).
 
-**Open:** where the Elixir modules over the natives (`Redoubt.Namespace`, `Redoubt.Process`,
-`Redoubt.Budget` and the rest) live: a Mix package versioned with the system and loaded from the
-boot bundle, with only what the VM needs at boot embedded in it (recommended), or all embedded
+The Elixir modules over them are of two layers. A server's typed calls are generated from its
+wire table, one function per message ([wire](../servers/wire.md#generated-clients)), so the
+binding cannot drift from the server. Above the natives and the generated calls, a thin
+hand-written module gives what is idiomatic and adds no authority: `Redoubt.Namespace`,
+`Redoubt.Budget` and `Redoubt.Process` over the natives, `Redoubt.Keys` over `keyd`'s calls.
+
+**Open:** where the Elixir modules live: a Mix package versioned with the system and loaded from
+the boot bundle, with only what the VM needs at boot embedded in it (recommended), or all embedded
 in the VM.
+
+### Screen natives
+
+Status: planned · M2 (usable shell)
+
+The screen buffer is `beamlet-screen`, a crate of the VM's with no `unsafe` and no dependency but
+the VM and the `cells` crate. Its natives, in the Erlang module `redoubt_screen`, are primitives
+over cells; widgets, layout and focus are Elixir ([the shell](shell.md#full-screen-programs)).
+
+| Native | What it does |
+| --- | --- |
+| `new(W, H)` | a buffer: a resource, every cell blank, owned by the calling Erlang process |
+| `resize(B, W, H)` | a new size, blank; the next `diff` clears the screen and sends it all |
+| `put(B, X, Y, Text, Style)` | writes `Text` along the row from `(X, Y)`, one grapheme a cell and a wide one two, clipped at the edge (a wide grapheme cut by it becomes a space, and a grapheme longer than a cell's symbol may be, U+FFFD); returns the columns written |
+| `fill(B, Rect, Symbol, Style)` | one symbol and style over a rectangle, clipped |
+| `plot(B, Rect, Bits, Style)` | a bitmap of 2×4 dots a cell, drawn in Braille (U+2800 to U+28FF) |
+| `width(Text)` | the columns `Text`, of at most 64 KiB, takes, by the table `put` uses |
+| `diff(B)` | the cells changed since the last `diff`, as a `cells` frame, which then becomes what is shown |
+
+- **A control character is refused, not drawn.** `put` and `fill` raise `badarg` on one (the
+  ASCII and 8-bit controls, DEL, and the bidirectional embedding, override and isolate controls:
+  the `cells` crate's own rule), so a caller that forgot to make text visible fails loudly, and
+  nothing reaches the encoder that the cell protocol would not carry.
+- **Bounded.** A buffer is at most 1024 cells on a side and 65,536 cells in all; `put` reads no
+  more of its text than the row has cells, and `width/1` takes at most 64 KiB; no native does
+  more than one pass over a buffer. So every call has a ceiling on its time and its allocation,
+  and it is charged in reductions by the cells and bytes it touched.
+- **Counted.** A process holds at most four buffers, and each counts toward its owner's heap
+  limit, so a loop of `new/2` is ended by the limit that ends any runaway allocation.
+- **One writer.** A buffer answers only the Erlang process that made it; any other gets `badarg`.
+  It sits behind a lock only because a resource may move between schedulers.
+- **One width table**, generated from one pinned Unicode version and held to vectors: `width/1`
+  is `put`'s own, and the terminal library measures with it, so what is measured is what is drawn.
+- **The diff speaks the cell protocol**, so a screen drawn in the session and a native program's
+  frames reach the encoder by one decoder ([the shell](shell.md#the-terminal-library)).
+
+**Open:** none.
 
 ### Asynchronous underneath, synchronous on top
 
@@ -227,7 +302,27 @@ in `receive`, not the scheduler. Concurrency is bounded by the pool and by each 
 admission limits per (account, label set); at the limit a call waits its turn
 ([the serving library](../servers/serving.md)).
 
-**Open:** none.
+A call that waits holds its thread for as long as it waits, and a process has at most 31 threads
+([processes](../kernel/processes.md)). Most calls are short, but some wait on a person or a peer
+for as long as nothing happens: the console read, the parked `resize`, a read on a TCP
+connection's data file, a `serve` loop, a job's exit notice. A read on `/dev/cons` and a read on a
+file are the same 9P message, so what makes a call a waiting one is where it goes, never its
+message: the console, a `/net` connection's data file, a served endpoint and an exit notice wait;
+every other call is short.
+
+So the threads are split. Two run the schedulers. Four take short calls, which never queue behind
+a waiting one, and each short call has a timeout, so a hung server costs its caller an error, not
+the session its short calls. Three are reserved for the session's own waiting calls (the console
+read, the parked `resize`, and the loop that serves the session's pipes), so no user code can take
+them. The rest, twenty-two, take user code's waiting calls, one each. A waiting call past that is
+refused (`system_limit`), not queued, so a session with too many open sockets learns it at once.
+A job's exit notice takes its thread when the job is launched, before `process_create`, and a
+launch with none free is refused, so no job ever runs with nobody waiting to reap it. Each
+server's admission limits are separate: a call a server has not admitted yet waits its turn there
+([the serving library](../servers/serving.md)).
+
+**Open:** whether one thread should one day wait on several endpoints at once, which is kernel
+work ([IPC](../kernel/ipc.md)).
 
 ## Why
 
@@ -243,6 +338,21 @@ that grants less gets a VM that can do less, with no code in between to trust.
 
 **One pinned compiler.** Accepting exactly one OTP version lets the loader refuse everything else
 instead of carrying compatibility code for old formats, which is where parsers go wrong.
+
+**Natives are few, and of three kinds.** A native is code every Erlang process in the session can
+reach, the ones handling hostile data among them, and it is not preempted. So what may be one is
+closed: OTP's own natives, which the differential test holds to BEAM; the system's, a fixed set
+with Elixir above it; and a primitive an interpreter cannot do fast enough, kept to the primitive.
+Nothing else is.
+
+**Its dependencies are userland's.** beamlet's own crates hold no `unsafe`; the crates it links
+(RustCrypto, `regex-automata`, `miniz_oxide`, `num-bigint`) do, for speed and for the platform.
+That is the latitude an application has and privileged code does not
+([the tenets](../TENETS.md#5-dependencies-are-part-of-the-trusted-computing-base)): the VM is
+per-principal code, and a bug in it reaches that principal's own capabilities, which the kernel
+contains ([trust tiers](../servers/README.md#trust-tiers)). What is shared with the servers is
+built from the same vendored bytes, and the rest is pinned by the lockfile and vendored when
+beamlet first goes into an image.
 
 **One 9P client, not a method per service.** Files, TCP and the console are all 9P on Redoubt, so
 one generic client in Rust covers them, and the framing (packet modes, line mode) stays in Erlang

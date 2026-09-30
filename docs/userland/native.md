@@ -250,7 +250,7 @@ the others' is ([vendored dependencies](../testbench.md#vendored-dependencies)).
 
 | Purpose | Crates |
 | --- | --- |
-| Screens | `ratatui-core`, `ratatui-widgets` (default features off), `unicode-width`, `unicode-segmentation`, `vte` (escape-sequence parsing) |
+| Screens | `cells` (ours: the frames a program with a screen writes, [the shell](shell.md#full-screen-programs)), `unicode-width`, `unicode-segmentation` |
 | Text | `crop` (a rope), `regex`, `memchr`, `aho-corasick` |
 | Compression | `miniz_oxide` (deflate, as beamlet uses), `ruzstd` (zstd), `lzma-rust2` (xz), `lz4_flex` |
 | Archives | `tar-no-std` (reading; writing is ours) |
@@ -291,8 +291,8 @@ pool of I/O threads ([asynchronous underneath](beamlet.md#asynchronous-underneat
 Time and randomness are the runtime's kernel calls, and raw `call`, `send` and `serve` are the
 runtime's `ipc`, which beamlet's natives use directly. `/net` is files, so `file` covers it. There
 is no module per typed server beyond `fsd`, whose operations name fids that live in Rust: for
-every other server `typed` with the generated module is the binding, and beamlet binds the same
-tables through their generated Elixir codecs.
+every other server `typed` with the generated module is the binding, and a session binds the same
+tables through generated Elixir clients ([wire](../servers/wire.md#generated-clients)).
 
 - **A namespace owns its connections.** A `bind` puts the same connection under another prefix:
   one connection, one badge, as a copied handle is in beamlet. An open file keeps its connection
@@ -309,10 +309,10 @@ tables through their generated Elixir codecs.
   its own buffer, so several threads use one connection at once. A fid goes back to the allocator
   only once the server has let it go (its clunk's reply), or once its request is refused before
   it is sent (a path that does not clean or does not fit the lend), so an untrusted path cannot
-  drain a shared connection's fids. A file dropped without `close` makes no
-  call, so its fid stays in use until the connection ends, and so does one whose clunk timed out:
-  a program that drops its files runs out of fids (`NoFid`), never reuses one the server may
-  still hold.
+  drain a shared connection's fids. A file dropped without `close` makes no call from its drop,
+  and one whose clunk timed out stays in use: a fid is never reused while the server may still
+  hold it. How a dropped file's fid comes back is
+  [below](#dropped-files-error-names-and-generated-calls).
 - **Policy is the servers'.** The library holds none and makes no check a server does not make:
   the label check is the server's ([R25 (the label check)](../servers/serving.md#r25-the-label-check)).
 - **One error type** tells apart the kernel's error, a reply that does not decode, the server's
@@ -349,6 +349,44 @@ call); an error path never leaks a handle (a partial reply, a server that dies m
 reply carrying handles); a request refused before it is sent costs no fid; a child's grants are
 released at every server when its exit notice arrives, and a server that never answers delays the
 reaping by one timeout, no more.
+
+### Dropped files, error names and generated calls
+
+Status: planned · M1 (separation and containment)
+
+What the client library adds before beamlet's files run on it, each keeping the rules above:
+- **A dropped file's fid comes back.** A fid is put on its connection's list to clunk only when
+  its file's last reference is gone, a call in flight on it included, so no call is ever still
+  using a listed fid. The next call on that connection, from any thread, takes one listed fid off
+  the list, which no other caller can then take, and clunks it first with that caller's lend; the
+  fid goes back to the allocator on its clunk's reply, as a closed file's does, and a clunk that
+  fails or times out keeps its fid in use and never fails the call it came before. So nothing is
+  mapped or called from a drop, each fid is clunked once, a fid is never reused while the server
+  may hold it, and a program whose files are dropped (beamlet's belong to Erlang processes, which
+  can be killed mid-read) does not run out of fids for them.
+- **An `Rerror` has a name.** A 9P server answers with one of a fixed set of texts, one table the
+  serving library and this library share ([wire](../servers/wire.md#error-names)); the library
+  keeps the name (`not_found`, `not_permitted`, `exists` and the rest), never the text, and a text not in
+  the table is `other`. beamlet's files adapter turns the name into the POSIX error OTP's `file`
+  expects (`enoent`, `eacces`, `eexist`).
+- **Calls by path.** `Namespace` opens, creates, stats and removes by a full path: the lookup, then
+  the call on the connection it found, so a caller cannot take one connection and use another's
+  rest of the path.
+- **Whole reads and writes.** `read_to_end`, up to a limit its caller gives, and `write_all` loop
+  over one-request calls; nothing is buffered between calls, each request's error is its own, a
+  read past the limit is refused rather than grown, and a write that fails midway says how much
+  was written.
+- **Generated calls for Elixir.** A session binds each typed server through a client generated
+  from its table, one function per message ([wire](../servers/wire.md#generated-clients)); Rust
+  keeps `typed` with the generated codec, which is already one call per message.
+
+The attack cases: a program that drops every file it opens, a thousand times over one connection,
+never gets `NoFid`, and no fid is reused before its clunk's reply; a file dropped while another
+thread is mid-read on it is clunked only after that read's reply, and once; a server that never
+answers a clunk delays one later call by one timeout, and fails none; a server that answers with a
+text outside the table is `other`, and the text reaches no caller.
+
+**Open:** none.
 
 ### The Rust `std` target
 
