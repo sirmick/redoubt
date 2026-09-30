@@ -1,4 +1,4 @@
-description = "Latency under the named workload (the targets in kernel/scheduling.md, \"Responsiveness\"): a driver stand-in on the goldfish RTC's alarm interrupt, a steward stand-in on timeouts, hand destroys after a decision timeout and lease deadlines, and 1, 4 and 16 spinning sessions; 200 wakes and 50 destructions of each kind per run; driver and timer wakes p50 <= 15 ms and p99 <= 50 ms, decision wakes p50 <= 25 ms and p99 <= 95 ms (from the seed sweep), deadline notice p99 <= 54 ms and R10 kernel time p99 <= 39 ms (from the trace; both from the seed sweep), a lease's end p99 <= 134 ms, a 1000-weight server's share under the 16-session load; every pick checked by the rank oracle (virtual time, checked build)"
+description = "Latency under the named workload (the targets in kernel/scheduling.md, \"Responsiveness\"): a driver stand-in on the goldfish RTC's alarm interrupt, a steward stand-in on timeouts, hand destroys after a decision timeout and lease deadlines, and 1, 4 and 16 spinning sessions; 200 wakes and 50 destructions of each kind per run; driver and timer wakes p50 <= 15 ms and p99 <= 50 ms, decision wakes p50 <= 25 ms and p99 <= 95 ms (from the fourth seed sweep), deadline notice p99 <= 40 ms and R10 kernel time p99 <= 30 ms (from the trace; both from the seed sweep), a lease's end p99 <= 125 ms, a 1000-weight server's share under the 16-session load; every pick checked by the rank oracle (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -9,9 +9,10 @@ qemu_seed = 3
 programs = ["sched-latency"]
 # Test builds only: the trace ring and its dump (never in a default or production kernel).
 kernel_features = ["sched-trace"]
-# The rank oracle; R10's kernel time from the trace's X/Y records, p99 <= 39 ms (from the seed
-# sweep); a lease's end, the worst decision-wake p99 plus R10's, <= 95 + 39 ms.
-post_check = "sched_oracle r10_p99_us=39000 lease_end_p99_us=134000"
+# The rank oracle; R10's kernel time from the trace's X/Y records, p99 <= 30 ms (back from the
+# 39 ms the handle-sweep term forced; kernel/budgets.md, "Residual risks"); a lease's end, the worst
+# decision-wake p99 plus R10's, <= 95 + 30 ms.
+post_check = "sched_oracle r10_p99_us=30000 lease_end_p99_us=125000"
 timeout_secs = 1800
 expect = [
     '^\[latency\] the RTC keeps virtual time: met',

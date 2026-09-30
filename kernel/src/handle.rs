@@ -287,6 +287,15 @@ impl MemoryManager {
         }
     }
 
+    /// [`MemoryManager::sweep_handles`], except during a destruction: then its single
+    /// `destroy_marked` pass closes them, so a per-object sweep would only repeat work (I1, I2).
+    pub fn sweep_handles_now(&mut self, doomed: impl Fn(&Self, &Handle) -> bool) {
+        if self.objects.deferring {
+            return;
+        }
+        self.sweep_handles(doomed);
+    }
+
     /// Remove every handle of a process that is ending.
     pub fn close_all_handles(&mut self, pid: Pid) { self.remove_handles_where(pid, &|_, _| true); }
 

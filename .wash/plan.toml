@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 62
+revision = 16
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -12,7 +12,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["HIST1", "FMT1"]
   body = "Closes docs/todo/module-search-order.md (deleted in the package); rule on docs/userland/packages.md#profiles-and-upgrades, built on docs/userland/beamlet.md#the-platform-boundary. Tier B since the owner's decision of 2026-09-29 (SWARM 23c497a38: the VM's interpreter and loader are one trust domain); it was reviewed by the full Tier A panel anyway."
   state = "done"
-  revision = 22
+  revision = 2
 
 [[node]]
   id = "HIST1"
@@ -30,7 +30,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Built in cf445aa0c, accepted c25fdbaa6: docs/kernel/ipc.md#r13-one-outcome-per-call, docs/kernel/memory.md (a loan within one process). Cross-hart races: docs/todo/kernel-attack-gaps.md; model replay: node model-replay."
   state = "done"
-  revision = 30
+  revision = 2
 
 [[node]]
   id = "K7"
@@ -40,7 +40,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["FMT1"]
   body = "docs/plan/m1-separation.md#remaining-work, the Kernel bullet: every docs/todo/ page it links, plus docs/todo/receive-output-late-invalid.md (rule: docs/kernel/ipc.md#a-bad-record-takes-nothing) and the IPC1 review's note (a dangling comment at kernel/src/arch/riscv/mem.rs map_into_with). Tier A."
   state = "done"
-  revision = 23
+  revision = 2
 
 [[node]]
   id = "M1"
@@ -114,7 +114,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["init", "API1"]
   body = "docs/userland/beamlet.md#beamlet-on-redoubt; docs/userland/shell.md#iex-in-a-session"
   state = "todo"
-  revision = 42
+  revision = 2
 
 [[node]]
   id = "fsd"
@@ -134,7 +134,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K7", "K8", "S3", "BL1", "GATE1"]
   body = "docs/plan/m1-separation.md#remaining-work: A kernel containment gate."
   state = "todo"
-  revision = 55
+  revision = 2
 
 [[node]]
   id = "host-shell-scripts"
@@ -153,7 +153,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["gate", "API1", "INIT4"]
   body = "docs/plan/m1-separation.md#remaining-work; docs/servers/init.md"
   state = "todo"
-  revision = 57
+  revision = 2
 
 [[node]]
   id = "model-replay"
@@ -173,7 +173,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["steward", "SSH1"]
   body = "docs/servers/sshd.md (the box's platform, approve@box; the core is SSH1's); docs/userland/sessions.md"
   state = "todo"
-  revision = 15
+  revision = 2
 
 [[node]]
   id = "steward"
@@ -183,7 +183,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["fsd", "beamlet-redoubt"]
   body = "docs/servers/steward.md; docs/todo/budget-destroy-cost.md (must restore the R10 30 ms and deadline-notice 40 ms targets relaxed in K7); docs/kernel/scheduling.md#responsiveness"
   state = "todo"
-  revision = 30
+  revision = 2
 
 [[node]]
   id = "FMT1"
@@ -208,13 +208,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 [[node]]
   id = "K8"
   title = "Kernel and bench follow-ups after K7"
-  emoji = "🧪"
   template = "package"
   parent = "M1"
   needs = ["K7"]
   body = "Closed so far on wp-k8 (base fbc53ff4a): workspace-host-tests; size budget leaves out #[cfg(test)]; unsafe-budget reason lines on the merge-base range (unsafe-ratchet-reason); sched-rv64-decision-wake closed as a residual with new targets (p50 25, p99 95, lease end 134). Step 5, bench-load-flakes: wait fixes, then the loaded proof run, which waits on the owner's choice of scope. Implementer handed off; a fresh one continues. Rebase onto redoubt (SSH1, API1 merged) before the merge run. Tier A (the bench)."
   state = "done"
-  revision = 62
+  revision = 2
 
 [[node]]
   id = "S3"
@@ -224,7 +223,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["S2"]
   body = "Closes docs/todo/raw-abi-syscall.md, raw-thread-create.md, request-raw-reply.md (deleted in the package); claims on docs/userland/native.md#redoubt-rt-the-native-runtime and docs/servers/serving.md#authority. Tier A. Reviewed: red OK with notes (2 rounds), simplifier OK with notes, editor OK; whole bench green on c7ff5d6d8 (6 ssh-loopback skips). Rebasing onto the owner's docs commit f530a5f0c, then merged."
   state = "done"
-  revision = 31
+  revision = 2
 
 [[node]]
   id = "SSH1"
@@ -233,7 +232,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Builds docs/servers/sshd.md#the-core-and-its-platforms (core and host platform; the box platform stays planned for the sshd step), docs/testbench.md#against-redoubts-sshd and #patched-crates, vendor/README.md; narrows docs/todo/ssh-loopback-host.md to the OpenSSH reference case. Tier A, L. All steps done at 6c164962b: whole bench 207 PASS, 1 SKIP (the OpenSSH reference case, SELinux); the loopback self-checks now run on Redoubt's own sshd. Networked provenance.sh run by the orchestrator: every vendored crate is the published one. Review round 2 (red, simplifier, editor) in progress; then fold the patch commits into 59cf994a3, rebase and merge."
   state = "done"
-  revision = 45
+  revision = 2
 
 [[node]]
   id = "smp"
@@ -242,7 +241,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/plan/m2-usable-shell.md#several-harts"
   state = "todo"
-  revision = 41
+  revision = 2
 
 [[node]]
   id = "API1"
@@ -251,17 +250,17 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "docs/userland/native.md#the-client-library; docs/userland/beamlet.md#beamlet-on-redoubt and #natives (the adapters' shape); docs/plan/m1-separation.md#remaining-work. Tier A, size M."
   state = "done"
-  revision = 53
+  revision = 2
 
 [[node]]
   id = "GATE1"
   title = "The kernel containment gate: one composite boot"
   template = "package"
   parent = "M1"
-  needs = ["K8"]
+  needs = ["K8", "K9"]
   body = "Builds docs/kernel/README.md#containment (a926fd1c3; bench:kernel-containment; rv64 and rv32, checked build, virtual time, tracing kernel, pinned seed from a 16-seed sweep); docs/plan/m1-separation.md Kernel cases, the Containment row. Brief: .wash/local/GATE1-implementer.md. Design: QA GATE1-design. Owner: a missed responsiveness target stops GATE1 and pulls docs/todo/budget-destroy-cost.md forward as its own kernel package first. Tier A, size M."
   state = "todo"
-  revision = 56
+  revision = 4
 
 [[node]]
   id = "INIT1"
@@ -271,7 +270,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["GATE1", "API1"]
   body = "Builds docs/kernel/boot.md#the-loader-loads-only-the-kernel-and-init (the bundle mapped into init, a0/a1), docs/kernel/devices.md#device_info (a new kernel call: which device a handle names; owner's choice), docs/kernel/budgets.md#the-tree-from-the-boot-manifest (root keeps init's process), docs/testbench.md#starting-a-cases-programs (the in-init's-place half: the log server launches the case's programs with named budgets; TAKE_GIFTS goes) and #data-entries-for-init (read-back from the bundle's pages). Brief: .wash/local/INIT1-implementer.md. Design: QA INIT1-design. Tier A (loader, kernel ABI, bench builder), size L."
   state = "todo"
-  revision = 58
+  revision = 2
 
 [[node]]
   id = "INIT2"
@@ -281,7 +280,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["INIT1"]
   body = "Builds docs/servers/init.md (the boot manifest, devices by register base and interrupt, confinement, starting the servers, key separation, fresh connections, authority, R33-R35), docs/kernel/devices.md#which-process-gets-which-device (placement matched with device_info), docs/servers/consoled.md#started-by-init (lines attributed by connection), docs/todo/server-bucket-counts.md (closed), docs/testbench.md#starting-a-cases-programs (the under-init half), image/boot.toml read by the builder for ./mkimage. Design: QA INIT1-design. Tier A, size L."
   state = "todo"
-  revision = 58
+  revision = 2
 
 [[node]]
   id = "INIT3"
@@ -291,7 +290,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["INIT2"]
   body = "Builds docs/servers/init.md#restarts-and-reboots (fresh budget, same endpoint, reboot rule; blame is the steward step's), docs/servers/wire.md#a-launcher-releases-its-childs-grants, docs/servers/serving.md#replies-and-rollback in a boot, docs/servers/netd.md#started-by-init (a driver restart case), docs/kernel/devices.md (a quarantined driver reboots). Design: QA INIT1-design. Tier A, size M."
   state = "todo"
-  revision = 57
+  revision = 2
 
 [[node]]
   id = "INIT4"
@@ -301,4 +300,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["INIT3"]
   body = "docs/plan/m1-separation.md#remaining-work (netd, ipd and the rest move from the bench's rigs to init): the net-* and bench-net-* cases boot init with a case manifest, their in-guest checks become test programs judged through consoled's attribution; tests/net/src/rig.rs deleted. docs/testbench.md#starting-a-cases-programs, #devices-and-the-network. Design: QA INIT1-design. Tier A (the bench), size M."
   state = "todo"
-  revision = 57
+  revision = 2
+
+[[node]]
+  id = "K9"
+  title = "Budget destruction's cost follows the dying subtree"
+  template = "package"
+  parent = "M1"
+  needs = ["K8"]
+  body = "docs/todo/budget-destroy-cost.md; pulled forward from the steward step by GATE1's R10 miss (133 ms vs 39 ms; owner rule in QA GATE1-design). Tier A (kernel), size L. Design: QA K9-design."
+  state = "done"
+  revision = 16

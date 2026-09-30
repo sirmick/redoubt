@@ -250,7 +250,7 @@ remainder alone rescaled, as before, it got 0.
 
 ### Responsiveness
 
-Status: built · tested: bench:sched-latency, host:testbench::destructions_are_timed_and_bounded
+Status: built · tested: bench:sched-latency, bench:budget-destroy-growth, host:testbench::destructions_are_timed_and_bounded
 
 No wake latency follows from weight. A wake waits out the running thread's slice, a waking
 budget keeps a pass above the floor if it has one, and several budgets can tie at the floor. So
@@ -281,15 +281,15 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | --- | --- |
 | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
 | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
-| steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 25 ms, p99 <= 105 ms (from the fourth sweep below; 25 and 95 ms before it, 20 and 115 before that, 15 and 50 before the first) |
-| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (from the fourth sweep below; 54 ms after the second, 30 ms before it) |
-| R10 kernel time of one destruction, from the trace | p99 <= 30 ms (from the fourth sweep below; 39 ms after the second sweep) |
-| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 105 + 30 = 135 ms, asserted as one sum by the post-check (134 ms before the fourth sweep, 154 before the third, 145 before the second, 80 before the first) |
+| steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 25 ms, p99 <= 95 ms (from the fourth sweep below; the third sweep set the same 25 and 95 ms) |
+| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (back from 54 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
+| R10 kernel time of one destruction, from the trace | p99 <= 30 ms (back from 39 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
+| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 95 + 30 = 125 ms, asserted as one sum by the post-check |
 | `budget_destroy`, call to return | recorded against one round: R10's 30 ms plus (runnable budgets + 2) slices |
 | the 1000-weight server's share of the spinning CPU at N = 16 | at least 384 less 30 per thousand |
 
 In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 30 ms is 3,750,000, 40 ms is 5,000,000,
-50 ms is 6,250,000, 105 ms is 13,125,000, 135 ms is 16,875,000, and one 10 ms slice is 1,250,000.
+50 ms is 6,250,000, 95 ms is 11,875,000, 125 ms is 15,625,000, and one 10 ms slice is 1,250,000.
 
 The decision wake is measured by the stand-in itself (`time_now` against its own deadline) and
 read from its console lines, while R10's time comes from the kernel's trace: that half of the
@@ -353,12 +353,12 @@ R10's kernel time, p99 in µs, and a lease's end:
 | 16 | 38661 | 33878 | 73301 | 37924 | 35124 | 86458 |
 
 The worst are the deadline notice at 48,851 µs (rv32, seed 15) and R10 at 35,421 µs (rv32, seed
-6). Their targets are the worst case plus a tenth, rounded up to 1 ms: 48.9 x 1.1 = 53.7, so
-54 ms, and 35.4 x 1.1 = 39.0, so 39 ms. The lease end's bound moves with R10's, to 154 ms; its
-worst is 105.8 ms. The difference from 30 ms is the handle-sweep term of
-[budget destruction's cost](../todo/budget-destroy-cost.md), which brings R10's target back to
-30 ms and the deadline notice's to 40 ms. Every other measure met its target on every seed. The
-gate stays on seed 3.
+6). Their targets became the worst case plus a tenth, rounded up to 1 ms: 48.9 x 1.1 = 53.7, so
+54 ms, and 35.4 x 1.1 = 39.0, so 39 ms. The lease end's bound moved with R10's, to 154 ms; its
+worst is 105.8 ms. The difference from 30 ms was the handle-sweep term of budget destruction's
+cost. A destruction now follows the dying subtree and folds that sweep into one pass, so the term
+is gone and the targets are back at 30 and 40 ms above ([budgets](budgets.md#residual-risks)).
+Every other measure met its target on every seed. The gate stays on seed 3.
 
 **The third sweep** (2026-09-29, the same seeds and widths) followed a change that frees a page
 table once it maps nothing. It found the first sweep's rv64 median was one phase, not a property
@@ -391,13 +391,37 @@ so 95 ms. The lease end's bound follows, to 95 + 39 = 134 ms; its worst is 116.6
 measure met its target on every seed. The gate stays on seed 3, which is no longer the worst
 seed; the targets come from the sweep, not from the seed the gate runs.
 
-**The fourth sweep** follows a destruction that walks what it destroys instead of every object
-frame ([budgets](budgets.md#residual-risks)), which cheapens R10 and moves the phase of later
-events. The decision wake's worst p99 is 95,131 µs (rv32, seed 9), where R10's p99 is 22,663 µs.
-R10 and the deadline notice return to the 30 ms and 40 ms they had before the second sweep, and by
-the same rule a tenth over the worst rounded up to 5 ms sets the decision wake's p99 at
-95.1 x 1.1 = 104.6, so 105 ms. A lease's end follows to 105 + 30 = 135 ms. Every other measure met
-its target on every seed; the gate stays on seed 3, and the full table is recorded with the change.
+**The fourth sweep** (2026-09-30, the same seeds and widths) followed a destruction that walks what
+it destroys instead of every object frame ([budgets](budgets.md#residual-risks)), which cheapens
+R10 and moves the phase of every later event. R10 and the deadline notice return to the 30 ms and
+40 ms they had before the second sweep. The decision wake's worst p50 is 18,541 µs (rv32, seed 11)
+and its worst p99 82,497 µs (rv64, seed 6); a tenth over the worst rounded up to 5 ms sets the p50
+at 25 ms and the p99 at 95 ms. A lease's end follows to 95 + 30 = 125 ms. Every other measure met
+its target on every seed; the gate stays on seed 3. The decision wake, p50 / p99 in µs at N = 1, 4
+and 16, and a lease's end (the worst decision-wake p99 plus R10's p99 from the trace):
+
+| Seed | rv64 N=1 | rv64 N=4 | rv64 N=16 | rv64 lease end | rv32 N=1 | rv32 N=4 | rv32 N=16 | rv32 lease end |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 5926 / 5926 | 6137 / 16521 | 7149 / 60964 | 82485 | 6162 / 6165 | 6402 / 16894 | 7606 / 62296 | 84795 |
+| 2 | 5926 / 5926 | 6137 / 16522 | 7149 / 50199 | 71841 | 6162 / 6164 | 6402 / 16894 | 18537 / 51367 | 73994 |
+| 3 | 5926 / 5926 | 6136 / 16521 | 7149 / 60967 | 82567 | 6161 / 6164 | 6402 / 16893 | 7608 / 51364 | 73947 |
+| 4 | 5926 / 5926 | 6137 / 16521 | 7149 / 82492 | 104149 | 6162 / 6164 | 6401 / 16892 | 18539 / 62295 | 84939 |
+| 5 | 5926 / 5926 | 6137 / 16521 | 7149 / 50202 | 71683 | 6162 / 6164 | 6401 / 16894 | 7607 / 51363 | 73824 |
+| 6 | 5926 / 5926 | 6137 / 16521 | 7149 / 82497 | 104318 | 6162 / 6164 | 6402 / 16893 | 18539 / 40424 | 63236 |
+| 7 | 5926 / 5926 | 6137 / 16522 | 7149 / 39440 | 61213 | 6162 / 6164 | 6402 / 16894 | 18538 / 51355 | 74116 |
+| 8 | 5925 / 5926 | 6137 / 16522 | 7149 / 50202 | 71943 | 6162 / 6164 | 6402 / 16894 | 18538 / 51364 | 74094 |
+| 9 | 5926 / 5926 | 6137 / 16522 | 7149 / 50202 | 71702 | 6162 / 6164 | 6402 / 16894 | 7607 / 51357 | 73836 |
+| 10 | 5926 / 5926 | 6137 / 16522 | 7149 / 39440 | 60962 | 6162 / 6164 | 6402 / 16893 | 7608 / 51357 | 73860 |
+| 11 | 5926 / 5926 | 6136 / 16521 | 7148 / 7149 | 38309 | 6162 / 6165 | 6402 / 16892 | 18541 / 51360 | 74136 |
+| 12 | 5926 / 5926 | 6137 / 16521 | 7149 / 82494 | 104307 | 6162 / 6164 | 6402 / 16894 | 18540 / 51357 | 74160 |
+| 13 | 5926 / 5926 | 6137 / 16522 | 7149 / 60965 | 82723 | 6162 / 6164 | 6402 / 16894 | 18539 / 51355 | 74101 |
+| 14 | 5926 / 5926 | 6137 / 16522 | 7149 / 50204 | 71705 | 6162 / 6164 | 6402 / 16892 | 7607 / 62294 | 84775 |
+| 15 | 5925 / 5926 | 6137 / 16521 | 7149 / 50202 | 71807 | 6162 / 6164 | 6402 / 16892 | 18536 / 51353 | 73940 |
+| 16 | 5926 / 5926 | 6137 / 16522 | 7149 / 50204 | 71739 | 6162 / 6164 | 6402 / 16893 | 18538 / 51353 | 73869 |
+
+The worst are p50 18,541 µs (rv32, seed 11) and p99 82,497 µs (rv64, seed 6); R10's p99 is
+22,812 µs (rv64, seed 6) and the deadline notice's is 37,450 µs (rv32, seed 15), both inside 30 and
+40 ms. The lease end's worst is 104,318 µs, inside 125 ms.
 
 The case fails on any `missed`. `bench:sched-latency-tcg` runs the same workload in host time and
 only reports, with the oracle still checking every pick.
@@ -439,8 +463,9 @@ processes hold. `map_anon`'s search is linear in the fixed-size area it searches
 and never in `len` (`bench:map-anon-search-bound`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the platform's
 interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in RAM
 frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
-every wake waits for it. R10 (destruction)'s sweeps are the one stated exception
-([todo](../todo/budget-destroy-cost.md)). What a call looks up by PID or by interrupt number
+every wake waits for it. R10 (destruction) walks only the dying subtree and its owner lists, and
+its one handle pass is bounded by `MAX_PROCESS_COUNT` × `MAX_HANDLE_PAGES` ([budgets](budgets.md#residual-risks)),
+so it is no exception. What a call looks up by PID or by interrupt number
 it finds in an index the kernel keeps as objects are made and freed: a process object in one of
 `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's sources; a boot
 naming a higher interrupt stops). So `process_create`'s PID draw looks at most at 63 slots, an
@@ -531,15 +556,15 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   slice: about 7 ms or about 18 ms, and any seed on either width can show the 18 ms mode (the
   third sweep above). Its p99 is a wake that lands behind several of the sixteen budgets, so it
   falls in steps of one slice (about 10.8 ms), from about 39 ms to about 82 ms, about 8 slices
-  (rv64, seed 13). The exact chain from a seed to its mode was not traced. The targets (25 and 95 ms) are set from the sweep, and
-  a lease's end from the steward's decision is 134 ms, not 80. A pinned seed repeats one run; a
+  (rv64, seed 6). The exact chain from a seed to its mode was not traced. The targets (25 and 95 ms) are set from the sweep, and
+  a lease's end from the steward's decision is 125 ms, not 80. A pinned seed repeats one run; a
   change that moves the phase can land on a worse one than the sweep saw, which the margin covers
   and a new sweep re-measures.
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
-  is the stated exception: it dominates lease termination and grows with the objects it walks
-  and with every live process's handle pages, so its target and the deadline notice's are 39 and
-  54 ms, not 30 ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
+  dominates lease termination and follows the dying subtree and the one handle pass, so its target
+  and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
+  ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,

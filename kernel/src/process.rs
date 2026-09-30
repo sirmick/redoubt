@@ -246,9 +246,14 @@ impl MemoryManager {
         }
     }
 
-    /// A checked build's proof that the PID index is what a scan of every object frame finds.
+    /// A checked build's proof that the PID index is what a scan of every object frame finds. It
+    /// does nothing while a destruction runs: that build audits once instead, off the walk
+    /// (`destroy_subtree`), where a per-object scan would scale the destruction.
     #[cfg(debug_assertions)]
-    fn check_process_index(&self) {
+    pub(crate) fn check_process_index(&self) {
+        if self.objects.deferring {
+            return;
+        }
         let objects = (0..=self.objects.high_frame).filter(|f| self.is_process_frame(*f));
         for frame in objects.clone() {
             let i = crate::budget::account_index(self.process(frame).pid).expect("a PID");
@@ -259,6 +264,14 @@ impl MemoryManager {
             self.objects.processes.iter().flatten().count(),
             "the PID index names a frame that is no process object"
         );
+    }
+
+    /// The checked build's audit, run once after a destruction's walk: the PID and IRQ indexes
+    /// name exactly the live objects. Off the walk, so it never scales the destruction's cost.
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_object_indexes(&self) {
+        self.check_process_index();
+        self.check_irq_index();
     }
 }
 
@@ -698,19 +711,21 @@ fn allowed(mm: &MemoryManager, e: EndpointRef, flow: Option<Flow>) -> bool {
 
 /// Free a process object: its handles go (I1: nothing may name a freed frame), its page goes back
 /// to the creator's budget, and its PID stops counting where it counts and becomes free again.
-/// The process itself is already gone.
+/// The process itself is already gone. On the notice path this closes the handles naming it in
+/// one bounded pass; inside a destruction that pass is `destroy_marked`'s and the frame is
+/// deferred to it.
 pub fn free_object(mm: &mut MemoryManager, frame: u32) {
     let p = mm.process(frame);
     assert!(!p.alive(), "a live process's object was freed");
     let r = ProcessRef { frame, id: p.id };
-    mm.sweep_handles(|_, h| matches!(h.object, Object::Process(x) if x == r));
+    mm.sweep_handles_now(|_, h| matches!(h.object, Object::Process(x) if x == r));
     if mm.is_live_budget(p.creator) {
         mm.uncharge(p.creator.frame, PROCESS_PAGES);
     }
     // Always live: a budget's destruction moves the count to its parent first (R10 step 8), and
     // the object is always freed before the frame of the budget it counts in.
     mm.uncount_process(p.counted_in.frame);
-    mm.free_object_frame(frame);
+    mm.release_object_frame(frame);
     mm.index_process(p.pid, None);
 }
 

@@ -66,7 +66,6 @@
 - [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
   - [The model's order of checks](todo/abi-model-disagreements.md)
-  - [Budget destruction's cost](todo/budget-destroy-cost.md)
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [Requests the bench cannot see against sshd](todo/sshd-unseen-requests.md)

@@ -260,6 +260,34 @@ impl MemoryManager {
         self.allocations[frame as usize] = None;
     }
 
+    /// A dying object's frame is due to be freed. Inside a destruction the free is deferred past
+    /// `destroy_marked`'s single handle sweep (I1: a handle may still name it, and the sweep reads
+    /// its frame), linked through the frame's [`crate::budget::DEFER_WORD`]; outside one it goes
+    /// at once.
+    pub(crate) fn release_object_frame(&mut self, frame: u32) {
+        if !self.objects.deferring {
+            self.free_object_frame(frame);
+            return;
+        }
+        let phys = self.object_phys(frame);
+        crate::kframe::write(
+            phys,
+            crate::budget::DEFER_WORD * 8,
+            crate::budget::frame_word(self.objects.deferred),
+        );
+        self.objects.deferred = Some(frame);
+    }
+
+    /// Free every frame a destruction deferred (after its sweep).
+    pub(crate) fn free_deferred_frames(&mut self) {
+        while let Some(frame) = self.objects.deferred {
+            let phys = self.object_phys(frame);
+            let next = (crate::kframe::read(phys, crate::budget::DEFER_WORD * 8) as u32).checked_sub(1);
+            self.objects.deferred = next;
+            self.free_object_frame(frame);
+        }
+    }
+
     /// Whether RAM frame `frame` holds a kernel object.
     pub fn is_object_frame(&self, frame: u32) -> bool {
         self.allocations.get(frame as usize) == Some(&Some(OBJECT_OWNER))

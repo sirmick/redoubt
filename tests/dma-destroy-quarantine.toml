@@ -1,0 +1,20 @@
+description = "Devices quarantined while a budget is destroyed still lose their handles (R10, I1, I2, I16; kernel/devices.md, \"Quarantine\"): two drivers each dma_alloc through a distinct deaf slot and park, then one budget_destroy ends both (not a fault), so a destruction runs with object-frame frees deferred while each death fails its slot's first reset (dma-reset-deaf) and quarantines it; the destruction returns, every handle to either quarantined slot is gone (BadHandle), the second death's quarantine does not free the first device's already-deferred frame, and both runs' charges move to the parent"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+kernel_features = ["dma-reset-deaf"]
+# The first program, so it holds every device object (kernel/devices.md).
+programs = ["dma-destroy-quarantine"]
+# Beyond the program's 60 s wait for the drivers' reports, so a stuck check reports itself.
+timeout_secs = 120
+expect = [
+    '^\[dma-destroy-quarantine\] ok: two drivers dma_alloced through two deaf slots ',
+    '^DMA: device [0-9a-f]+ did not confirm its reset; quarantined until reboot',
+    '^DMA: device [0-9a-f]+ did not confirm its reset; quarantined until reboot',
+    '^\[dma-destroy-quarantine\] ok: the drivers. budget is destroyed, not faulted',
+    '^\[dma-destroy-quarantine\] ok: every handle to either quarantined slot is gone ',
+    '^\[dma-destroy-quarantine\] ok: the carve came back ',
+    '^\[dma-destroy-quarantine\] DMA DESTROY QUARANTINE PASSED$',
+]
+forbid = ['\[dma-destroy-quarantine\] FAIL', 'PROGRAM HALT', 'PANIC']
+poweroff = true

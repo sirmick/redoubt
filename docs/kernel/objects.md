@@ -349,13 +349,11 @@ Status: built · tested: bench:budget-destroy-attack, bench:budget-table-attack,
 - **A stale handle stops the machine.** The kernel's answer to a broken I1 is to stop. A bug in
   R10's sweep would stop the kernel, and every process with it; it would not let a process use a
   freed object.
-- **Sweeps and slot searches scan.** Destroying a budget scans every table of every process (up
-  to `MAX_PROCESS_COUNT` (64) processes of 32 table pages), bounded by compile-time constants,
-  and every frame up to the highest one ever given to a kernel object, which is bounded only by
-  RAM: any budget moves that mark up by creating objects, and it never comes down. Installing a
-  handle searches for the lowest free slot of one table. R10's scan is the stated exception to
-  R12 (scheduling)'s bound on kernel time ([budgets](budgets.md#residual-risks)). Follow-up:
-  [todo](../todo/budget-destroy-cost.md).
+- **Sweeps and slot searches scan.** Destroying a budget closes handles in one pass over every
+  table of every process (up to `MAX_PROCESS_COUNT` (64) processes of 32 table pages), bounded by
+  compile-time constants; the destruction itself walks the dying subtree and its owner lists, not
+  the object frames ([budgets](budgets.md#residual-risks)). Installing a handle searches for the
+  lowest free slot of one table.
 - **Accounting on both widths.** One row of the cost table depends on the width: saved contexts
   take 1 page on rv32 and 2 on rv64. Most accounting cases run on both widths and check that each
   charge comes back exactly, but `map-fixed-tables`, `map-fixed-attack` and `dma-reset-quarantine`

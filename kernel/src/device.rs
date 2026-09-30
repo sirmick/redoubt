@@ -87,6 +87,12 @@ pub struct Device {
     pub fired: bool,
     /// IRQ: the source is masked at the interrupt controller (R5).
     pub masked: bool,
+    /// The next endpoint or device in its owner's list (`Budget::first_owned`), so a destruction
+    /// ends exactly its own (R10).
+    pub next_owned: Option<u32>,
+    /// Set when this object is destroyed, before its frame is deferred (R10; `message.rs`): a
+    /// scan later in the same destruction must not find and free the deferred frame again.
+    pub destroyed: bool,
 }
 
 // Word layout in the frame (a frame holds 512).
@@ -100,7 +106,9 @@ const W_DMA: usize = 7;
 const W_IRQ: usize = 8;
 const W_FIRED: usize = 9;
 const W_MASKED: usize = 10;
-const WORDS: usize = 11;
+const W_NEXT_OWNED: usize = 11;
+const W_DESTROYED: usize = 12;
+const WORDS: usize = 13;
 const _: () = assert!(WORDS * 8 <= PAGE_SIZE);
 
 impl MemoryManager {
@@ -126,6 +134,8 @@ impl MemoryManager {
             irq: w(W_IRQ) as u32,
             fired: w(W_FIRED) != 0,
             masked: w(W_MASKED) != 0,
+            next_owned: (w(W_NEXT_OWNED) as u32).checked_sub(1),
+            destroyed: w(W_DESTROYED) != 0,
         }
     }
 
@@ -143,6 +153,8 @@ impl MemoryManager {
         words[W_IRQ] = u64::from(d.irq);
         words[W_FIRED] = u64::from(d.fired);
         words[W_MASKED] = u64::from(d.masked);
+        words[W_NEXT_OWNED] = crate::budget::frame_word(d.next_owned);
+        words[W_DESTROYED] = u64::from(d.destroyed);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
         }
@@ -188,9 +200,14 @@ impl MemoryManager {
 
     /// A checked build's proof that the IRQ index is what a scan of every object frame finds.
     /// Keep it: it is one of the two things that catch a wrong IRQ index (with `irq-attack`), since
-    /// `scan-bounds` times only the lookup and the old scan found boot's IRQ objects early.
+    /// `scan-bounds` times only the lookup and the old scan found boot's IRQ objects early. It
+    /// does nothing while a destruction runs: that build audits once instead, off the walk
+    /// (`destroy_subtree`), where a per-device scan would scale the destruction.
     #[cfg(debug_assertions)]
-    fn check_irq_index(&self) {
+    pub(crate) fn check_irq_index(&self) {
+        if self.objects.deferring {
+            return;
+        }
         let objects = (0..=self.objects.high_frame)
             .filter(|f| self.is_device_frame(*f) && self.device(*f).kind == Kind::Irq);
         for frame in objects.clone() {
@@ -204,24 +221,28 @@ impl MemoryManager {
         );
     }
 
-    /// Create one device object, charged to `owner` (the cost table).
+    /// Create one device object, charged to `owner` (the cost table), linked into the owner's
+    /// device list so a destruction ends exactly its own (R10).
     fn new_device(&mut self, owner: BudgetFrame, d: &Device) -> Result<DeviceRef, Error> {
         self.charge(owner, DEVICE_PAGES)?;
         let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(owner, DEVICE_PAGES))?;
         let id = self.next_object_id();
-        let owner = BudgetRef { frame: owner, id: self.budget(owner).id };
-        self.store_device(frame, &Device { id, owner, ..*d });
+        let owner_ref = BudgetRef { frame: owner, id: self.budget(owner).id };
+        self.store_device(frame, &Device { id, owner: owner_ref, next_owned: None, ..*d });
+        self.link_owned(owner, frame);
         if d.kind == Kind::Irq {
             self.index_irq(d.irq, Some(frame));
         }
         Ok(DeviceRef { frame, id })
     }
 
-    /// Free a device object and give its page back to its owner.
+    /// Free a device object and give its page back to its owner. Inside a destruction the frame
+    /// free is deferred past `destroy_marked`'s single sweep (I1).
     pub fn free_device(&mut self, frame: u32) {
         let d = self.device(frame);
         let owner = d.owner;
-        self.free_object_frame(frame);
+        self.unlink_owned(owner.frame, frame);
+        self.release_object_frame(frame);
         if d.kind == Kind::Irq {
             self.index_irq(d.irq, None);
         }
@@ -276,6 +297,8 @@ impl MemoryManager {
             irq: 0,
             fired: false,
             masked: false,
+            next_owned: None,
+            destroyed: false,
         };
         match words[0] {
             1 => {
