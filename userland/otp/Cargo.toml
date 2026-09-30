@@ -9,3 +9,28 @@ version = "0.1.0"
 
 [profile.release]
 debug = true
+
+# The crates beamlet shares with the servers are built from the root's vendor/, the published
+# bytes tools/vendor-check proves, so both sides run the same code and cannot drift apart. The
+# rest still come from crates.io, pinned by Cargo.lock, until beamlet goes into an image.
+[patch.crates-io]
+aes = { path = "../../vendor/aes" }
+block-buffer = { path = "../../vendor/block-buffer" }
+chacha20 = { path = "../../vendor/chacha20" }
+cipher = { path = "../../vendor/cipher" }
+cmov = { path = "../../vendor/cmov" }
+cpubits = { path = "../../vendor/cpubits" }
+crypto-common = { path = "../../vendor/crypto-common" }
+ctr = { path = "../../vendor/ctr" }
+ctutils = { path = "../../vendor/ctutils" }
+digest = { path = "../../vendor/digest" }
+getrandom = { path = "../../vendor/getrandom" }
+hmac = { path = "../../vendor/hmac" }
+hybrid-array = { path = "../../vendor/hybrid-array" }
+inout = { path = "../../vendor/inout" }
+poly1305 = { path = "../../vendor/poly1305" }
+sha2 = { path = "../../vendor/sha2" }
+subtle = { path = "../../vendor/subtle" }
+typenum = { path = "../../vendor/typenum" }
+universal-hash = { path = "../../vendor/universal-hash" }
+zeroize = { path = "../../vendor/zeroize" }
