@@ -26,12 +26,11 @@ p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "ecd
 p384 = { version = "0.14.0", default-features = false, features = ["ecdsa", "ecdh", "arithmetic"] }
 pbkdf2 = { version = "0.13.0", default-features = false }
 poly1305 = { version = "0.9.1", default-features = false }
-# RSA: the stable 0.9 line (0.10 is still a release candidate). It predates the digest 0.11
-# generation used above, so PSS needs the matching sha1/sha2 0.10.
-rsa = { version = "0.9.10", default-features = false }
-sha1_10 = { package = "sha1", version = "0.10", default-features = false }
-sha2_10 = { package = "sha2", version = "0.10", default-features = false }
-rand_core_06 = { package = "rand_core", version = "0.6", default-features = false }
+# RSA: the 0.10 line, pinned to one release candidate, because it is the one on the digest 0.11
+# generation every other crate here uses, and its arithmetic is crypto-bigint's. The 0.9 line
+# would bring a second copy of that generation's crates, the most unsafe ones in the VM among them.
+rsa = { version = "=0.10.0-rc.18", default-features = false, features = ["hazmat"] }
+rand_core = { version = "0.10", default-features = false }
 sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 sha3 = { version = "0.12.0", default-features = false }

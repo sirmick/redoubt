@@ -268,7 +268,7 @@ pub fn sign(c: &mut Ctx, a: &[Term]) -> R {
             let sig = if opts.pss {
                 let alg = alg.ok_or_else(|| badarg(c, 1, "PSS needs a digest"))?;
                 let mut rng = KeystreamRng::new(c)?;
-                with_digest10(alg, &opts, |scheme| key.sign_with_rng(&mut rng, scheme, &digest))
+                with_pss!(alg, &opts, scheme => key.sign_with_rng(&mut rng, scheme, &digest))
                     .ok_or_else(|| notsup(c, 1, "Unsupported digest for PSS"))?
             } else {
                 key.sign(rsa::Pkcs1v15Sign::new_unprefixed(), &digest_info(alg, &digest))
@@ -315,7 +315,7 @@ pub fn verify(c: &mut Ctx, a: &[Term]) -> R {
             let opts = RsaOpts::parse(c, &a[5], 5)?;
             if opts.pss {
                 let alg = alg.ok_or_else(|| badarg(c, 1, "PSS needs a digest"))?;
-                with_digest10(alg, &opts, |scheme| key.verify(scheme, &digest, &sig))
+                with_pss!(alg, &opts, scheme => key.verify(scheme, &digest, &sig))
                     .ok_or_else(|| notsup(c, 1, "Unsupported digest for PSS"))?
                     .is_ok()
             } else {
@@ -441,31 +441,50 @@ impl RsaOpts {
     }
 }
 
-/// Run `f` with the PSS scheme for digest `alg` (and `opts`' salt length), using the digest
-/// 0.10 generation of SHA-1/SHA-2 that the `rsa` 0.9 crate works with.
-fn with_digest10<T>(alg: Alg, opts: &RsaOpts, f: impl FnOnce(rsa::Pss) -> T) -> Option<T> {
-    if opts.mgf1.is_some_and(|m| m != alg) {
-        return None; // a different MGF1 digest is not supported
-    }
-    macro_rules! pss {
-        ($D:ty, $len:expr) => {{
-            let salt = if opts.salt_len >= 0 { opts.salt_len as usize } else { $len };
-            f(rsa::Pss::new_with_salt::<$D>(salt))
-        }};
-    }
-    Some(match alg {
-        Alg::Sha1 => pss!(sha1_10::Sha1, 20),
-        Alg::Sha224 => pss!(sha2_10::Sha224, 28),
-        Alg::Sha256 => pss!(sha2_10::Sha256, 32),
-        Alg::Sha384 => pss!(sha2_10::Sha384, 48),
-        Alg::Sha512 => pss!(sha2_10::Sha512, 64),
-        _ => return None,
-    })
+/// `Some(body)` with `scheme` bound to the PSS scheme for digest `alg` (and `opts`' salt length),
+/// or `None` for a digest PSS is not offered with here, or an MGF1 digest other than `alg`. A
+/// scheme's type is its digest's, so each digest is its own arm.
+macro_rules! with_pss {
+    ($alg:expr, $opts:expr, $scheme:ident => $body:expr) => {{
+        let opts: &RsaOpts = $opts;
+        let salt = |len: usize| if opts.salt_len >= 0 { opts.salt_len as usize } else { len };
+        if opts.mgf1.is_some_and(|m| m != $alg) {
+            None
+        } else {
+            match $alg {
+                Alg::Sha1 => {
+                    let $scheme = rsa::Pss::<sha1::Sha1>::new_with_salt(salt(20));
+                    Some($body)
+                }
+                Alg::Sha224 => {
+                    let $scheme = rsa::Pss::<sha2::Sha224>::new_with_salt(salt(28));
+                    Some($body)
+                }
+                Alg::Sha256 => {
+                    let $scheme = rsa::Pss::<sha2::Sha256>::new_with_salt(salt(32));
+                    Some($body)
+                }
+                Alg::Sha384 => {
+                    let $scheme = rsa::Pss::<sha2::Sha384>::new_with_salt(salt(48));
+                    Some($body)
+                }
+                Alg::Sha512 => {
+                    let $scheme = rsa::Pss::<sha2::Sha512>::new_with_salt(salt(64));
+                    Some($body)
+                }
+                _ => None,
+            }
+        }
+    }};
+}
+use with_pss;
+
+fn rsa_int(c: &Ctx, t: &Term) -> Option<rsa::BoxedUint> {
+    c.heap().iodata_bytes(*t).map(|b| rsa::BoxedUint::from_be_slice_vartime(&b))
 }
 
-fn rsa_int(c: &Ctx, t: &Term) -> Option<rsa::BigUint> {
-    c.heap().iodata_bytes(*t).map(|b| rsa::BigUint::from_bytes_be(&b))
-}
+/// An RSA integer as OTP gives and takes them: big-endian, with no leading zeros.
+fn rsa_bytes(n: &rsa::BoxedUint) -> alloc::boxed::Box<[u8]> { n.to_be_bytes_trimmed_vartime() }
 
 /// `[E, N]`, or longer (a private key's list starts the same way).
 fn rsa_public(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPublicKey, E> {
@@ -478,7 +497,7 @@ fn rsa_public(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPublicKey, E> {
 
 /// `[E, N, D]` or `[E, N, D, P1, P2, E1, E2, C]`.
 fn rsa_private(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPrivateKey, E> {
-    let parts: Vec<rsa::BigUint> =
+    let parts: Vec<rsa::BoxedUint> =
         c.heap().to_vec(*t).unwrap_or_default().iter().filter_map(|t| rsa_int(c, t)).collect();
     if parts.len() < 3 {
         return Err(badarg(c, arg, "Bad RSA private key"));
@@ -524,7 +543,11 @@ pub fn crypt(c: &mut Ctx, a: &[Term]) -> R {
             // Undo a type 1 padding: m = s^e mod n, then 00 01 FF...FF 00 data.
             let key = rsa_public(c, &a[2], 2)?;
             let k = key.size();
-            let m = rsa::BigUint::from_bytes_be(&input).modpow(key.e(), key.n()).to_bytes_be();
+            let s = rsa::BoxedUint::from_be_slice_vartime(&input);
+            if &s >= key.n().as_ref() {
+                return Err(failed(c));
+            }
+            let m = rsa_bytes(&rsa::hazmat::rsa_encrypt(&key, &s).map_err(|_| failed(c))?);
             let mut em = alloc::vec![0u8; k.saturating_sub(m.len())];
             em.extend_from_slice(&m);
             let sep = em.iter().skip(2).position(|&b| b != 0xff).map(|i| i + 2);
@@ -547,7 +570,7 @@ pub fn privkey_to_pubkey(c: &mut Ctx, a: &[Term]) -> R {
     }
     let key = rsa_private(c, &a[1], 1)?;
     Ok({
-        let v = alloc::vec![bin(c, &key.e().to_bytes_be()), bin(c, &key.n().to_bytes_be())];
+        let v = alloc::vec![bin(c, &rsa_bytes(key.e())), bin(c, &rsa_bytes(key.n()))];
         c.list(v)
     })
 }
@@ -561,18 +584,16 @@ pub fn rsa_generate_key(c: &mut Ctx, a: &[Term]) -> R {
         .ok_or_else(|| badarg(c, 0, "Bad modulus size"))?;
     let e = rsa_int(c, &a[1]).ok_or_else(|| badarg(c, 1, "Bad exponent"))?;
     let mut rng = KeystreamRng::new(c)?;
-    let key = rsa::RsaPrivateKey::new_with_exp(&mut rng, bits, &e)
-        .map_err(|_| nif_error(c, "error", -1, "Key generation failed"))?;
+    let failed = |c: &mut Ctx| nif_error(c, "error", -1, "Key generation failed");
+    let key = rsa::RsaPrivateKey::new_with_exp(&mut rng, bits, e).map_err(|_| failed(c))?;
     let primes = key.primes();
-    let (p, q) = (&primes[0], &primes[1]);
-    let d = key.d();
-    let one = rsa::BigUint::from(1u32);
-    let dp = d % (p - &one);
-    let dq = d % (q - &one);
-    let qinv = key.crt_coefficient().ok_or_else(|| nif_error(c, "error", -1, "Key generation failed"))?;
-    let parts = [key.e(), key.n(), d, p, q, &dp, &dq, &qinv];
+    let (dp, dq, qinv) = match (key.dp(), key.dq(), key.crt_coefficient()) {
+        (Some(dp), Some(dq), Some(qinv)) => (dp.clone(), dq.clone(), qinv),
+        _ => return Err(failed(c)),
+    };
+    let parts = [key.e(), key.n().as_ref(), key.d(), &primes[0], &primes[1], &dp, &dq, &qinv];
     Ok({
-        let v = parts.iter().map(|x| bin(c, &x.to_bytes_be())).collect::<Vec<_>>();
+        let v = parts.iter().map(|x| bin(c, &rsa_bytes(x))).collect::<Vec<_>>();
         c.list(v)
     })
 }
