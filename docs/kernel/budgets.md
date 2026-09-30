@@ -453,15 +453,40 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
 
 ## Residual risks
 
-- **Destruction costs time nobody can interrupt.** Destroying a budget scans every kernel-object
-  page, several times, with interrupts off. Destroying a budget holding two processes takes about
-  21 ms of virtual time, and its p99 is over 30 ms: `bench:sched-latency` holds it to 39 ms, set
-  from a seed sweep. The cost grows with the kernel-object pages in the whole system, which any
-  budget can add to by creating objects, and with every live process's handle pages, which a
-  freed process object's handle sweep walks; every interrupt and timeout on the
-  machine waits for it. It dominates driver-wake and lease-end latency whenever a lease ends,
-  and must be brought well inside the target before the steward is built, in
-  M1 (separation and containment). Follow-up: [todo](../todo/budget-destroy-cost.md).
+- **Destruction costs time nobody can interrupt.** Destroying a budget runs with interrupts off
+  and is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
+  dominates lease termination (R39). The cost must follow the objects the dying subtree holds,
+  not every object page in the system and not every live table. The design ([todo](../todo/budget-destroy-cost.md))
+  gives destruction three indexes and makes the handle sweep one pass:
+
+  1. **The budget tree is linked downward.** Each budget keeps a `first_child` and a `next_sibling`
+     beside its `parent`, so `mark_dying`, `lift_dying` and the final free walk the subtree
+     directly instead of scanning `0..=high_frame` for budgets below `top`. The top unlinks from
+     its parent's list at mark time, with its carve; a refused `budget_create` unlinks its child
+     on the rollback. The checked build's `check_all_dying` re-scan stays as the audit that the
+     links are complete.
+  2. **Objects are linked to their owner.** Each budget heads a list of the endpoints and devices
+     charged to it (an `owner` link in their frames), so a destruction ends exactly the dying
+     subtree's endpoints and devices instead of re-scanning every object frame for one whose owner
+     is dying. Process objects are not scanned either: the PID index (`Objects::processes`) finds
+     them in a constant (64) lookups.
+  3. **One handle sweep per destruction.** The handles naming a dying object, and those stamped
+     with a dying budget, are closed in one pass, immediately before any such frame is freed; the
+     per-object sweeps that `free_object`, `destroy_endpoint` and `destroy_device` used to run are
+     folded into it. The one pass walks the live handle-table pages, a compile-time bound
+     (`MAX_PROCESS_COUNT` × `MAX_HANDLE_PAGES`), which another budget filling the system with
+     endpoints cannot grow: a process past `MAX_HANDLES` can create no more, so its table ends at
+     `MAX_HANDLE_PAGES` pages.
+
+  The invariant the three keep is R10 itself: after a destruction no handle, queued message or
+  taken call keeps authority that came through a dying budget (I2), and no handle names a freed
+  frame (I1); the ledger returns exactly (I10). The checked build's scans over `0..=high_frame`
+  (`check_all_dying`, `check_process_index`, `check_irq_index`) are the only full scans left: they
+  are the audit that the links and indexes name exactly the live objects, and they run at their
+  existing points, never inside the destruction walk. Until this lands, R10's and the deadline
+  notice's targets stay at 39 and 54 ms ([scheduling](scheduling.md#residual-risks)); done is
+  `bench:sched-latency` asserting 30 and 40 ms with margin on both widths, and a case that fills
+  the system with another budget's objects showing no growth.
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).
