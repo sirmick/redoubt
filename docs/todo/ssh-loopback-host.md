@@ -22,10 +22,13 @@ cannot run, that witness is missing.
 
 ## Where
 
-The host, not the tree: how the bench is started, or its SELinux policy.
+- [`tools/testbench/src/ssh.rs`](../../tools/testbench/src/ssh.rs): `loopback` and its probe run the
+  host's `sshd`.
+- The rule: [OpenSSH's server runs in a container](../testbench.md#sessions-and-the-loopback-server).
 
 ## Done when
 
-- The owner has chosen a host change (run the bench from a login session, or a local policy
-  module that lets the service's context start the user's shell), and the reference case passes
-  on the development host in a full bench run.
+- The reference case runs OpenSSH's `sshd` in a container built from
+  `tests/ssh-reference/Containerfile`, as the rule says, and passes on the development host in a
+  full bench run from the service's context.
+- The SELinux probe and its host test are gone, and this page is deleted.

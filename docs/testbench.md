@@ -367,7 +367,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-Status: built · partly tested: the OpenSSH reference case cannot run on the development host while the bench runs in a service's SELinux context ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback, bench:bench-ssh-loopback-deadlock, bench:bench-ssh-loopback-forbid, bench:bench-ssh-loopback-exit, bench:bench-ssh-loopback-host-key, bench:bench-ssh-loopback-aborted-text, bench:bench-ssh-guest, host:testbench::only_the_selinux_exec_refusal_is_the_hosts
+Status: built · partly tested: the OpenSSH reference case's container is not built yet, so the case still runs the host's `sshd`, which cannot start a shell while the bench runs in a service's SELinux context ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback, bench:bench-ssh-loopback-deadlock, bench:bench-ssh-loopback-forbid, bench:bench-ssh-loopback-exit, bench:bench-ssh-loopback-host-key, bench:bench-ssh-loopback-aborted-text, bench:bench-ssh-guest, host:testbench::only_the_selinux_exec_refusal_is_the_hosts
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
 while the bench keeps watching the console. Each drives the host's OpenSSH `ssh`, an implementation
@@ -395,19 +395,36 @@ stops the others. With `net.host_key` set, `ssh` refuses any other host key. Tes
 `tests/keys/`; they are public and marked not for production, and a boot manifest that lists one
 must never ship. The `ssh-loopback` kind runs sessions against a server that `ssh` starts itself
 for each session as its `ProxyCommand`, so nothing listens on a port: Redoubt's `sshd` on its host
-platform ([against Redoubt's sshd](#against-redoubts-sshd)), or with `server = "openssh"` the
-host's OpenSSH server in inetd mode. Its log goes to a file beside the transcripts, never to
-`ssh`'s output, so a late line of the server's cannot stand in for the session's last output; a
-case's `server_log` asks what the server saw (a refused key, say), not only what the client
-printed, and its `server_log_forbid` what the server must not have done (a console started, say).
-Before the first OpenSSH loopback case the bench logs in once and runs `exit 0`. One failure of that probe is named as the host's: under SELinux, `sshd` moves the shell
-into the user's default context, which a bench running in a service's context may not enter, and
-the shell's exec is refused. When `ssh` reports `<shell>: Permission denied` and the server's log
-shows the context change, every loopback case fails with that reason, as on a host without
-OpenSSH, and `--allow-skip` skips them. The match is loose: on a host whose `sshd` logs that
-context change, any `/<path>: Permission denied` from `ssh` counts as the host's, not only the
-shell's. Any other probe failure fails every OpenSSH loopback case
-(`host:testbench::only_the_selinux_exec_refusal_is_the_hosts`).
+platform ([against Redoubt's sshd](#against-redoubts-sshd)), or with `server = "openssh"`
+OpenSSH's server in inetd mode, inside a container. Its log goes to a file beside the transcripts,
+never to `ssh`'s output, so a late line of the server's cannot stand in for the session's last
+output; a case's `server_log` asks what the server saw (a refused key, say), not only what the
+client printed, and its `server_log_forbid` what the server must not have done (a console
+started, say).
+
+**OpenSSH's server runs in a container.** On a host that enforces SELinux, `sshd` moves every
+login shell into the user's default context, and a bench running in a service's context may not
+enter it, so the host's own `sshd` cannot serve the reference case. Inside a container `sshd`
+finds SELinux disabled and makes no such move; the client, the session runner and the case are
+unchanged, so the case is still a witness independent of Redoubt's server.
+- **The image** is built from `tests/ssh-reference/Containerfile`: a Debian base pinned by
+  digest and the distribution's `openssh-server` pinned by version, nothing else. The bench tags
+  it with a hash of that file and builds it only when no image has that tag, so only the first
+  run after a change to the file needs the network.
+- **Each session** starts its own server: `ssh`'s `ProxyCommand` is `podman run -i --rm
+  --network=none --pull=never` of that image running `sshd -i`, with the case's configuration,
+  keys and log in a directory the bench makes for the case, mounted with a shared SELinux label so
+  that concurrent sessions can all append to the one log. The server logs in only root, inside
+  the container (root there is the bench's user outside), runs `/bin/sh` for every login and
+  allows nothing else. The container has no network, so nothing but its `ssh` can reach it.
+- **Rootless `podman` needs the user's own group.** A service may run the bench with another
+  primary group, and `newuidmap` then refuses to map the container's users; the runner starts
+  `podman` under `sg` and the user's primary group from the password database.
+- **Before the first OpenSSH loopback case** the bench logs in once and runs `exit 0`, and the
+  server's log must name OpenSSH's version, so that no other server can pass for it. Without
+  `podman`, or with no image and no way to build one, every OpenSSH loopback case fails with that
+  reason, as on a host without OpenSSH, and `--allow-skip` skips them. Any other probe failure
+  fails every OpenSSH loopback case.
 
 ### Against Redoubt's sshd
 
@@ -433,8 +450,8 @@ shell or a login context, so the SELinux refusal above does not touch them.
 - **One reference case stays on OpenSSH's own `sshd`,** with `server = "openssh"`: concurrent
   sessions, marks, exit statuses, a pty and a refused key. It is the session runner's independent
   witness, so a bug the runner shares with Redoubt's server cannot pass every self-check
-  (`bench-ssh-loopback-openssh`). It keeps the SELinux probe, and runs from a login session
-  ([todo](todo/ssh-loopback-host.md)).
+  (`bench-ssh-loopback-openssh`). Its server runs in a container
+  ([sessions and the loopback server](#sessions-and-the-loopback-server)).
 - `ssh` gets `WarnWeakCrypto=no-pq-kex` against Redoubt's server, whose exchange is not
   post-quantum: OpenSSH's warning would otherwise be session output.
 
