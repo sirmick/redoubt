@@ -423,6 +423,9 @@ user address, and the load faults as a kernel failure.
   overlap. A launcher that puts the stack inside the link range can get a child whose data ends
   right at its stack's bottom, so a stack overflow writes the data instead of faulting. The
   launcher convention above prevents it; nothing enforces it.
+- **A boot process's stack reservation is one page longer.** The loader reserves the 32 pages
+  above, and the kernel reserves the stack again from the first thread's `sp`, which adds the
+  page at `0x7FFD_F000`. Only that process is affected: [todo](../todo/boot-stack-reservation.md).
 - **No ASLR.** Every address on this page is fixed, and `map_anon` places pages deterministically.
   A memory-safety bug in a program is easier to exploit, within that program's own process.
   Address randomisation is [beyond M5](../beyond/aslr.md).
