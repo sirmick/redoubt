@@ -403,7 +403,13 @@ of `aead`, `adler2`, `elf`, `ff`, `miniz_oxide`, `p384`, `primefield`, `regex-sy
   output, and indexes its power tables unchecked by exponents its arithmetic bounds.
 - `regex-automata`: its pool of search caches (a mutex of its own and an owner fast path, with
   `Sync` asserted for them), its lazily initialised statics, and the deserialisation of a
-  serialised automaton, which beamlet's `re` does not call.
+  serialised automaton, which beamlet's `re` does not call. `re` turns on the lazy DFA
+  (`hybrid`), whose search loop reads unchecked: `hybrid/search.rs`'s `next_unchecked!` reads
+  the haystack byte with `get_unchecked` at a position the forward loop bounds by the search's
+  end and the reverse loop by its start (reading down from one before its end),
+  and `hybrid/dfa.rs`'s `next_state_untagged_unchecked` reads the transition table with
+  `get_unchecked` at the state's offset plus the byte's class, which is in the table when the
+  state is untagged, a state the cache built; the loop takes the checked path for a tagged one.
 
 Found: nothing that needs changing. The patterns are the common ones, and each crate's use is
 the one its authors document; an update must redo this reading, and the counts per crate (from
