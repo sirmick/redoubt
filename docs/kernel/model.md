@@ -67,11 +67,11 @@ Status: built · partly tested: independence from the kernel's source and the em
   not modelled.
 - **PIDs** are drawn by a seeded generator from 2 to `0xffff`; `init` is 1. This tests reuse
   and accounting, not unpredictability.
-- **Addresses the kernel chooses.** A `map_anon` lands above everything the process has
-  mapped, from `KERNEL_CHOSEN_BASE` (`0x10_0000_0000`). If that does not fit below `USER_TOP`
-  (2^38), it takes the first free gap in between. So the model refuses no placement the kernel
-  accepts, even after a `map_fixed` has put a mapping high ([memory](memory.md)). The kernel
-  searches a bounded window instead; see Residual risks.
+- **Addresses the kernel chooses** are the kernel's: a `map_anon`, `map_device` or `dma_alloc`
+  run is placed in the 256 MiB area from `DEFAULT_BASE`, and a receiver's lend or transfer in
+  the 4 MiB area from `DEFAULT_MESSAGE_BASE`, each searched as the kernel searches it
+  ([memory](memory.md#where-map_anon-puts-pages)). A full area is refused as the kernel
+  refuses it.
 - **Costs** come from a `costs` table: by default the rv64 table (two saved-context pages per
   process, one page for each other object, 128 handles per handle-table page). The property
   tests use 8 handles per page, so handle-table growth and its charge show up in short runs.
@@ -314,13 +314,13 @@ a system server, and `init` destroys the client's budget while the server holds 
 end:
 
 ```
-do p:61415 t:3 call h:1 [1,2,3,4] [] a:0x1000000000+0x0@2 forever -> blocked
-wake p:38622 t:2 -> ok message call m:1 badge=5 account=1001 labels=[] words=[1,2,3,4] handles=[] buffer=[lend,a:0x1000000000,2]
-read p:38622 t:2 a:0x1000000000+0x0 -> ok word 42
-write p:38622 t:2 a:0x1000000000+0x0 99 -> ok
+do p:61415 t:3 call h:1 [1,2,3,4] [] a:0x60000000+0x0@2 forever -> blocked
+wake p:38622 t:2 -> ok message call m:1 badge=5 account=1001 labels=[] words=[1,2,3,4] handles=[] buffer=[lend,a:0x40000000,2]
+read p:38622 t:2 a:0x40000000+0x0 -> ok word 42
+write p:38622 t:2 a:0x40000000+0x0 99 -> ok
 do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
 do p:1 t:1 budget_destroy h:12 -> ok
-read p:38622 t:2 a:0x1000000000+0x0 -> ok word 99
+read p:38622 t:2 a:0x40000000+0x0 -> ok word 99
 do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
 do p:38622 t:2 receive h:1 0 0 -> ok abandoned m:1
 do p:38622 t:2 reply m:1 [0,0,0,0] [] -> ok reply delivery=discarded mask=0
@@ -442,7 +442,7 @@ run on the real timer. The case passes when 100,000 model traces replay with ide
 
 Replay is what turns the model from a reference into evidence about the kernel.
 
-**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM) and the rv32 cost table (one saved-context page); `map_device`'s result (the kernel returns the address and the length, the model only the address); `map_anon` once the kernel's placement window is full, where the model still succeeds; a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
+**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM) and the rv32 cost table (one saved-context page); `map_device`'s result (the kernel returns the address and the length, the model only the address); a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
 
 ## Residual risks
 
@@ -457,11 +457,6 @@ Replay is what turns the model from a reference into evidence about the kernel.
   is a counter. Passing model runs establish none of them. The kernel crate itself has no host
   tests: its binary says so (`test = false`), and its rules are tested on the target by the
   bench.
-- **The kernel's `map_anon` window can run out where the model's does not.** The kernel places
-  `map_anon` only within a 256 MiB window from its default base. A process can fill that window
-  with `map_fixed`, and its own later `map_anon` calls fail with `OutOfMemory` where the model,
-  which searches all of user space, succeeds. This harms only the calling process, and it is
-  kept as a known divergence ([memory](memory.md)). A replayed trace that does this will differ.
 - **One boot case copies model results by hand.** `tests/programs/src/bin/budget-test.rs` runs a
   short budget sequence whose expected results were read off the model. Nothing re-derives them
   from the model, so a change to the model leaves them stale without a failure.

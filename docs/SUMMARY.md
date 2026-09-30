@@ -65,7 +65,6 @@
 - [M5 (persist, install, share)](plan/m5-persist.md)
 - [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
-  - [The model's order of checks](todo/abi-model-disagreements.md)
   - [Fair waiting by least recently served group](todo/r2-least-recently-served.md)
   - [An ending process pumps each endpoint once](todo/process-ending-pumps-once.md)
   - [init does not check bucket counts](todo/server-bucket-counts.md)

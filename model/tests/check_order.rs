@@ -3,7 +3,11 @@
 
 mod common;
 use common::contracts::*;
-use redoubt_model::{spec::*, syscall::*};
+use redoubt_model::{
+    kernel::{Boot, DEFAULT_BASE, DEFAULT_MESSAGE_BASE, DeviceSpec, Resets},
+    spec::*,
+    syscall::*,
+};
 
 /// `init`'s handle to `system` (boot order: `root`, `system`, `users`, then the devices).
 const SYSTEM: u64 = 2;
@@ -68,4 +72,97 @@ fn every_page_of_a_record_is_checked() {
     assert_eq!(w.result(1, send.clone()).unwrap(), Err(Error::Timeout));
     w.sys(1, Syscall::Unmap { addr: base + PAGE_SIZE, len: PAGE_SIZE }).unwrap();
     assert_eq!(w.result(1, send).unwrap(), Err(Error::InvalidArgument));
+}
+
+fn addr(w: &mut World, call: Syscall) -> Result<u64, Error> {
+    w.result(1, call).unwrap().map(|r| match r {
+        Ret::Addr(a) | Ret::AddrPhys { addr: a, .. } => a,
+        r => panic!("expected an address, got {r:?}"),
+    })
+}
+
+#[test]
+fn map_anon_searches_from_the_run_it_placed_last() {
+    let mut w = World::new(None);
+    let page = Syscall::MapAnon { len: PAGE_SIZE, flags: FLAG_R | FLAG_W };
+    assert_eq!(addr(&mut w, page.clone()), Ok(DEFAULT_BASE));
+    assert_eq!(addr(&mut w, page.clone()), Ok(DEFAULT_BASE + PAGE_SIZE));
+    w.sys(1, Syscall::Unmap { addr: DEFAULT_BASE, len: PAGE_SIZE }).unwrap();
+    // The freed first page is not reused while there is room after the last run.
+    assert_eq!(addr(&mut w, page), Ok(DEFAULT_BASE + 2 * PAGE_SIZE));
+}
+
+/// A boot with extra devices after the default ones; returns the handle of the first extra.
+fn with_devices(extra: &[DeviceSpec]) -> (World, u64) {
+    let mut boot = Boot::default();
+    let first = 4 + boot.devices.len() as u64;
+    boot.devices.extend_from_slice(extra);
+    (World::booted(&boot, None), first)
+}
+
+fn mmio(base: u64, pages: u64) -> DeviceSpec {
+    DeviceSpec::Mmio { base, pages, dma: false, resets: Resets::Always }
+}
+
+#[test]
+fn map_anons_placement_area_is_256_mib() {
+    // Two devices of 128 MiB fill the area; a third finds no room, and a larger one never fits.
+    let half = 0x1000_0000 / PAGE_SIZE / 2;
+    let (mut w, h) = with_devices(&[mmio(0x2000_0000, half), mmio(0x3000_0000, half), mmio(0x5000_0000, 1)]);
+    assert_eq!(addr(&mut w, Syscall::MapDevice { h }), Ok(DEFAULT_BASE));
+    assert_eq!(addr(&mut w, Syscall::MapDevice { h: h + 1 }), Ok(DEFAULT_BASE + half * PAGE_SIZE));
+    assert_eq!(addr(&mut w, Syscall::MapDevice { h: h + 2 }), Err(Error::OutOfMemory));
+    let (mut w, h) = with_devices(&[mmio(0x2000_0000, 2 * half + 1)]);
+    assert_eq!(addr(&mut w, Syscall::MapDevice { h }), Err(Error::OutOfMemory));
+}
+
+#[test]
+fn a_receivers_message_area_is_4_mib() {
+    let mut boot = Boot::default();
+    boot.root.pages = 4096;
+    boot.ram_frames = 4097;
+    let mut w = World::booted(&boot, None);
+    let (ep, _, server) = w.setup().unwrap();
+    // The receiver (process 1 itself) fills all but one page of its message area.
+    let area = 0x40_0000 / PAGE_SIZE;
+    let fill = Syscall::MapFixed { addr: DEFAULT_MESSAGE_BASE, len: (area - 1) * PAGE_SIZE, flags: FLAG_R };
+    assert_eq!(w.result(1, fill).unwrap(), Ok(Ret::Unit));
+    let Ok(base) = addr(&mut w, Syscall::MapAnon { len: 2 * PAGE_SIZE, flags: FLAG_R | FLAG_W }) else {
+        panic!("map_anon")
+    };
+    let receive = Syscall::Receive { h: Some(ep), timeout: FOREVER, max_transfer: 2 };
+    let send = |npages| Syscall::Send {
+        h: ep,
+        words: [0; 4],
+        handles: vec![],
+        transfer: Some(Buffer { addr: base, npages }),
+        timeout: 0,
+    };
+    // Two pages find no run in the area: the sender is refused.
+    assert!(matches!(w.sys(server, receive.clone()).unwrap().outcome, Outcome::Blocked));
+    assert_eq!(w.result(1, send(2)).unwrap(), Err(Error::Refused));
+    // One page fits, at the area's last page.
+    let s = w.sys(1, send(1)).unwrap();
+    assert_eq!(s.outcome, Outcome::Done(Ok(Ret::Unit)));
+    let last = DEFAULT_MESSAGE_BASE + (area - 1) * PAGE_SIZE;
+    assert!(w.k.processes[&1].space.contains_key(&(last / PAGE_SIZE)));
+}
+
+#[test]
+fn a_device_has_32_dma_runs() {
+    let mut w = World::new(None);
+    // `init`'s handles to the two healthy DMA devices of the default boot.
+    let (dma, other) = (5, 10);
+    let alloc = |h| Syscall::DmaAlloc { h, npages: 1 };
+    for _ in 0..MAX_RUNS {
+        assert!(addr(&mut w, alloc(dma)).is_ok());
+    }
+    let used = w.k.budgets[&1].pages_used;
+    assert_eq!(addr(&mut w, alloc(dma)), Err(Error::OutOfMemory));
+    assert_eq!(w.k.budgets[&1].pages_used, used, "a refused run charges nothing");
+    // Unmapping a run does not end it: it lasts until its holder ends.
+    w.sys(1, Syscall::Unmap { addr: DEFAULT_BASE, len: PAGE_SIZE }).unwrap();
+    assert_eq!(addr(&mut w, alloc(dma)), Err(Error::OutOfMemory));
+    // The limit is the device's: another device still has all of its runs.
+    assert!(addr(&mut w, alloc(other)).is_ok());
 }

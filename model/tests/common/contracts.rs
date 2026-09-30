@@ -13,8 +13,10 @@ pub struct World {
     checker: Checker,
 }
 impl World {
-    pub fn new(mutation: Option<Mutation>) -> Self {
-        let k = Kernel::boot(&Boot::default(), mutation).unwrap();
+    pub fn new(mutation: Option<Mutation>) -> Self { Self::booted(&Boot::default(), mutation) }
+
+    pub fn booted(boot: &Boot, mutation: Option<Mutation>) -> Self {
+        let k = Kernel::boot(boot, mutation).unwrap();
         let checker = Checker::new(&k);
         Self { k, ops: Vec::new(), checker }
     }

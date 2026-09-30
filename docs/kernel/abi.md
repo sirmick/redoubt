@@ -248,7 +248,7 @@ one wrong code on their way out.
 
 ## Errors and the order of checks
 
-Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the kernel and the model are compared by reading, not by replaying traces, and differ in one row and in several details (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, fuzz:redoubt-sys/decode
+Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the model follows the kernel's order, but no trace has been replayed on the kernel (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, host:redoubt-model::a_budget_spec_decodes_in_slot_order, host:redoubt-model::receive_clears_the_current_call_before_its_record_check, host:redoubt-model::every_page_of_a_record_is_checked, host:redoubt-model::a_device_has_32_dma_runs, host:redoubt-model::map_anons_placement_area_is_256_mib, fuzz:redoubt-sys/decode
 
 A call with several faults returns the first one found, in a fixed order, so that the kernel,
 the model and a replayed trace agree exactly. Checks go in stages, and within a stage by
@@ -354,13 +354,11 @@ interrupt fires, and a child jumping to a fixed kernel return address faults.
 
 ## Residual risks
 
-- **The kernel and the model differ in one row, and in details.** `budget_create`: the kernel decodes the spec
-  record in slot order, so a spec with a process count wider than 32 bits and more than
-  `MAX_LABELS` labels is `InvalidArgument`; the model checks the label count first and says
-  `TooLarge`. The table above is the kernel's. In details: the model clears a `receive`'s current call only after the record check,
-  checks only a record's first page, and does not model the 32-run limit of `dma_alloc` or the
-  size of the placement area. No trace has been replayed on the kernel to find more such
-  differences ([model](model.md)). Follow-up: [todo](../todo/abi-model-disagreements.md).
+- **No trace has been replayed on the kernel.** The table above is the kernel's, and the model
+  follows it: host tests pin the rows where the two once differed (`budget_create`'s spec,
+  `receive`'s current call, every page of a record, `dma_alloc`'s runs and the placement areas).
+  A difference nobody has read for is found only by replaying traces on the kernel
+  ([model](model.md#replaying-traces-on-the-real-kernel)).
 - **The order after decoding is mostly argued from the code.** Cases pin the order of
   decoding, and of the first checks after it for `budget_create`, `budget_usage`, `call`,
   `receive`, `serve` and `process_start`; most later positions in most rows are read from the

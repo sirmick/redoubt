@@ -26,6 +26,8 @@ pub const STRIDE: u64 = 1 << 20;
 pub const SLICE: u64 = 10_000;
 /// A timeout that never expires.
 pub const FOREVER: u64 = u64::MAX;
+/// Live `dma_alloc` runs per device (kernel/devices.md, "`dma_alloc`").
+pub const MAX_RUNS: usize = 32;
 /// Taken-but-unreplied calls per process.
 pub const MAX_OPEN_CALLS: u64 = 64;
 /// Handles in `process_start`'s list.

@@ -4,7 +4,7 @@
 mod common;
 use common::contracts::*;
 use redoubt_model::{
-    kernel::{KERNEL_CHOSEN_BASE, USER_TOP},
+    kernel::{DEFAULT_BASE, USER_TOP},
     spec::*,
     syscall::*,
 };
@@ -36,10 +36,8 @@ fn addr_zero_succeeds_then_a_second_call_overlaps() {
     assert_eq!(w.k.budgets[&1].pages_used, after_first, "the second call must charge nothing");
 }
 
-/// A `map_fixed` placed high (inside `[KERNEL_CHOSEN_BASE, USER_TOP)`, where a static ELF's
-/// stub-placed segments and the loader stub itself live) must not make a later `map_anon` fail:
-/// `alloc_va`'s first-fit fallback keeps the model as permissive as the kernel's bounded
-/// `find_virtual_address` window, which never sees a mapping that high.
+/// A `map_fixed` placed high, outside `map_anon`'s placement area, must not make a later
+/// `map_anon` fail: the search looks only inside the area.
 #[test]
 fn map_fixed_near_user_top_does_not_starve_map_anon() {
     let mut w = World::new(None);
@@ -222,13 +220,13 @@ fn success_then_unmap_returns_to_baseline() {
     assert_eq!(w.k.budgets[&1].pages_used, before, "unmap must return usage to baseline");
 }
 
-/// `KERNEL_CHOSEN_BASE` stays the boundary the kernel picks its own addresses above; a
-/// `map_fixed` just below it must not affect that (sanity check for the fallback range).
+/// A `map_fixed` inside `map_anon`'s placement area is a taken page there: the search steps past
+/// it.
 #[test]
-fn map_fixed_below_kernel_chosen_base_is_unaffected() {
+fn map_anon_searches_past_a_map_fixed_in_its_area() {
     let mut w = World::new(None);
-    let addr = KERNEL_CHOSEN_BASE - PAGE_SIZE;
+    let addr = DEFAULT_BASE;
     assert_eq!(call(&mut w, 1, Syscall::MapFixed { addr, len: PAGE_SIZE, flags: FLAG_R }), Ok(Ret::Unit));
     let r = call(&mut w, 1, Syscall::MapAnon { len: PAGE_SIZE, flags: FLAG_R | FLAG_W });
-    assert!(matches!(r, Ok(Ret::Addr(_))), "map_anon after a low map_fixed: {r:?}");
+    assert_eq!(r, Ok(Ret::Addr(DEFAULT_BASE + PAGE_SIZE)));
 }
