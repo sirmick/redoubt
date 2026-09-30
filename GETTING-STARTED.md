@@ -121,6 +121,49 @@ tools/difftest                # differential tests against the real BEAM
 tools/elixir-tests            # Elixir's own suite on beamlet
 ```
 
+## The shell
+
+Redoubt's shell, `Redoubt.Shell` in `userland/shell`, is a read-eval-print loop over Elixir of
+Redoubt's own, not IEx ([the shell](docs/userland/shell.md)). Until beamlet runs on Redoubt it is
+developed on the host, on beamlet, with the same pinned OTP and Elixir as above; `./shell` puts
+them on the path itself.
+
+```sh
+./shell                       # the shell, the VM's / at userland/shell/_build/sandbox
+./shell --root ~/scratch      # another directory as the VM's /
+./shell --fake                # the shell on Redoubt's platform, on the fake kernel
+./test-shell                  # formatting, the cell protocol, the tests on BEAM then on
+                              # beamlet, the entry point, the fake kernel
+./test-shell test/redoubt/util_test.exs   # some test files only (in userland/shell)
+```
+
+A test that passes on BEAM and fails on beamlet is a beamlet bug. For the quickest loop,
+`mix test` in `userland/shell` runs the tests on BEAM alone.
+
+The prompt is plain Elixir. `help()` lists the commands by area, `help(:cp)` shows one's page,
+`help(:elixir)` shows how Elixir reads at the prompt, and `h(File)` or `h(&File.cp/2)` shows
+Elixir's own documentation. The commands work on files (`cd`, `ls`, `ls_r`, `find`, `cp`, `mv`,
+`rm`, `mkdir_p`, `stat` and more) and on lines (`cat`, `grep`, `sort`, `uniq_c`, `sub`, `cut`,
+`w` and more): `cat("app.log") |> grep("error", ignore_case: true) |> count()`. `table` lays rows
+out in columns: `ls_r() |> Enum.map(&[&1, stat(&1).size]) |> table(title: "sizes")`. Everything it
+prints shows control characters as visible text (`^[` for ESC), so a hostile file cannot drive
+the terminal; `hexdump` shows a file's bytes. Lines are read whole, so there is no line editing,
+history, completion or Ctrl+C yet; `exit` or Ctrl+D ends it.
+
+Each command is a commandlet, declared once with `defcommand` in any module of
+`userland/shell` that uses `Redoubt.Commandlet`: typed parameters, and help that a command does
+not compile without. Nothing else is wired; the prompt and `help` find it. `Redoubt.Commandlet`'s
+documentation shows how.
+
+The tests run against real files, a seeded tree copied into each
+test's own directory (`userland/shell/test/test_helper.exs`).
+
+`./shell --fake` runs the shell on beamlet's Redoubt platform (`userland/otp/redoubt`) instead
+of its Linux one: the VM reaches the console as it will on Redoubt, through the client library
+and IPC, here the fake kernel's, to a console server with this terminal for its device. It has
+no files or programs yet, and its modules come from the host's directories until they come from
+`/boot`.
+
 ## The book
 
 ```sh

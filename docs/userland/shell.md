@@ -70,9 +70,9 @@ package that `h/1` reads when present).
 
 ### The loop
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: runs on the host only, on beamlet and on the BEAM; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
 
-`Redoubt.Shell` is its own loop, not IEx's, in `userland/shell`:
+`Redoubt.Shell` is its own loop, not IEx's ([`userland/shell`](../../userland/shell)):
 
 1. **Read** a line from the group leader with `IO.gets/1`; a line that ends too soon to parse (an
    open `do`, a trailing `|>`) reads another.
@@ -103,11 +103,9 @@ Not guarded yet, until the shell's driver holds the console
 as `IO.puts/1` does, and the crash reports of processes a line spawned, which OTP's logger
 writes.
 
-**Open:** none.
-
 ### Commands
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: runs on the host only; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
 
 Every command is a **commandlet**: an Elixir function declared once, with `defcommand`, in any
 module of the shell that uses `Redoubt.Commandlet`:
@@ -144,11 +142,9 @@ A command's arguments are Elixir values the person wrote, evaluated as Elixir ev
 anywhere. There are no bare words for the shell to quote, so there is no quoting to get wrong and
 no second meaning a line can have.
 
-**Open:** none.
-
 ### Files and text
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: runs on the host only, over files beamlet's host platform serves; its tests are the shell's own ExUnit suite, which runs every command against a seeded tree of real files and no bench case runs
 
 Files come in through `cat` and go out through `w`; everything between takes lines and chains with
 `|>`. Relative paths resolve against the session's current directory.
@@ -175,8 +171,6 @@ Files come in through `cat` and go out through `w`; everything between takes lin
 
 What each file operation does underneath, and why a rename across volumes cannot be atomic, is
 [files and binds](files.md)'s.
-
-**Open:** none.
 
 ### Session commands and the pager
 
@@ -473,7 +467,7 @@ The shell's completer (`group`'s `expand_fun`) looks at the line before the curs
 
 ### Help
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: runs on the host only; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
 
 ```text
 help()            # commands grouped by area, one line each
@@ -485,8 +479,6 @@ h(File)           # Elixir's own documentation of a module; h(&File.cp/2) of a f
 A command's page comes from its `defcommand` ([commands](#commands)), so a command cannot exist
 without one. A topic is a short Markdown page bundled with the shell, shown as its text. `h/1`
 reads the documentation chunks of the module's `.beam` file.
-
-**Open:** none.
 
 ### Resource use
 
