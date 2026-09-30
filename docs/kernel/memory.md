@@ -326,6 +326,9 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 - **A lend within one process** (a thread calling an endpoint its own process receives on) is
   argued from the code, not attacked, when its threads run on several harts. `process-lifecycle`
   attacks it on one hart, the process ending with the call open included.
+- **A refused `process_map` can leave its source backed.** It backs an untouched source
+  reservation before its later checks, so a call refused after that keeps those pages, charged
+  to the caller: [todo](../todo/process-map-backs-before-refusing.md).
 - **The physmap maps every user frame writable for the kernel,** code included. Only the
   kernel can use that alias ([memory layout](memory-layout.md#residual-risks)).
 
