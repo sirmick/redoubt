@@ -108,8 +108,10 @@ const BEAMLET: &[(&str, &str, &str)] = &[
 ];
 
 /// beamlet's crates left to its `Cargo.lock`, pinned.
-const BEAMLET_LOCKED: &[(&str, &str, &str)] =
-    &[("cfg-if", "1.0.5", "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600")];
+const BEAMLET_LOCKED: &[(&str, &str, &str)] = &[
+    ("autocfg", "1.5.1", "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"),
+    ("cfg-if", "1.0.5", "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"),
+];
 
 /// Every vendored crate, the root's users' and beamlet's.
 fn all() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)> {

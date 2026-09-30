@@ -368,12 +368,14 @@ most `unsafe` in the VM. What builds or tests only on the host (the CLI's `cap-s
 `userland/otp/Cargo.lock`, as the root's host tools' crates do.
 
 **Left to `userland/otp/Cargo.lock`, not vendored.** `cfg-if` is macro-only, as it is for the root
-(above), and stays pinned by version and checksum. `serde`, `serde_core` and `serdect` are locked
+(above), and `autocfg` is `num-traits`'s build dependency, which runs only on the build host; both
+stay pinned by version and checksum. `serde`, `serde_core` and `serdect` are locked
 and never built: `crypto-bigint` names `serdect` through a weak feature (`serdect?/alloc`), which
 the lockfile resolves whatever the features, and nothing turns it on.
 
 | Crate | Version | License | crates.io SHA-256 |
 | --- | --- | --- | --- |
+| `autocfg` | 1.5.1 | MIT OR Apache-2.0 | `f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53` |
 | `cfg-if` | 1.0.5 | MIT OR Apache-2.0 | `4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600` |
 
 **What of them uses `unsafe`,** read for the vendoring commit, of what compiles for riscv64. The
