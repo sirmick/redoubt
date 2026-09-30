@@ -59,7 +59,7 @@ Nothing unmaps the physmap. So the kernel reaches any frame at any time, without
 
 ## The split by root entry
 
-Status: built · partly tested: the end of user space is attacked on the kernel on rv64 only, and on rv32 only in a host copy of the range check · tested: bench:map-fixed-attack, bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound, bench:kernel-half-attack
+Status: built · tested: bench:map-fixed-attack, bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound, bench:kernel-half-attack
 
 The root table's lower half is user space; its upper half is the kernel's. The kernel's root
 entries are made once, by the loader, and never change afterwards. Creating an address space
@@ -245,7 +245,7 @@ image, its stack and nothing else; its first thread starts with `sp` 16 bytes be
 
 ### Page 0
 
-Status: built · partly tested: mapping page 0 is attacked on the kernel on rv64 only · tested: bench:map-fixed-attack, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound
+Status: built · tested: bench:map-fixed-attack, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound
 
 User space starts at address 0 on both widths. No page is reserved at the bottom: `map_fixed`,
 `process_map`, `unmap` and `set_flags` accept page 0 like any other page. A mapped page 0

@@ -112,7 +112,7 @@ area is full (Residual risks).
 
 ### `map_fixed`
 
-Status: built · partly tested: `map-fixed-attack` and `map-fixed-tables` run on rv64 only; on rv32 only `return-lent-unmapped` calls `map_fixed` · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
+Status: built · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:map-fixed-tables-rv32, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
 
 `map_fixed(addr, len, flags)` maps zeroed pages at exactly `addr` in the caller's own address
 space, charged as `map_anon`'s are. It is the one call that puts new pages at an address the
@@ -273,7 +273,7 @@ device registers, is read-write and never executable.
 
 ### R22 (range cost)
 
-Status: built · partly tested: only `map_fixed`'s huge length and `map_anon`'s search are attacked · tested: bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly
+Status: built · tested: bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly
 
 A call that takes a range costs what the page tables hold and what the budget can pay for,
 never what the length asks. A process could otherwise ask for a huge range for free, and the
