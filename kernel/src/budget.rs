@@ -924,7 +924,7 @@ impl MemoryManager {
 
     /// The next object in its owner's list: an endpoint or a device, dispatched by the frame's
     /// magic. The two share the `next_owned` link (`endpoint.rs`, `device.rs`).
-    fn owned_next(&self, frame: u32) -> Option<u32> {
+    pub(crate) fn owned_next(&self, frame: u32) -> Option<u32> {
         if self.is_endpoint_frame(frame) {
             self.endpoint(frame).next_owned
         } else {

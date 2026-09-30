@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 16
+revision = 12
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -257,10 +257,11 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The kernel containment gate: one composite boot"
   template = "package"
   parent = "M1"
-  needs = ["K8", "K9"]
+  needs = ["K8", "K9", "K10"]
   body = "Builds docs/kernel/README.md#containment (a926fd1c3; bench:kernel-containment; rv64 and rv32, checked build, virtual time, tracing kernel, pinned seed from a 16-seed sweep); docs/plan/m1-separation.md Kernel cases, the Containment row. Brief: .wash/local/GATE1-implementer.md. Design: QA GATE1-design. Owner: a missed responsiveness target stops GATE1 and pulls docs/todo/budget-destroy-cost.md forward as its own kernel package first. Tier A, size M."
-  state = "todo"
-  revision = 4
+  state = "active"
+  revision = 9
+  overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
   id = "INIT1"
@@ -310,4 +311,23 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K8"]
   body = "docs/todo/budget-destroy-cost.md; pulled forward from the steward step by GATE1's R10 miss (133 ms vs 39 ms; owner rule in QA GATE1-design). Tier A (kernel), size L. Design: QA K9-design."
   state = "done"
-  revision = 16
+  revision = 2
+
+[[node]]
+  id = "K10"
+  title = "Endpoint destruction no longer scans every thread"
+  template = "package"
+  parent = "M1"
+  needs = ["K9"]
+  body = "Endpoint destruction no longer scans every thread: GATE1's full-fill run found destroy_endpoint (message.rs:1580) calls fail_all three times per endpoint, each driving find_thread over MAX_PROCESS_COUNT x MAX_THREADS, so R10 is O(owned endpoints x processes x threads); a full lease (~1460 endpoints) destroys at p99 ~1.9 s vs 30 ms. The Architect's K9-design escape hatch ('reverse index ... reopen here rather than widen'). Tier A (kernel), size M. Design: QA K10-design."
+  state = "done"
+  revision = 12
+
+[[node]]
+  id = "SHELL1"
+  title = "The owner's wp-SHELL1 branch: Redoubt's own shell, the cell protocol, beamlet's platform on the fake kernel, beamlet's crates vendored"
+  template = "package"
+  parent = "M1"
+  body = "Folds origin/wp-SHELL1 (11 commits on 5bad23c6e, owner-authored) into redoubt, cautiously: rebased onto redoubt as wp-shell1 (.worktrees/shell1), conflicts in docs/plan/m1-separation.md and vendor/README.md resolved, then the full Tier A panel. Pages: docs/userland/shell.md, beamlet.md, native.md (the cell protocol), docs/SECURITY.md (the session), vendor/README.md. Tier A: beamlet's platform boundary, crypto crate swaps (RSA 0.10 RC, ed25519-compact), the cell-protocol parser, vendor-check and doccheck. Size L (7.6K lines outside vendor/, 381K vendored). Merges after K10."
+  state = "reported"
+  revision = 10

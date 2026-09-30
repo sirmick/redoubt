@@ -1,0 +1,20 @@
+description = "R10's cost does not grow with the endpoints a destroyed budget owns (kernel/budgets.md, \"Residual risks\"; kernel/scheduling.md, \"Responsiveness\"): a budget owning a full lease of endpoints (at least 1500, past the containment gate's ~1460) is destroyed, and R10's kernel time from the sched-trace records must stay p99 <= 30 ms; the pre-fix per-endpoint all-thread scans were ~1.9 s (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+# The guest seed the gate runs, pinned since the first sweep.
+qemu_seed = 3
+programs = ["endpoint-destroy-full"]
+# Test builds only: the trace ring and its dump (never in a default or production kernel).
+kernel_features = ["sched-trace"]
+# R10's kernel time from the trace's X/Y records, p99 <= 30 ms (the gate case's target).
+post_check = "sched_oracle r10_p99_us=30000"
+timeout_secs = 900
+expect = [
+    '^\[destroy-full\] ok: the filler owns a full lease of endpoints: ',
+    '^ENDPOINT-DESTROY-FULL TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['PANIC']
+poweroff = true
