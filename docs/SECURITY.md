@@ -244,6 +244,10 @@ capabilities, which the kernel contains ([trust tiers](servers/README.md#trust-t
 - The terminal guard stops hostile text, not the session's own code, which can write to its own
   console; and it draws the bidirectional marks, which only settle weak and neutral characters
   ([the shell](userland/shell.md#hostile-text-never-drives-the-terminal)).
+- Until M5 (persist, install, share) a session has no wall clock and counts from 1970 at boot: a
+  check that a date has begun fails, but a check only that one has not passed, a token's expiry,
+  passes whatever the token, and times from two boots cannot be ordered
+  ([beamlet](userland/beamlet.md#beamlet-on-redoubt)).
 - A session makes a fixed number of waiting calls at once, and one past it is refused; memory off
   the Erlang heap, a large binary, is bounded only by the session's own page limit
   ([beamlet](userland/beamlet.md#asynchronous-underneath-synchronous-on-top),

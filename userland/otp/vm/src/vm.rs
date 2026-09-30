@@ -1258,7 +1258,7 @@ impl System {
         let [emulator, tag, error, error_logger, gl, pid_key, time_key, log] =
             ["emulator", "tag", "error", "error_logger", "gl", "pid", "time", "log"].map(|n| atom(self, n));
         let true_ = Term::Atom(self.atoms.true_);
-        let time = self.platform.lock().system_time_us().unwrap_or(0) as i64;
+        let time = crate::platform::system_time_us(&mut **self.platform.lock()) as i64;
         let (pid, leader) = (Term::Pid(p.pid), Term::Pid(p.group_leader.unwrap_or(p.pid)));
         self.send_with(logger, |h| {
             let format = h.string("Error in process ~p with exit value:~n~p~n");
