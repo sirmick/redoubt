@@ -281,15 +281,15 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | --- | --- |
 | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
 | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
-| steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 25 ms, p99 <= 95 ms (from the third sweep below; 20 and 115 ms before it, 15 and 50 ms before the first) |
-| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 54 ms (from the second sweep below; 30 ms before it) |
-| R10 kernel time of one destruction, from the trace | p99 <= 39 ms (from the second sweep below; 30 ms before it) |
-| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 95 + 39 = 134 ms, asserted as one sum by the post-check (154 ms before the third sweep, 145 ms before the second, 80 ms before the first) |
-| `budget_destroy`, call to return | recorded against one round: R10's 39 ms plus (runnable budgets + 2) slices |
+| steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 25 ms, p99 <= 105 ms (from the fourth sweep below; 25 and 95 ms before it, 20 and 115 before that, 15 and 50 before the first) |
+| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (from the fourth sweep below; 54 ms after the second, 30 ms before it) |
+| R10 kernel time of one destruction, from the trace | p99 <= 30 ms (from the fourth sweep below; 39 ms after the second sweep) |
+| a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 105 + 30 = 135 ms, asserted as one sum by the post-check (134 ms before the fourth sweep, 154 before the third, 145 before the second, 80 before the first) |
+| `budget_destroy`, call to return | recorded against one round: R10's 30 ms plus (runnable budgets + 2) slices |
 | the 1000-weight server's share of the spinning CPU at N = 16 | at least 384 less 30 per thousand |
 
-In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 39 ms is 4,875,000, 50 ms is 6,250,000,
-54 ms is 6,750,000, 95 ms is 11,875,000, 134 ms is 16,750,000, and one 10 ms slice is 1,250,000.
+In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 30 ms is 3,750,000, 40 ms is 5,000,000,
+50 ms is 6,250,000, 105 ms is 13,125,000, 135 ms is 16,875,000, and one 10 ms slice is 1,250,000.
 
 The decision wake is measured by the stand-in itself (`time_now` against its own deadline) and
 read from its console lines, while R10's time comes from the kernel's trace: that half of the
@@ -390,6 +390,14 @@ tenth over the worst rounded up to 5 ms: p50 18.5 x 1.1 = 20.4, so 25 ms; p99 82
 so 95 ms. The lease end's bound follows, to 95 + 39 = 134 ms; its worst is 116.6 ms. Every other
 measure met its target on every seed. The gate stays on seed 3, which is no longer the worst
 seed; the targets come from the sweep, not from the seed the gate runs.
+
+**The fourth sweep** follows a destruction that walks what it destroys instead of every object
+frame ([budgets](budgets.md#residual-risks)), which cheapens R10 and moves the phase of later
+events. The decision wake's worst p99 is 95,131 µs (rv32, seed 9), where R10's p99 is 22,663 µs.
+R10 and the deadline notice return to the 30 ms and 40 ms they had before the second sweep, and by
+the same rule a tenth over the worst rounded up to 5 ms sets the decision wake's p99 at
+95.1 x 1.1 = 104.6, so 105 ms. A lease's end follows to 105 + 30 = 135 ms. Every other measure met
+its target on every seed; the gate stays on seed 3, and the full table is recorded with the change.
 
 The case fails on any `missed`. `bench:sched-latency-tcg` runs the same workload in host time and
 only reports, with the oracle still checking every pick.
