@@ -248,6 +248,8 @@ capabilities, which the kernel contains ([trust tiers](servers/README.md#trust-t
   check that a date has begun fails, but a check only that one has not passed, a token's expiry,
   passes whatever the token, and times from two boots cannot be ordered
   ([beamlet](userland/beamlet.md#beamlet-on-redoubt)).
+- A console that stops answering a write stops the session's VM, until writes move to its I/O
+  threads ([beamlet](userland/beamlet.md#the-console-the-clock-and-randomness)).
 - A session makes a fixed number of waiting calls at once, and one past it is refused; memory off
   the Erlang heap, a large binary, is bounded only by the session's own page limit
   ([beamlet](userland/beamlet.md#asynchronous-underneath-synchronous-on-top),

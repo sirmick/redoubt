@@ -1,0 +1,27 @@
+[package]
+name = "beamlet-redoubt"
+description = "beamlet's Platform on Redoubt, over the client library"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+beamlet-vm = { path = "../vm" }
+redoubt-client = { path = "../../../libs/client" }
+redoubt-rt = { path = "../../../libs/rt" }
+# The host launcher, `fake-redoubt`: the platform run on the fake kernel, with the natives the
+# shell's modules need. Host only; nothing that runs on the machine has this feature.
+beamlet-crypto = { path = "../crypto", optional = true }
+beamlet-re = { path = "../re", optional = true }
+redoubt-fake-kernel = { path = "../../../libs/rt/fake", optional = true }
+
+[features]
+fake = ["dep:beamlet-crypto", "dep:beamlet-re", "dep:redoubt-fake-kernel"]
+
+[[bin]]
+name = "fake-redoubt"
+required-features = ["fake"]
+
+[[test]]
+name = "console"
+required-features = ["fake"]
