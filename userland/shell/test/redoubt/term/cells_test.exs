@@ -32,7 +32,7 @@ defmodule Redoubt.Term.CellsTest do
 
   test "every case of the cells crate is answered as it answers it" do
     cases = vectors()
-    assert length(cases) == 33
+    assert length(cases) == 34
 
     for %{"name" => name, "hex" => hex} = vector <- cases do
       bytes = Base.decode16!(hex, case: :lower)

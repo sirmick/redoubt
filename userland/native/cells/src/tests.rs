@@ -102,6 +102,7 @@ fn bad() -> Vec<(&'static str, Vec<u8>, Error)> {
         ("a cell cut after a position past the edge", with(10, 4)[..14].to_vec(), Error::Truncated),
         ("a header cut short", good[..7].to_vec(), Error::Truncated),
         ("a cell cut short", good[..good.len() - 1].to_vec(), Error::Truncated),
+        ("a symbol's length running past the frame's end", with(14, 16), Error::Truncated),
         ("version 2", with(0, 2), Error::Version),
         ("an unknown flag", with(1, 2), Error::Flags),
         ("a width of zero", with(2, 0), Error::Size),

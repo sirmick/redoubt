@@ -10,6 +10,7 @@
   {"name": "a cell cut after a position past the edge", "hex": "0100040002000100000004000000", "error": "truncated"},
   {"name": "a header cut short", "hex": "01000400020001", "error": "truncated"},
   {"name": "a cell cut short", "hex": "01000400020001000000010000000161000000000000000000", "error": "truncated"},
+  {"name": "a symbol's length running past the frame's end", "hex": "0100040002000100000001000000106100000000000000000000", "error": "truncated"},
   {"name": "version 2", "hex": "0200040002000100000001000000016100000000000000000000", "error": "version"},
   {"name": "an unknown flag", "hex": "0102040002000100000001000000016100000000000000000000", "error": "flags"},
   {"name": "a width of zero", "hex": "0100000002000100000001000000016100000000000000000000", "error": "size"},
