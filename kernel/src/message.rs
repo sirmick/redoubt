@@ -858,6 +858,11 @@ pub fn destroy_device(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32)
     if d.kind == crate::device::Kind::Irq {
         crate::arch::irq::disable_irq(d.irq as usize);
     }
+    // Mark it destroyed while it is still an object frame: a `destroy_quarantined_devices` later
+    // in the same destruction must not find and free this frame again (I5, I10).
+    let mut d = mm.device(frame);
+    d.destroyed = true;
+    mm.store_device(frame, &d);
     mm.sweep_handles_now(|_, h| matches!(h.object, Object::Device(x) if x == r));
     mm.free_device(frame);
 }
@@ -1540,8 +1545,8 @@ pub fn destroy_quarantined_devices(ss: &mut ProcessTable, mm: &mut MemoryManager
         return;
     }
     // At most one object per DMA slot (`dma::MAX_DMA_DEVICES`), collected before any is
-    // destroyed: a frame freed inside a destruction is deferred, so a fresh scan would find it
-    // again.
+    // destroyed. A destroyed device is skipped: its frame is still an object one (deferred), but
+    // it is already on `Objects::deferred`, and destroying it again would cycle that list.
     let mut doomed = [0u32; crate::dma::MAX_DMA_DEVICES];
     let mut count = 0;
     for frame in 0..=mm.objects.high_frame {
@@ -1550,7 +1555,7 @@ pub fn destroy_quarantined_devices(ss: &mut ProcessTable, mm: &mut MemoryManager
         }
         if mm.is_device_frame(frame) {
             let d = mm.device(frame);
-            if d.kind == crate::device::Kind::Mmio && mm.dma_quarantined(d.base) {
+            if d.kind == crate::device::Kind::Mmio && !d.destroyed && mm.dma_quarantined(d.base) {
                 doomed[count] = frame;
                 count += 1;
             }

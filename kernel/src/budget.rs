@@ -1067,14 +1067,28 @@ impl MemoryManager {
     /// Free the dying subtree `frame` heads: every descendant first, then the budget, unlinking
     /// each from the deadline list before its frame goes (I1: nothing may name a freed frame).
     fn free_dying_budgets(&mut self, frame: BudgetFrame) {
+        let mut free = |mm: &mut MemoryManager, f: BudgetFrame| {
+            mm.unlink_deadline(f);
+            mm.free_object_frame(f);
+        };
+        self.for_each_descendant_post(frame, &mut free);
+    }
+
+    /// Walk `frame`'s subtree children first, then `frame`, calling `action` on every budget in
+    /// it: R10's bottom-up order, shared by `free_dying_budgets` and `lift_dying`. The walk is at
+    /// most `MAX_DEPTH` deep and reads only the child links.
+    fn for_each_descendant_post(
+        &mut self,
+        frame: BudgetFrame,
+        action: &mut impl FnMut(&mut MemoryManager, BudgetFrame),
+    ) {
         let mut child = self.budget(frame).first_child;
         while let Some(c) = child {
             let next = self.budget(c).next_sibling;
-            self.free_dying_budgets(c);
+            self.for_each_descendant_post(c, &mut *action);
             child = next;
         }
-        self.unlink_deadline(frame);
-        self.free_object_frame(frame);
+        action(self, frame);
     }
 
     /// One destruction begins: object frames freed while it runs are deferred to
@@ -1148,16 +1162,9 @@ impl MemoryManager {
     /// The dying budgets, deepest first (every one's descendants before it): R10's bottom-up
     /// order for the scheduler's lifts, each returning its weight to its parent as it goes (the
     /// top's went back at mark time). The subtree walk is at most `MAX_DEPTH` deep.
-    pub fn lift_dying(&mut self, top: BudgetFrame) { self.lift_subtree(top, top); }
-
-    fn lift_subtree(&mut self, frame: BudgetFrame, top: BudgetFrame) {
-        let mut child = self.budget(frame).first_child;
-        while let Some(c) = child {
-            let next = self.budget(c).next_sibling;
-            self.lift_subtree(c, top);
-            child = next;
-        }
-        crate::sched::destroy(self, frame, frame == top);
+    pub fn lift_dying(&mut self, top: BudgetFrame) {
+        let mut lift = |mm: &mut MemoryManager, f: BudgetFrame| crate::sched::destroy(mm, f, f == top);
+        self.for_each_descendant_post(top, &mut lift);
     }
 }
 

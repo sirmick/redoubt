@@ -90,6 +90,9 @@ pub struct Device {
     /// The next endpoint or device in its owner's list (`Budget::first_owned`), so a destruction
     /// ends exactly its own (R10).
     pub next_owned: Option<u32>,
+    /// Set when this object is destroyed, before its frame is deferred (R10; `message.rs`): a
+    /// scan later in the same destruction must not find and free the deferred frame again.
+    pub destroyed: bool,
 }
 
 // Word layout in the frame (a frame holds 512).
@@ -104,7 +107,8 @@ const W_IRQ: usize = 8;
 const W_FIRED: usize = 9;
 const W_MASKED: usize = 10;
 const W_NEXT_OWNED: usize = 11;
-const WORDS: usize = 12;
+const W_DESTROYED: usize = 12;
+const WORDS: usize = 13;
 const _: () = assert!(WORDS * 8 <= PAGE_SIZE);
 
 impl MemoryManager {
@@ -131,6 +135,7 @@ impl MemoryManager {
             fired: w(W_FIRED) != 0,
             masked: w(W_MASKED) != 0,
             next_owned: (w(W_NEXT_OWNED) as u32).checked_sub(1),
+            destroyed: w(W_DESTROYED) != 0,
         }
     }
 
@@ -149,6 +154,7 @@ impl MemoryManager {
         words[W_FIRED] = u64::from(d.fired);
         words[W_MASKED] = u64::from(d.masked);
         words[W_NEXT_OWNED] = crate::budget::frame_word(d.next_owned);
+        words[W_DESTROYED] = u64::from(d.destroyed);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
         }
@@ -292,6 +298,7 @@ impl MemoryManager {
             fired: false,
             masked: false,
             next_owned: None,
+            destroyed: false,
         };
         match words[0] {
             1 => {
