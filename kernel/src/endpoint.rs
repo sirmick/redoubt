@@ -76,8 +76,8 @@ pub struct Endpoint {
     pub owner: BudgetRef,
     /// R2's round-robin cursor: the group served last, if any.
     pub cursor: Option<Group>,
-    /// The next endpoint in its owner's list (`Budget::first_endpoint`), so a destruction ends
-    /// exactly its own (R10).
+    /// The next endpoint or device in its owner's list (`Budget::first_owned`), so a destruction
+    /// ends exactly its own (R10).
     pub next_owned: Option<u32>,
 }
 
@@ -148,17 +148,14 @@ impl MemoryManager {
     }
 
     /// A new endpoint owned by `owner`: one page, charged there (the cost table), and linked into
-    /// the owner's endpoint list so a destruction ends exactly its own (R10).
+    /// the owner's object list so a destruction ends exactly its own (R10).
     pub fn new_endpoint(&mut self, owner: BudgetFrame) -> Result<EndpointRef, Error> {
         self.charge(owner, ENDPOINT_PAGES)?;
         let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(owner, ENDPOINT_PAGES))?;
         let id = self.next_object_id();
         let owner_ref = BudgetRef { frame: owner, id: self.budget(owner).id };
-        let mut ob = self.budget(owner);
-        let next_owned = ob.first_endpoint;
-        ob.first_endpoint = Some(frame);
-        self.store_endpoint(frame, &Endpoint { id, owner: owner_ref, cursor: None, next_owned });
-        self.store(owner, &ob);
+        self.store_endpoint(frame, &Endpoint { id, owner: owner_ref, cursor: None, next_owned: None });
+        self.link_owned(owner, frame);
         Ok(EndpointRef { frame, id })
     }
 
@@ -187,29 +184,8 @@ impl MemoryManager {
     /// failed everything waiting on it (`message::endpoint_dying`) and swept the handles. Inside a
     /// destruction the frame free is deferred past `destroy_marked`'s single sweep (I1).
     pub fn free_endpoint(&mut self, frame: u32, owner: BudgetFrame) {
-        self.unlink_endpoint(owner, frame);
+        self.unlink_owned(owner, frame);
         self.release_object_frame(frame);
         self.uncharge(owner, ENDPOINT_PAGES);
-    }
-
-    /// Take `frame` out of `owner`'s endpoint list.
-    fn unlink_endpoint(&mut self, owner: BudgetFrame, frame: u32) {
-        let mut ob = self.budget(owner);
-        if ob.first_endpoint == Some(frame) {
-            ob.first_endpoint = self.endpoint(frame).next_owned;
-            self.store(owner, &ob);
-            return;
-        }
-        let mut cur = ob.first_endpoint;
-        while let Some(c) = cur {
-            if self.endpoint(c).next_owned == Some(frame) {
-                let next = self.endpoint(frame).next_owned;
-                let mut ce = self.endpoint(c);
-                ce.next_owned = next;
-                self.store_endpoint(c, &ce);
-                return;
-            }
-            cur = self.endpoint(c).next_owned;
-        }
     }
 }

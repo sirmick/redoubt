@@ -72,10 +72,9 @@ pub struct Budget {
     /// frame ([Residual risks](#residual-risks)).
     pub first_child: Option<BudgetFrame>,
     pub next_sibling: Option<BudgetFrame>,
-    /// The endpoints and devices charged to this budget, linked through their frames' `next_owned`
-    /// (`endpoint.rs`, `device.rs`); a destruction ends exactly its own.
-    pub first_endpoint: Option<u32>,
-    pub first_device: Option<u32>,
+    /// The endpoints and devices charged to this budget, in one chain through their frames'
+    /// `next_owned` (`endpoint.rs`, `device.rs`); a destruction ends exactly its own.
+    pub first_owned: Option<u32>,
     pub depth: u32,
     pub class: Class,
     /// Set by `budget_destroy` on the whole subtree before it tears anything down (R10).
@@ -120,9 +119,8 @@ const MAGIC: u64 = u64::from_le_bytes(*b"budget\0\0");
 /// The tree and owner links sit after the scheduling words; a frame has room to spare.
 const W_FIRST_CHILD: usize = W_SCHED + 8;
 const W_NEXT_SIBLING: usize = W_SCHED + 9;
-const W_FIRST_ENDPOINT: usize = W_SCHED + 10;
-const W_FIRST_DEVICE: usize = W_SCHED + 11;
-const WORDS: usize = W_SCHED + 12;
+const W_FIRST_OWNED: usize = W_SCHED + 10;
+const WORDS: usize = W_SCHED + 11;
 /// Where the scheduling words start, after the labels.
 const W_SCHED: usize = 16 + MAX_LABELS;
 /// A scratch word in every object frame: the next frame in `Objects::deferred`. Above every
@@ -251,8 +249,7 @@ impl MemoryManager {
             parent: (w(2) as u32).checked_sub(1),
             first_child: frame_of(w(W_FIRST_CHILD)),
             next_sibling: frame_of(w(W_NEXT_SIBLING)),
-            first_endpoint: frame_of(w(W_FIRST_ENDPOINT)),
-            first_device: frame_of(w(W_FIRST_DEVICE)),
+            first_owned: frame_of(w(W_FIRST_OWNED)),
             depth: w(3) as u32,
             class,
             dying: w(5) != 0,
@@ -312,8 +309,7 @@ impl MemoryManager {
         words[W_SCHED + 7] = b.cursor.map_or(0, |(p, t)| u64::from(p) << 8 | u64::from(t.wrapping_add(1)));
         words[W_FIRST_CHILD] = frame_word(b.first_child);
         words[W_NEXT_SIBLING] = frame_word(b.next_sibling);
-        words[W_FIRST_ENDPOINT] = frame_word(b.first_endpoint);
-        words[W_FIRST_DEVICE] = frame_word(b.first_device);
+        words[W_FIRST_OWNED] = frame_word(b.first_owned);
         words[16..W_SCHED].copy_from_slice(&b.labels);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
@@ -718,8 +714,7 @@ impl MemoryManager {
             // It enters its parent's child list at the head (R10's subtree walk).
             first_child: None,
             next_sibling: parent_budget.and_then(|p| p.first_child),
-            first_endpoint: None,
-            first_device: None,
+            first_owned: None,
             depth: parent_budget.map_or(0, |p| p.depth + 1),
             class,
             dying: false,
@@ -899,26 +894,84 @@ impl MemoryManager {
         }
         // A pre-order walk of the subtree through the child links (R10): each budget below `top`
         // once, never a scan of every object frame.
-        let mut cur = top;
-        loop {
-            let mut b = self.budget(cur);
+        let mut cur = Some(top);
+        while let Some(frame) = cur {
+            let mut b = self.budget(frame);
             b.dying = true;
-            self.store(cur, &b);
-            if let Some(child) = self.budget(cur).first_child {
-                cur = child;
-                continue;
+            self.store(frame, &b);
+            cur = self.subtree_next(top, frame);
+        }
+    }
+
+    /// The next budget in a pre-order walk of the subtree `top` heads, after `cur`; `None` when
+    /// the walk is done. Reads only the child links. `mark_dying` and `message::budgets_dying`
+    /// share it, so the destruction's walk is written once.
+    pub(crate) fn subtree_next(&self, top: BudgetFrame, cur: BudgetFrame) -> Option<BudgetFrame> {
+        if let Some(child) = self.budget(cur).first_child {
+            return Some(child);
+        }
+        let mut at = cur;
+        loop {
+            if at == top {
+                return None;
             }
-            // Climb to the next sibling, or stop at the top.
-            loop {
-                if cur == top {
-                    return;
-                }
-                if let Some(sibling) = self.budget(cur).next_sibling {
-                    cur = sibling;
-                    break;
-                }
-                cur = self.budget(cur).parent.expect("a subtree budget has a parent");
+            if let Some(sibling) = self.budget(at).next_sibling {
+                return Some(sibling);
             }
+            at = self.budget(at).parent.expect("a subtree budget has a parent");
+        }
+    }
+
+    /// The next object in its owner's list: an endpoint or a device, dispatched by the frame's
+    /// magic. The two share the `next_owned` link (`endpoint.rs`, `device.rs`).
+    fn owned_next(&self, frame: u32) -> Option<u32> {
+        if self.is_endpoint_frame(frame) {
+            self.endpoint(frame).next_owned
+        } else {
+            self.device(frame).next_owned
+        }
+    }
+
+    /// Set `frame`'s owner-list link.
+    fn set_owned_next(&mut self, frame: u32, next: Option<u32>) {
+        if self.is_endpoint_frame(frame) {
+            let mut e = self.endpoint(frame);
+            e.next_owned = next;
+            self.store_endpoint(frame, &e);
+        } else {
+            let mut d = self.device(frame);
+            d.next_owned = next;
+            self.store_device(frame, &d);
+        }
+    }
+
+    /// Link `frame` at the head of `owner`'s object list (`new_endpoint`, `new_device`). The
+    /// frame must already hold its object, so `set_owned_next` can read its kind.
+    pub(crate) fn link_owned(&mut self, owner: BudgetFrame, frame: u32) {
+        let mut ob = self.budget(owner);
+        let next = ob.first_owned;
+        ob.first_owned = Some(frame);
+        self.store(owner, &ob);
+        self.set_owned_next(frame, next);
+    }
+
+    /// Take `frame` out of `owner`'s object list (`free_endpoint`, `free_device`), one chain for
+    /// endpoints and devices alike.
+    pub(crate) fn unlink_owned(&mut self, owner: BudgetFrame, frame: u32) {
+        let mut ob = self.budget(owner);
+        if ob.first_owned == Some(frame) {
+            ob.first_owned = self.owned_next(frame);
+            self.store(owner, &ob);
+            return;
+        }
+        let mut cur = ob.first_owned;
+        while let Some(c) = cur {
+            if self.owned_next(c) == Some(frame) {
+                let next = self.owned_next(frame);
+                self.set_owned_next(c, next);
+                return;
+            }
+            cur = self.owned_next(c);
         }
     }
 

@@ -217,12 +217,8 @@ impl MemoryManager {
     fn index_process(&mut self, pid: Pid, frame: Option<u32>) {
         let i = crate::budget::account_index(pid).expect("a process object names a PID");
         self.objects.processes[i] = frame;
-        // Inside a destruction the audit runs once, off its walk (`destroy_subtree`); this path
-        // would scan every object frame for each object freed.
         #[cfg(debug_assertions)]
-        if !self.objects.deferring {
-            self.check_process_index();
-        }
+        self.check_process_index();
     }
 
     /// R10 step 8, after the dying subtree's carve went back to `parent`: every PID a process
@@ -250,9 +246,14 @@ impl MemoryManager {
         }
     }
 
-    /// A checked build's proof that the PID index is what a scan of every object frame finds.
+    /// A checked build's proof that the PID index is what a scan of every object frame finds. It
+    /// does nothing while a destruction runs: that build audits once instead, off the walk
+    /// (`destroy_subtree`), where a per-object scan would scale the destruction.
     #[cfg(debug_assertions)]
     pub(crate) fn check_process_index(&self) {
+        if self.objects.deferring {
+            return;
+        }
         let objects = (0..=self.objects.high_frame).filter(|f| self.is_process_frame(*f));
         for frame in objects.clone() {
             let i = crate::budget::account_index(self.process(frame).pid).expect("a PID");
@@ -717,9 +718,7 @@ pub fn free_object(mm: &mut MemoryManager, frame: u32) {
     let p = mm.process(frame);
     assert!(!p.alive(), "a live process's object was freed");
     let r = ProcessRef { frame, id: p.id };
-    if !mm.objects.deferring {
-        mm.sweep_handles(|_, h| matches!(h.object, Object::Process(x) if x == r));
-    }
+    mm.sweep_handles_now(|_, h| matches!(h.object, Object::Process(x) if x == r));
     if mm.is_live_budget(p.creator) {
         mm.uncharge(p.creator.frame, PROCESS_PAGES);
     }
