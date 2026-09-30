@@ -1,5 +1,5 @@
 //! The tests are not vacuous: each deliberate rule break (mutation.rs) must make some property
-//! fail, and every rule R1-R12 must have at least one such break.
+//! fail, and every kernel rule the model holds must have at least one such break.
 //!
 //!     cargo test -p redoubt-model --release --test mutations -- --nocapture
 //!
@@ -13,10 +13,16 @@ use redoubt_model::mutation::Mutation;
 /// Seeds tried per family before a mutation counts as not caught.
 const CAP: u64 = 20_000;
 
+/// Every kernel rule the model holds, and I16: all of R1 to R24 but the six outside the model
+/// (kernel/model.md, "Mutations"), with R4a and R4b beside R4.
+const MODELLED: [&str; 21] = [
+    "R1", "R2", "R3", "R4", "R4a", "R4b", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13", "R14",
+    "R18", "R20", "R21", "R22", "I16",
+];
+
 #[test]
 fn every_rule_has_a_mutation() {
-    for r in 1..=12 {
-        let rule = format!("R{r}");
+    for rule in MODELLED {
         assert!(Mutation::ALL.iter().any(|m| m.rule() == rule), "no mutation breaks {rule}");
     }
 }

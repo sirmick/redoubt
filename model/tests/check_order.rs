@@ -5,6 +5,7 @@ mod common;
 use common::contracts::*;
 use redoubt_model::{
     kernel::{Boot, DEFAULT_BASE, DEFAULT_MESSAGE_BASE, DeviceSpec, Resets},
+    mutation::Mutation,
     spec::*,
     syscall::*,
 };
@@ -165,4 +166,19 @@ fn a_device_has_32_dma_runs() {
     assert_eq!(addr(&mut w, alloc(dma)), Err(Error::OutOfMemory));
     // The limit is the device's: another device still has all of its runs.
     assert!(addr(&mut w, alloc(other)).is_ok());
+}
+
+#[test]
+fn map_fixed_refuses_pages_it_cannot_pay_for_before_an_overlap() {
+    // More pages than `init`'s budget holds, over a page it has mapped: the pages alone come
+    // first (R22), so the error is `OutOfMemory`, not the overlap's `InvalidArgument`.
+    let over = |mutation| {
+        let mut w = World::new(mutation);
+        assert_eq!(addr(&mut w, Syscall::MapAnon { len: PAGE_SIZE, flags: FLAG_R }), Ok(DEFAULT_BASE));
+        let len = (w.k.budgets[&1].pages_limit + 1) * PAGE_SIZE;
+        w.result(1, Syscall::MapFixed { addr: DEFAULT_BASE, len, flags: FLAG_R }).unwrap()
+    };
+    assert_eq!(over(None), Err(Error::OutOfMemory));
+    // With the overlap checked first, the call answers the overlap.
+    assert_eq!(over(Some(Mutation::R22MapFixedWalksFirst)), Err(Error::InvalidArgument));
 }

@@ -831,12 +831,15 @@ impl Kernel {
     /// A PID for a new process, drawn at random from the free ones. A PID stays in use while its
     /// process object lives: while the process runs, and while its exit notice waits.
     fn draw_pid(&mut self) -> Option<u64> {
-        let in_use: BTreeSet<u64> = self
-            .processes
-            .keys()
-            .copied()
-            .chain(self.endpoints.values().flat_map(|e| e.exits.iter().map(|n| n.pid)))
-            .collect();
+        let noticed = self.endpoints.values().flat_map(|e| e.exits.iter().map(|n| n.pid));
+        if self.broken(Mutation::R20NoticePidReused) {
+            // Broken: a PID held only by a notice is free, and the draw lands on one (as a
+            // process spawning until it draws one would).
+            if let Some(pid) = noticed.clone().find(|p| !self.processes.contains_key(p)) {
+                return Some(pid);
+            }
+        }
+        let in_use: BTreeSet<u64> = self.processes.keys().copied().chain(noticed).collect();
         if in_use.len() as u64 >= MAX_PID {
             return None;
         }
@@ -949,6 +952,17 @@ impl Kernel {
 
     fn lookup(&self, pid: u64, h: u64) -> R<Handle> {
         self.processes.get(&pid).and_then(|p| p.handles.get(&h)).copied().ok_or(Error::BadHandle)
+    }
+
+    /// The device object `pid`'s handle `h` names. R18: a handle is the only way to a device;
+    /// a number that is not a handle of the caller's reaches nothing.
+    fn lookup_device(&self, pid: u64, h: u64) -> R<u64> {
+        match self.lookup(pid, h) {
+            Ok(Handle { object: Object::Device(d), .. }) => Ok(d),
+            Ok(_) => Err(Error::WrongObject),
+            Err(_) if self.broken(Mutation::R18DeviceByNumber) && self.devices.contains_key(&h) => Ok(h),
+            Err(e) => Err(e),
+        }
     }
 
     fn lookup_budget(&self, pid: u64, h: u64) -> R<u64> {
@@ -2702,22 +2716,22 @@ impl Kernel {
 
     /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr`; never replaces a
     /// mapping (kernel/memory.md R11). Same order as the kernel: decode flags, the range
-    /// (`user_range`, page 0 included), the whole range's overlap with any of `pid`'s mappings
-    /// (`range_free`, before anything is charged), the flags rule, then the charge -- pages alone
-    /// first, cheaply (R22: a hostile `map_fixed(0, USER_TOP)` must stay fast, never walking
-    /// `tables_needed` over pages it was never going to afford).
+    /// (`user_range`, page 0 included), the flags rule, the pages alone, cheaply (R22: a hostile
+    /// `map_fixed(0, USER_TOP)` must stay fast, never walking over pages it was never going to
+    /// afford), the whole range's overlap with any of `pid`'s mappings (`range_free`, before
+    /// anything is charged), then the pages and the page tables they need.
     pub fn map_fixed(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, false)?;
         let (first, n) = user_range(addr, len)?;
         check_flags(flags, false)?;
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
-        if n > self.free_pages(b) {
+        if n > self.free_pages(b) && !self.broken(Mutation::R22MapFixedWalksFirst) {
             return Err(Error::OutOfMemory);
         }
         if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
             return Err(Error::InvalidArgument);
         }
-        let tables = self.tables_needed(pid, first..first + n);
+        let tables = self.fresh_tables(pid, b, first, n);
         self.charge(b, n.checked_add(tables).ok_or(Error::OutOfMemory)?)?;
         for i in 0..n {
             let f = self.alloc_frame(b);
@@ -2735,8 +2749,7 @@ impl Kernel {
     /// this process's death will need, and every DMA frame it already holds is armed against it too
     /// (ghost, I16). No handle to a quarantined device survives (kernel/devices.md, "Quarantine").
     pub fn map_device(&mut self, pid: u64, h: u64) -> R<u64> {
-        let h = decode_handle(h)?;
-        let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
+        let d = self.lookup_device(pid, decode_handle(h)?)?;
         let DeviceKind::Mmio { pages, dma, quarantined, .. } = self.devices[&d].kind else {
             return Err(Error::WrongObject);
         };
@@ -2751,14 +2764,13 @@ impl Kernel {
             self.processes.get_mut(&pid).unwrap().dma_mapped.insert(d);
             self.dma_arm_current(pid);
         }
-        self.ghost.flows.push(Flow::DeviceUsed { device: d, quarantined });
+        self.ghost.flows.push(Flow::DeviceUsed { pid, device: d, quarantined });
         Ok(start * PAGE_SIZE)
     }
 
     /// `dma_alloc(h(MMIO), npages) -> addr, phys`: DMA flag; pages charged; contiguous; zeroed.
     pub fn dma_alloc(&mut self, pid: u64, h: u64, npages: u64) -> R<(u64, u64)> {
-        let h = decode_handle(h)?;
-        let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
+        let d = self.lookup_device(pid, decode_handle(h)?)?;
         let DeviceKind::Mmio { dma, quarantined, .. } = self.devices[&d].kind else {
             return Err(Error::WrongObject);
         };
@@ -2769,7 +2781,7 @@ impl Kernel {
             return Err(Error::NotPermitted);
         }
         let r = self.map_fresh(pid, npages, FLAG_R | FLAG_W, Some(d))?;
-        self.ghost.flows.push(Flow::DeviceUsed { device: d, quarantined });
+        self.ghost.flows.push(Flow::DeviceUsed { pid, device: d, quarantined });
         Ok(r)
     }
 

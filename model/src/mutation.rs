@@ -1,10 +1,11 @@
 //! Deliberate rule-breaking, so that the property tests are shown not to be vacuous.
 //!
 //! Each [`Mutation`] breaks one rule in exactly one place, marked in the code with
-//! `self.broken(Mutation::...)`: a numbered rule of docs/kernel/ (R1-R12), another statement of
-//! the kernel pages (messages, the current call, budgets, handles, a call's checks), a design
-//! decision recorded there, or the steward's policy. `tests/mutations.rs` runs the property tests
-//! against every mutation and requires each to be caught; every rule R1-R12 has at least one.
+//! `self.broken(Mutation::...)`: a numbered rule of docs/kernel/, another statement of the kernel
+//! pages (messages, the current call, budgets, handles, a call's checks), a design decision
+//! recorded there, or the steward's policy. `tests/mutations.rs` runs the property tests against
+//! every mutation and requires each to be caught; every kernel rule the model holds has at least
+//! one.
 
 /// One deliberate break. [`Mutation::rule`] names what it breaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -145,6 +146,17 @@ pub enum Mutation {
     R11ExecOnDeviceMemory,
     /// `process_map` skips its own flag check (empty flags, and writable without readable).
     R11ProcessMapSkipsFlags,
+    // R18. Device authority.
+    /// A device call through a number that is not one of the caller's handles reaches the device
+    /// object of that number.
+    R18DeviceByNumber,
+    // R20. PID reuse.
+    /// A PID held only by an exit notice is handed to a new process.
+    R20NoticePidReused,
+    // R22. Range cost.
+    /// `map_fixed` walks the page tables of its range before refusing pages its budget cannot pay
+    /// for.
+    R22MapFixedWalksFirst,
     /// Publishes no lend despite a supplied buffer.
     IpcWrongLend,
     /// Hides a committed partial reply behind its error.
@@ -326,7 +338,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 138] = {
+    pub const ALL: [Mutation; 141] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -387,6 +399,9 @@ impl Mutation {
             R11MapFixedSkipsOverlap,
             R11ExecOnDeviceMemory,
             R11ProcessMapSkipsFlags,
+            R18DeviceByNumber,
+            R20NoticePidReused,
+            R22MapFixedWalksFirst,
             IpcWrongLend,
             IpcDropPartial,
             IpcFalseDelivery,
@@ -531,6 +546,9 @@ impl Mutation {
             | R11MapFixedSkipsOverlap
             | R11ExecOnDeviceMemory
             | R11ProcessMapSkipsFlags => "R11",
+            R18DeviceByNumber => "R18",
+            R20NoticePidReused => "R20",
+            R22MapFixedWalksFirst => "R22",
             R12PriorityById
             | R12IgnoreWeight
             | R12WakeBanksCredit

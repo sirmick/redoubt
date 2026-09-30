@@ -253,8 +253,13 @@ impl Checker {
                         "I15: thread {tid} was told twice that call {msg} was abandoned"
                     );
                 }
-                Flow::DeviceUsed { device, quarantined } => {
+                Flow::DeviceUsed { pid, device, quarantined } => {
                     ensure!(!quarantined, "I16: quarantined device {device} was handed out again");
+                    let held = k
+                        .processes
+                        .get(pid)
+                        .is_some_and(|p| p.handles.values().any(|h| h.object == Object::Device(*device)));
+                    ensure!(held, "R18: process {pid} reached device {device} without a handle to it");
                 }
                 Flow::Woken { .. } | Flow::AbandonNotice { .. } => {}
             }

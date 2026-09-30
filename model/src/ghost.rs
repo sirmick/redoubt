@@ -124,9 +124,9 @@ pub enum Flow {
     Replied { msg: u64 },
     /// Thread `tid` was told that its open call `msg` was abandoned (R3).
     AbandonNotice { tid: u64, msg: u64 },
-    /// `map_device` or `dma_alloc` succeeded on device `device`, which its device object said
-    /// was `quarantined` when the call began (kernel/devices.md, "Quarantine").
-    DeviceUsed { device: u64, quarantined: bool },
+    /// `map_device` or `dma_alloc` by process `pid` succeeded on device `device`, which its device
+    /// object said was `quarantined` when the call began (kernel/devices.md, "Quarantine").
+    DeviceUsed { pid: u64, device: u64, quarantined: bool },
 }
 
 /// I11: while a key's oldest message waits on an endpoint, how often each other key has been
@@ -256,7 +256,7 @@ impl Ghost {
     /// `process_create` made process `child` (a PID may be reused once its object is gone).
     pub fn process_created(&mut self, child: u64, slot: Slot) {
         if self.slots.contains_key(&child) || self.owed.contains_key(&child) {
-            self.violations.push(format!("Process: PID {child} reused before its previous object was freed"));
+            self.violations.push(format!("R20: PID {child} reused before its previous object was freed"));
         }
         self.slots.insert(child, slot);
         self.last_rid.insert(child, 0);
