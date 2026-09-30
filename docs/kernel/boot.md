@@ -468,6 +468,10 @@ Status: built · partly tested: a reboot through `system_reset` is not attacked 
   controller from the loader's controller searches as well as from its device exclusion would get
   it made into a device object, and its holder could mask or raise any interrupt. That parse is
   the loader's to get right.
+- **Signatures are checked cofactored.** `ed25519-compact` accepts a signature whose R differs by
+  a point of small order, so a valid signature can be turned into another valid one for the same
+  bundle. That forges no bundle without the key; nothing here takes a signature as a bundle's
+  identity.
 - **The kernel trusts the loader.** It checks the argument block's shape and its device
   entries, but takes the RAM range, the ownership tables and the process table as true, and does
   not check the tags' CRC. On QEMU the loader is not verified (above).

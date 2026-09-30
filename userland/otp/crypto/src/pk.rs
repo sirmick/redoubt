@@ -13,9 +13,23 @@ use crate::{KeystreamRng, R, atom_name, badarg, bin, bytes, nif_error, notsup, r
 type E = Exception;
 
 // ---- X25519 and Ed25519 (the "evp" keys) ----
+//
+// Both are `ed25519-compact`'s, the crate the loader, keyd and sshd use.
 
 fn key32(c: &mut Ctx, b: &[u8], arg: i64) -> Result<[u8; 32], E> {
     <[u8; 32]>::try_from(b).map_err(|_| badarg(c, arg, "Bad key length"))
+}
+
+/// The Ed25519 key pair of a 32-byte seed, or `None` for the all-zero seed: `ed25519-compact`
+/// panics on that one, which OpenSSL takes like any other, so it is refused as a bad key, as sshd
+/// refuses it.
+fn ed25519_pair_of(seed: [u8; 32]) -> Option<ed25519_compact::KeyPair> {
+    (seed != [0; 32]).then(|| ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed)))
+}
+
+fn ed25519_pair(c: &mut Ctx, b: &[u8], arg: i64) -> Result<ed25519_compact::KeyPair, E> {
+    let seed = key32(c, b, arg)?;
+    ed25519_pair_of(seed).ok_or_else(|| badarg(c, arg, "Bad key"))
 }
 
 /// A private key argument: a binary, or `undefined` to generate one.
@@ -28,18 +42,18 @@ pub fn evp_generate_key(c: &mut Ctx, a: &[Term]) -> R {
     match atom_name(&a[0]) {
         Some("x25519") => {
             let private = private_or_random(c, a, 1, 32)?;
-            let secret = x25519_dalek::StaticSecret::from(key32(c, &private, 1)?);
-            let public = x25519_dalek::PublicKey::from(&secret);
+            let secret = ed25519_compact::x25519::SecretKey::new(key32(c, &private, 1)?);
+            let public = secret.recover_public_key().map_err(|_| badarg(c, 1, "Bad key"))?;
             Ok({
-                let e = [bin(c, public.as_bytes()), bin(c, &private)];
+                let e = [bin(c, &public[..]), bin(c, &private)];
                 c.tuple(&e)
             })
         }
         Some("ed25519") => {
             let private = private_or_random(c, a, 1, 32)?;
-            let signing = ed25519_dalek::SigningKey::from_bytes(&key32(c, &private, 1)?);
+            let pair = ed25519_pair(c, &private, 1)?;
             Ok({
-                let e = [bin(c, signing.verifying_key().as_bytes()), bin(c, &private)];
+                let e = [bin(c, &pair.pk[..]), bin(c, &private)];
                 c.tuple(&e)
             })
         }
@@ -54,14 +68,11 @@ pub fn evp_compute_key(c: &mut Ctx, a: &[Term]) -> R {
         return Err(notsup(c, 0, "Unsupported curve"));
     }
     let (theirs, mine) = (bytes(c, a, 1, "public key")?, bytes(c, a, 2, "private key")?);
-    let theirs = x25519_dalek::PublicKey::from(key32(c, &theirs, 1)?);
-    let secret = x25519_dalek::StaticSecret::from(key32(c, &mine, 2)?);
-    let shared = secret.diffie_hellman(&theirs);
-    // An all-zero result means the peer sent a low-order point; OpenSSL refuses those too.
-    if !shared.was_contributory() {
-        return Err(nif_error(c, "error", -1, "Can't derive secret"));
-    }
-    Ok(bin(c, shared.as_bytes()))
+    let theirs = ed25519_compact::x25519::PublicKey::new(key32(c, &theirs, 1)?);
+    let secret = ed25519_compact::x25519::SecretKey::new(key32(c, &mine, 2)?);
+    // `dh` fails on an all-zero result, a low-order point from the peer; OpenSSL refuses those too.
+    let shared = theirs.dh(&secret).map_err(|_| nif_error(c, "error", -1, "Can't derive secret"))?;
+    Ok(bin(c, &shared[..]))
 }
 
 // ---- NIST curves: ECDH and ECDSA on P-256 and P-384 ----
@@ -234,10 +245,10 @@ pub fn sign(c: &mut Ctx, a: &[Term]) -> R {
             }
             let private =
                 key.first().and_then(|k| c.heap().iodata_bytes(*k)).ok_or_else(|| badarg(c, 3, "Bad key"))?;
-            let signing = ed25519_dalek::SigningKey::from_bytes(&key32(c, &private, 3)?);
+            let pair = ed25519_pair(c, &private, 3)?;
             let msg = bytes(c, a, 2, "data")?;
-            use ed25519_dalek::Signer;
-            Ok(bin(c, &signing.sign(&msg).to_bytes()))
+            // No noise: RFC 8032's deterministic signature, the bytes OpenSSL gives.
+            Ok(bin(c, &pair.sk.sign(&msg, None)[..]))
         }
         Some("ecdsa") => {
             let (digest, _) = digest_of(c, a, 1, 2)?;
@@ -281,10 +292,10 @@ pub fn verify(c: &mut Ctx, a: &[Term]) -> R {
             let public =
                 key.first().and_then(|k| c.heap().iodata_bytes(*k)).ok_or_else(|| badarg(c, 4, "Bad key"))?;
             let msg = bytes(c, a, 2, "data")?;
-            let vk = ed25519_dalek::VerifyingKey::from_bytes(&key32(c, &public, 4)?);
-            match (vk, <[u8; 64]>::try_from(&sig[..])) {
-                (Ok(vk), Ok(s)) => vk.verify_strict(&msg, &ed25519_dalek::Signature::from_bytes(&s)).is_ok(),
-                _ => false,
+            let pk = ed25519_compact::PublicKey::new(key32(c, &public, 4)?);
+            match <[u8; 64]>::try_from(&sig[..]) {
+                Ok(s) => pk.verify(&msg, &ed25519_compact::Signature::new(s)).is_ok(),
+                Err(_) => false,
             }
         }
         Some("ecdsa") => {
@@ -564,4 +575,52 @@ pub fn rsa_generate_key(c: &mut Ctx, a: &[Term]) -> R {
         let v = parts.iter().map(|x| bin(c, &x.to_bytes_be())).collect::<Vec<_>>();
         c.list(v)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ed25519_pair_of;
+
+    fn hex(s: &str) -> alloc::vec::Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    /// RFC 8032, section 7.1, test 1: the public key and the signature of the empty message, which
+    /// `tests/cryptotests/pubkey.erl` also holds to BEAM's.
+    #[test]
+    fn ed25519_is_rfc_8032() {
+        let seed = hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
+        let pair = ed25519_pair_of(seed.try_into().unwrap()).unwrap();
+        assert_eq!(
+            &pair.pk[..],
+            &hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")[..]
+        );
+        let sig = pair.sk.sign(b"", None);
+        assert_eq!(
+            &sig[..],
+            &hex(concat!(
+                "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555",
+                "fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+            ))[..]
+        );
+        assert!(pair.pk.verify(b"", &sig).is_ok());
+        assert!(pair.pk.verify(b"x", &sig).is_err());
+    }
+
+    /// The seed `ed25519-compact` would panic on is refused instead, so no key reaches it.
+    #[test]
+    fn the_all_zero_seed_is_refused_not_a_panic() {
+        assert!(ed25519_pair_of([0; 32]).is_none());
+        assert!(ed25519_pair_of([1; 32]).is_some());
+    }
+
+    /// A low-order point gives an all-zero secret, which `dh` refuses, as OpenSSL does.
+    #[test]
+    fn x25519_refuses_a_low_order_point() {
+        use ed25519_compact::x25519::{PublicKey, SecretKey};
+        let mine = SecretKey::new([7; 32]);
+        assert!(PublicKey::new([0; 32]).dh(&mine).is_err());
+        let theirs = SecretKey::new([9; 32]).recover_public_key().unwrap();
+        assert!(theirs.dh(&mine).is_ok());
+    }
 }

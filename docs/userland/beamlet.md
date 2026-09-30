@@ -126,7 +126,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 
 ### What runs on it
 
-Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness and the bound on a zlib stream are not attacked by a named test · tested: host:beamlet-vm::decodes_otp_output, host:beamlet-vm::encodes_like_otp, host:beamlet-vm::printing_matches_otp, host:beamlet-vm::matches_otp, host:beamlet-vm::block_hash_handles_every_tail_length, host:beamlet-re::pcre_spellings, host:beamlet-re::braces_are_quantifiers_only_when_counted, host:beamlet-crypto::certificates_round_trip, host:beamlet-crypto::nesting_is_bounded, host:beamlet-crypto::mutants_never_panic, host:beamlet-vm::compressed_terms_round_trip
+Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness, the cofactored Ed25519 check and the bound on a zlib stream are not attacked by a named test · tested: host:beamlet-vm::decodes_otp_output, host:beamlet-vm::encodes_like_otp, host:beamlet-vm::printing_matches_otp, host:beamlet-vm::matches_otp, host:beamlet-vm::block_hash_handles_every_tail_length, host:beamlet-re::pcre_spellings, host:beamlet-re::braces_are_quantifiers_only_when_counted, host:beamlet-crypto::certificates_round_trip, host:beamlet-crypto::nesting_is_bounded, host:beamlet-crypto::mutants_never_panic, host:beamlet-crypto::ed25519_is_rfc_8032, host:beamlet-crypto::the_all_zero_seed_is_refused_not_a_panic, host:beamlet-crypto::x25519_refuses_a_low_order_point, host:beamlet-vm::compressed_terms_round_trip
 
 Where beamlet implements something, it behaves as the real BEAM does, and the differential suite
 checks it: each test runs on BEAM and on beamlet and the printed results must be identical.
@@ -139,10 +139,18 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
 - **Regular expressions** (`beamlet-re`) run in linear time for every pattern, so a hostile
   pattern cannot backtrack for ever. A pattern either means what it means in PCRE or fails to
   compile; backreferences and general lookaround do not compile.
-- **Crypto** (`beamlet-crypto`) implements OTP's `crypto` natives in pure Rust (RustCrypto and
-  dalek), so `crypto.erl`, `public_key`, `ssl` and `ssh` run on it. It takes randomness only from
-  `Platform::random`, and a failure to get it fails the operation. Its `rsa` crate has a known
-  timing side channel in decryption; side channels are a stated wall, not one the design closes.
+- **Crypto** (`beamlet-crypto`) implements OTP's `crypto` natives in pure Rust, so `crypto.erl`,
+  `public_key`, `ssl` and `ssh` run on it. It takes randomness only from `Platform::random`, and a
+  failure to get it fails the operation. Its `rsa` crate has a known timing side channel in
+  decryption; side channels are a stated wall, not one the design closes.
+- **One X25519 and Ed25519 for the whole box.** They are `ed25519-compact`'s, the crate the loader,
+  `keyd` and `sshd` use, built from the same vendored bytes, and the RustCrypto primitives beamlet
+  shares with the servers are built from them too
+  ([vendored dependencies](../testbench.md#vendored-dependencies)). Where it departs from OpenSSL,
+  and so from the real BEAM: an all-zero Ed25519 seed is refused as a bad key, where the crate
+  would panic; and a signature is checked cofactored, as the loader's and `sshd`'s are, so one
+  whose R differs by a point of small order verifies. That forges nothing without the key, but
+  signatures are malleable, and code that takes a signature as an identifier must not.
 - **Compression** is OTP's `zlib`, whose natives run on `miniz_oxide`: deflate and inflate in raw,
   zlib and gzip formats, so `:zlib`, `:zip` and compressed external terms work unchanged. Each
   stream bounds what it holds queued, so a hostile archive cannot make one call allocate without

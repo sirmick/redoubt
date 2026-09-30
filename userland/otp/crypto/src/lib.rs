@@ -1,4 +1,4 @@
-//! OTP's `crypto` NIFs, implemented in pure Rust on the RustCrypto and dalek crates.
+//! OTP's `crypto` NIFs, implemented in pure Rust on the RustCrypto crates and `ed25519-compact`.
 //!
 //! The real `crypto.erl` from OTP runs unchanged: its NIF stub functions (`hash_nif/2`,
 //! `ng_crypto_init_nif/4`, ...) are replaced by these natives when the module loads, as

@@ -20,6 +20,7 @@ chacha20 = { path = "../../vendor/chacha20" }
 cipher = { path = "../../vendor/cipher" }
 cmov = { path = "../../vendor/cmov" }
 cpubits = { path = "../../vendor/cpubits" }
+ed25519-compact = { path = "../../vendor/ed25519-compact" }
 crypto-common = { path = "../../vendor/crypto-common" }
 ctr = { path = "../../vendor/ctr" }
 ctutils = { path = "../../vendor/ctutils" }
