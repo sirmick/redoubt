@@ -133,7 +133,8 @@ them on the path itself.
 ./shell --root ~/scratch      # another directory as the VM's /
 ./shell --fake                # the shell on Redoubt's platform, on the fake kernel
 ./test-shell                  # formatting, the cell protocol, the tests on BEAM then on
-                              # beamlet, the entry point, the fake kernel
+                              # beamlet, the entry point, the platform built for the
+                              # machine and run on the fake kernel
 ./test-shell test/redoubt/util_test.exs   # some test files only (in userland/shell)
 ```
 

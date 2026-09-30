@@ -45,13 +45,15 @@ use redoubt_rt::ipc::{Delivery, Event};
 use redoubt_rt::startup::Startup;
 
 /// Starting a thread that runs as this process: on the machine, the runtime's `thread_create`;
-/// on a host, a host thread the fake kernel counts as this process.
-pub trait Threads {
+/// on a host, a host thread the fake kernel counts as this process. `Send`, as the platform is:
+/// the VM's schedulers may share it.
+pub trait Threads: Send {
     fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>);
 }
 
 /// Where the VM's modules and applications come from, by file name (`lists.beam`, `kernel.app`).
-pub trait Modules {
+/// `Send`, as [`Threads`] is.
+pub trait Modules: Send {
     fn load(&mut self, file: &str) -> Option<Vec<u8>>;
 }
 
