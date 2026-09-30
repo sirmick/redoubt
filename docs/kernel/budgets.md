@@ -457,7 +457,7 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   and is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
   dominates lease termination, R39 (leases end). The cost must follow the objects the dying subtree holds,
   not every object page in the system and not every live table. Destruction gives three indexes,
-  one handle sweep, and three thread walks:
+  handle chains, three thread walks, and a walk of each dying process's own frames:
 
   1. **The budget tree is linked downward.** Each budget keeps a `first_child` and a `next_sibling`
      beside its `parent`, so `mark_dying`, `lift_dying` and the final free walk the subtree
@@ -471,13 +471,25 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      the dying subtree's endpoints and devices instead of re-scanning every object frame for one
      whose owner is dying. Process objects are not scanned either: the PID index
      (`Objects::processes`) finds them in a constant (64) lookups.
-  3. **One handle sweep per destruction.** The handles naming a dying object, and those stamped
-     with a dying budget, are closed in one pass, immediately before any such frame is freed; the
-     per-object sweeps that `free_object`, `destroy_endpoint` and `destroy_device` used to run are
-     folded into it. The one pass walks the live handle-table pages, a compile-time bound
-     (`MAX_PROCESS_COUNT` × `MAX_HANDLE_PAGES`), which another budget filling the system with
-     endpoints cannot grow: a process past `MAX_HANDLES` can create no more, so its table ends at
-     `MAX_HANDLE_PAGES` pages.
+  3. **Handles held outside a budget are chained to it.** A handle dies when the object it names
+     is destroyed or when the budget that stamped it is. A handle whose holder runs inside that
+     budget's subtree dies with its holder's table, so it needs nothing more. A handle held
+     outside is entered, when it arrives in a table (made, copied, minted or received), in the
+     chain of the budget it depends on: one doubly linked chain for the budget its object is
+     charged to (a budget handle's object is the budget itself), and one for its stamp. Each
+     budget heads both chains. The inside-or-outside test walks up from the holder's budget, at
+     most `MAX_DEPTH` steps, and holds for the handle's life because no budget moves. The cost
+     is a constant on each call that adds or closes a handle, and nothing on a call that only
+     uses one.
+
+     A destruction walks the chains of the dying budgets and closes exactly the handles held
+     outside that depend on them. It then frees the dying processes' table pages whole, after
+     unhooking any slot still entered in a surviving budget's chain; that is one word read per
+     slot. No live table is swept.
+
+     The chain entries make a slot eight words, 64 bytes, so a table page holds 64 handles and a
+     full table (`MAX_HANDLES`) is 64 pages. A message's copy of a handle keeps the four-word
+     form, since the chains index tables, not messages.
   4. **Three thread walks for the endpoints' teardown, not three per endpoint.** `destroy_endpoint`
      ran three all-thread scans per endpoint — fail its blocked senders and receivers, fail callers
      waiting for a reply through it, clear the abandoned-call notices owed on it — and
@@ -491,10 +503,15 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      pass. Each walk is `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk
      [R2 (fair waiting)](ipc.md#r2-fair-waiting) already makes on the delivery path, repeated only
      for each waiter it fails: the cost follows the subtree's own parked calls, never its endpoint
-     count. Freeing an endpoint's frame touches only the frame, deferred to the one sweep, not the
-     dying budget that owns it: the budget's whole object list is going with it.
+     count. Freeing an endpoint's frame touches only the frame, deferred until its handles are
+     closed, not the dying budget that owns it: the budget's whole object list is going with it.
+  5. **A process's frames are found from the process.** Ending a process releases the frames it
+     owns by walking its own page tables and the kernel frames it holds (its table pages, IPC
+     pages, saved registers and open-call pages), never the ownership array over all of RAM: a
+     term linear in RAM frames is what [R12 (scheduling)](scheduling.md#r12-scheduling) forbids.
+     A frame it lent stays with the borrower, as R3 says.
 
-  The invariant the four keep is R10 itself: after a destruction no handle, queued message or
+  The invariant the five keep is R10 itself: after a destruction no handle, queued message or
   taken call keeps authority that came through a dying budget (I2), and no handle names a freed
   frame (I1); the ledger returns exactly (I10). The checked build's scans over `0..=high_frame`
   (`check_process_index`, `check_irq_index`) prove the PID and IRQ indexes name exactly the live
@@ -513,6 +530,18 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   R10's kernel time from the trace's records at 30 ms on both widths (p99 23,381 µs on rv64 and
   25,023 µs on rv32), the same target the containment gate's own full-fill run will repeat once it
   lands.
+
+  Items 3 and 5 are not built yet: today one sweep reads every live slot of every table, and
+  ending a process scans the ownership array over all of RAM. The containment gate's lease fills
+  its handle table ([containment](README.md#containment)). At a fill of about 1,530 handles, its
+  destruction took 56 ms alone and 114 ms while the other lease's table was live (rv64; rv32 5 to
+  10% more), against 30 ms. The difference was the sweep. The rest was the lease's own objects:
+  about 8 µs to close each of its handles and 9 µs to release each of its endpoints. There were
+  also fixed walks of about 17 ms: the RAM scan once per process, and a walk of every thread for
+  the abandoned-call notices. A full table holds about 4,000 endpoints, so under 30 ms leaves a
+  few microseconds per object in the checked build. The chains therefore come with those costs
+  cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and the
+  notice walk joined to a thread walk the destruction already makes.
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).
