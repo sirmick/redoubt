@@ -17,7 +17,8 @@ pub trait Platform: crate::sync::Sendable {
     /// Monotonic time in microseconds since an arbitrary fixed point. Never goes backwards.
     fn monotonic_us(&mut self) -> u64;
 
-    /// Wall-clock time in microseconds since the Unix epoch, if the platform has a clock.
+    /// Wall-clock time in microseconds since the Unix epoch, if the platform has a clock. Without
+    /// one the VM's system time is [`system_time_us`]'s.
     fn system_time_us(&mut self) -> Option<u64>;
 
     /// Block until `deadline` (a [`Platform::monotonic_us`] value) passes, or indefinitely for
@@ -295,4 +296,51 @@ pub enum ConsoleInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformError {
     Unavailable,
+}
+
+/// The VM's system time: the platform's wall clock, or, on a platform without one, the time
+/// since boot counted from the Unix epoch, as a machine without a real-time clock keeps it.
+/// Programs that read the time go on working (the logger stamps every event), and a date says
+/// 1970. A check that a date has begun, a certificate's `notBefore`, then fails; a check only that
+/// one has not passed, a token's expiry, then passes, whatever the token; and times from two
+/// boots cannot be ordered, since each counts from 1970.
+pub fn system_time_us(platform: &mut dyn Platform) -> u64 {
+    match platform.system_time_us() {
+        Some(us) => us,
+        None => platform.monotonic_us(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A platform ten seconds after boot, with a wall clock or without one.
+    struct Clock {
+        wall: Option<u64>,
+    }
+
+    impl Platform for Clock {
+        fn monotonic_us(&mut self) -> u64 { 10_000_000 }
+
+        fn system_time_us(&mut self) -> Option<u64> { self.wall }
+
+        fn idle(&mut self, _deadline: Option<u64>) {}
+
+        fn console_write(&mut self, _bytes: &[u8]) {}
+
+        fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
+
+        fn load_module(&mut self, _module: &str) -> Option<Vec<u8>> { None }
+    }
+
+    #[test]
+    fn the_wall_clock_is_the_system_time() {
+        assert_eq!(system_time_us(&mut Clock { wall: Some(1_790_000_000_000_000) }), 1_790_000_000_000_000);
+    }
+
+    #[test]
+    fn without_a_wall_clock_the_epoch_is_boot() {
+        assert_eq!(system_time_us(&mut Clock { wall: None }), 10_000_000);
+    }
 }
