@@ -235,6 +235,19 @@ flowchart TD
 budget below it, never above or beside it. Destroying S revokes the badge-6 handle and every copy
 of it; the badge-5 handle lasts as long as `system`.*
 
+Because `mint` only narrows, a server can mint a handle into a `user`-class budget only from a
+receive right whose stamp is that budget or an ancestor of it. A server's own endpoints are stamped
+with its own budget, so a `system`-class keeper — the steward, whose sessions and leases are carved
+from `users` — cannot mint a session's or lease's handles from them: `users` is beside `system`,
+not below it. The receive rights it mints from are therefore ones a process running at or above
+`users` created: `init`, which runs in `root`, makes its servers' endpoints stamped `root` (below
+which everything sits) and mints the badged handles its manifest names
+([init](../servers/init.md#starting-the-servers)); a helper run in `users` itself stamps its
+endpoints `users` and so can mint into anything under `users`. That helper must run in `users`
+itself, not in a child of it (a child's stamp would be the leases' sibling, not their ancestor),
+and it may exit at once, because an endpoint dies only with its owner budget, never with the
+process that created it.
+
 ## Authority
 
 Status: built · tested: bench:redoubt-ipc-attack, bench:budget-forge-attack, bench:device, bench:process-attack, mutation:ReceiveWithBadgedHandle, mutation:ExitEndpointBadged
