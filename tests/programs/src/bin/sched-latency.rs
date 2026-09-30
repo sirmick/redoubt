@@ -24,9 +24,9 @@
 //!
 //! The targets (kernel/scheduling.md, virtual time, N <= 16, this workload): driver and steward
 //! timer wakes p50 <= 15 ms and p99 <= 50 ms; the steward's decision wake p50 <= 25 ms and p99 <=
-//! 105 ms (from the fourth seed sweep); deadline notice p99 <= 40 ms and R10 kernel time p99 <=
+//! 95 ms (from the fourth seed sweep); deadline notice p99 <= 40 ms and R10 kernel time p99 <=
 //! 30 ms (R10's is the post-check); a lease's termination from the steward's decision, decision
-//! wake + R10, p99 <= 135 ms (the post-check adds the two); the 1000-weight server's share of the
+//! wake + R10, p99 <= 125 ms (the post-check adds the two); the 1000-weight server's share of the
 //! spinning CPU at N = 16 at least its weight's less 30/1000.
 //! Each is printed as `met` or `missed`; the virtual-time case requires `met`, and the plain-TCG
 //! reference case only reports. Destruction now follows the dying subtree, so adding objects to
@@ -49,10 +49,10 @@ const WINDOW_US: u64 = 16_000_000;
 const WAKE_P50: usize = 15_000;
 const WAKE_P99: usize = 50_000;
 /// The steward's decision wake, set from the seed sweep (kernel/scheduling.md, "Responsiveness"):
-/// its worst case over the seeds plus a tenth, rounded up to 5 ms. The fourth sweep moved it to
-/// 105 ms on a phase shift; a lease's end follows to 135 ms.
+/// its worst case over the seeds plus a tenth, rounded up to 5 ms. The fourth sweep's worst p99
+/// is 82,497 us, so 95 ms; a lease's end follows.
 const DECISION_P50: usize = 25_000;
-const DECISION_P99: usize = 105_000;
+const DECISION_P99: usize = 95_000;
 /// The deadline notice and R10's kernel time, set from the seed sweep and back at 30/40 ms now
 /// that a destruction follows the dying subtree (docs/kernel/budgets.md, "Residual risks").
 const NOTICE_P99: usize = 40_000;
