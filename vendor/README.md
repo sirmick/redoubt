@@ -1,14 +1,15 @@
 # Vendored crates
 
 Third-party source kept in the tree so that it is read and built from here, not fetched. Each
-crate is used through a `[patch.crates-io]` path in the root `Cargo.toml`.
+crate is used through a `[patch.crates-io]` path in the root `Cargo.toml`, or, for beamlet's,
+in `userland/otp/Cargo.toml`, its workspace's.
 
 ## The crates
 
 Each directory is the crate exactly as crates.io published it: the `.crate` file, unpacked,
 with nothing added, removed or edited, except that a patched crate carries its one patch
 ([below](#patched-crates)). The checksum is the published `.crate` file's SHA-256, as the
-crates.io index records it. There are three users:
+crates.io index records it. There are four users:
 
 - **`ipd`'s TCP/IP stack** (answer 174): `smoltcp` and the five crates after it. Mick chose to
   vendor them (2026-09-24).
@@ -16,6 +17,9 @@ crates.io index records it. There are three users:
   ([below](#the-loaders-and-keyds-ed25519)).
 - **`sshd`'s SSH library:** `sunset` and the rest of the table
   ([below](#sshds-ssh-library)). The owner chose to vendor them with `sshd`'s core (2026-09-28).
+- **beamlet, the Elixir VM:** every crate compiled into the VM for the target, the crypto,
+  regex, compression and number crates ([below](#beamlets-crates)). The owner chose to vendor
+  them now, one version of each (2026-09-30).
 
 | Crate | Version | License (ours to use under) | crates.io SHA-256 |
 | --- | --- | --- | --- |
@@ -53,6 +57,48 @@ crates.io index records it. There are three users:
 | `snafu-derive` | 0.9.2 | MIT (of MIT OR Apache-2.0) | `287f59010008f0d7cf5e3b03196d666c1acc46c8d3e9cf34c28a1a7157601e72` |
 | `virtue` | 0.0.17 | MIT | `7302ac74a033bf17b6e609ceec0f891ca9200d502d31f02dc7908d3d98767c9d` |
 | `getrandom` | 0.4.3 | MIT (of MIT OR Apache-2.0) | `300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099` |
+| `adler2` | 2.0.1 | 0BSD (of 0BSD OR MIT OR Apache-2.0) | `320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa` |
+| `aead` | 0.6.1 | MIT (of MIT OR Apache-2.0) | `1973cfbc1a2daf9cf550e74e1f088c28e7f7d8c1e1418fb6c9dc5184b7e84c99` |
+| `aes-gcm` | 0.11.1 | MIT (of Apache-2.0 OR MIT) | `7f2b8006a0c83f52b62ba44a97b58bf76fe2f70a329e588f67f89691d93d498f` |
+| `base16ct` | 1.0.0 | MIT (of Apache-2.0 OR MIT) | `fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6` |
+| `cbc` | 0.2.1 | MIT (of MIT OR Apache-2.0) | `ce2dc9ee5f88d11e0beb842c88b33c8a5cf0d1329c4b19494af42b07dbfe8896` |
+| `chacha20poly1305` | 0.11.0 | MIT (of Apache-2.0 OR MIT) | `9b89e1c441e926b9c82a8d023f6e1b7ae0adcfaa7d621814e4d60789bac751cb` |
+| `const-oid` | 0.10.2 | MIT (of Apache-2.0 OR MIT) | `a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c` |
+| `crypto-bigint` | 0.7.5 | MIT (of Apache-2.0 OR MIT) | `1a52aa3fcda4e6302a9f48734f234d35d4721b96f8fe07d073f07ce9df4f0271` |
+| `crypto-primes` | 0.7.2 | MIT (of Apache-2.0 OR MIT) | `3633a51a39c69ebbaa4feaa694bd83d241e4093901c84a0963b19d9bb3f0cf8f` |
+| `der` | 0.8.2 | MIT (of Apache-2.0 OR MIT) | `a878c850e9e421b20262e9b41f9c860e4785fa07541c266b62ff9d1ef998a80a` |
+| `ecdsa` | 0.17.0 | MIT (of Apache-2.0 OR MIT) | `c0681a4fc24c767085329728d8dfba959af91228aa4610cca4f8ce317ba46ae0` |
+| `elf` | 0.8.0 | MIT (of MIT OR Apache-2.0) | `55dd888a213fc57e957abf2aa305ee3e8a28dbe05687a251f33b637cd46b0070` |
+| `elliptic-curve` | 0.14.1 | MIT (of Apache-2.0 OR MIT) | `9d65aa39b3a5c1c9c1b745c9a019234bb7a21b77abcb4f4d266d706e2d577d65` |
+| `ff` | 0.14.0 | MIT (of MIT OR Apache-2.0) | `a1f686ab92a9fb0eaf188f6c6c87b89490baa6fdb0db4544ba4dc47f7942489f` |
+| `ghash` | 0.6.0 | MIT (of Apache-2.0 OR MIT) | `2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5` |
+| `group` | 0.14.0 | MIT (of MIT OR Apache-2.0) | `7fd1a1c7a5206c5b7a3f5a0d7ccd3ff85d0c8f5133d62a02680255b0004af5f4` |
+| `hkdf` | 0.13.0 | MIT (of MIT OR Apache-2.0) | `4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018` |
+| `keccak` | 0.2.2 | MIT (of Apache-2.0 OR MIT) | `d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598` |
+| `libm` | 0.2.16 | MIT | `b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981` |
+| `md-5` | 0.11.0 | MIT (of MIT OR Apache-2.0) | `69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98` |
+| `miniz_oxide` | 0.9.1 | MIT (of MIT OR Zlib OR Apache-2.0) | `b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c` |
+| `num-bigint` | 0.4.8 | MIT (of MIT OR Apache-2.0) | `c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367` |
+| `num-integer` | 0.1.47 | MIT (of MIT OR Apache-2.0) | `7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b` |
+| `num-traits` | 0.2.19 | MIT (of MIT OR Apache-2.0) | `071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841` |
+| `p256` | 0.14.0 | MIT (of Apache-2.0 OR MIT) | `d2c9239b2dbc807adbbe147e8cf72ea7450c3a0aabe62cb8e75ff4ec22e1f72a` |
+| `p384` | 0.14.0 | MIT (of Apache-2.0 OR MIT) | `d17b851e6b3e378ab4ecb07fa2ed23f4d15f075735f8fec9fa1e7bdce5f8301f` |
+| `pbkdf2` | 0.13.0 | MIT (of MIT OR Apache-2.0) | `112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629` |
+| `polyval` | 0.7.3 | MIT (of Apache-2.0 OR MIT) | `f0fa31d631f2b2cb2a544d0aa321ce847a94764d701ca2becc411138b93d49cd` |
+| `primefield` | 0.14.0 | MIT (of Apache-2.0 OR MIT) | `c555a6e4eb7d4e158fcb028c835c3b8642206ddc279b5c6b202ef9a8bdb592f4` |
+| `primeorder` | 0.14.0 | MIT (of Apache-2.0 OR MIT) | `5c9f42978c78a00e3d68f69fc03e57a234debae69da4020a4fb588fcdcd07b06` |
+| `rand_core` | 0.10.1 | MIT (of MIT OR Apache-2.0) | `63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69` |
+| `regex-automata` | 0.4.18 | MIT (of MIT OR Apache-2.0) | `ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2` |
+| `regex-syntax` | 0.8.11 | MIT (of MIT OR Apache-2.0) | `d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4` |
+| `rfc6979` | 0.6.0 | MIT (of Apache-2.0 OR MIT) | `b4a459cddafb3fe76b31fd8f1108007566c40301feb64dc7b54656eb7388172b` |
+| `rsa` | 0.10.0-rc.18 | MIT (of MIT OR Apache-2.0) | `30b2aa4ba0d89f73d1e332df05be0eeab8840351c36ca5654341dfdb57bb3caf` |
+| `ryu` | 1.0.23 | BSL-1.0 (of Apache-2.0 OR BSL-1.0) | `9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f` |
+| `sec1` | 0.8.1 | MIT (of Apache-2.0 OR MIT) | `d56d437c2f19203ce5f7122e507831de96f3d2d4d3be5af44a0b0a09d8a80e4d` |
+| `sha1` | 0.11.0 | MIT (of MIT OR Apache-2.0) | `aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214` |
+| `sha3` | 0.12.0 | MIT (of MIT OR Apache-2.0) | `bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759` |
+| `signature` | 3.0.0 | MIT (of Apache-2.0 OR MIT) | `28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5` |
+| `sponge-cursor` | 0.1.0 | MIT (of MIT OR Apache-2.0) | `3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620` |
+| `wnaf` | 0.14.1 | MIT (of Apache-2.0 OR MIT) | `795ca18b3fdb5e62bf982199278341ddcf7ebf7d32e25e212ad05d496e95f6fa` |
 
 Their licence texts are in `LICENSES/` (`smoltcp-0BSD.txt`, `heapless-MIT.txt`, ...), as well as
 in each directory. `sunset-sshwire-derive` ships none; its author's is `sunset`'s
@@ -311,3 +357,55 @@ ours.
 that the error `bindings_with_variant_name`, and Cargo caps lints only for registry crates, so the
 published crate does not build from `vendor/`. The patch renames the binding. It changes no
 behaviour and can go upstream.
+
+## beamlet's crates
+
+beamlet builds everything it compiles for the target from `vendor/`, through the patches in
+`userland/otp/Cargo.toml`: the twenty crates it shares with the servers, and the 42 of the first
+table from `adler2` down, its own. One version of each: RSA is `rsa` 0.10.0-rc.18, pinned to that
+release candidate, because it is the one on the digest 0.11 generation every other crate here
+uses; the 0.9 line would bring a second copy of that generation, and with it the crates with the
+most `unsafe` in the VM. What builds or tests only on the host (the CLI's `cap-std` and `rustix`,
+`pcre2` for the differential tests, the proc-macro stack) comes from crates.io, pinned by
+`userland/otp/Cargo.lock`, as the root's host tools' crates do.
+
+**Left to `userland/otp/Cargo.lock`, not vendored.** `cfg-if` is macro-only, as it is for the root
+(above), and stays pinned by version and checksum. `serde`, `serde_core` and `serdect` are locked
+and never built: `crypto-bigint` names `serdect` through a weak feature (`serdect?/alloc`), which
+the lockfile resolves whatever the features, and nothing turns it on.
+
+| Crate | Version | License | crates.io SHA-256 |
+| --- | --- | --- | --- |
+| `cfg-if` | 1.0.5 | MIT OR Apache-2.0 | `4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600` |
+
+**What of them uses `unsafe`,** read for the vendoring commit, of what compiles for riscv64. The
+SIMD and assembly backends for x86, ARM and LoongArch (`keccak`, `md-5`, `polyval`, `sha1`, `libm`'s
+`arch`, `num-bigint`'s carry intrinsics) are behind `cfg(target_arch)` and are not compiled. None
+of `aead`, `adler2`, `elf`, `ff`, `miniz_oxide`, `p384`, `primefield`, `regex-syntax`, `sec1`,
+`sha3`, `signature` and `wnaf` has any (`forbid(unsafe_code)`), nor do `aes-gcm`, `cbc`,
+`chacha20poly1305`, `crypto-primes`, `ecdsa`, `ghash`, `group`, `hkdf`, `num-integer`, `p256`,
+`pbkdf2`, `primeorder`, `rand_core`, `rfc6979` and `rsa`. The rest:
+- `const-oid`, `der`, `crypto-bigint` and `elliptic-curve`: casts of a reference to a
+  `repr(transparent)` newtype (`ObjectIdentifierRef`, `BytesRef`, `Limb`, `UintRef`, `NonZero`,
+  `Odd`, `NonIdentity`), each with its `SAFETY` note; `crypto-bigint` also views its limbs as
+  bytes (a byte slice needs no alignment) and turns an `i8` into the `repr(i8)` `Ordering`.
+- `base16ct` and `num-bigint`: `from_utf8_unchecked` over the ASCII digits they just wrote.
+- `num-traits`: one float-to-integer conversion after the range check that makes it exact.
+- `sponge-cursor` (under `sha3`): `unreachable_unchecked` where its type keeps the position below
+  the rate, and a `[u64; N]` viewed as the first `RATE` bytes, where `RATE` is at most its size.
+- `libm`: musl's algorithms, ported with unchecked indexing into fixed tables (`i!`), bit-for-bit
+  float transmutes, a volatile read to force an evaluation, and `unreachable_unchecked` behind
+  explicit checks in its narrowing division.
+- `ryu`: formats a float into a buffer through raw pointers, its `Buffer` sized for the longest
+  output, and indexes its power tables unchecked by exponents its arithmetic bounds.
+- `regex-automata`: its pool of search caches (a mutex of its own and an owner fast path, with
+  `Sync` asserted for them), its lazily initialised statics, and the deserialisation of a
+  serialised automaton, which beamlet's `re` does not call.
+
+Found: nothing that needs changing. The patterns are the common ones, and each crate's use is
+the one its authors document; an update must redo this reading, and the counts per crate (from
+`grep -c unsafe`) make the diff easy to see.
+
+**Build scripts,** which run on the build host; both were read. `num-traits`'s probes the compiler
+for `f64::total_cmp` with `autocfg`. `libm`'s reads only Cargo's own variables and
+`ENSURE_NO_PANIC`, and sets its configuration cfgs from the target.

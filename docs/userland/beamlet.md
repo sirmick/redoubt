@@ -376,8 +376,9 @@ That is the latitude an application has and privileged code does not
 ([the tenets](../TENETS.md#5-dependencies-are-part-of-the-trusted-computing-base)): the VM is
 per-principal code, and a bug in it reaches that principal's own capabilities, which the kernel
 contains ([trust tiers](../servers/README.md#trust-tiers)). What is shared with the servers is
-built from the same vendored bytes, and the rest is pinned by the lockfile and vendored when
-beamlet first goes into an image.
+built from the same vendored bytes, and the rest is vendored too, one version of each
+([vendored dependencies](../testbench.md#vendored-dependencies)); only what builds or tests on
+the host comes from crates.io, pinned by the lockfile.
 
 **One 9P client, not a method per service.** Files, TCP and the console are all 9P on Redoubt, so
 one generic client in Rust covers them, and the framing (packet modes, line mode) stays in Erlang

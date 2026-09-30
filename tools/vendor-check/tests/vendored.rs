@@ -60,6 +60,67 @@ const LOCKED: &[(&str, &str, &str)] = &[
     ("heck", "0.5.0", "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"),
 ];
 
+/// beamlet's own vendored crates (vendor/README.md, "beamlet's crates"), built by its own
+/// workspace, `userland/otp`, through the patches in its manifest.
+const BEAMLET: &[(&str, &str, &str)] = &[
+    ("adler2", "2.0.1", "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"),
+    ("aead", "0.6.1", "1973cfbc1a2daf9cf550e74e1f088c28e7f7d8c1e1418fb6c9dc5184b7e84c99"),
+    ("aes-gcm", "0.11.1", "7f2b8006a0c83f52b62ba44a97b58bf76fe2f70a329e588f67f89691d93d498f"),
+    ("base16ct", "1.0.0", "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"),
+    ("cbc", "0.2.1", "ce2dc9ee5f88d11e0beb842c88b33c8a5cf0d1329c4b19494af42b07dbfe8896"),
+    ("chacha20poly1305", "0.11.0", "9b89e1c441e926b9c82a8d023f6e1b7ae0adcfaa7d621814e4d60789bac751cb"),
+    ("const-oid", "0.10.2", "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"),
+    ("crypto-bigint", "0.7.5", "1a52aa3fcda4e6302a9f48734f234d35d4721b96f8fe07d073f07ce9df4f0271"),
+    ("crypto-primes", "0.7.2", "3633a51a39c69ebbaa4feaa694bd83d241e4093901c84a0963b19d9bb3f0cf8f"),
+    ("der", "0.8.2", "a878c850e9e421b20262e9b41f9c860e4785fa07541c266b62ff9d1ef998a80a"),
+    ("ecdsa", "0.17.0", "c0681a4fc24c767085329728d8dfba959af91228aa4610cca4f8ce317ba46ae0"),
+    ("elf", "0.8.0", "55dd888a213fc57e957abf2aa305ee3e8a28dbe05687a251f33b637cd46b0070"),
+    ("elliptic-curve", "0.14.1", "9d65aa39b3a5c1c9c1b745c9a019234bb7a21b77abcb4f4d266d706e2d577d65"),
+    ("ff", "0.14.0", "a1f686ab92a9fb0eaf188f6c6c87b89490baa6fdb0db4544ba4dc47f7942489f"),
+    ("ghash", "0.6.0", "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"),
+    ("group", "0.14.0", "7fd1a1c7a5206c5b7a3f5a0d7ccd3ff85d0c8f5133d62a02680255b0004af5f4"),
+    ("hkdf", "0.13.0", "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"),
+    ("keccak", "0.2.2", "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"),
+    ("libm", "0.2.16", "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"),
+    ("md-5", "0.11.0", "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"),
+    ("miniz_oxide", "0.9.1", "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"),
+    ("num-bigint", "0.4.8", "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"),
+    ("num-integer", "0.1.47", "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"),
+    ("num-traits", "0.2.19", "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"),
+    ("p256", "0.14.0", "d2c9239b2dbc807adbbe147e8cf72ea7450c3a0aabe62cb8e75ff4ec22e1f72a"),
+    ("p384", "0.14.0", "d17b851e6b3e378ab4ecb07fa2ed23f4d15f075735f8fec9fa1e7bdce5f8301f"),
+    ("pbkdf2", "0.13.0", "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"),
+    ("polyval", "0.7.3", "f0fa31d631f2b2cb2a544d0aa321ce847a94764d701ca2becc411138b93d49cd"),
+    ("primefield", "0.14.0", "c555a6e4eb7d4e158fcb028c835c3b8642206ddc279b5c6b202ef9a8bdb592f4"),
+    ("primeorder", "0.14.0", "5c9f42978c78a00e3d68f69fc03e57a234debae69da4020a4fb588fcdcd07b06"),
+    ("rand_core", "0.10.1", "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"),
+    ("regex-automata", "0.4.18", "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"),
+    ("regex-syntax", "0.8.11", "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"),
+    ("rfc6979", "0.6.0", "b4a459cddafb3fe76b31fd8f1108007566c40301feb64dc7b54656eb7388172b"),
+    ("rsa", "0.10.0-rc.18", "30b2aa4ba0d89f73d1e332df05be0eeab8840351c36ca5654341dfdb57bb3caf"),
+    ("ryu", "1.0.23", "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"),
+    ("sec1", "0.8.1", "d56d437c2f19203ce5f7122e507831de96f3d2d4d3be5af44a0b0a09d8a80e4d"),
+    ("sha1", "0.11.0", "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"),
+    ("sha3", "0.12.0", "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"),
+    ("signature", "3.0.0", "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"),
+    ("sponge-cursor", "0.1.0", "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"),
+    ("wnaf", "0.14.1", "795ca18b3fdb5e62bf982199278341ddcf7ebf7d32e25e212ad05d496e95f6fa"),
+];
+
+/// beamlet's crates left to its `Cargo.lock`, pinned.
+const BEAMLET_LOCKED: &[(&str, &str, &str)] =
+    &[("cfg-if", "1.0.5", "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600")];
+
+/// Every vendored crate, the root's users' and beamlet's.
+fn all() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)> {
+    VENDORED.iter().chain(BEAMLET)
+}
+
+/// beamlet's workspace's vendored crates: its own, and those of the root's it builds too.
+fn in_beamlet(lock: &str) -> Vec<&'static (&'static str, &'static str, &'static str)> {
+    all().filter(|(name, ..)| !locked(lock, name).is_empty()).collect()
+}
+
 fn root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("../..") }
 
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
@@ -181,7 +242,7 @@ fn check_published(vendor: &Path, names: &[&str], sums: &str) -> Result<(), Stri
 fn vendored_files_are_the_published_bytes() {
     let vendor = root().join("vendor");
     let sums = std::fs::read_to_string(vendor.join("SHA256SUMS")).expect("vendor/SHA256SUMS");
-    let names: Vec<&str> = VENDORED.iter().map(|(name, ..)| *name).collect();
+    let names: Vec<&str> = all().map(|(name, ..)| *name).collect();
     check_published(&vendor, &names, &sums).unwrap();
 }
 
@@ -267,7 +328,7 @@ fn every_vendored_file_is_tracked() {
         .collect();
     let vendor = root().join("vendor");
     let mut present = BTreeSet::new();
-    for (name, ..) in VENDORED {
+    for (name, ..) in all() {
         files(&vendor, &vendor.join(name), &mut present);
     }
     let untracked: Vec<_> = present.difference(&tracked).collect();
@@ -289,12 +350,27 @@ fn locked(lock: &str, name: &str) -> Vec<Vec<String>> {
 
 /// `Cargo.lock` builds each vendored crate from its path (a path package has no `source`),
 /// at the vendored version, and has no other copy of it; the crates left to the lockfile are
-/// the pinned registry versions.
+/// the pinned registry versions. So does beamlet's, for its crates and the root's it builds.
 #[test]
 fn the_vendored_copies_are_the_ones_that_build() {
     let lock = std::fs::read_to_string(root().join("Cargo.lock")).expect("Cargo.lock");
-    for (name, version, _) in VENDORED {
-        let blocks = locked(&lock, name);
+    built_from_vendor(&lock, VENDORED.iter(), LOCKED);
+    let beamlet =
+        std::fs::read_to_string(root().join("userland/otp/Cargo.lock")).expect("userland/otp/Cargo.lock");
+    assert!(
+        BEAMLET.iter().all(|(name, ..)| !locked(&beamlet, name).is_empty()),
+        "a crate of BEAMLET is not in beamlet's lock"
+    );
+    built_from_vendor(&beamlet, in_beamlet(&beamlet).into_iter(), BEAMLET_LOCKED);
+}
+
+fn built_from_vendor<'a>(
+    lock: &str,
+    vendored: impl Iterator<Item = &'a (&'a str, &'a str, &'a str)>,
+    left: &[(&str, &str, &str)],
+) {
+    for (name, version, _) in vendored {
+        let blocks = locked(lock, name);
         assert_eq!(
             blocks.len(),
             1,
@@ -308,8 +384,8 @@ fn the_vendored_copies_are_the_ones_that_build() {
             "{name}: Cargo.lock takes it from a registry, not vendor/{name}"
         );
     }
-    for (name, version, checksum) in LOCKED {
-        let blocks = locked(&lock, name);
+    for (name, version, checksum) in left {
+        let blocks = locked(lock, name);
         let pinned = blocks.iter().any(|b| {
             b.contains(&format!("version = \"{version}\""))
                 && b.contains(
@@ -341,9 +417,24 @@ fn manifest_paths(metadata: &str) -> BTreeSet<String> {
 #[test]
 fn the_patches_point_at_vendor() {
     let root = root().canonicalize().expect("repository root");
+    graph_from_vendor(&root, &root, VENDORED.iter(), true);
+    // beamlet's own crates are all compiled for the target; of the root's it shares, some are
+    // compiled only on the host, so those need only have no registry copy in its graph.
+    graph_from_vendor(&root, &root.join("userland/otp"), BEAMLET.iter(), true);
+    graph_from_vendor(&root, &root.join("userland/otp"), VENDORED.iter(), false);
+}
+
+/// In `workspace`'s graph for the target, each of `vendored` has no registry copy, and, when
+/// `required`, is built from `vendor/`.
+fn graph_from_vendor<'a>(
+    root: &Path,
+    workspace: &Path,
+    vendored: impl Iterator<Item = &'a (&'a str, &'a str, &'a str)>,
+    required: bool,
+) {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = std::process::Command::new(cargo)
-        .current_dir(&root)
+        .current_dir(workspace)
         .args([
             "metadata",
             "--format-version",
@@ -356,9 +447,13 @@ fn the_patches_point_at_vendor() {
         .expect("run cargo metadata");
     assert!(out.status.success(), "cargo metadata failed: {}", String::from_utf8_lossy(&out.stderr));
     let paths = manifest_paths(&String::from_utf8(out.stdout).expect("UTF-8 metadata"));
-    for (name, version, _) in VENDORED {
+    for (name, version, _) in vendored {
         let vendored = root.join("vendor").join(name).join("Cargo.toml");
-        assert!(paths.contains(vendored.to_str().unwrap()), "{name}: not built from {}", vendored.display());
+        assert!(
+            !required || paths.contains(vendored.to_str().unwrap()),
+            "{name}: not built from {}",
+            vendored.display()
+        );
         let registry = format!("/{name}-{version}/Cargo.toml");
         let copies: Vec<_> = paths.iter().filter(|p| p.ends_with(&registry)).collect();
         assert!(copies.is_empty(), "{name}: a registry copy is in the graph: {copies:?}");
@@ -370,7 +465,7 @@ fn the_patches_point_at_vendor() {
 #[test]
 fn the_readme_records_each_crate() {
     let readme = std::fs::read_to_string(root().join("vendor/README.md")).expect("vendor/README.md");
-    for (name, version, checksum) in VENDORED.iter().chain(LOCKED) {
+    for (name, version, checksum) in all().chain(LOCKED).chain(BEAMLET_LOCKED) {
         let row = format!("| `{name}` | {version} |");
         let line = readme.lines().find(|l| l.starts_with(&row)).unwrap_or_else(|| panic!("no row {row:?}"));
         assert!(line.contains(checksum), "vendor/README.md's row for {name} lacks {checksum}");
