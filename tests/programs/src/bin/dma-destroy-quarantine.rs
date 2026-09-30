@@ -1,17 +1,18 @@
-//! A device quarantined while a budget is being destroyed still loses its handles (R10, I1, I2,
+//! Devices quarantined while a budget is being destroyed still lose their handles (R10, I1, I2,
 //! I16; kernel/devices.md, "Quarantine").
 //!
-//! The first program's driver dma_allocs through the deaf slot and parks. It is ended by
-//! `budget_destroy`, not by a fault: a destruction is running (object-frame frees deferred and
-//! the per-object handle sweeps folded into one pass), and the driver's death fails the slot's
-//! first reset (`dma-reset-deaf`), quarantining it. The device object is charged to `system`,
-//! not to the dying driver budget, so the destruction's one sweep, which keys on the owner,
-//! would leave a handle naming the frame it is about to free. The destruction must return, every
-//! handle to the quarantined slot must be gone (`BadHandle`), and the run's charge must move to
-//! the parent.
+//! The first program's two drivers each dma_alloc through a distinct deaf slot and park. They are
+//! ended by one `budget_destroy`, not a fault: a destruction is running (object-frame frees
+//! deferred and the per-object handle sweeps folded into one pass), and each driver's death fails
+//! its slot's first reset (`dma-reset-deaf`), quarantining it. Each device object is charged to
+//! `system`, not to the dying driver budget, so the destruction's one sweep, which keys on the
+//! owner, would leave a handle naming the frame it is about to free; and the second death's
+//! quarantine must not find and free the first device's already-deferred frame again. The
+//! destruction must return, every handle to either quarantined slot must be gone (`BadHandle`),
+//! and both runs' charges must move to the parent.
 //!
 //! It runs as the bundle's first program, so it holds every device object, prints on the console
-//! it maps itself, and ends with `system_reset`. The driver is a copy of it (`spawn.rs`).
+//! it maps itself, and ends with `system_reset`. The drivers are copies of it (`spawn.rs`).
 
 #![no_std]
 #![no_main]
@@ -22,14 +23,15 @@ use test_programs::rd::{self, Error, Received, ResetKind};
 use test_programs::spawn;
 use uart_16550::MmioSerialPort;
 
-/// Pages of the driver's run.
+/// Pages of each driver's run.
 const RUN_PAGES: usize = 4;
-/// How long a check waits for the driver's report, in microseconds of guest time.
+/// How long a check waits for the drivers' reports, in microseconds of guest time.
 const WAIT: u64 = 60_000_000;
 /// Empty virtio-mmio slots this program can use: QEMU `virt` has 8.
 const MAX_SLOTS: usize = 8;
-/// The badge the driver reports on.
+/// The badges the two drivers report on.
 const D1: u64 = 1;
+const D2: u64 = 2;
 
 struct Out(MmioSerialPort);
 
@@ -46,8 +48,8 @@ macro_rules! check {
     }};
 }
 
-/// The driver: the deaf slot in its slot 1, a send handle in slot 2. It allocates one run,
-/// reports its physical address, then parks to be destroyed.
+/// A driver: the deaf slot in its slot 1, a send handle in slot 2. It allocates one run, reports
+/// its physical address, then parks to be destroyed.
 extern "C" fn driver(_arg: usize) -> ! {
     let phys = rd::dma_alloc(1, RUN_PAGES).map_or(0, |(_, p)| p as usize);
     if rd::send(2, &rd::body([phys, 0, 0, 0]), None, WAIT).is_err() {
@@ -56,15 +58,18 @@ extern "C" fn driver(_arg: usize) -> ! {
     test_programs::park()
 }
 
-/// The next message from `badge` on `ep`, skipping exit notices.
-fn report(ep: u32, badge: u64) -> Option<[usize; rd::WORDS]> {
-    loop {
+/// Both drivers' reports, told apart by badge; the drivers race, so neither may be assumed first.
+fn two_reports(ep: u32) -> Option<([usize; rd::WORDS], [usize; rd::WORDS])> {
+    let (mut d1, mut d2) = (None, None);
+    while d1.is_none() || d2.is_none() {
         match rd::receive(Some(ep), WAIT, 0).ok()? {
-            Received::Message(m) if m.badge == badge => return Some(m.body.words),
-            Received::Exit(_) => continue,
+            Received::Message(m) if m.badge == D1 => d1 = d1.or(Some(m.body.words)),
+            Received::Message(m) if m.badge == D2 => d2 = d2.or(Some(m.body.words)),
+            Received::Message(_) | Received::Exit(_) => continue,
             _ => return None,
         }
     }
+    Some((d1.unwrap(), d2.unwrap()))
 }
 
 fn pages(budget: u32) -> u64 { rd::usage(budget).expect("budget_usage").pages_usage }
@@ -77,7 +82,7 @@ pub extern "C" fn _start() -> ! {
     out.0.init();
     say!(out, "\n[dma-destroy-quarantine] mapped the console");
 
-    // One empty virtio slot, the "deaf" one: its first reset reports not confirmed.
+    // Two empty virtio slots, the "deaf" ones: each first reset reports not confirmed.
     let mut slots = [0u32; MAX_SLOTS];
     let mut count = 0;
     for h in rd::OTHER_DEVICES..rd::log_rx() {
@@ -89,44 +94,63 @@ pub extern "C" fn _start() -> ! {
             count += 1;
         }
     }
-    if count == 0 {
-        say!(out, "[dma-destroy-quarantine] FAIL: no empty virtio slot");
+    if count < 2 {
+        say!(out, "[dma-destroy-quarantine] FAIL: {} empty virtio slots, not 2", count);
         test_programs::park()
     }
-    let deaf = slots[0];
+    let (deaf0, deaf1) = (slots[0], slots[1]);
 
-    // One driver budget, a driver dma_allocing through the deaf slot, then destroyed.
+    // One budget holding both drivers, each dma_allocing through its own deaf slot, then
+    // destroyed: the second driver's death quarantines a second slot in the same destruction.
     let ep = rd::endpoint_create().expect("an endpoint");
-    let limit = spawn::image().pages() as u64 + 96;
+    let limit = 2 * spawn::image().pages() as u64 + 200;
     let before = pages(rd::SYSTEM);
-    let budget = rd::create(rd::SYSTEM, &rd::spec(limit, 1, 10)).expect("a driver budget");
-    let send = rd::mint_from_handle(ep, D1, None).expect("a send handle");
+    let budget = rd::create(rd::SYSTEM, &rd::spec(limit, 2, 10)).expect("a driver budget");
     let entry = driver as *const () as usize;
-    let started = spawn::spawn(&spawn::image(), budget, ep, entry, &[], &[deaf, send]);
-    let run = started.ok().and_then(|_| report(ep, D1)).map_or(0, |w| w[0] as u64);
-    check!(out, run != 0, "the driver dma_alloced through the deaf slot ({:#x})", run);
-
-    // The destruction: `budget_destroy` kills the parked driver, its death fails the slot's
-    // first reset, and the device object is destroyed while object-frame frees are deferred.
-    let destroyed = rd::destroy(budget);
-    check!(out, destroyed.is_ok(), "the driver's budget is destroyed, not faulted");
-
-    let mapped = rd::map_device(deaf).map(|_| ());
-    let allocated = rd::dma_alloc(deaf, 1).map(|_| ());
+    let image = spawn::image();
+    let send1 = rd::mint_from_handle(ep, D1, None).expect("a send handle");
+    let send2 = rd::mint_from_handle(ep, D2, None).expect("a send handle");
+    let started1 = spawn::spawn(&image, budget, ep, entry, &[], &[deaf0, send1]);
+    let started2 = spawn::spawn(&image, budget, ep, entry, &[], &[deaf1, send2]);
+    let reports = (started1.is_ok() && started2.is_ok()).then(|| two_reports(ep)).flatten();
+    let (r1, r2) = reports.unwrap_or(([0; rd::WORDS], [0; rd::WORDS]));
+    let (run1, run2) = (r1[0] as u64, r2[0] as u64);
     check!(
         out,
-        mapped == Err(Error::BadHandle) && allocated == Err(Error::BadHandle),
-        "every handle to the quarantined slot is gone (map_device {:?}, dma_alloc {:?})",
-        mapped,
-        allocated
+        run1 != 0 && run2 != 0,
+        "two drivers dma_alloced through two deaf slots ({:#x}, {:#x})",
+        run1,
+        run2
+    );
+
+    // The destruction: `budget_destroy` kills both parked drivers, each death fails its slot's
+    // first reset, and each device object is destroyed while object-frame frees are deferred.
+    let destroyed = rd::destroy(budget);
+    check!(out, destroyed.is_ok(), "the drivers' budget is destroyed, not faulted");
+
+    let mapped0 = rd::map_device(deaf0).map(|_| ());
+    let allocated0 = rd::dma_alloc(deaf0, 1).map(|_| ());
+    let mapped1 = rd::map_device(deaf1).map(|_| ());
+    let allocated1 = rd::dma_alloc(deaf1, 1).map(|_| ());
+    check!(
+        out,
+        mapped0 == Err(Error::BadHandle)
+            && allocated0 == Err(Error::BadHandle)
+            && mapped1 == Err(Error::BadHandle)
+            && allocated1 == Err(Error::BadHandle),
+        "every handle to either quarantined slot is gone (map_device {:?}/{:?}, dma_alloc {:?}/{:?})",
+        mapped0,
+        mapped1,
+        allocated0,
+        allocated1
     );
 
     let after = pages(rd::SYSTEM);
     check!(
         out,
-        after == before + RUN_PAGES as u64,
-        "its carve came back and its run's {} pages are charged to system ({} -> {})",
-        RUN_PAGES,
+        after == before + (2 * RUN_PAGES) as u64,
+        "the carve came back and both runs' {} pages are charged to system ({} -> {})",
+        2 * RUN_PAGES,
         before,
         after
     );
