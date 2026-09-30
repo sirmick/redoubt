@@ -364,7 +364,7 @@ process; it never counts as a page that wants backing.
 
 ### The lent bit
 
-Status: built · partly tested: a lender's own load or store to a page it has lent out is not attacked by a case · tested: bench:return-lent-unmapped, bench:move-borrowed-page, bench:map-fixed-attack, bench:uaf-lent-page
+Status: built · tested: bench:return-lent-unmapped, bench:lender-touches-lent, bench:move-borrowed-page, bench:map-fixed-attack, bench:uaf-lent-page
 
 A [lend](ipc.md) is recorded in the page tables themselves, with the software bit `S`:
 

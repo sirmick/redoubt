@@ -32,6 +32,7 @@ bin = [
     { name = "kernel-half-attack", test = false },
     { name = "legacy-gone", test = false },
     { name = "lend-untouched", test = false },
+    { name = "lender-touches-lent", test = false },
     { name = "log-server", test = false },
     { name = "logsrv-badge-forgery", test = false },
     { name = "map-anon-placement", test = false },

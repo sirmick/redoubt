@@ -1,0 +1,23 @@
+description = "A lender's own load or store to a page it has lent out faults (the lent bit, I9), read from the kernel's exit notice, and the borrower's copy keeps the lender's data after the fault (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# PID 2 log-server; PID 3 lender-touches-lent, the borrower, which takes the budgets
+# (TAKE_GIFTS) to spawn the lending children.
+programs = ["log-server", "lender-touches-lent"]
+timeout_secs = 60
+# Progress, the borrower's report: each fault line is the cause the kernel put in a lender's exit
+# notice (Faulted: 13 load, 15 store), and each intact line is the borrower reading the page it
+# still holds; anything else prints FAIL or intact false, forbidden. The verdict: log-server's
+# DONE names PID 3, with a clean power-off, which a stopped kernel never reaches.
+expect = [
+    '^\[server\] gifts given to pid 3$',
+    '^\[pid 3\] \[lender\] a load of its own lent page faulted with cause 13$',
+    '^\[pid 3\] \[lender\] the borrower.s page after the lender.s load: intact true$',
+    '^\[pid 3\] \[lender\] a store of its own lent page faulted with cause 15$',
+    '^\[pid 3\] \[lender\] the borrower.s page after the lender.s store: intact true$',
+    '^\[server\] done: reported by pid 3; still serving$',
+]
+forbid = ['\] FAIL', 'intact false']
+poweroff = true
+reporter = "lender-touches-lent"

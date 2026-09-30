@@ -91,7 +91,6 @@ gap: the page's section, the claim, and what no case attacks.
 - The end of user space on rv32: `map-fixed-attack` is rv64 only; rv32 is covered only by `host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound`, a hand copy of the kernel's `user_range`, not the kernel.
 - Page 0 on rv32: the same (host copy only).
 - `satp` and the TLB: no case attacks a stale translation surviving an address-space switch or an unmap (one hart, global flush; argued from the code; attacked across harts in M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
-- The lent bit: no case has a lender load or store its own lent-out page (it faults by the code).
 - Placement areas: the message area (`0x4000_0000`, 4 MiB) and `map_anon` area bases are not attacked as addresses (not security claims; listed for completeness).
 
 ### abi.md
@@ -103,7 +102,6 @@ gap: the page's section, the claim, and what no case attacks.
 ### invariants.md
 - I7 (every flow obeys R1): a message between user budgets with different labels: no case (the same gap as ipc.md's R1).
 - I9 (pages W^X, zeroed, lends unmapped): reuse of a freed frame (a case cannot choose which frame it gets; `mem-attack` says so): model only.
-- I9: a lender's own read or write of a page it has lent: no case (`return-lent-unmapped` tries unmap and remap only).
 - I11 (fair turns): turns among several groups on one endpoint: model only (the same as ipc.md's R2).
 - I12 (ids never reused): budget and message ids never reused: invisible to a process, model only; endpoint, device and process-object ids: nothing attacks them, not even the model (it checks budget ids only).
 - I13 (every blocking call returns by its timeout): timeouts on a multi-hart boot: `timeouts` has no `smp` key (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
