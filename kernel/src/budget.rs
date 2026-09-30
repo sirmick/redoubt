@@ -67,6 +67,15 @@ pub enum Class {
 pub struct Budget {
     pub id: u64,
     pub parent: Option<BudgetFrame>,
+    /// The first budget carved from this one, and the next budget under the same parent (R10):
+    /// a destruction walks the dying subtree through these instead of scanning every object
+    /// frame ([Residual risks](#residual-risks)).
+    pub first_child: Option<BudgetFrame>,
+    pub next_sibling: Option<BudgetFrame>,
+    /// The endpoints and devices charged to this budget, linked through their frames' `next_owned`
+    /// (`endpoint.rs`, `device.rs`); a destruction ends exactly its own.
+    pub first_endpoint: Option<u32>,
+    pub first_device: Option<u32>,
     pub depth: u32,
     pub class: Class,
     /// Set by `budget_destroy` on the whole subtree before it tears anything down (R10).
@@ -108,9 +117,23 @@ impl Budget {
 /// First word of every budget frame, so that a frame read as a budget that is not one is caught.
 const MAGIC: u64 = u64::from_le_bytes(*b"budget\0\0");
 /// Words a budget takes in its frame, one per field (a frame has 512): `load` and `store` below.
-const WORDS: usize = 16 + MAX_LABELS + 8;
+/// The tree and owner links sit after the scheduling words; a frame has room to spare.
+const W_FIRST_CHILD: usize = W_SCHED + 8;
+const W_NEXT_SIBLING: usize = W_SCHED + 9;
+const W_FIRST_ENDPOINT: usize = W_SCHED + 10;
+const W_FIRST_DEVICE: usize = W_SCHED + 11;
+const WORDS: usize = W_SCHED + 12;
 /// Where the scheduling words start, after the labels.
 const W_SCHED: usize = 16 + MAX_LABELS;
+/// A scratch word in every object frame: the next frame in `Objects::deferred`. Above every
+/// object's own words. `None` while the frame is not deferred.
+pub(crate) const DEFER_WORD: usize = 100;
+
+/// The frame index a `frame + 1` word names, or `None` for 0.
+pub(crate) fn frame_of(word: u64) -> Option<u32> { (word as u32).checked_sub(1) }
+
+/// A `frame + 1` word for a frame, 0 for none.
+pub(crate) fn frame_word(frame: Option<u32>) -> u64 { frame.map_or(0, |f| u64::from(f) + 1) }
 
 /// One process's side of the ledger. The kernel (PID 1) has none: it has no budget.
 #[derive(Clone, Copy)]
@@ -172,6 +195,12 @@ pub struct Objects {
     /// Each interrupt's IRQ object: kept at `boot_devices` and `free_device` (`device.rs`), so an
     /// interrupt finds its object in one lookup (R12).
     pub(crate) irqs: [Option<u32>; crate::device::MAX_IRQS],
+    /// The head of the object frames whose `free_object_frame` a destruction deferred past its
+    /// single handle sweep (I1), linked through each frame's [`DEFER_WORD`].
+    pub(crate) deferred: Option<u32>,
+    /// Whether a destruction is running, so object-frame frees defer and the per-object handle
+    /// sweeps fold into its single pass (`destroy_marked`).
+    pub(crate) deferring: bool,
 }
 
 impl Objects {
@@ -184,6 +213,8 @@ impl Objects {
             accounts: [Account::NONE; MAX_PROCESS_COUNT],
             processes: [None; MAX_PROCESS_COUNT],
             irqs: [None; crate::device::MAX_IRQS],
+            deferred: None,
+            deferring: false,
         }
     }
 }
@@ -218,6 +249,10 @@ impl MemoryManager {
             id: w(1),
             // Word 2 is the parent's frame plus one; 0 for none.
             parent: (w(2) as u32).checked_sub(1),
+            first_child: frame_of(w(W_FIRST_CHILD)),
+            next_sibling: frame_of(w(W_NEXT_SIBLING)),
+            first_endpoint: frame_of(w(W_FIRST_ENDPOINT)),
+            first_device: frame_of(w(W_FIRST_DEVICE)),
             depth: w(3) as u32,
             class,
             dying: w(5) != 0,
@@ -275,6 +310,10 @@ impl MemoryManager {
         words[W_SCHED + 5] = b.sched.tie as u64;
         words[W_SCHED + 6] = u64::from(b.sched.queued);
         words[W_SCHED + 7] = b.cursor.map_or(0, |(p, t)| u64::from(p) << 8 | u64::from(t.wrapping_add(1)));
+        words[W_FIRST_CHILD] = frame_word(b.first_child);
+        words[W_NEXT_SIBLING] = frame_word(b.next_sibling);
+        words[W_FIRST_ENDPOINT] = frame_word(b.first_endpoint);
+        words[W_FIRST_DEVICE] = frame_word(b.first_device);
         words[16..W_SCHED].copy_from_slice(&b.labels);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
@@ -676,6 +715,11 @@ impl MemoryManager {
         let b = Budget {
             id,
             parent,
+            // It enters its parent's child list at the head (R10's subtree walk).
+            first_child: None,
+            next_sibling: parent_budget.and_then(|p| p.first_child),
+            first_endpoint: None,
+            first_device: None,
             depth: parent_budget.map_or(0, |p| p.depth + 1),
             class,
             dying: false,
@@ -704,6 +748,7 @@ impl MemoryManager {
             let mut pb = self.budget(p);
             pb.pages_used += BUDGET_PAGES + spec.pages;
             pb.processes_used += spec.processes;
+            pb.first_child = Some(frame);
             self.store(p, &pb);
             // The carve changes the parent's stride weight: what it ran is charged at the old one.
             crate::sched::change_weight(self, p, |mm| {
@@ -773,6 +818,7 @@ impl MemoryManager {
         let handle = Handle { object: Object::Budget(BudgetRef { frame: child, id }), badge: 0, stamp };
         let installed = self.install_handle(pid, handle).inspect_err(|_| {
             crate::sched::change_weight(self, pf, |mm| mm.return_carve(child, true));
+            self.unlink_child(pf, child);
             self.unlink_deadline(child);
             self.free_object_frame(child);
         })?;
@@ -834,11 +880,12 @@ impl MemoryManager {
     }
 
     /// Mark `top` and everything below it dying (R10's first step, for `budget_destroy` and for
-    /// a deadline alike). Before anything else, `top`'s carve comes back to its parent, so the
-    /// destruction's own work (often the parent's own `budget_destroy`) is charged at the weight
-    /// the parent has once the child is gone, not at the sliver it kept while the child held the
-    /// rest (`sched.rs`: a weight change charges what ran before it). The
-    /// budgets below the top return theirs as the scheduler lifts them, bottom-up
+    /// a deadline alike). Before anything else, `top`'s carve comes back to its parent and `top`
+    /// leaves its parent's child list, so the subtree the walk starts from is exactly the one
+    /// being destroyed. The destruction's own work (often the parent's own `budget_destroy`) is
+    /// charged at the weight the parent has once the child is gone, not at the sliver it kept
+    /// while the child held the rest (`sched.rs`: a weight change charges what ran before it).
+    /// The budgets below the top return theirs as the scheduler lifts them, bottom-up
     /// ([`MemoryManager::lift_dying`]).
     pub fn mark_dying(&mut self, top: BudgetFrame) {
         if let Some(p) = self.budget(top).parent {
@@ -848,13 +895,52 @@ impl MemoryManager {
                 pb.weight_carved = pb.weight_carved.checked_sub(limit).expect("I5: carve underflow");
                 mm.store(p, &pb);
             });
+            self.unlink_child(p, top);
         }
-        for frame in 0..=self.objects.high_frame {
-            if self.is_budget_frame(frame) && self.below(frame, top) {
-                let mut b = self.budget(frame);
-                b.dying = true;
-                self.store(frame, &b);
+        // A pre-order walk of the subtree through the child links (R10): each budget below `top`
+        // once, never a scan of every object frame.
+        let mut cur = top;
+        loop {
+            let mut b = self.budget(cur);
+            b.dying = true;
+            self.store(cur, &b);
+            if let Some(child) = self.budget(cur).first_child {
+                cur = child;
+                continue;
             }
+            // Climb to the next sibling, or stop at the top.
+            loop {
+                if cur == top {
+                    return;
+                }
+                if let Some(sibling) = self.budget(cur).next_sibling {
+                    cur = sibling;
+                    break;
+                }
+                cur = self.budget(cur).parent.expect("a subtree budget has a parent");
+            }
+        }
+    }
+
+    /// Link `child` out of `parent`'s child list (`new_budget` linked it at the head). Called by
+    /// `budget_create`'s rollback and by `mark_dying` for the destroyed top.
+    fn unlink_child(&mut self, parent: BudgetFrame, child: BudgetFrame) {
+        let mut pb = self.budget(parent);
+        if pb.first_child == Some(child) {
+            pb.first_child = self.budget(child).next_sibling;
+            self.store(parent, &pb);
+            return;
+        }
+        let mut cur = pb.first_child;
+        while let Some(c) = cur {
+            if self.budget(c).next_sibling == Some(child) {
+                let next = self.budget(child).next_sibling;
+                let mut cb = self.budget(c);
+                cb.next_sibling = next;
+                self.store(c, &cb);
+                return;
+            }
+            cur = self.budget(c).next_sibling;
         }
     }
 
@@ -900,10 +986,19 @@ impl MemoryManager {
                 Object::Endpoint(e) => mm.budget_at(mm.endpoint_at(e).owner).dying,
                 Object::Device(d) => mm.budget_at(mm.device_at(d).owner).dying,
                 // A process object dies with the budget it is charged to, its creator's (R10).
-                Object::Process(p) => mm.budget_at(mm.process_at(p).creator).dying,
+                // One freed during this destruction for another reason (its exit endpoint went
+                // with the subtree) is no longer in the PID index, so its handles go too.
+                Object::Process(p) => {
+                    let proc = mm.process_at(p);
+                    crate::process::object_of(mm, proc.pid) != Some(p.frame)
+                        || mm.budget_at(proc.creator).dying
+                }
             };
             object_dying || mm.budget_at(h.stamp).dying
         });
+        // The sweep was the only pass: the process, endpoint and device frames it read are freed
+        // now, past it (I1), and nothing names them any more.
+        self.free_deferred_frames();
         // The weight came back as the scheduler lifted each budget (`sched::destroy`).
         self.return_carve(top, false);
         // Then, and only then, quarantined DMA pages charged in the subtree move to the parent,
@@ -911,13 +1006,32 @@ impl MemoryManager {
         self.dma_migrate_quarantine(self.budget(top).parent);
         // And so does every PID still held for a process that ran in the subtree (R6).
         self.migrate_held_pids(self.budget(top).parent);
-        for frame in 0..=self.objects.high_frame {
-            if self.is_budget_frame(frame) && self.budget(frame).dying {
-                self.unlink_deadline(frame);
-                self.free_object_frame(frame);
-            }
-        }
+        // Free the dying budgets themselves: children before their parent, so a parent's frame
+        // still holds the links the walk reads.
+        self.free_dying_budgets(top);
     }
+
+    /// Free the dying subtree `frame` heads: every descendant first, then the budget, unlinking
+    /// each from the deadline list before its frame goes (I1: nothing may name a freed frame).
+    fn free_dying_budgets(&mut self, frame: BudgetFrame) {
+        let mut child = self.budget(frame).first_child;
+        while let Some(c) = child {
+            let next = self.budget(c).next_sibling;
+            self.free_dying_budgets(c);
+            child = next;
+        }
+        self.unlink_deadline(frame);
+        self.free_object_frame(frame);
+    }
+
+    /// One destruction begins: object frames freed while it runs are deferred to
+    /// [`MemoryManager::destroy_marked`]'s single handle sweep, and the per-object sweeps fold
+    /// into it (I1, I2).
+    pub fn begin_destruction(&mut self) { self.objects.deferring = true; }
+
+    /// The destruction is over. The deferred frames are already freed; the flag that folded the
+    /// per-object sweeps into the one pass goes.
+    pub fn end_destruction(&mut self) { self.objects.deferring = false; }
 
     // --- Deadlines ---------------------------------------------------------------------------------
 
@@ -980,19 +1094,17 @@ impl MemoryManager {
 
     /// The dying budgets, deepest first (every one's descendants before it): R10's bottom-up
     /// order for the scheduler's lifts, each returning its weight to its parent as it goes (the
-    /// top's went back at mark time).
-    pub fn lift_dying(&mut self, top: BudgetFrame) {
-        let top_depth = self.budget(top).depth;
-        for depth in (top_depth..MAX_DEPTH as u32).rev() {
-            for frame in 0..=self.objects.high_frame {
-                if self.is_budget_frame(frame)
-                    && self.budget(frame).dying
-                    && self.budget(frame).depth == depth
-                {
-                    crate::sched::destroy(self, frame, frame == top);
-                }
-            }
+    /// top's went back at mark time). The subtree walk is at most `MAX_DEPTH` deep.
+    pub fn lift_dying(&mut self, top: BudgetFrame) { self.lift_subtree(top, top); }
+
+    fn lift_subtree(&mut self, frame: BudgetFrame, top: BudgetFrame) {
+        let mut child = self.budget(frame).first_child;
+        while let Some(c) = child {
+            let next = self.budget(c).next_sibling;
+            self.lift_subtree(c, top);
+            child = next;
         }
+        crate::sched::destroy(self, frame, frame == top);
     }
 }
 
@@ -1023,6 +1135,9 @@ pub fn destroy_subtree(
         0,
         MemoryManager::with(|mm| u128::from(mm.objects.high_frame)),
     );
+    // From here the destruction defers every object-frame free and folds the per-object sweeps
+    // into `destroy_marked`'s single pass (I1, I2).
+    MemoryManager::with_mut(|mm| mm.begin_destruction());
     let mut caller_doomed = false;
     for index in 1..=MAX_PROCESS_COUNT {
         let Some(victim) = Pid::new(index as u8) else { continue };
@@ -1051,7 +1166,7 @@ pub fn destroy_subtree(
     // R10 reaches messages in flight: the endpoints the subtree owns are destroyed, and every
     // message sent through a handle stamped with it fails its sender with `Dead`.
     MemoryManager::with_mut(|mm| {
-        crate::message::budgets_dying(ss, mm);
+        crate::message::budgets_dying(ss, mm, top);
         // Each budget's work since entry moves to its parent, bottom-up, and its carve returns.
         mm.lift_dying(top);
         mm.destroy_marked(top);
@@ -1059,8 +1174,12 @@ pub fn destroy_subtree(
         if let (Some(started), Some(payer)) = (deadline_since, payer) {
             crate::sched::bill(mm, payer, crate::sched::now_ticks().saturating_sub(started));
         }
+        mm.end_destruction();
     });
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);
+    // The audit, off the measured walk: the links and indexes name exactly the live objects.
+    #[cfg(debug_assertions)]
+    MemoryManager::with(|mm| mm.check_object_indexes());
     caller_doomed
 }

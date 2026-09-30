@@ -47,7 +47,7 @@ use redoubt_sys::{
 
 use crate::arch::process::MAX_PROCESS_COUNT;
 use crate::arch::process::TID;
-use crate::budget::Class;
+use crate::budget::{BudgetFrame, Class};
 use crate::endpoint::Group;
 use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
 use crate::kframe;
@@ -858,7 +858,9 @@ pub fn destroy_device(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32)
     if d.kind == crate::device::Kind::Irq {
         crate::arch::irq::disable_irq(d.irq as usize);
     }
-    mm.sweep_handles(|_, h| matches!(h.object, Object::Device(x) if x == r));
+    if !mm.objects.deferring {
+        mm.sweep_handles(|_, h| matches!(h.object, Object::Device(x) if x == r));
+    }
     mm.free_device(frame);
 }
 
@@ -1501,21 +1503,33 @@ pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
 }
 
 /// R10, the part that reaches messages: after `budget_destroy` marked a subtree dying and before
-/// its budgets are freed, destroy the endpoints it owns and fail every message sent through a
-/// handle stamped with it.
-pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager) {
+/// its budgets are freed, destroy the endpoints and devices it owns and fail every message sent
+/// through a handle stamped with it. The subtree is walked through the budgets' child links, and
+/// each budget's own endpoints and devices through its owner lists: never a scan of every object
+/// frame ([Residual risks](../kernel/budgets.md#residual-risks)).
+pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetFrame) {
     // Endpoints owned by a dying budget: everything waiting on them gets `Dead`.
-    while let Some(frame) = (0..=mm.objects.high_frame)
-        .find(|frame| mm.is_endpoint_frame(*frame) && mm.budget_at(mm.endpoint(*frame).owner).dying)
-    {
-        destroy_endpoint(ss, mm, frame);
+    let mut cur = top;
+    loop {
+        while let Some(frame) = mm.budget(cur).first_endpoint {
+            destroy_endpoint(ss, mm, frame);
+        }
+        match subtree_next(mm, top, cur) {
+            Some(next) => cur = next,
+            None => break,
+        }
     }
     // Devices likewise: destroying the budget they are charged to destroys them, and the
     // machine's devices are then unreachable for good, there being no way to create one.
-    while let Some(frame) = (0..=mm.objects.high_frame)
-        .find(|frame| mm.is_device_frame(*frame) && mm.budget_at(mm.device(*frame).owner).dying)
-    {
-        destroy_device(ss, mm, frame);
+    let mut cur = top;
+    loop {
+        while let Some(frame) = mm.budget(cur).first_device {
+            destroy_device(ss, mm, frame);
+        }
+        match subtree_next(mm, top, cur) {
+            Some(next) => cur = next,
+            None => break,
+        }
     }
     // Revocation reaches messages already sent (R10): a queued one fails its sender with `Dead`;
     // a taken call fails its caller with `Dead` at once and is abandoned (R3).
@@ -1527,6 +1541,24 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager) {
             _ => false,
         }
     });
+}
+
+/// The next budget in a pre-order walk of the subtree `top` heads, after `cur`; `None` when the
+/// walk is done. Reads only the child links.
+fn subtree_next(mm: &MemoryManager, top: BudgetFrame, cur: BudgetFrame) -> Option<BudgetFrame> {
+    if let Some(child) = mm.budget(cur).first_child {
+        return Some(child);
+    }
+    let mut at = cur;
+    loop {
+        if at == top {
+            return None;
+        }
+        if let Some(sibling) = mm.budget(at).next_sibling {
+            return Some(sibling);
+        }
+        at = mm.budget(at).parent.expect("a subtree budget has a parent");
+    }
 }
 
 /// A DMA device whose reset did not confirm is destroyed as R10 destroys one (kernel/devices.md,
@@ -1578,10 +1610,11 @@ fn destroy_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     // to report to (R10; `process.rs`).
     crate::process::endpoint_dying(mm, e);
     // The handles naming it go first: `budget_destroy`'s later sweep reads every handle's
-    // object, and one naming a freed frame would stop the kernel (I1). Needed only when a
-    // destroyable budget owns an endpoint, and cheaper than a liveness test on a path that runs
-    // for every handle in the system.
-    mm.sweep_handles(|_, h| matches!(h.object, Object::Endpoint(x) if x == e));
+    // object, and one naming a freed frame would stop the kernel (I1). Inside a destruction the
+    // frame free is deferred to that sweep, which closes them; outside one this bounded pass does.
+    if !mm.objects.deferring {
+        mm.sweep_handles(|_, h| matches!(h.object, Object::Endpoint(x) if x == e));
+    }
     let owner = mm.endpoint(frame).owner;
     mm.free_endpoint(frame, owner.frame);
 }

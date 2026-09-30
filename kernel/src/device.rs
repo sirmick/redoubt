@@ -87,6 +87,9 @@ pub struct Device {
     pub fired: bool,
     /// IRQ: the source is masked at the interrupt controller (R5).
     pub masked: bool,
+    /// The next device in its owner's list (`Budget::first_device`), so a destruction ends exactly
+    /// its own (R10).
+    pub next_owned: Option<u32>,
 }
 
 // Word layout in the frame (a frame holds 512).
@@ -100,7 +103,8 @@ const W_DMA: usize = 7;
 const W_IRQ: usize = 8;
 const W_FIRED: usize = 9;
 const W_MASKED: usize = 10;
-const WORDS: usize = 11;
+const W_NEXT_OWNED: usize = 11;
+const WORDS: usize = 12;
 const _: () = assert!(WORDS * 8 <= PAGE_SIZE);
 
 impl MemoryManager {
@@ -126,6 +130,7 @@ impl MemoryManager {
             irq: w(W_IRQ) as u32,
             fired: w(W_FIRED) != 0,
             masked: w(W_MASKED) != 0,
+            next_owned: (w(W_NEXT_OWNED) as u32).checked_sub(1),
         }
     }
 
@@ -143,6 +148,7 @@ impl MemoryManager {
         words[W_IRQ] = u64::from(d.irq);
         words[W_FIRED] = u64::from(d.fired);
         words[W_MASKED] = u64::from(d.masked);
+        words[W_NEXT_OWNED] = crate::budget::frame_word(d.next_owned);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
         }
@@ -182,15 +188,19 @@ impl MemoryManager {
     /// Interrupt `irq`'s object is now `frame` (`None`: freed), in the IRQ index.
     fn index_irq(&mut self, irq: u32, frame: Option<u32>) {
         self.objects.irqs[irq as usize] = frame;
+        // Inside a destruction the audit runs once, off its walk (`destroy_subtree`); this path
+        // would scan every object frame for each device destroyed.
         #[cfg(debug_assertions)]
-        self.check_irq_index();
+        if !self.objects.deferring {
+            self.check_irq_index();
+        }
     }
 
     /// A checked build's proof that the IRQ index is what a scan of every object frame finds.
     /// Keep it: it is one of the two things that catch a wrong IRQ index (with `irq-attack`), since
     /// `scan-bounds` times only the lookup and the old scan found boot's IRQ objects early.
     #[cfg(debug_assertions)]
-    fn check_irq_index(&self) {
+    pub(crate) fn check_irq_index(&self) {
         let objects = (0..=self.objects.high_frame)
             .filter(|f| self.is_device_frame(*f) && self.device(*f).kind == Kind::Irq);
         for frame in objects.clone() {
@@ -204,29 +214,57 @@ impl MemoryManager {
         );
     }
 
-    /// Create one device object, charged to `owner` (the cost table).
+    /// Create one device object, charged to `owner` (the cost table), linked into the owner's
+    /// device list so a destruction ends exactly its own (R10).
     fn new_device(&mut self, owner: BudgetFrame, d: &Device) -> Result<DeviceRef, Error> {
         self.charge(owner, DEVICE_PAGES)?;
         let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(owner, DEVICE_PAGES))?;
         let id = self.next_object_id();
-        let owner = BudgetRef { frame: owner, id: self.budget(owner).id };
-        self.store_device(frame, &Device { id, owner, ..*d });
+        let owner_ref = BudgetRef { frame: owner, id: self.budget(owner).id };
+        let mut ob = self.budget(owner);
+        let next_owned = ob.first_device;
+        ob.first_device = Some(frame);
+        self.store_device(frame, &Device { id, owner: owner_ref, next_owned, ..*d });
+        self.store(owner, &ob);
         if d.kind == Kind::Irq {
             self.index_irq(d.irq, Some(frame));
         }
         Ok(DeviceRef { frame, id })
     }
 
-    /// Free a device object and give its page back to its owner.
+    /// Free a device object and give its page back to its owner. Inside a destruction the frame
+    /// free is deferred past `destroy_marked`'s single sweep (I1).
     pub fn free_device(&mut self, frame: u32) {
         let d = self.device(frame);
         let owner = d.owner;
-        self.free_object_frame(frame);
+        self.unlink_device(owner.frame, frame);
+        self.release_object_frame(frame);
         if d.kind == Kind::Irq {
             self.index_irq(d.irq, None);
         }
         if self.is_live_budget(owner) {
             self.uncharge(owner.frame, DEVICE_PAGES);
+        }
+    }
+
+    /// Take `frame` out of `owner`'s device list.
+    fn unlink_device(&mut self, owner: BudgetFrame, frame: u32) {
+        let mut ob = self.budget(owner);
+        if ob.first_device == Some(frame) {
+            ob.first_device = self.device(frame).next_owned;
+            self.store(owner, &ob);
+            return;
+        }
+        let mut cur = ob.first_device;
+        while let Some(c) = cur {
+            if self.device(c).next_owned == Some(frame) {
+                let next = self.device(frame).next_owned;
+                let mut cd = self.device(c);
+                cd.next_owned = next;
+                self.store_device(c, &cd);
+                return;
+            }
+            cur = self.device(c).next_owned;
         }
     }
 
@@ -276,6 +314,7 @@ impl MemoryManager {
             irq: 0,
             fired: false,
             masked: false,
+            next_owned: None,
         };
         match words[0] {
             1 => {

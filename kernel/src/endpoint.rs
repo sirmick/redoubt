@@ -76,10 +76,14 @@ pub struct Endpoint {
     pub owner: BudgetRef,
     /// R2's round-robin cursor: the group served last, if any.
     pub cursor: Option<Group>,
+    /// The next endpoint in its owner's list (`Budget::first_endpoint`), so a destruction ends
+    /// exactly its own (R10).
+    pub next_owned: Option<u32>,
 }
 
-/// Words an endpoint takes in its frame (a frame holds 512).
-const WORDS: usize = 8 + MAX_LABELS;
+/// Words an endpoint takes in its frame (a frame has 512).
+const W_NEXT_OWNED: usize = 8 + MAX_LABELS;
+const WORDS: usize = W_NEXT_OWNED + 1;
 
 impl MemoryManager {
     pub fn endpoint(&self, frame: u32) -> Endpoint {
@@ -101,6 +105,7 @@ impl MemoryManager {
                 nlabels: (w(6) as usize).min(MAX_LABELS),
                 budget: w(7),
             }),
+            next_owned: (w(W_NEXT_OWNED) as u32).checked_sub(1),
         }
     }
 
@@ -116,8 +121,9 @@ impl MemoryManager {
             words[5] = g.account;
             words[6] = g.nlabels as u64;
             words[7] = g.budget;
-            words[8..].copy_from_slice(&g.labels);
+            words[8..8 + MAX_LABELS].copy_from_slice(&g.labels);
         }
+        words[W_NEXT_OWNED] = crate::budget::frame_word(e.next_owned);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
         }
@@ -141,13 +147,18 @@ impl MemoryManager {
         e
     }
 
-    /// A new endpoint owned by `owner`: one page, charged there (the cost table).
+    /// A new endpoint owned by `owner`: one page, charged there (the cost table), and linked into
+    /// the owner's endpoint list so a destruction ends exactly its own (R10).
     pub fn new_endpoint(&mut self, owner: BudgetFrame) -> Result<EndpointRef, Error> {
         self.charge(owner, ENDPOINT_PAGES)?;
         let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(owner, ENDPOINT_PAGES))?;
         let id = self.next_object_id();
-        let owner = BudgetRef { frame: owner, id: self.budget(owner).id };
-        self.store_endpoint(frame, &Endpoint { id, owner, cursor: None });
+        let owner_ref = BudgetRef { frame: owner, id: self.budget(owner).id };
+        let mut ob = self.budget(owner);
+        let next_owned = ob.first_endpoint;
+        ob.first_endpoint = Some(frame);
+        self.store_endpoint(frame, &Endpoint { id, owner: owner_ref, cursor: None, next_owned });
+        self.store(owner, &ob);
         Ok(EndpointRef { frame, id })
     }
 
@@ -173,9 +184,32 @@ impl MemoryManager {
     }
 
     /// Free the endpoint's frame and give its page back to its owner. The caller has already
-    /// failed everything waiting on it (`message::endpoint_dying`) and swept the handles.
+    /// failed everything waiting on it (`message::endpoint_dying`) and swept the handles. Inside a
+    /// destruction the frame free is deferred past `destroy_marked`'s single sweep (I1).
     pub fn free_endpoint(&mut self, frame: u32, owner: BudgetFrame) {
-        self.free_object_frame(frame);
+        self.unlink_endpoint(owner, frame);
+        self.release_object_frame(frame);
         self.uncharge(owner, ENDPOINT_PAGES);
+    }
+
+    /// Take `frame` out of `owner`'s endpoint list.
+    fn unlink_endpoint(&mut self, owner: BudgetFrame, frame: u32) {
+        let mut ob = self.budget(owner);
+        if ob.first_endpoint == Some(frame) {
+            ob.first_endpoint = self.endpoint(frame).next_owned;
+            self.store(owner, &ob);
+            return;
+        }
+        let mut cur = ob.first_endpoint;
+        while let Some(c) = cur {
+            if self.endpoint(c).next_owned == Some(frame) {
+                let next = self.endpoint(frame).next_owned;
+                let mut ce = self.endpoint(c);
+                ce.next_owned = next;
+                self.store_endpoint(c, &ce);
+                return;
+            }
+            cur = self.endpoint(c).next_owned;
+        }
     }
 }
