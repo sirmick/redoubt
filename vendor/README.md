@@ -144,6 +144,9 @@ proves:
 - `cargo metadata` resolves each one to `vendor/<name>/Cargo.toml` in this tree, so the patches
   point here, and no registry copy of it is in the graph;
 - the crates left to the lockfile are locked at the versions and checksums above;
+- what beamlet builds for the target, its build scripts' crates included, with the features
+  `cargo tree` resolves, is vendored or in the table of crates left to its lockfile, so a new
+  crates.io dependency fails;
 - the first table agrees with the test's own.
 
 `vendor-build` builds them all `no_std` for both widths, with the features their users ask for.

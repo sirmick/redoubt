@@ -462,6 +462,63 @@ fn graph_from_vendor<'a>(
     }
 }
 
+/// beamlet's crates that are compiled for the target (the CLI, `beamlet`, runs only on the host).
+const BEAMLET_TARGET: &[&str] = &["beamlet-vm", "beamlet-crypto", "beamlet-re", "beamlet-redoubt"];
+
+/// The registry crates in `tree` (`cargo tree --prefix none -f {p}`: `name vVERSION`, a path
+/// crate followed by its directory in brackets) that are not in `left`.
+fn unpinned(tree: &str, left: &[(&str, &str, &str)]) -> Result<(), String> {
+    let mut found = BTreeSet::new();
+    for line in tree.lines().map(|l| l.trim_end_matches(" (*)").trim()) {
+        if line.is_empty() || line.contains(" (/") {
+            continue;
+        }
+        let (name, version) = line.split_once(" v").ok_or(format!("malformed line {line:?}"))?;
+        if !left.iter().any(|(n, v, _)| *n == name && *v == version) {
+            found.insert(format!("{name} {version}"));
+        }
+    }
+    if found.is_empty() { Ok(()) } else { Err(format!("registry crates not vendored or pinned: {found:?}")) }
+}
+
+/// What beamlet builds for the target, its build scripts' crates included, comes from `vendor/`
+/// or is pinned in `BEAMLET_LOCKED`: a new crates.io dependency, or a feature that pulls one in
+/// (`p384`'s `fiat-crypto` backend), fails here. `cargo tree` resolves features as a build does,
+/// so `serdect`, which the lockfile holds but nothing turns on, is not counted.
+#[test]
+fn beamlet_builds_no_unpinned_registry_crate() {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let mut args = vec![
+        "tree",
+        "--offline",
+        "--target",
+        "riscv64imac-unknown-none-elf",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none",
+        "-f",
+        "{p}",
+    ];
+    for name in BEAMLET_TARGET {
+        args.extend(["-p", name]);
+    }
+    let out = std::process::Command::new(cargo)
+        .current_dir(root().join("userland/otp"))
+        .args(&args)
+        .output()
+        .expect("run cargo tree");
+    assert!(out.status.success(), "cargo tree failed: {}", String::from_utf8_lossy(&out.stderr));
+    let tree = String::from_utf8(out.stdout).expect("UTF-8 tree");
+    assert!(tree.contains("beamlet-crypto v"), "cargo tree listed no beamlet-crypto:\n{tree}");
+    unpinned(&tree, BEAMLET_LOCKED).unwrap();
+
+    let err = unpinned(&format!("{tree}fiat-crypto v0.3.0\n"), BEAMLET_LOCKED).unwrap_err();
+    assert!(err.contains("fiat-crypto 0.3.0"), "{err}");
+    let err = unpinned(&format!("{tree}cfg-if v1.0.4 (*)\n"), BEAMLET_LOCKED).unwrap_err();
+    assert!(err.contains("cfg-if 1.0.4"), "{err}");
+}
+
 /// The versions and checksums above are the ones vendor/README.md records, so the two cannot
 /// drift apart.
 #[test]
