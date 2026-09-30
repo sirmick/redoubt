@@ -170,6 +170,7 @@ Built and attack-tested today:
   ([bootfsd](../servers/bootfsd.md), [consoled](../servers/consoled.md), [keyd](../servers/keyd.md)).
 - **Launching:** the startup block and the loader stub ([init](../servers/init.md#the-startup-block)).
 - **beamlet** on the host, loading hostile code with limits inside one VM
-  ([beamlet](../userland/beamlet.md)).
+  ([beamlet](../userland/beamlet.md)); and its platform on Redoubt's console, clock and
+  randomness, on the fake kernel ([beamlet](../userland/beamlet.md#the-console-the-clock-and-randomness)).
 
 Not built: `init`'s manifest handling, the `fsd` server, the steward, `sshd`, sessions and the agent.

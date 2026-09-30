@@ -123,6 +123,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "beamlet-redoubt"
+version = "0.1.0"
+dependencies = [
+ "beamlet-crypto",
+ "beamlet-re",
+ "beamlet-vm",
+ "redoubt-client",
+ "redoubt-fake-kernel",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "beamlet-vm"
 version = "0.1.0"
 dependencies = [
@@ -449,6 +461,12 @@ dependencies = [
  "sha2 0.11.0",
  "subtle",
 ]
+
+[[package]]
+name = "elf"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55dd888a213fc57e957abf2aa305ee3e8a28dbe05687a251f33b637cd46b0070"
 
 [[package]]
 name = "elliptic-curve"
@@ -950,6 +968,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
+name = "redoubt-client"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+ "stub",
+]
+
+[[package]]
+name = "redoubt-fake-kernel"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
+name = "redoubt-rt"
+version = "0.1.0"
+dependencies = [
+ "redoubt-sys",
+ "redoubt-wire",
+]
+
+[[package]]
+name = "redoubt-sys"
+version = "0.1.0"
+
+[[package]]
+name = "redoubt-wire"
+version = "0.1.0"
+
+[[package]]
 name = "regex-automata"
 version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1160,6 +1209,15 @@ name = "sponge-cursor"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
+
+[[package]]
+name = "stub"
+version = "0.1.0"
+dependencies = [
+ "elf",
+ "redoubt-sys",
+ "redoubt-wire",
+]
 
 [[package]]
 name = "subtle"

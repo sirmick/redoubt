@@ -164,6 +164,23 @@ interrupt key with it, from the driver.
 
 **Open:** none.
 
+### The console, the clock and randomness
+
+Status: built · partly tested: on the host only, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in no boot · tested: host:beamlet-redoubt::writes_reach_the_screen, host:beamlet-redoubt::typing_reaches_the_vm_then_its_end, host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm, host:beamlet-redoubt::a_console_without_consol_has_no_size, host:beamlet-redoubt::idling_with_a_deadline_returns_by_it, host:beamlet-redoubt::after_the_console_ends_idling_still_waits_for_its_deadline, host:beamlet-redoubt::there_is_no_wall_clock
+
+The first part of beamlet's platform on Redoubt, `beamlet-redoubt`
+([`userland/otp/redoubt`](../../userland/otp/redoubt/src/lib.rs)), serves the console, the clock
+and randomness over the client library and the runtime's calls. `/dev/cons` is opened once. The
+VM's thread writes to it and asks its size; a reader thread of its own, with its own lend, reads
+it and hands what it read to the VM's thread as messages, so a read that waits never holds the
+VM's thread. After the console's end, `idle` still sleeps until its deadline. There is no wall
+clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
+- **Writes are still the VM's own calls.** A console that stops answering a write or a size query
+  stops the VM, until those calls move to the I/O threads
+  ([asynchronous underneath](#asynchronous-underneath-synchronous-on-top)).
+- **Randomness is the kernel's.** On the fake kernel it is seeded from the host for a person's
+  run, and fixed for a test's, so a test repeats.
+
 ### beamlet on Redoubt
 
 Status: planned · M1 (separation and containment)
