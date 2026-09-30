@@ -7,8 +7,8 @@ runs contained under a lease. Every property is backed by an attack case, and th
 below passes.
 
 The milestone is one thin vertical slice through the whole system: the kernel, `init` and the
-boot manifest, the drivers, the file server, the steward, `keyd` and `sshd`, beamlet running IEx
-in each session, and one scripted hostile agent. A session in this milestone needs only what the
+boot manifest, the drivers, the file server, the steward, `keyd` and `sshd`, beamlet running the
+shell in each session, and one scripted hostile agent. A session in this milestone needs only what the
 attack suite uses: the console, files and launching native programs. The rest of the shell is
 [M2 (usable shell)](m2-usable-shell.md).
 
@@ -99,7 +99,10 @@ page.
   typed operations, the console, launching, a launcher's grants and one typed call, the API every
   userland binds to, tested on the host against real servers
   ([native programs](../userland/native.md#the-client-library)). `init` and beamlet's platform are
-  built on it.
+  built on it. Before beamlet's files run on it: dropped files' fids that come back, `Rerror`s by
+  name, whole reads and writes, and generated Elixir clients
+  ([native programs](../userland/native.md#dropped-files-error-names-and-generated-calls),
+  [wire](../servers/wire.md#error-names)).
 - **`init` and the boot manifest.** The loader loads only the kernel and `init`
    ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)); `init` reads the
    manifest, builds the budget tree from it
@@ -119,10 +122,10 @@ page.
    log server's interim `TAKE_GIFTS` fixture goes; the servers' cases boot `init` itself with a
    manifest of their own, and `consoled` says who wrote each line
    ([starting a case's programs](../testbench.md#starting-a-cases-programs)).
-- **beamlet on Redoubt, and IEx on the console.** The VM runs on the kernel with its natives and
+- **beamlet on Redoubt, and the shell on the console.** The VM runs on the kernel with its natives and
    asynchronous platform ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)); an interactive
    Elixir shell on the UART console, before SSH exists
-   ([the shell](../userland/shell.md#iex-in-a-session)).
+   ([the shell](../userland/shell.md#the-shell-in-a-session)).
 - **The file server.** `fsd` over `blkd`: one volume per instance, labelled volumes, quotas per
    attach root, typed operations ([fsd](../servers/fsd.md)); files over 9P from a session
    ([files](../userland/files.md#files-over-9p)).
@@ -135,7 +138,7 @@ page.
    ([responsiveness](../kernel/scheduling.md#responsiveness)).
    The scheduling latency bench, measured with stand-ins for the steward and the drivers, is
    rerun with the real ones, and its numbers must stay within the target.
-- **`sshd`.** Sessions over SSH as beamlet VMs running IEx, vault sessions, and `approve@box`
+- **`sshd`.** Sessions over SSH as beamlet VMs running the shell, vault sessions, and `approve@box`
    ([sshd](../servers/sshd.md), [sessions](../userland/sessions.md)).
 - **The agent and the attack suite.** Alice's agent as its own principal under a lease, with
    delegation that only narrows ([agents](../userland/agents.md)), launching native programs from

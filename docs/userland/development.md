@@ -21,11 +21,12 @@ A working day, sketched:
 
 ```text
 $ ssh alice@box
-iex(1)> cd "/home/alice/redoubt"
-iex(2)> git pull                                 # through a gatewayd git capability
-iex(3)> ed "userland/lib/redoubt/shell.ex"
-iex(4)> mix test                                 # the Elixir compiler and ExUnit, in the session
-iex(5)> git commit -am "shell: complete labels" ; git push
+/home/alice (1)> cd("/home/alice/redoubt")
+/home/alice/redoubt (2)> pipe(~w(git pull))       # through a gatewayd git capability
+/home/alice/redoubt (3)> ed("userland/lib/redoubt/shell.ex")
+/home/alice/redoubt (4)> Mix.Task.run("test")     # the compiler and ExUnit, in the session
+/home/alice/redoubt (5)> pipe(["git", "commit", "-am", "shell: complete labels"])
+/home/alice/redoubt (6)> pipe(~w(git push))
 ```
 
 Rust is built on the developer's own machine. A program for one's own use arrives by SFTP and runs
@@ -36,7 +37,7 @@ principal, arrives from M5 (persist, install, share) as a signed package:
 laptop$ cargo build --release --target riscv64gc-unknown-redoubt-elf
 laptop$ xpkg build && xpkg sign --key alice        # -> logscan-1.3.xpkg
 laptop$ scp logscan-1.3.xpkg alice@box:/home/alice/in/
-iex(6)> pkg add "/home/alice/in/logscan-1.3.xpkg"
+/home/alice (1)> pkg_add("/home/alice/in/logscan-1.3.xpkg")
 ```
 
 ## What it can and cannot do

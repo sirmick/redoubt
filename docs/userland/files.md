@@ -27,7 +27,7 @@ File.cp!("/home/alice/notes.txt", "/work/notes.txt")   # across volumes: a copy 
 File.rename!("/home/alice/a.txt", "/home/alice/b.txt")  # one volume: the server renames
 ```
 
-The shell's helpers are the same operations with short names: `cat`, `cp`, `mv`, `rm`, `mkdir`,
+The shell's commands are the same operations with short names: `cat`, `cp`, `mv`, `rm`, `mkdir`,
 `ls`, `stat` ([the shell](shell.md)). A bind names a connection the session holds under another
 prefix:
 

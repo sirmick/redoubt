@@ -121,6 +121,47 @@ Status: built · tested: host:redoubt-wire::tversion_bytes, host:redoubt-wire::t
   accepted one checked against a message built by hand; every 9P server also runs it against its
   own skeleton.
 
+### Error names
+
+Status: planned · M1 (separation and containment)
+
+A 9P `Rerror` carries one of a fixed set of texts, so a hostile request cannot choose it
+([serving](serving.md#the-9p-server-skeleton)). The set is one table in `libs/wire`: a server
+answers only with a name of the table, whose text the type holds, so no server can make up a text;
+the client library reads the text back to its name, never keeps the text, and calls a text outside
+the table `other` ([native programs](../userland/native.md#dropped-files-error-names-and-generated-calls)).
+A name means one thing wherever it is used, in a 9P reply and in a typed protocol's error table
+alike: `not_permitted`, not a second word for it.
+
+| Text | Name | beamlet's `file` error |
+| --- | --- | --- |
+| `file does not exist` | `not_found` | `enoent` |
+| `permission denied`, `not_permitted` | `not_permitted` | `eacces` |
+| `file exists` | `exists` | `eexist` |
+| `not a directory` | `not_dir` | `enotdir` |
+| `is a directory` | `is_dir` | `eisdir` |
+| `directory not empty` | `not_empty` | `enotempty` |
+| `no space`, `quota refused` | `no_space` | `enospc` |
+| `read-only` | `read_only` | `erofs` |
+| `removed` | `removed` | `estale` |
+| `too many open files`, `too_many` | `too_many` | `emfile` |
+| `out of memory`, `no charge` | `no_memory` | `enomem` |
+| `not supported` | `not_supported` | `enotsup` |
+| `bad file name`, `path too deep` | `bad_name` | `einval` |
+| `refused` | `refused` | `econnrefused` |
+| `timeout` | `timeout` | `etimedout` |
+| `unreachable` | `unreachable` | `ehostunreach` |
+| `in_use` | `in_use` | `eaddrinuse` |
+| `state` | `state` | `enotconn` |
+| `malformed message`, `unknown fid`, `fid already in use`, `fid is open`, `fid not open for this`, `bad open mode`, `bad offset`, `count too small`, `reply too large`, `no such connection`, `no connection id`, `authentication not required` | `protocol` | `eio` |
+| a text not in the table | `other` | `eio` |
+
+Where two texts share a name, the first is the one a server sends from then on; the second is the
+text `ipd` or a quota hook sends today, read to the same name. A new error is a new row, and the
+drift check holds the serving library, the client library and this page to it.
+
+**Open:** none.
+
 ### Wire tables and the generator
 
 Status: built · partly tested: the generated Elixir codec is checked against the Rust one by `libs/wire/elixir/run-vectors`, which no bench case runs · tested: host:redoubt-wire-gen::generated_files_are_current, host:redoubt-wire-gen::parses_tables, host:redoubt-wire-gen::refuses_bad_tables, host:redoubt-wire-gen::every_row_is_read_or_refused, host:redoubt-wire-gen::ninep_marker_sets_the_opcode_floor, host:redoubt-wire-gen::malformed_is_code_one_everywhere, host:redoubt-wire-gen::kind_column_is_checked, host:redoubt-wire-gen::inline_boundary_is_twelve_bytes, host:redoubt-wire::generated_vectors_are_current, host:redoubt-wire::layouts_are_the_tables, host:redoubt-wire::replies_and_error_codes_decode_through_the_trait, bench:wire-host-tests
@@ -168,6 +209,29 @@ over every protocol, the client library's one typed call, needs no copy of a lay
 `libs/wire/vectors/example.txt` (written by hand) and `example-generated.txt` (thousands of
 hostile inputs with the Rust codec's verdict on each) are run by both codecs, through the
 fixture protocol `example`, which no server speaks.
+
+### Generated clients
+
+Status: planned · M1 (separation and containment)
+
+The generator writes, beside each protocol's Elixir codec in `libs/wire/elixir`, an Elixir client:
+one function per message, taking the request's fields and handles and returning the decoded reply,
+or the protocol's error by name, over beamlet's `call` native. It is what a session binds a server
+with ([beamlet](../userland/beamlet.md#natives)). In Rust, the client library's one typed call
+over the generated codec is the binding, one call per message
+([native programs](../userland/native.md#the-client-library)).
+- **Nothing to drift.** The clients are generated from the table the server is generated from,
+  checked in, and held to it by `generated_files_are_current`, as the codecs are.
+- **Handles are the caller's.** A handle a reply brings is returned to the caller (a resource term
+  in Elixir, an owned handle in Rust); an error reply, or one that does not decode, keeps none of
+  the handles it brought ([R13 (one outcome per call)](../kernel/ipc.md#r13-one-outcome-per-call)).
+- **No policy.** A generated function makes the call its message describes and nothing more;
+  what a session may do is the server's check and the handle's reach.
+
+The hand-written layer above is thin: `fsd`'s operations, which name fids that live in Rust, and
+in Elixir the modules that make a server idiomatic, such as `Redoubt.Keys` over `keyd`.
+
+**Open:** none.
 
 ### Granting and releasing
 
