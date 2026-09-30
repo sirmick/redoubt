@@ -556,8 +556,8 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   slice: about 7 ms or about 18 ms, and any seed on either width can show the 18 ms mode (the
   third sweep above). Its p99 is a wake that lands behind several of the sixteen budgets, so it
   falls in steps of one slice (about 10.8 ms), from about 39 ms to about 82 ms, about 8 slices
-  (rv64, seed 13). The exact chain from a seed to its mode was not traced. The targets (25 and 95 ms) are set from the sweep, and
-  a lease's end from the steward's decision is 134 ms, not 80. A pinned seed repeats one run; a
+  (rv64, seed 6). The exact chain from a seed to its mode was not traced. The targets (25 and 95 ms) are set from the sweep, and
+  a lease's end from the steward's decision is 125 ms, not 80. A pinned seed repeats one run; a
   change that moves the phase can land on a worse one than the sweep saw, which the margin covers
   and a new sweep re-measures.
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
