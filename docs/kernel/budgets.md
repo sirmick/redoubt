@@ -358,7 +358,7 @@ by itself.
 
 ### R10 (destruction)
 
-Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:sched-destroy-billing, bench:dma-reset-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
+Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:sched-destroy-billing, bench:dma-reset-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
@@ -455,9 +455,9 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
 
 - **Destruction costs time nobody can interrupt.** Destroying a budget runs with interrupts off
   and is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
-  dominates lease termination (R39). The cost must follow the objects the dying subtree holds,
-  not every object page in the system and not every live table. The design ([todo](../todo/budget-destroy-cost.md))
-  gives destruction three indexes and makes the handle sweep one pass:
+  dominates lease termination, R39 (leases end). The cost must follow the objects the dying subtree holds,
+  not every object page in the system and not every live table. Destruction gives three indexes
+  and makes the handle sweep one pass:
 
   1. **The budget tree is linked downward.** Each budget keeps a `first_child` and a `next_sibling`
      beside its `parent`, so `mark_dying`, `lift_dying` and the final free walk the subtree
@@ -482,11 +482,11 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   taken call keeps authority that came through a dying budget (I2), and no handle names a freed
   frame (I1); the ledger returns exactly (I10). The checked build's scans over `0..=high_frame`
   (`check_all_dying`, `check_process_index`, `check_irq_index`) are the only full scans left: they
-  are the audit that the links and indexes name exactly the live objects, and they run at their
-  existing points, never inside the destruction walk. Until this lands, R10's and the deadline
-  notice's targets stay at 39 and 54 ms ([scheduling](scheduling.md#residual-risks)); done is
-  `bench:sched-latency` asserting 30 and 40 ms with margin on both widths, and a case that fills
-  the system with another budget's objects showing no growth.
+  are the audit that the links and indexes name exactly the live objects, and they run off the
+  destruction walk, never scaling it. R10's and the deadline notice's targets are back at 30 and
+  40 ms ([scheduling](scheduling.md#residual-risks)); `bench:sched-latency` asserts both with
+  margin on both widths, and `bench:budget-destroy-growth` fills the system with another budget's
+  objects and shows the destruction does not grow.
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

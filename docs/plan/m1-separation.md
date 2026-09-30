@@ -127,8 +127,8 @@ page.
 - **The steward.** Principals from the manifest, fixed sub-budgets per label set, sessions,
    leases, the powerbox and approvals, declassification and push, crash blame
    ([the steward](../servers/steward.md)); the server graph, trust tiers and capability holdings
-   it runs on ([the servers](../servers/README.md)). The cost of destroying a budget is brought
-   under its target first ([budget destruction's cost](../todo/budget-destroy-cost.md)), and the
+   it runs on ([the servers](../servers/README.md)). The cost of destroying a budget follows the
+   dying subtree, under its target ([budgets](../kernel/budgets.md#residual-risks)), and the
    steward's decision-wake target is set from a seed sweep
    ([responsiveness](../kernel/scheduling.md#responsiveness)).
    The scheduling latency bench, measured with stand-ins for the steward and the drivers, is
