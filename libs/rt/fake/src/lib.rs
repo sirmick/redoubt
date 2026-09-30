@@ -164,6 +164,8 @@ pub struct Fake {
     state: Mutex<State>,
     changed: Condvar,
     boot: Instant,
+    /// Whether a wait with no deadline may last for ever ([`Fake::never_stuck`]).
+    patient: std::sync::atomic::AtomicBool,
 }
 
 thread_local! {
@@ -186,6 +188,7 @@ pub fn fake() -> &'static Fake {
             state: Mutex::new(State { rng: 0x2545_f491_4f6c_dd1d, next_id: 1, ..State::default() }),
             changed: Condvar::new(),
             boot: Instant::now(),
+            patient: std::sync::atomic::AtomicBool::new(false),
         }));
         redoubt_rt::install_host_kernel(fake);
         fake
@@ -373,6 +376,16 @@ impl Fake {
         result
     }
 
+    /// Lets a wait with no deadline last for ever, for a program run on this fake that waits on a
+    /// person rather than a test: a shell whose user is thinking changes nothing for as long as
+    /// they think. Tests never call it, so a test that stalls still fails after [`STUCK`].
+    pub fn never_stuck(&self) { self.patient.store(true, std::sync::atomic::Ordering::Relaxed); }
+
+    /// Seeds the kernel's `random`, for a program run on this fake for a person, whose keys must
+    /// not repeat from run to run. Tests never call it, so their randomness repeats, as a test's
+    /// should.
+    pub fn seed_random(&self, seed: u64) { self.lock().rng = seed | 1; }
+
     /// Waits for a change or the deadline; false once the deadline has passed. A wait with no
     /// deadline (`FOREVER`) that sees nothing change anywhere in this kernel for [`STUCK`] panics:
     /// the test is stuck (a server that ended early, a reply never sent), and fails naming it
@@ -380,6 +393,9 @@ impl Fake {
     fn wait<'a>(&self, guard: &mut Option<MutexGuard<'a, State>>, deadline: Option<Instant>) -> bool {
         let g = guard.take().unwrap();
         match deadline {
+            None if self.patient.load(std::sync::atomic::Ordering::Relaxed) => {
+                *guard = Some(self.changed.wait(g).unwrap_or_else(|e| e.into_inner()));
+            }
             None => {
                 let (g, waited) = self.changed.wait_timeout(g, STUCK).unwrap_or_else(|e| e.into_inner());
                 if waited.timed_out() {
