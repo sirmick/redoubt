@@ -180,9 +180,8 @@ impl MemoryManager {
         }
     }
 
-    /// Free the endpoint's frame and give its page back to its owner. The caller has already
-    /// failed everything waiting on it (`message::endpoint_dying`) and swept the handles. Inside a
-    /// destruction the frame free is deferred past `destroy_marked`'s single sweep (I1).
+    /// Free a new endpoint whose handle could not be installed: nothing names it or waits on it
+    /// yet. A destruction frees its endpoints in `message::budgets_dying` instead.
     pub fn free_endpoint(&mut self, frame: u32, owner: BudgetFrame) {
         self.unlink_owned(owner, frame);
         self.release_object_frame(frame);

@@ -457,7 +457,7 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   and is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
   dominates lease termination, R39 (leases end). The cost must follow the objects the dying subtree holds,
   not every object page in the system and not every live table. Destruction gives three indexes,
-  one handle sweep, and one thread walk:
+  one handle sweep, and three thread walks:
 
   1. **The budget tree is linked downward.** Each budget keeps a `first_child` and a `next_sibling`
      beside its `parent`, so `mark_dying`, `lift_dying` and the final free walk the subtree
@@ -478,15 +478,21 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      (`MAX_PROCESS_COUNT` × `MAX_HANDLE_PAGES`), which another budget filling the system with
      endpoints cannot grow: a process past `MAX_HANDLES` can create no more, so its table ends at
      `MAX_HANDLE_PAGES` pages.
-  4. **One thread walk for the endpoints' teardown.** `destroy_endpoint` runs three all-thread
-     scans per endpoint — fail its blocked senders and receivers, fail callers waiting for a reply
-     through it, clear the abandoned-call notices owed on it — and `endpoint_dying` a process-object
-     scan. Those move into one pass over the threads keyed on *the endpoint's owner is dying* (and
-     on the stamp, for a message already sent), never on *this one endpoint*, so a lease that holds
-     a thousand endpoints costs one bounded walk — `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk
-     [R2](ipc.md#r2-fair-waiting) already makes on the delivery path — plus the endpoints' own
-     parked calls, never a walk per endpoint. All that is left per endpoint is freeing its frame,
-     which the one sweep defers.
+  4. **Three thread walks for the endpoints' teardown, not three per endpoint.** `destroy_endpoint`
+     ran three all-thread scans per endpoint — fail its blocked senders and receivers, fail callers
+     waiting for a reply through it, clear the abandoned-call notices owed on it — and
+     `endpoint_dying` a process-object scan, so a full lease cost its endpoints times the threads.
+     `budgets_dying` now makes three walks over the threads for the whole subtree, keyed on *the
+     endpoint's owner is dying* (and on the stamp, for a message already sent), never on *this one
+     endpoint*: receivers and senders on a dying endpoint first, then callers waiting for a reply
+     through one and messages whose stamp is dying, then the notices, in a walk of their own and
+     last: an owed notice's caller no longer waits, so no failing walk finds it, and the reply
+     failures owe more. `process::endpoints_dying` drops the exit notices in one process-object
+     pass. Each walk is `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk
+     [R2 (fair waiting)](ipc.md#r2-fair-waiting) already makes on the delivery path, repeated only
+     for each waiter it fails: the cost follows the subtree's own parked calls, never its endpoint
+     count. Freeing an endpoint's frame touches only the frame, deferred to the one sweep, not the
+     dying budget that owns it: the budget's whole object list is going with it.
 
   The invariant the four keep is R10 itself: after a destruction no handle, queued message or
   taken call keeps authority that came through a dying budget (I2), and no handle names a freed
@@ -498,13 +504,12 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   scan remains, `destroy_quarantined_devices` (`message.rs`), which a process teardown runs to
   find the quarantined device objects and stops once it has the machine's DMA slots. R10's and
   the deadline notice's targets are back at 30 and 40 ms
-  ([scheduling](scheduling.md#residual-risks)); `bench:sched-latency` asserts both with margin on
-  both widths, and `bench:budget-destroy-growth` fills the system with another budget's objects
-  and shows the destruction does not grow. What those cases do not expose is a lease that itself
-  holds many endpoints: the containment gate's full fill (~1460) makes `destroy_endpoint`'s
-  per-endpoint scans `endpoints × threads`, which item 4 folds into the one bounded walk, and the
-  gate's full-fill run through `bench:kernel-containment` is that walk's acceptance, at the same
-  30 and 40 ms targets.
+  ([scheduling](scheduling.md#residual-risks)); `bench:sched-latency` asserts both on both widths
+  (seed 3: R10's p99 is 28,489 µs on rv64 and 29,723 µs on rv32, close under the target), and
+  `bench:budget-destroy-growth` fills the system with another budget's objects and shows the
+  destruction does not grow. What those cases do not expose is a lease that itself holds many
+  endpoints: the containment gate's full fill (~1460) is the three walks' acceptance, at the same
+  30 ms target.
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

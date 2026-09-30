@@ -1321,8 +1321,8 @@ pub fn reply(
     // exactly this reply).
     drop_open_call(mm, pid, tid, frame);
     if call.flags & F_WAITING == 0 {
-        // A notice owed here waits on a live endpoint: one destroyed took its notices with it
-        // (`destroy_endpoint`).
+        // A notice owed here waits on a live endpoint: a destruction took its notices with it
+        // (`budgets_dying`).
         debug_assert!(
             call.flags & F_NOTICE == 0 || mm.is_live_endpoint(call.endpoint),
             "I15: an abandoned call owes a notice on a destroyed endpoint"
@@ -1512,28 +1512,66 @@ pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
 /// frame ([Residual risks](../kernel/budgets.md#residual-risks)).
 pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetFrame) {
     // One pre-order walk of the dying subtree, and each budget's one owner chain, endpoint and
-    // device alike: the walk ends exactly what the subtree owns, never a scan of every frame.
+    // device alike: the walk ends exactly what the subtree owns, never a scan of every frame. The
+    // chain is read once and never written back: an endpoint's page is freed without a per-endpoint
+    // read-modify-write of the budget that owns it, which is going with the whole subtree anyway,
+    // and the endpoints' pages come back in one write (R10,
+    // [Residual risks](../kernel/budgets.md#residual-risks)).
     let mut cur = Some(top);
     while let Some(frame) = cur {
-        while let Some(owned) = mm.budget(frame).first_owned {
-            if mm.is_endpoint_frame(owned) {
-                destroy_endpoint(ss, mm, owned);
+        let mut owned = mm.budget(frame).first_owned;
+        let mut endpoint_pages = 0;
+        while let Some(o) = owned {
+            owned = mm.owned_next(o);
+            if mm.is_endpoint_frame(o) {
+                mm.release_object_frame(o);
+                endpoint_pages += crate::endpoint::ENDPOINT_PAGES;
             } else {
-                destroy_device(ss, mm, owned);
+                destroy_device(ss, mm, o);
             }
         }
+        mm.uncharge(frame, endpoint_pages);
         cur = mm.subtree_next(top, frame);
     }
-    // Revocation reaches messages already sent (R10): a queued one fails its sender with `Dead`;
-    // a taken call fails its caller with `Dead` at once and is abandoned (R3).
+    // R10 step 4's message reach, three bounded walks for the whole subtree, never one per endpoint.
+    // Receivers and senders on a dying endpoint go first, so a receiver is never offered an
+    // abandoned call's notice on the way out; then callers waiting for a reply through one, and
+    // every queued message or taken call whose stamp is dying (R3, R10).
+    fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
+        let s = slot(mm, pid, tid);
+        matches!(s.wait, Wait::Send | Wait::Receive)
+            && s.endpoint.is_some_and(|e| mm.budget_at(mm.endpoint_at(e).owner).dying)
+    });
     fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
         let s = slot(mm, pid, tid);
         match s.wait {
             Wait::Send => mm.budget_at(msg(mm, pid, tid).stamp).dying,
-            Wait::Reply => mm.budget_at(open_call_at(mm, s.open).stamp).dying,
+            Wait::Reply => {
+                mm.budget_at(open_call_at(mm, s.open).stamp).dying
+                    || mm.budget_at(mm.endpoint_at(open_call_at(mm, s.open).endpoint).owner).dying
+            }
             _ => false,
         }
     });
+    // Every call taken through a dying endpoint loses its abandoned-call notice: there is no
+    // endpoint left to receive one on (R3), and no notice may name a frame about to be freed (I1).
+    // A walk of its own, last: an owed notice's caller no longer waits, so no `fail_all` finds it,
+    // and the reply failures above owe more.
+    for pid in (1..=MAX_PROCESS_COUNT).filter_map(|i| Pid::new(i as u8)) {
+        for tid in 1..=MAX_THREADS {
+            for i in 0..slot(mm, pid, tid).ncalls {
+                let frame = nth_call(mm, pid, tid, i);
+                let mut c = open_call_at(mm, frame);
+                if c.flags & F_NOTICE != 0 && mm.budget_at(mm.endpoint_at(c.endpoint).owner).dying {
+                    c.flags &= !F_NOTICE;
+                    store_open_call(mm, frame, &c);
+                }
+            }
+        }
+    }
+    // Every exit notice owed to a dying endpoint is dropped, and a process still running loses the
+    // ear it was to report to (R10; `process.rs`).
+    crate::process::endpoints_dying(mm);
 }
 
 /// A DMA device whose reset did not confirm is destroyed as R10 destroys one (kernel/devices.md,
@@ -1574,43 +1612,6 @@ pub fn destroy_quarantined_devices(ss: &mut ProcessTable, mm: &mut MemoryManager
     }
 }
 
-/// Destroy an endpoint (R10): blocked senders and receivers get `Dead`, then calls in flight
-/// that a server took fail with `Dead` and are abandoned (R3), and the page goes back to its
-/// owner. Receivers go first, so none is offered an abandoned-call notice on the way out.
-fn destroy_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
-    let e = EndpointRef { frame, id: mm.endpoint(frame).id };
-    fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
-        let s = slot(mm, pid, tid);
-        matches!(s.wait, Wait::Send | Wait::Receive) && s.endpoint == Some(e)
-    });
-    fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
-        let s = slot(mm, pid, tid);
-        s.wait == Wait::Reply && open_call_at(mm, s.open).endpoint == e
-    });
-    // Every call taken through it is abandoned now, and no notice follows: there is no endpoint
-    // left to receive one on. `Dead` from `receive` on it is the holder's cue (R3); a reply to
-    // one of them is `discarded`, as to any abandoned call.
-    while let Some(frame) = find_thread(mm, |mm, pid, tid| {
-        let s = slot(mm, pid, tid);
-        (0..s.ncalls).map(|i| nth_call(mm, pid, tid, i)).find(|f| {
-            let c = open_call_at(mm, *f);
-            c.flags & F_NOTICE != 0 && c.endpoint == e
-        })
-    }) {
-        let mut c = open_call_at(mm, frame);
-        c.flags &= !F_NOTICE;
-        store_open_call(mm, frame, &c);
-    }
-    // Every exit notice owed here is dropped, and a process still running loses the ear it was
-    // to report to (R10; `process.rs`).
-    crate::process::endpoint_dying(mm, e);
-    // The handles naming it go first: `budget_destroy`'s later sweep reads every handle's
-    // object, and one naming a freed frame would stop the kernel (I1). Inside a destruction the
-    // frame free is deferred to that sweep, which closes them; outside one this bounded pass does.
-    mm.sweep_handles_now(|_, h| matches!(h.object, Object::Endpoint(x) if x == e));
-    let owner = mm.endpoint(frame).owner;
-    mm.free_endpoint(frame, owner.frame);
-}
 /// Fail every blocked thread `doomed` picks, one at a time, until none is left.
 fn fail_all(
     ss: &mut ProcessTable,

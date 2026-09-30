@@ -104,8 +104,9 @@ caller's table; an index of 0 or past the last table page is `BadHandle`, as is 
 object and its stamp each by frame and by id, and every lookup (`budget_at`, `endpoint_at`,
 `device_at`, `process_at`) compares the id with the one in the frame: a handle that escaped
 R10's sweep would name a freed and perhaps reused frame, and the kernel stops rather than use
-it. An object's frame is freed only after the handles naming it are swept (`destroy_endpoint`
-and `destroy_device` in `kernel/src/message.rs`, `free_object` in `kernel/src/process.rs`).
+it. An object's frame is freed only after the handles naming it are swept (`budgets_dying` and
+`destroy_device` in `kernel/src/message.rs`, `free_object` in `kernel/src/process.rs`; inside a
+destruction every such free waits for `destroy_marked`'s one sweep).
 
 **Model check:** `i1_i2_i3_i4_handles`: no table uses index 0, and every handle anywhere (in a
 table, as an exit endpoint, or carried in a queued message) names a live object.
@@ -437,8 +438,9 @@ written takes nothing, so the notice stays for the holder's next good `receive`
 sets the call's notice flag in the same step that clears its waiting flag; `pump` delivers the
 notice to the holding thread before any exit notice or message and clears the flag; `reply` to a
 call whose caller no longer waits frees the lend and reports `discarded`, and since the call
-leaves the thread's open calls there, no notice is left to deliver; `destroy_endpoint` clears the
-notices owed on the endpoint it destroys, whose `Dead` is the holder's report, and `reply` checks,
+leaves the thread's open calls there, no notice is left to deliver; `budgets_dying` clears the
+notices owed on every endpoint a destruction ends, whose `Dead` is the holder's report (and
+`process::endpoints_dying` the exit notices owed there), and `reply` checks,
 in a checked build, that none is owed on a destroyed endpoint. Each step runs to its end
 with interrupts off, holding the memory manager, so a reply and an abandonment cannot both
 win.

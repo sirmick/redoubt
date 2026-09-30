@@ -783,17 +783,16 @@ pub fn budgets_dying(ss: &mut ProcessTable) {
     }
 }
 
-/// An exit endpoint is being destroyed (R10): every notice owed to it is dropped and its object
-/// freed. A process still running keeps going -- it has lost the ear it was to report to, and its
-/// object goes when its creator's budget does.
-pub fn endpoint_dying(mm: &mut MemoryManager, e: EndpointRef) {
-    while let Some(frame) = mm.find_process(|mm, frame| mm.process(frame).endpoint == Some(e)) {
+/// Endpoints owned by a dying budget are being destroyed (R10): every exit notice owed to one is
+/// dropped and its process object freed, and a process still running loses the ear it was to
+/// report to. One pass over the process objects, keyed on the endpoint's owner dying, never one
+/// per endpoint.
+pub fn endpoints_dying(mm: &mut MemoryManager) {
+    while let Some(frame) = mm.find_process(|mm, frame| {
+        mm.process(frame).endpoint.is_some_and(|e| mm.budget_at(mm.endpoint_at(e).owner).dying)
+    }) {
         let mut p = mm.process(frame);
-        if p.alive() {
-            p.endpoint = None;
-            mm.store_process(frame, &p);
-        } else {
-            free_object(mm, frame);
-        }
+        p.endpoint = None;
+        if p.alive() { mm.store_process(frame, &p) } else { free_object(mm, frame) }
     }
 }
