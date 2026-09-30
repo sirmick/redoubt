@@ -502,12 +502,36 @@ fn rsa_private(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPrivateKey, E>
     if parts.len() < 3 {
         return Err(badarg(c, arg, "Bad RSA private key"));
     }
-    let primes = if parts.len() >= 5 { alloc::vec![parts[3].clone(), parts[4].clone()] } else { Vec::new() };
-    let key =
-        rsa::RsaPrivateKey::from_components(parts[1].clone(), parts[0].clone(), parts[2].clone(), primes)
-            .map_err(|_| badarg(c, arg, "Bad RSA private key"))?;
-    key.validate().map_err(|_| badarg(c, arg, "Bad RSA private key"))?;
-    Ok(key)
+    rsa_private_of(&parts).ok_or_else(|| badarg(c, arg, "Bad RSA private key"))
+}
+
+/// The private key `[E, N, D]` or `[E, N, D, P1, P2 | _]`, if it is one. `from_components` builds
+/// the modulus's Montgomery parameters, and recovers the primes from `D`, before anything checks
+/// a size, so a hostile key's multi-megabyte `N` or `D` would hold the VM's thread: `N` is held to
+/// the limit the public path and key generation keep, and `D` and the primes, never wider than
+/// `N` in a real key, to `N`'s width, first.
+fn rsa_private_of(parts: &[rsa::BoxedUint]) -> Option<rsa::RsaPrivateKey> {
+    let (e, n, d) = (parts.first()?, parts.get(1)?, parts.get(2)?);
+    let width = n.bits_vartime();
+    let primes = if parts.len() >= 5 { &parts[3..5] } else { &[] };
+    if width as usize > rsa::RsaPublicKey::MAX_SIZE || d.bits_vartime() > width {
+        return None;
+    }
+    if primes.iter().any(|p| p.bits_vartime() > width) {
+        return None;
+    }
+    // Without primes, `recover_primes` computes `D·E − 1`, which panics on underflow for a `D`
+    // of 0, and cuts `E` to `D`'s precision without a word; it is defined for `E` of at most 256
+    // bits.
+    if d.bits_vartime() < 2 {
+        return None;
+    }
+    if primes.is_empty() && (e.bits_vartime() > 256 || e.bits_vartime() > d.bits_precision()) {
+        return None;
+    }
+    let key = rsa::RsaPrivateKey::from_components(n.clone(), e.clone(), d.clone(), primes.to_vec()).ok()?;
+    key.validate().ok()?;
+    Some(key)
 }
 
 /// `pkey_crypt_nif(rsa, In, Key, Options, IsPrivate, IsEncrypt)`: RSA with PKCS #1 v1.5
@@ -600,6 +624,8 @@ pub fn rsa_generate_key(c: &mut Ctx, a: &[Term]) -> R {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::ed25519_pair_of;
 
     fn hex(s: &str) -> alloc::vec::Vec<u8> {
@@ -633,6 +659,105 @@ mod tests {
     fn the_all_zero_seed_is_refused_not_a_panic() {
         assert!(ed25519_pair_of([0; 32]).is_none());
         assert!(ed25519_pair_of([1; 32]).is_some());
+    }
+
+    /// A 1024-bit key's `[E, N, D, P1, P2]`, made for this test and nothing else.
+    fn rsa_parts() -> alloc::vec::Vec<rsa::BoxedUint> {
+        [
+            "010001",
+            concat!(
+                "a9fe558664722ab2c3190eb31e29e7a45be6d062afb29304c7c4965750f2c941e2bcf30391f15fde7bcb550d",
+                "39daa4fab484eaeb6f9304cf89880f84c711d98a80215c087dc54767f446c258f99e7492676b31365a116375",
+                "e5e0337b03f691bf9cc7b3dc75d1daa25c78c484c3f828ad07ea4b70a10ff2e5ee1d94f8443c8e27"
+            ),
+            concat!(
+                "9ddcae178b97e9c6f01e88e41592dca66921c34aa1d6b768ad0b0682378dff0fcc3ba381213a81c8de3548da",
+                "6b6b7be1c559d9bea17269f940c2b5869c471b385b183e417fc89fadc3664c450feeca4edcfaeef371a389f2",
+                "b32ac7fe76b8cb9176b354c302086e8cb0b8702bef86f93536bffdfae729376bd9f5688293e8c981"
+            ),
+            "dc2f03458c49fbe27819075b587deb8f2e0e0488be8dfc682594ffff11ec395e884be2da465438b0ea1b72ef294ab0a2dc9196d4ee5d2c87957681bcf00fdf71",
+            "c5a547be5bb12c2a5cae589072a7da70e99a80f6c324418e9ceb9a25ec0dbbfe56a3601dcd1d498dd7c45f02731bceb50400df917f3a876b7b30a9e777ffab17",
+        ]
+        .iter()
+        .map(|h| rsa::BoxedUint::from_be_slice_vartime(&hex(h)))
+        .collect()
+    }
+
+    /// An `N` or `D` wider than the limit, or a `D` or prime wider than `N`, is refused before
+    /// `from_components` builds anything from it: an 8 MiB `N`, which would hold the thread for
+    /// minutes there, is refused at once, and so is a valid key's `D` made wide.
+    #[test]
+    fn an_oversized_rsa_private_key_is_refused_before_it_is_built() {
+        use super::rsa_private_of;
+        let parts = rsa_parts();
+        assert!(rsa_private_of(&parts).is_some());
+        assert!(rsa_private_of(&parts[..3]).is_some());
+
+        let mut huge = alloc::vec![0xffu8; 8 << 20];
+        let at = std::time::Instant::now();
+        let mut wide = parts.clone();
+        wide[1] = rsa::BoxedUint::from_be_slice_vartime(&huge);
+        assert!(rsa_private_of(&wide).is_none());
+        huge.truncate(rsa::RsaPublicKey::MAX_SIZE / 8 + 1);
+        wide[1] = rsa::BoxedUint::from_be_slice_vartime(&huge);
+        assert!(rsa_private_of(&wide).is_none());
+        assert!(at.elapsed() < std::time::Duration::from_secs(1), "{:?}", at.elapsed());
+
+        let mut wide = parts.clone();
+        wide[2] = rsa::BoxedUint::from_be_slice_vartime(&[0xff; 8 << 20]);
+        assert!(rsa_private_of(&wide).is_none());
+        let mut wide = parts.clone();
+        wide[2] = rsa::BoxedUint::from_be_slice_vartime(&[0xff; 129]);
+        assert!(rsa_private_of(&wide).is_none());
+        let mut wide = parts.clone();
+        wide[3] = rsa::BoxedUint::from_be_slice_vartime(&[0xff; 129]);
+        assert!(rsa_private_of(&wide).is_none());
+    }
+
+    /// Malformed private keys over edge values, with and without primes, through everything that
+    /// takes a private key (decryption, both signature schemes, the public half): each is refused
+    /// or works, and none panics.
+    #[test]
+    fn malformed_rsa_private_keys_are_refused_never_a_panic() {
+        use rsa::BoxedUint;
+        use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+
+        use super::rsa_private_of;
+        let parts = rsa_parts();
+        let (n, d) = (parts[1].clone(), parts[2].clone());
+        let int = |bytes: &[u8]| BoxedUint::from_be_slice_vartime(bytes);
+        let small = |v: u64| int(&v.to_be_bytes());
+        let one_less = |x: &BoxedUint| x.wrapping_sub(&BoxedUint::one_with_precision(x.bits_precision()));
+        let mut wide_e = alloc::vec![0u8; 33];
+        wide_e[0] = 1;
+        wide_e[32] = 1;
+        let es = [small(1), small(2), small(3), small(65537), int(&wide_e), int(&[0xff; 129])];
+        let ds = [small(0), small(1), small(2), small(3), one_less(&n), n.clone(), d.clone()];
+        let ns = [n.clone(), small(0), small(1), small(4), small(15), small(3233)];
+        let mut rng = crate::KeystreamRng({
+            use chacha20::cipher::KeyIvInit;
+            chacha20::ChaCha20::new(&[7; 32].into(), &[0; 12].into())
+        });
+        for e in &es {
+            for d in &ds {
+                for n in &ns {
+                    for primes in [&[][..], &parts[3..5]] {
+                        let key = [&[e.clone(), n.clone(), d.clone()][..], primes].concat();
+                        let what = std::format!("e {e:?} d {d:?} n {n:?} primes {}", primes.len());
+                        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let Some(key) = rsa_private_of(&key) else { return };
+                            let _ = (key.e(), key.n(), key.d(), key.primes());
+                            let _ = key.decrypt(rsa::Pkcs1v15Encrypt, &[1]);
+                            let _ = key.decrypt_blinded(&mut rng, rsa::Pkcs1v15Encrypt, &[1; 128]);
+                            let _ = key.sign(rsa::Pkcs1v15Sign::new_unprefixed(), &[1; 20]);
+                            let pss = rsa::Pss::<sha2::Sha256>::new_with_salt(32);
+                            let _ = key.sign_with_rng(&mut rng, pss, &[1; 32]);
+                        }));
+                        assert!(run.is_ok(), "{what}: a panic");
+                    }
+                }
+            }
+        }
     }
 
     /// A low-order point gives an all-zero secret, which `dh` refuses, as OpenSSL does.
