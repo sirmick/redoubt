@@ -367,7 +367,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-Status: built · partly tested: the OpenSSH reference case's container is not built yet, so the case still runs the host's `sshd`, which cannot start a shell while the bench runs in a service's SELinux context ([todo](todo/ssh-loopback-host.md)); no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback, bench:bench-ssh-loopback-deadlock, bench:bench-ssh-loopback-forbid, bench:bench-ssh-loopback-exit, bench:bench-ssh-loopback-host-key, bench:bench-ssh-loopback-aborted-text, bench:bench-ssh-guest, host:testbench::only_the_selinux_exec_refusal_is_the_hosts
+Status: built · partly tested: no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback, bench:bench-ssh-loopback-openssh, bench:bench-ssh-loopback-deadlock, bench:bench-ssh-loopback-forbid, bench:bench-ssh-loopback-exit, bench:bench-ssh-loopback-host-key, bench:bench-ssh-loopback-aborted-text, bench:bench-ssh-guest, host:testbench::the_reference_proxy_quotes_only_what_the_bench_chose
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
 while the bench keeps watching the console. Each drives the host's OpenSSH `ssh`, an implementation
@@ -413,18 +413,30 @@ unchanged, so the case is still a witness independent of Redoubt's server.
   run after a change to the file needs the network.
 - **Each session** starts its own server: `ssh`'s `ProxyCommand` is `podman run -i --rm
   --network=none --pull=never` of that image running `sshd -i`, with the case's configuration,
-  keys and log in a directory the bench makes for the case, mounted with a shared SELinux label so
-  that concurrent sessions can all append to the one log. The server logs in only root, inside
+  keys and log from a directory the bench makes for the case. Each file is mounted on its own
+  with a shared SELinux label, so that concurrent sessions can all append to the one log; the
+  configuration and keys are read-only, and only the log is writable. The server logs in only root, inside
   the container (root there is the bench's user outside), runs `/bin/sh` for every login and
   allows nothing else. The container has no network, so nothing but its `ssh` can reach it.
 - **Rootless `podman` needs the user's own group.** A service may run the bench with another
   primary group, and `newuidmap` then refuses to map the container's users; the runner starts
-  `podman` under `sg` and the user's primary group from the password database.
+  `podman` under `sg` and the user's primary group from the password database. A service also has
+  no systemd user session to hold a container's cgroup, so `podman` runs with
+  `--cgroup-manager=cgroupfs`; without it the image's build fails there.
 - **Before the first OpenSSH loopback case** the bench logs in once and runs `exit 0`, and the
   server's log must name OpenSSH's version, so that no other server can pass for it. Without
-  `podman`, or with no image and no way to build one, every OpenSSH loopback case fails with that
-  reason, as on a host without OpenSSH, and `--allow-skip` skips them. Any other probe failure
-  fails every OpenSSH loopback case.
+  `podman`, or with no image and no network to build one, every OpenSSH loopback case fails with
+  that reason, as on a host without OpenSSH, and `--allow-skip` skips them. The bench tells the
+  network's absence from a broken recipe after a failed build: if the base image's registry or
+  Debian's archive does not accept a connection, the host lacks the network; if both do, the
+  recipe is at fault, and that, like any other probe failure, fails every OpenSSH loopback case.
+  The residual: Debian drops a superseded package version from its archive, so once
+  `openssh-server`'s pin is superseded a host without the image cannot build it, and every
+  OpenSSH loopback case fails there until the pin moves; a host that has the image runs on. The
+  check also runs from the bench's network, not the build's: a host whose `podman` alone is cut
+  off fails the case rather than skipping it, and a host whose only way out is an HTTP(S) proxy
+  that `podman` uses and the check does not finds neither source answering, so a bad pin there is
+  a host lack that `--allow-skip` skips.
 
 ### Against Redoubt's sshd
 
@@ -434,7 +446,7 @@ Status: built · partly tested: a window change reaches the console only in `ssh
 platform, `redoubt-sshd-host` ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)),
 which the bench builds and `ssh` starts as its `ProxyCommand`. Its host key is `loopback-host`,
 and each of the case's `authorized` keys is a principal of the same name. Nothing there needs a
-shell or a login context, so the SELinux refusal above does not touch them.
+shell, a login context or a container.
 
 - **The self-checks run on it,** their steps written for its scripted console, and their
   `server_log` patterns for its log.

@@ -1,0 +1,8 @@
+# OpenSSH's server for the bench's reference case (docs/testbench.md, "Sessions and the loopback
+# server"). The bench tags the image with this file's hash and builds it only when that tag is
+# missing: pin everything, so that one hash always names one server.
+FROM docker.io/library/debian:trixie-slim@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-server=1:10.0p1-7+deb13u4 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /run/sshd

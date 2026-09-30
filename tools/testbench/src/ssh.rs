@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,8 +22,12 @@ use crate::case::{Session, Step};
 use crate::qemu::{Forward, Reaped};
 
 pub const SSH: &str = "ssh";
-/// Absolute, because sshd refuses to start otherwise.
-pub const SSHD: &str = "/usr/sbin/sshd";
+/// The recipe of OpenSSH's server image for the reference case, relative to the workspace.
+const CONTAINERFILE: &str = "tests/ssh-reference/Containerfile";
+/// The reference server's only login: root in its container, which is the bench's user outside.
+const REFERENCE_USER: &str = "root";
+/// What OpenSSH's server logs at DEBUG1 when a session starts, and no other server's log has.
+const REFERENCE_VERSION: &str = "sshd-session version OpenSSH_";
 /// The test keys, relative to the workspace: `NAME` and `NAME.pub`, made by ssh-keygen.
 /// They are public, like the development signing seed (build.rs). NOT FOR PRODUCTION.
 const KEYS: &str = "tests/keys";
@@ -71,30 +76,33 @@ fn key_file(workspace: &Path, dir: &Path, name: &str) -> Result<PathBuf> {
 pub enum Server<'a> {
     /// A booted guest, through the port QEMU forwards to its port 22. `host_key`: see `Net`.
     Guest { forwards: &'a [Forward], host_key: Option<&'a str> },
-    /// A host sshd run by ssh itself for each session, in inetd mode (`sshd -i`) through
-    /// `ProxyCommand`: it never listens on a port, so nobody else on the machine can reach it.
-    Loopback { proxy: String, host_key: String, user: String },
+    /// OpenSSH's sshd, in a container that ssh itself starts for each session through
+    /// `ProxyCommand`, in inetd mode (`sshd -i`) and with no network: it never listens on a port,
+    /// so nobody else on the machine can reach it.
+    Loopback { proxy: String, host_key: String },
     /// Redoubt's `sshd` on its host platform, `redoubt-sshd-host`, run by ssh the same way.
     Redoubt { proxy: String, host_key: String },
 }
 
-/// Removes `case`'s server log: both servers append, and a line from an earlier run must not
-/// satisfy this one's `server_log`.
+/// Makes `case`'s own directory and removes its server log: both servers append, and a line from
+/// an earlier run must not satisfy this one's `server_log`.
 fn fresh_log(dir: &Path, case: &str) -> Result<PathBuf> {
     let log = loopback_log(dir, case);
+    std::fs::create_dir_all(log.parent().unwrap())?;
     match std::fs::remove_file(&log) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => bail!("removing {}: {e}", log.display()),
         _ => Ok(log),
     }
 }
 
-/// ssh hands `ProxyCommand` to a shell; keep it free of anything the shell would interpret.
-fn proxy_command(proxy: String) -> Result<String> {
+/// ssh hands `ProxyCommand` to a shell; keep what the bench does not choose itself (paths, the
+/// group's name) free of anything the shell would interpret.
+fn plain(part: &str) -> Result<&str> {
     ensure!(
-        proxy.bytes().all(|b| b.is_ascii_alphanumeric() || b" /._+=-".contains(&b)),
-        "unusual path in {proxy:?}"
+        part.bytes().all(|b| b.is_ascii_alphanumeric() || b" /._+=-".contains(&b)),
+        "unusual characters in {part:?}"
     );
-    Ok(proxy)
+    Ok(part)
 }
 
 /// The key `ssh` expects: the case's, or the loopback servers' own, `loopback-host`.
@@ -136,12 +144,107 @@ pub fn redoubt(
         check_key_name(name)?;
         proxy += &format!(" --login {name}={}", keys.join(format!("{name}.pub")).display());
     }
-    Ok(Server::Redoubt { proxy: proxy_command(proxy)?, host_key: expected_host_key(workspace, host_key)? })
+    Ok(Server::Redoubt { proxy: plain(&proxy)?.into(), host_key: expected_host_key(workspace, host_key)? })
 }
 
-/// Set up a loopback server that accepts the `authorized` test keys, logs in only the user
-/// running the bench (an unprivileged sshd can log in no one else), runs `/bin/sh` for every
-/// login and allows nothing else: no forwarding, no agent, no rc files it controls.
+/// OpenSSH's server image for the reference case, and how the bench runs `podman` for it.
+struct Reference {
+    /// The user's primary group from the password database: a service may start the bench under
+    /// another, and rootless `podman`'s `newuidmap` then refuses to map the container's users.
+    group: String,
+    /// `localhost/redoubt-ssh-reference:` and the first 16 hex digits of the Containerfile's
+    /// sha256, so that a changed recipe is a new image.
+    tag: String,
+}
+
+impl Reference {
+    fn new(workspace: &Path) -> Result<Reference> {
+        let run = |command: &mut Command| -> Result<String> {
+            let output = command.output().with_context(|| format!("running {command:?}"))?;
+            ensure!(output.status.success(), "{command:?} failed");
+            Ok(String::from_utf8(output.stdout)?.trim().to_string())
+        };
+        let user = run(Command::new("id").arg("-un"))?;
+        let group = run(Command::new("id").arg("-gn").arg(&user))?;
+        let hash = run(Command::new("sha256sum").arg(workspace.join(CONTAINERFILE)))?;
+        let hash = hash.get(..16).filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()));
+        let hash = hash.context("sha256sum printed no hash")?;
+        Ok(Reference { group: plain(&group)?.into(), tag: format!("localhost/redoubt-ssh-reference:{hash}") })
+    }
+
+    /// A `podman` command line. A service has no systemd user session for `podman` to put a
+    /// container's cgroup in, so it uses cgroupfs.
+    fn podman(args: &str) -> String { format!("podman --cgroup-manager=cgroupfs {args}") }
+
+    /// Runs a `podman` command line under the user's own group.
+    fn sg(&self, args: &str) -> std::io::Result<std::process::Output> {
+        Command::new("sg").args([&self.group, "-c", &Self::podman(args)]).output()
+    }
+
+    /// Builds the image unless one has its tag: the one step that needs the network. What the host
+    /// lacks for it (`sg`, `podman`, the network to build) is named as such. A build that fails while
+    /// the recipe's sources answer is the recipe's fault (a pin Debian has superseded, say): the case
+    /// fails.
+    fn ensure_image(&self, workspace: &Path) -> Result<(), Unusable> {
+        let lacks = |why: String| Unusable::Host(format!("the reference sshd's container: {why}"));
+        let version = self.sg("--version").map_err(|e| lacks(format!("sg: {e}")))?;
+        match version.status.code() {
+            Some(0) => {}
+            Some(127) => return Err(lacks("podman is not installed".into())),
+            _ => {
+                return Err(Unusable::Broken(format!(
+                    "sg {} could not run podman: {}",
+                    self.group,
+                    String::from_utf8_lossy(&version.stderr).trim()
+                )));
+            }
+        }
+        let exists = self.sg(&format!("image exists {}", self.tag)).map_err(|e| lacks(format!("sg: {e}")))?;
+        if exists.status.success() {
+            return Ok(());
+        }
+        let containerfile = workspace.join(CONTAINERFILE);
+        let broken = |e: anyhow::Error| Unusable::Broken(format!("{e:#}"));
+        let file = containerfile.to_str().context("a non-UTF-8 path").and_then(plain).map_err(broken)?;
+        let context = file.strip_suffix("/Containerfile").unwrap();
+        let build = self
+            .sg(&format!("build -q -t {} -f {file} {context}", self.tag))
+            .map_err(|e| lacks(format!("sg: {e}")))?;
+        if !build.status.success() {
+            let stderr = String::from_utf8_lossy(&build.stderr);
+            let last = stderr.lines().rfind(|l| !l.contains("level=warn")).unwrap_or("");
+            let failed = format!("building {} failed: {last}", self.tag);
+            return Err(match BUILD_SOURCES.iter().find(|source| !reachable(source)) {
+                Some(source) => lacks(format!("{failed}; no network: {source} does not answer")),
+                None => Unusable::Broken(failed),
+            });
+        }
+        Ok(())
+    }
+
+    /// ssh's `ProxyCommand` for one session: a container of its own, with no network, that mounts
+    /// only the case's files: its configuration and keys read-only, and its log writable. Each has a
+    /// shared label (`:z`) so that every session's server can read them and append to the one log.
+    fn proxy(&self, case_dir: &Path) -> Result<String> {
+        let case_dir = plain(case_dir.to_str().context("a non-UTF-8 path")?)?;
+        let mounts: String = CASE_FILES
+            .iter()
+            .map(|(file, mode)| format!("-v {case_dir}/{file}:/case/{file}:{mode} "))
+            .collect();
+        let run = Self::podman(&format!(
+            "run -i --rm --network=none --pull=never {mounts}{} \
+             /usr/sbin/sshd -i -f /case/sshd_config -E /case/sshd.log",
+            self.tag
+        ));
+        // sshd logs to its log file, but its monitor, and podman, can still write a last line to
+        // stderr, which is ssh's: it would stand in for the session's own last output.
+        Ok(format!("sg {} -c '{run}' 2>/dev/null", self.group))
+    }
+}
+
+/// Set up OpenSSH's server for a case: it accepts the `authorized` test keys, logs in only root
+/// in its container, runs `/bin/sh` for every login and allows nothing else: no forwarding, no
+/// agent, no rc files it controls. Its configuration, keys and log are in the case's directory.
 pub fn loopback(
     workspace: &Path,
     dir: &Path,
@@ -149,35 +252,49 @@ pub fn loopback(
     authorized: &[String],
     host_key: Option<&str>,
 ) -> Result<Server<'static>> {
+    let reference = Reference::new(workspace)?;
     let keys = authorized.iter().map(|name| public_key(workspace, name)).collect::<Result<Vec<_>>>()?;
-    let authorized_keys = dir.join(format!("{case}-authorized_keys"));
-    std::fs::create_dir_all(dir)?;
-    std::fs::write(&authorized_keys, keys.join("\n") + "\n")?;
-    let user = Command::new("id").arg("-un").output().context("running id -un")?;
-    let user = String::from_utf8(user.stdout)?.trim().to_string();
-    let config = dir.join(format!("{case}-sshd_config"));
+    let log = fresh_log(dir, case)?;
+    let case_dir = log.parent().unwrap();
+    // The container mounts the log file itself, so it must exist.
+    std::fs::File::create(&log)?;
+    std::fs::write(case_dir.join("authorized_keys"), keys.join("\n") + "\n")?;
+    key_file(workspace, case_dir, "loopback-host")?;
     std::fs::write(
-        &config,
+        case_dir.join("sshd_config"),
         format!(
-            "HostKey {}\nAuthorizedKeysFile {}\nAllowUsers {user}\nPasswordAuthentication no\n\
+            "HostKey /case/loopback-host\nAuthorizedKeysFile /case/authorized_keys\n\
+             AllowUsers {REFERENCE_USER}\nPermitRootLogin prohibit-password\nPasswordAuthentication no\n\
              KbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nPidFile none\n\
              ForceCommand /bin/sh\nAllowTcpForwarding no\nAllowAgentForwarding no\n\
              AllowStreamLocalForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitUserRC no\n\
-             PermitUserEnvironment no\nLogLevel DEBUG1\n",
-            key_file(workspace, dir, "loopback-host")?.display(),
-            authorized_keys.display()
+             PermitUserEnvironment no\nLogLevel DEBUG1\n"
         ),
     )?;
-    let proxy =
-        proxy_command(format!("{SSHD} -i -f {} -E {}", config.display(), fresh_log(dir, case)?.display()))?;
-    // sshd logs to its log file, but its monitor can still write a last line to stderr, which is ssh's:
-    // it would stand in for the session's own last output.
-    let proxy = format!("{proxy} 2>/dev/null");
-    Ok(Server::Loopback { proxy, host_key: expected_host_key(workspace, host_key)?, user })
+    Ok(Server::Loopback {
+        proxy: reference.proxy(case_dir)?,
+        host_key: expected_host_key(workspace, host_key)?,
+    })
 }
 
-/// The loopback server's log for `case`, written by `sshd -E` or `redoubt-sshd-host --log`.
-pub fn loopback_log(dir: &Path, case: &str) -> PathBuf { dir.join(format!("{case}-sshd.log")) }
+/// The loopback server's log for `case`, in the case's own directory, written by `sshd -E` or
+/// `redoubt-sshd-host --log`.
+pub fn loopback_log(dir: &Path, case: &str) -> PathBuf { dir.join(case).join("sshd.log") }
+
+/// Where building the reference image fetches from: the base image's registry and Debian's archive.
+const BUILD_SOURCES: [&str; 2] = ["registry-1.docker.io:443", "deb.debian.org:443"];
+
+/// Whether `source` (host and port) resolves and accepts a TCP connection within five seconds.
+fn reachable(source: &str) -> bool {
+    let timeout = Duration::from_secs(5);
+    source
+        .to_socket_addrs()
+        .is_ok_and(|mut addrs| addrs.any(|addr| TcpStream::connect_timeout(&addr, timeout).is_ok()))
+}
+
+/// The reference case's files the container mounts, and how: only its log is writable.
+const CASE_FILES: [(&str, &str); 4] =
+    [("sshd_config", "ro,z"), ("authorized_keys", "ro,z"), ("loopback-host", "ro,z"), ("sshd.log", "z")];
 
 /// Why the loopback server cannot be used.
 #[derive(Clone, Debug, PartialEq)]
@@ -188,17 +305,21 @@ pub enum Unusable {
     Broken(String),
 }
 
-/// Whether the host's sshd can log the bench's user in and start a shell: one loopback session
-/// that runs `exit 0`.
+/// Whether OpenSSH's server can serve the reference case: its image, built if missing, then one
+/// loopback session that runs `exit 0`, whose server must log OpenSSH's version, so that no other
+/// server can pass for it.
 pub fn loopback_usable(workspace: &Path, dir: &Path) -> Result<(), Unusable> {
+    let broken =
+        |e: anyhow::Error| Unusable::Broken(format!("the reference sshd could not be set up: {e:#}"));
+    Reference::new(workspace).map_err(broken)?.ensure_image(workspace)?;
     let probe = || -> Result<std::process::Output> {
-        let Server::Loopback { proxy, user, .. } =
+        let Server::Loopback { proxy, .. } =
             loopback(workspace, dir, "loopback-probe", &["alice".into()], None)?
         else {
             unreachable!("loopback() makes a loopback server")
         };
         Command::new(SSH)
-            .args(["-F", "/dev/null", "-T", "-l", &user, "-i"])
+            .args(["-F", "/dev/null", "-T", "-l", REFERENCE_USER, "-i"])
             .arg(key_file(workspace, dir, "alice")?)
             .args(["-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes"])
             .args(["-o", "LogLevel=ERROR", "-o", "StrictHostKeyChecking=no"])
@@ -208,37 +329,19 @@ pub fn loopback_usable(workspace: &Path, dir: &Path) -> Result<(), Unusable> {
             .output()
             .context("running ssh")
     };
-    let output =
-        probe().map_err(|e| Unusable::Broken(format!("the loopback sshd could not be set up: {e:#}")))?;
-    if output.status.success() {
-        return Ok(());
+    let output = probe().map_err(broken)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let last = stderr.lines().last().unwrap_or("");
+        return Err(Unusable::Broken(format!("the loopback probe failed: last output {last:?}")));
     }
     let server_log = std::fs::read_to_string(loopback_log(dir, "loopback-probe")).unwrap_or_default();
-    let context = std::fs::read_to_string("/proc/self/attr/current").unwrap_or_default();
-    Err(probe_failure(
-        &String::from_utf8_lossy(&output.stderr),
-        &server_log,
-        context.trim_end_matches(['\0', '\n']),
-    ))
-}
-
-/// Name a failed probe. Only one failure is the host's, and only when all of it is seen: the
-/// shell's exec refused (`<shell>: Permission denied`, sshd's own words) after sshd moved into the
-/// user's SELinux context (its log says it obtained one). Under SELinux, a bench running in a
-/// service's context may not enter the user's. Every other failure is the bench's or the
-/// server's, and fails the case.
-fn probe_failure(stderr: &str, server_log: &str, context: &str) -> Unusable {
-    let last = stderr.lines().last().unwrap_or("");
-    let exec_refused = last.starts_with('/') && last.ends_with(": Permission denied");
-    let selinux = server_log.lines().find(|l| l.contains("get_user_context: obtained context"));
-    match selinux {
-        Some(line) if exec_refused => Unusable::Host(format!(
-            "the host's sshd cannot start a shell for this user under SELinux: the bench runs in {context}, \
-             sshd logged {:?}, and the shell failed: {last:?}",
-            line.trim()
-        )),
-        _ => Unusable::Broken(format!("the loopback probe failed: last output {last:?}")),
+    if !server_log.lines().any(|line| line.contains(REFERENCE_VERSION)) {
+        return Err(Unusable::Broken(format!(
+            "the loopback probe's server log has no {REFERENCE_VERSION:?}"
+        )));
     }
+    Ok(())
 }
 
 /// Why a session stopped early.
@@ -308,10 +411,10 @@ pub fn run(
     let mut commands = Vec::new();
     for session in sessions {
         let mut ssh = Command::new(SSH);
-        // The loopback sshd can log in only the user running it; there `user` only picks the key.
+        // OpenSSH's loopback server logs in only root; there `user` only picks the key.
         let login = match server {
-            Server::Guest { .. } | Server::Redoubt { .. } => &session.user,
-            Server::Loopback { user, .. } => user,
+            Server::Guest { .. } | Server::Redoubt { .. } => session.user.as_str(),
+            Server::Loopback { .. } => REFERENCE_USER,
         };
         ssh.args(["-F", "/dev/null", if session.pty { "-tt" } else { "-T" }, "-l", login, "-i"])
             .arg(key_file(workspace, &dir, session.key())?)
@@ -626,23 +729,24 @@ fn describe(status: ExitStatus) -> String {
 mod tests {
     use super::*;
 
-    const SELINUX: &str =
-        "debug1: get_user_context: obtained context 'u:r:t:s0' requested context 'u:r:t:s0'\n";
-
-    /// Only the exec refusal after an SELinux context change is the host's; everything else fails.
+    /// The reference server's `ProxyCommand` is the container command the rule gives, and a case
+    /// directory the shell would read as more than a path never reaches it.
     #[test]
-    fn only_the_selinux_exec_refusal_is_the_hosts() {
-        let host = probe_failure("/bin/bash: Permission denied\n", SELINUX, "system_u:system_r:svc_t:s0");
-        assert!(matches!(host, Unusable::Host(ref why) if why.contains("svc_t")), "{host:?}");
-        for (stderr, log) in [
-            // No context change logged: not known to be SELinux.
-            ("/bin/bash: Permission denied\n", "debug1: something else\n"),
-            // A refused key, a closed connection, nothing at all.
-            ("mick@loopback: Permission denied (publickey).\n", SELINUX),
-            ("Connection closed by UNKNOWN port 65535\n", SELINUX),
-            ("", ""),
-        ] {
-            assert!(matches!(probe_failure(stderr, log, "c"), Unusable::Broken(_)), "{stderr:?} {log:?}");
+    fn the_reference_proxy_quotes_only_what_the_bench_chose() {
+        let reference = Reference {
+            group: "users".into(),
+            tag: "localhost/redoubt-ssh-reference:0123456789abcdef".into(),
+        };
+        assert_eq!(
+            reference.proxy(Path::new("/w/c")).unwrap(),
+            "sg users -c 'podman --cgroup-manager=cgroupfs run -i --rm --network=none --pull=never \
+             -v /w/c/sshd_config:/case/sshd_config:ro,z -v /w/c/authorized_keys:/case/authorized_keys:ro,z \
+             -v /w/c/loopback-host:/case/loopback-host:ro,z -v /w/c/sshd.log:/case/sshd.log:z \
+             localhost/redoubt-ssh-reference:0123456789abcdef \
+             /usr/sbin/sshd -i -f /case/sshd_config -E /case/sshd.log' 2>/dev/null"
+        );
+        for case_dir in ["/w/it's", "/w/a:b", "/w/$(x)", "/w/a;b", "/w/a\nb"] {
+            assert!(reference.proxy(Path::new(case_dir)).is_err(), "{case_dir:?}");
         }
     }
 }
