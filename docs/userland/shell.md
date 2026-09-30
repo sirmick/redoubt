@@ -325,8 +325,13 @@ from a native program only as `cells` frames.
 What it does not cover: code the person runs holds the session's authority, and can write to its
 own console as it can do anything else the session can; and the bidirectional marks (U+200E,
 U+200F, U+061C) are drawn, since they only settle the direction of the weak and neutral characters
-next to them. The attack case writes hostile text through every path above and judges the bytes
-the session wrote to `/dev/cons`.
+next to them. The invisible format characters (U+00AD, U+200B to U+200D, U+2060 to U+2064,
+U+FEFF, the tag characters of plane 14) and the line and paragraph separators (U+2028, U+2029)
+pass the guard too, so a file name or text holding them can look like another; they neither drive
+the terminal nor reach the approval channel, which only the steward draws
+([sessions](sessions.md#approve)), and drawing them as `<U+XXXX>` is
+[a follow-up](../todo/shell-invisible-format.md). The attack case writes hostile text through
+every path above and judges the bytes the session wrote to `/dev/cons`.
 
 **Open:** none.
 
