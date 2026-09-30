@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -502,7 +502,9 @@ struct Driver<'a> {
     shared: &'a Shared<'a>,
     deadline: Instant,
     ssh: Reaped,
-    stdin: Option<ChildStdin>,
+    /// ssh's standard input: a pipe, or for a `pty = true` session its terminal's master.
+    stdin: Option<std::fs::File>,
+    pty: bool,
     events: mpsc::Receiver<Event>,
     open_streams: usize,
     /// Set once both output streams have ended and ssh has been waited for.
@@ -532,7 +534,16 @@ fn drive(
         .map(|p| Regex::new(p))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| Stop::Broken(e.to_string()))?;
-    let mut child = ssh.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    // A terminal session reads a terminal, so that ssh reports its size changes; its output stays
+    // on pipes. The size is the one a terminal gets when nothing sets it.
+    let (master, input) = match session.pty {
+        true => {
+            let (master, slave) = crate::pty::open(80, 24)?;
+            (Some(master), Stdio::from(slave))
+        }
+        false => (None, Stdio::piped()),
+    };
+    let mut child = ssh.stdin(input).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let (tx, events) = mpsc::channel();
     let streams: [Box<dyn Read + Send>; 2] =
         [Box::new(child.stdout.take().unwrap()), Box::new(child.stderr.take().unwrap())];
@@ -552,7 +563,8 @@ fn drive(
     let mut driver = Driver {
         shared,
         deadline,
-        stdin: child.stdin.take(),
+        stdin: master.or_else(|| child.stdin.take().map(|pipe| std::os::fd::OwnedFd::from(pipe).into())),
+        pty: session.pty,
         ssh: Reaped(child),
         events,
         open_streams: 2,
@@ -588,6 +600,15 @@ impl Driver<'_> {
                 let stdin = self.stdin.as_mut().ok_or(Stop::Broken("send after exit".into()))?;
                 // ssh may be gone already; its exit is reported at the next expect or exit.
                 stdin.write_all(text.as_bytes()).and_then(|()| stdin.flush()).ok();
+                Ok(())
+            }
+            Step::Resize([cols, rows]) => {
+                let master = self.stdin.as_ref().filter(|_| self.pty);
+                let master = master.ok_or(Stop::Broken("resize without a terminal".into()))?;
+                // ssh may be gone already; its exit is reported at the next expect or exit.
+                if self.status.is_none() {
+                    crate::pty::resize(master, self.ssh.0.id(), *cols, *rows)?;
+                }
                 Ok(())
             }
             Step::Mark(mark) => {

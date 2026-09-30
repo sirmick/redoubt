@@ -10,6 +10,7 @@ mod case;
 mod cruft;
 mod fmt;
 mod peer;
+mod pty;
 mod qemu;
 mod sched_oracle;
 mod size;

@@ -1,0 +1,13 @@
+description = "sshd on its host platform: an env request (ssh's SetEnv) is refused by kind, and none of its content reaches the server's log; the verdict is the server's log"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+# ssh wants no reply to env, so the refusal shows only in the server's log, which names the
+# request's kind and never the client's name or value.
+server_log = ['^request env refused$', '^console started without a pty$']
+server_log_forbid = ['REDOUBT_TEST', 'r3doubt-value']
+
+[[session]]
+user = "alice"
+ssh_args = ["-o", "SetEnv=REDOUBT_TEST=r3doubt-value"]
+steps = [{ send = "echo ready\n" }, { expect = '^ready$' }]

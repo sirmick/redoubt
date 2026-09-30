@@ -367,7 +367,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-Status: built · partly tested: no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback, bench:bench-ssh-loopback-openssh, bench:bench-ssh-loopback-deadlock, bench:bench-ssh-loopback-forbid, bench:bench-ssh-loopback-exit, bench:bench-ssh-loopback-host-key, bench:bench-ssh-loopback-aborted-text, bench:bench-ssh-guest, host:testbench::the_reference_proxy_quotes_only_what_the_bench_chose
+Status: built · partly tested: no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback, bench:bench-ssh-loopback-openssh, bench:bench-ssh-loopback-deadlock, bench:bench-ssh-loopback-forbid, bench:bench-ssh-loopback-exit, bench:bench-ssh-loopback-host-key, bench:bench-ssh-loopback-aborted-text, bench:bench-ssh-guest, host:testbench::the_reference_proxy_quotes_only_what_the_bench_chose, host:testbench::resize_needs_a_pty, host:testbench::no_other_child_inherits_a_sessions_terminal
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
 while the bench keeps watching the console. Each drives the host's OpenSSH `ssh`, an implementation
@@ -384,6 +384,7 @@ steps = [
     { send = "File.read(\"/work/x\")\n" },
     { mark = "alice-ready" },    # tell other sessions this one got here
     { wait = "bob-ready" },      # wait for another session's mark
+    { resize = [132, 43] },      # with `pty = true`: resize ssh's terminal
     { exit = 0 },                # close input, read until ssh exits, require this status
 ]
 ssh_args = ["-W", "host:9"]  # optional: more ssh arguments, before the host
@@ -391,7 +392,10 @@ command = "echo hi"          # optional: a command (with `-s`, a subsystem) in p
 ```
 
 Every session's exit status is checked and all of its output passes `forbid`; a session that fails
-stops the others. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in
+stops the others. A `pty = true` session's `ssh` reads its input from a pseudo-terminal the bench
+opens at 80x24, so that `ssh` reports a size change as OpenSSH does for a user; its output stays on
+pipes. `resize` sets that terminal's size and signals `ssh` (`SIGWINCH`), which then sends a
+`window-change` if the size changed. The terminal is the client's input and never a verdict. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in
 `tests/keys/`; they are public and marked not for production, and a boot manifest that lists one
 must never ship. The `ssh-loopback` kind runs sessions against a server that `ssh` starts itself
 for each session as its `ProxyCommand`, so nothing listens on a port: Redoubt's `sshd` on its host
@@ -440,7 +444,7 @@ unchanged, so the case is still a witness independent of Redoubt's server.
 
 ### Against Redoubt's sshd
 
-Status: built · partly tested: a window change reaches the console only in `sshd`'s host tests, since `ssh` reports one only from a terminal and the bench gives it pipes; agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply · tested: bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:bench-ssh-loopback, bench:bench-ssh-loopback-host-key, bench:sshd-host-tests
+Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested: bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback, bench:bench-ssh-loopback-host-key, bench:sshd-host-tests
 
 `ssh-loopback` cases run the host's OpenSSH `ssh` against Redoubt's own `sshd` on its host
 platform, `redoubt-sshd-host` ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)),
@@ -454,11 +458,14 @@ shell, a login context or a container.
   `keyd` holds is refused and never reaches the login table, and so is an unknown principal;
   `alice+secrets` gets the labels `{alice-secrets}`; on a labelled channel a shell without a
   pty, `exec`, a subsystem, and remote and local port forwarding are refused, and no console
-  starts ([R67 (a channel keeps its labels)](servers/sshd.md#r67-a-channel-keeps-its-labels));
+  starts ([R67 (a channel keeps its labels)](servers/sshd.md#r67-a-channel-keeps-its-labels)),
+  and the log names each refusal, the shell's as `shell-without-pty`;
   a break reaches the console as its interrupt; one connection's end leaves another's session
-  running; a host key other than the case's is refused. A window change is the host tests'
-  alone, and the refusal of `env` and of agent forwarding shows in no verdict
-  ([todo](todo/sshd-unseen-requests.md)).
+  running; a host key other than the case's is refused. A resized terminal's window change
+  reaches the console as its new size, and one to no size (0x0) is refused and never reaches it.
+  `env` is refused, and the log names only the request's kind, never the client's name or value.
+  `ssh` wants no reply to either refusal, so the server's log is the whole evidence: each case
+  requires the refusal's line and forbids its opposite.
 - **One reference case stays on OpenSSH's own `sshd`,** with `server = "openssh"`: concurrent
   sessions, marks, exit statuses, a pty and a refused key. It is the session runner's independent
   witness, so a bug the runner shares with Redoubt's server cannot pass every self-check

@@ -19,7 +19,7 @@ steward started.
 
 ### The core and its platforms
 
-Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested: bench:sshd-host-tests, bench:sshd-build, bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:bench-ssh-loopback
+Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested: bench:sshd-host-tests, bench:sshd-build, bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback
 
 `sshd` is a core and a platform. The core runs `sunset` over byte slices and makes every decision
 this page states: the login name, the key checks, a channel's labels, and what a channel may not
@@ -30,7 +30,13 @@ do. The platform is only what the core asks for, and is one trait:
 - **`holds(key)`:** `keyd`'s answer;
 - **login:** the steward's answer, a session and its labels or a refusal
   ([steward](steward.md#authentication-and-sessions));
-- **a session's console:** its bytes each way, the window size, the interrupt, and its end.
+- **a session's console:** its bytes each way, the window size, the interrupt, and its end;
+- **a refusal:** the kind of each channel request the core refuses (`env`, `exec`, `subsystem`,
+  and any `pty-req`, `shell`, `window-change`, `signal` or `break` it does not pass on), as a name
+  the core chooses; a labelled session's shell without a pty is named apart, `shell-without-pty`,
+  for the audit of R67. Never the request's content:
+  an `env` name or value is the client's bytes, and a log line built from it would be a line the
+  client wrote.
 
 The connection's bytes are not in the trait: the core takes and gives slices, and the platform
 moves them. On the box the platform is `ipd`'s listen scope, `keyd`'s `ssh_host` badge, the
@@ -48,7 +54,7 @@ steward and `/dev/cons`. On the build host it is a host tool, so the bench logs 
   (no labels) or `P+L` (labels `{P-L}`); anything else is refused.
 - **Console:** a scripted line console, no shell: `echo`, `sleep`, `tty` (whether the channel has
   a pty), `labels` (the channel's labels), `exit N`, with `;` between commands. It logs each window
-  change and interrupt it receives.
+  change and interrupt it receives, and the platform logs each refusal by its name.
 
 The key exchange is `curve25519-sha256` only, the one `keyd` signs, with Ed25519 host and login
 keys. `sunset` is used as published with one patch ([patched
@@ -266,6 +272,10 @@ Status: planned · M1 (separation and containment)
 - **Ed25519 signatures are checked cofactored**, as the loader's are
   ([boot](../kernel/boot.md#residual-risks)): a client's signature can be made into another valid
   one for the same exchange, which authenticates nobody new.
+- **Agent forwarding is refused where no platform sees it.** `sunset` has no agent code:
+  `auth-agent-req@openssh.com` is left out of its request types, so it parses as an unknown request,
+  which `sunset` refuses before the core (with a failure only if the client wants a reply, and
+  `ssh` does not). Read from the vendored source; no case shows it, since nothing reaches the log.
 - **The key exchange is not post-quantum.** Traffic recorded now could be read by whoever later
   breaks X25519.
 
