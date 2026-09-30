@@ -1,0 +1,6 @@
+INFO  boot
+ERROR 12 disk full
+INFO  serve
+WARN  slow
+ERROR 7 net down
+INFO  stop

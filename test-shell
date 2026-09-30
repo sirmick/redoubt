@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#
+# test-shell -- test Redoubt's shell (userland/shell) and its native libraries (userland/native):
+# the Elixir's formatting, the native crates' tests, the shell's tests on beamlet and then the
+# same tests on BEAM, its entry point, and beamlet's Redoubt platform on the fake kernel, with the
+# shell on it. Every stage runs; the exit status is non-zero if any failed.
+#
+# Usage: ./test-shell [FILE...]
+#   ./test-shell                                  every stage, every test
+#   ./test-shell test/redoubt/util_test.exs       these test files (in userland/shell), on both VMs
+#
+# The Rust's formatting needs nightly rustfmt, which the bench's formatting case runs.
+# A test that passes on BEAM and fails on beamlet is a beamlet bug. The entry point is its own
+# stage because ExUnit cannot reach it: its runner starts applications the shell must start for
+# itself. On beamlet the VM's / is a scratch directory made afresh for each run
+# (userland/shell/_build/beamlet-root), the shell's sources are mounted read-only at /src, and a
+# directory on /dev/shm, another file system, is mounted at /xdev for moves across volumes; so a
+# test that writes where it should not fails there, and nothing a test leaves outlives the run.
+# On BEAM the tests run with this machine's own rights, each in a temporary directory of its own,
+# which is why beamlet goes first.
+#
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+case "${1:-}" in -h | --help) sed -n '2,10p' "$0"; exit 0 ;; esac
+
+. userland/shell/setup.sh
+files=("$@")
+if [ ${#files[@]} -eq 0 ]; then
+    while IFS= read -r f; do files+=("${f#"$app/"}"); done < <(find "$app/test" -name '*_test.exs' | sort)
+fi
+
+formatting() { (cd "$app" && mix format --check-formatted); }
+
+native() { (cd "$native" && cargo test -q); }
+
+on_beam() { (cd "$app" && mix test "${files[@]}"); }
+
+on_beamlet() {
+    local runner="$app/_build/beamlet-test" root="$app/_build/beamlet-root" log xdev tests=()
+    rm -rf "$root"
+    mkdir -p "$runner" "$root"
+    [ "$runner/exunit.beam" -nt "$otp/tools/exunit.erl" ] || erlc -o "$runner" "$otp/tools/exunit.erl"
+    for f in "${files[@]}"; do tests+=("/src/$f"); done
+    xdev="$(mktemp -d /dev/shm/redoubt-shell-test.XXXXXX)"
+    log="$(mktemp)"
+    # The cells crate's vectors at /cells, read-only.
+    "$beamlet" --root "$root" --mount "/src=$app:ro" --mount "/xdev=$xdev" \
+        --mount "/cells=$native/cells:ro" --env CELLS_VECTORS=/cells/vectors.json "${path[@]}" -pa "$runner" \
+        exunit run / /src/test/test_helper.exs "${tests[@]}" 2>&1 | tee "$log"
+    # beamlet prints ExUnit's summary last: the run passed only if it counts no failures.
+    tail -n 1 "$log" | grep -q 'failures => 0,'
+    local passed=$?
+    rm -rf "$log" "$xdev"
+    return $passed
+}
+
+# Starts the shell as ./shell does, defines a module at its prompt, which needs everything the
+# shell must start for itself, and lays out a table.
+entry_point() {
+    local out
+    out="$(printf 'defmodule Smoke do\n  def ok, do: :smoke_ok\nend\nSmoke.ok()\ntable([["smoke", 1]])\n"a\xffb"\n1 + 1\n' |
+        "$beamlet" --root "$sandbox" "${path[@]}" Elixir.Redoubt.Shell 2>&1)"
+    # A byte that is not UTF-8, straight from the console, is a wrong line, not the shell's end.
+    grep -q '(2)> :smoke_ok' <<<"$out" && grep -q '(3)> smoke 1' <<<"$out" &&
+        grep -q 'not UTF-8: "a<FF>b"' <<<"$out" && grep -q '(5)> 2' <<<"$out" || { printf '%s\n' "$out"; return 1; }
+}
+
+# beamlet's Redoubt platform (userland/otp/redoubt): its tests, then the shell on it, as
+# ./shell --fake runs it, its console reached through the client library and the fake kernel.
+on_fake_kernel() {
+    local out
+    (cd "$otp" && cargo test -q -p beamlet-redoubt --features fake) || return 1
+    out="$(printf 'x = Enum.map([1, 2], &(&1 * 10))\nEnum.sum(x)\n' | "$fake" "${path[@]}" Elixir.Redoubt.Shell 2>&1)"
+    grep -q '(1)> \[10, 20\]' <<<"$out" && grep -q '(2)> 30' <<<"$out" || { printf '%s\n' "$out"; return 1; }
+}
+
+set +e
+failed=()
+for stage in formatting native on_beamlet on_beam entry_point on_fake_kernel; do
+    echo "== $stage"
+    if "$stage"; then echo "== $stage: ok"; else echo "== $stage: FAILED"; failed+=("$stage"); fi
+done
+if [ ${#failed[@]} -eq 0 ]; then
+    echo "test-shell: every stage passed"
+else
+    echo "test-shell: FAILED: ${failed[*]}"
+    exit 1
+fi
