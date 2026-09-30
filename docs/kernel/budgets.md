@@ -358,7 +358,7 @@ by itself.
 
 ### R10 (destruction)
 
-Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:sched-destroy-billing, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
+Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:endpoint-destroy-full, bench:sched-destroy-billing, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
@@ -508,8 +508,11 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   (seed 3: R10's p99 is 28,489 µs on rv64 and 29,723 µs on rv32, close under the target), and
   `bench:budget-destroy-growth` fills the system with another budget's objects and shows the
   destruction does not grow. What those cases do not expose is a lease that itself holds many
-  endpoints: the containment gate's full fill (~1460) is the three walks' acceptance, at the same
-  30 ms target.
+  endpoints: `bench:endpoint-destroy-full` fills a budget with at least 1,500 endpoints (1,575 on
+  rv64 and 1,578 on rv32, past the containment gate's full fill of ~1460), destroys it, and bounds
+  R10's kernel time from the trace's records at 30 ms on both widths (p99 23,381 µs on rv64 and
+  25,023 µs on rv32), the same target the containment gate's own full-fill run will repeat once it
+  lands.
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).
