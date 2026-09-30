@@ -72,6 +72,9 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
 - **ETS** (`max_ets_words`, 2^27 words for all tables together): an insert past it raises
   `system_limit`.
 - **CPU:** reductions preempt every process, including a loop of plain jumps with no calls.
+  Residual: a native is not preempted, and `crypto:mod_pow` and finite-field Diffie-Hellman run
+  `modpow` on operands only the bignum limit bounds, so one call can hold its scheduler for
+  minutes ([todo](../todo/beamlet-bignum-bounds.md)).
 - **Fixed limits**, each `system_limit`: 2^20 atoms of at most 255 characters, 2^16 processes, a
   stack of 2^24 slots, bignums of 2^24 bits, binaries of 2^30 bits.
 

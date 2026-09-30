@@ -71,6 +71,7 @@
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [Requests the bench cannot see against sshd](todo/sshd-unseen-requests.md)
   - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
+  - [beamlet's modular exponentiation takes operands of any size](todo/beamlet-bignum-bounds.md)
   - [sshd's vendored crates under Miri](todo/sshd-vendored-miri.md)
   - [The boot stack reservation](todo/boot-stack-reservation.md)
   - [process_map backs before refusing](todo/process-map-backs-before-refusing.md)

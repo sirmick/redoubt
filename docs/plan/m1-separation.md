@@ -90,6 +90,7 @@ page.
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md).
    - **The kernel:** [the boot stack reservation](../todo/boot-stack-reservation.md),
      [`process_map` backs before refusing](../todo/process-map-backs-before-refusing.md).
+   - **beamlet:** [bounded operands for modular exponentiation](../todo/beamlet-bignum-bounds.md).
 - **A kernel containment gate.** One boot on QEMU that proves the kernel's primitives alone,
    before the whole milestone is layered on them: hostile code preempted and ended at its
    deadline, a budget subtree revoked with messages and lends in flight, and a victim that stays
