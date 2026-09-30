@@ -61,7 +61,6 @@ gap: the page's section, the claim, and what no case attacks.
 
 ### memory.md
 - Backing and zeroing: that a frame freed with data comes back zero is attacked only in the model (`R11NoZeroing`); no case can tell which frames it was handed.
-- Where `map_anon` puts pages: the placement itself (first fit from the last run, the wrap, a full area, a run that fits only at the area's end, an oversize request, the message area) is not attacked (`touch-beyond-ram` exhausts RAM, not the area); the search's worst-case cost is not measured.
 - `map_fixed`: `map-fixed-attack` and `map-fixed-tables` run on rv64 only; on rv32 only `return-lent-unmapped` calls it.
 - Instruction fetch after mapping: no case can see a missing `fence.i` (QEMU keeps fetch coherent).
 - Lending at the page-table level: a lend within one process is not attacked across harts.

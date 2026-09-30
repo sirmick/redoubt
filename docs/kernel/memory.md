@@ -91,7 +91,7 @@ process.
 
 ### Where `map_anon` puts pages
 
-Status: built · partly tested: the message area's placement is not attacked by a case, nor an oversize request; `touch-beyond-ram` exhausts RAM, not the area · tested: bench:map-anon-search-bound, bench:map-fixed-attack, bench:touch-beyond-ram
+Status: built · tested: bench:map-anon-search-bound, bench:map-anon-placement, bench:map-fixed-attack, bench:touch-beyond-ram
 
 The kernel chooses the address, and nothing may depend on it. `map_anon` takes the first free
 run of pages in its placement area, 256 MiB from `DEFAULT_BASE` (0x6000_0000 to 0x7000_0000),

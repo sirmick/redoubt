@@ -34,6 +34,7 @@ bin = [
     { name = "lend-untouched", test = false },
     { name = "log-server", test = false },
     { name = "logsrv-badge-forgery", test = false },
+    { name = "map-anon-placement", test = false },
     { name = "map-anon-search-bound", test = false },
     { name = "map-fixed-attack", test = false },
     { name = "map-fixed-tables", test = false },
