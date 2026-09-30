@@ -1,0 +1,15 @@
+description = "Destroying a budget follows the dying subtree, not every kernel-object frame (kernel/budgets.md, \"Residual risks\"; R10): destroying the same small two-level subtree takes no more after another budget fills the system with thousands of endpoints (virtual time, release build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# A release build: a checked build's post-walk index audit re-scans every object frame, which is
+# what would be measured (tests/scan-bounds.toml, "Checked builds").
+icount = "shift=3,sleep=off"
+programs = ["budget-destroy-growth"]
+timeout_secs = 600
+expect = [
+    '^\[destroy-growth\] ok: the filler filled its budget with endpoints',
+    '^\[destroy-growth\] ok: destruction does not grow with another budget.s objects',
+    '^BUDGET-DESTROY-GROWTH TEST PASSED$',
+]
+forbid = ['\[destroy-growth\] FAIL', 'PANIC']
+poweroff = true

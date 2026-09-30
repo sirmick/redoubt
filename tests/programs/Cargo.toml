@@ -6,6 +6,7 @@ bin = [
     { name = "budget-carve-attack", test = false },
     { name = "budget-deadline", test = false },
     { name = "budget-destroy-attack", test = false },
+    { name = "budget-destroy-growth", test = false },
     { name = "budget-destroy-system", test = false },
     { name = "budget-forge-attack", test = false },
     { name = "budget-mem-churn", test = false },
