@@ -31,9 +31,14 @@ impl World {
     }
 
     pub fn value(&mut self, tid: u64, call: Syscall) -> Result<Ret, String> {
+        self.result(tid, call)?.map_err(|e| format!("expected value, got {e:?}"))
+    }
+
+    /// The call's result, success or error; anything but a finished call is a failure.
+    pub fn result(&mut self, tid: u64, call: Syscall) -> Result<Result<Ret, Error>, String> {
         match self.sys(tid, call)?.outcome {
-            Outcome::Done(Ok(r)) => Ok(r),
-            x => Err(format!("expected value, got {x:?}")),
+            Outcome::Done(r) => Ok(r),
+            x => Err(format!("expected a result, got {x:?}")),
         }
     }
 

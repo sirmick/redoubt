@@ -62,8 +62,9 @@ Status: built · partly tested: independence from the kernel's source and the em
   advances only on a `tick`. So the model tests accounting and state changes, not real-time
   latency, and not races between harts.
 - **Records** (the user memory a call reads and writes) are abstracted as a whole: owned,
-  unmapped, read-only, borrowed, device memory, a copy that faults, or an address checked
-  against the modelled mappings. Byte layouts are not modelled.
+  unmapped, read-only, borrowed, device memory, a copy that faults, or an address whose every
+  page, for the call's record size, is checked against the modelled mappings. Byte layouts are
+  not modelled.
 - **PIDs** are drawn by a seeded generator from 2 to `0xffff`; `init` is 1. This tests reuse
   and accounting, not unpredictability.
 - **Addresses the kernel chooses.** A `map_anon` lands above everything the process has

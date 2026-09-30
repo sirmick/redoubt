@@ -1185,29 +1185,39 @@ impl Kernel {
         }
     }
 
-    fn record_valid(&self, pid: u64, tid: u64, completion: bool) -> bool {
+    /// Whether `pid`'s record of `slots` slots, which the kernel writes, passes the record check
+    /// (kernel/abi.md, "The record check"): 8-byte aligned, and every page a slot lies in the
+    /// caller's own readable and writable RAM, not the first page alone.
+    fn record_valid(&self, pid: u64, tid: u64, slots: usize, completion: bool) -> bool {
         match self.threads.get(&tid).map(|t| t.record) {
             Some(Record::Owned) => true,
             Some(Record::CopyFault) => !completion,
-            Some(Record::Memory(addr)) => {
-                addr.is_multiple_of(8)
-                    && self.processes.get(&pid).and_then(|p| p.space.get(&(addr / PAGE_SIZE))).is_some_and(
-                        |m| {
-                            m.state == MapState::Own
-                                && matches!(m.backing, Backing::Frame(_))
-                                && m.flags & (FLAG_R | FLAG_W) == FLAG_R | FLAG_W
-                        },
-                    )
-            }
+            Some(Record::Memory(addr)) => self.record_pages(pid, addr, slots, FLAG_R | FLAG_W),
             _ => false,
         }
+    }
+
+    /// Every page of the record at `addr` of `slots` slots is `pid`'s own RAM with `flags`: not
+    /// lent either way, not device registers, and not a `dma_alloc` frame, which the kernel's
+    /// frame ownership table credits to no process.
+    fn record_pages(&self, pid: u64, addr: u64, slots: usize, flags: u64) -> bool {
+        let Some(last) = addr.checked_add(8 * slots as u64 - 1) else { return false };
+        let Some(p) = self.processes.get(&pid) else { return false };
+        addr.is_multiple_of(8)
+            && (addr / PAGE_SIZE..=last / PAGE_SIZE).all(|v| {
+                p.space.get(&v).is_some_and(|m| {
+                    m.state == MapState::Own
+                        && m.flags & flags == flags
+                        && matches!(m.backing, Backing::Frame(f) if self.frames.get(&f).is_some_and(|fr| fr.dma.is_none()))
+                })
+            })
     }
 
     /// Whether a thread blocked in `receive` can still be told what it takes: its record is
     /// checked just before anything is delivered, and a bad one takes nothing (kernel/ipc.md, "A
     /// bad record takes nothing").
     fn receive_record_valid(&self, tid: u64) -> bool {
-        self.threads.get(&tid).is_some_and(|t| self.record_valid(t.pid, tid, true))
+        self.threads.get(&tid).is_some_and(|t| self.record_valid(t.pid, tid, RECEIVED_SLOTS, true))
     }
 
     /// A receiver whose record went bad while it waited leaves `e`'s queue with `InvalidArgument`,
@@ -1219,19 +1229,12 @@ impl Kernel {
         self.wake(tid, Err(Error::InvalidArgument));
     }
 
+    /// Whether `pid`'s body record, which the kernel only reads (`send`, `reply`), passes the
+    /// record check.
     fn input_record_valid(&self, pid: u64, tid: u64) -> bool {
         match self.threads.get(&tid).map(|t| t.record) {
             Some(Record::Owned | Record::ReadOnly | Record::CopyFault) => true,
-            Some(Record::Memory(addr)) => {
-                addr.is_multiple_of(8)
-                    && self.processes.get(&pid).and_then(|p| p.space.get(&(addr / PAGE_SIZE))).is_some_and(
-                        |m| {
-                            m.state == MapState::Own
-                                && matches!(m.backing, Backing::Frame(_))
-                                && m.flags & FLAG_R != 0
-                        },
-                    )
-            }
+            Some(Record::Memory(addr)) => self.record_pages(pid, addr, BODY_SLOTS, FLAG_R),
             _ => false,
         }
     }
@@ -3292,7 +3295,9 @@ impl Kernel {
             LendDisposition::None
         };
         let decoded = decode_handle(h).and_then(|_| {
-            if lend.is_some_and(|b| (b.addr == 0) != (b.npages == 0)) || !self.record_valid(pid, tid, false) {
+            if lend.is_some_and(|b| (b.addr == 0) != (b.npages == 0))
+                || !self.record_valid(pid, tid, BODY_SLOTS, false)
+            {
                 Err(Error::InvalidArgument)
             } else {
                 Ok(())
@@ -3358,14 +3363,16 @@ impl Kernel {
         if let Err(e) = decode_optional_handle(h) {
             return Outcome::Done(Err(e));
         }
-        if !self.record_valid(pid, tid, false) {
-            return Outcome::Done(Err(Error::InvalidArgument));
-        }
-        // Whatever it returns, the thread has no current call until it takes one.
+        // Whatever it returns, once its registers decode the thread has no current call until it
+        // takes one, even if its record is refused next (kernel/abi.md, "Errors and the order of
+        // checks").
         if !self.broken(Mutation::ReceiveKeepsCurrent) {
             self.threads.get_mut(&tid).unwrap().current = None;
         }
         self.ghost.receive_begins(tid);
+        if !self.record_valid(pid, tid, RECEIVED_SLOTS, false) {
+            return Outcome::Done(Err(Error::InvalidArgument));
+        }
         let h = match decode_optional_handle(h) {
             Ok(Some(h)) => h,
             Ok(None) => {
@@ -3459,7 +3466,7 @@ impl Kernel {
         self.unmap_lend_in_server(msg_id, false);
         self.close_call(msg_id);
         let before = self.processes[&m.sender_pid].handles.clone();
-        let output_valid = self.record_valid(m.sender_pid, m.sender_tid, true);
+        let output_valid = self.record_valid(m.sender_pid, m.sender_tid, BODY_SLOTS, true);
         let mut installed = Vec::new();
         let mut mask = 0;
         let mut status = Ok(());
@@ -3545,14 +3552,14 @@ impl Kernel {
         account: u64,
         deadline: u64,
     ) -> R<u64> {
-        // Decoding: the parent register, then the BudgetSpec record in slot order (processes and
-        // weight are u32; label count is checked first, before deduplication).
+        // Decoding: the parent register, then the BudgetSpec record in slot order: processes and
+        // weight are u32, then the label count, before deduplication.
         let parent = decode_handle(parent)?;
-        if labels.len() > MAX_LABELS {
-            return Err(Error::TooLarge);
-        }
         if processes > U32_MAX || weight > U32_MAX {
             return Err(Error::InvalidArgument);
+        }
+        if labels.len() > MAX_LABELS {
+            return Err(Error::TooLarge);
         }
         let p = self.lookup_budget(pid, parent)?;
         let px = self.budgets[&p].clone();
