@@ -17,6 +17,7 @@ bin = [
     { name = "deadline-flood-billed", test = false },
     { name = "device-exec-refused", test = false },
     { name = "device-test", test = false },
+    { name = "dma-destroy-quarantine", test = false },
     { name = "dma-reset-quarantine", test = false },
     { name = "dma-reset-reuse", test = false },
     { name = "dma-rules", test = false },
