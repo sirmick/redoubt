@@ -1,5 +1,5 @@
 description = "The kernel verifies at boot that none of its code is writable, directly or through the physmap"
-arch = ["rv64"]
+arch = ["rv64", "rv32"]
 kind = "boot"
 programs = ["log-server"]
 # The verdict is the kernel's own boot-time check, printed before any program runs; anchored,

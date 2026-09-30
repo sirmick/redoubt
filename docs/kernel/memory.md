@@ -259,7 +259,7 @@ Together these are I9 (pages W^X, zeroed, lends unmapped) of the
 
 ### R19 (kernel W^X)
 
-Status: built · partly tested: no case plants a writable kernel code page to show that the check stops the boot, and the case boots rv64 only · tested: bench:kernel-wx
+Status: built · partly tested: no case plants a writable kernel code page to show that the check stops the boot · tested: bench:kernel-wx
 
 The kernel's own mappings are W^X. At boot, before any process runs, the kernel walks its own
 area of the address space and, for every executable page there, checks three things: the page

@@ -66,7 +66,7 @@ gap: the page's section, the claim, and what no case attacks.
 - Instruction fetch after mapping: no case can see a missing `fence.i` (QEMU keeps fetch coherent).
 - Lending at the page-table level: a lend within one process is not attacked across harts.
 - R11 (memory): the absence of any physical-address argument is argued from the call table.
-- R19 (kernel W^X): no case plants a writable kernel code page to show the boot check stops; the case boots rv64 only.
+- R19 (kernel W^X): no case plants a writable kernel code page to show the boot check stops.
 - R22 (range cost): only `map_fixed`'s huge length is attacked; `unmap`, `set_flags`, `process_map` and lends with huge ranges are not, and `map_anon`'s search is an exception no case measures.
 
 ### scheduling.md
@@ -89,8 +89,6 @@ gap: the page's section, the claim, and what no case attacks.
 - Failure and restart: a reboot through `system_reset` (the chain rerun, the bundle verified again) is not attacked.
 
 ### memory-layout.md
-- The physmap and the kernel half: no case has a user-mode load, store or fetch at a mapped kernel-half address (physmap, kernel image, per-process context page). `legacy-gone` only jumps to never-mapped per-process addresses.
-- The kernel W^X boot check: `kernel-wx` is rv64 only; the check runs on rv32 but no case reads it.
 - The end of user space on rv32: `map-fixed-attack` is rv64 only; rv32 is covered only by `host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound`, a hand copy of the kernel's `user_range`, not the kernel.
 - Page 0 on rv32: the same (host copy only).
 - `satp` and the TLB: no case attacks a stale translation surviving an address-space switch or an unmap (one hart, global flush; argued from the code; attacked across harts in M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).

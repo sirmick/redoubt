@@ -1,0 +1,28 @@
+description = "No kernel-half entry has U: a child's load, store or fetch at a mapped kernel-half address, each one the mapping permits (load and store at the physmap over RAM, the kernel stack and its own context page; load and fetch at the kernel text), faults with the matching cause, and a control child's legal load returns, read from the kernel's exit notice (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# PID 2 log-server; PID 3 kernel-half-attack, which takes the budgets (TAKE_GIFTS) to spawn the
+# children that make the accesses.
+programs = ["log-server", "kernel-half-attack"]
+timeout_secs = 60
+# Progress, the attacker's report: each line is the cause the kernel put in a child's exit notice
+# (Faulted: 13 load, 15 store, 12 fetch), and the control's (Exited 1); any other outcome prints
+# FAIL or false, forbidden. The verdict: log-server's DONE names PID 3, with a clean power-off,
+# which a stopped kernel never reaches.
+expect = [
+    '^\[server\] gifts given to pid 3$',
+    '^\[pid 3\] \[kernel-half\] control: a load of its own image returned: true$',
+    '^\[pid 3\] \[kernel-half\] a load at the physmap over RAM faulted with cause 13$',
+    '^\[pid 3\] \[kernel-half\] a store at the physmap over RAM faulted with cause 15$',
+    '^\[pid 3\] \[kernel-half\] a load at the kernel stack faulted with cause 13$',
+    '^\[pid 3\] \[kernel-half\] a store at the kernel stack faulted with cause 15$',
+    '^\[pid 3\] \[kernel-half\] a load at its own context page faulted with cause 13$',
+    '^\[pid 3\] \[kernel-half\] a store at its own context page faulted with cause 15$',
+    '^\[pid 3\] \[kernel-half\] a load at the kernel text faulted with cause 13$',
+    '^\[pid 3\] \[kernel-half\] a fetch at the kernel text faulted with cause 12$',
+    '^\[server\] done: reported by pid 3; still serving$',
+]
+forbid = ['\] FAIL', 'returned: false']
+poweroff = true
+reporter = "kernel-half-attack"

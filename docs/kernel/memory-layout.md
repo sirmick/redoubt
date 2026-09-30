@@ -20,7 +20,7 @@ kernel never reaches user memory through a user mapping.
 
 ## The direct physical map
 
-Status: built · partly tested: no case has a process load, store or fetch at a physmap address; a case reads the boot-time check on rv64 only · tested: bench:kernel-wx
+Status: built · tested: bench:kernel-wx, bench:kernel-half-attack
 
 The loader maps all of RAM once, in the kernel half, at
 
@@ -59,7 +59,7 @@ Nothing unmaps the physmap. So the kernel reaches any frame at any time, without
 
 ## The split by root entry
 
-Status: built · partly tested: a user-mode access to a mapped kernel-half address is not attacked by a case; the end of user space is attacked on the kernel on rv64 only, and on rv32 only in a host copy of the range check · tested: bench:map-fixed-attack, bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound
+Status: built · partly tested: the end of user space is attacked on the kernel on rv64 only, and on rv32 only in a host copy of the range check · tested: bench:map-fixed-attack, bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound, bench:kernel-half-attack
 
 The root table's lower half is user space; its upper half is the kernel's. The kernel's root
 entries are made once, by the loader, and never change afterwards. Creating an address space
@@ -86,7 +86,7 @@ The walls on the boundary:
 
 ## The two address maps
 
-Status: built · partly tested: the constants' separation is checked at compile time and the PLIC's size at boot, not attacked by a case; no case loads, stores or fetches at a mapped kernel-half address from user mode, and `kernel-wx` boots rv64 only · tested: bench:kernel-wx, bench:legacy-gone
+Status: built · partly tested: the constants' separation is checked at compile time and the PLIC's size at boot, not attacked by a case · tested: bench:kernel-wx, bench:legacy-gone, bench:kernel-half-attack
 
 Addresses are from `libs/layout/src/lib.rs`, the kernel's `link.x` and `link64.x`, and
 `kernel/src/arch/riscv/process.rs`. Compile-time assertions keep the DMA window clear of the
