@@ -1,0 +1,8 @@
+[package]
+name = "cells"
+description = "The cell protocol: what a screen program may hand the session to draw"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]

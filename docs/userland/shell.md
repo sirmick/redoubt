@@ -338,17 +338,15 @@ the session wrote to `/dev/cons`.
 
 ### The cell protocol
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: the Elixir decoder is held to the Rust one by the shared vectors in the shell's ExUnit suite, which no bench case runs · tested: host:cells::good_frames_decode_and_encode_back_to_their_bytes, host:cells::no_control_character_is_ever_a_symbol, host:cells::vectors_are_current
 
-A frame of changed cells, `cells` (`userland/native/cells`)
+A frame of changed cells, `cells` ([`userland/native/cells`](../../userland/native/cells/src/lib.rs))
 in Rust and `Redoubt.Term.Cells` in Elixir, is everything anything may hand the session to draw: a
 position, a symbol, two colours and attributes per cell. It is strict. A symbol is a non-empty
 string of at most 32 bytes, one cell's worth as the session lays it out, that holds no control
 character, a cell cannot fall outside its
 screen or be given twice, and a frame that decodes re-encodes to exactly its bytes; anything else
 is refused, never repaired. One file of vectors holds the two decoders to the same answers.
-
-**Open:** none.
 
 ### Full-screen programs
 

@@ -61,6 +61,8 @@ exclude = [
   # beamlet, the BEAM VM for the OTP userland: its own workspace (host tools and `no_std`
   # target crates, its own test toolchain), built by its own `cargo` invocations.
   "userland/otp",
+  # The userland's native libraries (the cell protocol): their own workspace.
+  "userland/native",
   # ipd's TCP/IP stack and its dependencies, vendored unmodified from crates.io (vendor/README.md).
   # They are built through the [patch.crates-io] paths below but are not workspace members, so
   # their dev-dependencies never enter Cargo.lock and `cargo test --workspace` never builds their
