@@ -118,7 +118,7 @@ fn map_page_in(
 
 /// A page that is mapped, or lent out (the `S` bit, with `VALID` cleared). A lent page's entry
 /// is the lender's only record of the loan: the borrower's return restores it. So nothing but
-/// that return may overwrite it: not a new mapping, a reservation or an unmap.
+/// that return may overwrite it: not a new mapping or an unmap.
 fn is_occupied(pte: Pte) -> bool { pte.is_valid() || pte.has(PteFlags::S) }
 
 /// How many page-table pages `space` still lacks to map the `pages` pages from `virt`, none of
@@ -363,38 +363,6 @@ impl MemoryMapping {
             println!("    {:016x} -> {:010x} ({:?})", virt, pte.phys(), pte.flags());
         });
         println!("End of map");
-    }
-
-    /// Reserve `addr` for demand paging: the leaf entry gets its permission bits but not `VALID`,
-    /// and `ensure_page_exists_inner()` backs it with a real page on first touch.
-    pub fn reserve_address(
-        &mut self,
-        mm: &mut MemoryManager,
-        addr: usize,
-        flags: MemFlags,
-    ) -> Result<(), PageError> {
-        let slot = walk(current_root(), addr, Some((mm, crate::arch::current_pid())))?;
-        if is_occupied(slot.get()) {
-            // can't double-reserve pages
-            return Err(PageError::InUse);
-        }
-        let flags = translate_flags(flags);
-        check_permissions(flags)?;
-        slot.set(Pte::reservation(flags));
-        Ok(())
-    }
-
-    pub fn unreserve_address(&self, addr: usize) -> Result<(), PageError> {
-        let Ok(slot) = walk(current_root(), addr, None) else {
-            // No leaf table, so nothing was ever reserved here.
-            return Ok(());
-        };
-        // Refuse to touch a live or lent mapping. Only undo reservations.
-        if is_occupied(slot.get()) {
-            return Err(PageError::InUse);
-        }
-        slot.set(Pte::EMPTY);
-        Ok(())
     }
 }
 

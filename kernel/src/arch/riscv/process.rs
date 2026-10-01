@@ -33,7 +33,6 @@ use redoubt_sys::{MAX_THREADS, PAGE_SIZE};
 use crate::cell::KernelCell;
 use crate::ptable::ProcessInner;
 
-pub const DEFAULT_STACK_SIZE: usize = 128 * 1024;
 pub const MAX_PROCESS_COUNT: usize = 64;
 
 /// Base of a range of addresses that are never mapped. Jumping to one of them faults into
@@ -239,21 +238,12 @@ impl Process {
 
     /// The first run of a loader-bundle program (until `init` launches them,
     /// plan/m1-separation.md), in its own address space: claim its slot, reset its contexts,
-    /// start its first thread at `entry` with stack pointer `sp`, and reserve its stack for demand
-    /// paging (kernel/memory.md, "Backing and zeroing").
+    /// and start its first thread at `entry` with stack pointer `sp`. Its stack is the loader's to
+    /// reserve, and only the loader's (kernel/memory-layout.md, "Regions").
     pub fn setup_loader_process(pid: Pid, entry: usize, sp: usize) {
         Self::claim(pid);
         Self::setup_empty_process(pid);
         Self::setup_first_thread(pid, entry, sp, 0);
-        let stack = (sp - DEFAULT_STACK_SIZE) & !(PAGE_SIZE - 1);
-        crate::mem::MemoryManager::with_mut(|mm| {
-            mm.reserve_range(
-                stack as *mut u8,
-                DEFAULT_STACK_SIZE,
-                redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE,
-            )
-            .expect("couldn't reserve stack")
-        });
     }
 
     /// Claim `pid` in the process table, so that its address space can be activated. It is a

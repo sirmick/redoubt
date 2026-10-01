@@ -441,36 +441,6 @@ impl MemoryManager {
         })
     }
 
-    /// Reserve the given range without actually allocating memory.
-    /// That way we can overpromise on stack size and heap size without
-    /// needing to actually have pages to back it.
-    pub fn reserve_range(
-        &mut self,
-        virt_ptr: *mut u8,
-        size: usize,
-        flags: MemFlags,
-    ) -> Result<(), PageError> {
-        // If no address was specified, pick the next address that fits
-        // in the "default" range
-        let virt = self.find_virtual_address(virt_ptr, size, MemoryType::Default)? as usize;
-
-        if virt & 0xfff != 0 || size & 0xfff != 0 {
-            return Err(PageError::Unaligned);
-        }
-
-        let mut mm = MemoryMapping::current();
-        for addr in (virt..(virt + size)).step_by(PAGE_SIZE) {
-            if let Err(e) = mm.reserve_address(self, addr, flags) {
-                // Roll back the prefix we already reserved.
-                for undo in (virt..addr).step_by(PAGE_SIZE) {
-                    mm.unreserve_address(undo).expect("Internal error: couldn't unwind failed reservation");
-                }
-                return Err(e);
-            }
-        }
-        Ok(())
-    }
-
     pub fn is_main_memory(&self, phys: *mut u8) -> bool {
         (phys as usize) >= self.ram_start && (phys as usize) < self.ram_start + self.ram_size
     }
@@ -492,7 +462,7 @@ impl MemoryManager {
 
     /// Map the device registers at `phys` into the virtual address space of `pid` (the kernel's
     /// own: the PLIC). Nothing here reserves pages to back later: reservations are only the
-    /// loader programs' stacks (`reserve_range`, the Setup path).
+    /// loader programs' stacks, which the loader reserves (`loader/src/main.rs`).
     ///
     /// # Errors
     ///
@@ -836,7 +806,7 @@ impl MemoryManager {
 // `map_anon` backs and charges every page at once rather than reserving it for demand paging.
 // The spec's row says "pages charged", and a process that is told it has memory and then
 // faults for want of it has been told a lie. The only reservations are the loader programs'
-// stacks (`reserve_range`, the Setup path).
+// stacks, which the loader reserves (`loader/src/main.rs`).
 impl MemoryManager {
     /// A range argument: page-aligned, non-empty, and wholly inside user space. Its end.
     fn user_range(addr: usize, len: usize) -> Result<usize, redoubt_sys::Error> {
