@@ -169,8 +169,18 @@ Built and attack-tested today:
 - **`bootfsd`, `consoled` and `keyd`**, served and attacked in host tests
   ([bootfsd](../servers/bootfsd.md), [consoled](../servers/consoled.md), [keyd](../servers/keyd.md)).
 - **Launching:** the startup block and the loader stub ([init](../servers/init.md#the-startup-block)).
+- **The client library**, tested on the host against real servers
+  ([native programs](../userland/native.md#the-client-library)).
 - **beamlet** on the host, loading hostile code with limits inside one VM
   ([beamlet](../userland/beamlet.md)); and its platform on Redoubt's console, clock and
   randomness, on the fake kernel ([beamlet](../userland/beamlet.md#the-console-the-clock-and-randomness)).
+- **The shell** on beamlet on the host: the loop, the commands, the file and text commands and
+  help, with hostile text drawn visibly and the cell protocol held to its vectors
+  ([the shell](../userland/shell.md#the-loop),
+  [the cell protocol](../userland/shell.md#the-cell-protocol)).
+- **`sshd`'s core** on its host platform, which the bench's SSH sessions run against, with
+  OpenSSH's server as the reference ([sshd](../servers/sshd.md#the-core-and-its-platforms),
+  [SSH sessions](../testbench.md#sessions-and-the-loopback-server)).
 
-Not built: `init`'s manifest handling, the `fsd` server, the steward, `sshd`, sessions and the agent.
+Not built: `init`'s manifest handling, the `fsd` server, the steward, `sshd` on the box, sessions
+and the agent.
