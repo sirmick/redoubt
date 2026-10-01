@@ -467,9 +467,12 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      no budget outlives it; the child links themselves are read by the destruction's walk, not
      re-scanned by an audit.
   2. **Objects are linked to their owner.** Each budget heads one chain of the endpoints and
-     devices charged to it (a `next_owned` link in their frames), so a destruction ends exactly
-     the dying subtree's endpoints and devices instead of re-scanning every object frame for one
-     whose owner is dying. Process objects are not scanned either: the PID index
+     devices charged to it (a link word at the same place in both kinds' frames, read alone), so
+     a destruction ends exactly the dying subtree's endpoints and devices instead of re-scanning
+     every object frame for one whose owner is dying. Its first walk of the chains destroys the
+     devices, which leave them, each moved to its chain's head first so that leaving does not
+     walk the endpoints ahead of it; the endpoints stay until the handle chains are closed, and a
+     second walk frees each in a link read and a free. Process objects are not scanned either: the PID index
      (`Objects::processes`) finds them in a constant (64) lookups.
   3. **Handles held outside a budget are chained to it.** A handle dies when the object it names
      is destroyed or when the budget that stamped it is. A handle whose holder runs inside that

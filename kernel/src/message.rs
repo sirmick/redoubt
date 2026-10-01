@@ -1509,31 +1509,29 @@ pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
 }
 
 /// R10, the part that reaches messages: after `budget_destroy` marked a subtree dying and before
-/// its budgets are freed, destroy the endpoints and devices it owns and fail every message sent
-/// through a handle stamped with it. The subtree is walked through the budgets' child links, and
-/// each budget's own endpoints and devices through its owner lists: never a scan of every object
-/// frame ([Residual risks](../kernel/budgets.md#residual-risks)).
+/// its budgets are freed, destroy the devices it owns and fail every message sent through a handle
+/// stamped with it or waiting on an endpoint it owns. The subtree is walked through the budgets'
+/// child links, and each budget's own devices through its owner lists: never a scan of every
+/// object frame ([Residual risks](../kernel/budgets.md#residual-risks)). Its endpoints are freed
+/// later, once no handle names them (`MemoryManager::free_owned_endpoints`).
 pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetFrame) {
     // One pre-order walk of the dying subtree, and each budget's one owner chain, endpoint and
-    // device alike: the walk ends exactly what the subtree owns, never a scan of every frame. The
-    // chain is read once and never written back: an endpoint's page is freed without a per-endpoint
-    // read-modify-write of the budget that owns it, which is going with the whole subtree anyway,
-    // and the endpoints' pages come back in one write (R10,
-    // [Residual risks](../kernel/budgets.md#residual-risks)).
+    // device alike, reading each object's link and kind words alone: the walk ends exactly what
+    // the subtree owns, never a scan of every frame. A destroyed device leaves the chain, so
+    // only endpoints are left on it; it is moved to the chain's head first, so leaving it does
+    // not walk the endpoints ahead of it.
     let mut cur = Some(top);
     while let Some(frame) = cur {
-        let mut owned = mm.budget(frame).first_owned;
-        let mut endpoint_pages = 0;
+        let (mut owned, mut prev) = (mm.budget(frame).first_owned, None);
         while let Some(o) = owned {
             owned = mm.owned_next(o);
             if mm.is_endpoint_frame(o) {
-                mm.release_object_frame(o);
-                endpoint_pages += crate::endpoint::ENDPOINT_PAGES;
+                prev = Some(o);
             } else {
+                mm.owned_to_head(frame, prev, o);
                 destroy_device(ss, mm, o);
             }
         }
-        mm.uncharge(frame, endpoint_pages);
         cur = mm.subtree_next(top, frame);
     }
     // R10 step 4's message reach, two bounded walks for the whole subtree, never one per endpoint.
