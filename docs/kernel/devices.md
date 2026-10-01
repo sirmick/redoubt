@@ -219,7 +219,8 @@ two label sets share a device.
 - **Drivers find their devices by name.** `init` installs a device's register region under the
   name the server's entry gives it, and its interrupt under that name with `-irq` added
   (`consoled` looks up `uart` and `uart-irq`, `blkd` `disk` and `disk-irq`, `netd` `net` and
-  `net-irq`). The kernel still says nothing about which device a handle names.
+  `net-irq`). The names are `init`'s: it matched them to the kernel's objects with
+  [`device_info`](#device_info), and a driver relies on the name, never on a handle's index.
 - **`init` keeps a copy of every device handle it places,** so that it can place the handle again
   when it restarts a driver. It never maps a device after it starts `consoled`, and a copy it
   never maps never puts it in a reset set, so being a co-holder costs nothing at a driver's end
