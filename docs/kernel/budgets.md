@@ -143,11 +143,33 @@ The loader starts only `init`, which runs in `root` on the weight and the one pr
 keeps free. What `init` launches counts in the budgets it launches into.
 
 - **The kernel keeps its fixed split.** It creates `root`, `system` and `users` at boot, as in
-  the table above, except that `root` keeps one process for `init`: `system` gets 15 processes
-  and `users` 47. The boot manifest does not size `system`. The kernel reads no manifest and the
+  the table above, except that `root` keeps one process and some pages for `init`:
+  - `system` gets 15 processes and `users` 47;
+  - `root` keeps everything the loader gave `init` (its image, page tables, saved contexts and
+    the bundle's frames), measured at boot as the loader's programs are measured today, plus
+    `INIT_PAGES` (1,024 pages, 4 MiB) for `init` to work in;
+  - `system` gets a quarter of the pages left and `users` the rest.
+
+  A boot whose `init` charges and `INIT_PAGES` do not fit stops (fail closed). The boot manifest
+  does not size `system`. The kernel reads no manifest and the
   loader parses no JSON, so the split is set in one place, the kernel. `init` adds up what the
   manifest's servers ask for and refuses the boot if it does not fit in `system`, before it
   starts anything ([init](../servers/init.md#the-boot-manifest)).
+- **`INIT_PAGES` is `init`'s working set, with room to spare.** Everything `init` uses is charged
+  to `root`:
+  - its first thread's 32-page stack;
+  - its heap, for the manifest and the startup blocks it builds;
+  - a handle table of up to 64 pages;
+  - a page for each server endpoint it owns;
+  - a process object for each process it starts (at most 63).
+
+  That is about 500 pages, and 1,024 doubles it. It is a fixed count, not a share of RAM,
+  because `init`'s needs do not grow with the machine, and a share of a large machine would sit
+  idle in `root`. The manifest cannot change it, because the kernel reads no manifest. `init`
+  reads its own usage and refuses a boot it cannot run in, and the number changes only in the
+  kernel, with a stated reason. A tester in `init`'s place
+  ([test bench](../testbench.md#starting-a-cases-programs)) works within the same allowance. A
+  kernel case whose first program needs more works in a budget it carves from `system`.
 - **The weights stay.** `ROOT_WEIGHT` is 1,000,000 and `INIT_WEIGHT` is 1,000. `init`'s free
   weight in `root` is a driver's, and the rest is split between `system` (250,000) and `users`
   (749,000). Only the budgets that hold processes compete, so what matters is how their weights
