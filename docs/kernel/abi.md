@@ -110,11 +110,14 @@ one. "(2)" marks a 64-bit value in two registers. A field named `..._rec` is the
 | 0x118 | `random` | - | one value from the kernel's CSPRNG (2) | [boot](boot.md) |
 | 0x119 | `system_reset` | Reset device handle, kind (1 power off, 2 reboot) | does not return on success | [devices](devices.md) |
 | 0x11a | `map_fixed` | address, len, flags | - | [memory](memory.md) |
+| 0x11b | `device_info` | device handle | kind (1 MMIO, 2 IRQ, 3 Reset), a (2), b (2), flags: the device's `Devs` entry | [devices](devices.md#device_info) |
 
 `thread_create`'s and `process_start`'s argument reaches the new thread unchanged in its first
 argument register; the kernel does not check it, nor the entry or stack pointer. A `usize`
 result (an address, a length) is one register; a handle or TID is one register holding at most
-32 bits.
+32 bits. `device_info`'s `a` and `b` are 64-bit on both widths, as in the `Devs` entry, because
+an Sv32 physical address has 34 bits; a field its kind does not use is 0
+([boot](boot.md#the-argument-block)).
 
 ## Records
 
@@ -351,6 +354,7 @@ list, in order.
 | `random` | - | - |
 | `system_reset` | device: `BadHandle`; kind: `InvalidArgument` | `BadHandle`, `WrongObject` (not the Reset device) |
 | `map_fixed` | flags: `InvalidArgument` | `InvalidArgument` (range: address or len not page-aligned, len 0, wraps, or past `USER_AREA_END`), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (the pages alone), `InvalidArgument` (overlaps any mapping or reservation of the caller's, lent pages included), `OutOfMemory` (the pages and the page tables they need); nothing mapped or charged on failure |
+| `device_info` | device: `BadHandle` | `BadHandle`, `WrongObject` (not a device object); nothing after these fails |
 
 Every call can also fail decoding in the general ways of stage 1 (a non-zero unused register, a
 value too wide). "Handle table" is stage 4's last check. Three rows depart from the stages, and
@@ -378,7 +382,7 @@ walk that follows skips page-table subtrees that are absent
 
 </details>
 
-Every value of `a0` outside 0x101-0x11a is an unknown number: `InvalidArgument` in `a0` and 0 in
+Every value of `a0` outside 0x101-0x11b is an unknown number: `InvalidArgument` in `a0` and 0 in
 `a1`-`a7`. That includes 0, every number up to and including `NUMBER_BASE`, the first number
 past the table, and on rv64 a value with bit 32 or bit 63 set: the whole register is compared,
 never a truncated part of it. An unknown number carries no `call` dispositions, and nothing
