@@ -38,6 +38,9 @@ pub enum Mutation {
     R2KeyByStampLabels,
     /// Every account-0 sender shares one group.
     R2SystemCallersShareGroup,
+    /// One round-robin cursor per endpoint over every group, of every label set: the group after
+    /// the one served last is next, so one label set's takes move another's turns.
+    R2OneCursor,
     // R3. Lends and abandoned calls.
     /// An abandoned lend is unmapped from the server at once.
     R3UnmapAbandonedLend,
@@ -338,7 +341,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 141] = {
+    pub const ALL: [Mutation; 142] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -353,6 +356,7 @@ impl Mutation {
             R2KeyByAccountOnly,
             R2KeyByStampLabels,
             R2SystemCallersShareGroup,
+            R2OneCursor,
             R3UnmapAbandonedLend,
             R3ChargeStaysWithCaller,
             AbandonNoticeMissing,
@@ -504,7 +508,8 @@ impl Mutation {
             | R2NoWaitCap
             | R2KeyByAccountOnly
             | R2KeyByStampLabels
-            | R2SystemCallersShareGroup => "R2",
+            | R2SystemCallersShareGroup
+            | R2OneCursor => "R2",
             R3UnmapAbandonedLend
             | R3ChargeStaysWithCaller
             | AbandonNoticeMissing

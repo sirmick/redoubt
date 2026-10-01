@@ -452,10 +452,19 @@ impl Run {
                 String::from("ok")
             }
             PolicyOp::CrashServing { session } => {
+                // The crash is the call's: the server answers what it takes until it takes this
+                // session's call, and crashes serving it.
                 let r = self.st.work(*session);
                 self.st.poll();
-                self.held = self.st.hold().map(|m| (m.account, m.labels));
-                let held = self.held.take().unwrap_or_default();
+                let mut held = (0, Vec::new());
+                while let Some(m) = self.st.hold() {
+                    if m.words[0] == *session {
+                        held = (m.account, m.labels);
+                        break;
+                    }
+                    self.st.reply(m.msg_id);
+                }
+                self.held = None;
                 self.st.crash_server();
                 self.check_blame(held, now, audit_from, &sessions_before)?;
                 format!("{r:?}")
@@ -690,15 +699,18 @@ pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failu
 }
 
 /// P10 (servers/steward.md R37): one sequence runs twice, the second time without the work of the
-/// vault sessions (their item writes, submissions and calls to the shared server). Everything an
-/// unlabelled session observes must be the same: every result it gets, and the usage of every
-/// principal's top budget and of `users`.
+/// vault sessions: their item writes, submissions and calls to the shared server, the owner's
+/// approvals and denials of their requests, and whatever names an agent such an approval started.
+/// Everything an unlabelled session observes must be the same: every result it gets, the ids of
+/// its requests, the order the server takes its calls in, the audit records an unlabelled reader
+/// may read, and the usage of every principal's top budget and unlabelled sub-budget and of
+/// `users`.
 ///
 /// Since the caps are keyed by (account, label set), the observers include the vault owner's own
-/// unlabelled sessions. Left out of the sequence: approving or denying a vault request (approving
-/// is declassifying, by design), ending a vault session, and the server's crashes (a leak through
-/// crash blame is not checked here: kernel/model.md, "Residual risks"). The owner's approval
-/// screen is not an observer.
+/// unlabelled sessions. Ending a vault session, and a crash an unlabelled session's call causes,
+/// run in both. Left out of the sequence: a crash at an instant, and one a vault's call causes,
+/// whose blame and outcomes are service-slot timing (servers/steward.md R37, "Residual risks").
+/// The owner's approval screen is not an observer.
 pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let mut rng = Rng::new(seed);
     let secret = rng.next_u64();
@@ -708,6 +720,9 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
     let mut first = Run::new(mutation, secret);
     let mut ops: Vec<(PolicyOp, bool)> = Vec::new();
     let mut vault_sessions: BTreeSet<u64> = BTreeSet::new();
+    // Sessions vault work started (an agent on an approved vault request): they exist only with
+    // the vault's work, so an op that names one is vault work too.
+    let mut vault_made: BTreeSet<u64> = BTreeSet::new();
     let mut owners: BTreeSet<usize> = BTreeSet::new();
     for _ in 0..rng.range(20, 100) {
         let op = random_op(&first.st, &first.subs, &mut rng);
@@ -716,19 +731,26 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
             | PolicyOp::Submit { session, .. }
             | PolicyOp::Work { session } => vault_sessions.contains(session),
             PolicyOp::Approve { request, .. } | PolicyOp::Deny { request, .. } => {
-                if vault_sessions.contains(&request.session) {
-                    continue;
-                }
-                false
+                vault_sessions.contains(&request.session)
             }
-            PolicyOp::EndSession { session } if vault_sessions.contains(session) => continue,
-            PolicyOp::Hold | PolicyOp::Crash | PolicyOp::CrashServing { .. } => continue,
+            PolicyOp::EndSession { session } | PolicyOp::StartAgent { session, .. } => {
+                vault_made.contains(session)
+            }
+            PolicyOp::EndLease { by, lease } => vault_made.contains(by) || vault_made.contains(lease),
+            // A crash at an instant blames whichever call is in service, which the vault's queued
+            // calls decide, and a crash the vault's call causes moves when the server takes the
+            // calls before it: service-slot timing (servers/steward.md R37, "Residual risks").
+            PolicyOp::CrashServing { session } if vault_sessions.contains(session) => continue,
+            PolicyOp::Hold | PolicyOp::Crash => continue,
             _ => false,
         };
         let before = first.st.sessions.keys().copied().collect::<BTreeSet<u64>>();
         first.apply(&op).map_err(fail)?;
-        for s in first.st.sessions.values() {
-            if !before.contains(&s.id) && !s.labels.is_empty() {
+        for s in first.st.sessions.values().filter(|s| !before.contains(&s.id)) {
+            if vault {
+                vault_made.insert(s.id);
+            }
+            if !s.labels.is_empty() {
                 vault_sessions.insert(s.id);
                 owners.insert(s.principal);
             }
@@ -737,6 +759,13 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
     }
     let mut with = Run::new(mutation, secret);
     let mut without = Run::new(mutation, secret);
+    // A vault session's number, and so its id, follows its label set's own history, which the
+    // vault's work is part of: the session an op names is found in the run without that work as
+    // the one started at the same op. Results are never renamed.
+    let mut renamed: BTreeMap<u64, u64> = BTreeMap::new();
+    // How much of each run's take log has been read, and the unlabelled takes read from it.
+    let mut seen = (0, 0);
+    let mut order: (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
     for (i, (op, vault)) in ops.iter().enumerate() {
         let observed = match op {
             PolicyOp::Pending { principal } => !owners.contains(principal),
@@ -752,11 +781,21 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
             PolicyOp::Approve { .. } | PolicyOp::Deny { .. } | PolicyOp::Usage { .. } => true,
             _ => false,
         };
+        let ids = |r: &Run| r.st.sessions.keys().copied().collect::<BTreeSet<u64>>();
+        let (before_with, before_without) = (ids(&with), ids(&without));
         let a = with.apply(op).map_err(fail)?;
         if *vault {
             continue;
         }
-        let b = without.apply(op).map_err(fail)?;
+        let b = without.apply(&rename(op, &renamed)).map_err(fail)?;
+        let mut started: Vec<&Session> =
+            without.st.sessions.values().filter(|s| !before_without.contains(&s.id)).collect();
+        for s in with.st.sessions.values().filter(|s| !before_with.contains(&s.id)) {
+            let same = |t: &&Session| t.principal == s.principal && t.labels == s.labels && t.kind == s.kind;
+            if let Some(at) = started.iter().position(same) {
+                renamed.insert(s.id, started.remove(at).id);
+            }
+        }
         if observed && a != b {
             return Err(fail(format!(
                 "P10: op {i} ({op:?}) showed {a:?} with the vault's work and {b:?} without"
@@ -772,9 +811,17 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
                 )));
             }
         }
+        // The unlabelled sessions' calls the server took, and their order (R2: one label set's turns
+        // do not depend on another's). Each op's takes are added to what was already compared.
+        for (r, seen, order) in [(&with, &mut seen.0, &mut order.0), (&without, &mut seen.1, &mut order.1)] {
+            order.extend(r.st.taken[*seen..].iter().filter(|(labels, _)| labels.is_empty()).map(|(_, w)| *w));
+            *seen = r.st.taken.len();
+        }
+        if order.0 != order.1 {
+            return Err(fail(format!("P10: the server took unlabelled calls in another order (op {i})")));
+        }
         // What an unlabelled reader may read of the audit file.
-        let (x, y) = (format!("{:?}", with.st.audit_view(&[])), format!("{:?}", without.st.audit_view(&[])));
-        if x != y {
+        if with.st.audit_view(&[]) != without.st.audit_view(&[]) {
             return Err(fail(format!("P10: the unlabelled audit view depends on the vault's work (op {i})")));
         }
         // The steward's slot 1 is `users`; each principal's top budget and unlabelled sub-budget.
@@ -792,6 +839,35 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
         }
     }
     Ok(())
+}
+
+/// `op` with the sessions it names as the run without the vault's work knows them
+/// (`steward_noninterference`).
+fn rename(op: &PolicyOp, to: &BTreeMap<u64, u64>) -> PolicyOp {
+    let s = |x: u64| *to.get(&x).unwrap_or(&x);
+    let r = |x: &ReqRef| ReqRef { session: s(x.session), nth: x.nth };
+    let mut op = op.clone();
+    match &mut op {
+        PolicyOp::EndSession { session }
+        | PolicyOp::StartAgent { session, .. }
+        | PolicyOp::WriteItem { session, .. }
+        | PolicyOp::Submit { session, .. }
+        | PolicyOp::Work { session }
+        | PolicyOp::CrashServing { session } => *session = s(*session),
+        PolicyOp::Approve { request, hash, .. } => {
+            *request = r(request);
+            if let HashRef::Of(x) = hash {
+                *x = r(x);
+            }
+        }
+        PolicyOp::Deny { request, .. } => *request = r(request),
+        PolicyOp::EndLease { by, lease } => {
+            *by = s(*by);
+            *lease = s(*lease);
+        }
+        _ => {}
+    }
+    op
 }
 
 /// Independent ancestry oracle for the self-minted share (servers/serving.md R26: a chain of
