@@ -261,6 +261,7 @@ impl Checker {
                         .is_some_and(|p| p.handles.values().any(|h| h.object == Object::Device(*device)));
                     ensure!(held, "R18: process {pid} reached device {device} without a handle to it");
                 }
+                Flow::DeviceInfo { pid, h, got } => device_info_answer(k, *pid, *h, got)?,
                 Flow::Woken { .. } | Flow::AbandonNotice { .. } => {}
             }
         }
@@ -1060,6 +1061,26 @@ fn r4_delivery(k: &Kernel) -> Check {
             }
         }
     }
+    Ok(())
+}
+
+/// `device_info` (kernel/devices.md; R18): the answer is the `Devs` entry of the device the
+/// caller's handle names, read from its handle table and the device object; `WrongObject` if the
+/// handle names anything else; `BadHandle` if the caller holds no such handle.
+fn device_info_answer(k: &Kernel, pid: u64, h: u64, got: &Result<Ret, Error>) -> Check {
+    let held = k.processes.get(&pid).and_then(|p| p.handles.get(&h));
+    let want = match held.map(|h| h.object) {
+        None => Err(Error::BadHandle),
+        Some(Object::Device(d)) => Ok(match k.devices[&d].kind {
+            DeviceKind::Mmio { base, pages, dma, .. } => {
+                Ret::Device { kind: 1, a: base, b: pages * PAGE_SIZE, flags: u64::from(dma) }
+            }
+            DeviceKind::Irq { n, .. } => Ret::Device { kind: 2, a: n, b: 0, flags: 0 },
+            DeviceKind::Reset => Ret::Device { kind: 3, a: 0, b: 0, flags: 0 },
+        }),
+        Some(_) => Err(Error::WrongObject),
+    };
+    ensure!(*got == want, "R18: device_info({h}) by process {pid} answered {got:?}, expected {want:?}");
     Ok(())
 }
 

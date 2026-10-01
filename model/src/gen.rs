@@ -240,7 +240,7 @@ impl Gen {
         let w = [self.any(), self.any(), self.any(), self.any()];
         let buf =
             |g: &mut Gen| if g.rng.pct(50) { None } else { Some(Buffer { addr: g.any(), npages: g.any() }) };
-        match self.rng.below(25) {
+        match self.rng.below(26) {
             0 => S::MapAnon { len: self.any(), flags: self.any() },
             1 => S::Unmap { addr: self.any(), len: self.any() },
             2 => S::SetFlags { addr: self.any(), len: self.any(), flags: self.any() },
@@ -316,6 +316,7 @@ impl Gen {
             21 => S::SystemReset { h: self.any(), kind: self.any() },
             22 => S::Random,
             23 => S::MapFixed { addr: self.any(), len: self.any(), flags: self.any() },
+            24 => S::DeviceInfo { h: self.any() },
             _ => S::ThreadCreate { entry: 0, sp: 0, arg: 0 },
         }
     }
@@ -780,7 +781,7 @@ impl Gen {
         }
         let is_endpoint = |h: &crate::kernel::Handle| matches!(h.object, Object::Endpoint(_));
         let is_budget = |h: &crate::kernel::Handle| matches!(h.object, Object::Budget(_));
-        match self.rng.below(100) {
+        match self.rng.below(101) {
             0..=6 => {
                 let n = if self.rng.pct(90) { self.rng.range(1, 4) } else { self.rng.range(0, 40) };
                 let len = if self.rng.pct(95) { n * PAGE_SIZE } else { n * PAGE_SIZE + 12 };
@@ -937,6 +938,14 @@ impl Gen {
                 let n = if self.rng.pct(90) { self.rng.range(1, 4) } else { self.rng.range(0, 40) };
                 Syscall::MapFixed { addr, len: n * PAGE_SIZE, flags: self.flags() }
             }
+            // Mostly a device handle; now and then any other handle, for `WrongObject`.
+            99 => Syscall::DeviceInfo {
+                h: if self.rng.pct(80) {
+                    self.handle(k, pid, |h| matches!(h.object, Object::Device(_)))
+                } else {
+                    self.handle(k, pid, |_| true)
+                },
+            },
             _ => Syscall::TimeNow,
         }
     }

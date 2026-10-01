@@ -231,6 +231,7 @@ impl Names {
             }
             S::SystemReset { h: x, kind } => format!("{} {kind}", h(*x)),
             S::MapFixed { addr, len, flags } => format!("{} {len:#x} {flags}", a(*addr)),
+            S::DeviceInfo { h: x } => h(*x),
         };
         if args.is_empty() { c.name().to_string() } else { format!("{} {args}", c.name()) }
     }
@@ -327,6 +328,7 @@ impl Names {
             }
             Ret::Time(t) => format!("ok time tm:{t}"),
             Ret::Random => "ok random".into(),
+            Ret::Device { kind, a, b, flags } => format!("ok device {kind} {a:#x} {b:#x} {flags}"),
             Ret::Word(w) => format!("ok word {w}"),
         }
     }
@@ -560,6 +562,7 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
         "random" => S::Random,
         "system_reset" => S::SystemReset { h: v(0)?, kind: v(1)? },
         "map_fixed" => S::MapFixed { addr: v(0)?, len: v(1)?, flags: v(2)? },
+        "device_info" => S::DeviceInfo { h: v(0)? },
         other => return Err(format!("unknown call {other}")),
     })
 }

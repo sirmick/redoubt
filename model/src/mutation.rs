@@ -153,6 +153,8 @@ pub enum Mutation {
     /// A device call through a number that is not one of the caller's handles reaches the device
     /// object of that number.
     R18DeviceByNumber,
+    /// `device_info` reports an interrupt as an MMIO region: the wrong kind of device.
+    DeviceInfoWrongKind,
     // R20. PID reuse.
     /// A PID held only by an exit notice is handed to a new process.
     R20NoticePidReused,
@@ -341,7 +343,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 142] = {
+    pub const ALL: [Mutation; 143] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -404,6 +406,7 @@ impl Mutation {
             R11ExecOnDeviceMemory,
             R11ProcessMapSkipsFlags,
             R18DeviceByNumber,
+            DeviceInfoWrongKind,
             R20NoticePidReused,
             R22MapFixedWalksFirst,
             IpcWrongLend,
@@ -551,7 +554,7 @@ impl Mutation {
             | R11MapFixedSkipsOverlap
             | R11ExecOnDeviceMemory
             | R11ProcessMapSkipsFlags => "R11",
-            R18DeviceByNumber => "R18",
+            R18DeviceByNumber | DeviceInfoWrongKind => "R18",
             R20NoticePidReused => "R20",
             R22MapFixedWalksFirst => "R22",
             R12PriorityById

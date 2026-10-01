@@ -2630,6 +2630,11 @@ impl Kernel {
             S::MapFixed { addr, len, flags } => {
                 done(self.map_fixed(pid, *addr, *len, *flags).map(|_| Ret::Unit))
             }
+            S::DeviceInfo { h } => {
+                let got = self.device_info(pid, *h);
+                self.ghost.flows.push(Flow::DeviceInfo { pid, h: *h, got: got.clone() });
+                done(got)
+            }
         }
     }
 
@@ -3816,6 +3821,22 @@ impl Kernel {
 
     /// `time_now() -> µs`.
     pub fn time_now(&self) -> u64 { self.now }
+
+    /// `device_info(h(device)) -> kind, a, b, flags`: the device's `Devs` entry
+    /// (kernel/devices.md, `device_info`). `BadHandle`, then `WrongObject`; nothing changes.
+    pub fn device_info(&self, pid: u64, h: u64) -> R<Ret> {
+        let d = self.lookup_device(pid, decode_handle(h)?)?;
+        Ok(match self.devices[&d].kind {
+            DeviceKind::Mmio { base, pages, dma, .. } => {
+                Ret::Device { kind: 1, a: base, b: pages * PAGE_SIZE, flags: u64::from(dma) }
+            }
+            DeviceKind::Irq { n, .. } => {
+                let kind = if self.broken(Mutation::DeviceInfoWrongKind) { 1 } else { 2 };
+                Ret::Device { kind, a: n, b: 0, flags: 0 }
+            }
+            DeviceKind::Reset => Ret::Device { kind: 3, a: 0, b: 0, flags: 0 },
+        })
+    }
 
     /// `system_reset(h(Reset), kind)`: Reset device handle. The machine stops.
     pub fn system_reset(&mut self, pid: u64, h: u64, kind: u64) -> R<()> {
