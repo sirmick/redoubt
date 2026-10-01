@@ -323,8 +323,9 @@ pub struct Steward {
     pub unlabelled: BTreeMap<u64, Vec<u8>>,
     pub push_requests: BTreeMap<u64, PushRequest>,
     push_counter: u64,
-    /// Sessions started so far, per principal (drives session ids and names).
-    started: BTreeMap<usize, u64>,
+    /// Sessions started so far, per principal and label set (drives session ids and names): no
+    /// counter is shared across a principal's label sets (servers/steward.md R37).
+    started: BTreeMap<(usize, Vec<u64>), u64>,
     /// The badge of the next session's connection to the server: each session gets its own
     /// (servers/serving.md, "Minted connections").
     next_badge: u64,
@@ -636,11 +637,13 @@ impl Steward {
                 return Err(e);
             }
         };
-        // A random id and a per-principal name: nothing another principal can count.
-        let n = self.started.entry(principal).or_insert(0);
+        // A random id and a name per (principal, label set): nothing another principal, or another
+        // of this principal's label sets, can count.
+        let n = self.started.entry((principal, labels.clone())).or_insert(0);
         *n += 1;
         let name = format!("{}-{}", if kind == SessionKind::Agent { "agent" } else { "session" }, n);
-        let mut id = mix(self.secret ^ 0x5e55 ^ mix(((principal as u64) << 32) ^ *n));
+        let set = labels.iter().fold(0, |h, l| mix(h ^ l));
+        let mut id = mix(self.secret ^ 0x5e55 ^ mix(((principal as u64) << 32) ^ *n) ^ set);
         while id == 0 || self.sessions.contains_key(&id) {
             id = mix(id);
         }
