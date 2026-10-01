@@ -457,7 +457,7 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   and is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
   dominates lease termination, R39 (leases end). The cost must follow the objects the dying subtree holds,
   not every object page in the system and not every live table. Destruction gives three indexes,
-  handle chains, three thread walks, and a walk of each dying process's own frames:
+  handle chains, two thread walks, and a walk of each dying process's own frames:
 
   1. **The budget tree is linked downward.** Each budget keeps a `first_child` and a `next_sibling`
      beside its `parent`, so `mark_dying`, `lift_dying` and the final free walk the subtree
@@ -505,21 +505,23 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      The chain entries make a slot eight words, 64 bytes, so a table page holds 64 handles and a
      full table (`MAX_HANDLES`) is 64 pages. A message's copy of a handle keeps the four-word
      form, since the chains index tables, not messages.
-  4. **Three thread walks for the endpoints' teardown, not three per endpoint.** `destroy_endpoint`
+  4. **Two thread walks for the endpoints' teardown, not three per endpoint.** `destroy_endpoint`
      ran three all-thread scans per endpoint — fail its blocked senders and receivers, fail callers
      waiting for a reply through it, clear the abandoned-call notices owed on it — and
      `endpoint_dying` a process-object scan, so a full lease cost its endpoints times the threads.
-     `budgets_dying` now makes three walks over the threads for the whole subtree, keyed on *the
-     endpoint's owner is dying* (and on the stamp, for a message already sent), never on *this one
+     `budgets_dying` now walks the threads twice for the whole subtree, keyed on *the endpoint's
+     owner is dying* (and on the stamp, for a message already sent), never on *this one
      endpoint*: receivers and senders on a dying endpoint first, then callers waiting for a reply
-     through one and messages whose stamp is dying, then the notices, in a walk of their own and
-     last: an owed notice's caller no longer waits, so no failing walk finds it, and the reply
-     failures owe more. `process::endpoints_dying` drops the exit notices in one process-object
-     pass. Each walk is `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk
-     [R2 (fair waiting)](ipc.md#r2-fair-waiting) already makes on the delivery path, repeated only
-     for each waiter it fails: the cost follows the subtree's own parked calls, never its endpoint
-     count. Freeing an endpoint's frame touches only the frame, deferred until its handles are
-     closed, not the dying budget that owns it: the budget's whole object list is going with it.
+     through one and messages whose stamp is dying. The second walk also drops the notices owed
+     on a dying endpoint, reading each open call's flags alone: `abandon` owes no notice on an
+     endpoint whose owner is dying, so every such notice was owed before the destruction began,
+     and the walk's first pass meets each once, however many callers it fails.
+     `process::endpoints_dying` drops the exit notices in one process-object pass. Each walk is
+     `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk [R2 (fair waiting)](ipc.md#r2-fair-waiting)
+     already makes on the delivery path, repeated only while a pass fails a waiter: the cost
+     follows the subtree's own parked calls, never its endpoint count. Freeing an endpoint's frame
+     touches only the frame, deferred until its handles are closed, not the dying budget that
+     owns it: the budget's whole object list is going with it.
   5. **A process's frames are found from the process.** Ending a process releases the frames it
      owns by walking its own page tables: the tables themselves, the user half's pages and the
      process area's saved registers, each freed if the ownership table still credits it to the
