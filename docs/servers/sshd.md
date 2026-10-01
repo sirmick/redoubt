@@ -140,6 +140,10 @@ Status: planned · M1 (separation and containment)
   size over 1,024 columns or rows reaches the session cut to 1,024. A zero means no size, as
   RFC 4254 says (a client whose input is not a terminal sends zeros): a `window-change` carrying
   one is refused, and a pty asked for with one starts at 80 by 24.
+- **Randomness.** The program provides `getrandom`'s `__getrandom_v03_custom`, the only source
+  `getrandom` has on bare metal, and it writes all of the buffer it is given before it returns
+  `Ok`: `getrandom` then reads every byte as initialised
+  ([vendor/README.md](../../vendor/README.md#sshds-ssh-library)).
 - **State is per channel**, and each channel carries its session's labels (`alice@`: none;
   `alice+secrets@`: `{alice-secrets}`); `sshd` applies the label check to them
   ([R25 (the label check)](serving.md#r25-the-label-check)). Channels are independent: one

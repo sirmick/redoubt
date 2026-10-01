@@ -589,8 +589,7 @@ and many name `Cargo.lock`. Two checks guard them, and they prove different thin
 
 The residuals: provenance is only as current as the last review that ran it, and the vendored
 crates' `unsafe` is checked by recorded Miri runs, not by a bench case
-([ipd under Miri](servers/ipd.md#under-miri)); `sshd`'s crates have no such record yet
-([todo](todo/sshd-vendored-miri.md)).
+([ipd under Miri](servers/ipd.md#under-miri), [sshd under Miri](servers/sshd.md#under-miri)).
 
 ### Patched crates
 

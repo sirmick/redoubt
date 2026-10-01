@@ -289,15 +289,49 @@ no `std`. What it brings:
   `.cargo/config.toml` sets it for every `target_os = "none"` build, where no other crate reads
   it. Cargo joins those flags with any `[target.<triple>]` ones (checked with cargo 1.98.1),
   but a `RUSTFLAGS` environment variable replaces them all; nothing in the tree or the bench
-  sets one. `sshd`'s program provides the function.
+  sets one. No program provides the function yet: `sshd` is a library until its box platform is
+  built, and that platform must ([sshd](../docs/servers/sshd.md#sessions-over-ssh)).
 
 **`unsafe` on RISC-V.** Most of these crates' `unsafe` is in SIMD and instruction backends for
 x86, ARM, LoongArch and WebAssembly, and in `sha2`'s RISC-V `zknh` backend, which only an
 explicit `sha2_backend` cfg selects: the box compiles none of them. What it does compile is the
 software backends and the helpers: `inout`, `block-buffer`, `hybrid-array`, `cmov`'s portable
 path, `zeroize`, `subtle`'s one barrier, `ascii`'s string conversions, and `getrandom`'s custom
-backend and slice helpers. Their reading and their own tests under Miri, each with its software
-backend forced, are a follow-up ([todo](../docs/todo/sshd-vendored-miri.md)).
+backend and slice helpers. Their own tests ran under Miri, each with its software backend forced
+([sshd under Miri](../docs/servers/sshd.md#under-miri)).
+
+**Read for `sshd`.** On RISC-V, with no backend cfg set:
+- `aes`, `chacha20`, `poly1305` and `sha2` fall through to their software backends. `aes`'s union
+  is only ever written as `soft`, and each of its three reads is of `soft`; its `Drop` zeroes the
+  whole struct. `chacha20` compiles none of its `unsafe`, and `poly1305` none (`sunset` does not
+  turn on its `zeroize`). `sha2`'s soft `rk(i)` reads `K32[i]` (`K64[i]`) with `i` from its
+  unrolled 0..64 (0..80): in bounds.
+- `inout`: input and output are equal or disjoint by construction (one `&mut`, or a `&` and a
+  `&mut`); `get` and `split_at` assert their bounds; chunks are cast to `Array`, which is
+  `repr(transparent)`. `reserved.rs` is compiled, but its only callers are behind `cipher`'s
+  `block-padding`, which is off.
+- `block-buffer` (eager, for SHA-256): the position lives in the block's last byte and stays
+  below the block size, under 256; bytes `0..pos` are initialised, and `ResetGuard` restores
+  that if `compress` panics. `ReadBuffer` serves only XOFs, which nothing here uses.
+- `hybrid-array`: every cast rests on `repr(transparent)` and on each `ArraySize`'s `USIZE`
+  equalling its inner array's length, which its macro writes and its own test checks; `split`
+  needs `U: Sub<N>`, so `N <= U` at compile time; `from_fn`'s guard drops only what it wrote.
+- `cmov`: on RISC-V its mask is `seqz` then `addi -1` in inline assembly (`nomem`, `nostack`),
+  all ones exactly when the condition is nonzero; Miri runs the portable Rust mask instead. Its
+  slice casts are signed to unsigned of one width, and `NonZero` is rebuilt from a value `get`
+  returned.
+- `zeroize`: volatile writes over exactly the object's bytes, and zero is valid for each type
+  written. On RISC-V the barrier is an empty `asm!` given the pointer, `readonly`; Miri runs its
+  portable path instead. `zeroize_flat_type` hands the barrier `&data`, the local pointer, not
+  the data: a weaker barrier than its name suggests.
+- `subtle`: one volatile read of a local in `black_box`, and an `Ordering` rebuilt from an `i8`
+  that is one of two valid `Ordering` values.
+- `ascii`: `sunset` calls `as_ascii_str` (which checks `is_ascii`, then casts: `AsciiStr` is
+  `repr(transparent)` over `[AsciiChar]`, which is `repr(u8)`), `as_str`, `chars` and `split`,
+  whose unchecked slicing takes its bounds from `position`.
+- `getrandom`: `fill` views `&mut [u8]` as `&mut [MaybeUninit<u8>]` and back once the backend
+  returns `Ok`, so the custom backend's provider must write all of `dest` before it does.
+- Found: nothing that needs changing. An update of any of these crates must redo this reading.
 
 ## Patched crates
 
