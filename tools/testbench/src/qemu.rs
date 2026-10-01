@@ -35,6 +35,44 @@ pub enum Verdict {
 /// (Linux's parent-death signal): a run killed at its timeout leaves no guest running.
 const EXIT_WITH_PARENT: [&str; 2] = ["-run-with", "exit-with-parent=on"];
 
+/// The oldest QEMU that knows `EXIT_WITH_PARENT`.
+const EXIT_WITH_PARENT_SINCE: &str = "QEMU 10.1";
+
+/// Whether `qemu` takes every option the bench passes it that an older QEMU lacks; probed once
+/// per binary and run. Without this, a QEMU too old fails every boot case at once, each for
+/// the same reason.
+pub fn usable(qemu: &'static str) -> Result<(), String> {
+    static PROBED: Mutex<Vec<(&str, Result<(), String>)>> = Mutex::new(Vec::new());
+    let mut probed = PROBED.lock().unwrap();
+    if let Some((_, usable)) = probed.iter().find(|(binary, _)| *binary == qemu) {
+        return usable.clone();
+    }
+    let usable = probe(qemu, &EXIT_WITH_PARENT);
+    probed.push((qemu, usable.clone()));
+    usable
+}
+
+/// Run `qemu <options> -version`: QEMU rejects an option it does not know, or a `-run-with`
+/// parameter, before it gets to `-version`.
+fn probe(qemu: &str, options: &[&str]) -> Result<(), String> {
+    let run = |args: &[&str]| Command::new(qemu).args(args).stdin(Stdio::null()).output();
+    let probe = match run(&[options, &["-version"]].concat()) {
+        Ok(probe) => probe,
+        Err(e) => return Err(format!("`{qemu}` could not be run: {e}")),
+    };
+    if probe.status.success() {
+        return Ok(());
+    }
+    let first = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().next().unwrap_or("").trim().to_string();
+    let version = run(&["-version"]).map(|v| first(&v.stdout)).unwrap_or_default();
+    Err(format!(
+        "`{qemu}` does not take `{}`; the bench needs {EXIT_WITH_PARENT_SINCE} or later, this is {:?}: {}",
+        options.join(" "),
+        version,
+        first(&probe.stderr),
+    ))
+}
+
 /// A child process (QEMU, ssh) that is killed however the run ends.
 pub struct Reaped(pub Child);
 
@@ -514,6 +552,20 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// The QEMU the bench runs takes every option it passes; a QEMU refusing one is reported
+    /// with the version needed and QEMU's own complaint.
+    #[test]
+    fn a_qemu_lacking_an_option_is_named() {
+        for qemu in ["qemu-system-riscv64", "qemu-system-riscv32"] {
+            assert_eq!(probe(qemu, &EXIT_WITH_PARENT), Ok(()));
+            let why = probe(qemu, &["-run-with", "no-such-parameter=on"]).expect_err("an unknown parameter");
+            assert!(why.contains("needs QEMU 10.1 or later, this is \"QEMU emulator version "), "{why}");
+            assert!(why.ends_with("Invalid parameter 'no-such-parameter'"), "{why}");
+        }
+        let why = probe("qemu-system-no-such-width", &EXIT_WITH_PARENT).expect_err("a missing binary");
+        assert!(why.starts_with("`qemu-system-no-such-width` could not be run: "), "{why}");
     }
 
     fn modern(args: &[String]) -> usize { args.windows(2).filter(|w| w == &MODERN_VIRTIO).count() }

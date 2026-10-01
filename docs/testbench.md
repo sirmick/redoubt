@@ -35,7 +35,7 @@ fallback to QEMU's own firmware.
 
 ### What a case passes on
 
-Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-qemu-early-exit, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu
+Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-qemu-early-exit, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu, host:testbench::a_qemu_lacking_an_option_is_named
 
 A boot case passes when every `expect` pattern matches a console line, in order, no `forbid`
 pattern ever matches, and the boot ends as the case says. Three patterns are always forbidden:
@@ -46,9 +46,13 @@ exit status the case names (0 by default; 255 for an SBI system failure). QEMU r
 `-run-with exit-with-parent=on`, so a bench killed at its timeout, even outright, leaves no guest
 running to skew the next run.
 
-A guest that ends before it prints a line, or whose QEMU exits with a failing status, fails with
-QEMU's exit status and the last lines of its stderr, which go to the console log too; one that
-printed and then died fails as it did, with QEMU's exit status.
+That option is QEMU 10.1's, and the bench checks for it: before a width's first boot it runs that
+width's QEMU with the option and `-version`, and a QEMU that refuses it fails every boot case at
+once with the version found, the version needed and QEMU's complaint (skips them, with
+`--allow-skip`, as a missing firmware does). A guest that ends before it prints a line, or whose
+QEMU exits with a failing status, fails with QEMU's exit status and the last lines of its stderr,
+which go to the console log too; one that printed and then died fails as it did, with QEMU's exit
+status.
 
 In-guest programs print through the log server and finish with `<NAME> TEST PASSED` or
 `<NAME> TEST FAILED`; attack programs end with `attempts done` instead. The log server starts every

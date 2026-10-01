@@ -59,7 +59,7 @@ struct Args {
     /// With --run, start QEMU paused with a gdb stub on :1234.
     #[arg(long)]
     debug: bool,
-    /// Report a case whose firmware or OpenSSH is missing as SKIP instead of FAIL.
+    /// Report a case whose firmware, QEMU or OpenSSH is missing or too old as SKIP instead of FAIL.
     #[arg(long)]
     allow_skip: bool,
     /// Show cargo's output.
@@ -373,6 +373,9 @@ fn run_case(
         Ok(firmware) => firmware,
         Err(why) => return Ok(vec![(String::new(), missing(why), 0.0)]),
     };
+    if let Err(why) = qemu::usable(machine.qemu) {
+        return Ok(vec![(String::new(), missing(why), 0.0)]);
+    }
     if !boot.session.is_empty() {
         if let Err(why) = ssh_available() {
             return Ok(vec![(String::new(), missing(why), 0.0)]);
