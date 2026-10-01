@@ -193,7 +193,12 @@ programs in one of two ways:
   loader stub and from the bundle's pages, each in a budget of its own carved from `system`. Each
   program gets the handles in the slots it has today: the boot endpoint's receive right for the
   second program, and the boot and log endpoints for the later ones. A program also gets the
-  budgets the case names for it (`budgets = ["system"]`), which replaces `TAKE_GIFTS`. The log
+  budgets the case names for it (`budgets = ["system"]`), which replaces `TAKE_GIFTS`. The
+  builder tells the tester which programs to start, and with which budgets, in one more data
+  entry, `programs`. It has one ASCII line per program after the first, in the case's order:
+  the program's entry name, then the names of the budgets it gets (`root`, `system`, `users`),
+  separated by spaces. The tester reads it from the bundle's pages, which the loader verified
+  with the rest, and refuses the boot on any line it cannot parse. The log
   server badges each program's handles with the program's place in the case, 2 on, and names
   programs by that place, because the kernel now draws every PID but the first. A case matches a
   PID in a kernel line with a pattern.
