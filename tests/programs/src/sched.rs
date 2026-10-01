@@ -657,13 +657,15 @@ fn steward(k: usize, leases: usize) {
         }
         let _ = rd::receive(Some(exit), 1_000_000, 0);
     }
-    // By deadline: the deadline is set before the spawn, so it leaves room for the spawn under
-    // load; a lease whose deadline came first is retried.
+    // By deadline: a budget's deadline is fixed when it is created, before the spawn, so it
+    // leaves room for the spawn under load; a lease whose deadline came first is retried. The
+    // steward's spawn at N = 16 takes about 150 ms, so the lead is twice that: at 150 ms every
+    // retry on one seed lost the race and took no sample.
     for _ in 0..leases * 2 {
         if nn == leases {
             break;
         }
-        let deadline = now() + 150_000;
+        let deadline = now() + 300_000;
         let Ok(lease) = rd::create(3, &rd::BudgetSpec { deadline, ..rd::spec(pages, 1, 10) }) else {
             continue;
         };
