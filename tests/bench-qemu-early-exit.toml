@@ -1,0 +1,9 @@
+description = "Bench self-check: a QEMU that exits before the guest prints anything is reported with QEMU's own error"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server", "ipc-client"]
+timeout_secs = 30
+expect = ['IPC TEST PASSED']
+# An -icount QEMU cannot parse: it exits at once, writing why only to its stderr.
+icount = "no-such-option"
+must_fail = '^guest exited while waiting for /IPC TEST PASSED/: QEMU exited with exit status: 1: .*-icount no-such-option: icount: Invalid shift value$'

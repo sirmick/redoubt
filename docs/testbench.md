@@ -35,7 +35,7 @@ fallback to QEMU's own firmware.
 
 ### What a case passes on
 
-Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu
+Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-qemu-early-exit, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu
 
 A boot case passes when every `expect` pattern matches a console line, in order, no `forbid`
 pattern ever matches, and the boot ends as the case says. Three patterns are always forbidden:
@@ -45,6 +45,10 @@ one still fails the case. With `poweroff = true` it reads instead until QEMU exi
 exit status the case names (0 by default; 255 for an SBI system failure). QEMU runs with
 `-run-with exit-with-parent=on`, so a bench killed at its timeout, even outright, leaves no guest
 running to skew the next run.
+
+A guest that ends before it prints a line, or whose QEMU exits with a failing status, fails with
+QEMU's exit status and the last lines of its stderr, which go to the console log too; one that
+printed and then died fails as it did, with QEMU's exit status.
 
 In-guest programs print through the log server and finish with `<NAME> TEST PASSED` or
 `<NAME> TEST FAILED`; attack programs end with `attempts done` instead. The log server starts every
@@ -492,7 +496,7 @@ shell, a login context or a container.
 
 ## Self-checks
 
-Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused, bench:bench-cbo-self-unrefused
+Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused, bench:bench-cbo-self-unrefused, bench:bench-qemu-early-exit
 
 The harness can fail, and each feature shows it. Cases named `bench-*` check the bench itself:
 each feature has a case that passes only if the feature works and, where the bench can be
