@@ -228,7 +228,13 @@ Status: built · partly tested: turns between several groups, and how groups are
 Senders blocked on an endpoint are grouped by their budget's account and label set, and, for
 account 0 (no principal: the boot budgets, and any budget carved without one, of either class),
 by budget as well. Each `receive` takes the oldest message of the
-next group after the one served last, round-robin. A group that already has `WAIT_CAP` (16)
+group served least recently: a group's turn is due from when it was last served, or from when its
+oldest message arrived if it has not been served since. Ties go to the lower group key. A group's
+place therefore depends only on its own history, so the order in which one label set's groups are
+served is the same whatever other label sets send. A single cursor over all groups would not keep
+that: a vault session's take would move the cursor, and with it which unlabelled caller is served
+next, which crash blame then shows to unlabelled readers
+([R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference)). A group that already has `WAIT_CAP` (16)
 messages queued on the endpoint gets `Busy` at once. Only queued messages count; a taken call is
 bounded by [R4a](#r4a-open-calls) instead. Keying by label set keeps a vault session and its
 owner's ordinary session, which share an account, from sharing a turn or a cap. Keying
@@ -359,6 +365,10 @@ Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-
 
 ## Residual risks
 
+- **The kernel still turns by one cursor per endpoint.** `next_sender` takes the next group after
+  the group served last, over all label sets, so a vault session's takes change which unlabelled
+  group a shared server serves next. The rule above is least recently served. Follow-up:
+  [todo](../todo/r2-least-recently-served.md).
 - **System-class servers are trusted to check labels.** R1 does not constrain a flow into or out
   of a `system` budget. A system server that serves two label sets and mixes their data breaks
   label separation, and the kernel cannot see it ([servers](../servers/README.md#labels)).
