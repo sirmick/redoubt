@@ -72,6 +72,7 @@
   - [beamlet's modular exponentiation takes operands of any size](todo/beamlet-bignum-bounds.md)
   - [The boot stack reservation](todo/boot-stack-reservation.md)
   - [process_map backs before refusing](todo/process-map-backs-before-refusing.md)
+  - [The latency targets exclude the checked build's audits](todo/latency-excludes-audits.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [rv32](beyond/rv32.md)

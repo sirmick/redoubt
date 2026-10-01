@@ -270,6 +270,13 @@ every guest instruction advances virtual time by 2^3 ns, and idle time skips to 
 deadline. So 1 ms is 125,000 instructions, and each target below is that many instructions; the
 milliseconds are for reading. Host load does not change a result.
 
+**Targets exclude the checked build's audits.** The case is a checked build, since the trace needs
+one ([R23](#r23-no-test-channels)). A checked build runs full audit scans after each destruction
+and at each process-object free, and a release build compiles none of them. Each target counts the
+kernel a release build runs: the audit time inside its window is subtracted, from the trace's
+audit records, and reported beside it ([checked builds](../testbench.md#checked-builds)). With two
+full handle tables live, the audits are about 24 ms after a destruction and 8 ms at a free.
+
 **The gate runs one pinned seed.** The guest's boot RNG seed decides the PIDs the kernel draws,
 which shift instruction counts and so the phase of every later event; with it pinned, a run
 repeats exactly, and the case prints the seed so that a failure replays. One seed hides the
@@ -584,6 +591,9 @@ Status: built · partly tested: a picked thread that dies before the switch, and
 - **Wakeup is prompt but not bounded.** A wake waits out the running slice, may keep a larger
   pass, and may tie. Human control rests on a measured steward lease-termination latency, not a
   proven bound, until something needs a real-time rule ([TENETS](../TENETS.md#guarantees)).
+- **The targets still count the checked build's audits.** Nothing subtracts the audit time yet,
+  so a run with full handle tables live misses the deadline notice by the audits alone. Follow-up:
+  [todo](../todo/latency-excludes-audits.md).
 - **The steward decision wake is late by whole slices.** A wake never preempts: at N = 16 the
   steward stand-in waits out the running slice, then the slices of any budgets that rank ahead of
   it. Its p50 is one or two slices late, depending on where its timeout lands against the running

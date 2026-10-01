@@ -242,6 +242,14 @@ then panic, and every case forbids `PANIC`:
 - arithmetic overflow, wherever the kernel or the loader does not use a checked or wrapping
   operation on purpose.
 
+A checked build also runs the kernel's audits, full scans that check the indexes, frame owners and
+handle chains after a destruction and when a process object is freed. They hold the hart while
+they run, and a release build has none of them. So a latency target, which is measured in a checked
+build because the scheduler trace needs one, excludes them. The traced kernel stamps each audit's
+start and end, and `sched_oracle` subtracts the audit time inside each measured window before it
+applies a target. It reports the audit total beside the target
+([responsiveness](kernel/scheduling.md#responsiveness)). The audits themselves stay full.
+
 Many cases use the profile: every case file with `debug_assertions = true`, most of them over
 both widths (`budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc` and `smp-spike` among
 them), and some, such as `all-together`, on rv64 only. The kernel
