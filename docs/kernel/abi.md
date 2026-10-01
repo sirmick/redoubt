@@ -55,21 +55,17 @@ adds one to the current time with saturation, so `FOREVER` (2^64 - 1) never wrap
 expires ([timer](timer.md), I13 (every blocking call returns by its timeout)). A **budget
 deadline** is absolute, in microseconds since boot, and `FOREVER` means none.
 
-```svgbob
-      ecall: call                              return from call
-    +----+-----------------------------+      +----+--------------------------------+
-    | a0 | 0x10e, the number of call   |      | a0 | 0, or the error code           |
-    +----+-----------------------------+      +----+--------------------------------+
-    | a1 | endpoint handle             |      | a1 | lend: 0 none, 1 returned,      |
-    | a2 | body record address         |      |    |       2 consumed               |
-    | a3 | lend address, 0 for none    | ---> | a2 | reply: 0 absent, 1 present     |
-    | a4 | lend pages, 0 for none      |      | a3 | 0                              |
-    | a5 | timeout, low 32 bits        |      | .. |                                |
-    | a6 | timeout, high 32 bits       |      | a7 | 0                              |
-    | a7 | 0, unused                   |      |    |                                |
-    +----+-----------------------------+      +----+--------------------------------+
-```
-*Figure: register use for `call` and its return. The 64-bit timeout takes two registers on both widths.*
+| Register | `ecall`: `call` | return from `call` |
+| --- | --- | --- |
+| `a0` | `0x10e`, the number of `call` | 0, or the error code |
+| `a1` | endpoint handle | lend: 0 none, 1 returned, 2 consumed |
+| `a2` | body record address | reply: 0 absent, 1 present |
+| `a3` | lend address, 0 for none | 0 |
+| `a4` | lend pages, 0 for none | 0 |
+| `a5` | timeout, low 32 bits | 0 |
+| `a6` | timeout, high 32 bits | 0 |
+| `a7` | 0, unused | 0 |
+*Table: register use for `call` and its return. The 64-bit timeout takes two registers on both widths.*
 
 On the process's side, `redoubt_sys::syscall` is the `ecall` itself (the crate's only `unsafe`),
 and `redoubt_sys::decode_result` reads the result. It refuses any result the kernel could not
@@ -157,28 +153,21 @@ message's body), a handle slot within the count may be 0 and keeps its place: a 
 while its message was queued ([R10 (destruction)](budgets.md#r10-destruction)), or a reply
 handle the caller could not take ([R4 (delivery)](ipc.md#r4-delivery)).
 
-```svgbob
-  body: call, send, reply             receive record: what receive writes
-  slot                                slot
-      +------------------------+          +------------------------+
-    0 | word 0                 |        0 | kind                   |
-    1 | word 1                 |        1 | msg_id                 |
-    2 | word 2                 |        2 | badge                  |
-    3 | word 3                 |        3 | account                |
-      +------------------------+          +------------------------+
-    4 | handle count, 0 to 4   |        4 | label count, 0 to 8    |
-      +------------------------+     5-12 | labels 0-7             |
-    5 | handle 0               |          +------------------------+
-    6 | handle 1               |    13-16 | words 0-3              |
-    7 | handle 2               |          +------------------------+
-    8 | handle 3               |       17 | handle count, 0 to 4   |
-      +------------------------+    18-21 | handles 0-3            |
-                                          +------------------------+
-  slot n is at byte 8n;                22 | buffer address         |
-  every unused slot is 0               23 | buffer pages           |
-                                          +------------------------+
-```
-*Figure: record slot layout of a body and of the receive record, the same on rv32 and rv64.*
+| Slot | Body: `call`, `send`, `reply` | Slot | Receive record: what `receive` writes |
+| --- | --- | --- | --- |
+| 0 to 3 | words 0 to 3 | 0 | kind |
+| 4 | handle count, 0 to 4 | 1 | `msg_id` |
+| 5 to 8 | handles 0 to 3 | 2 | badge |
+| | | 3 | account |
+| | | 4 | label count, 0 to 8 |
+| | | 5 to 12 | labels 0 to 7 |
+| | | 13 to 16 | words 0 to 3 |
+| | | 17 | handle count, 0 to 4 |
+| | | 18 to 21 | handles 0 to 3 |
+| | | 22 | buffer address |
+| | | 23 | buffer pages |
+*Table: record slot layout of a body and of the receive record, the same on rv32 and rv64. Slot n
+is at byte 8n, and every unused slot is 0.*
 
 ### The record check
 

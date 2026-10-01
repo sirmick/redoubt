@@ -112,24 +112,19 @@ a write is copied from the lend into the data buffer before the request is offer
 copied out of the data buffer once, with a length `blkd` chose, before anything looks at a byte of
 it ([R51 (DMA stays in its region)](#r51-dma-stays-in-its-region)).
 
-```svgbob
- DMA region: DMA_PAGES pages from dma_alloc, the only memory the device is told about
-
- base + 0                                                       base + PAGE_SIZE
- +------------------+-----------------+--------------+--------+--------+-------+
- | descriptor table | available ring  |  used ring   | header | status | (pad) |
- | (written, never  | (written, never | (3 values    |        |  byte  |       |
- |  read back)      |  read back)     |  read,checked|        |        |       |
- +------------------+-----------------+--------------+--------+--------+-------+
- base + PAGE_SIZE
- +------------------------------------------------------------------------------+
- | data buffer: MAX_SECTORS x 512 bytes                                          |
- +------------------------------------------------------------------------------+
-        ^                                                   |
-        | copied in before a write                          | copied out once after a read
- +------+------+                                     +------v------+
- | client lend |  never named to the device          | blkd memory |
- +-------------+                                     +-------------+
+```mermaid
+flowchart TB
+    subgraph R["DMA region: DMA_PAGES pages from dma_alloc, the only memory the device is told about"]
+        direction TB
+        subgraph P0["the first page, base + 0 to base + PAGE_SIZE"]
+            direction LR
+            dt["descriptor table<br/>written, never read back"] --- ar["available ring<br/>written, never read back"] --- ur["used ring<br/>three values read, checked"] --- hd["header"] --- sb["status byte"]
+        end
+        DB["data buffer, from base + PAGE_SIZE: MAX_SECTORS × 512 bytes"]
+        P0 --- DB
+    end
+    L["client lend<br/>never named to the device"] -- "copied in before a write" --> DB
+    DB -- "copied out once after a read" --> M["blkd memory"]
 ```
 *Figure: the DMA region and where a client's bytes go.*
 

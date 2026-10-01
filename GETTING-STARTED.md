@@ -22,8 +22,8 @@ Your own machine instead needs:
   `riscv32imac-unknown-none-elf` and `riscv64gc-unknown-none-elf`;
 - `qemu-system-riscv64` and `qemu-system-riscv32`;
 - OpenSSH, for the bench's SSH sessions;
-- `mdbook`, `mdbook-mermaid` and `mdbook-svgbob`, to render the book
-  (`cargo install mdbook mdbook-mermaid mdbook-svgbob`).
+- `mdbook` and `mdbook-mermaid`, to render the book (`cargo install mdbook mdbook-mermaid`); the
+  book's own preprocessor for address maps builds with `cargo`.
 
 ## Firmware
 

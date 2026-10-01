@@ -38,15 +38,14 @@ The server sees them at an address the kernel picks. A **transfer** is pages giv
 good: they leave the sender and become the receiver's, owner and payer both. A receiver takes a
 transfer only if its `receive` named a `max_transfer` at least that large.
 
-```svgbob
- caller                                   server
-+-----------------+    call (lend)     +-----------------+
-| words[4]        |------------------->| words[4]        |
-| handles[<=4]    |                    | handles (copies)|
-| lend: pages     |=== pages move ===> | lend at kernel- |
-|  (unmapped      |                    |  chosen address |
-|   until reply)  |<=== pages back ====|                 |
-+-----------------+    reply           +-----------------+
+```mermaid
+sequenceDiagram
+    participant C as caller
+    participant S as server
+    C->>S: call: four words, up to four handles, a lend of pages
+    Note over C,S: the lent pages move: unmapped from the caller until the reply,<br/>mapped in the server at an address the kernel chose
+    S-->>C: reply: four words, copies of the handles
+    Note over C,S: the pages come back to the caller
 ```
 *Figure: what a call carries. The lent pages are mapped in exactly one address space at a time.*
 

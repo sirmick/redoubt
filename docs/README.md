@@ -113,10 +113,11 @@ mdbook build docs      # output in target/book
 mdbook serve docs      # the same, served on localhost with live reload
 ```
 
-Diagrams are text inside the pages: Mermaid for flows, sequences and state machines, svgbob for
-box layouts such as a record's fields, and `memmap` blocks for address maps, which the book's own
-preprocessor (`tools/mdbook-memmap`) draws to scale on a log axis, one region per line with its
-first address, its name and a note per column. Solid lines are built; dashed lines are planned.
-The book needs the `mdbook-mermaid` and `mdbook-svgbob` preprocessors and `cargo` for its own.
+Diagrams are text inside the pages: Mermaid for flows, sequences, state machines and the packet
+diagrams that draw a record's words and bits, which GitHub renders too; and `memmap` blocks for
+address maps, which the book's own preprocessor (`tools/mdbook-memmap`) draws to scale on a log
+axis, one region per line with its first address, its name and a note per column, and which read
+as a table on GitHub. Solid lines are built; dashed lines are planned. The book needs the
+`mdbook-mermaid` preprocessor and `cargo` for its own.
 The docs checker, `redoubt-doccheck`, holds every page to these rules
 ([the test bench](testbench.md#the-docs-checker)).

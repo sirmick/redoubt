@@ -158,24 +158,29 @@ runs the same builder and writes `target/image/redoubt.bundle`.
 The block is `ARGS_PAGES` (4) pages of 32-bit words, written by `loader/src/args.rs` and read
 by `kernel/src/args.rs`. It is a run of tags, `XArg` first:
 
-```svgbob
- one tag: a header of two words, then its data
-+-------------+----------------+----------------+-----------------+
-| name        | crc16          | words          | data            |
-| 4 ASCII     | low 16 bits    | high 16 bits   | words x u32     |
-| bytes       | of word 1      | of word 1      |                 |
-+-------------+----------------+----------------+-----------------+
-  word 0        word 1                            word 2 on
+```mermaid
+packet-beta
+title one tag: a header of two words, then its data
+0-31: "name: 4 ASCII bytes (word 0)"
+32-47: "crc16: low 16 bits of word 1"
+48-63: "words: high 16 bits of word 1"
+64-95: "data: words × u32, from word 2 on"
+```
 
- the block, in the order the loader writes it
-+------+------+------+------+------+------+------+------+     +------+
-| XArg | MREx | Ctrl | Devs | Plic | Seed | Time | IniE | ... | IniE |
-+------+------+------+------+------+------+------+------+     +------+
+```mermaid
+flowchart LR
+    XArg --> MREx --> Ctrl --> Devs --> Plic --> Seed --> Time --> first[IniE] --> more["..."] --> last[IniE]
+```
 
- one Devs entry, six words
-+------+---------+---------+---------+---------+-------+
-| kind | a (lo)  | a (hi)  | b (lo)  | b (hi)  | flags |
-+------+---------+---------+---------+---------+-------+
+```mermaid
+packet-beta
+title one Devs entry, six words
+0-31: "kind"
+32-63: "a (lo)"
+64-95: "a (hi)"
+96-127: "b (lo)"
+128-159: "b (hi)"
+160-191: "flags"
 ```
 *Figure: the tag framing, the tags in block order, and one `Devs` entry.*
 
@@ -352,20 +357,20 @@ for `./mkimage`.
 - **No fallback.** A signature over the bare archive is refused like any other bad one, and a
   bad one powers the machine off ([R17](#r17-fail-closed)).
 
-```svgbob
- the initrd, as the firmware hands it over
-+----------------+---------------------------------------+
-| signature      | tar                                   |
-| 64 bytes       | len bytes: the rest of the initrd     |
-+----------------+---------------------------------------+
+```mermaid
+flowchart LR
+    subgraph initrd["the initrd, as the firmware hands it over"]
+        direction LR
+        sig["signature<br/>64 bytes"] --> tar["tar<br/>len bytes: the rest of the initrd"]
+    end
+```
 
- what the signature covers
-+----------------------+--------------+------------------+
-| "redoubt.bundle.v1"  | len          | tar              |
-| and a NUL: 18 bytes  | u64 LE:      | len bytes        |
-|                      | 8 bytes      |                  |
-+----------------------+--------------+------------------+
- the preamble: 26 bytes, built in libs/signing
+```mermaid
+flowchart LR
+    subgraph covered["what the signature covers: the preamble, 26 bytes, built in libs/signing, then the tar"]
+        direction LR
+        d["#quot;redoubt.bundle.v1#quot; and a NUL<br/>18 bytes"] --> l["len<br/>u64 LE, 8 bytes"] --> t["tar<br/>len bytes"]
+    end
 ```
 *Figure: the container, and the preimage the signature covers.*
 

@@ -326,15 +326,20 @@ address, faults, and the trap lands in the kernel with the arguments still in re
 
 Status: built · tested: bench:wx, bench:map-fixed-attack, bench:kernel-wx
 
-```svgbob
- Sv39: bits 63-54 zero; PPN in bits 53-10
- Sv32: PPN in bits 31-10
-
- XLEN-1          10   9   8   7   6   5   4   3   2   1   0
-+------------------+---+---+---+---+---+---+---+---+---+---+
-| PPN              | P | S | D | A | G | U | X | W | R | V |
-+------------------+---+---+---+---+---+---+---+---+---+---+
-                   RSW: software
+```mermaid
+packet-beta
+title a page-table entry, Sv32's 32 bits. Sv39 carries the PPN on to bit 53 and keeps bits 54 to 63 zero
+0: "V"
+1: "R"
+2: "W"
+3: "X"
+4: "U"
+5: "G"
+6: "A"
+7: "D"
+8: "S"
+9: "P"
+10-31: "PPN"
 ```
 *Figure: a page-table entry, the same low ten bits on both widths.*
 

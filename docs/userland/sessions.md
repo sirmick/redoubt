@@ -136,24 +136,30 @@ child starts ([processes](../kernel/processes.md#creating-and-starting)); for a 
 launcher is the steward. There is no mount call and no kernel mount table: the kernel knows
 handles, never paths.
 
-```svgbob
-  Alice's session: one beamlet VM                       servers
- +- - - - - - - - - - - - - - - - - - - - - - - -+
- : namespace: prefix -> connection                :
- :                                                :
- :  "/home/alice" o- - - - - - - - - - - - - - - - - - - - > fsd, Alice's home volume
- :  "/dev/cons" o- - - - - - - - - - - - - - - - - - - - - > sshd, this SSH channel
- :  "/boot"     o- - - - - - - - - - - - - - - - - - - - - > bootfsd, read-only
- :  "/net"      o- - - - - - - - - - - - - - - - - - - - - > ipd, a scope of hosts and ports
- :                                                :
- : named handles                                  :
- :  "steward"   o- - - - - - - - - - - - - - - - - - - - - > the steward, this session's grant
- :  "budget"    o  the session's own budget       :
- +- - - - - - - - - - - - - - - - - - - - - - - -+
-      "/home/bob/notes.txt": no entry is a prefix of it, so it is enoent
+```mermaid
+flowchart LR
+    subgraph S["Alice's session: one beamlet VM"]
+        direction TB
+        subgraph NS["namespace: prefix to connection"]
+            h["/home/alice"]
+            c["/dev/cons"]
+            b["/boot"]
+            n["/net"]
+        end
+        subgraph NH["named handles"]
+            st["steward"]
+            bu["budget: the session's own budget"]
+        end
+    end
+    h -.-> FS["fsd, Alice's home volume"]
+    c -.-> SH["sshd, this SSH channel"]
+    b -.-> BF["bootfsd, read-only"]
+    n -.-> IP["ipd, a scope of hosts and ports"]
+    st -.-> ST["the steward, this session's grant"]
 ```
 *Figure: a session's namespace. Every part is planned (dashed). Each entry is a connection the
-session holds; a path reaches only what an entry names.*
+session holds; a path reaches only what an entry names, so `/home/bob/notes.txt`, which no entry
+is a prefix of, is enoent.*
 
 What follows from a table of capabilities:
 - **A path resolves by its longest matching prefix**, and the rest of the path is walked on that

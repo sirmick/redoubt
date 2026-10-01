@@ -88,24 +88,23 @@ The table: [libs/wire/tables/netif.md](../../libs/wire/tables/netif.md).
 - **A DMA page never leaves `netd`.** No path lends, transfers or maps one; the kernel refuses to
   anyway ([devices](../kernel/devices.md#dma_alloc)).
 
-```svgbob
- receive region (REGION_PAGES pages)            transmit region (REGION_PAGES pages)
- +------------------------------------+         +------------------------------------+
- | page 0: descriptors | avail | used |         | page 0: descriptors | avail | used |
- |  desc i --> slot i  | (write| (idx,|         |  desc i --> slot i: | (write| (idx,|
- |  (write-only)       |  only)| id,  |         |  header + frame only|  only)| id,  |
- |                     |       | len) |         |  (write-only)       |       | len) |
- +------------------------------------+         +------------------------------------+
- | slot 0  (2048 bytes)               |         | slot 0  (2048 bytes)               |
- | slot 1                             |         | slot 1                             |
- |  ...                               |         |  ...                               |
- | slot 15                            |         | slot 15                            |
- +------------------------------------+         +------------------------------------+
-     |  copied out once, slot zeroed                 ^  copied in from ipd's lend
-     v                                               |
- +-------------+   send, one page    +-----+   transmit call   |
- | netd memory | ------------------> | ipd | -------------------'
- +-------------+                     +-----+
+```mermaid
+flowchart TB
+    subgraph RX["receive region, REGION_PAGES pages"]
+        direction TB
+        rx0["page 0: descriptors (write-only), available ring (write-only),<br/>used ring (only index, id and length read); descriptor i names slot i"]
+        rxs["slots 0 to 15, 2048 bytes each"]
+        rx0 --- rxs
+    end
+    subgraph TX["transmit region, REGION_PAGES pages"]
+        direction TB
+        tx0["page 0: descriptors (write-only), available ring (write-only),<br/>used ring (only index, id and length read); descriptor i names slot i: header and frame only"]
+        txs["slots 0 to 15, 2048 bytes each"]
+        tx0 --- txs
+    end
+    rxs -- "copied out once, the slot zeroed" --> M["netd memory"]
+    M -- "send, one page" --> I["ipd"]
+    I -- "transmit call: copied in from ipd's lend" --> txs
 ```
 *Figure: `netd`'s two DMA regions; descriptor i always names slot i, and only the used ring's index, id and length are read.*
 

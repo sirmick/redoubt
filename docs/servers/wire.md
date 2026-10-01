@@ -66,33 +66,23 @@ A message is four machine words, up to four handles (`MAX_MSG_HANDLES`) and at m
   it is its opcode as a `u32` followed by the buffer-shape encoding of its fields, one operation
   per `Twrite`. A message that carries handles cannot be written into a file.
 
-```svgbob
- request                      reply
- +---------+---------+        +---------+---------+
- | word 0  | opcode  |        | word 0  | status  |  0 = ok, 1 = malformed,
- +---------+---------+        +---------+---------+  2.. the protocol's own
- | word 1  |         |        | word 1  |         |
- +---------+ fields, |        +---------+ fields, |
- | word 2  | 12 bytes|        | word 2  | 12 bytes|   inline shape
- +---------+         |        +---------+         |
- | word 3  |         |        | word 3  |         |
- +---------+---------+        +---------+---------+
-
- +---------+---------+        +---------+---------+
- | word 0  | opcode  |        | word 0  | status  |
- +---------+---------+        +---------+---------+
- | word 1  | length -+--.     | word 1  | length -+--.   buffer shape
- +---------+---------+  |     +---------+---------+  |
- | word 2  |    0    |  |     | word 2  |    0    |  |
- | word 3  |    0    |  |     | word 3  |    0    |  |
- +---------+---------+  |     +---------+---------+  |
- +-------------------+  |     +-------------------+  |
- | lend: fields      |<-'     | same lend: reply  |<-'
- +-------------------+        | fields            |
-                              +-------------------+
- handle slots 0..3: separate from the bytes, counted against the layout
+```mermaid
+packet-beta
+title the inline shape: a request, and a reply with status in place of the opcode
+0-31: "word 0: opcode (reply: status)"
+32-127: "words 1 to 3: the fields, 12 bytes"
 ```
-*Figure: a typed request and its reply, in the inline and buffer shapes; every word holds at most 32 bits.*
+
+```mermaid
+packet-beta
+title the buffer shape: the fields travel in the lend, and the reply's fields come back in the same lend
+0-31: "word 0: opcode (reply: status)"
+32-63: "word 1: length of the fields in the lend"
+64-127: "words 2 and 3: 0"
+```
+*Figure: a typed request and its reply, in the inline and buffer shapes; every word holds at most
+32 bits. A status is 0 for ok, 1 for malformed, and 2 on for the protocol's own. Handle slots 0 to
+3 are separate from the bytes and counted against the layout.*
 
 ### The encoding
 

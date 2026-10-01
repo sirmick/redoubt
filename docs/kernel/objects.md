@@ -86,28 +86,28 @@ handles; a compile-time check in `kernel/src/handle.rs` confirms that 64 slots f
 exactly. Index i is slot (i - 1) mod 64 of table page (i - 1) / 64. A table has at most
 `MAX_HANDLES` (4096: 64 pages) handles. A message's copy of a handle is the four words alone.
 
-```svgbob
- one slot: eight 64-bit words, 64 bytes; 64 slots fill a 4 KiB table page
-
-          63     56 55                  28 27                   0
-         +---------+----------------------+----------------------+
- word 0  |  kind   |   stamp's frame      |   object's frame     |
-         +---------+----------------------+----------------------+
- word 1  |                     object's id                       |
-         +-------------------------------------------------------+
- word 2  |                        badge                          |
-         +-------------------------------------------------------+
- word 3  |                  stamp's budget id                    |
-         +-------------------------------------------------------+
- word 4  |              object chain: previous link              |
- word 5  |              object chain: next link                  |
- word 6  |              stamp chain: previous link               |
- word 7  |              stamp chain: next link                   |
-         +-------------------------------------------------------+
-
- kind: 0 empty slot, 1 budget, 2 endpoint, 3 device, 4 process
- link: 0 none; the head's frame, top bit set; or the holder's PID and the index
+```mermaid
+---
+config:
+  packet:
+    bitsPerRow: 64
+---
+packet-beta
+title one slot: eight 64-bit words, 64 bytes, so 64 slots fill a 4 KiB table page
+0-27: "object's frame"
+28-55: "stamp's frame"
+56-63: "kind"
+64-127: "object's id"
+128-191: "badge"
+192-255: "stamp's budget id"
+256-319: "object chain: previous link"
+320-383: "object chain: next link"
+384-447: "stamp chain: previous link"
+448-511: "stamp chain: next link"
 ```
+
+The kind is 0 for an empty slot, 1 a budget, 2 an endpoint, 3 a device, 4 a process. A link is 0
+for none, the head's frame with the top bit set, or the holder's PID and the index.
 *Figure: a handle as the kernel stores it. A compile-time check confirms every frame index fits
 its 28 bits.*
 
@@ -134,23 +134,30 @@ budget being unable to pay for the next table page (`OutOfMemory`). At delivery,
 would take the receiver past `MAX_HANDLES` is a cost it cannot pay, and the sender gets `Refused`
 ([R4 (delivery)](ipc.md#r4-delivery)).
 
-```svgbob
- process P's handle table                          kernel objects
-+-------+------------+-------+--------+          +-------------------------+
-| index | object     | badge | stamp  |          |                         |
-+-------+------------+-------+--------+          |                         |
-|   1   | budget B   |   0   | system |--------->| budget B                |
-|   2   | endpoint E |   0   | system |---+      |                         |
-|   3   | endpoint E |   5   | S      |---+----->| endpoint E              |
-|   4   | process Q  |   0   | system |--------->| process Q               |
-|   5   | (empty)    |       |        |          |                         |
-|  ...  |            |       |        |          |                         |
-|   64  | (empty)    |       |        |          |                         |
-+-------+------------+-------+--------+          +-------------------------+
- table page 0: indices 1-64, one frame, charged to P's budget
- table page 1: indices 65-128, no frame until a handle needs index 65
- ... table page 63 ends at index 4096 (MAX_HANDLES)
+```mermaid
+flowchart LR
+    subgraph T["process P's handle table: index, object, badge, stamp"]
+        direction TB
+        h1["1: budget B, badge 0, stamp system"]
+        h2["2: endpoint E, badge 0, stamp system"]
+        h3["3: endpoint E, badge 5, stamp S"]
+        h4["4: process Q, badge 0, stamp system"]
+        h5["5 to 64: empty"]
+    end
+    subgraph O["kernel objects"]
+        direction TB
+        B["budget B"]
+        E["endpoint E"]
+        Q["process Q"]
+    end
+    h1 --> B
+    h2 --> E
+    h3 --> E
+    h4 --> Q
 ```
+
+Table page 0 holds indices 1 to 64 in one frame, charged to P's budget; table page 1 (65 to 128)
+has no frame until a handle needs index 65; table page 63 ends at index 4096 (`MAX_HANDLES`).
 *Figure: a handle table and the objects it names. Handles 2 and 3 name the same endpoint: 2 is
 its receive right, 3 a handle minted with badge 5 and stamped with S, a budget below `system`.*
 

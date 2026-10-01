@@ -11,9 +11,6 @@ create-missing = false
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
 
-[preprocessor.svgbob]
-command = "mdbook-svgbob"
-
 # Address maps (```memmap), drawn to scale on a log axis; tools/mdbook-memmap in this tree.
 [preprocessor.memmap]
 command = "cargo run -q -p mdbook-memmap --"
