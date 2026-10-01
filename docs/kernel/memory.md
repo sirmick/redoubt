@@ -39,9 +39,8 @@ is a `dma_alloc` page of its own, or device registers it mapped). Only the RAM a
 be made executable ([R11](#r11-memory)). A reservation not yet touched is not a mapping.
 
 Each call checks the whole range before it changes any page, so an error leaves every mapping
-as it was. One can leave a charge behind: `process_map` backs untouched pages of its source
-before its checks of the child, so a refused one can leave them backed and charged to the
-caller (Residual risks; [ABI](abi.md#residual-risks)). It checks the flags first, so bad flags leave nothing charged.
+as it was and charges nothing. `process_map` counts the untouched pages of its source among what
+the call must pay for, and backs them only once nothing can refuse it.
 The errors are `InvalidArgument` and `OutOfMemory`, and for `process_map` also `BadHandle`,
 `WrongObject` and `NotPermitted` (the child has started). The order of the checks, the same in
 the kernel and the [model](model.md), is in the
@@ -297,12 +296,12 @@ kernel, running the call to its end with interrupts off, would stall every other
 
 ## Failure and restart
 
-Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, bench:wx, bench:uaf-lent-page, bench:map-fixed-attack, bench:return-lent-unmapped
+Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, bench:wx, bench:uaf-lent-page, bench:map-fixed-attack, bench:process-map-untouched-attack, bench:return-lent-unmapped
 
 - **Out of memory is the caller's error.** A mapping call that cannot be paid for returns
   `OutOfMemory`; a process that exhausts RAM gets `OutOfMemory` and every other process keeps
-  running. A refused `map_fixed` charges nothing, a refused `process_map` charges the child
-  nothing, and a refused `map_anon` gives back every page and page table it took.
+  running. A refused `map_fixed` charges nothing, a refused `process_map` charges neither the
+  child nor the caller, and a refused `map_anon` gives back every page and page table it took.
 - **A permission fault ends the process.** A store to a page that is not writable, or a fetch
   from one that is not executable, is never mistaken for a page to back. The process faults,
   and its exit notice carries the RISC-V cause (12 for an instruction page fault, 15 for a store
@@ -325,9 +324,6 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 - **A lend within one process** (a thread calling an endpoint its own process receives on) is
   argued from the code, not attacked, when its threads run on several harts. `process-lifecycle`
   attacks it on one hart, the process ending with the call open included.
-- **A refused `process_map` can leave its source backed.** It backs an untouched source
-  reservation before its later checks, so a call refused after that keeps those pages, charged
-  to the caller: [todo](../todo/process-map-backs-before-refusing.md).
 - **The physmap maps every user frame writable for the kernel,** code included. Only the
   kernel can use that alias ([memory layout](memory-layout.md#residual-risks)).
 

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 62
+revision = 65
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -259,8 +259,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K8", "K9", "K10"]
   body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-09-30: wp-gate1 tip b9aeb3477 (test fixes, arming on the event, readable child panics, the full-table lease: 4,091 endpoints). K12 merged (redoubt 5986f0dd7), so the targets should now be met. Left: rebase onto redoubt, the full case on both widths with targets met, the 16-seed sweep and pinned seed, the page status lines, the whole bench, review. Handoff: .wash/local/handoffs/gate1-implementer.md. Bisect: .wash/local/GATE1-r10-bisect.md. Tier A, size M."
-  state = "reported"
-  revision = 16
+  state = "active"
+  revision = 63
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
@@ -387,8 +387,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12", "MOD1"]
   body = "Closes docs/todo/r2-least-recently-served.md; rule on docs/kernel/ipc.md#r2-fair-waiting (9f0b47f38), for docs/servers/steward.md#r37-vault-non-interference. Design: QA MOD1-r2-cursor-blame. Brief: .wash/local/IPC2-implementer.md. Tier A (kernel IPC, the model), size M."
-  state = "active"
-  revision = 61
+  state = "reported"
+  revision = 64
 
 [[node]]
   id = "K13"
@@ -407,8 +407,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12"]
   body = "Closes docs/todo/process-map-backs-before-refusing.md (docs/kernel/memory.md#failure-and-restart) and docs/todo/boot-stack-reservation.md (docs/kernel/memory-layout.md#regions). kernel/src/process.rs, mem.rs, arch/riscv/process.rs and the loader: no overlap with IPC2 or K13 in message.rs. Tier A (kernel, loader), size S."
-  state = "reported"
-  revision = 57
+  state = "done"
+  revision = 65
 
 [[node]]
   id = "B3"

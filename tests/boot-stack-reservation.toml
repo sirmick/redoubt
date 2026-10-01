@@ -1,0 +1,19 @@
+description = "A boot process's stack is the loader's 32 reserved pages below 0x8000_0000 and nothing more (memory-layout.md, Regions): map_fixed of the lowest is refused as an overlap and charges nothing, map_fixed of the page below succeeds"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["boot-stack-reservation"]
+timeout_secs = 30
+# The sole first program, holding UART and Reset, judges the kernel by `map_fixed`'s result and
+# `budget_usage` (docs/testbench.md, "A sole first program judging the kernel"). The kernel once
+# reserved the stack again, 128 KiB down from `sp`, which took the page below the 32.
+expect = [
+    '^\[boot-stack\] ok: the lowest stack page is reserved$',
+    '^\[boot-stack\] ok: nothing charged$',
+    '^\[boot-stack\] ok: the page below the stack is free$',
+    '^\[boot-stack\] ok: it is charged as a mapping$',
+    '^\[boot-stack\] ok: unmap returns usage to baseline$',
+    '^\[boot-stack\] BOOT STACK TEST PASSED$',
+]
+forbid = ['\[boot-stack\] FAIL']
+poweroff = true

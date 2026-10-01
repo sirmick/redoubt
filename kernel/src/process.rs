@@ -447,15 +447,29 @@ pub fn process_map(
     // is backed, so a refused call leaves nothing charged (kernel/memory.md).
     let pages = whole_pages(src, dst, len)?;
     crate::mem::check_map_flags(flags)?;
-    // The source must be the caller's own backed RAM, mapped and not lent out. Checked whole
-    // before any page moves, because a later failure would not put the source back.
-    mm.ensure_range_exists(src, len).map_err(|_| Error::InvalidArgument)?;
+    // The source must be the caller's own RAM, mapped and not lent out, or a reservation of its
+    // own not yet touched. Checked whole before any page moves, because a later failure would
+    // not put the source back. An untouched page is only counted here: it is backed, and
+    // charged to the caller, once nothing can refuse the call (kernel/memory.md).
+    let mut untouched = 0u64;
     for i in 0..pages {
-        let phys = mm.owned_mapping(pid, src + i * page_size)?;
+        let page = src + i * page_size;
+        if matches!(crate::arch::mem::virt_to_phys(page), Err(crate::mem::PageError::Reserved)) {
+            untouched += 1;
+            continue;
+        }
+        let phys = mm.owned_mapping(pid, page)?;
         // DMA pages stay put (kernel/devices.md, `dma_alloc`): held by their process until it ends.
         if !mm.is_main_memory(phys as *mut u8) || mm.is_dma_frame(phys) {
             return Err(Error::InvalidArgument);
         }
+    }
+    // A caller that could not back its untouched pages is refused here, as backing them would
+    // have refused it. Stage 4 checks them again only when caller and child share a budget;
+    // when they do not, the caller pays for the backing and the child for the move, so this is
+    // the one check that bounds the caller's budget.
+    if mm.budget_of(pid).is_some_and(|own| untouched > mm.free_pages(own)) {
+        return Err(Error::InvalidArgument);
     }
     let child = p.pid;
     let space = ss.mapping_of(child).ok_or(Error::NotPermitted)?;
@@ -470,14 +484,17 @@ pub fn process_map(
         return Err(Error::NotPermitted);
     }
     // Stage 4: the child's budget pays for the page tables that map the range, and for the
-    // frames themselves unless parent and child already share a budget.
+    // frames themselves unless parent and child already share a budget, in which case it also
+    // pays for backing the untouched source pages.
     let budget = mm.budget_of(child).ok_or(Error::NotPermitted)?;
     let tables = crate::arch::mem::tables_needed(&space, dst, pages) as u64;
-    let moved = if mm.budget_of(pid) == Some(budget) { 0 } else { pages as u64 };
-    if tables + moved > mm.free_pages(budget) {
+    let shared = mm.budget_of(pid) == Some(budget);
+    let charged = if shared { untouched } else { pages as u64 };
+    if tables + charged > mm.free_pages(budget) {
         return Err(Error::OutOfMemory);
     }
     // From here nothing fails: every page was counted just above and every address was free.
+    mm.ensure_range_exists(src, len).expect("process_map: the untouched source pages were counted above");
     let free_before = mm.free_pages(budget);
     for i in 0..pages {
         crate::arch::mem::prepare_map(mm, &space, child, dst + i * page_size)

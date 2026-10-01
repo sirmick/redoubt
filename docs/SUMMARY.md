@@ -70,8 +70,6 @@
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
   - [beamlet's modular exponentiation takes operands of any size](todo/beamlet-bignum-bounds.md)
-  - [The boot stack reservation](todo/boot-stack-reservation.md)
-  - [process_map backs before refusing](todo/process-map-backs-before-refusing.md)
   - [Three cases that wait on the host's clock](todo/wall-clock-flakes.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)

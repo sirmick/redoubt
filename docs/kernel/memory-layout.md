@@ -196,7 +196,7 @@ any other address there is an ordinary fault.
 
 ### Regions
 
-Status: built · partly tested: the message area and the stack are conventions of the kernel and loader that no case attacks as addresses · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:map-anon-search-bound
+Status: built · partly tested: the message area is a convention of the kernel that no case attacks as an address · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:map-anon-search-bound, bench:boot-stack-reservation
 
 User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the rest, up to
 256 GiB, is free for `map_fixed` and `process_map` and nothing is placed there by default.
@@ -423,9 +423,6 @@ user address, and the load faults as a kernel failure.
   overlap. A launcher that puts the stack inside the link range can get a child whose data ends
   right at its stack's bottom, so a stack overflow writes the data instead of faulting. The
   launcher convention above prevents it; nothing enforces it.
-- **A boot process's stack reservation is one page longer.** The loader reserves the 32 pages
-  above, and the kernel reserves the stack again from the first thread's `sp`, which adds the
-  page at `0x7FFD_F000`. Only that process is affected: [todo](../todo/boot-stack-reservation.md).
 - **No ASLR.** Every address on this page is fixed, and `map_anon` places pages deterministically.
   A memory-safety bug in a program is easier to exploit, within that program's own process.
   Address randomisation is [beyond M5](../beyond/aslr.md).

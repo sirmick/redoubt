@@ -3,6 +3,7 @@
 # out is not built, so the case that names it fails rather than the host test build.
 lib = { test = false, doctest = false }
 bin = [
+    { name = "boot-stack-reservation", test = false },
     { name = "budget-carve-attack", test = false },
     { name = "budget-deadline", test = false },
     { name = "budget-destroy-attack", test = false },
@@ -54,6 +55,7 @@ bin = [
     { name = "proc-lifecycle", test = false },
     { name = "proc-review", test = false },
     { name = "proc-test", test = false },
+    { name = "process-map-untouched", test = false },
     { name = "receive-bad-record", test = false },
     { name = "redoubt-attack", test = false },
     { name = "redoubt-client", test = false },
