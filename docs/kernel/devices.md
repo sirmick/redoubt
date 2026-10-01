@@ -62,8 +62,9 @@ the device calls are in the [ABI reference](abi.md#errors-and-the-order-of-check
 `map_device(h(MMIO)) -> addr, len` maps the whole range readable and writable, not executable,
 at an address the kernel chooses ([R11 (memory)](memory.md#r11-memory)), and returns the address
 and the length in bytes. The length is what the driver may touch; which device the handle names
-is the launcher's to say, and the kernel says nothing about it. Errors, in order: `BadHandle`,
-`WrongObject` (an IRQ, the Reset right or any other object), `OutOfMemory` (page tables).
+is [`device_info`](#device_info)'s answer, and which handles a driver gets is its launcher's
+choice. Errors, in order: `BadHandle`, `WrongObject` (an IRQ, the Reset right or any other
+object), `OutOfMemory` (page tables).
 
 The device's pages are not RAM and cost nothing; the page tables that map them are charged to
 the caller's budget. Each call makes a new mapping, so two calls give two addresses. The kernel
@@ -77,7 +78,17 @@ process with the registers mapped could have programmed the device with any addr
 
 ### `device_info`
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: that its kernel time is constant is argued from the code (one handle lookup, one read of the object's frame), not measured · tested (7)</summary>
+
+- bench:device-info-attack
+- host:redoubt-sys::every_result_and_error_round_trips
+- host:redoubt-sys::malformed_results_are_refused
+- host:redoubt-model::every_device_handle_answers_its_devs_entry
+- host:redoubt-model::what_is_not_a_device_is_refused_in_order
+- host:redoubt-model::device_info_changes_nothing
+- mutation:DeviceInfoWrongKind
+
+</details>
 
 `device_info(h(device)) -> kind, a, b, flags` says which device a handle names, in the form of
 the `Devs` entry the object was made from ([boot](boot.md#the-argument-block)). For MMIO it gives
@@ -90,11 +101,16 @@ It is how `init` matches the manifest's devices to the handles the kernel gave i
 ([which process gets which device](#which-process-gets-which-device)). It shows a holder where
 the device's registers are, which a holder that maps them could find out anyway. The address is
 not RAM and grants nothing, and no call takes a physical address
-([R11 (memory)](memory.md#r11-memory)). Once it is built, `map_device`'s "the kernel says nothing
-about it" no longer holds: the kernel says which device a handle names, and the launcher still
-decides which handles a driver gets.
+([R11 (memory)](memory.md#r11-memory)). The kernel says which device a handle names; the
+launcher still decides which handles a driver gets.
 
-**Open:** none.
+The result travels as the `Devs` entry does: the kind in `a1` (1 MMIO, 2 IRQ, 3 Reset), `a` and
+`b` in two registers each, the flags in `a6`, and a field the kind does not use 0
+([ABI](abi.md#call-numbers-and-arguments)). `redoubt-sys` decodes it as `DeviceInfo` and refuses
+any other shape. The kernel's time is one handle lookup and one read of the object's frame,
+whatever the device. The [executable model](model.md) checks every answer it gives against the
+`Devs` entry of the device the caller's handle names, after every step (`device_info_answer` in
+`model/src/invariants.rs`).
 
 ### `dma_alloc`
 

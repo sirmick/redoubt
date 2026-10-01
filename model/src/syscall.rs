@@ -144,11 +144,15 @@ pub enum Syscall {
         len: u64,
         flags: u64,
     },
+    /// Which device a handle names, as its `Devs` entry (kernel/devices.md, `device_info`).
+    DeviceInfo {
+        h: u64,
+    },
 }
 
 /// The calls' names, in kernel/abi.md's table order (the order of `redoubt-sys`'s numbers, from 1).
 /// The one list of them: [`Syscall::name`], the trace and the tests use it.
-pub const CALL_NAMES: [&str; 26] = [
+pub const CALL_NAMES: [&str; 27] = [
     "map_anon",
     "unmap",
     "set_flags",
@@ -175,6 +179,7 @@ pub const CALL_NAMES: [&str; 26] = [
     "random",
     "system_reset",
     "map_fixed",
+    "device_info",
 ];
 
 impl Syscall {
@@ -207,6 +212,7 @@ impl Syscall {
             Syscall::Random => 24,
             Syscall::SystemReset { .. } => 25,
             Syscall::MapFixed { .. } => 26,
+            Syscall::DeviceInfo { .. } => 27,
         }
     }
 
@@ -334,6 +340,14 @@ pub enum Ret {
     /// `random`'s u64: the model does not produce it (it is the kernel's CSPRNG output and cannot
     /// be compared).
     Random,
+    /// `device_info`: the device's `Devs` entry (kernel/boot.md): kind (1 MMIO, 2 IRQ, 3 Reset),
+    /// `a` (the base, or the interrupt number), `b` (the size in bytes), `flags` (bit 0: DMA).
+    Device {
+        kind: u64,
+        a: u64,
+        b: u64,
+        flags: u64,
+    },
 }
 
 /// What a step did for the thread that made it.
