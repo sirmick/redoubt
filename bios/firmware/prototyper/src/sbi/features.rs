@@ -297,11 +297,21 @@ pub fn configure_hart_environment() {
     }
     if hart_priv_version >= PrivilegedVersion::Version1_12 {
         if hart_has_extension(hart_id, Extension::Sstc) {
-            menvcfg::set_bits(
-                menvcfg::STCE | menvcfg::CBIE_INVALIDATE | menvcfg::CBCFE | menvcfg::CBZE,
-            );
+            menvcfg::set_bits(menvcfg::STCE | menvcfg::CBCFE | menvcfg::CBZE);
         } else {
-            menvcfg::set_bits(menvcfg::CBIE_INVALIDATE | menvcfg::CBCFE | menvcfg::CBZE);
+            menvcfg::set_bits(menvcfg::CBCFE | menvcfg::CBZE);
+        }
+        // A field, not bits: a reset that left CBIE at 11 would let a supervisor cbo.inval
+        // discard a line. It is read back and the boot stops on anything but flush, or 00 on a
+        // hart without Zicbom, where cbo.inval does not run at all.
+        let cbie = menvcfg::write_field(menvcfg::CBIE, menvcfg::CBIE_FLUSH);
+        if cbie != menvcfg::CBIE_FLUSH && cbie != 0 {
+            warn!(
+                "Hart {} keeps menvcfg.CBIE at {:#b}, not flush",
+                hart_id,
+                cbie >> 4
+            );
+            fail::stop();
         }
         // Follow the device tree: C907 firmware also describes its RV32
         // page-memory-type extension as Svpbmt and requires PBMTE.

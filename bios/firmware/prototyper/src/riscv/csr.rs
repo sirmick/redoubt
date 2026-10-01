@@ -57,8 +57,12 @@ pub fn disable_thead_maee() {
 pub mod menvcfg {
     use core::arch::asm;
 
-    /// Cache-block-invalidate effect: invalidate (CBIE=11).
-    pub const CBIE_INVALIDATE: u64 = 0b11 << 4;
+    use super::CSR_MENVCFG;
+
+    /// The cache-block-invalidate field (CBIE); 11 would invalidate.
+    pub const CBIE: u64 = 0b11 << 4;
+    /// Cache-block-invalidate effect: flush (CBIE=01), so no mode below M can discard a line.
+    pub const CBIE_FLUSH: u64 = 0b01 << 4;
     /// Cache-block-clean flush enable.
     pub const CBCFE: u64 = 0x1 << 6;
     /// Cache-block-zero enable.
@@ -67,6 +71,19 @@ pub mod menvcfg {
     pub const PBMTE: u64 = 0x1 << 62;
     /// Supervisor timer counter enable.
     pub const STCE: u64 = 0x1 << 63;
+
+    /// Sets the field `mask` to `value`, whatever the reset left in it, through the Runtime's
+    /// guarded CSR access, and returns the field as read back (the field is WARL). Low-word
+    /// fields only: on RV32 the upper half is menvcfgh.
+    pub fn write_field(mask: u64, value: u64) -> u64 {
+        let read = || {
+            runtime::trap::read_csr_guarded::<CSR_MENVCFG>()
+                .expect("BUG: menvcfg is probed before it is configured")
+        };
+        runtime::trap::write_csr_guarded::<CSR_MENVCFG>(read() & !(mask as usize) | value as usize)
+            .expect("BUG: menvcfg is probed before it is configured");
+        read() as u64 & mask
+    }
 
     /// Sets specified bits in menvcfg register.
     pub fn set_bits(option: u64) {
