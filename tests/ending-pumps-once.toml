@@ -1,0 +1,18 @@
+description = "R4b, R3 and I15: a killed process whose later thread is receiving on an endpoint, and which drops under MAX_OPEN_CALLS as its threads end, never takes the call queued there on its way out; the caller keeps waiting, a new server takes the call, and the abandoned call gets one notice (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The program runs first and judges from the kernel's answers: Q's call, the new server's
+# receive and S's notices.
+programs = ["ending-pumps-once"]
+timeout_secs = 60
+expect = [
+    '^\[ending-pumps-once\] ok: S holds C.s call, and R is receiving on E$',
+    '^\[ending-pumps-once\] ok: Q.s call is queued before the kill$',
+    '^\[ending-pumps-once\] ok: Q is still waiting after the kill \(got 0\)$',
+    '^\[ending-pumps-once\] ok: a new server takes Q.s call, and Q gets its reply \(got 1\)$',
+    '^\[ending-pumps-once\] ok: C.s abandoned call gets exactly one notice \(got 1, and 0 else\)$',
+    '^ENDING-PUMPS-ONCE TEST PASSED$',
+]
+forbid = ['\[ending-pumps-once\] FAIL', 'PANIC']
+poweroff = true
