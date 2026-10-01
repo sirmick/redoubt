@@ -1,7 +1,7 @@
 //! Budgets and handle tables as kernel/budgets.md and kernel/objects.md state them, as far as a
 //! system-class caller holding the boot budgets can see them: carving and charging (R6, R7),
 //! labels added and sorted (part of I6), depth, destruction and its sweep of this process's own
-//! table (R10, I2, I10), the handle table's cost (128 handles a page), usage within limits after
+//! table (R10, I2, I10), the handle table's cost (64 handles a page), usage within limits after
 //! every step (I5), `time_now` and `random`, and a short sequence whose every result the
 //! executable model predicts (written out below as a trace, kernel/model.md, "Traces"). Must run
 //! as the loader's first program, which holds root, system and users in handles 1-3, then a
@@ -222,30 +222,30 @@ pub extern "C" fn _start() -> ! {
     t.nheld = 3;
     t.i5("destroy");
 
-    // --- The handle table: 128 handles a page, charged to the caller's budget ----------------
+    // --- The handle table: 64 handles a page, charged to the caller's budget -----------------
     let x = expect!(t, rd::create(rd::SYSTEM, &rd::spec(400, 0, 0)), Ok(base)).unwrap_or(base);
     let with_x = rd::usage(rd::SYSTEM).unwrap();
     // Handles 1..=base are held; scopes take the rest of the first table page.
-    for index in base + 1..=128 {
+    for index in base + 1..=64 {
         if rd::create(x, &rd::spec(0, 0, 0)) != Ok(index) {
             t.check(false, format_args!("scope {} did not get handle {}", index, index));
             break;
         }
     }
     let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(with_x));
-    // The 129th handle needs a second page: one more page from system, not from x.
-    let _ = expect!(t, rd::create(x, &rd::spec(0, 0, 0)), Ok(129));
+    // The 65th handle needs a second page: one more page from system, not from x.
+    let _ = expect!(t, rd::create(x, &rd::spec(0, 0, 0)), Ok(65));
     let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(Usage { pages_usage: with_x.pages_usage + 1, ..with_x }));
-    // One page per scope, all paid by x: the rest of the first page, plus the 129th.
-    let _ = expect!(t, rd::usage(x).map(|u| u.pages_usage), Ok(129 - base as u64));
+    // One page per scope, all paid by x: the rest of the first page, plus the 65th.
+    let _ = expect!(t, rd::usage(x).map(|u| u.pages_usage), Ok(65 - base as u64));
     // Closing the second page's only handle frees that page.
-    let _ = expect!(t, rd::close(129), Ok(()));
+    let _ = expect!(t, rd::close(65), Ok(()));
     let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(with_x));
-    let _ = expect!(t, rd::close(129), Err(Error::BadHandle));
-    // Destroying x sweeps every scope out of the table.
+    let _ = expect!(t, rd::close(65), Err(Error::BadHandle));
+    // Destroying x closes every scope in the table.
     let _ = expect!(t, rd::destroy(x), Ok(()));
     let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
-    let _ = expect!(t, rd::usage(128), Err(Error::BadHandle));
+    let _ = expect!(t, rd::usage(64), Err(Error::BadHandle));
 
     // --- A sequence the model predicts, result by result (replay compares these) ------------
     // In the trace format (kernel/model.md, "Traces"), from a fresh budget M = (10 pages,

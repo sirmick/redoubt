@@ -43,7 +43,7 @@ and a DMA device also when its reset fails (Residual risks).
 
 ### Handles
 
-Status: built · tested: bench:budget, bench:budget-table-attack, bench:budget-forge-attack, bench:budget-destroy-attack, bench:redoubt-ipc, bench:device, host:redoubt-sys::malformed_calls_are_refused
+Status: built · tested: bench:budget, bench:budget-table-attack, bench:budget-forge-attack, bench:budget-destroy-attack, bench:handle-chain-attack, bench:handle-chain-fault, bench:process-chain-fault, bench:redoubt-ipc, bench:device, host:redoubt-sys::malformed_calls_are_refused
 
 A handle is an index into the calling process's handle table. The slot at that index holds:
 - the **object**: its kind, its frame and its id;
@@ -58,13 +58,14 @@ that is 0 where a handle is required, wider than 32 bits, or not in the caller's
 `BadHandle`; a handle of the wrong kind for the call is `WrongObject`. A process cannot read its
 table: it learns nothing of a handle's object, badge or stamp except by using it.
 
-A slot is four 64-bit words, 32 bytes, so a 4 KiB table page holds `HANDLES_PER_PAGE` (128)
-handles; a compile-time check in `kernel/src/handle.rs` confirms that 128 slots fill one page
-exactly. Index i is slot (i - 1) mod 128 of table page (i - 1) / 128. A table has at most
-`MAX_HANDLES` (4096: 32 pages) handles.
+A handle is four 64-bit words. A slot adds two chain entries of two words each (below), so it
+is eight words, 64 bytes, on both widths, and a 4 KiB table page holds `HANDLES_PER_PAGE` (64)
+handles; a compile-time check in `kernel/src/handle.rs` confirms that 64 slots fill one page
+exactly. Index i is slot (i - 1) mod 64 of table page (i - 1) / 64. A table has at most
+`MAX_HANDLES` (4096: 64 pages) handles. A message's copy of a handle is the four words alone.
 
 ```svgbob
- one slot: four 64-bit words, 32 bytes; 128 slots fill a 4 KiB table page
+ one slot: eight 64-bit words, 64 bytes; 64 slots fill a 4 KiB table page
 
           63     56 55                  28 27                   0
          +---------+----------------------+----------------------+
@@ -76,11 +77,31 @@ exactly. Index i is slot (i - 1) mod 128 of table page (i - 1) / 128. A table ha
          +-------------------------------------------------------+
  word 3  |                  stamp's budget id                    |
          +-------------------------------------------------------+
+ word 4  |              object chain: previous link              |
+ word 5  |              object chain: next link                  |
+ word 6  |              stamp chain: previous link               |
+ word 7  |              stamp chain: next link                   |
+         +-------------------------------------------------------+
 
  kind: 0 empty slot, 1 budget, 2 endpoint, 3 device, 4 process
+ link: 0 none; the head's frame, top bit set; or the holder's PID and the index
 ```
 *Figure: a handle as the kernel stores it. A compile-time check confirms every frame index fits
 its 28 bits.*
+
+A handle dies when the object it names goes or when the budget that stamped it does. The two
+chain entries let a destruction find it without reading every table
+([residual risks](budgets.md#residual-risks)). When a handle arrives in a table, the kernel walks
+up from the holder's budget, at most `MAX_DEPTH` steps, and enters the slot:
+- in the **object chain** of the budget its object is charged to, if the holder is outside that
+  budget's subtree (a budget handle's object is the budget itself); a handle to a process object
+  is entered in that object's own chain wherever it is held, since the object can be freed while
+  its creator lives;
+- in the **stamp chain** of its stamp, if the holder is outside the stamp's subtree.
+
+A handle held inside dies with its holder's table, which goes whole when the holder ends. Each
+chain is doubly linked, from a head word in the budget's or process object's frame, so adding or
+closing a handle costs a constant and using one costs nothing more.
 
 A new handle takes the **lowest free index**. A table page is a frame of its own, allocated and
 charged one page to the process's budget when its first handle arrives, and freed when its last
@@ -102,17 +123,17 @@ would take the receiver past `MAX_HANDLES` is a cost it cannot pay, and the send
 |   4   | process Q  |   0   | system |--------->| process Q               |
 |   5   | (empty)    |       |        |          |                         |
 |  ...  |            |       |        |          |                         |
-|  128  | (empty)    |       |        |          |                         |
+|   64  | (empty)    |       |        |          |                         |
 +-------+------------+-------+--------+          +-------------------------+
- table page 0: indices 1-128, one frame, charged to P's budget
- table page 1: indices 129-256, no frame until a handle needs index 129
- ... table page 31 ends at index 4096 (MAX_HANDLES)
+ table page 0: indices 1-64, one frame, charged to P's budget
+ table page 1: indices 65-128, no frame until a handle needs index 65
+ ... table page 63 ends at index 4096 (MAX_HANDLES)
 ```
 *Figure: a handle table and the objects it names. Handles 2 and 3 name the same endpoint: 2 is
 its receive right, 3 a handle minted with badge 5 and stamped with S, a budget below `system`.*
 
 Every lookup checks the id in the handle against the id in the object's frame, and the stamp's id
-against its budget's. A mismatch would mean a handle outlived its object. The sweeps of
+against its budget's. A mismatch would mean a handle outlived its object. The chains of
 [R10 (destruction)](budgets.md#r10-destruction) rule that out (I2 (revocation is complete)), and
 the kernel stops rather than use a frame that may hold something else
 (I1 (handles name live objects)).

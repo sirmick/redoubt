@@ -463,9 +463,9 @@ processes hold. `map_anon`'s search is linear in the fixed-size area it searches
 and never in `len` (`bench:map-anon-search-bound`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the platform's
 interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in RAM
 frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
-every wake waits for it. R10 (destruction) walks only the dying subtree and its owner lists, and
-its one handle pass is bounded by `MAX_PROCESS_COUNT` × `MAX_HANDLE_PAGES` ([budgets](budgets.md#residual-risks)),
-so it is no exception. What a call looks up by PID or by interrupt number
+every wake waits for it. R10 (destruction) walks only the dying subtree, its owner lists, the
+dying processes' own tables and page tables, and the chains of the handles held outside it
+([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by interrupt number
 it finds in an index the kernel keeps as objects are made and freed: a process object in one of
 `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's sources; a boot
 naming a higher interrupt stops). So `process_create`'s PID draw looks at most at 63 slots, an
@@ -511,8 +511,11 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
 debug-only break of the tie rule that implies the trace, and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
-([devices](devices.md)), and so are `sum-probe`, a stray kernel load that must fault
-([R24 (SUM and MXR clear)](memory-layout.md#r24-sum-and-mxr-clear)), and `panic-in-print`, a
+([devices](devices.md)), and so are `handle-chain-fault` and `process-chain-fault`, a handle
+installed without its stamp entry or its process object entry for the chain audit to catch
+([budgets](budgets.md#residual-risks)), `sum-probe`, a stray
+kernel load that must fault ([R24 (SUM and MXR clear)](memory-layout.md#r24-sum-and-mxr-clear)),
+and `panic-in-print`, a
 panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these implies the feature
 `test-only`, which the kernel refuses to compile without debug assertions, so the release build
 `./build` makes cannot carry one; a checked build, as `./build --debug` makes, still can.
@@ -562,7 +565,7 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   and a new sweep re-measures.
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
-  dominates lease termination and follows the dying subtree and the one handle pass, so its target
+  dominates lease termination and follows the dying subtree and the handles that depend on it, so its target
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).

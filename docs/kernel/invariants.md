@@ -103,10 +103,11 @@ caller's table; an index of 0 or past the last table page is `BadHandle`, as is 
 32 bits, refused while decoding. Installing past `MAX_HANDLES` is `TooLarge`. A handle names its
 object and its stamp each by frame and by id, and every lookup (`budget_at`, `endpoint_at`,
 `device_at`, `process_at`) compares the id with the one in the frame: a handle that escaped
-R10's sweep would name a freed and perhaps reused frame, and the kernel stops rather than use
-it. An object's frame is freed only after the handles naming it are swept (`budgets_dying` and
-`destroy_device` in `kernel/src/message.rs`, `free_object` in `kernel/src/process.rs`; inside a
-destruction every such free waits for `destroy_marked`'s one sweep).
+R10's chains would name a freed and perhaps reused frame, and the kernel stops rather than use
+it. An object's frame is freed only after the handles naming it are closed: a process object's
+through its own chain (`free_object` in `kernel/src/process.rs`), a device's by a sweep
+(`destroy_device` in `kernel/src/message.rs`), and inside a destruction every endpoint and device
+frame waits until `destroy_marked` has closed the dying budgets' chains.
 
 **Model check:** `i1_i2_i3_i4_handles`: no table uses index 0, and every handle anywhere (in a
 table, as an exit endpoint, or carried in a queued message) names a live object.
@@ -120,15 +121,20 @@ process's exit and sees both go at notice receipt, the copy arriving as 0.
 
 ### I2 (revocation is complete)
 
-Status: built · tested: bench:budget-destroy-attack, bench:redoubt-revoke, bench:budget-deadline, bench:process-attack, mutation:R10KeepForeignHandles, host:redoubt-rt::badges_are_never_reused_and_ids_are_never_zero
+Status: built · tested: bench:budget-destroy-attack, bench:handle-chain-attack, bench:handle-chain-fault, bench:process-chain-fault, bench:redoubt-revoke, bench:budget-deadline, bench:process-attack, mutation:R10KeepForeignHandles, host:redoubt-rt::badges_are_never_reused_and_ids_are_never_zero
 
 After a budget is destroyed, no handle stamped with it or with any budget below it can be used
 anywhere: none is left in any process's table, and a copy carried in a message not yet received
 arrives as 0 in its slot. This is what makes a budget a revocation scope.
 
-**Kept in** `destroy_marked` ([`kernel/src/budget.rs`](../../kernel/src/budget.rs)): once the
-subtree's processes are gone, one sweep closes, in every table, each handle whose object or whose
-stamp is a dying budget, or whose endpoint, device or process object dies with one. Messages are
+**Kept in** `destroy_marked` ([`kernel/src/budget.rs`](../../kernel/src/budget.rs)) and the
+chains of [`kernel/src/handle.rs`](../../kernel/src/handle.rs): a handle held outside the budget
+its object is charged to, or outside its stamp, is entered in that budget's chain when it arrives,
+and one naming a process object in that object's chain. Once the subtree's processes are gone,
+and with them every table inside it, `destroy_marked` closes every handle in the dying budgets'
+chains, and freeing a process object closes its own. The checked build audits every table's
+entries after each destruction's walk (`check_handle_chains`), and `bench:handle-chain-fault`
+and `bench:process-chain-fault` show it catching a missing one. Messages are
 reached by `budgets_dying` in `kernel/src/message.rs`: a queued message sent through a handle
 stamped with a dying budget fails its sender with `Dead`, and a taken one is abandoned (R3). A
 handle carried inside a queued message is checked again at delivery (`is_live`) and installed as

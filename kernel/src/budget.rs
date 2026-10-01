@@ -126,6 +126,11 @@ const W_SCHED: usize = 16 + MAX_LABELS;
 /// A scratch word in every object frame: the next frame in `Objects::deferred`. Above every
 /// object's own words. `None` while the frame is not deferred.
 pub(crate) const DEFER_WORD: usize = 100;
+/// The heads of the handle chains (`handle.rs`), above every object's own words too, so that
+/// storing an object never touches them: the object chain's in a budget or a process object,
+/// the stamp chain's in a budget. 0 for an empty chain; a new frame is zeroed.
+pub(crate) const HELD_WORD: usize = 101;
+pub(crate) const STAMPED_WORD: usize = 102;
 
 /// The frame index a `frame + 1` word names, or `None` for 0.
 pub(crate) fn frame_of(word: u64) -> Option<u32> { (word as u32).checked_sub(1) }
@@ -1033,26 +1038,16 @@ impl MemoryManager {
     /// (marked, with no processes and no handles left; nothing reads a dying frame's tree links
     /// after this).
     pub fn destroy_marked(&mut self, top: BudgetFrame) {
-        self.sweep_handles(|mm, h| {
-            let object_dying = match h.object {
-                Object::Budget(b) => mm.budget_at(b).dying,
-                // An endpoint, and a device, die with their owner, so a handle to one is
-                // revoked with it.
-                Object::Endpoint(e) => mm.budget_at(mm.endpoint_at(e).owner).dying,
-                Object::Device(d) => mm.budget_at(mm.device_at(d).owner).dying,
-                // A process object dies with the budget it is charged to, its creator's (R10).
-                // One freed during this destruction for another reason (its exit endpoint went
-                // with the subtree) is no longer in the PID index, so its handles go too.
-                Object::Process(p) => {
-                    let proc = mm.process_at(p);
-                    crate::process::object_of(mm, proc.pid) != Some(p.frame)
-                        || mm.budget_at(proc.creator).dying
-                }
-            };
-            object_dying || mm.budget_at(h.stamp).dying
-        });
-        // The sweep was the only pass: the process, endpoint and device frames it read are freed
-        // now, past it (I1), and nothing names them any more.
+        // The handles held outside the subtree that depend on a dying budget are in its chains;
+        // those held inside went with their holders' tables, and those naming a freed process
+        // object with its own chain (`handle.rs`).
+        let mut cur = Some(top);
+        while let Some(frame) = cur {
+            self.close_dependents(frame);
+            cur = self.subtree_next(top, frame);
+        }
+        // Every handle naming them is closed: the process, endpoint and device frames are freed
+        // now, past that (I1).
         self.free_deferred_frames();
         // The weight came back as the scheduler lifted each budget (`sched::destroy`).
         self.return_carve(top, false);

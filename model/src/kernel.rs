@@ -59,7 +59,7 @@ pub struct Costs {
 }
 
 impl Default for Costs {
-    /// The rv64 cost table: two saved-context pages, one per other object, 128 handles per table page.
+    /// The rv64 cost table: two saved-context pages, one per other object, 64 handles per table page.
     fn default() -> Costs {
         Costs {
             budget: 1,
@@ -67,7 +67,7 @@ impl Default for Costs {
             contexts: 2,
             thread: 1,
             endpoint: 1,
-            handles_per_page: 128,
+            handles_per_page: 64,
             page_table: 1,
             open_call: 1,
         }

@@ -70,16 +70,18 @@ fn record_inside_returning_lend_and_server_thread_exit() {
 fn occupied_handle_pages_and_cap() {
     let mut w = World::new(None);
     let (ep, _, _) = w.setup().unwrap();
-    while w.k.processes[&1].handles.len() < 129 {
+    // One full table page and the first handle of the next.
+    let next = Boot::default().costs.handles_per_page + 1;
+    while (w.k.processes[&1].handles.len() as u64) < next {
         w.k.mint(1, 1, MintSource::Handle(ep), 7, None).unwrap();
     }
     let used = w.k.budgets[&1].pages_used;
-    for h in 1..129 {
+    for h in 1..next {
         w.k.handle_close(1, h).unwrap();
     }
     assert_eq!(w.k.budgets[&1].pages_used, used - 1);
-    assert!(w.k.processes[&1].handles.contains_key(&129));
-    w.k.handle_close(1, 129).unwrap();
+    assert!(w.k.processes[&1].handles.contains_key(&next));
+    w.k.handle_close(1, next).unwrap();
     assert_eq!(w.k.budgets[&1].pages_used, used - 2);
     let ep = w.k.endpoint_create(1).unwrap();
     while w.k.processes[&1].handles.len() < MAX_HANDLES as usize {

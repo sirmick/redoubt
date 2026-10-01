@@ -358,7 +358,7 @@ by itself.
 
 ### R10 (destruction)
 
-Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:endpoint-destroy-full, bench:sched-destroy-billing, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
+Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:endpoint-destroy-full, bench:handle-chain-attack, bench:handle-chain-fault, bench:process-chain-fault, bench:sched-destroy-billing, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
@@ -490,9 +490,17 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      uses one.
 
      A destruction walks the chains of the dying budgets and of the process objects it frees, and
-     closes exactly the handles that depend on them. It then frees the dying processes' table pages whole, after
-     unhooking any slot still entered in a surviving budget's chain; that is one word read per
-     slot. No live table is swept.
+     closes exactly the handles that depend on them. The dying processes' tables were freed whole
+     when they ended: each table page counts its chain entries, a page with none goes without
+     being read, and on the others each slot's two entry words are read and any entry unhooked
+     from its chain. No live table is swept. The checked build's `check_handle_chains`, run once
+     after the walk, checks every live handle's entries against its holder's place, and the
+     test-only features `handle-chain-fault`, which leaves out every stamp entry, and
+     `process-chain-fault`, which leaves out every process object entry, are what it catches
+     (`bench:handle-chain-fault`, `bench:process-chain-fault`); `bench:handle-chain-attack` holds
+     the dependent handles several levels up, in the dying top's parent and in its sibling, and
+     handles to a process object the destruction frees while its creator lives: in the creator,
+     inside its budget, and outside it under the live stamp.
 
      The chain entries make a slot eight words, 64 bytes, so a table page holds 64 handles and a
      full table (`MAX_HANDLES`) is 64 pages. A message's copy of a handle keeps the four-word
@@ -526,7 +534,8 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   taken call keeps authority that came through a dying budget (I2), and no handle names a freed
   frame (I1); the ledger returns exactly (I10). The checked build's scans over `0..=high_frame`
   (`check_process_index`, `check_irq_index`) prove the PID and IRQ indexes name exactly the live
-  objects, and run once off the destruction walk, never scaling it; `check_all_dying` proves no
+  objects, `check_frame_owners` and `check_handle_chains` the frames and the chains, and they run
+  once off the destruction walk, never scaling it; `check_all_dying` proves no
   budget outlives `root`. The child and owner links are not re-scanned: a missed link shows as an
   object the destruction fails to end, which the destruction cases exercise. One production full
   scan remains, `destroy_quarantined_devices` (`message.rs`), which a process teardown runs to
@@ -542,8 +551,9 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   25,023 µs on rv32), the same target the containment gate's own full-fill run will repeat once it
   lands.
 
-  Item 3 is not built yet: today one sweep reads every live slot of every table. The containment gate's lease fills
-  its handle table ([containment](README.md#containment)): 4,091 endpoints. At that fill, its
+  Before items 3 and 5 were built, one sweep read every live slot of every table, and ending a
+  process scanned the ownership array over all of RAM. The containment gate's lease fills its
+  handle table ([containment](README.md#containment)): 4,091 endpoints. At that fill, its
   destruction took 102 ms alone and 251 ms while the other lease's full table was live (rv64; rv32
   7% more), against 30 ms. The difference was the sweep, about 36 µs for each live handle in the
   other table. The rest was the lease's own objects: about 8 µs to close each of its handles and

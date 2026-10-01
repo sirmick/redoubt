@@ -73,7 +73,7 @@ Status: built · partly tested: independence from the kernel's source and the em
   ([memory](memory.md#where-map_anon-puts-pages)). A full area is refused as the kernel
   refuses it.
 - **Costs** come from a `costs` table: by default the rv64 table (two saved-context pages per
-  process, one page for each other object, 128 handles per handle-table page). The property
+  process, one page for each other object, 64 handles per handle-table page). The property
   tests use 8 handles per page, so handle-table growth and its charge show up in short runs.
 - **Boot.** `root`, `system` and `users` get the kernel's weight split: `root` 1,000,000,
   `system` 250,000, `users` 749,000, so `root` keeps 1,000 free for `init`. Page and process
