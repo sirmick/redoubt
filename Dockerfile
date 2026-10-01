@@ -13,7 +13,9 @@
 # At run time ./dev.sh bind-mounts this directory into /work. See dev.sh for the exact mount
 # list; that script is the whole sandbox boundary.
 
-# trixie (Debian 13) supplies the QEMU 10.x version used by the boot and device test matrix.
+# trixie (Debian 13), with QEMU and OpenSSH from trixie-backports: the bench starts QEMU with
+# `-run-with exit-with-parent=on` and ssh with `-o WarnWeakCrypto=no-pq-kex`, which QEMU 10.1
+# and OpenSSH 10.1 introduced, and trixie itself ships 10.0 of each.
 FROM debian:trixie
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -24,7 +26,7 @@ ARG CODEX_VERSION=latest
 ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=1000
-ARG IMAGE_REV=2
+ARG IMAGE_REV=3
 
 LABEL org.redoubt.dev.revision="${IMAGE_REV}" \
       org.redoubt.dev.uid="${USER_UID}" \
@@ -34,23 +36,25 @@ LABEL org.redoubt.dev.revision="${IMAGE_REV}" \
 # Base packages
 # ---------------------------------------------------------------------------
 # build-essential: a C toolchain for -sys crates the bench pulls in (and pcre2 for beamlet
-#   differential runs). qemu-system-misc: the virt machine for both RISC-V widths.
+#   differential runs). qemu-system-riscv: the virt machine for both RISC-V widths.
 # openssh-server: the bench spawns `sshd -i` for its SSH session cases.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/backports.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       ca-certificates \
       curl \
       git \
       less \
       libssl-dev \
-      openssh-server \
-      openssh-client \
       pkg-config \
       python3 \
-      qemu-system-misc \
       sudo \
       vim-tiny \
       xz-utils \
+    && apt-get install -y --no-install-recommends -t trixie-backports \
+      openssh-client \
+      openssh-server \
+      qemu-system-riscv \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------

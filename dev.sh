@@ -35,7 +35,7 @@
 set -euo pipefail
 
 IMAGE=redoubt-dev
-IMAGE_REV=2
+IMAGE_REV=3
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The image contains a real passwd entry for the host identity. OpenSSH refuses to run for a
