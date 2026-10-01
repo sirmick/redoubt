@@ -81,6 +81,9 @@ const LABEL: u64 = 7;
 const WAIT: u64 = 2_000_000;
 /// Long enough for every child of a scenario to have started and made its call.
 const BARRIER: u64 = 200_000;
+/// Between two callers' starts: long enough for the first to queue its call, well inside
+/// `BARRIER`.
+const STAGGER_MS: u64 = 50;
 
 macro_rules! say {
     ($out:expr, $($arg:tt)*) => {{ writeln!($out, $($arg)*).ok(); }};
@@ -164,9 +167,8 @@ fn child(arg: usize) -> ! {
             fault()
         }
         R_TWO_CALLS | R_TWO_EXIT => {
-            // Wait until both callers have queued, so that which call is taken first is R2's
-            // decision and not a race: the lowest group in R2's order goes first, and the
-            // groups here differ only by account, so the lower account is served first.
+            // Wait until both callers have queued; the parent queues the first caller's call
+            // before starting the second, and R2 takes the oldest waiting call first.
             rd::receive(None, BARRIER, 0).ok();
             let first = take_call();
             take_call();
@@ -451,9 +453,14 @@ fn blame(out: &mut Console, parent: &Parent, budget_a: u32, budget_b: u32) {
         let server = parent.start(rd::SYSTEM, role, value, &[work]).expect("a server child");
         let mut caller_runs: [Option<Run>; 2] = [None, None];
         assert!(callers.len() <= caller_runs.len(), "a scenario has at most two callers");
-        for (slot, (budget, caller_role, tag)) in caller_runs.iter_mut().zip(callers) {
+        for (i, (slot, (budget, caller_role, tag))) in caller_runs.iter_mut().zip(callers).enumerate() {
             let badged = rd::mint_from_handle(work, 1 + u64::from(*tag), None).expect("mint");
             *slot = Some(parent.start(*budget, *caller_role, *tag, &[badged]).expect("a caller child"));
+            // The first caller queues before the second starts: R2 takes the oldest waiting
+            // call first, so which call is taken first is the scenario's choice, not a race.
+            if i + 1 < callers.len() {
+                test_programs::wait_ms(STAGGER_MS);
+            }
         }
         let notice = parent.notice(&server);
         for run in caller_runs.iter().flatten() {

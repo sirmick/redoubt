@@ -345,9 +345,10 @@ Status: planned · M4 (self-hosted development)
 
 The same log extends to every steward action: the steward appends a record for every mint,
 delegation, revocation, approval, denial, lease end, blame and lockout, with the principal chain, to
-a file only it can write. Each record carries the request's labels and is read under the label check
-([R25 (the label check)](serving.md#r25-the-label-check)), so a labelled request's target never
-reaches an unlabelled reader. **Each record is signed**: the steward asks `keyd` to sign it under
+a file only it can write. Each record carries the request's or target's labels and is read under
+the label check ([R25 (the label check)](serving.md#r25-the-label-check)), so a labelled
+request's target never reaches an unlabelled reader. A lease's end is audited with the lease's
+labels, though its sponsor is unlabelled. **Each record is signed**: the steward asks `keyd` to sign it under
 the `audit` purpose over the preimage `"redoubt.audit.v1\0" || u64_le(len) || record`, whose digest
 `keyd` computes itself, and stores the signature beside the record. The steward holds a `keyd` grant
 for that one purpose, never a key. A record cannot be altered undetected by anything that can write
@@ -460,9 +461,10 @@ move the number of its owner's next unlabelled session. The model checks this
 on kernel results by replaying sequences with the vault's operations removed
 (`steward_noninterference`, its P10). It also checks the order a shared server takes unlabelled
 calls in, which [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) keeps the same whatever a
-vault sends. The crashes P10 replays are ones a call causes. A server that crashes on its own is a
-stated residual ([residual risks](#residual-risks)): which call it holds at that moment is service
-timing.
+vault sends. The crashes P10 replays are ones an unlabelled session's call causes. A server that
+crashes on its own, or on a vault's call, is a stated residual
+([residual risks](#residual-risks)): which call it holds, and when it takes the calls queued
+before, is service timing.
 
 **Open:** none.
 
@@ -558,8 +560,9 @@ Status: planned · M1 (separation and containment)
   This is service timing from one server instance serving two label sets. No fair turn order
   hides it, and blaming nobody would not either, since the `Dead` result alone shows it. A
   confined deployment has no such server
-  ([R34 (confined placement)](init.md#r34-confined-placement)). R37 holds for crashes a call
-  causes, which is what P10 checks.
+  ([R34 (confined placement)](init.md#r34-confined-placement)). A crash a vault's call causes is
+  the same timing: it moves when the server takes the unlabelled calls queued before it. R37 holds
+  for crashes an unlabelled session's call causes, which is what P10 checks.
 - **Per-record signatures catch edits, not drops.** Until records are chained, a record dropped or
   reordered wholesale is not detected.
 - **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's

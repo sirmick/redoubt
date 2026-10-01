@@ -1,0 +1,15 @@
+description = "R2 (fair waiting): one label set's service order at a shared endpoint is the same whatever another label set sends; a vault group's turn between two unlabelled groups' leaves the order they are served in unchanged, the oldest waiting first; and a group just served goes behind one already waiting (kernel/ipc.md R2, I11; checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["ipc-fair-label-sets"]
+timeout_secs = 300
+expect = [
+    '^\[fair-labels\] ok: without the vault, the older waiting group goes first$',
+    '^\[fair-labels\] ok: a vault turn leaves the unlabelled order unchanged$',
+    '^\[fair-labels\] ok: a served group goes behind one already waiting$',
+    '^IPC-FAIR-LABEL-SETS TEST PASSED$',
+]
+forbid = ['PANIC', '^\[fair-labels\] FAIL']
+poweroff = true

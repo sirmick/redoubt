@@ -235,7 +235,7 @@ model checks.
 | ID | Variants | What they break |
 | --- | --- | --- |
 | [R1 (flow)](ipc.md#r1-flow) | `R1SkipLabelCheck`, `R1ExitNoticeIgnoresLabels`, `R1UsageIgnoresLabels`, `R1UsageExemptBySystemTarget`, `R1ExitExemptBySystemExiting`, `R1ChecksReceiverNotOwner`, `R1SenderClassFromStamp` | the label check on messages, exit notices and usage reads, and which side's class exempts it |
-| [R2 (fair waiting)](ipc.md#r2-fair-waiting) | `R2FifoAcrossAccounts`, `R2NoWaitCap`, `R2KeyByAccountOnly`, `R2KeyByStampLabels`, `R2SystemCallersShareGroup` | turns, the cap, and how groups are keyed |
+| [R2 (fair waiting)](ipc.md#r2-fair-waiting) | `R2FifoAcrossAccounts`, `R2NoWaitCap`, `R2KeyByAccountOnly`, `R2KeyByStampLabels`, `R2SystemCallersShareGroup`, `R2OneCursor` | turns, the cap, how groups are keyed, and one label set's turns apart from another's |
 | [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls) | `R3UnmapAbandonedLend`, `R3ChargeStaysWithCaller`, `AbandonNoticeMissing`, `AbandonNoticeRepeated`, `BadRecordConsumesNotice`, `EndpointDestroyNoticeKept` | an abandoned lend's mapping and charge; the notice, once, kept for a good record, and none on a destroyed endpoint |
 | [R4 (delivery)](ipc.md#r4-delivery) | `R4IgnoreMaxTransfer`, `R4OverdrawOnDelivery` | `max_transfer`; paying for a delivery |
 | [R4a (open calls)](ipc.md#r4a-open-calls) | `R4aOpenCallsPerThread`, `R4aFullTakesNothing`, `OpenCallsUnlimited`, `ReceiveDropsOpenCalls` | the limit, per process; sends and notices at the limit; keeping open calls across a `receive` |
@@ -394,13 +394,14 @@ is described on [the steward](../servers/steward.md).
 
 `steward_policy` runs 20 to 160 random policy operations per seed and checks the properties and
 the kernel's checks after each. `steward_noninterference` runs one sequence twice, the second
-time without the vault sessions' work (their item writes, requests and calls to the server), and
-compares everything an unlabelled session observes. The other host tests pin connection lineage
-(a delegated badge shares its root's pending share, checked by an oracle that walks parent edges
-itself, with a deliberate break it must catch), audit signatures bound to purpose, signer,
-domain, length and every byte, a confined session refused a read of lower data while its owner
-pushes one approved item up, and `approve` and `deny` authenticating their channel before any
-effect.
+time without the vault sessions' work (their item writes, requests and calls to the server, and
+the owner's approvals and denials of their requests), and compares everything an unlabelled
+session observes, the order the server takes its calls in included. The other host tests pin
+connection lineage (a delegated badge shares its root's pending share, checked by an oracle that
+walks parent edges itself, with a deliberate break it must catch), audit signatures bound to
+purpose, signer, domain, length and every byte, a confined session refused a read of lower data
+while its owner pushes one approved item up, and `approve` and `deny` authenticating their
+channel before any effect.
 
 What the steward model leaves out: SSH (a login is "this key for this user name"), the approval
 terminal (a channel is "a connection that authenticated with this key"), and cryptography. Ids
@@ -467,9 +468,9 @@ Replay is what turns the model from a reference into evidence about the kernel.
   Sizes and mapping geometry bound what the runs explore. The million-sequence run is a separate
   test that the bench does not run.
 - **The steward model is checked only against itself.** Its cryptography is ideal, and the
-  non-interference comparison leaves out approving or denying a vault request (approval is
-  declassification, by design), ending a vault session, and server crashes. A leak through crash
-  blame or a session's end is not checked by it.
+  non-interference comparison leaves out a server crash on its own and one a vault's call causes:
+  which call such a crash blames, and when the server takes the calls before it, is service timing,
+  a stated residual of [R37 (vault non-interference)](../servers/steward.md#residual-risks).
 - **Rules outside the model** (R15, R16, R17, R19, R23, R24) have no model check at all; their
   boot cases are their only attack.
 

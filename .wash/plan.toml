@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 65
+revision = 73
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -271,8 +271,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["GATE1", "API1"]
   body = "Builds docs/kernel/boot.md#the-loader-loads-only-the-kernel-and-init (the bundle mapped into init, a0/a1), docs/kernel/devices.md#device_info (a new kernel call: which device a handle names; owner's choice), docs/kernel/budgets.md#the-tree-from-the-boot-manifest (root keeps init's process), docs/testbench.md#starting-a-cases-programs (the in-init's-place half: the log server launches the case's programs with named budgets; TAKE_GIFTS goes) and #data-entries-for-init (read-back from the bundle's pages). Brief: .wash/local/INIT1-implementer.md. Design: QA INIT1-design. Tier A (loader, kernel ABI, bench builder), size L."
   state = "active"
-  revision = 40
-  overrides = ["2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, confirming run), and only K15's bookkeeping is left; INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program. wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, resolved, dd862a390); only K15 is left before it is accepted. INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the audits excluded (QA GATE1-notice-late resolved, dd862a390); K15 is in review. INIT1 touches the loader, kernel ABI and bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance."]
+  revision = 67
+  overrides = ["2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, confirming run), and only K15's bookkeeping is left; INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program. wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, resolved, dd862a390); only K15 is left before it is accepted. INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the audits excluded (QA GATE1-notice-late resolved, dd862a390); K15 is in review. INIT1 touches the loader, kernel ABI and bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance.", "2026-10-01: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01). GATE1 passes on rv64 with every net target met and is sweeping; INIT1 touches the loader, the kernel's boot functions and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance."]
 
 [[node]]
   id = "INIT2"
@@ -387,8 +387,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12", "MOD1"]
   body = "Closes docs/todo/r2-least-recently-served.md; rule on docs/kernel/ipc.md#r2-fair-waiting (9f0b47f38), for docs/servers/steward.md#r37-vault-non-interference. Design: QA MOD1-r2-cursor-blame. Brief: .wash/local/IPC2-implementer.md. Tier A (kernel IPC, the model), size M."
-  state = "reported"
-  revision = 64
+  state = "done"
+  revision = 73
 
 [[node]]
   id = "K13"
@@ -435,5 +435,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Closes docs/todo/wall-clock-flakes.md (378a67877): uaf-lent-page (the holder answers SYNC before it holds the lend: a test bug, the case can pass without testing reuse), touch-beyond-ram, libs/rt parked.rs; plus process-review's zero_entries window found by K14's dig (a thread created with entry 0 runs if a tick lands between thread_create and process_exit: InstructionPageFault at 0; give those threads a parked entry, or the case runs under icount). Done when each orders on events and passes 20 runs beside a loaded host. Tests and libs/rt's test only; red team at low (attack cases). Tier B-sized, size S."
-  state = "active"
-  revision = 49
+  state = "reported"
+  revision = 72

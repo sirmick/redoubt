@@ -92,10 +92,10 @@ fn every_existing_audit_entry_is_signed_but_no_chain_is_claimed() {
     st.audit.pop();
     st.audit_signatures.pop();
     assert!(st.audit_authentic()); // nor omission of whole record/signature pairs
-    st.audit.push(Audit::LeaseEnded { session: 0, by: 0 });
+    st.audit.push(Audit::LeaseEnded { session: 0, by: 0, labels: Vec::new() });
     assert!(!st.audit_authentic()); // unsigned insertion detected
     st.audit.pop();
-    st.audit[0] = Audit::LeaseEnded { session: 123, by: 456 };
+    st.audit[0] = Audit::LeaseEnded { session: 123, by: 456, labels: Vec::new() };
     assert!(!st.audit_authentic()); // edited record detected
 }
 

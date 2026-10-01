@@ -84,7 +84,10 @@ const W_SENDER_BUDGET: usize = 12; // frame + 1
 const W_SENDER_BUDGET_ID: usize = 13;
 const W_BUF_ADDR: usize = 14;
 const W_BUF_PAGES: usize = 15;
-const W_WORDS: usize = 16; // WORDS words
+/// While queued, when its group's turn became due (R2): `W_SEQ`, or its group's last take if that
+/// came later.
+const W_DUE: usize = 16;
+const W_WORDS: usize = 17; // WORDS words
 const W_NHANDLES: usize = W_WORDS + WORDS;
 const W_HANDLES: usize = W_NHANDLES + 1; // MAX_MSG_HANDLES * 4 words
 const W_NCALLS: usize = W_HANDLES + MAX_MSG_HANDLES * 4;
@@ -158,7 +161,9 @@ struct Slot {
     wait: Wait,
     /// Absolute µs since boot; `u64::MAX` never expires.
     deadline: u64,
+    /// Its message's place in the one order of arrivals and takes (`next_seq`).
     seq: u64,
+    due: u64,
     /// The endpoint it is sending on or receiving from.
     endpoint: Option<EndpointRef>,
     /// While waiting for a reply, the open call's frame.
@@ -207,6 +212,7 @@ fn slot(mm: &MemoryManager, pid: Pid, tid: TID) -> Slot {
         wait,
         deadline: w(W_DEADLINE),
         seq: w(W_SEQ),
+        due: w(W_DUE),
         endpoint: match (wait, frame_of(w(W_OBJECT))) {
             (Wait::Reply | Wait::Irq, _) => None,
             (_, frame) => frame.map(|frame| EndpointRef { frame, id: w(W_OBJECT_ID) }),
@@ -737,6 +743,7 @@ pub fn send(
     store_msg(mm, pid, tid, &m);
     let seq = mm.next_seq();
     set_tword(mm, pid, tid, W_SEQ, seq);
+    set_tword(mm, pid, tid, W_DUE, seq);
     set_tword(mm, pid, tid, W_OBJECT, frame_word(endpoint.frame));
     set_tword(mm, pid, tid, W_OBJECT_ID, endpoint.id);
     set_tword(mm, pid, tid, W_REC, body_rec as u64);
@@ -986,31 +993,29 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
     }
 }
 
-/// R2: the next message to take on `e` — the oldest message of the next group after the one
-/// served last, in group order, wrapping round once. Without `calls` a process at
+/// R2: the next message to take on `e` — the oldest message of the group served least recently,
+/// the group whose turn has been due longest, ties to the lower group. A group's messages all
+/// carry its turn from their arrival on, and a take moves it to now, so the head of the group is
+/// the first of its messages in (due, arrival) order. Without `calls` a process at
 /// `MAX_OPEN_CALLS` skips calls, so a group's oldest *send* is its message (R4a).
 fn next_sender(mm: &MemoryManager, e: EndpointRef, calls: bool) -> Option<(Pid, TID)> {
-    let cursor = mm.endpoint_at(e).cursor;
-    // Rank 0: groups after the cursor. Rank 1: those at or before it, taken only once the others
-    // are done, which is the wrap-around. Then group order, then age.
-    let mut best: Option<(u8, Group, u64, Pid, TID)> = None;
+    let mut best: Option<(u64, Group, u64, Pid, TID)> = None;
     find_thread::<()>(mm, |mm, pid, tid| {
         if !queued_on(mm, pid, tid, e) || (!calls && msg(mm, pid, tid).kind == MsgKind::Call) {
             return None;
         }
         let group = group_of(mm, pid, tid);
-        let rank = u8::from(cursor.is_some_and(|c| group.order(&c) != Ordering::Greater));
-        let seq = slot(mm, pid, tid).seq;
+        let s = slot(mm, pid, tid);
         let better = match &best {
             None => true,
-            Some((brank, bgroup, bseq, _, _)) => match rank.cmp(brank).then(group.order(bgroup)) {
+            Some((bdue, bgroup, bseq, _, _)) => match s.due.cmp(bdue).then(group.order(bgroup)) {
                 Ordering::Less => true,
                 Ordering::Greater => false,
-                Ordering::Equal => seq < *bseq,
+                Ordering::Equal => s.seq < *bseq,
             },
         };
         if better {
-            best = Some((rank, group, seq, pid, tid));
+            best = Some((s.due, group, s.seq, pid, tid));
         }
         None
     });
@@ -1039,10 +1044,19 @@ fn deliver(
         fail_wait(ss, mm, rpid, rtid, error);
         return;
     }
-    // Delivered or refused, the group has had its turn, so one sender cannot hold up the rest.
-    let mut ep = mm.endpoint_at(e);
-    ep.cursor = Some(group_of(mm, spid, stid));
-    mm.store_endpoint(e.frame, &ep);
+    // Delivered or refused, the group has had its turn, so one sender cannot hold up the rest: its
+    // turn is due again from now, behind every group already waiting. Only its own messages carry
+    // that, so a group with nothing queued keeps nothing, and other groups' turns do not move.
+    // The restamp is one write per message still queued in the group, at most `WAIT_CAP`. `W_DUE`
+    // is never readable by a process, like `next_seq` it comes from.
+    let group = group_of(mm, spid, stid);
+    let now = mm.next_seq();
+    find_thread::<()>(mm, |mm, pid, tid| {
+        if queued_on(mm, pid, tid, e) && group_of(mm, pid, tid) == group {
+            set_tword(mm, pid, tid, W_DUE, now);
+        }
+        None
+    });
     let kind = msg(mm, spid, stid).kind;
     match prepare(ss, mm, e, rpid, rtid, spid, stid) {
         Err(error) => fail_wait(ss, mm, spid, stid, error),

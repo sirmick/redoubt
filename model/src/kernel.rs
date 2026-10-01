@@ -440,6 +440,9 @@ pub struct Msg {
     pub labels: Vec<u64>,
     /// The R2 group it is queued under.
     pub key: Key,
+    /// While queued, when its group's turn became due (R2): its arrival, or its group's last take
+    /// if that came later. Both are read from `next_msg`, the one counter.
+    pub due: u64,
     pub words: [u64; WORDS],
     /// Copies of the handles it carries until it is delivered; one revoked meanwhile is `None`, and
     /// arrives as 0 (R10).
@@ -480,7 +483,8 @@ pub struct Endpoint {
     pub owner: u64,
     /// Blocked senders' messages, grouped as R2 says, oldest first.
     pub queue: BTreeMap<Key, VecDeque<u64>>,
-    /// The key served last (R2's round-robin cursor).
+    /// The key served last: the single round-robin cursor that `R2OneCursor` turns by instead
+    /// of R2's least recently served group.
     pub cursor: Option<Key>,
     /// Threads blocked in `receive` on it, first come first served.
     pub receivers: VecDeque<u64>,
@@ -1533,15 +1537,33 @@ impl Kernel {
     /// A queued message is refused in its turn: its group counts as served (R2) and the sender
     /// fails with `err`.
     fn refuse(&mut self, e: u64, mid: u64, err: Error) {
-        let key = self.msgs[&mid].key.clone();
-        self.ghost.took(e, &key, &self.endpoints[&e]);
-        self.endpoints.get_mut(&e).unwrap().cursor = Some(key);
+        self.served(e, mid);
         self.fail_sender(mid, err);
     }
 
-    /// R2: the next message to take on `e`: the oldest message of the next group after the last
-    /// one served, in group order, wrapping around. A process at `MAX_OPEN_CALLS` takes no calls:
-    /// without `calls`, R2's turns skip them, and a group's oldest send is its message.
+    /// R2: message `mid`'s group on `e` has its turn, delivered or refused. Its turn is due again
+    /// from now, a fresh value of the one counter, so its waiting messages go behind every group
+    /// already waiting. Only the group's own messages carry it: a group with nothing queued keeps
+    /// nothing.
+    fn served(&mut self, e: u64, mid: u64) {
+        let key = self.msgs[&mid].key.clone();
+        self.ghost.took(e, &key, &self.endpoints[&e]);
+        let now = self.next_msg;
+        self.next_msg += 1;
+        let one_cursor = self.broken(Mutation::R2OneCursor);
+        let ep = self.endpoints.get_mut(&e).unwrap();
+        if one_cursor {
+            ep.cursor = Some(key.clone());
+        }
+        for m in ep.queue.get(&key).into_iter().flatten() {
+            self.msgs.get_mut(m).unwrap().due = now;
+        }
+    }
+
+    /// R2: the next message to take on `e`: the oldest message of the group served least
+    /// recently, the group whose turn has been due longest, ties to the lower key. A process at
+    /// `MAX_OPEN_CALLS` takes no calls: without `calls`, R2's turns skip them, and a group's oldest
+    /// send is its message.
     fn next_sender(&self, e: u64, calls: bool) -> Option<u64> {
         use core::ops::Bound::{Excluded, Unbounded};
         let ep = self.endpoints.get(&e)?;
@@ -1550,16 +1572,23 @@ impl Kernel {
         if self.broken(Mutation::R2FifoAcrossAccounts) {
             return ep.queue.values().filter_map(head).min();
         }
-        let after: Vec<&VecDeque<u64>> = match &ep.cursor {
-            Some(c) => ep
-                .queue
-                .range((Excluded(c.clone()), Unbounded))
-                .chain(ep.queue.range(..=c.clone()))
-                .map(|(_, q)| q)
-                .collect(),
-            None => ep.queue.values().collect(),
-        };
-        after.into_iter().find_map(head)
+        if self.broken(Mutation::R2OneCursor) {
+            let after: Vec<&VecDeque<u64>> = match &ep.cursor {
+                Some(c) => ep
+                    .queue
+                    .range((Excluded(c.clone()), Unbounded))
+                    .chain(ep.queue.range(..=c.clone()))
+                    .map(|(_, q)| q)
+                    .collect(),
+                None => ep.queue.values().collect(),
+            };
+            return after.into_iter().find_map(head);
+        }
+        ep.queue
+            .iter()
+            .filter_map(|(k, q)| head(q).map(|m| (self.msgs[&m].due, k, m)))
+            .min()
+            .map(|(_, _, m)| m)
     }
 
     /// The abandoned-call notice waiting for thread `tid` on endpoint `e`, if any.
@@ -1713,12 +1742,9 @@ impl Kernel {
         }
 
         // Deliver.
-        let key = m.key.clone();
-        self.ghost.took(e, &key, &self.endpoints[&e]);
+        self.served(e, mid);
         self.unqueue(mid);
-        let ep = self.endpoints.get_mut(&e).unwrap();
-        ep.cursor = Some(key);
-        ep.receivers.retain(|x| *x != rtid);
+        self.endpoints.get_mut(&e).unwrap().receivers.retain(|x| *x != rtid);
         // The message's copies of its handles move into the receiver's table; a revoked one
         // arrives as 0 (R10).
         self.add_usage(rbudget, growth);
@@ -3377,6 +3403,7 @@ impl Kernel {
                 account,
                 labels,
                 key: key.clone(),
+                due: id,
                 words,
                 handles: hs.into_iter().map(Some).collect(),
                 buffer,

@@ -13,9 +13,9 @@
 //! It holds no message queue. A queued message is a message whose sender is blocked in `send` or
 //! `call`, and a thread blocks at most once, so the queue *is* the set of blocked senders, which
 //! `message.rs` keeps in each thread's own page and finds by scanning. The same goes for the
-//! threads blocked in `receive` on it. So the only thing an endpoint must remember between calls
-//! is R2's round-robin cursor: the group served last. That fits in the frame with room to spare,
-//! and no sender can make the kernel allocate.
+//! threads blocked in `receive` on it. R2's turns live there too: each queued message carries when
+//! its group's turn became due. So an endpoint remembers nothing between calls but its id and its
+//! owner, and no sender can make the kernel allocate.
 //!
 //! The **owner** is the budget of the process that created it, which is what R1 compares a sender
 //! with (I7) and where the cost table charges the page.
@@ -57,8 +57,8 @@ impl Group {
         }
     }
 
-    /// A total order over groups, so "the next group after the one served last" is defined and
-    /// the same on every run (R2, I11). Accounts, then label sets, then budget id.
+    /// A total order over groups, so R2's ties go the same way on every run (I11). Accounts, then
+    /// label sets, then budget id.
     pub fn order(&self, other: &Group) -> core::cmp::Ordering {
         self.account
             .cmp(&other.account)
@@ -74,13 +74,11 @@ pub struct Endpoint {
     /// The budget of the process that created it: what R1 compares against (I7) and what pays
     /// for the page.
     pub owner: BudgetRef,
-    /// R2's round-robin cursor: the group served last, if any.
-    pub cursor: Option<Group>,
 }
 
 /// Words an endpoint takes in its frame (a frame has 512). Its link in its owner's list is
 /// apart, at `budget::OWNED_WORD`.
-const WORDS: usize = 8 + MAX_LABELS;
+const WORDS: usize = 4;
 
 impl MemoryManager {
     pub fn endpoint(&self, frame: u32) -> Endpoint {
@@ -89,20 +87,7 @@ impl MemoryManager {
         // As in `budget.rs`: a frame that does not hold an endpoint means a stale reference
         // survived R10's sweep, a violated invariant (I1), so the kernel stops.
         assert!(w(0) == MAGIC, "I1: frame {} holds no endpoint", frame);
-        let mut labels = [0; MAX_LABELS];
-        for (i, label) in labels.iter_mut().enumerate() {
-            *label = w(8 + i);
-        }
-        Endpoint {
-            id: w(1),
-            owner: BudgetRef { frame: (w(2) as u32).wrapping_sub(1), id: w(3) },
-            cursor: (w(4) != 0).then_some(Group {
-                account: w(5),
-                labels,
-                nlabels: (w(6) as usize).min(MAX_LABELS),
-                budget: w(7),
-            }),
-        }
+        Endpoint { id: w(1), owner: BudgetRef { frame: (w(2) as u32).wrapping_sub(1), id: w(3) } }
     }
 
     pub fn store_endpoint(&mut self, frame: u32, e: &Endpoint) {
@@ -112,13 +97,6 @@ impl MemoryManager {
         words[1] = e.id;
         words[2] = u64::from(e.owner.frame) + 1;
         words[3] = e.owner.id;
-        if let Some(g) = e.cursor {
-            words[4] = 1;
-            words[5] = g.account;
-            words[6] = g.nlabels as u64;
-            words[7] = g.budget;
-            words[8..8 + MAX_LABELS].copy_from_slice(&g.labels);
-        }
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
         }
@@ -149,7 +127,7 @@ impl MemoryManager {
         let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(owner, ENDPOINT_PAGES))?;
         let id = self.next_object_id();
         let owner_ref = BudgetRef { frame: owner, id: self.budget(owner).id };
-        self.store_endpoint(frame, &Endpoint { id, owner: owner_ref, cursor: None });
+        self.store_endpoint(frame, &Endpoint { id, owner: owner_ref });
         self.link_owned(owner, frame);
         Ok(EndpointRef { frame, id })
     }

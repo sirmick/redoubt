@@ -186,8 +186,9 @@ pub struct Objects {
     /// The next object id, shared by budgets and endpoints. Ids are never reused (I12); a
     /// `u64` cannot run out.
     next_id: u64,
-    /// The next send order number (R2: "the oldest message of the next group"). A `u64` cannot
-    /// run out, and userspace never sees it, so it is no covert channel.
+    /// The next value of the one order of message arrivals and takes (R2: "the group served least
+    /// recently"). A `u64` cannot run out, and userspace never sees it, so it is no covert
+    /// channel.
     next_seq: u64,
     /// The highest frame ever given to a kernel object: where a scan for budgets stops.
     pub high_frame: u32,
@@ -373,7 +374,7 @@ impl MemoryManager {
         id
     }
 
-    /// The next send order number.
+    /// The next value of the one order of message arrivals and R2 takes.
     pub fn next_seq(&mut self) -> u64 {
         let seq = self.objects.next_seq;
         self.objects.next_seq = seq.checked_add(1).expect("send order exhausted");

@@ -342,15 +342,18 @@ checks that receiving notices refunds the creator's pages exactly.
 
 ### I11 (fair turns)
 
-Status: built · partly tested: turns between several groups on one endpoint are attacked only in the model · tested: host:redoubt-model::flood, host:redoubt-model::kernel_sequences, mutation:R2FifoAcrossAccounts
+Status: built · partly tested: turns between several groups on one endpoint are attacked only in the model, and on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting · tested: host:redoubt-model::flood, host:redoubt-model::kernel_sequences, bench:ipc-fair-label-sets, mutation:R2FifoAcrossAccounts, mutation:R2OneCursor
 
 With k groups of R2 blocked on an endpoint, and the receiving process holding fewer than
 `MAX_OPEN_CALLS` open calls, each group's oldest message is taken within k receives.
 
-**Kept in** `next_sender` (`kernel/src/message.rs`): the oldest message of the next group after
-the endpoint's cursor, the group served last, wrapping round once; `deliver` moves the cursor.
-A refused message (R4) takes its turn too, so a group that cannot be paid for does not stall the
-others.
+**Kept in** `next_sender` (`kernel/src/message.rs`): the oldest message of the group whose turn
+has been due longest, ties to the lower group. Each queued message carries its group's turn
+(`W_DUE`): its arrival, then, at each take of its group, a fresh value of the kernel's one order
+of arrivals and takes (`next_seq`), which `deliver` writes to the group's waiting messages. A
+waiting group keeps its turn until it is taken, a taken group goes behind every group already
+waiting, and a group that arrives later is due later, so at most k−1 groups go first. A refused
+message (R4) takes its turn too, so a group that cannot be paid for does not stall the others.
 
 **Model check:** `Ghost::took`: while one group's oldest message waits, no other group is taken
 twice. The `flood` family queues up to 10,000 senders from many groups, some servers hoarding

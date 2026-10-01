@@ -265,6 +265,7 @@ pub enum Audit {
     LeaseEnded {
         session: u64,
         by: u64,
+        labels: Vec<u64>,
     },
 }
 
@@ -280,9 +281,9 @@ impl Audit {
             | Audit::Denied { labels, .. }
             | Audit::Wrote { labels, .. }
             | Audit::Blamed { labels, .. }
-            | Audit::LoggedOut { labels, .. } => labels,
+            | Audit::LoggedOut { labels, .. }
+            | Audit::LeaseEnded { labels, .. } => labels,
             Audit::Declassified { label, .. } => core::slice::from_ref(label),
-            Audit::LeaseEnded { .. } => &[],
         }
     }
 }
@@ -322,9 +323,13 @@ pub struct Steward {
     pub confined: bool,
     pub unlabelled: BTreeMap<u64, Vec<u8>>,
     pub push_requests: BTreeMap<u64, PushRequest>,
+    /// Every message the server took, in order: its sender's labels and first word (a session's
+    /// call carries the session's id). P10 reads the unlabelled ones' order (R2).
+    pub taken: Vec<(Vec<u64>, u64)>,
     push_counter: u64,
-    /// Sessions started so far, per principal (drives session ids and names).
-    started: BTreeMap<usize, u64>,
+    /// Sessions started so far, per principal and label set (drives session ids and names): no
+    /// counter is shared across a principal's label sets (servers/steward.md R37).
+    started: BTreeMap<(usize, Vec<u64>), u64>,
     /// The badge of the next session's connection to the server: each session gets its own
     /// (servers/serving.md, "Minted connections").
     next_badge: u64,
@@ -464,6 +469,7 @@ impl Steward {
             confined: false,
             unlabelled: BTreeMap::new(),
             push_requests: BTreeMap::new(),
+            taken: Vec::new(),
             push_counter: 0,
             started: BTreeMap::new(),
             next_badge: 1,
@@ -636,11 +642,13 @@ impl Steward {
                 return Err(e);
             }
         };
-        // A random id and a per-principal name: nothing another principal can count.
-        let n = self.started.entry(principal).or_insert(0);
+        // A random id and a name per (principal, label set): nothing another principal, or another
+        // of this principal's label sets, can count.
+        let n = self.started.entry((principal, labels.clone())).or_insert(0);
         *n += 1;
         let name = format!("{}-{}", if kind == SessionKind::Agent { "agent" } else { "session" }, n);
-        let mut id = mix(self.secret ^ 0x5e55 ^ mix(((principal as u64) << 32) ^ *n));
+        let set = labels.iter().fold(0, |h, l| mix(h ^ l));
+        let mut id = mix(self.secret ^ 0x5e55 ^ mix(((principal as u64) << 32) ^ *n) ^ set);
         while id == 0 || self.sessions.contains_key(&id) {
             id = mix(id);
         }
@@ -813,24 +821,16 @@ impl Steward {
     /// answers all of it, until nothing is left. An abandoned call is answered too: that frees it.
     pub fn serve(&mut self) {
         let s = self.server;
-        let reply = |k: &mut Kernel, m: u64| {
-            let call = Syscall::Reply { msg_id: m, words: [0; WORDS], handles: Vec::new() };
-            k.step(&Op::Sys { pid: s.pid, tid: s.tid, call });
-        };
         let held: Vec<u64> = self.k.threads.get(&s.tid).map_or(Vec::new(), |t| {
             t.serving.iter().filter_map(|m| self.k.msgs.get(m)).map(|m| m.rid).collect()
         });
         for m in held {
-            reply(&mut self.k, m);
+            self.reply(m);
         }
         for _ in 0..4096 {
-            let recv = Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 };
-            match self.k.step(&Op::Sys { pid: s.pid, tid: s.tid, call: recv }).map(|x| x.outcome) {
-                Some(Outcome::Done(Ok(Ret::Message(m)))) if m.kind == crate::syscall::MsgKind::Call => {
-                    reply(&mut self.k, m.msg_id)
-                }
-                Some(Outcome::Done(Ok(Ret::Message(_)))) => {}
-                Some(Outcome::Done(Ok(Ret::Abandoned { .. }))) => {}
+            match self.take() {
+                Some(Ret::Message(m)) if m.kind == crate::syscall::MsgKind::Call => self.reply(m.msg_id),
+                Some(Ret::Message(_)) | Some(Ret::Abandoned { .. }) => {}
                 _ => break,
             }
         }
@@ -839,18 +839,34 @@ impl Steward {
     /// The server takes one waiting call and keeps it open (it is working on it: its current call);
     /// an abandoned-call notice on the way is answered with a reply, which frees the call.
     pub fn hold(&mut self) -> Option<Message> {
-        let s = self.server;
-        let recv = Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 };
         loop {
-            match self.k.step(&Op::Sys { pid: s.pid, tid: s.tid, call: recv.clone() }).map(|x| x.outcome) {
-                Some(Outcome::Done(Ok(Ret::Message(m)))) => return Some(m),
-                Some(Outcome::Done(Ok(Ret::Abandoned { msg_id }))) => {
-                    let call = Syscall::Reply { msg_id, words: [0; WORDS], handles: Vec::new() };
-                    self.k.step(&Op::Sys { pid: s.pid, tid: s.tid, call });
-                }
+            match self.take() {
+                Some(Ret::Message(m)) => return Some(m),
+                Some(Ret::Abandoned { msg_id }) => self.reply(msg_id),
                 _ => return None,
             }
         }
+    }
+
+    /// One `receive` by the server, without waiting. A message it takes goes in `taken`.
+    fn take(&mut self) -> Option<Ret> {
+        let s = self.server;
+        let recv = Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 };
+        let Outcome::Done(Ok(ret)) = self.k.step(&Op::Sys { pid: s.pid, tid: s.tid, call: recv })?.outcome
+        else {
+            return None;
+        };
+        if let Ret::Message(m) = &ret {
+            self.taken.push((m.labels.clone(), m.words[0]));
+        }
+        Some(ret)
+    }
+
+    /// The server answers one call it took.
+    pub fn reply(&mut self, msg_id: u64) {
+        let s = self.server;
+        let call = Syscall::Reply { msg_id, words: [0; WORDS], handles: Vec::new() };
+        self.k.step(&Op::Sys { pid: s.pid, tid: s.tid, call });
     }
 
     /// The server crashes (the kernel reports the account of the message it was serving).
@@ -1114,8 +1130,9 @@ impl Steward {
         if self.broken(Mutation::PolicyEndLeaseAdmitted) && self.pending_of(account, &[]) >= PENDING_CAP {
             return Err(Denied::Cap);
         }
+        let labels = l.labels.clone();
         self.end_session(lease)?;
-        self.record(Audit::LeaseEnded { session: lease, by });
+        self.record(Audit::LeaseEnded { session: lease, by, labels });
         Ok(())
     }
 
