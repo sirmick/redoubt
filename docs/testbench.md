@@ -198,7 +198,10 @@ programs in one of two ways:
   entry, `programs`. It has one ASCII line per program after the first, in the case's order:
   the program's entry name, then the names of the budgets it gets (`root`, `system`, `users`),
   separated by spaces. The tester reads it from the bundle's pages, which the loader verified
-  with the rest, and refuses the boot on any line it cannot parse. The log
+  with the rest, and refuses the boot on any line it cannot parse. Each program's own budget gets
+  an equal share of what `system` has free (pages and processes) and weight 1,000, a driver's,
+  so no program's limits depend on another's name or order. A case that needs other sizes builds
+  its own tree from the budgets it is given. The log
   server badges each program's handles with the program's place in the case, 2 on, and names
   programs by that place, because the kernel now draws every PID but the first. A case matches a
   PID in a kernel line with a pattern.
