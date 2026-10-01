@@ -2,6 +2,9 @@
 //! resumed under `serve`, an abandoned one is replied to at once, and one past its server-side
 //! deadline is answered with a timeout.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use redoubt_fake_kernel::{answer, fake};
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{self, Endpoint};
@@ -14,17 +17,27 @@ const WAIT: u64 = 1;
 const WAKE: u64 = 2;
 /// The status of a parked call past its deadline.
 const TIMED_OUT: u64 = 5;
-/// The longest a call stays parked (µs). Long enough that A's parked call cannot expire while B
-/// retries its wake-up, however loaded the machine (at 200 ms it could, and B then retried for
-/// ever).
-const LONGEST: u64 = 2_000_000;
 
-/// A server that parks `WAIT` calls and answers one with 42 for each `WAKE`, until its endpoint
-/// goes. Returns how many abandoned-call notices it handled and how many calls expired.
-fn serve(ep: Endpoint) -> (u32, u32) {
+/// Waits for the test's next step, `cond`, polling the fake kernel's state; fails naming `step`
+/// if it does not come within `TRIES` polls, before the fake's own 60 s guard.
+fn until(step: &str, mut cond: impl FnMut() -> bool) {
+    const TRIES: u32 = 20_000;
+    for _ in 0..TRIES {
+        if cond() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("{step}: not reached in {TRIES} polls");
+}
+
+/// A server that parks `WAIT` calls for at most `longest` µs and answers one with 42 for each
+/// `WAKE`, until its endpoint goes, counting in `abandoned` the abandoned-call notices it has
+/// handled. Returns how many it handled and how many calls expired.
+fn serve(ep: Endpoint, longest: u64, abandoned: Arc<AtomicU32>) -> (u32, u32) {
     let mut admission = Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0 }).unwrap();
-    let mut parked: Parked<u64> = Parked::new(LONGEST);
-    let (mut abandoned, mut expired) = (0, 0);
+    let mut parked: Parked<u64> = Parked::new(longest);
+    let mut expired = 0;
     loop {
         let now = handle::time_now().unwrap();
         while let Some(call) = parked.expired(&mut admission, now) {
@@ -56,73 +69,85 @@ fn serve(ep: Endpoint) -> (u32, u32) {
                 answer(request, [1, 0, 0, 0]).unwrap();
             }
             Ok(Event::Abandoned(id)) => {
+                // Counted before the reply frees the call, so a test that sees the call gone
+                // sees it counted.
+                abandoned.fetch_add(1, Ordering::Release);
                 assert!(
                     parked.abandoned(&mut admission, id, &[0; 4]).is_some(),
                     "a notice for a call not parked"
                 );
-                abandoned += 1;
             }
             Ok(_) | Err(Error::Timeout) => {}
-            Err(_) => return (abandoned, expired),
+            Err(_) => return (abandoned.load(Ordering::Acquire), expired),
         }
     }
 }
 
+/// Each step waits on the server's state, never against a deadline: A's and C's server parks
+/// without one, so nothing expires while B or C is slow, and D's server has a short one, which
+/// a slow host only reaches later.
 #[test]
 fn parked_calls_are_served_abandoned_and_expired() {
     let f = fake();
     let server = f.process(0, &[]);
     let receive = f.endpoint(server);
-    let [a, b, c, d] = [1001, 1002, 1003, 1004].map(|account| f.process(account, &[]));
-    let [ha, hb, hc, hd] =
-        [(a, 1), (b, 2), (c, 3), (d, 4)].map(|(pid, badge)| f.grant(server, receive, pid, badge));
+    let [a, b, c] = [1001, 1002, 1003].map(|account| f.process(account, &[]));
+    let [ha, hb, hc] = [(a, 1), (b, 2), (c, 3)].map(|(pid, badge)| f.grant(server, receive, pid, badge));
+    let abandoned = Arc::new(AtomicU32::new(0));
+    let seen = abandoned.clone();
     let server_thread = f.run(server, move || {
-        let (abandoned, expired) = serve(Endpoint::from_handle(receive));
+        let (abandoned, expired) = serve(Endpoint::from_handle(receive), FOREVER, seen);
         abandoned * 100 + expired
     });
 
-    // A waits; B wakes it (retrying until A's call is parked, and no longer than A waits).
+    // A waits; once the server holds A's call, B wakes it.
     let waiter = f.run(a, move || {
         Endpoint::from_handle(ha).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[1]
             as u32
     });
-    let waiter_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let done = waiter_done.clone();
+    until("the server holds A's call", || f.open_calls(server) == 1);
     let waker = f.run(b, move || {
-        let ep = Endpoint::from_handle(hb);
-        while !done.load(std::sync::atomic::Ordering::Acquire) {
-            if ep.call(&[WAKE, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[1] != 0 {
-                return 1;
-            }
-            handle::sleep(1000).unwrap();
-        }
-        0
+        Endpoint::from_handle(hb).call(&[WAKE, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[1]
+            as u32
     });
-    let woken = waiter.join().unwrap();
-    waiter_done.store(true, std::sync::atomic::Ordering::Release);
-    assert_eq!(waker.join().unwrap(), 1, "A's call was answered without B's wake-up (it expired)");
-    assert_eq!(woken, 42);
+    assert_eq!(waker.join().unwrap(), 1, "B's wake-up found no parked call");
+    assert_eq!(waiter.join().unwrap(), 42);
     // The server made A's call its current call before it answered it (kernel/processes.md R21).
-    // (A's is the only call resumed so far; B's were answered as they came.)
+    // (A's is the only call resumed so far; B's was answered as it came.)
     let log = f.log(server);
     let served = log.iter().position(|(call, _)| *call == "serve").expect("serve before resuming");
     let a_call = log[served].1;
     assert!(served < log.iter().position(|e| *e == ("reply", a_call)).unwrap());
 
     // C gives up on its parked call: the server is told and replies at once, freeing it, and
-    // closes the handles the call brought.
+    // closes the handles the call brought. A call that times out before the server takes it is
+    // withdrawn unseen, so C calls again until the server has handled the notice.
     let handles_before = f.held(server).0;
-    let gave_up = f.run(c, move || {
-        let carried = [Endpoint::create().unwrap().handle(), Endpoint::create().unwrap().handle()];
-        let r = Endpoint::from_handle(hc).call(&[WAIT, 0, 0, 0], &carried, None, 100_000);
-        u32::from(r.status == Err(Error::Timeout))
-    });
-    assert_eq!(gave_up.join().unwrap(), 1);
-    while f.open_calls(server) != 0 {
-        std::thread::sleep(std::time::Duration::from_millis(1));
+    let mut tries = 0;
+    while abandoned.load(Ordering::Acquire) == 0 {
+        tries += 1;
+        assert!(tries <= 100, "C's call was never taken before it timed out, in {tries} calls");
+        let gave_up = f.run(c, move || {
+            let carried = [Endpoint::create().unwrap().handle(), Endpoint::create().unwrap().handle()];
+            let r = Endpoint::from_handle(hc).call(&[WAIT, 0, 0, 0], &carried, None, 100_000);
+            u32::from(r.status == Err(Error::Timeout))
+        });
+        assert_eq!(gave_up.join().unwrap(), 1);
+        until("the server answered C's abandoned call", || f.open_calls(server) == 0);
     }
     assert_eq!(f.held(server).0, handles_before, "the abandoned call's handles were closed");
-    // D waits past the server's deadline: its call is answered with a timeout, under `serve`.
+    f.destroy(server, receive);
+    assert_eq!(server_thread.join().unwrap(), 100, "one abandoned call, none expired");
+
+    // D waits past a server's deadline: its call is answered with a timeout, under `serve`.
+    let server = f.process(0, &[]);
+    let receive = f.endpoint(server);
+    let d = f.process(1004, &[]);
+    let hd = f.grant(server, receive, d, 4);
+    let server_thread = f.run(server, move || {
+        let (abandoned, expired) = serve(Endpoint::from_handle(receive), 1_000, Arc::default());
+        abandoned * 100 + expired
+    });
     let expired = f.run(d, move || {
         Endpoint::from_handle(hd).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[0]
             as u32
@@ -131,12 +156,8 @@ fn parked_calls_are_served_abandoned_and_expired() {
     let log = f.log(server);
     let (_, d_call) = *log.last().unwrap();
     assert_eq!(log[log.len() - 2], ("serve", d_call));
-
-    while f.open_calls(server) != 0 {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
     f.destroy(server, receive);
-    assert_eq!(server_thread.join().unwrap(), 100 + 1, "one abandoned call, one expired");
+    assert_eq!(server_thread.join().unwrap(), 1, "no abandoned call, one expired");
 }
 
 #[test]
@@ -241,14 +262,13 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
     };
     // The agent floods: half the bucket (4 of 8) parks, the rest is refused.
     let flood: Vec<_> = (0..6).map(|_| wait(agent, agent_conn)).collect();
-    while f.open_calls(server) < 4 {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    // All six reached the server: four parked and two answered, so none parks after the lease.
+    until("four agent calls parked and two refused", || {
+        f.open_calls(server) >= 4 && flood.iter().filter(|t| t.is_finished()).count() >= 2
+    });
     // The sponsor still parks calls of its own: a third of the bucket.
     let own: Vec<_> = (0..2).map(|_| wait(sponsor, sponsor_conn)).collect();
-    while f.open_calls(server) < 6 {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    until("the sponsor's two calls parked", || f.open_calls(server) >= 6);
     let parked_before_end = f.run(sponsor, move || {
         Endpoint::from_handle(sponsor_conn)
             .call(&[END_LEASE, 0, 0, 0], &[], None, FOREVER)

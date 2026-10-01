@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 73
+revision = 77
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -259,8 +259,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K8", "K9", "K10"]
   body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-09-30: wp-gate1 tip b9aeb3477 (test fixes, arming on the event, readable child panics, the full-table lease: 4,091 endpoints). K12 merged (redoubt 5986f0dd7), so the targets should now be met. Left: rebase onto redoubt, the full case on both widths with targets met, the 16-seed sweep and pinned seed, the page status lines, the whole bench, review. Handoff: .wash/local/handoffs/gate1-implementer.md. Bisect: .wash/local/GATE1-r10-bisect.md. Tier A, size M."
-  state = "active"
-  revision = 63
+  state = "reported"
+  revision = 75
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
@@ -397,8 +397,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12", "IPC2"]
   body = "Closes docs/todo/process-ending-pumps-once.md. Builds docs/kernel/ipc.md#r4b-a-server-dies, keeping #r3-lends-and-abandoned-calls and docs/kernel/invariants.md#i15-abandoned-calls-reported-once; remeasures docs/kernel/budgets.md#residual-risks for #r10-destruction. Design: QA K12-pump-once. Brief: .wash/local/K13-implementer.md. Tier A (kernel), size S."
-  state = "parked"
-  revision = 5
+  state = "reported"
+  revision = 77
 
 [[node]]
   id = "K14"
@@ -435,5 +435,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Closes docs/todo/wall-clock-flakes.md (378a67877): uaf-lent-page (the holder answers SYNC before it holds the lend: a test bug, the case can pass without testing reuse), touch-beyond-ram, libs/rt parked.rs; plus process-review's zero_entries window found by K14's dig (a thread created with entry 0 runs if a tick lands between thread_create and process_exit: InstructionPageFault at 0; give those threads a parked entry, or the case runs under icount). Done when each orders on events and passes 20 runs beside a loaded host. Tests and libs/rt's test only; red team at low (attack cases). Tier B-sized, size S."
-  state = "reported"
-  revision = 72
+  state = "done"
+  revision = 76

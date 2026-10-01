@@ -69,7 +69,6 @@
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
   - [beamlet's modular exponentiation takes operands of any size](todo/beamlet-bignum-bounds.md)
-  - [Four cases that race the host's clock](todo/wall-clock-flakes.md)
   - [The parked write test races the host's clock](todo/parked-write-clock.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
