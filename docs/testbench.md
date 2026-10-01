@@ -199,9 +199,21 @@ programs in one of two ways:
   device and the bundle. It is the trusted tester, as the first program is
   today. When it is the log server, it starts the case's other programs itself, through the
   loader stub and from the bundle's pages, each in a budget of its own carved from `system`. Each
-  program gets the handles in the slots it has today: the boot endpoint's receive right for the
-  second program, and the boot and log endpoints for the later ones. A program also gets the
-  budgets the case names for it (`budgets = ["system"]`), which replaces `TAKE_GIFTS`. The
+  program gets the same slots:
+  - slot 1, the boot endpoint: its receive right for the first program started, a send badged
+    with its place for each later one;
+  - slot 2, the log endpoint, badged with its place;
+  - slot 3, its own budget;
+  - slot 4 on, the budgets the case names for it (`budgets = ["system"]`), in the line's order,
+    which replaces `TAKE_GIFTS`.
+
+  Its own budget's handle gives a program nothing it lacks: the pages are already its own to
+  spend, a carve from it comes out of its own share ([R7 (carving)](kernel/budgets.md#r7-carving)),
+  and destroying it ends only the program and what it started
+  ([R10 (destruction)](kernel/budgets.md#r10-destruction)), which the tester sees as a `killed`
+  notice. It lets a program read its own charges and run measured work in a budget it carves.
+  The budget is `system`-class, as its parent is, so a program may add labels below it; a kernel
+  case has no server those labels could reach. The
   builder tells the tester which programs to start, and with which budgets, in one more data
   entry, `programs`. It has one ASCII line per program after the first, in the case's order:
   the program's entry name, then the names of the budgets it gets (`root`, `system`, `users`),
@@ -215,7 +227,9 @@ programs in one of two ways:
   PID in a kernel line with a pattern.
 - **Under `init`, for the servers' cases.** The case boots the real `init` with a manifest of its
   own, packed as the `manifest` entry, and its test programs are `servers` entries in that
-  manifest. `init` prints its own lines bare, and `consoled` starts every other program's line
+  manifest. They get no budget handle, their own included, as no server does
+  ([R33 (no server holds a system budget)](servers/init.md#r33-no-server-holds-a-system-budget)).
+  `init` prints its own lines bare, and `consoled` starts every other program's line
   with its connection id ([consoled](servers/consoled.md#started-by-init)). A case's `reporter`
   names a manifest entry, and the bench reads that entry's connection id from `init`'s line
   announcing it. Such a case ends at its last `expect`, since no test program holds the Reset
