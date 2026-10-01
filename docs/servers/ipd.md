@@ -77,11 +77,11 @@ stateDiagram-v2
     Closed --> Listening: ctl listen<br/>(listen rule checked first)
     Connecting --> Established: handshake done
     Connecting --> Closed: refused, unreachable<br/>or 60 s timeout
-    Listening --> Listening: accept: a new socket N
+    Listening --> Listening: accept, a new socket N
     Established --> Closing: ctl close, or the peer ends
     Closing --> Closed: done, or linger 60 s
     Established --> Closed: ctl abort, disconnect,<br/>or 60 s without progress
-    Closed --> [*]: gone: its State unit returned
+    Closed --> [*]: gone, its State unit returned
 ```
 *Figure: a TCP socket's states as its `ctl` file reports them.*
 

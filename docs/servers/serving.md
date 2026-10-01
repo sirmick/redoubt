@@ -179,7 +179,7 @@ stateDiagram-v2
     [*] --> Taken: receive
     Taken --> Answered: answered at once<br/>(no admission)
     Taken --> Parked: park (InFlight admitted)
-    Taken --> Answered: park refused:<br/>answered now
+    Taken --> Answered: park refused,<br/>answered now
     Parked --> Working: resume / resume_first<br/>(serve, admission released)
     Parked --> Working: expired<br/>(serve, admission released)
     Parked --> Freed: abandoned notice<br/>(reply to nobody, admission released)
@@ -340,7 +340,7 @@ stateDiagram-v2
     Provisional --> RolledBack: reply discarded
     Provisional --> RolledBack: delivered,<br/>slot 0 not installed
     Provisional --> RolledBack: reply rejected<br/>(malformed sent instead)
-    RolledBack --> [*]: forget: record, descendants<br/>and admission released
+    RolledBack --> [*]: forgotten, with its record, descendants<br/>and admission released
     Kept --> [*]: disconnect by its holder
 ```
 *Figure: the outcome of a reply that carries a new connection or grant.*
