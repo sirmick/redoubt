@@ -1,0 +1,22 @@
+description = "process_map from a source of untouched stack reservation (memory.md, Failure and restart): refused for a taken destination, for a child's budget that cannot pay and for a caller's own budget that cannot back the source, each leaves the caller's and the child's usage unchanged; a call that goes ahead backs the source and charges the child alone"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["process-map-untouched"]
+timeout_secs = 30
+# The sole first program, holding UART and Reset, judges the kernel by `budget_usage`
+# (docs/testbench.md, "A sole first program judging the kernel"). The kernel once backed and
+# charged the source to the caller before these refusals.
+expect = [
+    '^\[process-map\] ok: a taken destination is refused$',
+    '^\[process-map\] ok: nothing charged$',
+    '^\[process-map\] ok: a child budget that cannot pay is refused$',
+    '^\[process-map\] ok: nothing charged$',
+    '^\[process-map\] ok: a caller that cannot back its source is refused$',
+    '^\[process-map\] ok: nothing charged$',
+    '^\[process-map\] ok: an untouched source moves$',
+    '^\[process-map\] ok: the child pays for the pages, the caller for nothing$',
+    '^\[process-map\] PROCESS-MAP UNTOUCHED TEST PASSED$',
+]
+forbid = ['\[process-map\] FAIL']
+poweroff = true

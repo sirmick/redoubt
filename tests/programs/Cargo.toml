@@ -54,6 +54,7 @@ bin = [
     { name = "proc-lifecycle", test = false },
     { name = "proc-review", test = false },
     { name = "proc-test", test = false },
+    { name = "process-map-untouched", test = false },
     { name = "receive-bad-record", test = false },
     { name = "redoubt-attack", test = false },
     { name = "redoubt-client", test = false },

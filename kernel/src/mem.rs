@@ -1035,9 +1035,9 @@ impl MemoryManager {
             // exists for each is an assumption: a budget's free_pages is backed by free
             // physical frames. It holds because `boot_budgets` gives `root` only the RAM frames
             // the kernel did not keep, every child carves its limit out of its parent's, and
-            // nothing is held back. `process_map` relies on the same thing only
-            // for page tables (its `prepare_map` `.expect`, which allocates through `walk`);
-            // failing on data frames with `.expect` is new here. `map_run` instead treats a
+            // nothing is held back. `process_map` relies on the same thing for its page tables
+            // (its `prepare_map` `.expect`, which allocates through `walk`) and for the untouched
+            // source pages it backs (its `ensure_range_exists` `.expect`). `map_run` instead treats a
             // failed `alloc_page` as live and unwinds (`undo_run`).
             let frame = self.alloc_page(pid).expect("map_fixed: charged for above");
             crate::kframe::zero(frame);
