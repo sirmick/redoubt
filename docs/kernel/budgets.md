@@ -541,7 +541,15 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   the abandoned-call notices. A full table holds about 4,000 endpoints, so under 30 ms leaves a
   few microseconds per object in the checked build. The chains therefore come with those costs
   cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and the
-  notice walk joined to a thread walk the destruction already makes.
+  notice walk joined to a thread walk the destruction already makes. At the full fill on rv32, the slower width, that
+  budgets the destruction at about 25 ms:
+  - the chain walk, under 1 ms;
+  - the dying tables, 2 ms;
+  - the processes' frames, 1.5 ms;
+  - the endpoints, 8 ms, at about 2 µs each;
+  - the threads' teardown, 8 ms;
+  - the thread walks, 2 ms;
+  - the rest, 3 ms.
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).
