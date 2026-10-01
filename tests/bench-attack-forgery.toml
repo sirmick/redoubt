@@ -17,4 +17,4 @@ expect = [
 ]
 poweroff = true
 reporter = "forger"
-must_fail = '^guest exited while waiting for /\^\\\[server\\\] irq: received \.y\.\$/$'
+must_fail = '^guest exited while waiting for /\^\\\[server\\\] irq: received \.y\.\$/: QEMU exited with exit status: 0$'

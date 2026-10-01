@@ -1,11 +1,12 @@
 //! Running one boot under QEMU and judging its console output.
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -33,6 +34,44 @@ pub enum Verdict {
 /// QEMU ends when the bench does, even when the bench is killed and nothing is dropped
 /// (Linux's parent-death signal): a run killed at its timeout leaves no guest running.
 const EXIT_WITH_PARENT: [&str; 2] = ["-run-with", "exit-with-parent=on"];
+
+/// The oldest QEMU that knows `EXIT_WITH_PARENT`.
+const EXIT_WITH_PARENT_SINCE: &str = "QEMU 10.1";
+
+/// Whether `qemu` takes every option the bench passes it that an older QEMU lacks; probed once
+/// per binary and run. Without this, a QEMU too old fails every boot case at once, each for
+/// the same reason.
+pub fn usable(qemu: &'static str) -> Result<(), String> {
+    static PROBED: Mutex<Vec<(&str, Result<(), String>)>> = Mutex::new(Vec::new());
+    let mut probed = PROBED.lock().unwrap();
+    if let Some((_, usable)) = probed.iter().find(|(binary, _)| *binary == qemu) {
+        return usable.clone();
+    }
+    let usable = probe(qemu, &EXIT_WITH_PARENT);
+    probed.push((qemu, usable.clone()));
+    usable
+}
+
+/// Run `qemu <options> -version`: QEMU rejects an option it does not know, or a `-run-with`
+/// parameter, before it gets to `-version`.
+fn probe(qemu: &str, options: &[&str]) -> Result<(), String> {
+    let run = |args: &[&str]| Command::new(qemu).args(args).stdin(Stdio::null()).output();
+    let probe = match run(&[options, &["-version"]].concat()) {
+        Ok(probe) => probe,
+        Err(e) => return Err(format!("`{qemu}` could not be run: {e}")),
+    };
+    if probe.status.success() {
+        return Ok(());
+    }
+    let first = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().next().unwrap_or("").trim().to_string();
+    let version = run(&["-version"]).map(|v| first(&v.stdout)).unwrap_or_default();
+    Err(format!(
+        "`{qemu}` does not take `{}`; the bench needs {EXIT_WITH_PARENT_SINCE} or later, this is {:?}: {}",
+        options.join(" "),
+        version,
+        first(&probe.stderr),
+    ))
+}
 
 /// A child process (QEMU, ssh) that is killed however the run ends.
 pub struct Reaped(pub Child);
@@ -170,6 +209,63 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
     Ok((args, forwards))
 }
 
+/// How much of QEMU's stderr the bench keeps: the last lines, each cut short, so a QEMU that
+/// writes without end cannot grow the bench's memory.
+const STDERR_LINES: usize = 20;
+const STDERR_LINE_BYTES: usize = 512;
+
+/// QEMU's stderr, read on its own thread: its last lines, kept to say why a guest died.
+struct Stderr {
+    tail: Arc<Mutex<VecDeque<String>>>,
+    reader: std::thread::JoinHandle<()>,
+}
+
+impl Stderr {
+    fn read(stderr: std::process::ChildStderr) -> Self {
+        let tail = Arc::new(Mutex::new(VecDeque::new()));
+        let kept = Arc::clone(&tail);
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stderr).split(b'\n').map_while(|l| l.ok()) {
+                let mut line =
+                    String::from_utf8_lossy(&line[..line.len().min(STDERR_LINE_BYTES)]).into_owned();
+                line.truncate(line.trim_end().len());
+                let mut kept = kept.lock().unwrap();
+                if kept.len() == STDERR_LINES {
+                    kept.pop_front();
+                }
+                kept.push_back(line);
+            }
+        });
+        Stderr { tail, reader }
+    }
+
+    /// The last lines QEMU wrote, once it has exited. A process QEMU started (a peer helper) can
+    /// hold the pipe open after QEMU is gone, so the reader is given a moment, not waited for.
+    fn last_lines(&self) -> Vec<String> {
+        let until = Instant::now() + Duration::from_secs(1);
+        while !self.reader.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.tail.lock().unwrap().iter().cloned().collect()
+    }
+}
+
+/// The verdict for a guest that ended: `failure` and QEMU's exit status, and when QEMU's
+/// stderr is the likely reason (it exited before the console said anything, or with a failing
+/// status), its last stderr lines, which go to the log too.
+fn exited(failure: String, status: ExitStatus, console: &mut Console, stderr: &Stderr) -> Result<String> {
+    if console.seen && status.success() {
+        return Ok(format!("{failure}: QEMU exited with {status}"));
+    }
+    let lines = stderr.last_lines();
+    writeln!(console.log, "QEMU exited with {status}; its stderr:")?;
+    for line in &lines {
+        writeln!(console.log, "{line}")?;
+    }
+    let said = if lines.is_empty() { "nothing on stderr".to_string() } else { lines.join(" | ") };
+    Ok(format!("{failure}: QEMU exited with {status}: {said}"))
+}
+
 /// What the console did next.
 enum Line {
     Text(String),
@@ -187,6 +283,8 @@ struct Console {
     captured: Vec<Option<String>>,
     inputs: Vec<(Regex, String)>,
     stdin: ChildStdin,
+    /// Whether the guest has printed a line yet.
+    seen: bool,
     /// The reporter's `DONE` line, and whether it has been seen (`Boot::reporter`).
     done: Option<Regex>,
     done_seen: bool,
@@ -204,6 +302,7 @@ impl Console {
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(Line::Exited),
         };
         writeln!(self.log, "{line}")?;
+        self.seen = true;
         if let Some(pattern) = self.forbid.iter().find(|p| p.is_match(&line)) {
             return Ok(Line::Forbidden(format!("forbidden output /{pattern}/: {line}")));
         }
@@ -260,10 +359,11 @@ pub fn run(
     qemu.args(["-display", "none", "-monitor", "none", "-serial", "stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     let mut guest = Reaped(qemu.spawn().with_context(|| format!("starting {}", machine.qemu))?);
     let stdin = guest.0.stdin.take().unwrap();
     let stdout = guest.0.stdout.take().unwrap();
+    let stderr = Stderr::read(guest.0.stderr.take().unwrap());
 
     // Read the console on a thread so that the deadline applies even to a silent guest.
     let (tx, rx) = mpsc::channel();
@@ -283,6 +383,7 @@ pub fn run(
         capture,
         inputs,
         stdin,
+        seen: false,
         done,
         done_seen: false,
     };
@@ -295,7 +396,8 @@ pub fn run(
             Line::Forbidden(why) => return Ok(Verdict::Fail(why)),
             Line::Timeout => return Ok(Verdict::Fail(format!("timed out waiting for /{}/", expect[next]))),
             Line::Exited => {
-                return Ok(Verdict::Fail(format!("guest exited while waiting for /{}/", expect[next])));
+                let failure = format!("guest exited while waiting for /{}/", expect[next]);
+                return Ok(Verdict::Fail(exited(failure, guest.0.wait()?, &mut console, &stderr)?));
             }
         }
     }
@@ -318,10 +420,8 @@ pub fn run(
             Line::Exited if boot.poweroff => {
                 let status = guest.0.wait()?;
                 if status.code() != Some(boot.poweroff_status) {
-                    return Ok(Verdict::Fail(format!(
-                        "QEMU exited with {status}, expected status {}",
-                        boot.poweroff_status
-                    )));
+                    let failure = format!("expected QEMU's exit status {}", boot.poweroff_status);
+                    return Ok(Verdict::Fail(exited(failure, status, &mut console, &stderr)?));
                 }
                 if console.done.is_some() && !console.done_seen {
                     return Ok(Verdict::Fail("powered off without the reporter's DONE".into()));
@@ -452,6 +552,20 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// The QEMU the bench runs takes every option it passes; a QEMU refusing one is reported
+    /// with the version needed and QEMU's own complaint.
+    #[test]
+    fn a_qemu_lacking_an_option_is_named() {
+        for qemu in ["qemu-system-riscv64", "qemu-system-riscv32"] {
+            assert_eq!(probe(qemu, &EXIT_WITH_PARENT), Ok(()));
+            let why = probe(qemu, &["-run-with", "no-such-parameter=on"]).expect_err("an unknown parameter");
+            assert!(why.contains("needs QEMU 10.1 or later, this is \"QEMU emulator version "), "{why}");
+            assert!(why.ends_with("Invalid parameter 'no-such-parameter'"), "{why}");
+        }
+        let why = probe("qemu-system-no-such-width", &EXIT_WITH_PARENT).expect_err("a missing binary");
+        assert!(why.starts_with("`qemu-system-no-such-width` could not be run: "), "{why}");
     }
 
     fn modern(args: &[String]) -> usize { args.windows(2).filter(|w| w == &MODERN_VIRTIO).count() }

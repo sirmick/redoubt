@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 77
+revision = 43
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -48,7 +48,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "milestone"
   body = "docs/plan/m1-separation.md"
   state = "active"
-  revision = 77
+  revision = 2
 
 [[node]]
   id = "M2"
@@ -259,8 +259,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K8", "K9", "K10"]
   body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-09-30: wp-gate1 tip b9aeb3477 (test fixes, arming on the event, readable child panics, the full-table lease: 4,091 endpoints). K12 merged (redoubt 5986f0dd7), so the targets should now be met. Left: rebase onto redoubt, the full case on both widths with targets met, the 16-seed sweep and pinned seed, the page status lines, the whole bench, review. Handoff: .wash/local/handoffs/gate1-implementer.md. Bisect: .wash/local/GATE1-r10-bisect.md. Tier A, size M."
-  state = "parked"
-  revision = 76
+  state = "reported"
+  revision = 16
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
@@ -270,8 +270,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["GATE1", "API1"]
   body = "Builds docs/kernel/boot.md#the-loader-loads-only-the-kernel-and-init (the bundle mapped into init, a0/a1), docs/kernel/devices.md#device_info (a new kernel call: which device a handle names; owner's choice), docs/kernel/budgets.md#the-tree-from-the-boot-manifest (root keeps init's process), docs/testbench.md#starting-a-cases-programs (the in-init's-place half: the log server launches the case's programs with named budgets; TAKE_GIFTS goes) and #data-entries-for-init (read-back from the bundle's pages). Brief: .wash/local/INIT1-implementer.md. Design: QA INIT1-design. Tier A (loader, kernel ABI, bench builder), size L."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 40
+  overrides = ["2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, confirming run), and only K15's bookkeeping is left; INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program. wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, resolved, dd862a390); only K15 is left before it is accepted. INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the audits excluded (QA GATE1-notice-late resolved, dd862a390); K15 is in review. INIT1 touches the loader, kernel ABI and bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance."]
 
 [[node]]
   id = "INIT2"
@@ -321,7 +322,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K9"]
   body = "Endpoint destruction no longer scans every thread: GATE1's full-fill run found destroy_endpoint (message.rs:1580) calls fail_all three times per endpoint, each driving find_thread over MAX_PROCESS_COUNT x MAX_THREADS, so R10 is O(owned endpoints x processes x threads); a full lease (~1460 endpoints) destroys at p99 ~1.9 s vs 30 ms. The Architect's K9-design escape hatch ('reverse index ... reopen here rather than widen'). Tier A (kernel), size M. Design: QA K10-design."
   state = "done"
-  revision = 12
+  revision = 2
 
 [[node]]
   id = "SHELL1"
@@ -330,7 +331,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Folds origin/wp-SHELL1 (11 commits on 5bad23c6e, owner-authored) into redoubt, cautiously: rebased onto redoubt as wp-shell1 (.worktrees/shell1), conflicts in docs/plan/m1-separation.md and vendor/README.md resolved, then the full Tier A panel. Pages: docs/userland/shell.md, beamlet.md, native.md (the cell protocol), docs/SECURITY.md (the session), vendor/README.md. Tier A: beamlet's platform boundary, crypto crate swaps (RSA 0.10 RC, ed25519-compact), the cell-protocol parser, vendor-check and doccheck. Size L (7.6K lines outside vendor/, 381K vendored). Merges after K10."
   state = "done"
-  revision = 54
+  revision = 2
 
 [[node]]
   id = "ATK1"
@@ -339,7 +340,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "The memory.md, memory-layout.md and I9 lines of docs/todo/kernel-attack-gaps.md; docs/kernel/memory.md, docs/kernel/memory-layout.md. Brief: .wash/local/ATK1-implementer.md. Tier A (attack cases), size M."
   state = "done"
-  revision = 51
+  revision = 2
 
 [[node]]
   id = "K11"
@@ -348,7 +349,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Closes docs/todo/user-cache-invalidate.md; rule on docs/kernel/memory.md#r11-memory. Brief: .wash/local/K11-implementer.md. Tier A (kernel arch, firmware), size S."
   state = "done"
-  revision = 50
+  revision = 2
 
 [[node]]
   id = "MOD1"
@@ -357,7 +358,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Closes docs/todo/abi-model-disagreements.md and the model.md lines of docs/todo/kernel-attack-gaps.md (not replay); docs/kernel/abi.md#errors-and-the-order-of-checks, docs/kernel/model.md. Brief: .wash/local/MOD1-implementer.md. Tier A (the model), size M."
   state = "done"
-  revision = 72
+  revision = 2
 
 [[node]]
   id = "SSH2"
@@ -366,7 +367,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Closes docs/todo/sshd-unseen-requests.md, docs/todo/sshd-vendored-miri.md and docs/todo/ssh-loopback-host.md (the OpenSSH reference case in a container: owner's decision on QA ssh-reference-selinux, rule on docs/testbench.md#sessions-and-the-loopback-server, e95c6c099); docs/testbench.md#against-redoubts-sshd, docs/servers/sshd.md. Brief: .wash/local/SSH2-implementer.md. Tier A (sshd, the bench), size L."
   state = "done"
-  revision = 70
+  revision = 2
 
 [[node]]
   id = "K12"
@@ -376,7 +377,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["GATE1-composed-r10"]
   body = "Designed in docs/kernel/budgets.md Residual risks items 3-5 (QA GATE1-composed-r10, K12-full-fill-ring, K12-pump-once). PARKED 2026-09-30: wp-k12 tip 497d21496 on the cleaned redoubt a61a1917b; reviewed (red OK with notes, simplifier OK, editor OK), round 1 fixes folded; full fill rv32 23.6/20.5 ms, rv64 23.3/20.5; 16-seed sweep 32/32. Left: rebase over MOD1 (ca0d27e20; conflicts at the model's handle-slot constant and size-budget.toml's model line 10092), model host tests and mutation sweep, the whole bench, merge. Handoff: .wash/local/handoffs/k12-implementer-2.md. Tier A (kernel), size L."
   state = "done"
-  revision = 74
+  revision = 2
   overrides = ["2026-09-30: started by Orchestrator before QA GATE1-composed-r10 (open): Step 0 (the trace ring) is settled on QA GATE1-composed-r10 and may start before the design; everything past it waits for the thread."]
 
 [[node]]
@@ -386,15 +387,53 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12", "MOD1"]
   body = "Closes docs/todo/r2-least-recently-served.md; rule on docs/kernel/ipc.md#r2-fair-waiting (9f0b47f38), for docs/servers/steward.md#r37-vault-non-interference. Design: QA MOD1-r2-cursor-blame. Brief: .wash/local/IPC2-implementer.md. Tier A (kernel IPC, the model), size M."
-  state = "parked"
-  revision = 77
+  state = "active"
+  revision = 11
 
 [[node]]
   id = "K13"
-  title = "Kernel follow-ups after K12: an ending process pumps each endpoint once"
+  title = "An ending process pumps each endpoint once"
+  template = "package"
+  parent = "M1"
+  needs = ["K12", "IPC2"]
+  body = "Closes docs/todo/process-ending-pumps-once.md. Builds docs/kernel/ipc.md#r4b-a-server-dies, keeping #r3-lends-and-abandoned-calls and docs/kernel/invariants.md#i15-abandoned-calls-reported-once; remeasures docs/kernel/budgets.md#residual-risks for #r10-destruction. Design: QA K12-pump-once. Brief: .wash/local/K13-implementer.md. Tier A (kernel), size S."
+  state = "parked"
+  revision = 5
+
+[[node]]
+  id = "K14"
+  title = "Kernel memory follow-ups: process_map backs after it can refuse, one boot stack reservation"
   template = "package"
   parent = "M1"
   needs = ["K12"]
-  body = "Closes docs/todo/process-ending-pumps-once.md (ipc.md R3, R4b; QA K12-pump-once). Candidates to fold in: docs/todo/process-map-backs-before-refusing.md, docs/todo/boot-stack-reservation.md, and the rt-host-tests wall-clock flake (libs/rt's parked host test took 64 s against 4 s under host load 66 on rv32; passes alone; a flaky test is a bug). Brief: the Architect cuts it when K12 merges. Tier A (kernel), size S-M."
-  state = "parked"
-  revision = 77
+  body = "Closes docs/todo/process-map-backs-before-refusing.md (docs/kernel/memory.md#failure-and-restart) and docs/todo/boot-stack-reservation.md (docs/kernel/memory-layout.md#regions). kernel/src/process.rs, mem.rs, arch/riscv/process.rs and the loader: no overlap with IPC2 or K13 in message.rs. Tier A (kernel, loader), size S."
+  state = "active"
+  revision = 35
+
+[[node]]
+  id = "B3"
+  title = "The bench says why a guest died at once, and checks its QEMU"
+  template = "package"
+  parent = "M1"
+  body = "tools/testbench/src/qemu.rs: run() nulls QEMU's stderr, so a QEMU that exits before its first console line is reported as 'guest exited' with an empty log (seen 2026-10-01: QEMU 10.0 lacking -run-with exit-with-parent, docs/testbench.md); the option is never probed. Builds docs/testbench.md (the guest's early exit names QEMU's error; the bench names the QEMU version it needs, GETTING-STARTED.md prerequisites). Brief: .wash/local/B3-implementer.md. Tier A (the bench), size S."
+  state = "done"
+  revision = 43
+
+[[node]]
+  id = "K15"
+  title = "The latency targets exclude the checked build's audits"
+  template = "package"
+  parent = "M1"
+  needs = ["K12"]
+  body = "Closes docs/todo/latency-excludes-audits.md. Rule: docs/kernel/scheduling.md#responsiveness and docs/testbench.md#checked-builds (dd862a390), for docs/kernel/README.md#containment. Design: QA GATE1-notice-late (owner: exclude audits). Brief: .wash/local/K15-implementer.md. Tier A (kernel trace, the oracle), size S. Touches budget.rs destroy_subtree, process.rs index_process, sched.rs trace, tools/testbench sched_oracle; not message.rs. GATE1 resumes on it."
+  state = "active"
+  revision = 41
+
+[[node]]
+  id = "B4"
+  title = "Three cases order on events, not on the host's clock"
+  template = "package"
+  parent = "M1"
+  body = "Closes docs/todo/wall-clock-flakes.md (378a67877): uaf-lent-page (the holder answers SYNC before it holds the lend: a test bug, the case can pass without testing reuse), touch-beyond-ram, libs/rt parked.rs; done when each orders on events and passes 20 runs beside a loaded host. Tests and libs/rt's test only; red team at low (attack cases). Tier B-sized, size S."
+  state = "todo"
+  revision = 42

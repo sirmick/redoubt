@@ -6,7 +6,7 @@ book. What Redoubt is, and what each part does, is in [the book](docs/README.md)
 ## Prerequisites
 
 The dev container has everything the operating system needs: Rust with the RISC-V bare-metal
-targets, QEMU for both widths and OpenSSH.
+targets, QEMU 10.1 or later for both widths and OpenSSH 10.1 or later.
 
 ```sh
 ./dev.sh                 # build the image (first time), then a shell in /work

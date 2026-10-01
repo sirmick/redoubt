@@ -59,7 +59,7 @@ struct Args {
     /// With --run, start QEMU paused with a gdb stub on :1234.
     #[arg(long)]
     debug: bool,
-    /// Report a case whose firmware or OpenSSH is missing as SKIP instead of FAIL.
+    /// Report a case whose firmware, QEMU or OpenSSH is missing or too old as SKIP instead of FAIL.
     #[arg(long)]
     allow_skip: bool,
     /// Show cargo's output.
@@ -211,7 +211,7 @@ fn main() -> Result<()> {
         }
         if let Kind::SshLoopback(loopback) = &case.kind {
             let started = Instant::now();
-            // Only OpenSSH's server needs a container; Redoubt's needs only `ssh`.
+            // Only OpenSSH's server needs a container; Redoubt's, an `ssh` that takes its options.
             let usable = match loopback.server {
                 LoopbackServer::Openssh => loopback_usable
                     .get_or_insert_with(|| {
@@ -220,7 +220,9 @@ fn main() -> Result<()> {
                             .and_then(|()| ssh::loopback_usable(&workspace, &logs.join("ssh")))
                     })
                     .clone(),
-                LoopbackServer::Redoubt => ssh_available().map_err(ssh::Unusable::Host),
+                LoopbackServer::Redoubt => {
+                    ssh_available().and_then(|()| ssh::redoubt_usable()).map_err(ssh::Unusable::Host)
+                }
             };
             let outcome = match usable {
                 Err(ssh::Unusable::Host(why)) => missing(why),
@@ -373,6 +375,9 @@ fn run_case(
         Ok(firmware) => firmware,
         Err(why) => return Ok(vec![(String::new(), missing(why), 0.0)]),
     };
+    if let Err(why) = qemu::usable(machine.qemu) {
+        return Ok(vec![(String::new(), missing(why), 0.0)]);
+    }
     if !boot.session.is_empty() {
         if let Err(why) = ssh_available() {
             return Ok(vec![(String::new(), missing(why), 0.0)]);
@@ -532,7 +537,9 @@ fn ssh_loopback(workspace: &Path, case: &Case, loopback: &case::SshLoopback, log
     let sessions = ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort)?;
     // What the server saw comes first: a case that fails as its `must_fail` expects still fails if
     // the server did not see it that way.
-    let server_log = std::fs::read_to_string(ssh::loopback_log(&logs.join("ssh"), &case.name))?;
+    let server_log = ssh::loopback_log(&logs.join("ssh"), &case.name);
+    let server_log = std::fs::read_to_string(&server_log)
+        .with_context(|| format!("reading the server's log {}", server_log.display()))?;
     for pattern in &loopback.server_log {
         let re = regex::Regex::new(pattern)?;
         if !server_log.lines().any(|line| re.is_match(line)) {

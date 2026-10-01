@@ -35,7 +35,7 @@ fallback to QEMU's own firmware.
 
 ### What a case passes on
 
-Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu
+Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-qemu-early-exit, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu, host:testbench::a_qemu_lacking_an_option_is_named
 
 A boot case passes when every `expect` pattern matches a console line, in order, no `forbid`
 pattern ever matches, and the boot ends as the case says. Three patterns are always forbidden:
@@ -45,6 +45,14 @@ one still fails the case. With `poweroff = true` it reads instead until QEMU exi
 exit status the case names (0 by default; 255 for an SBI system failure). QEMU runs with
 `-run-with exit-with-parent=on`, so a bench killed at its timeout, even outright, leaves no guest
 running to skew the next run.
+
+That option is QEMU 10.1's, and the bench checks for it: before a width's first boot it runs that
+width's QEMU with the option and `-version`, and a QEMU that refuses it fails every boot case at
+once with the version found, the version needed and QEMU's complaint (skips them, with
+`--allow-skip`, as a missing firmware does). A guest that ends before it prints a line, or whose
+QEMU exits with a failing status, fails with QEMU's exit status and the last lines of its stderr,
+which go to the console log too; one that printed and then died fails as it did, with QEMU's exit
+status.
 
 In-guest programs print through the log server and finish with `<NAME> TEST PASSED` or
 `<NAME> TEST FAILED`; attack programs end with `attempts done` instead. The log server starts every
@@ -460,7 +468,7 @@ unchanged, so the case is still a witness independent of Redoubt's server.
 
 ### Against Redoubt's sshd
 
-Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested: bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback, bench:bench-ssh-loopback-host-key, bench:sshd-host-tests
+Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested: bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback, bench:bench-ssh-loopback-host-key, bench:sshd-host-tests, host:testbench::an_ssh_lacking_an_option_is_named
 
 `ssh-loopback` cases run the host's OpenSSH `ssh` against Redoubt's own `sshd` on its host
 platform, `redoubt-sshd-host` ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)),
@@ -488,11 +496,14 @@ shell, a login context or a container.
   (`bench-ssh-loopback-openssh`). Its server runs in a container
   ([sessions and the loopback server](#sessions-and-the-loopback-server)).
 - `ssh` gets `WarnWeakCrypto=no-pq-kex` against Redoubt's server, whose exchange is not
-  post-quantum: OpenSSH's warning would otherwise be session output.
+  post-quantum: OpenSSH's warning would otherwise be session output. The option is OpenSSH 10.1's,
+  and before such a case the bench has `ssh -G` parse it: an older `ssh` fails the case with the
+  version found and the version needed (skips it, with `--allow-skip`), rather than with the
+  server's log that was never written.
 
 ## Self-checks
 
-Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused, bench:bench-cbo-self-unrefused
+Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused, bench:bench-cbo-self-unrefused, bench:bench-qemu-early-exit
 
 The harness can fail, and each feature shows it. Cases named `bench-*` check the bench itself:
 each feature has a case that passes only if the feature works and, where the bench can be

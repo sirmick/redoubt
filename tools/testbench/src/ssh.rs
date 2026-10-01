@@ -22,6 +22,33 @@ use crate::case::{Session, Step};
 use crate::qemu::{Forward, Reaped};
 
 pub const SSH: &str = "ssh";
+
+/// What `ssh` gets against Redoubt's server, whose exchange is not post-quantum: OpenSSH's
+/// warning would otherwise be session output. OpenSSH 10.1 introduced the option.
+const REDOUBT_OPTIONS: [&str; 2] = ["-o", "WarnWeakCrypto=no-pq-kex"];
+const REDOUBT_OPTIONS_SINCE: &str = "OpenSSH 10.1";
+
+/// Whether the host's `ssh` takes the options it gets against Redoubt's server. An older one
+/// refuses them before it runs the server, so every such case would fail on a server log that
+/// was never written.
+pub fn redoubt_usable() -> Result<(), String> { takes(&REDOUBT_OPTIONS, REDOUBT_OPTIONS_SINCE) }
+
+/// Whether `ssh` takes `options`: `-G` parses them and prints the configuration, connecting to
+/// nothing. If not, the error names the version needed, the one found and ssh's complaint.
+fn takes(options: &[&str], since: &str) -> Result<(), String> {
+    let probe = Command::new(SSH).arg("-G").args(options).arg("redoubt").stdin(Stdio::null()).output();
+    let probe = probe.map_err(|e| format!("`{SSH}` could not be run: {e}"))?;
+    if probe.status.success() {
+        return Ok(());
+    }
+    let first = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().next().unwrap_or("").trim().to_string();
+    let version = Command::new(SSH).arg("-V").output().map(|v| first(&v.stderr)).unwrap_or_default();
+    Err(format!(
+        "`{SSH}` does not take `{}`; the bench needs {since} or later, this is {version:?}: {}",
+        options.join(" "),
+        first(&probe.stderr)
+    ))
+}
 /// The recipe of OpenSSH's server image for the reference case, relative to the workspace.
 const CONTAINERFILE: &str = "tests/ssh-reference/Containerfile";
 /// The reference server's only login: root in its container, which is the bench's user outside.
@@ -88,7 +115,7 @@ pub enum Server<'a> {
 /// an earlier run must not satisfy this one's `server_log`.
 fn fresh_log(dir: &Path, case: &str) -> Result<PathBuf> {
     let log = loopback_log(dir, case);
-    std::fs::create_dir_all(log.parent().unwrap())?;
+    std::fs::create_dir_all(log.parent().unwrap()).with_context(|| format!("creating {}", log.display()))?;
     match std::fs::remove_file(&log) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => bail!("removing {}: {e}", log.display()),
         _ => Ok(log),
@@ -257,7 +284,7 @@ pub fn loopback(
     let log = fresh_log(dir, case)?;
     let case_dir = log.parent().unwrap();
     // The container mounts the log file itself, so it must exist.
-    std::fs::File::create(&log)?;
+    std::fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
     std::fs::write(case_dir.join("authorized_keys"), keys.join("\n") + "\n")?;
     key_file(workspace, case_dir, "loopback-host")?;
     std::fs::write(
@@ -386,7 +413,7 @@ pub fn run(
     abort: &AtomicBool,
 ) -> Result<Option<String>> {
     let dir = logs.join("ssh");
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     // Host keys: checked when the case says which key to expect, as known_hosts under one
     // alias. The guest's key is not known until `sshd` exists (docs/plan/m1-separation.md), so
     // guest cases may accept any.
@@ -398,7 +425,8 @@ pub fn run(
     match host_key {
         Some(key) => {
             let known_hosts = dir.join(format!("{log_prefix}-known_hosts"));
-            std::fs::write(&known_hosts, format!("redoubt {key}\n"))?;
+            std::fs::write(&known_hosts, format!("redoubt {key}\n"))
+                .with_context(|| format!("writing {}", known_hosts.display()))?;
             host_key_options.push("HostKeyAlias=redoubt".into());
             host_key_options.push("StrictHostKeyChecking=yes".into());
             host_key_options.push(format!("UserKnownHostsFile={}", known_hosts.display()));
@@ -432,8 +460,7 @@ pub fn run(
             ssh.args(["-o", option]);
         }
         if let Server::Redoubt { .. } = server {
-            // Its exchange is not post-quantum, and OpenSSH's warning would be session output.
-            ssh.args(["-o", "WarnWeakCrypto=no-pq-kex"]);
+            ssh.args(REDOUBT_OPTIONS);
         }
         ssh.args(&session.ssh_args);
         match server {
@@ -543,7 +570,12 @@ fn drive(
         }
         false => (None, Stdio::piped()),
     };
-    let mut child = ssh.stdin(input).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut child = ssh
+        .stdin(input)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Stop::Broken(format!("running {SSH}: {e}")))?;
     let (tx, events) = mpsc::channel();
     let streams: [Box<dyn Read + Send>; 2] =
         [Box::new(child.stdout.take().unwrap()), Box::new(child.stderr.take().unwrap())];
@@ -570,7 +602,8 @@ fn drive(
         open_streams: 2,
         status: None,
         forbid,
-        log: std::fs::File::create(log)?,
+        log: std::fs::File::create(log)
+            .map_err(|e| Stop::Broken(format!("creating {}: {e}", log.display())))?,
         undecoded: Vec::new(),
         line: String::new(),
         last_line: String::new(),
@@ -749,6 +782,16 @@ fn describe(status: ExitStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An `ssh` that refuses an option the bench gives it is named with the version needed and
+    /// ssh's own complaint; one it takes passes.
+    #[test]
+    fn an_ssh_lacking_an_option_is_named() {
+        assert_eq!(takes(&["-o", "BatchMode=yes"], "OpenSSH 1.0"), Ok(()));
+        let why = takes(&["-o", "NoSuchOption=yes"], "OpenSSH 99.0").expect_err("an unknown option");
+        assert!(why.starts_with("`ssh` does not take `-o NoSuchOption=yes`; the bench needs OpenSSH 99.0 or later, this is \"OpenSSH_"), "{why}");
+        assert!(why.ends_with("Bad configuration option: nosuchoption"), "{why}");
+    }
 
     /// The reference server's `ProxyCommand` is the container command the rule gives, and a case
     /// directory the shell would read as more than a path never reaches it.
