@@ -1,0 +1,10 @@
+[package]
+name = "mdbook-memmap"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Renders the book's ```memmap blocks, address maps written as text, into SVG drawn to scale on a log axis"
+publish = false
+
+[dependencies]
+serde_json = "1"

@@ -59,7 +59,15 @@ Nothing unmaps the physmap. So the kernel reaches any frame at any time, without
 
 ## The split by root entry
 
-Status: built · tested: bench:map-fixed-attack, bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound, bench:kernel-half-attack
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:map-fixed-attack
+- bench:loader-rejects-kernel-address
+- bench:loader-rejects-kernel-entry
+- host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound
+- bench:kernel-half-attack
+
+</details>
 
 The root table's lower half is user space; its upper half is the kernel's. The kernel's root
 entries are made once, by the loader, and never change afterwards. Creating an address space
@@ -117,25 +125,15 @@ Inside the kernel area:
 | `0xffff_ffff_fff8_0000` | top of the kernel stack (`KERNEL_STACK_TOP`), 8 pages below it |
 | `0xffff_ffff_ffff_0000` | top of the trap stack (`TRAP_STACK_TOP`), 8 pages below it |
 
-```svgbob
- virtual address              root entries
-+----------------------------+ 0xffff_ffff_ffff_ffff
-| kernel area: image, kernel |
-| and trap stacks, PLIC and  |  511         shared
-| DMA register windows       |
-+----------------------------+ 0xffff_ffff_c000_0000
-| per-process kernel data    |  510         one per address space
-+----------------------------+ 0xffff_ffff_8000_0000
-| empty                      |  384 - 509
-+----------------------------+ 0xffff_ffe0_0000_0000
-| physmap: physical 0 to the |
-| end of RAM, 1 GiB leaves   |  256 - 383   shared
-+----------------------------+ 0xffff_ffc0_0000_0000
-| not canonical: every       |
-| access faults              |
-+----------------------------+ 0x0000_0040_0000_0000
-| user space, 256 GiB        |  0 - 255     one per address space
-+----------------------------+ 0x0
+```memmap
+top 0xffff_ffff_ffff_ffff
+columns root entries | sharing
+0xffff_ffff_c000_0000 | kernel area: image, kernel and trap stacks, PLIC and DMA register windows | 511 | shared
+0xffff_ffff_8000_0000 | per-process kernel data | 510 | one per address space
+0xffff_ffe0_0000_0000 hole | empty | 384 - 509
+0xffff_ffc0_0000_0000 | physmap: physical 0 to the end of RAM, 1 GiB leaves | 256 - 383 | shared
+0x0000_0040_0000_0000 hole | not canonical: every access faults
+0x0 | user space, 256 GiB | 0 - 255 | one per address space
 ```
 *Figure: the Sv39 address map. Everything above the non-canonical gap is supervisor-only.*
 
@@ -154,26 +152,15 @@ Root entries are 4 MiB each, 1024 of them. Every 32-bit address is canonical.
 
 A QEMU `virt` PLIC is 6 MiB, which is why the PLIC window takes two root entries.
 
-```svgbob
- virtual address        root entries
-+----------------------+ 0xffff_ffff
-| kernel area: image,  |
-| kernel and trap      |  1023          shared
-| stacks               |
-+----------------------+ 0xffc0_0000
-| per-process kernel   |  1022          one per address space
-| data                 |
-+----------------------+ 0xff80_0000
-| DMA register window  |  1021, 64 KiB  shared
-+----------------------+ 0xff7f_0000
-| PLIC window          |  1020 - 1021   shared
-+----------------------+ 0xff00_0000
-| physmap: RAM at its  |
-| own address, 4 MiB   |  512 - 1019    shared
-| leaves               |
-+----------------------+ 0x8000_0000
-| user space, 2 GiB    |  0 - 511       one per address space
-+----------------------+ 0x0
+```memmap
+top 0xffff_ffff
+columns root entries | sharing
+0xffc0_0000 | kernel area: image, kernel and trap stacks | 1023 | shared
+0xff80_0000 | per-process kernel data | 1022 | one per address space
+0xff7f_0000 | DMA register window | 1021, 64 KiB | shared
+0xff00_0000 | PLIC window | 1020 - 1021 | shared
+0x8000_0000 | physmap: RAM at its own address, 4 MiB leaves | 512 - 1019 | shared
+0x0 | user space, 2 GiB | 0 - 511 | one per address space
 ```
 *Figure: the Sv32 address map. Everything from `0x8000_0000` up is supervisor-only.*
 
@@ -196,7 +183,14 @@ any other address there is an ordinary fault.
 
 ### Regions
 
-Status: built · partly tested: the message area is a convention of the kernel that no case attacks as an address · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:map-anon-search-bound, bench:boot-stack-reservation
+<details><summary>Status: built · partly tested: the message area is a convention of the kernel that no case attacks as an address · tested (4)</summary>
+
+- bench:map-fixed-attack
+- bench:map-fixed-tables
+- bench:map-anon-search-bound
+- bench:boot-stack-reservation
+
+</details>
 
 User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the rest, up to
 256 GiB, is free for `map_fixed` and `process_map` and nothing is placed there by default.
@@ -216,30 +210,19 @@ choice; `map_anon`'s choice is [memory](memory.md)'s. A process started by the l
 image, its stack and nothing else; its first thread starts with `sp` 16 bytes below
 `0x8000_0000`. On Sv32 the stack top is also the end of user space.
 
-```svgbob
-+--------------------------+ 0x8000_0000   Sv32: end of user space
-| first thread's stack     |               Sv39: user space goes on
-| (128 KiB reserved)       |               to 0x40_0000_0000
-+--------------------------+ 0x7ffe_0000
-| startup block (launched) |
-+--------------------------+ 0x7ff0_0000
-| free                     |
-+--------------------------+ 0x7000_0000
-| map_anon area, 256 MiB   |
-+--------------------------+ 0x6000_0000
-| free                     |
-+--------------------------+ 0x4040_0000
-| message area, 4 MiB      |
-+--------------------------+ 0x4000_0000
-| free                     |
-+--------------------------+ 0x1ff4_0000
-| loader stub (launched)   |
-+--------------------------+ 0x1ff0_0000
-| program image            |
-| (link range)             |
-+--------------------------+ 0x0001_0000
-| free, page 0 included    |
-+--------------------------+ 0x0
+```memmap
+top 0x7fff_ffff
+columns widths
+0x7ffe_0000 | first thread's stack (128 KiB reserved) | Sv32: the end of user space; Sv39: user space goes on to 0x40_0000_0000
+0x7ff0_0000 | startup block (launched)
+0x7000_0000 hole | free
+0x6000_0000 | map_anon area, 256 MiB
+0x4040_0000 hole | free
+0x4000_0000 | message area, 4 MiB
+0x1ff4_0000 hole | free
+0x1ff0_0000 | loader stub (launched)
+0x0001_0000 | program image (link range)
+0x0 hole | free, page 0 included
 ```
 *Figure: user space, the same on both widths. Launched processes get the stub and a startup block; boot processes do not.*
 
@@ -286,7 +269,14 @@ stack; see Residual risks.
 
 ## Sv32 and Sv39 compared
 
-Status: built · tested: bench:wx, bench:touch-beyond-ram, bench:stub-launch, bench:map-fixed-tables
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:wx
+- bench:touch-beyond-ram
+- bench:stub-launch
+- bench:map-fixed-tables
+
+</details>
 
 The two modes share the low ten entry bits, and the physical page number starts at bit 10 in
 both. So one `usize`-sized `Pte` type and one flag set (`PteFlags`) serve both widths, and the
@@ -364,7 +354,15 @@ process; it never counts as a page that wants backing.
 
 ### The lent bit
 
-Status: built · tested: bench:return-lent-unmapped, bench:lender-touches-lent, bench:move-borrowed-page, bench:map-fixed-attack, bench:uaf-lent-page
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:return-lent-unmapped
+- bench:lender-touches-lent
+- bench:move-borrowed-page
+- bench:map-fixed-attack
+- bench:uaf-lent-page
+
+</details>
 
 A [lend](ipc.md) is recorded in the page tables themselves, with the software bit `S`:
 
