@@ -26,7 +26,7 @@ max_lines = 966
 [[crate]]
 name = "libs/layout"
 paths = ["libs/layout/src"]
-max_lines = 58
+max_lines = 60
 
 [[crate]]
 name = "libs/paging"

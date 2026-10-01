@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 50
+revision = 51
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -338,8 +338,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "The memory.md, memory-layout.md and I9 lines of docs/todo/kernel-attack-gaps.md; docs/kernel/memory.md, docs/kernel/memory-layout.md. Brief: .wash/local/ATK1-implementer.md. Tier A (attack cases), size M."
-  state = "reported"
-  revision = 38
+  state = "done"
+  revision = 51
 
 [[node]]
   id = "K11"

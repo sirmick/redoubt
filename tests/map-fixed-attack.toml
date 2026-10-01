@@ -1,5 +1,5 @@
-description = "map_fixed (R11, R22): a range check, an overlap check (stack, untouched reservation, map_anon, both sides of a lend) and the flags rule each refuse with nothing mapped and nothing charged; both halves of the charge check (pages, then page tables) are exact; a huge len is refused within 10 ms, over mappings too, before the overlap walk; the success path zeroes, enforces flags and unmaps back to baseline; page 0 is user space"
-arch = ["rv64"]
+description = "map_fixed (R11, R22): a range check, an overlap check (stack, untouched reservation, map_anon, both sides of a lend) and the flags rule each refuse with nothing mapped and nothing charged; both halves of the charge check (pages, then page tables) are exact; a huge len is refused within 10 ms, over mappings too, before the overlap walk, and so are unmap, set_flags, process_map and a lend over a huge range; the success path zeroes, enforces flags and unmaps back to baseline; page 0 is user space"
+arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 programs = ["map-fixed-attack"]
@@ -46,7 +46,7 @@ expect = [
     '^\[map-fixed\] ok: nothing charged$',
     '^\[map-fixed\] ok: one page freed$',
     '^\[map-fixed\] ok: exactly enough for pages and page tables$',
-    '^\[map-fixed\] ok: charged 2 pages and 4 page tables$',
+    '^\[map-fixed\] ok: charged 2 pages and their page tables$',
     '^\[map-fixed\] ok: a huge len is refused$',
     '^\[map-fixed\] ok: nothing charged$',
     '^\[map-fixed\] huge len took [0-9]+ us$',
@@ -54,6 +54,22 @@ expect = [
     '^\[map-fixed\] ok: a huge len over mappings is refused before the overlap walk$',
     '^\[map-fixed\] ok: nothing charged$',
     '^\[map-fixed\] ok: a huge len over mappings is refused within 10 ms$',
+    '^\[map-fixed\] unmap of a huge range took [0-9]+ us$',
+    '^\[map-fixed\] ok: a huge range is refused$',
+    '^\[map-fixed\] ok: nothing changed$',
+    '^\[map-fixed\] ok: a huge range is refused within 10 ms$',
+    '^\[map-fixed\] set_flags of a huge range took [0-9]+ us$',
+    '^\[map-fixed\] ok: a huge range is refused$',
+    '^\[map-fixed\] ok: nothing changed$',
+    '^\[map-fixed\] ok: a huge range is refused within 10 ms$',
+    '^\[map-fixed\] process_map of a huge range took [0-9]+ us$',
+    '^\[map-fixed\] ok: a huge range is refused$',
+    '^\[map-fixed\] ok: nothing changed$',
+    '^\[map-fixed\] ok: a huge range is refused within 10 ms$',
+    '^\[map-fixed\] a lend of a huge range took [0-9]+ us$',
+    '^\[map-fixed\] ok: a huge range is refused$',
+    '^\[map-fixed\] ok: nothing changed$',
+    '^\[map-fixed\] ok: a huge range is refused within 10 ms$',
     '^\[map-fixed\] ok: a successful map_fixed charges something$',
     '^\[map-fixed\] ok: a fresh page reads zero$',
     '^\[map-fixed\] ok: the page is writable$',

@@ -71,14 +71,14 @@ fn bad_ranges(c: &mut Checker) {
         rd::rw(),
         Error::InvalidArgument,
     );
-    // On Sv39 both cases above are also refused by the overlap walk: USER_AREA_END is root slot
-    // 256, the physmap every process copies. Root slot 320 is kernel half but empty, so only
-    // `user_range`'s end check refuses this one (without it, the kernel panics mapping it).
-    #[cfg(target_pointer_width = "64")]
+    // Both cases above are also refused by the overlap walk: USER_AREA_END is the physmap's
+    // first root slot, which every process copies. `width::EMPTY_KERNEL_SLOT` is kernel half
+    // but empty, so only `user_range`'s end check refuses this one (without it, the kernel
+    // panics mapping it).
     refused(
         c,
         "outside user space, empty root slot",
-        0x50_0000_0000,
+        width::EMPTY_KERNEL_SLOT,
         PAGE_SIZE,
         rd::rw(),
         Error::InvalidArgument,
@@ -200,26 +200,65 @@ fn exhausted_budget(c: &mut Checker) {
     c.check(usage_pages() == before, "nothing charged when the budget is exhausted");
 }
 
-/// The "page tables" half of the charge check, which the "pages" half alone never reaches: a
-/// range whose pages fit but whose page tables do not.
-///
-/// The range is `[4 GiB - PAGE_SIZE, 4 GiB + PAGE_SIZE)`: the last page of the fourth gigabyte and the
-/// first of the fifth, so it crosses a 1 GiB boundary as well as a 2 MiB one. Nothing else in
-/// this process lives in either gigabyte (image at 0x1_0000, heap 0x2000_0000, the `map_anon`
-/// window 0x6000_0000, the stack below 0x8000_0000: gigabytes 0 and 1; the filler below:
-/// gigabyte 2), so on Sv39 each page needs a level-1 table (one per gigabyte, from its root
-/// entry) and a level-0 table (one per 2 MiB): 2 pages + 4 tables = 6. (Round 1's review
-/// counted 5, for one gigabyte.) That also covers `tables_needed` across root entries.
+/// What differs by width, stated once (kernel/memory-layout.md, "Sv32 and Sv39 compared").
 #[cfg(target_pointer_width = "64")]
+mod width {
+    use test_programs::rd::{PAGE_SIZE, USER_AREA_END};
+    /// A leaf page table's span.
+    pub const SPAN: usize = 2 << 20;
+    /// The charge check's range, `[4 GiB - PAGE_SIZE, 4 GiB + PAGE_SIZE)`: the last page of the
+    /// fourth gigabyte and the first of the fifth, so it crosses a 1 GiB boundary as well as a
+    /// 2 MiB one. Nothing else in this process lives in either gigabyte (image at 0x1_0000, heap
+    /// 0x2000_0000, the `map_anon` window 0x6000_0000, the stack below 0x8000_0000: gigabytes 0
+    /// and 1; the filler: gigabyte 2), so each page needs a level-1 table (one per gigabyte,
+    /// from its root entry) and a level-0 table (one per 2 MiB): 2 pages + 4 tables = 6. That
+    /// also covers `tables_needed` across root entries.
+    pub const AT: usize = 0x1_0000_0000 - PAGE_SIZE;
+    pub const TABLES: u64 = 4;
+    /// The filler: gigabyte 2.
+    pub const FILL: usize = 0x8000_0000;
+    pub const FILL_END: usize = 0xC000_0000;
+    /// A free range of about 2^26 pages, 4 GiB to the end of user space (252 GiB).
+    pub const HUGE: (usize, usize) = (0x1_0000_0000, USER_AREA_END);
+    /// A kernel-half address whose root slot is empty: root slot 320, inside the physmap's
+    /// window but past any RAM.
+    pub const EMPTY_KERNEL_SLOT: usize = 0x50_0000_0000;
+    /// A high free page of user space: the last below `USER_AREA_END`.
+    pub const LAST_FREE: usize = USER_AREA_END - PAGE_SIZE;
+}
+#[cfg(target_pointer_width = "32")]
+mod width {
+    use test_programs::rd::{PAGE_SIZE, USER_AREA_END};
+    /// A leaf page table's span: one root entry.
+    pub const SPAN: usize = 4 << 20;
+    /// The charge check's range, across the 4 MiB boundary at 0x5080_0000, where nothing else
+    /// in this process lives: each page needs its own leaf table, 2 pages + 2 tables = 4.
+    pub const AT: usize = 0x5080_0000 - PAGE_SIZE;
+    pub const TABLES: u64 = 2;
+    /// The filler: between the image and the message area.
+    pub const FILL: usize = 0x3000_0000;
+    pub const FILL_END: usize = 0x4000_0000;
+    /// All of user space above page 0, about 2^19 pages: no free range on Sv32 is long enough for
+    /// a per-page walk to run far past the bound, so this one is over mappings. It starts at
+    /// page 1, not 0, so the first page's checks never dereference a null pointer.
+    pub const HUGE: (usize, usize) = (PAGE_SIZE, USER_AREA_END);
+    /// A kernel-half address whose root slot is empty: root slot 768, in the physmap's window
+    /// but past the case's 256 MiB of RAM.
+    pub const EMPTY_KERNEL_SLOT: usize = 0xC000_0000;
+    /// A high free page of user space: the stack's reservation ends at `USER_AREA_END`
+    /// (memory-layout.md, "Regions"), so the last page below the startup block's address, which
+    /// a boot process leaves free.
+    pub const LAST_FREE: usize = 0x7FF0_0000 - PAGE_SIZE;
+}
+
+/// The "page tables" half of the charge check, which the "pages" half alone never reaches: a
+/// range whose pages fit but whose page tables do not (`width::AT`, `width::TABLES`).
 fn page_table_charge(c: &mut Checker) {
-    const AT: usize = 0x1_0000_0000 - PAGE_SIZE;
+    use width::{AT, FILL, FILL_END, SPAN, TABLES};
     const PAGES: u64 = 2;
-    const TABLES: u64 = 4;
-    // Filler: 2 MiB level-0 tables in gigabyte 2, each opened by mapping its first page, then
-    // filled a slot at a time. Once a table exists, each page in it costs exactly one page,
-    // so the budget can be brought to an exact count.
-    const FILL: usize = 0x8000_0000;
-    const SPAN: usize = 2 << 20;
+    // Filler: leaf tables in `FILL..FILL_END`, each opened by mapping its first page, then
+    // filled a slot at a time. Once a table exists, each page in it costs exactly one page, so
+    // the budget can be brought to an exact count.
     const SLOTS: usize = SPAN / PAGE_SIZE - 1;
     let target = PAGES + TABLES - 1;
     let (mut opened, mut filled) = (0usize, 0usize);
@@ -229,9 +268,9 @@ fn page_table_charge(c: &mut Checker) {
             break;
         }
         if short > opened * SLOTS - filled {
-            // Opening costs 2 (3 for the first: gigabyte 2's level-1 table as well). Opening
-            // only while more slots are still needed keeps `short` far above that here.
-            assert!(opened < (1 << 30) / SPAN, "the filler must stay inside gigabyte 2");
+            // Opening costs 2 (3 for the first on Sv39: gigabyte 2's level-1 table as well).
+            // Opening only while more slots are still needed keeps `short` far above that here.
+            assert!(opened < (FILL_END - FILL) / SPAN, "the filler must stay inside its area");
             rd::map_fixed(FILL + opened * SPAN, PAGE_SIZE, rd::rw()).expect("open a filler table");
             opened += 1;
             continue;
@@ -256,7 +295,7 @@ fn page_table_charge(c: &mut Checker) {
         rd::map_fixed(AT, PAGES as usize * PAGE_SIZE, rd::rw()).is_ok(),
         "exactly enough for pages and page tables",
     );
-    c.check(usage_pages() == before + PAGES + TABLES, "charged 2 pages and 4 page tables");
+    c.check(usage_pages() == before + PAGES + TABLES, "charged 2 pages and their page tables");
 
     rd::unmap(AT, PAGES as usize * PAGE_SIZE).expect("unmap");
     for table in 0..opened {
@@ -272,29 +311,27 @@ fn page_table_charge(c: &mut Checker) {
     }
 }
 
-/// A range of about 2^26 pages (4 GiB to USER_AREA_END, 252 GiB) must be refused at once: the
-/// overlap walk skips absent subtrees and the pages check runs before `tables_needed` ever
-/// walks the range (R22). The range is free (everything else here is below 4 GiB, and
-/// `page_table_charge`'s tables at 4 GiB went with its `unmap`), so it is the budget check that
-/// refuses it, not an occupied page.
-///
-/// The bound is 10 ms. The fixed path reads 252 root entries (far under a millisecond even
-/// under QEMU TCG), plus one syscall. A regression to one walk per page does 2^26 walks: at
-/// even 100 ns each that is ~7 s, and a per-page `tables_needed` is 2^26 x 3 levels. 10 ms sits
-/// two orders above the first and nearly three below the second, and absorbs a timer tick or
-/// two (the kernel's slice is milliseconds). `time_now` is in microseconds (kernel/timer.md, "Time").
+/// The bound on a refused huge range (R22). The fixed paths read a few root entries or stop at
+/// the first page that is not the caller's, far under a millisecond even under QEMU TCG, plus
+/// one syscall. A regression to one walk per page does 2^26 walks over Sv39's `width::HUGE`
+/// and about 2^19 over Sv32's: at even 100 ns each that is ~7 s and ~52 ms. 10 ms absorbs a timer
+/// tick or two (the kernel's slice is milliseconds). `time_now` is in microseconds
+/// (kernel/timer.md, "Time").
+const BOUND_US: u64 = 10_000;
+
+/// A huge `map_fixed` must be refused at once: the pages check runs before `tables_needed` ever
+/// walks the range, and the overlap walk skips absent subtrees (R22). On Sv39 the range,
+/// `width::HUGE`, is free, so it is the budget check that refuses it, not an occupied page.
 ///
 /// Then the whole of user space from page 0, over this process's own image, heap and stack: the
 /// pages-alone check comes before the overlap walk (kernel/abi.md, `map_fixed`'s row), so it is
 /// `OutOfMemory`, not the overlap's `InvalidArgument`, and a length no budget can pay for never
 /// buys a walk of what is mapped.
-#[cfg(target_pointer_width = "64")]
 fn huge_len_is_prompt(c: &mut Checker) {
-    const BOUND_US: u64 = 10_000;
-    let addr = 0x1_0000_0000;
+    let (addr, end) = width::HUGE;
     let before = usage_pages();
     let t0 = rd::time_now().unwrap();
-    let r = rd::map_fixed(addr, USER_AREA_END - addr, rd::rw());
+    let r = rd::map_fixed(addr, end - addr, rd::rw());
     let elapsed = rd::time_now().unwrap() - t0;
     c.check(r == Err(Error::OutOfMemory), "a huge len is refused");
     c.check(usage_pages() == before, "nothing charged");
@@ -308,6 +345,45 @@ fn huge_len_is_prompt(c: &mut Checker) {
     c.check(r == Err(Error::OutOfMemory), "a huge len over mappings is refused before the overlap walk");
     c.check(usage_pages() == before, "nothing charged");
     c.check(elapsed < BOUND_US, "a huge len over mappings is refused within 10 ms");
+}
+
+/// The other range calls over `width::HUGE`, whose first page is mapped (R22): `unmap`,
+/// `set_flags` and `process_map` stop at the first page that is not the caller's
+/// (`InvalidArgument`), and a lend longer than `MAX_LEND_PAGES` is `TooLarge` before any page is
+/// looked at. Each is refused within the bound, and changes nothing: the first page is still
+/// mapped and still writable (a store that `set_flags` had made read-only would fault this
+/// program, and the case with it), and neither `system` nor the child's budget is charged.
+fn huge_ranges_are_prompt(c: &mut Checker) {
+    let (addr, end) = width::HUGE;
+    let len = end - addr;
+    rd::map_fixed(addr, PAGE_SIZE, rd::rw()).expect("map the first page");
+    rd::poke(addr, 7);
+    let exit = rd::endpoint_create().expect("an exit endpoint");
+    let budget = rd::create(rd::USERS, &rd::spec(16, 1, 10)).expect("a child budget");
+    let child = rd::process_create(budget, exit).expect("a child to map into");
+    let endpoint = LEND_ENDPOINT.load(Ordering::Acquire) as u32;
+    let calls: [(&str, Error, &dyn Fn() -> Result<(), Error>); 4] = [
+        ("unmap", Error::InvalidArgument, &|| rd::unmap(addr, len)),
+        ("set_flags", Error::InvalidArgument, &|| rd::set_flags(addr, len, MemFlags::READ)),
+        ("process_map", Error::InvalidArgument, &|| rd::process_map(child, addr, addr, len, rd::rw())),
+        ("a lend", Error::TooLarge, &|| {
+            rd::call(endpoint, &rd::body([0; 4]), rd::pages(addr, len / PAGE_SIZE), FOREVER).map(|_| ())
+        }),
+    ];
+    let child_pages = || rd::usage(budget).unwrap().pages_usage;
+    for (name, want, call) in calls {
+        let before = (usage_pages(), child_pages());
+        let t0 = rd::time_now().unwrap();
+        let r = call();
+        let elapsed = rd::time_now().unwrap() - t0;
+        writeln!(c.0, "[map-fixed] {} of a huge range took {} us", name, elapsed).ok();
+        c.check(r == Err(want), "a huge range is refused");
+        rd::poke(addr, 7);
+        c.check((usage_pages(), child_pages()) == before && rd::peek(addr) == 7, "nothing changed");
+        c.check(elapsed < BOUND_US, "a huge range is refused within 10 ms");
+    }
+    rd::destroy(budget).expect("destroy the child's budget");
+    rd::unmap(addr, PAGE_SIZE).expect("unmap the first page");
 }
 
 fn success_and_addr_zero(c: &mut Checker) {
@@ -331,11 +407,11 @@ fn success_and_addr_zero(c: &mut Checker) {
     rd::unmap(0, PAGE_SIZE).expect("unmap page 0");
     c.check(usage_pages() == before, "unmap page 0 returns usage to baseline");
 
-    // The last page below USER_AREA_END is accepted, and stays mapped while `map_anon` runs:
+    // A high free page of user space is accepted, and stays mapped while `map_anon` runs:
     // a mapping near the top must not starve the kernel's choice (kernel/memory.md, "Where
     // `map_anon` puts pages").
-    let last = USER_AREA_END - PAGE_SIZE;
-    rd::map_fixed(last, PAGE_SIZE, MemFlags::READ).expect("the last page below USER_AREA_END is accepted");
+    let last = width::LAST_FREE;
+    rd::map_fixed(last, PAGE_SIZE, MemFlags::READ).expect("a high free page is accepted");
     c.check(
         matches!(rd::map_anon(PAGE_SIZE, rd::rw()), Ok(_)),
         "map_anon still succeeds with the last page mapped",
@@ -396,10 +472,9 @@ pub extern "C" fn _start(_: usize) -> ! {
     occupied_ranges(&mut c);
     lent_ranges(&mut c);
     exhausted_budget(&mut c);
-    #[cfg(target_pointer_width = "64")]
     page_table_charge(&mut c);
-    #[cfg(target_pointer_width = "64")]
     huge_len_is_prompt(&mut c);
+    huge_ranges_are_prompt(&mut c);
     success_and_addr_zero(&mut c);
     read_only_faults(&mut c);
     writeln!(c.0, "[map-fixed] MAP-FIXED ATTACK TEST PASSED").ok();

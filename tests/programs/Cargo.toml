@@ -29,10 +29,13 @@ bin = [
     { name = "ipc-outcomes", test = false },
     { name = "irq-attack", test = false },
     { name = "irq-first-receive", test = false },
+    { name = "kernel-half-attack", test = false },
     { name = "legacy-gone", test = false },
     { name = "lend-untouched", test = false },
+    { name = "lender-touches-lent", test = false },
     { name = "log-server", test = false },
     { name = "logsrv-badge-forgery", test = false },
+    { name = "map-anon-placement", test = false },
     { name = "map-anon-search-bound", test = false },
     { name = "map-fixed-attack", test = false },
     { name = "map-fixed-tables", test = false },
@@ -104,6 +107,8 @@ autobins = false
 [dependencies]
 uart_16550 = { version = "0.3", default-features = false }
 redoubt-sys = { path = "../../libs/sys" }
+# The kernel-half addresses the attack cases aim at, from their one definition.
+redoubt-layout = { path = "../../libs/layout" }
 # Only for the stub launcher: the startup-block builder, and the stub's own fixed
 # address/bounds-checking constants. Every other test program stays on the raw `rd` wrapper.
 redoubt-rt = { path = "../../libs/rt" }

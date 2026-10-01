@@ -20,7 +20,7 @@ kernel never reaches user memory through a user mapping.
 
 ## The direct physical map
 
-Status: built · partly tested: no case has a process load, store or fetch at a physmap address; a case reads the boot-time check on rv64 only · tested: bench:kernel-wx
+Status: built · tested: bench:kernel-wx, bench:kernel-half-attack
 
 The loader maps all of RAM once, in the kernel half, at
 
@@ -59,7 +59,7 @@ Nothing unmaps the physmap. So the kernel reaches any frame at any time, without
 
 ## The split by root entry
 
-Status: built · partly tested: a user-mode access to a mapped kernel-half address is not attacked by a case; the end of user space is attacked on the kernel on rv64 only, and on rv32 only in a host copy of the range check · tested: bench:map-fixed-attack, bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound
+Status: built · tested: bench:map-fixed-attack, bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound, bench:kernel-half-attack
 
 The root table's lower half is user space; its upper half is the kernel's. The kernel's root
 entries are made once, by the loader, and never change afterwards. Creating an address space
@@ -86,7 +86,7 @@ The walls on the boundary:
 
 ## The two address maps
 
-Status: built · partly tested: the constants' separation is checked at compile time and the PLIC's size at boot, not attacked by a case; no case loads, stores or fetches at a mapped kernel-half address from user mode, and `kernel-wx` boots rv64 only · tested: bench:kernel-wx, bench:legacy-gone
+Status: built · partly tested: the constants' separation is checked at compile time and the PLIC's size at boot, not attacked by a case · tested: bench:kernel-wx, bench:legacy-gone, bench:kernel-half-attack
 
 Addresses are from `libs/layout/src/lib.rs`, the kernel's `link.x` and `link64.x`, and
 `kernel/src/arch/riscv/process.rs`. Compile-time assertions keep the DMA window clear of the
@@ -245,7 +245,7 @@ image, its stack and nothing else; its first thread starts with `sp` 16 bytes be
 
 ### Page 0
 
-Status: built · partly tested: mapping page 0 is attacked on the kernel on rv64 only · tested: bench:map-fixed-attack, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound
+Status: built · tested: bench:map-fixed-attack, host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound
 
 User space starts at address 0 on both widths. No page is reserved at the bottom: `map_fixed`,
 `process_map`, `unmap` and `set_flags` accept page 0 like any other page. A mapped page 0
@@ -364,7 +364,7 @@ process; it never counts as a page that wants backing.
 
 ### The lent bit
 
-Status: built · partly tested: a lender's own load or store to a page it has lent out is not attacked by a case · tested: bench:return-lent-unmapped, bench:move-borrowed-page, bench:map-fixed-attack, bench:uaf-lent-page
+Status: built · tested: bench:return-lent-unmapped, bench:lender-touches-lent, bench:move-borrowed-page, bench:map-fixed-attack, bench:uaf-lent-page
 
 A [lend](ipc.md) is recorded in the page tables themselves, with the software bit `S`:
 
@@ -423,6 +423,9 @@ user address, and the load faults as a kernel failure.
   overlap. A launcher that puts the stack inside the link range can get a child whose data ends
   right at its stack's bottom, so a stack overflow writes the data instead of faulting. The
   launcher convention above prevents it; nothing enforces it.
+- **A boot process's stack reservation is one page longer.** The loader reserves the 32 pages
+  above, and the kernel reserves the stack again from the first thread's `sp`, which adds the
+  page at `0x7FFD_F000`. Only that process is affected: [todo](../todo/boot-stack-reservation.md).
 - **No ASLR.** Every address on this page is fixed, and `map_anon` places pages deterministically.
   A memory-safety bug in a program is easier to exploit, within that program's own process.
   Address randomisation is [beyond M5](../beyond/aslr.md).

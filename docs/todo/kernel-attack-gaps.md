@@ -61,13 +61,10 @@ gap: the page's section, the claim, and what no case attacks.
 
 ### memory.md
 - Backing and zeroing: that a frame freed with data comes back zero is attacked only in the model (`R11NoZeroing`); no case can tell which frames it was handed.
-- Where `map_anon` puts pages: the placement itself (first fit from the last run, the wrap, a full area, a run that fits only at the area's end, an oversize request, the message area) is not attacked (`touch-beyond-ram` exhausts RAM, not the area); the search's worst-case cost is not measured.
-- `map_fixed`: `map-fixed-attack` and `map-fixed-tables` run on rv64 only; on rv32 only `return-lent-unmapped` calls it.
 - Instruction fetch after mapping: no case can see a missing `fence.i` (QEMU keeps fetch coherent).
 - Lending at the page-table level: a lend within one process is not attacked across harts.
 - R11 (memory): the absence of any physical-address argument is argued from the call table.
-- R19 (kernel W^X): no case plants a writable kernel code page to show the boot check stops; the case boots rv64 only.
-- R22 (range cost): only `map_fixed`'s huge length is attacked; `unmap`, `set_flags`, `process_map` and lends with huge ranges are not, and `map_anon`'s search is an exception no case measures.
+- R19 (kernel W^X): no case plants a writable kernel code page to show the boot check stops.
 
 ### scheduling.md
 - One flat stride queue: round-robin among one budget's threads is not attacked.
@@ -89,12 +86,7 @@ gap: the page's section, the claim, and what no case attacks.
 - Failure and restart: a reboot through `system_reset` (the chain rerun, the bundle verified again) is not attacked.
 
 ### memory-layout.md
-- The physmap and the kernel half: no case has a user-mode load, store or fetch at a mapped kernel-half address (physmap, kernel image, per-process context page). `legacy-gone` only jumps to never-mapped per-process addresses.
-- The kernel W^X boot check: `kernel-wx` is rv64 only; the check runs on rv32 but no case reads it.
-- The end of user space on rv32: `map-fixed-attack` is rv64 only; rv32 is covered only by `host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound`, a hand copy of the kernel's `user_range`, not the kernel.
-- Page 0 on rv32: the same (host copy only).
 - `satp` and the TLB: no case attacks a stale translation surviving an address-space switch or an unmap (one hart, global flush; argued from the code; attacked across harts in M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
-- The lent bit: no case has a lender load or store its own lent-out page (it faults by the code).
 - Placement areas: the message area (`0x4000_0000`, 4 MiB) and `map_anon` area bases are not attacked as addresses (not security claims; listed for completeness).
 
 ### abi.md
@@ -106,7 +98,6 @@ gap: the page's section, the claim, and what no case attacks.
 ### invariants.md
 - I7 (every flow obeys R1): a message between user budgets with different labels: no case (the same gap as ipc.md's R1).
 - I9 (pages W^X, zeroed, lends unmapped): reuse of a freed frame (a case cannot choose which frame it gets; `mem-attack` says so): model only.
-- I9: a lender's own read or write of a page it has lent: no case (`return-lent-unmapped` tries unmap and remap only).
 - I11 (fair turns): turns among several groups on one endpoint: model only (the same as ipc.md's R2).
 - I12 (ids never reused): budget and message ids never reused: invisible to a process, model only; endpoint, device and process-object ids: nothing attacks them, not even the model (it checks budget ids only).
 - I13 (every blocking call returns by its timeout): timeouts on a multi-hart boot: `timeouts` has no `smp` key (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
@@ -115,7 +106,7 @@ gap: the page's section, the claim, and what no case attacks.
 
 ### model.md
 - `every_rule_has_a_mutation` requires variants only for rules numbered 1 to 12; nothing requires R13, R14 (unforgeable sender), R21, I16, or R4a (open calls) and R4b (a server dies) separately, to keep a variant.
-- R18, R20 (PID reuse) and R22: modelled, but no mutation; R20 and part of R22 have scripted host tests only.
+- R18, R20 (PID reuse) and R22 (range cost): modelled, but no mutation; R20 and part of R22 have scripted host tests only.
 - R15 (verified boot), R16, R17, R19 and R23: not in the model at all.
 - The `redoubt-stride` differential: `a_broken_model_disagrees` does not list `R12ExitRunsFree` or `R12TimeoutWakePreempts` (`R12ExitRunsFree`'s site is in `sched.rs`, which the differential drives through `thread_exited`, so it could be added).
 - `steward_noninterference` leaves out vault approve and deny, ending a vault session, and server crashes; a leak through crash blame or session end is unchecked.

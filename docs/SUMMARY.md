@@ -71,6 +71,8 @@
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [Requests the bench cannot see against sshd](todo/sshd-unseen-requests.md)
   - [sshd's vendored crates under Miri](todo/sshd-vendored-miri.md)
+  - [The boot stack reservation](todo/boot-stack-reservation.md)
+  - [process_map backs before refusing](todo/process-map-backs-before-refusing.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [rv32](beyond/rv32.md)

@@ -91,7 +91,7 @@ process.
 
 ### Where `map_anon` puts pages
 
-Status: built · partly tested: the message area's placement is not attacked by a case, nor an oversize request; `touch-beyond-ram` exhausts RAM, not the area · tested: bench:map-anon-search-bound, bench:map-fixed-attack, bench:touch-beyond-ram
+Status: built · tested: bench:map-anon-search-bound, bench:map-anon-placement, bench:map-fixed-attack, bench:touch-beyond-ram
 
 The kernel chooses the address, and nothing may depend on it. `map_anon` takes the first free
 run of pages in its placement area, 256 MiB from `DEFAULT_BASE` (0x6000_0000 to 0x7000_0000),
@@ -112,7 +112,7 @@ area is full (Residual risks).
 
 ### `map_fixed`
 
-Status: built · partly tested: `map-fixed-attack` and `map-fixed-tables` run on rv64 only; on rv32 only `return-lent-unmapped` calls `map_fixed` · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
+Status: built · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:map-fixed-tables-rv32, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
 
 `map_fixed(addr, len, flags)` maps zeroed pages at exactly `addr` in the caller's own address
 space, charged as `map_anon`'s are. It is the one call that puts new pages at an address the
@@ -259,7 +259,7 @@ Together these are I9 (pages W^X, zeroed, lends unmapped) of the
 
 ### R19 (kernel W^X)
 
-Status: built · partly tested: no case plants a writable kernel code page to show that the check stops the boot, and the case boots rv64 only · tested: bench:kernel-wx
+Status: built · partly tested: no case plants a writable kernel code page to show that the check stops the boot · tested: bench:kernel-wx
 
 The kernel's own mappings are W^X. At boot, before any process runs, the kernel walks its own
 area of the address space and, for every executable page there, checks three things: the page
@@ -273,7 +273,7 @@ device registers, is read-write and never executable.
 
 ### R22 (range cost)
 
-Status: built · partly tested: only `map_fixed`'s huge length and `map_anon`'s search are attacked · tested: bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly
+Status: built · tested: bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly
 
 A call that takes a range costs what the page tables hold and what the budget can pay for,
 never what the length asks. A process could otherwise ask for a huge range for free, and the
@@ -326,6 +326,9 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 - **A lend within one process** (a thread calling an endpoint its own process receives on) is
   argued from the code, not attacked, when its threads run on several harts. `process-lifecycle`
   attacks it on one hart, the process ending with the call open included.
+- **A refused `process_map` can leave its source backed.** It backs an untouched source
+  reservation before its later checks, so a call refused after that keeps those pages, charged
+  to the caller: [todo](../todo/process-map-backs-before-refusing.md).
 - **The physmap maps every user frame writable for the kernel,** code included. Only the
   kernel can use that alias ([memory layout](memory-layout.md#residual-risks)).
 

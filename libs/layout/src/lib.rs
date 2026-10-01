@@ -48,6 +48,9 @@ pub mod sv32 {
     pub const THREAD_CONTEXT_PAGES: usize = 1;
     /// Root entry 1023: the kernel image, stacks and arguments, shared by every address space.
     pub const KERNEL_AREA: usize = 0xffc0_0000;
+    /// The kernel's code and constants, 512 KiB: `FLASH` in `kernel/link.x`, which a host test
+    /// holds to this value.
+    pub const KERNEL_TEXT: usize = 0xffd0_0000;
     pub const KERNEL_STACK_TOP: usize = 0xfff8_0000;
     pub const KERNEL_STACK_PAGES: usize = 8;
     pub const TRAP_STACK_TOP: usize = 0xffff_0000;
@@ -68,6 +71,9 @@ mod sv39 {
     pub const THREAD_CONTEXT_PAGES: usize = 2;
     /// Root entry 511: the kernel, shared by every address space.
     pub const KERNEL_AREA: usize = 0xffff_ffff_c000_0000;
+    /// The kernel's code and constants, 512 KiB: `FLASH` in `kernel/link64.x`, which a host
+    /// test holds to this value.
+    pub const KERNEL_TEXT: usize = 0xffff_ffff_ffd0_0000;
     /// Where the kernel maps the platform's interrupt controller.
     pub const KERNEL_PLIC_BASE: usize = 0xffff_ffff_f000_0000;
     /// The kernel's window on DMA devices' registers, one page per device: right
@@ -128,6 +134,21 @@ mod tests {
     #[test]
     fn ram_one_page_past_the_physmap_end_is_refused() {
         assert!(!physmap_covers(&(PHYSMAP_PHYS_BASE..END + PAGE_SIZE)));
+    }
+
+    /// `FLASH`'s origin in a kernel link script.
+    fn flash_origin(script: &str) -> usize {
+        let line = script.lines().find(|l| l.trim_start().starts_with("FLASH")).expect("a FLASH region");
+        let origin = line.split("ORIGIN = 0x").nth(1).expect("an ORIGIN").split(',').next().unwrap();
+        usize::from_str_radix(origin.trim(), 16).expect("a hex ORIGIN")
+    }
+
+    /// The kernel's link scripts place its text where `KERNEL_TEXT` says, on both widths: the
+    /// linker cannot read this crate, so this is what keeps the two from drifting apart.
+    #[test]
+    fn the_link_scripts_put_the_kernel_text_at_kernel_text() {
+        assert_eq!(flash_origin(include_str!("../../../kernel/link.x")), sv32::KERNEL_TEXT);
+        assert_eq!(flash_origin(include_str!("../../../kernel/link64.x")), KERNEL_TEXT);
     }
 
     /// The rv32 constants, on the host: the physmap's end fits in a 32-bit address.
