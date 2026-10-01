@@ -263,6 +263,9 @@ Status: planned · M1 (separation and containment)
 - **A few unusual clients fail closed.** `sunset` hashes its own re-encoding of the peer's
   `KEXINIT`, so a client whose `KEXINIT` does not re-encode to the same bytes fails the exchange;
   and `ed25519-compact` refuses a non-canonical X25519 public value.
+- **Ed25519 signatures are checked cofactored**, as the loader's are
+  ([boot](../kernel/boot.md#residual-risks)): a client's signature can be made into another valid
+  one for the same exchange, which authenticates nobody new.
 - **The key exchange is not post-quantum.** Traffic recorded now could be read by whoever later
   breaks X25519.
 

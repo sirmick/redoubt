@@ -4,14 +4,14 @@
 
 The Elixir shell is a working environment. A person logged in over SSH does everyday work without
 writing Elixir by hand:
-- a command mode, where bare words stand in for quoted arguments;
+- commands: short, typed Elixir functions, each with its help, for the everyday work;
 - file operations (copy, move, rename, delete, make a directory) and binds;
 - viewing and searching files;
 - native programs with standard input and output, joined by pipes;
 - interrupting and killing jobs, by budget destruction, with no signals;
 - line editing, history, completion and help;
 - showing resource use;
-- full-screen programs drawn as cells through the session;
+- full-screen programs drawn as cells through the session, from menus and dialogs to the pager;
 - the editor and file manager.
 
 And the kernel runs user code on every hart, not only the boot hart.
@@ -22,16 +22,19 @@ Every convenience is attacked for the authority it might add. Each case runs a h
 program against a real session and is judged by the session or the kernel, never by the hostile
 party's own output.
 
-- **Command mode runs nothing hidden.** `cat #{File.rm("x")}` reads a file of that name and runs
-  nothing; a local binding or import named like a command does not change what the command runs
-  ([the shell](../userland/shell.md#command-mode)).
+- **Nothing runs at start.** A `.iex.exs`, or any other file, planted in the directory a session
+  starts in is neither read nor run ([the shell](../userland/shell.md#the-loop)).
+- **An interrupted line loses only itself.** Ctrl+C in the middle of `x = 1; loop()` ends the
+  evaluation; the bindings of every earlier line are still there
+  ([the shell](../userland/shell.md#interrupting-and-killing-jobs)).
 - **A job ends, and only it.** `Job.kill` and Ctrl+C destroy the budgets of the job's native stages
   and everything they started, never the session
   ([R10 (destruction)](../kernel/budgets.md#r10-destruction),
   [the shell](../userland/shell.md#interrupting-and-killing-jobs)).
 - **No program swallows the interrupt.** A foreground native stage never holds the raw console, so
-  Ctrl+C reaches the shell whatever the stage does; a runaway evaluation is ended by its heap limit
-  before it takes the session's budget.
+  Ctrl+C reaches the shell whatever the stage does; a runaway allocation on the heap, by a line,
+  anything it spawns or a screen program, is ended by that process's heap limit, and the
+  session's processes together by its budget, which ends the session and nothing else.
 - **A pipe carries no authority.** A native stage reaches only what its launcher bound into its
   namespace; its standard streams are served files, and nothing is inherited
   ([native programs](../userland/native.md#standard-input-and-output-and-pipes)).
@@ -45,11 +48,24 @@ party's own output.
   control sequences (OSC 52, OSC 8, a title report, a bare ESC) reaches `/dev/cons` only as
   visible characters; the case judges the bytes the session wrote
   ([the shell](../userland/shell.md#the-terminal-library)).
-- **A full-screen program holds nothing.** `render` and the editor never reach `/dev/cons`, and a
-  hostile `render` or a file crafted against the editor reaches only what that program was bound
-  ([the shell](../userland/shell.md#full-screen-programs)).
-- **A paste is one event.** Pasted text arrives as one bracketed event and never triggers
-  completion ([the shell](../userland/shell.md#the-terminal-library)).
+- **A screen writes no control sequence.** Hostile text drawn by a screen program reaches
+  `/dev/cons` only as visible characters, the screen buffer's natives refuse a control character,
+  and a native program with a screen can send the session nothing but cells
+  ([the shell](../userland/shell.md#full-screen-programs),
+  [beamlet](../userland/beamlet.md#screen-natives)).
+- **The screen natives hold under hostile arguments.** Every screen native, given any sizes,
+  rectangles, text and styles, answers or raises `badarg` within its bound; none panics, and a
+  buffer answers only the process that made it ([beamlet](../userland/beamlet.md#screen-natives)).
+- **The editor turns no file into action.** A file crafted to look like a modeline, a script or a
+  path is shown and edited as text, and saving writes only the file the editor was asked to; the
+  case judges what is on the volume, not what the editor reports
+  ([the shell](../userland/shell.md#the-editor)).
+- **The file manager acts only inside its panel.** A 9P server that lists `..`, `a/../..` or a
+  name holding a NUL gets each name shown and refused, and a copy, move or removal from the panel
+  touches nothing outside the listed directory ([the shell](../userland/shell.md#the-editor)).
+- **A paste is one event.** Pasted text arrives as one bracketed event, never triggers
+  completion, and runs nothing until the person presses Enter, however many lines it holds
+  ([the shell](../userland/shell.md#line-editing-and-history)).
 - **Binds add nothing.** A bind makes a held capability appear at another path and cannot point
   anywhere the process could not already reach
   ([files](../userland/files.md#copying-moving-removing-and-binds)).
@@ -74,29 +90,41 @@ cases pass booted with several harts as well as with one.
 
 ### The shell
 
-In this order:
+Two tracks, side by side. The shell itself is built on a host first, where each step is one a
+person can use, in this order:
+
+1. **The terminal:** the host console, the terminal library, the shell's driver under `group` and
+   `edlin`, line editing and history, and the interrupt ending a line
+   ([beamlet](../userland/beamlet.md#the-console-on-a-host),
+   [the shell](../userland/shell.md#the-terminal-library),
+   [the shell](../userland/shell.md#line-editing-and-history)).
+2. **Screens:** the screen natives, then `Redoubt.Screen`, its layout, and `pick` first
+   ([beamlet](../userland/beamlet.md#screen-natives),
+   [the shell](../userland/shell.md#full-screen-programs)).
+3. **The pager, help drawn in it, and completion**
+   ([the shell](../userland/shell.md#session-commands-and-the-pager),
+   [the shell](../userland/shell.md#completion)).
+4. **The widgets:** the menu bar, dialogs, the input, the lists, the table and the canvas
+   ([the shell](../userland/shell.md#full-screen-programs)).
+5. **The editor**, then **the file manager** ([the shell](../userland/shell.md#the-editor)).
+6. **Resource use** ([the shell](../userland/shell.md#resource-use)).
+
+On Redoubt, in this order:
 
 1. **Parking a typed call** in the serving library, then the console's `consol` protocol (`size`,
    `resize`) on it ([serving](../servers/serving.md#parking-a-typed-call),
    [consoled](../servers/consoled.md#the-consol-protocol)).
-2. **The terminal library**, line editing and history
-   ([the shell](../userland/shell.md#the-terminal-library)).
-3. **The helpers and file operations**, viewing and searching, then binds
-   ([the shell](../userland/shell.md#helpers-and-file-operations),
+2. **The commands on Redoubt:** files through beamlet's platform, the session's own commands, and
+   binds ([the shell](../userland/shell.md#session-commands-and-the-pager),
    [files](../userland/files.md#copying-moving-removing-and-binds)).
-4. **Command mode**, as a preprocessor ahead of the Elixir parser
-   ([the shell](../userland/shell.md#command-mode)).
-5. **Native programs and pipes**: standard streams as served files, pipelines of native stages
+3. **Native programs and pipes**: standard streams as served files, pipelines of native stages
    ([native programs](../userland/native.md#standard-input-and-output-and-pipes),
    [the shell](../userland/shell.md#native-programs-and-pipes)).
-6. **Jobs**: one budget per native stage, `Job.kill`, the interrupt key over the console and SSH
+4. **Jobs**: one budget per native stage, `Job.kill`, the interrupt key over the console and SSH
    ([native programs](../userland/native.md#killing-a-job),
    [the shell](../userland/shell.md#interrupting-and-killing-jobs)).
-7. **Full-screen programs**: `render` with the cell backend, the vendored crates it needs
-   ([the shell](../userland/shell.md#full-screen-programs),
-   [libraries](../userland/native.md#libraries-for-native-programs)).
-8. **Completion, help and resource use** ([the shell](../userland/shell.md#completion)).
-9. **The editor and file manager** ([the shell](../userland/shell.md#the-editor)).
+5. **A native program's screen:** its `cells` frames read and drawn by the session
+   ([the shell](../userland/shell.md#full-screen-programs)).
 
 ### Several harts
 
@@ -120,8 +148,11 @@ attacked before the next, in this order:
 
 ## Progress
 
-Nothing of this milestone is built. What it builds on: the serving library's parked calls
-([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
+On the host, ahead of the milestone: the shell's loop, its commands (the file and text commands
+and `table`), and help, tested by the shell's own suite on beamlet and on the BEAM
+([the shell](../userland/shell.md#the-loop)); the cell protocol, in Rust and in Elixir, held to
+one set of vectors. On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
+library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). For several harts: a two-hart spike, in which a
 second hart started through SBI's hart management contends with the first on the kernel lock

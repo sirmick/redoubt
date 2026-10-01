@@ -226,8 +226,8 @@ grant with the principal chain ([the steward](../servers/steward.md)).
   Nothing is free-form: there is no "all" and no wildcard beyond `git`'s ref patterns. An unknown
   kind, a path that does not resolve, or a term broader than the launcher holds is refused whole by
   the steward, before any budget exists. Planned cases: each kind is refused when broader than the
-  launcher's; an unknown kind is refused; `run --isolated`'s flags and the keyword list give the
-  same steward request.
+  launcher's; an unknown kind is refused; `run`'s `isolated:` options and the keyword list give
+  the same steward request.
 - **Each grant becomes the agent's own connection.** The steward mints each one fresh, with the
   agent's own badge, so every request through it is the agent's and never its sponsor's: a file
   connection rooted where the grant says, a `gatewayd` or `git` capability no wider than the
@@ -268,10 +268,10 @@ prompt under 1,000 tokens, four tools, and nothing else in the loop.
 | `read` | a file's contents, by the shell's `cat` |
 | `write` | a whole file, by `w` (a temporary file and a rename) |
 | `edit` | replace one exact span of a file with another, failing if the span is absent or not unique |
-| `eval` | an Elixir expression or a command-mode line, evaluated in the agent's own VM in a monitored process with a timeout, its output captured |
+| `eval` | an Elixir expression, evaluated in the agent's own VM in a monitored process with a timeout, its output captured |
 
 - **`eval` is the agent's shell.** Where `pi` gives a model `bash`, a Redoubt agent gets the same
-  shell a person does ([the shell](shell.md)): helpers, command mode, native pipes, and
+  shell a person does ([the shell](shell.md)): its commands, native pipes, and
   `Redoubt.Agent` for sub-agents when its grants allow them. It adds no authority: whatever `eval`
   runs, runs with the agent's handles, inside its lease.
 - **Nothing more in the loop.** No MCP, no plan mode, no to-do list, no tools beyond the four.

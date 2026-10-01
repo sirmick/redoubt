@@ -13,6 +13,7 @@ roots = [
     "servers/netd/fuzz",
     "stub/fuzz",
     "userland/otp",
+    "userland/native",
 ]
 
 [[skip]]

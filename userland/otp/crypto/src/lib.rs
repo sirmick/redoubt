@@ -1,4 +1,4 @@
-//! OTP's `crypto` NIFs, implemented in pure Rust on the RustCrypto and dalek crates.
+//! OTP's `crypto` NIFs, implemented in pure Rust on the RustCrypto crates and `ed25519-compact`.
 //!
 //! The real `crypto.erl` from OTP runs unchanged: its NIF stub functions (`hash_nif/2`,
 //! `ng_crypto_init_nif/4`, ...) are replaced by these natives when the module loads, as
@@ -174,32 +174,32 @@ impl KeystreamRng {
     }
 }
 
-impl rand_core_06::RngCore for KeystreamRng {
-    fn next_u32(&mut self) -> u32 {
+// Drawing cannot fail (the key came first), so the error is `Infallible`, which makes it an
+// `Rng` and a `CryptoRng` too.
+impl rand_core::TryRng for KeystreamRng {
+    type Error = core::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
+        self.try_fill_bytes(&mut b)?;
+        Ok(u32::from_le_bytes(b))
     }
 
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_le_bytes(b)
+        self.try_fill_bytes(&mut b)?;
+        Ok(u64::from_le_bytes(b))
     }
 
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
         use chacha20::cipher::StreamCipher;
         dest.fill(0);
         self.0.apply_keystream(dest);
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
-        self.fill_bytes(dest);
         Ok(())
     }
 }
 
-impl rand_core_06::CryptoRng for KeystreamRng {}
+impl rand_core::TryCryptoRng for KeystreamRng {}
 
 /// An integer argument given as a big-endian binary (crypto.erl's `ensure_int_as_bin`).
 fn uint(c: &mut Ctx, a: &[Term], i: usize, what: &str) -> Result<num_bigint::BigUint, Exception> {

@@ -570,12 +570,13 @@ fn test_exists(c: &mut Ctx, t: &str) -> bool {
     }
 }
 
-/// The crates C2 searches: the workspace members, `model` and `userland/otp` (and the members
-/// of any of those that is itself a workspace), each with its `#[test]` function names.
+/// The crates C2 searches: the workspace members, `model`, `userland/otp` and `userland/native`
+/// (and the members of any of those that is itself a workspace), each with its `#[test]`
+/// function names.
 fn crates(root: &Path) -> BTreeMap<String, (String, BTreeSet<String>)> {
     let manifest = |dir: &str| fs::read_to_string(root.join(dir).join("Cargo.toml")).unwrap_or_default();
     let mut dirs: Vec<String> = toml_list(&manifest("."), "members");
-    dirs.extend(["model".to_string(), "userland/otp".to_string()]);
+    dirs.extend(["model".to_string(), "userland/otp".to_string(), "userland/native".to_string()]);
     let mut out = BTreeMap::new();
     let mut seen = BTreeSet::new();
     while let Some(dir) = dirs.pop() {

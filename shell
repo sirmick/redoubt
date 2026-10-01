@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# shell -- Redoubt's shell (userland/shell) on beamlet, on this machine's terminal. Extra
+# arguments go to beamlet (-pa DIR, --root DIR, --schedulers N, ...). ./test-shell tests it.
+#
+# Usage: ./shell [BEAMLET-ARGS...] | ./shell --fake
+#   ./shell                      the shell, the VM's / at userland/shell/_build/sandbox
+#   ./shell --root ~/scratch     another directory as the VM's /
+#   ./shell --fake               the shell on Redoubt's platform, on the fake kernel: the
+#                                console through the client library, no files or programs yet
+#
+# The shell is Redoubt.Shell, a loop of Redoubt's own, not IEx (docs/userland/shell.md). Lines
+# are read whole, so there is no line editing, history, completion or Ctrl+C until the shell's
+# driver exists; `exit` or Ctrl+D ends it. --root wins over the default because beamlet takes
+# the last one.
+#
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+case "${1:-}" in -h | --help) sed -n '2,11p' "$0"; exit 0 ;; esac
+
+. userland/shell/setup.sh
+if [ "${1:-}" = --fake ]; then
+    exec "$fake" "${path[@]}" Elixir.Redoubt.Shell
+fi
+exec "$beamlet" --root "$sandbox" "${path[@]}" "$@" Elixir.Redoubt.Shell

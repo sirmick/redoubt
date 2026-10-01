@@ -872,16 +872,16 @@ pub fn monotonic_time1(c: &mut Ctx, a: &[Term]) -> R {
     Ok(scaled(c, now, per))
 }
 
-fn wall_us(c: &mut Ctx) -> Result<u64, Exception> { c.platform().system_time_us().ok_or_else(|| c.badarg()) }
+fn wall_us(c: &mut Ctx) -> u64 { crate::platform::system_time_us(&mut **c.platform()) }
 
 pub fn system_time(c: &mut Ctx, _a: &[Term]) -> R {
-    let now = wall_us(c)?;
+    let now = wall_us(c);
     Ok(scaled(c, now, 1_000_000_000))
 }
 
 pub fn system_time1(c: &mut Ctx, a: &[Term]) -> R {
     let per = unit_per_second(c, &a[0])?;
-    let now = wall_us(c)?;
+    let now = wall_us(c);
     Ok(scaled(c, now, per))
 }
 
@@ -1158,7 +1158,7 @@ pub fn get_keys(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `now()`: `{MegaSecs, Secs, MicroSecs}` of the system clock, strictly increasing.
 pub fn now(c: &mut Ctx, _a: &[Term]) -> R {
-    let us = wall_us(c)?.max(c.sys().stats.last_now_us + 1);
+    let us = wall_us(c).max(c.sys().stats.last_now_us + 1);
     c.sys().stats.last_now_us = us;
     Ok(c.tuple(&[
         Term::Int((us / 1_000_000_000_000) as i64),
@@ -1173,7 +1173,7 @@ pub fn time_offset(c: &mut Ctx, a: &[Term]) -> R {
         Some(u) => unit_per_second(c, u)?,
         None => 1_000_000_000,
     };
-    let offset = wall_us(c)? as i128 - c.sys().now_us() as i128;
+    let offset = wall_us(c) as i128 - c.sys().now_us() as i128;
     Ok(c.from_i128(offset * per as i128 / 1_000_000))
 }
 
@@ -1302,7 +1302,7 @@ pub fn unique_integer(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn timestamp(c: &mut Ctx, _a: &[Term]) -> R {
-    let us = wall_us(c)?;
+    let us = wall_us(c);
     Ok(c.tuple(&[
         Term::Int((us / 1_000_000_000_000) as i64),
         Term::Int((us / 1_000_000 % 1_000_000) as i64),

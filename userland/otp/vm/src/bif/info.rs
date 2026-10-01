@@ -626,7 +626,7 @@ fn datetime(c: &mut Ctx, secs: i64) -> Term {
 /// `universaltime()` as `{{Y, M, D}, {H, Mi, S}}`. `localtime()` is the same: the VM has no time
 /// zone (the platform could supply one later).
 pub fn universaltime(c: &mut Ctx, _a: &[Term]) -> R {
-    let us = c.platform().system_time_us().ok_or_else(|| c.badarg())?;
+    let us = crate::platform::system_time_us(&mut **c.platform());
     Ok(datetime(c, (us / 1_000_000) as i64))
 }
 

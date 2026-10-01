@@ -108,12 +108,12 @@ more than the parent's. Unix: none. Defined in [budgets](kernel/budgets.md#r7-ca
 into a system budget is not label-checked by the kernel) and never scheduling order. Defined in
 [budgets](kernel/budgets.md).
 
-### command mode
+### commandlet
 
-The shell's short form for everyday work: bare words are quoted, `|>` joins Elixir stages, `|`
-joins native stages, and `>` and `>>` write and append. It expands to ordinary Elixir calls to
-the shell's helpers. Unix: the shell's own syntax, but only a preprocessor in front of Elixir.
-Defined in [the shell](userland/shell.md#command-mode).
+One of the shell's commands (`cat`, `cp`, `grep`): an Elixir function declared once, with
+`defcommand`, with typed parameters and its help, which it does not compile without. Imported at
+the prompt and called as plain Elixir. Unix: a shell builtin, but an ordinary function with no
+syntax of its own. Defined in [the shell](userland/shell.md#commands).
 
 ### confined deployment
 
@@ -419,6 +419,20 @@ shares and how setup-only operations are reserved. Defined in
 The IP prefixes and ports an `ipd` connection may reach. A grant only narrows it, and no scope
 reaches the box's own addresses. Unix: none; closest to a per-socket firewall rule. Defined in
 [ipd](servers/ipd.md).
+
+### screen buffer
+
+A grid of cells beamlet holds natively for one screen program, written with a few primitives and
+diffed into the cells that changed; the only way a screen's text reaches the terminal. Unix: a
+curses window, but with no escape sequence in it. Defined in
+[beamlet](userland/beamlet.md#screen-natives).
+
+### screen program
+
+A full-screen program of the session (the pager, the editor, a chooser): an Erlang process that
+draws into a screen buffer and is sent its keys by the shell's driver. Unix: a curses program, but
+in the session's VM, not a process of its own. Defined in
+[the shell](userland/shell.md#full-screen-programs).
 
 ### seal
 

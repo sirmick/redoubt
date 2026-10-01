@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["vm", "crypto", "re", "cli"]
+members = ["vm", "crypto", "re", "cli", "redoubt"]
 
 [workspace.package]
 edition = "2021"
@@ -9,3 +9,72 @@ version = "0.1.0"
 
 [profile.release]
 debug = true
+
+# Every crate compiled into the VM is built from the root's vendor/, the published bytes
+# tools/vendor-check proves: those beamlet shares with the servers, so both sides run the same
+# code, and beamlet's own (vendor/README.md). Only what builds or tests on the host comes from
+# crates.io, pinned by Cargo.lock, as the root's host tools do.
+[patch.crates-io]
+adler2 = { path = "../../vendor/adler2" }
+aead = { path = "../../vendor/aead" }
+aes = { path = "../../vendor/aes" }
+aes-gcm = { path = "../../vendor/aes-gcm" }
+base16ct = { path = "../../vendor/base16ct" }
+block-buffer = { path = "../../vendor/block-buffer" }
+cbc = { path = "../../vendor/cbc" }
+chacha20 = { path = "../../vendor/chacha20" }
+chacha20poly1305 = { path = "../../vendor/chacha20poly1305" }
+cipher = { path = "../../vendor/cipher" }
+cmov = { path = "../../vendor/cmov" }
+const-oid = { path = "../../vendor/const-oid" }
+cpubits = { path = "../../vendor/cpubits" }
+crypto-bigint = { path = "../../vendor/crypto-bigint" }
+crypto-common = { path = "../../vendor/crypto-common" }
+crypto-primes = { path = "../../vendor/crypto-primes" }
+ctr = { path = "../../vendor/ctr" }
+ctutils = { path = "../../vendor/ctutils" }
+der = { path = "../../vendor/der" }
+digest = { path = "../../vendor/digest" }
+ecdsa = { path = "../../vendor/ecdsa" }
+ed25519-compact = { path = "../../vendor/ed25519-compact" }
+elf = { path = "../../vendor/elf" }
+elliptic-curve = { path = "../../vendor/elliptic-curve" }
+ff = { path = "../../vendor/ff" }
+getrandom = { path = "../../vendor/getrandom" }
+ghash = { path = "../../vendor/ghash" }
+group = { path = "../../vendor/group" }
+hkdf = { path = "../../vendor/hkdf" }
+hmac = { path = "../../vendor/hmac" }
+hybrid-array = { path = "../../vendor/hybrid-array" }
+inout = { path = "../../vendor/inout" }
+keccak = { path = "../../vendor/keccak" }
+libm = { path = "../../vendor/libm" }
+md-5 = { path = "../../vendor/md-5" }
+miniz_oxide = { path = "../../vendor/miniz_oxide" }
+num-bigint = { path = "../../vendor/num-bigint" }
+num-integer = { path = "../../vendor/num-integer" }
+num-traits = { path = "../../vendor/num-traits" }
+p256 = { path = "../../vendor/p256" }
+p384 = { path = "../../vendor/p384" }
+pbkdf2 = { path = "../../vendor/pbkdf2" }
+poly1305 = { path = "../../vendor/poly1305" }
+polyval = { path = "../../vendor/polyval" }
+primefield = { path = "../../vendor/primefield" }
+primeorder = { path = "../../vendor/primeorder" }
+rand_core = { path = "../../vendor/rand_core" }
+regex-automata = { path = "../../vendor/regex-automata" }
+regex-syntax = { path = "../../vendor/regex-syntax" }
+rfc6979 = { path = "../../vendor/rfc6979" }
+rsa = { path = "../../vendor/rsa" }
+ryu = { path = "../../vendor/ryu" }
+sec1 = { path = "../../vendor/sec1" }
+sha1 = { path = "../../vendor/sha1" }
+sha2 = { path = "../../vendor/sha2" }
+sha3 = { path = "../../vendor/sha3" }
+signature = { path = "../../vendor/signature" }
+sponge-cursor = { path = "../../vendor/sponge-cursor" }
+subtle = { path = "../../vendor/subtle" }
+typenum = { path = "../../vendor/typenum" }
+universal-hash = { path = "../../vendor/universal-hash" }
+wnaf = { path = "../../vendor/wnaf" }
+zeroize = { path = "../../vendor/zeroize" }

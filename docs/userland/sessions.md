@@ -28,14 +28,14 @@ $ ssh approve@box          # the approval terminal: only the steward talks here
 At the prompt, the session's namespace is a table you can print:
 
 ```elixir
-iex(1)> ns()
+/home/alice (1)> ns()
 /home/alice  fsd:home     (Alice's home volume)
 /dev/cons    sshd         (this SSH channel)
 /boot        bootfsd      (the boot bundle, read-only)
 /net         ipd          (the hosts and ports this session may reach)
-iex(2)> File.ls!("/home/alice")
+/home/alice (2)> File.ls!("/home/alice")
 ["notes.txt", "src"]
-iex(3)> File.read("/home/bob/notes.txt")
+/home/alice (3)> File.read("/home/bob/notes.txt")
 {:error, :enoent}
 ```
 
@@ -43,10 +43,10 @@ iex(3)> File.read("/home/bob/notes.txt")
 authority, only a name:
 
 ```elixir
-iex(4)> {home, _rest} = ns_lookup("/home/alice")
-iex(5)> bind("/h", home)
+/home/alice (4)> {home, _rest} = ns_lookup("/home/alice")
+/home/alice (5)> bind("/h", home)
 :ok
-iex(6)> File.ls!("/h/src")                  # the same files as /home/alice/src
+/home/alice (6)> File.ls!("/h/src")                  # the same files as /home/alice/src
 ```
 
 Leaving the session (`exit`, or closing the SSH connection) ends it: the steward destroys the

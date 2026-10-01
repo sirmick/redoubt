@@ -13,9 +13,23 @@ use crate::{KeystreamRng, R, atom_name, badarg, bin, bytes, nif_error, notsup, r
 type E = Exception;
 
 // ---- X25519 and Ed25519 (the "evp" keys) ----
+//
+// Both are `ed25519-compact`'s, the crate the loader, keyd and sshd use.
 
 fn key32(c: &mut Ctx, b: &[u8], arg: i64) -> Result<[u8; 32], E> {
     <[u8; 32]>::try_from(b).map_err(|_| badarg(c, arg, "Bad key length"))
+}
+
+/// The Ed25519 key pair of a 32-byte seed, or `None` for the all-zero seed: `ed25519-compact`
+/// panics on that one, which OpenSSL takes like any other, so it is refused as a bad key, as sshd
+/// refuses it.
+fn ed25519_pair_of(seed: [u8; 32]) -> Option<ed25519_compact::KeyPair> {
+    (seed != [0; 32]).then(|| ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed)))
+}
+
+fn ed25519_pair(c: &mut Ctx, b: &[u8], arg: i64) -> Result<ed25519_compact::KeyPair, E> {
+    let seed = key32(c, b, arg)?;
+    ed25519_pair_of(seed).ok_or_else(|| badarg(c, arg, "Bad key"))
 }
 
 /// A private key argument: a binary, or `undefined` to generate one.
@@ -28,18 +42,18 @@ pub fn evp_generate_key(c: &mut Ctx, a: &[Term]) -> R {
     match atom_name(&a[0]) {
         Some("x25519") => {
             let private = private_or_random(c, a, 1, 32)?;
-            let secret = x25519_dalek::StaticSecret::from(key32(c, &private, 1)?);
-            let public = x25519_dalek::PublicKey::from(&secret);
+            let secret = ed25519_compact::x25519::SecretKey::new(key32(c, &private, 1)?);
+            let public = secret.recover_public_key().map_err(|_| badarg(c, 1, "Bad key"))?;
             Ok({
-                let e = [bin(c, public.as_bytes()), bin(c, &private)];
+                let e = [bin(c, &public[..]), bin(c, &private)];
                 c.tuple(&e)
             })
         }
         Some("ed25519") => {
             let private = private_or_random(c, a, 1, 32)?;
-            let signing = ed25519_dalek::SigningKey::from_bytes(&key32(c, &private, 1)?);
+            let pair = ed25519_pair(c, &private, 1)?;
             Ok({
-                let e = [bin(c, signing.verifying_key().as_bytes()), bin(c, &private)];
+                let e = [bin(c, &pair.pk[..]), bin(c, &private)];
                 c.tuple(&e)
             })
         }
@@ -54,14 +68,11 @@ pub fn evp_compute_key(c: &mut Ctx, a: &[Term]) -> R {
         return Err(notsup(c, 0, "Unsupported curve"));
     }
     let (theirs, mine) = (bytes(c, a, 1, "public key")?, bytes(c, a, 2, "private key")?);
-    let theirs = x25519_dalek::PublicKey::from(key32(c, &theirs, 1)?);
-    let secret = x25519_dalek::StaticSecret::from(key32(c, &mine, 2)?);
-    let shared = secret.diffie_hellman(&theirs);
-    // An all-zero result means the peer sent a low-order point; OpenSSL refuses those too.
-    if !shared.was_contributory() {
-        return Err(nif_error(c, "error", -1, "Can't derive secret"));
-    }
-    Ok(bin(c, shared.as_bytes()))
+    let theirs = ed25519_compact::x25519::PublicKey::new(key32(c, &theirs, 1)?);
+    let secret = ed25519_compact::x25519::SecretKey::new(key32(c, &mine, 2)?);
+    // `dh` fails on an all-zero result, a low-order point from the peer; OpenSSL refuses those too.
+    let shared = theirs.dh(&secret).map_err(|_| nif_error(c, "error", -1, "Can't derive secret"))?;
+    Ok(bin(c, &shared[..]))
 }
 
 // ---- NIST curves: ECDH and ECDSA on P-256 and P-384 ----
@@ -234,10 +245,10 @@ pub fn sign(c: &mut Ctx, a: &[Term]) -> R {
             }
             let private =
                 key.first().and_then(|k| c.heap().iodata_bytes(*k)).ok_or_else(|| badarg(c, 3, "Bad key"))?;
-            let signing = ed25519_dalek::SigningKey::from_bytes(&key32(c, &private, 3)?);
+            let pair = ed25519_pair(c, &private, 3)?;
             let msg = bytes(c, a, 2, "data")?;
-            use ed25519_dalek::Signer;
-            Ok(bin(c, &signing.sign(&msg).to_bytes()))
+            // No noise: RFC 8032's deterministic signature, the bytes OpenSSL gives.
+            Ok(bin(c, &pair.sk.sign(&msg, None)[..]))
         }
         Some("ecdsa") => {
             let (digest, _) = digest_of(c, a, 1, 2)?;
@@ -257,7 +268,7 @@ pub fn sign(c: &mut Ctx, a: &[Term]) -> R {
             let sig = if opts.pss {
                 let alg = alg.ok_or_else(|| badarg(c, 1, "PSS needs a digest"))?;
                 let mut rng = KeystreamRng::new(c)?;
-                with_digest10(alg, &opts, |scheme| key.sign_with_rng(&mut rng, scheme, &digest))
+                with_pss!(alg, &opts, scheme => key.sign_with_rng(&mut rng, scheme, &digest))
                     .ok_or_else(|| notsup(c, 1, "Unsupported digest for PSS"))?
             } else {
                 key.sign(rsa::Pkcs1v15Sign::new_unprefixed(), &digest_info(alg, &digest))
@@ -281,10 +292,10 @@ pub fn verify(c: &mut Ctx, a: &[Term]) -> R {
             let public =
                 key.first().and_then(|k| c.heap().iodata_bytes(*k)).ok_or_else(|| badarg(c, 4, "Bad key"))?;
             let msg = bytes(c, a, 2, "data")?;
-            let vk = ed25519_dalek::VerifyingKey::from_bytes(&key32(c, &public, 4)?);
-            match (vk, <[u8; 64]>::try_from(&sig[..])) {
-                (Ok(vk), Ok(s)) => vk.verify_strict(&msg, &ed25519_dalek::Signature::from_bytes(&s)).is_ok(),
-                _ => false,
+            let pk = ed25519_compact::PublicKey::new(key32(c, &public, 4)?);
+            match <[u8; 64]>::try_from(&sig[..]) {
+                Ok(s) => pk.verify(&msg, &ed25519_compact::Signature::new(s)).is_ok(),
+                Err(_) => false,
             }
         }
         Some("ecdsa") => {
@@ -304,7 +315,7 @@ pub fn verify(c: &mut Ctx, a: &[Term]) -> R {
             let opts = RsaOpts::parse(c, &a[5], 5)?;
             if opts.pss {
                 let alg = alg.ok_or_else(|| badarg(c, 1, "PSS needs a digest"))?;
-                with_digest10(alg, &opts, |scheme| key.verify(scheme, &digest, &sig))
+                with_pss!(alg, &opts, scheme => key.verify(scheme, &digest, &sig))
                     .ok_or_else(|| notsup(c, 1, "Unsupported digest for PSS"))?
                     .is_ok()
             } else {
@@ -430,31 +441,50 @@ impl RsaOpts {
     }
 }
 
-/// Run `f` with the PSS scheme for digest `alg` (and `opts`' salt length), using the digest
-/// 0.10 generation of SHA-1/SHA-2 that the `rsa` 0.9 crate works with.
-fn with_digest10<T>(alg: Alg, opts: &RsaOpts, f: impl FnOnce(rsa::Pss) -> T) -> Option<T> {
-    if opts.mgf1.is_some_and(|m| m != alg) {
-        return None; // a different MGF1 digest is not supported
-    }
-    macro_rules! pss {
-        ($D:ty, $len:expr) => {{
-            let salt = if opts.salt_len >= 0 { opts.salt_len as usize } else { $len };
-            f(rsa::Pss::new_with_salt::<$D>(salt))
-        }};
-    }
-    Some(match alg {
-        Alg::Sha1 => pss!(sha1_10::Sha1, 20),
-        Alg::Sha224 => pss!(sha2_10::Sha224, 28),
-        Alg::Sha256 => pss!(sha2_10::Sha256, 32),
-        Alg::Sha384 => pss!(sha2_10::Sha384, 48),
-        Alg::Sha512 => pss!(sha2_10::Sha512, 64),
-        _ => return None,
-    })
+/// `Some(body)` with `scheme` bound to the PSS scheme for digest `alg` (and `opts`' salt length),
+/// or `None` for a digest PSS is not offered with here, or an MGF1 digest other than `alg`. A
+/// scheme's type is its digest's, so each digest is its own arm.
+macro_rules! with_pss {
+    ($alg:expr, $opts:expr, $scheme:ident => $body:expr) => {{
+        let opts: &RsaOpts = $opts;
+        let salt = |len: usize| if opts.salt_len >= 0 { opts.salt_len as usize } else { len };
+        if opts.mgf1.is_some_and(|m| m != $alg) {
+            None
+        } else {
+            match $alg {
+                Alg::Sha1 => {
+                    let $scheme = rsa::Pss::<sha1::Sha1>::new_with_salt(salt(20));
+                    Some($body)
+                }
+                Alg::Sha224 => {
+                    let $scheme = rsa::Pss::<sha2::Sha224>::new_with_salt(salt(28));
+                    Some($body)
+                }
+                Alg::Sha256 => {
+                    let $scheme = rsa::Pss::<sha2::Sha256>::new_with_salt(salt(32));
+                    Some($body)
+                }
+                Alg::Sha384 => {
+                    let $scheme = rsa::Pss::<sha2::Sha384>::new_with_salt(salt(48));
+                    Some($body)
+                }
+                Alg::Sha512 => {
+                    let $scheme = rsa::Pss::<sha2::Sha512>::new_with_salt(salt(64));
+                    Some($body)
+                }
+                _ => None,
+            }
+        }
+    }};
+}
+use with_pss;
+
+fn rsa_int(c: &Ctx, t: &Term) -> Option<rsa::BoxedUint> {
+    c.heap().iodata_bytes(*t).map(|b| rsa::BoxedUint::from_be_slice_vartime(&b))
 }
 
-fn rsa_int(c: &Ctx, t: &Term) -> Option<rsa::BigUint> {
-    c.heap().iodata_bytes(*t).map(|b| rsa::BigUint::from_bytes_be(&b))
-}
+/// An RSA integer as OTP gives and takes them: big-endian, with no leading zeros.
+fn rsa_bytes(n: &rsa::BoxedUint) -> alloc::boxed::Box<[u8]> { n.to_be_bytes_trimmed_vartime() }
 
 /// `[E, N]`, or longer (a private key's list starts the same way).
 fn rsa_public(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPublicKey, E> {
@@ -467,17 +497,41 @@ fn rsa_public(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPublicKey, E> {
 
 /// `[E, N, D]` or `[E, N, D, P1, P2, E1, E2, C]`.
 fn rsa_private(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPrivateKey, E> {
-    let parts: Vec<rsa::BigUint> =
+    let parts: Vec<rsa::BoxedUint> =
         c.heap().to_vec(*t).unwrap_or_default().iter().filter_map(|t| rsa_int(c, t)).collect();
     if parts.len() < 3 {
         return Err(badarg(c, arg, "Bad RSA private key"));
     }
-    let primes = if parts.len() >= 5 { alloc::vec![parts[3].clone(), parts[4].clone()] } else { Vec::new() };
-    let key =
-        rsa::RsaPrivateKey::from_components(parts[1].clone(), parts[0].clone(), parts[2].clone(), primes)
-            .map_err(|_| badarg(c, arg, "Bad RSA private key"))?;
-    key.validate().map_err(|_| badarg(c, arg, "Bad RSA private key"))?;
-    Ok(key)
+    rsa_private_of(&parts).ok_or_else(|| badarg(c, arg, "Bad RSA private key"))
+}
+
+/// The private key `[E, N, D]` or `[E, N, D, P1, P2 | _]`, if it is one. `from_components` builds
+/// the modulus's Montgomery parameters, and recovers the primes from `D`, before anything checks
+/// a size, so a hostile key's multi-megabyte `N` or `D` would hold the VM's thread: `N` is held to
+/// the limit the public path and key generation keep, and `D` and the primes, never wider than
+/// `N` in a real key, to `N`'s width, first.
+fn rsa_private_of(parts: &[rsa::BoxedUint]) -> Option<rsa::RsaPrivateKey> {
+    let (e, n, d) = (parts.first()?, parts.get(1)?, parts.get(2)?);
+    let width = n.bits_vartime();
+    let primes = if parts.len() >= 5 { &parts[3..5] } else { &[] };
+    if width as usize > rsa::RsaPublicKey::MAX_SIZE || d.bits_vartime() > width {
+        return None;
+    }
+    if primes.iter().any(|p| p.bits_vartime() > width) {
+        return None;
+    }
+    // Without primes, `recover_primes` computes `D·E − 1`, which panics on underflow for a `D`
+    // of 0, and cuts `E` to `D`'s precision without a word; it is defined for `E` of at most 256
+    // bits.
+    if d.bits_vartime() < 2 {
+        return None;
+    }
+    if primes.is_empty() && (e.bits_vartime() > 256 || e.bits_vartime() > d.bits_precision()) {
+        return None;
+    }
+    let key = rsa::RsaPrivateKey::from_components(n.clone(), e.clone(), d.clone(), primes.to_vec()).ok()?;
+    key.validate().ok()?;
+    Some(key)
 }
 
 /// `pkey_crypt_nif(rsa, In, Key, Options, IsPrivate, IsEncrypt)`: RSA with PKCS #1 v1.5
@@ -513,7 +567,11 @@ pub fn crypt(c: &mut Ctx, a: &[Term]) -> R {
             // Undo a type 1 padding: m = s^e mod n, then 00 01 FF...FF 00 data.
             let key = rsa_public(c, &a[2], 2)?;
             let k = key.size();
-            let m = rsa::BigUint::from_bytes_be(&input).modpow(key.e(), key.n()).to_bytes_be();
+            let s = rsa::BoxedUint::from_be_slice_vartime(&input);
+            if &s >= key.n().as_ref() {
+                return Err(failed(c));
+            }
+            let m = rsa_bytes(&rsa::hazmat::rsa_encrypt(&key, &s).map_err(|_| failed(c))?);
             let mut em = alloc::vec![0u8; k.saturating_sub(m.len())];
             em.extend_from_slice(&m);
             let sep = em.iter().skip(2).position(|&b| b != 0xff).map(|i| i + 2);
@@ -536,7 +594,7 @@ pub fn privkey_to_pubkey(c: &mut Ctx, a: &[Term]) -> R {
     }
     let key = rsa_private(c, &a[1], 1)?;
     Ok({
-        let v = alloc::vec![bin(c, &key.e().to_bytes_be()), bin(c, &key.n().to_bytes_be())];
+        let v = alloc::vec![bin(c, &rsa_bytes(key.e())), bin(c, &rsa_bytes(key.n()))];
         c.list(v)
     })
 }
@@ -550,18 +608,165 @@ pub fn rsa_generate_key(c: &mut Ctx, a: &[Term]) -> R {
         .ok_or_else(|| badarg(c, 0, "Bad modulus size"))?;
     let e = rsa_int(c, &a[1]).ok_or_else(|| badarg(c, 1, "Bad exponent"))?;
     let mut rng = KeystreamRng::new(c)?;
-    let key = rsa::RsaPrivateKey::new_with_exp(&mut rng, bits, &e)
-        .map_err(|_| nif_error(c, "error", -1, "Key generation failed"))?;
+    let failed = |c: &mut Ctx| nif_error(c, "error", -1, "Key generation failed");
+    let key = rsa::RsaPrivateKey::new_with_exp(&mut rng, bits, e).map_err(|_| failed(c))?;
     let primes = key.primes();
-    let (p, q) = (&primes[0], &primes[1]);
-    let d = key.d();
-    let one = rsa::BigUint::from(1u32);
-    let dp = d % (p - &one);
-    let dq = d % (q - &one);
-    let qinv = key.crt_coefficient().ok_or_else(|| nif_error(c, "error", -1, "Key generation failed"))?;
-    let parts = [key.e(), key.n(), d, p, q, &dp, &dq, &qinv];
+    let (dp, dq, qinv) = match (key.dp(), key.dq(), key.crt_coefficient()) {
+        (Some(dp), Some(dq), Some(qinv)) => (dp.clone(), dq.clone(), qinv),
+        _ => return Err(failed(c)),
+    };
+    let parts = [key.e(), key.n().as_ref(), key.d(), &primes[0], &primes[1], &dp, &dq, &qinv];
     Ok({
-        let v = parts.iter().map(|x| bin(c, &x.to_bytes_be())).collect::<Vec<_>>();
+        let v = parts.iter().map(|x| bin(c, &rsa_bytes(x))).collect::<Vec<_>>();
         c.list(v)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::ed25519_pair_of;
+
+    fn hex(s: &str) -> alloc::vec::Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    /// RFC 8032, section 7.1, test 1: the public key and the signature of the empty message, which
+    /// `tests/cryptotests/pubkey.erl` also holds to BEAM's.
+    #[test]
+    fn ed25519_is_rfc_8032() {
+        let seed = hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
+        let pair = ed25519_pair_of(seed.try_into().unwrap()).unwrap();
+        assert_eq!(
+            &pair.pk[..],
+            &hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")[..]
+        );
+        let sig = pair.sk.sign(b"", None);
+        assert_eq!(
+            &sig[..],
+            &hex(concat!(
+                "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555",
+                "fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+            ))[..]
+        );
+        assert!(pair.pk.verify(b"", &sig).is_ok());
+        assert!(pair.pk.verify(b"x", &sig).is_err());
+    }
+
+    /// The seed `ed25519-compact` would panic on is refused instead, so no key reaches it.
+    #[test]
+    fn the_all_zero_seed_is_refused_not_a_panic() {
+        assert!(ed25519_pair_of([0; 32]).is_none());
+        assert!(ed25519_pair_of([1; 32]).is_some());
+    }
+
+    /// A 1024-bit key's `[E, N, D, P1, P2]`, made for this test and nothing else.
+    fn rsa_parts() -> alloc::vec::Vec<rsa::BoxedUint> {
+        [
+            "010001",
+            concat!(
+                "a9fe558664722ab2c3190eb31e29e7a45be6d062afb29304c7c4965750f2c941e2bcf30391f15fde7bcb550d",
+                "39daa4fab484eaeb6f9304cf89880f84c711d98a80215c087dc54767f446c258f99e7492676b31365a116375",
+                "e5e0337b03f691bf9cc7b3dc75d1daa25c78c484c3f828ad07ea4b70a10ff2e5ee1d94f8443c8e27"
+            ),
+            concat!(
+                "9ddcae178b97e9c6f01e88e41592dca66921c34aa1d6b768ad0b0682378dff0fcc3ba381213a81c8de3548da",
+                "6b6b7be1c559d9bea17269f940c2b5869c471b385b183e417fc89fadc3664c450feeca4edcfaeef371a389f2",
+                "b32ac7fe76b8cb9176b354c302086e8cb0b8702bef86f93536bffdfae729376bd9f5688293e8c981"
+            ),
+            "dc2f03458c49fbe27819075b587deb8f2e0e0488be8dfc682594ffff11ec395e884be2da465438b0ea1b72ef294ab0a2dc9196d4ee5d2c87957681bcf00fdf71",
+            "c5a547be5bb12c2a5cae589072a7da70e99a80f6c324418e9ceb9a25ec0dbbfe56a3601dcd1d498dd7c45f02731bceb50400df917f3a876b7b30a9e777ffab17",
+        ]
+        .iter()
+        .map(|h| rsa::BoxedUint::from_be_slice_vartime(&hex(h)))
+        .collect()
+    }
+
+    /// An `N` or `D` wider than the limit, or a `D` or prime wider than `N`, is refused before
+    /// `from_components` builds anything from it: an 8 MiB `N`, which would hold the thread for
+    /// minutes there, is refused at once, and so is a valid key's `D` made wide.
+    #[test]
+    fn an_oversized_rsa_private_key_is_refused_before_it_is_built() {
+        use super::rsa_private_of;
+        let parts = rsa_parts();
+        assert!(rsa_private_of(&parts).is_some());
+        assert!(rsa_private_of(&parts[..3]).is_some());
+
+        let mut huge = alloc::vec![0xffu8; 8 << 20];
+        let at = std::time::Instant::now();
+        let mut wide = parts.clone();
+        wide[1] = rsa::BoxedUint::from_be_slice_vartime(&huge);
+        assert!(rsa_private_of(&wide).is_none());
+        huge.truncate(rsa::RsaPublicKey::MAX_SIZE / 8 + 1);
+        wide[1] = rsa::BoxedUint::from_be_slice_vartime(&huge);
+        assert!(rsa_private_of(&wide).is_none());
+        assert!(at.elapsed() < std::time::Duration::from_secs(1), "{:?}", at.elapsed());
+
+        let mut wide = parts.clone();
+        wide[2] = rsa::BoxedUint::from_be_slice_vartime(&[0xff; 8 << 20]);
+        assert!(rsa_private_of(&wide).is_none());
+        let mut wide = parts.clone();
+        wide[2] = rsa::BoxedUint::from_be_slice_vartime(&[0xff; 129]);
+        assert!(rsa_private_of(&wide).is_none());
+        let mut wide = parts.clone();
+        wide[3] = rsa::BoxedUint::from_be_slice_vartime(&[0xff; 129]);
+        assert!(rsa_private_of(&wide).is_none());
+    }
+
+    /// Malformed private keys over edge values, with and without primes, through everything that
+    /// takes a private key (decryption, both signature schemes, the public half): each is refused
+    /// or works, and none panics.
+    #[test]
+    fn malformed_rsa_private_keys_are_refused_never_a_panic() {
+        use rsa::BoxedUint;
+        use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+
+        use super::rsa_private_of;
+        let parts = rsa_parts();
+        let (n, d) = (parts[1].clone(), parts[2].clone());
+        let int = |bytes: &[u8]| BoxedUint::from_be_slice_vartime(bytes);
+        let small = |v: u64| int(&v.to_be_bytes());
+        let one_less = |x: &BoxedUint| x.wrapping_sub(&BoxedUint::one_with_precision(x.bits_precision()));
+        let mut wide_e = alloc::vec![0u8; 33];
+        wide_e[0] = 1;
+        wide_e[32] = 1;
+        let es = [small(1), small(2), small(3), small(65537), int(&wide_e), int(&[0xff; 129])];
+        let ds = [small(0), small(1), small(2), small(3), one_less(&n), n.clone(), d.clone()];
+        let ns = [n.clone(), small(0), small(1), small(4), small(15), small(3233)];
+        let mut rng = crate::KeystreamRng({
+            use chacha20::cipher::KeyIvInit;
+            chacha20::ChaCha20::new(&[7; 32].into(), &[0; 12].into())
+        });
+        for e in &es {
+            for d in &ds {
+                for n in &ns {
+                    for primes in [&[][..], &parts[3..5]] {
+                        let key = [&[e.clone(), n.clone(), d.clone()][..], primes].concat();
+                        let what = std::format!("e {e:?} d {d:?} n {n:?} primes {}", primes.len());
+                        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let Some(key) = rsa_private_of(&key) else { return };
+                            let _ = (key.e(), key.n(), key.d(), key.primes());
+                            let _ = key.decrypt(rsa::Pkcs1v15Encrypt, &[1]);
+                            let _ = key.decrypt_blinded(&mut rng, rsa::Pkcs1v15Encrypt, &[1; 128]);
+                            let _ = key.sign(rsa::Pkcs1v15Sign::new_unprefixed(), &[1; 20]);
+                            let pss = rsa::Pss::<sha2::Sha256>::new_with_salt(32);
+                            let _ = key.sign_with_rng(&mut rng, pss, &[1; 32]);
+                        }));
+                        assert!(run.is_ok(), "{what}: a panic");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A low-order point gives an all-zero secret, which `dh` refuses, as OpenSSL does.
+    #[test]
+    fn x25519_refuses_a_low_order_point() {
+        use ed25519_compact::x25519::{PublicKey, SecretKey};
+        let mine = SecretKey::new([7; 32]);
+        assert!(PublicKey::new([0; 32]).dh(&mine).is_err());
+        let theirs = SecretKey::new([9; 32]).recover_public_key().unwrap();
+        assert!(theirs.dh(&mine).is_ok());
+    }
 }

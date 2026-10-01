@@ -19,11 +19,11 @@ their authority.
 ## How to use it
 
 ```text
-iex(1)> pkg add logscan-1.3.xpkg
+/home/alice (1)> pkg_add("logscan-1.3.xpkg")
   signed by: alice (on your trust list)   requests: read /logs, write ~/reports
-iex(2)> pkg use logscan 1.3               # pkg use logscan 1.2 rolls back
-iex(3)> logscan --since yesterday
-iex(4)> pkg gc                            # remove versions no profile uses
+/home/alice (2)> pkg_use("logscan", "1.3")     # pkg_use("logscan", "1.2") rolls back
+/home/alice (3)> pipe(~w(logscan --since yesterday))
+/home/alice (4)> pkg_gc()                       # remove versions no profile uses
 ```
 
 Adding a signer to the trust list is a high-stakes step, answered at `ssh approve@box`
@@ -124,7 +124,7 @@ grants.
 Status: planned · M5 (persist, install, share)
 
 A hijacked agent can run code it wrote: any process can create a child and map pages into it
-(the launcher needs exactly that), and IEx evaluates any Elixir. What holds is that such code
+(the launcher needs exactly that), and the shell evaluates any Elixir. What holds is that such code
 never runs with more authority than its author already holds. Signatures gate only what the
 steward launches with **new** grants ([native programs](native.md#launching-from-a-session)).
 

@@ -1,0 +1,53 @@
+<!-- wash-qa-thread: SHELL1-otp-crypto -->
+
+## SHELL1 · SHELL1-otp-crypto — SHELL1: the pinned OTP's crypto NIF does not load on this host
+
+Status: **resolved** · Assigned to: Orchestrator · Revision: 6
+
+Evidence: With BEAMLET_TOOLCHAINS=./toolchains/rebuilt (OTP 28.5.0.6 built from the official source against OpenSSL 3.5.8), ./test-shell exits 0 on wp-shell1 be6b57ea2: native 6, beamlet 85/85, BEAM 85/85, entry point, fake kernel 7. difftest 513/521 and elixir-tests show the same failures on redoubt, so they are pre-existing. Swapping the rebuilt OTP into toolchains/ still waits on the owner's OK.
+
+### Orchestrator · Question
+
+Event: `aba13c8131c50a38a74221ca39f2e0bc` · 2026-09-30T22:59:36Z
+
+> toolchains/otp-28.5.0.6/lib/crypto-5.8.3.3/priv/lib/crypto.so (built 2026-09-01) needs EVP_sm4_cbc@OPENSSL_3.0.0; the host's openssl-libs-3.5.8-1.fc44 does not export it, so crypto:start() fails, Mix dies, and ./test-shell runs no stage. The same breaks beamlet's difftest and elixir-tests on this host for every package. Rebuilding OTP from toolchains/OTP-28.5.0.6.tar.gz needs perl and ncurses-devel, neither installed. Owner choice: how the toolchain is repaired.
+
+### Orchestrator · Owner decision requested
+
+Event: `9905b3130f5f6d4e9896af89c11297f9` · 2026-09-30T22:59:42Z
+
+> SHELL1's Elixir tests can't run on this host
+> 
+> 1. The pinned OTP's crypto library was built against an OpenSSL that had SM4; this Fedora's openssl-libs 3.5.8 doesn't export EVP_sm4_cbc, so crypto won't load, Mix dies, and ./test-shell (and beamlet's difftests) can't run here. How should the toolchain be fixed?
+>    - You install perl + ncurses-devel; I rebuild OTP beside the old one (recommended): sudo dnf install perl ncurses-devel. I build OTP 28.5.0.6 from toolchains/OTP-28.5.0.6.tar.gz into a new root, test SHELL1 through BEAMLET_TOOLCHAINS, and swap it into toolchains/ only with your OK. Nothing live is replaced first.
+>    - You fix the toolchain yourself: SHELL1 waits for it; K10 and review carry on.
+>    - Merge SHELL1 on your machine's test-shell run: Accept your own ./test-shell result from where you wrote the branch; only the Rust gates and the bench are checked here. Less cautious.
+
+### Owner · Owner decision
+
+Event: `3c294ca7ffdee4fe9850ffaf4bcd808c` · 2026-09-30T23:00:18Z
+
+> The owner answered:
+> 
+> 1. The pinned OTP's crypto library was built against an OpenSSL that had SM4; this Fedora's openssl-libs 3.5.8 doesn't export EVP_sm4_cbc, so crypto won't load, Mix dies, and ./test-shell (and beamlet's difftests) can't run here. How should the toolchain be fixed?
+>    → You install perl + ncurses-devel; I rebuild OTP beside the old one
+
+### Orchestrator · Reply
+
+Event: `cb22840b95393a4e35a52d175afda603` · 2026-09-30T23:00:36Z
+
+> Owner 2026-09-30: installs perl and ncurses-devel; the orchestrator rebuilds OTP 28.5.0.6 from toolchains/OTP-28.5.0.6.tar.gz into a separate root, SHELL1 is tested through BEAMLET_TOOLCHAINS, and it replaces toolchains/otp-28.5.0.6 only with the owner's OK.
+
+### Orchestrator · Reply
+
+Event: `71553f7adedbb1b1deccc8ae32307fec` · 2026-09-30T23:05:08Z
+
+> Rebuilt OTP 28.5.0.6 from the official otp_src_28.5.0.6.tar.gz (SHA256 49d7a75e… matches the release's SHA256.txt; toolchains/OTP-28.5.0.6.tar.gz is a prebuilt binary, not source) into toolchains/rebuilt/otp-28.5.0.6, --without-wx --without-odbc. crypto loads against OpenSSL 3.5.8. SHELL1 tests through BEAMLET_TOOLCHAINS=./toolchains/rebuilt; swapping it into toolchains/ waits on the owner's OK.
+
+### Orchestrator · Resolved
+
+Event: `87eaa3fbb4f6f1040144a896cca64e5b` · 2026-09-30T23:29:29Z
+
+> Evidence: With BEAMLET_TOOLCHAINS=./toolchains/rebuilt (OTP 28.5.0.6 built from the official source against OpenSSL 3.5.8), ./test-shell exits 0 on wp-shell1 be6b57ea2: native 6, beamlet 85/85, BEAM 85/85, entry point, fake kernel 7. difftest 513/521 and elixir-tests show the same failures on redoubt, so they are pre-existing. Swapping the rebuilt OTP into toolchains/ still waits on the owner's OK.
+
+<!-- wash-qa-checkpoint-v2: eyJ0aHJlYWQiOnsiaWQiOiJTSEVMTDEtb3RwLWNyeXB0byIsIm5vZGUiOiJTSEVMTDEiLCJ0aXRsZSI6IlNIRUxMMTogdGhlIHBpbm5lZCBPVFAncyBjcnlwdG8gTklGIGRvZXMgbm90IGxvYWQgb24gdGhpcyBob3N0IiwiY3JlYXRvciI6IjE3MmIxYThmYTc3ODMxYTJiOWI0MzYxOWJmOTcwYzA0IiwiYXNzaWduZWUiOiIxNzJiMWE4ZmE3NzgzMWEyYjliNDM2MTliZjk3MGMwNCIsInN0YXRlIjoicmVzb2x2ZWQiLCJibG9ja2luZyI6ZmFsc2UsInJldmlzaW9uIjo2LCJkZWNpc2lvbl9yZWZzIjpudWxsLCJldmlkZW5jZSI6IldpdGggQkVBTUxFVF9UT09MQ0hBSU5TPS4vdG9vbGNoYWlucy9yZWJ1aWx0IChPVFAgMjguNS4wLjYgYnVpbHQgZnJvbSB0aGUgb2ZmaWNpYWwgc291cmNlIGFnYWluc3QgT3BlblNTTCAzLjUuOCksIC4vdGVzdC1zaGVsbCBleGl0cyAwIG9uIHdwLXNoZWxsMSBiZTZiNTdlYTI6IG5hdGl2ZSA2LCBiZWFtbGV0IDg1Lzg1LCBCRUFNIDg1Lzg1LCBlbnRyeSBwb2ludCwgZmFrZSBrZXJuZWwgNy4gZGlmZnRlc3QgNTEzLzUyMSBhbmQgZWxpeGlyLXRlc3RzIHNob3cgdGhlIHNhbWUgZmFpbHVyZXMgb24gcmVkb3VidCwgc28gdGhleSBhcmUgcHJlLWV4aXN0aW5nLiBTd2FwcGluZyB0aGUgcmVidWlsdCBPVFAgaW50byB0b29sY2hhaW5zLyBzdGlsbCB3YWl0cyBvbiB0aGUgb3duZXIncyBPSy4iLCJldmVudHMiOlt7ImlkIjoiYWJhMTNjODEzMWM1MGEzOGE3NDIyMWNhMzlmMmUwYmMiLCJhdXRob3IiOiIxNzJiMWE4ZmE3NzgzMWEyYjliNDM2MTliZjk3MGMwNCIsImtpbmQiOiJvcGVuIiwiYm9keSI6InRvb2xjaGFpbnMvb3RwLTI4LjUuMC42L2xpYi9jcnlwdG8tNS44LjMuMy9wcml2L2xpYi9jcnlwdG8uc28gKGJ1aWx0IDIwMjYtMDktMDEpIG5lZWRzIEVWUF9zbTRfY2JjQE9QRU5TU0xfMy4wLjA7IHRoZSBob3N0J3Mgb3BlbnNzbC1saWJzLTMuNS44LTEuZmM0NCBkb2VzIG5vdCBleHBvcnQgaXQsIHNvIGNyeXB0bzpzdGFydCgpIGZhaWxzLCBNaXggZGllcywgYW5kIC4vdGVzdC1zaGVsbCBydW5zIG5vIHN0YWdlLiBUaGUgc2FtZSBicmVha3MgYmVhbWxldCdzIGRpZmZ0ZXN0IGFuZCBlbGl4aXItdGVzdHMgb24gdGhpcyBob3N0IGZvciBldmVyeSBwYWNrYWdlLiBSZWJ1aWxkaW5nIE9UUCBmcm9tIHRvb2xjaGFpbnMvT1RQLTI4LjUuMC42LnRhci5neiBuZWVkcyBwZXJsIGFuZCBuY3Vyc2VzLWRldmVsLCBuZWl0aGVyIGluc3RhbGxlZC4gT3duZXIgY2hvaWNlOiBob3cgdGhlIHRvb2xjaGFpbiBpcyByZXBhaXJlZC4iLCJjcmVhdGVkX2F0IjoxNzkwODA5MTc2MDY4fSx7ImlkIjoiOTkwNWIzMTMwZjVmNmQ0ZTk4OTZhZjg5YzExMjk3ZjkiLCJhdXRob3IiOiIxNzJiMWE4ZmE3NzgzMWEyYjliNDM2MTliZjk3MGMwNCIsImtpbmQiOiJkZWNpc2lvbl9yZXF1ZXN0IiwiYm9keSI6IlNIRUxMMSdzIEVsaXhpciB0ZXN0cyBjYW4ndCBydW4gb24gdGhpcyBob3N0XG5cbjEuIFRoZSBwaW5uZWQgT1RQJ3MgY3J5cHRvIGxpYnJhcnkgd2FzIGJ1aWx0IGFnYWluc3QgYW4gT3BlblNTTCB0aGF0IGhhZCBTTTQ7IHRoaXMgRmVkb3JhJ3Mgb3BlbnNzbC1saWJzIDMuNS44IGRvZXNuJ3QgZXhwb3J0IEVWUF9zbTRfY2JjLCBzbyBjcnlwdG8gd29uJ3QgbG9hZCwgTWl4IGRpZXMsIGFuZCAuL3Rlc3Qtc2hlbGwgKGFuZCBiZWFtbGV0J3MgZGlmZnRlc3RzKSBjYW4ndCBydW4gaGVyZS4gSG93IHNob3VsZCB0aGUgdG9vbGNoYWluIGJlIGZpeGVkP1xuICAgLSBZb3UgaW5zdGFsbCBwZXJsICsgbmN1cnNlcy1kZXZlbDsgSSByZWJ1aWxkIE9UUCBiZXNpZGUgdGhlIG9sZCBvbmUgKHJlY29tbWVuZGVkKTogc3VkbyBkbmYgaW5zdGFsbCBwZXJsIG5jdXJzZXMtZGV2ZWwuIEkgYnVpbGQgT1RQIDI4LjUuMC42IGZyb20gdG9vbGNoYWlucy9PVFAtMjguNS4wLjYudGFyLmd6IGludG8gYSBuZXcgcm9vdCwgdGVzdCBTSEVMTDEgdGhyb3VnaCBCRUFNTEVUX1RPT0xDSEFJTlMsIGFuZCBzd2FwIGl0IGludG8gdG9vbGNoYWlucy8gb25seSB3aXRoIHlvdXIgT0suIE5vdGhpbmcgbGl2ZSBpcyByZXBsYWNlZCBmaXJzdC5cbiAgIC0gWW91IGZpeCB0aGUgdG9vbGNoYWluIHlvdXJzZWxmOiBTSEVMTDEgd2FpdHMgZm9yIGl0OyBLMTAgYW5kIHJldmlldyBjYXJyeSBvbi5cbiAgIC0gTWVyZ2UgU0hFTEwxIG9uIHlvdXIgbWFjaGluZSdzIHRlc3Qtc2hlbGwgcnVuOiBBY2NlcHQgeW91ciBvd24gLi90ZXN0LXNoZWxsIHJlc3VsdCBmcm9tIHdoZXJlIHlvdSB3cm90ZSB0aGUgYnJhbmNoOyBvbmx5IHRoZSBSdXN0IGdhdGVzIGFuZCB0aGUgYmVuY2ggYXJlIGNoZWNrZWQgaGVyZS4gTGVzcyBjYXV0aW91cy4iLCJtZXNzYWdlX2lkIjoiZGVmYTNjNDE0ODNjN2I0YWU5M2I3YmUyMDIxNzdlYTgiLCJjcmVhdGVkX2F0IjoxNzkwODA5MTgyNjcyfSx7ImlkIjoiM2MyOTRjYTdmZmRlZTRmZTk4NTBmZmFmNGJjZDgwOGMiLCJhdXRob3IiOiJodW1hbiIsImtpbmQiOiJkZWNpc2lvbl9yZXNwb25zZSIsImJvZHkiOiJUaGUgb3duZXIgYW5zd2VyZWQ6XG5cbjEuIFRoZSBwaW5uZWQgT1RQJ3MgY3J5cHRvIGxpYnJhcnkgd2FzIGJ1aWx0IGFnYWluc3QgYW4gT3BlblNTTCB0aGF0IGhhZCBTTTQ7IHRoaXMgRmVkb3JhJ3Mgb3BlbnNzbC1saWJzIDMuNS44IGRvZXNuJ3QgZXhwb3J0IEVWUF9zbTRfY2JjLCBzbyBjcnlwdG8gd29uJ3QgbG9hZCwgTWl4IGRpZXMsIGFuZCAuL3Rlc3Qtc2hlbGwgKGFuZCBiZWFtbGV0J3MgZGlmZnRlc3RzKSBjYW4ndCBydW4gaGVyZS4gSG93IHNob3VsZCB0aGUgdG9vbGNoYWluIGJlIGZpeGVkP1xuICAg4oaSIFlvdSBpbnN0YWxsIHBlcmwgKyBuY3Vyc2VzLWRldmVsOyBJIHJlYnVpbGQgT1RQIGJlc2lkZSB0aGUgb2xkIG9uZSIsIm1lc3NhZ2VfaWQiOiIzZDE3Y2ZlYmM4NjY3OGY2NjhkZWNkZDBjM2MwYjkxOSIsImNyZWF0ZWRfYXQiOjE3OTA4MDkyMTg1Njl9LHsiaWQiOiJjYjIyODQwYjk1MzkzYTRlMzVhNTJkMTc1YWZkYTYwMyIsImF1dGhvciI6IjE3MmIxYThmYTc3ODMxYTJiOWI0MzYxOWJmOTcwYzA0Iiwia2luZCI6InJlcGx5IiwiYm9keSI6Ik93bmVyIDIwMjYtMDktMzA6IGluc3RhbGxzIHBlcmwgYW5kIG5jdXJzZXMtZGV2ZWw7IHRoZSBvcmNoZXN0cmF0b3IgcmVidWlsZHMgT1RQIDI4LjUuMC42IGZyb20gdG9vbGNoYWlucy9PVFAtMjguNS4wLjYudGFyLmd6IGludG8gYSBzZXBhcmF0ZSByb290LCBTSEVMTDEgaXMgdGVzdGVkIHRocm91Z2ggQkVBTUxFVF9UT09MQ0hBSU5TLCBhbmQgaXQgcmVwbGFjZXMgdG9vbGNoYWlucy9vdHAtMjguNS4wLjYgb25seSB3aXRoIHRoZSBvd25lcidzIE9LLiIsImNyZWF0ZWRfYXQiOjE3OTA4MDkyMzYwNTR9LHsiaWQiOiI3MTU1M2Y3YWRlZGJiMWIxZGVjY2M4YWUzMjMwN2ZlYyIsImF1dGhvciI6IjE3MmIxYThmYTc3ODMxYTJiOWI0MzYxOWJmOTcwYzA0Iiwia2luZCI6InJlcGx5IiwiYm9keSI6IlJlYnVpbHQgT1RQIDI4LjUuMC42IGZyb20gdGhlIG9mZmljaWFsIG90cF9zcmNfMjguNS4wLjYudGFyLmd6IChTSEEyNTYgNDlkN2E3NWXigKYgbWF0Y2hlcyB0aGUgcmVsZWFzZSdzIFNIQTI1Ni50eHQ7IHRvb2xjaGFpbnMvT1RQLTI4LjUuMC42LnRhci5neiBpcyBhIHByZWJ1aWx0IGJpbmFyeSwgbm90IHNvdXJjZSkgaW50byB0b29sY2hhaW5zL3JlYnVpbHQvb3RwLTI4LjUuMC42LCAtLXdpdGhvdXQtd3ggLS13aXRob3V0LW9kYmMuIGNyeXB0byBsb2FkcyBhZ2FpbnN0IE9wZW5TU0wgMy41LjguIFNIRUxMMSB0ZXN0cyB0aHJvdWdoIEJFQU1MRVRfVE9PTENIQUlOUz0uL3Rvb2xjaGFpbnMvcmVidWlsdDsgc3dhcHBpbmcgaXQgaW50byB0b29sY2hhaW5zLyB3YWl0cyBvbiB0aGUgb3duZXIncyBPSy4iLCJjcmVhdGVkX2F0IjoxNzkwODA5NTA4MjczfSx7ImlkIjoiODdlYWEzZmJiNGY2ZjEwNDAxNDRhODk2Y2NhNjRlNWIiLCJhdXRob3IiOiIxNzJiMWE4ZmE3NzgzMWEyYjliNDM2MTliZjk3MGMwNCIsImtpbmQiOiJyZXNvbHZlIiwiYm9keSI6IkV2aWRlbmNlOiBXaXRoIEJFQU1MRVRfVE9PTENIQUlOUz0uL3Rvb2xjaGFpbnMvcmVidWlsdCAoT1RQIDI4LjUuMC42IGJ1aWx0IGZyb20gdGhlIG9mZmljaWFsIHNvdXJjZSBhZ2FpbnN0IE9wZW5TU0wgMy41LjgpLCAuL3Rlc3Qtc2hlbGwgZXhpdHMgMCBvbiB3cC1zaGVsbDEgYmU2YjU3ZWEyOiBuYXRpdmUgNiwgYmVhbWxldCA4NS84NSwgQkVBTSA4NS84NSwgZW50cnkgcG9pbnQsIGZha2Uga2VybmVsIDcuIGRpZmZ0ZXN0IDUxMy81MjEgYW5kIGVsaXhpci10ZXN0cyBzaG93IHRoZSBzYW1lIGZhaWx1cmVzIG9uIHJlZG91YnQsIHNvIHRoZXkgYXJlIHByZS1leGlzdGluZy4gU3dhcHBpbmcgdGhlIHJlYnVpbHQgT1RQIGludG8gdG9vbGNoYWlucy8gc3RpbGwgd2FpdHMgb24gdGhlIG93bmVyJ3MgT0suIiwiY3JlYXRlZF9hdCI6MTc5MDgxMDk2OTg1M31dfSwiYXV0aG9ycyI6eyIxNzJiMWE4ZmE3NzgzMWEyYjliNDM2MTliZjk3MGMwNCI6Ik9yY2hlc3RyYXRvciJ9fQ== -->

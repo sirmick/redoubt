@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 51
+revision = 54
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -329,8 +329,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Folds origin/wp-SHELL1 (11 commits on 5bad23c6e, owner-authored) into redoubt, cautiously: rebased onto redoubt as wp-shell1 (.worktrees/shell1), conflicts in docs/plan/m1-separation.md and vendor/README.md resolved, then the full Tier A panel. Pages: docs/userland/shell.md, beamlet.md, native.md (the cell protocol), docs/SECURITY.md (the session), vendor/README.md. Tier A: beamlet's platform boundary, crypto crate swaps (RSA 0.10 RC, ed25519-compact), the cell-protocol parser, vendor-check and doccheck. Size L (7.6K lines outside vendor/, 381K vendored). Merges after K10."
-  state = "reported"
-  revision = 41
+  state = "done"
+  revision = 54
 
 [[node]]
   id = "ATK1"
@@ -376,7 +376,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["GATE1-composed-r10"]
   body = "Pulled forward by GATE1's miss (owner's rule, QA GATE1-design): docs/kernel/budgets.md#residual-risks (destruction cost), docs/kernel/scheduling.md#responsiveness, docs/kernel/README.md#containment. Design: QA GATE1-composed-r10 (pending the bisect). Brief: .wash/local/K12-implementer.md. Tier A (kernel), size L."
   state = "active"
-  revision = 43
+  revision = 53
   overrides = ["2026-09-30: started by Orchestrator before QA GATE1-composed-r10 (open): Step 0 (the trace ring) is settled on QA GATE1-composed-r10 and may start before the design; everything past it waits for the thread."]
 
 [[node]]

@@ -1,7 +1,7 @@
 # Userland
 
 Userland is everything above the servers: what a person, an agent or a developer meets on the
-box. A person logs in over SSH and gets an Elixir session, an interactive IEx prompt running in a
+box. A person logs in over SSH and gets an Elixir session, the shell's interactive prompt running in a
 beamlet VM of its own, in a budget of its own, with a namespace the steward built for it. An agent
 gets the same kind of VM under a lease, with capabilities narrowed from its launcher's. Native
 programs, written in Rust against `redoubt-rt`, run in budgets the session carves for them. There
@@ -17,7 +17,7 @@ person or agent does:
 | --- | --- |
 | [Sessions and namespaces](sessions.md) | logging in, the session VM and its budget, vault sessions, namespaces, `approve@` |
 | [beamlet, the Elixir VM](beamlet.md) | the BEAM interpreter every session and agent runs in, and its boundary with the system |
-| [The shell](shell.md) | IEx as the shell: helpers, command mode, jobs, line editing, completion, help, full-screen programs, the editor and file manager |
+| [The shell](shell.md) | `Redoubt.Shell`: commands, jobs, line editing, completion, help, full-screen programs, the editor and file manager |
 | [Files and binds](files.md) | files over 9P, what `File` and `Path` do, labels on files, binds, sharing |
 | [Native programs](native.md) | launching Rust programs, standard I/O and pipes, killing jobs, `redoubt-rt` |
 | [Agents, leases and labels](agents.md) | an agent as a principal with a sponsor, leases, delegation, the agent harness |
@@ -34,16 +34,16 @@ The mechanisms underneath belong to other pages: handles, IPC, budgets and proce
 Status: planned · M1 (separation and containment)
 
 Alice runs `ssh alice@box`. `sshd` and the steward authenticate her with her own key, the steward
-starts her session, and she is at an IEx prompt. The session is one beamlet VM in one budget carved
+starts her session, and she is at the shell's prompt. The session is one beamlet VM in one budget carved
 from hers; everything she types runs there, and every call it makes carries her account and the
 session's label set, which the kernel stamps and no process can forge
 ([R14 (unforgeable sender)](../kernel/ipc.md#r14-unforgeable-sender)).
 
 ```text
 $ ssh alice@box
-iex(1)> File.read!("/home/alice/notes.txt")
+/home/alice (1)> File.read!("/home/alice/notes.txt")
 "buy milk\n"
-iex(2)> File.read!("/home/bob/notes.txt")
+/home/alice (2)> File.read!("/home/bob/notes.txt")
 ** (File.Error) could not read file "/home/bob/notes.txt": no such file or directory
 ```
 
@@ -57,8 +57,8 @@ her labelled data and cannot send it anywhere unlabelled
 ([R1 (flow)](../kernel/ipc.md#r1-flow)). `ssh approve@box` is the one place Alice answers
 requests for authority nobody has granted; only the steward talks to that terminal.
 
-In M1 (separation and containment) the session is IEx with the helpers the attack suite needs:
-the console, files, and launching native programs. The working shell (command mode, file
+In M1 (separation and containment) the session is the shell with what the attack suite needs:
+the console, files, and launching native programs. The working shell (commands, file
 operations, pipes, jobs, line editing, completion, help and the editor) is
 [the shell](shell.md)'s, for M2 (usable shell). Files in and out over SFTP and SCP are
 [file transfer](transfer.md)'s, for M3 (files in and out).
@@ -106,7 +106,7 @@ flowchart TB
     S -.-> ST["the steward"]
     ST -.-> VM
     subgraph VM["session: one beamlet VM in one budget"]
-        IEX["IEx and the shell"] -.-> EX["Elixir modules: File, IO, Redoubt.*"]
+        SH["the shell"] -.-> EX["Elixir modules: File, IO, Redoubt.*"]
         EX -.-> NAT["beamlet natives and the Platform"]
     end
     NAT -.->|"9P and typed calls"| SRV["servers: fsd, consoled, ipd, ..."]
@@ -134,7 +134,7 @@ Three layers, each with one job:
 **Elixir, not a POSIX shell.** A shell language is a second programming language with its own
 quoting, word splitting and globbing, and a long history of injection bugs. A session that is an
 Elixir VM has one language, with real data structures, and the same code serves the prompt, a
-script and a program. The prompt gets short helpers and a command mode on top, not a different
+script and a program. The prompt gets short commands, plain Elixir functions, not a different
 language ([the shell](shell.md)).
 
 **One VM per trust domain.** Inside a VM, processes share memory-safe terms and a scheduler, so a

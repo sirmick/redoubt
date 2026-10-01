@@ -47,7 +47,7 @@ fn the_real_structure_passes() {
     let (readme, dirs) = tree();
     let (code, out) = run("real", &readme, &dirs, &["--structure-only"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("every vendored crate (34)"), "{out}");
+    assert!(out.contains("every vendored crate (76)"), "{out}");
 }
 
 #[test]

@@ -1,0 +1,10 @@
+# The userland's native libraries: a workspace of their own, as userland/otp is, outside the root
+# one. It holds the cell protocol, and no third-party crate.
+[workspace]
+resolver = "2"
+members = ["cells"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+version = "0.1.0"

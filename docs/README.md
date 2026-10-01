@@ -62,7 +62,7 @@ A milestone is always written with its name.
 | Milestone | Goal |
 | --- | --- |
 | [M1 (separation and containment)](plan/m1-separation.md) | Alice and Bob log in over SSH into Elixir sessions and are kept apart; Alice's agent runs contained under a lease; the attack suite passes. |
-| [M2 (usable shell)](plan/m2-usable-shell.md) | The Elixir shell is a working environment: command mode, file operations, native programs and pipes, jobs, line editing, the editor. |
+| [M2 (usable shell)](plan/m2-usable-shell.md) | The Elixir shell is a working environment: commands, file operations, native programs and pipes, jobs, line editing, screens, the editor. |
 | [M3 (files in and out)](plan/m3-files.md) | SFTP and SCP inside SSH, confined to the session's capabilities and audited. |
 | [M4 (self-hosted development)](plan/m4-self-hosted.md) | Redoubt is developed on Redoubt: compilers, `git` and a model provider through gateways, the agent harness, the audit log and the escape room. |
 | [M5 (persist, install, share)](plan/m5-persist.md) | The steward's state survives reboots; signed packages, trust lists and shared projects; A/B updates; the supervisor; wall-clock time; log retention. |

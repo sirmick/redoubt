@@ -3,8 +3,8 @@
 //!
 //! - every vendored file is byte for byte what `vendor/SHA256SUMS` records, and nothing has been added or
 //!   removed;
-//! - `Cargo.lock` and `cargo metadata` build the vendored copies, through the root manifest's
-//!   `[patch.crates-io]` paths into `vendor/`, and no registry copy of them.
+//! - `Cargo.lock` and `cargo metadata` build the vendored copies, through the `[patch.crates-io]` paths into
+//!   `vendor/` of the root manifest and of beamlet's (`userland/otp`), and no registry copy of them.
 //!
 //! That is integrity since vendoring, not provenance: `SHA256SUMS` is generated from the tree.
 //! That the tree is what crates.io published is checked by `provenance.sh`, which needs the

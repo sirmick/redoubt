@@ -1,20 +1,23 @@
 # The shell
 
-The shell is IEx, Elixir's interactive prompt, running in the session's beamlet VM. There is no
-POSIX shell and no second language: a line at the prompt is Elixir, with short helpers for the
-everyday work (`cat`, `ls`, `cp`, `grep`), a command mode that lets bare words stand in for
-quoted arguments, and native programs joined by pipes when a stage must run in a budget of its
-own. Line editing, history, completion, help and a pager are Elixir too. The editor and file
-manager is one native program, and its screen reaches the person's terminal only as cells the
-session draws: nothing but the session ever writes a control sequence to `/dev/cons`.
+The shell is `Redoubt.Shell`, a read-eval-print loop of Redoubt's own over Elixir, in the
+session's beamlet VM. A line at the prompt is Elixir and nothing else. The everyday work is done
+by commands (`cat`, `ls`, `cp`, `grep`), which are Elixir functions, each declared once with its
+types and its help and imported at the prompt. Native programs, joined by pipes, run in budgets of
+their own when a stage must. Line editing, history, completion, help, the pager and full-screen
+programs, the editor and file manager among them, are Elixir in the session, drawing into a screen
+buffer beamlet holds natively. Everything the session draws reaches `/dev/cons` through one
+encoder, the only writer of control sequences, so hostile text can never drive the person's
+terminal ([hostile text](#hostile-text-never-drives-the-terminal)).
 
 ## Purpose
 
 A person who logs in has to be able to work: look at files, change them, run programs, stop what
-runs away, and find out how. On a box with no Unix, IEx is the natural shell (the Nerves project
-uses it the same way on devices), and Elixir is a better scripting language than any shell
-language. What IEx lacks is the short surface a shell gives, launching and piping programs, job
-control, and line editing on a console nobody echoes for. This page describes that surface.
+runs away, and find out how. On a box with no Unix, Elixir is the natural shell language (the
+Nerves project uses IEx the same way on devices), and a better scripting language than any shell
+language. What a bare Elixir prompt lacks is the short surface a shell gives, launching and piping
+programs, job control, screens, and line editing on a console nobody echoes for. This page
+describes that surface.
 
 The scope is three things done well: the command line, an editor with a file manager, and the
 agent ([agents](agents.md#the-agent-loop)). Everything else keeps to plain lines on the terminal,
@@ -22,168 +25,169 @@ and the terminal is the only front end there is.
 
 ## How to use it
 
-The same work, three ways. In a script, full Elixir:
+The prompt shows the current directory and the line's number. The same work in a script and at
+the prompt is the same Elixir; the commands are imported at the prompt and are plain functions
+anywhere else (`Redoubt.Util.cat/1`):
 
 ```elixir
-File.read!("app.log") |> String.split("\n") |> Enum.filter(&String.contains?(&1, "error"))
-```
-
-At the prompt, the helpers (imported in every session):
-
-```elixir
-iex(1)> cat("app.log") |> grep("error") |> count()
+/home/alice (1)> cat("app.log") |> grep("error") |> count()
 42
-iex(2)> cat("config.txt") |> sub("staging", "prod") |> w("config.txt")
+/home/alice (2)> cat("config.txt") |> sub("staging", "prod") |> w("config.txt")
 :ok
-iex(3)> ls_r("/home/alice/logs") |> Enum.filter(&(stat(&1).size > 1_000_000))
-["/home/alice/logs/big.log"]
+/home/alice (3)> cp "notes.txt", "notes.bak"
+:ok
+/home/alice (4)> ls_r("logs") |> Enum.filter(&(stat(&1).size > 1_000_000))
+["logs/big.log"]
+/home/alice (5)> pipe(~w(zcat big.gz | sort | uniq)) |> w("uniq.txt")
+:ok
+/home/alice (6)> help(:cp)
 ```
 
-In command mode, bare words are quoted for you; `|>` joins Elixir stages, `|` joins native
-stages, `>` writes a file and `>>` appends to one:
-
-```text
-iex(4)> cat app.log |> grep error |> count
-42
-iex(5)> zcat big.gz | sort | uniq > uniq.txt
-:ok
-iex(6)> help cp
-```
-
-Stop a runaway job with Ctrl+C. See what the session is using with `top()`. Edit a file with
-`ed notes.txt`; browse and copy files in two panes with `fm ~/project`.
+A call needs no parentheses when it is the whole line (`cp "a", "b"`); inside a pipeline it does,
+as Elixir says. Stop a runaway job with Ctrl+C. See what the session is using with `top()`. Edit a
+file with `ed("notes.txt")`; browse and copy files in two panes with `fm("project")`.
 
 ## What it can and cannot do
 
-### IEx in a session
+### The shell in a session
 
 Status: planned · M1 (separation and containment)
 
-Every session starts with IEx's read-eval-print loop over the session's console connection,
-`/dev/cons` ([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH
-channel). In M1 (separation and containment) the shell is what the attack suite needs and no
-more: the console, reading and writing files through OTP's `File`, and launching a native program
-through the launch natives ([beamlet](beamlet.md#natives)). What IEx does on beamlet is
-[beamlet](beamlet.md#what-runs-on-it)'s.
+Every session starts `Redoubt.Shell` over the session's console connection, `/dev/cons`
+([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH channel).
+In M1 (separation and containment) the shell is what the attack suite needs and no more: the
+console, reading and writing files through OTP's `File`, and launching a native program through
+the launch natives ([beamlet](beamlet.md#natives)). The shell's modules come from the boot bundle
+like the rest of the system's ([beamlet](beamlet.md#the-platform-boundary)).
 
 Everything the prompt evaluates runs with the session's authority, in the session's VM. There is
-nothing the shell can do that the session's handles do not allow, and nothing a helper adds to
+nothing the shell can do that the session's handles do not allow, and nothing a command adds to
 them.
 
-**Open:** none.
+**Open:** whether the documentation chunks `h/1` reads ship in the boot bundle's `.beam` files
+(the recommendation: strip them from the bundle and ship them as an optional documentation
+package that `h/1` reads when present).
 
-### Three syntax layers
+### The loop
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: runs on the host only, on beamlet and on the BEAM; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
 
-```mermaid
-flowchart LR
-    CM["command mode<br/>cat a |> grep x > b"] -.->|"expands to"| H["helpers (Redoubt.Shell, Redoubt.Util)<br/>cat('a') |> grep('x') |> w('b')"]
-    H -.->|"calls"| E["Elixir and OTP<br/>File, Enum, Redoubt.Cmd"]
-    S["scripts and programs (.ex, .exs)"] -.-> E
+`Redoubt.Shell` is its own loop, not IEx's ([`userland/shell`](../../userland/shell)):
+
+1. **Read** a line from the group leader with `IO.gets/1`; a line that ends too soon to parse (an
+   open `do`, a trailing `|>`) reads another.
+2. **Parse** it with `Code.string_to_quoted/2`.
+3. **Evaluate** it in a fresh Erlang process, with a killing heap limit, through
+   `Code.eval_quoted_with_env/4`. The shell holds the bindings and the environment between
+   lines, so an evaluation that dies loses only its own line. The compiler's diagnostics are
+   taken with `Code.with_diagnostics/2` and printed by the shell, not written by the compiler.
+4. **Print** the value through `Redoubt.Term.Text`, which draws every control character in it
+   visibly (`^[`, `^G`, `<U+009B>`, `<U+202E>`); a `%Lines{}` is printed a line at a time.
+
+A line that is not UTF-8, or that the tokenizer cannot read, is that line's error, and the next
+is read; the tokenizer's warnings, like the compiler's, are printed through the same guard.
+
+It is built on Elixir's public API only, and uses none of IEx's modules.
+
+What the loop does not have:
+- **A file run at start.** IEx runs `.iex.exs` from the current directory when it starts, with the
+  session's authority, so a file planted in a shared directory would run in the session of anyone
+  who started there. The shell reads and runs nothing at start but itself.
+- **A second syntax.** A bare command name is an undefined variable, as Elixir says; the shell
+  adds that it is a command to call as `pwd()`. `exit` alone on a line is the one word the loop
+  reads itself, and ends the shell as `exit()` does.
+- **Pry, remote shells, or a break menu.**
+
+Not guarded yet, until the shell's driver holds the console
+([line editing](#line-editing-and-history)): code a line runs that writes to the console itself,
+as `IO.puts/1` does, and the crash reports of processes a line spawned, which OTP's logger
+writes.
+
+### Commands
+
+Status: built · partly tested: runs on the host only; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
+
+Every command is a **commandlet**: an Elixir function declared once, with `defcommand`, in any
+module of the shell that uses `Redoubt.Commandlet`:
+
+```elixir
+defmodule Redoubt.Shell.Helpers do
+  use Redoubt.Commandlet, area: "Files"
+
+  @summary "Copy a file"
+  @help """
+  Copies src to dst. Into an existing directory, the copy keeps its name.
+  """
+  @args src: "the file to copy", dst: "where the copy goes"
+  @examples [{~S'cp("a.txt", "b.txt")', "copy a.txt to b.txt"}]
+  defcommand cp(src :: path, dst :: path) do
+    File.cp!(src, dst)
+  end
+end
 ```
-*Figure: the three syntax layers. Every part is planned (dashed). Command mode and the helpers
-exist only at the prompt; scripts use Elixir directly.*
 
-| Context | Syntax | Use |
-| --- | --- | --- |
-| Programmatic (`.ex`, scripts) | full Elixir: explicit paths and handles | code that outlives a session |
-| IEx helpers | short names over a default context (namespace, budget, console) | interactive work |
-| Command mode | bare words quoted; `\|>` an Elixir stage, `\|` a native one | quick one-liners |
+- **Typed.** A parameter is `name :: type`, with an optional default: `path`, `string`,
+  `integer` (with bounds), `pattern` (a string or a `~r//`), `lines`, `boolean`, `one_of`,
+  `flags(...)` for keyword options, `ref` (a function or module), `name`, a command's name, and
+  `many(t)`.
+  The arguments are checked, and coerced where a type says so, before the body runs; a wrong one
+  raises a usage error naming the parameter and showing the usage.
+- **The help is not optional.** A command without a summary, a page, a line for each parameter,
+  or an example that calls it does not compile. The same declaration becomes the function's
+  `@doc`, its page in `help`, and what completion offers for each argument.
+- **Nothing else to wire.** The registry finds every module of the shell's application that
+  declares commands; they are imported at the prompt and listed by `help`, grouped by area.
 
-The last two exist only inside an IEx session. They are sugar over Elixir, not a different
-language.
+A command's arguments are Elixir values the person wrote, evaluated as Elixir evaluates them
+anywhere. There are no bare words for the shell to quote, so there is no quoting to get wrong and
+no second meaning a line can have.
 
-**Open:** none.
+### Files and text
 
-### Helpers and file operations
+Status: built · partly tested: runs on the host only, over files beamlet's host platform serves; its tests are the shell's own ExUnit suite, which runs every command against a seeded tree of real files and no bench case runs
+
+Files come in through `cat` and go out through `w`; everything between takes lines and chains with
+`|>`. Relative paths resolve against the session's current directory.
+
+| Command | What it does |
+| --- | --- |
+| `pwd()`, `cd(dir)` | the current directory; there is no kernel working directory |
+| `ls(path)`, `ls_r(path)`, `find(path, pattern)`, `glob(pattern)`, `stat(path)` | list, walk, find by name, expand a pattern, stat |
+| `cp(src, dst)`, `mv(src, dst)` | copy and rename; within one volume the server renames, across volumes it is a copy and `mv` is not atomic ([files](files.md)) |
+| `rm(path)`, `rm_rf(path)`, `mkdir(path)`, `mkdir_p(path)`, `touch(path)` | remove, make directories and files |
+| `cat(paths)` | the files' lines, read as they are consumed |
+| `grep`, `grep_v`, `sub`, `cut`, `sort`, `uniq`, `uniq_c`, `head`, `tail`, `count` | lines in, lines or a number out |
+| `w(lines, path)`, `append(lines, path)` | write or add lines to a file |
+| `table(rows)` | rows laid out in columns, with a header and a titled border if asked |
+| `hexdump(path)`, `checksum(path)` | a file's bytes, and its hash |
+
+- `cat` returns `%Lines{}`: enumerable and lazy, so `cat("big.log") |> head(5)` reads only the
+  start of the file, and a consumer that stops early closes it. It checks every file when called,
+  so a missing one fails on its own line.
+- `w` writes a new file beside the old one and renames it into place, so a failure leaves the old
+  file whole and `cat(f) |> sub(...) |> w(f)` is safe.
+- A file's contents and names are shown with every control character made visible, by
+  `Redoubt.Term.Text`; bytes are looked at with `hexdump`.
+
+What each file operation does underneath, and why a rename across volumes cannot be atomic, is
+[files and binds](files.md)'s.
+
+### Session commands and the pager
 
 Status: planned · M2 (usable shell)
 
-`Redoubt.Shell` holds the session's context (its namespace, its budget and its console) and the
-helpers over it. Relative paths resolve against the session's current prefix, and work is charged
-to the session's budget.
-
-| Helper | What it does |
+| Command | What it does |
 | --- | --- |
-| `cat(path \| [path])` | the file's lines, lazily; printed through the pager when it is the value at the prompt |
-| `cp(src, dst)`, `mv(src, dst)` | copy and rename; within one volume the server does it, across volumes it is a copy loop and `mv` is not atomic |
-| `rm(path)`, `rm_rf(path)` | remove; removing an open file succeeds |
-| `mkdir(path)`, `mkdir_p(path)`, `touch(path)` | make directories and files |
-| `ls(path)`, `ls_r(path)`, `find(path, ~r//)`, `stat(path)` | list, walk, find by name, stat (name, length, mtime, qid; no mode or owner) |
-| `cd(prefix)`, `pwd()` | the session's current prefix; there is no kernel working directory |
 | `ns()`, `bind(prefix, conn)` | show the namespace; bind a held connection at a prefix |
 | `whoami()`, `labels()` | the principal and the session's label set |
 | `clear()` | clear the screen |
+| `out(value)` | print without the pager |
+| `follow(path)` | the lines added to a file, as they come, until Ctrl+C |
+| `now()`, `today()`, `ago(time)` | wall-clock time, which a session has from M5 (persist, install, share) |
 
-What each file operation does underneath, and why rename across volumes cannot be atomic, is
-[files and binds](files.md)'s.
-
-**Open:** none.
-
-### Viewing and searching
-
-Status: planned · M2 (usable shell)
-
-`Redoubt.Util` is the text toolkit, imported in every session and script. Files come in through
-`cat` and go out through `w`; everything between takes lines and chains with `|>`.
-- `cat` returns `%Lines{}`: enumerable and lazy, read in 9P-sized blocks as it is consumed, and
-  closed when a consumer stops early, so `cat("big.log") |> head(5)` reads one block. It checks
-  the file exists when called, so a missing file fails on its own line.
-- `grep`, `grep_v`, `sub` (a pattern is a string or a `~r//`), `cut`, `sort`, `uniq`, `uniq_c`,
-  `head`, `tail` and `count` return lines or a number.
-- `w(src, path)` writes through a temporary file and a rename, so `cat(f) |> sub(...) |> w(f)` is
-  safe; `append` adds to a file; `out` prints without the pager.
-- `follow(path)` is `tail -f`; `glob(pattern)` expands a pattern in the session's namespace;
-  `checksum`, `hexdump`, `now`, `today` and `ago` cover the rest of the usual scripts.
-- The **pager** shows a long value a screen at a time (space, `b`, `/search`, `q`).
-
-**Open:** none.
-
-### Command mode
-
-Status: planned · M2 (usable shell)
-
-Command mode is a preprocessor ahead of the Elixir parser. Bare words are quoted, `|>` is an
-Elixir stage, `|` a native stage, `>` is `w` and `>>` is `append`:
-
-| Typed | Runs |
-| --- | --- |
-| `cat a` | `cat("a")` |
-| `grep x f` | `cat("f") \|> grep("x")` |
-| `cat a \|> sub x y > a` | `cat("a") \|> sub("x", "y") \|> w("a")` |
-| `zcat a.gz \| sort > b` | `pipe(~w(zcat a.gz \| sort)) \|> w("b")` |
-| `cat a \| parse --json \|> grep w` | `cat("a") \|> pipe(~w(parse --json)) \|> grep("w")` |
-| `ls` / `top` / `cd d` / `ed f` | `ls(".")` / `top()` / `cd("d")` / `ed("f")` |
-
-A command-mode `cat` is always the Elixir one; no native `cat` is launched. Every command is
-declared once, with `defcommand`, naming its argument types, a summary, a page of help and
-examples; that one declaration drives the expansion, completion and help.
-
-**Which lines are commands.** The mode is decided by the line's first two tokens alone, never by
-trying Elixir first: almost every command line is also valid Elixir (`cat a` parses as `cat(a)`),
-and a rule that fell back on failure would make a line's meaning depend on what the session has
-bound. A line is in command mode when its first token is a registered command and it is followed
-by the end of the line, or by whitespace and a token that is not an Elixir operator (`|>`, `|`,
-`>` and `>>` are command-mode stage operators here, not Elixir ones). Every other line is Elixir:
-`cat("a") |> grep("x")`, `count = 5`, `ls == x`, and any line whose first word is not a command.
-Parentheses right after a command's name are how to write Elixir that starts with it.
-
-What command mode cannot do:
-- **Run code hidden in an argument.** Bare words become literal strings with no interpolation, as
-  `~S` does: `cat #{File.rm("x")}` reads a file of that name and runs nothing.
-- **Be redirected by a binding.** Command mode calls the registry's functions by their full module
-  name, so a local variable or an import named `cp` cannot change what `cp` runs.
-
-**Running a script.** `run tool.exs a b` runs the script in the session's VM with the session's
-full authority, with `System.argv/0` set: exactly as if it were typed, so it is for scripts one
-would type. `run --isolated tool.exs` starts a child VM through the same launch path as an agent's
-lease ([agents](agents.md#the-agent-harness)), with capabilities the same as or narrower than the
-session's. With no grants, the child gets a budget of its own carved from the session's (bounded
-CPU and memory, ended by destroying it), a read-only view of the current directory and no network.
-More is granted with flags that map one to one onto the agent harness's grant kinds
-([agents](agents.md#the-agent-harness)): `--read P`, `--write P`, `--gateway N`,
-`--git REMOTE[:fetch|:push=PATTERN]` and `--launch pages=..,processes=..,weight=..`.
+The **pager** shows a long value a screen at a time (space, `b`, `/search`, `q`); a `%Lines{}`
+that is the value at the prompt goes through it, and `help`'s pages and topics are drawn in it
+with bold and indentation. It is a screen program ([full-screen programs](#full-screen-programs)).
 
 **Open:** none.
 
@@ -204,6 +208,16 @@ A native stage is for what should not run with the session's authority (an untru
 needs its own address space; everything else is Elixir. How programs are launched, how their
 standard streams are named and who serves a pipe are [native programs](native.md)'s.
 
+**Running a script.** `run("tool.exs", ["a", "b"])` runs the script in the session's VM with the
+session's full authority, with `System.argv/0` set: exactly as if it were typed.
+`run("tool.exs", isolated: true)` starts a child VM through the same launch path as an agent's
+lease ([agents](agents.md#the-agent-harness)), with capabilities the same as or narrower than the
+session's. With no grants, the child gets a budget of its own carved
+from the session's (bounded CPU and memory, ended by destroying it), a read-only view of the
+current directory and no network. More is granted with options that map one to one onto the agent
+harness's grant kinds ([agents](agents.md#the-agent-harness)): `read:`, `write:`, `gateway:`,
+`git:` and `launch:`.
+
 **Open:** none here; the stream names and who serves a pipe are open on
 [native programs](native.md).
 
@@ -220,25 +234,28 @@ session's, so ending it can never touch the session.
 
 The interrupt key:
 - **Ctrl+C with a job in the foreground** destroys the budget of every native stage of that job.
-  Elixir work is ended by killing the evaluating Erlang process with an untrappable exit (`:kill`),
-  and IEx starts a fresh evaluator. The session and its VM survive; its bindings are whatever IEx
-  keeps, and the page states which once a case interrupts `x = 1; loop()` and checks `x`.
-- **Ctrl+C at an idle prompt** clears the line. The BEAM's break menu is never reachable, and a
-  session ends only by `exit` or Ctrl+D.
-- **Ctrl+G** is `edlin`'s job-control menu.
-- **With a full-screen program in front**, Ctrl+C is the program's key; the key the session keeps
-  for itself is open ([full-screen programs](#full-screen-programs)).
+  Elixir work, a line's evaluation or a screen program, is ended by killing its Erlang process
+  with an untrappable exit (`:kill`). The session and its VM survive, and the shell keeps the
+  bindings of every line before the interrupted one.
+- **Ctrl+C at an idle prompt** clears the line. There is no break menu and no job-control menu:
+  both are OTP's `user_drv`, which the shell's driver replaces
+  ([line editing](#line-editing-and-history)). A session ends only by `exit` or Ctrl+D.
+- **With a full-screen program in front**, Ctrl+C may be the program's key; the key the session
+  keeps for itself is [full-screen programs](#full-screen-programs)'.
 - **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the same
   interrupt a 0x03 byte gives. It is a protocol message, not a Unix signal; nothing inside Redoubt
   has signals ([sshd](../servers/sshd.md)).
 
 What a job cannot do:
-- **Swallow the interrupt.** The session's I/O server reads `/dev/cons` all the time, not only
-  while a line is requested, and a native stage never gets the raw console: its standard input is
-  a pipe the session feeds. So no foreground program can hide Ctrl+C from the shell.
-- **Take the session's memory.** The evaluator runs with Erlang's `max_heap_size` flag (killing),
-  set to a fixed share of the session's budget, so a runaway allocation kills the evaluator, as
-  Ctrl+C would, instead of taking the whole VM to its budget's page limit.
+- **Swallow the interrupt.** The session's driver reads `/dev/cons` all the time, not only while
+  a line is requested, and a native stage never gets the raw console: its standard input is a
+  pipe the session feeds. So no foreground program can hide Ctrl+C from the shell.
+- **Take the session's memory on the heap.** Every Erlang process the session starts, the
+  evaluator, what a line spawns and every screen program, runs with Erlang's `max_heap_size` flag
+  (killing), set to a fixed share of the session's budget, so a runaway allocation kills that
+  process, as Ctrl+C would. A screen buffer counts toward its owner's limit. What lies off the heap,
+  a large binary, is bounded only by the session's own page limit
+  ([R6 (charging)](../kernel/budgets.md#r6-charging)), which ends the session, not the box.
 
 Processes an expression spawned without a link are not killed by Ctrl+C; background work belongs
 in a `Job`.
@@ -249,27 +266,34 @@ in a `Job`.
 
 Status: planned · M2 (usable shell)
 
-Nothing between the keyboard and IEx edits a line: `consoled` and `sshd` serve `/dev/cons` as a
-raw byte stream with no echo. So the shell owns the terminal, through one pure-Elixir library,
-`Redoubt.Term`, that everything drawn on it goes through (the line editor, the pager, `top`, the
-agent's output, and the cells of [full-screen programs](#full-screen-programs)).
-- **The only writer of control sequences.** `Redoubt.Term` is the one code in a session that
-  emits escape sequences, and what it draws is cells: a grapheme with a colour and attributes,
-  never bytes passed through. A control character in the text of a cell, from a file's contents,
-  a file name or a model's reply, is drawn visibly (`^[`, `^G`), as `less` does, so hostile text
-  can never drive the person's terminal: set their clipboard (OSC 52), retitle the window, forge
-  a link (OSC 8) or make the terminal answer as if typed. There is no raw pass-through; bytes are
-  looked at with `hexdump`.
+Nothing between the keyboard and the shell edits a line: `consoled` and `sshd` serve `/dev/cons`
+as a raw byte stream with no echo. So the shell owns the terminal, through one library,
+`Redoubt.Term`, that everything drawn on it goes through: the line editor, the pager, `top`, the
+agent's output, and every [full-screen program](#full-screen-programs).
+- **The only writer of control sequences.** `Redoubt.Term`'s encoder, in the shell's driver,
+  which alone holds the session's connection to `/dev/cons`, is the one code that emits escape
+  sequences for what the session draws, and what it draws is cells: a grapheme with a colour and
+  attributes, never bytes passed through. A control character in any text is drawn visibly
+  ([hostile text](#hostile-text-never-drives-the-terminal)).
+  There is no raw pass-through.
+- **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
+  diff speaks it ([beamlet](beamlet.md#screen-natives)), and so does a native program with a
+  screen, and the encoder reads both through one decoder.
 - **Output:** cursor movement, erasing, scroll regions, the alternate screen, colour and
   attributes, bracketed paste, and synchronized update so a redraw does not flicker. Drawing is a
-  diff: the library keeps the screen's cells and sends only what changed.
+  diff: only the cells that changed are sent.
 - **Glyphs:** 24-bit colour, box drawing, block elements and Braille patterns (a 2×4 dot grid per
   cell, for sparklines and graphs), with a 16-colour ASCII fallback a session can choose, for a
   UART or a console font without them.
 - **Input:** a key decoder for VT100, xterm and Linux sequences, including modifier forms
   (`ESC [1;5C` is Ctrl+Right), UTF-8, and bracketed paste as one event, so a paste can never
-  trigger completion.
-- **Width:** grapheme and East Asian width, so cursor arithmetic holds for CJK and emoji.
+  trigger completion. A lone ESC is held for a short timeout before it is the Esc key, so Alt+F
+  (ESC then `f`) is one key; a mouse report, if one is ever taken, is SGR only and decoded under
+  the same rules.
+- **Width:** grapheme and East Asian width, from one table the screen buffer uses too, so what
+  the session measures is what it draws. The person's terminal has a table of its own, which may
+  disagree on a wide or ambiguous grapheme, so after one the encoder places the cursor absolutely
+  again, and a disagreement costs a cell's misplacement, never the rest of the line.
 - **One target:** VT102 plus the common xterm extensions every current emulator speaks, with no
   terminfo.
 - **Size:** `Console.size/0` asks `/dev/cons` afresh on every call and returns `{cols, rows}` or
@@ -284,54 +308,107 @@ agent's output, and the cells of [full-screen programs](#full-screen-programs)).
 query at login and adapts, or assumes the VT102 and xterm target (the recommendation: assume,
 because a query on a UART that never answers costs a timeout at every login).
 
+### Hostile text never drives the terminal
+
+Status: planned · M2 (usable shell)
+
+Text the session draws, from a file's contents, a file name, a program's output or a model's reply,
+reaches `/dev/cons` only as visible characters: every control character in it (the ASCII and 8-bit
+controls, DEL, and the bidirectional embedding, override and isolate controls) is drawn as text
+(`^[`, `^G`, `<U+009B>`), as `less` does. So hostile text cannot set the person's clipboard
+(OSC 52), retitle their window, forge a link (OSC 8), reorder what is shown, or make the terminal
+answer as if typed. It holds because the encoder is the one writer of what the session draws, and
+because nothing reaches the encoder but cells, whose symbols cannot hold a control character: from
+the shell's printer, from a screen program through the buffer's natives, which refuse one, and
+from a native program only as `cells` frames.
+
+What it does not cover: code the person runs holds the session's authority, and can write to its
+own console as it can do anything else the session can; and the bidirectional marks (U+200E,
+U+200F, U+061C) are drawn, since they only settle the direction of the weak and neutral characters
+next to them. The invisible format characters (U+00AD, U+200B to U+200D, U+2060 to U+2064,
+U+FEFF, the tag characters of plane 14) and the line and paragraph separators (U+2028, U+2029)
+pass the guard too, so a file name or text holding them can look like another; they neither drive
+the terminal nor reach the approval channel, which only the steward draws
+([sessions](sessions.md#approve)), and drawing them as `<U+XXXX>` is
+[a follow-up](../todo/shell-invisible-format.md). The attack case writes hostile text through
+every path above and judges the bytes the session wrote to `/dev/cons`.
+
+**Open:** none.
+
+### The cell protocol
+
+Status: built · partly tested: the Elixir decoder is held to the Rust one by the shared vectors in the shell's ExUnit suite, which no bench case runs · tested: host:cells::good_frames_decode_and_encode_back_to_their_bytes, host:cells::no_control_character_is_ever_a_symbol, host:cells::vectors_are_current
+
+A frame of changed cells, `cells` ([`userland/native/cells`](../../userland/native/cells/src/lib.rs))
+in Rust and `Redoubt.Term.Cells` in Elixir, is everything anything may hand the session to draw: a
+position, a symbol, two colours and attributes per cell. It is strict. A symbol is a non-empty
+string of at most 32 bytes, one cell's worth as the session lays it out, that holds no control
+character, a cell cannot fall outside its
+screen or be given twice, and a frame that decodes re-encodes to exactly its bytes; anything else
+is refused, never repaired. One file of vectors holds the two decoders to the same answers.
+
 ### Full-screen programs
 
 Status: planned · M2 (usable shell)
 
 ```mermaid
 flowchart LR
-    APP["Elixir app: init, update, view"] -.->|"a view tree per frame"| R["render: ratatui, a budget of its own"]
-    NP["a native TUI program (the editor)"] -.->|"the same backend"| CELLS
-    R -.->|"changed cells"| CELLS["Redoubt.Term in the session"]
-    CELLS -.->|"escape sequences"| C["/dev/cons"]
+    APP["screen program: an Erlang process<br/>init, update, view"] -.->|"widgets draw"| W["Redoubt.Screen: layout, widgets"]
+    W -.->|"put, fill, plot"| B["the screen buffer<br/>(beamlet natives)"]
+    B -.->|"diff: a cells frame"| E["Redoubt.Term's encoder"]
+    NP["a native program with a screen"] -.->|"cells frames on a pipe"| E
+    E -.->|"escape sequences"| C["/dev/cons"]
     C -.->|"raw bytes"| K["the session's key decoder"]
     K -.->|"key events"| APP
     K -.->|"key events"| NP
 ```
 *Figure: how a full-screen program reaches the terminal. Every part is planned (dashed). Only the
-session's `Redoubt.Term` writes to `/dev/cons`; everything else hands it cells.*
+session's encoder writes to `/dev/cons`; everything else hands it cells.*
 
-Screens with layout (a table, panes, a chart) are drawn by ratatui, a Rust TUI library, running
-nearly unchanged as a native program, `render`, in a budget of its own. ratatui already splits its
-work at its `Backend` trait: above it, widgets, layout, the cell buffer and the diff between
-frames; below it, the terminal. Redoubt's backend writes no escape sequences: it sends the changed
-cells (position, grapheme, colours, attributes) down a pipe, and the session draws them through
-`Redoubt.Term`.
-- **Driven from Elixir.** An Elixir screen program is three functions, `init`, `update` and `view`,
-  in the Elm style. Each frame the session sends `view`'s tree of widgets (block, list, table,
-  paragraph, gauge, sparkline, a Braille canvas) to `render`, which lays it out and answers with
-  the cells that changed. `top`, the pager and `help` are written this way.
-- **Native programs use the same backend.** A Rust program with a screen (the editor below) links
-  the backend itself, so its screen, too, reaches the terminal only as cells.
-- **Keys come from the session.** The session decodes every key from `/dev/cons` and sends the
-  program events; ratatui never did input, which was its terminal crate's job.
+A full-screen program (the pager, `help`'s pages, `top`, the editor, a `menuconfig`-style form, a
+QBasic-style menu bar and dialogs) is an Erlang process in the session's VM, not a program of its
+own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
+([beamlet](beamlet.md#screen-natives)), and everything above the buffer is Elixir:
+- **`Redoubt.Screen`**, a behaviour of three functions in the Elm style: `init`, `update` on a key
+  or a message, and `view`, which draws into the buffer. One Erlang process runs a screen: the
+  shell's driver sends it the keys while it is in front, and it answers each with `update`,
+  `view` and the buffer's diff, a frame the driver draws. The shell supervises it, and the
+  interrupt ends it as it ends an evaluation.
+- **Layout** is rectangles only: split into rows or columns by fixed size, percentage or what is
+  left; centre; inset. A screen lays out in fixed rectangles.
+- **Widgets are functions, not processes:** each draws into a rectangle of the buffer from its
+  state, and a widget that takes keys answers a key with a new state. The set: a box with a title
+  and a shadow, a label, a status line, a menu bar with drop-downs, a list with scrolling and a
+  selection, a checklist and a radio list, buttons, a text input with a cursor, a completion
+  pop-up, a stack of modal dialogs (a message, yes or no, an input), a table, and a Braille canvas.
+- **Focus:** keys go to the top dialog of the stack, or to the screen when there is none; inside
+  either, Tab and Shift+Tab move along a focus ring. On a resize the stack is laid out again, top
+  to bottom, at the new size.
+- **A theme** is a map from roles to styles; QBasic's blue and `menuconfig`'s are two maps.
+- **A screen's life.** A line starts a screen with `Redoubt.Screen.run(module, args)`, which
+  returns when the screen ends, with the value its `update` ended it with. While it is in front,
+  the driver shows the alternate screen, sends it every key as `{:key, key, modifiers}` and every
+  change of size as `{:resize, cols, rows}`, and holds other processes' output until it ends;
+  then the driver restores the screen and the line as they were. The interrupt ends it with
+  `nil`.
+- **`pick(items)`** is the first screen, `menuconfig`'s chooser: a list in a box, arrows and
+  Enter to choose, Esc to leave. It returns the chosen item, or `nil`.
 - **Small things skip it.** A spinner, a progress line or a single status line is drawn by
-  `Redoubt.Term` directly, with no `render`.
+  `Redoubt.Term` directly.
+
+A **native program with a screen**, a package's own TUI, sends `cells` frames on its standard
+output, and the session draws them through the same decoder and encoder. It holds its pipes and
+its budget, no `/dev/cons`, and a cell cannot carry a control sequence, so a hijacked one can draw
+wrong cells, or crash and have its budget reclaimed, and nothing more.
 
 What a full-screen program cannot do:
-- **Write to the terminal.** It holds two pipes and its budget, no `/dev/cons`, and a cell cannot
-  carry a control sequence. A hijacked or buggy `render` can draw wrong cells, or crash and have
-  its budget reclaimed, and nothing more.
-- **Reach anything.** `render` holds no files, no network and no launch; the editor holds the
-  files it was started on ([the editor](#the-editor)).
-- **Grow the trusted base.** ratatui and its crates are a native program's dependencies, not the
-  VM's, the kernel's or a server's ([libraries](native.md#libraries-for-native-programs)); what is
-  trusted is the cell protocol and `Redoubt.Term`'s encoder.
-
-- **Keep the session's interrupt key.** A full-screen program receives Ctrl+C as a key (the editor
-  copies with it), so the session keeps one other key for itself, never forwards it, and destroys
-  the foreground job's budgets on it, as Ctrl+C does at the prompt. The key is configurable per
-  principal.
+- **Draw a control sequence.** What a screen program draws reaches the terminal only through the
+  buffer's natives, which refuse a control character, and what a native one draws only as cells
+  ([hostile text](#hostile-text-never-drives-the-terminal)).
+- **Keep the interrupt from the session.** A full-screen program may take Ctrl+C as a key (the
+  editor copies with it), so the session keeps one other key for itself, never forwards it, and
+  ends the foreground screen or job on it, as Ctrl+C does at the prompt. The key is configurable
+  per principal.
 
 **Open:** the default interrupt key for full-screen programs.
 
@@ -341,43 +418,47 @@ Status: planned · M2 (usable shell)
 
 ```mermaid
 flowchart BT
-    C["/dev/cons: raw bytes, no echo"] -.-> T["Redoubt.Term: keys in, escape sequences out"]
-    T -.-> L["edlin in beamlet_io: editing, history, Ctrl+R"]
-    L -.->|"expand_fun"| CO["completion: commands, paths, then IEx.Autocomplete"]
-    L -.-> I["IEx: evaluates the line"]
-    R["the command registry (defcommand)"] -.-> CO
+    C["/dev/cons: raw bytes, no echo"] -.-> D["the shell's driver: keys in through Redoubt.Term, drawing out through it"]
+    D -.-> G["OTP's group and edlin, unchanged: editing, history, Ctrl+R"]
+    G -.->|"expand_fun"| CO["completion"]
+    G -.-> S["Redoubt.Shell: the loop"]
+    R["the registry (defcommand)"] -.-> CO
     R -.-> HE["help"]
-    R -.-> CM["command mode"]
-    CM -.-> I
 ```
 *Figure: the shell's layers, bottom up. Every part is planned (dashed). One registry feeds
-command mode, completion and help.*
+completion and help.*
 
-On the BEAM, line editing is OTP's `edlin`, plain Erlang; only the tty driver under it needs the
-operating system. So `beamlet_io`, beamlet's I/O server, gains `edlin` and a small tty backend
-that draws through `Redoubt.Term`, and honours IEx's completion hook (`expand_fun`). That gives
-Emacs keys, a kill ring, multi-line input, history with Ctrl+R search, and IEx's own completion
-of modules, functions, variables and map keys, unchanged.
+On the BEAM, line editing is OTP's `edlin` under `group`, plain Erlang; only the driver under
+them (`user_drv` and `prim_tty`) needs the operating system. So the shell keeps `group` and
+`edlin` unchanged and replaces the driver with its own, which reads keys through `Redoubt.Term`
+and draws `group`'s requests through its encoder. `group`'s driver protocol is small: requests to
+draw (`put_chars_sync`, `move_rel`, `insert_chars`, `delete_chars`, `beep`, `redraw_prompt`,
+`put_expand` and a few more), input as `{data, Chars}` and `eof`, the geometry and terminal-state
+queries, and the interrupt as an exit signal. That gives Emacs keys, a kill ring, multi-line
+input and history with Ctrl+R search. `group` writes a few escape sequences itself, for the Ctrl+R
+prompt; the driver recognises only those, at the requests that carry them, and draws every other
+byte through the guard.
 - **History** persists per principal in the principal's home volume, capped in lines. A vault
   session keeps its history in memory only: its label forbids writing to the unlabelled home
   volume, so there is nowhere to save it.
 - **Echo is the editor's job**, so a password prompt is a call that reads with echo off
   (`Redoubt.Term.read_secret/1`), not a terminal mode.
 
-**Open:** `edlin` inside `beamlet_io` or a fresh editor in Elixir (the recommendation: `edlin`,
-which IEx is tested against and which keeps IEx's completion).
+**Open:** how a paste becomes one event inside `edlin`, which has no bracketed paste: a pasted
+Tab must not complete, and a pasted newline must not run a line before the person presses Enter.
 
 ### Completion
 
 Status: planned · M2 (usable shell)
 
-`Redoubt.Shell` installs a completer that looks at the line before deferring:
+The shell's completer (`group`'s `expand_fun`) looks at the line before the cursor with
+`Code.Fragment`:
 
 | Line so far | Completes from |
 | --- | --- |
-| `c⇥` (command mode, first word) | the command registry |
-| `cp no⇥` (command mode, an argument) | the type that argument is declared with: a path, package, principal, budget or label |
-| anything else | `IEx.Autocomplete` |
+| `c⇥` (a name being typed) | commands, then Elixir's modules, functions and variables in scope |
+| `cp("no⇥` (inside a string argument of a command) | the type that parameter is declared with: a path, a command's name, a principal, a budget or a label |
+| `File.re⇥` | the functions of the module |
 
 - **Paths** resolve through the session's namespace and read the directory over 9P, one read per
   Tab. The file server lists only entries the caller's labels may read, so completion cannot
@@ -391,22 +472,18 @@ Status: planned · M2 (usable shell)
 
 ### Help
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: runs on the host only; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
 
 ```text
-help              # commands grouped by area, one line each
-help cp           # the command's page in the pager: usage, doc, examples
-help namespaces   # a concept: namespaces, budgets, labels, pipes, sessions
-h File.cp/2       # IEx's own module documentation
+help()            # commands grouped by area, one line each
+help(:cp)         # the command's page: usage, parameters, examples
+help(:elixir)     # a topic: how Elixir reads at the prompt; help(:terminal), and more
+h(File)           # Elixir's own documentation of a module; h(&File.cp/2) of a function
 ```
 
-Every command's help comes from its `defcommand`, and a build fails for any command without a
-summary, a page or an example. Concept topics are short, shell-oriented summaries of these pages,
-bundled as Markdown and drawn with bold and indentation.
-
-**Open:** whether the documentation chunks `h/1` needs ship in the boot bundle's `.beam` files
-(the recommendation: strip them from the bundle and ship them as an optional documentation
-package that `h/1` reads when present).
+A command's page comes from its `defcommand` ([commands](#commands)), so a command cannot exist
+without one. A topic is a short Markdown page bundled with the shell, shown as its text. `h/1`
+reads the documentation chunks of the module's `.beam` file.
 
 ### Resource use
 
@@ -425,60 +502,64 @@ are drawn at random for the same reason ([processes](../kernel/processes.md#proc
 
 Status: planned · M2 (usable shell)
 
-The editor and the file manager are one native program with two views, in the manner of Midnight
-Commander: `ed notes.txt` opens the editor on a file, and `fm ~/project` opens two panes on a
+The editor and the file manager are one screen program with two views, in the manner of Midnight
+Commander: `ed("notes.txt")` opens the editor on a file, and `fm("project")` opens two panes on a
 directory, from which F4 edits the selected file and closing the editor returns to the panes.
 - **Modeless, with the keys people expect.** The editor keeps micro's keys: Ctrl+S saves, Ctrl+Q
   quits, Ctrl+F finds, Ctrl+Z undoes, Ctrl+C and Ctrl+V copy and paste, and the mouse is not used.
   The panes keep Midnight Commander's: F3 views, F4 edits, F5 copies, F6 moves, F7 makes a
   directory, F8 removes.
-- **What it edits well:** large files through a rope, search and replace by regular expression,
-  syntax highlighting for the languages of the box (Elixir, Erlang, Rust, Markdown, TOML, JSON),
-  undo and redo, and several files open at once.
-- **Scripted edits are the helpers'.** A script changes a file with `cat |> sub |> w`
-  ([viewing and searching](#viewing-and-searching)), not by driving the editor.
+- **What it edits well:** search and replace by regular expression, in linear time for every
+  pattern ([beamlet](beamlet.md#what-runs-on-it)); syntax highlighting for the languages of the
+  box (Elixir, Erlang, Rust, Markdown, TOML, JSON); undo and redo; several files open at once. A
+  file is held as lines, and as a rope only if a large file is measured to need one.
+- **Scripted edits are the commands'.** A script changes a file with `cat |> sub |> w`
+  ([files and text](#files-and-text)), not by driving the editor.
 
-It runs in a budget of its own carved from the session's, drawn as cells through the session
-([full-screen programs](#full-screen-programs)), and holds only what it was started on: `ed f`
-binds `f`'s directory (a save writes a temporary file and renames it) and `fm d` binds `d`, each
-read-write, into its namespace, and nothing else.
-It has no console, no network and no launch, so a file crafted to take over the editor takes a
-process that can reach that directory and no more.
-
-It is built from these crates, each of which builds `no_std` for rv64 with no C
-([libraries](native.md#libraries-for-native-programs)):
-
-| Crate | What for |
-| --- | --- |
-| `ratatui-core`, `ratatui-widgets` | layout, widgets and the frame diff, with Redoubt's cell backend |
-| `crop` | the buffer: a rope, so a large file edits in logarithmic time |
-| `regex` | search, replace and highlighting, in linear time for every pattern |
-| `unicode-width`, `unicode-segmentation` | cursor arithmetic over graphemes and wide characters |
-
-Two parts are forked rather than taken whole: the editing logic from `ratatui-textarea` (MIT,
-`forbid(unsafe_code)`, whose `std` use is only files and paths), and the highlighter from
-`synoptic`, moved onto `regex`.
+It is an Erlang process in the session's VM, drawn through the screen buffer
+([full-screen programs](#full-screen-programs)), and it runs with the session's authority, as
+every tool in the session does. A file is data to it, handled as the session handles all data: by
+Elixir on a memory-safe VM ([why](#why)). What the editor must not have is a way to turn a file's
+contents into an action:
+- **No file content becomes an action.** It has no modelines, evaluates nothing it opened, takes
+  no path from a file, and saves only to the file it was asked to, through a temporary file and a
+  rename.
+- **The panes act only on what they list.** A name in a listing that holds `/`, is `.` or `..`, or
+  holds a NUL is shown and refused, and every copy, move and removal is made on the listed
+  directory, so a server that lists a crafted name cannot make the file manager act outside it.
 
 **Open:** none.
 
 ## Why
 
-**IEx is the shell.** No shell in the Elixir world replaces bash, and none needs to: IEx already
-edits, evaluates and completes, and on Nerves devices it is the only shell there is. Elixir
-pipelines read like shell pipelines and have none of the quoting, word-splitting or injection
-problems. The surface of a shell (`cat`, `ls`, `grep`, `top`) is borrowed from Toolshed, which
-was written for this situation, and reimplemented over Redoubt's namespace instead of Linux
-`/proc`.
+**Elixir is the shell, and the loop is Redoubt's.** No shell in the Elixir world replaces bash,
+and none needs to: Elixir pipelines read like shell pipelines and have none of the quoting,
+word-splitting or injection problems. IEx is the obvious loop, but it runs a file from the
+current directory at start with the session's authority, its evaluator and
+completion are internal modules with no stable API, and its terminal driver is the one part that
+needs the operating system. The shell keeps what is sound under IEx (`group`, `edlin`, the
+compiler) and writes the loop, a small one, on Elixir's public API. The surface of a shell (`cat`,
+`ls`, `grep`, `top`) is borrowed from Toolshed, which was written for this situation, and
+reimplemented over Redoubt's namespace instead of Linux `/proc`.
+
+**One syntax.** The prompt is Elixir and nothing else: there is no second syntax to keep in step
+with Elixir, no rule for which lines are commands, and no quoting to get wrong. Plain Elixir costs
+a pair of quotes and a comma, and a call that is the whole line needs no parentheses. One language
+and one parser leave nothing to inject into.
+
+**Commands are declared, not written twice.** A command's types, its help, its page and what
+completion offers come from one declaration that does not compile without its help, so a command
+cannot drift from its documentation or ship without it.
 
 **One layer.** An operation that does not need its own address space is an Elixir function, not
 a program: there is no `cp` or `ls` binary to launch, to sign or to audit. A native program is
 for what must run apart from the session: untrusted input, or authority the session should not
 lend.
 
-**The terminal is Elixir, and the C reference stays a reference.** `libvterm`, a C terminal
-library, is read for its state machine and key tables and is never built or linked: Redoubt has no
-C in its build. Terminal code is a parser of untrusted bytes (anything that reaches `/dev/cons`
-can be typed or pasted), which is one more reason to keep it in a memory-safe language.
+**The terminal is the session's, and the C reference stays a reference.** `libvterm`, a C
+terminal library, is read for its state machine and key tables and is never built or linked:
+Redoubt has no C in its build. Terminal code is a parser of untrusted bytes (anything that reaches
+`/dev/cons` can be typed or pasted), which is one more reason to keep it in a memory-safe language.
 
 **Cells, not bytes.** Whatever reaches the person's terminal can drive the terminal program on
 their own machine, and on Redoubt much of what is shown was written by a hostile party: an agent's
@@ -486,17 +567,24 @@ reply, a file it made, a name it chose. Sanitising at every place that prints wo
 to forget per program. Making the session's encoder the only writer, and cells the only thing
 anyone else can hand it, leaves no path for a control sequence to take.
 
-**ratatui, kept out.** Writing widgets, layout and a frame diff again would be work already done
-well. Linking ratatui into beamlet would put its crates in every session's VM and make the VM
-decode widget trees. Cutting it at its `Backend` trait keeps all of it in a native program that
-holds nothing, and speeds up the one part an interpreter does slowly, diffing a screen of cells.
+**Screens are drawn in the session.** A screen is an Erlang process in the session's VM: it
+costs the box no process and no copy of any code. Widgets and layout need neither speed nor
+anything outside Elixir; what needs speed on an interpreter is the loop over cells, and that alone
+is native ([beamlet](beamlet.md#screen-natives)).
 
-**A new editor.** No existing Rust editor or file manager ports: helix, zee, amp and Ox bring C
-(tree-sitter, Lua, oniguruma), and yazi, xplr, joshuto and broot are built on `std`'s files,
-processes and threads throughout. A rope, ratatui and a regex engine are most of an editor, and
-writing the rest on them is smaller than porting any of those. `fancy-regex` is not taken, though
-it builds: it backtracks, and a pattern should cost linear time wherever Redoubt matches one
-([beamlet](beamlet.md#what-runs-on-it)).
+**The editor is Elixir.** It is a screen program like the pager, so it reads a file with the same
+memory-safe code every tool of the session uses and costs no process of its own. Its search and
+highlighting are `Regex`, which costs linear time in every pattern, as it does wherever Redoubt
+matches one.
+
+**One VM per session.** Every tool of a session, the shell, the editor, `top`, the pager, runs in
+the session's one VM. A VM is not a wall inside one principal: code that takes one over holds the
+session's handles and could load any bytecode it liked, whichever tool it came in through. The
+wall is the kernel's, around the VM, and it holds whichever tool read the file: what a session
+reaches is what its principal was granted, keys stay in `keyd`, and approvals are drawn only at
+`approve@`. So a person or an agent pays for one VM's code and heap, not one per tool. Running
+code someone else wrote is a risk the person takes, here as in any environment; a child VM with
+narrower grants is there for whoever wants one.
 
 **The terminal is the only front end.** A web interface for administration would be an inbound
 service and a GUI, both non-goals ([the tenets](../TENETS.md#non-goals)), and it would render
