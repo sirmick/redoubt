@@ -70,7 +70,6 @@
   - [An ending process pumps each endpoint once](todo/process-ending-pumps-once.md)
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
-  - [Requests the bench cannot see against sshd](todo/sshd-unseen-requests.md)
   - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
   - [beamlet's modular exponentiation takes operands of any size](todo/beamlet-bignum-bounds.md)
   - [sshd's vendored crates under Miri](todo/sshd-vendored-miri.md)
