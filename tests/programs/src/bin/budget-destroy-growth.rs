@@ -1,12 +1,14 @@
-//! Budget destruction's cost does not grow with other budgets' objects
-//! (kernel/budgets.md, "Residual risks"; R10). A destruction walks the dying subtree, not every
-//! kernel-object frame, so filling the system with an unrelated budget's endpoints leaves it
+//! Budget destruction's cost does not grow with other budgets' objects or handles
+//! (kernel/budgets.md, "Residual risks"; R10). A destruction walks the dying subtree and the
+//! chains of the handles that depend on it, not every kernel-object frame or every live table, so
+//! an unrelated budget's endpoints, and a live process's full table of handles to them, leave it
 //! unchanged.
 //!
 //! Two medians of `budget_destroy`, call to return, of the same small two-level subtree: one on
-//! a system holding almost nothing else, one after a filler budget owns thousands of endpoints.
-//! The after time must stay within twice the empty time and inside R10's 30 ms target; the old
-//! whole-frame scan grew with the filler and failed both. The case is a release build: a checked
+//! a system holding almost nothing else, one while a filler budget owns thousands of endpoints and
+//! its running filler holds a handle to each, a full table. The after time must stay within twice
+//! the empty time and inside R10's 30 ms target; the old whole-frame scan, and the sweep of every
+//! live table after it, grew with the filler and failed both. The case is a release build: a checked
 //! build's post-walk index audit re-scans every object frame, which is what would be measured
 //! (tests/scan-bounds.toml, "Checked builds").
 //!
@@ -22,23 +24,25 @@ use test_programs::spawn;
 
 /// Destructions sampled before and after the fill; the median is judged.
 const SAMPLES: usize = 9;
-/// The filler budget's pages: that many endpoint frames, at most.
+/// The filler budget's pages: more than a full table's endpoints, its 64 pages and the filler.
 const FILL_PAGES: u64 = 8_000;
+/// The least a full table holds, less the handles the filler was started with.
+const MIN_ENDPOINTS: usize = 4_000;
 /// R10's target (kernel/scheduling.md, "Responsiveness"), µs.
 const TARGET_US: u64 = 30_000;
 /// A floor under the empty time the ratio is taken against, so a few µs of noise on a
 /// microsecond-scale measure do not decide it.
 const FLOOR_US: u64 = 1_000;
 
-/// The filler: endpoints in its own budget until it is refused, closing each handle (an endpoint
-/// lives until its budget does). Exits with how many it made.
+/// The filler: endpoints in its own budget until its table is full, keeping each handle. It
+/// reports how many it made on slot 1 and stays, its table live.
 extern "C" fn filler(_: usize) -> ! {
     let mut made = 0;
-    while let Ok(h) = rd::endpoint_create() {
-        let _ = rd::close(h);
+    while rd::endpoint_create().is_ok() {
         made += 1;
     }
-    rd::process_exit(made)
+    let _ = rd::send(1, &rd::body([made, 0, 0, 0]), None, rd::FOREVER);
+    test_programs::park()
 }
 
 /// Create a fresh two-level subtree under `users` and destroy it, returning how long the
@@ -66,18 +70,19 @@ pub extern "C" fn _start() -> ! {
     let empty = median(&mut empty);
     b.note(format_args!("empty: budget_destroy {} us", empty));
 
-    // The filler carves its own budget from `users`, fills it with endpoints and exits; the
-    // endpoints stay, owned by the budget, with no handle naming any of them.
+    // The filler carves its own budget from `users` and fills its table with endpoints that
+    // budget owns; it keeps running, so its full table is live while the subtree is destroyed.
+    let report = rd::endpoint_create().expect("the report endpoint");
+    let to_report = rd::mint_from_handle(report, 1, None).expect("a send right");
     let fill = rd::create(rd::USERS, &rd::spec(FILL_PAGES, 1, 100)).expect("the filler's budget");
-    spawn::spawn(b.image(), fill, b.exit_endpoint(), filler as *const () as usize, &[], &[])
+    spawn::spawn(b.image(), fill, b.exit_endpoint(), filler as *const () as usize, &[], &[to_report])
         .expect("the filler");
-    let made = match rd::receive(Some(b.exit_endpoint()), 600_000_000, 0) {
-        Ok(rd::Received::Exit(n)) => n.code,
+    let made = match rd::receive(Some(report), 600_000_000, 0) {
+        Ok(rd::Received::Message(m)) => m.body.words[0],
         _ => 0,
     };
-    while rd::receive(Some(b.exit_endpoint()), 0, 0).is_ok() {}
-    b.note(format_args!("the filler made {} endpoints in another budget", made));
-    b.check(u64::from(made) > FILL_PAGES / 2, format_args!("the filler filled its budget with endpoints"));
+    b.note(format_args!("the filler holds {} endpoints in another budget", made));
+    b.check(made >= MIN_ENDPOINTS, format_args!("the filler filled its table with endpoints"));
 
     let mut full = [0u64; SAMPLES];
     for sample in full.iter_mut() {

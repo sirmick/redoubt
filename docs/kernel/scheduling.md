@@ -419,6 +419,37 @@ and 16, and a lease's end (the worst decision-wake p99 plus R10's p99 from the t
 | 15 | 5925 / 5926 | 6137 / 16521 | 7149 / 50202 | 71807 | 6162 / 6164 | 6402 / 16892 | 18536 / 51353 | 73940 |
 | 16 | 5926 / 5926 | 6137 / 16522 | 7149 / 50204 | 71739 | 6162 / 6164 | 6402 / 16893 | 18538 / 51353 | 73869 |
 
+**The fifth sweep** (2026-09-30, the same seeds and widths) followed a destruction that closes
+only the handles chained to what it destroys and frees the dying tables whole
+([budgets](budgets.md#residual-risks)). R10's p99 is 5,462 µs on rv64 and 5,723 µs on rv32 at
+most, on every seed, and the deadline notice's worst p99 is 27,089 µs (rv64, seed 7). The
+decision wake's worst p50 is 7,606 µs (rv32, seed 5) and its worst p99 50,993 µs (rv64, seed 15);
+a lease's worst end is 56,454 µs. The targets stay where the fourth sweep set them. The steward
+now sets each by-deadline lease's deadline 300 ms ahead, not 150: a budget's deadline is fixed
+at its creation, before the spawn, and at N = 16 the spawn takes about 150 ms, so on one seed
+every lease ended before its process started and the notice took no sample. The lead is the
+fixture's; the notice is measured from the deadline, and its target stays 40 ms. The decision
+wake, p50 / p99 in µs at N = 1, 4 and 16, and a lease's end:
+
+| Seed | rv64 N=1 | rv64 N=4 | rv64 N=16 | rv64 lease end | rv32 N=1 | rv32 N=4 | rv32 N=16 | rv32 lease end |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 5926 / 5927 | 6137 / 16521 | 7149 / 28676 | 34137 | 6162 / 6165 | 7079 / 17572 | 7604 / 45854 | 51576 |
+| 2 | 5926 / 5927 | 6137 / 16522 | 7149 / 28675 | 34136 | 6162 / 6165 | 7078 / 28060 | 7604 / 29479 | 35202 |
+| 3 | 5926 / 5927 | 6137 / 16521 | 7150 / 39440 | 44901 | 6162 / 6164 | 7079 / 17571 | 7605 / 29479 | 35200 |
+| 4 | 5926 / 5927 | 6137 / 16521 | 7149 / 28676 | 34137 | 6162 / 6164 | 7078 / 17570 | 7604 / 29483 | 35205 |
+| 5 | 5926 / 5927 | 6137 / 16522 | 7149 / 39440 | 44902 | 6162 / 6165 | 7078 / 28061 | 7606 / 32510 | 38232 |
+| 6 | 5926 / 5927 | 6138 / 16522 | 7150 / 50203 | 55664 | 6163 / 6164 | 7078 / 17571 | 7605 / 40422 | 46143 |
+| 7 | 5926 / 5927 | 6138 / 6138 | 7149 / 28676 | 34137 | 6163 / 6165 | 7079 / 28060 | 7605 / 40419 | 46140 |
+| 8 | 5926 / 5927 | 6137 / 16522 | 7150 / 28674 | 34135 | 6162 / 6164 | 7078 / 17570 | 7605 / 40418 | 46139 |
+| 9 | 5926 / 5927 | 6137 / 16521 | 7149 / 28675 | 34136 | 6162 / 6165 | 7078 / 17570 | 7605 / 29478 | 35200 |
+| 10 | 5926 / 5927 | 6137 / 16522 | 7150 / 28677 | 34138 | 6162 / 6165 | 7077 / 17569 | 7605 / 40418 | 46139 |
+| 11 | 5926 / 5927 | 6137 / 16522 | 7148 / 17911 | 23372 | 6163 / 6165 | 7078 / 17571 | 7604 / 29475 | 35197 |
+| 12 | 5926 / 5927 | 6138 / 16522 | 7149 / 17915 | 23376 | 6162 / 6164 | 7078 / 17571 | 7606 / 29482 | 35203 |
+| 13 | 5926 / 5927 | 6137 / 16521 | 7149 / 28673 | 34134 | 6163 / 6164 | 7079 / 28060 | 7604 / 40423 | 46145 |
+| 14 | 5926 / 5927 | 6137 / 16522 | 7149 / 39434 | 44895 | 6162 / 6165 | 7078 / 17570 | 7604 / 40419 | 46141 |
+| 15 | 5926 / 5926 | 6138 / 6138 | 7149 / 50993 | 56454 | 6162 / 6165 | 7078 / 17570 | 7605 / 40423 | 46144 |
+| 16 | 5926 / 5927 | 6137 / 16521 | 7149 / 7149 | 21982 | 6162 / 6165 | 7079 / 17572 | 7604 / 29479 | 35201 |
+
 The worst are p50 18,541 µs (rv32, seed 11) and p99 82,497 µs (rv64, seed 6); R10's p99 is
 22,812 µs (rv64, seed 6) and the deadline notice's is 37,450 µs (rv32, seed 15), both inside 30 and
 40 ms. The lease end's worst is 104,318 µs, inside 125 ms.

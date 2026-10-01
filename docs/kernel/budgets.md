@@ -523,8 +523,9 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk [R2 (fair waiting)](ipc.md#r2-fair-waiting)
      already makes on the delivery path, repeated only while a pass fails a waiter: the cost
      follows the subtree's own parked calls, never its endpoint count. Freeing an endpoint's frame
-     touches only the frame, deferred until its handles are closed, not the dying budget that
-     owns it: the budget's whole object list is going with it.
+     touches only the frame, once its handles are closed (item 2), not the dying budget that owns
+     it: the budget's whole object list is going with it, and its endpoints' pages come back in
+     one write.
   5. **A process's frames are found from the process.** Ending a process releases the frames it
      owns by walking its own page tables: the tables themselves, the user half's pages and the
      process area's saved registers, each freed if the ownership table still credits it to the
@@ -547,14 +548,15 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   find the quarantined device objects and stops once it has the machine's DMA slots. R10's and
   the deadline notice's targets are back at 30 and 40 ms
   ([scheduling](scheduling.md#residual-risks)); `bench:sched-latency` asserts both on both widths
-  (seed 3: R10's p99 is 28,489 µs on rv64 and 29,723 µs on rv32, close under the target), and
-  `bench:budget-destroy-growth` fills the system with another budget's objects and shows the
-  destruction does not grow. What those cases do not expose is a lease that itself holds many
-  endpoints: `bench:endpoint-destroy-full` fills a budget with at least 1,500 endpoints (1,575 on
-  rv64 and 1,578 on rv32, past the containment gate's full fill of ~1460), destroys it, and bounds
-  R10's kernel time from the trace's records at 30 ms on both widths (p99 23,381 µs on rv64 and
-  25,023 µs on rv32), the same target the containment gate's own full-fill run will repeat once it
-  lands.
+  (seed 3: R10's p99 is 5,461 µs on rv64 and 5,722 µs on rv32), and
+  `bench:budget-destroy-growth` shows the destruction does not grow while another budget owns
+  thousands of endpoints and its running process holds a full table of handles to them (a median
+  of 1,211 µs against 1,123 µs alone on rv64, 1,385 against 1,290 µs on rv32). What those cases
+  do not expose is a lease that itself holds many endpoints: `bench:endpoint-destroy-full`
+  destroys a budget whose running process holds a full table of endpoints it owns (4,095 on both
+  widths, past the containment gate's full fill of 4,091), and bounds R10's kernel time from the
+  trace's records at 30 ms on both widths (10,976 µs on rv64 and 10,985 µs on rv32), the same
+  target the containment gate's own full-fill run repeats with both leases live.
 
   Before items 3 and 5 were built, one sweep read every live slot of every table, and ending a
   process scanned the ownership array over all of RAM. The containment gate's lease fills its
@@ -566,15 +568,20 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   about 17 ms: the RAM scan once per process, and a walk of every thread for the abandoned-call
   notices. Under 30 ms leaves a few microseconds per object in the checked build. The chains therefore come with those costs
   cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and the
-  notice walk joined to a thread walk the destruction already makes. At the full fill on rv32, the slower width, that
-  budgets the destruction at about 25 ms:
-  - the chain walk, under 1 ms;
-  - the dying tables, 2 ms;
-  - the processes' frames, 1.5 ms;
-  - the endpoints, 8 ms, at about 2 µs each;
-  - the threads' teardown, 8 ms;
-  - the thread walks, 2 ms;
-  - the rest, 3 ms.
+  notice walk joined to a thread walk the destruction already makes. The budget was 25 ms at the
+  full fill on rv32, the slower width. Built, the gate's full fill measures 23.6 ms with the other
+  lease's full table live and 20.5 ms alone on rv32, and 23.3 and 20.5 ms on rv64 (the medians of
+  nine destructions each). On rv32, with the other lease live:
+  - the chain walk, 0.2 ms (budgeted under 1 ms);
+  - the dying tables, 0.3 ms (2 ms);
+  - the processes' frames, 2.0 ms (1.5 ms; most of it is reading the Sv32 page tables of two
+    processes; 2.5 ms on rv64);
+  - the endpoints, 8.8 ms, 2.15 µs each: a 5.0 ms walk that destroys the devices and a 3.8 ms
+    walk that frees the endpoints (8 ms);
+  - the threads' teardown, 8.0 ms (8 ms), most of it the four parked lend calls, each of which
+    abandons its call and pumps the server's endpoint again;
+  - the thread walks, 1.3 ms (2 ms);
+  - the rest, 2.9 ms (3 ms).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

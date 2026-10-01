@@ -1,4 +1,4 @@
-description = "R10's cost does not grow with the endpoints a destroyed budget owns (kernel/budgets.md, \"Residual risks\"; kernel/scheduling.md, \"Responsiveness\"): a budget owning a full lease of endpoints (at least 1500, past the containment gate's ~1460) is destroyed, and R10's kernel time from the sched-trace records must stay p99 <= 30 ms; the pre-fix per-endpoint all-thread scans were ~1.9 s (virtual time, checked build)"
+description = "R10's cost does not grow with the endpoints a destroyed budget owns (kernel/budgets.md, \"Residual risks\"; kernel/scheduling.md, \"Responsiveness\"): a budget whose running process holds a full table of endpoints (at least 4,000, the containment gate's full fill of 4,091) is destroyed, and R10's kernel time from the sched-trace records must stay p99 <= 30 ms; the pre-fix per-endpoint all-thread scans were ~1.9 s (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -12,7 +12,7 @@ kernel_features = ["sched-trace"]
 post_check = "sched_oracle r10_p99_us=30000"
 timeout_secs = 900
 expect = [
-    '^\[destroy-full\] ok: the filler owns a full lease of endpoints: ',
+    '^\[destroy-full\] ok: the filler holds a full table of endpoints: ',
     '^ENDPOINT-DESTROY-FULL TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]
