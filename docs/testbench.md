@@ -468,7 +468,7 @@ unchanged, so the case is still a witness independent of Redoubt's server.
 
 ### Against Redoubt's sshd
 
-Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested: bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback, bench:bench-ssh-loopback-host-key, bench:sshd-host-tests
+Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested: bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback, bench:bench-ssh-loopback-host-key, bench:sshd-host-tests, host:testbench::an_ssh_lacking_an_option_is_named
 
 `ssh-loopback` cases run the host's OpenSSH `ssh` against Redoubt's own `sshd` on its host
 platform, `redoubt-sshd-host` ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)),
@@ -496,7 +496,10 @@ shell, a login context or a container.
   (`bench-ssh-loopback-openssh`). Its server runs in a container
   ([sessions and the loopback server](#sessions-and-the-loopback-server)).
 - `ssh` gets `WarnWeakCrypto=no-pq-kex` against Redoubt's server, whose exchange is not
-  post-quantum: OpenSSH's warning would otherwise be session output.
+  post-quantum: OpenSSH's warning would otherwise be session output. The option is OpenSSH 10.1's,
+  and before such a case the bench has `ssh -G` parse it: an older `ssh` fails the case with the
+  version found and the version needed (skips it, with `--allow-skip`), rather than with the
+  server's log that was never written.
 
 ## Self-checks
 
