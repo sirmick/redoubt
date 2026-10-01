@@ -93,11 +93,11 @@ sequenceDiagram
     SH-->>KD: holds(K)?
     KD-->>SH: no
     SH-->>ST: login(alice, secrets, K)
-    ST-->>ST: K is a login key of alice;<br/>alice owns secrets
+    ST-->>ST: K is a login key of alice,<br/>alice owns secrets
     ST-->>ST: carve users/alice/{alice-secrets}/session-1
     ST-->>F: new_connection for the session's namespace
     ST-->>S: launch through the stub with the namespace
-    ST-->>SH: session id; the channel's labels
+    ST-->>SH: session id, the channel's labels
     SH-->>C: the session on its labelled channel
 ```
 *Figure: a vault login. All of it is planned.*
@@ -218,7 +218,7 @@ sequenceDiagram
     participant P as Alice
     Note over A,P: planned
     A-->>ST: submit(content, reason)
-    ST-->>ST: freeze; id, hash(content);<br/>check the pending cap
+    ST-->>ST: freeze, id, hash(content),<br/>check the pending cap
     ST-->>A: request id
     ST-->>P: notification on her channels:<br/>an approval is waiting
     P-->>SH: ssh approve@box with her approval key
@@ -226,7 +226,7 @@ sequenceDiagram
     ST-->>SH: rendered request (printable ASCII)
     P-->>SH: approve(id, hash)
     SH-->>ST: approve(id, hash)
-    ST-->>ST: hash matches; grant at most<br/>what Alice holds; audit
+    ST-->>ST: hash matches, grant at most<br/>what Alice holds, audit
     ST-->>A: the grant
 ```
 *Figure: an agent's request approved out of band. All of it is planned.*
@@ -283,14 +283,14 @@ sequenceDiagram
     participant U as fsd:data
     Note over P,U: planned
     P-->>ST: declassify(item)
-    ST-->>R: create (exact labels, deadline); call
+    ST-->>R: create (exact labels, deadline), call
     R-->>V: read the item
     R-->>ST: the snapshot, in the steward's lend
-    ST-->>ST: size and text checks; hash
+    ST-->>ST: size and text checks, hash
     ST-->>P: approve@box shows all of it
     P-->>ST: approve(id, hash)
     ST-->>U: write exactly the snapshot
-    ST-->>ST: destroy the reader; audit
+    ST-->>ST: destroy the reader, audit
 ```
 *Figure: declassifying one item. All of it is planned.*
 

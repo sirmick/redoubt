@@ -128,7 +128,7 @@ flowchart TD
     X -- no --> P{"next sender by R2<br/>(calls skipped if the process<br/>holds MAX_OPEN_CALLS)"}
     P -- none --> W[block until one arrives<br/>or the timeout]
     P -- found --> C{"R4: can the receiving<br/>budget pay for it all?"}
-    C -- no --> RF[sender gets Refused;<br/>try the next sender]
+    C -- no --> RF[sender gets Refused,<br/>try the next sender]
     RF --> P
     C -- yes --> D[deliver: map buffer,<br/>install handles, return record]
 ```
@@ -205,12 +205,12 @@ sequenceDiagram
     S->>K: receive(E, timeout, max_transfer)
     Note over S,K: blocks: nothing queued
     C->>K: call(E, words, handles, lend 4 pages, timeout)
-    Note over K: checks; R1 labels; R2 cap;<br/>lend unmapped from client
+    Note over K: checks, R1 labels, R2 cap,<br/>lend unmapped from client
     K->>S: record: kind=call, msg_id, badge,<br/>account, labels, words, handles, lend at A
-    Note over K: open call page charged to server (R4a);<br/>lend charged to both sides (R3)
+    Note over K: open call page charged to server (R4a),<br/>lend charged to both sides (R3)
     S->>S: read and write the lend at A
     S->>K: reply(msg_id, words, handles)
-    Note over K: lend unmapped from server, remapped<br/>in client; reply record written
+    Note over K: lend unmapped from server, remapped<br/>in client, reply record written
     K-->>C: status 0, lend returned, reply present
     K-->>S: delivered, mask
 ```
@@ -348,7 +348,7 @@ stateDiagram-v2
     Open --> [*]: reply (delivered)<br/>lend returned
     Open --> [*]: server dies<br/>caller gets Dead, lend returned
     Open --> Abandoned: caller dies, times out,<br/>or is revoked
-    Abandoned --> [*]: server replies<br/>(discarded; lend freed)
+    Abandoned --> [*]: server replies<br/>(discarded, lend freed)
     Abandoned --> [*]: server dies<br/>(lend freed)
 ```
 *Figure: the life of a call. The lend is mapped in exactly one address space in every state.*

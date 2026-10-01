@@ -341,12 +341,12 @@ sequenceDiagram
     K->>P: unmask the source
     Note over K: fired not set: the thread blocks
     D->>P: raise the line
-    P->>K: external interrupt; claim
+    P->>K: external interrupt, claim
     K->>P: complete the claim
     K->>P: mask the source
     Note over K: fired set, then cleared<br/>by answering the waiting thread
     K->>T: record: kind = interrupt
-    Note over T,D: the driver services the device;<br/>the source stays masked
+    Note over T,D: the driver services the device,<br/>the source stays masked
     T->>K: receive(IRQ handle, timeout)
     K->>P: unmask the source
     Note over P,D: a line still asserted<br/>fires again at once

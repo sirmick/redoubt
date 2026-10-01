@@ -177,7 +177,7 @@ sequenceDiagram
     L-->>K: verified bundle: kernel and init
     L-->>I: the bundle, read-only
     K-->>I: root, system, users budgets,<br/>devices, Reset
-    I-->>I: parse and check the manifest;<br/>make the servers' endpoints
+    I-->>I: parse and check the manifest,<br/>make the servers' endpoints
     I-->>KD: launch keyd with its keys
     I-->>KD: holds(each login, approval and bundle key)
     KD-->>I: no (a yes stops the boot)
@@ -389,8 +389,8 @@ stateDiagram-v2
     [*] --> Running: launched through the stub
     Running --> Exited: exit or fault
     Exited --> Blamed: fault notice names<br/>(account, label set)
-    Blamed --> Running: steward told;<br/>restarted on the same endpoint
-    Exited --> Running: clean exit;<br/>restarted on the same endpoint
+    Blamed --> Running: steward told,<br/>restarted on the same endpoint
+    Exited --> Running: clean exit,<br/>restarted on the same endpoint
     Exited --> Reboot: more than 5 restarts<br/>in 60 seconds
     Reboot --> [*]
 ```

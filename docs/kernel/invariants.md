@@ -70,7 +70,7 @@ flowchart LR
     S --> H[ghost records what the<br/>step did and was given]
     H --> C{"Checker::check<br/>every check, in order"}
     C -- holds --> G
-    C -- fails --> F[shrink to the ops that matter;<br/>print the trace and the invariant]
+    C -- fails --> F[shrink to the ops that matter,<br/>print the trace and the invariant]
 ```
 *Figure: how one random sequence is checked.*
 

@@ -59,11 +59,11 @@ sequenceDiagram
     Note over A,S: planned
     A-->>G: complete(model, prompt) on its gateway capability
     G-->>S: spend cap and the principal's figure
-    G-->>G: check service, model, size;<br/>under the cap
+    G-->>G: check service, model, size,<br/>under the cap
     G-->>I: TLS connection to the provider<br/>(gatewayd's own scope)
     G-->>P: HTTPS request with the API key
     P-->>G: completion and usage
-    G-->>S: usage for the meter; audit record:<br/>principal chain, operation, cost
+    G-->>S: usage for the meter, audit record:<br/>principal chain, operation, cost
     G-->>A: the completion (no key, no headers)
 ```
 *Figure: an agent's model call through `gatewayd`. All of it is planned.*
