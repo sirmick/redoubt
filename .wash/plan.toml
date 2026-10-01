@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 76
+revision = 77
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -47,8 +47,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "M1 (separation and containment)"
   template = "milestone"
   body = "docs/plan/m1-separation.md"
-  state = "reported"
-  revision = 16
+  state = "active"
+  revision = 77
 
 [[node]]
   id = "M2"
@@ -386,8 +386,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12", "MOD1"]
   body = "Closes docs/todo/r2-least-recently-served.md; rule on docs/kernel/ipc.md#r2-fair-waiting (9f0b47f38), for docs/servers/steward.md#r37-vault-non-interference. Design: QA MOD1-r2-cursor-blame. Brief: .wash/local/IPC2-implementer.md. Tier A (kernel IPC, the model), size M."
-  state = "todo"
-  revision = 46
+  state = "parked"
+  revision = 77
 
 [[node]]
   id = "K13"
@@ -396,5 +396,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12"]
   body = "Closes docs/todo/process-ending-pumps-once.md (ipc.md R3, R4b; QA K12-pump-once). Candidates to fold in: docs/todo/process-map-backs-before-refusing.md, docs/todo/boot-stack-reservation.md, and the rt-host-tests wall-clock flake (libs/rt's parked host test took 64 s against 4 s under host load 66 on rv32; passes alone; a flaky test is a bug). Brief: the Architect cuts it when K12 merges. Tier A (kernel), size S-M."
-  state = "todo"
-  revision = 73
+  state = "parked"
+  revision = 77
