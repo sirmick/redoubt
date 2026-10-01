@@ -32,17 +32,21 @@ rather than dropping it.
 
 ## Models
 
-Each member's launch carries its tier's model and effort ([SWARM](SWARM.md#roles)), as model IDs
-from `about.caller.config_options`:
+Each member's launch carries its tier's provider, model and effort ([SWARM](SWARM.md#roles)). The
+workspace's catalog is `anthropic-budget`, and every launch names `provider: "claude"` and the
+model ID from `about.caller.config_options`:
 
 | Tier | `model` | `effort` |
 | --- | --- | --- |
 | `frontier` | `opus[1m]` | `high` |
-| `workhorse` | `opus[1m]` | `low`; `medium` for kernel commits and merge gates, set live with `member_control configure` |
+| `workhorse` | `opus[1m]` | `low`; `medium` for kernel commits and merge gates |
 | `light` | `sonnet` | `low` |
 
-If a named model is not offered, ask the owner; do not guess IDs or silently substitute. Preserve
-the models the owner has chosen for running members.
+A tier names what a member is for, not a vendor: another catalog can serve the same tiers, and
+the owner chooses which. If a model or an effort is not offered, ask the owner; do not guess or
+silently substitute. Preserve the models the owner has chosen for running members. A `light`
+member's window is 200K, so Wash's `context_warn` reaches it early; a reviewer hands off between
+rounds, never during one.
 
 ## Environment preflight
 

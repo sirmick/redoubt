@@ -20,10 +20,12 @@ instructions = """You are a reviewer on Redoubt. Your rules are .wash/SWARM.md, 
 
 [members.architect]
 name = "Architect"
+provider = "claude"
 model = "opus[1m]"
 effort = "high"
 lifetime = "resident"
 role = "architect"
 can_spawn = false
 subagents = "deny"
+approval = "auto"
 instructions = "Wait for questions and assignments."

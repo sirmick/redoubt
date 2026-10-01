@@ -1,0 +1,47 @@
+<!-- wash-qa-thread: M1-models-agnostic -->
+
+## M1 · M1-models-agnostic — Model-agnostic tiers: catalog slots, not vendor IDs
+
+Status: **resolved** · Assigned to: Orchestrator · Revision: 4
+
+Decision references: 5b68912e04bbc98f85f2058dbedc19a6
+
+Evidence: Applied. workspace.toml + PROJECT.md now name catalog slots (frontier/coding/small), not vendor IDs; workhorse=coding per the owner. Architect relaunched under key architect2: opencode, model openrouter/deepseek/deepseek-v4-pro-0813 (resolved from slot 'frontier'), effort high, approval auto, can_spawn false, subagents allow. Workspace revision 3.
+
+### Orchestrator · Question
+
+Event: `1eda9575163bd12e8858e082202f5184` · 2026-09-30T02:08:29Z
+
+> Owner asks why the Architect opened on Claude and how to make members model-agnostic. The workspace runs on the openrouter-budget catalog, whose slots front/coding/small map to deepseek-v4-pro-0813 / deepseek-v4.1-flash / deepseek-v4.1-flash. Fix: name slots in workspace.toml+PROJECT.md instead of vendor IDs (openrouter/anthropic/claude-opus-4.8). One open choice: the workhorse tier (SWARM says 'same strong model at low thinking', but Wash's coding slot downgrades the model).
+
+### Orchestrator · Owner decision requested
+
+Event: `bca099708114d791cad8f01cb2ac906f` · 2026-09-30T02:08:48Z
+
+> Model-agnostic tiers: workhorse slot and whether to apply now
+> 
+> 1. Under the openrouter-budget catalog (frontier=deepseek-v4-pro-0813, coding/small=deepseek-v4.1-flash), how should Redoubt's 'workhorse' tier map? SWARM defines workhorse as 'the same strongest model at low thinking', but Wash's coding slot downgrades to v4.1-flash.
+>    - frontier (v4-pro) at low effort (recommended): Keeps the strong model, low thinking, matching SWARM's workhorse definition; stays agnostic via the frontier slot.
+>    - coding (v4.1-flash): Cheaper; matches Wash's slot semantics but downgrades the model for kernel/bench work.
+> 2. Apply the agnostic change now: rewrite workspace.toml + PROJECT.md to slot names and re-launch the Architect on the deepseek frontier slot?
+>    - Yes, apply now (recommended): Rewrite the two files to slots, then re-launch the resident Architect with model=frontier (deepseek-v4-pro-0813).
+>    - No, just document: Leave the running Architect and files as-is for now; I only record the plan.
+
+### Owner · Owner decision
+
+Event: `5b68912e04bbc98f85f2058dbedc19a6` · 2026-09-30T02:09:51Z
+
+> The owner answered:
+> 
+> 1. Under the openrouter-budget catalog (frontier=deepseek-v4-pro-0813, coding/small=deepseek-v4.1-flash), how should Redoubt's 'workhorse' tier map? SWARM defines workhorse as 'the same strongest model at low thinking', but Wash's coding slot downgrades to v4.1-flash.
+>    → coding (v4.1-flash)
+> 2. Apply the agnostic change now: rewrite workspace.toml + PROJECT.md to slot names and re-launch the Architect on the deepseek frontier slot?
+>    → Yes, apply now
+
+### Orchestrator · Resolved
+
+Event: `87d2d5381843ed1b40b253851d9452ed` · 2026-09-30T02:11:18Z
+
+> Evidence: Applied. workspace.toml + PROJECT.md now name catalog slots (frontier/coding/small), not vendor IDs; workhorse=coding per the owner. Architect relaunched under key architect2: opencode, model openrouter/deepseek/deepseek-v4-pro-0813 (resolved from slot 'frontier'), effort high, approval auto, can_spawn false, subagents allow. Workspace revision 3.
+
+<!-- wash-qa-checkpoint-v2: eyJ0aHJlYWQiOnsiaWQiOiJNMS1tb2RlbHMtYWdub3N0aWMiLCJub2RlIjoiTTEiLCJ0aXRsZSI6Ik1vZGVsLWFnbm9zdGljIHRpZXJzOiBjYXRhbG9nIHNsb3RzLCBub3QgdmVuZG9yIElEcyIsImNyZWF0b3IiOiI5YzJkMjIzMWQ2MDIxNTgxYzYzZDFiYjMwM2VhNGE4OSIsImFzc2lnbmVlIjoiOWMyZDIyMzFkNjAyMTU4MWM2M2QxYmIzMDNlYTRhODkiLCJzdGF0ZSI6InJlc29sdmVkIiwiYmxvY2tpbmciOmZhbHNlLCJyZXZpc2lvbiI6NCwiZGVjaXNpb25fcmVmcyI6WyI1YjY4OTEyZTA0YmJjOThmODVmMjA1OGRiZWRjMTlhNiJdLCJldmlkZW5jZSI6IkFwcGxpZWQuIHdvcmtzcGFjZS50b21sICsgUFJPSkVDVC5tZCBub3cgbmFtZSBjYXRhbG9nIHNsb3RzIChmcm9udGllci9jb2Rpbmcvc21hbGwpLCBub3QgdmVuZG9yIElEczsgd29ya2hvcnNlPWNvZGluZyBwZXIgdGhlIG93bmVyLiBBcmNoaXRlY3QgcmVsYXVuY2hlZCB1bmRlciBrZXkgYXJjaGl0ZWN0Mjogb3BlbmNvZGUsIG1vZGVsIG9wZW5yb3V0ZXIvZGVlcHNlZWsvZGVlcHNlZWstdjQtcHJvLTA4MTMgKHJlc29sdmVkIGZyb20gc2xvdCAnZnJvbnRpZXInKSwgZWZmb3J0IGhpZ2gsIGFwcHJvdmFsIGF1dG8sIGNhbl9zcGF3biBmYWxzZSwgc3ViYWdlbnRzIGFsbG93LiBXb3Jrc3BhY2UgcmV2aXNpb24gMy4iLCJldmVudHMiOlt7ImlkIjoiMWVkYTk1NzUxNjNiZDEyZTg4NThlMDgyMjAyZjUxODQiLCJhdXRob3IiOiI5YzJkMjIzMWQ2MDIxNTgxYzYzZDFiYjMwM2VhNGE4OSIsImtpbmQiOiJvcGVuIiwiYm9keSI6Ik93bmVyIGFza3Mgd2h5IHRoZSBBcmNoaXRlY3Qgb3BlbmVkIG9uIENsYXVkZSBhbmQgaG93IHRvIG1ha2UgbWVtYmVycyBtb2RlbC1hZ25vc3RpYy4gVGhlIHdvcmtzcGFjZSBydW5zIG9uIHRoZSBvcGVucm91dGVyLWJ1ZGdldCBjYXRhbG9nLCB3aG9zZSBzbG90cyBmcm9udC9jb2Rpbmcvc21hbGwgbWFwIHRvIGRlZXBzZWVrLXY0LXByby0wODEzIC8gZGVlcHNlZWstdjQuMS1mbGFzaCAvIGRlZXBzZWVrLXY0LjEtZmxhc2guIEZpeDogbmFtZSBzbG90cyBpbiB3b3Jrc3BhY2UudG9tbCtQUk9KRUNULm1kIGluc3RlYWQgb2YgdmVuZG9yIElEcyAob3BlbnJvdXRlci9hbnRocm9waWMvY2xhdWRlLW9wdXMtNC44KS4gT25lIG9wZW4gY2hvaWNlOiB0aGUgd29ya2hvcnNlIHRpZXIgKFNXQVJNIHNheXMgJ3NhbWUgc3Ryb25nIG1vZGVsIGF0IGxvdyB0aGlua2luZycsIGJ1dCBXYXNoJ3MgY29kaW5nIHNsb3QgZG93bmdyYWRlcyB0aGUgbW9kZWwpLiIsImNyZWF0ZWRfYXQiOjE3OTA3MzQxMDk4NTd9LHsiaWQiOiJiY2EwOTk3MDgxMTRkNzkxY2FkOGYwMWNiMmFjOTA2ZiIsImF1dGhvciI6IjljMmQyMjMxZDYwMjE1ODFjNjNkMWJiMzAzZWE0YTg5Iiwia2luZCI6ImRlY2lzaW9uX3JlcXVlc3QiLCJib2R5IjoiTW9kZWwtYWdub3N0aWMgdGllcnM6IHdvcmtob3JzZSBzbG90IGFuZCB3aGV0aGVyIHRvIGFwcGx5IG5vd1xuXG4xLiBVbmRlciB0aGUgb3BlbnJvdXRlci1idWRnZXQgY2F0YWxvZyAoZnJvbnRpZXI9ZGVlcHNlZWstdjQtcHJvLTA4MTMsIGNvZGluZy9zbWFsbD1kZWVwc2Vlay12NC4xLWZsYXNoKSwgaG93IHNob3VsZCBSZWRvdWJ0J3MgJ3dvcmtob3JzZScgdGllciBtYXA/IFNXQVJNIGRlZmluZXMgd29ya2hvcnNlIGFzICd0aGUgc2FtZSBzdHJvbmdlc3QgbW9kZWwgYXQgbG93IHRoaW5raW5nJywgYnV0IFdhc2gncyBjb2Rpbmcgc2xvdCBkb3duZ3JhZGVzIHRvIHY0LjEtZmxhc2guXG4gICAtIGZyb250aWVyICh2NC1wcm8pIGF0IGxvdyBlZmZvcnQgKHJlY29tbWVuZGVkKTogS2VlcHMgdGhlIHN0cm9uZyBtb2RlbCwgbG93IHRoaW5raW5nLCBtYXRjaGluZyBTV0FSTSdzIHdvcmtob3JzZSBkZWZpbml0aW9uOyBzdGF5cyBhZ25vc3RpYyB2aWEgdGhlIGZyb250aWVyIHNsb3QuXG4gICAtIGNvZGluZyAodjQuMS1mbGFzaCk6IENoZWFwZXI7IG1hdGNoZXMgV2FzaCdzIHNsb3Qgc2VtYW50aWNzIGJ1dCBkb3duZ3JhZGVzIHRoZSBtb2RlbCBmb3Iga2VybmVsL2JlbmNoIHdvcmsuXG4yLiBBcHBseSB0aGUgYWdub3N0aWMgY2hhbmdlIG5vdzogcmV3cml0ZSB3b3Jrc3BhY2UudG9tbCArIFBST0pFQ1QubWQgdG8gc2xvdCBuYW1lcyBhbmQgcmUtbGF1bmNoIHRoZSBBcmNoaXRlY3Qgb24gdGhlIGRlZXBzZWVrIGZyb250aWVyIHNsb3Q/XG4gICAtIFllcywgYXBwbHkgbm93IChyZWNvbW1lbmRlZCk6IFJld3JpdGUgdGhlIHR3byBmaWxlcyB0byBzbG90cywgdGhlbiByZS1sYXVuY2ggdGhlIHJlc2lkZW50IEFyY2hpdGVjdCB3aXRoIG1vZGVsPWZyb250aWVyIChkZWVwc2Vlay12NC1wcm8tMDgxMykuXG4gICAtIE5vLCBqdXN0IGRvY3VtZW50OiBMZWF2ZSB0aGUgcnVubmluZyBBcmNoaXRlY3QgYW5kIGZpbGVzIGFzLWlzIGZvciBub3c7IEkgb25seSByZWNvcmQgdGhlIHBsYW4uIiwibWVzc2FnZV9pZCI6IjE1MjY4NWQ4ZDY4MWE4ZTQwMTVhZmIzOGI2NjI5MzYwIiwiY3JlYXRlZF9hdCI6MTc5MDczNDEyODM0Mn0seyJpZCI6IjViNjg5MTJlMDRiYmM5OGY4NWYyMDU4ZGJlZGMxOWE2IiwiYXV0aG9yIjoiaHVtYW4iLCJraW5kIjoiZGVjaXNpb25fcmVzcG9uc2UiLCJib2R5IjoiVGhlIG93bmVyIGFuc3dlcmVkOlxuXG4xLiBVbmRlciB0aGUgb3BlbnJvdXRlci1idWRnZXQgY2F0YWxvZyAoZnJvbnRpZXI9ZGVlcHNlZWstdjQtcHJvLTA4MTMsIGNvZGluZy9zbWFsbD1kZWVwc2Vlay12NC4xLWZsYXNoKSwgaG93IHNob3VsZCBSZWRvdWJ0J3MgJ3dvcmtob3JzZScgdGllciBtYXA/IFNXQVJNIGRlZmluZXMgd29ya2hvcnNlIGFzICd0aGUgc2FtZSBzdHJvbmdlc3QgbW9kZWwgYXQgbG93IHRoaW5raW5nJywgYnV0IFdhc2gncyBjb2Rpbmcgc2xvdCBkb3duZ3JhZGVzIHRvIHY0LjEtZmxhc2guXG4gICDihpIgY29kaW5nICh2NC4xLWZsYXNoKVxuMi4gQXBwbHkgdGhlIGFnbm9zdGljIGNoYW5nZSBub3c6IHJld3JpdGUgd29ya3NwYWNlLnRvbWwgKyBQUk9KRUNULm1kIHRvIHNsb3QgbmFtZXMgYW5kIHJlLWxhdW5jaCB0aGUgQXJjaGl0ZWN0IG9uIHRoZSBkZWVwc2VlayBmcm9udGllciBzbG90P1xuICAg4oaSIFllcywgYXBwbHkgbm93IiwibWVzc2FnZV9pZCI6IjlmMGQzM2RlMmE4YWY0YWM4NWM2NDA0YzUwMTk2MzViIiwiY3JlYXRlZF9hdCI6MTc5MDczNDE5MTIyNn0seyJpZCI6Ijg3ZDJkNTM4MTg0M2VkMWI0MGIyNTM4NTFkOTQ1MmVkIiwiYXV0aG9yIjoiOWMyZDIyMzFkNjAyMTU4MWM2M2QxYmIzMDNlYTRhODkiLCJraW5kIjoicmVzb2x2ZSIsImJvZHkiOiJFdmlkZW5jZTogQXBwbGllZC4gd29ya3NwYWNlLnRvbWwgKyBQUk9KRUNULm1kIG5vdyBuYW1lIGNhdGFsb2cgc2xvdHMgKGZyb250aWVyL2NvZGluZy9zbWFsbCksIG5vdCB2ZW5kb3IgSURzOyB3b3JraG9yc2U9Y29kaW5nIHBlciB0aGUgb3duZXIuIEFyY2hpdGVjdCByZWxhdW5jaGVkIHVuZGVyIGtleSBhcmNoaXRlY3QyOiBvcGVuY29kZSwgbW9kZWwgb3BlbnJvdXRlci9kZWVwc2Vlay9kZWVwc2Vlay12NC1wcm8tMDgxMyAocmVzb2x2ZWQgZnJvbSBzbG90ICdmcm9udGllcicpLCBlZmZvcnQgaGlnaCwgYXBwcm92YWwgYXV0bywgY2FuX3NwYXduIGZhbHNlLCBzdWJhZ2VudHMgYWxsb3cuIFdvcmtzcGFjZSByZXZpc2lvbiAzLiIsImNyZWF0ZWRfYXQiOjE3OTA3MzQyNzg4NjR9XX0sImF1dGhvcnMiOnsiOWMyZDIyMzFkNjAyMTU4MWM2M2QxYmIzMDNlYTRhODkiOiJPcmNoZXN0cmF0b3IifX0= -->
