@@ -540,13 +540,13 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
 
   Items 3 and 5 are not built yet: today one sweep reads every live slot of every table, and
   ending a process scans the ownership array over all of RAM. The containment gate's lease fills
-  its handle table ([containment](README.md#containment)). At a fill of about 1,530 handles, its
-  destruction took 56 ms alone and 114 ms while the other lease's table was live (rv64; rv32 5 to
-  10% more), against 30 ms. The difference was the sweep. The rest was the lease's own objects:
-  about 8 µs to close each of its handles and 9 µs to release each of its endpoints. There were
-  also fixed walks of about 17 ms: the RAM scan once per process, and a walk of every thread for
-  the abandoned-call notices. A full table holds about 4,000 endpoints, so under 30 ms leaves a
-  few microseconds per object in the checked build. The chains therefore come with those costs
+  its handle table ([containment](README.md#containment)): 4,091 endpoints. At that fill, its
+  destruction took 102 ms alone and 251 ms while the other lease's full table was live (rv64; rv32
+  7% more), against 30 ms. The difference was the sweep, about 36 µs for each live handle in the
+  other table. The rest was the lease's own objects: about 8 µs to close each of its handles and
+  10 µs to release each of its endpoints, 18 µs an endpoint in all. There were also fixed walks of
+  about 17 ms: the RAM scan once per process, and a walk of every thread for the abandoned-call
+  notices. Under 30 ms leaves a few microseconds per object in the checked build. The chains therefore come with those costs
   cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and the
   notice walk joined to a thread walk the destruction already makes. At the full fill on rv32, the slower width, that
   budgets the destruction at about 25 ms:
