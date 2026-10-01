@@ -10,6 +10,7 @@ mod case;
 mod cruft;
 mod fmt;
 mod peer;
+mod pty;
 mod qemu;
 mod sched_oracle;
 mod size;
@@ -210,16 +211,16 @@ fn main() -> Result<()> {
         }
         if let Kind::SshLoopback(loopback) = &case.kind {
             let started = Instant::now();
-            // Only OpenSSH's server needs the host's login context; Redoubt's needs only `ssh`.
+            // Only OpenSSH's server needs a container; Redoubt's needs only `ssh`.
             let usable = match loopback.server {
                 LoopbackServer::Openssh => loopback_usable
                     .get_or_insert_with(|| {
-                        ssh_available(true)
+                        ssh_available()
                             .map_err(ssh::Unusable::Host)
                             .and_then(|()| ssh::loopback_usable(&workspace, &logs.join("ssh")))
                     })
                     .clone(),
-                LoopbackServer::Redoubt => ssh_available(false).map_err(ssh::Unusable::Host),
+                LoopbackServer::Redoubt => ssh_available().map_err(ssh::Unusable::Host),
             };
             let outcome = match usable {
                 Err(ssh::Unusable::Host(why)) => missing(why),
@@ -373,7 +374,7 @@ fn run_case(
         Err(why) => return Ok(vec![(String::new(), missing(why), 0.0)]),
     };
     if !boot.session.is_empty() {
-        if let Err(why) = ssh_available(false) {
+        if let Err(why) = ssh_available() {
             return Ok(vec![(String::new(), missing(why), 0.0)]);
         }
     }
@@ -509,16 +510,12 @@ fn judge(must_fail: Option<&str>, outcome: Outcome) -> Result<Outcome> {
     })
 }
 
-/// SSH sessions need OpenSSH's client, and loopback cases its server, on the host.
-fn ssh_available(server_too: bool) -> Result<(), String> {
+/// SSH sessions need OpenSSH's client on the host.
+fn ssh_available() -> Result<(), String> {
     match Command::new(ssh::SSH).arg("-V").stderr(Stdio::null()).status() {
-        Ok(status) if status.success() => {}
-        _ => return Err(format!("OpenSSH's `{}` is not installed", ssh::SSH)),
+        Ok(status) if status.success() => Ok(()),
+        _ => Err(format!("OpenSSH's `{}` is not installed", ssh::SSH)),
     }
-    if server_too && !Path::new(ssh::SSHD).exists() {
-        return Err(format!("OpenSSH's server {} is not installed", ssh::SSHD));
-    }
-    Ok(())
 }
 
 /// Run an `ssh-loopback` case: its sessions against a host server accepting its keys. An error

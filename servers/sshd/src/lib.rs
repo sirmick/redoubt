@@ -14,7 +14,8 @@
 //!   verified the signature. Passwords and `none` are refused.
 //! - **Channels.** One session channel per connection, after login; a second is refused. `exec`, subsystems
 //!   and `env` fail (no `exec` on the box; SFTP is later). A labelled session's shell needs a pty (R67).
-//!   Forwarding, agent and X11 requests `sunset` refuses itself.
+//!   Forwarding, agent and X11 requests `sunset` refuses itself. The platform is told the kind of each
+//!   request the core refuses, [`Refusal`], never its content: an `env` name or value is the client's.
 //! - **Raw numbers stay here.** A window size over [`Window::MAX`] reaches the session cut to it. A zero
 //!   means no size, as RFC 4254 says (a client whose input is not a terminal sends zeros): a `window-change`
 //!   carrying one fails, and a pty asked for with one starts at [`Window::DEFAULT`]. Only the `INT` signal
@@ -64,6 +65,43 @@ impl Window {
     }
 }
 
+/// A channel request the core refused, by kind. Its content is the client's and is never passed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    Env,
+    Exec,
+    Subsystem,
+    /// A pty asked twice, after the shell, or on a channel not the session's.
+    Pty,
+    /// A shell asked twice, or on a channel not the session's.
+    Shell,
+    /// R67: a labelled session's shell asked without a pty.
+    ShellWithoutPty,
+    /// A window change without a size, or not for a started session's pty.
+    WindowChange,
+    /// A signal other than `INT`, or before the shell.
+    Signal,
+    /// A break before the shell.
+    Break,
+}
+
+impl Refusal {
+    /// The request's name in RFC 4254 (and RFC 4335 for `break`); R67's refusal is named apart.
+    pub fn name(self) -> &'static str {
+        match self {
+            Refusal::Env => "env",
+            Refusal::Exec => "exec",
+            Refusal::Subsystem => "subsystem",
+            Refusal::Pty => "pty-req",
+            Refusal::Shell => "shell",
+            Refusal::ShellWithoutPty => "shell-without-pty",
+            Refusal::WindowChange => "window-change",
+            Refusal::Signal => "signal",
+            Refusal::Break => "break",
+        }
+    }
+}
+
 /// Who a login is for: the SSH user name `principal` or `principal+label`, each part a name as
 /// servers/init.md "Names" has it, without `+`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +141,8 @@ pub trait Platform {
     fn login(&mut self, who: &Login<'_>, key: &PublicKey) -> Result<Self::Session, Refused>;
     /// The session is over for this connection: its channel has closed or the connection ended.
     fn end(&mut self, session: Self::Session);
+    /// The core refused a channel request of this kind.
+    fn refused(&mut self, request: Refusal);
 }
 
 /// A session's console: bytes each way, the window, the interrupt, and its end.
@@ -271,20 +311,38 @@ impl<'a, P: Platform> Connection<'a, P> {
                     *pty = Some(Window::asked(asked.cols, asked.rows).unwrap_or(Window::DEFAULT));
                     t.succeed()?
                 } else {
+                    platform.refused(Refusal::Pty);
                     t.fail()?
                 }
             }
             ServEvent::SessionShell(s) => match session {
                 // R67: a labelled session's output goes only to a pty channel.
-                Some(sess) if ours(chan, s.channel()) && !*started && (pty.is_some() || !sess.labelled()) => {
+                Some(sess) if ours(chan, s.channel()) && !*started && pty.is_none() && sess.labelled() => {
+                    platform.refused(Refusal::ShellWithoutPty);
+                    s.fail()?
+                }
+                Some(sess) if ours(chan, s.channel()) && !*started => {
                     sess.start(*pty);
                     *started = true;
                     s.succeed()?
                 }
-                _ => s.fail()?,
+                _ => {
+                    platform.refused(Refusal::Shell);
+                    s.fail()?
+                }
             },
-            ServEvent::SessionExec(e) | ServEvent::SessionSubsystem(e) => e.fail()?,
-            ServEvent::SessionEnv(e) => e.fail()?,
+            ServEvent::SessionExec(e) => {
+                platform.refused(Refusal::Exec);
+                e.fail()?
+            }
+            ServEvent::SessionSubsystem(e) => {
+                platform.refused(Refusal::Subsystem);
+                e.fail()?
+            }
+            ServEvent::SessionEnv(e) => {
+                platform.refused(Refusal::Env);
+                e.fail()?
+            }
             ServEvent::SessionWinChange(w) => {
                 let size = w.size()?;
                 match (session.as_mut(), Window::asked(size.cols, size.rows)) {
@@ -292,7 +350,10 @@ impl<'a, P: Platform> Connection<'a, P> {
                         sess.window(win);
                         w.succeed()?
                     }
-                    _ => w.fail()?,
+                    _ => {
+                        platform.refused(Refusal::WindowChange);
+                        w.fail()?
+                    }
                 }
             }
             ServEvent::SessionSignal(g) => match session {
@@ -300,14 +361,20 @@ impl<'a, P: Platform> Connection<'a, P> {
                     sess.interrupt();
                     g.succeed()?
                 }
-                _ => g.fail()?,
+                _ => {
+                    platform.refused(Refusal::Signal);
+                    g.fail()?
+                }
             },
             ServEvent::SessionBreak(b) => match session {
                 Some(sess) if ours(chan, b.channel()) && *started => {
                     sess.interrupt();
                     b.succeed()?
                 }
-                _ => b.fail()?,
+                _ => {
+                    platform.refused(Refusal::Break);
+                    b.fail()?
+                }
             },
             ServEvent::Defunct => return Ok(Progress::Closed),
         }

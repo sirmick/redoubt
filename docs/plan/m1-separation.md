@@ -86,8 +86,6 @@ page.
 
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
-   - **The bench and its tools:**
-     [the SSH loopback self-checks](../todo/ssh-loopback-host.md).
    - **The kernel:** [the boot stack reservation](../todo/boot-stack-reservation.md),
      [`process_map` backs before refusing](../todo/process-map-backs-before-refusing.md),
      [an ending process pumps each endpoint once](../todo/process-ending-pumps-once.md).

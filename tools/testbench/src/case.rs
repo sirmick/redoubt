@@ -389,6 +389,9 @@ pub enum Step {
     Wait(String),
     /// Close the session's input, read its output until ssh exits, and require this status.
     Exit(i32),
+    /// Set a `pty = true` session's terminal to `[cols, rows]`, which makes ssh send a
+    /// `window-change` if the size changed.
+    Resize([u16; 2]),
 }
 
 #[derive(Debug, Deserialize)]
@@ -545,9 +548,27 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
                 Step::Exit(_) => {
                     ensure!(number + 1 == session.steps.len(), "session {user}: `exit` must be the last step")
                 }
+                Step::Resize(_) => ensure!(session.pty, "session {user}: `resize` needs `pty = true`"),
                 _ => {}
             }
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `resize` works only on a session's terminal, so a session without one is refused at load.
+    #[test]
+    fn resize_needs_a_pty() {
+        let session = |pty: bool| -> Session {
+            let text = format!("user = \"alice\"\npty = {pty}\nsteps = [{{ resize = [132, 43] }}]\n");
+            toml::from_str(&text).unwrap()
+        };
+        assert!(check_sessions(&[session(true)]).is_ok());
+        let err = check_sessions(&[session(false)]).unwrap_err().to_string();
+        assert!(err.contains("`resize` needs `pty = true`"), "{err}");
+    }
 }

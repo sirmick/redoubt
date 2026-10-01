@@ -1,0 +1,18 @@
+description = "sshd on its host platform: a terminal resized under ssh sends a window change, which reaches the console as its new size; the verdict is the server's log"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+# The terminal starts at 80x24; the resize is the only way the console could learn 132x43.
+server_log = ['^console started with a pty, 80x24$', '^console window 132x43$']
+server_log_forbid = ['^request window-change refused$']
+
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { send = "echo ready\n" },
+    { expect = '^ready$' },
+    { resize = [132, 43] },
+    { send = "echo resized\n" },
+    { expect = '^resized$' },
+]

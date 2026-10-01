@@ -34,7 +34,7 @@ use redoubt_rt::server::minted::Minter;
 use redoubt_rt::wire::proto::keyd::{Holds, Message, Reply, SignSshExchange};
 use redoubt_rt::wire::typed::opcode;
 use redoubt_sshd::{
-    Connection, ExchangeTranscript, Login, Platform, Progress, PublicKey, Refused, Signature,
+    Connection, ExchangeTranscript, Login, Platform, Progress, PublicKey, Refusal, Refused, Signature,
 };
 
 /// The largest packet `sunset` takes.
@@ -147,6 +147,8 @@ impl Platform for Host {
     }
 
     fn end(&mut self, session: Console) { self.log.line(&format!("session {} ended", session.name())) }
+
+    fn refused(&mut self, request: Refusal) { self.log.line(&format!("request {} refused", request.name())) }
 }
 
 fn main() -> Result<()> {

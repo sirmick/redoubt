@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 54
+revision = 70
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -356,8 +356,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Closes docs/todo/abi-model-disagreements.md and the model.md lines of docs/todo/kernel-attack-gaps.md (not replay); docs/kernel/abi.md#errors-and-the-order-of-checks, docs/kernel/model.md. Brief: .wash/local/MOD1-implementer.md. Tier A (the model), size M."
-  state = "active"
-  revision = 19
+  state = "reported"
+  revision = 69
 
 [[node]]
   id = "SSH2"
@@ -365,8 +365,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Closes docs/todo/sshd-unseen-requests.md, docs/todo/sshd-vendored-miri.md and docs/todo/ssh-loopback-host.md (the OpenSSH reference case in a container: owner's decision on QA ssh-reference-selinux, rule on docs/testbench.md#sessions-and-the-loopback-server, e95c6c099); docs/testbench.md#against-redoubts-sshd, docs/servers/sshd.md. Brief: .wash/local/SSH2-implementer.md. Tier A (sshd, the bench), size L."
-  state = "active"
-  revision = 24
+  state = "done"
+  revision = 70
 
 [[node]]
   id = "K12"
@@ -376,7 +376,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["GATE1-composed-r10"]
   body = "Pulled forward by GATE1's miss (owner's rule, QA GATE1-design): docs/kernel/budgets.md#residual-risks (destruction cost), docs/kernel/scheduling.md#responsiveness, docs/kernel/README.md#containment. Design: QA GATE1-composed-r10 (pending the bisect). Brief: .wash/local/K12-implementer.md. Tier A (kernel), size L."
   state = "active"
-  revision = 53
+  revision = 61
   overrides = ["2026-09-30: started by Orchestrator before QA GATE1-composed-r10 (open): Step 0 (the trace ring) is settled on QA GATE1-composed-r10 and may start before the design; everything past it waits for the thread."]
 
 [[node]]
@@ -388,3 +388,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Closes docs/todo/r2-least-recently-served.md; rule on docs/kernel/ipc.md#r2-fair-waiting (9f0b47f38), for docs/servers/steward.md#r37-vault-non-interference. Design: QA MOD1-r2-cursor-blame. Brief: .wash/local/IPC2-implementer.md. Tier A (kernel IPC, the model), size M."
   state = "todo"
   revision = 46
+
+[[node]]
+  id = "K13"
+  title = "Kernel follow-ups after K12: an ending process pumps each endpoint once"
+  template = "package"
+  parent = "M1"
+  needs = ["K12"]
+  body = "Closes docs/todo/process-ending-pumps-once.md (rule: docs/kernel/ipc.md R3, R4b; QA K12-pump-once, bad3803c6). Candidates to fold in once K12 merges: docs/todo/process-map-backs-before-refusing.md and docs/todo/boot-stack-reservation.md. Tier A (kernel), size S-M."
+  state = "todo"
+  revision = 59

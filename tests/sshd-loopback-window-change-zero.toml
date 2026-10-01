@@ -1,0 +1,18 @@
+description = "sshd on its host platform: a window change to no size (0x0) is refused and never reaches the console; the verdict is the server's log"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+# ssh wants no reply to a window change, so the refusal shows only in the server's log.
+server_log = ['^console started with a pty, 80x24$', '^request window-change refused$']
+server_log_forbid = ['^console window']
+
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { send = "echo ready\n" },
+    { expect = '^ready$' },
+    { resize = [0, 0] },
+    { send = "echo resized\n" },
+    { expect = '^resized$' },
+]

@@ -1,11 +1,13 @@
-description = "Bench self-check, the reference case: concurrent scripted SSH sessions, ordered by marks, exit statuses checked, a pty and a refused key, against the host's OpenSSH server, the session runner's independent witness"
+description = "Bench self-check, the reference case: concurrent scripted SSH sessions, ordered by marks, exit statuses checked, a pty and a refused key, against OpenSSH's server in a container, the session runner's independent witness"
 kind = "ssh-loopback"
 server = "openssh"
 timeout_secs = 20
-# ssh runs the host sshd itself (inetd mode), which runs /bin/sh for every login and accepts
-# only these test keys. It can log in only the user running the bench, so `user` here only
-# chooses the key and names the log (see README).
+# ssh starts OpenSSH's sshd itself (inetd mode) in a container of its own for each session; it
+# runs /bin/sh for every login and accepts only these test keys. It logs in only root in its
+# container, so `user` here only chooses the key and names the log (docs/testbench.md).
 authorized = ["alice", "bob"]
+# The server is OpenSSH's: no other server logs this.
+server_log = ['^debug1: sshd-session version OpenSSH_']
 
 [[session]]
 user = "alice"

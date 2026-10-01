@@ -7,7 +7,8 @@ use std::rc::Rc;
 
 use redoubt_keyd::ssh::{Transcript, exchange_hash};
 use redoubt_sshd::{
-    Connection, ExchangeTranscript, Login, Platform, Progress, PublicKey, Refused, Session, Signature, Window,
+    Connection, ExchangeTranscript, Login, Platform, Progress, PublicKey, Refusal, Refused, Session,
+    Signature, Window,
 };
 use sunset::ed25519_compact::{KeyPair, Seed};
 use sunset::event::{CliEvent, Event};
@@ -32,6 +33,7 @@ struct Log {
     windows: Vec<Window>,
     interrupts: usize,
     ended: usize,
+    refused: Vec<Refusal>,
 }
 
 /// The stand-in platform: `keyd` holds [`held`] and signs with [`host`] unless told not to; the
@@ -67,6 +69,8 @@ impl Platform for Fake {
     }
 
     fn end(&mut self, _: Console) { self.log.borrow_mut().ended += 1 }
+
+    fn refused(&mut self, request: Refusal) { self.log.borrow_mut().refused.push(request) }
 }
 
 /// Echoes its input; `!` ends it with status 7.
@@ -386,6 +390,7 @@ fn a_labelled_login_reaches_its_shell_only_with_a_pty() {
     assert!(r.seen.authenticated);
     assert!(r.log.borrow().started.is_none());
     assert!(r.log.borrow().input.is_empty());
+    assert_eq!(r.log.borrow().refused, [Refusal::ShellWithoutPty]);
 }
 
 #[test]
@@ -397,12 +402,13 @@ fn an_unlabelled_login_may_have_a_shell_without_a_pty() {
 
 #[test]
 fn exec_and_subsystems_are_refused() {
-    for request in [Request::Exec, Request::Subsystem] {
+    for (request, refusal) in [(Request::Exec, Refusal::Exec), (Request::Subsystem, Refusal::Subsystem)] {
         for user in ["alice", "alice+secrets"] {
             let r = run(Script { user, request, data: b"hello", ..Script::default() });
             assert!(r.seen.authenticated);
             assert!(r.log.borrow().started.is_none());
             assert!(r.log.borrow().input.is_empty());
+            assert_eq!(r.log.borrow().refused, [refusal]);
         }
     }
 }
@@ -411,6 +417,45 @@ fn exec_and_subsystems_are_refused() {
 fn a_window_change_without_a_size_is_refused() {
     let r = run(Script { windows: &[(132, 43), (0, 43), (132, 0), (0, 0), (1024, 1)], ..Script::default() });
     assert_eq!(r.log.borrow().windows, [Window { cols: 132, rows: 43 }, Window { cols: 1024, rows: 1 }]);
+    assert_eq!(r.log.borrow().refused, [Refusal::WindowChange; 3]);
+}
+
+#[test]
+fn a_window_change_before_the_shell_is_refused() {
+    // No shell starts: the request comes before any session to take it.
+    let r = run(Script { request: Request::Exec, windows: &[(132, 43)], ..Script::default() });
+    assert!(r.log.borrow().windows.is_empty());
+    assert_eq!(r.log.borrow().refused, [Refusal::Exec, Refusal::WindowChange]);
+}
+
+#[test]
+fn a_refusal_is_named_by_its_kind() {
+    let names = [
+        Refusal::Env,
+        Refusal::Exec,
+        Refusal::Subsystem,
+        Refusal::Pty,
+        Refusal::Shell,
+        Refusal::ShellWithoutPty,
+        Refusal::WindowChange,
+        Refusal::Signal,
+        Refusal::Break,
+    ]
+    .map(Refusal::name);
+    assert_eq!(
+        names,
+        [
+            "env",
+            "exec",
+            "subsystem",
+            "pty-req",
+            "shell",
+            "shell-without-pty",
+            "window-change",
+            "signal",
+            "break"
+        ]
+    );
 }
 
 #[test]
@@ -443,8 +488,11 @@ fn a_pty_over_the_largest_is_cut_to_it() {
 fn only_int_and_break_interrupt() {
     let r = run(Script { signals: &["TERM", "KILL", "INT", "int", "SIGINT"], ..Script::default() });
     assert_eq!(r.log.borrow().interrupts, 1);
+    assert_eq!(r.log.borrow().refused, [Refusal::Signal; 4]);
     let r = run(Script { brk: true, ..Script::default() });
     assert_eq!(r.log.borrow().interrupts, 1);
+    // Only the requests the core names are told; a shell asked and given is not one.
+    assert!(r.log.borrow().refused.is_empty());
 }
 
 #[test]

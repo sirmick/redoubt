@@ -19,7 +19,7 @@ steward started.
 
 ### The core and its platforms
 
-Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested: bench:sshd-host-tests, bench:sshd-build, bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:bench-ssh-loopback
+Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested: bench:sshd-host-tests, bench:sshd-build, bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback
 
 `sshd` is a core and a platform. The core runs `sunset` over byte slices and makes every decision
 this page states: the login name, the key checks, a channel's labels, and what a channel may not
@@ -30,7 +30,13 @@ do. The platform is only what the core asks for, and is one trait:
 - **`holds(key)`:** `keyd`'s answer;
 - **login:** the steward's answer, a session and its labels or a refusal
   ([steward](steward.md#authentication-and-sessions));
-- **a session's console:** its bytes each way, the window size, the interrupt, and its end.
+- **a session's console:** its bytes each way, the window size, the interrupt, and its end;
+- **a refusal:** the kind of each channel request the core refuses (`env`, `exec`, `subsystem`,
+  and any `pty-req`, `shell`, `window-change`, `signal` or `break` it does not pass on), as a name
+  the core chooses; a labelled session's shell without a pty is named apart, `shell-without-pty`,
+  for the audit of R67. Never the request's content:
+  an `env` name or value is the client's bytes, and a log line built from it would be a line the
+  client wrote.
 
 The connection's bytes are not in the trait: the core takes and gives slices, and the platform
 moves them. On the box the platform is `ipd`'s listen scope, `keyd`'s `ssh_host` badge, the
@@ -48,7 +54,7 @@ steward and `/dev/cons`. On the build host it is a host tool, so the bench logs 
   (no labels) or `P+L` (labels `{P-L}`); anything else is refused.
 - **Console:** a scripted line console, no shell: `echo`, `sleep`, `tty` (whether the channel has
   a pty), `labels` (the channel's labels), `exit N`, with `;` between commands. It logs each window
-  change and interrupt it receives.
+  change and interrupt it receives, and the platform logs each refusal by its name.
 
 The key exchange is `curve25519-sha256` only, the one `keyd` signs, with Ed25519 host and login
 keys. `sunset` is used as published with one patch ([patched
@@ -73,6 +79,38 @@ crates](../testbench.md#patched-crates)), which changes three things:
 - **Its X25519 and Ed25519 verification use `ed25519-compact`,** the crate the loader and `keyd`
   already link, in place of the `dalek` crates. The box then has one implementation of each
   curve operation.
+
+### Under Miri
+
+Status: built · partly tested: a recorded run, not a bench case
+
+The vendored crates' `unsafe` sits outside the ratchet, so Miri checks it instead, as for
+[`ipd`'s](ipd.md#under-miri): nightly 2026-09-23 (rustc 1.100.0, Miri 0.1.0 of the same
+nightly), Stacked Borrows, `MIRIFLAGS=-Zmiri-disable-isolation` (`cmov`'s property tests and
+`getrandom`'s read the working directory or the system's random source), and
+`RUSTFLAGS='--cfg aes_backend="soft" --cfg chacha20_backend="soft" --cfg poly1305_backend="soft"
+--cfg sha2_backend="soft"'`, so that each crate runs the software backend the box compiles. Each
+crate's own tests run in an unedited copy outside the tree, with the features the box builds it
+with. Two of the box's paths are not the ones Miri runs: on RISC-V, `cmov` makes its masks and
+`zeroize` its optimisation barrier with inline assembly, which Miri does not interpret, so under
+Miri both crates take their portable Rust paths. Those two assembly blocks are read
+([vendor/README.md](../../vendor/README.md#sshds-ssh-library)).
+
+| Run | Result |
+| --- | --- |
+| `sshd`: `core` (19 tests, each a whole SSH connection) | pass, in four groups, about 25 minutes in all |
+| aes 0.9.3 (`zeroize`) | 2 pass |
+| chacha20 0.10.2 (`cipher`, `zeroize`) | 5 pass |
+| poly1305 0.9.1 | 6 pass |
+| sha2 0.11.0 (no default features) | 14 pass; `sha256_rand` and `sha512_rand`, which hash a long generated stream, run too long under Miri to finish |
+| inout 0.2.2 | 1 pass |
+| block-buffer 0.12.1 (`zeroize`) | 14 pass |
+| hybrid-array 0.4.15 (`zeroize`) | 70 pass |
+| cmov 0.5.4 | 121 pass; its 73 property tests run too long under Miri to finish (7 in nine minutes) |
+| zeroize 1.9.0 | 27 pass |
+| subtle 2.6.1 (no default features) | 33 pass |
+| ascii 1.1.0 (the vendored copy: as published it does not compile on this nightly: a pattern binding named like an `AsciiChar` variant is now an error, which its patch fixes by renaming two bindings) | 94 pass; `is_digit_strange_radixes` fails natively too, since `char::is_digit` now panics on a radix below 2, and two doctests hit the same error |
+| getrandom 0.4.3 | 16 pass, on its Linux backend; the box's custom backend calls a function the program provides, which no test defines |
 
 ### Sessions over SSH
 
@@ -102,6 +140,10 @@ Status: planned · M1 (separation and containment)
   size over 1,024 columns or rows reaches the session cut to 1,024. A zero means no size, as
   RFC 4254 says (a client whose input is not a terminal sends zeros): a `window-change` carrying
   one is refused, and a pty asked for with one starts at 80 by 24.
+- **Randomness.** The program provides `getrandom`'s `__getrandom_v03_custom`, the only source
+  `getrandom` has on bare metal, and it writes all of the buffer it is given before it returns
+  `Ok`: `getrandom` then reads every byte as initialised
+  ([vendor/README.md](../../vendor/README.md#sshds-ssh-library)).
 - **State is per channel**, and each channel carries its session's labels (`alice@`: none;
   `alice+secrets@`: `{alice-secrets}`); `sshd` applies the label check to them
   ([R25 (the label check)](serving.md#r25-the-label-check)). Channels are independent: one
@@ -266,6 +308,10 @@ Status: planned · M1 (separation and containment)
 - **Ed25519 signatures are checked cofactored**, as the loader's are
   ([boot](../kernel/boot.md#residual-risks)): a client's signature can be made into another valid
   one for the same exchange, which authenticates nobody new.
+- **Agent forwarding is refused where no platform sees it.** `sunset` has no agent code:
+  `auth-agent-req@openssh.com` is left out of its request types, so it parses as an unknown request,
+  which `sunset` refuses before the core (with a failure only if the client wants a reply, and
+  `ssh` does not). Read from the vendored source; no case shows it, since nothing reaches the log.
 - **The key exchange is not post-quantum.** Traffic recorded now could be read by whoever later
   breaks X25519.
 

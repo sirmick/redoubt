@@ -1,8 +1,14 @@
-description = "R67 on sshd's host platform: a labelled session gets no shell without a pty (sent env or not), and exec, a subsystem, remote and local port forwarding are refused; the verdict is the server's log, where no console starts"
+description = "R67 on sshd's host platform: a labelled session gets no shell without a pty (sent env or not), and exec, a subsystem, remote and local port forwarding are refused; the verdict is the server's log, which names each refusal and where no console starts"
 kind = "ssh-loopback"
 timeout_secs = 20
 authorized = ["alice"]
-server_log = ['^login alice\+secrets: labels \{alice-secrets\}$']
+server_log = [
+    '^login alice\+secrets: labels \{alice-secrets\}$',
+    '^request shell-without-pty refused$',
+    '^request exec refused$',
+    '^request subsystem refused$',
+    '^request env refused$',
+]
 server_log_forbid = ['^console started']
 
 [[session]]
@@ -20,7 +26,7 @@ ssh_args = ["-s"]
 command = "sftp"
 steps = [{ expect = 'subsystem request failed' }, { exit = 255 }]
 
-# ssh asks no reply to env, so what shows is only that no console starts for it.
+# ssh asks no reply to env: its refusal shows only in the server's log.
 [[session]]
 user = "alice+env"
 ssh_args = ["-o", "SetEnv=REDOUBT_TEST=1"]
