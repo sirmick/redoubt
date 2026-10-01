@@ -477,13 +477,20 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      outside is entered, when it arrives in a table (made, copied, minted or received), in the
      chain of the budget it depends on: one doubly linked chain for the budget its object is
      charged to (a budget handle's object is the budget itself), and one for its stamp. Each
-     budget heads both chains. The inside-or-outside test walks up from the holder's budget, at
+     budget heads both chains. A process object is the exception: it can be freed while the
+     budget it is charged to lives (its creator's), once its exit notice is taken or dropped, so
+     a handle held inside the creator's subtree would not die with its holder. Every handle to a
+     process object, held anywhere, is therefore in a chain headed by the process object itself,
+     instead of in its budget's object chain. Freeing a process object, inside a destruction or
+     not, walks that chain, never a sweep. The budgets' object chains carry budget, endpoint and
+     device handles. A device object is freed outside a destruction only after quarantine, which
+     keeps its full sweep. The inside-or-outside test walks up from the holder's budget, at
      most `MAX_DEPTH` steps, and holds for the handle's life because no budget moves. The cost
      is a constant on each call that adds or closes a handle, and nothing on a call that only
      uses one.
 
-     A destruction walks the chains of the dying budgets and closes exactly the handles held
-     outside that depend on them. It then frees the dying processes' table pages whole, after
+     A destruction walks the chains of the dying budgets and of the process objects it frees, and
+     closes exactly the handles that depend on them. It then frees the dying processes' table pages whole, after
      unhooking any slot still entered in a surviving budget's chain; that is one word read per
      slot. No live table is swept.
 
