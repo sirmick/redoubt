@@ -1,10 +1,11 @@
-# Three cases that wait on the host's clock
+# Four cases that race the host's clock
 
 ## What
 
-Three cases pass alone and failed once each while six benches shared the host. Each orders its
-steps with a fixed wait on the host's clock, not on the event it means to wait for. None runs
-under `icount`, so a loaded host stretches the guest's steps past the wait.
+Four cases pass alone and failed under a loaded host. Three order their steps with a fixed wait
+on the host's clock, not on the event they mean to wait for. The fourth assumes no timer tick
+lands in a window. None runs under `icount`, so a loaded host stretches the guest's steps past
+the wait, or puts a tick in the window.
 
 - **`uaf-lent-page`** (rv64, release kernel). The grabber calls `SYNC`, waits 100 ms, maps and
   stamps 64 pages, then asks the holder to `CHECK`. Its comment says the holder answers `SYNC`
@@ -28,6 +29,11 @@ under `icount`, so a loaded host stretches the guest's steps past the wait.
 
   Under host load 66 the run took 64 s against 4 s alone. A 2 s window on a host that slow can
   expire A's call before B's wake, and the assertion "answered without B's wake-up" fails.
+- **`process-review`** (rv64 seen, both widths declared). The `zero_entries` child creates two
+  threads with entry 0 and then calls `process_exit(43)`; its comment says neither allocation
+  yields. A timer tick in that window runs an entry-0 thread, and the child dies of
+  `InstructionPageFault` at 0 instead of `Exited(43)`. It failed 3 of 12 runs under load and
+  0 of 20 run serially.
 
 ## Why it matters
 
@@ -40,6 +46,7 @@ also pass without testing anything, which is worse than failing.
   `tests/uaf-lent-page.toml`.
 - `tests/programs/src/bin/touch-beyond-ram-survivor.rs`; `tests/touch-beyond-ram.toml`.
 - `libs/rt/tests/parked.rs`, and the runtime's fake kernel's `time_now` and `sleep`.
+- `tests/programs/src/bin/proc-review.rs` (`zero_entries`); `tests/process-review.toml`.
 
 ## Done when
 
@@ -52,6 +59,8 @@ also pass without testing anything, which is worse than failing.
   - `parked.rs`'s deadlines run on a clock the test drives, so A's expiry, C's timeout and D's
     deadline are steps the test takes, not host time. Or each wait is on the parked state, with
     no deadline racing it.
+  - `zero_entries`'s threads get an entry that parks or exits, or `process-review` runs under
+    `icount`, whichever the case's purpose (distinct IDs for zero-PC threads) allows.
 - A wait that remains states what it waits for, and a case fails if that event did not happen,
   rather than going on.
 - Each case passes 20 runs in a row while the bench runs beside it under load (for example,
