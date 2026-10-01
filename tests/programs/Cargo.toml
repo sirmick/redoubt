@@ -18,6 +18,7 @@ bin = [
     { name = "cbo-user-fault", test = false },
     { name = "deadline-flood-billed", test = false },
     { name = "device-exec-refused", test = false },
+    { name = "device-info-attack", test = false },
     { name = "device-test", test = false },
     { name = "dma-destroy-quarantine", test = false },
     { name = "dma-reset-quarantine", test = false },
