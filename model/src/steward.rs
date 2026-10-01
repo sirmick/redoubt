@@ -265,6 +265,7 @@ pub enum Audit {
     LeaseEnded {
         session: u64,
         by: u64,
+        labels: Vec<u64>,
     },
 }
 
@@ -280,9 +281,9 @@ impl Audit {
             | Audit::Denied { labels, .. }
             | Audit::Wrote { labels, .. }
             | Audit::Blamed { labels, .. }
-            | Audit::LoggedOut { labels, .. } => labels,
+            | Audit::LoggedOut { labels, .. }
+            | Audit::LeaseEnded { labels, .. } => labels,
             Audit::Declassified { label, .. } => core::slice::from_ref(label),
-            Audit::LeaseEnded { .. } => &[],
         }
     }
 }
@@ -1117,8 +1118,9 @@ impl Steward {
         if self.broken(Mutation::PolicyEndLeaseAdmitted) && self.pending_of(account, &[]) >= PENDING_CAP {
             return Err(Denied::Cap);
         }
+        let labels = l.labels.clone();
         self.end_session(lease)?;
-        self.record(Audit::LeaseEnded { session: lease, by });
+        self.record(Audit::LeaseEnded { session: lease, by, labels });
         Ok(())
     }
 

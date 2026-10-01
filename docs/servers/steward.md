@@ -345,9 +345,10 @@ Status: planned · M4 (self-hosted development)
 
 The same log extends to every steward action: the steward appends a record for every mint,
 delegation, revocation, approval, denial, lease end, blame and lockout, with the principal chain, to
-a file only it can write. Each record carries the request's labels and is read under the label check
-([R25 (the label check)](serving.md#r25-the-label-check)), so a labelled request's target never
-reaches an unlabelled reader. **Each record is signed**: the steward asks `keyd` to sign it under
+a file only it can write. Each record carries the request's or target's labels and is read under
+the label check ([R25 (the label check)](serving.md#r25-the-label-check)), so a labelled
+request's target never reaches an unlabelled reader. A lease's end is audited with the lease's
+labels, though its sponsor is unlabelled. **Each record is signed**: the steward asks `keyd` to sign it under
 the `audit` purpose over the preimage `"redoubt.audit.v1\0" || u64_le(len) || record`, whose digest
 `keyd` computes itself, and stores the signature beside the record. The steward holds a `keyd` grant
 for that one purpose, never a key. A record cannot be altered undetected by anything that can write
