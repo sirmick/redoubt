@@ -187,9 +187,14 @@ impl MemoryManager {
     }
 
     /// Whether `r` still names the process object it named (a handle in a message R10 may have
-    /// revoked meanwhile).
+    /// revoked meanwhile). A destruction defers freeing an object's frame, so the PID index, which
+    /// `free_object` clears at once, is what says it is gone: a handle carried in a message is
+    /// never installed, and entered in a chain, after its object's chain was closed.
     pub fn is_live_process(&self, r: ProcessRef) -> bool {
-        self.is_process_frame(r.frame) && self.process(r.frame).id == r.id
+        self.is_process_frame(r.frame) && {
+            let p = self.process(r.frame);
+            p.id == r.id && object_of(self, p.pid) == Some(r.frame)
+        }
     }
 
     /// The process object `r` names, which must still be the one it named (I1).
@@ -267,11 +272,15 @@ impl MemoryManager {
     }
 
     /// The checked build's audit, run once after a destruction's walk: the PID and IRQ indexes
-    /// name exactly the live objects. Off the walk, so it never scales the destruction's cost.
+    /// name exactly the live objects, no frame is credited to a process that ended, and every
+    /// handle is in the chains it should be. Off the walk, so it never scales the destruction's
+    /// cost.
     #[cfg(debug_assertions)]
     pub(crate) fn check_object_indexes(&self) {
         self.check_process_index();
         self.check_irq_index();
+        self.check_frame_owners();
+        self.check_handle_chains();
     }
 }
 
@@ -717,8 +726,7 @@ fn allowed(mm: &MemoryManager, e: EndpointRef, flow: Option<Flow>) -> bool {
 pub fn free_object(mm: &mut MemoryManager, frame: u32) {
     let p = mm.process(frame);
     assert!(!p.alive(), "a live process's object was freed");
-    let r = ProcessRef { frame, id: p.id };
-    mm.sweep_handles_now(|_, h| matches!(h.object, Object::Process(x) if x == r));
+    mm.close_handles_to(frame);
     if mm.is_live_budget(p.creator) {
         mm.uncharge(p.creator.frame, PROCESS_PAGES);
     }

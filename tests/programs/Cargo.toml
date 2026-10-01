@@ -25,6 +25,7 @@ bin = [
     { name = "endpoint-destroy-full", test = false },
     { name = "endpoint-destroy-open-calls", test = false },
     { name = "forger", test = false },
+    { name = "handle-chain-attack", test = false },
     { name = "ipc-client", test = false },
     { name = "ipc-outcomes", test = false },
     { name = "irq-attack", test = false },

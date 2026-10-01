@@ -76,14 +76,11 @@ pub struct Endpoint {
     pub owner: BudgetRef,
     /// R2's round-robin cursor: the group served last, if any.
     pub cursor: Option<Group>,
-    /// The next endpoint or device in its owner's list (`Budget::first_owned`), so a destruction
-    /// ends exactly its own (R10).
-    pub next_owned: Option<u32>,
 }
 
-/// Words an endpoint takes in its frame (a frame has 512).
-const W_NEXT_OWNED: usize = 8 + MAX_LABELS;
-const WORDS: usize = W_NEXT_OWNED + 1;
+/// Words an endpoint takes in its frame (a frame has 512). Its link in its owner's list is
+/// apart, at `budget::OWNED_WORD`.
+const WORDS: usize = 8 + MAX_LABELS;
 
 impl MemoryManager {
     pub fn endpoint(&self, frame: u32) -> Endpoint {
@@ -105,7 +102,6 @@ impl MemoryManager {
                 nlabels: (w(6) as usize).min(MAX_LABELS),
                 budget: w(7),
             }),
-            next_owned: (w(W_NEXT_OWNED) as u32).checked_sub(1),
         }
     }
 
@@ -123,7 +119,6 @@ impl MemoryManager {
             words[7] = g.budget;
             words[8..8 + MAX_LABELS].copy_from_slice(&g.labels);
         }
-        words[W_NEXT_OWNED] = crate::budget::frame_word(e.next_owned);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
         }
@@ -154,7 +149,7 @@ impl MemoryManager {
         let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(owner, ENDPOINT_PAGES))?;
         let id = self.next_object_id();
         let owner_ref = BudgetRef { frame: owner, id: self.budget(owner).id };
-        self.store_endpoint(frame, &Endpoint { id, owner: owner_ref, cursor: None, next_owned: None });
+        self.store_endpoint(frame, &Endpoint { id, owner: owner_ref, cursor: None });
         self.link_owned(owner, frame);
         Ok(EndpointRef { frame, id })
     }
@@ -181,7 +176,7 @@ impl MemoryManager {
     }
 
     /// Free a new endpoint whose handle could not be installed: nothing names it or waits on it
-    /// yet. A destruction frees its endpoints in `message::budgets_dying` instead.
+    /// yet. A destruction frees its endpoints in `destroy_marked` instead.
     pub fn free_endpoint(&mut self, frame: u32, owner: BudgetFrame) {
         self.unlink_owned(owner, frame);
         self.release_object_frame(frame);

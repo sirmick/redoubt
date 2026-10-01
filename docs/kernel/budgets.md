@@ -358,7 +358,7 @@ by itself.
 
 ### R10 (destruction)
 
-Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:endpoint-destroy-full, bench:sched-destroy-billing, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
+Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:endpoint-destroy-full, bench:handle-chain-attack, bench:handle-chain-fault, bench:process-chain-fault, bench:sched-destroy-billing, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
@@ -457,7 +457,7 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   and is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
   dominates lease termination, R39 (leases end). The cost must follow the objects the dying subtree holds,
   not every object page in the system and not every live table. Destruction gives three indexes,
-  handle chains, three thread walks, and a walk of each dying process's own frames:
+  handle chains, two thread walks, and a walk of each dying process's own frames:
 
   1. **The budget tree is linked downward.** Each budget keeps a `first_child` and a `next_sibling`
      beside its `parent`, so `mark_dying`, `lift_dying` and the final free walk the subtree
@@ -467,9 +467,12 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      no budget outlives it; the child links themselves are read by the destruction's walk, not
      re-scanned by an audit.
   2. **Objects are linked to their owner.** Each budget heads one chain of the endpoints and
-     devices charged to it (a `next_owned` link in their frames), so a destruction ends exactly
-     the dying subtree's endpoints and devices instead of re-scanning every object frame for one
-     whose owner is dying. Process objects are not scanned either: the PID index
+     devices charged to it (a link word at the same place in both kinds' frames, read alone), so
+     a destruction ends exactly the dying subtree's endpoints and devices instead of re-scanning
+     every object frame for one whose owner is dying. Its first walk of the chains destroys the
+     devices, which leave them, each moved to its chain's head first so that leaving does not
+     walk the endpoints ahead of it; the endpoints stay until the handle chains are closed, and a
+     second walk frees each in a link read and a free. Process objects are not scanned either: the PID index
      (`Objects::processes`) finds them in a constant (64) lookups.
   3. **Handles held outside a budget are chained to it.** A handle dies when the object it names
      is destroyed or when the budget that stamped it is. A handle whose holder runs inside that
@@ -490,57 +493,74 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      uses one.
 
      A destruction walks the chains of the dying budgets and of the process objects it frees, and
-     closes exactly the handles that depend on them. It then frees the dying processes' table pages whole, after
-     unhooking any slot still entered in a surviving budget's chain; that is one word read per
-     slot. No live table is swept.
+     closes exactly the handles that depend on them. The dying processes' tables were freed whole
+     when they ended: each table page counts its chain entries, a page with none goes without
+     being read, and on the others each slot's two entry words are read and any entry unhooked
+     from its chain. No live table is swept. The checked build's `check_handle_chains`, run once
+     after the walk, checks every live handle's entries against its holder's place, and the
+     test-only features `handle-chain-fault`, which leaves out every stamp entry, and
+     `process-chain-fault`, which leaves out every process object entry, are what it catches
+     (`bench:handle-chain-fault`, `bench:process-chain-fault`); `bench:handle-chain-attack` holds
+     the dependent handles several levels up, in the dying top's parent and in its sibling, and
+     handles to a process object the destruction frees while its creator lives: in the creator,
+     inside its budget, and outside it under the live stamp.
 
      The chain entries make a slot eight words, 64 bytes, so a table page holds 64 handles and a
      full table (`MAX_HANDLES`) is 64 pages. A message's copy of a handle keeps the four-word
      form, since the chains index tables, not messages.
-  4. **Three thread walks for the endpoints' teardown, not three per endpoint.** `destroy_endpoint`
+  4. **Two thread walks for the endpoints' teardown, not three per endpoint.** `destroy_endpoint`
      ran three all-thread scans per endpoint — fail its blocked senders and receivers, fail callers
      waiting for a reply through it, clear the abandoned-call notices owed on it — and
      `endpoint_dying` a process-object scan, so a full lease cost its endpoints times the threads.
-     `budgets_dying` now makes three walks over the threads for the whole subtree, keyed on *the
-     endpoint's owner is dying* (and on the stamp, for a message already sent), never on *this one
+     `budgets_dying` now walks the threads twice for the whole subtree, keyed on *the endpoint's
+     owner is dying* (and on the stamp, for a message already sent), never on *this one
      endpoint*: receivers and senders on a dying endpoint first, then callers waiting for a reply
-     through one and messages whose stamp is dying, then the notices, in a walk of their own and
-     last: an owed notice's caller no longer waits, so no failing walk finds it, and the reply
-     failures owe more. `process::endpoints_dying` drops the exit notices in one process-object
-     pass. Each walk is `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk
-     [R2 (fair waiting)](ipc.md#r2-fair-waiting) already makes on the delivery path, repeated only
-     for each waiter it fails: the cost follows the subtree's own parked calls, never its endpoint
-     count. Freeing an endpoint's frame touches only the frame, deferred until its handles are
-     closed, not the dying budget that owns it: the budget's whole object list is going with it.
+     through one and messages whose stamp is dying. The second walk also drops the notices owed
+     on a dying endpoint, reading each open call's flags alone: `abandon` owes no notice on an
+     endpoint whose owner is dying, so every such notice was owed before the destruction began,
+     and the walk's first pass meets each once, however many callers it fails.
+     `process::endpoints_dying` drops the exit notices in one process-object pass. Each walk is
+     `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk [R2 (fair waiting)](ipc.md#r2-fair-waiting)
+     already makes on the delivery path, repeated only while a pass fails a waiter: the cost
+     follows the subtree's own parked calls, never its endpoint count. Freeing an endpoint's frame
+     touches only the frame, once its handles are closed (item 2), not the dying budget that owns
+     it: the budget's whole object list is going with it, and its endpoints' pages come back in
+     one write.
   5. **A process's frames are found from the process.** Ending a process releases the frames it
-     owns by walking its own page tables and the kernel frames it holds (its table pages, IPC
-     pages, saved registers and open-call pages), never the ownership array over all of RAM: a
-     term linear in RAM frames is what [R12 (scheduling)](scheduling.md#r12-scheduling) forbids.
-     A frame it lent stays with the borrower, as R3 says.
+     owns by walking its own page tables: the tables themselves, the user half's pages and the
+     process area's saved registers, each freed if the ownership table still credits it to the
+     process. Its handle-table, IPC and open-call pages are kernel objects, released with its
+     handles and threads. Nothing walks the ownership array over all of RAM: a term linear in
+     RAM frames is what [R12 (scheduling)](scheduling.md#r12-scheduling) forbids. A frame it lent
+     stays with the borrower, as R3 says, and a page it borrowed is its lender's. The checked
+     build's `check_frame_owners` scans RAM for a frame still credited to an ended process, at a
+     process's end and once after a destruction's walk, never inside it.
 
   The invariant the five keep is R10 itself: after a destruction no handle, queued message or
   taken call keeps authority that came through a dying budget (I2), and no handle names a freed
   frame (I1); the ledger returns exactly (I10). The checked build's scans over `0..=high_frame`
   (`check_process_index`, `check_irq_index`) prove the PID and IRQ indexes name exactly the live
-  objects, and run once off the destruction walk, never scaling it; `check_all_dying` proves no
+  objects, `check_frame_owners` and `check_handle_chains` the frames and the chains, and they run
+  once off the destruction walk, never scaling it; `check_all_dying` proves no
   budget outlives `root`. The child and owner links are not re-scanned: a missed link shows as an
   object the destruction fails to end, which the destruction cases exercise. One production full
   scan remains, `destroy_quarantined_devices` (`message.rs`), which a process teardown runs to
   find the quarantined device objects and stops once it has the machine's DMA slots. R10's and
   the deadline notice's targets are back at 30 and 40 ms
   ([scheduling](scheduling.md#residual-risks)); `bench:sched-latency` asserts both on both widths
-  (seed 3: R10's p99 is 28,489 µs on rv64 and 29,723 µs on rv32, close under the target), and
-  `bench:budget-destroy-growth` fills the system with another budget's objects and shows the
-  destruction does not grow. What those cases do not expose is a lease that itself holds many
-  endpoints: `bench:endpoint-destroy-full` fills a budget with at least 1,500 endpoints (1,575 on
-  rv64 and 1,578 on rv32, past the containment gate's full fill of ~1460), destroys it, and bounds
-  R10's kernel time from the trace's records at 30 ms on both widths (p99 23,381 µs on rv64 and
-  25,023 µs on rv32), the same target the containment gate's own full-fill run will repeat once it
-  lands.
+  (seed 3: R10's p99 is 5,461 µs on rv64 and 5,722 µs on rv32), and
+  `bench:budget-destroy-growth` shows the destruction does not grow while another budget owns
+  thousands of endpoints and its running process holds a full table of handles to them (a median
+  of 1,211 µs against 1,123 µs alone on rv64, 1,385 against 1,290 µs on rv32). What those cases
+  do not expose is a lease that itself holds many endpoints: `bench:endpoint-destroy-full`
+  destroys a budget whose running process holds a full table of endpoints it owns (4,095 on both
+  widths, past the containment gate's full fill of 4,091), and bounds R10's kernel time from the
+  trace's records at 30 ms on both widths (10,976 µs on rv64 and 10,985 µs on rv32), the same
+  target the containment gate's own full-fill run repeats with both leases live.
 
-  Items 3 and 5 are not built yet: today one sweep reads every live slot of every table, and
-  ending a process scans the ownership array over all of RAM. The containment gate's lease fills
-  its handle table ([containment](README.md#containment)): 4,091 endpoints. At that fill, its
+  Before items 3 and 5 were built, one sweep read every live slot of every table, and ending a
+  process scanned the ownership array over all of RAM. The containment gate's lease fills its
+  handle table ([containment](README.md#containment)): 4,091 endpoints. At that fill, its
   destruction took 102 ms alone and 251 ms while the other lease's full table was live (rv64; rv32
   7% more), against 30 ms. The difference was the sweep, about 36 µs for each live handle in the
   other table. The rest was the lease's own objects: about 8 µs to close each of its handles and
@@ -548,15 +568,20 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   about 17 ms: the RAM scan once per process, and a walk of every thread for the abandoned-call
   notices. Under 30 ms leaves a few microseconds per object in the checked build. The chains therefore come with those costs
   cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and the
-  notice walk joined to a thread walk the destruction already makes. At the full fill on rv32, the slower width, that
-  budgets the destruction at about 25 ms:
-  - the chain walk, under 1 ms;
-  - the dying tables, 2 ms;
-  - the processes' frames, 1.5 ms;
-  - the endpoints, 8 ms, at about 2 µs each;
-  - the threads' teardown, 8 ms;
-  - the thread walks, 2 ms;
-  - the rest, 3 ms.
+  notice walk joined to a thread walk the destruction already makes. The budget was 25 ms at the
+  full fill on rv32, the slower width. Built, the gate's full fill measures 23.6 ms with the other
+  lease's full table live and 20.5 ms alone on rv32, and 23.3 and 20.5 ms on rv64 (the medians of
+  nine destructions each). On rv32, with the other lease live:
+  - the chain walk, 0.2 ms (budgeted under 1 ms);
+  - the dying tables, 0.3 ms (2 ms);
+  - the processes' frames, 2.0 ms (1.5 ms; most of it is reading the Sv32 page tables of two
+    processes; 2.5 ms on rv64);
+  - the endpoints, 8.8 ms, 2.15 µs each: a 5.0 ms walk that destroys the devices and a 3.8 ms
+    walk that frees the endpoints (8 ms);
+  - the threads' teardown, 8.0 ms (8 ms), most of it the four parked lend calls, each of which
+    abandons its call and pumps the server's endpoint again;
+  - the thread walks, 1.3 ms (2 ms);
+  - the rest, 2.9 ms (3 ms).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

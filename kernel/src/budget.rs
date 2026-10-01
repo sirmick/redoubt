@@ -73,7 +73,7 @@ pub struct Budget {
     pub first_child: Option<BudgetFrame>,
     pub next_sibling: Option<BudgetFrame>,
     /// The endpoints and devices charged to this budget, in one chain through their frames'
-    /// `next_owned` (`endpoint.rs`, `device.rs`); a destruction ends exactly its own.
+    /// [`OWNED_WORD`]; a destruction ends exactly its own.
     pub first_owned: Option<u32>,
     pub depth: u32,
     pub class: Class,
@@ -126,6 +126,14 @@ const W_SCHED: usize = 16 + MAX_LABELS;
 /// A scratch word in every object frame: the next frame in `Objects::deferred`. Above every
 /// object's own words. `None` while the frame is not deferred.
 pub(crate) const DEFER_WORD: usize = 100;
+/// The heads of the handle chains (`handle.rs`), above every object's own words too, so that
+/// storing an object never touches them: the object chain's in a budget or a process object,
+/// the stamp chain's in a budget. 0 for an empty chain; a new frame is zeroed.
+pub(crate) const HELD_WORD: usize = 101;
+pub(crate) const STAMPED_WORD: usize = 102;
+/// The next endpoint or device in its owner's chain (`Budget::first_owned`), at one place in
+/// both kinds' frames, so a destruction's owner walk reads it alone. 0 for the last.
+pub(crate) const OWNED_WORD: usize = 103;
 
 /// The frame index a `frame + 1` word names, or `None` for 0.
 pub(crate) fn frame_of(word: u64) -> Option<u32> { (word as u32).checked_sub(1) }
@@ -536,6 +544,8 @@ impl MemoryManager {
         if crate::process::object_of(self, pid).is_none() {
             self.uncount_process(budget);
         }
+        #[cfg(debug_assertions)]
+        self.check_frame_owners();
     }
 
     pub fn thread_created(&mut self, pid: Pid, tid: usize) -> Result<(), Error> {
@@ -922,37 +932,35 @@ impl MemoryManager {
         }
     }
 
-    /// The next object in its owner's list: an endpoint or a device, dispatched by the frame's
-    /// magic. The two share the `next_owned` link (`endpoint.rs`, `device.rs`).
+    /// The next object in its owner's list, an endpoint or a device: one word.
     pub(crate) fn owned_next(&self, frame: u32) -> Option<u32> {
-        if self.is_endpoint_frame(frame) {
-            self.endpoint(frame).next_owned
-        } else {
-            self.device(frame).next_owned
-        }
+        frame_of(kframe::read(self.object_phys(frame), OWNED_WORD * 8))
     }
 
     /// Set `frame`'s owner-list link.
     fn set_owned_next(&mut self, frame: u32, next: Option<u32>) {
-        if self.is_endpoint_frame(frame) {
-            let mut e = self.endpoint(frame);
-            e.next_owned = next;
-            self.store_endpoint(frame, &e);
-        } else {
-            let mut d = self.device(frame);
-            d.next_owned = next;
-            self.store_device(frame, &d);
-        }
+        kframe::write(self.object_phys(frame), OWNED_WORD * 8, frame_word(next));
     }
 
-    /// Link `frame` at the head of `owner`'s object list (`new_endpoint`, `new_device`). The
-    /// frame must already hold its object, so `set_owned_next` can read its kind.
+    /// Link `frame` at the head of `owner`'s object list (`new_endpoint`, `new_device`).
     pub(crate) fn link_owned(&mut self, owner: BudgetFrame, frame: u32) {
         let mut ob = self.budget(owner);
         let next = ob.first_owned;
         ob.first_owned = Some(frame);
         self.store(owner, &ob);
         self.set_owned_next(frame, next);
+    }
+
+    /// Move `frame`, which follows `prev` in `owner`'s object list (`None`: it heads it already),
+    /// to the head, in a few words: then `unlink_owned` finds it first.
+    pub(crate) fn owned_to_head(&mut self, owner: BudgetFrame, prev: Option<u32>, frame: u32) {
+        let Some(prev) = prev else { return };
+        let next = self.owned_next(frame);
+        self.set_owned_next(prev, next);
+        let mut ob = self.budget(owner);
+        self.set_owned_next(frame, ob.first_owned);
+        ob.first_owned = Some(frame);
+        self.store(owner, &ob);
     }
 
     /// Take `frame` out of `owner`'s object list (`free_endpoint`, `free_device`), one chain for
@@ -1031,26 +1039,17 @@ impl MemoryManager {
     /// (marked, with no processes and no handles left; nothing reads a dying frame's tree links
     /// after this).
     pub fn destroy_marked(&mut self, top: BudgetFrame) {
-        self.sweep_handles(|mm, h| {
-            let object_dying = match h.object {
-                Object::Budget(b) => mm.budget_at(b).dying,
-                // An endpoint, and a device, die with their owner, so a handle to one is
-                // revoked with it.
-                Object::Endpoint(e) => mm.budget_at(mm.endpoint_at(e).owner).dying,
-                Object::Device(d) => mm.budget_at(mm.device_at(d).owner).dying,
-                // A process object dies with the budget it is charged to, its creator's (R10).
-                // One freed during this destruction for another reason (its exit endpoint went
-                // with the subtree) is no longer in the PID index, so its handles go too.
-                Object::Process(p) => {
-                    let proc = mm.process_at(p);
-                    crate::process::object_of(mm, proc.pid) != Some(p.frame)
-                        || mm.budget_at(proc.creator).dying
-                }
-            };
-            object_dying || mm.budget_at(h.stamp).dying
-        });
-        // The sweep was the only pass: the process, endpoint and device frames it read are freed
-        // now, past it (I1), and nothing names them any more.
+        // The handles held outside the subtree that depend on a dying budget are in its chains;
+        // those held inside went with their holders' tables, and those naming a freed process
+        // object with its own chain (`handle.rs`).
+        let mut cur = Some(top);
+        while let Some(frame) = cur {
+            self.close_dependents(frame);
+            cur = self.subtree_next(top, frame);
+        }
+        // Every handle naming them is closed: the endpoint, process and device frames are freed
+        // now, past that (I1).
+        self.free_owned_endpoints(top);
         self.free_deferred_frames();
         // The weight came back as the scheduler lifted each budget (`sched::destroy`).
         self.return_carve(top, false);
@@ -1062,6 +1061,24 @@ impl MemoryManager {
         // Free the dying budgets themselves: children before their parent, so a parent's frame
         // still holds the links the walk reads.
         self.free_dying_budgets(top);
+    }
+
+    /// Free the endpoints the dying subtree owns, the last left on its budgets' owner chains
+    /// (`message::budgets_dying` destroyed the devices), each in a link read and a free, and give
+    /// each budget its endpoints' pages back in one write. Nothing reads them past this.
+    fn free_owned_endpoints(&mut self, top: BudgetFrame) {
+        let mut cur = Some(top);
+        while let Some(frame) = cur {
+            let mut owned = self.budget(frame).first_owned;
+            let mut pages = 0;
+            while let Some(o) = owned {
+                owned = self.owned_next(o);
+                self.free_object_frame(o);
+                pages += crate::endpoint::ENDPOINT_PAGES;
+            }
+            self.uncharge(frame, pages);
+            cur = self.subtree_next(top, frame);
+        }
     }
 
     /// Free the dying subtree `frame` heads: every descendant first, then the budget, unlinking

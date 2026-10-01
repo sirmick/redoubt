@@ -1,0 +1,17 @@
+description = "The checked build's chain audit catches a missing process object entry (kernel/budgets.md, \"Residual risks\", item 3; I1, I2): a test build installs every handle to a process object without its entry in the object's chain (process-chain-fault), and after the attack case's destruction frees the object its creator outlives, the audit stops the kernel on the first handle to it the chain does not hold (process-chain-fault, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+kernel_features = ["process-chain-fault"]
+programs = ["handle-chain-attack"]
+timeout_secs = 60
+allow_panic = true          # the kernel is supposed to panic here
+poweroff = true
+poweroff_status = 255
+# The verdict is the kernel's own audit: the destruction itself returns, and the audit after
+# its walk finds a handle the planted fault left out of the freed process object's chain.
+expect = [
+    '^\[chain-attack\] ok: holder 1 in beside holds C.s endpoint and the process object$',
+    '^PANIC in PID \d+: panicked at kernel/src/handle.rs:[0-9]+:[0-9]+:$',
+    '^I2: handle \d+ of PID \d+ is not in the chains its holder.s place calls for$',
+]

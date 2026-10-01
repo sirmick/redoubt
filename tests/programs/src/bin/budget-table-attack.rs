@@ -1,7 +1,7 @@
 //! Attacker: exhaust the handle table. It fills its table with revocation scopes (cheap: one
 //! page each, charged to a child budget of its own) until the kernel refuses (`TooLarge` past
 //! `MAX_HANDLES`), closes and reopens across a page boundary, then destroys the child, which
-//! sweeps every one of them.
+//! closes every one of them.
 //! Every table page is charged to `system`, the attacker's budget, and the victim beside it must
 //! still get its pages afterwards. See `tests/budget-table-attack.toml`.
 
@@ -43,14 +43,14 @@ pub extern "C" fn _start() -> ! {
         pool_usage,
         if one_each { "one per scope" } else { "FAIL" }
     );
-    // Table pages are charged to system: 31 more than the one it had, beyond the pool (5000
-    // pages and its own).
+    // Table pages are charged to system: 63 more than the one it had (64 handles a page), beyond
+    // the pool (5000 pages and its own).
     let table_pages = rd::usage(system).unwrap().pages_usage - before - 5001;
     log!(logger, "[table] system paid {} pages for the table", table_pages);
     // Hand back the last page's handles, then take one again: the page is freed and recharged.
-    let closed = (3969..=last).all(|h| rd::close(h).is_ok());
+    let closed = (4033..=last).all(|h| rd::close(h).is_ok());
     let reopened = rd::create(pool, &rd::spec(0, 0, 0));
-    log!(logger, "[table] closed 3969..={}: {}; reopened -> {:?}", last, closed, reopened);
+    log!(logger, "[table] closed 4033..={}: {}; reopened -> {:?}", last, closed, reopened);
     let destroyed = rd::destroy(pool);
     let after = rd::usage(system).unwrap().pages_usage;
     log!(
@@ -59,7 +59,7 @@ pub extern "C" fn _start() -> ! {
         destroyed,
         before == after
     );
-    let gone = (base..=3969).all(|h| rd::usage(h) == Err(Error::BadHandle));
+    let gone = (base..=4033).all(|h| rd::usage(h) == Err(Error::BadHandle));
     log!(logger, "[table] every swept index is empty: {}", gone);
     log!(logger, "[table] attempts done");
     rd::victim::go();

@@ -419,6 +419,37 @@ and 16, and a lease's end (the worst decision-wake p99 plus R10's p99 from the t
 | 15 | 5925 / 5926 | 6137 / 16521 | 7149 / 50202 | 71807 | 6162 / 6164 | 6402 / 16892 | 18536 / 51353 | 73940 |
 | 16 | 5926 / 5926 | 6137 / 16522 | 7149 / 50204 | 71739 | 6162 / 6164 | 6402 / 16893 | 18538 / 51353 | 73869 |
 
+**The fifth sweep** (2026-09-30, the same seeds and widths) followed a destruction that closes
+only the handles chained to what it destroys and frees the dying tables whole
+([budgets](budgets.md#residual-risks)). R10's p99 is 5,462 µs on rv64 and 5,723 µs on rv32 at
+most, on every seed, and the deadline notice's worst p99 is 27,089 µs (rv64, seed 7). The
+decision wake's worst p50 is 7,606 µs (rv32, seed 5) and its worst p99 50,993 µs (rv64, seed 15);
+a lease's worst end is 56,454 µs. The targets stay where the fourth sweep set them. The steward
+now sets each by-deadline lease's deadline 300 ms ahead, not 150: a budget's deadline is fixed
+at its creation, before the spawn, and at N = 16 the spawn takes about 150 ms, so on one seed
+every lease ended before its process started and the notice took no sample. The lead is the
+fixture's; the notice is measured from the deadline, and its target stays 40 ms. The decision
+wake, p50 / p99 in µs at N = 1, 4 and 16, and a lease's end:
+
+| Seed | rv64 N=1 | rv64 N=4 | rv64 N=16 | rv64 lease end | rv32 N=1 | rv32 N=4 | rv32 N=16 | rv32 lease end |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 5926 / 5927 | 6137 / 16521 | 7149 / 28676 | 34137 | 6162 / 6165 | 7079 / 17572 | 7604 / 45854 | 51576 |
+| 2 | 5926 / 5927 | 6137 / 16522 | 7149 / 28675 | 34136 | 6162 / 6165 | 7078 / 28060 | 7604 / 29479 | 35202 |
+| 3 | 5926 / 5927 | 6137 / 16521 | 7150 / 39440 | 44901 | 6162 / 6164 | 7079 / 17571 | 7605 / 29479 | 35200 |
+| 4 | 5926 / 5927 | 6137 / 16521 | 7149 / 28676 | 34137 | 6162 / 6164 | 7078 / 17570 | 7604 / 29483 | 35205 |
+| 5 | 5926 / 5927 | 6137 / 16522 | 7149 / 39440 | 44902 | 6162 / 6165 | 7078 / 28061 | 7606 / 32510 | 38232 |
+| 6 | 5926 / 5927 | 6138 / 16522 | 7150 / 50203 | 55664 | 6163 / 6164 | 7078 / 17571 | 7605 / 40422 | 46143 |
+| 7 | 5926 / 5927 | 6138 / 6138 | 7149 / 28676 | 34137 | 6163 / 6165 | 7079 / 28060 | 7605 / 40419 | 46140 |
+| 8 | 5926 / 5927 | 6137 / 16522 | 7150 / 28674 | 34135 | 6162 / 6164 | 7078 / 17570 | 7605 / 40418 | 46139 |
+| 9 | 5926 / 5927 | 6137 / 16521 | 7149 / 28675 | 34136 | 6162 / 6165 | 7078 / 17570 | 7605 / 29478 | 35200 |
+| 10 | 5926 / 5927 | 6137 / 16522 | 7150 / 28677 | 34138 | 6162 / 6165 | 7077 / 17569 | 7605 / 40418 | 46139 |
+| 11 | 5926 / 5927 | 6137 / 16522 | 7148 / 17911 | 23372 | 6163 / 6165 | 7078 / 17571 | 7604 / 29475 | 35197 |
+| 12 | 5926 / 5927 | 6138 / 16522 | 7149 / 17915 | 23376 | 6162 / 6164 | 7078 / 17571 | 7606 / 29482 | 35203 |
+| 13 | 5926 / 5927 | 6137 / 16521 | 7149 / 28673 | 34134 | 6163 / 6164 | 7079 / 28060 | 7604 / 40423 | 46145 |
+| 14 | 5926 / 5927 | 6137 / 16522 | 7149 / 39434 | 44895 | 6162 / 6165 | 7078 / 17570 | 7604 / 40419 | 46141 |
+| 15 | 5926 / 5926 | 6138 / 6138 | 7149 / 50993 | 56454 | 6162 / 6165 | 7078 / 17570 | 7605 / 40423 | 46144 |
+| 16 | 5926 / 5927 | 6137 / 16521 | 7149 / 7149 | 21982 | 6162 / 6165 | 7079 / 17572 | 7604 / 29479 | 35201 |
+
 The worst are p50 18,541 µs (rv32, seed 11) and p99 82,497 µs (rv64, seed 6); R10's p99 is
 22,812 µs (rv64, seed 6) and the deadline notice's is 37,450 µs (rv32, seed 15), both inside 30 and
 40 ms. The lease end's worst is 104,318 µs, inside 125 ms.
@@ -463,9 +494,9 @@ processes hold. `map_anon`'s search is linear in the fixed-size area it searches
 and never in `len` (`bench:map-anon-search-bound`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the platform's
 interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in RAM
 frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
-every wake waits for it. R10 (destruction) walks only the dying subtree and its owner lists, and
-its one handle pass is bounded by `MAX_PROCESS_COUNT` × `MAX_HANDLE_PAGES` ([budgets](budgets.md#residual-risks)),
-so it is no exception. What a call looks up by PID or by interrupt number
+every wake waits for it. R10 (destruction) walks only the dying subtree, its owner lists, the
+dying processes' own tables and page tables, and the chains of the handles held outside it
+([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by interrupt number
 it finds in an index the kernel keeps as objects are made and freed: a process object in one of
 `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's sources; a boot
 naming a higher interrupt stops). So `process_create`'s PID draw looks at most at 63 slots, an
@@ -511,8 +542,11 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
 debug-only break of the tie rule that implies the trace, and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
-([devices](devices.md)), and so are `sum-probe`, a stray kernel load that must fault
-([R24 (SUM and MXR clear)](memory-layout.md#r24-sum-and-mxr-clear)), and `panic-in-print`, a
+([devices](devices.md)), and so are `handle-chain-fault` and `process-chain-fault`, a handle
+installed without its stamp entry or its process object entry for the chain audit to catch
+([budgets](budgets.md#residual-risks)), `sum-probe`, a stray
+kernel load that must fault ([R24 (SUM and MXR clear)](memory-layout.md#r24-sum-and-mxr-clear)),
+and `panic-in-print`, a
 panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these implies the feature
 `test-only`, which the kernel refuses to compile without debug assertions, so the release build
 `./build` makes cannot carry one; a checked build, as `./build --debug` makes, still can.
@@ -562,7 +596,7 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   and a new sweep re-measures.
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
-  dominates lease termination and follows the dying subtree and the one handle pass, so its target
+  dominates lease termination and follows the dying subtree and the handles that depend on it, so its target
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
@@ -579,7 +613,7 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   hardware run is measured, and a hardware run will characterise in cycles, not gate. A target
   set from a sweep holds for the seeds swept, not for every seed. The queue and its accounting
   drive one hart until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases that read the trace run a
-  kernel built with it, which has a record at every queue event and 2 MiB less RAM for the budget
+  kernel built with it, which has a record at every queue event and 32 MiB less RAM for the budget
   tree.
 
 ## Why

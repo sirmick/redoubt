@@ -41,6 +41,12 @@ sched-inject-tie-fault = ["sched-trace"]
 # Test builds only: each DMA device's first reset reports "not confirmed" after the
 # real write, so the quarantine path runs. It only ever adds quarantine.
 dma-reset-deaf = ["test-only"]
+# Test builds only: a handle held outside its stamp's subtree is installed without its stamp
+# chain entry, for the checked build's chain audit to catch (kernel/budgets.md, "Residual risks").
+handle-chain-fault = ["test-only"]
+# Test builds only: a handle to a process object is installed without its entry in the object's
+# chain, for the same audit to catch.
+process-chain-fault = ["test-only"]
 # Test builds only: at the first system call the kernel loads the caller's `ecall` straight
 # through the user mapping, which must fault (R24).
 sum-probe = ["test-only"]

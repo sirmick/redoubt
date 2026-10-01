@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 72
+revision = 74
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -258,9 +258,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["K8", "K9", "K10"]
-  body = "Builds docs/kernel/README.md#containment (a926fd1c3; bench:kernel-containment; rv64 and rv32, checked build, virtual time, tracing kernel, pinned seed from a 16-seed sweep); docs/plan/m1-separation.md Kernel cases, the Containment row. Brief: .wash/local/GATE1-implementer.md. Design: QA GATE1-design. Owner: a missed responsiveness target stops GATE1 and pulls docs/todo/budget-destroy-cost.md forward as its own kernel package first. Tier A, size M."
+  body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-09-30: wp-gate1 tip b9aeb3477 (test fixes, arming on the event, readable child panics, the full-table lease: 4,091 endpoints); targets miss until K12 merges. Left: rebase onto K12's merge, the full case on both widths with targets met, the 16-seed sweep and pinned seed, the page status lines, the whole bench, review. Handoff: .wash/local/handoffs/gate1-implementer.md. Bisect: .wash/local/GATE1-r10-bisect.md. Tier A, size M."
   state = "reported"
-  revision = 42
+  revision = 73
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
@@ -374,9 +374,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["GATE1-composed-r10"]
-  body = "Pulled forward by GATE1's miss (owner's rule, QA GATE1-design): docs/kernel/budgets.md#residual-risks (destruction cost), docs/kernel/scheduling.md#responsiveness, docs/kernel/README.md#containment. Design: QA GATE1-composed-r10 (pending the bisect). Brief: .wash/local/K12-implementer.md. Tier A (kernel), size L."
-  state = "reported"
-  revision = 71
+  body = "Designed in docs/kernel/budgets.md Residual risks items 3-5 (QA GATE1-composed-r10, K12-full-fill-ring, K12-pump-once). PARKED 2026-09-30: wp-k12 tip 497d21496 on the cleaned redoubt a61a1917b; reviewed (red OK with notes, simplifier OK, editor OK), round 1 fixes folded; full fill rv32 23.6/20.5 ms, rv64 23.3/20.5; 16-seed sweep 32/32. Left: rebase over MOD1 (ca0d27e20; conflicts at the model's handle-slot constant and size-budget.toml's model line 10092), model host tests and mutation sweep, the whole bench, merge. Handoff: .wash/local/handoffs/k12-implementer-2.md. Tier A (kernel), size L."
+  state = "done"
+  revision = 74
   overrides = ["2026-09-30: started by Orchestrator before QA GATE1-composed-r10 (open): Step 0 (the trace ring) is settled on QA GATE1-composed-r10 and may start before the design; everything past it waits for the thread."]
 
 [[node]]
@@ -395,6 +395,6 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["K12"]
-  body = "Closes docs/todo/process-ending-pumps-once.md (rule: docs/kernel/ipc.md R3, R4b; QA K12-pump-once, bad3803c6). Candidates to fold in once K12 merges: docs/todo/process-map-backs-before-refusing.md and docs/todo/boot-stack-reservation.md. Tier A (kernel), size S-M."
+  body = "Closes docs/todo/process-ending-pumps-once.md (ipc.md R3, R4b; QA K12-pump-once). Candidates to fold in: docs/todo/process-map-backs-before-refusing.md, docs/todo/boot-stack-reservation.md, and the rt-host-tests wall-clock flake (libs/rt's parked host test took 64 s against 4 s under host load 66 on rv32; passes alone; a flaky test is a bug). Brief: the Architect cuts it when K12 merges. Tier A (kernel), size S-M."
   state = "todo"
-  revision = 59
+  revision = 73
