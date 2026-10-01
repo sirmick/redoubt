@@ -279,6 +279,11 @@ server. `init`'s first thread starts with the bundle's address in `a0` and its l
 The archive was verified before the loader parsed it, and `init` reads it only within that
 length.
 
+No later entry's name means anything to the loader. An entry named `grants` is data like any
+other and grants nothing. The loader reads no entry it does not load, and the kernel refuses a
+`Grnt` tag, so no file in the bundle grants a device to either of them. What a server holds is
+`init`'s to place, from the manifest ([devices](devices.md#which-process-gets-which-device)).
+
 `init` learns which device each handle names from the kernel, with
 [`device_info`](devices.md#device_info), and matches that to the manifest, which names each
 device by its register base and its interrupt
