@@ -44,6 +44,10 @@ dma-reset-deaf = ["test-only"]
 # Test builds only: at the first system call the kernel loads the caller's `ecall` straight
 # through the user mapping, which must fault (R24).
 sum-probe = ["test-only"]
+# Test builds only: after the boot has checked senvcfg is 0, `_start` writes it permissive (user
+# cache-block operations run), standing in for a hart that kept a nonzero reset value; the
+# self-check bench-cbo-self-unrefused must then fail (R11).
+plant-senvcfg = ["test-only"]
 # Test builds only: print a value whose `Display` prints and then panics, at boot, so both strike
 # inside `print!` (debug/console.rs).
 panic-in-print = ["test-only"]

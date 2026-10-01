@@ -1,0 +1,18 @@
+description = "No cache-block operation runs in user mode (R11): senvcfg is 0 on every hart, so children that run cbo.inval, cbo.clean, cbo.flush and cbo.zero on pages they mapped fault with an illegal instruction, by the kernel's exit notice (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The first program, alone: it holds the console and judges the kernel (docs/testbench.md,
+# "Rule F"). The children's verdicts are the exit notices the kernel writes; the children have no
+# console, and one whose operation ran exits 0, which the kernel reports as `exited`.
+programs = ["cbo-user-fault"]
+timeout_secs = 30
+expect = [
+    '^\[cbo-user-fault\] ok: cbo\.inval by a child faulted with cause 2$',
+    '^\[cbo-user-fault\] ok: cbo\.clean by a child faulted with cause 2$',
+    '^\[cbo-user-fault\] ok: cbo\.flush by a child faulted with cause 2$',
+    '^\[cbo-user-fault\] ok: cbo\.zero by a child faulted with cause 2$',
+    '^\[cbo-user-fault\] CBO USER FAULT$',
+]
+forbid = ['\[cbo-user-fault\] FAIL']
+poweroff = true

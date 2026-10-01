@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use redoubt_layout::Pid;
-use riscv::register::{satp, sie, sstatus};
+use riscv::register::{satp, senvcfg, sie, sstatus};
 
 mod asm;
 pub mod exception;
@@ -22,6 +22,8 @@ pub fn init() {
     // R24: `_start` cleared both, and nothing sets them again.
     let status = sstatus::read();
     assert!(!status.sum() && !status.mxr(), "sstatus.SUM or MXR is set at boot (R24)");
+    // R11: `_start` wrote senvcfg 0, so no cache-block operation runs in user mode.
+    assert_eq!(senvcfg::read().bits(), 0, "senvcfg is not 0 at boot (R11)");
     irq::init();
 
     println!(

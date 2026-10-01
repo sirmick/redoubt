@@ -49,7 +49,7 @@ the kernel and the [model](model.md), is in the
 
 ### Backing and zeroing
 
-Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames · tested: bench:device, bench:mem-attack, bench:map-fixed-attack, bench:lend-untouched-page, bench:touch-beyond-ram, mutation:R11NoZeroing
+Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames; QEMU models no cache, so `cbo-user-fault` shows that user cache-block operations trap, not that zeroes could be lost, and the firmware's flush is read from the code · tested: bench:device, bench:mem-attack, bench:map-fixed-attack, bench:lend-untouched-page, bench:touch-beyond-ram, bench:cbo-user-fault, mutation:R11NoZeroing
 
 `map_anon` and `map_fixed` back every page when they map it. Each takes a free frame, charges it
 to the caller's budget ([R6 (charging)](budgets.md#r6-charging)), zeroes it through the
@@ -65,6 +65,14 @@ started by `process_start` has no reservations: its parent gave it every page it
 
 Running out is the caller's error: `map_anon` of more than the budget or RAM can supply is
 `OutOfMemory`, and every page and page table it had taken goes back.
+
+The zeroes cannot be discarded from user mode. Until they are evicted they may live only in a
+data cache, and a `cbo.inval` of the page would drop them and expose the frame's old contents in
+DRAM. So the kernel writes `senvcfg` 0 on every hart at entry, whatever the reset left, and every
+cache-block operation traps in user mode; the boot stops unless it reads the 0 back. The firmware
+turns a supervisor `cbo.inval` into a flush, so no mode below M can discard a line. The kernel
+requires privileged architecture 1.12, where `senvcfg` first appears: on an older hart the write
+traps and the boot stops.
 
 ### Page tables
 
@@ -208,7 +216,7 @@ Status: built · partly tested: that no call names a physical frame is argued fr
 
 ### R11 (memory)
 
-Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11SetFlagsAllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap, mutation:R11ExecOnDeviceMemory, mutation:R11ProcessMapSkipsFlags
+Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked; that the zeroes stay is shown only as user cache-block operations trapping, since QEMU models no cache · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, bench:device-exec-refused, bench:cbo-user-fault, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11SetFlagsAllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap, mutation:R11ExecOnDeviceMemory, mutation:R11ProcessMapSkipsFlags
 
 - **No RAM page is ever mapped writable and executable** ([W^X](../GLOSSARY.md#wx)): not by one
   entry, and not by two, since a RAM frame has at most one user entry at a time (the kernel's
@@ -230,6 +238,9 @@ Status: built · partly tested: that a frame freed with data in it comes back ze
 - **Every page is zeroed** before a process first sees it: anonymous and fixed pages, backed
   reservations, page tables, and `dma_alloc` pages. Pages moved by lend, transfer or
   `process_map` carry their contents, because moving them is the point.
+- **The zeroes stay.** `senvcfg` is 0 on every hart and the firmware turns supervisor
+  `cbo.inval` into a flush, so no process can discard the zeroes the kernel wrote to its page and
+  read what the frame held before ([above](#backing-and-zeroing)).
 - **No physical addresses.** No call takes one, and none maps RAM by one: `map_device` maps a
   device object's registers, and the boot refuses any device object that overlaps RAM. The one
   physical address a process learns is that of its own `dma_alloc` pages, which its device
@@ -309,11 +320,6 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`, where the
   [model](model.md), whose placement is unbounded, succeeds. It harms only that process.
-- **User cache-block invalidation is not turned off.** The firmware enables `cbo.inval` below
-  M-mode and the kernel never writes `senvcfg`, so on a hart with a write-back cache a process
-  may be able to discard the kernel's zeroes on a page it was just given and read the previous
-  owner's data from DRAM. QEMU has no cache, so the bench cannot show it. Follow-up:
-  [todo](../todo/user-cache-invalidate.md).
 - **One hart.** `fence.i` and the TLB flush act on the hart that runs the call. Running user
   code on several harts needs them on every hart, and when a thread moves
   (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).

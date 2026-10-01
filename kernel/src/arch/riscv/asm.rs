@@ -149,7 +149,18 @@ _start:
     // never loads or stores through a user mapping (R24), and nothing sets either again.
     li      t0, (1 << 18) | (1 << 19)
     csrc    sstatus, t0
+    // senvcfg 0, whatever the firmware or the reset left: every cache-block operation traps in
+    // user mode, so no process can discard the zeroes the kernel wrote (R11). CSR 0x10a, named
+    // by number for assemblers that predate it; a hart without it (privileged spec before 1.12)
+    // traps here and the boot stops.
+    csrw    0x10a, zero
     call    init
+.if {plant_senvcfg}
+    // The `plant-senvcfg` test build: user cbo.inval flushes, cbo.clean, cbo.flush and cbo.zero
+    // run, after `init` has checked the 0 (bench-cbo-self-unrefused).
+    li      t0, (0b01 << 4) | (1 << 6) | (1 << 7)
+    csrw    0x10a, t0
+.endif
     j       kmain
 
 /*
@@ -235,4 +246,5 @@ flush_mmu:
     context_area = const PROCESS_AREA,
     exception_sp = const TRAP_STACK_TOP - 16,
     ctx_shift = const CTX_SHIFT,
+    plant_senvcfg = const cfg!(feature = "plant-senvcfg") as usize,
 );

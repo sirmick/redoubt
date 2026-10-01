@@ -178,7 +178,7 @@ Standard extensions that make Redoubt faster without weakening it, each testable
   - Zacas: the kernel takes one big lock.
   - Hardware IPC around the kernel.
   - User access to `seed`, the counters or `cbo.inval`
-    ([user cache-block invalidation](../todo/user-cache-invalidate.md)).
+    (`cbo.inval`: [R11 (memory)](../kernel/memory.md#r11-memory)).
 
 ### Kernel work it implies
 
@@ -187,7 +187,8 @@ Standard extensions that make Redoubt faster without weakening it, each testable
   lock, inter-processor interrupts and TLB shootdowns.
 - `dma_alloc` drawing only from the DMA region, and the loader reading it from the device tree
   ([`loader/src/dt.rs`](../../loader/src/dt.rs)).
-- The ISA features above, and `senvcfg` written at boot.
+- The ISA features above. (`senvcfg` is already written 0 on every hart at boot:
+  [backing and zeroing](../kernel/memory.md#backing-and-zeroing).)
 
 ### Order
 
