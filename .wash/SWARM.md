@@ -215,6 +215,57 @@ changes only through its tables and the generator.
    follow-ups in `docs/todo/`.
 6. **Accept and merge** ([acceptance](#acceptance)).
 
+The whole path of a Tier A package, the kernel's and the rest of the trusted computing base's,
+with every place it can be sent back:
+
+```mermaid
+flowchart TB
+    OWNER(["the owner"])
+    subgraph ORCH["orchestrator"]
+        CUT["cuts the package from the plan page:\nID, tier, size, needs, a brief"]
+        WT["worktree .worktrees/pkg on wp-pkg;\nimplementer and panel launched"]
+        ROUND["review round: three assignments,\nresults in one turn"]
+        FIX["one fix assignment, findings\ncited by reviewer and number"]
+        ACCEPT["plan_accept: gates and verdicts\nbecome the merge's trailers"]
+        MERGE["rebase with sign-off, rerun the bench,\nmerge --no-ff, stage plan and threads,\nend the members"]
+    end
+    subgraph ARCH["Architect (resident)"]
+        DESIGN["design question on a QA thread:\npage, rule, contradiction, options"]
+        RULE["rules from the tenets and the pages;\nwrites the rule on its owning page,\ndecision ref = the commit"]
+    end
+    subgraph PKG["package worktree"]
+        IMPL["implementer builds exactly one package:\ncode, attack cases with system verdicts,\npages in the same commit as their tests"]
+        GATES{"gates: whole bench both widths,\nrv32 compiles, unsafe ratchet,\nsize budget, docs checker"}
+        RED["red team (Opus): a rule or invariant\nviolated, a label boundary crossed,\na verdict the attacker could forge"]
+        SIMP["simplifier (Sonnet): what can be deleted,\nwhat duplicates, the one obvious way"]
+        ED["editor (Sonnet): pages say what the code\ndoes, SAFETY comments true, names agree,\nno process leftovers"]
+        FOLD["clean branch: logical commits,\nno WIP or fix-round commits"]
+    end
+    OWNER -- "asks for development" --> CUT
+    CUT --> WT --> IMPL
+    IMPL -- "a gap the pages do not settle" --> DESIGN
+    DESIGN --> RULE
+    RULE -- "a genuine owner choice:\ndecision_request, a recommendation,\nthe alternatives" --> OWNER
+    OWNER -- "answer, recorded on the thread" --> RULE
+    RULE -- "back to the asker" --> IMPL
+    IMPL --> GATES
+    GATES -- "red" --> IMPL
+    GATES -- "green: report" --> ROUND
+    ROUND --> RED & SIMP & ED
+    RED & SIMP & ED -- "verdict first line:\nBLOCK, OK, OK with notes" --> FIX
+    FIX -- "findings applied, or declined\nwith a reason on the thread" --> IMPL
+    FIX -- "every verdict OK" --> FOLD
+    FOLD --> ACCEPT --> MERGE
+    MERGE -- "a miss on rebase or rerun" --> IMPL
+    MERGE --> OWNER
+```
+
+Two things the picture cannot show. First, no box is skipped for being small: a kernel package of
+sixty lines takes the same panel as one of two thousand, because the tier is decided by what the
+code can reach, not by its size. Second, the loops are the point: a gate that goes red, a BLOCK,
+a design gap and a miss on the rerun each send the work back to the implementer, and a package
+leaves the loop only when every one of them is clear.
+
 Review may be batched for small changes; trusted-code work gets its own round with the red team. A
 package merged before its review keeps its node in the state `review-due`, not done, and that debt
 is cleared before the next package starts.
