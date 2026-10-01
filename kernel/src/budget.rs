@@ -536,6 +536,8 @@ impl MemoryManager {
         if crate::process::object_of(self, pid).is_none() {
             self.uncount_process(budget);
         }
+        #[cfg(debug_assertions)]
+        self.check_frame_owners();
     }
 
     pub fn thread_created(&mut self, pid: Pid, tid: usize) -> Result<(), Error> {

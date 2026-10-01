@@ -267,11 +267,13 @@ impl MemoryManager {
     }
 
     /// The checked build's audit, run once after a destruction's walk: the PID and IRQ indexes
-    /// name exactly the live objects. Off the walk, so it never scales the destruction's cost.
+    /// name exactly the live objects, and no frame is credited to a process that ended. Off the
+    /// walk, so it never scales the destruction's cost.
     #[cfg(debug_assertions)]
     pub(crate) fn check_object_indexes(&self) {
         self.check_process_index();
         self.check_irq_index();
+        self.check_frame_owners();
     }
 }
 

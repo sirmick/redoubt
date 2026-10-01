@@ -513,10 +513,14 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
      count. Freeing an endpoint's frame touches only the frame, deferred until its handles are
      closed, not the dying budget that owns it: the budget's whole object list is going with it.
   5. **A process's frames are found from the process.** Ending a process releases the frames it
-     owns by walking its own page tables and the kernel frames it holds (its table pages, IPC
-     pages, saved registers and open-call pages), never the ownership array over all of RAM: a
-     term linear in RAM frames is what [R12 (scheduling)](scheduling.md#r12-scheduling) forbids.
-     A frame it lent stays with the borrower, as R3 says.
+     owns by walking its own page tables: the tables themselves, the user half's pages and the
+     process area's saved registers, each freed if the ownership table still credits it to the
+     process. Its handle-table, IPC and open-call pages are kernel objects, released with its
+     handles and threads. Nothing walks the ownership array over all of RAM: a term linear in
+     RAM frames is what [R12 (scheduling)](scheduling.md#r12-scheduling) forbids. A frame it lent
+     stays with the borrower, as R3 says, and a page it borrowed is its lender's. The checked
+     build's `check_frame_owners` scans RAM for a frame still credited to an ended process, at a
+     process's end and once after a destruction's walk, never inside it.
 
   The invariant the five keep is R10 itself: after a destruction no handle, queued message or
   taken call keeps authority that came through a dying budget (I2), and no handle names a freed
@@ -538,8 +542,7 @@ Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench
   25,023 µs on rv32), the same target the containment gate's own full-fill run will repeat once it
   lands.
 
-  Items 3 and 5 are not built yet: today one sweep reads every live slot of every table, and
-  ending a process scans the ownership array over all of RAM. The containment gate's lease fills
+  Item 3 is not built yet: today one sweep reads every live slot of every table. The containment gate's lease fills
   its handle table ([containment](README.md#containment)): 4,091 endpoints. At that fill, its
   destruction took 102 ms alone and 251 ms while the other lease's full table was live (rv64; rv32
   7% more), against 30 ms. The difference was the sweep, about 36 µs for each live handle in the

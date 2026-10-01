@@ -50,6 +50,8 @@ pub fn sync_icache() {
 const ROOT_KERNEL_START: usize = physmap::ENTRIES / 2;
 /// Root entry holding per-process kernel data. Everything else in the kernel half is shared.
 const ROOT_PROCESS_AREA: usize = physmap::vpn(PROCESS_AREA, physmap::LEVELS - 1);
+// `for_each_owned_frame` walks the user half and then this entry: each once.
+const _: () = assert!(ROOT_PROCESS_AREA >= ROOT_KERNEL_START);
 
 /// Extract the PID (stored as the ASID) from a raw `satp` value.
 pub fn pid_from_satp(satp: usize) -> usize { physmap::satp_pid(satp) }
@@ -184,6 +186,12 @@ fn check_permissions(flags: PteFlags) -> Result<(), PageError> {
 /// with `VALID` cleared); reservations are skipped, matching the original walk. Recurses
 /// through valid intermediate tables, so it works for any `LEVELS` (Sv32 and Sv39).
 fn for_each_leaf(table: Table, level: usize, base: usize, f: &mut impl FnMut(usize, Pte)) {
+    for_each_entry(table, level, base, false, f);
+}
+
+/// [`for_each_leaf`], and with `tables` also every entry that links a table below `table`, before
+/// the leaves under it: one traversal for both.
+fn for_each_entry(table: Table, level: usize, base: usize, tables: bool, f: &mut impl FnMut(usize, Pte)) {
     for index in 0..physmap::ENTRIES {
         let pte = table.get(index);
         let virt = base + index * physmap::leaf_size(level);
@@ -192,7 +200,10 @@ fn for_each_leaf(table: Table, level: usize, base: usize, f: &mut impl FnMut(usi
                 f(virt, pte);
             }
         } else if let Some(child) = table.child(index) {
-            for_each_leaf(child, level - 1, virt, f);
+            if tables {
+                f(virt, pte);
+            }
+            for_each_entry(child, level - 1, virt, tables, f);
         }
     }
 }
@@ -327,15 +338,23 @@ impl MemoryMapping {
         }
     }
 
-    /// Call `f` with the physical frame of every page this address space has lent out.
-    /// An outgoing loan is `S` without `VALID`; `VALID | S` is its protected borrower
-    /// alias and must not make teardown reparent somebody else's frame.
-    pub fn for_each_lent_frame(&self, mut f: impl FnMut(usize)) {
-        self.for_each_user_leaf(|_virt, pte| {
-            if pte.has(PteFlags::S) && !pte.is_valid() {
-                f(pte.phys());
-            }
-        });
+    /// Call `f(phys, lent)` with every frame this address space's own entries name: its root,
+    /// every table below it, and every occupied leaf, in the user half and in the process area
+    /// (the kernel half's other entries are shared, never this space's). `lent` marks a page this
+    /// space lent out (`S` without `VALID`); a borrowed page (`VALID | S`) is another's frame,
+    /// which the caller tells apart by the ownership table. One walk, whose cost follows the
+    /// tables the space has, not RAM.
+    pub fn for_each_owned_frame(&self, mut f: impl FnMut(usize, bool)) {
+        let root = root_of(self.satp);
+        f(physmap::satp_root(self.satp), false);
+        for index in (0..ROOT_KERNEL_START).chain([ROOT_PROCESS_AREA]) {
+            let Some(child) = root.child(index) else { continue };
+            f(root.get(index).phys(), false);
+            let base = index * physmap::leaf_size(physmap::LEVELS - 1);
+            for_each_entry(child, physmap::LEVELS - 2, base, true, &mut |_virt, pte| {
+                f(pte.phys(), pte.has(PteFlags::S) && !pte.is_valid())
+            });
+        }
     }
 
     pub fn print_map(&self) {

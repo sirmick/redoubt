@@ -755,33 +755,61 @@ impl MemoryManager {
         {
             let kernel = Pid::new(1).unwrap();
 
-            // Pass 1: a frame this process has lent out is still mapped in the borrower.
-            // Reparent it to the kernel so the frame is not reused while the borrower holds
-            // it; it is freed when the borrower returns it. Which frames are lent is read
-            // from this process's own page table, where the "shared" bit actually lives --
-            // not guessed from a physical address. (The caller's charge ends here; the lend
-            // stays charged to the server that holds it until it comes back, kernel/ipc.md R3.)
-            space.for_each_lent_frame(|phys| {
-                if self.is_main_memory(phys as *mut u8) {
-                    let idx = (phys - self.ram_start) / PAGE_SIZE;
-                    // A DMA frame is never lent (kernel/devices.md), and stays `DMA_OWNER`'s
-                    // whatever happens: only `dma_release` pools it.
-                    if self.allocations[idx] != Some(DMA_OWNER) {
-                        self.allocations[idx] = Some(kernel);
-                    }
+            // One walk of the process's own tables, never of every frame of RAM (R12;
+            // kernel/budgets.md, "Residual risks"). A frame it has lent out is still mapped in
+            // the borrower: it is reparented to the kernel so it is not reused while the
+            // borrower holds it, and freed when the borrower returns it (the caller's charge
+            // ends here; the lend stays charged to the server that holds it, kernel/ipc.md R3).
+            // Every other frame its tables name that is still credited to it goes back, the
+            // tables themselves included; a borrowed page is its lender's. A page lent to itself
+            // ends the kernel's whichever of its two entries the walk meets first.
+            space.for_each_owned_frame(|phys, lent| {
+                let owner = if self.is_main_memory(phys as *mut u8) {
+                    &mut self.allocations[(phys - self.ram_start) / PAGE_SIZE]
                 } else if let Some(idx) = self.extra_index(phys) {
-                    self.extra_allocations[idx] = Some(kernel);
+                    &mut self.extra_allocations[idx]
+                } else {
+                    return;
+                };
+                // A DMA frame is never lent (kernel/devices.md), and stays `DMA_OWNER`'s
+                // whatever happens: only `dma_release` pools it.
+                if lent && *owner != Some(DMA_OWNER) {
+                    *owner = Some(kernel);
+                } else if !lent && *owner == Some(pid) {
+                    *owner = None;
                 }
             });
-
-            // Pass 2: release the remaining ownership entries after protected lends moved away.
-            self.release_owned_frames(pid);
+            self.uncharge_all_frames(pid);
         }
     }
 
-    /// Give back every frame still owned by a process that will never run again. Its protected
-    /// lends must already have moved away, or it must never have run (`process_create` rollback).
-    /// This shared final step needs no page-table access, including for a partially built space.
+    /// The checked build's proof that no frame is credited to a process that has ended: a frame
+    /// its tables did not name would have been left out of `release_all_memory_for_process`. A
+    /// scan of all of RAM, so never during a destruction: that build runs it once after the
+    /// walk instead (`destroy_subtree`), where it does not scale the destruction.
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_frame_owners(&self) {
+        if self.objects.deferring {
+            return;
+        }
+        let ended = |owner: &Option<Pid>| {
+            owner.is_some_and(|pid| {
+                pid.get() > 1
+                    && usize::from(pid.get()) <= crate::arch::process::MAX_PROCESS_COUNT
+                    && self.account(pid).is_none()
+            })
+        };
+        assert!(!self.allocations.iter().any(ended), "I1: a RAM frame is credited to a process that ended");
+        assert!(
+            !self.extra_allocations.iter().any(ended),
+            "I1: a device frame is credited to a process that ended"
+        );
+    }
+
+    /// Give back every frame still owned by a process that never ran (`process_create`'s
+    /// rollback). A scan of all of RAM, which needs no page-table access, so it serves a
+    /// partially built space; an ended process is walked from its tables instead
+    /// ([`MemoryManager::release_all_memory_for_process`]).
     pub fn release_owned_frames(&mut self, pid: Pid) {
         for idx in 0..self.allocations.len() {
             if self.allocations[idx] == Some(pid) {
