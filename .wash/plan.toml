@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 74
+revision = 76
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -258,9 +258,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["K8", "K9", "K10"]
-  body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-09-30: wp-gate1 tip b9aeb3477 (test fixes, arming on the event, readable child panics, the full-table lease: 4,091 endpoints); targets miss until K12 merges. Left: rebase onto K12's merge, the full case on both widths with targets met, the 16-seed sweep and pinned seed, the page status lines, the whole bench, review. Handoff: .wash/local/handoffs/gate1-implementer.md. Bisect: .wash/local/GATE1-r10-bisect.md. Tier A, size M."
-  state = "reported"
-  revision = 73
+  body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-09-30: wp-gate1 tip b9aeb3477 (test fixes, arming on the event, readable child panics, the full-table lease: 4,091 endpoints). K12 merged (redoubt 5986f0dd7), so the targets should now be met. Left: rebase onto redoubt, the full case on both widths with targets met, the 16-seed sweep and pinned seed, the page status lines, the whole bench, review. Handoff: .wash/local/handoffs/gate1-implementer.md. Bisect: .wash/local/GATE1-r10-bisect.md. Tier A, size M."
+  state = "parked"
+  revision = 76
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
