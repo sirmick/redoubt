@@ -4,10 +4,10 @@
 use core::num::{NonZeroU64, NonZeroUsize};
 
 pub use redoubt_sys::{
-    Body, BudgetSpec, Call, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels, MAX_HANDLES,
-    MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message, MessageKind,
-    MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return, USER_AREA_END, Usage,
-    WAIT_CAP, WORDS,
+    Body, BudgetSpec, Call, Cause, DeviceInfo, Error, ExitNotice, FOREVER, Handle, Handles, Labels,
+    MAX_HANDLES, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message,
+    MessageKind, MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return,
+    USER_AREA_END, Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
 
@@ -62,6 +62,14 @@ pub fn map_device(device: u32) -> Result<(usize, usize), Error> {
 pub fn dma_alloc(device: u32, npages: usize) -> Result<(usize, u64), Error> {
     match redoubt_sys::syscall(&Call::DmaAlloc { device: h(device), npages })? {
         Return::Dma { addr, phys } => Ok((addr, phys)),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// `device_info(h(device)) -> kind, a, b, flags` (kernel/devices.md).
+pub fn device_info(device: u32) -> Result<DeviceInfo, Error> {
+    match redoubt_sys::syscall(&Call::DeviceInfo { device: h(device) })? {
+        Return::Device(info) => Ok(info),
         _ => Err(Error::InvalidArgument),
     }
 }

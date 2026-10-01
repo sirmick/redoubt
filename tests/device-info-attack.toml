@@ -1,0 +1,25 @@
+description = "device_info: the kernel names each device handle's device as its Devs entry (the Reset right, QEMU virt's UART at its base and size, its interrupt, every other MMIO region and then every other interrupt ascending), and refuses a budget and an endpoint (WrongObject), a closed handle, an index not held and a handle register wider than 32 bits (BadHandle); it maps and charges nothing"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The bundle's first program holds every device object (kernel/boot.md, "Devices handed to the
+# first program"), the Reset right and the console, and prints through the console it maps
+# itself: there is no log-server here. Its verdict needs the power-off through the Reset right.
+programs = ["device-info-attack"]
+timeout_secs = 30
+expect = [
+    '^\[device-info\] mapped the console$',
+    '^\[device-info\] ok: handle 4 is the Reset right$',
+    '^\[device-info\] ok: the console is virt.s UART: ',
+    '^\[device-info\] ok: the console.s interrupt is virt.s: ',
+    '^\[device-info\] ok: [0-9]+ other MMIO regions \([0-9]+ with DMA\), then [0-9]+ interrupts ascending$',
+    '^\[device-info\] ok: a budget -> WrongObject$',
+    '^\[device-info\] ok: an endpoint -> WrongObject$',
+    '^\[device-info\] ok: a closed handle -> BadHandle$',
+    '^\[device-info\] ok: an index it does not hold -> BadHandle$',
+    '^\[device-info\] ok: all ones in the handle register -> BadHandle, and nothing else in the registers$',
+    '^\[device-info\] ok: device_info maps nothing and charges nothing$',
+    '^\[device-info\] DEVICE INFO ATTACK TEST PASSED$',
+]
+forbid = ['\[device-info\] FAIL']
+poweroff = true
