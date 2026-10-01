@@ -260,6 +260,8 @@ A taken call is **abandoned** when its caller dies, times out, or is failed by r
 - the call stays open, and counts against the server's limit, until the server replies; that
   reply reaches nobody, and replying frees the lend.
 
+A thread owed several notices gets one per `receive`, each exactly once, in no promised order.
+
 A reply that comes before the abandonment is delivered, and nothing is abandoned. If the
 abandonment comes first and the server replies before it has received the notice, `reply`
 returns `discarded`, mask 0, and no notice follows: the reply closed the call.
@@ -369,6 +371,12 @@ Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-
   the group served last, over all label sets, so a vault session's takes change which unlabelled
   group a shared server serves next. The rule above is least recently served. Follow-up:
   [todo](../todo/r2-least-recently-served.md).
+- **An ending process's own threads can take a message.** Ending a process pumps an endpoint
+  each time one of its threads that waited for a reply through it ends. A later thread of the
+  same process, still receiving on that endpoint, can then take a queued call and end holding it,
+  so that caller gets `Dead` rather than waiting for the restarted server as R4b says. Each pump
+  is also a walk of every thread, about 1.2 ms. Follow-up:
+  [todo](../todo/process-ending-pumps-once.md).
 - **System-class servers are trusted to check labels.** R1 does not constrain a flow into or out
   of a `system` budget. A system server that serves two label sets and mixes their data breaks
   label separation, and the kernel cannot see it ([servers](../servers/README.md#labels)).
