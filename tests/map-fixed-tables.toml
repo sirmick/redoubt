@@ -2,17 +2,23 @@ description = "map_fixed's page-table count across gigabytes (R22, I14): unmap f
 arch = ["rv64"]
 kind = "boot"
 debug_assertions = true
-# `system` gets a quarter of RAM and must afford the 261634-page range; the guest touches ~130 MiB.
+# `system` gets a quarter of RAM, nearly all of it this program's, and must afford the 261634-page range; the guest touches ~130 MiB.
 memory_mib = 4608
-programs = ["map-fixed-tables"]
+# PID 2 log-server; PID 3 map-fixed-tables, the one program it starts, in its own budget: all
+# of system's free pages bar one, 15 processes, weight 1,000. Before the tester it ran alone in
+# init's place, in system. Every verdict is its own budget's usage or a kernel error, printed
+# under the place only the tester gives it, and nothing else runs beside it (docs/testbench.md,
+# "Rule F").
+programs = ["log-server", "map-fixed-tables"]
 # 120, not less: a regression maps and zeroes the whole 1 GiB (about a minute) before its last
 # `alloc_page` fails, so the kernel PANIC is only seen after that.
 timeout_secs = 120
 expect = [
-    '^\[map-fixed-tables\] ok: unmap freed every page table the setup made$',
-    '^\[map-fixed-tables\] ok: one page table short across two gigabytes is refused$',
-    '^\[map-fixed-tables\] ok: nothing charged$',
-    '^\[map-fixed-tables\] MAP-FIXED TABLES TEST PASSED$',
+    '^\[pid 3\] \[map-fixed-tables\] ok: unmap freed every page table the setup made$',
+    '^\[pid 3\] \[map-fixed-tables\] ok: one page table short across two gigabytes is refused$',
+    '^\[pid 3\] \[map-fixed-tables\] ok: nothing charged$',
+    '^\[pid 3\] \[map-fixed-tables\] MAP-FIXED TABLES TEST PASSED$',
 ]
 forbid = ['\[map-fixed-tables\] FAIL', 'PANIC']
 poweroff = true
+reporter = "map-fixed-tables"

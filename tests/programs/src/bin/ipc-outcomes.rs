@@ -1,6 +1,8 @@
 //! Trusted checker of IPC outcomes (R13). Its serving thread changes a blocked caller's record at
 //! a known boundary, then replies; the main checker judges kernel outcomes and accounting, not
-//! text from a hostile program. Existing redoubt-ipc covers separate address spaces.
+//! text from a hostile program. Existing redoubt-ipc covers separate address spaces. It runs in
+//! `init`'s place, the one place that holds a device to aim records at, so `root` is the budget
+//! it runs in and pays its charges.
 #![no_std]
 #![no_main]
 
@@ -62,7 +64,7 @@ fn server(_: usize) {
                 let redoubt_sys::MessageKind::Call { lend: Some(lend) } = m.kind else {
                     panic!("expected loan")
                 };
-                let before = rd::usage(rd::SYSTEM).unwrap().pages_usage;
+                let before = rd::usage(rd::ROOT).unwrap().pages_usage;
                 protected_alias(lend.addr, endpoint);
                 if op == LOAN_PROTECTION {
                     protected_alias(m.body.words[1], endpoint);
@@ -75,7 +77,7 @@ fn server(_: usize) {
                     protected_alias(lend.addr, endpoint);
                 }
                 if op == LOAN_PROTECTION {
-                    assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage, before);
+                    assert_eq!(rd::usage(rd::ROOT).unwrap().pages_usage, before);
                 }
             }
             MMIO_REPLY => {
@@ -218,7 +220,7 @@ pub extern "C" fn _start() -> ! {
     for (iteration, op) in [READ_ONLY, UNMAP, REMAP].into_iter().enumerate() {
         let record = rd::page();
         write_body(record, rd::body([op, record, 0, 0]));
-        let before = rd::usage(rd::SYSTEM).unwrap().pages_usage;
+        let before = rd::usage(rd::ROOT).unwrap().pages_usage;
         let out = raw_call(endpoint, record, rd::pages(page, 1));
         assert_eq!(
             out,
@@ -231,7 +233,7 @@ pub extern "C" fn _start() -> ! {
         assert_eq!(replied(2 + iteration), ReplyOutcome { delivered: false, installed: 0 });
         assert_eq!(rd::first_free(), 129, "all newly installed handles rolled back");
         assert_eq!(
-            rd::usage(rd::SYSTEM).unwrap().pages_usage,
+            rd::usage(rd::ROOT).unwrap().pages_usage,
             before - u64::from(op == UNMAP),
             "reply/table/lend charges restored"
         );
@@ -267,7 +269,7 @@ pub extern "C" fn _start() -> ! {
     // and rolls back the handle that did fit without disturbing any pre-existing handle.
     let record = rd::page();
     write_body(record, rd::body([READ_ONLY, record, 0, 0]));
-    let before = rd::usage(rd::SYSTEM).unwrap().pages_usage;
+    let before = rd::usage(rd::ROOT).unwrap().pages_usage;
     let out = raw_call(endpoint, record, rd::pages(page, 1));
     assert_eq!(
         out,
@@ -279,26 +281,26 @@ pub extern "C" fn _start() -> ! {
     );
     assert_eq!(replied(6), ReplyOutcome { delivered: false, installed: 0 });
     assert_eq!(rd::first_free(), rd::MAX_HANDLES as u32);
-    assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage, before);
+    assert_eq!(rd::usage(rd::ROOT).unwrap().pages_usage, before);
     rd::unmap(record, rd::PAGE_SIZE).unwrap();
     for handle in &filler[..count] {
         rd::close(*handle).unwrap();
     }
     log!(logger, "ipc-outcomes partial OOM reply preserves words, slots and installed mask");
 
-    let before = rd::usage(rd::SYSTEM).unwrap().pages_usage;
+    let before = rd::usage(rd::ROOT).unwrap().pages_usage;
     let (out, _) =
         rd::call_outcome(endpoint, &rd::body([LOAN_PROTECTION, page, 0, 0]), rd::pages(page, 1), FOREVER)
             .unwrap();
     assert_eq!(out, CallOutcome { status: Ok(()), lend: LendDisposition::Returned, reply_present: true });
     assert_eq!(replied(7), ReplyOutcome { delivered: true, installed: 0 });
     assert_eq!(rd::peek(page), 0xbeef, "same physical frame returned");
-    assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage, before);
+    assert_eq!(rd::usage(rd::ROOT).unwrap().pages_usage, before);
     log!(logger, "ipc-outcomes both loan aliases protected; frame and charges preserved");
 
     // Destroying the request's stamp after receipt abandons it; the late reply is discarded.
-    let before_abandon = rd::usage(rd::SYSTEM).unwrap().pages_usage;
-    let scope = rd::create(rd::SYSTEM, &rd::spec(0, 0, 0)).unwrap();
+    let before_abandon = rd::usage(rd::ROOT).unwrap().pages_usage;
+    let scope = rd::create(rd::ROOT, &rd::spec(0, 0, 0)).unwrap();
     let stamped = rd::mint_from_handle(endpoint, 7, Some(scope)).unwrap();
     let (out, reply) =
         rd::call_outcome(stamped, &rd::body([REVOKE, scope as usize, 0, 0]), rd::pages(page, 1), FOREVER)
@@ -309,7 +311,7 @@ pub extern "C" fn _start() -> ! {
     );
     assert!(reply.is_none());
     assert_eq!(replied(8), ReplyOutcome { delivered: false, installed: 0 });
-    assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage + 1, before_abandon);
+    assert_eq!(rd::usage(rd::ROOT).unwrap().pages_usage + 1, before_abandon);
     log!(logger, "ipc-outcomes taken revocation consumed lend; server observed discard");
 
     // The other records at a device mapping: `send`'s body, `reply`'s body, `receive`'s output

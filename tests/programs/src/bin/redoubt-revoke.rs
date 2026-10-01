@@ -1,6 +1,6 @@
-//! R10's reach into messages, and `mint`'s narrowing rule (R9, I3). Must run as the loader's
-//! first program, the one that holds `root`, `system` and `users`, because only a budget handle
-//! can revoke anything.
+//! R10's reach into messages, and `mint`'s narrowing rule (R9, I3). Runs as a program the tester
+//! starts, holding the budget it runs in (slot 3), `root` (slot 4) and `users` (slot 5), because
+//! only a budget handle can revoke anything.
 //!
 //! Everything here happens inside one process, across threads. That is enough: R10 looks at the
 //! *stamp* of the handle a message was sent through, and at the handles a message carries,
@@ -135,22 +135,24 @@ macro_rules! expect {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let logger = test_programs::logsrv::start();
+    let logger = Logger::connect();
     let mut t = T { logger, failed: false };
     log!(t.logger, "[revoke] starting");
 
     // Two revocation scopes: budgets with no limits at all, made only to be destroyed
-    // (kernel/budgets.md). They are children of `system`, this process's own budget.
-    let scope = rd::create(rd::SYSTEM, &rd::spec(0, 0, 0)).expect("a revocation scope");
-    let scope2 = rd::create(rd::SYSTEM, &rd::spec(0, 0, 0)).expect("a second scope");
+    // (kernel/budgets.md). They are children of this process's own budget.
+    let scope = rd::create(rd::OWN, &rd::spec(0, 0, 0)).expect("a revocation scope");
+    let scope2 = rd::create(rd::OWN, &rd::spec(0, 0, 0)).expect("a second scope");
+    let (root, users) = (rd::GIVEN, rd::GIVEN + 1);
     let silent = rd::endpoint_create().expect("an endpoint");
     let served = rd::endpoint_create().expect("another endpoint");
 
     // --- I3: a budget handle only narrows ----------------------------------------------------
-    // An endpoint handle is stamped with its creator's budget, here `system`. Minting into
-    // `root` (above it) or `users` (beside it) is refused; into a child of `system`, allowed.
-    let _ = expect!(t, rd::mint_from_handle(silent, 5, Some(rd::ROOT)).err(), Some(Error::NotPermitted));
-    let _ = expect!(t, rd::mint_from_handle(silent, 5, Some(rd::USERS)).err(), Some(Error::NotPermitted));
+    // An endpoint handle is stamped with its creator's budget, here its own, under `system`.
+    // Minting into `root` (above it) or `users` (beside `system`) is refused; into a child of its
+    // own budget, allowed.
+    let _ = expect!(t, rd::mint_from_handle(silent, 5, Some(root)).err(), Some(Error::NotPermitted));
+    let _ = expect!(t, rd::mint_from_handle(silent, 5, Some(users)).err(), Some(Error::NotPermitted));
     let stamped_silent = rd::mint_from_handle(silent, 5, Some(scope)).expect("mint into the scope");
     let stamped_served = rd::mint_from_handle(served, 6, Some(scope)).expect("mint into the scope");
     let carried = rd::mint_from_handle(silent, 7, Some(scope2)).expect("mint into the second scope");

@@ -8,16 +8,16 @@
 //! failed and stopped the machine, from an ordinary `call` (I14).
 //!
 //! The receiver is a thread of this same process, so the lend lands in a Messages region with
-//! no page tables yet, which is what makes the shortfall exact. Must run as the loader's first
-//! program: it needs a `system` budget handle to carve.
+//! no page tables yet, which is what makes the shortfall exact. Runs as a program the tester
+//! starts, which holds the budget it runs in (slot 3), the one it carves.
 //!
 //! See `tests/redoubt-tight.toml`.
 
 #![no_std]
 #![no_main]
 
-use test_programs::log;
 use test_programs::rd::{self, Error, FOREVER, Received};
+use test_programs::{Logger, log};
 
 static mut ENDPOINT: u32 = 0;
 
@@ -40,7 +40,7 @@ const PAGES: usize = 3;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let mut logger = test_programs::logsrv::start();
+    let mut logger = Logger::connect();
     log!(logger, "[tight] starting");
     let endpoint = rd::endpoint_create().expect("an endpoint");
     // SAFETY: written before the receiver thread is created.
@@ -49,19 +49,19 @@ pub extern "C" fn _start() -> ! {
     test_programs::wait_ms(30);
 
     let buf = rd::many_pages(PAGES);
-    let free = rd::free(rd::SYSTEM);
-    log!(logger, "[tight] system free before the carve: {}", free);
-    // Creating the hog charges `system` its own page as well, so this leaves exactly the
-    // open-call page plus the lent pages free: everything the old pre-check counted, and not
+    let free = rd::free(rd::OWN);
+    log!(logger, "[tight] its own budget free before the carve: {}", free);
+    // Creating the hog charges its own budget the hog's own page as well, so this leaves exactly
+    // the open-call page plus the lent pages free: everything the old pre-check counted, and not
     // one page more.
-    let hog = rd::create(rd::SYSTEM, &rd::spec(free - PAGES as u64 - 2, 0, 0)).expect("a hog budget");
-    let left = rd::free(rd::SYSTEM);
-    log!(logger, "[tight] system free after the carve: {} (want {})", left, PAGES + 1);
+    let hog = rd::create(rd::OWN, &rd::spec(free - PAGES as u64 - 2, 0, 0)).expect("a hog budget");
+    let left = rd::free(rd::OWN);
+    log!(logger, "[tight] its own budget free after the carve: {} (want {})", left, PAGES + 1);
 
     let result = rd::call(endpoint, &rd::body([0; rd::WORDS]), rd::pages(buf, PAGES), FOREVER);
     // A refused delivery costs the receiving budget nothing: not the open-call page, not the
     // lend, and not the page tables that would have mapped it. Its free pages are as they were.
-    let spent = left - rd::free(rd::SYSTEM);
+    let spent = left - rd::free(rd::OWN);
     log!(logger, "[tight] the tight lend -> {:?}, {} pages spent", result, spent);
 
     // With the pages back, the same message goes through to the same waiting receiver.

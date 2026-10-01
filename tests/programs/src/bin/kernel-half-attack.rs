@@ -56,9 +56,8 @@ extern "C" fn access(arg: usize) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let gifts = rd::take_gifts().expect("the budgets");
     let exit = rd::endpoint_create().expect("an exit endpoint");
-    let kids = rd::create(gifts.users, &rd::spec(400, 2, 10)).expect("the children's budget");
+    let kids = rd::create(rd::GIVEN, &rd::spec(400, 2, 10)).expect("the children's budget");
     let image = spawn::image();
     let entry = access as *const () as usize;
     // One child per access; its exit notice, from the kernel, as (cause, code).

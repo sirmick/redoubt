@@ -6,8 +6,8 @@
 //! calls are refused, each from a source of its own, so no refusal sees pages another backed:
 //! two after the source check, because the child's destination is taken and because the child's
 //! budget cannot pay, and one at it, because the caller's own budget cannot pay for backing the
-//! source. Only a process the loader started holds a reservation, so that caller is this program,
-//! its budget (`system`) filled first. After each refusal, the caller's usage (R6) and the
+//! source. Only the process the loader starts holds a reservation, so that caller is this program,
+//! in `init`'s place, its budget (`root`) filled first. After each refusal, the caller's usage (R6) and the
 //! child's are what they were. Last, a source of the same kind is moved for real: backed, then
 //! charged to the child, and nothing is left charged to the caller.
 //!
@@ -29,7 +29,7 @@ static CONSOLE: AtomicUsize = AtomicUsize::new(0);
 const PAGES: usize = 2;
 /// Where the calls map in the child: free in a fresh process on both widths.
 const DST: usize = 0x5000_0000;
-/// Where `system` is filled: a free area of this process on each width (as `map-fixed-attack`'s
+/// Where `root` is filled: a free area of this process on each width (as `map-fixed-attack`'s
 /// filler).
 #[cfg(target_pointer_width = "64")]
 const FILL: usize = 0x8000_0000;
@@ -46,18 +46,18 @@ impl Checker {
 
 fn pages_used(budget: u32) -> u64 { rd::usage(budget).unwrap().pages_usage }
 
-/// Map pages at `FILL` until `system` has at most one free page; the length mapped. Each call
+/// Map pages at `FILL` until `root` has at most one free page; the length mapped. Each call
 /// leaves room for the page tables it needs (one per 512 or 1024 pages, and a few above them), so
 /// none is refused.
-fn fill_system() -> usize {
+fn fill_root() -> usize {
     let mut len = 0;
     loop {
-        let free = rd::free(rd::SYSTEM) as usize;
+        let free = rd::free(rd::ROOT) as usize;
         if free <= 1 {
             return len;
         }
         let pages = if free > 64 { free - free / 256 - 8 } else { 1 };
-        rd::map_fixed(FILL + len, pages * PAGE_SIZE, rd::rw()).expect("fill system");
+        rd::map_fixed(FILL + len, pages * PAGE_SIZE, rd::rw()).expect("fill root");
         len += pages * PAGE_SIZE;
     }
 }
@@ -98,34 +98,34 @@ pub extern "C" fn _start(_: usize) -> ! {
     let page = rd::map_anon(PAGE_SIZE, rd::rw()).expect("map_anon");
     rd::poke(page, 1);
     rd::process_map(child, page, DST, PAGE_SIZE, rd::rw()).expect("take the child's page at DST");
-    let before = (pages_used(rd::SYSTEM), pages_used(budget));
+    let before = (pages_used(rd::ROOT), pages_used(budget));
     let r = rd::process_map(child, first, DST, len, rd::rw());
     c.check(r == Err(Error::InvalidArgument), "a taken destination is refused");
-    c.check((pages_used(rd::SYSTEM), pages_used(budget)) == before, "nothing charged");
+    c.check((pages_used(rd::ROOT), pages_used(budget)) == before, "nothing charged");
 
     // The child's budget cannot pay: it has fewer free pages than the call moves.
     let (tight, poor) = tight_child(exit);
     assert!(rd::free(tight) < PAGES as u64, "the tight budget has room to spare");
-    let before = (pages_used(rd::SYSTEM), pages_used(tight));
+    let before = (pages_used(rd::ROOT), pages_used(tight));
     let r = rd::process_map(poor, second, DST, len, rd::rw());
     c.check(r == Err(Error::OutOfMemory), "a child budget that cannot pay is refused");
-    c.check((pages_used(rd::SYSTEM), pages_used(tight)) == before, "nothing charged");
+    c.check((pages_used(rd::ROOT), pages_used(tight)) == before, "nothing charged");
 
     // The caller's own budget cannot pay for backing the source: refused at the source check.
-    let filled = fill_system();
-    let before = (pages_used(rd::SYSTEM), pages_used(budget));
+    let filled = fill_root();
+    let before = (pages_used(rd::ROOT), pages_used(budget));
     let r = rd::process_map(child, third, DST + 0x10_0000, len, rd::rw());
     c.check(r == Err(Error::InvalidArgument), "a caller that cannot back its source is refused");
-    c.check((pages_used(rd::SYSTEM), pages_used(budget)) == before, "nothing charged");
+    c.check((pages_used(rd::ROOT), pages_used(budget)) == before, "nothing charged");
     rd::unmap(FILL, filled).expect("unmap the filler");
 
     // The call that goes ahead: the first source, still untouched, moves next to the taken page,
     // in the leaf table that already maps it, so the child pays for the pages and nothing else.
-    let before = (pages_used(rd::SYSTEM), pages_used(budget));
+    let before = (pages_used(rd::ROOT), pages_used(budget));
     let r = rd::process_map(child, first, DST + PAGE_SIZE, len, rd::rw());
     c.check(r.is_ok(), "an untouched source moves");
     c.check(
-        (pages_used(rd::SYSTEM), pages_used(budget)) == (before.0, before.1 + PAGES as u64),
+        (pages_used(rd::ROOT), pages_used(budget)) == (before.0, before.1 + PAGES as u64),
         "the child pays for the pages, the caller for nothing",
     );
 

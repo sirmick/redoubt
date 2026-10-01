@@ -2,21 +2,25 @@ description = "map_anon's placement search: a whole-area request in an empty are
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
-# The first program, alone: every ok line is an address or a time the kernel returned
-# (docs/testbench.md, "Rule F"). The whole-area request needs 256 MiB of `system`'s pages.
-programs = ["map-anon-search-bound"]
+# PID 2 log-server; PID 3 map-anon-search-bound, the one program it starts, in its own budget:
+# all of system's free pages bar one, 15 processes, weight 1,000. Before the tester it ran alone
+# in init's place, in system. Every ok line is an address or a time the kernel returned, printed
+# under the place only the tester gives it, and nothing else runs beside it (docs/testbench.md,
+# "Rule F"). The whole-area request needs 256 MiB of its own budget's pages.
+programs = ["log-server", "map-anon-search-bound"]
 memory_mib = 1536
 icount = "shift=3,sleep=off"
 timeout_secs = 120
 expect = [
-    '^\[search\] ok: a request for the whole empty area is placed at its start$',
-    '^\[search\] ok: a run that fits only at the area.s end is placed there$',
-    '^\[search\] ok: after a high placement, a run that does not fit is refused$',
-    '^\[search\] ok: a refused search past a middle page took \d+ us, under 12 ms$',
-    '^\[search\] ok: a refused search over every page table took \d+ us, under 12 ms$',
-    '^\[search\] ok: a timer wake during the search was \d+ us late, under 15 ms$',
-    '^\[search\] ok: every run placed lies inside the area$',
-    '^\[search\] MAP_ANON SEARCH BOUNDED$',
+    '^\[pid 3\] \[search\] ok: a request for the whole empty area is placed at its start$',
+    '^\[pid 3\] \[search\] ok: a run that fits only at the area.s end is placed there$',
+    '^\[pid 3\] \[search\] ok: after a high placement, a run that does not fit is refused$',
+    '^\[pid 3\] \[search\] ok: a refused search past a middle page took \d+ us, under 12 ms$',
+    '^\[pid 3\] \[search\] ok: a refused search over every page table took \d+ us, under 12 ms$',
+    '^\[pid 3\] \[search\] ok: a timer wake during the search was \d+ us late, under 15 ms$',
+    '^\[pid 3\] \[search\] ok: every run placed lies inside the area$',
+    '^\[pid 3\] \[search\] MAP_ANON SEARCH BOUNDED$',
 ]
 forbid = ['\[search\] FAIL']
 poweroff = true
+reporter = "map-anon-search-bound"

@@ -66,7 +66,7 @@ pub extern "C" fn _start() -> ! {
 
     // A DMA-capable device: an empty virtio-mmio slot, with nothing behind it to program.
     let Some((dev, dma)) =
-        (rd::OTHER_DEVICES..rd::log_rx()).find_map(|h| rd::dma_alloc(h, 1).ok().map(|(at, _)| (h, at)))
+        (rd::OTHER_DEVICES..rd::first_free()).find_map(|h| rd::dma_alloc(h, 1).ok().map(|(at, _)| (h, at)))
     else {
         panic!("no device carries the DMA flag")
     };

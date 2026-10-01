@@ -13,9 +13,11 @@
 //! need 515 tables: gigabyte 3's level-1 table and its 512 level-0 tables, and gigabyte 4's
 //! level-1 table and its first level-0 table. With `free == pages + 514` the pages check passes
 //! and the page-tables check must refuse: OutOfMemory, nothing charged. Only this tight half
-//! runs. The exact half zeroes 1 GiB, about a minute under QEMU. `memory_mib = 4608` because
-//! `system` gets a quarter of RAM (budget.rs, `boot_budgets`) and must be able to afford the
-//! pages. The guest touches only ~130 MiB.
+//! runs. The exact half zeroes 1 GiB, about a minute under QEMU. It is the one program the
+//! tester starts, so its own budget (slot 3) is all of `system`'s free pages bar one, and
+//! `memory_mib = 4608` because `system` gets a quarter of RAM (budget.rs, `boot_budgets`) and must
+//! be able to afford the pages; `root` in `init`'s place could not. The guest touches only
+//! ~130 MiB.
 //!
 //! Sv32 has one level below the root, whose index never recurs along a range, and no RAM for a
 //! 1 GiB range (`tests/map-fixed-tables-rv32.toml`). Its form is the same two checks over three
@@ -24,43 +26,31 @@
 #![no_std]
 #![no_main]
 
-use core::fmt::Write;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use test_programs::rd;
+use test_programs::{Logger, checker, log};
 
-use test_programs::rd::{self, ResetKind};
-use uart_16550::MmioSerialPort;
-
-static CONSOLE: AtomicUsize = AtomicUsize::new(0);
-
-fn check(out: &mut MmioSerialPort, ok: bool, label: &str) {
-    writeln!(out, "[map-fixed-tables] {}: {}", if ok { "ok" } else { "FAIL" }, label).ok();
+fn check(out: &mut Logger, ok: bool, label: &str) {
+    log!(out, "[map-fixed-tables] {}: {}", if ok { "ok" } else { "FAIL" }, label);
     assert!(ok, "{}", label);
 }
 
 #[no_mangle]
 pub extern "C" fn _start(_: usize) -> ! {
-    let (uart, _) = rd::map_device(rd::CONSOLE_MMIO).unwrap();
-    // SAFETY: the kernel mapped this process's granted console register page.
-    let mut out = unsafe { MmioSerialPort::new(uart) };
-    out.init();
-    CONSOLE.store(uart, Ordering::Relaxed);
-    writeln!(out).ok();
+    let mut out = Logger::connect();
     case::run(&mut out);
-    writeln!(out, "[map-fixed-tables] MAP-FIXED TABLES TEST PASSED").ok();
-    rd::system_reset(rd::RESET, ResetKind::PowerOff).unwrap();
-    loop {
-        rd::receive(None, rd::FOREVER, 0).ok();
-    }
+    log!(out, "[map-fixed-tables] MAP-FIXED TABLES TEST PASSED");
+    checker::done();
+    test_programs::park()
 }
 
-/// Bring `system`'s free pages to exactly `target` with filler at `fill`: open leaf tables of
+/// Bring its own budget's free pages to exactly `target` with filler at `fill`: open leaf tables of
 /// `span` bytes by mapping their first page, then fill their other slots, each costing exactly
 /// one page once its table exists (as `map-fixed-attack.rs`'s `page_table_charge` does).
 fn fill_to(target: u64, fill: usize, span: usize, tables: usize) {
     let slots = span / rd::PAGE_SIZE - 1;
     let (mut opened, mut filled) = (0usize, 0usize);
     loop {
-        let short = rd::free(rd::SYSTEM).checked_sub(target).expect("the filler overshot") as usize;
+        let short = rd::free(rd::OWN).checked_sub(target).expect("the filler overshot") as usize;
         if short == 0 {
             return;
         }
@@ -78,18 +68,18 @@ fn fill_to(target: u64, fill: usize, span: usize, tables: usize) {
     }
 }
 
-fn usage_pages() -> u64 { rd::usage(rd::SYSTEM).unwrap().pages_usage }
+fn usage_pages() -> u64 { rd::usage(rd::OWN).unwrap().pages_usage }
 
 #[cfg(target_pointer_width = "64")]
 mod case {
+    use test_programs::Logger;
     use test_programs::rd::{self, Error};
-    use uart_16550::MmioSerialPort;
 
     use super::{check, fill_to, usage_pages};
 
     const SPAN: usize = 2 << 20;
 
-    pub fn run(out: &mut MmioSerialPort) {
+    pub fn run(out: &mut Logger) {
         const G3: usize = 0xC000_0000;
         const G4: usize = 0x1_0000_0000;
         // The shape the old miscount needed: map one page in each of gigabyte 3's blocks
@@ -118,15 +108,15 @@ mod case {
 
 #[cfg(target_pointer_width = "32")]
 mod case {
+    use test_programs::Logger;
     use test_programs::rd::{self, Error};
-    use uart_16550::MmioSerialPort;
 
     use super::{check, fill_to, usage_pages};
 
     /// A root entry's span, which one leaf table maps.
     const SPAN: usize = 4 << 20;
 
-    pub fn run(out: &mut MmioSerialPort) {
+    pub fn run(out: &mut Logger) {
         // Three root entries nothing else in this process uses.
         const R0: usize = 0x5000_0000;
         let before = usage_pages();
@@ -150,11 +140,7 @@ mod case {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let uart = CONSOLE.load(Ordering::Relaxed);
-    if uart != 0 {
-        // SAFETY: only this process initializes CONSOLE, to its granted UART page.
-        let mut out = unsafe { MmioSerialPort::new(uart) };
-        writeln!(out, "[map-fixed-tables] FAIL: {}", info).ok();
-    }
-    rd::process_exit(255)
+    let mut logger = Logger::connect();
+    log!(logger, "[map-fixed-tables] FAIL: {}", info);
+    test_programs::park()
 }

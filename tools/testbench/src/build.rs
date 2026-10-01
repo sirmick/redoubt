@@ -107,7 +107,7 @@ impl Builder {
                 std::fs::write(&path, elf)?;
                 return Ok((name, path));
             }
-            Program::TestProgram(bin) => ("test-programs", bin.as_str()),
+            Program::TestProgram(bin) | Program::Bin { bin, .. } => ("test-programs", bin.as_str()),
             Program::Package { package, bin } => (package.as_str(), bin.as_str()),
         };
         self.cargo(target, package, Some(bin), &[], Profile::Release)?;
@@ -216,33 +216,62 @@ fn corrupt_elf(elf: &mut Vec<u8>, corruption: &Corruption) -> Result<()> {
     Ok(())
 }
 
-/// Pack the boot bundle: a ustar archive with the kernel first, then the programs in PID order.
 /// The development signing seed (public: see kernel/boot.md). NOT FOR PRODUCTION.
 const DEV_SEED: [u8; 32] = [0x42; 32];
 
-/// Build the boot bundle, sign it, and write `signature || tar` to `path`. `files` are data
-/// entries, placed after the programs. If `tamper`, flip one payload byte after signing, so
-/// the loader must reject it. If `bare_archive`, sign the archive alone instead of the preimage
-/// kernel/boot.md states, which the loader must reject too.
+/// The `programs` data entry (docs/testbench.md, "Starting a case's programs"): one ASCII line
+/// per program after the first, in the case's order, its entry name and then the budgets the
+/// tester gives it, separated by spaces.
+pub fn programs_entry(programs: &[(String, PathBuf)], budgets: &[&[String]]) -> Vec<u8> {
+    let mut text = String::new();
+    for ((name, _), budgets) in programs.iter().zip(budgets).skip(1) {
+        text.push_str(name);
+        for budget in budgets.iter() {
+            text.push(' ');
+            text.push_str(budget);
+        }
+        text.push('\n');
+    }
+    text.into_bytes()
+}
+
+/// Build the boot bundle, sign it, and write `signature || tar` to `path`: the kernel, the first
+/// program in `init`'s place, the `programs` entry the tester reads (`listing`; a case that
+/// brings its own as a file has none here), the other programs, then `files`, the data entries.
+/// If `tamper`, flip one payload byte after signing, so the loader must reject it. If
+/// `bare_archive`, sign the archive alone instead of the preimage kernel/boot.md states, which
+/// the loader must reject too.
 pub fn bundle(
     path: &Path,
     kernel: &Path,
     programs: &[(String, PathBuf)],
+    listing: Option<&[u8]>,
     files: &[(String, PathBuf)],
     tamper: bool,
     bare_archive: bool,
 ) -> Result<()> {
     let mut archive = tar::Builder::new(Vec::new());
-    let entries: Vec<_> = std::iter::once(("kernel".to_string(), kernel.to_path_buf()))
-        .chain(programs.iter().chain(files).cloned())
-        .collect();
+    let read = |(name, path): &(String, PathBuf)| -> Result<(String, Vec<u8>)> {
+        Ok((name.clone(), std::fs::read(path).with_context(|| format!("reading {}", path.display()))?))
+    };
+    let mut entries = vec![read(&("kernel".to_string(), kernel.to_path_buf()))?];
+    let (first, rest) =
+        programs.split_first().map_or((&[][..], &[][..]), |(f, r)| (std::slice::from_ref(f), r));
+    for program in first {
+        entries.push(read(program)?);
+    }
+    if let Some(listing) = listing {
+        entries.push(("programs".to_string(), listing.to_vec()));
+    }
+    for entry in rest.iter().chain(files) {
+        entries.push(read(entry)?);
+    }
     let mut names: Vec<&str> = entries.iter().map(|(name, _)| name.as_str()).collect();
     names.sort();
     if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {
         bail!("two bundle entries are named {:?}", pair[0]);
     }
-    for (name, elf) in entries {
-        let data = std::fs::read(&elf).with_context(|| format!("reading {}", elf.display()))?;
+    for (name, data) in entries {
         append(&mut archive, &name, &data)?;
     }
     let mut tar = archive.into_inner()?;

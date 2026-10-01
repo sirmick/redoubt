@@ -37,10 +37,10 @@ pub enum ProcessState {
     /// This process has been allocated, but has no threads yet
     Allocated,
 
-    /// A loader-bundle program that hasn't run yet: its first thread starts at `entry` with stack
-    /// pointer `sp` when it is first switched to (until `init` launches them,
-    /// plan/m1-separation.md).
-    Setup { entry: usize, sp: usize },
+    /// `init`, the one process the loader starts, before it has run: its first thread starts at
+    /// `entry` with stack pointer `sp` and the bundle's address and length in `a0` and `a1` when
+    /// it is first switched to (kernel/boot.md).
+    Setup { entry: usize, sp: usize, a0: usize, a1: usize },
 
     /// This process is able to be run.  The context bitmask describes contexts
     /// that are ready.
@@ -62,7 +62,9 @@ impl core::fmt::Debug for ProcessState {
         match *self {
             Free => write!(fmt, "Free"),
             Allocated => write!(fmt, "Allocated"),
-            Setup { entry, sp } => write!(fmt, "Setup {{ entry: {:#x}, sp: {:#x} }}", entry, sp),
+            Setup { entry, sp, a0, a1 } => {
+                write!(fmt, "Setup {{ entry: {:#x}, sp: {:#x}, a0: {:#x}, a1: {:#x} }}", entry, sp, a0, a1)
+            }
             Ready(rt) => write!(fmt, "Ready({:b})", rt),
             Running(rt) => write!(fmt, "Running({:b})", rt),
             Sleeping => write!(fmt, "Sleeping"),
@@ -216,30 +218,12 @@ impl ProcessTable {
     /// Create a new "System Services" object based on the arguments from the
     /// kernel. These arguments decide where the memory spaces are located, as
     /// well as where the stack and program counter should initially go.
-    pub fn init_from_memory(&mut self, base: *const u32, args: &crate::args::KernelArguments) {
-        // Look through the kernel arguments and create a new process for each.
-        let init_offsets = {
-            // The kernel, then one `IniE` tag per loader process (kernel/boot.md).
-            let init_count = 1 + args.iter().filter(|arg| arg.name == u32::from_le_bytes(*b"IniE")).count();
-            // The loader writes the table into one page, one record per process (kernel/boot.md),
-            // and refuses a bundle with more processes than the kernel has room for. This is the
-            // kernel's side of that check: a count beyond either limit means the two disagree, and
-            // the boot stops here rather than at an index somewhere later.
-            let capacity = (redoubt_sys::PAGE_SIZE / size_of::<crate::arch::process::InitialProcess>())
-                .min(crate::arch::process::MAX_PROCESS_COUNT);
-            assert!(
-                init_count <= capacity,
-                "the loader reported {} initial processes, room is {}",
-                init_count,
-                capacity
-            );
-            // SAFETY: `base` is that page, which the loader allocated, zeroed and filled with
-            // one `InitialProcess` per process; it is page-aligned, so aligned for the record,
-            // and `init_count` records fit within it.
-            unsafe {
-                core::slice::from_raw_parts(base as *const crate::arch::process::InitialProcess, init_count)
-            }
-        };
+    pub fn init_from_memory(&mut self, base: *const u32) {
+        // The kernel, then `init`: the loader starts exactly one process (kernel/boot.md).
+        // SAFETY: `base` is a page the loader allocated, zeroed and filled with these two
+        // `InitialProcess` records; it is page-aligned, so aligned for the record, and two fit.
+        let init_offsets =
+            unsafe { core::slice::from_raw_parts(base as *const crate::arch::process::InitialProcess, 2) };
 
         // Copy over the initial process list.  The pid is encoded in the SATP
         // value from the bootloader.  For each process, translate it from a raw
@@ -257,7 +241,7 @@ impl ProcessTable {
             process.state = if pid == 1 {
                 ProcessState::Running(0)
             } else {
-                ProcessState::Setup { entry: init.entrypoint, sp: init.sp }
+                ProcessState::Setup { entry: init.entrypoint, sp: init.sp, a0: init.a0, a1: init.a1 }
             };
         }
 
@@ -617,8 +601,8 @@ impl ProcessTable {
             // the list of ready threads.
             let new = self.get_process_mut(new_pid)?;
             new.state = match new.state {
-                ProcessState::Setup { entry, sp } => {
-                    ArchProcess::setup_loader_process(new_pid, entry, sp);
+                ProcessState::Setup { entry, sp, a0, a1 } => {
+                    ArchProcess::setup_loader_process(new_pid, entry, sp, a0, a1);
 
                     ProcessState::Running(0)
                 }

@@ -1,10 +1,10 @@
-//! Attacker: forge handle indices. It holds root, system and users in slots 1-3, a handle per
-//! device object, and a budget of its own; it passes every other index it can think of
-//! (0, every unused slot of the first
-//! table page, indices on pages it does not have, which a kernel that dropped the page number
-//! would read as slots 1-3, past the table, wider than 32 bits) to `budget_destroy` and the other
-//! calls. A forged index that reached `system` would destroy it and kill the victim living there;
-//! the victim reporting afterwards is the verdict. See `tests/budget-forge-attack.toml`.
+//! Attacker: forge handle indices. It holds the boot and log endpoints in slots 1 and 2, its own
+//! budget in 3 and `system` in 4; it passes every other index it can think of (0, every unused
+//! slot of the first table page, indices on pages it does not have, which a kernel that dropped
+//! the page number would read as slots 1-5, past the table, wider than 32 bits) to
+//! `budget_destroy` and the other calls. A forged index that reached `system` would destroy it
+//! and kill the victim, whose budget is under it (R10); the victim reporting afterwards is the
+//! verdict. See `tests/budget-forge-attack.toml`.
 
 #![no_std]
 #![no_main]
@@ -15,20 +15,20 @@ use test_programs::{Logger, log};
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    // The bundle's third program: its budgets come from log-server, once, and no device (R2).
-    let rd::Gifts { system, .. } = rd::take_gifts().expect("the budgets");
+    // The case's third program: the tester gives it `system` in slot 4, and no device (R2).
+    let system = rd::GIVEN;
     log!(logger, "[attacker] starting");
-    let own = rd::create(system, &rd::spec(10, 0, 0)).expect("own");
-    rd::close(own).expect("close");
-    // `own` is now a closed index, the last in use; those after it to 128 were never used;
+    let closed = rd::create(rd::OWN, &rd::spec(10, 0, 0)).expect("a child");
+    rd::close(closed).expect("close");
+    // `closed` is now a closed index, the last in use; those after it to 128 were never used;
     // 129..=133 and 257..=261 alias slots 1-5 of pages 1 and 2, which do not exist (on page 0 those
-    // are the boot and log endpoints and the three gifts); 4096 is the last index, 4097 past the
-    // table.
+    // are the boot and log endpoints, its own budget, `system`, then `closed`); 4096 is the last
+    // index, 4097 past the table.
     let mut refused = 0;
     let mut tried = 0;
     let mut forged = [0u32; 140];
     let mut n = 0;
-    for h in (own..=128).chain([
+    for h in (closed..=128).chain([
         129,
         130,
         131,

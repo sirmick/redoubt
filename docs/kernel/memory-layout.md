@@ -183,12 +183,13 @@ any other address there is an ordinary fault.
 
 ### Regions
 
-<details><summary>Status: built · partly tested: the message area is a convention of the kernel that no case attacks as an address · tested (4)</summary>
+<details><summary>Status: built · partly tested: the message area is a convention of the kernel that no case attacks as an address · tested (5)</summary>
 
 - bench:map-fixed-attack
 - bench:map-fixed-tables
 - bench:map-anon-search-bound
 - bench:boot-stack-reservation
+- bench:bundle-mapped
 
 </details>
 
@@ -200,6 +201,7 @@ User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the 
 | `0x0`..`0x1_0000` | free; page 0 is user space | nobody |
 | `0x1_0000`..`0x1FF0_0000` | the program image: the link range | the program's linker |
 | `0x1FF0_0000`..`0x1FF4_0000` | the loader stub, in a launched process (at most 256 KiB) | the launcher |
+| `0x2000_0000`..`0x4000_0000` | the bundle (`BUNDLE_AT`), only in `init`'s address space or the tester's in its place: the whole verified initrd, mapped read-only by the loader and kept so by `init`, which is trusted (a program it starts holds only copies), charged to `root`; at most 512 MiB, and the loader refuses a larger one or one that does not start on a page. `map_fixed` over it is refused as an overlap | the loader |
 | `0x4000_0000`..`0x4040_0000` | the message area (4 MiB): where the kernel maps a lend or transfer the process receives, every one inside it | the kernel |
 | `0x6000_0000`..`0x7000_0000` | the `map_anon` area (256 MiB): where `map_anon`, `map_device` and `dma_alloc` place pages, every run inside it | the kernel |
 | `0x7FF0_0000` | the startup block, in a launched process | the launcher |
@@ -207,8 +209,10 @@ User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the 
 
 The kernel searches its two areas for the first free run of pages, starting at its last
 choice; `map_anon`'s choice is [memory](memory.md)'s. A process started by the loader gets its
-image, its stack and nothing else; its first thread starts with `sp` 16 bytes below
-`0x8000_0000`. On Sv32 the stack top is also the end of user space.
+image, its stack and the bundle; its first thread starts with `sp` 16 bytes below
+`0x8000_0000`, the bundle's address in `a0` and its length in `a1`
+([boot](boot.md#the-loader-loads-only-the-kernel-and-init)). On Sv32 the stack top is also the
+end of user space.
 
 ```memmap
 top 0x7fff_ffff
@@ -219,12 +223,13 @@ columns widths
 0x6000_0000 | map_anon area, 256 MiB
 0x4040_0000 hole | free
 0x4000_0000 | message area, 4 MiB
+0x2000_0000 | bundle, init only, read-only (at most 512 MiB)
 0x1ff4_0000 hole | free
 0x1ff0_0000 | loader stub (launched)
 0x0001_0000 | program image (link range)
 0x0 hole | free, page 0 included
 ```
-*Figure: user space, the same on both widths. Launched processes get the stub and a startup block; boot processes do not.*
+*Figure: user space, the same on both widths. Launched processes get the stub and a startup block; `init` gets the bundle instead.*
 
 ### Page 0
 

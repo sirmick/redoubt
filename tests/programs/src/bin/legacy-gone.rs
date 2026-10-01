@@ -103,7 +103,6 @@ extern "C" fn jumper(arg: usize) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let gifts = rd::take_gifts().expect("the budgets");
     let stack = rd::map_anon(2 * rd::PAGE_SIZE, rd::rw()).expect("a stack for the thread rows");
 
     // --- The sweep ----------------------------------------------------------------------------
@@ -141,7 +140,7 @@ pub extern "C" fn _start() -> ! {
     log!(logger, "[legacy-gone] map_fixed at the MapMemory rows' address -> fresh page: {}", mapped);
 
     let exit = rd::endpoint_create().expect("an exit endpoint");
-    let kids = rd::create(gifts.users, &rd::spec(400, 2, 10)).expect("the children's budget");
+    let kids = rd::create(rd::GIVEN, &rd::spec(400, 2, 10)).expect("the children's budget");
     let image = spawn::image();
     for (name, to) in [
         ("RETURN_FROM_ISR", RETURN_FROM_ISR),

@@ -121,7 +121,7 @@ an Sv32 physical address has 34 bits; a field its kind does not use is 0
 
 ## Records
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
 - host:redoubt-sys::records_round_trip
 - host:redoubt-sys::malformed_records_are_refused
@@ -130,6 +130,7 @@ an Sv32 physical address has 34 bits; a field its kind does not use is 0
 - bench:budget-syscall-attack
 - bench:ipc-outcomes
 - bench:process-attack
+- bench:map-fixed-attack
 
 </details>
 

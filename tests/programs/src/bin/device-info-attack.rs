@@ -43,7 +43,7 @@ pub extern "C" fn _start() -> ! {
     let mut out = Console;
     say!(out, "[device-info] mapped the console");
     // The devices end where the log endpoint's receive right is, before anything is added.
-    let devices_end = rd::log_rx();
+    let devices_end = rd::first_free();
 
     // --- every device handle -------------------------------------------------------------
     // The three the order pins, against QEMU `virt`'s device tree.

@@ -1,17 +1,15 @@
-description = "Bench self-check: the loader finds a [[file]] entry in the signed bundle after the programs (today it refuses it; the entry read back in the guest waits for the loader that loads only the kernel and init: testbench.md, \"Data entries for init\")"
-arch = ["rv64"]
+description = "Bench self-check: a [[file]] entry reaches the guest signed, as data the loader never runs, and the program in init's place reads it back from the bundle's pages byte for byte (the read-back through /boot under init is the servers' half)"
+arch = ["rv64", "rv32"]
 kind = "boot"
-programs = ["log-server"]
+# The one program, in init's place: it holds the console and the Reset right, finds the entry
+# named `data` in the bundle the loader mapped for it, and compares it with the file it was built
+# with (docs/testbench.md, "Bundle files"). The verdict is its own line, on the console only it
+# holds, and the power-off; no other program runs (docs/testbench.md, "Rule F").
+programs = ["bundle-file"]
 timeout_secs = 20
-# Today's loader starts every bundle entry as a process, so it refuses a data
-# entry. Its complaint quotes the entry's first bytes, "DATA" (68, 65, 84, 65), right after
-# loading log-server: the bytes arrived as they were, signed, after the programs. When the
-# loader loads only the kernel and init (docs/plan/m1-separation.md), this becomes a clean boot
-# in which a guest program reads the entry back (docs/testbench.md, "Data entries for `init`").
-# This refusal test does not stand in for that readback.
-allow_panic = true
-expect = ['bundle signature ok', 'PID 2: log-server', 'loader PANIC', 'invalid ELF: BadMagic\(\[68, 65, 84, 65\]\)']
-forbid = ['KMAIN']
+expect = ['^\[bundle-file\] ok: the data entry is the injected file, \d+ bytes$']
+forbid = ['\[bundle-file\] FAIL']
+poweroff = true
 
 [[file]]
 name = "data"

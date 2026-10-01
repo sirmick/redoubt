@@ -4,14 +4,16 @@ kind = "boot"
 # Built with the checks on (docs/testbench.md, "Checked builds"): the bug was an arithmetic
 # shortfall that a release build would have hidden until the charge itself failed.
 debug_assertions = true
-# PID 2 redoubt-tight: it must be the loader's first program, the one holding root, system and
-# users, since the carve needs a budget handle.
-programs = ["redoubt-tight"]
+# PID 2 log-server; PID 3 redoubt-tight, which holds the budget it runs in (slot 3), since the
+# carve needs a budget handle. Before the tester it ran in init's place, in system, and carved
+# system; its own budget now is an equal share of system for one program (all of system's free
+# pages bar one, 15 processes, weight 1,000), and the carve leaves it the same exact 4 pages.
+programs = ["log-server", "redoubt-tight"]
 timeout_secs = 30
 expect = [
-    '^\[pid 2\] \[tight\] system free after the carve: 4 \(want 4\)$',
-    '^\[pid 2\] \[tight\] the tight lend -> Err\(Refused\), 0 pages spent$',
-    '^\[pid 2\] \[tight\] after the hog goes: the same lend -> Ok\(\(\)\)$',
-    '^\[pid 2\] REDOUBT-TIGHT TEST PASSED$',
+    '^\[pid 3\] \[tight\] its own budget free after the carve: 4 \(want 4\)$',
+    '^\[pid 3\] \[tight\] the tight lend -> Err\(Refused\), 0 pages spent$',
+    '^\[pid 3\] \[tight\] after the hog goes: the same lend -> Ok\(\(\)\)$',
+    '^\[pid 3\] REDOUBT-TIGHT TEST PASSED$',
 ]
 forbid = ['REDOUBT-TIGHT TEST FAILED']

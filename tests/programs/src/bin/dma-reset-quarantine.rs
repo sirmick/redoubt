@@ -9,15 +9,16 @@
 //! its run is quarantined too, although a retry would now confirm (a quarantined device never
 //! counts as reset).
 //!
-//! Then every free page in the tree is searched: `users` is destroyed, a checker child takes all
-//! of `root`'s free pages, and it and this program each `dma_alloc` through the other empty slots
+//! Then every free page in the tree is searched: `users` is destroyed, which gives `root` its
+//! pages, a checker child takes all of `system`'s free pages, and it and this program, which runs
+//! in `root`, each `dma_alloc` through the other empty slots
 //! with halving chunk sizes until a single page is refused. The pages allocated plus the page
 //! tables charged must equal the free pages recorded before, bar at most `TABLES` in a budget
 //! whose last mapping could not pay for its tables, and no run may overlap a quarantined one. The
 //! verdicts come from the kernel's answers.
 //!
-//! It runs as the bundle's first program, so it holds every device object, prints on the console
-//! it maps itself, as `device-test` does, and ends with `system_reset`. The children are copies
+//! It runs in `init`'s place, so it holds every device object, prints on the console it maps
+//! itself, as `device-test` does, and ends with `system_reset`. The children are copies
 //! of it (`spawn.rs`).
 
 #![no_std]
@@ -154,7 +155,7 @@ pub extern "C" fn _start() -> ! {
     // which matters only if it dies, and it never does before the power-off.
     let mut slots = [0u32; MAX_SLOTS];
     let mut count = 0;
-    for h in rd::OTHER_DEVICES..rd::log_rx() {
+    for h in rd::OTHER_DEVICES..rd::first_free() {
         let Ok((at, len)) = rd::map_device(h) else { continue };
         // SAFETY: `at` maps `len` bytes of this device's registers; its first word is the magic.
         let magic = unsafe { (at as *const u32).read_volatile() };
@@ -241,9 +242,9 @@ pub extern "C" fn _start() -> ! {
     let users = rd::destroy(rd::USERS);
     // A budget's own pages are its carve less its limit, the same for every budget.
     let own = carve[0] - limit;
-    let root_free = rd::free(rd::ROOT);
+    let system_free = rd::free(rd::SYSTEM);
     let checker_budget =
-        rd::create(rd::ROOT, &rd::spec(root_free - own, 1, 1)).expect("the checker's budget");
+        rd::create(rd::SYSTEM, &rd::spec(system_free - own, 1, 1)).expect("the checker's budget");
     let mut startup = [0u8; 24];
     startup[0] = others.len() as u8;
     startup[8..16].copy_from_slice(&run1.to_le_bytes());
@@ -264,7 +265,7 @@ pub extern "C" fn _start() -> ! {
         say!(out, "[dma-reset-quarantine] FAIL: the checker did not report");
         test_programs::park()
     };
-    let mine = search(rd::SYSTEM, others, &[run1, run2]);
+    let mine = search(rd::ROOT, others, &[run1, run2]);
     let left = [rd::ROOT, rd::SYSTEM, checker_budget].map(rd::free);
     let free = theirs.free + mine.free;
     let taken = theirs.allocated + theirs.tables + mine.allocated + mine.tables;

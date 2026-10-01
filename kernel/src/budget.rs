@@ -53,6 +53,15 @@ const ROOT_WEIGHT: u32 = 1_000_000;
 /// What `root` keeps for `init` when carving `system` and `users` (kernel/budgets.md R7: a
 /// budget holding a process has free weight).
 const INIT_WEIGHT: u32 = 1000;
+/// The pages `root` keeps for `init` to work in, beyond what the loader gave it and its first
+/// thread: its stack's demand-paged pages, its own `map_anon` and the endpoints it owns
+/// (kernel/budgets.md, "The tree from the boot manifest").
+const INIT_PAGES: u64 = 1024;
+/// `init`, the one process the loader starts (kernel/boot.md).
+const INIT_PID: Pid = match Pid::new(2) {
+    Some(pid) => pid,
+    None => unreachable!(),
+};
 
 /// A budget's class (kernel/budgets.md, "Class is trust, not order"): inherited from its parent,
 /// so never in the ABI.
@@ -569,19 +578,18 @@ impl MemoryManager {
 
     // --- Boot -----------------------------------------------------------------------------------
 
-    /// Create `root`, `system` and `users` and put the loader's processes in `system`.
+    /// Create `root`, `system` and `users` and put `init`, the one process the loader started,
+    /// in `root` (kernel/budgets.md, "The tree from the boot manifest").
     ///
-    /// Until the loader loads only `init` and `init` builds the tree from the boot manifest
-    /// (kernel/budgets.md, "The tree from the boot manifest"; plan/m1-separation.md): the sizes
-    /// are computed here rather than read from the argument block. `root` gets every RAM page the
-    /// kernel did not keep at boot, every PID but the kernel's, and all the weight; `system` a
-    /// quarter of each (the manifest's default), `users` the rest. Every
-    /// loader-started process (every PID owning frames: the loader gave each its pages) is
-    /// charged to `system`, and the first one (PID 2) gets handles to the three budgets in slots
-    /// 1-3, stamped with `root`, as `init` will.
+    /// The split is fixed here, not read from the argument block. `root` gets every RAM page the
+    /// kernel did not keep at boot, every PID but the kernel's, and all the weight. It keeps for
+    /// `init` one process, `INIT_WEIGHT`, and `init`'s pages: everything the loader gave it (its
+    /// image, stack, page tables, saved contexts and the bundle's frames), its first thread and
+    /// `INIT_PAGES` to work in. `system` gets a quarter of the rest of the pages, 15 processes
+    /// and a quarter of the weight; `users` what is left. `init` gets handles to the three
+    /// budgets in slots 1-3, stamped with `root`, then the devices.
     ///
-    /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
-    /// kernel refuses to boot (fail closed).
+    /// If `init`'s pages do not fit, the kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
         // Every RAM page the kernel did not keep for itself, less `root`'s own page, which no
         // budget pays for (R6): `root`'s limit bounds every charge in the tree, so the charges and
@@ -591,12 +599,18 @@ impl MemoryManager {
         // frame behind it without a reservation.
         let kept = self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) as u64;
         let pages = self.ram_frames() - kept - BUDGET_PAGES;
+        // Everything the loader gave `init`, all owned by its PID in the ownership table.
+        let init_frames = self.ram_frames_owned_by(INIT_PID) as u64;
+        let init_pages = init_frames + THREAD_PAGES + INIT_PAGES;
+        let rest =
+            pages.checked_sub(init_pages + 2 * BUDGET_PAGES).expect("boot: init's pages do not fit in RAM");
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
-        let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
-        // `users` gets the rest of the weight but what `root` keeps for `init`.
+        let (sys_pages, sys_processes, sys_weight) = (rest / 4, processes / 4, ROOT_WEIGHT / 4);
+        // `users` gets the rest of the weight and the processes but what `root` keeps for `init`.
         let users_weight = ROOT_WEIGHT - sys_weight - INIT_WEIGHT;
-        // Root pays for the two budgets' own pages; its own page is the one left out of `pages`.
-        let users_pages = pages - 2 * BUDGET_PAGES - sys_pages;
+        let users_processes = processes - sys_processes - 1;
+        // Root pays for the two budgets' own pages, counted out of `rest` above.
+        let users_pages = rest - sys_pages;
         // `root` and `system` are class `system`; `users` is class `user`. Nothing runs before
         // anything else: one stride queue, and weight decides (kernel/scheduling.md).
         let boot = |mm: &mut Self, parent, class, pages, processes, weight| {
@@ -612,94 +626,33 @@ impl MemoryManager {
         };
         let root = boot(self, None, Class::System, pages, processes, ROOT_WEIGHT);
         let system = boot(self, Some(root), Class::System, sys_pages, sys_processes, sys_weight);
-        let users = boot(self, Some(root), Class::User, users_pages, processes - sys_processes, users_weight);
+        let users = boot(self, Some(root), Class::User, users_pages, users_processes, users_weight);
         assert!(
             self.budget(root).pages_limit + BUDGET_PAGES + kept <= self.ram_frames(),
             "R6: root's limit, its own page and the kernel's frames exceed RAM"
         );
-        let mut first = None;
-        let mut bundle = [None; MAX_PROCESS_COUNT];
-        let mut nbundle = 0;
-        for index in 2..=MAX_PROCESS_COUNT {
-            let pid = Pid::new(index as u8).expect("PIDs start at 1");
-            let frames = self.ram_frames_owned_by(pid) as u64;
-            if frames == 0 {
-                continue;
-            }
-            first.get_or_insert(pid);
-            bundle[nbundle] = Some(pid);
-            nbundle += 1;
-            // Everything the loader gave it: its image, its stack, its page tables, its root
-            // table and its saved contexts, all owned by the PID in the ownership table.
-            self.count_process(system).expect("boot: the loader's processes do not fit in system");
-            self.process_created(pid, system).expect("boot: the loader's processes do not fit in system");
-            self.charge(system, frames).expect("boot: the loader's processes do not fit in system");
-            self.account_mut(pid).expect("account").frames = frames;
-            self.thread_created(pid, INITIAL_TID).expect("boot: no page for a program's first thread");
-        }
+        self.count_process(root).expect("boot: root keeps no process for init");
+        self.process_created(INIT_PID, root).expect("boot: root keeps no weight for init");
+        self.charge(root, init_frames).expect("boot: init's pages do not fit in root");
+        self.account_mut(INIT_PID).expect("account").frames = init_frames;
+        self.thread_created(INIT_PID, INITIAL_TID).expect("boot: no page for init's first thread");
         let stamp = BudgetRef { frame: root, id: self.budget(root).id };
-        if let Some(first) = first {
-            for budget in [root, system, users] {
-                let id = self.budget(budget).id;
-                let handle =
-                    Handle { object: Object::Budget(BudgetRef { frame: budget, id }), badge: 0, stamp };
-                self.install_handle(first, handle).expect("boot: no room for the first program's handles");
-            }
+        for budget in [root, system, users] {
+            let id = self.budget(budget).id;
+            let handle = Handle { object: Object::Budget(BudgetRef { frame: budget, id }), badge: 0, stamp };
+            self.install_handle(INIT_PID, handle).expect("boot: no room for init's handles");
         }
-        // The machine's devices, charged to `system` and given to the first program as `init` will
-        // receive them (until `init` exists, `device.rs`). They come after the three budget
-        // handles, so the first program's table is 1-3 budgets, 4.. devices. The handles are
-        // stamped with `root`, like the three budget handles, and not with the budget the objects
-        // are charged to: a stamp says which budget's destruction revokes the *handle* (R10), and
-        // these are `init`'s to hand on, so they outlive anything below `root`. The objects
-        // themselves are charged to, and die with, `system`.
-        self.boot_devices(system, first, stamp);
-        self.boot_endpoint(system, &bundle[..nbundle]);
-        self.boot_log_endpoint(system, &bundle[..nbundle]);
+        // The machine's devices, charged to `system` and given to `init` (`device.rs`). They come
+        // after the three budget handles, so `init`'s table is 1-3 budgets, 4.. devices. The
+        // handles are stamped with `root`, like the three budget handles, and not with the budget
+        // the objects are charged to: a stamp says which budget's destruction revokes the *handle*
+        // (R10), and these are `init`'s to hand on, so they outlive anything below `root`. The
+        // objects themselves are charged to, and die with, `system`.
+        self.boot_devices(system, Some(INIT_PID), stamp);
         println!(
-            "Budgets: root {} pages, system {} (the loader's processes), users {}",
-            pages, sys_pages, users_pages
+            "Budgets: root {} pages ({} kept for init), system {}, users {}",
+            pages, init_pages, sys_pages, users_pages
         );
-    }
-
-    /// Until `init` hands out endpoints from the boot manifest (plan/m1-separation.md): one
-    /// endpoint for the bundle's programs to talk over, because nothing else can put a Redoubt
-    /// handle in a second process yet.
-    ///
-    /// The **second** program gets the receive right (badge 0, handle 1) and every later one a
-    /// handle badged with its own PID, so a server can tell its clients apart. The first
-    /// program's table is left as `init`'s will be: `root`, `system` and `users`, then a handle
-    /// to every device object the machine has (`device.rs`, `boot_devices`), then only the log
-    /// endpoint's receive right (`boot_log_endpoint`).
-    fn boot_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<Pid>]) {
-        let Some(Some(server)) = bundle.get(1).copied() else { return };
-        let endpoint = self.new_endpoint(system).expect("boot: system cannot pay for the endpoint");
-        let owner = self.endpoint(endpoint.frame).owner;
-        for pid in bundle.iter().skip(1).flatten() {
-            // The receive right for the server; a badge for each client, its own PID, which
-            // `mint` never produces as 0 (I3).
-            let badge = if *pid == server { 0 } else { u64::from(pid.get()) };
-            let handle = Handle { object: Object::Endpoint(endpoint), badge, stamp: owner };
-            self.install_handle(*pid, handle).expect("boot: no room for a program's endpoint handle");
-        }
-    }
-
-    /// Until `init` owns the console (plan/m1-separation.md): the log endpoint, one in every
-    /// boot.
-    ///
-    /// The first program, which owns the console, gets the receive right, installed last, after
-    /// the budgets and the devices, so it is the highest index in its table. Every later program
-    /// gets a send in slot 2, after the boot endpoint's slot 1, badged with its own PID. The
-    /// badge only says whose line it is: the server prints it and grants nothing on it.
-    fn boot_log_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<Pid>]) {
-        let Some(Some(first)) = bundle.first().copied() else { return };
-        let endpoint = self.new_endpoint(system).expect("boot: system cannot pay for the log endpoint");
-        let owner = self.endpoint(endpoint.frame).owner;
-        for pid in bundle.iter().flatten() {
-            let badge = if *pid == first { 0 } else { u64::from(pid.get()) };
-            let handle = Handle { object: Object::Endpoint(endpoint), badge, stamp: owner };
-            self.install_handle(*pid, handle).expect("boot: no room for a program's log handle");
-        }
     }
 
     // --- The calls --------------------------------------------------------------------------------

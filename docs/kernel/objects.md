@@ -231,7 +231,7 @@ Everything the kernel stores is charged in whole pages to one budget (R6 (chargi
 | --- | --- | --- |
 | budget | 1 | its parent; `root`'s own to `root`, a rule the boot code departs from ([budgets](budgets.md#residual-risks)) |
 | endpoint | 1 | its owner, the budget of the process that created it |
-| device | 1 | its owner: `system`, the budget the loader's programs run in |
+| device | 1 | its owner: `system`, charged at boot |
 | process object (it holds the exit notice) | 1 | the creator's budget, the budget of `process_create`'s caller |
 | saved thread contexts | `PROCESS_IMPL_PAGES`: 1 on rv32, 2 on rv64 | the budget the process runs in |
 | thread IPC page | 1 per thread | the budget the process runs in |
@@ -398,7 +398,7 @@ handle and every copy of it, in every table; a copy in a message not yet receive
   it ([`mint`](#mint)). The default stamp of a call is the stamp of the handle the call came
   through, not the caller's budget.
 - Handles the kernel places at boot, before any process runs, are stamped with `root` for the
-  first program's budgets and devices ([boot](boot.md)).
+  budgets and devices `init` receives ([boot](boot.md)).
 
 So a stamp only moves down the budget tree. A handle minted from another dies no later than its
 source, and a handle minted in answer to a call dies no later than the handle the call came

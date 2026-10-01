@@ -247,13 +247,10 @@ impl MemoryManager {
     }
 
     /// Create every device object the loader described, charged to `owner`, and put a handle
-    /// to each in `first`'s table, in the `Devs` tag's order (kernel/boot.md).
-    ///
-    /// Until `init` exists (plan/m1-separation.md): kernel/devices.md says `init` receives them
-    /// all, and there is no `init` yet, so they go to the bundle's first program exactly as
-    /// `boot_endpoint` gives out the one endpoint. The order is the loader's, which puts the
-    /// Reset right first and the console and its interrupt next, so a test program can name
-    /// one without a manifest.
+    /// to each in `first`'s table, in the `Devs` tag's order (kernel/boot.md). `first` is `init`,
+    /// or the program in its place. The order is the loader's, which puts the Reset right first
+    /// and the console and its interrupt next, so a test program can name one without a
+    /// manifest.
     pub fn boot_devices(&mut self, owner: BudgetFrame, first: Option<Pid>, stamp: BudgetRef) {
         let Some(entries) = devs() else {
             println!("Devices: the loader reported none");
@@ -273,7 +270,7 @@ impl MemoryManager {
                 self.install_handle(pid, handle).expect("boot: no room for a device handle");
             }
         }
-        println!("Devices: {} objects, all held by the first program", n);
+        println!("Devices: {} objects, all held by init", n);
     }
 
     /// One `Devs` entry: kind, two 64-bit values (low word first), a flag word (kernel/boot.md).

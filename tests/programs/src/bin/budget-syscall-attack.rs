@@ -1,6 +1,6 @@
 //! Attacker: hostile arguments to the kernel's calls (I14): bad and wide handles, unknown
-//! numbers, non-zero unused registers, records misaligned, at 0, in the kernel, read-only, never
-//! touched, straddling into an unmapped page, malformed slot by slot, the largest values; the
+//! numbers, non-zero unused registers, records misaligned, at 0, in the kernel, read-only,
+//! straddling into an unmapped page, malformed slot by slot, the largest values; the
 //! order in which the stages report them; then a few thousand calls with arguments drawn from a
 //! pool of hostile values. No argument may panic the kernel. Each targeted attempt's error is
 //! printed as progress; the verdict is the victim's report and the checker's power-off, which a
@@ -29,8 +29,9 @@ fn good_spec() -> [u64; BUDGET_SPEC_SLOTS] { rd::spec(1, 0, 0).encode() }
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    // The bundle's third program: its budgets come from log-server, once, and no device.
-    let rd::Gifts { system, .. } = rd::take_gifts().expect("the budgets");
+    // The case's third program: the tester gives it its own budget in slot 3, `system` in slot 4,
+    // and no device.
+    let system = rd::GIVEN;
     log!(logger, "[attacker] starting");
     let scratch = (&raw mut SCRATCH) as usize;
     // Decoding never backs an untouched page (kernel/abi.md, "The record check"), so touch every
@@ -46,7 +47,9 @@ pub extern "C" fn _start() -> ! {
     rd::unmap(end, rd::PAGE_SIZE).expect("unmap");
     rd::poke(pages, 1);
 
-    let create = |rec: usize| call(Number::BudgetCreate, [system as usize, rec, 0, 0, 0, 0, 0]);
+    // Records are carved from its own budget, which has pages free: the tester carved all of
+    // `system`'s, so there a record's later checks would never be reached.
+    let create = |rec: usize| call(Number::BudgetCreate, [rd::OWN as usize, rec, 0, 0, 0, 0, 0]);
     let spec = good_spec();
     let at = |slots: &[u64; BUDGET_SPEC_SLOTS]| {
         for (i, slot) in slots.iter().enumerate() {
@@ -90,11 +93,10 @@ pub extern "C" fn _start() -> ! {
         call(Number::BudgetCreate, [system as usize, at(&spec), 1, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_create order -> {:?}", order);
-    // A page reserved and never touched: decoding does not back it (kernel/abi.md, "The record
-    // check").
-    let untouched = rd::untouched_stack_page();
+    // A page reserved and never touched, which decoding does not back (kernel/abi.md, "The record
+    // check"), is not tried here: only the program in `init`'s place has one, and
+    // `map-fixed-attack` tries it there.
     let usage = [
-        call(Number::BudgetUsage, [system as usize, untouched, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [system as usize, text, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [system as usize, scratch + 1, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [system as usize, KERNEL, 0, 0, 0, 0, 0]),
@@ -154,14 +156,11 @@ pub extern "C" fn _start() -> ! {
         call(Number::Receive, [0, 0, 0, 0, scratch, 0, 0]),
     ];
     log!(logger, "[i14] other -> {:?}", other);
-    let sandbox = rd::create(system, &rd::spec(200, 0, 0)).expect("sandbox");
+    let sandbox = rd::create(rd::OWN, &rd::spec(200, 0, 0)).expect("sandbox");
 
-    // Random calls over hostile values. Never destroy or close slots 1-3: losing `system` would
-    // kill this program and the victim, which is not the attack. `system_reset` is in the
-    // sweep and this program does hold the Reset right, but a call decodes only with every
-    // register it does not use set to zero, so a draw that put the right handle in `a1` would
-    // have to put a known reset kind in `a2` and zero in `a3..=a7` at the same time: the
-    // machine is not powered off by accident here.
+    // Random calls over hostile values. Never destroy or close slots 1-4: losing its own budget
+    // or `system` would kill this program, and `system` the victim too, which is not the attack.
+    // `system_reset` is in the sweep, but this program holds no Reset right.
     let pool = [
         0,
         1,
@@ -200,11 +199,11 @@ pub extern "C" fn _start() -> ! {
         for arg in args.iter_mut() {
             *arg = if next() % 4 == 0 { next() as usize } else { pool[next() as usize % pool.len()] };
         }
-        if matches!(number, Number::BudgetDestroy | Number::HandleClose) && (1..=3).contains(&args[0]) {
+        if matches!(number, Number::BudgetDestroy | Number::HandleClose) && (1..=4).contains(&args[0]) {
             continue;
         }
         // An endpoint lives until its owner budget is destroyed (R10), so thousands of them
-        // would eat the pages of `system`, which the victim needs after the attack. The
+        // would eat this program's own pages, which it needs to finish the attack. The
         // targeted list above covers `endpoint_create`, whose only argument is that it has none.
         if number == Number::EndpointCreate {
             continue;
@@ -224,8 +223,8 @@ pub extern "C" fn _start() -> ! {
             }
             _ => {}
         }
-        // New budgets come only from the sandbox, so the fuzzing cannot use up `system`.
-        if number == Number::BudgetCreate && (1..=3).contains(&args[0]) {
+        // New budgets come only from the sandbox, so the fuzzing cannot use up its own budget.
+        if number == Number::BudgetCreate && (1..=4).contains(&args[0]) {
             args[0] = sandbox as usize;
         }
         // Where a call writes, the address is from the pool: every writable address in it is

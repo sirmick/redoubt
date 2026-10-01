@@ -3,8 +3,9 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
-# PID 2 device-test is the bundle's first program, so it holds every device object the loader
-# made from the device tree (kernel/devices.md, "Devices handed to the first program"). There is
+# PID 2 device-test is in init's place, so it holds every device object the kernel made from
+# the device tree (kernel/devices.md, "Devices handed to the first program"), and runs in root,
+# which pays for its pages. There is
 # no log-server here: only one process can own the UART, and this one maps it through its own
 # handle and prints on it.
 programs = ["device-test"]
