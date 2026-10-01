@@ -7,7 +7,7 @@ use core::{
 };
 
 use test_programs::{
-    rd::{self, Cause, Error, Received, ResetKind},
+    rd::{self, Cause, Error, MemFlags, Received, ResetKind},
     spawn,
 };
 use uart_16550::MmioSerialPort;
@@ -35,9 +35,16 @@ extern "C" fn notice_receiver(arg: usize) -> ! {
     rd::process_exit(42)
 }
 extern "C" fn zero_entries(_: usize) -> ! {
+    // Page 0 holds `j .`, so a zero-PC thread the timer schedules before this one exits spins
+    // instead of faulting, and the exit notice stays this thread's `Exited(43)`.
+    rd::map_fixed(0, rd::PAGE_SIZE, rd::rw()).unwrap();
+    // SAFETY: page 0 was just mapped read-write in this process and nothing else uses it. The
+    // store is `sw` from asm, as Rust gives no pointer to address 0 a defined write.
+    unsafe { core::arch::asm!("sw {0}, 0(zero)", in(reg) 0x0000_006f_u32, options(nostack)) };
+    rd::set_flags(0, rd::PAGE_SIZE, MemFlags::READ | MemFlags::EXECUTE).unwrap();
     let stack = rd::map_anon(4 * rd::PAGE_SIZE, rd::rw()).unwrap();
     let before = rd::usage(1).unwrap();
-    // Neither allocation yields: both zero PCs remain live until this process exits.
+    // Both zero PCs remain live until this process exits.
     let first = rd::thread_create(0, stack + 4 * rd::PAGE_SIZE - 16, 0).unwrap();
     let second = rd::thread_create(0, stack + 4 * rd::PAGE_SIZE - 16, 0).unwrap();
     assert_ne!(first, second);
