@@ -179,6 +179,18 @@ pub mod mem {
     pub const SECRET_PAGES: usize = 64;
 }
 
+/// Protocol for `touch-beyond-ram`: the attacker tells the survivor, over the boot endpoint, that
+/// it is leaving, and the kernel tells the survivor when it has gone. See
+/// `tests/touch-beyond-ram.toml`.
+pub mod beyond_ram {
+    /// Call, from a thread of the attacker once it has been refused, with no timeout: never
+    /// answered, so the kernel's abandoned notice for it, at the attacker's exit, is what the
+    /// survivor waits on (a timeout on the call would abandon it too).
+    pub const GONE: usize = 1;
+    /// Call: answered once the survivor holds the `GONE` call, so the attacker exits only then.
+    pub const HELD: usize = 2;
+}
+
 /// Protocol for the use-after-free attack test (`uaf-*` binaries). A "holder" server
 /// keeps a page lent to it by a "victim" that then terminates; a "grabber" tries to
 /// reclaim the freed frame. See `tests/uaf-lent-page.toml`.

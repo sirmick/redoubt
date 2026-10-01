@@ -5,6 +5,10 @@ kind = "boot"
 memory_mib = 32
 # PID 2 log-server; PID 3 survivor, second, so that it and not the attacker holds the boot
 # endpoint's receive right; PID 4 touch-beyond-ram (runs out, gives it back, exits).
+# A boot process has no exit endpoint, so its exit notice is not available here. What is ordered
+# on: the attacker, once refused, leaves the survivor a call (with no timeout) and exits; the
+# kernel abandons that call (at the exit, or at the call's own timeout had the attacker chosen
+# one), and only the abandoned notice lets the survivor report, never a delay.
 programs = ["log-server", "touch-beyond-ram-survivor", "touch-beyond-ram"]
 timeout_secs = 30
 # The fault-path allocator once `.expect()`ed and halted the machine on OOM. PANIC is always

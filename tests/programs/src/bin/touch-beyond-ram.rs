@@ -1,18 +1,24 @@
 //! Attack test, attacker role: map and touch far more anonymous memory than the machine has
 //! RAM, in ever smaller chunks, until the kernel refuses even one page. Running out must be this
-//! process's `OutOfMemory`, not a kernel panic. It then gives everything back and exits; the
-//! verdict is that another process is still served afterwards (see
-//! `touch-beyond-ram-survivor`).
+//! process's `OutOfMemory`, not a kernel panic. It then gives everything back, leaves the
+//! survivor a call that its exit abandons, and exits; the verdict is that another process is
+//! still served afterwards (see `touch-beyond-ram-survivor`).
 
 #![no_std]
 #![no_main]
 
+use test_programs::beyond_ram::*;
 use test_programs::{Logger, log, rd};
 
 /// More pages than the case's small guest has RAM (see the toml's `memory_mib`).
 const PAGES: usize = 16 * 1024; // 64 MiB, above the 32 MiB machine.
 /// The first chunk; each refusal halves it.
 const CHUNK: usize = 1024;
+
+/// Calls the survivor and blocks there until this process exits, which abandons the call.
+fn leave(_arg: usize) {
+    rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([GONE, 0, 0, 0]), None, rd::FOREVER).ok();
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -45,6 +51,9 @@ pub extern "C" fn _start() -> ! {
     } else {
         log!(logger, "[attacker] refused after {} pages: {:?}", total, refusal);
     }
+    rd::thread(leave, 0).expect("couldn't spawn the leaving thread");
+    rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([HELD, 0, 0, 0]), None, rd::FOREVER)
+        .expect("the survivor never held the leaving call");
     rd::process_exit(0)
 }
 
