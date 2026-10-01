@@ -27,7 +27,16 @@
 //! Each destruction (R10) is bracketed by `X` and `Y` records carrying the time in µs in the pass
 //! field; the check reports their durations, and a case can bound their p99
 //! (`post_check = "sched_oracle r10_p99_us=30000"`) and, adding the worst steward decision-wake
-//! p99 the program printed, a lease's end (`lease_end_p99_us=145000`).
+//! p99, a lease's end (`lease_end_p99_us=145000`).
+//!
+//! **The latency targets count the kernel a release build runs.** A checked build's audits, full
+//! scans a release build has none of, are bracketed by `U` and `V` records (which audit, and the
+//! time in µs). The program prints each latency sample's window, its end on `time_now` and its
+//! length (`LATENCY-SAMPLE N=16 deadline_notice <end> <gross>`), and how many it took
+//! (`LATENCY-COUNT`, which the windows must number); this check subtracts the audit
+//! time inside each window, judges the net p50 and p99 against the case's bounds
+//! (`deadline_notice_p99_us=40000`), and reports the audit time beside each. An audit unpaired, or
+//! inside a destruction (R10's own window, which then subtracts nothing), fails the check.
 //!
 //! A weight change (a carve, or a carve returned) is recorded as a group of six records ahead of
 //! the pass it sets, and recomputed from the rule as the spec states it (kernel/scheduling.md
@@ -80,7 +89,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZ".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUV".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -190,6 +199,8 @@ pub struct Summary {
     pub r10_us: Vec<u64>,
     /// The most object frames present at a destruction's start (R10 walks them all).
     pub r10_frames: u64,
+    /// Each checked-build audit's span, µs (`U` to `V`), in trace order.
+    pub audits: Vec<(u64, u64)>,
 }
 
 /// Check every pick in `records` against the four clauses, the floor and every pass's
@@ -199,6 +210,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     let mut last_pass: BTreeMap<u64, u128> = BTreeMap::new();
     let mut floor: u128 = 0;
     let mut open_r10: Option<(u64, u128)> = None;
+    let mut open_audit: Option<(u64, u128)> = None;
     let mut requeues: i128 = 0;
     let mut sum = Summary::default();
     let mut i = 0;
@@ -229,6 +241,20 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 open_r10 = Some((r.id, r.pass));
             }
             'Z' => sum.r10_frames = sum.r10_frames.max(r.pass as u64),
+            // An audit is off R10's walk: none runs inside a destruction, so R10 subtracts none.
+            'U' if open_r10.is_some() => {
+                return Err(format!("record {}: an audit inside a destruction", r.seq));
+            }
+            'U' => {
+                if let Some((id, _)) = open_audit {
+                    return Err(format!("record {}: an audit began inside audit {id}", r.seq));
+                }
+                open_audit = Some((r.id, r.pass));
+            }
+            'V' => match open_audit.take() {
+                Some((id, t)) if id == r.id && r.pass >= t => sum.audits.push((t as u64, r.pass as u64)),
+                _ => return Err(format!("record {}: audit {} ended without beginning", r.seq, r.id)),
+            },
             'Y' => match open_r10.take() {
                 Some((id, t)) if id == r.id => sum.r10_us.push(r.pass.saturating_sub(t) as u64),
                 _ => {
@@ -307,6 +333,9 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
             }
         }
     }
+    if let Some((id, _)) = open_audit {
+        return Err(format!("audit {id} began and never ended"));
+    }
     if sum.picks == 0 {
         return Err("the trace holds no pick: nothing was checked".into());
     }
@@ -320,66 +349,158 @@ fn percentile(v: &mut [u64], q: usize) -> u64 {
     v.get((v.len() * q).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0)
 }
 
+/// The audit time inside `[from, to]`, µs: the part of each audit's span that falls in it, so an
+/// audit straddling an edge counts only its inside. `audits` is in trace order, so by time.
+pub fn audit_inside(audits: &[(u64, u64)], from: u64, to: u64) -> u64 {
+    let first = audits.partition_point(|a| a.1 <= from);
+    audits[first..].iter().take_while(|a| a.0 < to).map(|a| a.1.min(to).saturating_sub(a.0.max(from))).sum()
+}
+
+/// The measures a program times on `time_now` and prints sample by sample, each a window
+/// `[end - gross, end]` in µs: `LATENCY-SAMPLE <group> <measure> <end> <gross>`, the group being
+/// what the program judges apart (`N=16`). With them, how many it took of each
+/// (`LATENCY-COUNT <group> <measure> <n>`), so a window lost on the way fails the check.
+const MEASURES: [&str; 4] = ["driver_wake", "timer_wake", "decision_wake", "deadline_notice"];
+
+/// The windows the program printed, `(end, gross)` in µs, and the count it took, by measure (its
+/// index in [`MEASURES`]) and group. Every group's windows must number its count.
+fn samples(log: &str) -> Result<BTreeMap<(usize, &str), Vec<(u64, u64)>>, String> {
+    let mut windows: BTreeMap<(usize, &str), Vec<(u64, u64)>> = BTreeMap::new();
+    let mut counts = BTreeMap::new();
+    for line in log.lines().map(|line| line.trim_end_matches('\r')) {
+        let (sample, rest) = match (line.strip_prefix("LATENCY-SAMPLE "), line.strip_prefix("LATENCY-COUNT "))
+        {
+            (Some(rest), _) => (true, rest),
+            (_, Some(rest)) => (false, rest),
+            _ => continue,
+        };
+        let bad = || format!("malformed {line:?}");
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        let (group, measure) = (f.first().ok_or_else(bad)?, f.get(1).ok_or_else(bad)?);
+        let m = MEASURES.iter().position(|x| x == measure).ok_or_else(bad)?;
+        let num = |i: usize| f.get(i).and_then(|v| v.parse::<u64>().ok()).ok_or_else(bad);
+        if sample && f.len() == 4 && num(3)? <= num(2)? {
+            windows.entry((m, *group)).or_default().push((num(2)?, num(3)?));
+        } else if !sample && f.len() == 3 && counts.insert((m, *group), num(2)?).is_none() {
+            windows.entry((m, *group)).or_default();
+        } else {
+            return Err(bad());
+        }
+    }
+    for (&(m, group), w) in &windows {
+        if counts.get(&(m, group)) != Some(&(w.len() as u64)) {
+            return Err(format!(
+                "{group} {}: {} windows printed, but the program counted {:?}",
+                MEASURES[m],
+                w.len(),
+                counts.get(&(m, group))
+            ));
+        }
+    }
+    Ok(windows)
+}
+
 /// The bench's post-check: parse the case's console log and check it. `args` may bound the p99
-/// of R10's durations, `r10_p99_us=N`, and a lease's end from the steward's decision,
-/// `lease_end_p99_us=N`: the worst decision-wake p99 the program printed (over every N) plus R10's
-/// p99 (kernel/scheduling.md, "Responsiveness").
+/// of R10's durations, `r10_p99_us=N`; each measure's p50 and p99 net of audits,
+/// `<measure>_p50_us=N` and `<measure>_p99_us=N`, in each group the program printed; and a
+/// lease's end from the steward's decision, `lease_end_p99_us=N`: the worst net decision-wake p99
+/// (over every group) plus R10's p99 (kernel/scheduling.md, "Responsiveness"). Every window a
+/// target judges has the checked build's audit time inside it subtracted; R10's has none.
 pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
+    let samples = samples(log)?;
     let n = sum.r10_us.len();
     let (p50, p99, max) = (
         percentile(&mut sum.r10_us, 50),
         percentile(&mut sum.r10_us, 99),
         sum.r10_us.last().copied().unwrap_or(0),
     );
-    let mut lease_end = String::new();
+    // Each bound, by its argument's name.
+    let mut bounds = BTreeMap::new();
     for arg in args.split_whitespace() {
         let (name, bound) = arg
             .split_once('=')
             .and_then(|(name, v)| Some((name, v.parse::<u64>().ok()?)))
             .ok_or_else(|| format!("unknown sched_oracle argument {arg:?}"))?;
-        if n == 0 {
-            return Err(format!("{name} is set, but the trace holds no destruction"));
+        let measure = name.strip_suffix("_p50_us").or_else(|| name.strip_suffix("_p99_us"));
+        if !(["r10_p99_us", "lease_end_p99_us"].contains(&name)
+            || measure.is_some_and(|m| MEASURES.contains(&m)))
+        {
+            return Err(format!("unknown sched_oracle argument {arg:?}"));
         }
-        match name {
-            "r10_p99_us" if p99 > bound => {
-                return Err(format!("R10's p99 is {p99} µs over {n} destructions, above {bound}"));
+        bounds.insert(name, bound);
+    }
+    if n == 0 && (bounds.contains_key("r10_p99_us") || bounds.contains_key("lease_end_p99_us")) {
+        return Err("an R10 bound is set, but the trace holds no destruction".into());
+    }
+    if let Some(bound) = bounds.get("r10_p99_us").filter(|b| p99 > **b) {
+        return Err(format!("R10's p99 is {p99} µs over {n} destructions, above {bound}"));
+    }
+    // Each measure in each group, net of the audits inside its windows.
+    let (mut lines, mut missed, mut decision_p99) = (Vec::new(), false, None::<u64>);
+    for (m, measure) in MEASURES.iter().enumerate() {
+        let want = ["p50", "p99"].map(|q| (q, bounds.get(&*format!("{measure}_{q}_us"))));
+        let groups: Vec<_> = samples.range((m, "")..(m + 1, "")).filter(|(_, w)| !w.is_empty()).collect();
+        if groups.is_empty() && want.iter().any(|(_, b)| b.is_some()) {
+            return Err(format!("a {measure} bound is set, but the log holds no {measure} sample"));
+        }
+        for ((_, group), windows) in groups {
+            let mut gross: Vec<u64> = windows.iter().map(|(_, g)| *g).collect();
+            let inside: Vec<u64> =
+                windows.iter().map(|(end, g)| audit_inside(&sum.audits, end - g, *end)).collect();
+            let mut net: Vec<u64> = windows.iter().zip(&inside).map(|((_, g), a)| g - a).collect();
+            let stats =
+                |v: &mut Vec<u64>| (percentile(v, 50), percentile(v, 99), v.last().copied().unwrap_or(0));
+            let ((g50, g99, gmax), (n50, n99, nmax)) = (stats(&mut gross), stats(&mut net));
+            let judged: Vec<(String, bool)> = want
+                .iter()
+                .filter_map(|(q, b)| {
+                    b.map(|b| (format!("{q} <= {b}"), if *q == "p50" { n50 } else { n99 } <= *b))
+                })
+                .collect();
+            let met = judged.iter().all(|(_, ok)| *ok);
+            missed |= !met;
+            if *measure == "decision_wake" {
+                decision_p99 = Some(decision_p99.unwrap_or(0).max(n99));
             }
-            "r10_p99_us" => {}
-            "lease_end_p99_us" => {
-                let wake = decision_wake_p99(log)?;
-                if wake + p99 > bound {
-                    return Err(format!(
-                        "a lease's end, decision wake p99 {wake} µs + R10 p99 {p99} µs, is above {bound}"
-                    ));
-                }
-                lease_end = format!("; lease end p99 {wake} + {p99} = {} µs", wake + p99);
-            }
-            _ => return Err(format!("unknown sched_oracle argument {arg:?}")),
+            let target = if judged.is_empty() {
+                "no target".to_string()
+            } else {
+                let texts: Vec<&str> = judged.iter().map(|(text, _)| text.as_str()).collect();
+                format!("target {} ({})", if met { "met" } else { "missed" }, texts.join(", "))
+            };
+            lines.push(format!(
+                "{group} {measure} ({}): net p50/p99/max {n50}/{n99}/{nmax} µs, gross {g50}/{g99}/{gmax}, audits {} µs: {target}",
+                gross.len(),
+                inside.iter().sum::<u64>()
+            ));
         }
     }
-    Ok(format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}{lease_end}",
+    let mut lease_end = String::new();
+    if let Some(bound) = bounds.get("lease_end_p99_us") {
+        let wake =
+            decision_p99.ok_or("lease_end_p99_us is set, but the log holds no decision_wake sample")?;
+        missed |= wake + p99 > *bound;
+        lease_end = format!(
+            "; lease end p99, net decision wake {wake} + R10 {p99} = {} µs: target {} (<= {bound})",
+            wake + p99,
+            if wake + p99 <= *bound { "met" } else { "missed" }
+        );
+    }
+    let audit_total: u64 = sum.audits.iter().map(|(b, e)| e - b).sum();
+    let head = format!(
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, no audit inside one; {} audits, {audit_total} µs{lease_end}",
         records.len(),
         sum.picks,
         sum.lifts,
         sum.telling,
         sum.reweighs,
-        sum.r10_frames
-    ))
-}
-
-/// The worst steward decision-wake p99 the program printed, µs: its lines read
-/// `[latency] N=<n> steward decision wake: <p50> / <p99> / <max> (<samples>): ...`.
-fn decision_wake_p99(log: &str) -> Result<u64, String> {
-    let mut worst = None;
-    for (_, rest) in log.lines().filter_map(|line| line.split_once(" steward decision wake: ")) {
-        let p99 = rest.split(" / ").nth(1).and_then(|v| v.parse::<u64>().ok());
-        let p99 = p99.ok_or_else(|| format!("unreadable decision wake {rest:?}"))?;
-        worst = Some(worst.unwrap_or(0).max(p99));
-    }
-    worst.ok_or_else(|| "lease_end_p99_us is set, but the log holds no decision wake".into())
+        sum.r10_frames,
+        sum.audits.len()
+    );
+    let out = std::iter::once(head).chain(lines).collect::<Vec<_>>().join("\n      ");
+    if missed { Err(out) } else { Ok(out) }
 }
 
 #[cfg(test)]
@@ -584,16 +705,113 @@ mod tests {
         );
         assert!(run(&t, "r10_p99_us=49").is_err_and(|e| e.contains("above 49")));
         assert!(run(&t, "r10_p99=49").is_err());
-        // A lease's end: the worst decision-wake p99 over every N, plus R10's p99 (50).
-        assert!(run(&t, "lease_end_p99_us=1000").is_err_and(|e| e.contains("no decision wake")));
-        let t = t + "[latency] N=1 steward decision wake: 5 / 900 / 900 (50): target met\n\
-               [latency] N=16 steward decision wake: 7 / 950 / 950 (50): target met\n";
+        // A lease's end: the worst net decision-wake p99 over every group, plus R10's p99 (50).
+        assert!(run(&t, "lease_end_p99_us=1000").is_err_and(|e| e.contains("no decision_wake sample")));
+        let t = t + "LATENCY-SAMPLE N=1 decision_wake 1900 900\nLATENCY-COUNT N=1 decision_wake 1\n\
+                     LATENCY-SAMPLE N=16 decision_wake 2950 950\nLATENCY-COUNT N=16 decision_wake 1\n";
         let ok = run(&t, "r10_p99_us=50 lease_end_p99_us=1000");
-        assert!(ok.as_ref().is_ok_and(|s| s.contains("lease end p99 950 + 50 = 1000 µs")), "{ok:?}");
-        assert!(run(&t, "lease_end_p99_us=999").is_err_and(|e| e.contains("above 999")));
+        assert!(
+            ok.as_ref().is_ok_and(|s| s.contains("decision wake 950 + R10 50 = 1000 µs: target met")),
+            "{ok:?}"
+        );
+        assert!(run(&t, "lease_end_p99_us=999").is_err_and(|e| e.contains("target missed (<= 999)")));
         // Unpaired or nested brackets.
         assert!(verdict(&[(1, 'Y', 7, 1), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
         assert!(verdict(&[(1, 'X', 7, 1), (1, 'X', 8, 2), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
+    }
+
+    /// A destruction from 100 to 130 µs, an audit from 130 to 154 (after `Y`, as the kernel runs
+    /// it) and one from 300 to 308 (at a process object's free), then `samples`.
+    fn audited(samples: &str) -> String {
+        trace(&[
+            (1, 'X', 7, 100),
+            (1, 'Y', 7, 130),
+            (1, 'U', 1, 130),
+            (1, 'V', 1, 154),
+            (2, 'U', 2, 300),
+            (2, 'V', 2, 308),
+            (2, 'W', 1, 5),
+            (2, 'K', 1, 5),
+        ]) + samples
+    }
+
+    #[test]
+    fn audits_are_subtracted_inside_each_window() {
+        let spans = [(130, 154), (300, 308)];
+        // Inside: [120, 200] holds the first whole; [120, 400] both.
+        assert_eq!(audit_inside(&spans, 120, 200), 24);
+        assert_eq!(audit_inside(&spans, 120, 400), 32);
+        // Straddling an edge: only the part inside counts.
+        assert_eq!(audit_inside(&spans, 140, 200), 14);
+        assert_eq!(audit_inside(&spans, 100, 304), 28);
+        // None inside, an edge touching one included.
+        assert_eq!(audit_inside(&spans, 154, 300), 0);
+        assert_eq!(audit_inside(&spans, 0, 100), 0);
+        // The deadline notice: a 40 µs target. Its window [100, 160] holds 24 µs of audit (gross 60,
+        // net 36); [145, 185] the audit's last 9 (net 31); [200, 235] none (net 35).
+        let log = audited(
+            "LATENCY-SAMPLE N=1 deadline_notice 160 60\n\
+             LATENCY-SAMPLE N=1 deadline_notice 185 40\n\
+             LATENCY-SAMPLE N=1 deadline_notice 235 35\n\
+             LATENCY-COUNT N=1 deadline_notice 3\n",
+        );
+        let ok = run(&log, "deadline_notice_p99_us=36");
+        assert!(
+            ok.as_ref().is_ok_and(|s| s.contains(
+                "N=1 deadline_notice (3): net p50/p99/max 35/36/36 µs, gross 40/60/60, audits 33 µs: target met (p99 <= 36)"
+            ) && s.contains("2 audits, 32 µs")),
+            "{ok:?}"
+        );
+        let missed = run(&log, "deadline_notice_p99_us=35");
+        assert!(missed.as_ref().is_err_and(|e| e.contains("target missed (p99 <= 35)")), "{missed:?}");
+        // Unsubtracted, the same windows miss by the audit: a stamp the kernel left out is time
+        // the oracle never saw.
+        let unstamped = trace(&[(1, 'X', 7, 100), (1, 'Y', 7, 130), (2, 'W', 1, 5), (2, 'K', 1, 5)])
+            + "LATENCY-SAMPLE N=1 deadline_notice 160 60\nLATENCY-COUNT N=1 deadline_notice 1\n";
+        assert!(run(&unstamped, "deadline_notice_p99_us=40").is_err_and(|e| e.contains("target missed")));
+        // Groups are judged apart, and each measure's p50 too.
+        let log = audited(
+            "LATENCY-SAMPLE N=1 driver_wake 160 50\nLATENCY-COUNT N=1 driver_wake 1\n\
+             LATENCY-SAMPLE N=16 driver_wake 260 50\nLATENCY-COUNT N=16 driver_wake 1\n",
+        );
+        let v = run(&log, "driver_wake_p50_us=30 driver_wake_p99_us=50");
+        let n1 = "N=1 driver_wake (1): net p50/p99/max 26/26/26 µs, gross 50/50/50, audits 24 µs: target met";
+        let n16 =
+            "N=16 driver_wake (1): net p50/p99/max 50/50/50 µs, gross 50/50/50, audits 0 µs: target missed";
+        assert!(v.as_ref().is_err_and(|e| e.contains(n1) && e.contains(n16)), "{v:?}");
+        // A bound with no sample, a malformed sample, an unknown measure.
+        assert!(run(&audited(""), "timer_wake_p99_us=5").is_err_and(|e| e.contains("no timer_wake sample")));
+        assert!(run(&audited("LATENCY-SAMPLE N=1 timer_wake 5\n"), "").is_err());
+        assert!(run(&audited("LATENCY-SAMPLE N=1 timer_wake 5 6\n"), "").is_err());
+        assert!(run(&audited("LATENCY-SAMPLE N=1 lunch 9 6\n"), "").is_err());
+        // A window lost on the way (the program counted two), a count with no windows, and windows
+        // with no count.
+        let lost = audited("LATENCY-SAMPLE N=1 timer_wake 9 6\nLATENCY-COUNT N=1 timer_wake 2\n");
+        assert!(
+            run(&lost, "").is_err_and(|e| e.contains("1 windows printed, but the program counted Some(2)"))
+        );
+        assert!(run(&audited("LATENCY-COUNT N=1 timer_wake 2\n"), "").is_err());
+        assert!(run(&audited("LATENCY-SAMPLE N=1 timer_wake 9 6\n"), "").is_err());
+        assert!(run(&audited("LATENCY-COUNT N=1 timer_wake 0\n"), "").is_ok());
+        assert!(run(&audited(""), "lunch_p99_us=5").is_err());
+    }
+
+    #[test]
+    fn an_unmatched_audit_fails() {
+        let pick = [(2, 'W', 1, 5), (2, 'K', 1, 5)];
+        for (what, head) in [
+            ("a begin with no end", vec![(1, 'U', 1, 130)]),
+            ("an end with no begin", vec![(1, 'V', 1, 154)]),
+            ("an end of another audit", vec![(1, 'U', 1, 130), (1, 'V', 2, 154)]),
+            ("an end before its begin", vec![(1, 'U', 1, 154), (1, 'V', 1, 130)]),
+            ("nested", vec![(1, 'U', 1, 130), (1, 'U', 2, 131), (1, 'V', 2, 132), (1, 'V', 1, 133)]),
+            // R10 subtracts nothing: an audit inside a destruction fails it.
+            ("inside R10", vec![(1, 'X', 7, 100), (1, 'U', 2, 110), (1, 'V', 2, 111), (1, 'Y', 7, 130)]),
+        ] {
+            let v = verdict(&[head, pick.to_vec()].concat());
+            assert!(v.as_ref().is_err_and(|e| e.contains("audit")), "{what}: {v:?}");
+        }
+        assert!(verdict(&[vec![(1, 'U', 1, 130), (1, 'V', 1, 154)], pick.to_vec()].concat()).is_ok());
     }
 
     #[test]

@@ -76,12 +76,14 @@ pub enum Role {
     /// count.
     DestroyThenCount = 18,
     /// The latency case's driver stand-in: p0 samples of the goldfish RTC's alarm (MMIO in slot
-    /// 3, interrupt in slot 4), each waited for in `receive`; report [`Stats::DRIVER_WAKE`].
+    /// 3, interrupt in slot 4), each waited for in `receive`; report [`Stats::DRIVER_WAKE`]. With
+    /// p1 = 1, hold each sample's window until the launcher asks ([`Bench::samples`]).
     Driver = 14,
     /// The latency case's steward stand-in, with leases carved from slot 3: p0 timeout wakes,
     /// p1 leases destroyed by hand (each after a timeout: its decision) and p1 destroyed by their
     /// deadlines; report [`Stats::TIMER_WAKE`], [`Stats::DESTROY`], [`Stats::DECISION_WAKE`] and
-    /// [`Stats::DEADLINE`].
+    /// [`Stats::DEADLINE`]. With p2 = 1, hold each wake's and notice's window until the launcher
+    /// asks ([`Bench::samples`]).
     Steward = 15,
     /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from 200 µs
     /// ahead, each round then counting for 1 ms; report the count.
@@ -345,11 +347,11 @@ pub extern "C" fn child(arg: usize) -> ! {
             rd::process_exit(0)
         }
         Some(Role::Driver) => {
-            driver(param(0) as usize);
+            driver(param(0) as usize, param(1) == 1);
             rd::process_exit(0)
         }
         Some(Role::Steward) => {
-            steward(param(0) as usize, param(1) as usize);
+            steward(param(0) as usize, param(1) as usize, param(2) == 1);
             rd::process_exit(0)
         }
         Some(Role::Probe) => {
@@ -571,6 +573,17 @@ impl Stats {
     pub const DRIVER_WAKE: usize = 1;
     pub const TIMER_WAKE: usize = 2;
 
+    /// The name the bench's post-check knows a measure's samples by.
+    fn measure(tag: usize) -> Option<&'static str> {
+        match tag {
+            Stats::DRIVER_WAKE => Some("driver_wake"),
+            Stats::TIMER_WAKE => Some("timer_wake"),
+            Stats::DECISION_WAKE => Some("decision_wake"),
+            Stats::DEADLINE => Some("deadline_notice"),
+            _ => None,
+        }
+    }
+
     /// Sort `samples` and send `[p50, p99, max, tag | count << 8]` on slot 1.
     fn report(samples: &mut [u64], tag: usize) {
         samples.sort_unstable();
@@ -585,11 +598,34 @@ impl Stats {
 /// The most samples a stand-in takes of one thing.
 const MAX_SAMPLES: usize = 256;
 
+/// One latency sample's window: its end on `time_now` and its length, µs. The bench's post-check
+/// subtracts the checked build's audit time inside it (kernel/scheduling.md, "Responsiveness").
+#[derive(Clone, Copy, Default)]
+struct Window {
+    end: u64,
+    gross: u64,
+}
+
+/// After a stand-in's reports, once the launcher asks on slot 2 (when every measurement is over,
+/// so the windows' messages perturb none): send each window, `[end, end, gross, tag]` (the end in
+/// halves), then `[0; 4]`.
+fn hand_over(sets: &[(usize, &[Window])]) {
+    let _ = rd::receive(Some(2), rd::FOREVER, 0);
+    for (tag, windows) in sets {
+        for w in windows.iter() {
+            let [lo, hi] = halves(w.end);
+            let _ = rd::send(1, &rd::body([lo, hi, w.gross as usize, *tag]), None, rd::FOREVER);
+        }
+    }
+    let _ = rd::send(1, &rd::body([0; 4]), None, rd::FOREVER);
+}
+
 /// The driver stand-in: `k` alarms, each a little over 2 ms ahead (phases spread over a
 /// millisecond); how late, on the RTC's own clock, it runs again after each.
-fn driver(k: usize) {
+fn driver(k: usize, hold: bool) {
     let Ok((base, _)) = rd::map_device(3) else { return };
     let mut late = [0u64; MAX_SAMPLES];
+    let mut windows = [Window::default(); MAX_SAMPLES];
     let (k, mut n, mut lost) = (k.min(MAX_SAMPLES), 0, 0usize);
     for i in 0..2 * k {
         if n == k {
@@ -601,7 +637,11 @@ fn driver(k: usize) {
         // got back into `receive`) may never be delivered (R5; docs/todo/irq-level-latch.md);
         // give up on it after 100 ms, count it, and arm again.
         if matches!(rd::receive(Some(4), 100_000, 0), Ok(Received::Interrupt)) {
+            // The same window on `time_now` (the RTC keeps virtual time too), its end read first
+            // so that it holds all the lateness measured.
+            let end = rd::time_now().unwrap_or(0);
             late[n] = rtc::now_ns(base).saturating_sub(at) / 1000;
+            windows[n] = Window { end, gross: late[n] };
             n += 1;
         } else {
             lost += 1;
@@ -610,21 +650,27 @@ fn driver(k: usize) {
     }
     Stats::report(&mut late[..n], Stats::DRIVER_WAKE);
     let _ = rd::send(1, &rd::body([lost, 0, 0, Stats::DRIVER_LOST | 1 << 8]), None, rd::FOREVER);
+    if hold {
+        hand_over(&[(Stats::DRIVER_WAKE, &windows[..n])]);
+    }
 }
 
 /// The steward stand-in: `k` timeout wakes (how late it runs again after each deadline); `leases`
 /// one-process leases carved from slot 3, each destroyed by hand after a timeout (how long
 /// `budget_destroy` takes); and `leases` more destroyed by their deadlines (how late the killed
 /// notice arrives).
-fn steward(k: usize, leases: usize) {
+fn steward(k: usize, leases: usize, hold: bool) {
     let now = || rd::time_now().unwrap_or(0);
     let (k, leases) = (k.min(MAX_SAMPLES), leases.min(MAX_SAMPLES));
     let mut wake = [0u64; MAX_SAMPLES];
+    let mut windows = [[Window::default(); MAX_SAMPLES]; 3];
     for (i, sample) in wake[..k].iter_mut().enumerate() {
         let timeout = 3_000 + (i as u64 * 397) % 1_000;
         let before = now();
         let _ = rd::receive(None, timeout, 0);
-        *sample = now().saturating_sub(before + timeout);
+        let end = now();
+        *sample = end.saturating_sub(before + timeout);
+        windows[0][i] = Window { end, gross: *sample };
     }
     Stats::report(&mut wake[..k], Stats::TIMER_WAKE);
     let image = spawn::image();
@@ -650,6 +696,7 @@ fn steward(k: usize, leases: usize) {
         let _ = rd::receive(None, 5_000, 0);
         let woke = now();
         decision[ns] = woke.saturating_sub(before + 5_000);
+        windows[1][ns] = Window { end: woke, gross: decision[ns] };
         ns += 1;
         if rd::destroy(lease).is_ok() {
             destroy[nd] = now() - woke;
@@ -675,7 +722,9 @@ fn steward(k: usize, leases: usize) {
         }
         if let Ok(Received::Exit(n)) = rd::receive(Some(exit), 1_000_000, 0) {
             if n.cause == rd::Cause::Killed {
-                notice[nn] = now().saturating_sub(deadline);
+                let end = now();
+                notice[nn] = end.saturating_sub(deadline);
+                windows[2][nn] = Window { end, gross: notice[nn] };
                 nn += 1;
             }
         }
@@ -683,6 +732,13 @@ fn steward(k: usize, leases: usize) {
     Stats::report(&mut destroy[..nd], Stats::DESTROY);
     Stats::report(&mut decision[..ns], Stats::DECISION_WAKE);
     Stats::report(&mut notice[..nn], Stats::DEADLINE);
+    if hold {
+        hand_over(&[
+            (Stats::TIMER_WAKE, &windows[0][..k]),
+            (Stats::DECISION_WAKE, &windows[1][..ns]),
+            (Stats::DEADLINE, &windows[2][..nn]),
+        ]);
+    }
 }
 
 /// A lease's process: spin until killed.
@@ -785,6 +841,8 @@ pub struct Bench {
     exit: u32,
     rep: u32,
     go: [u32; 64],
+    /// Each child's go handle, kept to ask it for its samples ([`Bench::samples`]).
+    ask: [u32; 64],
     started: usize,
     /// `rdtime` ticks per microsecond.
     pub tpu: u64,
@@ -810,7 +868,8 @@ impl Bench {
         // The loop's rate alone, over 100 ms.
         let n = spin_until(ticks() + 100_000 * tpu);
         let rate = n / 100;
-        let b = Bench { image, exit, rep, go: [0; 64], started: 0, tpu, rate, name, failed: false };
+        let b =
+            Bench { image, exit, rep, go: [0; 64], ask: [0; 64], started: 0, tpu, rate, name, failed: false };
         let _ = writeln!(Console, "[{}] calibrated: {} ticks/us, {} iterations/ms", name, tpu, rate);
         b
     }
@@ -835,6 +894,7 @@ impl Bench {
         let rep_client = rd::mint_from_handle(self.rep, i as u64 + 1, None).unwrap();
         let go = rd::endpoint_create().unwrap();
         self.go[i] = rd::mint_from_handle(go, 1, None).unwrap();
+        self.ask[i] = self.go[i];
         let mut startup = [0u8; 1 + 8 * 8];
         startup[0] = role as u8;
         for (k, p) in params.iter().enumerate().take(7) {
@@ -904,6 +964,41 @@ impl Bench {
         }
         while rd::receive(Some(self.exit), 0, 0).is_ok() {}
         out
+    }
+
+    /// Ask child `i`, a stand-in holding its samples, for them, once every report is collected,
+    /// and print each as `LATENCY-SAMPLE <group> <measure> <end> <gross>` (µs) for the bench's
+    /// post-check (`sched_oracle`), which judges the targets net of the checked build's audits.
+    /// `reports` are the child's reports: each measure's count among them is printed too
+    /// (`LATENCY-COUNT <group> <measure> <n>`), so a window lost on the way fails the check.
+    pub fn samples(&mut self, i: usize, reports: &[[usize; 4]], group: core::fmt::Arguments) {
+        for w in reports {
+            if let Some(measure) = Stats::measure(w[3] & 0xff).filter(|_| w[3] >> 8 > 0) {
+                let _ = writeln!(Console, "LATENCY-COUNT {} {} {}", group, measure, w[3] >> 8);
+            }
+        }
+        let _ = rd::send(self.ask[i], &rd::body([0; 4]), None, rd::FOREVER);
+        loop {
+            let Ok(Received::Message(m)) = rd::receive(Some(self.rep), 60_000_000, 0) else {
+                self.check(false, format_args!("{}: a stand-in's samples stopped", group));
+                return;
+            };
+            if m.badge as usize != i + 1 {
+                self.check(
+                    false,
+                    format_args!(
+                        "{}: a report from child {} among child {}'s samples",
+                        group,
+                        m.badge,
+                        i + 1
+                    ),
+                );
+                return;
+            }
+            let w = m.body.words;
+            let Some(measure) = Stats::measure(w[3]) else { return };
+            let _ = writeln!(Console, "LATENCY-SAMPLE {} {} {} {}", group, measure, join(w[0], w[1]), w[2]);
+        }
     }
 
     /// A count as a share of the window, in thousandths.

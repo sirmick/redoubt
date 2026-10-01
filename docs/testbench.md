@@ -230,7 +230,7 @@ so they run a tester in `init`'s place instead.
 
 ### The scheduler oracle
 
-Status: built · tested: bench:sched-ties, host:testbench::a_trace_that_keeps_every_clause_passes, host:testbench::each_broken_clause_is_caught, host:testbench::a_broken_trace_is_rejected, host:testbench::the_models_own_ranks_pass, host:testbench::the_models_broken_ties_are_caught, host:testbench::lifts_are_recomputed, host:testbench::weight_changes_are_recomputed, host:testbench::the_floor_and_the_passes_are_checked_on_their_own, host:testbench::destructions_are_timed_and_bounded
+Status: built · tested: bench:sched-ties, host:testbench::a_trace_that_keeps_every_clause_passes, host:testbench::each_broken_clause_is_caught, host:testbench::a_broken_trace_is_rejected, host:testbench::the_models_own_ranks_pass, host:testbench::the_models_broken_ties_are_caught, host:testbench::lifts_are_recomputed, host:testbench::weight_changes_are_recomputed, host:testbench::the_floor_and_the_passes_are_checked_on_their_own, host:testbench::destructions_are_timed_and_bounded, host:testbench::audits_are_subtracted_inside_each_window, host:testbench::an_unmatched_audit_fails
 
 The oracle is independent of the kernel's code: it reads what the queue did (woke, requeued, left,
 pass changed, picked), never why, and rebuilds the order from the events alone: the lowest pass
@@ -243,7 +243,7 @@ time. The tracing kernel is a test build only
 
 ## Checked builds
 
-Status: built · tested: bench:bench-debug-assertions, bench:bench-debug-assertions-off
+Status: built · tested: bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:sched-latency, host:testbench::audits_are_subtracted_inside_each_window, host:testbench::an_unmatched_audit_fails
 
 `debug_assertions = true` builds the kernel and the loader (the trusted base, not the programs) with
 the workspace's `checked` profile: `release` with debug assertions and overflow checks on. It is the
@@ -262,9 +262,17 @@ A checked build also runs the kernel's audits, full scans that check the indexes
 handle chains after a destruction and when a process object is freed. They hold the hart while
 they run, and a release build has none of them. So a latency target, which is measured in a checked
 build because the scheduler trace needs one, excludes them. The traced kernel stamps each audit's
-start and end, and `sched_oracle` subtracts the audit time inside each measured window before it
-applies a target. It reports the audit total beside the target
-([responsiveness](kernel/scheduling.md#responsiveness)). The audits themselves stay full.
+start and end (records `U` and `V`: which audit, and the time). The program prints each latency
+sample's window, its end on `time_now` and its length (`LATENCY-SAMPLE <group> <measure> <end>
+<gross>`) and how many it took of each, so a window lost on the way fails the check, and it
+judges none of them. `sched_oracle` subtracts the audit time inside each window,
+counting only the part of an audit that falls in it, and then applies the case's bounds
+(`deadline_notice_p99_us=40000`). It reports the gross, the net and the audit time beside each
+target ([responsiveness](kernel/scheduling.md#responsiveness)). An audit that never ends, ends
+without beginning or runs inside a destruction fails the check. The oracle subtracts only what the
+trace shows it: a kernel built with `audit-unstamped`, which leaves the audit after a destruction
+unstamped, misses the containment gate's deadline notice, in a recorded negative run. The audits
+themselves stay full.
 
 Many cases use the profile: every case file with `debug_assertions = true`, most of them over
 both widths (`budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc` and `smp-spike` among

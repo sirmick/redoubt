@@ -250,7 +250,7 @@ remainder alone rescaled, as before, it got 0.
 
 ### Responsiveness
 
-Status: built · tested: bench:sched-latency, bench:budget-destroy-growth, host:testbench::destructions_are_timed_and_bounded
+Status: built · tested: bench:sched-latency, bench:budget-destroy-growth, host:testbench::destructions_are_timed_and_bounded, host:testbench::audits_are_subtracted_inside_each_window, host:testbench::an_unmatched_audit_fails
 
 No wake latency follows from weight. A wake waits out the running thread's slice, a waking
 budget keeps a pass above the floor if it has one, and several budgets can tie at the floor. So
@@ -277,6 +277,26 @@ kernel a release build runs: the audit time inside its window is subtracted, fro
 audit records, and reported beside it ([checked builds](../testbench.md#checked-builds)). With two
 full handle tables live, the audits are about 24 ms after a destruction and 8 ms at a free.
 
+Measured at seed 3, p99 in µs, net / gross (audit time inside the windows): the audits hold the
+deadline notice, which waits out the audit after its own destruction, and little else. The
+trace's audit stamps shift the phases, so these seed-3 numbers differ from the sweeps', whose
+figures stay as measured.
+
+| Measure (p99, N = 1 / 4 / 16) | rv64 | rv32 |
+| --- | --- | --- |
+| deadline notice | 4121 / 4766 / 5322 net, 19745 / 21944 / 22928 gross | 4319 / 5015 / 5587 net, 19524 / 21860 / 22887 gross |
+| driver wake | 9622 / 18424 / 33003 net, 9622 / 20033 / 33003 gross | 10037 / 11468 / 34101, net = gross |
+| steward timer wake | 8533 / 9649 / 31939, net = gross | 8908 / 10250 / 34440, net = gross |
+| steward decision wake | 5927 / 17050 / 50201, net = gross | 6165 / 6404 / 29483, net = gross |
+| a lease's end (worst decision wake + R10) | 50201 + 5560 = 55761 | 29483 + 5824 = 35307 |
+
+The run's 837 audits total 7.55 s (rv64) and 7.29 s (rv32) of the hart; R10 itself has none
+inside it, which the oracle asserts. In the containment gate, with two full handle tables live
+(rv64, seed 3, its D leases' notices), the deadline notice is 23,185 µs net and 53,830 µs gross,
+492,458 µs of audit inside its windows. With the audit after a destruction left unstamped
+(`audit-unstamped`, the recorded negative run), it is 47,270 µs net: the target misses, since the
+oracle subtracts only what the trace shows it.
+
 **The gate runs one pinned seed.** The guest's boot RNG seed decides the PIDs the kernel draws,
 which shift instruction counts and so the phase of every later event; with it pinned, a run
 repeats exactly, and the case prints the seed so that a failure replays. One seed hides the
@@ -298,9 +318,9 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 30 ms is 3,750,000, 40 ms is 5,000,000,
 50 ms is 6,250,000, 95 ms is 11,875,000, 125 ms is 15,625,000, and one 10 ms slice is 1,250,000.
 
-The decision wake is measured by the stand-in itself (`time_now` against its own deadline) and
-read from its console lines, while R10's time comes from the kernel's trace: that half of the
-lease-end sum is the program's own report, not the kernel's.
+The decision wake is measured by the stand-in itself (`time_now` against its own deadline), and
+the post-check reads its sample windows, net of audits, while R10's time comes from the kernel's
+trace: that half of the lease-end sum is the program's own report, not the kernel's.
 
 **The sweep** (2026-09-27, seeds 1 to 16, on rv64 and rv32, `TESTBENCH_QEMU_SEED`; the gate runs
 seed 3, this sweep's worst, and no gate sets the variable). The steward decision wake, p50 / p99 in µs at N = 1, 4 and 16, and a lease's end (the
@@ -539,7 +559,7 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 `sched-trace`, and no default build enables it:
 - the kernel's default features are `print-panics` alone, and `./build` adds only the board
   (`qemu-virt`);
-- every trace site in `kernel/src/{sched,budget,mem,main,redoubt}.rs` sits under
+- every trace site in `kernel/src/{sched,budget,mem,main,process,redoubt}.rs` sits under
   `#[cfg(feature = "sched-trace")]`, so with the feature off the ring, its records and its
   `SCHED-TRACE` console lines are not compiled;
 - the bench turns it on per case (`kernel_features`), only for `sched-ties`,
@@ -547,7 +567,9 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   reads the trace printed at `system_reset`.
 
 The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
-debug-only break of the tie rule that implies the trace, and `debug-print`, which prints every
+debug-only break of the tie rule that implies the trace; `audit-unstamped`, which leaves the audit
+after a destruction out of the trace, for one recorded negative run
+([responsiveness](#responsiveness)); and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
 ([devices](devices.md)), and so are `handle-chain-fault` and `process-chain-fault`, a handle
 installed without its stamp entry or its process object entry for the chain audit to catch
@@ -591,9 +613,6 @@ Status: built · partly tested: a picked thread that dies before the switch, and
 - **Wakeup is prompt but not bounded.** A wake waits out the running slice, may keep a larger
   pass, and may tie. Human control rests on a measured steward lease-termination latency, not a
   proven bound, until something needs a real-time rule ([TENETS](../TENETS.md#guarantees)).
-- **The targets still count the checked build's audits.** Nothing subtracts the audit time yet,
-  so a run with full handle tables live misses the deadline notice by the audits alone. Follow-up:
-  [todo](../todo/latency-excludes-audits.md).
 - **The steward decision wake is late by whole slices.** A wake never preempts: at N = 16 the
   steward stand-in waits out the running slice, then the slices of any budgets that rank ahead of
   it. Its p50 is one or two slices late, depending on where its timeout lands against the running

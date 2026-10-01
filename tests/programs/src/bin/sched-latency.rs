@@ -25,12 +25,14 @@
 //! The targets (kernel/scheduling.md, virtual time, N <= 16, this workload): driver and steward
 //! timer wakes p50 <= 15 ms and p99 <= 50 ms; the steward's decision wake p50 <= 25 ms and p99 <=
 //! 95 ms (from the fourth seed sweep); deadline notice p99 <= 40 ms and R10 kernel time p99 <=
-//! 30 ms (R10's is the post-check); a lease's termination from the steward's decision, decision
-//! wake + R10, p99 <= 125 ms (the post-check adds the two); the 1000-weight server's share of the
-//! spinning CPU at N = 16 at least its weight's less 30/1000.
-//! Each is printed as `met` or `missed`; the virtual-time case requires `met`, and the plain-TCG
-//! reference case only reports. Destruction now follows the dying subtree, so adding objects to
-//! another budget moves no R10 term (docs/kernel/budgets.md, "Residual risks").
+//! 30 ms; a lease's termination from the steward's decision, decision wake + R10, p99 <= 125 ms;
+//! the 1000-weight server's share of the spinning CPU at N = 16 at least its weight's less
+//! 30/1000. The latency targets count the kernel a release build runs, so the program judges
+//! none of them: it prints each sample's window (`LATENCY-SAMPLE`), and the bench's post-check
+//! subtracts the checked build's audit time inside each window and judges the rest (the bounds
+//! are tests/sched-latency.toml's). The share is printed as `met` or `missed`. Destruction follows
+//! the dying subtree, so adding objects to another budget moves no R10 term
+//! (docs/kernel/budgets.md, "Residual risks").
 
 #![no_std]
 #![no_main]
@@ -45,17 +47,7 @@ const K: u64 = 200;
 /// Leases per run the steward destroys by hand, and as many by deadline.
 const LEASES: u64 = 50;
 const WINDOW_US: u64 = 16_000_000;
-/// The targets, µs.
-const WAKE_P50: usize = 15_000;
-const WAKE_P99: usize = 50_000;
-/// The steward's decision wake, set from the seed sweep (kernel/scheduling.md, "Responsiveness"):
-/// its worst case over the seeds plus a tenth, rounded up to 5 ms. The fourth sweep's worst p99
-/// is 82,497 us, so 95 ms; a lease's end follows.
-const DECISION_P50: usize = 25_000;
-const DECISION_P99: usize = 95_000;
-/// The deadline notice and R10's kernel time, set from the seed sweep and back at 30/40 ms now
-/// that a destruction follows the dying subtree (docs/kernel/budgets.md, "Residual risks").
-const NOTICE_P99: usize = 40_000;
+/// R10's kernel time target, µs, for `budget_destroy`'s recorded bound (the post-check judges R10).
 const R10_P99: usize = 30_000;
 
 fn verdict(b: bool) -> &'static str { if b { "met" } else { "missed" } }
@@ -85,8 +77,9 @@ pub extern "C" fn _start() -> ! {
         let steward = b.budget(rd::SYSTEM, 1000, 1, rd::FOREVER);
         // The steward's leases come from a sessions budget it holds.
         let leases = b.budget(rd::USERS, 100, 1, rd::FOREVER);
-        let d = b.start(driver, Role::Driver, &[K], &[rtc_mmio, rtc_irq]);
-        let s = b.start(steward, Role::Steward, &[K, LEASES], &[leases]);
+        // Both hold their samples' windows until asked, below.
+        let d = b.start(driver, Role::Driver, &[K, 1], &[rtc_mmio, rtc_irq]);
+        let s = b.start(steward, Role::Steward, &[K, LEASES, 1], &[leases]);
         let mut spinners = [0usize; 16];
         let mut budgets = [0u32; 17];
         for i in 0..n as usize {
@@ -112,41 +105,23 @@ pub extern "C" fn _start() -> ! {
         ));
         let stat =
             |i: usize, tag: usize| words[i].iter().find(|w| w[3] & 0xff == tag && w[3] >> 8 > 0).copied();
-        for (i, tag, what, p50, p99) in [
-            (d, Stats::DRIVER_WAKE, "driver wake", Some(WAKE_P50), WAKE_P99),
-            (s, Stats::TIMER_WAKE, "steward timer wake", Some(WAKE_P50), WAKE_P99),
-            (s, Stats::DECISION_WAKE, "steward decision wake", Some(DECISION_P50), DECISION_P99),
-            (s, Stats::DEADLINE, "deadline notice", None, NOTICE_P99),
+        // Gross, as measured; the post-check judges each net of the audits inside its windows.
+        for (i, tag, what) in [
+            (d, Stats::DRIVER_WAKE, "driver wake"),
+            (s, Stats::TIMER_WAKE, "steward timer wake"),
+            (s, Stats::DECISION_WAKE, "steward decision wake"),
+            (s, Stats::DEADLINE, "deadline notice"),
         ] {
             match stat(i, tag) {
-                Some(w) => {
-                    let met = p50.is_none_or(|t| w[0] <= t) && w[1] <= p99;
-                    match p50 {
-                        Some(t) => b.note(format_args!(
-                            "N={} {}: {} / {} / {} ({}): target {} (p50 <= {}, p99 <= {})",
-                            n,
-                            what,
-                            w[0],
-                            w[1],
-                            w[2],
-                            w[3] >> 8,
-                            verdict(met),
-                            t,
-                            p99
-                        )),
-                        None => b.note(format_args!(
-                            "N={} {}: {} / {} / {} ({}): target {} (p99 <= {})",
-                            n,
-                            what,
-                            w[0],
-                            w[1],
-                            w[2],
-                            w[3] >> 8,
-                            verdict(met),
-                            p99
-                        )),
-                    }
-                }
+                Some(w) => b.note(format_args!(
+                    "N={} {}: {} / {} / {} ({}): gross, audits included; net in the post-check",
+                    n,
+                    what,
+                    w[0],
+                    w[1],
+                    w[2],
+                    w[3] >> 8
+                )),
                 None => b.check(false, format_args!("N={} {}: no samples", n, what)),
             }
         }
@@ -169,6 +144,8 @@ pub extern "C" fn _start() -> ! {
             )),
             None => b.check(false, format_args!("N={} budget_destroy: no samples", n)),
         }
+        b.samples(d, &words[d], format_args!("N={}", n));
+        b.samples(s, &words[s], format_args!("N={}", n));
         if let Some(sv) = server {
             let total: u64 = spinners[..n as usize].iter().map(|i| count(*i)).sum::<u64>() + count(sv);
             let share = count(sv) * 1000 / total.max(1);
