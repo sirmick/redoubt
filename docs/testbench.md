@@ -457,7 +457,7 @@ shell or a login context, so the SELinux refusal above does not touch them.
 
 ## Self-checks
 
-Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused
+Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused, bench:bench-cbo-self-unrefused
 
 The harness can fail, and each feature shows it. Cases named `bench-*` check the bench itself:
 each feature has a case that passes only if the feature works and, where the bench can be
@@ -472,7 +472,9 @@ the bench's own trouble is a failure regardless. Each case writes its pattern an
 the evidence, so it cannot pass by failing for some other reason; the bench does not enforce the
 anchoring, so a reviewer checks it. An attack case can have a self-check of its own:
 `bench-net-self-unrefused` runs `net-attacks`'s boot with `ipd` not told one of the box's addresses,
-and must fail on the SYN the capture then shows.
+and must fail on the SYN the capture then shows. `bench-cbo-self-unrefused` runs
+`cbo-user-fault`'s boot with a kernel that leaves `senvcfg` permissive: all four cache-block
+operations must be seen running, and the run must fail on the verdict line that never comes.
 
 ## The unsafe budget
 

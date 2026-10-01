@@ -96,6 +96,7 @@ core::arch::global_asm!(
     .global _smp_secondary_land
     .balign 4
 _smp_secondary_land:               // virtual, MMU on; a0 = hartid still
+    csrw    0x10a, zero            // senvcfg 0, as `_start` writes it (R11)
     tail    {main}
 "#,
     main = sym secondary_main
@@ -109,6 +110,8 @@ extern "C" {
 /// The secondary hart lands here, through `_smp_secondary_land` (virtual, MMU on, interrupts
 /// off, `sp` set).
 extern "C" fn secondary_main(_hartid: usize) -> ! {
+    // R11: `_smp_secondary_land` wrote senvcfg 0, as `_start` does on the boot hart.
+    assert_eq!(riscv::register::senvcfg::read().bits(), 0, "senvcfg is not 0 on a secondary hart (R11)");
     for _ in 0..ITERS {
         COUNTER.with(|c| *c += 1);
     }

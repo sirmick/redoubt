@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 12
+revision = 50
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -47,8 +47,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "M1 (separation and containment)"
   template = "milestone"
   body = "docs/plan/m1-separation.md"
-  state = "active"
-  revision = 2
+  state = "reported"
+  revision = 16
 
 [[node]]
   id = "M2"
@@ -259,8 +259,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K8", "K9", "K10"]
   body = "Builds docs/kernel/README.md#containment (a926fd1c3; bench:kernel-containment; rv64 and rv32, checked build, virtual time, tracing kernel, pinned seed from a 16-seed sweep); docs/plan/m1-separation.md Kernel cases, the Containment row. Brief: .wash/local/GATE1-implementer.md. Design: QA GATE1-design. Owner: a missed responsiveness target stops GATE1 and pulls docs/todo/budget-destroy-cost.md forward as its own kernel package first. Tier A, size M."
-  state = "active"
-  revision = 9
+  state = "reported"
+  revision = 42
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
@@ -330,4 +330,61 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Folds origin/wp-SHELL1 (11 commits on 5bad23c6e, owner-authored) into redoubt, cautiously: rebased onto redoubt as wp-shell1 (.worktrees/shell1), conflicts in docs/plan/m1-separation.md and vendor/README.md resolved, then the full Tier A panel. Pages: docs/userland/shell.md, beamlet.md, native.md (the cell protocol), docs/SECURITY.md (the session), vendor/README.md. Tier A: beamlet's platform boundary, crypto crate swaps (RSA 0.10 RC, ed25519-compact), the cell-protocol parser, vendor-check and doccheck. Size L (7.6K lines outside vendor/, 381K vendored). Merges after K10."
   state = "reported"
-  revision = 10
+  revision = 41
+
+[[node]]
+  id = "ATK1"
+  title = "Attack cases for the address space and the memory calls"
+  template = "package"
+  parent = "M1"
+  body = "The memory.md, memory-layout.md and I9 lines of docs/todo/kernel-attack-gaps.md; docs/kernel/memory.md, docs/kernel/memory-layout.md. Brief: .wash/local/ATK1-implementer.md. Tier A (attack cases), size M."
+  state = "reported"
+  revision = 38
+
+[[node]]
+  id = "K11"
+  title = "User mode runs no cache-block operation"
+  template = "package"
+  parent = "M1"
+  body = "Closes docs/todo/user-cache-invalidate.md; rule on docs/kernel/memory.md#r11-memory. Brief: .wash/local/K11-implementer.md. Tier A (kernel arch, firmware), size S."
+  state = "done"
+  revision = 50
+
+[[node]]
+  id = "MOD1"
+  title = "The model checks in the kernel's order, and its mutations reach every rule"
+  template = "package"
+  parent = "M1"
+  body = "Closes docs/todo/abi-model-disagreements.md and the model.md lines of docs/todo/kernel-attack-gaps.md (not replay); docs/kernel/abi.md#errors-and-the-order-of-checks, docs/kernel/model.md. Brief: .wash/local/MOD1-implementer.md. Tier A (the model), size M."
+  state = "active"
+  revision = 19
+
+[[node]]
+  id = "SSH2"
+  title = "sshd: the requests the bench cannot see, and its vendored crates under Miri"
+  template = "package"
+  parent = "M1"
+  body = "Closes docs/todo/sshd-unseen-requests.md, docs/todo/sshd-vendored-miri.md and docs/todo/ssh-loopback-host.md (the OpenSSH reference case in a container: owner's decision on QA ssh-reference-selinux, rule on docs/testbench.md#sessions-and-the-loopback-server, e95c6c099); docs/testbench.md#against-redoubts-sshd, docs/servers/sshd.md. Brief: .wash/local/SSH2-implementer.md. Tier A (sshd, the bench), size L."
+  state = "active"
+  revision = 24
+
+[[node]]
+  id = "K12"
+  title = "Destruction's cost at the gate's full fill: R10 within 30 ms for a full lease"
+  template = "package"
+  parent = "M1"
+  needs = ["GATE1-composed-r10"]
+  body = "Pulled forward by GATE1's miss (owner's rule, QA GATE1-design): docs/kernel/budgets.md#residual-risks (destruction cost), docs/kernel/scheduling.md#responsiveness, docs/kernel/README.md#containment. Design: QA GATE1-composed-r10 (pending the bisect). Brief: .wash/local/K12-implementer.md. Tier A (kernel), size L."
+  state = "active"
+  revision = 43
+  overrides = ["2026-09-30: started by Orchestrator before QA GATE1-composed-r10 (open): Step 0 (the trace ring) is settled on QA GATE1-composed-r10 and may start before the design; everything past it waits for the thread."]
+
+[[node]]
+  id = "IPC2"
+  title = "Fair waiting serves the least recently served group"
+  template = "package"
+  parent = "M1"
+  needs = ["K12", "MOD1"]
+  body = "Closes docs/todo/r2-least-recently-served.md; rule on docs/kernel/ipc.md#r2-fair-waiting (9f0b47f38), for docs/servers/steward.md#r37-vault-non-interference. Design: QA MOD1-r2-cursor-blame. Brief: .wash/local/IPC2-implementer.md. Tier A (kernel IPC, the model), size M."
+  state = "todo"
+  revision = 46

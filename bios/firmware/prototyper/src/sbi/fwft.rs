@@ -8,15 +8,53 @@
 use runtime::rustsbi::SbiRet;
 use runtime::rustsbi::spec::fwft::feature_type;
 
-use crate::riscv::csr::CSR_MENVCFG;
+use crate::riscv::csr::{CSR_MENVCFG, menvcfg};
 
-// `menvcfg` fields defined by the corresponding RISC-V extensions.
-const ENVCFG_LPE: usize = 1 << 0; // Landing pad (Zicfilp)
-const ENVCFG_DTE: usize = 1 << 1; // Double trap (Smdbltrp)
-const ENVCFG_ADUE: usize = 1 << 5; // PTE A/D hardware updating (SVADU)
-const ENVCFG_SSE: usize = 1 << 8; // Shadow stack (Zicfiss)
-const ENVCFG_PMM_SHIFT: usize = 9; // Pointer masking tag length (Smnpm)
+// `menvcfg` fields defined by the corresponding RISC-V extensions, where the privileged
+// specification places them ("Machine Environment Configuration Register (menvcfg)").
+const ENVCFG_LPE: usize = 1 << 2; // Landing pad (Zicfilp)
+const ENVCFG_SSE: usize = 1 << 3; // Shadow stack (Zicfiss)
+// On rv32 DTE and ADUE are in menvcfgh, which this module has no path to, so they are refused
+// there; PMM is RV64-only in the specification.
+#[cfg(target_pointer_width = "64")]
+const ENVCFG_PMM_SHIFT: usize = 32; // Pointer masking tag length (Smnpm)
+#[cfg(target_pointer_width = "64")]
 const ENVCFG_PMM: usize = 0b11 << ENVCFG_PMM_SHIFT;
+#[cfg(target_pointer_width = "64")]
+const ENVCFG_DTE: usize = 1 << 59; // Double trap (Smdbltrp)
+#[cfg(target_pointer_width = "64")]
+const ENVCFG_ADUE: usize = 1 << 61; // PTE A/D hardware updating (Svadu)
+
+/// Whether no two of `fields` share a bit.
+const fn disjoint(fields: &[usize]) -> bool {
+    let mut seen = 0;
+    let mut i = 0;
+    while i < fields.len() {
+        if seen & fields[i] != 0 {
+            return false;
+        }
+        seen |= fields[i];
+        i += 1;
+    }
+    true
+}
+
+// No feature this extension sets can reach a field the firmware sets itself, nor FIOM (bit 0).
+// On rv32 the cast keeps the low word, the only one this extension writes there.
+const ENVCFG_FIOM: u64 = 1 << 0;
+const FIRMWARE: usize =
+    (menvcfg::CBIE | menvcfg::CBCFE | menvcfg::CBZE | menvcfg::PBMTE | menvcfg::STCE | ENVCFG_FIOM)
+        as usize;
+const _: () = assert!(disjoint(&[FIRMWARE, ENVCFG_LPE, ENVCFG_SSE]));
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(disjoint(&[
+    FIRMWARE,
+    ENVCFG_LPE,
+    ENVCFG_SSE,
+    ENVCFG_PMM,
+    ENVCFG_DTE,
+    ENVCFG_ADUE
+]));
 
 /// Firmware Features extension backed by narrow Runtime operations.
 ///
@@ -43,7 +81,9 @@ impl SbiFwft {
         match feature_id {
             feature_type::LANDING_PAD => Some(ENVCFG_LPE),
             feature_type::SHADOW_STACK => Some(ENVCFG_SSE),
+            #[cfg(target_pointer_width = "64")]
             feature_type::DOUBLE_TRAP => Some(ENVCFG_DTE),
+            #[cfg(target_pointer_width = "64")]
             feature_type::PTE_AD_HW_UPDATING => Some(ENVCFG_ADUE),
             _ => None,
         }
@@ -74,6 +114,7 @@ impl SbiFwft {
         SbiRet::success(0)
     }
 
+    #[cfg(target_pointer_width = "64")]
     fn set_pmm(value: usize) -> SbiRet {
         if value > 3 {
             return SbiRet::invalid_param();
@@ -131,6 +172,7 @@ impl runtime::rustsbi::Fwft for SbiFwft {
                 runtime::trap::set_misaligned_delegation(value == 1);
                 SbiRet::success(0)
             }
+            #[cfg(target_pointer_width = "64")]
             feature_type::POINTER_MASKING_PMLEN => Self::set_pmm(value),
             _ => match Self::menvcfg_bit(feature_id as usize) {
                 Some(bit) => Self::set_menvcfg_bit(bit, value),
@@ -147,6 +189,7 @@ impl runtime::rustsbi::Fwft for SbiFwft {
                 }
                 SbiRet::success(runtime::trap::misaligned_delegated() as usize)
             }
+            #[cfg(target_pointer_width = "64")]
             feature_type::POINTER_MASKING_PMLEN => {
                 if !Self::menvcfg_bits_supported(ENVCFG_PMM) {
                     return SbiRet::not_supported();
