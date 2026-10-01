@@ -259,6 +259,10 @@ close:
   none of these is partitioned;
 - a shared server's caches and the disk: a vault's reads warm a cache an unlabelled session can
   time, unless the deployment is confined;
+- a shared server's service slot: if it crashes on its own, whose call it was serving depends on
+  what was queued ahead. A vault's queued calls therefore change an unlabelled caller's result
+  (`Dead`, or a later reply) and the crash blame it can read, unless the deployment is confined
+  ([steward](servers/steward.md#residual-risks));
 - a server sized for fewer buckets than the label sets it serves, which refuses latecomers
   ([serving](servers/serving.md#residual-risks)).
 

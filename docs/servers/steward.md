@@ -458,7 +458,11 @@ across a principal's label sets: sessions and agents are numbered and named per 
 set), as `users/alice/{alice-secrets}/session-1` is, so a vault agent started on approval does not
 move the number of its owner's next unlabelled session. The model checks this
 on kernel results by replaying sequences with the vault's operations removed
-(`steward_noninterference`, its P10).
+(`steward_noninterference`, its P10). It also checks the order a shared server takes unlabelled
+calls in, which [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) keeps the same whatever a
+vault sends. The crashes P10 replays are ones a call causes. A server that crashes on its own is a
+stated residual ([residual risks](#residual-risks)): which call it holds at that moment is service
+timing.
 
 **Open:** none.
 
@@ -544,6 +548,18 @@ Status: planned · M1 (separation and containment)
 - **Blame follows the current call.** A request that corrupts a server which crashes later, while
   serving someone else, blames the wrong account, and one that crashes an idle thread later blames
   nobody; the consequence is a logout or a restart, not data loss.
+- **A shared server's own crash shows whose call it was serving.** A server that serves a vault
+  and unlabelled sessions, and crashes on its own, holds whichever call it took last. If a vault's
+  calls were queued ahead, the vault's call is in service. The vault is blamed
+  ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)), and the unlabelled call waits for
+  the restarted server ([R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)). Without them,
+  the unlabelled caller is blamed and gets `Dead`, and three such crashes end its sessions (R40).
+
+  This is service timing from one server instance serving two label sets. No fair turn order
+  hides it, and blaming nobody would not either, since the `Dead` result alone shows it. A
+  confined deployment has no such server
+  ([R34 (confined placement)](init.md#r34-confined-placement)). R37 holds for crashes a call
+  causes, which is what P10 checks.
 - **Per-record signatures catch edits, not drops.** Until records are chained, a record dropped or
   reordered wholesale is not detected.
 - **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's
