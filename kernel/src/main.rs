@@ -64,13 +64,13 @@ pub unsafe extern "C" fn init(
     crate::mem::MemoryManager::with_mut(|mm| {
         mm.init_from_memory(rpt_offset, xpt_offset, &args).expect("couldn't initialize memory manager")
     });
-    ProcessTable::with_mut(|pt| pt.init_from_memory(init_offset, &args));
+    ProcessTable::with_mut(|pt| pt.init_from_memory(init_offset));
 
     // Test builds only: the scheduling trace's ring, before the budget tree counts free RAM.
     #[cfg(feature = "sched-trace")]
     crate::mem::MemoryManager::with_mut(crate::sched::trace::init);
 
-    // The budget tree, with the loader's processes in `system` (budget.rs, `boot_budgets`).
+    // The budget tree, with `init` in `root` (budget.rs, `boot_budgets`).
     crate::mem::MemoryManager::with_mut(|mm| mm.boot_budgets());
 
     // Now that the memory manager is set up, perform any architecture and

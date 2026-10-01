@@ -33,12 +33,20 @@
 //! are tests/sched-latency.toml's). The share is printed as `met` or `missed`. Destruction follows
 //! the dying subtree, so adding objects to another budget moves no R10 term
 //! (docs/kernel/budgets.md, "Residual risks").
+//!
+//! The program in `init`'s place runs in `root` at `init`'s weight, 1,000, which is not part of
+//! the workload: measuring from there puts the workload's parent behind 17 spinners whenever it
+//! has setup to do, and the N = 16 wakes miss their targets for it. So it carves a budget from
+//! `system` at the weight the measurer had when it ran in `system` itself (`MEASURER_WEIGHT`),
+//! starts a copy of itself there holding its whole table in the same slots, and that copy
+//! measures; it ends the case with the Reset right, as before.
 
 #![no_std]
 #![no_main]
 
-use test_programs::rd;
+use test_programs::rd::{self, MAX_START_HANDLES, ResetKind};
 use test_programs::sched::{Bench, Role, SLICE_US, Stats, join, rtc};
+use test_programs::spawn;
 
 /// Share tolerance, in thousandths.
 const TOL: u64 = 30;
@@ -50,11 +58,35 @@ const WINDOW_US: u64 = 16_000_000;
 /// R10's kernel time target, µs, for `budget_destroy`'s recorded bound (the post-check judges R10).
 const R10_P99: usize = 30_000;
 
+/// The measurer's weight: about what it had when it ran in `system` itself, `system`'s 250,000
+/// less the workload's carves, which `system` keeps room for (kernel/scheduling.md).
+const MEASURER_WEIGHT: u32 = 240_000;
+
 fn verdict(b: bool) -> &'static str { if b { "met" } else { "missed" } }
 
+/// In `init`'s place: start the measurer in a budget of its own under `system`, with this
+/// program's whole table (`root`, `system`, `users`, Reset, the console, the devices) in the same
+/// slots, and power off if it ends without doing so itself.
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let devices = rd::OTHER_DEVICES..rd::log_rx();
+    let mut handles = [0u32; MAX_START_HANDLES];
+    let n = rd::first_free() as usize - 1;
+    for (slot, handle) in handles[..n].iter_mut().enumerate() {
+        *handle = slot as u32 + 1;
+    }
+    let exit = rd::endpoint_create().expect("an exit endpoint");
+    let pages = rd::free(rd::SYSTEM) / 4;
+    let budget = rd::create(rd::SYSTEM, &rd::spec(pages, 1, MEASURER_WEIGHT)).expect("the measurer's budget");
+    spawn::spawn(&spawn::image(), budget, exit, measure as *const () as usize, &[], &handles[..n])
+        .expect("the measurer");
+    let _ = rd::receive(Some(exit), rd::FOREVER, 0);
+    let _ = rd::system_reset(rd::RESET, ResetKind::PowerOff);
+    test_programs::park()
+}
+
+/// The measurer, in its own budget under `system`.
+extern "C" fn measure(_: usize) -> ! {
+    let devices = rd::OTHER_DEVICES..rd::first_free();
     let mut b = Bench::new("latency");
     let Some((rtc_mmio, rtc_base, rtc_irq)) = rtc::find(devices) else {
         b.check(false, format_args!("no goldfish RTC among the device handles"));

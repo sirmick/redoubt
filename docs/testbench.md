@@ -66,11 +66,12 @@ status.
 In-guest programs print through the log server and finish with `<NAME> TEST PASSED` or
 `<NAME> TEST FAILED`; attack programs end with `attempts done` instead. The log server starts every
 line it prints for a client with the sender's badge, as the kernel reports it, on every path that
-takes client text: `[pid N] ` for a badge below 0x100, and `[badge N] ` for any other. The loader
-numbers bundle programs from 2 to at most 64 and gives each its PID as its badge, and every badge
-a test program mints is 0x100 or more, so a minted badge can never print as a PID and forge a
-bundle program's line (`tests/programs/src/logsrv.rs`). Lines without a prefix come from the
-kernel, the loader, the log server's own fixed templates, or a program that owns the UART.
+takes client text: `[pid N] ` for a badge below 0x100, and `[badge N] ` for any other. The
+tester numbers a case's programs by their place, 2 on (it is 2), at most 16, and gives each its
+place as its badge, and every badge a test program mints is 0x100 or more, so a minted badge can
+never print as a place and forge a case program's line (`tests/programs/src/logsrv.rs`). Lines
+without a prefix come from the kernel, the loader, the log server's own fixed templates, or a
+program that owns the UART.
 
 ### Rule F (trusted verdicts)
 
@@ -86,13 +87,14 @@ attack case passes only on a line the attacker cannot write:
 - **A victim** that owns what is attacked and still has it afterwards: the log server still hears
   UART input after every attempt (`irq-attack`); a victim inspects its pages (`mem-attack`,
   `uaf-lent-page`).
-- **The log server's `DONE`.** The bundle's first program owns the console: it holds the console's
-  device handles, and every other program's text reaches the UART only through it, prefixed with
-  the sender's `[pid N]` or `[badge N]`. A victim, or with no victim the attacker once it is done,
-  calls the checker's `done()`; the log server prints one `[server] done:` line naming the caller
-  by the badge the kernel gave its handle, and powers off. A case that names a `reporter` passes
-  only if exactly one line starts `[server] done:` and it names the reporter's PID; any other such
-  line fails it, as does one in a case with no `reporter`.
+- **The log server's `DONE`.** The program in `init`'s place owns the console: it holds the
+  console's device handles, and every other program's text reaches the UART only through it,
+  prefixed with the sender's `[pid N]` or `[badge N]`. A victim, or with no victim the attacker
+  once it is done, calls the checker's `done()`; the log server prints one `[server] done:` line
+  naming the caller by the badge the kernel delivers with the call, which the tester chose, and
+  powers off. A case that names a `reporter` passes only if exactly one line starts
+  `[server] done:` and it names the reporter's place; any other such line fails it, as does one
+  in a case with no `reporter`.
 - **A sole first program judging the kernel.** In `map-fixed-attack`, `write-only-attack` and
   `process-attack` one program runs, alone: it holds the console and the reset, makes every
   refused call itself, and prints its own unprefixed `ok:` lines. It is trusted because nothing
@@ -104,16 +106,8 @@ attack case passes only on a line the attacker cannot write:
 
 **Program order.** A program that attacks another program, or the fixture, is never the first. In a case with several programs, the
 first is the trusted tester (the log server, unless the case is one of the sole-program cases
-above), and the case's `programs` list fixes the order of the rest, so which PID and which handles
-each program gets is the case's choice, never a race.
-
-**Gifts.** A budget-attack case needs its attacker to hold budgets. The log server hands the first
-program's three budgets (`root`, `system` and `users`), and never a device or a DMA device, to the
-first caller of `TAKE_GIFTS`, and refuses every later caller (`tests/programs/src/bin/log-server.rs`).
-The residual: a benign sibling that happens to call first takes the gifts; the attacker then fails
-loudly on `Refused`, never passes silently. That is acceptable only while the log server is the
-interim fixture; once the log server starts a case's programs with the budgets the case names,
-the gifts go ([starting a case's programs](#starting-a-cases-programs)).
+above), and the case's `programs` list fixes the order of the rest, so which place and which
+handles each program gets is the case's choice, never a race.
 
 Every verdict pattern is anchored with `^` and pinned to its writer, with a comment beside it saying
 why it cannot be forged. The attacker's own lines may be required as progress (so a refusal for the
@@ -136,7 +130,7 @@ is ignored rather than refused (`tools/testbench/src/case.rs`).
 description = "What this proves"
 arch = ["rv64", "rv32"]      # targets to run on
 kind = "boot"
-programs = [                 # initial processes, PID 2 onwards
+programs = [                 # the first in init's place, the rest started by it
     "log-server",                                  # a binary of the test programs
     { package = "my-crate", bin = "my-server" },   # any workspace binary, built for the target
     { path = "prebuilt/thing.elf" },               # or a prebuilt ELF
@@ -197,57 +191,78 @@ bounds a measured cost.
 
 ### Starting a case's programs
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (7)</summary>
 
-Once the loader loads only the kernel and `init`
-([boot](kernel/boot.md#the-loader-loads-only-the-kernel-and-init)), a boot case starts its
-programs in one of two ways:
+- bench:rng
+- bench:budget
+- bench:budget-carve-attack
+- bench:budget-destroy-kills
+- bench:programs-unknown-budget-attack
+- bench:programs-unknown-program-attack
+- bench:bundle-mapped
 
-- **In `init`'s place, for the kernel's cases.** The case's first program is packed as the
-  bundle's second entry. It gets `init`'s handoff: the three budgets, the Reset right, every
-  device and the bundle. It is the trusted tester, as the first program is
-  today. When it is the log server, it starts the case's other programs itself, through the
-  loader stub and from the bundle's pages, each in a budget of its own carved from `system`. Each
-  program gets the same slots:
-  - slot 1, the boot endpoint: its receive right for the first program started, a send badged
-    with its place for each later one;
-  - slot 2, the log endpoint, badged with its place;
-  - slot 3, its own budget;
-  - slot 4 on, the budgets the case names for it (`budgets = ["system"]`), in the line's order,
-    which replaces `TAKE_GIFTS`.
+</details>
 
-  Its own budget's handle gives a program nothing it lacks: the pages are already its own to
-  spend, a carve from it comes out of its own share ([R7 (carving)](kernel/budgets.md#r7-carving)),
-  and destroying it ends only the program and what it started
-  ([R10 (destruction)](kernel/budgets.md#r10-destruction)), which the tester sees as a `killed`
-  notice. It lets a program read its own charges and run measured work in a budget it carves.
-  The budget is `system`-class, as its parent is, so a program may add labels below it; a kernel
-  case has no server those labels could reach. The
-  builder tells the tester which programs to start, and with which budgets, in one more data
-  entry, `programs`. It has one ASCII line per program after the first, in the case's order:
-  the program's entry name, then the names of the budgets it gets (`root`, `system`, `users`),
-  separated by spaces. The tester reads it from the bundle's pages, which the loader verified
-  with the rest, and refuses the boot on any line it cannot parse. Each program's own budget gets
-  an equal share of what `system` has free (pages and processes) and weight 1,000, a driver's,
-  so no program's limits depend on another's name or order. A case that needs other sizes builds
-  its own tree from the budgets it is given. The log
-  server badges each program's handles with the program's place in the case, 2 on, and names
-  programs by that place, because the kernel now draws every PID but the first. A case matches a
-  PID in a kernel line with a pattern.
-- **Under `init`, for the servers' cases.** The case boots the real `init` with a manifest of its
-  own, packed as the `manifest` entry, and its test programs are `servers` entries in that
-  manifest. They get no budget handle, their own included, as no server does
-  ([R33 (no server holds a system budget)](servers/init.md#r33-no-server-holds-a-system-budget)).
-  `init` prints its own lines bare, and `consoled` starts every other program's line
-  with its connection id ([consoled](servers/consoled.md#started-by-init)). A case's `reporter`
-  names a manifest entry, and the bench reads that entry's connection id from `init`'s line
-  announcing it. Such a case ends at its last `expect`, since no test program holds the Reset
-  right.
+The loader loads only the kernel and `init`
+([boot](kernel/boot.md#the-loader-loads-only-the-kernel-and-init)), so a kernel case's first
+program is packed as the bundle's second entry and runs in `init`'s place. It gets `init`'s
+handoff: the three budgets, the Reset right, every device and the bundle. It is the trusted
+tester. When it is the log server, it starts the case's other programs itself, through the
+loader stub and from the bundle's pages, each in a budget of its own carved from `system`. Each
+program gets the same slots:
+- slot 1, the boot endpoint: its receive right for the first program started, a send badged
+  with its place for each later one;
+- slot 2, the log endpoint, badged with its place;
+- slot 3, its own budget;
+- slot 4 on, the budgets the case names for it (`budgets = ["system"]`), in the line's order.
+
+Its own budget's handle gives a program nothing it lacks: the pages are already its own to
+spend, a carve from it comes out of its own share ([R7 (carving)](kernel/budgets.md#r7-carving)),
+and destroying it ends only the program and what it started
+([R10 (destruction)](kernel/budgets.md#r10-destruction)), which the tester sees as a `killed`
+notice. It lets a program read its own charges and run measured work in a budget it carves. The
+budget is `system`-class, as its parent is, so a program may add labels below it; a kernel case
+has no server those labels could reach.
+
+The builder tells the tester which programs to start, and with which budgets, in one more data
+entry, `programs`. It has one ASCII line per program after the first, in the case's order: the
+program's entry name, then the names of the budgets it gets (`root`, `system`, `users`),
+separated by spaces. The tester reads it from the bundle's pages, which the loader verified with
+the rest, and reads every line before it starts anything. It refuses the boot, and powers off,
+on a line that is not printable ASCII, names an entry the bundle lacks or a budget other than the
+three, or names a budget twice, and on more programs than `system` has processes. Each
+program's own budget gets an equal share of what `system` has free (pages and processes) and
+weight 1,000, a driver's, so no program's limits depend on another's name or order. A case that
+needs other sizes builds its own tree from the budgets it is given.
+
+The log server badges each program's handles with the program's place in the case, 2 on, and
+names programs by that place, because the kernel draws every PID but the first. A case matches a
+PID in a kernel line with a pattern. Each program gets an exit endpoint of its own, so the tester
+tells their notices apart ([processes](kernel/processes.md)) and prints each under the program's
+name and place, with the kernel's PID beside it.
+
+A program the tester starts holds no device, and every page it has is backed, its stack
+included: only the process the loader starts has a stack reservation
+([memory](kernel/memory.md#backing-and-zeroing)). So a case that needs a device, or a page never
+touched, runs its program alone in `init`'s place, where its own budget is `root`.
 
 `init` itself never takes a case's place and has no mode for the bench. The kernel's cases need
 `root` and `system`, which no program under `init` may hold
 ([R33 (no server holds a system budget)](servers/init.md#r33-no-server-holds-a-system-budget)),
 so they run a tester in `init`'s place instead.
+
+### The servers' cases under `init`
+
+Status: planned · M1 (separation and containment)
+
+A servers' case boots the real `init` with a manifest of its own, packed as the `manifest`
+entry, and its test programs are `servers` entries in that manifest. They get no budget handle,
+their own included, as no server does
+([R33 (no server holds a system budget)](servers/init.md#r33-no-server-holds-a-system-budget)).
+`init` prints its own lines bare, and `consoled` starts every other program's line with its
+connection id ([consoled](servers/consoled.md#started-by-init)). A case's `reporter` names a
+manifest entry, and the bench reads that entry's connection id from `init`'s line announcing it.
+Such a case ends at its last `expect`, since no test program holds the Reset right.
 
 **Open:** none.
 
@@ -364,7 +379,7 @@ use, such as a malformed ELF for a parent to launch, is a bundle file.
 
 ### Bundle files
 
-Status: built · tested: bench:bench-bundle-file, bench:loader-rejects-grants
+Status: built · tested: bench:bench-bundle-file, bench:programs-unknown-budget-attack
 
 ```toml
 [[file]]                     # a data entry, after the programs
@@ -372,23 +387,23 @@ name = "trace"
 from = { path = "tests/data/bundle-file.txt" }   # or any `programs` form, corrupted ones included
 ```
 
-Entry names must differ from each other and from `kernel`. The loader refuses an entry named
-`grants`, and the bench refuses a `[[grant]]` table: a program reaches a device only through the
-handles it is given ([R18 (device authority)](kernel/devices.md#r18-device-authority)). Today the
-loader starts every entry as a process, so it refuses a data entry, and `bench-bundle-file`
-checks that refusal.
+Entry names must differ from each other and from `kernel`. A file named `programs` replaces the
+listing the builder writes, so an attack case can hand the tester a hostile one. The bench
+refuses a `[[grant]]` table: a program reaches a device only through the handles it is given
+([R18 (device authority)](kernel/devices.md#r18-device-authority)). The loader starts only the
+kernel and the program in `init`'s place, so a data entry reaches the guest signed and is never
+run. `bench-bundle-file` reads its entry back: the program in `init`'s place finds it in the
+bundle's pages and compares it, byte for byte, with the file it was built with.
 
 ### Data entries for `init`
 
 Status: planned · M1 (separation and containment)
 
-Once the loader loads only the kernel and `init`, `init` receives the verified bundle, hands the
-public entries to `bootfsd`, and a data entry is how a model trace reaches an in-guest replayer,
-which compares results itself and prints its verdict
-([boot](kernel/boot.md#the-loader-loads-only-the-kernel-and-init)). `bench-bundle-file` then
-expects the entry's bytes read back in the guest. The program in `init`'s place reads them first,
-from the bundle's pages. Under `init`, a program reads them through `/boot` once the manifest's
-`public` list names the entry.
+`init` receives the verified bundle and hands the public entries to `bootfsd`, and a data entry
+is how a model trace reaches an in-guest replayer, which compares results itself and prints its
+verdict ([boot](kernel/boot.md#what-init-does-with-the-bundle)). The program in `init`'s place
+already reads a data entry from the bundle's pages ([bundle files](#bundle-files)); under `init`,
+a program reads it again through `/boot` once the manifest's `public` list names the entry.
 
 **Open:** none.
 

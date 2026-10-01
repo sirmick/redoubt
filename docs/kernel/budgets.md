@@ -108,12 +108,13 @@ there cannot become one.
 
 ### Root, system and users
 
-<details><summary>Status: built · partly tested: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`) · tested (4)</summary>
+<details><summary>Status: built · partly tested: no case checks the weights or `INIT_WEIGHT` · tested (5)</summary>
 
 - bench:budget
 - bench:budget-destroy-kills
 - bench:process-attack
 - bench:pages-exhaustion
+- bench:bundle-mapped
 
 </details>
 
@@ -122,35 +123,35 @@ At boot the kernel creates three budgets, all with account 0, no labels and no d
 | Budget | Class | Pages | Processes | Weight |
 | --- | --- | --- | --- | --- |
 | `root` | `system` | every RAM page the kernel did not keep for itself, less `root`'s own page | 63 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
-| `system` | `system` | a quarter of `root`'s | 15 (a quarter) | 250,000 (a quarter) |
-| `users` | `user` | the rest, less the two budgets' own pages | 48 (the rest) | 749,000 |
+| `system` | `system` | a quarter of what `root` does not keep for `init` | 15 (a quarter) | 250,000 (a quarter) |
+| `users` | `user` | the rest, less the two budgets' own pages | 47 (the rest, less `init`'s) | 749,000 |
 
-`root` pays for the two budgets' own pages and carves all its pages and processes into them. It
-keeps `INIT_WEIGHT` (1,000) of its weight free, because a budget that holds a process needs free
-weight; that share is `init`'s. By R6 (charging) `root`'s own page is charged to `root`, so its
+`root` pays for the two budgets' own pages and carves the rest of its pages and processes into
+them, but what it keeps for `init`: one process, `INIT_WEIGHT` (1,000) of its weight, because a
+budget that holds a process needs free weight, and `init`'s pages
+([below](#the-tree-from-the-boot-manifest)): everything the loader gave `init`, its first
+thread and `INIT_PAGES` (1,024). By R6 (charging) `root`'s own page is charged to `root`, so its
 limit is the free frames less that page. The boot checks that `root`'s limit, its own page and
 the kernel's frames fit in RAM, and stops if they do not.
 
-Every program the loader started runs in `system`, charged there for everything the loader gave
-it (image, stack, page tables, saved contexts) and for its first thread. The first of them gets
-handles to `root`, `system` and `users` in slots 1 to 3, stamped with `root`, then a handle to
-every device object, as `init` receives them ([boot](boot.md)). The machine's device objects and
-the two boot endpoints are charged to `system`. A bundle whose programs do not fit in `system`
-does not boot: the kernel stops (fail closed).
+`init`, the one program the loader starts, runs in `root`, charged there for everything the
+loader gave it (image, stack, page tables, saved contexts, the bundle's frames) and for its first
+thread. It gets handles to `root`, `system` and `users` in slots 1 to 3, stamped with `root`,
+then a handle to every device object ([boot](boot.md)). The machine's device objects are charged
+to `system`. A boot whose `init` and `INIT_PAGES` do not fit does not boot: the kernel stops
+(fail closed).
 
 ```mermaid
 flowchart TD
     R["root<br/>class system, 63 processes<br/>weight 1,000,000, keeps 1,000 free"]
     S["system<br/>class system<br/>a quarter of the pages, 15 processes<br/>weight 250,000"]
-    U["users<br/>class user<br/>the rest, 48 processes<br/>weight 749,000"]
-    L[the loader's programs]
+    U["users<br/>class user<br/>the rest, 47 processes<br/>weight 749,000"]
     I[init]
     SV["servers and drivers<br/>(manifest weights)"]
     P["principals, label sets,<br/>sessions and leases"]
     R --> S
     R --> U
-    L -- runs in --> S
-    I -. runs in .-> R
+    I -- runs in --> R
     SV -. carved from .-> S
     P -. carved from .-> U
 ```
@@ -168,7 +169,7 @@ keeps free. What `init` launches counts in the budgets it launches into.
   the table above, except that `root` keeps one process and some pages for `init`:
   - `system` gets 15 processes and `users` 47;
   - `root` keeps everything the loader gave `init` (its image, page tables, saved contexts and
-    the bundle's frames), measured at boot as the loader's programs are measured today, plus
+    the bundle's frames), measured at boot from the frames the loader gave it, plus
     `INIT_PAGES` (1,024 pages, 4 MiB) for `init` to work in;
   - `system` gets a quarter of the pages left and `users` the rest.
 
@@ -468,7 +469,7 @@ by itself.
 
 ### R10 (destruction)
 
-<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested (29)</summary>
+<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; that the caller is killed last is not pinned by a case: the kernel's kill lines, the only ones in kill order, carry the PIDs it draws, the tester's lines that name each program come in no defined order, and the bench has no check across lines (`budget-destroy-kills` checks that both die); the equal-instant order of timeouts before deadlines is attacked only in the model · tested (29)</summary>
 
 - bench:budget
 - bench:budget-destroy-attack
@@ -734,8 +735,8 @@ without preemption.*
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).
-  Until `init` builds the tree, the loader's first program holds `root`, `system` and `users`, and
-  is trusted as `init` is.
+  Until `init` builds the tree, `init` (or the tester in its place) holds `root`, `system` and
+  `users`, and is trusted.
 - **A budget handle is a destroy right.** Whoever holds a copy can end the budget and everything
   in it. A server given a budget that holds processes could end them; servers are given only
   revocation scopes ([init](../servers/init.md)).

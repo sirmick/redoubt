@@ -11,7 +11,7 @@ max_lines = 7763
 [[crate]]
 name = "loader"
 paths = ["loader/src"]
-max_lines = 841
+max_lines = 868
 
 [[crate]]
 name = "stub"

@@ -788,7 +788,7 @@ pub mod rtc {
 
     pub fn clear(base: usize) { write(base, CLEAR_INTERRUPT, 1); }
 
-    /// Among `devices` (read with [`rd::log_rx`] before any handle is made): the RTC's MMIO
+    /// Among `devices` (read with [`rd::first_free`] before any handle is made): the RTC's MMIO
     /// handle and where it is mapped here, and its interrupt handle. The MMIO is the one-page
     /// device that is not virtio and whose first word (its time's low half, in ns) moves by half
     /// a million to a hundred million over a millisecond's sleep: nothing else of the others is

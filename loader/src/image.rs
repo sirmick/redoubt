@@ -1,8 +1,7 @@
 //! Loading programs from the boot bundle.
 //!
-//! The bundle is a plain (ustar) tar archive of ELF executables, handed to us as the
-//! initrd. The first entry is the kernel; every following entry becomes an initial
-//! process, in order, starting at PID 2.
+//! The bundle is a plain (ustar) tar archive, handed to us as the initrd. The first entry is
+//! the kernel and the second `init`, PID 2; every later entry is data to the loader.
 
 use elf::ElfBytes;
 use elf::abi::{PF_R, PF_W, PF_X, PT_LOAD};

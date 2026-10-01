@@ -171,15 +171,15 @@ fn arguments(c: &mut Checker, image: &spawn::Image) {
     }
     c.check(true, "hostile mapping ranges and W+X refused without moving source");
     // Bad flags on a source page never touched: refused before the page is backed, so the
-    // caller's own budget (this loader program's, `system`) is charged nothing.
+    // caller's own budget (`root`, where `init`'s place runs) is charged nothing.
     let untouched = rd::untouched_stack_page();
-    let own = rd::usage(rd::SYSTEM).unwrap();
+    let own = rd::usage(rd::ROOT).unwrap();
     for flags in [MemFlags::WRITE, MemFlags::NONE] {
         assert_eq!(
             rd::process_map(process, untouched, DEST, rd::PAGE_SIZE, flags),
             Err(Error::InvalidArgument)
         );
-        assert_eq!(rd::usage(rd::SYSTEM), Ok(own));
+        assert_eq!(rd::usage(rd::ROOT), Ok(own));
     }
     c.check(true, "bad flags refused before an untouched source page is backed");
     rd::process_map(process, src, DEST, rd::PAGE_SIZE, rd::rw()).unwrap();
@@ -257,21 +257,25 @@ fn arguments(c: &mut Checker, image: &spawn::Image) {
 
 fn pending_record(c: &mut Checker, image: &spawn::Image) {
     let exit = rd::endpoint_create().unwrap();
-    let base = rd::usage(rd::SYSTEM).unwrap();
+    // The creator, this program, runs in `root`, which pays for the process object; the budget it
+    // runs in is carved from `system`.
+    let (base, own) = (rd::usage(rd::SYSTEM).unwrap(), rd::usage(rd::ROOT).unwrap());
     let budget = rd::create(rd::SYSTEM, &rd::spec(200, 1, 10)).unwrap();
     let carved = rd::usage(rd::SYSTEM).unwrap();
     assert_eq!(carved.pages_usage, base.pages_usage + 201);
     let process = rd::process_create(budget, exit).unwrap();
-    assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage, carved.pages_usage + 1);
+    assert_eq!(rd::usage(rd::SYSTEM), Ok(carved));
+    let object = rd::Usage { pages_usage: own.pages_usage + 1, ..own };
+    assert_eq!(rd::usage(rd::ROOT), Ok(object));
     let execution = rd::usage(budget).unwrap();
     assert_eq!(execution.processes_usage, 1);
     assert!(execution.pages_usage > 0);
     rd::destroy(budget).unwrap(); // Notice is pending synchronously; no timing assumption.
-    // The object's page is ours, and the PID it holds now counts here, the destroyed budget's
-    // parent (R10 step 8).
-    let pending =
-        rd::Usage { pages_usage: base.pages_usage + 1, processes_usage: base.processes_usage + 1, ..base };
+    // The object's page is ours, and the PID it holds now counts in `system`, the destroyed
+    // budget's parent (R10 step 8), whose carve came back.
+    let pending = rd::Usage { processes_usage: base.processes_usage + 1, ..base };
     assert_eq!(rd::usage(rd::SYSTEM), Ok(pending));
+    assert_eq!(rd::usage(rd::ROOT), Ok(object));
     let bad_record = Call::Receive { from: Some(rd::h(exit)), timeout: 0, max_transfer: 0, received_rec: 0 };
     assert_eq!(redoubt_sys::syscall(&bad_record), Err(Error::InvalidArgument));
     // A pending process handle remains an existing process object, not a dead handle.
@@ -280,6 +284,7 @@ fn pending_record(c: &mut Checker, image: &spawn::Image) {
     notice(exit, Cause::Killed, 0);
     assert_eq!(rd::usage(process), Err(Error::BadHandle));
     assert_eq!(rd::usage(rd::SYSTEM), Ok(base));
+    assert_eq!(rd::usage(rd::ROOT), Ok(own));
     c.check(true, "bad receive output preserves pending notice and process object");
     // A naturally exiting process frees all execution charges before its object is received.
     let budget = rd::create(rd::SYSTEM, &rd::spec(200, 1, 10)).unwrap();

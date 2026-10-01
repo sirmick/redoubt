@@ -6,6 +6,9 @@ icount = "shift=3,sleep=off"
 # The guest seed the gate runs, pinned since the first sweep; the targets come from the sweeps
 # (kernel/scheduling.md, "Responsiveness").
 qemu_seed = 3
+# In init's place it holds the RTC; it starts the measurer, a copy of itself with its whole
+# table, in a budget under system at 240,000, the weight it had when it ran in system itself:
+# measured from init's weight (1,000) the N = 16 wakes miss (tests/programs/src/bin/sched-latency.rs).
 programs = ["sched-latency"]
 # Test builds only: the trace ring and its dump (never in a default or production kernel).
 kernel_features = ["sched-trace"]

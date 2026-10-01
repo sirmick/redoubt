@@ -222,12 +222,12 @@ because that call never returns.
 
 Status: built · partly tested: the loader's refusal of a device tree that names no console, or a console with no interrupt, is not attacked by a case · tested: bench:device, bench:irq-attack
 
-The kernel gives every device object to the bundle's first program, which is where `init`
-receives them to place ([below](#which-process-gets-which-device)), in the handle order
-[boot](boot.md#devices-handed-to-the-first-program) gives. The objects are charged to `system`, and the handles are stamped with
-`root`, so they are revoked only with the whole tree ([stamps](objects.md#r9-stamps)). A program
-finds its DMA devices by asking: `dma_alloc` is `NotPermitted` without the flag and
-`WrongObject` on an IRQ or the Reset right.
+The kernel gives every device object to `init`, the one program the loader starts, to place
+([below](#which-process-gets-which-device)), in the handle order
+[boot](boot.md#devices-handed-to-the-first-program) gives. The objects are charged to `system`,
+and the handles are stamped with `root`, so they are revoked only with the whole tree
+([stamps](objects.md#r9-stamps)). A program finds its DMA devices by asking: `dma_alloc` is
+`NotPermitted` without the flag and `WrongObject` on an IRQ or the Reset right.
 
 ### Which process gets which device
 
@@ -355,7 +355,7 @@ sequenceDiagram
 
 ### R18 (device authority)
 
-Status: built · partly tested: the kernel's refusal of a malformed `Devs` entry (one overlapping RAM or an interrupt controller among them) and of a `Grnt` boot argument is not attacked by a case · tested: bench:irq-attack, bench:loader-rejects-grants, bench:legacy-gone
+Status: built · partly tested: the kernel's refusal of a malformed `Devs` entry (one overlapping RAM or an interrupt controller among them) and of a `Grnt` boot argument is not attacked by a case · tested: bench:irq-attack, bench:legacy-gone, bench:device-info-attack
 
 Device objects are the only device authority. A process reaches an MMIO range, an interrupt or
 the Reset right only through a handle to its device object; a process that holds none gets
@@ -363,8 +363,9 @@ the Reset right only through a handle to its device object; a process that holds
 physical address, so neither a device's registers nor RAM can be reached by address
 ([R11](memory.md#r11-memory)). No call number outside the call table does anything: each is
 `InvalidArgument`, so no number claims an interrupt or maps a physical address. The bundle
-carries no list of device claims: the loader refuses a bundle with a `grants` entry, and the
-kernel refuses a `Grnt` boot argument.
+carries no list of device claims: the loader reads no entry it does not load
+([boot](boot.md#the-loader-loads-only-the-kernel-and-init)), and the kernel refuses a `Grnt`
+boot argument.
 
 Two ranges never become device objects, because either would give away everything else: an
 **interrupt controller** (a holder of the PLIC could mask and raise every source; one of the
@@ -422,9 +423,9 @@ the PLIC for itself alone.
 - **A co-holder keeps its mapping of a quarantined device**, and of any device whose handle was
   revoked: the kernel does not unmap device ranges. It can go on programming a quarantined
   device until it ends, when its own runs are quarantined in turn.
-- **One early process holds all device authority**: the bundle's first program holds every
-  device object, the Reset right and every DMA device, and nothing narrows that until `init`
-  places them ([below](#which-process-gets-which-device)).
+- **One early process holds all device authority**: `init` holds every device object, the
+  Reset right and every DMA device, and nothing narrows that until it places them
+  ([below](#which-process-gets-which-device)).
 - **A device tree that hides a controller** from the loader's controller search as well as from
   its device list defeats the kernel's `Ctrl` check: the kernel's own list of controllers comes
   from the same tree ([boot](boot.md)).

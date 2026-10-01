@@ -49,10 +49,9 @@ extern "C" fn lender(arg: usize) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let gifts = rd::take_gifts().expect("the budgets");
     let exit = rd::endpoint_create().expect("an exit endpoint");
     let lends = rd::endpoint_create().expect("the lend endpoint");
-    let kids = rd::create(gifts.users, &rd::spec(400, 2, 10)).expect("the children's budget");
+    let kids = rd::create(rd::GIVEN, &rd::spec(400, 2, 10)).expect("the children's budget");
     let image = spawn::image();
     let entry = lender as *const () as usize;
     for (op, what, cause) in [(0, "load", 13), (STORE, "store", 15)] {

@@ -115,7 +115,7 @@ fn verdict(b: &mut Bench, what: &str, want: usize) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let devices = rd::OTHER_DEVICES..rd::log_rx();
+    let devices = rd::OTHER_DEVICES..rd::first_free();
     let mut b = Bench::new("receive-bad-record");
 
     let endpoint = rd::endpoint_create().expect("an endpoint");

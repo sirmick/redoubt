@@ -13,6 +13,7 @@
 
 use core::fmt::Write;
 
+pub mod bundle;
 pub mod console;
 pub mod logsrv;
 pub mod rd;
@@ -29,11 +30,8 @@ pub mod op {
     pub const UPPERCASE: usize = 4;
     /// Send with a transfer: print word 1 bytes of it. The server keeps the pages.
     pub const PRINT_AND_KEEP: usize = 5;
-    /// Call, `log-server` only: the first caller gets `root`, `system` and `users` in the reply
-    /// (`rd::take_gifts`), and never a device; a later one gets `Refused` in word 0.
-    pub const TAKE_GIFTS: usize = 6;
     /// Call, `log-server` only: the attack checker. It prints `[server] done: reported by pid
-    /// N; still serving`, N the caller's badge, replies, and powers the machine off.
+    /// N; still serving`, N the caller's place, replies, and powers the machine off.
     pub const DONE: usize = 7;
 }
 

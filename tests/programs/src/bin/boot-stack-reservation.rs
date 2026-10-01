@@ -30,7 +30,8 @@ impl Checker {
     }
 }
 
-fn pages_used() -> u64 { rd::usage(rd::SYSTEM).unwrap().pages_usage }
+/// Its own budget's pages: `root`, where `init`'s place runs.
+fn pages_used() -> u64 { rd::usage(rd::ROOT).unwrap().pages_usage }
 
 #[no_mangle]
 pub extern "C" fn _start(_: usize) -> ! {

@@ -1,8 +1,10 @@
-//! Attacker: carve beyond the parent (R7). It first carves all but `MARGIN` of `system`'s free
-//! pages into a child of its own, legitimately, so that any carve the kernel wrongly allows
-//! beyond `system`'s limits leaves `system` too little for the victim's pages. Then it tries every
-//! way of carving more than a parent has: each limit, the largest values, sums that would wrap,
-//! and the same one level down. See `tests/budget-carve-attack.toml`.
+//! Attacker: carve beyond the parent (R7). It tries to carve more pages than `system` has free
+//! (the tester has carved all of them), then more than `users` has of each limit, the largest
+//! values, and more than `root` has. A carve the kernel wrongly allowed would leave `system` or
+//! `users` past a limit, which the victim, holding both, reads afterwards.
+//! Then it carves all but `MARGIN` of its own budget's free pages into a child, legitimately, and
+//! tries the same one level down: more than the child has, sums that would wrap. See
+//! `tests/budget-carve-attack.toml`.
 
 #![no_std]
 #![no_main]
@@ -10,29 +12,27 @@
 use test_programs::rd::{self, Error};
 use test_programs::{Logger, log};
 
-/// Pages `system` keeps free for the victim: more than its 64 pages and their tables, fewer than
-/// the smallest over-carve tried below.
+/// Pages its own budget keeps free beside the child: room for what serving its log lines needs.
 const MARGIN: u64 = 100;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    // The bundle's third program: its budgets come from log-server, once, and no device (R2).
-    let rd::Gifts { root, system, users } = rd::take_gifts().expect("the budgets");
-    // Let log-server map what serving a message needs before `system`'s usage is read.
+    // The case's third program: the tester gives it its own budget in slot 3, the budgets its
+    // case names from slot 4, and no device (R2).
+    let (root, system, users) = (rd::GIVEN, rd::GIVEN + 1, rd::GIVEN + 2);
     log!(logger, "[attacker] starting");
-    test_programs::wait_ms(20);
-    let hog = rd::create(system, &rd::spec(rd::free(system) - MARGIN, 0, 0)).expect("carve");
-    let u = rd::usage(system).unwrap();
+    let u = rd::usage(users).unwrap();
     let (free_procs, free_weight) = (u.processes_limit - u.processes_usage, u.weight_limit - u.weight_carved);
+    let hog = rd::create(rd::OWN, &rd::spec(rd::free(rd::OWN) - MARGIN, 0, 0)).expect("carve");
     let attempts: [(u32, u64, u32, u32); 10] = [
-        (system, MARGIN + 1, 0, 0),
+        (system, rd::free(system) + 1, 0, 0),
         (system, u64::MAX, 0, 0),
-        (system, 1, free_procs + 1, 0),
-        (system, 1, u32::MAX, 0),
-        (system, 1, 0, free_weight + 1),
-        (system, 1, 0, u32::MAX),
-        (root, 1, 0, 0), // root is full: users took the rest
+        (users, 1, free_procs + 1, 0),
+        (users, 1, u32::MAX, 0),
+        (users, 1, 0, free_weight + 1),
+        (users, 1, 0, u32::MAX),
+        (root, rd::free(root) + 1, 0, 0),
         (hog, u64::MAX, 0, 0),
         (hog, u64::MAX - 1, u32::MAX, u32::MAX),
         (users, u64::MAX / 2 + 1, 0, 0),

@@ -79,7 +79,7 @@ gap: the page's section, the claim, and what no case attacks.
 ### boot.md
 - Firmware: the bench never falling back to QEMU's own firmware is not attacked.
 - The argument block: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a bad `Devs` entry, a `Grnt` tag) are not attacked.
-- R16 (image confinement): an image cut short inside its segment data, a writable and executable segment, and a bundle of more than 63 programs are not attacked; the truncated-image case runs on rv64 only.
+- R16 (image confinement): an image cut short inside its segment data and a writable and executable segment are not attacked; the truncated-image case runs on rv64 only.
 - R17: a short or missing seed and a missing timebase are not attacked (every QEMU boot supplies both); nor an initrd under 64 bytes.
 - Verified boot, R15 (verified boot) and R17: the two signature cases run on rv64 only.
 - Devices handed to the first program: a DMA device past the sixteenth getting no object is not attacked (as devices.md's).

@@ -40,7 +40,7 @@ The kernel holds nothing else:
   block, virtio net) belongs to a userspace server that holds its device object.
 - **No names.** The kernel knows handles, never paths, file names or server names. A process
   reaches only what its own handle table holds.
-- **No program loading.** The loader places the kernel and the first programs at boot. After
+- **No program loading.** The loader places the kernel and `init` at boot. After
   that a launcher builds a process with `process_map` and `process_start`, and a loader stub
   inside the new process reads its ELF image ([boot](boot.md), [processes](processes.md)).
 - **No policy.** The kernel enforces [R1 (flow)](ipc.md#r1-flow) on label sets and the budget
@@ -273,7 +273,7 @@ two, where a file serves two mechanisms).
 | `libs/layout` (`redoubt-layout`) | the kernel-half address map and PIDs, shared with the loader | [memory layout](memory-layout.md) |
 | `libs/stride` (`redoubt-stride`) | the stride rules the scheduler applies | [scheduling](scheduling.md) |
 | `libs/signing` (`redoubt-signing`) | the signature preimage the loader checks | [boot](boot.md) |
-| `loader/` | verifies the bundle, places the kernel and first programs | [boot](boot.md) |
+| `loader/` | verifies the bundle, places the kernel and `init` | [boot](boot.md) |
 | `model/` (`redoubt-model`) | the executable model, its invariants and mutations | [model](model.md), [invariants](invariants.md) |
 
 ## Residual risks

@@ -1,10 +1,11 @@
 //! Attack test for `map_fixed(addr, len, flags)` (kernel/memory.md, `map_fixed`; R11, R22).
 //!
-//! Every failing case must map nothing and charge nothing: verified by `system`'s page usage
-//! (`rd::usage(rd::SYSTEM)`, R6) before and after, and, where relevant, by `unmap` on the
-//! attempted target succeeding only when it should not have been created. This program is the
-//! loader's trusted first process, holding UART and Reset directly (as `write-only-attack.rs`
-//! does), so every verdict below is a kernel result, not this program's own claim. The one
+//! Every failing case must map nothing and charge nothing: verified by its own budget's page
+//! usage (`rd::usage(rd::ROOT)`: it runs in `init`'s place, in `root`; R6) before and after, and,
+//! where relevant, by `unmap` on the attempted target succeeding only when it should not have
+//! been created. This program is the loader's trusted first process, holding UART and Reset
+//! directly (as `write-only-attack.rs` does), so every verdict below is a kernel result, not this
+//! program's own claim. The one
 //! verdict it cannot see itself, a fault, comes from the kernel's exit notice for a child (as
 //! `wx-test.rs` does).
 //!
@@ -36,10 +37,10 @@ impl Checker {
     }
 }
 
-fn usage_pages() -> u64 { rd::usage(rd::SYSTEM).unwrap().pages_usage }
+fn usage_pages() -> u64 { rd::usage(rd::ROOT).unwrap().pages_usage }
 
 /// A failing call must map nothing (a later `map_fixed` at the same address must succeed) and
-/// charge nothing (`system`'s usage is unchanged).
+/// charge nothing (`root`'s usage is unchanged).
 fn refused(c: &mut Checker, label: &str, addr: usize, len: usize, flags: MemFlags, want: Error) {
     let before = usage_pages();
     let r = rd::map_fixed(addr, len, flags);
@@ -103,6 +104,14 @@ fn occupied_ranges(c: &mut Checker) {
     // `is_occupied` (valid or S) disagree, so it is what fails if the overlap check is ever
     // weakened to `is_occupied`.
     let untouched = rd::untouched_stack_page();
+    // The record check never allocates (kernel/abi.md, "The record check"): an output record on
+    // that page is refused, not backed and charged in the middle of decoding. Only the program
+    // in `init`'s place holds a reservation, so this is where the check is tried.
+    let before = usage_pages();
+    let usage = rd::number(rd::Number::BudgetUsage);
+    let record = rd::raw_error(rd::raw([usage, rd::ROOT as usize, untouched, 0, 0, 0, 0, 0]));
+    c.check(record == Some(Error::InvalidArgument), "a record on an untouched page");
+    c.check(usage_pages() == before, "nothing charged");
     refused(c, "untouched stack reservation", untouched, PAGE_SIZE, rd::rw(), Error::InvalidArgument);
 
     // A `map_anon` region.
@@ -163,7 +172,7 @@ fn lend_server(_: usize) {
     );
     LENT_OUT_UNCHARGED.store(usage_pages() == before, Ordering::Release);
     rd::reply(m.msg_id.get(), &rd::body([0; 4])).expect("reply");
-    // Block for good rather than exit, so nothing this thread owns changes `system`'s usage
+    // Block for good rather than exit, so nothing this thread owns changes `root`'s usage
     // under the checks that follow.
     loop {
         rd::receive(Some(endpoint), FOREVER, 0).ok();
@@ -190,7 +199,7 @@ fn lent_ranges(c: &mut Checker) {
 /// physical RAM: asking for one more page than the whole budget can ever hold is refused by
 /// arithmetic alone, the same way a huge `len` is.
 fn exhausted_budget(c: &mut Checker) {
-    let u = rd::usage(rd::SYSTEM).unwrap();
+    let u = rd::usage(rd::ROOT).unwrap();
     let free = u.pages_limit - u.pages_usage;
     let before = u.pages_usage;
 
@@ -263,7 +272,7 @@ fn page_table_charge(c: &mut Checker) {
     let target = PAGES + TABLES - 1;
     let (mut opened, mut filled) = (0usize, 0usize);
     loop {
-        let short = rd::free(rd::SYSTEM).checked_sub(target).expect("the filler overshot") as usize;
+        let short = rd::free(rd::ROOT).checked_sub(target).expect("the filler overshot") as usize;
         if short == 0 {
             break;
         }
@@ -289,7 +298,7 @@ fn page_table_charge(c: &mut Checker) {
     // Give back exactly one page: the first filler table's first page (the table still maps the
     // slots filled after it, so only the page returns).
     rd::unmap(FILL, PAGE_SIZE).expect("free one filler page");
-    c.check(rd::free(rd::SYSTEM) == PAGES + TABLES, "one page freed");
+    c.check(rd::free(rd::ROOT) == PAGES + TABLES, "one page freed");
     let before = usage_pages();
     c.check(
         rd::map_fixed(AT, PAGES as usize * PAGE_SIZE, rd::rw()).is_ok(),
@@ -352,7 +361,7 @@ fn huge_len_is_prompt(c: &mut Checker) {
 /// (`InvalidArgument`), and a lend longer than `MAX_LEND_PAGES` is `TooLarge` before any page is
 /// looked at. Each is refused within the bound, and changes nothing: the first page is still
 /// mapped and still writable (a store that `set_flags` had made read-only would fault this
-/// program, and the case with it), and neither `system` nor the child's budget is charged.
+/// program, and the case with it), and neither `root` nor the child's budget is charged.
 fn huge_ranges_are_prompt(c: &mut Checker) {
     let (addr, end) = width::HUGE;
     let len = end - addr;

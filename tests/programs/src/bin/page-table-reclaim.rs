@@ -1,9 +1,11 @@
 //! A page table that maps nothing is freed, and uncharged, by the call that emptied it (R6;
 //! kernel/memory.md, "Page tables").
 //!
-//! The loader's trusted first process, alone, holding UART and Reset directly, so every verdict
-//! below is `system`'s page usage as the kernel reports it (`rd::usage`, R6), never this
-//! program's own claim (docs/testbench.md, "Rule F"). It checks four ways a table empties:
+//! The one program the tester starts, in a budget of its own (slot 3): every verdict below is
+//! that budget's page usage as the kernel reports it (`rd::usage`, R6), never this program's own
+//! claim (docs/testbench.md, "Rule F"); nothing else runs in that budget. It runs behind the
+//! tester, not in `init`'s place, because a round on Sv32 is more pages than `root` keeps. It
+//! checks four ways a table empties:
 //! - `map_anon` then `unmap`, 50 times: each round charges the pages and a table, and `unmap` gives all of
 //!   them back.
 //! - A `map_anon` of every free page, refused at the budget's edge once its tables no longer fit: `map_run`'s
@@ -16,34 +18,32 @@
 //! - A `process_map` into a child of another budget: the source's table goes with its page.
 //!
 //! Sender, receiver and server are threads of this one process, so every table is charged to
-//! `system` and the budget's usage sees all of them.
+//! its own budget, and the budget's usage sees all of them.
 #![no_std]
 #![no_main]
 
-use core::fmt::Write;
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
-use test_programs::rd::{self, Error, FOREVER, MessageKind, PAGE_SIZE, Received, ResetKind};
-use uart_16550::MmioSerialPort;
+use test_programs::rd::{self, Error, FOREVER, MessageKind, PAGE_SIZE, Received};
+use test_programs::{Logger, checker, log};
 
-static CONSOLE: AtomicUsize = AtomicUsize::new(0);
 static ENDPOINT: AtomicU32 = AtomicU32::new(0);
 
 /// Pages per `map_anon` round: a leaf table's whole span (2 MiB on Sv39, 4 MiB on Sv32), so a
-/// round always reaches a span no other mapping holds a table in (the console's registers are
-/// the area's first page).
+/// round always reaches a span no other mapping holds a table in (the logger's page is the
+/// area's first).
 const PAGES: usize = if cfg!(target_pointer_width = "64") { 512 } else { 1024 };
 const ROUNDS: usize = 50;
 /// A page alone in its leaf table's span on both widths (2 MiB on Sv39, 4 MiB on Sv32): below
 /// the `map_anon` area, above the message area, and nothing else of this process is there.
 const LONE: usize = 0x5000_0000;
 
-fn check(out: &mut MmioSerialPort, ok: bool, label: &str) {
-    writeln!(out, "[pt-reclaim] {}: {}", if ok { "ok" } else { "FAIL" }, label).ok();
+fn check(out: &mut Logger, ok: bool, label: &str) {
+    log!(out, "[pt-reclaim] {}: {}", if ok { "ok" } else { "FAIL" }, label);
     assert!(ok, "{}", label);
 }
 
-fn usage_pages() -> u64 { rd::usage(rd::SYSTEM).unwrap().pages_usage }
+fn usage_pages() -> u64 { rd::usage(rd::OWN).unwrap().pages_usage }
 
 /// Call word: hold the call past its caller's timeout before replying.
 const LATE: usize = 1;
@@ -74,12 +74,7 @@ fn serve(_: usize) {
 
 #[no_mangle]
 pub extern "C" fn _start(_: usize) -> ! {
-    let (uart, _) = rd::map_device(rd::CONSOLE_MMIO).unwrap();
-    // SAFETY: the kernel mapped this process's granted console register page.
-    let mut out = unsafe { MmioSerialPort::new(uart) };
-    out.init();
-    CONSOLE.store(uart, Ordering::Relaxed);
-    writeln!(out).ok();
+    let mut out = Logger::connect();
     let out = &mut out;
 
     // Before any thread, so nothing else in the `map_anon` area shares a round's tables.
@@ -93,11 +88,11 @@ pub extern "C" fn _start(_: usize) -> ! {
     }
     check(out, rounds, "each map_anon charged a page table, and its unmap gave it back");
 
-    // All of `system`'s free pages fit in the 256 MiB area, so the search finds room and the
-    // run fails only when a page or a table can no longer be paid for.
+    // All of its own budget's free pages fit in the 256 MiB area, so the search finds room and
+    // the run fails only when a page or a table can no longer be paid for.
     let before = usage_pages();
-    let free = rd::free(rd::SYSTEM) as usize;
-    assert!(free * PAGE_SIZE < 0x1000_0000, "system's free pages must fit the map_anon area");
+    let free = rd::free(rd::OWN) as usize;
+    assert!(free * PAGE_SIZE < 0x1000_0000, "its free pages must fit the map_anon area");
     let r = rd::map_anon(free * PAGE_SIZE, rd::rw());
     check(
         out,
@@ -142,7 +137,7 @@ pub extern "C" fn _start(_: usize) -> ! {
         "an abandoned lend, once replied to, leaves no page table behind",
     );
 
-    let budget = rd::create(rd::SYSTEM, &rd::spec(16, 1, 10)).expect("a budget");
+    let budget = rd::create(rd::OWN, &rd::spec(16, 1, 10)).expect("a budget");
     let exit = rd::endpoint_create().expect("an exit endpoint");
     let child = rd::process_create(budget, exit).expect("a process");
     let before = usage_pages();
@@ -154,20 +149,14 @@ pub extern "C" fn _start(_: usize) -> ! {
         "a process_map into another budget leaves no page table behind in the source",
     );
 
-    writeln!(out, "[pt-reclaim] PAGE TABLE RECLAIM PASSED").ok();
-    rd::system_reset(rd::RESET, ResetKind::PowerOff).unwrap();
-    loop {
-        rd::receive(None, FOREVER, 0).ok();
-    }
+    log!(out, "[pt-reclaim] PAGE TABLE RECLAIM PASSED");
+    checker::done();
+    test_programs::park()
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let uart = CONSOLE.load(Ordering::Relaxed);
-    if uart != 0 {
-        // SAFETY: only this process initializes CONSOLE, to its granted UART page.
-        let mut out = unsafe { MmioSerialPort::new(uart) };
-        writeln!(out, "[pt-reclaim] FAIL: {}", info).ok();
-    }
-    rd::process_exit(255)
+    let mut logger = Logger::connect();
+    log!(logger, "[pt-reclaim] FAIL: {}", info);
+    test_programs::park()
 }

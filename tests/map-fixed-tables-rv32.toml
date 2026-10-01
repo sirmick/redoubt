@@ -2,13 +2,16 @@ description = "map_fixed's page-table count across Sv32 root entries (R22, I14):
 arch = ["rv32"]
 kind = "boot"
 debug_assertions = true
-programs = ["map-fixed-tables"]
+# PID 2 log-server; PID 3 map-fixed-tables, the one program it starts, in its own budget (as
+# map-fixed-tables.toml). Before the tester it ran alone in init's place, in system.
+programs = ["log-server", "map-fixed-tables"]
 timeout_secs = 60
 expect = [
-    '^\[map-fixed-tables\] ok: unmap freed every page table the setup made$',
-    '^\[map-fixed-tables\] ok: one page table short across three root entries is refused$',
-    '^\[map-fixed-tables\] ok: nothing charged$',
-    '^\[map-fixed-tables\] MAP-FIXED TABLES TEST PASSED$',
+    '^\[pid 3\] \[map-fixed-tables\] ok: unmap freed every page table the setup made$',
+    '^\[pid 3\] \[map-fixed-tables\] ok: one page table short across three root entries is refused$',
+    '^\[pid 3\] \[map-fixed-tables\] ok: nothing charged$',
+    '^\[pid 3\] \[map-fixed-tables\] MAP-FIXED TABLES TEST PASSED$',
 ]
 forbid = ['\[map-fixed-tables\] FAIL', 'PANIC']
 poweroff = true
+reporter = "map-fixed-tables"

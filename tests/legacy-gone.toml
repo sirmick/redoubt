@@ -3,9 +3,9 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
-# PID 2 log-server; PID 3 legacy-gone, alone with the boot receive right. It takes the budgets
-# from log-server (TAKE_GIFTS) to spawn the children that jump to the old magic addresses.
-programs = ["log-server", "legacy-gone"]
+# PID 2 log-server; PID 3 legacy-gone, alone with the boot receive right. The tester gives it
+# `users` (slot 4) to spawn the children that jump to the old magic addresses.
+programs = ["log-server", { bin = "legacy-gone", budgets = ["users"] }]
 timeout_secs = 60
 # Progress, the attacker's report: each line is a kernel result read by the program (a call's
 # registers, map_fixed, an exit notice). A number that is not refused prints FAIL, forbidden.
@@ -13,7 +13,7 @@ timeout_secs = 60
 # interrupt fired (log-server's echo), and log-server's DONE names PID 3 with a clean power-off,
 # which a stopped kernel never reaches.
 expect = [
-    '^\[server\] gifts given to pid 3$',
+    '^\[server\] started legacy-gone as pid 3$',
     '^\[pid 3\] \[legacy-gone\] (261|355) numbers swept$',
     '^\[pid 3\] \[legacy-gone\] SwitchTo \(7\) -> refused: true$',
     '^\[pid 3\] \[legacy-gone\] Shutdown \(23\) -> refused: true$',

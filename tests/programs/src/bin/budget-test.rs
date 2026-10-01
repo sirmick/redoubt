@@ -3,15 +3,14 @@
 //! labels added and sorted (part of I6), depth, destruction and its sweep of this process's own
 //! table (R10, I2, I10), the handle table's cost (64 handles a page), usage within limits after
 //! every step (I5), `time_now` and `random`, and a short sequence whose every result the
-//! executable model predicts (written out below as a trace, kernel/model.md, "Traces"). Must run
-//! as the loader's first program, which holds root, system and users in handles 1-3, then a
-//! handle per device object the machine has, and lives in system. How many devices there are is
-//! the machine's business, so the handles this test creates are numbered from
-//! [`rd::first_free`], never from 4.
+//! executable model predicts (written out below as a trace, kernel/model.md, "Traces"). Runs as a
+//! program the tester starts: it lives in its own budget, carved from `system` and so
+//! system-class, which it holds in slot 3, and holds `users` in slot 4. The handles this test
+//! creates are numbered from [`rd::first_free`].
 //!
 //! What this test cannot show from userspace: accounts (R8) and stamps other than the caller's
-//! (R9) travel only in messages; a process killed by R10 in a budget below `system` needs
-//! `process_create` (`budget-destroy-kills` covers `system` itself); a user-class caller (the
+//! (R9) travel only in messages; a process killed by R10 in a budget below its own needs
+//! `process_create` (`budget-destroy-kills` covers `system`); a user-class caller (the
 //! `ClassDenied` for labels, `budget_usage`'s `LabelDenied`) needs a process in a user budget.
 //! Budget ids never being reused (I12) is not visible from here: the kernel checks ids on every
 //! handle lookup, and the cycles below only exercise that path.
@@ -96,34 +95,32 @@ fn warm_stack() {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let logger = test_programs::logsrv::start();
+    let logger = Logger::connect();
     let mut t = T { logger, failed: false, held: [0; 64], nheld: 0 };
-    for h in [rd::ROOT, rd::SYSTEM, rd::USERS] {
+    let (own, users) = (rd::OWN, rd::GIVEN);
+    for h in [own, users] {
         t.hold(h);
     }
-    // Where this process's own handles start: after root, system, users and the machine's
-    // device objects (kernel `device.rs`; which process gets which device is
-    // docs/plan/m1-separation.md).
+    // Where this process's own handles start: after the boot and log endpoints and the two
+    // budgets the tester gave it.
     let base = rd::first_free();
-    // `system` pays for every page this process and log-server fault in, so exact checks of its
-    // usage need both to be done growing first: touch the stack this test will use, and let
-    // log-server map what serving a message needs. Nothing is logged between checks (only a
-    // failure logs).
+    // Its own budget pays for every page this process faults in, so exact checks of its usage
+    // need it to be done growing first: touch the stack this test will use, and log once, which
+    // maps what logging needs. Nothing is logged between checks (only a failure logs).
     warm_stack();
     log!(t.logger, "[budget] warming up");
-    let system0 = rd::usage(rd::SYSTEM).unwrap();
-    log!(t.logger, "[budget] system {:?}", system0);
-    test_programs::wait_ms(20);
-    let system0 = rd::usage(rd::SYSTEM).unwrap();
+    let own0 = rd::usage(own).unwrap();
+    log!(t.logger, "[budget] own {:?}", own0);
+    let own0 = rd::usage(own).unwrap();
 
     // --- R6, R7: carving and charging -------------------------------------------------------
-    let a = expect!(t, rd::create(rd::SYSTEM, &rd::spec(100, 2, 50)), Ok(base)).unwrap_or(base);
+    let a = expect!(t, rd::create(own, &rd::spec(100, 2, 50)), Ok(base)).unwrap_or(base);
     t.hold(a);
     // The parent pays the child's own page and counts its limits, never its usage (R6).
-    let s = system0;
+    let s = own0;
     let _ = expect!(
         t,
-        rd::usage(rd::SYSTEM),
+        rd::usage(own),
         Ok(Usage {
             pages_usage: s.pages_usage + 101,
             processes_usage: s.processes_usage + 2,
@@ -168,7 +165,7 @@ pub extern "C" fn _start() -> ! {
     let _ = expect!(t, rd::create(quick, &labelled(0, &[])), Ok(base + 3));
     let _ = expect!(t, rd::destroy(quick), Ok(()));
     // A labelled user-class parent: a child dropping the label is refused whoever asks.
-    let user_lab = expect!(t, rd::create(rd::USERS, &labelled(1, &[9])), Ok(base + 2)).unwrap_or(base + 2);
+    let user_lab = expect!(t, rd::create(users, &labelled(1, &[9])), Ok(base + 2)).unwrap_or(base + 2);
     let _ = expect!(t, rd::create(user_lab, &labelled(0, &[])), Err(Error::LabelDenied));
     let _ = expect!(t, rd::destroy(user_lab), Ok(()));
     // A system-class caller may add labels; they are sorted and deduplicated.
@@ -182,29 +179,29 @@ pub extern "C" fn _start() -> ! {
     let _ = expect!(t, rd::destroy(more), Ok(()));
     let _ = expect!(t, rd::destroy(same), Ok(()));
 
-    // --- MAX_DEPTH: system is at depth 1, so seven more levels fit and the eighth is refused.
-    // `a` is at depth 2, so chain[1..=5] are at depths 3 to 7, and a child of chain[5] would be
-    // at MAX_DEPTH = 8. Each level leaves its parent one free page.
-    let mut chain = [0u32; 6];
+    // --- MAX_DEPTH: system is at depth 1 and its own budget at 2, so five more levels fit and
+    // the sixth is refused. `a` is at depth 3, so chain[1..=4] are at depths 4 to 7, and a child
+    // of chain[4] would be at MAX_DEPTH = 8. Each level leaves its parent one free page.
+    let mut chain = [0u32; 5];
     chain[0] = a;
-    for depth in 1..6 {
+    for depth in 1..5 {
         let pages = 20 - 2 * depth as u64;
         chain[depth] =
             expect!(t, rd::create(chain[depth - 1], &rd::spec(pages, 0, 0)), Ok(base + 2 + depth as u32))
                 .unwrap_or(0);
     }
-    let _ = expect!(t, rd::create(chain[5], &rd::spec(1, 0, 0)), Err(Error::TooLarge));
-    let _ = expect!(t, rd::create(chain[5], &labelled(1, &[])), Err(Error::TooLarge));
+    let _ = expect!(t, rd::create(chain[4], &rd::spec(1, 0, 0)), Err(Error::TooLarge));
+    let _ = expect!(t, rd::create(chain[4], &labelled(1, &[])), Err(Error::TooLarge));
     t.i5("depth");
 
     // --- R10, I2, I10: destroy a subtree ----------------------------------------------------
-    // `chain[1]` holds chain[2..=5]; handles to every one of them go, and `a` gets back exactly
+    // `chain[1]` holds chain[2..=4]; handles to every one of them go, and `a` gets back exactly
     // what chain[1] carved from it.
     let before = rd::usage(a).unwrap();
     // chain[1] carved 18 pages from `a`, and `a` paid its object's page.
-    let tree = expect!(t, rd::create(chain[1], &rd::spec(0, 0, 0)), Ok(base + 8)).unwrap_or(base + 8);
+    let tree = expect!(t, rd::create(chain[1], &rd::spec(0, 0, 0)), Ok(base + 7)).unwrap_or(base + 7);
     let _ = expect!(t, rd::destroy(chain[1]), Ok(()));
-    for gone in [chain[1], chain[2], chain[3], chain[4], chain[5], tree] {
+    for gone in [chain[1], chain[2], chain[3], chain[4], tree] {
         let _ = expect!(t, rd::usage(gone), Err(Error::BadHandle));
         let _ = expect!(t, rd::close(gone), Err(Error::BadHandle));
         let _ = expect!(t, rd::destroy(gone), Err(Error::BadHandle));
@@ -213,18 +210,19 @@ pub extern "C" fn _start() -> ! {
     // What was never carved from `a`'s subtree is untouched: the scope and the labelled budget.
     let _ = expect!(t, rd::usage(scope), Ok(usage(0, 0, 0, 0, 0, 0)));
     let _ = expect!(t, rd::usage(lab).map(|u| u.pages_limit), Ok(20));
-    // Destroying `a` itself returns system to where it started (I10), handle table included.
+    // Destroying `a` itself returns its own budget to where it started (I10), handle table
+    // included.
     let _ = expect!(t, rd::destroy(a), Ok(()));
     for gone in [a, scope, lab] {
         let _ = expect!(t, rd::usage(gone), Err(Error::BadHandle));
     }
-    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
-    t.nheld = 3;
+    let _ = expect!(t, rd::usage(own), Ok(own0));
+    t.nheld = 2;
     t.i5("destroy");
 
     // --- The handle table: 64 handles a page, charged to the caller's budget -----------------
-    let x = expect!(t, rd::create(rd::SYSTEM, &rd::spec(400, 0, 0)), Ok(base)).unwrap_or(base);
-    let with_x = rd::usage(rd::SYSTEM).unwrap();
+    let x = expect!(t, rd::create(own, &rd::spec(400, 0, 0)), Ok(base)).unwrap_or(base);
+    let with_x = rd::usage(own).unwrap();
     // Handles 1..=base are held; scopes take the rest of the first table page.
     for index in base + 1..=64 {
         if rd::create(x, &rd::spec(0, 0, 0)) != Ok(index) {
@@ -232,25 +230,26 @@ pub extern "C" fn _start() -> ! {
             break;
         }
     }
-    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(with_x));
-    // The 65th handle needs a second page: one more page from system, not from x.
+    let _ = expect!(t, rd::usage(own), Ok(with_x));
+    // The 65th handle needs a second page: one more page from its own budget, not from x.
     let _ = expect!(t, rd::create(x, &rd::spec(0, 0, 0)), Ok(65));
-    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(Usage { pages_usage: with_x.pages_usage + 1, ..with_x }));
+    let _ = expect!(t, rd::usage(own), Ok(Usage { pages_usage: with_x.pages_usage + 1, ..with_x }));
     // One page per scope, all paid by x: the rest of the first page, plus the 65th.
     let _ = expect!(t, rd::usage(x).map(|u| u.pages_usage), Ok(65 - base as u64));
     // Closing the second page's only handle frees that page.
     let _ = expect!(t, rd::close(65), Ok(()));
-    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(with_x));
+    let _ = expect!(t, rd::usage(own), Ok(with_x));
     let _ = expect!(t, rd::close(65), Err(Error::BadHandle));
     // Destroying x closes every scope in the table.
     let _ = expect!(t, rd::destroy(x), Ok(()));
-    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
+    let _ = expect!(t, rd::usage(own), Ok(own0));
     let _ = expect!(t, rd::usage(64), Err(Error::BadHandle));
 
     // --- A sequence the model predicts, result by result (replay compares these) ------------
     // In the trace format (kernel/model.md, "Traces"), from a fresh budget M = (10 pages,
-    // 1 process, weight 10) in system, M = h:4 in the model's numbering (here `base`, since
-    // the boot handles come first), with each budget's own page charged to its parent (R6):
+    // 1 process, weight 10) in its own budget, M = h:4 in the model's numbering (here `base`,
+    // since the handles the tester gave it come first), with each budget's own page charged to
+    // its parent (R6):
     //   budget_create h:4 5 0 0 user [] 0 forever  -> ok h:5
     //   budget_usage h:4                           -> ok usage [10,6,1,0,10,0]
     //   budget_create h:4 5 0 0 user [] 0 forever  -> err OutOfMemory
@@ -265,7 +264,7 @@ pub extern "C" fn _start() -> ! {
     //   budget_usage h:4                           -> ok usage [10,1,1,0,10,0]
     //   budget_destroy h:4                         -> ok
     //   budget_usage h:4                           -> err BadHandle
-    let m = expect!(t, rd::create(rd::SYSTEM, &rd::spec(10, 1, 10)), Ok(base)).unwrap_or(base);
+    let m = expect!(t, rd::create(own, &rd::spec(10, 1, 10)), Ok(base)).unwrap_or(base);
     let _ = expect!(t, rd::create(m, &rd::spec(5, 0, 0)), Ok(base + 1));
     let _ = expect!(t, rd::usage(m), Ok(usage(10, 6, 1, 0, 10, 0)));
     let _ = expect!(t, rd::create(m, &rd::spec(5, 0, 0)), Err(Error::OutOfMemory));
@@ -282,11 +281,11 @@ pub extern "C" fn _start() -> ! {
     let _ = expect!(t, rd::usage(m), Ok(usage(10, 1, 1, 0, 10, 0)));
     let _ = expect!(t, rd::destroy(m), Ok(()));
     let _ = expect!(t, rd::usage(m), Err(Error::BadHandle));
-    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
+    let _ = expect!(t, rd::usage(own), Ok(own0));
 
     // --- I10 over many cycles: create, nest, destroy; nothing leaks ----------------------------
     for cycle in 0..500u64 {
-        let b = rd::create(rd::SYSTEM, &rd::spec(8, 1, 1));
+        let b = rd::create(own, &rd::spec(8, 1, 1));
         let c = b.and_then(|b| rd::create(b, &rd::spec(3, 0, 0)));
         let ok = b == Ok(base)
             && c == Ok(base + 1)
@@ -297,11 +296,11 @@ pub extern "C" fn _start() -> ! {
             break;
         }
     }
-    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
+    let _ = expect!(t, rd::usage(own), Ok(own0));
     // A deadline is accepted at creation; this one is an hour away, so the budget is destroyed by
     // hand first. (Enforcement: `budget-deadline`.)
     let lease = rd::BudgetSpec { deadline: rd::time_now().unwrap() + 3_600_000_000, ..rd::spec(2, 0, 0) };
-    let l = expect!(t, rd::create(rd::SYSTEM, &lease), Ok(base)).unwrap_or(base);
+    let l = expect!(t, rd::create(own, &lease), Ok(base)).unwrap_or(base);
     let _ = expect!(t, rd::destroy(l), Ok(()));
     let _ = FOREVER;
 

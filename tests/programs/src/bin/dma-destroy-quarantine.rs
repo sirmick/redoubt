@@ -11,8 +11,8 @@
 //! destruction must return, every handle to either quarantined slot must be gone (`BadHandle`),
 //! and both runs' charges must move to the parent.
 //!
-//! It runs as the bundle's first program, so it holds every device object, prints on the console
-//! it maps itself, and ends with `system_reset`. The drivers are copies of it (`spawn.rs`).
+//! It runs in `init`'s place, so it holds every device object, prints on the console it maps
+//! itself, and ends with `system_reset`. The drivers are copies of it (`spawn.rs`).
 
 #![no_std]
 #![no_main]
@@ -85,7 +85,7 @@ pub extern "C" fn _start() -> ! {
     // Two empty virtio slots, the "deaf" ones: each first reset reports not confirmed.
     let mut slots = [0u32; MAX_SLOTS];
     let mut count = 0;
-    for h in rd::OTHER_DEVICES..rd::log_rx() {
+    for h in rd::OTHER_DEVICES..rd::first_free() {
         let Ok((at, len)) = rd::map_device(h) else { continue };
         // SAFETY: `at` maps `len` bytes of this device's registers; its first word is the magic.
         let magic = unsafe { (at as *const u32).read_volatile() };
@@ -145,11 +145,14 @@ pub extern "C" fn _start() -> ! {
         allocated1
     );
 
+    // `system` gets the carve back and both runs' pages, and loses the two quarantined device
+    // objects' pages (one each, kernel/devices.md). The drivers' process objects are charged to
+    // their creator's budget, `root`, where `init`'s place runs, so they are not counted here.
     let after = pages(rd::SYSTEM);
     check!(
         out,
-        after == before + (2 * RUN_PAGES) as u64,
-        "the carve came back and both runs' {} pages are charged to system ({} -> {})",
+        after == before + (2 * RUN_PAGES) as u64 - 2,
+        "the carve came back, both runs' {} pages are charged to system and both device objects freed ({} -> {})",
         2 * RUN_PAGES,
         before,
         after

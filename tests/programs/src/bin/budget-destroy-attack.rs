@@ -4,8 +4,9 @@
 //! frames and indices are reused, and tries the stale indices again. A handle that outlived its
 //! budget would reach a freed frame, and the kernel stops on that (I1) rather than trust it; a
 //! reused frame read through a stale handle would carve from a budget the attacker no longer
-//! holds. The kernel surviving, and the victim still getting its pages from `system`, is the
-//! verdict. (No other process holds handles here; copies in other tables, which travel in
+//! holds. It builds the tree in its own budget, under `system`. The kernel surviving, and the
+//! victim beside it still getting its pages, with `system` within its limits, is the verdict.
+//! (No other process holds handles to the tree; copies in other tables, which travel in
 //! messages, are not covered by this case.) See `tests/budget-destroy-attack.toml`.
 
 #![no_std]
@@ -17,15 +18,16 @@ use test_programs::{Logger, log};
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    // The bundle's third program: its budgets come from log-server, once, and no device (R2).
-    let rd::Gifts { system, users, .. } = rd::take_gifts().expect("the budgets");
+    // The case's third program: the tester gives it its own budget in slot 3, `users` in slot 4,
+    // and no device (R2).
+    let (own, users) = (rd::OWN, rd::GIVEN);
     log!(logger, "[attacker] starting");
-    let b = rd::create(system, &rd::spec(300, 0, 0)).expect("b");
+    let b = rd::create(own, &rd::spec(300, 0, 0)).expect("b");
     let c = rd::create(b, &rd::spec(200, 0, 0)).expect("c");
     let d = rd::create(c, &rd::spec(100, 0, 0)).expect("d");
     let scope = rd::create(d, &rd::spec(0, 0, 0)).expect("scope");
-    let e = rd::create(system, &rd::spec(10, 0, 0)).expect("e");
-    let before = rd::usage(system).unwrap();
+    let e = rd::create(own, &rd::spec(10, 0, 0)).expect("e");
+    let before = rd::usage(own).unwrap();
     log!(
         logger,
         "[destroy] held b={} c={} d={} scope={} e={}; destroy b -> {:?}",
@@ -54,7 +56,7 @@ pub extern "C" fn _start() -> ! {
         }
         // Reuse the freed frames (and, from the second round, the indices below b's).
         for _ in 0..50 {
-            let x = rd::create(system, &rd::spec(20, 0, 0));
+            let x = rd::create(own, &rd::spec(20, 0, 0));
             let y = x.and_then(|x| rd::create(x, &rd::spec(0, 0, 0)));
             if let Ok(x) = x {
                 rd::destroy(x).ok();
@@ -62,9 +64,9 @@ pub extern "C" fn _start() -> ! {
             let _ = y;
         }
     }
-    let after = rd::usage(system).unwrap();
+    let after = rd::usage(own).unwrap();
     log!(logger, "[destroy] stale index checks refused: {} of 8", stale_ok);
-    log!(logger, "[destroy] system carve returned: {}", after.pages_usage + 301 == before.pages_usage);
+    log!(logger, "[destroy] own carve returned: {}", after.pages_usage + 301 == before.pages_usage);
     log!(logger, "[destroy] e untouched: {:?}", rd::usage(e).map(|u| u.pages_limit));
     // Destroying `users`, which the attacker also holds, frees root's share; its handle goes.
     log!(logger, "[destroy] destroy users -> {:?}, then {:?}", rd::destroy(users), rd::usage(users));

@@ -92,7 +92,7 @@ pub extern "C" fn _start() -> ! {
     out.0.init();
     say!(out, "\n[dma-reset-reuse] mapped the console");
 
-    let mut devices = rd::OTHER_DEVICES..rd::log_rx();
+    let mut devices = rd::OTHER_DEVICES..rd::first_free();
     let disk = devices.clone().find_map(|h| {
         let (at, len) = rd::map_device(h).ok()?;
         let virtio = len >= rd::PAGE_SIZE && read(at, MAGIC) == u32::from_le_bytes(*b"virt");

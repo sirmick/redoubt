@@ -3,21 +3,20 @@
 //! request for the whole of an empty area succeeds, and a refusal costs a scan of the area, not
 //! the area times the request, so a timer wake meanwhile stays prompt (R12, kernel/scheduling.md).
 //!
-//! It runs as the bundle's first program, alone, and judges the kernel itself (docs/testbench.md,
-//! "Rule F (trusted verdicts)"): every `ok:` line is an address or a time the kernel returned.
-//! The placement checks run before the console is mapped, while the area is still empty (the
-//! console's registers are placed in the same area), and are printed once it is.
+//! It is the one program the tester starts, in its own budget (slot 3), which is all of
+//! `system`'s free pages bar one: the whole-area request needs more than `root` keeps in `init`'s
+//! place. It judges the kernel itself, with nothing else beside it (docs/testbench.md, "Rule F
+//! (trusted verdicts)"): every `ok:` line is an address or a time the kernel returned. The
+//! placement checks run before the logger has its page, while the area is still empty (that page
+//! is placed in the same area), and are printed once it has.
 
 #![no_std]
 #![no_main]
 
-use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use test_programs::rd::{self, Error, ResetKind};
-use uart_16550::MmioSerialPort;
-
-static UART: AtomicUsize = AtomicUsize::new(0);
+use test_programs::rd::{self, Error};
+use test_programs::{Logger, checker, log};
 
 /// The `map_anon` area: 256 MiB from here (memory-layout.md, "Regions").
 const AREA: usize = 0x6000_0000;
@@ -111,26 +110,21 @@ fn placement() -> Placement {
 pub extern "C" fn _start() -> ! {
     let p = placement();
 
-    let (uart, _) = rd::map_device(rd::CONSOLE_MMIO).expect("the console's mmio handle");
-    UART.store(uart, Ordering::Relaxed);
-    // SAFETY: `uart` is the console's register page, mapped for this process by the kernel.
-    let mut out = unsafe { MmioSerialPort::new(uart) };
-    out.init();
-    writeln!(out).ok();
+    let mut out = Logger::connect();
     assert_eq!(p.whole, Ok(AREA), "a whole-area request in an empty area");
-    writeln!(out, "[search] ok: a request for the whole empty area is placed at its start").ok();
+    log!(out, "[search] ok: a request for the whole empty area is placed at its start");
     assert_eq!(p.end_fit, Ok(AREA_END - pages(HALF)), "a run that fits only at the end");
-    writeln!(out, "[search] ok: a run that fits only at the area's end is placed there").ok();
+    log!(out, "[search] ok: a run that fits only at the area's end is placed there");
     assert_eq!(p.wrapped, Err(Error::OutOfMemory), "a wrap after a high placement");
-    writeln!(out, "[search] ok: after a high placement, a run that does not fit is refused").ok();
+    log!(out, "[search] ok: after a high placement, a run that does not fit is refused");
 
-    // One page taken in the middle (the console's registers may already be there, placed after
+    // One page taken in the middle (the logger's page may already be there, placed after
     // the last run above); a request for more than half then fits on neither side.
     let middle = AREA + pages(HALF);
     assert!(matches!(rd::map_fixed(middle, rd::PAGE_SIZE, rd::rw()), Ok(()) | Err(Error::InvalidArgument)));
     let elapsed = refusal_time(pages(HALF + 1));
     assert!(elapsed < REFUSAL_BOUND_US, "a refused search past a middle page took {elapsed} us");
-    writeln!(out, "[search] ok: a refused search past a middle page took {elapsed} us, under 12 ms").ok();
+    log!(out, "[search] ok: a refused search past a middle page took {elapsed} us, under 12 ms");
 
     // The worst case for the scan: a page taken in every 2 MiB span, so every page table of the
     // area is there to be read and no run of a span's length fits. A thread sleeps meanwhile,
@@ -145,13 +139,13 @@ pub extern "C" fn _start() -> ! {
     }
     let elapsed = refusal_time(SPAN);
     assert!(elapsed < REFUSAL_BOUND_US, "a refused search over every page table took {elapsed} us");
-    writeln!(out, "[search] ok: a refused search over every page table took {elapsed} us, under 12 ms").ok();
+    log!(out, "[search] ok: a refused search over every page table took {elapsed} us, under 12 ms");
     while WOKE.load(Ordering::Acquire) == 0 {
         rd::receive(None, SLEEP_US, 0).ok();
     }
     let late = (WOKE.load(Ordering::Acquire) - DUE.load(Ordering::Acquire)) as u64;
     assert!(late < WAKE_BOUND_US, "the sleeper woke {late} us late");
-    writeln!(out, "[search] ok: a timer wake during the search was {late} us late, under 15 ms").ok();
+    log!(out, "[search] ok: a timer wake during the search was {late} us late, under 15 ms");
 
     // Placements that succeed land inside the area.
     for npages in [1, 7, 64, SPAN / rd::PAGE_SIZE - 1] {
@@ -159,19 +153,15 @@ pub extern "C" fn _start() -> ! {
         assert!(inside(at, npages), "{npages} pages at {at:#x}");
         rd::unmap(at, pages(npages)).unwrap();
     }
-    writeln!(out, "[search] ok: every run placed lies inside the area").ok();
-    writeln!(out, "[search] MAP_ANON SEARCH BOUNDED").ok();
-    rd::system_reset(rd::RESET, ResetKind::PowerOff).unwrap();
+    log!(out, "[search] ok: every run placed lies inside the area");
+    log!(out, "[search] MAP_ANON SEARCH BOUNDED");
+    checker::done();
     test_programs::park()
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let uart = UART.load(Ordering::Relaxed);
-    if uart != 0 {
-        // SAFETY: this program mapped the UART and has stopped normal execution.
-        let mut out = unsafe { MmioSerialPort::new(uart) };
-        writeln!(out, "[search] FAIL: {info}").ok();
-    }
-    rd::process_exit(255)
+    let mut logger = Logger::connect();
+    log!(logger, "[search] FAIL: {info}");
+    test_programs::park()
 }

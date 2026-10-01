@@ -202,7 +202,8 @@ pub struct Budget {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Boot {
-    /// Initial processes, in PID order starting at PID 2.
+    /// The case's programs: the first in `init`'s place, the loader's one process; the tester
+    /// starts the others in this order (docs/testbench.md, "Starting a case's programs").
     pub programs: Vec<Program>,
     /// Hart counts to run with. One run per entry.
     #[serde(default = "default_smp")]
@@ -402,7 +403,9 @@ pub struct Build {
     pub features: Vec<String>,
 }
 
-/// A program to inject into the boot bundle.
+/// A program to inject into the boot bundle. The `bin` form takes `budgets`: the budgets the
+/// tester gives the program, from `root`, `system` and `users` (docs/testbench.md, "Starting a
+/// case's programs").
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Program {
@@ -410,12 +413,39 @@ pub enum Program {
     TestProgram(String),
     /// A binary of any workspace package, built for the case's target.
     Package { package: String, bin: String },
+    /// A binary of the `test-programs` package, with budgets.
+    Bin {
+        bin: String,
+        #[serde(default)]
+        budgets: Vec<String>,
+    },
     /// A prebuilt ELF, relative to the workspace root.
     Path { path: PathBuf },
     /// A `test-programs` binary, corrupted before injection, for testing how the loader
     /// and kernel cope with hostile images.
     Corrupted { corrupt: String, with: Corruption },
 }
+
+impl Program {
+    /// The `test-programs` binary it names, if it names one.
+    pub fn test_program(&self) -> Option<&str> {
+        match self {
+            Program::TestProgram(bin) | Program::Bin { bin, .. } => Some(bin),
+            _ => None,
+        }
+    }
+
+    /// The budgets the tester gives it.
+    pub fn budgets(&self) -> &[String] {
+        match self {
+            Program::Bin { budgets, .. } => budgets,
+            _ => &[],
+        }
+    }
+}
+
+/// The budgets a tester can give: `init`'s three.
+pub const BUDGETS: [&str; 3] = ["root", "system", "users"];
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -441,11 +471,11 @@ fn default_smp() -> Vec<u32> { vec![1] }
 fn default_timeout() -> f64 { 60.0 }
 
 impl Boot {
-    /// The reporter's PID: the loader numbers the bundle's programs from 2, in order.
+    /// The reporter's place, which the tester prints as its PID: the case's programs are places
+    /// 2 on, in order.
     pub fn reporter_pid(&self) -> Option<usize> {
         let reporter = self.reporter.as_ref()?;
-        let index =
-            self.programs.iter().position(|p| matches!(p, Program::TestProgram(name) if name == reporter))?;
+        let index = self.programs.iter().position(|p| p.test_program() == Some(reporter.as_str()))?;
         Some(index + 2)
     }
 }
@@ -481,6 +511,17 @@ impl Case {
                         net.peer.is_empty() || boot.distinct_across_boots.is_empty(),
                         "peers need one boot"
                     );
+                }
+                for (index, program) in boot.programs.iter().enumerate() {
+                    let budgets = program.budgets();
+                    ensure!(
+                        index != 0 || budgets.is_empty(),
+                        "the first program holds init's budgets already"
+                    );
+                    for (i, budget) in budgets.iter().enumerate() {
+                        ensure!(BUDGETS.contains(&budget.as_str()), "unknown budget {budget:?}");
+                        ensure!(!budgets[..i].contains(budget), "budget {budget:?} named twice");
+                    }
                 }
                 if let Some(reporter) = &boot.reporter {
                     ensure!(boot.poweroff, "a reporter needs poweroff = true");
