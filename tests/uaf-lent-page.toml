@@ -8,6 +8,9 @@ programs = ["log-server", "uaf-holder", "uaf-victim", "uaf-grabber"]
 timeout_secs = 30
 expect = [
     '^\[pid 3\] \[holder\] holding page',
+    # The kernel's abandoned notice for the lending call: the victim is gone, and the grabber
+    # is let go only after it.
+    '^\[pid 3\] \[holder\] victim gone, lend still held',
     # Progress, the attacker's report.
     '^\[pid 5\] \[grabber\] stamped',
     # The verdict, the holder's; "UAF TEST FAILED" (it sees the grabber's data) is always

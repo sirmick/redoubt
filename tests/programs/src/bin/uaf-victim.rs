@@ -8,11 +8,10 @@
 use test_programs::uaf::*;
 use test_programs::{Logger, log, rd};
 
-/// Runs on a second thread: gives the main thread time to lend the page and the holder
-/// time to receive it, then ends this process (including the main thread, which is by
-/// then blocked in the lend).
+/// Runs on a second thread: waits until the holder holds the lend, then ends this process
+/// (including the main thread, which is by then blocked in the lend).
 fn terminator(_arg: usize) {
-    test_programs::wait_ms(50);
+    rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([LENT, 0, 0, 0]), None, rd::FOREVER).expect("lent failed");
     rd::process_exit(0)
 }
 

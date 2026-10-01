@@ -185,7 +185,11 @@ pub mod mem {
 pub mod uaf {
     /// Call with a writable lend: hold this page forever and remember where it is mapped.
     pub const HOLD: usize = 1;
-    /// Call: reply immediately (liveness / ordering for the grabber).
+    /// Call, by the victim's terminator: answered once the holder holds the lend, so the victim
+    /// dies only after its page is lent.
+    pub const LENT: usize = 2;
+    /// Call, by the grabber: answered once the holder holds the lend and the kernel has reported
+    /// the lending call abandoned, that is, once the victim is gone.
     pub const SYNC: usize = 3;
     /// Call: re-read the held page; reply 1 if it still reads back as the victim's data.
     pub const CHECK: usize = 4;

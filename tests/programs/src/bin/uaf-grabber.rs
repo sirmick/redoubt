@@ -14,10 +14,9 @@ const PAGES: usize = 64;
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
     let call = |op| rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([op, 0, 0, 0]), None, rd::FOREVER);
-    // Ordering: the holder answers SYNC only once it is past receiving the lend. Then give
-    // the victim's termination time to complete before we try to reclaim its frame.
+    // Ordering: the holder answers SYNC only once it holds the lend and the kernel has reported
+    // the lending call abandoned, so the victim is gone before we try to reclaim its frame.
     call(SYNC).expect("sync failed");
-    test_programs::wait_ms(100);
     let mut grabbed = 0;
     for _ in 0..PAGES {
         if let Ok(page) = rd::map_anon(rd::PAGE_SIZE, rd::rw()) {

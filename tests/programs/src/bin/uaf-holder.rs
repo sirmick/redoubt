@@ -25,11 +25,28 @@ pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
     // The bundle's second program: it holds the boot endpoint's receive right.
     log!(logger, "[holder] up");
-    let mut held = None;
+    // The held lend's address and its call's id; the open LENT and SYNC calls, answered when
+    // their event comes; and whether the kernel has reported the lending call abandoned.
+    let mut held: Option<(usize, u64)> = None;
+    let mut lent = None;
+    let mut sync = None;
+    let mut victim_gone = false;
     loop {
-        // An abandoned notice for the held call is left unanswered: replying would free the
-        // call and give the lend back, and the point is to keep holding it (R3).
-        let Ok(Received::Message(m)) = rd::receive(Some(rd::BOOT_ENDPOINT), rd::FOREVER, 0) else { continue };
+        let m = match rd::receive(Some(rd::BOOT_ENDPOINT), rd::FOREVER, 0) {
+            Ok(Received::Message(m)) => m,
+            // The victim is gone and its lend is still held: the frame the grabber must not
+            // get. The notice is left unanswered: replying would free the call and give the
+            // lend back, and the point is to keep holding it (R3).
+            Ok(Received::Abandoned(id)) if held.is_some_and(|(_, h)| h == id.get()) => {
+                log!(logger, "[holder] victim gone, lend still held");
+                victim_gone = true;
+                if let Some(s) = sync.take() {
+                    rd::reply(s, &rd::body([1, 0, 0, 0])).ok();
+                }
+                continue;
+            }
+            _ => continue,
+        };
         let MessageKind::Call { lend } = m.kind else { continue };
         let id = m.msg_id.get();
         match (m.body.words[0], lend) {
@@ -41,13 +58,21 @@ pub extern "C" fn _start() -> ! {
                 );
                 // Never replied to: the lend stays mapped here and the victim's calling thread
                 // stays blocked until the victim dies.
-                held = Some(pages.addr);
+                held = Some((pages.addr, id));
+                if let Some(l) = lent.take() {
+                    rd::reply(l, &rd::body([1, 0, 0, 0])).ok();
+                }
             }
-            (SYNC, None) => {
+            (LENT, None) if held.is_some() => {
                 rd::reply(id, &rd::body([1, 0, 0, 0])).ok();
             }
+            (LENT, None) => lent = Some(id),
+            (SYNC, None) if victim_gone => {
+                rd::reply(id, &rd::body([1, 0, 0, 0])).ok();
+            }
+            (SYNC, None) => sync = Some(id),
             (CHECK, None) => {
-                let Some(at) = held else {
+                let Some((at, _)) = held else {
                     log!(logger, "UAF TEST FAILED: holder never received the lend (test setup)");
                     rd::reply(id, &rd::body([0; rd::WORDS])).ok();
                     continue;
