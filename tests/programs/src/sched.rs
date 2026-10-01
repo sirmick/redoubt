@@ -182,6 +182,8 @@ fn window() -> (u64, u64) {
 /// The launcher's `rdtime` ticks per µs, the last parameter of every child.
 fn tpu() -> u64 { param(7).max(1) }
 
+/// Whether this process is a child (set at [`child`]'s entry): its panics cannot print.
+static IS_CHILD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static TOTAL: AtomicUsize = AtomicUsize::new(0);
 static DONE: AtomicUsize = AtomicUsize::new(0);
 static PARAMS: [AtomicUsize; 8] = [const { AtomicUsize::new(0) }; 8];
@@ -316,6 +318,7 @@ fn await_done(n: usize) {
 
 /// A child's entry: its role from the startup block.
 pub extern "C" fn child(arg: usize) -> ! {
+    IS_CHILD.store(true, SeqCst);
     let role = Role::from_u8(spawn::startup_byte(arg, 0));
     for (i, p) in PARAMS.iter().enumerate() {
         p.store(word(arg, i) as usize, SeqCst);
@@ -894,8 +897,19 @@ pub mod rtc {
     }
 }
 
-/// A case's panic: say so on the UART (the launcher's; a child has none), then park.
+/// A case's panic: say so on the UART, then park. A child has no UART (it is a copy of the
+/// launcher, console state and all, without the mapping), so it faults instead, on purpose, at
+/// `0x7000_0000 | file << 16 | line` (file 1 `sched.rs`, 2 `spawn.rs`, 3 `rd.rs`, 0 another): the
+/// kernel's `PROGRAM HALT` line names where it panicked, and no text of the child's reaches the
+/// console (rule F).
 pub fn panicked(name: &str, info: &core::panic::PanicInfo) -> ! {
+    if IS_CHILD.load(SeqCst) {
+        let (file, line) = info.location().map_or(("", 0), |l| (l.file(), l.line() as usize));
+        let tag =
+            ["sched.rs", "spawn.rs", "rd.rs"].iter().position(|f| file.ends_with(f)).map_or(0, |i| i + 1);
+        // Nothing is mapped there: the load faults, and the kernel ends the process.
+        rd::peek(0x7000_0000 | tag << 16 | line.min(0xffff));
+    }
     let _ = writeln!(Console, "[{}] FAIL: panic: {}", name, info);
     crate::park()
 }
