@@ -16,7 +16,20 @@ session read from the bundle?" is the list it was built from, not a filter it ap
 
 ### Serving `/boot`
 
-Status: built · tested: bench:r4-host-tests, bench:bootfsd-build, host:redoubt-bootfsd::a_session_reads_the_public_entries_and_sees_nothing_else, host:redoubt-bootfsd::a_walk_to_an_unpublished_name_is_the_same_as_to_one_that_never_existed, host:redoubt-bootfsd::entries_read_back_byte_for_byte_at_any_offset, host:redoubt-bootfsd::every_way_of_writing_is_refused, host:redoubt-bootfsd::the_directory_lists_exactly_the_public_list_in_order, host:redoubt-bootfsd::the_conformance_vectors_run_against_bootfsd, host:redoubt-bootfsd::serving_connection_rolls_back_discard_missing_capability_and_error, host:redoubt-bootfsd::the_limits_fit_the_budget
+<details><summary>Status: built · tested (10)</summary>
+
+- bench:r4-host-tests
+- bench:bootfsd-build
+- host:redoubt-bootfsd::a_session_reads_the_public_entries_and_sees_nothing_else
+- host:redoubt-bootfsd::a_walk_to_an_unpublished_name_is_the_same_as_to_one_that_never_existed
+- host:redoubt-bootfsd::entries_read_back_byte_for_byte_at_any_offset
+- host:redoubt-bootfsd::every_way_of_writing_is_refused
+- host:redoubt-bootfsd::the_directory_lists_exactly_the_public_list_in_order
+- host:redoubt-bootfsd::the_conformance_vectors_run_against_bootfsd
+- host:redoubt-bootfsd::serving_connection_rolls_back_discard_missing_capability_and_error
+- host:redoubt-bootfsd::the_limits_fit_the_budget
+
+</details>
 
 `bootfsd` is a 9P server over the [9P server skeleton](serving.md#the-9p-server-skeleton), and its
 endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
@@ -40,7 +53,17 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
 
 ### Filling it
 
-Status: built · partly tested: the refusal of `add` and `seal` from badge 0 is read from the code, not attacked · tested: host:redoubt-bootfsd::a_bad_public_list_stops_the_server, host:redoubt-bootfsd::the_public_list_is_checked_before_anything_is_served, host:redoubt-bootfsd::add_only_appends_to_a_listed_name_in_order, host:redoubt-bootfsd::setup_is_refused_after_seal_and_from_every_minted_connection, host:redoubt-bootfsd::nothing_is_visible_before_seal, host:redoubt-bootfsd::a_client_cannot_publish_into_boot, host:redoubt-bootfsd::the_published_bytes_are_bounded
+<details><summary>Status: built · partly tested: the refusal of `add` and `seal` from badge 0 is read from the code, not attacked · tested (7)</summary>
+
+- host:redoubt-bootfsd::a_bad_public_list_stops_the_server
+- host:redoubt-bootfsd::the_public_list_is_checked_before_anything_is_served
+- host:redoubt-bootfsd::add_only_appends_to_a_listed_name_in_order
+- host:redoubt-bootfsd::setup_is_refused_after_seal_and_from_every_minted_connection
+- host:redoubt-bootfsd::nothing_is_visible_before_seal
+- host:redoubt-bootfsd::a_client_cannot_publish_into_boot
+- host:redoubt-bootfsd::the_published_bytes_are_bounded
+
+</details>
 
 - **The list.** `bootfsd`'s arguments are the `public` list, one name per argument, in the
   manifest's order. Each must be one 9P path component (not empty, `.` or `..`, no `/` or NUL),
@@ -84,7 +107,16 @@ holder gets `add` and `seal` until the seal.
 
 ### R46 (only the public list)
 
-Status: built · tested: host:redoubt-bootfsd::a_session_reads_the_public_entries_and_sees_nothing_else, host:redoubt-bootfsd::a_walk_to_an_unpublished_name_is_the_same_as_to_one_that_never_existed, host:redoubt-bootfsd::setup_is_refused_after_seal_and_from_every_minted_connection, host:redoubt-bootfsd::nothing_is_visible_before_seal, host:redoubt-bootfsd::every_way_of_writing_is_refused, host:redoubt-bootfsd::a_client_cannot_publish_into_boot
+<details><summary>Status: built · tested (6)</summary>
+
+- host:redoubt-bootfsd::a_session_reads_the_public_entries_and_sees_nothing_else
+- host:redoubt-bootfsd::a_walk_to_an_unpublished_name_is_the_same_as_to_one_that_never_existed
+- host:redoubt-bootfsd::setup_is_refused_after_seal_and_from_every_minted_connection
+- host:redoubt-bootfsd::nothing_is_visible_before_seal
+- host:redoubt-bootfsd::every_way_of_writing_is_refused
+- host:redoubt-bootfsd::a_client_cannot_publish_into_boot
+
+</details>
 
 `/boot` shows exactly the entries of the `public` list, with exactly the bytes the founding
 handle's holder added before the seal, and nothing else: nothing before the seal, no change after

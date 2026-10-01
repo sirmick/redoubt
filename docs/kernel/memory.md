@@ -20,7 +20,16 @@ by what the caller has, because the kernel runs a call to its end with interrupt
 
 ### The mapping calls
 
-Status: built · tested: bench:device, bench:write-only-attack, bench:process-attack, bench:map-fixed-attack, bench:return-lent-unmapped, bench:dma-rules
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:device
+- bench:write-only-attack
+- bench:process-attack
+- bench:map-fixed-attack
+- bench:return-lent-unmapped
+- bench:dma-rules
+
+</details>
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -48,7 +57,17 @@ the kernel and the [model](model.md), is in the
 
 ### Backing and zeroing
 
-Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames; QEMU models no cache, so `cbo-user-fault` shows that user cache-block operations trap, not that zeroes could be lost, and the firmware's flush is read from the code · tested: bench:device, bench:mem-attack, bench:map-fixed-attack, bench:lend-untouched-page, bench:touch-beyond-ram, bench:cbo-user-fault, mutation:R11NoZeroing
+<details><summary>Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames; QEMU models no cache, so `cbo-user-fault` shows that user cache-block operations trap, not that zeroes could be lost, and the firmware's flush is read from the code · tested (7)</summary>
+
+- bench:device
+- bench:mem-attack
+- bench:map-fixed-attack
+- bench:lend-untouched-page
+- bench:touch-beyond-ram
+- bench:cbo-user-fault
+- mutation:R11NoZeroing
+
+</details>
 
 `map_anon` and `map_fixed` back every page when they map it. Each takes a free frame, charges it
 to the caller's budget ([R6 (charging)](budgets.md#r6-charging)), zeroes it through the
@@ -90,7 +109,14 @@ process.
 
 ### Where `map_anon` puts pages
 
-Status: built · tested: bench:map-anon-search-bound, bench:map-anon-placement, bench:map-fixed-attack, bench:touch-beyond-ram
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:map-anon-search-bound
+- bench:map-anon-placement
+- bench:map-fixed-attack
+- bench:touch-beyond-ram
+
+</details>
 
 The kernel chooses the address, and nothing may depend on it. `map_anon` takes the first free
 run of pages in its placement area, 256 MiB from `DEFAULT_BASE` (0x6000_0000 to 0x7000_0000),
@@ -110,7 +136,17 @@ on addresses as well as outcomes.
 
 ### `map_fixed`
 
-Status: built · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:map-fixed-tables-rv32, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
+<details><summary>Status: built · tested (7)</summary>
+
+- bench:map-fixed-attack
+- bench:map-fixed-tables
+- bench:map-fixed-tables-rv32
+- bench:return-lent-unmapped
+- host:redoubt-model::bad_ranges_are_refused
+- host:redoubt-model::partial_overlap_is_refused_whole
+- host:redoubt-model::page_tables_half_of_the_charge_check
+
+</details>
 
 `map_fixed(addr, len, flags)` maps zeroed pages at exactly `addr` in the caller's own address
 space, charged as `map_anon`'s are. It is the one call that puts new pages at an address the
@@ -145,7 +181,18 @@ thread moves (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#seve
 
 ### Lending at the page-table level
 
-Status: built · partly tested: a lend within one process is not attacked across harts · tested: bench:process-lifecycle, bench:return-lent-unmapped, bench:ipc-outcomes, bench:map-fixed-attack, bench:move-borrowed-page, bench:uaf-lent-page, bench:lend-untouched-page, mutation:R11LendStaysMapped
+<details><summary>Status: built · partly tested: a lend within one process is not attacked across harts · tested (8)</summary>
+
+- bench:process-lifecycle
+- bench:return-lent-unmapped
+- bench:ipc-outcomes
+- bench:map-fixed-attack
+- bench:move-borrowed-page
+- bench:uaf-lent-page
+- bench:lend-untouched-page
+- mutation:R11LendStaysMapped
+
+</details>
 
 A [lend or a transfer](ipc.md#messages) is page-table edits:
 - **When the message is sent**, each page is checked first: backed (a reserved page is backed at
@@ -175,7 +222,17 @@ markers and the frame before changing either.
 
 ### A page's life
 
-Status: built · tested: bench:device, bench:ipc-outcomes, bench:lend-untouched-page, bench:uaf-lent-page, bench:process-attack, bench:dma-rules, bench:dma-reset-reuse
+<details><summary>Status: built · tested (7)</summary>
+
+- bench:device
+- bench:ipc-outcomes
+- bench:lend-untouched-page
+- bench:uaf-lent-page
+- bench:process-attack
+- bench:dma-rules
+- bench:dma-reset-reuse
+
+</details>
 
 ```mermaid
 stateDiagram-v2
@@ -197,7 +254,14 @@ zeroed whenever it leaves Free.*
 
 ## Authority
 
-Status: built · partly tested: that no call names a physical frame is argued from the call table, not attacked · tested: bench:process-attack, bench:device, bench:ipc-outcomes, bench:map-fixed-attack
+<details><summary>Status: built · partly tested: that no call names a physical frame is argued from the call table, not attacked · tested (4)</summary>
+
+- bench:process-attack
+- bench:device
+- bench:ipc-outcomes
+- bench:map-fixed-attack
+
+</details>
 
 - **A process maps only into its own address space.** `map_anon`, `map_fixed`, `unmap` and
   `set_flags` act on the caller's own pages; none names another process.
@@ -214,7 +278,28 @@ Status: built · partly tested: that no call names a physical frame is argued fr
 
 ### R11 (memory)
 
-Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked; that the zeroes stay is shown only as user cache-block operations trapping, since QEMU models no cache · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, bench:device-exec-refused, bench:cbo-user-fault, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11SetFlagsAllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap, mutation:R11ExecOnDeviceMemory, mutation:R11ProcessMapSkipsFlags
+<details><summary>Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked; that the zeroes stay is shown only as user cache-block operations trapping, since QEMU models no cache · tested (18)</summary>
+
+- bench:wx
+- bench:write-only-attack
+- bench:map-fixed-attack
+- bench:device
+- bench:mem-attack
+- bench:process-attack
+- bench:return-lent-unmapped
+- bench:dma-rules
+- bench:dma-reset-reuse
+- bench:device-exec-refused
+- bench:cbo-user-fault
+- mutation:R11NoZeroing
+- mutation:R11SetFlagsAllowsWx
+- mutation:R11SetFlagsAllowsWriteOnly
+- mutation:R11LendStaysMapped
+- mutation:R11MapFixedSkipsOverlap
+- mutation:R11ExecOnDeviceMemory
+- mutation:R11ProcessMapSkipsFlags
+
+</details>
 
 - **No RAM page is ever mapped writable and executable** ([W^X](../GLOSSARY.md#wx)): not by one
   entry, and not by two, since a RAM frame has at most one user entry at a time (the kernel's
@@ -296,7 +381,17 @@ kernel, running the call to its end with interrupts off, would stall every other
 
 ## Failure and restart
 
-Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, bench:wx, bench:uaf-lent-page, bench:map-fixed-attack, bench:process-map-untouched-attack, bench:return-lent-unmapped
+<details><summary>Status: built · tested (7)</summary>
+
+- bench:touch-beyond-ram
+- bench:lend-untouched-page
+- bench:wx
+- bench:uaf-lent-page
+- bench:map-fixed-attack
+- bench:process-map-untouched-attack
+- bench:return-lent-unmapped
+
+</details>
 
 - **Out of memory is the caller's error.** A mapping call that cannot be paid for returns
   `OutOfMemory`; a process that exhausts RAM gets `OutOfMemory` and every other process keeps

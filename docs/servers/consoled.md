@@ -17,7 +17,19 @@ channel by [`sshd`](sshd.md), not here.
 
 ### `/dev/cons`
 
-Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel; in a boot the console is held by the bench's interim log server, so `consoled` is only built; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested: bench:r4-host-tests, bench:consoled-build, host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind, host:redoubt-consoled::typing_on_the_uart_reaches_a_ninep_reader, host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up, host:redoubt-consoled::writes_go_out_of_the_uart_in_order, host:redoubt-consoled::a_flood_of_input_keeps_what_was_typed_first, host:redoubt-consoled::the_console_refuses_what_it_is_not, host:redoubt-consoled::the_conformance_vectors_run_against_consoled
+<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel; in a boot the console is held by the bench's interim log server, so `consoled` is only built; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested (9)</summary>
+
+- bench:r4-host-tests
+- bench:consoled-build
+- host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
+- host:redoubt-consoled::typing_on_the_uart_reaches_a_ninep_reader
+- host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up
+- host:redoubt-consoled::writes_go_out_of_the_uart_in_order
+- host:redoubt-consoled::a_flood_of_input_keeps_what_was_typed_first
+- host:redoubt-consoled::the_console_refuses_what_it_is_not
+- host:redoubt-consoled::the_conformance_vectors_run_against_consoled
+
+</details>
 
 `/dev/cons` is served over the [9P server skeleton](serving.md#the-9p-server-skeleton) as one file
 with nothing below it.

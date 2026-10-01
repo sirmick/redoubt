@@ -35,7 +35,16 @@ fallback to QEMU's own firmware.
 
 ### What a case passes on
 
-Status: built · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-qemu-early-exit, bench:rustsbi-boot, host:testbench::a_killed_bench_leaves_no_qemu, host:testbench::a_qemu_lacking_an_option_is_named
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:bench-console-after-expect
+- bench:bench-poweroff-missing
+- bench:bench-qemu-early-exit
+- bench:rustsbi-boot
+- host:testbench::a_killed_bench_leaves_no_qemu
+- host:testbench::a_qemu_lacking_an_option_is_named
+
+</details>
 
 A boot case passes when every `expect` pattern matches a console line, in order, no `forbid`
 pattern ever matches, and the boot ends as the case says. Three patterns are always forbidden:
@@ -244,7 +253,22 @@ so they run a tester in `init`'s place instead.
 
 ### The scheduler oracle
 
-Status: built · tested: bench:sched-ties, host:testbench::a_trace_that_keeps_every_clause_passes, host:testbench::each_broken_clause_is_caught, host:testbench::a_broken_trace_is_rejected, host:testbench::the_models_own_ranks_pass, host:testbench::the_models_broken_ties_are_caught, host:testbench::lifts_are_recomputed, host:testbench::weight_changes_are_recomputed, host:testbench::the_floor_and_the_passes_are_checked_on_their_own, host:testbench::destructions_are_timed_and_bounded, host:testbench::audits_are_subtracted_inside_each_window, host:testbench::an_unmatched_audit_fails
+<details><summary>Status: built · tested (12)</summary>
+
+- bench:sched-ties
+- host:testbench::a_trace_that_keeps_every_clause_passes
+- host:testbench::each_broken_clause_is_caught
+- host:testbench::a_broken_trace_is_rejected
+- host:testbench::the_models_own_ranks_pass
+- host:testbench::the_models_broken_ties_are_caught
+- host:testbench::lifts_are_recomputed
+- host:testbench::weight_changes_are_recomputed
+- host:testbench::the_floor_and_the_passes_are_checked_on_their_own
+- host:testbench::destructions_are_timed_and_bounded
+- host:testbench::audits_are_subtracted_inside_each_window
+- host:testbench::an_unmatched_audit_fails
+
+</details>
 
 The oracle is independent of the kernel's code: it reads what the queue did (woke, requeued, left,
 pass changed, picked), never why, and rebuilds the order from the events alone: the lowest pass
@@ -257,7 +281,15 @@ time. The tracing kernel is a test build only
 
 ## Checked builds
 
-Status: built · tested: bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:sched-latency, host:testbench::audits_are_subtracted_inside_each_window, host:testbench::an_unmatched_audit_fails
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:bench-debug-assertions
+- bench:bench-debug-assertions-off
+- bench:sched-latency
+- host:testbench::audits_are_subtracted_inside_each_window
+- host:testbench::an_unmatched_audit_fails
+
+</details>
 
 `debug_assertions = true` builds the kernel and the loader (the trusted base, not the programs) with
 the workspace's `checked` profile: `release` with debug assertions and overflow checks on. It is the
@@ -302,7 +334,16 @@ That run fails `bench-debug-assertions-off`, as it should; everything else must 
 
 ## Hostile inputs
 
-Status: built · tested: bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, bench:loader-rejects-truncated-elf, bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, bench:rng
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:loader-rejects-kernel-address
+- bench:loader-rejects-kernel-entry
+- bench:loader-rejects-truncated-elf
+- bench:verified-boot-rejects-tamper
+- bench:verified-boot-rejects-bare-archive
+- bench:rng
+
+</details>
 
 A program entry can be a good binary the bench corrupts before injecting it:
 
@@ -355,7 +396,14 @@ from the bundle's pages. Under `init`, a program reads them through `/boot` once
 
 ### Disks and network cards
 
-Status: built · tested: bench:bench-virtio-devices, bench:bench-virtio-legacy-off, host:testbench::every_network_is_restricted, host:testbench::virtio_devices_are_modern
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:bench-virtio-devices
+- bench:bench-virtio-legacy-off
+- host:testbench::every_network_is_restricted
+- host:testbench::virtio_devices_are_modern
+
+</details>
 
 ```toml
 [disk]                       # a virtio-blk disk, zeroed, created afresh for every boot
@@ -373,7 +421,21 @@ ports, chosen by the operating system, so benches running side by side do not co
 
 ### Peers, dials and the capture
 
-Status: built · tested: bench:bench-net-peer, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, host:testbench::peers_are_judged_on_records_and_capture, host:testbench::a_capture_is_read_fail_closed, host:testbench::what_the_guest_sends_is_checked, host:testbench::records_are_counted_per_peer, host:testbench::a_dial_needs_its_echo, host:testbench::prefixes_and_peers_are_checked, host:testbench::peers_get_the_wider_network_and_a_capture
+<details><summary>Status: built · tested (11)</summary>
+
+- bench:bench-net-peer
+- bench:bench-net-peer-twice
+- bench:bench-net-peer-count
+- bench:bench-net-peer-pcap-empty
+- host:testbench::peers_are_judged_on_records_and_capture
+- host:testbench::a_capture_is_read_fail_closed
+- host:testbench::what_the_guest_sends_is_checked
+- host:testbench::records_are_counted_per_peer
+- host:testbench::a_dial_needs_its_echo
+- host:testbench::prefixes_and_peers_are_checked
+- host:testbench::peers_get_the_wider_network_and_a_capture
+
+</details>
 
 A network case can give the guest hosts to reach, and judge what it sent, all from outside the
 guest, after the boot has passed:
@@ -413,7 +475,21 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-Status: built · partly tested: no guest `sshd` exists yet to log in to · tested: bench:bench-ssh-loopback, bench:bench-ssh-loopback-openssh, bench:bench-ssh-loopback-deadlock, bench:bench-ssh-loopback-forbid, bench:bench-ssh-loopback-exit, bench:bench-ssh-loopback-host-key, bench:bench-ssh-loopback-aborted-text, bench:bench-ssh-guest, host:testbench::the_reference_proxy_quotes_only_what_the_bench_chose, host:testbench::resize_needs_a_pty, host:testbench::no_other_child_inherits_a_sessions_terminal
+<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (11)</summary>
+
+- bench:bench-ssh-loopback
+- bench:bench-ssh-loopback-openssh
+- bench:bench-ssh-loopback-deadlock
+- bench:bench-ssh-loopback-forbid
+- bench:bench-ssh-loopback-exit
+- bench:bench-ssh-loopback-host-key
+- bench:bench-ssh-loopback-aborted-text
+- bench:bench-ssh-guest
+- host:testbench::the_reference_proxy_quotes_only_what_the_bench_chose
+- host:testbench::resize_needs_a_pty
+- host:testbench::no_other_child_inherits_a_sessions_terminal
+
+</details>
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
 while the bench keeps watching the console. Each drives the host's OpenSSH `ssh`, an implementation
@@ -490,7 +566,21 @@ unchanged, so the case is still a witness independent of Redoubt's server.
 
 ### Against Redoubt's sshd
 
-Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested: bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback, bench:bench-ssh-loopback-host-key, bench:sshd-host-tests, host:testbench::an_ssh_lacking_an_option_is_named
+<details><summary>Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested (11)</summary>
+
+- bench:sshd-loopback-logins
+- bench:sshd-loopback-r67
+- bench:sshd-loopback-interrupt
+- bench:sshd-loopback-independent
+- bench:sshd-loopback-window-change
+- bench:sshd-loopback-window-change-zero
+- bench:sshd-loopback-env-refused
+- bench:bench-ssh-loopback
+- bench:bench-ssh-loopback-host-key
+- bench:sshd-host-tests
+- host:testbench::an_ssh_lacking_an_option_is_named
+
+</details>
 
 `ssh-loopback` cases run the host's OpenSSH `ssh` against Redoubt's own `sshd` on its host
 platform, `redoubt-sshd-host` ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)),
@@ -525,7 +615,22 @@ shell, a login context or a container.
 
 ## Self-checks
 
-Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused, bench:bench-cbo-self-unrefused, bench:bench-qemu-early-exit
+<details><summary>Status: built · tested (12)</summary>
+
+- bench:bench-attack-forgery
+- bench:bench-console-after-expect
+- bench:bench-poweroff-missing
+- bench:bench-reporter-mismatch
+- bench:bench-debug-assertions
+- bench:bench-debug-assertions-off
+- bench:bench-net-peer-twice
+- bench:bench-net-peer-count
+- bench:bench-net-peer-pcap-empty
+- bench:bench-net-self-unrefused
+- bench:bench-cbo-self-unrefused
+- bench:bench-qemu-early-exit
+
+</details>
 
 The harness can fail, and each feature shows it. Cases named `bench-*` check the bench itself:
 each feature has a case that passes only if the feature works and, where the bench can be
@@ -546,7 +651,23 @@ operations must be seen running, and the run must fail on the verdict line that 
 
 ## The unsafe budget
 
-Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory, host:testbench::every_on_target_source_is_in_a_budget, host:testbench::a_long_safety_block_directly_above_justifies, host:testbench::a_raise_needs_its_unsafe_budget_line, bench:rt-miri, host:testbench::a_miri_case_runs_its_files_under_miri
+<details><summary>Status: built · tested (13)</summary>
+
+- bench:unsafe-budget
+- host:testbench::actual_source_counts_still_enforce_the_budget
+- host:testbench::empty_configuration_is_not_coverage
+- host:testbench::every_configured_root_must_contain_rust_source
+- host:testbench::missing_paths_fail_regardless_of_extension
+- host:testbench::unreadable_source_reports_its_path
+- host:testbench::broken_nested_symlink_is_not_silently_skipped
+- host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory
+- host:testbench::every_on_target_source_is_in_a_budget
+- host:testbench::a_long_safety_block_directly_above_justifies
+- host:testbench::a_raise_needs_its_unsafe_budget_line
+- bench:rt-miri
+- host:testbench::a_miri_case_runs_its_files_under_miri
+
+</details>
 
 `unsafe-budget.toml` lists every source directory of the trusted computing base that runs on the
 target, each with the most uses of `unsafe` it may hold and the most that may lack a justification
@@ -577,7 +698,22 @@ which is strongly protected`.
 
 ## The size budget
 
-Status: built · tested: bench:size-budget, host:testbench::only_code_lines_count, host:testbench::a_test_module_does_not_count, host:testbench::a_test_module_file_does_not_count, host:testbench::a_shipped_file_always_counts, host:testbench::a_form_the_case_cannot_follow_fails, host:testbench::a_raise_needs_its_reason, host:testbench::the_ratchet_reads_the_commit_that_raised, host:testbench::a_merge_is_judged_against_its_first_parent, host:testbench::merged_history_is_not_read_again, host:testbench::a_new_budget_file_needs_every_reason, host:testbench::a_deleted_budget_file_fails
+<details><summary>Status: built · tested (12)</summary>
+
+- bench:size-budget
+- host:testbench::only_code_lines_count
+- host:testbench::a_test_module_does_not_count
+- host:testbench::a_test_module_file_does_not_count
+- host:testbench::a_shipped_file_always_counts
+- host:testbench::a_form_the_case_cannot_follow_fails
+- host:testbench::a_raise_needs_its_reason
+- host:testbench::the_ratchet_reads_the_commit_that_raised
+- host:testbench::a_merge_is_judged_against_its_first_parent
+- host:testbench::merged_history_is_not_read_again
+- host:testbench::a_new_budget_file_needs_every_reason
+- host:testbench::a_deleted_budget_file_fails
+
+</details>
 
 The size of the trusted computing base is budgeted, not observed
 ([the tenets](TENETS.md)). `size-budget.toml` lists each trusted crate (the kernel, the loader,
@@ -618,7 +754,21 @@ part of the trusted computing base
 
 ### Crates as published
 
-Status: built · partly tested: provenance against crates.io needs the network, so no bench case runs it; it is run by hand in the review of any change to `vendor/` · tested: bench:vendor-check, bench:vendor-build, host:redoubt-vendor-check::the_real_structure_passes, host:redoubt-vendor-check::a_renamed_header_fails_before_any_download, host:redoubt-vendor-check::a_missing_row_fails, host:redoubt-vendor-check::a_row_without_its_directory_and_a_stray_directory_fail, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::the_vendored_copies_are_the_ones_that_build, host:redoubt-vendor-check::the_patches_point_at_vendor, host:redoubt-vendor-check::the_readme_records_each_crate, host:redoubt-vendor-check::every_vendored_file_is_tracked
+<details><summary>Status: built · partly tested: provenance against crates.io needs the network, so no bench case runs it; it is run by hand in the review of any change to `vendor/` · tested (11)</summary>
+
+- bench:vendor-check
+- bench:vendor-build
+- host:redoubt-vendor-check::the_real_structure_passes
+- host:redoubt-vendor-check::a_renamed_header_fails_before_any_download
+- host:redoubt-vendor-check::a_missing_row_fails
+- host:redoubt-vendor-check::a_row_without_its_directory_and_a_stray_directory_fail
+- host:redoubt-vendor-check::vendored_files_are_the_published_bytes
+- host:redoubt-vendor-check::the_vendored_copies_are_the_ones_that_build
+- host:redoubt-vendor-check::the_patches_point_at_vendor
+- host:redoubt-vendor-check::the_readme_records_each_crate
+- host:redoubt-vendor-check::every_vendored_file_is_tracked
+
+</details>
 
 `vendor/` holds third-party crates exactly as crates.io published them, each used through a
 `[patch.crates-io]` path, and `vendor/README.md` records each one's version, license and published
@@ -642,7 +792,14 @@ crates' `unsafe` is checked by recorded Miri runs, not by a bench case
 
 ### Patched crates
 
-Status: built · tested: bench:vendor-check, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::a_patched_crate_differs_only_by_its_patch, host:redoubt-vendor-check::every_patch_is_a_vendored_crates_and_recorded
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:vendor-check
+- host:redoubt-vendor-check::vendored_files_are_the_published_bytes
+- host:redoubt-vendor-check::a_patched_crate_differs_only_by_its_patch
+- host:redoubt-vendor-check::every_patch_is_a_vendored_crates_and_recorded
+
+</details>
 
 A crate we must change is still vendored from its published bytes, with exactly one patch file,
 `vendor/patches/<crate>.patch`, holding every change. `vendor/<crate>/` is the published crate
@@ -703,7 +860,15 @@ configuration for everything under `tests/`.
 
 ### What it checks
 
-Status: built · partly tested: no bench case runs it yet; it is run by hand before every change to the book · tested: host:redoubt-doccheck::good_tree_is_clean, host:redoubt-doccheck::narrow_cases_fire, host:redoubt-doccheck::c1_reports_each_failure, host:redoubt-doccheck::pages_scope_keeps_only_the_listed_pages, host:redoubt-doccheck::pages_scope_keeps_a_directory
+<details><summary>Status: built · partly tested: no bench case runs it yet; it is run by hand before every change to the book · tested (5)</summary>
+
+- host:redoubt-doccheck::good_tree_is_clean
+- host:redoubt-doccheck::narrow_cases_fire
+- host:redoubt-doccheck::c1_reports_each_failure
+- host:redoubt-doccheck::pages_scope_keeps_only_the_listed_pages
+- host:redoubt-doccheck::pages_scope_keeps_a_directory
+
+</details>
 
 `redoubt-doccheck` (`tools/doccheck`) holds this book to its own rules:
 `cargo run -q -p redoubt-doccheck` prints each finding as `path:line: C<n>: message`;

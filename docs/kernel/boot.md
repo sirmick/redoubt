@@ -101,7 +101,15 @@ runs the same builder and writes `target/image/redoubt.bundle`.
 
 ### What the loader does
 
-Status: built · tested: bench:rustsbi-boot, bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, bench:loader-rejects-truncated-elf, bench:loader-rejects-grants
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:rustsbi-boot
+- bench:loader-rejects-kernel-address
+- bench:loader-rejects-kernel-entry
+- bench:loader-rejects-truncated-elf
+- bench:loader-rejects-grants
+
+</details>
 
 1. **Reads the device tree** (`loader/src/dt.rs`, over `fdt-rs`), once, into one record: RAM,
    the initrd's range, `/chosen/rng-seed`, the timebase and hart count, every MMIO `reg`
@@ -138,7 +146,14 @@ Status: built · tested: bench:rustsbi-boot, bench:loader-rejects-kernel-address
 
 ### The argument block
 
-Status: built · partly tested: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a `Devs` entry that names RAM or a controller, wraps or names interrupt 0 or one at or above 1024, a `Grnt` tag) are not attacked by a case · tested: bench:rustsbi-boot, bench:device, bench:uart-irq, bench:rng
+<details><summary>Status: built · partly tested: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a `Devs` entry that names RAM or a controller, wraps or names interrupt 0 or one at or above 1024, a `Grnt` tag) are not attacked by a case · tested (4)</summary>
+
+- bench:rustsbi-boot
+- bench:device
+- bench:uart-irq
+- bench:rng
+
+</details>
 
 The block is `ARGS_PAGES` (4) pages of 32-bit words, written by `loader/src/args.rs` and read
 by `kernel/src/args.rs`. It is a run of tags, `XArg` first:
@@ -307,7 +322,16 @@ for `./mkimage`.
 
 ### Verified boot
 
-Status: built · partly tested: the two boot cases run on rv64 only; the rv32 loader's check is the same code, not attacked · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-signing::preamble_is_the_documented_bytes, host:redoubt-signing::domain_is_prefix_free, host:testbench::the_signed_bytes_are_the_documented_preimage, host:testbench::golden_signature_over_a_known_archive
+<details><summary>Status: built · partly tested: the two boot cases run on rv64 only; the rv32 loader's check is the same code, not attacked · tested (6)</summary>
+
+- bench:verified-boot-rejects-tamper
+- bench:verified-boot-rejects-bare-archive
+- host:redoubt-signing::preamble_is_the_documented_bytes
+- host:redoubt-signing::domain_is_prefix_free
+- host:testbench::the_signed_bytes_are_the_documented_preimage
+- host:testbench::golden_signature_over_a_known_archive
+
+</details>
 
 - **Algorithm:** Ed25519 (RFC 8032), through the pure-Rust `no_std` crate `ed25519_compact`.
   One public key is compiled into the loader (`loader/src/verify.rs`). There is no algorithm
@@ -425,7 +449,15 @@ would be written into all of them.
 
 ### R17 (fail closed)
 
-Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals are tested on the host, not by a boot · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused, host:loader::a_boot_hart_without_an_s_mode_context_is_refused, host:loader::booting_on_hart_1_takes_hart_1s_s_mode_context
+<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals are tested on the host, not by a boot · tested (5)</summary>
+
+- bench:verified-boot-rejects-tamper
+- bench:verified-boot-rejects-bare-archive
+- host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused
+- host:loader::a_boot_hart_without_an_s_mode_context_is_refused
+- host:loader::booting_on_hart_1_takes_hart_1s_s_mode_context
+
+</details>
 
 The boot never runs degraded. Each of these powers the machine off through SBI SRST with
 `SystemFailure` rather than boot: a bad bundle signature; an initrd too short to be signed; a
@@ -446,7 +478,14 @@ naming both ranges.
 
 ## Failure and restart
 
-Status: built · partly tested: a reboot through `system_reset` is not attacked by a case · tested: bench:verified-boot-rejects-tamper, bench:loader-rejects-grants, bench:device, bench:panic-in-print
+<details><summary>Status: built · partly tested: a reboot through `system_reset` is not attacked by a case · tested (4)</summary>
+
+- bench:verified-boot-rejects-tamper
+- bench:loader-rejects-grants
+- bench:device
+- bench:panic-in-print
+
+</details>
 
 - **A refused boot** powers off. Nothing retries it and nothing boots in its place: someone
   must fix the bundle or the machine.

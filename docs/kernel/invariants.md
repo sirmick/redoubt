@@ -40,7 +40,14 @@ Most invariants are the state-level form of rules other pages own, such as
 
 ## How the model checks them
 
-Status: built · tested: host:redoubt-model::kernel_sequences, host:redoubt-model::budget_lifecycles, host:redoubt-model::flood, host:redoubt-model::mutations_are_caught
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-model::kernel_sequences
+- host:redoubt-model::budget_lifecycles
+- host:redoubt-model::flood
+- host:redoubt-model::mutations_are_caught
+
+</details>
 
 The [model](model.md) (`model/`) is a second implementation of the kernel's calls, written
 against the specification and not the kernel source. A generator picks an operation that is
@@ -91,7 +98,15 @@ detects; the rule checks run in the same pass and catch the rest.
 
 ### I1 (handles name live objects)
 
-Status: built · tested: bench:budget-forge-attack, bench:budget-destroy-attack, bench:process, host:redoubt-model::exited_object_handles_and_queued_copies_live_until_notice_receipt, host:redoubt-model::kernel_sequences
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:budget-forge-attack
+- bench:budget-destroy-attack
+- bench:process
+- host:redoubt-model::exited_object_handles_and_queued_copies_live_until_notice_receipt
+- host:redoubt-model::kernel_sequences
+
+</details>
 
 A process can name objects only by indices into its own handle table, which holds at most
 `MAX_HANDLES` (4096: the handles one process may hold). Index 0 is never a handle. Every live
@@ -121,7 +136,19 @@ process's exit and sees both go at notice receipt, the copy arriving as 0.
 
 ### I2 (revocation is complete)
 
-Status: built · tested: bench:budget-destroy-attack, bench:handle-chain-attack, bench:handle-chain-fault, bench:process-chain-fault, bench:redoubt-revoke, bench:budget-deadline, bench:process-attack, mutation:R10KeepForeignHandles, host:redoubt-rt::badges_are_never_reused_and_ids_are_never_zero
+<details><summary>Status: built · tested (9)</summary>
+
+- bench:budget-destroy-attack
+- bench:handle-chain-attack
+- bench:handle-chain-fault
+- bench:process-chain-fault
+- bench:redoubt-revoke
+- bench:budget-deadline
+- bench:process-attack
+- mutation:R10KeepForeignHandles
+- host:redoubt-rt::badges_are_never_reused_and_ids_are_never_zero
+
+</details>
 
 After a budget is destroyed, no handle stamped with it or with any budget below it can be used
 anywhere: none is left in any process's table, and a copy carried in a message not yet received
@@ -153,7 +180,15 @@ revokes every handle a destroyed budget's processes created and handed to a proc
 
 ### I3 (minted badges are non-zero and narrow)
 
-Status: built · tested: bench:redoubt-ipc-attack, bench:redoubt-revoke, bench:redoubt-ipc, host:redoubt-sys::malformed_calls_are_refused, mutation:R9MintStampsCaller
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:redoubt-ipc-attack
+- bench:redoubt-revoke
+- bench:redoubt-ipc
+- host:redoubt-sys::malformed_calls_are_refused
+- mutation:R9MintStampsCaller
+
+</details>
 
 A handle made by `mint` has a badge other than 0, and its stamp is its source's default stamp or
 a budget below it. So minting never makes a receive right, and never makes a grant that outlives
@@ -176,7 +211,15 @@ badge 77. `malformed_calls_are_refused` pins the decoder's refusal of badge 0.
 
 ### I4 (only badge-0 handles receive)
 
-Status: built · tested: bench:redoubt-ipc-attack, bench:redoubt-ipc, bench:process-attack, mutation:ReceiveWithBadgedHandle, mutation:ExitEndpointBadged
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:redoubt-ipc-attack
+- bench:redoubt-ipc
+- bench:process-attack
+- mutation:ReceiveWithBadgedHandle
+- mutation:ExitEndpointBadged
+
+</details>
 
 Only an endpoint handle with badge 0, a **receive right**, can `receive`. Every receive right is
 made when its endpoint is made, or copied from one; none is minted.
@@ -196,7 +239,16 @@ the same with a handle the server minted for it; `process-attack` names a badged
 
 ### I5 (usage within limits)
 
-Status: built · tested: bench:budget, bench:budget-carve-attack, bench:redoubt-tight, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R4OverdrawOnDelivery, mutation:R7NoCarveCheck
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:budget
+- bench:budget-carve-attack
+- bench:redoubt-tight
+- host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit
+- mutation:R4OverdrawOnDelivery
+- mutation:R7NoCarveCheck
+
+</details>
 
 For every budget, pages, processes and carved weight used are at most its limits, and its
 children's limits and own pages, plus its own objects, fit within them. A server's charge for the
@@ -243,7 +295,18 @@ system-class caller; `process-attack` runs a user-class process that tries to ad
 
 ### I7 (every flow obeys R1)
 
-Status: built · partly tested: a message between user budgets with different labels is attacked only in the model · tested: bench:process-attack, bench:process-review, mutation:R1SkipLabelCheck, mutation:R1ChecksReceiverNotOwner, mutation:R1ExitNoticeIgnoresLabels, mutation:R1UsageIgnoresLabels, mutation:R1UsageExemptBySystemTarget, mutation:R1ExitExemptBySystemExiting
+<details><summary>Status: built · partly tested: a message between user budgets with different labels is attacked only in the model · tested (8)</summary>
+
+- bench:process-attack
+- bench:process-review
+- mutation:R1SkipLabelCheck
+- mutation:R1ChecksReceiverNotOwner
+- mutation:R1ExitNoticeIgnoresLabels
+- mutation:R1UsageIgnoresLabels
+- mutation:R1UsageExemptBySystemTarget
+- mutation:R1ExitExemptBySystemExiting
+
+</details>
 
 Every flow of information the kernel carries obeys R1: messages, exit notices and `budget_usage`
 reads. A message is compared with its endpoint's **owner**, the budget that created it, whoever
@@ -288,7 +351,23 @@ reads the account the kernel attaches to the child's messages; the same probe, i
 
 ### I9 (pages W^X, zeroed, lends unmapped)
 
-Status: built · partly tested: reuse of a freed frame is attacked only in the model · tested: bench:wx, bench:write-only-attack, bench:mem-attack, bench:map-fixed-attack, bench:return-lent-unmapped, bench:lender-touches-lent, bench:uaf-lent-page, bench:device-exec-refused, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11SetFlagsAllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11ExecOnDeviceMemory
+<details><summary>Status: built · partly tested: reuse of a freed frame is attacked only in the model · tested (13)</summary>
+
+- bench:wx
+- bench:write-only-attack
+- bench:mem-attack
+- bench:map-fixed-attack
+- bench:return-lent-unmapped
+- bench:lender-touches-lent
+- bench:uaf-lent-page
+- bench:device-exec-refused
+- mutation:R11NoZeroing
+- mutation:R11SetFlagsAllowsWx
+- mutation:R11SetFlagsAllowsWriteOnly
+- mutation:R11LendStaysMapped
+- mutation:R11ExecOnDeviceMemory
+
+</details>
 
 No user page is ever mapped writable and executable, or writable without being readable, and no
 page of device registers or DMA frame is ever mapped executable. Every page is zeroed before a
@@ -318,7 +397,16 @@ and the victim finds them zero; `map-fixed-attack` refuses W+X and reads a fresh
 
 ### I10 (create-destroy leaves the parent unchanged)
 
-Status: built · tested: bench:budget, bench:budget-deadline, bench:process-lifecycle, bench:process-attack, host:redoubt-model::budget_lifecycles, mutation:R10KeepCarvedLimits
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:budget
+- bench:budget-deadline
+- bench:process-lifecycle
+- bench:process-attack
+- host:redoubt-model::budget_lifecycles
+- mutation:R10KeepCarvedLimits
+
+</details>
 
 Creating a budget and then destroying it leaves its parent's usage and free limits as they were,
 once the exit notices of its processes are received or dropped. The notices matter because a
@@ -342,7 +430,15 @@ checks that receiving notices refunds the creator's pages exactly.
 
 ### I11 (fair turns)
 
-Status: built · partly tested: turns between several groups on one endpoint are attacked only in the model, and on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting · tested: host:redoubt-model::flood, host:redoubt-model::kernel_sequences, bench:ipc-fair-label-sets, mutation:R2FifoAcrossAccounts, mutation:R2OneCursor
+<details><summary>Status: built · partly tested: turns between several groups on one endpoint are attacked only in the model, and on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting · tested (5)</summary>
+
+- host:redoubt-model::flood
+- host:redoubt-model::kernel_sequences
+- bench:ipc-fair-label-sets
+- mutation:R2FifoAcrossAccounts
+- mutation:R2OneCursor
+
+</details>
 
 With k groups of R2 blocked on an endpoint, and the receiving process holding fewer than
 `MAX_OPEN_CALLS` open calls, each group's oldest message is taken within k receives.
@@ -409,7 +505,17 @@ side 200 times.
 
 ### I14 (no call panics the kernel)
 
-Status: built · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:redoubt-tight, bench:pages-exhaustion, host:redoubt-sys::malformed_calls_are_refused, fuzz:redoubt-sys/decode, host:redoubt-model::kernel_sequences
+<details><summary>Status: built · tested (7)</summary>
+
+- bench:budget-syscall-attack
+- bench:syscall-attack
+- bench:redoubt-tight
+- bench:pages-exhaustion
+- host:redoubt-sys::malformed_calls_are_refused
+- fuzz:redoubt-sys/decode
+- host:redoubt-model::kernel_sequences
+
+</details>
 
 No sequence of system calls, with any arguments, panics the kernel. A malformed value is an
 error, never a stop.
@@ -433,7 +539,20 @@ and the kernel must survive to power off; `syscall-attack` makes an oversized le
 
 ### I15 (abandoned calls reported once)
 
-Status: built · tested: bench:redoubt-ipc, bench:timeouts, bench:budget-deadline, bench:process-lifecycle, bench:receive-bad-record, bench:endpoint-destroy-open-calls, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice, mutation:EndpointDestroyNoticeKept
+<details><summary>Status: built · tested (10)</summary>
+
+- bench:redoubt-ipc
+- bench:timeouts
+- bench:budget-deadline
+- bench:process-lifecycle
+- bench:receive-bad-record
+- bench:endpoint-destroy-open-calls
+- mutation:AbandonNoticeMissing
+- mutation:AbandonNoticeRepeated
+- mutation:BadRecordConsumesNotice
+- mutation:EndpointDestroyNoticeKept
+
+</details>
 
 Every abandoned call is reported to the thread holding it exactly once, and stays open until that
 thread replies; the reply reaches nobody. The report is an abandoned-call notice, delivered on the
@@ -467,7 +586,21 @@ caller's death.
 
 ### I16 (DMA pages reset before reuse)
 
-Status: built · partly tested: a co-holder that still reaches a device reset at another holder's death is attacked only in the model · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, bench:dma-rules, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::exit_pools_after_reset, mutation:DmaFreeBeforeReset, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaResetClearsCoHolderReach, mutation:DmaUnmapFrees
+<details><summary>Status: built · partly tested: a co-holder that still reaches a device reset at another holder's death is attacked only in the model · tested (11)</summary>
+
+- bench:dma-reset-reuse
+- bench:dma-reset-quarantine
+- bench:dma-destroy-quarantine
+- bench:dma-rules
+- host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder
+- host:redoubt-model::deaf_device_quarantines_the_co_holder_too
+- host:redoubt-model::exit_pools_after_reset
+- mutation:DmaFreeBeforeReset
+- mutation:DmaQuarantinedSlotCountsAsReset
+- mutation:DmaResetClearsCoHolderReach
+- mutation:DmaUnmapFrees
+
+</details>
 
 A page `dma_alloc` handed out goes back to the free pool only after every device that could still
 write it has confirmed a reset: the device it was allocated through and every DMA device its

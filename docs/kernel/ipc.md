@@ -17,7 +17,14 @@ page change hands in a way either side did not agree to.
 
 ### Messages
 
-Status: built · tested: bench:ipc, bench:redoubt-ipc, bench:all-together, host:redoubt-sys::received_layout
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:ipc
+- bench:redoubt-ipc
+- bench:all-together
+- host:redoubt-sys::received_layout
+
+</details>
 
 A message carries:
 - `WORDS` (4) machine words, widened to 64 bits in records so one layout serves rv32 and rv64;
@@ -51,7 +58,14 @@ non-zero and never reused within the receiving process, which `reply` and `serve
 
 ### The calls
 
-Status: built · tested: bench:redoubt-ipc, bench:redoubt-ipc-attack, host:redoubt-sys::every_call_round_trips, host:redoubt-sys::malformed_calls_are_refused
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:redoubt-ipc
+- bench:redoubt-ipc-attack
+- host:redoubt-sys::every_call_round_trips
+- host:redoubt-sys::malformed_calls_are_refused
+
+</details>
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -73,7 +87,14 @@ fixed order, the same in the kernel and the [model](model.md); the full rows are
 
 ### What `receive` returns
 
-Status: built · partly tested: a record made unwritable while its thread waits is attacked only for an exit notice (`process-attack`); for a message it is not attacked by a case · tested: bench:redoubt-ipc, bench:timeouts, bench:process-attack, host:redoubt-sys::received_layout
+<details><summary>Status: built · partly tested: a record made unwritable while its thread waits is attacked only for an exit notice (`process-attack`); for a message it is not attacked by a case · tested (4)</summary>
+
+- bench:redoubt-ipc
+- bench:timeouts
+- bench:process-attack
+- host:redoubt-sys::received_layout
+
+</details>
 
 One record layout for every result: `(kind, msg_id, badge, account, labels, words, handles,
 buffer, pages)`. A field a kind does not use is 0.
@@ -115,7 +136,15 @@ flowchart TD
 
 ### A bad record takes nothing
 
-Status: built · tested: bench:receive-bad-record, bench:process-attack, host:redoubt-model::a_record_gone_bad_while_receiving_takes_nothing, mutation:BadRecordConsumesNotice, mutation:R5BadRecordConsumesInterrupt
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:receive-bad-record
+- bench:process-attack
+- host:redoubt-model::a_record_gone_bad_while_receiving_takes_nothing
+- mutation:BadRecordConsumesNotice
+- mutation:R5BadRecordConsumesInterrupt
+
+</details>
 
 An interrupt or an abandoned-call notice is kept like a message: the record is checked just
 before either is delivered, and if it can no longer be written the receiver gets
@@ -208,7 +237,16 @@ Status: built · tested: bench:redoubt-ipc-attack, mutation:R1ChecksReceiverNotO
 
 ### R1 (flow)
 
-Status: built · partly tested: a call or send between user budgets with different labels is attacked only in the model; on the target only a `budget_usage` read and an exit notice are · tested: bench:process-attack, bench:process-review, mutation:R1SkipLabelCheck, mutation:R1ChecksReceiverNotOwner, mutation:R1ExitNoticeIgnoresLabels, mutation:R1UsageIgnoresLabels
+<details><summary>Status: built · partly tested: a call or send between user budgets with different labels is attacked only in the model; on the target only a `budget_usage` read and an exit notice are · tested (6)</summary>
+
+- bench:process-attack
+- bench:process-review
+- mutation:R1SkipLabelCheck
+- mutation:R1ChecksReceiverNotOwner
+- mutation:R1ExitNoticeIgnoresLabels
+- mutation:R1UsageIgnoresLabels
+
+</details>
 
 Information flows from budget A to budget B only if B is class `system` or B's labels include
 all of A's. A message is a flow from the sender's budget to the endpoint's **owner** (the budget
@@ -223,7 +261,19 @@ exiting budget to the owner of the exit endpoint; one that fails the rule is dro
 
 ### R2 (fair waiting)
 
-Status: built · partly tested: how groups are keyed (account, label set, and budget for account 0) is attacked only in the model, and turns between groups on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting; the IPC case fills one group's cap · tested: bench:redoubt-ipc, bench:ipc-fair-label-sets, host:redoubt-model::steward_noninterference, mutation:R2FifoAcrossAccounts, mutation:R2NoWaitCap, mutation:R2KeyByAccountOnly, mutation:R2KeyByStampLabels, mutation:R2SystemCallersShareGroup, mutation:R2OneCursor
+<details><summary>Status: built · partly tested: how groups are keyed (account, label set, and budget for account 0) is attacked only in the model, and turns between groups on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting; the IPC case fills one group's cap · tested (9)</summary>
+
+- bench:redoubt-ipc
+- bench:ipc-fair-label-sets
+- host:redoubt-model::steward_noninterference
+- mutation:R2FifoAcrossAccounts
+- mutation:R2NoWaitCap
+- mutation:R2KeyByAccountOnly
+- mutation:R2KeyByStampLabels
+- mutation:R2SystemCallersShareGroup
+- mutation:R2OneCursor
+
+</details>
 
 Senders blocked on an endpoint are grouped by their budget's account and label set, and, for
 account 0 (no principal: the boot budgets, and any budget carved without one, of either class),
@@ -246,7 +296,22 @@ k receives (I11 (fair turns)).
 
 ### R3 (lends and abandoned calls)
 
-Status: built · tested: bench:redoubt-revoke, bench:timeouts, bench:ipc-outcomes, bench:uaf-lent-page, bench:process-lifecycle, bench:endpoint-destroy-open-calls, mutation:R3UnmapAbandonedLend, mutation:R3ChargeStaysWithCaller, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated, mutation:BadRecordConsumesNotice, mutation:EndpointDestroyNoticeKept
+<details><summary>Status: built · tested (12)</summary>
+
+- bench:redoubt-revoke
+- bench:timeouts
+- bench:ipc-outcomes
+- bench:uaf-lent-page
+- bench:process-lifecycle
+- bench:endpoint-destroy-open-calls
+- mutation:R3UnmapAbandonedLend
+- mutation:R3ChargeStaysWithCaller
+- mutation:AbandonNoticeMissing
+- mutation:AbandonNoticeRepeated
+- mutation:BadRecordConsumesNotice
+- mutation:EndpointDestroyNoticeKept
+
+</details>
 
 A lend's range must be the caller's own writable RAM. Pages in it that were never touched are
 backed first, charged to the caller like `map_anon`'s; a caller that cannot pay for them gets
@@ -290,7 +355,16 @@ stateDiagram-v2
 
 ### R4 (delivery)
 
-Status: built · tested: bench:redoubt-ipc, bench:redoubt-dead, bench:redoubt-tight, mutation:R4IgnoreMaxTransfer, mutation:R4OverdrawOnDelivery, mutation:IpcDropPartial
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:redoubt-ipc
+- bench:redoubt-dead
+- bench:redoubt-tight
+- mutation:R4IgnoreMaxTransfer
+- mutation:R4OverdrawOnDelivery
+- mutation:IpcDropPartial
+
+</details>
 
 A message is delivered only if the receiving process's budget can pay for everything it
 brings: the handle-table pages for its handles, a call's open-call page, its lent or transferred
@@ -326,7 +400,15 @@ receives them ([init](../servers/init.md#restarts-and-reboots)).
 
 ### R13 (one outcome per call)
 
-Status: built · partly tested: completion races between harts are not attacked by a case · tested: bench:ipc-outcomes, mutation:IpcWrongLend, mutation:IpcFalseDelivery, mutation:IpcSkipOutputCheck, mutation:IpcLeakRollback
+<details><summary>Status: built · partly tested: completion races between harts are not attacked by a case · tested (5)</summary>
+
+- bench:ipc-outcomes
+- mutation:IpcWrongLend
+- mutation:IpcFalseDelivery
+- mutation:IpcSkipOutputCheck
+- mutation:IpcLeakRollback
+
+</details>
 
 Every `call` ends in exactly one row of the completion table, and the caller and server agree
 on it. `present` means the whole reply record was written, and only then may the caller decode
@@ -341,7 +423,15 @@ so no unmap, remap or teardown can fall between them.
 
 ### R14 (unforgeable sender)
 
-Status: built · partly tested: every case delivers account 0 and no labels, so a non-zero account or a label set reaching the receiver unchanged is attacked only in the model · tested: bench:redoubt-ipc, bench:bench-attack-forgery, bench:pid-reuse-authority, mutation:MsgNoLabels, mutation:MsgAccountZero
+<details><summary>Status: built · partly tested: every case delivers account 0 and no labels, so a non-zero account or a label set reaching the receiver unchanged is attacked only in the model · tested (5)</summary>
+
+- bench:redoubt-ipc
+- bench:bench-attack-forgery
+- bench:pid-reuse-authority
+- mutation:MsgNoLabels
+- mutation:MsgAccountZero
+
+</details>
 
 The badge, account and labels a receiver sees are the kernel's: the badge of the handle used,
 and the sender budget's account and labels at the time of sending. No argument of `call` or
@@ -350,7 +440,14 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
 
 ## Failure and restart
 
-Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-deadline, bench:timeouts
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:redoubt-dead
+- bench:redoubt-revoke
+- bench:budget-deadline
+- bench:timeouts
+
+</details>
 
 - **The server dies** holding calls: callers get `Dead` and their lends back (R4b). Queued
   senders wait for the restarted server on the same endpoint.

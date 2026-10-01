@@ -19,7 +19,20 @@ steward started.
 
 ### The core and its platforms
 
-Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested: bench:sshd-host-tests, bench:sshd-build, bench:sshd-loopback-logins, bench:sshd-loopback-r67, bench:sshd-loopback-interrupt, bench:sshd-loopback-independent, bench:sshd-loopback-window-change, bench:sshd-loopback-window-change-zero, bench:sshd-loopback-env-refused, bench:bench-ssh-loopback
+<details><summary>Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested (10)</summary>
+
+- bench:sshd-host-tests
+- bench:sshd-build
+- bench:sshd-loopback-logins
+- bench:sshd-loopback-r67
+- bench:sshd-loopback-interrupt
+- bench:sshd-loopback-independent
+- bench:sshd-loopback-window-change
+- bench:sshd-loopback-window-change-zero
+- bench:sshd-loopback-env-refused
+- bench:bench-ssh-loopback
+
+</details>
 
 `sshd` is a core and a platform. The core runs `sunset` over byte slices and makes every decision
 this page states: the login name, the key checks, a channel's labels, and what a channel may not

@@ -30,7 +30,12 @@ A handle is the authority.
 
 ### R1 (flow)
 
-Status: built · tested: bench:smoke, host:demo::flows
+<details><summary>Status: built · tested (2)</summary>
+
+- bench:smoke
+- host:demo::flows
+
+</details>
 
 Labels decide flow.
 

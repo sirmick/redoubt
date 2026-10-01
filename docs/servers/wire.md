@@ -17,7 +17,19 @@ turns bytes into values and values into bytes.
 
 ### The message convention
 
-Status: built · tested: host:redoubt-wire::inline_packs_little_endian_into_three_words, host:redoubt-wire::inline_overflow_is_refused, host:redoubt-wire::words_must_fit_in_32_bits, host:redoubt-wire::buffer_length_is_bounded, host:redoubt-wire::error_replies_carry_only_a_status, host:redoubt-wire::file_framing, host:redoubt-wire::example_vectors, host:redoubt-wire::layouts_by_hand, fuzz:redoubt-wire/typed
+<details><summary>Status: built · tested (9)</summary>
+
+- host:redoubt-wire::inline_packs_little_endian_into_three_words
+- host:redoubt-wire::inline_overflow_is_refused
+- host:redoubt-wire::words_must_fit_in_32_bits
+- host:redoubt-wire::buffer_length_is_bounded
+- host:redoubt-wire::error_replies_carry_only_a_status
+- host:redoubt-wire::file_framing
+- host:redoubt-wire::example_vectors
+- host:redoubt-wire::layouts_by_hand
+- fuzz:redoubt-wire/typed
+
+</details>
 
 A message is four machine words, up to four handles (`MAX_MSG_HANDLES`) and at most one buffer
 ([IPC](../kernel/ipc.md#messages)). `libs/wire/src/typed.rs` lays a typed message out in them:
@@ -84,7 +96,17 @@ A message is four machine words, up to four handles (`MAX_MSG_HANDLES`) and at m
 
 ### The encoding
 
-Status: built · tested: host:redoubt-wire::integers_are_little_endian, host:redoubt-wire::lengths_are_bounded_by_the_input, host:redoubt-wire::writer_refuses_overflow, host:redoubt-wire::atomic_writes_leave_nothing_on_failure, host:redoubt-wire::trailing_and_padding, fuzz:redoubt-wire/typed, fuzz:redoubt-wire/ninep
+<details><summary>Status: built · tested (7)</summary>
+
+- host:redoubt-wire::integers_are_little_endian
+- host:redoubt-wire::lengths_are_bounded_by_the_input
+- host:redoubt-wire::writer_refuses_overflow
+- host:redoubt-wire::atomic_writes_leave_nothing_on_failure
+- host:redoubt-wire::trailing_and_padding
+- fuzz:redoubt-wire/typed
+- fuzz:redoubt-wire/ninep
+
+</details>
 
 9P and typed messages share 9P's encoding (`libs/wire/src/codec.rs`): little-endian `u8`, `u16`,
 `u32` and `u64`; a string as a `u16` length and UTF-8; bytes as a `u32` length and the bytes.
@@ -102,7 +124,20 @@ stated in the table's page.
 
 ### 9P2000 as Redoubt uses it
 
-Status: built · tested: host:redoubt-wire::tversion_bytes, host:redoubt-wire::twalk_bytes, host:redoubt-wire::rstat_sizes_nest, host:redoubt-wire::framing_is_strict, host:redoubt-wire::walk_limit, host:redoubt-wire::encode_respects_msize_and_buffer, host:redoubt-wire::a_directory_entry_that_does_not_fit_is_not_written, host:redoubt-wire::directory_reads, host:redoubt-wire::ninep_vectors, fuzz:redoubt-wire/ninep
+<details><summary>Status: built · tested (10)</summary>
+
+- host:redoubt-wire::tversion_bytes
+- host:redoubt-wire::twalk_bytes
+- host:redoubt-wire::rstat_sizes_nest
+- host:redoubt-wire::framing_is_strict
+- host:redoubt-wire::walk_limit
+- host:redoubt-wire::encode_respects_msize_and_buffer
+- host:redoubt-wire::a_directory_entry_that_does_not_fit_is_not_written
+- host:redoubt-wire::directory_reads
+- host:redoubt-wire::ninep_vectors
+- fuzz:redoubt-wire/ninep
+
+</details>
 
 `libs/wire/src/ninep.rs` is plain 9P2000, as in Plan 9's intro(5): no `.u`, no `.L`.
 
@@ -164,7 +199,22 @@ drift check holds the serving library, the client library and this page to it.
 
 ### Wire tables and the generator
 
-Status: built · partly tested: the generated Elixir codec is checked against the Rust one by `libs/wire/elixir/run-vectors`, which no bench case runs · tested: host:redoubt-wire-gen::generated_files_are_current, host:redoubt-wire-gen::parses_tables, host:redoubt-wire-gen::refuses_bad_tables, host:redoubt-wire-gen::every_row_is_read_or_refused, host:redoubt-wire-gen::ninep_marker_sets_the_opcode_floor, host:redoubt-wire-gen::malformed_is_code_one_everywhere, host:redoubt-wire-gen::kind_column_is_checked, host:redoubt-wire-gen::inline_boundary_is_twelve_bytes, host:redoubt-wire::generated_vectors_are_current, host:redoubt-wire::layouts_are_the_tables, host:redoubt-wire::replies_and_error_codes_decode_through_the_trait, bench:wire-host-tests
+<details><summary>Status: built · partly tested: the generated Elixir codec is checked against the Rust one by `libs/wire/elixir/run-vectors`, which no bench case runs · tested (12)</summary>
+
+- host:redoubt-wire-gen::generated_files_are_current
+- host:redoubt-wire-gen::parses_tables
+- host:redoubt-wire-gen::refuses_bad_tables
+- host:redoubt-wire-gen::every_row_is_read_or_refused
+- host:redoubt-wire-gen::ninep_marker_sets_the_opcode_floor
+- host:redoubt-wire-gen::malformed_is_code_one_everywhere
+- host:redoubt-wire-gen::kind_column_is_checked
+- host:redoubt-wire-gen::inline_boundary_is_twelve_bytes
+- host:redoubt-wire::generated_vectors_are_current
+- host:redoubt-wire::layouts_are_the_tables
+- host:redoubt-wire::replies_and_error_codes_decode_through_the_trait
+- bench:wire-host-tests
+
+</details>
 
 Each typed protocol is defined by one file, `libs/wire/tables/<protocol>.md`: a message table and
 an error table, each under a marker line (`<!-- wire: NAME -->`, `<!-- wire-errors: NAME -->`).
@@ -266,7 +316,14 @@ The attack test: killing a launcher leaves its orphan's connections dead at ever
 
 ### `ninep_common`
 
-Status: built · tested: host:redoubt-rt::minted_connections_are_admitted_and_fold_into_the_share_they_came_from, host:redoubt-rt::disconnect_frees_everything_minted_under_it_and_only_for_its_holder, host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist, host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-rt::minted_connections_are_admitted_and_fold_into_the_share_they_came_from
+- host:redoubt-rt::disconnect_frees_everything_minted_under_it_and_only_for_its_holder
+- host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist
+- host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed
+
+</details>
 
 Every 9P endpoint also serves `ninep_common`, typed opcodes 1 to 15. `new_connection(root, quota)`
 mints a fresh connection rooted at `root`, a path relative to the caller's own root that never
@@ -284,7 +341,23 @@ The table: [libs/wire/tables/ninep_common.md](../../libs/wire/tables/ninep_commo
 
 ### Strict JSON
 
-Status: built · tested: fuzz:redoubt-wire/json, host:redoubt-wire::accepts_json, host:redoubt-wire::integers_only_within_2_to_53, host:redoubt-wire::big_integers_as_strings, host:redoubt-wire::duplicate_members_are_refused, host:redoubt-wire::depth_is_bounded, host:redoubt-wire::size_is_bounded, host:redoubt-wire::text_rules, host:redoubt-wire::syntax_errors, host:redoubt-wire::unknown_members_are_errors, host:redoubt-wire::schema_errors_name_the_path, host:redoubt-wire::heap_is_bounded, host:redoubt-wire::stack_is_bounded
+<details><summary>Status: built · tested (13)</summary>
+
+- fuzz:redoubt-wire/json
+- host:redoubt-wire::accepts_json
+- host:redoubt-wire::integers_only_within_2_to_53
+- host:redoubt-wire::big_integers_as_strings
+- host:redoubt-wire::duplicate_members_are_refused
+- host:redoubt-wire::depth_is_bounded
+- host:redoubt-wire::size_is_bounded
+- host:redoubt-wire::text_rules
+- host:redoubt-wire::syntax_errors
+- host:redoubt-wire::unknown_members_are_errors
+- host:redoubt-wire::schema_errors_name_the_path
+- host:redoubt-wire::heap_is_bounded
+- host:redoubt-wire::stack_is_bounded
+
+</details>
 
 `libs/wire/src/json.rs` is the one parser for files people write (the boot manifest, package
 manifests, configuration): RFC 8259 syntax under the I-JSON profile (RFC 7493), narrowed so
@@ -322,7 +395,20 @@ grant nothing either: they are documentation, and the kernel checks a handle by 
 
 ### R29 (strict decoding)
 
-Status: built · tested: fuzz:redoubt-wire/ninep, fuzz:redoubt-wire/typed, fuzz:redoubt-wire/json, host:redoubt-wire::lengths_are_bounded_by_the_input, host:redoubt-wire::framing_is_strict, host:redoubt-wire::trailing_and_padding, host:redoubt-wire::words_must_fit_in_32_bits, host:redoubt-wire::buffer_length_is_bounded, host:redoubt-wire::heap_is_bounded, host:redoubt-wire::stack_is_bounded
+<details><summary>Status: built · tested (10)</summary>
+
+- fuzz:redoubt-wire/ninep
+- fuzz:redoubt-wire/typed
+- fuzz:redoubt-wire/json
+- host:redoubt-wire::lengths_are_bounded_by_the_input
+- host:redoubt-wire::framing_is_strict
+- host:redoubt-wire::trailing_and_padding
+- host:redoubt-wire::words_must_fit_in_32_bits
+- host:redoubt-wire::buffer_length_is_bounded
+- host:redoubt-wire::heap_is_bounded
+- host:redoubt-wire::stack_is_bounded
+
+</details>
 
 Decoding untrusted bytes never panics, never reads outside its input, and never loops without
 consuming it; a 9P or typed value that decodes re-encodes to exactly the bytes it came from, so
@@ -333,7 +419,16 @@ for every accepted input.
 
 ### R30 (one layout per message)
 
-Status: built · tested: host:redoubt-wire-gen::generated_files_are_current, host:redoubt-wire-gen::refuses_bad_tables, host:redoubt-wire-gen::every_row_is_read_or_refused, host:redoubt-wire-gen::malformed_is_code_one_everywhere, host:redoubt-wire-gen::ninep_marker_sets_the_opcode_floor, bench:wire-host-tests
+<details><summary>Status: built · tested (6)</summary>
+
+- host:redoubt-wire-gen::generated_files_are_current
+- host:redoubt-wire-gen::refuses_bad_tables
+- host:redoubt-wire-gen::every_row_is_read_or_refused
+- host:redoubt-wire-gen::malformed_is_code_one_everywhere
+- host:redoubt-wire-gen::ninep_marker_sets_the_opcode_floor
+- bench:wire-host-tests
+
+</details>
 
 Each typed message has exactly one layout, defined by one table, and the codecs every sender and
 receiver use are generated from it and checked against it in the bench. Code 1 means

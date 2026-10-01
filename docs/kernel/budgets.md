@@ -28,7 +28,14 @@ if the steward is busy or gone.
 
 ### The budget object
 
-Status: built · tested: bench:budget, bench:budget-destroy-attack, bench:process-attack, mutation:ProcessInWeightlessBudget
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:budget
+- bench:budget-destroy-attack
+- bench:process-attack
+- mutation:ProcessInWeightlessBudget
+
+</details>
 
 | Field | What it holds |
 | --- | --- |
@@ -65,7 +72,15 @@ handle to it does not destroy it: its carve stays out of its parent (see Residua
 
 ### The calls
 
-Status: built · tested: bench:budget, bench:budget-syscall-attack, bench:budget-forge-attack, host:redoubt-sys::every_call_round_trips, host:redoubt-sys::malformed_calls_are_refused
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:budget
+- bench:budget-syscall-attack
+- bench:budget-forge-attack
+- host:redoubt-sys::every_call_round_trips
+- host:redoubt-sys::malformed_calls_are_refused
+
+</details>
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -93,7 +108,14 @@ there cannot become one.
 
 ### Root, system and users
 
-Status: built · partly tested: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`) · tested: bench:budget, bench:budget-destroy-kills, bench:process-attack, bench:pages-exhaustion
+<details><summary>Status: built · partly tested: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`) · tested (4)</summary>
+
+- bench:budget
+- bench:budget-destroy-kills
+- bench:process-attack
+- bench:pages-exhaustion
+
+</details>
 
 At boot the kernel creates three budgets, all with account 0, no labels and no deadline:
 
@@ -187,7 +209,15 @@ label set ([steward](../servers/steward.md)).
 
 ### Class is trust, not order
 
-Status: built · partly tested: that scheduling ignores class is argued from the code, not attacked · tested: bench:process-attack, bench:budget, mutation:ClassNotInherited, mutation:LabelsAddedByParentClass, mutation:R1UsageExemptBySystemTarget
+<details><summary>Status: built · partly tested: that scheduling ignores class is argued from the code, not attacked · tested (5)</summary>
+
+- bench:process-attack
+- bench:budget
+- mutation:ClassNotInherited
+- mutation:LabelsAddedByParentClass
+- mutation:R1UsageExemptBySystemTarget
+
+</details>
 
 A budget's class is its parent's, fixed at creation; `budget_create` takes no class argument
 (I8 (class and account inherited)). `root` and `system` are class `system`; `users` and everything
@@ -225,7 +255,15 @@ a number, and carries the sender budget's label set on every message.
 
 ### Deadlines
 
-Status: built · partly tested: a process that enters the kernel in a tight loop to put a deadline off is not attacked by a case; the destruction's billing departs from R10 and floods of weight-0 deadlines past 64 are not attacked · tested: bench:sched-timer-flood, bench:budget-deadline, bench:budget, mutation:BudgetDeadlineIgnored, mutation:ExpireBudgetsFirst
+<details><summary>Status: built · partly tested: a process that enters the kernel in a tight loop to put a deadline off is not attacked by a case; the destruction's billing departs from R10 and floods of weight-0 deadlines past 64 are not attacked · tested (5)</summary>
+
+- bench:sched-timer-flood
+- bench:budget-deadline
+- bench:budget
+- mutation:BudgetDeadlineIgnored
+- mutation:ExpireBudgetsFirst
+
+</details>
 
 A deadline is the kernel's half of a lease. `budget_create` takes it as an absolute time in
 microseconds since boot (the clock `time_now` reads); `FOREVER` means none. The kernel sets no
@@ -260,7 +298,15 @@ off. So a deadline always destroys its budget, at the first kernel entry at or a
 
 ### `budget_usage`
 
-Status: built · tested: bench:budget, bench:process-attack, bench:budget-syscall-attack, mutation:R1UsageIgnoresLabels, mutation:R1UsageExemptBySystemTarget
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:budget
+- bench:process-attack
+- bench:budget-syscall-attack
+- mutation:R1UsageIgnoresLabels
+- mutation:R1UsageExemptBySystemTarget
+
+</details>
 
 `budget_usage(h, usage_rec)` writes six slots (`USAGE_SLOTS`): the page limit and usage, the
 process limit and usage, and the weight limit and carved weight. The free weight is the limit less
@@ -290,7 +336,15 @@ labelled child's handle to a `user`-class caller is a flow R1 must check.
 
 ## Authority
 
-Status: built · tested: bench:budget, bench:process-attack, bench:budget-forge-attack, bench:budget-destroy-attack, mutation:ClassNotInherited
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:budget
+- bench:process-attack
+- bench:budget-forge-attack
+- bench:budget-destroy-attack
+- mutation:ClassNotInherited
+
+</details>
 
 - **A budget handle is the right to spend the budget and to end it.** Its holder can carve
   children from it, create processes in it (`process_create`), read its usage, narrow a mint to
@@ -315,7 +369,30 @@ Status: built · tested: bench:budget, bench:process-attack, bench:budget-forge-
 
 ### R6 (charging)
 
-Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:page-table-reclaim, bench:pages-exhaustion, bench:redoubt-tight, bench:process-attack, bench:pid-pinning-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6EmptyTableKept, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce, mutation:R6RootPageUncounted, mutation:R6PidUncountedAtEnd
+<details><summary>Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case · tested (20)</summary>
+
+- bench:budget
+- bench:budget-mem-churn
+- bench:budget-table-attack
+- bench:map-fixed-tables
+- bench:page-table-reclaim
+- bench:pages-exhaustion
+- bench:redoubt-tight
+- bench:process-attack
+- bench:pid-pinning-attack
+- mutation:R6ChargeAncestors
+- mutation:R6OwnPageChargedToItself
+- mutation:R6EndpointsFree
+- mutation:R6PageTablesFree
+- mutation:R6EmptyTableKept
+- mutation:R6OpenCallsFree
+- mutation:R6ProcessObjectFree
+- mutation:R6ProcessObjectChargedToBudget
+- mutation:R6LendChargedOnce
+- mutation:R6RootPageUncounted
+- mutation:R6PidUncountedAtEnd
+
+</details>
 
 Every kernel object is charged in pages to one budget, and a charge over the budget's limit fails
 with `OutOfMemory` before anything changes. Who pays:
@@ -354,7 +431,18 @@ page a budget uses is on its ledger, and usage stays within limits after every c
 
 ### R7 (carving)
 
-Status: built · tested: bench:budget-carve-attack, bench:budget, bench:process-attack, bench:pid-pinning-attack, host:redoubt-model::budget_lifecycles, mutation:R7NoCarveCheck, mutation:R7CarveToZeroFree, mutation:ProcessInWeightlessBudget
+<details><summary>Status: built · tested (8)</summary>
+
+- bench:budget-carve-attack
+- bench:budget
+- bench:process-attack
+- bench:pid-pinning-attack
+- host:redoubt-model::budget_lifecycles
+- mutation:R7NoCarveCheck
+- mutation:R7CarveToZeroFree
+- mutation:ProcessInWeightlessBudget
+
+</details>
 
 A child's page, process and weight limits come out of its parent's **free** limits, and the child's
 own page comes out of the parent's pages too. The children never add up to more than the parent;
@@ -380,7 +468,39 @@ by itself.
 
 ### R10 (destruction)
 
-Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:endpoint-destroy-full, bench:handle-chain-attack, bench:handle-chain-fault, bench:process-chain-fault, bench:sched-destroy-billing, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:ExpireBudgetsFirst
+<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; the equal-instant order of timeouts before deadlines is attacked only in the model · tested (29)</summary>
+
+- bench:budget
+- bench:budget-destroy-attack
+- bench:budget-destroy-kills
+- bench:budget-destroy-growth
+- bench:budget-deadline
+- bench:deadline-flood-billed
+- bench:redoubt-revoke
+- bench:process-attack
+- bench:pid-pinning-attack
+- bench:endpoint-destroy-open-calls
+- bench:endpoint-destroy-full
+- bench:handle-chain-attack
+- bench:handle-chain-fault
+- bench:process-chain-fault
+- bench:sched-destroy-billing
+- bench:dma-reset-quarantine
+- bench:dma-destroy-quarantine
+- host:redoubt-model::budget_lifecycles
+- host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit
+- mutation:R10KeepForeignHandles
+- mutation:R10KeepCarvedLimits
+- mutation:R10SpareDescendantProcesses
+- mutation:R10ExitNoticesOutlivePayer
+- mutation:R10RevokedMessageDelivered
+- mutation:R10RevokedCallAnswered
+- mutation:R10SweptHandlesDropped
+- mutation:R10CreatorDeathSparesProcess
+- mutation:R10HeldPidsDropped
+- mutation:ExpireBudgetsFirst
+
+</details>
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
@@ -455,7 +575,14 @@ without preemption.*
 
 ## Failure and restart
 
-Status: built · tested: bench:budget-destroy-kills, bench:process-attack, bench:budget-deadline, bench:budget-syscall-attack
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:budget-destroy-kills
+- bench:process-attack
+- bench:budget-deadline
+- bench:budget-syscall-attack
+
+</details>
 
 - **A process in a budget ends:** its threads, pages, page tables and handle table go back to the
   budget at once. Its process object stays charged to its creator's budget until its exit notice

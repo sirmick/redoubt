@@ -63,11 +63,12 @@ fires! {
     c12_summary: 12, "c12";
 }
 
-/// C1's four failures on one page: no status, malformed, double, stray and misplaced lines.
+/// C1's failures on one page: no status, malformed, double, stray and misplaced lines, and a
+/// collapsed status whose count does not match its list.
 #[test]
 fn c1_reports_each_failure() {
     let lines: BTreeSet<usize> = run("c1").iter().filter(|f| f.rule == 1).map(|f| f.line).collect();
-    assert_eq!(lines, BTreeSet::from([3, 7, 9, 17, 23, 25]));
+    assert_eq!(lines, BTreeSet::from([3, 7, 9, 17, 23, 25, 27, 29]));
 }
 
 /// `beyond` excuses only M5 (C3); a part of a rule must repeat its name (C5); generated and

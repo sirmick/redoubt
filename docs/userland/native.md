@@ -54,7 +54,22 @@ fn run(startup: &redoubt_rt::startup::Startup) -> u32 {
 
 ### The loader stub
 
-Status: built · tested: bench:stub-launch, fuzz:stub/plan, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_writable_without_readable, host:stub::plan_refuses_a_non_riscv_machine, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::read_image_refuses_an_image_len_over_the_cap
+<details><summary>Status: built · tested (12)</summary>
+
+- bench:stub-launch
+- fuzz:stub/plan
+- host:stub::plan_maps_a_well_formed_segment
+- host:stub::plan_refuses_two_segments_that_overlap_each_other
+- host:stub::plan_refuses_a_segment_reaching_into_the_stub_region
+- host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page
+- host:stub::plan_refuses_writable_and_executable
+- host:stub::plan_refuses_writable_without_readable
+- host:stub::plan_refuses_a_non_riscv_machine
+- host:stub::plan_refuses_an_entry_outside_any_executable_segment
+- host:stub::plan_refuses_more_than_max_phnum_segments
+- host:stub::read_image_refuses_an_image_len_over_the_cap
+
+</details>
 
 By design every process after `init` is launched one way. Both halves are built: the launcher's
 calls, made in the bench by a user-class parent, and the stub
@@ -174,7 +189,25 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 
 ### `redoubt-rt`, the native runtime
 
-Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested: bench:rt-build, bench:net-tcp, host:redoubt-rt::echo_pair_runs_on_the_runtime, host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it, host:redoubt-rt::exit_codes_reach_the_parent, host:redoubt-rt::a_panic_is_reported_on_the_console_once, host:redoubt-rt::heap_over_map_anon, host:redoubt-rt::call_lend_and_reply, host:redoubt-rt::send_transfers_pages_for_good, host:redoubt-rt::timeouts_dead_endpoints_and_refusals, host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::the_9p_client_closes_handles_a_hostile_server_sends, host:redoubt-rt::threads_share_one_connection_with_their_own_lends, host:redoubt-rt::a_consumed_lend_is_replaced_by_fresh_pages
+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (15)</summary>
+
+- bench:rt-build
+- bench:net-tcp
+- host:redoubt-rt::echo_pair_runs_on_the_runtime
+- host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it
+- host:redoubt-rt::exit_codes_reach_the_parent
+- host:redoubt-rt::a_panic_is_reported_on_the_console_once
+- host:redoubt-rt::heap_over_map_anon
+- host:redoubt-rt::call_lend_and_reply
+- host:redoubt-rt::send_transfers_pages_for_good
+- host:redoubt-rt::timeouts_dead_endpoints_and_refusals
+- host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse
+- host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery
+- host:redoubt-rt::the_9p_client_closes_handles_a_hostile_server_sends
+- host:redoubt-rt::threads_share_one_connection_with_their_own_lends
+- host:redoubt-rt::a_consumed_lend_is_replaced_by_fresh_pages
+
+</details>
 
 `redoubt-rt` is everything a `no_std` Rust program or server needs between the system-call ABI
 (`redoubt-sys`) and its own logic ([`libs/rt/src/lib.rs`](../../libs/rt/src/lib.rs)). It builds
@@ -269,7 +302,38 @@ Every one is also to build for rv32, where the vendored crates are checked too, 
 
 ### The client library
 
-Status: built · partly tested: only on the host (no program on the machine links it yet); `fsd`'s operations and `consol`'s `size` and `resize` against in-test servers until `fsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested: bench:client-host-tests, bench:client-build, host:redoubt-client::each_operation_names_its_files_fids, host:redoubt-client::files_on_two_connections_are_refused_before_any_call, host:redoubt-client::a_child_gets_the_stub_its_image_a_stack_and_its_block, host:redoubt-client::a_bad_launch_is_refused_before_any_kernel_call, host:redoubt-client::a_refusal_midway_hands_the_budget_back, host:redoubt-client::the_exit_notice_releases_every_grant, host:redoubt-client::a_hung_server_does_not_stop_the_reaping, host:redoubt-client::a_killed_job_ends_with_its_notice, host:redoubt-client::typed_calls_reach_keyd, host:redoubt-client::a_refusal_is_the_servers_code, host:redoubt-client::a_hostile_reply_leaves_no_handle, host:redoubt-client::a_server_dying_mid_call_is_disconnected, host:redoubt-client::a_session_reads_boot_through_the_library, host:redoubt-client::a_refusal_is_the_servers_and_costs_no_fid, host:redoubt-client::a_path_too_long_to_send_costs_no_fid, host:redoubt-client::a_dropped_file_keeps_its_fid_and_a_closed_one_returns_it, host:redoubt-client::files_are_created_written_and_removed, host:redoubt-client::a_minted_connection_cannot_climb_out_of_its_root_and_a_refused_quota_mints_nothing, host:redoubt-client::threads_share_a_connection, host:redoubt-client::a_gone_server_is_disconnected_every_time, host:redoubt-client::a_session_writes_and_reads_the_console, host:redoubt-client::a_labelled_session_cannot_write_the_console, host:redoubt-client::size_and_resize_come_from_the_server, host:redoubt-client::the_namespace_resolves_by_longest_prefix, host:redoubt-wire::layouts_are_the_tables, host:redoubt-wire::replies_and_error_codes_decode_through_the_trait
+<details><summary>Status: built · partly tested: only on the host (no program on the machine links it yet); `fsd`'s operations and `consol`'s `size` and `resize` against in-test servers until `fsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested (28)</summary>
+
+- bench:client-host-tests
+- bench:client-build
+- host:redoubt-client::each_operation_names_its_files_fids
+- host:redoubt-client::files_on_two_connections_are_refused_before_any_call
+- host:redoubt-client::a_child_gets_the_stub_its_image_a_stack_and_its_block
+- host:redoubt-client::a_bad_launch_is_refused_before_any_kernel_call
+- host:redoubt-client::a_refusal_midway_hands_the_budget_back
+- host:redoubt-client::the_exit_notice_releases_every_grant
+- host:redoubt-client::a_hung_server_does_not_stop_the_reaping
+- host:redoubt-client::a_killed_job_ends_with_its_notice
+- host:redoubt-client::typed_calls_reach_keyd
+- host:redoubt-client::a_refusal_is_the_servers_code
+- host:redoubt-client::a_hostile_reply_leaves_no_handle
+- host:redoubt-client::a_server_dying_mid_call_is_disconnected
+- host:redoubt-client::a_session_reads_boot_through_the_library
+- host:redoubt-client::a_refusal_is_the_servers_and_costs_no_fid
+- host:redoubt-client::a_path_too_long_to_send_costs_no_fid
+- host:redoubt-client::a_dropped_file_keeps_its_fid_and_a_closed_one_returns_it
+- host:redoubt-client::files_are_created_written_and_removed
+- host:redoubt-client::a_minted_connection_cannot_climb_out_of_its_root_and_a_refused_quota_mints_nothing
+- host:redoubt-client::threads_share_a_connection
+- host:redoubt-client::a_gone_server_is_disconnected_every_time
+- host:redoubt-client::a_session_writes_and_reads_the_console
+- host:redoubt-client::a_labelled_session_cannot_write_the_console
+- host:redoubt-client::size_and_resize_come_from_the_server
+- host:redoubt-client::the_namespace_resolves_by_longest_prefix
+- host:redoubt-wire::layouts_are_the_tables
+- host:redoubt-wire::replies_and_error_codes_decode_through_the_trait
+
+</details>
 
 `redoubt-client` ([`libs/client`](../../libs/client/src/lib.rs)) is the one client API every userland binds to: native programs
 link it, beamlet's Redoubt platform and natives are thin adapters over it

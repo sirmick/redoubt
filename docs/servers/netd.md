@@ -17,7 +17,20 @@ policy. Everything above the link is `ipd`'s.
 
 ### Serving `ipd`
 
-Status: built · partly tested: the drop of a frame `ipd` does not take within `SEND_TIMEOUT_US` is read from the code, not attacked · tested: bench:netd-host-tests, bench:net-tcp, host:redoubt-netd::info_and_transmit_for_the_client, host:redoubt-netd::anyone_else_is_not_permitted, host:redoubt-netd::a_frame_of_the_wrong_length_is_too_many, host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_failed_for_good, host:redoubt-netd::a_request_that_does_not_decode_is_malformed, host:redoubt-netd::arguments_are_exactly_one_client_badge, host:redoubt-netd::randomized_requests_reach_the_wire_only_from_the_client, fuzz:redoubt-netd/request
+<details><summary>Status: built · partly tested: the drop of a frame `ipd` does not take within `SEND_TIMEOUT_US` is read from the code, not attacked · tested (10)</summary>
+
+- bench:netd-host-tests
+- bench:net-tcp
+- host:redoubt-netd::info_and_transmit_for_the_client
+- host:redoubt-netd::anyone_else_is_not_permitted
+- host:redoubt-netd::a_frame_of_the_wrong_length_is_too_many
+- host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_failed_for_good
+- host:redoubt-netd::a_request_that_does_not_decode_is_malformed
+- host:redoubt-netd::arguments_are_exactly_one_client_badge
+- host:redoubt-netd::randomized_requests_reach_the_wire_only_from_the_client
+- fuzz:redoubt-netd/request
+
+</details>
 
 - **One client.** `netd`'s one argument names the badge `ipd`'s handle carries. Any other badge, and
   any labelled caller, gets `not_permitted`. `netd` mints nothing for a client and parks nothing,
@@ -37,7 +50,19 @@ The table: [libs/wire/tables/netif.md](../../libs/wire/tables/netif.md).
 
 ### Rings and slots
 
-Status: built · tested: host:redoubt-netd::an_honest_device_comes_up_with_two_features_and_its_mac, host:redoubt-netd::bring_up_refuses_and_resets, host:redoubt-netd::frames_arrive_exactly_and_every_slot_comes_back, host:redoubt-netd::a_transmit_sends_exactly_its_header_and_frame, host:redoubt-netd::an_inflated_length_reads_zeros_not_old_frames, host:redoubt-netd::the_ring_counters_wrap, host:redoubt-netd::spurious_interrupts_deliver_nothing, host:redoubt-netd::a_frame_completed_before_the_first_wait_without_an_interrupt_is_delivered, host:redoubt-netd::a_frame_completed_silently_during_a_drain_is_delivered_before_the_next_wait
+<details><summary>Status: built · tested (9)</summary>
+
+- host:redoubt-netd::an_honest_device_comes_up_with_two_features_and_its_mac
+- host:redoubt-netd::bring_up_refuses_and_resets
+- host:redoubt-netd::frames_arrive_exactly_and_every_slot_comes_back
+- host:redoubt-netd::a_transmit_sends_exactly_its_header_and_frame
+- host:redoubt-netd::an_inflated_length_reads_zeros_not_old_frames
+- host:redoubt-netd::the_ring_counters_wrap
+- host:redoubt-netd::spurious_interrupts_deliver_nothing
+- host:redoubt-netd::a_frame_completed_before_the_first_wait_without_an_interrupt_is_delivered
+- host:redoubt-netd::a_frame_completed_silently_during_a_drain_is_delivered_before_the_next_wait
+
+</details>
 
 - **Two DMA regions**, one per queue, each a run of `REGION_PAGES` pages from `dma_alloc`
   ([devices](../kernel/devices.md#dma_alloc)): the descriptor table, available ring and used ring
@@ -86,7 +111,19 @@ Status: built · tested: host:redoubt-netd::an_honest_device_comes_up_with_two_f
 
 ### Lies and bad frames
 
-Status: built · tested: fuzz:redoubt-netd/device, host:redoubt-netd::receive_lies_are_refused, host:redoubt-netd::transmit_lies_are_refused, host:redoubt-netd::a_buffer_completed_twice_is_a_lie, host:redoubt-netd::scribbling_devices_change_nothing_netd_believes, host:redoubt-netd::a_scribbled_descriptor_is_rewritten_when_offered_again, host:redoubt-netd::a_device_that_keeps_every_slot_is_busy_then_broken, host:redoubt-netd::a_bad_frame_from_the_wire_is_dropped_never_a_lie, host:redoubt-netd::randomized_hostile_devices
+<details><summary>Status: built · tested (9)</summary>
+
+- fuzz:redoubt-netd/device
+- host:redoubt-netd::receive_lies_are_refused
+- host:redoubt-netd::transmit_lies_are_refused
+- host:redoubt-netd::a_buffer_completed_twice_is_a_lie
+- host:redoubt-netd::scribbling_devices_change_nothing_netd_believes
+- host:redoubt-netd::a_scribbled_descriptor_is_rewritten_when_offered_again
+- host:redoubt-netd::a_device_that_keeps_every_slot_is_busy_then_broken
+- host:redoubt-netd::a_bad_frame_from_the_wire_is_dropped_never_a_lie
+- host:redoubt-netd::randomized_hostile_devices
+
+</details>
 
 **A lie and a bad frame are different things.**
 
@@ -104,7 +141,14 @@ Status: built · tested: fuzz:redoubt-netd/device, host:redoubt-netd::receive_li
 
 ### Two threads, reset on exit
 
-Status: built · partly tested: the serving thread's reset before it exits is read from the code, not attacked · tested: host:redoubt-netd::only_the_receive_threads_report_breaks_the_device, host:redoubt-netd::the_receive_loop_resets_and_reports_a_lie, host:redoubt-netd::the_receive_loop_resets_and_reports_when_the_interrupt_fails, host:redoubt-netd::a_panic_resets_the_device
+<details><summary>Status: built · partly tested: the serving thread's reset before it exits is read from the code, not attacked · tested (4)</summary>
+
+- host:redoubt-netd::only_the_receive_threads_report_breaks_the_device
+- host:redoubt-netd::the_receive_loop_resets_and_reports_a_lie
+- host:redoubt-netd::the_receive_loop_resets_and_reports_when_the_interrupt_fails
+- host:redoubt-netd::a_panic_resets_the_device
+
+</details>
 
 - **The serving thread** maps the registers, allocates both regions, brings the device up and only
   then starts the receive thread. It owns the transmit queue, answers `netif` calls, and waits on
@@ -183,7 +227,14 @@ that claims more than it wrote hands back zeros.
 
 ### R57 (the device stops before netd does)
 
-Status: built · partly tested: a kill or a fault of `netd` runs none of its code, and the device reset then is the kernel's; the serving thread's reset before it exits is not attacked · tested: host:redoubt-netd::a_panic_resets_the_device, host:redoubt-netd::the_receive_loop_resets_and_reports_a_lie, host:redoubt-netd::the_receive_loop_resets_and_reports_when_the_interrupt_fails, host:redoubt-netd::only_the_receive_threads_report_breaks_the_device
+<details><summary>Status: built · partly tested: a kill or a fault of `netd` runs none of its code, and the device reset then is the kernel's; the serving thread's reset before it exits is not attacked · tested (4)</summary>
+
+- host:redoubt-netd::a_panic_resets_the_device
+- host:redoubt-netd::the_receive_loop_resets_and_reports_a_lie
+- host:redoubt-netd::the_receive_loop_resets_and_reports_when_the_interrupt_fails
+- host:redoubt-netd::only_the_receive_threads_report_breaks_the_device
+
+</details>
 
 On every way out of either thread that `netd` controls, a lie, a failed interrupt, an exit or a
 panic, the device is reset and the reset read back before anything else, so the device writes

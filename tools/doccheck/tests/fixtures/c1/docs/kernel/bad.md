@@ -23,3 +23,11 @@ Double.
 Status: planned · M1 (separation and containment)
 
 **Open:** stray.
+
+## Collapsed
+
+<details><summary>Status: built · tested (2)</summary>
+
+- bench:x
+
+</details>

@@ -23,7 +23,16 @@ those three walls and the tests that attack them.
 
 ### The four object kinds
 
-Status: built · partly tested: that no two objects ever share an id is attacked only in the model for budgets and not at all for the other kinds, because a process cannot see an id · tested: bench:budget, bench:redoubt-ipc, bench:redoubt-dead, bench:process, bench:process-attack, bench:device
+<details><summary>Status: built · partly tested: that no two objects ever share an id is attacked only in the model for budgets and not at all for the other kinds, because a process cannot see an id · tested (6)</summary>
+
+- bench:budget
+- bench:redoubt-ipc
+- bench:redoubt-dead
+- bench:process
+- bench:process-attack
+- bench:device
+
+</details>
 
 | Kind | What it is | Made by | Ends when |
 | --- | --- | --- | --- |
@@ -43,7 +52,20 @@ and a DMA device also when its reset fails (Residual risks).
 
 ### Handles
 
-Status: built · tested: bench:budget, bench:budget-table-attack, bench:budget-forge-attack, bench:budget-destroy-attack, bench:handle-chain-attack, bench:handle-chain-fault, bench:process-chain-fault, bench:redoubt-ipc, bench:device, host:redoubt-sys::malformed_calls_are_refused
+<details><summary>Status: built · tested (10)</summary>
+
+- bench:budget
+- bench:budget-table-attack
+- bench:budget-forge-attack
+- bench:budget-destroy-attack
+- bench:handle-chain-attack
+- bench:handle-chain-fault
+- bench:process-chain-fault
+- bench:redoubt-ipc
+- bench:device
+- host:redoubt-sys::malformed_calls_are_refused
+
+</details>
 
 A handle is an index into the calling process's handle table. The slot at that index holds:
 - the **object**: its kind, its frame and its id;
@@ -140,7 +162,15 @@ the kernel stops rather than use a frame that may hold something else
 
 ### Making, copying and closing handles
 
-Status: built · tested: bench:budget, bench:process, bench:process-attack, bench:redoubt-ipc, bench:redoubt-revoke
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:budget
+- bench:process
+- bench:process-attack
+- bench:redoubt-ipc
+- bench:redoubt-revoke
+
+</details>
 
 | Call | Arguments -> result | The handle |
 | --- | --- | --- |
@@ -173,7 +203,20 @@ handle to it closes, in every table.
 
 ### What objects cost
 
-Status: built · partly tested: an endpoint's page is attacked only in the model, a device's page by no case, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from R6 (charging) for `root`'s own page · tested: bench:budget, bench:budget-table-attack, bench:budget-mem-churn, bench:process-attack, bench:process-review, bench:process-lifecycle, mutation:R6EndpointsFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6OwnPageChargedToItself, mutation:R6OpenCallsFree
+<details><summary>Status: built · partly tested: an endpoint's page is attacked only in the model, a device's page by no case, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from R6 (charging) for `root`'s own page · tested (10)</summary>
+
+- bench:budget
+- bench:budget-table-attack
+- bench:budget-mem-churn
+- bench:process-attack
+- bench:process-review
+- bench:process-lifecycle
+- mutation:R6EndpointsFree
+- mutation:R6ProcessObjectChargedToBudget
+- mutation:R6OwnPageChargedToItself
+- mutation:R6OpenCallsFree
+
+</details>
 
 Everything the kernel stores is charged in whole pages to one budget (R6 (charging)):
 
@@ -211,7 +254,15 @@ n handles filled without closing any costs exactly ceil(n / 128) pages.
 
 ### `mint`
 
-Status: built · partly tested: `Dead` from a message source whose endpoint or stamp has gone is attacked by no case · tested: bench:redoubt-ipc, bench:redoubt-ipc-attack, bench:redoubt-revoke, host:redoubt-sys::malformed_calls_are_refused, mutation:MintFromUnservedMessage
+<details><summary>Status: built · partly tested: `Dead` from a message source whose endpoint or stamp has gone is attacked by no case · tested (5)</summary>
+
+- bench:redoubt-ipc
+- bench:redoubt-ipc-attack
+- bench:redoubt-revoke
+- host:redoubt-sys::malformed_calls_are_refused
+- mutation:MintFromUnservedMessage
+
+</details>
 
 `mint(source, badge, budget?) -> h` makes a new handle to an endpoint, with a badge the caller
 chooses. The source is one of:
@@ -271,7 +322,16 @@ process that created it.
 
 ## Authority
 
-Status: built · tested: bench:redoubt-ipc-attack, bench:budget-forge-attack, bench:device, bench:process-attack, mutation:ReceiveWithBadgedHandle, mutation:ExitEndpointBadged
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:redoubt-ipc-attack
+- bench:budget-forge-attack
+- bench:device
+- bench:process-attack
+- mutation:ReceiveWithBadgedHandle
+- mutation:ExitEndpointBadged
+
+</details>
 
 What each handle lets its holder do:
 
@@ -307,7 +367,17 @@ A handle of another kind gets `WrongObject`. A device handle is the only way to 
 
 ### R9 (stamps)
 
-Status: built · partly tested: a handle minted from a call taking that call's stamp is attacked only in the model · tested: bench:process-attack, bench:redoubt-revoke, bench:budget-deadline, mutation:R9ReceivedHandleRestamped, mutation:R9MintStampsCaller, mutation:R9MsgStampIsSenderBudget, mutation:R10KeepForeignHandles
+<details><summary>Status: built · partly tested: a handle minted from a call taking that call's stamp is attacked only in the model · tested (7)</summary>
+
+- bench:process-attack
+- bench:redoubt-revoke
+- bench:budget-deadline
+- mutation:R9ReceivedHandleRestamped
+- mutation:R9MintStampsCaller
+- mutation:R9MsgStampIsSenderBudget
+- mutation:R10KeepForeignHandles
+
+</details>
 
 Every handle has a stamp, a budget. Destroying that budget, or any budget above it, closes the
 handle and every copy of it, in every table; a copy in a message not yet received arrives as 0
@@ -333,7 +403,15 @@ is being destroyed.
 
 ## Failure and restart
 
-Status: built · tested: bench:budget-destroy-attack, bench:budget-table-attack, bench:process, bench:process-attack, bench:redoubt-revoke
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:budget-destroy-attack
+- bench:budget-table-attack
+- bench:process
+- bench:process-attack
+- bench:redoubt-revoke
+
+</details>
 
 - **A process ends:** every handle in its table closes and its table pages return to its budget.
   The objects they named are untouched: an endpoint it received on stays for a restarted server

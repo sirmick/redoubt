@@ -37,7 +37,14 @@ a time never fires before `time_now` reaches it.
 
 ### The hart timer
 
-Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested: bench:timeouts, bench:budget-deadline, bench:sched-share, mutation:TimeoutIgnoredWhileOthersRun
+<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (4)</summary>
+
+- bench:timeouts
+- bench:budget-deadline
+- bench:sched-share
+- mutation:TimeoutIgnoredWhileOthersRun
+
+</details>
 
 The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for the earliest:
 - the **slice end** of the running thread: set to the pick time plus `SLICE` (10,000 µs) when
@@ -81,7 +88,14 @@ flowchart TD
 
 ### Timeouts and `FOREVER`
 
-Status: built · tested: bench:timeouts, bench:timeouts-tcg, bench:sched-wake-no-preempt, mutation:R12TimeoutWakePreempts
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:timeouts
+- bench:timeouts-tcg
+- bench:sched-wake-no-preempt
+- mutation:R12TimeoutWakePreempts
+
+</details>
 
 `call`, `send` and `receive` each take a **timeout**: relative microseconds from the moment the
 call is made. The kernel adds it to the current time with saturation, so the deadline it
@@ -185,7 +199,15 @@ Status: built · tested: bench:timeouts, bench:budget-deadline, bench:legacy-gon
 
 ### I13 (every blocking call returns by its timeout), on the timer
 
-Status: built · partly tested: timeouts on more than one hart are not attacked by a case · tested: bench:timeouts, bench:timeouts-tcg, bench:sched-latency, bench:sched-wake-no-preempt, mutation:TimeoutIgnoredWhileOthersRun
+<details><summary>Status: built · partly tested: timeouts on more than one hart are not attacked by a case · tested (5)</summary>
+
+- bench:timeouts
+- bench:timeouts-tcg
+- bench:sched-latency
+- bench:sched-wake-no-preempt
+- mutation:TimeoutIgnoredWhileOthersRun
+
+</details>
 
 I13 is owned by [invariants](invariants.md#i13-every-blocking-call-returns-by-its-timeout); this
 is how the timer keeps it. No thread stays blocked past its timeout. The timer is armed for the

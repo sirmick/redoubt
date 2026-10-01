@@ -18,7 +18,20 @@ it asks the device to touch can be checked.
 
 ### Ranges and badges
 
-Status: built · tested: bench:blkd-host-tests, host:redoubt-blkd::a_block_round_trips_through_a_range_badge, host:redoubt-blkd::info_describes_the_range_not_the_disk, host:redoubt-blkd::a_full_run_round_trips, host:redoubt-blkd::a_range_cannot_name_a_sector_outside_itself, host:redoubt-blkd::a_badge_that_names_no_range_is_refused, host:redoubt-blkd::roots_have_one_slot_per_gpt_entry, host:redoubt-blkd::a_gap_in_the_table_does_not_renumber_the_volumes_after_it, host:redoubt-blkd::a_labelled_caller_may_read_but_not_write, host:redoubt-blkd::one_clients_read_never_carries_anothers_bytes
+<details><summary>Status: built · tested (10)</summary>
+
+- bench:blkd-host-tests
+- host:redoubt-blkd::a_block_round_trips_through_a_range_badge
+- host:redoubt-blkd::info_describes_the_range_not_the_disk
+- host:redoubt-blkd::a_full_run_round_trips
+- host:redoubt-blkd::a_range_cannot_name_a_sector_outside_itself
+- host:redoubt-blkd::a_badge_that_names_no_range_is_refused
+- host:redoubt-blkd::roots_have_one_slot_per_gpt_entry
+- host:redoubt-blkd::a_gap_in_the_table_does_not_renumber_the_volumes_after_it
+- host:redoubt-blkd::a_labelled_caller_may_read_but_not_write
+- host:redoubt-blkd::one_clients_read_never_carries_anothers_bytes
+
+</details>
 
 - **A range is a badge.** The root badge of GPT entry i is i + 1, counting every entry of the
   array, used or not. So a launcher mints each volume's range from the manifest's entry number
@@ -38,7 +51,17 @@ Status: built · tested: bench:blkd-host-tests, host:redoubt-blkd::a_block_round
 
 ### Messages
 
-Status: built · tested: host:redoubt-blkd::a_request_over_the_bound_is_refused_and_one_of_no_sectors_is_malformed, host:redoubt-blkd::a_read_whose_reply_would_not_fit_the_lend_is_refused_before_the_disk_is_touched, host:redoubt-blkd::malformed_requests_are_refused, host:redoubt-blkd::arbitrary_requests_never_panic, host:redoubt-blkd::a_read_only_device_refuses_writes, host:redoubt-blkd::a_broken_read_only_device_does_not_answer_ok_to_a_flush, fuzz:redoubt-blkd/request
+<details><summary>Status: built · tested (7)</summary>
+
+- host:redoubt-blkd::a_request_over_the_bound_is_refused_and_one_of_no_sectors_is_malformed
+- host:redoubt-blkd::a_read_whose_reply_would_not_fit_the_lend_is_refused_before_the_disk_is_touched
+- host:redoubt-blkd::malformed_requests_are_refused
+- host:redoubt-blkd::arbitrary_requests_never_panic
+- host:redoubt-blkd::a_read_only_device_refuses_writes
+- host:redoubt-blkd::a_broken_read_only_device_does_not_answer_ok_to_a_flush
+- fuzz:redoubt-blkd/request
+
+</details>
 
 `blkd` serves a typed protocol, not 9P: four operations on a range, and no namespace.
 
@@ -69,7 +92,14 @@ The table: [libs/wire/tables/blkd.md](../../libs/wire/tables/blkd.md).
 
 ### The DMA region
 
-Status: built · tested: host:redoubt-blkd::a_broken_device_is_never_handed_a_clients_write_payload, host:redoubt-blkd::a_short_write_reads_back_as_zeros_not_as_the_last_requests_bytes, host:redoubt-blkd::impossible_requests_never_reach_the_device, host:redoubt-blkd::a_hundred_thousand_random_liars_never_panic_and_never_stray
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-blkd::a_broken_device_is_never_handed_a_clients_write_payload
+- host:redoubt-blkd::a_short_write_reads_back_as_zeros_not_as_the_last_requests_bytes
+- host:redoubt-blkd::impossible_requests_never_reach_the_device
+- host:redoubt-blkd::a_hundred_thousand_random_liars_never_panic_and_never_stray
+
+</details>
 
 The device can reach one contiguous run of `DMA_PAGES` pages from `dma_alloc`
 ([devices](../kernel/devices.md#dma_alloc)), laid out by constants: the descriptor table, the
@@ -105,7 +135,23 @@ it ([R51 (DMA stays in its region)](#r51-dma-stays-in-its-region)).
 
 ### Device lies
 
-Status: built · tested: fuzz:redoubt-blkd/device, host:redoubt-blkd::rewriting_the_rings_changes_nothing_the_driver_believes, host:redoubt-blkd::a_device_that_lies_about_a_completion_is_refused_and_never_spoken_to_again, host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed, host:redoubt-blkd::lies_that_are_not_protocol_violations_are_still_harmless, host:redoubt-blkd::a_reported_io_error_does_not_break_the_device, host:redoubt-blkd::a_device_that_is_not_one_is_refused_at_bring_up, host:redoubt-blkd::only_the_features_we_need_are_accepted, host:redoubt-blkd::an_interrupt_storm_is_bounded_even_when_the_clock_has_failed, host:redoubt-blkd::an_interrupt_storm_with_a_working_clock_ends_at_the_deadline, host:redoubt-blkd::every_completion_acknowledges_the_interrupt, host:redoubt-blkd::avail_flags_is_written_again_before_every_request, host:redoubt-blkd::both_completion_paths_work
+<details><summary>Status: built · tested (13)</summary>
+
+- fuzz:redoubt-blkd/device
+- host:redoubt-blkd::rewriting_the_rings_changes_nothing_the_driver_believes
+- host:redoubt-blkd::a_device_that_lies_about_a_completion_is_refused_and_never_spoken_to_again
+- host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed
+- host:redoubt-blkd::lies_that_are_not_protocol_violations_are_still_harmless
+- host:redoubt-blkd::a_reported_io_error_does_not_break_the_device
+- host:redoubt-blkd::a_device_that_is_not_one_is_refused_at_bring_up
+- host:redoubt-blkd::only_the_features_we_need_are_accepted
+- host:redoubt-blkd::an_interrupt_storm_is_bounded_even_when_the_clock_has_failed
+- host:redoubt-blkd::an_interrupt_storm_with_a_working_clock_ends_at_the_deadline
+- host:redoubt-blkd::every_completion_acknowledges_the_interrupt
+- host:redoubt-blkd::avail_flags_is_written_again_before_every_request
+- host:redoubt-blkd::both_completion_paths_work
+
+</details>
 
 - **Nothing the device writes is believed.** The descriptor table and the available ring are
   written from constants for every request and never read back, so a device that rewrites them (a
@@ -131,7 +177,23 @@ whole driver against it, including a hundred thousand random liars
 
 ### The partition table
 
-Status: built · tested: fuzz:redoubt-blkd/gpt, host:redoubt-blkd::a_good_table_reads_back, host:redoubt-blkd::header_fields_sit_where_the_specification_says, host:redoubt-blkd::crc32_matches_the_published_check_value, host:redoubt-blkd::unused_entries_are_skipped_and_indices_are_the_entry_s, host:redoubt-blkd::a_disk_with_no_signature_is_refused, host:redoubt-blkd::a_header_crc_that_does_not_match_is_refused, host:redoubt-blkd::an_entry_array_crc_that_does_not_match_is_refused, host:redoubt-blkd::hostile_header_numbers_are_refused, host:redoubt-blkd::hostile_partition_entries_are_refused, host:redoubt-blkd::adjacent_partitions_are_allowed, host:redoubt-blkd::arbitrary_header_bytes_never_panic, host:redoubt-blkd::arbitrary_entry_arrays_never_panic
+<details><summary>Status: built · tested (13)</summary>
+
+- fuzz:redoubt-blkd/gpt
+- host:redoubt-blkd::a_good_table_reads_back
+- host:redoubt-blkd::header_fields_sit_where_the_specification_says
+- host:redoubt-blkd::crc32_matches_the_published_check_value
+- host:redoubt-blkd::unused_entries_are_skipped_and_indices_are_the_entry_s
+- host:redoubt-blkd::a_disk_with_no_signature_is_refused
+- host:redoubt-blkd::a_header_crc_that_does_not_match_is_refused
+- host:redoubt-blkd::an_entry_array_crc_that_does_not_match_is_refused
+- host:redoubt-blkd::hostile_header_numbers_are_refused
+- host:redoubt-blkd::hostile_partition_entries_are_refused
+- host:redoubt-blkd::adjacent_partitions_are_allowed
+- host:redoubt-blkd::arbitrary_header_bytes_never_panic
+- host:redoubt-blkd::arbitrary_entry_arrays_never_panic
+
+</details>
 
 The GPT (UEFI 2.10, section 5.3) is the one on-disk structure `blkd` parses, once, at start.
 
@@ -184,7 +246,16 @@ bounds what `blkd` asks for, not what the device does.
 
 ### R52 (a lie is a failure, never corruption)
 
-Status: built · tested: fuzz:redoubt-blkd/device, host:redoubt-blkd::rewriting_the_rings_changes_nothing_the_driver_believes, host:redoubt-blkd::a_device_that_lies_about_a_completion_is_refused_and_never_spoken_to_again, host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed, host:redoubt-blkd::a_hundred_thousand_random_liars_never_panic_and_never_stray, host:redoubt-blkd::one_clients_read_never_carries_anothers_bytes
+<details><summary>Status: built · tested (6)</summary>
+
+- fuzz:redoubt-blkd/device
+- host:redoubt-blkd::rewriting_the_rings_changes_nothing_the_driver_believes
+- host:redoubt-blkd::a_device_that_lies_about_a_completion_is_refused_and_never_spoken_to_again
+- host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed
+- host:redoubt-blkd::a_hundred_thousand_random_liars_never_panic_and_never_stray
+- host:redoubt-blkd::one_clients_read_never_carries_anothers_bytes
+
+</details>
 
 Nothing a device writes can corrupt `blkd`'s memory, panic it, or make it return one client's bytes
 to another: no ring value is an index or a length, the rings `blkd` writes are never read back,
@@ -193,7 +264,15 @@ for good.
 
 ### R53 (a filesystem sees only its partition)
 
-Status: built · tested: fuzz:redoubt-blkd/gpt, host:redoubt-blkd::a_range_cannot_name_a_sector_outside_itself, host:redoubt-blkd::hostile_partition_entries_are_refused, host:redoubt-blkd::a_badge_that_names_no_range_is_refused, host:redoubt-blkd::a_gap_in_the_table_does_not_renumber_the_volumes_after_it
+<details><summary>Status: built · tested (5)</summary>
+
+- fuzz:redoubt-blkd/gpt
+- host:redoubt-blkd::a_range_cannot_name_a_sector_outside_itself
+- host:redoubt-blkd::hostile_partition_entries_are_refused
+- host:redoubt-blkd::a_badge_that_names_no_range_is_refused
+- host:redoubt-blkd::a_gap_in_the_table_does_not_renumber_the_volumes_after_it
+
+</details>
 
 A client's badge names one partition, its sector numbers are relative to it, and no partition table
 with overlapping entries is accepted. So no client can read or write a sector outside its own

@@ -50,7 +50,14 @@ the device calls are in the [ABI reference](abi.md#errors-and-the-order-of-check
 
 ### `map_device`
 
-Status: built · tested: bench:device, bench:irq-attack, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:DmaResetClearsCoHolderReach
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:device
+- bench:irq-attack
+- host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder
+- mutation:DmaResetClearsCoHolderReach
+
+</details>
 
 `map_device(h(MMIO)) -> addr, len` maps the whole range readable and writable, not executable,
 at an address the kernel chooses ([R11 (memory)](memory.md#r11-memory)), and returns the address
@@ -91,7 +98,14 @@ decides which handles a driver gets.
 
 ### `dma_alloc`
 
-Status: built · partly tested: the limit of `MAX_RUNS` runs per device is not attacked by a case · tested: bench:device, bench:dma-rules, host:redoubt-model::dma_pages_stay_put, mutation:DmaUnmapFrees
+<details><summary>Status: built · partly tested: the limit of `MAX_RUNS` runs per device is not attacked by a case · tested (4)</summary>
+
+- bench:device
+- bench:dma-rules
+- host:redoubt-model::dma_pages_stay_put
+- mutation:DmaUnmapFrees
+
+</details>
 
 `dma_alloc(h(MMIO), npages) -> addr, phys` returns `npages` physically contiguous, zeroed pages,
 mapped readable and writable at an address the kernel chooses, and their physical address. It is
@@ -113,7 +127,16 @@ process only at its end.
 
 ### Reset before reuse
 
-Status: built · partly tested: that the reset precedes the pooling inside the kernel is attacked only in the model · tested: bench:dma-reset-reuse, bench:dma-rules, host:redoubt-model::exit_pools_after_reset, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:DmaFreeBeforeReset, mutation:DmaResetClearsCoHolderReach
+<details><summary>Status: built · partly tested: that the reset precedes the pooling inside the kernel is attacked only in the model · tested (6)</summary>
+
+- bench:dma-reset-reuse
+- bench:dma-rules
+- host:redoubt-model::exit_pools_after_reset
+- host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder
+- mutation:DmaFreeBeforeReset
+- mutation:DmaResetClearsCoHolderReach
+
+</details>
 
 A DMA device may still hold the physical address of a run after the process that programmed it
 has died. So no DMA page goes back to the pool until every device that could hold its address has
@@ -156,7 +179,16 @@ stateDiagram-v2
 
 ### Quarantine
 
-Status: built · tested: bench:dma-reset-quarantine, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaQuarantineChargeDropped, mutation:DmaQuarantinedDeviceUsable
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:dma-reset-quarantine
+- host:redoubt-model::deaf_device_quarantines_the_co_holder_too
+- host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit
+- mutation:DmaQuarantinedSlotCountsAsReset
+- mutation:DmaQuarantineChargeDropped
+- mutation:DmaQuarantinedDeviceUsable
+
+</details>
 
 When a device in the reset set does not confirm, every run the ending process held is
 **quarantined**, the runs through devices that did confirm included: their pages are never
@@ -234,7 +266,14 @@ two label sets share a device.
 
 ## Authority
 
-Status: built · tested: bench:irq-attack, bench:device, bench:dma-rules, bench:dma-reset-quarantine
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:irq-attack
+- bench:device
+- bench:dma-rules
+- bench:dma-reset-quarantine
+
+</details>
 
 - **A device handle is the device.** An MMIO handle is the right to map its registers, an IRQ
   handle the right to receive its interrupt, the Reset handle the right to stop the machine.
@@ -255,7 +294,16 @@ Status: built · tested: bench:irq-attack, bench:device, bench:dma-rules, bench:
 
 ### R5 (interrupts)
 
-Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested: bench:uart-irq, bench:irq-first-receive, bench:receive-bad-record, mutation:R5NoMaskOnFire, mutation:R5NoUnmaskOnReceive, mutation:R5BadRecordConsumesInterrupt
+<details><summary>Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested (6)</summary>
+
+- bench:uart-irq
+- bench:irq-first-receive
+- bench:receive-bad-record
+- mutation:R5NoMaskOnFire
+- mutation:R5NoUnmaskOnReceive
+- mutation:R5BadRecordConsumesInterrupt
+
+</details>
 
 When an interrupt fires, the kernel masks its source and sets the IRQ object's `fired` flag.
 `receive` on the IRQ handle unmasks the source when it begins, then returns an `interrupt`
@@ -331,7 +379,14 @@ the PLIC for itself alone.
 
 ## Failure and restart
 
-Status: built · partly tested: destroying a device object's owner budget, and a device handle closing when the budget that stamped it is destroyed, are not attacked by a case · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, bench:pid-reuse-authority
+<details><summary>Status: built · partly tested: destroying a device object's owner budget, and a device handle closing when the budget that stamped it is destroyed, are not attacked by a case · tested (4)</summary>
+
+- bench:dma-reset-reuse
+- bench:dma-reset-quarantine
+- bench:dma-rules
+- bench:pid-reuse-authority
+
+</details>
 
 - **A driver ends**, however it ends: its device mappings go with its address space, its
   handles close, and its DMA runs are reset and pooled, or quarantined. The device objects

@@ -49,6 +49,7 @@ const PACKAGES: [&str; 17] =
 const FAVICON: &str = "docs/theme/favicon.svg";
 const BINARY: [&str; 9] = ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "pdf"];
 const STATUS_TESTED: &str = " · tested: ";
+const DETAILS_OPEN: &str = "<details><summary>Status: ";
 
 pub fn check(root: &Path, scope: Scope) -> Vec<Finding> {
     let mut c = Ctx { root, out: Vec::new(), crates: None };
@@ -438,6 +439,50 @@ impl Status {
 
 fn milestone(m: usize) -> String { format!("{} ({})", MILESTONES[m].0, MILESTONES[m].1) }
 
+/// The collapsed form of a status with many tests: the status in a `<summary>`, with the count of
+/// tests in place of the list, and the tests as a bullet list inside the `<details>`:
+///
+/// ```text
+/// <details><summary>Status: built · tested (3)</summary>
+///
+/// - bench:a
+/// - host:b::c
+/// - mutation:D
+///
+/// </details>
+/// ```
+///
+/// The count must match the list, so a test cannot be dropped from the list without the summary
+/// saying so.
+fn parse_details(lines: &[String], i: usize) -> Option<Status> {
+    let s = lines[i].trim_end().strip_prefix(DETAILS_OPEN)?.strip_suffix("</summary>")?;
+    let (status, count) = s.rsplit_once(" · tested (")?;
+    let count: usize = count.strip_suffix(')')?.parse().ok()?;
+    let partly = match status.strip_prefix("built · partly tested: ") {
+        Some(gap) => (!gap.trim().is_empty()).then_some(true)?,
+        None => (status == "built").then_some(false)?,
+    };
+    let mut tests = Vec::new();
+    let mut j = i + 1;
+    loop {
+        let l = lines.get(j)?.trim_end();
+        if l == "</details>" {
+            break;
+        }
+        if let Some(t) = l.strip_prefix("- ") {
+            parse_test(t)?;
+            tests.push(t.to_string());
+        } else if !l.trim().is_empty() {
+            return None;
+        }
+        j += 1;
+    }
+    if tests.len() != count || tests.is_empty() {
+        return None;
+    }
+    Some(if partly { Status::Partly(tests) } else { Status::Built(tests) })
+}
+
 /// The S3 grammar, exactly.
 fn parse_status(line: &str) -> Option<Status> {
     let s = line.strip_prefix("Status: ")?;
@@ -494,7 +539,8 @@ fn read_statuses(c: &mut Ctx, p: &mut Page) {
         return;
     }
     for i in 0..p.lines.len() {
-        if p.fenced[i] || !p.lines[i].starts_with("Status:") {
+        let collapsed = p.lines[i].starts_with(DETAILS_OPEN);
+        if p.fenced[i] || !(collapsed || p.lines[i].starts_with("Status:")) {
             continue;
         }
         let h = p.head_of(i).filter(|&h| {
@@ -504,7 +550,8 @@ fn read_statuses(c: &mut Ctx, p: &mut Page) {
             c.err(1, &p.path, i + 1, "status line is not the first line of a section".into());
             continue;
         };
-        let Some(s) = parse_status(p.lines[i].trim_end()) else {
+        let parsed = if collapsed { parse_details(&p.lines, i) } else { parse_status(p.lines[i].trim_end()) };
+        let Some(s) = parsed else {
             c.err(1, &p.path, i + 1, "malformed status".into());
             continue;
         };

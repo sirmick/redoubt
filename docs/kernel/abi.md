@@ -18,7 +18,14 @@ on it (I14 (no call panics the kernel)); and report the same first error that th
 
 ## One register layout on both widths
 
-Status: built · partly tested: that the kernel preserves the registers outside `a0`-`a7` is not attacked by a case · tested: host:redoubt-sys::every_call_round_trips, host:redoubt-sys::every_result_and_error_round_trips, host:redoubt-sys::random_registers, bench:budget-syscall-attack
+<details><summary>Status: built · partly tested: that the kernel preserves the registers outside `a0`-`a7` is not attacked by a case · tested (4)</summary>
+
+- host:redoubt-sys::every_call_round_trips
+- host:redoubt-sys::every_result_and_error_round_trips
+- host:redoubt-sys::random_registers
+- bench:budget-syscall-attack
+
+</details>
 
 A call is an `ecall` from user mode with `a0` = the call's number and its arguments in `a1`,
 `a2`, ... in the order its row lists them. The kernel answers in the same eight registers: `a0`
@@ -115,7 +122,17 @@ result (an address, a length) is one register; a handle or TID is one register h
 
 ## Records
 
-Status: built · tested: host:redoubt-sys::records_round_trip, host:redoubt-sys::malformed_records_are_refused, host:redoubt-sys::random_records, fuzz:redoubt-sys/decode, bench:budget-syscall-attack, bench:ipc-outcomes, bench:process-attack
+<details><summary>Status: built · tested (7)</summary>
+
+- host:redoubt-sys::records_round_trip
+- host:redoubt-sys::malformed_records_are_refused
+- host:redoubt-sys::random_records
+- fuzz:redoubt-sys/decode
+- bench:budget-syscall-attack
+- bench:ipc-outcomes
+- bench:process-attack
+
+</details>
 
 ### Layouts
 
@@ -189,7 +206,14 @@ has blocked (`receive`'s, or `call`'s reply) is checked again at that point
 
 ## The receive record
 
-Status: built · tested: host:redoubt-sys::received_layout, host:redoubt-sys::malformed_records_are_refused, host:redoubt-sys::random_records, fuzz:redoubt-sys/decode
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-sys::received_layout
+- host:redoubt-sys::malformed_records_are_refused
+- host:redoubt-sys::random_records
+- fuzz:redoubt-sys/decode
+
+</details>
 
 `receive` writes one layout for every result: `(kind, msg_id, badge, account, labels, words,
 handles, buffer, pages)`, in the slots of the figure above. Slot 0 is the kind; a field the kind
@@ -213,7 +237,14 @@ never mistakes a notice for a message.
 
 ## Errors and their codes
 
-Status: built · tested: host:redoubt-sys::numbers_and_codes_are_dense_from_one, host:redoubt-sys::every_result_and_error_round_trips, host:redoubt-sys::error_rows, bench:budget-syscall-attack
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-sys::numbers_and_codes_are_dense_from_one
+- host:redoubt-sys::every_result_and_error_round_trips
+- host:redoubt-sys::error_rows
+- bench:budget-syscall-attack
+
+</details>
 
 One error enum serves every call. Its code travels in `a0`; 0 there is success, so codes start
 at 1.
@@ -248,7 +279,25 @@ one wrong code on their way out.
 
 ## Errors and the order of checks
 
-Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the model follows the kernel's order, but no trace has been replayed on the kernel (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, bench:process-map-untouched-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, host:redoubt-model::a_budget_spec_decodes_in_slot_order, host:redoubt-model::receive_clears_the_current_call_before_its_record_check, host:redoubt-model::every_page_of_a_record_is_checked, host:redoubt-model::a_device_has_32_dma_runs, host:redoubt-model::map_anons_placement_area_is_256_mib, host:redoubt-model::map_fixed_refuses_pages_it_cannot_pay_for_before_an_overlap, fuzz:redoubt-sys/decode
+<details><summary>Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the model follows the kernel's order, but no trace has been replayed on the kernel (Residual risks) · tested (15)</summary>
+
+- bench:budget-syscall-attack
+- bench:syscall-attack
+- bench:ipc-outcomes
+- bench:process-attack
+- bench:process-map-untouched-attack
+- host:redoubt-sys::malformed_calls_are_refused
+- host:redoubt-model::every_call_and_error_is_reached
+- host:redoubt-model::process_map_destination_validation_precedes_started_state
+- host:redoubt-model::a_budget_spec_decodes_in_slot_order
+- host:redoubt-model::receive_clears_the_current_call_before_its_record_check
+- host:redoubt-model::every_page_of_a_record_is_checked
+- host:redoubt-model::a_device_has_32_dma_runs
+- host:redoubt-model::map_anons_placement_area_is_256_mib
+- host:redoubt-model::map_fixed_refuses_pages_it_cannot_pay_for_before_an_overlap
+- fuzz:redoubt-sys/decode
+
+</details>
 
 A call with several faults returns the first one found, in a fixed order, so that the kernel,
 the model and a replayed trace agree exactly. Checks go in stages, and within a stage by
@@ -331,7 +380,14 @@ walk that follows skips page-table subtrees that are absent
 
 ## Unknown call numbers
 
-Status: built · tested: bench:legacy-gone, bench:budget-syscall-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-sys::numbers_and_codes_are_dense_from_one
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:legacy-gone
+- bench:budget-syscall-attack
+- host:redoubt-sys::malformed_calls_are_refused
+- host:redoubt-sys::numbers_and_codes_are_dense_from_one
+
+</details>
 
 Every value of `a0` outside 0x101-0x11a is an unknown number: `InvalidArgument` in `a0` and 0 in
 `a1`-`a7`. That includes 0, every number up to and including `NUMBER_BASE`, the first number

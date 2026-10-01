@@ -41,7 +41,19 @@ in the VM sees is ordinary Elixir: `File.read!/1`, `IO.puts/1`, `:gen_tcp.connec
 
 ### Loading hostile code
 
-Status: built · partly tested: runs on the host only; the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested: host:beamlet-vm::fixtures_load, host:beamlet-vm::every_truncation_is_rejected, host:beamlet-vm::wrong_formats_are_named, host:beamlet-vm::mutants_never_panic, host:beamlet-vm::empty_frames_count_against_the_stack, host:beamlet-vm::rejects_hostile_input, host:beamlet-vm::safe_mode_creates_no_atoms, host:beamlet-vm::nesting_is_bounded, host:beamlet-vm::deep_terms_are_handled_iteratively
+<details><summary>Status: built · partly tested: runs on the host only; the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested (9)</summary>
+
+- host:beamlet-vm::fixtures_load
+- host:beamlet-vm::every_truncation_is_rejected
+- host:beamlet-vm::wrong_formats_are_named
+- host:beamlet-vm::mutants_never_panic
+- host:beamlet-vm::empty_frames_count_against_the_stack
+- host:beamlet-vm::rejects_hostile_input
+- host:beamlet-vm::safe_mode_creates_no_atoms
+- host:beamlet-vm::nesting_is_bounded
+- host:beamlet-vm::deep_terms_are_handled_iteratively
+
+</details>
 
 The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re` and
 `beamlet-crypto` ([`userland/otp/vm/src/lib.rs`](../../userland/otp/vm/src/lib.rs)).
@@ -58,7 +70,22 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-Status: built · partly tested: runs on the host only · tested: host:beamlet-vm::full_mailbox_kills_the_receiver, host:beamlet-vm::full_own_mailbox_kills_the_sender, host:beamlet-vm::a_roomy_mailbox_is_not_a_limit, host:beamlet-vm::the_vm_heap_limit_kills, host:beamlet-vm::a_process_can_lower_its_own_limit, host:beamlet-vm::spawn_opt_sets_a_limit, host:beamlet-vm::under_the_limit_nothing_happens, host:beamlet-vm::ets_inserts_past_the_limit_raise, host:beamlet-vm::memory_is_reported, host:beamlet-vm::jump_loops_are_preempted, host:beamlet-vm::garbage_is_collected_and_live_data_survives, host:beamlet-vm::unreferenced_binaries_are_freed
+<details><summary>Status: built · partly tested: runs on the host only · tested (12)</summary>
+
+- host:beamlet-vm::full_mailbox_kills_the_receiver
+- host:beamlet-vm::full_own_mailbox_kills_the_sender
+- host:beamlet-vm::a_roomy_mailbox_is_not_a_limit
+- host:beamlet-vm::the_vm_heap_limit_kills
+- host:beamlet-vm::a_process_can_lower_its_own_limit
+- host:beamlet-vm::spawn_opt_sets_a_limit
+- host:beamlet-vm::under_the_limit_nothing_happens
+- host:beamlet-vm::ets_inserts_past_the_limit_raise
+- host:beamlet-vm::memory_is_reported
+- host:beamlet-vm::jump_loops_are_preempted
+- host:beamlet-vm::garbage_is_collected_and_live_data_survives
+- host:beamlet-vm::unreferenced_binaries_are_freed
+
+</details>
 
 One VM is one trust domain, but a buggy or hostile Erlang process must not take the rest of the
 VM down. Every limit fails closed: the offender ends, and nothing is lost silently
@@ -85,7 +112,17 @@ kernel's to share, by budget weight ([scheduling](../kernel/scheduling.md)).
 
 ### The `Platform` boundary
 
-Status: built · partly tested: runs on the host only; only the host embedding exists · tested: host:beamlet-vm::programs_need_the_platform_to_grant_them, host:beamlet-vm::the_bundle_wins_over_a_front_directory, host:beamlet-vm::a_name_the_bundle_lacks_is_found_on_the_path, host:beamlet-vm::names_resolve_inside_the_root, host:beamlet::symlinks_cannot_leave_the_root, host:beamlet::mounts_are_separate_and_may_be_read_only, host:beamlet::files_round_trip
+<details><summary>Status: built · partly tested: runs on the host only; only the host embedding exists · tested (7)</summary>
+
+- host:beamlet-vm::programs_need_the_platform_to_grant_them
+- host:beamlet-vm::the_bundle_wins_over_a_front_directory
+- host:beamlet-vm::a_name_the_bundle_lacks_is_found_on_the_path
+- host:beamlet-vm::names_resolve_inside_the_root
+- host:beamlet::symlinks_cannot_leave_the_root
+- host:beamlet::mounts_are_separate_and_may_be_read_only
+- host:beamlet::files_round_trip
+
+</details>
 
 Everything the VM gets from outside comes through the `Platform` trait
 ([`userland/otp/vm/src/platform.rs`](../../userland/otp/vm/src/platform.rs)):
@@ -129,7 +166,24 @@ Everything the VM gets from outside comes through the `Platform` trait
 
 ### What runs on it
 
-Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness, the cofactored Ed25519 check and the bound on a zlib stream are not attacked by a named test · tested: host:beamlet-vm::decodes_otp_output, host:beamlet-vm::encodes_like_otp, host:beamlet-vm::printing_matches_otp, host:beamlet-vm::matches_otp, host:beamlet-vm::block_hash_handles_every_tail_length, host:beamlet-re::pcre_spellings, host:beamlet-re::braces_are_quantifiers_only_when_counted, host:beamlet-crypto::certificates_round_trip, host:beamlet-crypto::nesting_is_bounded, host:beamlet-crypto::mutants_never_panic, host:beamlet-crypto::ed25519_is_rfc_8032, host:beamlet-crypto::the_all_zero_seed_is_refused_not_a_panic, host:beamlet-crypto::x25519_refuses_a_low_order_point, host:beamlet-vm::compressed_terms_round_trip
+<details><summary>Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness, the cofactored Ed25519 check and the bound on a zlib stream are not attacked by a named test · tested (14)</summary>
+
+- host:beamlet-vm::decodes_otp_output
+- host:beamlet-vm::encodes_like_otp
+- host:beamlet-vm::printing_matches_otp
+- host:beamlet-vm::matches_otp
+- host:beamlet-vm::block_hash_handles_every_tail_length
+- host:beamlet-re::pcre_spellings
+- host:beamlet-re::braces_are_quantifiers_only_when_counted
+- host:beamlet-crypto::certificates_round_trip
+- host:beamlet-crypto::nesting_is_bounded
+- host:beamlet-crypto::mutants_never_panic
+- host:beamlet-crypto::ed25519_is_rfc_8032
+- host:beamlet-crypto::the_all_zero_seed_is_refused_not_a_panic
+- host:beamlet-crypto::x25519_refuses_a_low_order_point
+- host:beamlet-vm::compressed_terms_round_trip
+
+</details>
 
 Where beamlet implements something, it behaves as the real BEAM does, and the differential suite
 checks it: each test runs on BEAM and on beamlet and the printed results must be identical.
@@ -177,7 +231,17 @@ interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
-Status: built · partly tested: on the host only, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in no boot · tested: host:beamlet-redoubt::writes_reach_the_screen, host:beamlet-redoubt::typing_reaches_the_vm_then_its_end, host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm, host:beamlet-redoubt::a_console_without_consol_has_no_size, host:beamlet-redoubt::idling_with_a_deadline_returns_by_it, host:beamlet-redoubt::after_the_console_ends_idling_still_waits_for_its_deadline, host:beamlet-redoubt::there_is_no_wall_clock
+<details><summary>Status: built · partly tested: on the host only, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in no boot · tested (7)</summary>
+
+- host:beamlet-redoubt::writes_reach_the_screen
+- host:beamlet-redoubt::typing_reaches_the_vm_then_its_end
+- host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm
+- host:beamlet-redoubt::a_console_without_consol_has_no_size
+- host:beamlet-redoubt::idling_with_a_deadline_returns_by_it
+- host:beamlet-redoubt::after_the_console_ends_idling_still_waits_for_its_deadline
+- host:beamlet-redoubt::there_is_no_wall_clock
+
+</details>
 
 The first part of beamlet's platform on Redoubt, `beamlet-redoubt`
 ([`userland/otp/redoubt`](../../userland/otp/redoubt/src/lib.rs)), serves the console, the clock

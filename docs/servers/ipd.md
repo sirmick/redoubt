@@ -18,7 +18,23 @@ at all.
 
 ### The `/net` tree
 
-Status: built · tested: bench:net-tcp, bench:ipd-host-tests, host:redoubt-ipd::clone_makes_a_socket_and_tcp_lists_only_the_callers, host:redoubt-ipd::a_connect_waits_then_carries_data_through_the_files, host:redoubt-ipd::ctl_refusals_are_named_and_checked_before_the_stack, host:redoubt-ipd::a_listener_accepts_through_ctl, host:redoubt-ipd::numbers_are_per_connection_and_invisible_to_others, host:redoubt-ipd::a_connection_carries_bytes_both_ways_and_ends, host:redoubt-ipd::a_far_host_is_reached_through_the_gateway, host:redoubt-ipd::a_write_waits_while_the_send_buffer_is_full, host:redoubt-ipd::a_listener_accepts_its_backlog_and_listens_again, host:redoubt-ipd::the_conformance_vectors_run_against_ipd, host:redoubt-ipd::a_client_connects_and_echoes_through_the_program
+<details><summary>Status: built · tested (13)</summary>
+
+- bench:net-tcp
+- bench:ipd-host-tests
+- host:redoubt-ipd::clone_makes_a_socket_and_tcp_lists_only_the_callers
+- host:redoubt-ipd::a_connect_waits_then_carries_data_through_the_files
+- host:redoubt-ipd::ctl_refusals_are_named_and_checked_before_the_stack
+- host:redoubt-ipd::a_listener_accepts_through_ctl
+- host:redoubt-ipd::numbers_are_per_connection_and_invisible_to_others
+- host:redoubt-ipd::a_connection_carries_bytes_both_ways_and_ends
+- host:redoubt-ipd::a_far_host_is_reached_through_the_gateway
+- host:redoubt-ipd::a_write_waits_while_the_send_buffer_is_full
+- host:redoubt-ipd::a_listener_accepts_its_backlog_and_listens_again
+- host:redoubt-ipd::the_conformance_vectors_run_against_ipd
+- host:redoubt-ipd::a_client_connects_and_echoes_through_the_program
+
+</details>
 
 `/net` is served over the [9P server skeleton](serving.md#the-9p-server-skeleton). Everything a
 file holds is typed, in the wire encoding ([wire](wire.md#the-encoding)), never text.
@@ -75,7 +91,21 @@ The table: [libs/wire/tables/net_ctl.md](../../libs/wire/tables/net_ctl.md).
 
 ### Scopes and grants
 
-Status: built · tested: bench:net-attacks, host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain, host:redoubt-ipd::a_grant_only_narrows, host:redoubt-ipd::a_grant_never_widens_or_adds_listen, host:redoubt-ipd::the_encoding_is_canonical_and_round_trips, host:redoubt-ipd::only_a_root_badge_with_a_scope_attaches, host:redoubt-ipd::new_connection_keeps_the_scope, host:redoubt-ipd::a_grant_narrows_and_disconnect_frees_everything, host:redoubt-ipd::grant_mints_a_narrower_connection, host:redoubt-ipd::a_grant_nobody_received_is_undone, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
+<details><summary>Status: built · tested (11)</summary>
+
+- bench:net-attacks
+- host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain
+- host:redoubt-ipd::a_grant_only_narrows
+- host:redoubt-ipd::a_grant_never_widens_or_adds_listen
+- host:redoubt-ipd::the_encoding_is_canonical_and_round_trips
+- host:redoubt-ipd::only_a_root_badge_with_a_scope_attaches
+- host:redoubt-ipd::new_connection_keeps_the_scope
+- host:redoubt-ipd::a_grant_narrows_and_disconnect_frees_everything
+- host:redoubt-ipd::grant_mints_a_narrower_connection
+- host:redoubt-ipd::a_grant_nobody_received_is_undone
+- host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
+
+</details>
 
 - **A scope** is at most `MAX_RULES` (8) rules, each a **connect** rule (an IPv4 prefix and a port
   range) or a **listen** rule (a port range). A connection may connect to an address and port only
@@ -107,7 +137,14 @@ transferred page ([netd](netd.md#serving-ipd)). Frames count only from the unlab
 
 ### The box's own addresses
 
-Status: built · tested: bench:net-attacks, bench:bench-net-self-unrefused, host:redoubt-ipd::the_self_set, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:net-attacks
+- bench:bench-net-self-unrefused
+- host:redoubt-ipd::the_self_set
+- host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
+
+</details>
 
 Before any scope is looked at, `ipd` refuses every address of the box itself: its own address, its
 network's network and broadcast addresses, the limited broadcast, the loopback and "this host"
@@ -132,7 +169,14 @@ cannot even make a socket by reading `clone`, which the label check alone would 
 
 ### Pinned and abandoned calls
 
-Status: built · tested: bench:net-pinned, host:redoubt-ipd::parked_calls_are_freed_when_abandoned_and_capped_by_the_share, host:redoubt-ipd::two_reads_one_byte_one_answer_and_ipd_goes_on, host:redoubt-ipd::an_accept_nobody_answers_ends_with_the_ctl_deadline
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:net-pinned
+- host:redoubt-ipd::parked_calls_are_freed_when_abandoned_and_capped_by_the_share
+- host:redoubt-ipd::two_reads_one_byte_one_answer_and_ipd_goes_on
+- host:redoubt-ipd::an_accept_nobody_answers_ends_with_the_ctl_deadline
+
+</details>
 
 Every waiting read or write is parked with a server-side deadline, in the caller's bucket and share
 ([R28 (parked-call accounting)](serving.md#r28-parked-call-accounting)); it is served again once
@@ -145,7 +189,22 @@ listener's `ctl` read at the 60 s one, and the connection still works after.
 
 ### Sizing
 
-Status: built · tested: host:redoubt-ipd::the_rig_and_the_milestone_parse, host:redoubt-ipd::anything_else_stops_ipd, host:redoubt-ipd::the_rig_and_the_milestone_fit, host:redoubt-ipd::the_worst_case_must_fit_or_ipd_does_not_start, host:redoubt-ipd::clone_stops_at_the_buckets_socket_cap, host:redoubt-ipd::sockets_stop_at_the_buckets_cap, host:redoubt-ipd::an_agent_cannot_take_all_its_sponsors_sockets, host:redoubt-ipd::a_lingering_socket_keeps_its_bucket, host:redoubt-ipd::a_lingering_socket_is_bounded, host:redoubt-ipd::a_disconnect_aborts_and_returns_the_charges, host:redoubt-ipd::a_half_open_connection_gives_its_slot_back, fuzz:redoubt-ipd/args
+<details><summary>Status: built · tested (12)</summary>
+
+- host:redoubt-ipd::the_rig_and_the_milestone_parse
+- host:redoubt-ipd::anything_else_stops_ipd
+- host:redoubt-ipd::the_rig_and_the_milestone_fit
+- host:redoubt-ipd::the_worst_case_must_fit_or_ipd_does_not_start
+- host:redoubt-ipd::clone_stops_at_the_buckets_socket_cap
+- host:redoubt-ipd::sockets_stop_at_the_buckets_cap
+- host:redoubt-ipd::an_agent_cannot_take_all_its_sponsors_sockets
+- host:redoubt-ipd::a_lingering_socket_keeps_its_bucket
+- host:redoubt-ipd::a_lingering_socket_is_bounded
+- host:redoubt-ipd::a_disconnect_aborts_and_returns_the_charges
+- host:redoubt-ipd::a_half_open_connection_gives_its_slot_back
+- fuzz:redoubt-ipd/args
+
+</details>
 
 **Arguments**, parsed strictly and all at once; anything `ipd` does not understand stops it before
 it serves:
@@ -173,7 +232,20 @@ its own use, or `ipd` does not start.
 
 ### Sequence numbers and the link
 
-Status: built · tested: host:redoubt-ipd::each_active_open_takes_one_seed_and_its_isn_is_that_seeds, host:redoubt-ipd::each_passive_open_takes_one_seed_and_its_isn_is_that_seeds, host:redoubt-ipd::without_a_seed_nothing_opens, host:redoubt-ipd::no_link_is_unreachable_until_it_comes_back, host:redoubt-ipd::martian_sources_are_dropped, host:redoubt-ipd::non_tcp_and_martian_datagrams_get_no_answer, host:redoubt-ipd::randomized_frames, host:redoubt-ipd::randomized_sessions, fuzz:redoubt-ipd/frames, fuzz:redoubt-ipd/session
+<details><summary>Status: built · tested (10)</summary>
+
+- host:redoubt-ipd::each_active_open_takes_one_seed_and_its_isn_is_that_seeds
+- host:redoubt-ipd::each_passive_open_takes_one_seed_and_its_isn_is_that_seeds
+- host:redoubt-ipd::without_a_seed_nothing_opens
+- host:redoubt-ipd::no_link_is_unreachable_until_it_comes_back
+- host:redoubt-ipd::martian_sources_are_dropped
+- host:redoubt-ipd::non_tcp_and_martian_datagrams_get_no_answer
+- host:redoubt-ipd::randomized_frames
+- host:redoubt-ipd::randomized_sessions
+- fuzz:redoubt-ipd/frames
+- fuzz:redoubt-ipd/session
+
+</details>
 
 - **Every initial sequence number** comes from a fresh seed drawn from the kernel's random words, one
   per connection, never from smoltcp's own generator; without a seed nothing opens
@@ -238,7 +310,14 @@ Status: built · tested: host:redoubt-ipd::only_a_root_badge_with_a_scope_attach
 
 ### R58 (a scope reaches only what it allows)
 
-Status: built · tested: bench:net-attacks, host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing, host:redoubt-ipd::numbers_are_per_connection_and_invisible_to_others
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:net-attacks
+- host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain
+- host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
+- host:redoubt-ipd::numbers_are_per_connection_and_invisible_to_others
+
+</details>
 
 A connection connects only to an address and port some connect rule of its scope contains, and
 listens only on a port some listen rule contains; a refused connect sends nothing. In

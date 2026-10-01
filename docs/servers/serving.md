@@ -19,7 +19,22 @@ Written once, those answers are tested once and cannot drift between servers.
 
 ### `admit`
 
-Status: built · tested: host:redoubt-rt::the_key_is_the_account_and_the_label_set, host:redoubt-rt::limits_are_per_key_and_per_resource, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share, host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything, host:redoubt-rt::buckets_are_bounded_so_caps_fit, host:redoubt-rt::open_calls_leave_headroom, host:redoubt-rt::caps_fit_the_budget, host:redoubt-rt::released_keys_leave_the_table, host:redoubt-rt::an_override_is_its_root_badge_s_alone, host:redoubt-rt::overrides_are_sized_and_checked, host:redoubt-rt::the_worst_order_never_passes_the_headroom, host:redoubt-rt::fits_counts_overrides_at_their_caps
+<details><summary>Status: built · tested (12)</summary>
+
+- host:redoubt-rt::the_key_is_the_account_and_the_label_set
+- host:redoubt-rt::limits_are_per_key_and_per_resource
+- host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
+- host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything
+- host:redoubt-rt::buckets_are_bounded_so_caps_fit
+- host:redoubt-rt::open_calls_leave_headroom
+- host:redoubt-rt::caps_fit_the_budget
+- host:redoubt-rt::released_keys_leave_the_table
+- host:redoubt-rt::an_override_is_its_root_badge_s_alone
+- host:redoubt-rt::overrides_are_sized_and_checked
+- host:redoubt-rt::the_worst_order_never_passes_the_headroom
+- host:redoubt-rt::fits_counts_overrides_at_their_caps
+
+</details>
 
 `Admission` (`libs/rt/src/server/admit.rs`) limits what one client may hold in a server at once,
 per kind of resource:
@@ -73,7 +88,19 @@ it.
 
 ### Minted connections
 
-Status: built · tested: host:redoubt-rt::the_first_badge_is_random_and_leaves_room, host:redoubt-rt::badges_are_never_reused_and_ids_are_never_zero, host:redoubt-rt::a_chain_a_client_minted_for_itself_folds_into_its_own_share, host:redoubt-rt::disconnect_frees_everything_minted_under_it_and_only_for_its_holder, host:redoubt-rt::disconnect_all_frees_everything_one_holder_minted, host:redoubt-rt::a_mint_that_fails_records_nothing, host:redoubt-rt::the_badge_space_runs_out_cleanly, host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist, host:redoubt-rt::minted_connections_are_admitted_and_fold_into_the_share_they_came_from
+<details><summary>Status: built · tested (9)</summary>
+
+- host:redoubt-rt::the_first_badge_is_random_and_leaves_room
+- host:redoubt-rt::badges_are_never_reused_and_ids_are_never_zero
+- host:redoubt-rt::a_chain_a_client_minted_for_itself_folds_into_its_own_share
+- host:redoubt-rt::disconnect_frees_everything_minted_under_it_and_only_for_its_holder
+- host:redoubt-rt::disconnect_all_frees_everything_one_holder_minted
+- host:redoubt-rt::a_mint_that_fails_records_nothing
+- host:redoubt-rt::the_badge_space_runs_out_cleanly
+- host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist
+- host:redoubt-rt::minted_connections_are_admitted_and_fold_into_the_share_they_came_from
+
+</details>
 
 `Minted<T>` (`libs/rt/src/server/minted.rs`) is the table of capabilities a server mints for its
 clients: a 9P server's connections (`new_connection`, `disconnect`) and a typed server's grants
@@ -110,7 +137,14 @@ back for each entry `disconnect` frees.
 
 ### Parked calls
 
-Status: built · tested: host:redoubt-rt::parked_calls_are_served_abandoned_and_expired, host:redoubt-rt::parking_is_admitted_per_bucket_and_share, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::a_waiting_write_is_parked_abandoned_and_expired
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-rt::parked_calls_are_served_abandoned_and_expired
+- host:redoubt-rt::parking_is_admitted_per_bucket_and_share
+- host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end
+- host:redoubt-rt::a_waiting_write_is_parked_abandoned_and_expired
+
+</details>
 
 A server that cannot answer yet (a console read with no input, a connect waiting for the
 network) **parks** the call rather than blocking or answering a default. `Parked<T>`
@@ -157,7 +191,15 @@ stateDiagram-v2
 
 ### Typed dispatch
 
-Status: built · tested: host:redoubt-rt::requests_replies_and_errors, host:redoubt-rt::handles_travel_and_unread_ones_come_back, host:redoubt-rt::malformed_requests_and_oversized_replies, host:redoubt-rt::random_words_never_panic, host:redoubt-rt::typed_replies_close_the_handles_made_for_the_caller
+<details><summary>Status: built · tested (5)</summary>
+
+- host:redoubt-rt::requests_replies_and_errors
+- host:redoubt-rt::handles_travel_and_unread_ones_come_back
+- host:redoubt-rt::malformed_requests_and_oversized_replies
+- host:redoubt-rt::random_words_never_panic
+- host:redoubt-rt::typed_replies_close_the_handles_made_for_the_caller
+
+</details>
 
 A typed server (`libs/rt/src/server/typed.rs`) names its protocol by implementing `Protocol`, a
 few lines over the codecs generated from its wire table ([wire](wire.md)), and answers requests
@@ -174,7 +216,25 @@ replies with the encoded reply or the error's status.
 
 ### The 9P server skeleton
 
-Status: built · tested: fuzz:redoubt-rt/ninep_server, bench:r4-host-tests, host:redoubt-rt::the_9p_conformance_vectors_hold_for_a_minimal_server, host:redoubt-rt::attach_walk_open_read_write, host:redoubt-rt::dot_dot_never_leaves_the_attach_root, host:redoubt-rt::walk_names_are_components, host:redoubt-rt::depth_is_bounded, host:redoubt-rt::fids_are_bounded_per_connection_and_per_account, host:redoubt-rt::copies_of_one_badge_in_other_accounts_or_label_sets_share_nothing, host:redoubt-rt::offsets_counts_and_modes_are_not_trusted, host:redoubt-rt::malformed_requests_get_errors, host:redoubt-rt::random_requests_never_panic, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed, host:redoubt-rt::a_client_at_its_connection_cap_costs_the_server_no_walk
+<details><summary>Status: built · tested (15)</summary>
+
+- fuzz:redoubt-rt/ninep_server
+- bench:r4-host-tests
+- host:redoubt-rt::the_9p_conformance_vectors_hold_for_a_minimal_server
+- host:redoubt-rt::attach_walk_open_read_write
+- host:redoubt-rt::dot_dot_never_leaves_the_attach_root
+- host:redoubt-rt::walk_names_are_components
+- host:redoubt-rt::depth_is_bounded
+- host:redoubt-rt::fids_are_bounded_per_connection_and_per_account
+- host:redoubt-rt::copies_of_one_badge_in_other_accounts_or_label_sets_share_nothing
+- host:redoubt-rt::offsets_counts_and_modes_are_not_trusted
+- host:redoubt-rt::malformed_requests_get_errors
+- host:redoubt-rt::random_requests_never_panic
+- host:redoubt-rt::labels_are_checked_on_every_request
+- host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed
+- host:redoubt-rt::a_client_at_its_connection_cap_costs_the_server_no_walk
+
+</details>
 
 `NineServer` (`libs/rt/src/server/ninep.rs`) keeps a 9P2000 server's protocol state
 (connections, fids, open modes, directory offsets) and applies every rule that does not depend on
@@ -236,7 +296,15 @@ an R-message sent to a server is refused, and nothing a vector sends mints a con
 
 ### Replies and rollback
 
-Status: built · tested: bench:ninep-newconn-discard, host:redoubt-rt::what_was_minted_here_can_be_undone, host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:ninep-newconn-discard
+- host:redoubt-rt::what_was_minted_here_can_be_undone
+- host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says
+- host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery
+- host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error
+
+</details>
 
 A successful `reply` says `delivered` or `discarded`, and which of the reply's handle slots were
 installed in the caller ([IPC](../kernel/ipc.md#how-a-call-completes)). Reply success is not
@@ -294,7 +362,18 @@ or decoded again when it is served; which typed operations may park at all
 
 ## Authority
 
-Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist, host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::a_hostile_client_does_not_hurt_the_server_or_other_clients, host:redoubt-rt::parked_calls_are_served_abandoned_and_expired, host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind, host:redoubt-rt::a_dropped_request_is_refused_and_closes_what_it_carried, host:redoubt-rt::a_rejected_reply_closes_no_carried_handle_twice
+<details><summary>Status: built · tested (8)</summary>
+
+- host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist
+- host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed
+- host:redoubt-rt::labels_are_checked_on_every_request
+- host:redoubt-rt::a_hostile_client_does_not_hurt_the_server_or_other_clients
+- host:redoubt-rt::parked_calls_are_served_abandoned_and_expired
+- host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
+- host:redoubt-rt::a_dropped_request_is_refused_and_closes_what_it_carried
+- host:redoubt-rt::a_rejected_reply_closes_no_carried_handle_twice
+
+</details>
 
 - **The library adds no authority.** It uses the server's own handles and the facts the kernel
   attaches to each message: badge, account and labels. It trusts nothing a request says about who
@@ -333,7 +412,17 @@ Status: built · tested: host:redoubt-rt::a_strangers_id_is_refused_like_one_tha
 
 ### R25 (the label check)
 
-Status: built · partly tested: the check and its use in the 9P skeleton are attacked in host tests; in a boot only `ipd`'s refusal of labelled callers is · tested: host:redoubt-rt::matches_the_set_definition, host:redoubt-rt::properties, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::every_write_needs_equal_labels, host:redoubt-rt::labelled_metadata_does_not_flow_down, host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it, bench:net-attacks
+<details><summary>Status: built · partly tested: the check and its use in the 9P skeleton are attacked in host tests; in a boot only `ipd`'s refusal of labelled callers is · tested (7)</summary>
+
+- host:redoubt-rt::matches_the_set_definition
+- host:redoubt-rt::properties
+- host:redoubt-rt::labels_are_checked_on_every_request
+- host:redoubt-rt::every_write_needs_equal_labels
+- host:redoubt-rt::labelled_metadata_does_not_flow_down
+- host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it
+- bench:net-attacks
+
+</details>
 
 A system server lets information flow from an object to a caller only if the object's labels
 are a subset of the caller's, and from a caller into an object only if their label sets are
@@ -346,7 +435,24 @@ could read a's labels itself (`properties` checks exactly that).
 
 ### R26 (admission fairness)
 
-Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested: host:redoubt-rt::the_key_is_the_account_and_the_label_set, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::self_minting_does_not_multiply_the_share, host:redoubt-rt::an_account_0_chain_holds_one_bucket, host:redoubt-rt::an_account_0_rooted_chain_holds_one_bucket, host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything, host:redoubt-rt::open_calls_leave_headroom, host:redoubt-rt::the_worst_order_never_passes_the_headroom, host:redoubt-rt::a_bucket_count_is_given_once_and_never_defaulted, host:redoubt-bootfsd::a_bad_public_list_stops_the_server, host:redoubt-consoled::a_console_with_no_device_does_not_start, host:redoubt-keyd::bad_key_arguments_stop_keyd_starting, host:redoubt-ipd::the_rig_and_the_milestone_parse
+<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested (14)</summary>
+
+- host:redoubt-rt::the_key_is_the_account_and_the_label_set
+- host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
+- host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end
+- host:redoubt-rt::self_minting_does_not_multiply_the_share
+- host:redoubt-rt::an_account_0_chain_holds_one_bucket
+- host:redoubt-rt::an_account_0_rooted_chain_holds_one_bucket
+- host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything
+- host:redoubt-rt::open_calls_leave_headroom
+- host:redoubt-rt::the_worst_order_never_passes_the_headroom
+- host:redoubt-rt::a_bucket_count_is_given_once_and_never_defaulted
+- host:redoubt-bootfsd::a_bad_public_list_stops_the_server
+- host:redoubt-consoled::a_console_with_no_device_does_not_start
+- host:redoubt-keyd::bad_key_arguments_stop_keyd_starting
+- host:redoubt-ipd::the_rig_and_the_milestone_parse
+
+</details>
 
 One client cannot use up a shared server that serves others. What a client holds in a server is
 counted per (account, label set), and per badge for account 0; within a bucket of a non-zero account
@@ -369,7 +475,14 @@ or its budget, does not start, so no count is fixed in code where the manifest c
 
 ### R27 (badge allocation)
 
-Status: built · tested: host:redoubt-rt::the_first_badge_is_random_and_leaves_room, host:redoubt-rt::badges_are_never_reused_and_ids_are_never_zero, host:redoubt-rt::the_badge_space_runs_out_cleanly, host:redoubt-rt::a_mint_that_fails_records_nothing
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-rt::the_first_badge_is_random_and_leaves_room
+- host:redoubt-rt::badges_are_never_reused_and_ids_are_never_zero
+- host:redoubt-rt::the_badge_space_runs_out_cleanly
+- host:redoubt-rt::a_mint_that_fails_records_nothing
+
+</details>
 
 A server never gives out one badge twice. Its minted badges start at a point drawn uniformly from
 2^62 values above 2^63, from the kernel's random words, and count up; the badge space runs out
@@ -379,7 +492,14 @@ agree on a badge with probability 2^-62 per badge, not with certainty.
 
 ### R28 (parked-call accounting)
 
-Status: built · partly tested: attacked in host tests with the runtime's fake kernel; `consoled` and `ipd`, which park, are attacked only in part in a boot · tested: host:redoubt-rt::parking_is_admitted_per_bucket_and_share, host:redoubt-rt::parked_calls_are_served_abandoned_and_expired, host:redoubt-rt::a_waiting_write_is_parked_abandoned_and_expired, bench:net-pinned
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; `consoled` and `ipd`, which park, are attacked only in part in a boot · tested (4)</summary>
+
+- host:redoubt-rt::parking_is_admitted_per_bucket_and_share
+- host:redoubt-rt::parked_calls_are_served_abandoned_and_expired
+- host:redoubt-rt::a_waiting_write_is_parked_abandoned_and_expired
+- bench:net-pinned
+
+</details>
 
 A parked call holds exactly one `InFlight` of its caller's bucket and share, from `park` to the
 moment it is resumed, expires or is abandoned; the caps keep every bucket's parked calls under
@@ -391,7 +511,14 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
 
 ## Failure and restart
 
-Status: built · partly tested: the exit after a rejected fallback reply is argued from the code, not attacked · tested: host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::a_held_9p_call_closes_what_it_brought_exactly_once, host:redoubt-rt::disconnect_all_frees_everything_one_holder_minted, host:redoubt-rt::a_panic_is_reported_on_the_console_once
+<details><summary>Status: built · partly tested: the exit after a rejected fallback reply is argued from the code, not attacked · tested (4)</summary>
+
+- host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery
+- host:redoubt-rt::a_held_9p_call_closes_what_it_brought_exactly_once
+- host:redoubt-rt::disconnect_all_frees_everything_one_holder_minted
+- host:redoubt-rt::a_panic_is_reported_on_the_console_once
+
+</details>
 
 - **A request the server cannot answer** (it does not decode, its reply does not fit) gets the
   malformed reply; a reply the kernel rejects is replaced by it; if that too is rejected the

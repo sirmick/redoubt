@@ -107,7 +107,22 @@ root with quota 0 cannot create a file.
 
 ### littlefs
 
-Status: built · tested: fuzz:littlefs/image, fuzz:littlefs/mutate, host:littlefs::random_operations_small_blocks, host:littlefs::random_operations_large_blocks, host:littlefs::random_operations_tiny_blocks, host:littlefs::random_operations_crowded_small_volume, host:littlefs::directory_split_and_drop, host:littlefs::full_volume, host:littlefs::handles_follow_renames, host:littlefs::bad_arguments, host:littlefs::path_and_handle_rules, host:littlefs::a_failed_write_commits_nothing
+<details><summary>Status: built · tested (12)</summary>
+
+- fuzz:littlefs/image
+- fuzz:littlefs/mutate
+- host:littlefs::random_operations_small_blocks
+- host:littlefs::random_operations_large_blocks
+- host:littlefs::random_operations_tiny_blocks
+- host:littlefs::random_operations_crowded_small_volume
+- host:littlefs::directory_split_and_drop
+- host:littlefs::full_volume
+- host:littlefs::handles_follow_renames
+- host:littlefs::bad_arguments
+- host:littlefs::path_and_handle_rules
+- host:littlefs::a_failed_write_commits_nothing
+
+</details>
 
 `libs/littlefs` implements the littlefs on-disk format, version 2.1, in pure Rust: `no_std` with
 `alloc`, no dependencies, no `unsafe`. Images it writes mount in the C reference (v2.11.3) and
@@ -136,7 +151,26 @@ volumes run full.
 
 ### The medium is hostile
 
-Status: built · tested: fuzz:littlefs/image, fuzz:littlefs/mutate, host:littlefs::corrupted_bytes_never_panic, host:littlefs::noise_never_panics, host:littlefs::duplicate_names_are_corrupt, host:littlefs::nul_names_are_found_and_refused, host:littlefs::geometry_mismatch_is_refused, host:littlefs::tail_list_cycle_is_refused, host:littlefs::directory_chain_cycle_is_refused, host:littlefs::directory_inside_itself_is_found_by_fsck, host:littlefs::file_larger_than_the_volume_is_refused, host:littlefs::file_head_outside_the_volume_is_refused, host:littlefs::skip_list_pointing_at_itself_terminates, host:littlefs::forged_file_sizes_do_not_amplify_allocation, host:littlefs::stale_handle_after_pair_drop_does_not_touch_another_file, host:littlefs::unnameable_names_fail_the_check
+<details><summary>Status: built · tested (16)</summary>
+
+- fuzz:littlefs/image
+- fuzz:littlefs/mutate
+- host:littlefs::corrupted_bytes_never_panic
+- host:littlefs::noise_never_panics
+- host:littlefs::duplicate_names_are_corrupt
+- host:littlefs::nul_names_are_found_and_refused
+- host:littlefs::geometry_mismatch_is_refused
+- host:littlefs::tail_list_cycle_is_refused
+- host:littlefs::directory_chain_cycle_is_refused
+- host:littlefs::directory_inside_itself_is_found_by_fsck
+- host:littlefs::file_larger_than_the_volume_is_refused
+- host:littlefs::file_head_outside_the_volume_is_refused
+- host:littlefs::skip_list_pointing_at_itself_terminates
+- host:littlefs::forged_file_sizes_do_not_amplify_allocation
+- host:littlefs::stale_handle_after_pair_drop_does_not_touch_another_file
+- host:littlefs::unnameable_names_fail_the_check
+
+</details>
 
 Every length, offset, block pointer and tag read from the device is checked before use, and a
 malformed image yields `Error::Corrupt`, never a panic. Every walk is bounded: along the list of
@@ -147,7 +181,17 @@ one level deep. Metadata is checksummed; file data is not
 
 ### Power loss
 
-Status: built · tested: host:littlefs::crash_at_every_write_small_blocks, host:littlefs::crash_at_every_write_tiny_blocks, host:littlefs::crash_at_every_write_large_blocks, host:littlefs::crash_at_every_write_random_workloads, host:littlefs::crash_at_every_write_torn_erases, host:littlefs::crash_during_repair, host:littlefs::io_error_poisons_until_remount
+<details><summary>Status: built · tested (7)</summary>
+
+- host:littlefs::crash_at_every_write_small_blocks
+- host:littlefs::crash_at_every_write_tiny_blocks
+- host:littlefs::crash_at_every_write_large_blocks
+- host:littlefs::crash_at_every_write_random_workloads
+- host:littlefs::crash_at_every_write_torn_erases
+- host:littlefs::crash_during_repair
+- host:littlefs::io_error_poisons_until_remount
+
+</details>
 
 Every change reaches the disk as one metadata commit, or, for renames and directory removal, a
 sequence the next mount completes or undoes, so an interrupted operation leaves the volume as it
@@ -201,7 +245,18 @@ quota's.)
 
 ### R49 (a hostile medium is corrupt, not a crash)
 
-Status: built · tested: fuzz:littlefs/image, fuzz:littlefs/mutate, host:littlefs::corrupted_bytes_never_panic, host:littlefs::noise_never_panics, host:littlefs::tail_list_cycle_is_refused, host:littlefs::skip_list_pointing_at_itself_terminates, host:littlefs::forged_file_sizes_do_not_amplify_allocation, host:littlefs::stale_handle_after_pair_drop_does_not_erase_another_files_data
+<details><summary>Status: built · tested (8)</summary>
+
+- fuzz:littlefs/image
+- fuzz:littlefs/mutate
+- host:littlefs::corrupted_bytes_never_panic
+- host:littlefs::noise_never_panics
+- host:littlefs::tail_list_cycle_is_refused
+- host:littlefs::skip_list_pointing_at_itself_terminates
+- host:littlefs::forged_file_sizes_do_not_amplify_allocation
+- host:littlefs::stale_handle_after_pair_drop_does_not_erase_another_files_data
+
+</details>
 
 Whatever bytes the medium holds, littlefs refuses them as corrupt rather than panicking, looping
 or allocating beyond the volume's size, and a stale handle never touches another file's metadata
@@ -210,7 +265,14 @@ or data. So a hostile disk image can make its own volume unreadable, never crash
 
 ### R50 (power loss leaves before or after)
 
-Status: built · tested: host:littlefs::crash_at_every_write_small_blocks, host:littlefs::crash_at_every_write_random_workloads, host:littlefs::crash_at_every_write_torn_erases, host:littlefs::crash_during_repair
+<details><summary>Status: built · tested (4)</summary>
+
+- host:littlefs::crash_at_every_write_small_blocks
+- host:littlefs::crash_at_every_write_random_workloads
+- host:littlefs::crash_at_every_write_torn_erases
+- host:littlefs::crash_during_repair
+
+</details>
 
 On a device that keeps the block-device contract, a power cut at any block write leaves every
 metadata change either done or not done, and the next mount reads a consistent volume.

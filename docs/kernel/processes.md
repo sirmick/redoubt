@@ -20,7 +20,14 @@ process that draws a PID used before inherits nothing.
 
 ### Processes and PIDs
 
-Status: built · partly tested: that PIDs are drawn at random is not attacked by a case · tested: bench:process, bench:process-attack, bench:process-lifecycle, host:redoubt-model::pid_reuse_only_after_notice_receipt
+<details><summary>Status: built · partly tested: that PIDs are drawn at random is not attacked by a case · tested (4)</summary>
+
+- bench:process
+- bench:process-attack
+- bench:process-lifecycle
+- host:redoubt-model::pid_reuse_only_after_notice_receipt
+
+</details>
 
 A process has:
 - a **PID**, which is also its hardware address-space id (the ASID in `satp`);
@@ -63,7 +70,14 @@ and its pages until its budget or its creator's is destroyed.
 
 ### Threads
 
-Status: built · partly tested: a `thread_create` refused for want of a page, and a first thread returning from its entry, are not attacked by a case · tested: bench:thread-limit, bench:process, bench:process-lifecycle, bench:process-review
+<details><summary>Status: built · partly tested: a `thread_create` refused for want of a page, and a first thread returning from its entry, are not attacked by a case · tested (4)</summary>
+
+- bench:thread-limit
+- bench:process
+- bench:process-lifecycle
+- bench:process-review
+
+</details>
 
 A thread's number within its process, its **TID**, runs from 1 to `MAX_THREADS` (31); the first
 thread is 1. A process holds at most 31 threads, the first one included.
@@ -92,7 +106,22 @@ threads. A fault in any thread ends the whole process.
 
 ### Creating and starting
 
-Status: built · partly tested: `OutOfMemory` from `process_start` is not attacked by a case · tested: bench:process, bench:process-attack, bench:pid-pinning-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6PidUncountedAtEnd, mutation:R10HeldPidsDropped, mutation:R11ProcessMapSkipsFlags
+<details><summary>Status: built · partly tested: `OutOfMemory` from `process_start` is not attacked by a case · tested (12)</summary>
+
+- bench:process
+- bench:process-attack
+- bench:pid-pinning-attack
+- bench:stub-launch
+- host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths
+- host:redoubt-model::process_map_destination_validation_precedes_started_state
+- mutation:ProcessInWeightlessBudget
+- mutation:R6ProcessObjectFree
+- mutation:R6ProcessObjectChargedToBudget
+- mutation:R6PidUncountedAtEnd
+- mutation:R10HeldPidsDropped
+- mutation:R11ProcessMapSkipsFlags
+
+</details>
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -166,7 +195,21 @@ ELF image inside the child, are [init](../servers/init.md)'s.
 
 ### Exit notices
 
-Status: built · partly tested: a notice dropped because its exit endpoint was destroyed is not attacked by a case · tested: bench:process, bench:process-attack, bench:process-review, bench:process-lifecycle, host:redoubt-sys::received_layout, host:redoubt-model::exited_object_handles_and_queued_copies_live_until_notice_receipt, mutation:ExitNoticeDroppedIfNoReceiver, mutation:R10ExitNoticesOutlivePayer, mutation:R10CreatorDeathSparesProcess, mutation:R1ExitNoticeIgnoresLabels, mutation:R1ExitExemptBySystemExiting
+<details><summary>Status: built · partly tested: a notice dropped because its exit endpoint was destroyed is not attacked by a case · tested (11)</summary>
+
+- bench:process
+- bench:process-attack
+- bench:process-review
+- bench:process-lifecycle
+- host:redoubt-sys::received_layout
+- host:redoubt-model::exited_object_handles_and_queued_copies_live_until_notice_receipt
+- mutation:ExitNoticeDroppedIfNoReceiver
+- mutation:R10ExitNoticesOutlivePayer
+- mutation:R10CreatorDeathSparesProcess
+- mutation:R1ExitNoticeIgnoresLabels
+- mutation:R1ExitExemptBySystemExiting
+
+</details>
 
 A process ends in one of three ways, and its exit notice says which:
 
@@ -261,7 +304,14 @@ Status: built · tested: bench:process-attack, bench:pid-reuse-authority, mutati
 
 ### R20 (PID reuse)
 
-Status: built · tested: bench:pid-reuse-authority, bench:process-attack, bench:process-lifecycle, host:redoubt-model::pid_reuse_only_after_notice_receipt
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:pid-reuse-authority
+- bench:process-attack
+- bench:process-lifecycle
+- host:redoubt-model::pid_reuse_only_after_notice_receipt
+
+</details>
 
 A reused PID inherits nothing. A process that draws a PID another process held gets none of that
 process's handles, mappings, badges, open calls, messages, notices, interrupts or device
@@ -282,7 +332,19 @@ parent.
 
 ### R21 (crash blame)
 
-Status: built · partly tested: blame after the blamed sender's budget is destroyed is not attacked by a case, and a thread that holds a parked call, then receives a send and faults (blaming nobody), is attacked only in parts · tested: bench:process, bench:process-attack, mutation:BlameNobody, mutation:BlameNewestCall, mutation:ExitWithOpenCallsNotFaulted, mutation:CurrentNeverSet, mutation:ReceiveKeepsCurrent, mutation:ServeIgnored, mutation:ExitEndpointBadged
+<details><summary>Status: built · partly tested: blame after the blamed sender's budget is destroyed is not attacked by a case, and a thread that holds a parked call, then receives a send and faults (blaming nobody), is attacked only in parts · tested (9)</summary>
+
+- bench:process
+- bench:process-attack
+- mutation:BlameNobody
+- mutation:BlameNewestCall
+- mutation:ExitWithOpenCallsNotFaulted
+- mutation:CurrentNeverSet
+- mutation:ReceiveKeepsCurrent
+- mutation:ServeIgnored
+- mutation:ExitEndpointBadged
+
+</details>
 
 Crash blame names the sender of the current call, or nobody. When a process ends `faulted`, its
 notice blames the account and labels of the sender of the **current call** of the thread that
@@ -312,7 +374,14 @@ let it key by label set.
 
 ## Failure and restart
 
-Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:stub-launch, bench:sched-exit-churn
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:process-lifecycle
+- bench:process-attack
+- bench:stub-launch
+- bench:sched-exit-churn
+
+</details>
 
 - **A process ends** by exiting, faulting or being killed. Its callers get `Dead` and their
   lends back (R4b); a call it made that a server had taken is abandoned, and the server is told

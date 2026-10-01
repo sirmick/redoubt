@@ -179,7 +179,16 @@ for any other process, and a child sees only the table its launcher wrote for it
 
 ### How a program reads its namespace
 
-Status: built · tested: host:redoubt-rt::resolve_takes_the_longest_prefix, host:redoubt-rt::dot_dot_never_climbs_above_the_root, host:redoubt-rt::bad_names_are_refused, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::a_client_without_its_namespace_fails_cleanly
+<details><summary>Status: built · tested (6)</summary>
+
+- host:redoubt-rt::resolve_takes_the_longest_prefix
+- host:redoubt-rt::dot_dot_never_climbs_above_the_root
+- host:redoubt-rt::bad_names_are_refused
+- host:redoubt-rt::hostile_blocks_are_refused
+- host:redoubt-rt::handle_names_follow_the_manifest_rule
+- host:redoubt-rt::a_client_without_its_namespace_fails_cleanly
+
+</details>
 
 For native programs the namespace table exists in code: `redoubt-rt` (the native runtime) parses the
 startup block and resolves paths against it

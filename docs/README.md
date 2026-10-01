@@ -37,6 +37,20 @@ that is part built and part planned is split in two.
 | `Status: built · partly tested: <gap> · tested: <tests>` | The code exists; the gap says what no test attacks yet, and the tests (when named) cover the rest. |
 | `Status: planned · M2 (usable shell)` | Nothing of it is built; it arrives in the named milestone. The section ends with an **Open:** list of what is still undecided. |
 
+A status with four or more tests folds them away, so the section opens on its claim and not on a
+list: the status sits in a `<summary>` with the count of tests, and the tests follow as a bullet
+list inside the `<details>`, one per line. The checker holds the count to the list.
+
+```text
+<details><summary>Status: built · tested (3)</summary>
+
+- bench:redoubt-ipc
+- host:redoubt-sys::every_call_round_trips
+- mutation:R2OneCursor
+
+</details>
+```
+
 "Built" means the code exists and its named tests pass. A host test or a build case is not a
 boot: code built and host-tested is not thereby running in the integrated system, and running
 there is its own planned section.

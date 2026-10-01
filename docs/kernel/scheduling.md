@@ -20,7 +20,18 @@ serves the steward.
 
 ### One flat stride queue
 
-Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested: bench:sched-share, bench:sched-large-weight, bench:sched-server-busy, bench:sched-carve-inflation, host:redoubt-stride::the_crate_and_the_model_agree, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12StrideWeightIsLimit
+<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (8)</summary>
+
+- bench:sched-share
+- bench:sched-large-weight
+- bench:sched-server-busy
+- bench:sched-carve-inflation
+- host:redoubt-stride::the_crate_and_the_model_agree
+- mutation:R12PriorityById
+- mutation:R12IgnoreWeight
+- mutation:R12StrideWeightIsLimit
+
+</details>
 
 Every budget with a runnable thread is in one queue, whatever its class. There is no priority,
 no second queue and no flag that jumps it. The kernel runs the queued budget with the lowest
@@ -45,7 +56,15 @@ no dependencies.
 
 ### Preemption points
 
-Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested: bench:sched-wake-no-preempt, bench:budget-deadline, host:redoubt-model::scheduler_contracts_hold, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts
+<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (5)</summary>
+
+- bench:sched-wake-no-preempt
+- bench:budget-deadline
+- host:redoubt-model::scheduler_contracts_hold
+- mutation:R12PreemptOnWake
+- mutation:R12TimeoutWakePreempts
+
+</details>
 
 The running thread keeps the CPU until one of these:
 - its slice ends: `SLICE_US` (10,000 µs) from the pick;
@@ -68,7 +87,20 @@ context as it saves a thread's.
 
 ### The current minimum and ties
 
-Status: built · partly tested: wakers ahead of requeued budgets, and requeues in order, are checked on the target only when a run happens to produce such a tie; the host tests and the model attack them · tested: bench:sched-ties, bench:sched-idle-gap, host:redoubt-stride::ranks_follow_all_four_clauses, host:redoubt-stride::the_floor_survives_an_empty_queue, host:redoubt-stride::a_running_budget_stays_queued_and_counts_for_the_floor, mutation:R12WakeBanksCredit, mutation:R12NoFloorWhenIdle, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo
+<details><summary>Status: built · partly tested: wakers ahead of requeued budgets, and requeues in order, are checked on the target only when a run happens to produce such a tie; the host tests and the model attack them · tested (10)</summary>
+
+- bench:sched-ties
+- bench:sched-idle-gap
+- host:redoubt-stride::ranks_follow_all_four_clauses
+- host:redoubt-stride::the_floor_survives_an_empty_queue
+- host:redoubt-stride::a_running_budget_stays_queued_and_counts_for_the_floor
+- mutation:R12WakeBanksCredit
+- mutation:R12NoFloorWhenIdle
+- mutation:R12TieQueuedFirst
+- mutation:R12RequeueAhead
+- mutation:R12RequeueLifo
+
+</details>
 
 A budget **wakes** when it goes from no runnable thread to one. Its pass becomes
 `max(own pass, floor)`. The **floor** is the current minimum: the lowest pass among queued
@@ -114,7 +146,25 @@ flowchart TD
 
 ### Charging
 
-Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested: bench:sched-sleep-gaming, bench:sched-exit-churn, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-destroy-billing, bench:deadline-flood-billed, host:redoubt-stride::a_split_charge_equals_the_whole, host:redoubt-stride::every_charge_counts_at_any_weight, host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12NoMinimumCharge, mutation:R12FoldAtNewWeight, mutation:R12DeadlineWorkUnbilled
+<details><summary>Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested (15)</summary>
+
+- bench:sched-sleep-gaming
+- bench:sched-exit-churn
+- bench:sched-timer-flood
+- bench:sched-server-busy
+- bench:sched-destroy-billing
+- bench:deadline-flood-billed
+- host:redoubt-stride::a_split_charge_equals_the_whole
+- host:redoubt-stride::every_charge_counts_at_any_weight
+- host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran
+- mutation:R12ShortRunsFree
+- mutation:R12DropRemainder
+- mutation:R12ExitRunsFree
+- mutation:R12NoMinimumCharge
+- mutation:R12FoldAtNewWeight
+- mutation:R12DeadlineWorkUnbilled
+
+</details>
 
 Runtime is counted in timebase ticks at the trap boundary. There are two ways into user mode
 (resuming a thread, returning from a call) and one way out (the trap handler). On every trap from
@@ -173,7 +223,21 @@ the kernel's alone, and the boot cases are its only check.
 
 ### Inheritance
 
-Status: built · tested: bench:sched-budget-churn, bench:sched-debt-lift, bench:sched-idle-gap, host:redoubt-stride::create_then_destroy_without_a_run_moves_nothing, host:redoubt-stride::a_churned_child_adds_to_a_leading_parent, host:redoubt-stride::the_inherited_wait_is_not_counted_again, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait
+<details><summary>Status: built · tested (11)</summary>
+
+- bench:sched-budget-churn
+- bench:sched-debt-lift
+- bench:sched-idle-gap
+- host:redoubt-stride::create_then_destroy_without_a_run_moves_nothing
+- host:redoubt-stride::a_churned_child_adds_to_a_leading_parent
+- host:redoubt-stride::the_inherited_wait_is_not_counted_again
+- mutation:R12DestroyDropsDebt
+- mutation:R12CreateAtFloorOnly
+- mutation:R12LiftByMax
+- mutation:R12UnnormalizedLift
+- mutation:R12LiftCountsEntryWait
+
+</details>
 
 A child budget enters at `e = max(floor, parent's pass)`, and keeps `e` as its **entry**. A
 running parent is charged first. So a child never starts behind the parent it came from, and
@@ -201,7 +265,18 @@ run between, leaves the victim neither more nor less than half.
 
 ### Running while carved down
 
-Status: built · tested: bench:sched-carve-inflation, bench:sched-carve-return, bench:sched-budget-churn, bench:sched-destroy-billing, host:redoubt-stride::a_carve_and_its_return_leave_the_state, mutation:R12StrideWeightIsLimit, mutation:R12FoldAtNewWeight, mutation:R12RescaleOnlyOnReturn
+<details><summary>Status: built · tested (8)</summary>
+
+- bench:sched-carve-inflation
+- bench:sched-carve-return
+- bench:sched-budget-churn
+- bench:sched-destroy-billing
+- host:redoubt-stride::a_carve_and_its_return_leave_the_state
+- mutation:R12StrideWeightIsLimit
+- mutation:R12FoldAtNewWeight
+- mutation:R12RescaleOnlyOnReturn
+
+</details>
 
 A budget that runs while most of its weight is carved away accrues its lead at the small weight
 it kept, and owes that runtime at whatever weight it has later
@@ -217,7 +292,16 @@ carved ([R7](budgets.md#r7-carving)).
 
 ### The lead follows the weight
 
-Status: built · tested: bench:sched-carve-return, bench:sched-budget-churn, host:redoubt-stride::a_carve_and_its_return_leave_the_state, host:redoubt-stride::the_crate_and_the_model_agree, host:testbench::weight_changes_are_recomputed, mutation:R12RescaleOnlyOnReturn
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:sched-carve-return
+- bench:sched-budget-churn
+- host:redoubt-stride::a_carve_and_its_return_leave_the_state
+- host:redoubt-stride::the_crate_and_the_model_agree
+- host:testbench::weight_changes_are_recomputed
+- mutation:R12RescaleOnlyOnReturn
+
+</details>
 
 What a budget owes is runtime, and a weight change keeps it exactly. Every weight change, a
 carve and a carve returned alike, folds at the old weight and then converts the budget's lead
@@ -250,7 +334,15 @@ remainder alone rescaled, as before, it got 0.
 
 ### Responsiveness
 
-Status: built · tested: bench:sched-latency, bench:budget-destroy-growth, host:testbench::destructions_are_timed_and_bounded, host:testbench::audits_are_subtracted_inside_each_window, host:testbench::an_unmatched_audit_fails
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:sched-latency
+- bench:budget-destroy-growth
+- host:testbench::destructions_are_timed_and_bounded
+- host:testbench::audits_are_subtracted_inside_each_window
+- host:testbench::an_unmatched_audit_fails
+
+</details>
 
 No wake latency follows from weight. A wake waits out the running thread's slice, a waking
 budget keeps a pass above the floor if it has one, and several budgets can tie at the floor. So
@@ -507,7 +599,50 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range and `process_create` · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:deadline-flood-billed, bench:sched-carve-return, bench:map-anon-search-bound, bench:scan-bounds, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge, mutation:R12DeadlineWorkUnbilled, mutation:R12RescaleOnlyOnReturn
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range and `process_create` · tested (40)</summary>
+
+- bench:sched-share
+- bench:sched-sleep-gaming
+- bench:sched-idle-gap
+- bench:sched-exit-churn
+- bench:sched-budget-churn
+- bench:sched-carve-inflation
+- bench:sched-debt-lift
+- bench:sched-timer-flood
+- bench:sched-server-busy
+- bench:sched-large-weight
+- bench:deadline-flood-billed
+- bench:sched-carve-return
+- bench:map-anon-search-bound
+- bench:scan-bounds
+- host:redoubt-stride::the_crate_and_the_model_agree
+- host:redoubt-stride::a_broken_model_disagrees
+- host:redoubt-model::scheduler_fairness
+- host:redoubt-model::scheduler_contracts_hold
+- mutation:R12PriorityById
+- mutation:R12IgnoreWeight
+- mutation:R12WakeBanksCredit
+- mutation:R12TieQueuedFirst
+- mutation:R12RequeueAhead
+- mutation:R12RequeueLifo
+- mutation:R12PreemptOnWake
+- mutation:R12TimeoutWakePreempts
+- mutation:R12NoFloorWhenIdle
+- mutation:R12ShortRunsFree
+- mutation:R12DropRemainder
+- mutation:R12ExitRunsFree
+- mutation:R12DestroyDropsDebt
+- mutation:R12CreateAtFloorOnly
+- mutation:R12LiftByMax
+- mutation:R12StrideWeightIsLimit
+- mutation:R12UnnormalizedLift
+- mutation:R12LiftCountsEntryWait
+- mutation:R12FoldAtNewWeight
+- mutation:R12NoMinimumCharge
+- mutation:R12DeadlineWorkUnbilled
+- mutation:R12RescaleOnlyOnReturn
+
+</details>
 
 A budget's CPU follows its free weight, in one queue with no priority. While it has a runnable
 thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No
@@ -582,7 +717,16 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 
 ## Failure and restart
 
-Status: built · partly tested: a picked thread that dies before the switch, and a full queue, are not attacked by a case · tested: bench:sched-exit-churn, bench:budget-deadline, bench:sched-idle-gap, host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran, host:redoubt-stride::the_floor_survives_an_empty_queue, host:redoubt-model::scheduler_stays_fair_past_the_old_pass_saturation_boundary
+<details><summary>Status: built · partly tested: a picked thread that dies before the switch, and a full queue, are not attacked by a case · tested (6)</summary>
+
+- bench:sched-exit-churn
+- bench:budget-deadline
+- bench:sched-idle-gap
+- host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran
+- host:redoubt-stride::the_floor_survives_an_empty_queue
+- host:redoubt-model::scheduler_stays_fair_past_the_old_pass_saturation_boundary
+
+</details>
 
 - **A thread exits, faults or is killed on the CPU:** its budget is descheduled and charged what
   it ran, at least one tick, like any other deschedule.

@@ -86,7 +86,16 @@ Status: built · partly tested: independence from the kernel's source and the em
 
 ## Property families
 
-Status: built · tested: host:redoubt-model::kernel_sequences, host:redoubt-model::budget_lifecycles, host:redoubt-model::scheduler_fairness, host:redoubt-model::flood, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder
+<details><summary>Status: built · tested (6)</summary>
+
+- host:redoubt-model::kernel_sequences
+- host:redoubt-model::budget_lifecycles
+- host:redoubt-model::scheduler_fairness
+- host:redoubt-model::flood
+- host:redoubt-model::every_call_and_error_is_reached
+- host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder
+
+</details>
 
 A family is a function of one seed and an optional mutation. The runner
 (`model/tests/common/mod.rs`) runs seeds on every core, keeps the lowest failing seed, and
@@ -193,7 +202,16 @@ threads, and it must still take a send. The checker runs every 512 steps and at 
 
 ## Scripted contracts
 
-Status: built · tested: host:redoubt-model::ipc_completion_table_and_rollback, host:redoubt-model::sparse_committed_reply_mask_is_positional, host:redoubt-model::scheduler_contracts_hold, host:redoubt-model::pid_reuse_only_after_notice_receipt, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::partial_overlap_is_refused_whole
+<details><summary>Status: built · tested (6)</summary>
+
+- host:redoubt-model::ipc_completion_table_and_rollback
+- host:redoubt-model::sparse_committed_reply_mask_is_positional
+- host:redoubt-model::scheduler_contracts_hold
+- host:redoubt-model::pid_reuse_only_after_notice_receipt
+- host:redoubt-model::deaf_device_quarantines_the_co_holder_too
+- host:redoubt-model::partial_overlap_is_refused_whole
+
+</details>
 
 Some cases are rare in random runs, so fixed sequences pin them. The IPC contracts are written
 from the completion table, not from the model's output. They cover:
@@ -275,7 +293,14 @@ loader, no bundle, no kernel mappings of its own and no test build.
 
 ## Traces
 
-Status: built · tested: host:redoubt-model::traces_round_trip, host:redoubt-model::a_rule_breaking_kernel_fails_replay, host:redoubt-model::the_example_trace_is_what_the_model_does, host:redoubt-model::hostile_traces_are_refused_cleanly
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-model::traces_round_trip
+- host:redoubt-model::a_rule_breaking_kernel_fails_replay
+- host:redoubt-model::the_example_trace_is_what_the_model_does
+- host:redoubt-model::hostile_traces_are_refused_cleanly
+
+</details>
 
 A trace is a run as ASCII text: the boot, then each event with the result the model gave.
 `trace::record` writes one, `trace::parse` reads it back, and `trace::check` replays it on the
@@ -363,7 +388,16 @@ are planned.*
 
 ## The steward model
 
-Status: built · tested: host:redoubt-model::steward_policy, host:redoubt-model::steward_noninterference, host:redoubt-model::random_lineage_sequences_and_deliberate_rule_break, host:redoubt-model::audit_authority_binds_purpose_signer_domain_length_and_every_byte, host:redoubt-model::confined_read_down_and_owner_approved_one_item_snapshot_push, host:redoubt-model::approve_and_deny_authenticate_direct_channels_before_any_effect
+<details><summary>Status: built · tested (6)</summary>
+
+- host:redoubt-model::steward_policy
+- host:redoubt-model::steward_noninterference
+- host:redoubt-model::random_lineage_sequences_and_deliberate_rule_break
+- host:redoubt-model::audit_authority_binds_purpose_signer_domain_length_and_every_byte
+- host:redoubt-model::confined_read_down_and_owner_approved_one_item_snapshot_push
+- host:redoubt-model::approve_and_deny_authenticate_direct_channels_before_any_effect
+
+</details>
 
 `model/src/steward.rs` is the steward's policy as a layer on the kernel model, and
 `model/src/policy.rs` holds its properties. `init` creates the shared server's endpoint and

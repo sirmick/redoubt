@@ -86,7 +86,16 @@ Status: planned · M1 (separation and containment)
 
 ### The rule servers apply
 
-Status: built · tested: host:redoubt-rt::matches_the_set_definition, host:redoubt-rt::properties, host:redoubt-rt::labels_are_checked_on_every_request, host:redoubt-rt::every_write_needs_equal_labels, host:redoubt-rt::labelled_metadata_does_not_flow_down, host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it
+<details><summary>Status: built · tested (6)</summary>
+
+- host:redoubt-rt::matches_the_set_definition
+- host:redoubt-rt::properties
+- host:redoubt-rt::labels_are_checked_on_every_request
+- host:redoubt-rt::every_write_needs_equal_labels
+- host:redoubt-rt::labelled_metadata_does_not_flow_down
+- host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it
+
+</details>
 
 Labels are information-flow labels on budgets and volumes. The kernel checks them between user
 budgets; system servers check them themselves, on every request, using the label set the kernel
@@ -145,7 +154,16 @@ caller influences is visible to a caller without that label: `fsd` keeps state p
 
 ## Connections
 
-Status: built · partly tested: the rule runs in host tests against the runtime's fake kernel; no boot has a launcher hand a child a fresh connection · tested: host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it, host:redoubt-rt::new_connection_is_rooted_below_the_callers_root, host:redoubt-rt::a_disconnect_frees_its_fids_and_every_connection_minted_under_it, host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist, host:redoubt-rt::copies_of_one_badge_in_other_accounts_or_label_sets_share_nothing, host:redoubt-rt::self_minting_does_not_multiply_the_share
+<details><summary>Status: built · partly tested: the rule runs in host tests against the runtime's fake kernel; no boot has a launcher hand a child a fresh connection · tested (6)</summary>
+
+- host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it
+- host:redoubt-rt::new_connection_is_rooted_below_the_callers_root
+- host:redoubt-rt::a_disconnect_frees_its_fids_and_every_connection_minted_under_it
+- host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist
+- host:redoubt-rt::copies_of_one_badge_in_other_accounts_or_label_sets_share_nothing
+- host:redoubt-rt::self_minting_does_not_multiply_the_share
+
+</details>
 
 A capability to a server is an endpoint handle whose **badge** names the grant: for a 9P server,
 a connection with its own attach root and fid table. The pattern is one endpoint per service and
