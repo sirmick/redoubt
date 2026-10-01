@@ -155,6 +155,8 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::MapFixed { addr, len, flags } => {
             MemoryManager::with_mut(|mm| mm.map_fixed(pid, addr, len, flags)).map(done)
         }
+        Call::DeviceInfo { device } => MemoryManager::with(|mm| mm.device_info(pid, device.index()))
+            .map(|info| Some(Return::Device(info))),
         Call::TimeNow => Ok(Some(Return::Time(crate::time::now_us()))),
         Call::Random => {
             let mut bytes = [0u8; 8];

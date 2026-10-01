@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Device objects (kernel/devices.md; R5, R11) and the calls that use them:
-//! `map_device`, `dma_alloc` and `system_reset`.
+//! `map_device`, `dma_alloc`, `device_info` and `system_reset`.
 //!
 //! A device object is one of three things: an **MMIO** range with a DMA flag, an **IRQ** with its
 //! `fired` and `masked` flags, or the **Reset** right. The loader reads the machine's device tree
@@ -366,8 +366,8 @@ fn overlaps_kernel_region(base: u64, end: u64) -> bool {
 impl MemoryManager {
     /// `map_device(h(MMIO)) -> addr, len` (kernel/devices.md, `map_device`). The
     /// whole range, at an address the kernel chooses (R11), readable and writable and never
-    /// executable. The length is what the driver may touch; *which* device it is comes from
-    /// the boot manifest, so the kernel says nothing about it.
+    /// executable. The length is what the driver may touch; *which* device it is, is
+    /// `device_info`'s to say, and which handles a driver gets is its launcher's.
     ///
     /// The MMIO page-ownership table is not touched. A device handle may be copied like any
     /// other, so two holders may both map the device; the handle, not a page owner, is the
@@ -430,6 +430,20 @@ impl MemoryManager {
                 Err(e)
             }
         }
+    }
+
+    /// `device_info(h(device)) -> kind, a, b, flags` (kernel/devices.md, `device_info`): which
+    /// device the handle names, as the `Devs` entry it was made from. `BadHandle`, then
+    /// `WrongObject` for anything that is not a device. One handle lookup and one frame read:
+    /// it maps nothing, changes nothing, and its time does not depend on the device.
+    pub fn device_info(&self, pid: Pid, h: u32) -> Result<redoubt_sys::DeviceInfo, Error> {
+        let Object::Device(r) = self.handle(pid, h)?.object else { return Err(Error::WrongObject) };
+        let d = self.device_at(r);
+        Ok(match d.kind {
+            Kind::Mmio => redoubt_sys::DeviceInfo::Mmio { base: d.base, size: d.size, dma: d.dma },
+            Kind::Irq => redoubt_sys::DeviceInfo::Irq(d.irq),
+            Kind::Reset => redoubt_sys::DeviceInfo::Reset,
+        })
     }
 
     /// The `system_reset(h(Reset), kind)` handle check. It only checks: the reset itself is

@@ -157,6 +157,7 @@ impl Number {
             Number::TimeNow | Number::Random => set(&[]),
             Number::SystemReset => set(&[BadHandle, InvalidArgument, WrongObject]),
             Number::MapFixed => set(&[InvalidArgument, OutOfMemory]),
+            Number::DeviceInfo => set(&[BadHandle, WrongObject]),
         };
         row.with(DECODING)
     }

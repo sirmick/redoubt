@@ -327,4 +327,7 @@ calls! {
     /// but at a caller-named address; never replaces a mapping (kernel/memory.md R11). Appended
     /// last so earlier call numbers keep their values (kernel/abi.md).
     MapFixed = 26 "map_fixed" { addr: usize, len: usize, flags: MemFlags };
+    /// -> `Device`: which device the handle names, in the form of its `Devs` entry
+    /// (kernel/devices.md, `device_info`). Maps nothing and changes nothing.
+    DeviceInfo = 27 "device_info" { device: Handle };
 }

@@ -77,6 +77,7 @@ fn sample_calls() -> Vec<Call> {
         Call::SystemReset { device: h(12), kind: ResetKind::PowerOff },
         Call::SystemReset { device: h(12), kind: ResetKind::Reboot },
         Call::MapFixed { addr: 0x2000_0000, len: 0x1000, flags: rw },
+        Call::DeviceInfo { device: h(5) },
     ]
 }
 
@@ -103,6 +104,14 @@ fn sample_returns(number: Number) -> Vec<Return> {
         }
         Number::TimeNow => std::vec![Return::Time(0), Return::Time(BIG)],
         Number::Random => std::vec![Return::Random(0), Return::Random(BIG), Return::Random(u64::MAX)],
+        Number::DeviceInfo => std::vec![
+            Return::Device(DeviceInfo::Mmio { base: 0x1000_0000, size: 0x1000, dma: false }),
+            // Sv32 physical addresses are 34 bits: the base needs its high half.
+            Return::Device(DeviceInfo::Mmio { base: BIG, size: !BIG, dma: true }),
+            Return::Device(DeviceInfo::Irq(10)),
+            Return::Device(DeviceInfo::Irq(u32::MAX)),
+            Return::Device(DeviceInfo::Reset),
+        ],
         _ => std::vec![Return::Nothing],
     }
 }
@@ -520,6 +529,26 @@ fn malformed_results_are_refused() {
         Err(Error::InvalidArgument)
     );
     assert_eq!(decode_result(Number::Mint, &[0, 0, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "handle 0");
+    // `device_info`: an unknown kind, an unknown flag, and a field the kind does not use.
+    let info = Number::DeviceInfo;
+    for (regs, what) in [
+        ([0, 0, 0, 0, 0, 0, 0, 0], "kind 0"),
+        ([0, 4, 0, 0, 0, 0, 0, 0], "kind 4"),
+        ([0, 1, 0x1000, 0, 0x1000, 0, 2, 0], "an MMIO flag other than DMA"),
+        ([0, 2, 10, 1, 0, 0, 0, 0], "an IRQ number wider than 32 bits"),
+        ([0, 2, 10, 0, 1, 0, 0, 0], "an IRQ with a size"),
+        ([0, 2, 10, 0, 0, 0, 1, 0], "an IRQ with a flag"),
+        ([0, 3, 1, 0, 0, 0, 0, 0], "Reset with an address"),
+        ([0, 3, 0, 0, 0, 0, 1, 0], "Reset with a flag"),
+        ([0, 1, 0x1000, 0, 0x1000, 0, 0, 1], "a7"),
+    ] {
+        assert_eq!(decode_result(info, &regs), Err(Error::InvalidArgument), "device_info: {what}");
+    }
+    assert_eq!(
+        decode_result(info, &[0, 1, 0x1000, 0x2, 0x3000, 0, 1, 0]),
+        Ok(Return::Device(DeviceInfo::Mmio { base: 0x2_0000_1000, size: 0x3000, dma: true })),
+        "device_info: a 34-bit base"
+    );
 }
 
 #[test]
@@ -738,6 +767,9 @@ fn error_rows() {
     assert!(lacks(Number::Random, &[TooLarge, BadHandle, OutOfMemory]));
     assert!(lacks(Number::TimeNow, &[BadHandle, OutOfMemory]));
     assert!(lacks(Number::ThreadExit, &[BadHandle, OutOfMemory]));
+    // `device_info` maps nothing and changes nothing (kernel/devices.md).
+    assert!(has(Number::DeviceInfo, &[BadHandle, WrongObject]));
+    assert!(lacks(Number::DeviceInfo, &[OutOfMemory, NotPermitted, TooLarge]));
     // Every call that adds a handle to its caller's table (`MAX_HANDLES`).
     for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate] {
         assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");
