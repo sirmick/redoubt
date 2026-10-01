@@ -453,7 +453,10 @@ Status: planned · M1 (separation and containment)
 
 A vault session's work (item writes, requests, calls to a shared server) changes nothing an
 unlabelled session observes: its results, the usage of `users`, of every principal's budget and
-unlabelled sub-budget, and the audit records an unlabelled reader may read. The model checks this
+unlabelled sub-budget, and the audit records an unlabelled reader may read. No counter is shared
+across a principal's label sets: sessions and agents are numbered and named per (account, label
+set), as `users/alice/{alice-secrets}/session-1` is, so a vault agent started on approval does not
+move the number of its owner's next unlabelled session. The model checks this
 on kernel results by replaying sequences with the vault's operations removed
 (`steward_noninterference`, its P10).
 
