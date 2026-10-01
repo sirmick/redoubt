@@ -488,6 +488,40 @@ pub mod trace {
     /// The object frames a destruction walks (after its `X`).
     pub const R10_FRAMES: u8 = b'Z';
 
+    /// A checked build's audit began and ended: which audit, and the time in µs in the pass field.
+    /// A release build runs none, so the bench subtracts their time from every window a latency
+    /// target judges (kernel/scheduling.md, "Responsiveness").
+    pub const AUDIT_BEGIN: u8 = b'U';
+    pub const AUDIT_END: u8 = b'V';
+    /// The audit after a destruction's `Y` (`budget::destroy_subtree`).
+    pub const AUDIT_DESTRUCTION: u64 = 1;
+    /// The PID index's audit at a process object's change (`MemoryManager::index_process`).
+    pub const AUDIT_PROCESS_INDEX: u64 = 2;
+
+    /// An audit running: its begin is recorded, and its end when this drops (none if `None`).
+    pub struct Audit(Option<u64>);
+
+    /// Stamp the audit `which` that is about to run, until the returned guard drops.
+    pub fn audit(which: u64) -> Audit {
+        // Debug only, never in a bench build but one recorded negative run (feature
+        // `audit-unstamped`): the audit after a destruction runs unstamped, to show that the
+        // oracle subtracts only what the trace shows it.
+        #[cfg(feature = "audit-unstamped")]
+        if which == AUDIT_DESTRUCTION {
+            return Audit(None);
+        }
+        record(AUDIT_BEGIN, which, u128::from(crate::time::now_us()));
+        Audit(Some(which))
+    }
+
+    impl Drop for Audit {
+        fn drop(&mut self) {
+            if let Some(which) = self.0 {
+                record(AUDIT_END, which, u128::from(crate::time::now_us()));
+            }
+        }
+    }
+
     /// A destroyed child's work moved to its parent: every operand of the rule and its result,
     /// as a group of nine records the oracle recomputes (`L` parent pass before, `l` child pass,
     /// `e` child entry, `f` floor, `r` child remainder, `q` parent remainder before, `w` the child's

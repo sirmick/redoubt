@@ -222,8 +222,15 @@ impl MemoryManager {
     fn index_process(&mut self, pid: Pid, frame: Option<u32>) {
         let i = crate::budget::account_index(pid).expect("a process object names a PID");
         self.objects.processes[i] = frame;
+        // A traced build stamps the audit, so the latency targets leave it out; but not inside a
+        // destruction, where it does nothing.
         #[cfg(debug_assertions)]
-        self.check_process_index();
+        {
+            #[cfg(feature = "sched-trace")]
+            let _audit = (!self.objects.deferring)
+                .then(|| crate::sched::trace::audit(crate::sched::trace::AUDIT_PROCESS_INDEX));
+            self.check_process_index();
+        }
     }
 
     /// R10 step 8, after the dying subtree's carve went back to `parent`: every PID a process

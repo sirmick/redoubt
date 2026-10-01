@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 43
+revision = 62
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -388,7 +388,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K12", "MOD1"]
   body = "Closes docs/todo/r2-least-recently-served.md; rule on docs/kernel/ipc.md#r2-fair-waiting (9f0b47f38), for docs/servers/steward.md#r37-vault-non-interference. Design: QA MOD1-r2-cursor-blame. Brief: .wash/local/IPC2-implementer.md. Tier A (kernel IPC, the model), size M."
   state = "active"
-  revision = 11
+  revision = 61
 
 [[node]]
   id = "K13"
@@ -407,8 +407,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12"]
   body = "Closes docs/todo/process-map-backs-before-refusing.md (docs/kernel/memory.md#failure-and-restart) and docs/todo/boot-stack-reservation.md (docs/kernel/memory-layout.md#regions). kernel/src/process.rs, mem.rs, arch/riscv/process.rs and the loader: no overlap with IPC2 or K13 in message.rs. Tier A (kernel, loader), size S."
-  state = "active"
-  revision = 35
+  state = "reported"
+  revision = 57
 
 [[node]]
   id = "B3"
@@ -426,14 +426,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K12"]
   body = "Closes docs/todo/latency-excludes-audits.md. Rule: docs/kernel/scheduling.md#responsiveness and docs/testbench.md#checked-builds (dd862a390), for docs/kernel/README.md#containment. Design: QA GATE1-notice-late (owner: exclude audits). Brief: .wash/local/K15-implementer.md. Tier A (kernel trace, the oracle), size S. Touches budget.rs destroy_subtree, process.rs index_process, sched.rs trace, tools/testbench sched_oracle; not message.rs. GATE1 resumes on it."
-  state = "active"
-  revision = 41
+  state = "done"
+  revision = 62
 
 [[node]]
   id = "B4"
   title = "Three cases order on events, not on the host's clock"
   template = "package"
   parent = "M1"
-  body = "Closes docs/todo/wall-clock-flakes.md (378a67877): uaf-lent-page (the holder answers SYNC before it holds the lend: a test bug, the case can pass without testing reuse), touch-beyond-ram, libs/rt parked.rs; done when each orders on events and passes 20 runs beside a loaded host. Tests and libs/rt's test only; red team at low (attack cases). Tier B-sized, size S."
-  state = "todo"
-  revision = 42
+  body = "Closes docs/todo/wall-clock-flakes.md (378a67877): uaf-lent-page (the holder answers SYNC before it holds the lend: a test bug, the case can pass without testing reuse), touch-beyond-ram, libs/rt parked.rs; plus process-review's zero_entries window found by K14's dig (a thread created with entry 0 runs if a tick lands between thread_create and process_exit: InstructionPageFault at 0; give those threads a parked entry, or the case runs under icount). Done when each orders on events and passes 20 runs beside a loaded host. Tests and libs/rt's test only; red team at low (attack cases). Tier B-sized, size S."
+  state = "active"
+  revision = 49

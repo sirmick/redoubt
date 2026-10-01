@@ -1256,7 +1256,12 @@ pub fn destroy_subtree(
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);
     // The audit, off the measured walk: the links and indexes name exactly the live objects.
+    // A traced build stamps it, so the latency targets leave it out.
     #[cfg(debug_assertions)]
-    MemoryManager::with(|mm| mm.check_object_indexes());
+    {
+        #[cfg(feature = "sched-trace")]
+        let _audit = crate::sched::trace::audit(crate::sched::trace::AUDIT_DESTRUCTION);
+        MemoryManager::with(|mm| mm.check_object_indexes());
+    }
     caller_doomed
 }
