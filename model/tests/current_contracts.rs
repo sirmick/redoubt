@@ -116,11 +116,6 @@ fn contexts_are_separate_from_creator_object_on_both_widths() {
     }
 }
 #[test]
-fn too_many_labels_precede_bad_scalar_encoding() {
-    let mut k = Kernel::boot(&Boot::default(), None).unwrap();
-    assert_eq!(k.budget_create(1, 1, 0, u64::MAX, u64::MAX, &[1; 9], 0, FOREVER), Err(Error::TooLarge));
-}
-#[test]
 fn revocation_before_and_after_receipt_has_distinct_ownership() {
     for taken in [false, true] {
         let mut w = World::new(None);

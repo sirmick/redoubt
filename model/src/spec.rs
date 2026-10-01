@@ -26,6 +26,8 @@ pub const STRIDE: u64 = 1 << 20;
 pub const SLICE: u64 = 10_000;
 /// A timeout that never expires.
 pub const FOREVER: u64 = u64::MAX;
+/// Live `dma_alloc` runs per device (kernel/devices.md, "`dma_alloc`").
+pub const MAX_RUNS: usize = 32;
 /// Taken-but-unreplied calls per process.
 pub const MAX_OPEN_CALLS: u64 = 64;
 /// Handles in `process_start`'s list.
@@ -33,6 +35,13 @@ pub const MAX_START_HANDLES: usize = 64;
 /// "No handle" in an optional-handle slot, and never a handle index. The ABI's sentinel; this is
 /// the one place the model names it.
 pub const NO_HANDLE: u64 = 0;
+
+/// Encoding: slots in a message body record (`call`, `send`, `reply`): the words, the handle
+/// count and the handles (kernel/abi.md, "Layouts").
+pub const BODY_SLOTS: usize = WORDS + 1 + MAX_MSG_HANDLES;
+/// Encoding: slots in `receive`'s record: kind, message id, badge and account; the labels as a
+/// list; a body; the buffer's address and pages (kernel/abi.md, "Layouts").
+pub const RECEIVED_SLOTS: usize = 4 + 1 + MAX_LABELS + BODY_SLOTS + 2;
 
 /// Encoding: the page size. The model counts memory in pages; both Sv32 and Sv39 use 4 KiB base
 /// pages (kernel/memory.md).

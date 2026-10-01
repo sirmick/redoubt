@@ -145,8 +145,8 @@ page.
    a session ([native programs](../userland/native.md#launching-from-a-session)), and every "not
    yet" above turned into a case.
 - **The model on the real kernel.** Model traces replayed on the real kernel and compared step by
-   step ([the model](../kernel/model.md#replaying-traces-on-the-real-kernel)), after the model and
-   the kernel agree on their order of checks ([the model's order of checks](../todo/abi-model-disagreements.md)).
+   step ([the model](../kernel/model.md#replaying-traces-on-the-real-kernel)), the model making
+   the kernel's checks in the kernel's order ([ABI](../kernel/abi.md#errors-and-the-order-of-checks)).
 
 Every follow-up page is placed above.
 

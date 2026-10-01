@@ -356,7 +356,10 @@ fn the_crate_and_the_model_agree() {
 }
 
 /// The comparison bites: a model with any of the scheduler's arithmetic or rank rules broken
-/// disagrees with the crate on some sequence.
+/// disagrees with the crate on some sequence. Two R12 variants are not driven here:
+/// `R12TimeoutWakePreempts` breaks the kernel model's timer path, not `Scheduler`, and
+/// `R12DeadlineWorkUnbilled` the billing of a deadline's destruction work, which this harness does
+/// not do. The model's own checks catch both (`sched_contracts`, `scheduler_fairness`).
 #[test]
 fn a_broken_model_disagrees() {
     let quiet = std::panic::take_hook();
@@ -381,6 +384,8 @@ fn a_broken_model_disagrees() {
         Mutation::R12PriorityById,
         Mutation::R12PreemptOnWake,
         Mutation::R12NoMinimumCharge,
+        Mutation::R12ExitRunsFree,
+        Mutation::R12RescaleOnlyOnReturn,
     ] {
         let seen = (0..3000).any(|seed| std::panic::catch_unwind(|| run_with(seed, Some(m))).is_err());
         if !seen {

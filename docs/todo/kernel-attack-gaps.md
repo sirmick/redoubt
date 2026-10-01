@@ -105,10 +105,7 @@ gap: the page's section, the claim, and what no case attacks.
 - I1 (handles name live objects) and I10 (create-destroy leaves the parent unchanged): no mutation targets I1 alone; I10's `R10KeepCarvedLimits` is caught first by the per-step R6 recount, so `budget_lifecycle`'s own check may be doing no unique work. Not a gap in the kernel, a note on the model.
 
 ### model.md
-- `every_rule_has_a_mutation` requires variants only for rules numbered 1 to 12; nothing requires R13, R14 (unforgeable sender), R21, I16, or R4a (open calls) and R4b (a server dies) separately, to keep a variant.
-- R18, R20 (PID reuse) and R22 (range cost): modelled, but no mutation; R20 and part of R22 have scripted host tests only.
 - R15 (verified boot), R16, R17, R19 and R23: not in the model at all.
-- The `redoubt-stride` differential: `a_broken_model_disagrees` does not list `R12ExitRunsFree` or `R12TimeoutWakePreempts` (`R12ExitRunsFree`'s site is in `sched.rs`, which the differential drives through `thread_exited`, so it could be added).
 - `steward_noninterference` leaves out vault approve and deny, ending a vault session, and server crashes; a leak through crash blame or session end is unchecked.
 - Model replay on the real kernel: no case; every "attacked only in the model" on the kernel pages rests on it.
 - The budget test's hand-copied model sequence: nothing checks it still matches the model.

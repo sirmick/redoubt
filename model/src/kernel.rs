@@ -226,9 +226,31 @@ fn check_boot(b: &Boot) -> Result<(), String> {
 /// Where user virtual addresses end (Sv39's lower half). `process_map`'s `dst` must lie below. User
 /// space has no lower bound: page 0 is in it (kernel/memory-layout.md, "Page 0").
 pub const USER_TOP: u64 = 1 << 38;
-/// Where the kernel places the mappings it chooses addresses for (`map_anon`, received buffers):
-/// above everything the process has mapped, from here.
-pub const KERNEL_CHOSEN_BASE: u64 = 0x10_0000_0000;
+/// Where `map_anon`'s placement area starts (kernel/memory.md, "Where `map_anon` puts pages").
+pub const DEFAULT_BASE: u64 = 0x6000_0000;
+/// Where the placement area of a receiver's lends and transfers starts.
+pub const DEFAULT_MESSAGE_BASE: u64 = 0x4000_0000;
+
+/// A placement area: where the kernel places a run of pages whose address it chooses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Area {
+    /// `map_anon`, `map_device` and `dma_alloc`: 256 MiB from `DEFAULT_BASE`.
+    Default,
+    /// A receiver's lends and transfers: 4 MiB from `DEFAULT_MESSAGE_BASE`.
+    Messages,
+}
+
+impl Area {
+    /// The area's first page number and the one past its end.
+    pub fn pages(self) -> (u64, u64) {
+        let (base, len) = match self {
+            Area::Default => (DEFAULT_BASE, 0x1000_0000),
+            Area::Messages => (DEFAULT_MESSAGE_BASE, 0x40_0000),
+        };
+        (vpn(base), vpn(base + len))
+    }
+}
+
 /// Physical address of frame 0; `dma_alloc` returns physical addresses from here.
 pub const RAM_BASE: u64 = 0x8000_0000;
 /// The longest `Op::Tick` the model accepts (one hour): a replay of hostile input must finish.
@@ -350,6 +372,10 @@ pub struct Process {
     /// Every DMA device this process has ever named in `map_device` (with `dma`'s own devices, the
     /// reset set S: kernel/devices.md, "Reset before reuse").
     pub dma_mapped: BTreeSet<u64>,
+    /// Per placement area (`Area::Default`, then `Area::Messages`), the first page of the run
+    /// placed there last, where the next search starts (kernel/memory.md, "Where `map_anon` puts
+    /// pages").
+    pub placed: [u64; 2],
 }
 
 /// What a blocked thread waits for.
@@ -536,6 +562,10 @@ pub struct Kernel {
     next_tid: u64,
     next_endpoint: u64,
     next_frame: u64,
+    /// The runs `dma_alloc` handed out, by first frame: the device and the pages. A run is live
+    /// while any of its frames is (frame numbers of a run are never reused), and a device has at
+    /// most `MAX_RUNS` live runs (kernel/devices.md, "`dma_alloc`").
+    dma_runs: BTreeMap<u64, (u64, u64)>,
     next_msg: u64,
     wakes: Vec<Wake>,
     notes: Vec<Note>,
@@ -643,6 +673,7 @@ impl Kernel {
             next_tid: 1,
             next_endpoint: 1,
             next_frame: 0,
+            dma_runs: BTreeMap::new(),
             next_msg: 1,
             wakes: Vec::new(),
             notes: Vec::new(),
@@ -680,6 +711,7 @@ impl Kernel {
                 next_msg_id: 1,
                 dma: BTreeSet::new(),
                 dma_mapped: BTreeSet::new(),
+                placed: [Area::Default.pages().0, Area::Messages.pages().0],
             },
         );
         let root_table = k.page_table_cost();
@@ -799,12 +831,15 @@ impl Kernel {
     /// A PID for a new process, drawn at random from the free ones. A PID stays in use while its
     /// process object lives: while the process runs, and while its exit notice waits.
     fn draw_pid(&mut self) -> Option<u64> {
-        let in_use: BTreeSet<u64> = self
-            .processes
-            .keys()
-            .copied()
-            .chain(self.endpoints.values().flat_map(|e| e.exits.iter().map(|n| n.pid)))
-            .collect();
+        let noticed = self.endpoints.values().flat_map(|e| e.exits.iter().map(|n| n.pid));
+        if self.broken(Mutation::R20NoticePidReused) {
+            // Broken: a PID held only by a notice is free, and the draw lands on one (as a
+            // process spawning until it draws one would).
+            if let Some(pid) = noticed.clone().find(|p| !self.processes.contains_key(p)) {
+                return Some(pid);
+            }
+        }
+        let in_use: BTreeSet<u64> = self.processes.keys().copied().chain(noticed).collect();
         if in_use.len() as u64 >= MAX_PID {
             return None;
         }
@@ -917,6 +952,17 @@ impl Kernel {
 
     fn lookup(&self, pid: u64, h: u64) -> R<Handle> {
         self.processes.get(&pid).and_then(|p| p.handles.get(&h)).copied().ok_or(Error::BadHandle)
+    }
+
+    /// The device object `pid`'s handle `h` names. R18: a handle is the only way to a device;
+    /// a number that is not a handle of the caller's reaches nothing.
+    fn lookup_device(&self, pid: u64, h: u64) -> R<u64> {
+        match self.lookup(pid, h) {
+            Ok(Handle { object: Object::Device(d), .. }) => Ok(d),
+            Ok(_) => Err(Error::WrongObject),
+            Err(_) if self.broken(Mutation::R18DeviceByNumber) && self.devices.contains_key(&h) => Ok(h),
+            Err(e) => Err(e),
+        }
     }
 
     fn lookup_budget(&self, pid: u64, h: u64) -> R<u64> {
@@ -1046,31 +1092,49 @@ impl Kernel {
         }
     }
 
-    /// `n` free virtual pages in `pid` for a mapping whose address the kernel chooses: above
-    /// everything already mapped, from `KERNEL_CHOSEN_BASE`. If that space
-    /// doesn't fit `n` pages -- a `map_fixed` placed a mapping high in `[KERNEL_CHOSEN_BASE,
-    /// USER_TOP)`, which the real kernel's bounded `find_virtual_address` window never sees -- fall
-    /// back to the first gap of `n` free pages anywhere in that range, so this stays as permissive
-    /// as the kernel.
-    fn alloc_va(&self, pid: u64, n: u64) -> R<u64> {
-        let p = self.processes.get(&pid).ok_or(Error::Dead)?;
-        let above = p.space.last_key_value().map_or(0, |(v, _)| v + 1);
-        let start = above.max(vpn(KERNEL_CHOSEN_BASE));
-        if let Some(end) = start.checked_add(n) {
-            if end <= vpn(USER_TOP) {
-                return Ok(start);
+    /// The first page of a free run of `n` pages in `pid`'s placement area `area`, found as the
+    /// kernel's `find_virtual_address` finds it (kernel/memory.md, "Where `map_anon` puts pages"):
+    /// every start from the one placed last up to the last start that fits, then from the area's
+    /// start; a page is free only if nothing is mapped there, either side of a lend included. The
+    /// area remembers the run it found even if the call then fails, as the kernel's does. `None`
+    /// if no run fits, a request larger than the area included.
+    fn place(&mut self, pid: u64, n: u64, area: Area) -> Option<u64> {
+        let (start, end) = area.pages();
+        let p = self.processes.get_mut(&pid)?;
+        let last_start = end.checked_sub(n).filter(|last| *last >= start)?;
+        let first = p.placed[area as usize].clamp(start, last_start);
+        let taken = |at: u64, until: u64| p.space.range(at..until).next().map(|(v, _)| *v);
+        // From `first` up to the last start. The first page taken at or after `first` is
+        // remembered for the wrap.
+        let mut candidate = first;
+        let mut taken_after_first = None;
+        let mut found = None;
+        while candidate <= last_start {
+            match taken(candidate, candidate + n) {
+                None => {
+                    found = Some(candidate);
+                    break;
+                }
+                Some(v) => {
+                    taken_after_first.get_or_insert(v);
+                    candidate = v + 1;
+                }
             }
         }
-        let (lo, hi) = (vpn(KERNEL_CHOSEN_BASE), vpn(USER_TOP));
-        let mut cursor = lo;
-        for (&v, _) in p.space.range(lo..hi) {
-            // `v - cursor`, not `cursor + n`: a hostile `n` near `u64::MAX` must not overflow.
-            if v.saturating_sub(cursor) >= n {
-                return Ok(cursor);
+        // Then from the area's start up to `first`: a run reaching past `first` fits only if it
+        // ends before the page found taken there.
+        let mut candidate = start;
+        while found.is_none() && candidate < first {
+            let run_end = candidate + n;
+            match taken(candidate, run_end.min(first)) {
+                Some(v) => candidate = v + 1,
+                None if taken_after_first.is_none_or(|t| run_end <= t) => found = Some(candidate),
+                None => break,
             }
-            cursor = cursor.max(v + 1);
         }
-        if hi.saturating_sub(cursor) >= n { Ok(cursor) } else { Err(Error::OutOfMemory) }
+        let at = found?;
+        p.placed[area as usize] = at;
+        Some(at)
     }
 
     /// Page-table pages (in pages to charge) that mapping `vpns` into `pid` would allocate.
@@ -1085,6 +1149,20 @@ impl Kernel {
             }
         }
         new.len() as u64 * self.page_table_cost()
+    }
+
+    /// `tables_needed` for `n` fresh pages from `first`, which `payer` pays for. R22: the call
+    /// has already refused, by arithmetic, pages the budget cannot pay for, so the walk follows
+    /// what the budget can afford, never what the length asks. A walk the budget could not pay
+    /// for is a violation, reported without walking.
+    fn fresh_tables(&mut self, pid: u64, payer: u64, first: u64, n: u64) -> u64 {
+        if n > self.free_pages(payer) {
+            self.ghost.violations.push(alloc::format!(
+                "R22: process {pid} walked the page tables of {n} pages before its budget was shown to pay for them"
+            ));
+            return u64::MAX;
+        }
+        self.tables_needed(pid, first..first + n)
     }
 
     /// Map `m` at `v` in `pid`. The caller has charged the page tables (`tables_needed`).
@@ -1185,29 +1263,39 @@ impl Kernel {
         }
     }
 
-    fn record_valid(&self, pid: u64, tid: u64, completion: bool) -> bool {
+    /// Whether `pid`'s record of `slots` slots, which the kernel writes, passes the record check
+    /// (kernel/abi.md, "The record check"): 8-byte aligned, and every page a slot lies in the
+    /// caller's own readable and writable RAM, not the first page alone.
+    fn record_valid(&self, pid: u64, tid: u64, slots: usize, completion: bool) -> bool {
         match self.threads.get(&tid).map(|t| t.record) {
             Some(Record::Owned) => true,
             Some(Record::CopyFault) => !completion,
-            Some(Record::Memory(addr)) => {
-                addr.is_multiple_of(8)
-                    && self.processes.get(&pid).and_then(|p| p.space.get(&(addr / PAGE_SIZE))).is_some_and(
-                        |m| {
-                            m.state == MapState::Own
-                                && matches!(m.backing, Backing::Frame(_))
-                                && m.flags & (FLAG_R | FLAG_W) == FLAG_R | FLAG_W
-                        },
-                    )
-            }
+            Some(Record::Memory(addr)) => self.record_pages(pid, addr, slots, FLAG_R | FLAG_W),
             _ => false,
         }
+    }
+
+    /// Every page of the record at `addr` of `slots` slots is `pid`'s own RAM with `flags`: not
+    /// lent either way, not device registers, and not a `dma_alloc` frame, which the kernel's
+    /// frame ownership table credits to no process.
+    fn record_pages(&self, pid: u64, addr: u64, slots: usize, flags: u64) -> bool {
+        let Some(last) = addr.checked_add(8 * slots as u64 - 1) else { return false };
+        let Some(p) = self.processes.get(&pid) else { return false };
+        addr.is_multiple_of(8)
+            && (addr / PAGE_SIZE..=last / PAGE_SIZE).all(|v| {
+                p.space.get(&v).is_some_and(|m| {
+                    m.state == MapState::Own
+                        && m.flags & flags == flags
+                        && matches!(m.backing, Backing::Frame(f) if self.frames.get(&f).is_some_and(|fr| fr.dma.is_none()))
+                })
+            })
     }
 
     /// Whether a thread blocked in `receive` can still be told what it takes: its record is
     /// checked just before anything is delivered, and a bad one takes nothing (kernel/ipc.md, "A
     /// bad record takes nothing").
     fn receive_record_valid(&self, tid: u64) -> bool {
-        self.threads.get(&tid).is_some_and(|t| self.record_valid(t.pid, tid, true))
+        self.threads.get(&tid).is_some_and(|t| self.record_valid(t.pid, tid, RECEIVED_SLOTS, true))
     }
 
     /// A receiver whose record went bad while it waited leaves `e`'s queue with `InvalidArgument`,
@@ -1219,19 +1307,12 @@ impl Kernel {
         self.wake(tid, Err(Error::InvalidArgument));
     }
 
+    /// Whether `pid`'s body record, which the kernel only reads (`send`, `reply`), passes the
+    /// record check.
     fn input_record_valid(&self, pid: u64, tid: u64) -> bool {
         match self.threads.get(&tid).map(|t| t.record) {
             Some(Record::Owned | Record::ReadOnly | Record::CopyFault) => true,
-            Some(Record::Memory(addr)) => {
-                addr.is_multiple_of(8)
-                    && self.processes.get(&pid).and_then(|p| p.space.get(&(addr / PAGE_SIZE))).is_some_and(
-                        |m| {
-                            m.state == MapState::Own
-                                && matches!(m.backing, Backing::Frame(_))
-                                && m.flags & FLAG_R != 0
-                        },
-                    )
-            }
+            Some(Record::Memory(addr)) => self.record_pages(pid, addr, BODY_SLOTS, FLAG_R),
             _ => false,
         }
     }
@@ -1595,6 +1676,18 @@ impl Kernel {
                 h.stamp = rbudget;
             }
         }
+        // Where the buffer lands: a free run in the receiver's message area, or `Refused`.
+        let va = if pages > 0 {
+            match self.place(rpid, pages, Area::Messages) {
+                Some(rv) => Some(rv),
+                None => {
+                    self.refuse(e, mid, Error::Refused);
+                    return true;
+                }
+            }
+        } else {
+            None
+        };
         let growth = match self.handle_slots(rpid, hs.len()) {
             Ok((_, growth)) => growth,
             Err(_) => {
@@ -1607,7 +1700,6 @@ impl Kernel {
         } else {
             0
         };
-        let va = if pages > 0 { self.alloc_va(rpid, pages).ok() } else { None };
         let tables = va.map_or(0, |rv| self.tables_needed(rpid, rv..rv + pages));
         let lent =
             if m.kind == MsgKind::Call && !self.broken(Mutation::R6LendChargedOnce) { pages } else { 0 };
@@ -1615,7 +1707,7 @@ impl Kernel {
         let need =
             growth.saturating_add(open).saturating_add(tables).saturating_add(lent).saturating_add(moved);
         let overdraw = self.broken(Mutation::R4OverdrawOnDelivery);
-        if (self.free_pages(rbudget) < need && !overdraw) || (pages > 0 && va.is_none()) {
+        if self.free_pages(rbudget) < need && !overdraw {
             self.refuse(e, mid, Error::Refused);
             return true;
         }
@@ -2523,12 +2615,34 @@ impl Kernel {
     /// ever used, and DMA-owned: held by the process until it ends (kernel/devices.md,
     /// "`dma_alloc`"), armed against `device` and every device the process has already mapped
     /// (ghost, I16).
+    ///
+    /// Each failure is `OutOfMemory`, in the kernel's order: `map_anon` places the run first and
+    /// then pays for its pages; `dma_alloc` takes one of the device's `MAX_RUNS` runs, pays for the
+    /// pages, and only then places them. Either then pays for the page tables.
     fn map_fresh(&mut self, pid: u64, n: u64, flags: u64, dma: Option<u64>) -> R<(u64, u64)> {
+        let oom = Error::OutOfMemory;
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
-        let start = self.alloc_va(pid, n)?;
-        let tables = self.tables_needed(pid, start..start + n);
-        self.charge(b, n.checked_add(tables).ok_or(Error::OutOfMemory)?)?;
+        let start = match dma {
+            None => {
+                let start = self.place(pid, n, Area::Default).ok_or(oom)?;
+                if n > self.free_pages(b) {
+                    return Err(oom);
+                }
+                start
+            }
+            Some(d) => {
+                if self.live_runs(d) >= MAX_RUNS || n > self.free_pages(b) {
+                    return Err(oom);
+                }
+                self.place(pid, n, Area::Default).ok_or(oom)?
+            }
+        };
+        let tables = self.fresh_tables(pid, b, start, n);
+        self.charge(b, n.checked_add(tables).ok_or(oom)?)?;
         let first = self.next_frame;
+        if let Some(d) = dma {
+            self.dma_runs.insert(first, (d, n));
+        }
         let mut fresh = Vec::new();
         for i in 0..n {
             // Contiguous (dma_alloc): fresh frames from the top of what was ever used.
@@ -2602,22 +2716,22 @@ impl Kernel {
 
     /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr`; never replaces a
     /// mapping (kernel/memory.md R11). Same order as the kernel: decode flags, the range
-    /// (`user_range`, page 0 included), the whole range's overlap with any of `pid`'s mappings
-    /// (`range_free`, before anything is charged), the flags rule, then the charge -- pages alone
-    /// first, cheaply (R22: a hostile `map_fixed(0, USER_TOP)` must stay fast, never walking
-    /// `tables_needed` over pages it was never going to afford).
+    /// (`user_range`, page 0 included), the flags rule, the pages alone, cheaply (R22: a hostile
+    /// `map_fixed(0, USER_TOP)` must stay fast, never walking over pages it was never going to
+    /// afford), the whole range's overlap with any of `pid`'s mappings (`range_free`, before
+    /// anything is charged), then the pages and the page tables they need.
     pub fn map_fixed(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, false)?;
         let (first, n) = user_range(addr, len)?;
         check_flags(flags, false)?;
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
-        if n > self.free_pages(b) {
+        if n > self.free_pages(b) && !self.broken(Mutation::R22MapFixedWalksFirst) {
             return Err(Error::OutOfMemory);
         }
         if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
             return Err(Error::InvalidArgument);
         }
-        let tables = self.tables_needed(pid, first..first + n);
+        let tables = self.fresh_tables(pid, b, first, n);
         self.charge(b, n.checked_add(tables).ok_or(Error::OutOfMemory)?)?;
         for i in 0..n {
             let f = self.alloc_frame(b);
@@ -2635,12 +2749,11 @@ impl Kernel {
     /// this process's death will need, and every DMA frame it already holds is armed against it too
     /// (ghost, I16). No handle to a quarantined device survives (kernel/devices.md, "Quarantine").
     pub fn map_device(&mut self, pid: u64, h: u64) -> R<u64> {
-        let h = decode_handle(h)?;
-        let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
+        let d = self.lookup_device(pid, decode_handle(h)?)?;
         let DeviceKind::Mmio { pages, dma, quarantined, .. } = self.devices[&d].kind else {
             return Err(Error::WrongObject);
         };
-        let start = self.alloc_va(pid, pages)?;
+        let start = self.place(pid, pages, Area::Default).ok_or(Error::OutOfMemory)?;
         let tables = self.tables_needed(pid, start..start + pages);
         self.charge(self.budget_of(pid).unwrap(), tables)?;
         for i in 0..pages {
@@ -2651,14 +2764,13 @@ impl Kernel {
             self.processes.get_mut(&pid).unwrap().dma_mapped.insert(d);
             self.dma_arm_current(pid);
         }
-        self.ghost.flows.push(Flow::DeviceUsed { device: d, quarantined });
+        self.ghost.flows.push(Flow::DeviceUsed { pid, device: d, quarantined });
         Ok(start * PAGE_SIZE)
     }
 
     /// `dma_alloc(h(MMIO), npages) -> addr, phys`: DMA flag; pages charged; contiguous; zeroed.
     pub fn dma_alloc(&mut self, pid: u64, h: u64, npages: u64) -> R<(u64, u64)> {
-        let h = decode_handle(h)?;
-        let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
+        let d = self.lookup_device(pid, decode_handle(h)?)?;
         let DeviceKind::Mmio { dma, quarantined, .. } = self.devices[&d].kind else {
             return Err(Error::WrongObject);
         };
@@ -2669,8 +2781,15 @@ impl Kernel {
             return Err(Error::NotPermitted);
         }
         let r = self.map_fresh(pid, npages, FLAG_R | FLAG_W, Some(d))?;
-        self.ghost.flows.push(Flow::DeviceUsed { device: d, quarantined });
+        self.ghost.flows.push(Flow::DeviceUsed { pid, device: d, quarantined });
         Ok(r)
+    }
+
+    /// How many of device `d`'s runs are live. Runs none of whose frames is left are forgotten.
+    fn live_runs(&mut self, d: u64) -> usize {
+        let frames = &self.frames;
+        self.dma_runs.retain(|&first, &mut (_, n)| (first..first + n).any(|f| frames.contains_key(&f)));
+        self.dma_runs.values().filter(|(device, _)| *device == d).count()
     }
 
     /// The reset set S for `pid` (kernel/devices.md, "Reset before reuse"): the device behind each
@@ -2882,6 +3001,7 @@ impl Kernel {
                 next_msg_id: 1,
                 dma: BTreeSet::new(),
                 dma_mapped: BTreeSet::new(),
+                placed: [Area::Default.pages().0, Area::Messages.pages().0],
             },
         );
         match self.install(pid, &[h]) {
@@ -3292,7 +3412,9 @@ impl Kernel {
             LendDisposition::None
         };
         let decoded = decode_handle(h).and_then(|_| {
-            if lend.is_some_and(|b| (b.addr == 0) != (b.npages == 0)) || !self.record_valid(pid, tid, false) {
+            if lend.is_some_and(|b| (b.addr == 0) != (b.npages == 0))
+                || !self.record_valid(pid, tid, BODY_SLOTS, false)
+            {
                 Err(Error::InvalidArgument)
             } else {
                 Ok(())
@@ -3358,14 +3480,16 @@ impl Kernel {
         if let Err(e) = decode_optional_handle(h) {
             return Outcome::Done(Err(e));
         }
-        if !self.record_valid(pid, tid, false) {
-            return Outcome::Done(Err(Error::InvalidArgument));
-        }
-        // Whatever it returns, the thread has no current call until it takes one.
+        // Whatever it returns, once its registers decode the thread has no current call until it
+        // takes one, even if its record is refused next (kernel/abi.md, "Errors and the order of
+        // checks").
         if !self.broken(Mutation::ReceiveKeepsCurrent) {
             self.threads.get_mut(&tid).unwrap().current = None;
         }
         self.ghost.receive_begins(tid);
+        if !self.record_valid(pid, tid, RECEIVED_SLOTS, false) {
+            return Outcome::Done(Err(Error::InvalidArgument));
+        }
         let h = match decode_optional_handle(h) {
             Ok(Some(h)) => h,
             Ok(None) => {
@@ -3459,7 +3583,7 @@ impl Kernel {
         self.unmap_lend_in_server(msg_id, false);
         self.close_call(msg_id);
         let before = self.processes[&m.sender_pid].handles.clone();
-        let output_valid = self.record_valid(m.sender_pid, m.sender_tid, true);
+        let output_valid = self.record_valid(m.sender_pid, m.sender_tid, BODY_SLOTS, true);
         let mut installed = Vec::new();
         let mut mask = 0;
         let mut status = Ok(());
@@ -3545,14 +3669,14 @@ impl Kernel {
         account: u64,
         deadline: u64,
     ) -> R<u64> {
-        // Decoding: the parent register, then the BudgetSpec record in slot order (processes and
-        // weight are u32; label count is checked first, before deduplication).
+        // Decoding: the parent register, then the BudgetSpec record in slot order: processes and
+        // weight are u32, then the label count, before deduplication.
         let parent = decode_handle(parent)?;
-        if labels.len() > MAX_LABELS {
-            return Err(Error::TooLarge);
-        }
         if processes > U32_MAX || weight > U32_MAX {
             return Err(Error::InvalidArgument);
+        }
+        if labels.len() > MAX_LABELS {
+            return Err(Error::TooLarge);
         }
         let p = self.lookup_budget(pid, parent)?;
         let px = self.budgets[&p].clone();

@@ -29,15 +29,15 @@ note process p:1 h:16 p:61415
 do p:1 t:1 process_start h:16 0x1000 0x2000 0x0 [h:15] -> ok
 note thread p:61415 t:3
 do p:38622 t:2 receive h:1 forever 0 -> blocked
-do p:61415 t:3 map_anon 0x2000 3 -> ok a:0x1000000000
-write p:61415 t:3 a:0x1000000000+0x0 42 -> ok
-do p:61415 t:3 call h:1 [1,2,3,4] [] a:0x1000000000+0x0@2 forever -> blocked
-wake p:38622 t:2 -> ok message call m:1 badge=5 account=1001 labels=[] words=[1,2,3,4] handles=[] buffer=[lend,a:0x1000000000,2]
-read p:38622 t:2 a:0x1000000000+0x0 -> ok word 42
-write p:38622 t:2 a:0x1000000000+0x0 99 -> ok
+do p:61415 t:3 map_anon 0x2000 3 -> ok a:0x60000000
+write p:61415 t:3 a:0x60000000+0x0 42 -> ok
+do p:61415 t:3 call h:1 [1,2,3,4] [] a:0x60000000+0x0@2 forever -> blocked
+wake p:38622 t:2 -> ok message call m:1 badge=5 account=1001 labels=[] words=[1,2,3,4] handles=[] buffer=[lend,a:0x40000000,2]
+read p:38622 t:2 a:0x40000000+0x0 -> ok word 42
+write p:38622 t:2 a:0x40000000+0x0 99 -> ok
 do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
 do p:1 t:1 budget_destroy h:12 -> ok
-read p:38622 t:2 a:0x1000000000+0x0 -> ok word 99
+read p:38622 t:2 a:0x40000000+0x0 -> ok word 99
 do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
 do p:38622 t:2 receive h:1 0 0 -> ok abandoned m:1
 do p:38622 t:2 reply m:1 [0,0,0,0] [] -> ok reply delivery=discarded mask=0

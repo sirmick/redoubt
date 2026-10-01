@@ -6,7 +6,7 @@ mod common;
 
 use redoubt_model::check;
 use redoubt_model::gen::Gen;
-use redoubt_model::kernel::{Boot, Kernel, Note};
+use redoubt_model::kernel::{Boot, DEFAULT_BASE, DEFAULT_MESSAGE_BASE, Kernel, Note};
 use redoubt_model::mutation::Mutation;
 use redoubt_model::spec::{FLAG_R, FLAG_W, FOREVER, PAGE_SIZE};
 use redoubt_model::syscall::{Buffer, MintSource, Op, Syscall};
@@ -132,7 +132,8 @@ fn lender_dies_mid_call() -> Vec<Op> {
         account,
         deadline: FOREVER,
     };
-    let buf = 0x10_0000_0000; // the model's first kernel-chosen address
+    // Where the client's `map_anon` places its buffer, and where the lend lands in the server.
+    let (buf, lent) = (DEFAULT_BASE, DEFAULT_MESSAGE_BASE);
     go(&mut k, init(Syscall::EndpointCreate)); // h:11
     go(&mut k, init(budget(3, 1001))); // h:12 alice
     go(&mut k, init(budget(2, 0))); // h:13 server
@@ -150,11 +151,11 @@ fn lender_dies_mid_call() -> Vec<Op> {
     go(&mut k, Op::Write { pid: cp, tid: ct, addr: buf, value: 42 });
     let lend = Some(Buffer { addr: buf, npages: 2 });
     go(&mut k, client(Syscall::Call { h: 1, words: [1, 2, 3, 4], handles: vec![], lend, timeout: FOREVER }));
-    go(&mut k, Op::Read { pid: sp, tid: st, addr: buf });
-    go(&mut k, Op::Write { pid: sp, tid: st, addr: buf, value: 99 });
+    go(&mut k, Op::Read { pid: sp, tid: st, addr: lent });
+    go(&mut k, Op::Write { pid: sp, tid: st, addr: lent, value: 99 });
     go(&mut k, init(Syscall::BudgetUsage { h: 13 }));
     go(&mut k, init(Syscall::BudgetDestroy { h: 12 }));
-    go(&mut k, Op::Read { pid: sp, tid: st, addr: buf });
+    go(&mut k, Op::Read { pid: sp, tid: st, addr: lent });
     go(&mut k, init(Syscall::BudgetUsage { h: 13 }));
     go(&mut k, server(Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 }));
     go(&mut k, server(Syscall::Reply { msg_id: 1, words: [0; 4], handles: vec![] }));

@@ -15,8 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::kernel::{
-    Backing, DeviceKind, INIT_PID, KERNEL_CHOSEN_BASE, Kernel, MapState, Object, ROOT, SYSTEM, USER_TOP,
-    USERS,
+    Backing, DEFAULT_BASE, DeviceKind, INIT_PID, Kernel, MapState, Object, ROOT, SYSTEM, USER_TOP, USERS,
 };
 use crate::spec::*;
 use crate::syscall::*;
@@ -711,7 +710,7 @@ impl Gen {
         if pages.is_empty() || self.rng.pct(6) {
             return match self.rng.below(3) {
                 0 => (0x1234, 1),
-                1 => (KERNEL_CHOSEN_BASE_GUESS, self.rng.range(1, 3)),
+                1 => (NEVER_PLACED, self.rng.range(1, 3)),
                 _ => (u64::MAX - PAGE_SIZE + 1, 2),
             };
         }
@@ -922,9 +921,9 @@ impl Gen {
             }
             96..=98 => {
                 // A mix of a likely-free low address, address 0 (user space starts at 0:
-                // kernel/memory-layout.md), an address near USER_TOP (where a lone-mapping
-                // process's alloc_va fallback matters), and now and then a page the process
-                // already owns (own_pages), so the overlap refusal fires too.
+                // kernel/memory-layout.md), an address near USER_TOP, the first page of the
+                // placement area (where `map_anon` then has to search past it), and now and then a
+                // page the process already owns (own_pages), so the overlap refusal fires too.
                 let addr = if self.rng.pct(20) {
                     self.own_pages(k, pid, 1, |_| true).0
                 } else {
@@ -932,7 +931,7 @@ impl Gen {
                         0 => 0,
                         1 => 0x1000_0000,
                         2 => USER_TOP - PAGE_SIZE,
-                        _ => KERNEL_CHOSEN_BASE - PAGE_SIZE,
+                        _ => DEFAULT_BASE,
                     }
                 };
                 let n = if self.rng.pct(90) { self.rng.range(1, 4) } else { self.rng.range(0, 40) };
@@ -1006,9 +1005,9 @@ impl Gen {
     }
 }
 
-/// An address the model never hands out (below where the kernel places mappings), used for
+/// An address the kernel never places a run at (below both placement areas), used for
 /// hostile page ranges.
-const KERNEL_CHOSEN_BASE_GUESS: u64 = 0x0800_0000;
+const NEVER_PLACED: u64 = 0x0800_0000;
 
 #[cfg(test)]
 mod subtree_regressions {

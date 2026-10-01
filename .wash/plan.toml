@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 70
+revision = 72
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -356,8 +356,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Closes docs/todo/abi-model-disagreements.md and the model.md lines of docs/todo/kernel-attack-gaps.md (not replay); docs/kernel/abi.md#errors-and-the-order-of-checks, docs/kernel/model.md. Brief: .wash/local/MOD1-implementer.md. Tier A (the model), size M."
-  state = "reported"
-  revision = 69
+  state = "done"
+  revision = 72
 
 [[node]]
   id = "SSH2"
@@ -375,8 +375,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["GATE1-composed-r10"]
   body = "Pulled forward by GATE1's miss (owner's rule, QA GATE1-design): docs/kernel/budgets.md#residual-risks (destruction cost), docs/kernel/scheduling.md#responsiveness, docs/kernel/README.md#containment. Design: QA GATE1-composed-r10 (pending the bisect). Brief: .wash/local/K12-implementer.md. Tier A (kernel), size L."
-  state = "active"
-  revision = 61
+  state = "reported"
+  revision = 71
   overrides = ["2026-09-30: started by Orchestrator before QA GATE1-composed-r10 (open): Step 0 (the trace ring) is settled on QA GATE1-composed-r10 and may start before the design; everything past it waits for the thread."]
 
 [[node]]

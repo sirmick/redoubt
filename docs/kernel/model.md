@@ -62,15 +62,16 @@ Status: built · partly tested: independence from the kernel's source and the em
   advances only on a `tick`. So the model tests accounting and state changes, not real-time
   latency, and not races between harts.
 - **Records** (the user memory a call reads and writes) are abstracted as a whole: owned,
-  unmapped, read-only, borrowed, device memory, a copy that faults, or an address checked
-  against the modelled mappings. Byte layouts are not modelled.
+  unmapped, read-only, borrowed, device memory, a copy that faults, or an address whose every
+  page, for the call's record size, is checked against the modelled mappings. Byte layouts are
+  not modelled.
 - **PIDs** are drawn by a seeded generator from 2 to `0xffff`; `init` is 1. This tests reuse
   and accounting, not unpredictability.
-- **Addresses the kernel chooses.** A `map_anon` lands above everything the process has
-  mapped, from `KERNEL_CHOSEN_BASE` (`0x10_0000_0000`). If that does not fit below `USER_TOP`
-  (2^38), it takes the first free gap in between. So the model refuses no placement the kernel
-  accepts, even after a `map_fixed` has put a mapping high ([memory](memory.md)). The kernel
-  searches a bounded window instead; see Residual risks.
+- **Addresses the kernel chooses** are the kernel's: a `map_anon`, `map_device` or `dma_alloc`
+  run is placed in the 256 MiB area from `DEFAULT_BASE`, and a receiver's lend or transfer in
+  the 4 MiB area from `DEFAULT_MESSAGE_BASE`, each searched as the kernel searches it
+  ([memory](memory.md#where-map_anon-puts-pages)). A full area is refused as the kernel
+  refuses it.
 - **Costs** come from a `costs` table: by default the rv64 table (two saved-context pages per
   process, one page for each other object, 128 handles per handle-table page). The property
   tests use 8 handles per page, so handle-table growth and its charge show up in short runs.
@@ -218,12 +219,12 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 138 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 141 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks.
 
-- `every_rule_has_a_mutation` requires at least one variant for every kernel rule numbered 1
-  to 12.
+- `every_rule_has_a_mutation` requires at least one variant for every kernel rule the model
+  holds (each R row of the table below, before the steward's) and for I16.
 - `mutations_are_caught` plants each variant in turn. It runs the scripted IPC and scheduling
   contracts, then every property family, the one that pressures the rule first
   (`scheduler_fairness` for R12, the steward families for the `Policy` variants, `flood` for the open-call
@@ -249,7 +250,10 @@ model checks.
 | [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn` | one flat queue, charging, the floor, ranks, preemption, inheritance at create and destroy |
 | [R13 (one outcome per call)](ipc.md#r13-one-outcome-per-call) | `IpcWrongLend`, `IpcDropPartial`, `IpcFalseDelivery`, `IpcSkipOutputCheck`, `IpcLeakRollback` | the lend disposition, a partial reply, `delivered`, the completion-time record check, rollback |
 | [R14 (unforgeable sender)](ipc.md#r14-unforgeable-sender) | `MsgNoLabels`, `MsgBadgeZero`, `MsgAccountZero`, `MsgIdsGlobal` | the attached labels, badge and account; message ids per receiving process |
+| [R18 (device authority)](devices.md#r18-device-authority) | `R18DeviceByNumber` | a device reached only through a handle to it |
+| [R20 (PID reuse)](processes.md#r20-pid-reuse) | `R20NoticePidReused` | no PID reused while a notice names it |
 | [R21 (crash blame)](processes.md#r21-crash-blame) | `BlameNobody`, `BlameNewestCall`, `ExitWithOpenCallsNotFaulted`, `CurrentNeverSet`, `ReceiveKeepsCurrent`, `ServeIgnored`, `ExitEndpointBadged`, `ExitNoticeDroppedIfNoReceiver` | blaming the current call's sender; how `receive` and `serve` set the current call; a badge-0 exit endpoint; a notice kept until received |
+| [R22 (range cost)](memory.md#r22-range-cost) | `R22MapFixedWalksFirst` | `map_fixed`'s pages refused by arithmetic before any walk |
 | [I3 (minted badges are non-zero and narrow)](invariants.md#i3-minted-badges-are-non-zero-and-narrow) | `MintFromUnservedMessage` | minting only from an open call of the caller's own thread |
 | [I4 (only badge-0 handles receive)](invariants.md#i4-only-badge-0-handles-receive) | `ReceiveWithBadgedHandle` | `receive` through a minted handle |
 | [I6 (labels only grow downward)](invariants.md#i6-labels-only-grow-downward) | `LabelsAddedByParentClass` | adding labels needs a system-class caller |
@@ -267,10 +271,7 @@ model checks.
 | [R42 (one approved item)](../servers/steward.md#r42-one-approved-item) | `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader` | a snapshot, to a named reader |
 
 Six rules are outside the model and have no variant: R15 (verified boot), R16 (image confinement), R17 (fail closed), R19 (kernel W^X), R23 (no test channels) and R24 (SUM and MXR clear). The model has no
-loader, no bundle, no kernel mappings of its own and no test build. Three rules are in the model
-but have no variant: R18 (device authority), R20 (PID reuse) and R22 (range cost). Scripted
-tests cover R20 (`pid_reuse_only_after_notice_receipt`) and part of R22
-(`huge_len_is_refused_promptly`).
+loader, no bundle, no kernel mappings of its own and no test build.
 
 ## Traces
 
@@ -313,13 +314,13 @@ a system server, and `init` destroys the client's budget while the server holds 
 end:
 
 ```
-do p:61415 t:3 call h:1 [1,2,3,4] [] a:0x1000000000+0x0@2 forever -> blocked
-wake p:38622 t:2 -> ok message call m:1 badge=5 account=1001 labels=[] words=[1,2,3,4] handles=[] buffer=[lend,a:0x1000000000,2]
-read p:38622 t:2 a:0x1000000000+0x0 -> ok word 42
-write p:38622 t:2 a:0x1000000000+0x0 99 -> ok
+do p:61415 t:3 call h:1 [1,2,3,4] [] a:0x60000000+0x0@2 forever -> blocked
+wake p:38622 t:2 -> ok message call m:1 badge=5 account=1001 labels=[] words=[1,2,3,4] handles=[] buffer=[lend,a:0x40000000,2]
+read p:38622 t:2 a:0x40000000+0x0 -> ok word 42
+write p:38622 t:2 a:0x40000000+0x0 99 -> ok
 do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
 do p:1 t:1 budget_destroy h:12 -> ok
-read p:38622 t:2 a:0x1000000000+0x0 -> ok word 99
+read p:38622 t:2 a:0x40000000+0x0 -> ok word 99
 do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
 do p:38622 t:2 receive h:1 0 0 -> ok abandoned m:1
 do p:38622 t:2 reply m:1 [0,0,0,0] [] -> ok reply delivery=discarded mask=0
@@ -419,9 +420,11 @@ differential test drives the crate, wired as the kernel's `sched.rs` calls it, a
 threads blocked first, the budget on the CPU, a whole subtree bottom-up), wakes, blocks, runs,
 slice ends and preemptions. Over 3,000 seeds every pass, entry, remainder, tie, queue
 membership, the floor, the tie counters and the running thread must agree after every step.
-`a_broken_model_disagrees` shows the comparison bites: with any of 18 of the 20 R12 variants
-planted in the model, some sequence disagrees; the list leaves out `R12TimeoutWakePreempts`
-(a site in the kernel model, not the scheduler) and `R12ExitRunsFree`. The bench case `stride-host-tests` runs both tests. This compares one kernel crate with the
+`a_broken_model_disagrees` shows the comparison bites: with any of 20 of the 22 R12 variants
+planted in the model, some sequence disagrees. It leaves out `R12TimeoutWakePreempts`, whose
+site is the kernel model's timer path, not the scheduler, and `R12DeadlineWorkUnbilled`, the
+billing of a deadline's destruction work, which the differential does not drive; the model's
+own checks catch both. The bench case `stride-host-tests` runs both tests. This compares one kernel crate with the
 model, on the host; the kernel's own use of it runs in boot cases
 ([scheduling](scheduling.md)).
 
@@ -441,7 +444,7 @@ run on the real timer. The case passes when 100,000 model traces replay with ide
 
 Replay is what turns the model from a reference into evidence about the kernel.
 
-**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM) and the rv32 cost table (one saved-context page); `map_device`'s result (the kernel returns the address and the length, the model only the address); `map_anon` once the kernel's placement window is full, where the model still succeeds; a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
+**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM) and the rv32 cost table (one saved-context page); `map_device`'s result (the kernel returns the address and the length, the model only the address); a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
 
 ## Residual risks
 
@@ -456,11 +459,6 @@ Replay is what turns the model from a reference into evidence about the kernel.
   is a counter. Passing model runs establish none of them. The kernel crate itself has no host
   tests: its binary says so (`test = false`), and its rules are tested on the target by the
   bench.
-- **The kernel's `map_anon` window can run out where the model's does not.** The kernel places
-  `map_anon` only within a 256 MiB window from its default base. A process can fill that window
-  with `map_fixed`, and its own later `map_anon` calls fail with `OutOfMemory` where the model,
-  which searches all of user space, succeeds. This harms only the calling process, and it is
-  kept as a known divergence ([memory](memory.md)). A replayed trace that does this will differ.
 - **One boot case copies model results by hand.** `tests/programs/src/bin/budget-test.rs` runs a
   short budget sequence whose expected results were read off the model. Nothing re-derives them
   from the model, so a change to the model leaves them stale without a failure.
@@ -468,9 +466,6 @@ Replay is what turns the model from a reference into evidence about the kernel.
   `root` has 1,024 pages and 24 processes), and random record changes target blocked calls only.
   Sizes and mapping geometry bound what the runs explore. The million-sequence run is a separate
   test that the bench does not run.
-- **The coverage test for mutations stops at twelve.** `every_rule_has_a_mutation` requires a
-  variant only for rules numbered 1 to 12. R13, R14, R21 and I16 have variants, but no test
-  requires them to keep one.
 - **The steward model is checked only against itself.** Its cryptography is ideal, and the
   non-interference comparison leaves out approving or denying a vault request (approval is
   declassification, by design), ending a vault session, and server crashes. A leak through crash

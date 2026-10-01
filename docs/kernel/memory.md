@@ -106,9 +106,8 @@ receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAG
 (0x4000_0000), found the same way. The rest of the user layout is on
 [memory layout](memory-layout.md#regions).
 
-The [model](model.md) places runs differently: above the highest mapping, falling back to the
-first gap large enough. The two agree on outcomes, not addresses, except where the kernel's
-area is full (Residual risks).
+The [model](model.md) places runs in the same two areas, searched the same way, so the two agree
+on addresses as well as outcomes.
 
 ### `map_fixed`
 
@@ -318,8 +317,8 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
 ## Residual risks
 
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
-  `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`, where the
-  [model](model.md), whose placement is unbounded, succeeds. It harms only that process.
+  `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`. It harms only that
+  process.
 - **One hart.** `fence.i` and the TLB flush act on the hart that runs the call. Running user
   code on several harts needs them on every hart, and when a thread moves
   (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
