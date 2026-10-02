@@ -189,8 +189,13 @@ keeps free. What `init` launches counts in the budgets it launches into.
   That is about 500 pages, and 1,024 doubles it. It is a fixed count, not a share of RAM,
   because `init`'s needs do not grow with the machine, and a share of a large machine would sit
   idle in `root`. The manifest cannot change it, because the kernel reads no manifest. `init`
-  reads its own usage and refuses a boot it cannot run in, and the number changes only in the
-  kernel, with a stated reason. A tester in `init`'s place
+  works in a fixed arena, and before it creates anything it bounds what the manifest will cost it
+  in `root`: the endpoints it makes, a process object, a startup block and a thread watching its
+  exit endpoint (the thread's IPC page and stack) for each server, the handles it keeps and mints,
+  and the arena. It reads `root`'s free pages with
+  [`budget_usage`](#budget_usage) and refuses the boot if the bound is larger; a charge that fails
+  later is a bug in the bound, and refuses the boot too, so no boot runs half started. The number
+  changes only in the kernel, with a stated reason. A tester in `init`'s place
   ([test bench](../testbench.md#starting-a-cases-programs)) works within the same allowance. A
   kernel case whose first program needs more works in a budget it carves from `system`.
 - **The weights stay.** `ROOT_WEIGHT` is 1,000,000 and `INIT_WEIGHT` is 1,000. `init`'s free

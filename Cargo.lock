@@ -644,6 +644,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-init"
+version = "0.1.0"
+dependencies = [
+ "redoubt-init",
+ "redoubt-rt",
+ "redoubt-sys",
+ "stub",
+]
+
+[[package]]
 name = "redoubt-ipd"
 version = "0.1.0"
 dependencies = [

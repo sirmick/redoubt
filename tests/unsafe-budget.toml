@@ -175,6 +175,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# init, the most privileged process after the kernel. Its library says `#![forbid(unsafe_code)]`.
+name = "redoubt-init (init)"
+paths = ["servers/init/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # The kernel-half map and PIDs the loader and kernel share. `#![forbid(unsafe_code)]`, so this
 # can only stay at 0.
 name = "redoubt-layout (kernel-half map)"

@@ -107,3 +107,8 @@ max_lines = 1552
 name = "servers/ipd"
 paths = ["servers/ipd/src"]
 max_lines = 2883
+
+[[crate]]
+name = "servers/init"
+paths = ["servers/init/src"]
+max_lines = 1037

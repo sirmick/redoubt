@@ -28,9 +28,9 @@ and `init`'s only input. Its entries:
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume, the endpoints it receives on, the endpoints it is handed, and arguments |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume, the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), and arguments |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
-| `principals` | each principal's name, SSH public keys for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
+| `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
 
 - **Types.** Each field has one JSON type. A 64-bit quantity (a label id, an account, a size in
@@ -48,19 +48,31 @@ and `init`'s only input. Its entries:
   two holders, and the interrupt's holder could then mask the other's device and time its
   activity. A device name, and a name a server looks a device up by, is at most 60 bytes and may
   not end in `-irq`, so `NAME-irq` never collides and fits the name rule. `consoled` takes `uart`
-  and `uart-irq`, so two machines' manifests may call the same UART by different names.
+  and `uart-irq`, so two machines' manifests may call the same UART by different names. A
+  `devices` entry is held by at most one server, and an endpoint is received on by at most one; a
+  manifest naming either twice is refused, confined or not.
 - **No server gets a budget handle.** A `servers` entry names the budget `init` creates for the
   server, never a handle to one; a manifest that grants a server a budget handle is refused
-  ([R33 (no server holds a system budget)](#r33-no-server-holds-a-system-budget)).
+  ([R33 (no server holds a system budget)](#r33-no-server-holds-a-system-budget)). `root`,
+  `system` and `users` are reserved: no endpoint takes one of those names, and a `receives` or
+  `handed` item that names one is refused as a budget grant.
 - **Arguments** are opaque strings. `init` passes them unchanged and in order as the startup
   block's `argv` and never interprets them; each server's page defines its own (`keyd`'s keys,
   `ipd`'s addresses and bucket count). `init` checks only that each is UTF-8 with no NUL, and that
-  together they leave the startup block inside its page.
+  together they leave the startup block inside its page. A badge a server's arguments name for a
+  caller is that caller's `handed` badge, written in both places by the manifest's author; `init`
+  mints it from the `handed` item, never from the argument. Where `init` calls a server itself
+  (`keyd`, `consoled` and `bootfsd`, at the first endpoint each receives on), its own handle
+  carries the smallest badge from 1 that no `handed` item there uses.
 - **Sizing.** Every shared server takes `buckets=N` as an argument, parsed once in the serving
   library; none has a compiled-in count. `init` refuses the boot unless N is at least the number
-  of distinct (account, label set)s the manifest routes to that server, plus its system callers.
-  So a server's bucket count never binds in normal use, and a full server cannot tell a latecomer
-  that others hold state ([serving](serving.md#residual-risks)). A server whose block has no `buckets=N`, or
+  of (account, label set)s the manifest declares (each principal's unlabelled set and every label
+  set it works under) plus the root badges `init` mints at that server, one per system caller. It
+  counts every declared domain at every shared server, not only those a session will reach: an
+  over-count costs buckets, and an under-count would bind. `init` reads `buckets=N` from a
+  server's arguments, with the serving library's parser, and no other argument. So a server's
+  bucket count never binds in normal use, and a full server cannot tell a latecomer that others
+  hold state ([serving](serving.md#residual-risks)). A server whose block has no `buckets=N`, or
   one outside 1 to 32, does not start. `init` does not exist yet, so the check against the
   manifest's routes is not built ([todo](../todo/server-bucket-counts.md)).
 - **Weights.** One stride queue serves every budget ([scheduling](../kernel/scheduling.md)), so
@@ -85,7 +97,7 @@ and `init`'s only input. Its entries:
 ```json
 { "servers": [ { "name": "fsd:data", "program": "fsd", "volume": "data",
                  "budget": { "pages": "4096", "processes": 1, "weight": 100 },
-                 "receives": ["fsd:data"], "handed": ["blkd"] } ],
+                 "receives": ["fsd:data"], "handed": [ { "endpoint": "blkd", "badge": "1" } ] } ],
   "principals": [ { "name": "alice", "account": "1001", "labels": ["alice-secrets"],
                     "ssh_keys": ["ssh-ed25519 AAAA..."], "home": "data:/home/alice",
                     "net": [ { "prefix": "0.0.0.0/0", "ports": [22, 443] } ] } ] }
@@ -105,12 +117,12 @@ Status: planned · M1 (separation and containment)
 A manifest may set `confined`, a deployment profile for the whole boot, never per domain. Set, it
 makes `init` **refuse the boot** whenever two entries with differing label sets share any of:
 
-- a **server instance**: one `servers` entry serving both;
-- a **volume**: one `volumes` entry both attach;
 - an **endpoint**: one name in a `servers` entry's receives or handed list both hold;
+- a **volume**: one `volumes` entry both attach;
 - a **network instance**: one `ipd` or `netd` both use (a labelled domain gets no `/net` at all);
 - a **device object**: one `devices` entry both hold, since a shared disk or NIC is a shared
-  scheduler, cache and timing surface.
+  scheduler, cache and timing surface;
+- a **server instance**: one `servers` entry serving both.
 
 The kernel and the cores are not on the list. Every label set shares the one kernel, which is the
 trusted base, and its cores, whose timing is no more partitioned than the caches around them
@@ -123,6 +135,12 @@ labels, so it is a domain of its own. A confined manifest in which a labelled do
 shared unlabelled volume is refused too; data enters such a domain by an audited push from the
 steward ([steward](steward.md)). The refusal is a boot failure, not a warning
 ([R34 (confined placement)](#r34-confined-placement)).
+
+The domains compared are each `servers` entry, under its `labels` (`{}` if none), and each
+principal's label sets. A server's users are the servers handed one of its endpoints and, for a
+shared server (one that takes `buckets=N`), every principal domain: the same count as the bucket
+rule, so a server a session may later reach is never missed. The kinds are checked in the order
+listed, and the refusal names the kind.
 
 **The one named exception** is the control plane: the steward and `sshd` may reach across label
 sets, and only by three kinds of edge: the request and owner-approval path; per-item reader and
@@ -146,13 +164,16 @@ The kernel gives `init` the `root`, `system` and `users` budgets, every device o
 Reset right. The loader maps the bundle into it, read-only
 ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)). `init` then:
 
-1. parses and checks the manifest, and refuses the boot on any error. Until `consoled` starts,
+1. parses and checks the manifest, and refuses the boot on any error, or if what the manifest
+   will cost `init` does not fit in what `root` keeps for it
+   ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Until `consoled` starts,
    `init` writes its own lines to the UART, which it maps for itself. A refusal is printed there,
    and the machine powers off with a system-failure status, before any other process has run;
 2. creates every endpoint the manifest's servers receive on. Each is owned by and charged to
    `root`, so it outlives any one instance of its server, and R1 (flow) does not bind it because `root`
    is `system` class ([IPC](../kernel/ipc.md#r1-flow)). `init` keeps the receive right, hands the
-   server a copy, and mints the badged handles the server's arguments name for its callers;
+   server a copy, and mints, for each `handed` item that names the endpoint, a handle with the
+   item's badge for the server whose entry lists it;
 3. starts `keyd` and runs the [key-separation check](#the-key-separation-check) against it;
 4. unmaps the UART and starts `consoled` with it. From then on, `init` writes through its own
    connection to `consoled`, and it prints each child's console connection id when it starts

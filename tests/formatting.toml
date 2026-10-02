@@ -9,6 +9,7 @@ roots = [
     "libs/sys/fuzz",
     "libs/wire/fuzz",
     "servers/blkd/fuzz",
+    "servers/init/fuzz",
     "servers/ipd/fuzz",
     "servers/netd/fuzz",
     "stub/fuzz",
