@@ -490,9 +490,11 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
 - **A `consumed` lend is gone.** A caller whose taken call times out loses those pages. Callers
   that cannot afford that must not lend them with a short timeout.
 - **Delivery walks every thread, twice over.** Finding a receiver scans all threads, and for
-  each waiting receiver finding the next sender scans them all again: up to the square of
-  `MAX_PROCESS_COUNT` x `MAX_THREADS`, compile-time constants no process can change. It costs
-  time on every delivery, and that cost is not charged to the caller's budget.
+  each waiting receiver finding the next sender scans them all again: up to the square of the
+  threads that exist. A walk skips a PID with no process and visits only the threads that have
+  an IPC page, so it follows the threads the budgets have paid for, at most `MAX_PROCESS_COUNT` x
+  `MAX_THREADS`, compile-time constants no process can change. It costs time on every delivery,
+  and that cost is not charged to the caller's budget.
 - **Completion races between harts** are argued from the code, not attacked by a case. On one
   hart the kernel runs with interrupts off. On several (a build for more than one hart), each
   kernel global is guarded by its own lock, and the completion holds the memory manager's for

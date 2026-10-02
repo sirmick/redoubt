@@ -164,6 +164,9 @@ pub struct Account {
     /// `ProcessImpl`, and everything IPC needs (what the thread waits for, the message it is
     /// sending, the calls it holds open) lives here, so `call` and `send` never allocate.
     pub ipc: [u32; MAX_THREADS + 1],
+    /// The TIDs whose `ipc` slot holds a page, bit `tid` for thread `tid`: what every walk of the
+    /// threads iterates, so its cost follows the threads that exist ([`MemoryManager::live_tids`]).
+    pub live: u64,
     /// Open calls this process's threads hold (R4a): at `MAX_OPEN_CALLS` it takes no more.
     pub open_calls: u32,
     /// The next message id its threads will hand a sender. Never 0, never reused within this
@@ -184,6 +187,7 @@ impl Account {
         frames: 0,
         handles: HandleTable::EMPTY,
         ipc: [0; MAX_THREADS + 1],
+        live: 0,
         open_calls: 0,
         next_msg_id: 1,
         earliest_timeout: u64::MAX,
@@ -239,6 +243,15 @@ pub(crate) fn account_index(pid: Pid) -> Option<usize> {
     let index = usize::from(pid.get()) - 1;
     (index < MAX_PROCESS_COUNT).then_some(index)
 }
+
+/// Every PID, lowest first. A walk of the threads asks each for its [`MemoryManager::live_tids`],
+/// so a PID with no process costs it one lookup.
+pub(crate) fn pids() -> impl Iterator<Item = Pid> {
+    (1..=MAX_PROCESS_COUNT).filter_map(|i| Pid::new(i as u8))
+}
+
+// `Account::live` has a bit for every TID.
+const _: () = assert!(MAX_THREADS < u64::BITS as usize);
 
 /// `a ⊇ b`, both sorted.
 fn superset(a: &[u64], b: &[u64]) -> bool { b.iter().all(|x| a.binary_search(x).is_ok()) }
@@ -414,16 +427,32 @@ impl MemoryManager {
             return;
         }
         let frame = self.alloc_object_frame().expect("R6: a thread's page was charged but has no frame");
-        self.account_mut(pid).expect("account").ipc[tid] = frame;
+        let account = self.account_mut(pid).expect("account");
+        account.ipc[tid] = frame;
+        account.live |= 1 << tid;
     }
 
     /// Take thread `tid`'s IPC page back. Its contents are dead by now: `message.rs` unwinds
     /// what the thread waited for and the calls it held before the thread goes.
     fn take_ipc_frame(&mut self, pid: Pid, tid: usize) {
         if let Some(frame) = self.ipc_frame(pid, tid) {
-            self.account_mut(pid).expect("account").ipc[tid] = 0;
+            let account = self.account_mut(pid).expect("account");
+            account.ipc[tid] = 0;
+            account.live &= !(1 << tid);
             self.free_object_frame(frame);
         }
+    }
+
+    /// The TIDs of `pid`'s threads that have an IPC page, lowest first; none for a PID with no
+    /// account. The mask is read once, so the walk may end the threads it visits: one it has
+    /// not reached yet and that has ended meanwhile reads as a thread with no page.
+    pub fn live_tids(&self, pid: Pid) -> impl Iterator<Item = usize> + use<> {
+        let mut mask = self.account(pid).map_or(0, |a| a.live);
+        core::iter::from_fn(move || {
+            let tid = (mask != 0).then(|| mask.trailing_zeros() as usize)?;
+            mask &= mask - 1;
+            Some(tid)
+        })
     }
 
     // --- Charging (R6) ------------------------------------------------------------------------
@@ -544,7 +573,7 @@ impl MemoryManager {
     pub fn process_ended(&mut self, pid: Pid) {
         let Some(budget) = self.budget_of(pid) else { return };
         self.close_all_handles(pid);
-        for tid in 1..=MAX_THREADS {
+        for tid in self.live_tids(pid) {
             self.take_ipc_frame(pid, tid);
         }
         let account = self.account_mut(pid).expect("account");
@@ -1181,8 +1210,7 @@ pub fn destroy_subtree(
     // into `destroy_marked`'s single pass (I1, I2).
     MemoryManager::with_mut(|mm| mm.begin_destruction());
     let mut caller_doomed = false;
-    for index in 1..=MAX_PROCESS_COUNT {
-        let Some(victim) = Pid::new(index as u8) else { continue };
+    for victim in pids() {
         if !MemoryManager::with(|mm| mm.runs_in_dying(victim)) {
             continue;
         }

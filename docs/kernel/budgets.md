@@ -686,13 +686,13 @@ without preemption.*
      on a dying endpoint, reading each open call's flags alone: `abandon` owes no notice on an
      endpoint whose owner is dying, so every such notice was owed before the destruction began,
      and the walk's first pass meets each once, however many callers it fails.
-     `process::endpoints_dying` drops the exit notices in one process-object pass. Each walk is
-     `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk [R2 (fair waiting)](ipc.md#r2-fair-waiting)
-     already makes on the delivery path, repeated only while a pass fails a waiter: the cost
-     follows the subtree's own parked calls, never its endpoint count. Freeing an endpoint's frame
-     touches only the frame, once its handles are closed (item 2), not the dying budget that owns
-     it: the budget's whole object list is going with it, and its endpoints' pages come back in
-     one write.
+     `process::endpoints_dying` drops the exit notices in one process-object pass. Each walk
+     visits the threads that exist, at most `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk
+     [R2 (fair waiting)](ipc.md#r2-fair-waiting) already makes on the delivery path, repeated
+     only while a pass fails a waiter: the cost follows the subtree's own parked calls, never its
+     endpoint count. Freeing an endpoint's frame touches only the frame, once its handles are
+     closed (item 2), not the dying budget that owns it: the budget's whole object list is going
+     with it, and its endpoints' pages come back in one write.
   5. **A process's frames are found from the process.** Ending a process releases the frames it
      owns by walking its own page tables: the tables themselves, the user half's pages and the
      process area's saved registers, each freed if the ownership table still credits it to the
