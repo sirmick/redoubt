@@ -514,6 +514,9 @@ this order:
 3. **Free process objects.** Every process object charged to a dying budget is freed, its process
    killed first if it still runs elsewhere, with no notice. A notice never outlives the budget
    that pays for it.
+
+   A process that step 2 or 3 ends is **doomed** from the mark on: it runs in a dying budget, or
+   its process object is charged to one, because its creator's budget is dying.
 4. **Reach messages in flight.** Every endpoint a dying budget owns is destroyed: calls and sends
    blocked on it and receives waiting on it fail with `Dead`, calls a server took through it are
    abandoned (R3), and exit notices owed to it are dropped. Every device object charged to a
