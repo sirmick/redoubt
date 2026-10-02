@@ -539,12 +539,13 @@ and the kernel must survive to power off; `syscall-attack` makes an oversized le
 
 ### I15 (abandoned calls reported once)
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (11)</summary>
 
 - bench:redoubt-ipc
 - bench:timeouts
 - bench:budget-deadline
 - bench:process-lifecycle
+- bench:ending-pumps-once
 - bench:receive-bad-record
 - bench:endpoint-destroy-open-calls
 - mutation:AbandonNoticeMissing

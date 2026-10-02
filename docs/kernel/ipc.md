@@ -390,7 +390,14 @@ notices. A `send` is never an open call, so `reply` to a send's id is `InvalidAr
 
 ### R4b (a server dies)
 
-Status: built · tested: bench:redoubt-dead, bench:process-lifecycle, mutation:R4bDeadServerFakesReply
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:redoubt-dead
+- bench:process-lifecycle
+- bench:ending-pumps-once
+- mutation:R4bDeadServerFakesReply
+
+</details>
 
 When a thread or process exits, faults or is killed holding open calls, each waiting caller
 gets `Dead` and its lend back intact; the lend of an abandoned call is freed. Senders still
@@ -465,12 +472,6 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
 
 ## Residual risks
 
-- **An ending process's own threads can take a message.** Ending a process pumps an endpoint
-  each time one of its threads that waited for a reply through it ends. A later thread of the
-  same process, still receiving on that endpoint, can then take a queued call and end holding it,
-  so that caller gets `Dead` rather than waiting for the restarted server as R4b says. Each pump
-  is also a walk of every thread, about 1.2 ms. Follow-up:
-  [todo](../todo/process-ending-pumps-once.md).
 - **System-class servers are trusted to check labels.** R1 does not constrain a flow into or out
   of a `system` budget. A system server that serves two label sets and mixes their data breaks
   label separation, and the kernel cannot see it ([servers](../servers/README.md#labels)).

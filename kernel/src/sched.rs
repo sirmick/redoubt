@@ -522,6 +522,25 @@ pub mod trace {
         }
     }
 
+    /// A process's threads began and finished ending, the pumps after them included
+    /// (`message::process_ending`): the time in µs in the pass field. The bench reports each
+    /// destruction's time in them beside R10's (kernel/budgets.md, "Residual risks").
+    pub const THREADS_BEGIN: u8 = b'T';
+    pub const THREADS_END: u8 = b't';
+
+    /// The threads span running: its begin is recorded, and its end when this drops.
+    pub struct Threads;
+
+    /// Stamp a process's threads ending, until the returned guard drops.
+    pub fn threads() -> Threads {
+        record(THREADS_BEGIN, 0, u128::from(crate::time::now_us()));
+        Threads
+    }
+
+    impl Drop for Threads {
+        fn drop(&mut self) { record(THREADS_END, 0, u128::from(crate::time::now_us())); }
+    }
+
     /// A destroyed child's work moved to its parent: every operand of the rule and its result,
     /// as a group of nine records the oracle recomputes (`L` parent pass before, `l` child pass,
     /// `e` child entry, `f` floor, `r` child remainder, `q` parent remainder before, `w` the child's

@@ -1477,6 +1477,15 @@ fn abandon(ss: &ProcessTable, mm: &mut MemoryManager, frame: u32) {
 /// A thread is ending. What it waited for is withdrawn; a caller still waiting on a call it
 /// holds gets `Dead` and its lend back, and an abandoned lend is freed (R4b).
 pub fn thread_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID) {
+    if let Some(e) = end_thread(ss, mm, pid, tid) {
+        // A server may be able to take calls again now that this one is gone.
+        pump(ss, mm, e);
+    }
+}
+
+/// A thread's teardown, with no pump: returns the endpoint its wait served, for the caller to
+/// pump once it may.
+fn end_thread(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID) -> Option<EndpointRef> {
     // Not `fail_wait`: a dying thread gets no answer and must not go back on the ready list.
     let served = unwind(ss, mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
@@ -1486,10 +1495,7 @@ pub fn thread_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, ti
         drop_open_call(mm, pid, tid, frame);
         finish_served(ss, mm, frame);
     }
-    if let Some(e) = served {
-        // A server may be able to take calls again now that this one is gone.
-        pump(ss, mm, e);
-    }
+    served
 }
 
 /// A served call's server is gone: a waiting caller gets `Dead` and its lend back; an abandoned
@@ -1513,12 +1519,26 @@ fn finish_served(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     }
 }
 
-/// A process is ending: every one of its threads does (R4b).
+/// A process is ending: every one of its threads does (R4b). No endpoint is pumped until the last
+/// has ended, so none of them can take a call on the way out; then each endpoint their waits
+/// served is pumped once.
 pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
+    #[cfg(feature = "sched-trace")]
+    let _threads = crate::sched::trace::threads();
+    let mut served: [Option<EndpointRef>; MAX_THREADS] = [None; MAX_THREADS];
+    let mut n = 0;
     for tid in 1..=MAX_THREADS {
-        if mm.ipc_frame(pid, tid).is_some() {
-            thread_ending(ss, mm, pid, tid);
+        if mm.ipc_frame(pid, tid).is_none() {
+            continue;
         }
+        let e = end_thread(ss, mm, pid, tid);
+        if e.is_some() && !served[..n].contains(&e) {
+            served[n] = e;
+            n += 1;
+        }
+    }
+    for e in served[..n].iter().flatten() {
+        pump(ss, mm, *e);
     }
 }
 

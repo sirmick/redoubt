@@ -718,17 +718,23 @@ without preemption.*
   notices. Under 30 ms leaves a few microseconds per object in the checked build. The chains therefore come with those costs
   cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and the
   notice walk joined to a thread walk the destruction already makes. The budget was 25 ms at the
-  full fill on rv32, the slower width. Built, the gate's full fill measures 23.6 ms with the other
-  lease's full table live and 20.5 ms alone on rv32, and 23.3 and 20.5 ms on rv64 (the medians of
-  nine destructions each). On rv32, with the other lease live:
+  full fill on rv32, the slower width. Built, the gate's full fill measures 20.8 ms with the other
+  lease's full table live and 18.7 ms alone on rv32, and 20.7 and 18.8 ms on rv64 (the medians of
+  nine destructions each, seed 3). An ending process pumps each endpoint once, after its threads;
+  pumping after each thread instead, the same kernel measures 24.5 and 21.2 ms on rv32. A traced
+  build brackets each process's end with `T` and `t` records, and the bench reports the time
+  inside each destruction beside R10's. On rv32, with the other lease live (the threads'
+  teardown measured with those records, the other lines by the bisect that set the budget):
   - the chain walk, 0.2 ms (budgeted under 1 ms);
   - the dying tables, 0.3 ms (2 ms);
   - the processes' frames, 2.0 ms (1.5 ms; most of it is reading the Sv32 page tables of two
     processes; 2.5 ms on rv64);
   - the endpoints, 8.8 ms, 2.15 µs each: a 5.0 ms walk that destroys the devices and a 3.8 ms
     walk that frees the endpoints (8 ms);
-  - the threads' teardown, 8.0 ms (8 ms), most of it the four parked lend calls, each of which
-    abandons its call and pumps the server's endpoint again;
+  - the threads' teardown, 3.0 ms (8 ms; 6.7 ms pumping after each thread). Every thread ends
+    first, and then each endpoint their waits served is pumped once, so the cost follows the
+    served endpoints, not the parked calls: the four parked lend calls are one pump of the
+    server's endpoint, a walk of every thread, not four;
   - the thread walks, 1.3 ms (2 ms);
   - the rest, 2.9 ms (3 ms).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create

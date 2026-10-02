@@ -23,6 +23,7 @@ bin = [
     { name = "dma-reset-quarantine", test = false },
     { name = "dma-reset-reuse", test = false },
     { name = "dma-rules", test = false },
+    { name = "ending-pumps-once", test = false },
     { name = "endpoint-destroy-full", test = false },
     { name = "endpoint-destroy-open-calls", test = false },
     { name = "forger", test = false },
