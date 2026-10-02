@@ -32,7 +32,7 @@ use redoubt_steward::audit::Record;
 use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, DECLASSIFY_MAX, FIELD_CAP, MAX_LEASE, PENDING_CAP};
 use redoubt_steward::domain::Labels;
 use redoubt_steward::effect::{Answer, Kind, Notice, Notified, Output};
-use redoubt_steward::event::Content;
+use redoubt_steward::event::{Content, Event};
 use redoubt_steward::inspect;
 use redoubt_steward::manifest::{Limits, Manifest, PrincipalSpec, Sizes};
 use redoubt_steward::render::{printable, sanitize};
@@ -973,8 +973,19 @@ impl Run {
 
 /// P1-P9, P11-P14: a random sequence of policy operations.
 pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
+    policy_sequence(seed, mutation, false).map(|_| ())
+}
+
+/// The events `steward_policy`'s sequence for `seed` gives the core: a trace for the Elixir
+/// reference (servers/steward.md, "Two embedders and a reference").
+pub fn steward_policy_events(seed: u64) -> Result<Vec<Event>, Failure> {
+    policy_sequence(seed, None, true).map(|mut run| run.st.recorded.take().unwrap_or_default())
+}
+
+fn policy_sequence(seed: u64, mutation: Option<Mutation>, record: bool) -> Result<Run, Failure> {
     let mut rng = Rng::new(seed);
     let mut run = Run::new(mutation, rng.next_u64());
+    run.st.recorded = record.then(Vec::new);
     for i in 0..rng.range(20, 160) {
         let op = random_op(&run, &mut rng);
         run.apply(&op).map_err(|message| Failure {
@@ -984,7 +995,7 @@ pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failu
             ops: Vec::new(),
         })?;
     }
-    Ok(())
+    Ok(run)
 }
 
 /// P10 (servers/steward.md R37): one sequence runs twice, the second time without the work of the
@@ -1001,6 +1012,17 @@ pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failu
 /// blame and outcomes are service-slot timing (servers/steward.md R37, "Residual risks"). The
 /// owner's approval screen is not an observer.
 pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
+    noninterference_runs(seed, mutation, false).map(|_| ())
+}
+
+/// The events `steward_noninterference`'s two runs for `seed` give the core, with the vault's
+/// work and without it: traces for the Elixir reference.
+pub fn steward_noninterference_events(seed: u64) -> Result<[Vec<Event>; 2], Failure> {
+    let (mut with, mut without) = noninterference_runs(seed, None, true)?;
+    Ok([with.st.recorded.take().unwrap_or_default(), without.st.recorded.take().unwrap_or_default()])
+}
+
+fn noninterference_runs(seed: u64, mutation: Option<Mutation>, record: bool) -> Result<(Run, Run), Failure> {
     let mut rng = Rng::new(seed);
     let secret = rng.next_u64();
     let fail =
@@ -1048,6 +1070,8 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
     }
     let mut with = Run::new(mutation, secret);
     let mut without = Run::new(mutation, secret);
+    with.st.recorded = record.then(Vec::new);
+    without.st.recorded = record.then(Vec::new);
     // A vault session's id follows its domain's own history, which the vault's work is part of:
     // the session an op names is found in the run without that work as the one started at the
     // same op. Results are never renamed.
@@ -1134,7 +1158,7 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
             }
         }
     }
-    Ok(())
+    Ok((with, without))
 }
 
 /// `op` with the sessions it names as the run without the vault's work knows them

@@ -687,6 +687,7 @@ name = "redoubt-model"
 version = "0.1.0"
 dependencies = [
  "redoubt-steward",
+ "redoubt-steward-trace",
 ]
 
 [[package]]

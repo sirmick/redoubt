@@ -11,3 +11,7 @@ description = "Executable security model of the Redoubt kernel (docs/kernel/mode
 # (src/gen.rs), so every failure is reproducible from one seed and shrinks to a short trace.
 [dependencies]
 redoubt-steward = { path = "../libs/steward" }
+
+# The steward core's trace encoding, for `examples/steward-traces.rs`: host-only, never in the model.
+[dev-dependencies]
+redoubt-steward-trace = { path = "../libs/steward/trace" }

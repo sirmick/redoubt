@@ -165,6 +165,9 @@ pub struct Steward {
     /// `PolicySequentialIds`'s counter.
     counter: u64,
     replies: u64,
+    /// When set, every event the core decides, in order: a trace for the Elixir reference
+    /// (servers/steward.md, "Two embedders and a reference").
+    pub recorded: Option<Vec<Event>>,
 }
 
 /// splitmix64's finaliser: the model's stand-in for a keyed random function.
@@ -239,6 +242,7 @@ impl Steward {
             drawn: BTreeMap::new(),
             counter: 0,
             replies: 0,
+            recorded: None,
         };
         st.exits = handle(st.sys(Syscall::EndpointCreate)?)?;
         st.start_server()?;
@@ -396,8 +400,11 @@ impl Steward {
     fn feed(&mut self, reply: u64, kind: EventKind) {
         let mut queue = VecDeque::from([(reply, kind)]);
         while let Some((reply, kind)) = queue.pop_front() {
-            let random = self.words(&kind);
-            let effects = decide(&mut self.store, Event { now: self.k.now, random, reply, kind });
+            let event = Event { now: self.k.now, random: self.words(&kind), reply, kind };
+            if let Some(r) = &mut self.recorded {
+                r.push(event.clone());
+            }
+            let effects = decide(&mut self.store, event);
             if effects.exit {
                 return;
             }
