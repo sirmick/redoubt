@@ -43,6 +43,12 @@ failure, and then reports the batch as one `Done` event, with every result or th
 failed. A machine waiting for a batch is in a state of its own, so every failure has a
 transition.
 
+Events one machine raises for another (a grant's lease, a crossing's snapshot for its request, a
+lockout, a session's end for its requests) are the core's own and never a batch's steps: `decide`
+runs them in the order they were raised before it returns, and drops without an answer one that
+names an object already gone. An event the embedder's guarantee excludes is a steward bug, and
+the server fails closed: it exits, and `init` restarts it ([below](#failure-and-restart)).
+
 The embedder guarantees, and the core assumes, that:
 - events come one at a time, and a batch's `Done` arrives before any other event about that
   object;
@@ -87,20 +93,27 @@ Only the module that holds these three can borrow two domains at once. So no oth
 read or change a second domain: [R37 (vault non-interference)](#r37-vault-non-interference) is
 kept by the type, not by review. Audit records have one constructor, which takes a domain and
 stamps its account and labels, so no record can lack the labels it must be read under. An edge's
-record is stamped with the labelled side's domain.
+record is stamped with the labelled side's domain. So a request an unlabelled session submits for
+a labelled target (a labelled agent, a push) is recorded under its target's domain from
+submission on: whether it was approved depends on that domain's lockout.
 
 #### Machines
 
 Each object is a plain `enum` with one transition table: a session, a lease, a request, a
 crossing, a domain's blame and an approval channel. A request is rendered before it can be
-approved: `Approve` is a transition only from `Rendered`, on the channel that rendered it.
+answered: `Approve` and `Deny` are transitions only from `Rendered`, on the channel that rendered
+it last. What an approval starts belongs to the machine it starts (a lease, a crossing), so
+`Approved` is final and a failure after it is that machine's transition. A crossing's kind is fixed
+when it opens and each kind has rows of its own: a declassification's read and a push's write go
+through a budget carrying exactly the labelled side's labels; a declassification's copy out is
+the steward's own write to the unlabelled volume, with no budget.
 
 | Machine | States | Events |
 | --- | --- | --- |
 | session | `Starting`, `Running`, `Ending`, `Ended` | `Login`; `Done`; `EndSession`, `ChannelClosed`, `Exited`, `LockedOut` |
 | lease | `Starting`, `Running`, `Ending`, `Ended` | `StartAgent` or a granted request; `Done`; `EndLease`, `Exited` (its deadline), `LockedOut` |
 | request | `Snapshotting`, `Frozen`, `Rendered`, `Approved`, `Denied`, `Dropped` | `Submit`; `Done` (the snapshot); `Pending`, `Approve`, `Deny`; its session's end |
-| crossing | `Open`, `Closed` | opened by a request; `Done` (the item read or written), `Exited` |
+| crossing | `Open`, `Closing`, `Closed` | opened by a request (a read, a copy out, a push's write); `Done` (the item read or written, or what was left destroyed), `Exited` |
 | blame | `Open`, `LockedOut` | `Blame`; `Login` once the window has passed |
 | approval channel | `Open`, `Closed` | `ApprovalOpened`, `ApprovalClosed` |
 
@@ -126,19 +139,24 @@ default. The model swaps one entry for a broken one.
 
 | Guard or effect | Rule | Mutation |
 | --- | --- | --- |
-| `login_key` | a login uses one of the principal's login keys, never one `keyd` holds | `PolicyLoginWithKeydKey` |
-| `owns_labels` | a vault login, a labelled agent, a declassification or a push needs the labels' owner | `PolicyVaultWithoutOwnership` |
+| `login_key`, `approval_key` | a login uses one of the principal's login keys and an approval channel one of its approval keys, never a key `keyd` holds or one enrolled in the other role | `PolicyLoginWithKeydKey`, `PolicyApproveWithLoginKey` |
+| `owns_labels` | a vault login, a labelled agent, a declassification or a push needs the labels' owner, read from the manifest's owned labels, never from a domain's existence | `PolicyVaultWithoutOwnership` |
+| `caller_unlabelled` | a labelled session or agent starts nothing; it only submits requests | `PolicyLabelledStartsAgent` |
 | `not_locked`, `blame_window` | R40 | `PolicyNoLockout`, `PolicyBlameNoWindow` |
 | `pending_cap`, `fair_share` | the pending cap per domain, a fair share per session | `PolicyNoPendingCap`, `PolicyNoFairShare` |
 | `drop_requests` | a session's end drops its requests | `PolicyDeadSessionRequestsKept` |
-| `lease_bounded` | R39 | `PolicyUnboundedLease` |
-| `may_see`, `render` | R38's screens: only owners of every label, printable ASCII, capped, no labelled free text | `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown` |
+| `lease_bounded`, `carve_lease` | R39: a lease at most `MAX_LEASE`; a sub-agent inside its agent's budget, ending no later | `PolicyUnboundedLease`, `PolicySubAgentOutlivesAgent` |
+| `may_see`, `render`, `notify` | R38's screens: only owners of every label, printable ASCII, capped, no labelled free text; an approval-waiting notice reaches only channels whose labels include all the request's | `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyNotifyLabelledToAll` |
 | `rendered_here`, `hash_matches`, `approver_holds` | R38's binding and its bound | `PolicyApproveOtherChannel`, `PolicyApproveIgnoresHash`, `PolicyApproverExceeds` |
-| `one_item`, `exact_labels` | R42 | `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader`, `PolicyWriteUp` |
+| `exact_labels`, `item_fits` | R42: a declassification is submitted from a session with exactly the item's labels, a push from an unlabelled session; a declassified item is at most `DECLASSIFY_MAX` bytes of printable text | `PolicyDeclassifyFromUnlabelled`, `PolicyDeclassifyUnfit` |
+| `carve_crossing`, `copy_out` | R42: a reader or writer budget carries exactly the labelled side's labels; a copy out writes exactly the snapshot | `PolicyDeclassifyWithoutReader`, `PolicyDeclassifyLive` |
 | `sponsor_session` | a lease is ended only from an unlabelled session of its sponsor | `PolicyEndLeaseFromVault` |
-| `audit_visible` | an audit record is read under [R25 (the label check)](serving.md#r25-the-label-check) | `PolicyAuditUnfiltered` |
+| `audit_visible` | every audit read goes through it: a record is read under [R25 (the label check)](serving.md#r25-the-label-check) | `PolicyAuditUnfiltered` |
 
-Three of the model's mutations break a rule the types now keep, and they cannot be written: blame
+A guard that reads only an object's kind (which crossing it is, whether a request snapshots)
+carries no rule, is named only in the tables, and has no mutation.
+
+Four of the model's mutations break a rule the types now keep, and they cannot be written: blame
 or a pending cap counted per account (`PolicyBlamePerAccount`, `PolicyCapPerAccount`) and a
 session carved from another label set's sub-budget (`PolicyCarveFromUnlabelled`) each need a
 second domain, and a narrowing handle for a session's budget (`PolicyNarrowToSessionBudget`)
@@ -146,6 +164,8 @@ needs a budget where the effect takes only a revocation scope, a type of its own
 zero-limit `CreateScope` makes (R41). They are retired, and this table says why. Ids drawn from
 a counter (`PolicySequentialIds`) and end-lease admitted behind others
 (`PolicyEndLeaseAdmitted`) break the embedder's half, and stay mutations of the model's embedder.
+So does an item written by a session without exactly its labels (`PolicyWriteUp`): that check is
+the volume's ([R25](serving.md#r25-the-label-check)), and no steward event.
 
 The request binding hash is SHA-256 over the request's canonical encoding, through the
 workspace's vendored `sha2`. It is the core's one cryptographic function. It binds content and
@@ -219,7 +239,7 @@ Status: planned · M1 (separation and containment)
   channel, which the steward opened for the label's owner. The model checks the ownership rule
   (`PolicyVaultWithoutOwnership`).
 - **A labelled session starts nothing.** It can only submit requests to the steward; everything it
-  asks for is started, if at all, by the steward (its P8).
+  asks for is started, if at all, by the steward (its P8; `PolicyLabelledStartsAgent`).
 - **Every id is unpredictable.** Session, request and connection ids are random 64-bit words from
   a keyed generator, never a counter, which would tell every principal how many the others made
   ([R36 (unpredictable ids)](#r36-unpredictable-ids)).
@@ -295,6 +315,8 @@ or an agent with a person at the top of the chain.
   it straight from its receive loop ([serving](serving.md#admit)). The sponsor ends it from any of
   its unlabelled sessions. A vault session cannot, since ending a lease it does not share labels
   with would be a flow out of the vault.
+- **The sponsor learns that a lease ended**, however it ended: the steward notifies the sponsor's
+  unlabelled sessions through the lease-supervision edge, naming the lease and not why it ended.
 - **Narrowing is a revocation scope.** To give a server a way to narrow a session's or lease's
   connections, the steward passes it a revocation scope made for that purpose, never a budget
   that holds processes, which would let a compromised server end every session
@@ -386,7 +408,8 @@ sequenceDiagram
 The model checks binding, screens, caps and the approval channel (its P3, P4 and P5;
 `PolicyApproveIgnoresHash`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`,
 `PolicyShowLabelledToAll`, `PolicyCapPerAccount`, `PolicyNoPendingCap`,
-`PolicyDeadSessionRequestsKept`) ([R38 (out-of-band approval)](#r38-out-of-band-approval)).
+`PolicyDeadSessionRequestsKept`, `PolicyApproveWithLoginKey`, `PolicyNotifyLabelledToAll`)
+([R38 (out-of-band approval)](#r38-out-of-band-approval)).
 
 **The steward's constants** are the model's, changed only by a new system bundle, never per
 principal: `PENDING_CAP` 4 pending requests per (account, label set); `FIELD_CAP` 64 characters;
@@ -423,9 +446,10 @@ push moves one item from an unlabelled volume into the labelled domain's volume.
 label's owner triggers it through the powerbox with an out-of-band approval; the confined domain
 cannot trigger one, name the item, or pull one. The owner submits it from an unlabelled session.
 At submission the steward reads the source (it is unlabelled), snapshots it and hashes the
-snapshot, as a declassification does. On approval it writes exactly that snapshot through a
-short-lived **writer budget** carrying exactly the target label set,
-since a write needs equal labels. There is no standing path, queue or batch, and the push is
+snapshot, as a declassification does. A pushed item is not held to `DECLASSIFY_MAX`: its screen
+shows the source and the target, the item's size and the snapshot's hash. On approval it writes
+exactly that snapshot through a short-lived **writer budget** carrying exactly the target label
+set, since a write needs equal labels. There is no standing path, queue or batch, and the push is
 audited with the request's labels. The steward declines a labelled session's mount of a shared
 unlabelled volume in a confined deployment and offers the push instead.
 
@@ -451,8 +475,8 @@ sequenceDiagram
 
 The model checks that what is copied out is exactly the snapshot, read through a reader with the
 item's labels, and the push's shape (its P6 and P11; `PolicyDeclassifyLive`,
-`PolicyDeclassifyWithoutReader`, `PolicyWriteUp`)
-([R42 (one approved item)](#r42-one-approved-item)).
+`PolicyDeclassifyWithoutReader`, `PolicyDeclassifyFromUnlabelled`, `PolicyDeclassifyUnfit`,
+`PolicyWriteUp`) ([R42 (one approved item)](#r42-one-approved-item)).
 
 The steward's reader and writer budgets are edges of the confinement check's one named
 exception: each carries exactly one label set and dies after one item
