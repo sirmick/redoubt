@@ -27,6 +27,21 @@ const CHUNK: u64 = 256;
 /// The slice (kernel/scheduling.md, "Preemption points"), in microseconds.
 pub const SLICE_US: u64 = 10_000;
 
+// The latency workload (kernel/scheduling.md, "Responsiveness"), one definition used by both
+// `sched-latency` and `kernel-containment`. The targets are the case files' post-check bounds.
+
+/// Share tolerance, in thousandths.
+pub const TOL: u64 = 30;
+/// Driver alarms and steward timeouts per latency run (p99 is then the second largest).
+pub const K: u64 = 200;
+/// Leases per latency run the steward destroys by hand, and as many by deadline.
+pub const LEASES: u64 = 50;
+/// The latency case's window, µs.
+pub const WINDOW_US: u64 = 16_000_000;
+/// R10's kernel time target, µs, for `budget_destroy`'s recorded bound (the post-check judges R10
+/// and every latency target, net of the checked build's audits).
+pub const R10_P99: usize = 30_000;
+
 /// What a child does. Its startup block is the role, then up to eight `u64` parameters.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
@@ -91,6 +106,19 @@ pub enum Role {
     /// Carve p0 of this budget's weight (slot 3) to an empty child, count 9 ms, destroy the child
     /// so the weight comes back, then count until the window ends; report that last count.
     CarveSpin = 20,
+    /// The containment gate's hostile agent, run by the steward in a lease (kernel/README.md,
+    /// "Containment").
+    Agent = 21,
+    /// The agent's sub-agent: bounded thread and process churn in the sub-budget.
+    SubAgent = 22,
+    /// The containment gate's victim server.
+    Victim = 23,
+    /// The containment gate's bystander: its share, and the queued stamped handle.
+    Bystander = 24,
+    /// The containment gate's steward stand-in.
+    Containment = 25,
+    /// The endpoint maker, run once in `users`.
+    EndpointMaker = 26,
 }
 
 impl Role {
@@ -117,6 +145,12 @@ impl Role {
             DestroyThenCount,
             DeadlineFlood,
             CarveSpin,
+            Agent,
+            SubAgent,
+            Victim,
+            Bystander,
+            Containment,
+            EndpointMaker,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -295,6 +329,14 @@ pub extern "C" fn child(arg: usize) -> ! {
         }
         rd::process_exit(0)
     }
+    // Roles the containment gate starts directly (not through `Bench::start`): they have no go
+    // window and no report handle, so they are dispatched before the window wait.
+    match role {
+        Some(Role::EndpointMaker) => endpoint_maker(),
+        Some(Role::Agent) => agent_main(),
+        Some(Role::SubAgent) => sub_agent_main(),
+        _ => {}
+    }
     let (start, end) = window();
     let tpu = tpu();
     set_end(end);
@@ -444,6 +486,9 @@ pub extern "C" fn child(arg: usize) -> ! {
             await_done(threads);
             0
         }
+        Some(Role::Victim) => victim(),
+        Some(Role::Bystander) => bystander(),
+        Some(Role::Containment) => containment(),
         _ => 0,
     };
     report(total);
@@ -849,6 +894,757 @@ pub fn panicked(name: &str, info: &core::panic::PanicInfo) -> ! {
     crate::park()
 }
 
+// --- The containment gate (kernel/README.md, "Containment") -------------------------------
+
+/// The gate's lease geometry: the same page counts on both widths. The sub-budget is the
+/// sub-agent's image and churn. The agent fills its handle table to `MAX_HANDLES` with endpoints,
+/// and the lease is sized ([`ct_lease_pages`]) so that the kernel's refusal of a handle past a
+/// full table ends the fill, never the lease's pages: the full fill, which is what makes R10 walk
+/// as far as a lease can make it walk.
+pub const CT_SUB_PAGES: u64 = 1500;
+/// What objects cost (kernel/objects.md, the pages each object takes): an endpoint is one page,
+/// and a handle-table page holds 128 handles.
+const ENDPOINT_PAGES: u64 = 1;
+const HANDLES_PER_PAGE: u64 = 128;
+/// The agent's handles that are not its fill: its call, send and progress handles, its lease and
+/// the sub-budget.
+const CT_AGENT_HANDLES: u64 = 5;
+/// The endpoints of a full fill: the rest of the handle table.
+const CT_FILL_ENDPOINTS: u64 = redoubt_sys::MAX_HANDLES as u64 - CT_AGENT_HANDLES;
+/// The agent's thread pages: an IPC page per thread, a stack per thread it starts, and its lends.
+const CT_THREAD_PAGES: u64 = ((1 + CT_SPINS + CT_CALLERS + CT_SENDERS)
+    + (CT_SPINS + CT_CALLERS + CT_SENDERS) * STACK_PAGES
+    + CT_CALLERS * CT_LEND_PAGES) as u64;
+/// Room for what the agent holds besides: its saved contexts, page tables and startup page.
+const CT_AGENT_SPARE: u64 = 64;
+
+/// The pages a full fill holds at its least: the image, the sub-budget's carve and its own page,
+/// the agent's thread pages, the fill's endpoints and a full handle table. A lease whose usage
+/// reaches this, with pages to spare, filled its table.
+fn ct_fill_pages(image: &Image) -> u64 {
+    image.pages() as u64
+        + CT_SUB_PAGES
+        + 1
+        + CT_THREAD_PAGES
+        + CT_FILL_ENDPOINTS * ENDPOINT_PAGES
+        + redoubt_sys::MAX_HANDLES as u64 / HANDLES_PER_PAGE
+}
+
+/// A lease: a full fill and room to spare, so the table fills before the pages run out.
+fn ct_lease_pages(image: &Image) -> u64 { ct_fill_pages(image) + CT_AGENT_SPARE }
+
+/// Whether the armed lease `lease` filled its handle table: its usage (the kernel's count) holds a
+/// full fill's pages and is still under its limit, so the fill ended on the table, not the pages.
+fn filled(image: &Image, lease: u32) -> bool {
+    rd::usage(lease).is_ok_and(|u| u.pages_usage >= ct_fill_pages(image) && u.pages_usage < u.pages_limit)
+}
+const CT_LEASE_WEIGHT: u32 = 10;
+const CT_LEND_PAGES: usize = 2;
+/// The sub-agent's later deadline, from the agent's own start. It is far past any lease deadline,
+/// so the lease dies first and this never fires: a child's later deadline never outlives it.
+const CT_SUBLEASE_US: u64 = 600_000_000;
+/// Slot H's decision: this long after the agent armed, the steward destroys it by hand.
+const CT_DECISION_US: u64 = 5_000;
+/// Leases per slot (kernel/README.md, "Containment": eight of each kind have ended; a ninth runs
+/// so the eighth's lends can be checked after a later lease reused freed frames).
+const CT_LEASES: usize = 9;
+/// The slot D deadline is calibrated from the time the slot H agent took to arm: it is set to
+/// this many times that, plus a margin, so the fill finishes first and the lease's end is the
+/// measured destruction. [`CT_ARM_FALLBACK_US`] is the first round's guess.
+const CT_ARM_FACTOR: u64 = 4;
+const CT_D_MARGIN_US: u64 = 200_000;
+const CT_ARM_FALLBACK_US: u64 = 2_000_000;
+const CT_SPINS: usize = 3;
+const CT_CALLERS: usize = 4;
+const CT_SENDERS: usize = 4;
+const CT_SUB_ROUNDS: usize = 32;
+const CT_SUB_CHILDREN: usize = 4;
+
+// Badges: one distinct per report path (rule F).
+const CT_AGENT: u64 = 0x11;
+const CT_PROGRESS_BADGE: u64 = 0x13;
+const CT_CARRIED: u64 = 0x21;
+const CT_STEWARD: u64 = 0xC0;
+const CT_GIFT_SEND: u64 = 0x30;
+const CT_QUEUED_SEND: u64 = 0x20;
+
+// Progress words.
+const CT_SUB: usize = 1;
+const CT_ARMED: usize = 2;
+// Control words.
+const CT_END: usize = 1;
+const CT_FINAL: usize = 2;
+const CT_DONE: usize = 3;
+
+/// The tag of the steward's verdict report on its slot 1 (the only line a hostile agent's lease
+/// could otherwise write to is progress, never a report).
+pub const CT_VERDICT: usize = 7;
+
+// Handle slots each role receives (Bench::start: 1 report, 2 go, extras from 3).
+const CT_V_CALL: u32 = 3;
+const CT_V_SEND_D: u32 = 4;
+const CT_V_SEND_H: u32 = 5;
+const CT_V_QUEUED_D: u32 = 6;
+const CT_V_QUEUED_H: u32 = 7;
+const CT_V_BUDGET: u32 = 8;
+const CT_S_SESSIONS: u32 = 3;
+const CT_S_CALL: u32 = 4;
+const CT_S_SEND_D: u32 = 5;
+const CT_S_SEND_H: u32 = 6;
+const CT_S_PROGRESS: u32 = 7;
+const CT_S_GIFT: u32 = 8;
+const CT_B_GIFT: u32 = 3;
+const CT_B_QUEUED_D: u32 = 4;
+const CT_B_QUEUED_H: u32 = 5;
+const CT_M_HANDOFF: u32 = 1;
+
+/// What a lend of the agent's carries: a function of the lease, the caller and the page.
+fn lend_pattern(r: u64, caller: u64, page: u64) -> u64 {
+    0x9e37_79b9_0000_0000 | (r << 32) | (caller << 24) | page
+}
+
+fn usage_pages(budget: u32) -> u64 { rd::usage(budget).map(|u| u.pages_usage).unwrap_or(u64::MAX) }
+
+/// Whether a handle the steward held is gone after the budget that stamped or named it died.
+fn gone(handle: u32) -> bool { matches!(rd::usage(handle), Err(rd::Error::BadHandle)) }
+
+/// A reply the caller no longer waits for: `discarded`, mask 0.
+fn discarded(msg_id: u64) -> bool {
+    let rec = rd::body([0; 4]).encode();
+    let Some(id) = core::num::NonZeroU64::new(msg_id) else { return false };
+    matches!(
+        redoubt_sys::syscall(&rd::Call::Reply { msg_id: id, body_rec: rec.as_ptr() as usize }),
+        Ok(rd::Return::Reply(o)) if !o.delivered && o.installed == 0
+    )
+}
+
+// --- The hostile agent's threads ---
+
+/// Spin on `rdtime` only: never enters the kernel.
+extern "C" fn agent_spinner(_: usize) -> ! {
+    loop {
+        spin_until(u64::MAX);
+    }
+}
+
+/// Enter the kernel in a tight loop (a call that returns at once).
+extern "C" fn agent_tight(_: usize) -> ! {
+    loop {
+        let _ = rd::time_now();
+    }
+}
+
+/// Call the victim with a two-page lend the victim holds open; the caller is killed at the
+/// lease's end, which abandons the call (R3).
+extern "C" fn agent_caller(arg: usize) -> ! {
+    let r = param(0);
+    let slot = param(1);
+    let caller = arg as u64;
+    let pages = rd::many_pages(CT_LEND_PAGES);
+    for p in 0..CT_LEND_PAGES as u64 {
+        rd::poke(pages + p as usize * rd::PAGE_SIZE, lend_pattern(r, caller, p));
+    }
+    let _ = rd::call_outcome(
+        1,
+        &rd::body([r as usize, caller as usize, slot as usize, 0]),
+        rd::pages(pages, CT_LEND_PAGES),
+        rd::FOREVER,
+    );
+    crate::park()
+}
+
+/// Block in `send` on the lease's send endpoint: nothing receives there, so it stays blocked
+/// until the lease dies and fails it with `Dead`.
+extern "C" fn agent_sender(_: usize) -> ! {
+    let _ = rd::send(2, &rd::body([7, 0, 0, 0]), None, rd::FOREVER);
+    crate::park()
+}
+
+/// The agent's process: start its threads, carve the sub-budget, fill the lease and its handle
+/// table, then arm and spin. Slots: 1 call, 2 send, 3 progress, 4 the lease budget.
+fn agent_main() -> ! {
+    let r = param(0);
+    for _ in 0..CT_SPINS {
+        thread(agent_spinner, 0);
+    }
+    thread(agent_tight, 0);
+    for c in 0..CT_CALLERS {
+        thread(agent_caller, c);
+    }
+    for _ in 0..CT_SENDERS {
+        thread(agent_sender, 0);
+    }
+    let sub = rd::create(
+        4,
+        &rd::BudgetSpec {
+            deadline: rd::time_now().unwrap_or(0) + CT_SUBLEASE_US,
+            ..rd::spec(CT_SUB_PAGES, 2, 1)
+        },
+    )
+    .expect("the sub-budget");
+    let _ =
+        rd::send(3, &rd::body_with([CT_SUB, r as usize, param(1) as usize, 0], &[sub]), None, rd::FOREVER);
+    // The full fill (kernel/README.md, "Containment"): endpoints until the kernel refuses one,
+    // which, in a lease of `ct_lease_pages`, is the full handle table; then mints from the first
+    // endpoint, which the full table refuses too. The cap is only a safety net; the steward judges
+    // the fill from the lease's usage, never from this agent.
+    let first = rd::endpoint_create().expect("the first endpoint");
+    let mut eps = 1u64;
+    let mut ep_err = 0usize;
+    while (eps as usize) < redoubt_sys::MAX_HANDLES {
+        match rd::endpoint_create() {
+            Ok(_) => eps += 1,
+            Err(e) => {
+                ep_err = e as usize;
+                break;
+            }
+        }
+    }
+    let mut mints = 0u64;
+    let mut mint_err = 0usize;
+    while (mints as usize) < redoubt_sys::MAX_HANDLES {
+        match rd::mint_from_handle(first, 0x500 + mints, None) {
+            Ok(_) => mints += 1,
+            Err(e) => {
+                mint_err = e as usize;
+                break;
+            }
+        }
+    }
+    let _ = (ep_err, mint_err);
+    let _ = rd::send(
+        3,
+        &rd::body([CT_ARMED, r as usize, param(1) as usize, eps as usize | ((mints as usize) << 20)]),
+        None,
+        rd::FOREVER,
+    );
+    loop {
+        spin_until(u64::MAX);
+    }
+}
+
+// --- The sub-agent: bounded thread and process churn ---
+
+static SUB_CHURNED: AtomicUsize = AtomicUsize::new(0);
+
+extern "C" fn sub_worker(_: usize) -> ! {
+    let _ = spin_until(ticks() + 2_000);
+    SUB_CHURNED.fetch_add(1, SeqCst);
+    rd::thread_exit().ok();
+    crate::park()
+}
+
+/// The agent's sub-agent, in the sub-budget (slot 1 is that budget's handle): a bounded number
+/// of thread create/exit rounds and child processes, then spin. The bound is what keeps the
+/// kernel trace ring from dropping records.
+fn sub_agent_main() -> ! {
+    for round in 0..CT_SUB_ROUNDS {
+        thread_on(30 + round % 2, sub_worker, 0);
+        while SUB_CHURNED.load(SeqCst) < round + 1 {
+            let _ = rd::receive(None, 1_000, 0);
+        }
+    }
+    let image = spawn::image();
+    let exit = rd::endpoint_create().expect("the sub-agent's exit endpoint");
+    let mut startup = [0u8; 1 + 8 * 8];
+    startup[0] = Role::ChurnChild as u8;
+    startup[1..9].copy_from_slice(&2_000u64.to_le_bytes());
+    startup[9..17].copy_from_slice(&0u64.to_le_bytes());
+    startup[17..25].copy_from_slice(&1u64.to_le_bytes());
+    for _ in 0..CT_SUB_CHILDREN {
+        if spawn::spawn(&image, 1, exit, child as *const () as usize, &startup, &[]).is_err() {
+            break;
+        }
+        let _ = rd::receive(Some(exit), rd::FOREVER, 0);
+    }
+    loop {
+        spin_until(u64::MAX);
+    }
+}
+
+// --- The endpoint maker: run once in `users`, then exit ---
+
+/// Make the victim's endpoints and the steward's progress endpoint (all owned and stamped by
+/// `users`, which is where this runs), hand out copies, and exit: an endpoint outlives its maker.
+fn endpoint_maker() -> ! {
+    let handoff = CT_M_HANDOFF;
+    let call = rd::endpoint_create().expect("call");
+    let send_d = rd::endpoint_create().expect("send_d");
+    let send_h = rd::endpoint_create().expect("send_h");
+    let queued_d = rd::endpoint_create().expect("queued_d");
+    let queued_h = rd::endpoint_create().expect("queued_h");
+    let progress = rd::endpoint_create().expect("progress");
+    let gift = rd::endpoint_create().expect("gift");
+    let gift_send = rd::mint_from_handle(gift, CT_GIFT_SEND, None).expect("gift_send");
+    let queue_d_send = rd::mint_from_handle(queued_d, CT_QUEUED_SEND, None).expect("queue_d");
+    let queue_h_send = rd::mint_from_handle(queued_h, CT_QUEUED_SEND, None).expect("queue_h");
+    // Victim (tags 1 and 5), steward (2 and 3), bystander (4).
+    let msg = |tag: usize, hs: &[u32]| {
+        let _ = rd::send(handoff, &rd::body_with([tag, 0, 0, 0], hs), None, rd::FOREVER);
+    };
+    msg(1, &[call, send_d, send_h, queued_d]);
+    msg(5, &[queued_h]);
+    msg(2, &[call, send_d, send_h, progress]);
+    msg(3, &[gift_send]);
+    msg(4, &[gift, queue_d_send, queue_h_send]);
+    rd::process_exit(0)
+}
+
+// --- The victim server ---
+
+#[derive(Clone, Copy)]
+struct Hold {
+    msg_id: u64,
+    slot: usize,
+    r: u64,
+    caller: u64,
+    lend: usize,
+    notices: u32,
+}
+
+/// A control call from the steward on the call endpoint; a distinct badge names it (rule F).
+fn victim_control(ctl: u32, cmd: usize, slot: usize, r: u64, final_: usize) {
+    let _ = rd::call_waiting(ctl, &rd::body([cmd, slot, r as usize, final_]), None, rd::FOREVER);
+}
+
+/// The victim server: take and hold the agents' lend calls and log one abandoned notice per id
+/// (a second is a failure), answer the steward's controls, and at each end drain the slot's send
+/// endpoint, take the bystander's queued message (its carried handle must be 0), check the
+/// previous lease's held calls (one notice, bytes intact, reply discarded mask 0), and report.
+fn victim() -> ! {
+    let call_rx = CT_V_CALL;
+    let send_rx = [CT_V_SEND_D, CT_V_SEND_H];
+    let q_rx = [CT_V_QUEUED_D, CT_V_QUEUED_H];
+    let budget = CT_V_BUDGET;
+    let start_usage = usage_pages(budget);
+    // Room for each slot's held calls over two rounds, retried slot D leases included.
+    let mut holds = [Hold { msg_id: 0, slot: 0, r: 0, caller: 0, lend: 0, notices: 0 }; 64];
+    let mut n = 0usize;
+    let mut fails = 0u64;
+    let mut controls = 0u64;
+    let mut checked = 0u64;
+    loop {
+        match rd::receive(Some(call_rx), rd::FOREVER, 0) {
+            Ok(Received::Message(m)) => match (m.badge, m.kind) {
+                (CT_AGENT, rd::MessageKind::Call { lend: Some(pages) }) => {
+                    if n < holds.len() {
+                        holds[n] = Hold {
+                            msg_id: m.msg_id.get(),
+                            slot: m.body.words[2],
+                            r: m.body.words[0] as u64,
+                            caller: m.body.words[1] as u64,
+                            lend: pages.addr,
+                            notices: 0,
+                        };
+                        n += 1;
+                    } else {
+                        fails |= 1;
+                    }
+                }
+                (CT_STEWARD, rd::MessageKind::Call { .. }) => {
+                    let w = m.body.words;
+                    if w[0] == CT_DONE {
+                        // Reply to the control first: its open-call page is the receiver's, and
+                        // the usage check must see it freed (I10).
+                        let _ = rd::reply(m.msg_id.get(), &rd::body([0; 4]));
+                        if usage_pages(budget) != start_usage {
+                            fails |= 128;
+                        }
+                        let _ = rd::send(
+                            1,
+                            &rd::body([fails as usize, controls as usize, checked as usize, n]),
+                            None,
+                            rd::FOREVER,
+                        );
+                        rd::process_exit(0)
+                    }
+                    let slot = w[1];
+                    let r = w[2] as u64;
+                    if slot > 1 {
+                        fails |= 2;
+                    } else {
+                        // At a lease's end (the final control only checks held calls: its lease's
+                        // end was already checked, and its queue drained, at `CT_END`).
+                        if w[0] == CT_END {
+                            // Every blocked send failed and left nothing queued here.
+                            if !matches!(rd::receive(Some(send_rx[slot]), 0, 0), Err(rd::Error::Timeout)) {
+                                fails |= 4;
+                            }
+                            // The bystander's queued message arrived with its stamped handle as 0.
+                            let mut qok = false;
+                            while let Ok(Received::Message(qm)) = rd::receive(Some(q_rx[slot]), 0, 0) {
+                                if qm.body.words[0] as u64 == r
+                                    && qm.body.handles.as_slice().first().copied().flatten().is_none()
+                                {
+                                    qok = true;
+                                }
+                            }
+                            if !qok {
+                                fails |= 8;
+                            }
+                        }
+                        // The previous lease's held calls (the last lease: by a final control).
+                        let check = if w[3] == 1 {
+                            Some(r)
+                        } else if r > 0 {
+                            Some(r - 1)
+                        } else {
+                            None
+                        };
+                        if let Some(cr) = check {
+                            let mut i = 0;
+                            while i < n {
+                                if holds[i].slot == slot && holds[i].r == cr {
+                                    if holds[i].notices != 1 {
+                                        fails |= 16;
+                                    }
+                                    let at = holds[i].lend;
+                                    let caller = holds[i].caller;
+                                    if rd::peek(at) != lend_pattern(cr, caller, 0)
+                                        || rd::peek(at + rd::PAGE_SIZE) != lend_pattern(cr, caller, 1)
+                                    {
+                                        fails |= 32;
+                                    }
+                                    if !discarded(holds[i].msg_id) {
+                                        fails |= 64;
+                                    }
+                                    checked += 1;
+                                    holds[i] = holds[n - 1];
+                                    n -= 1;
+                                } else {
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                    controls += 1;
+                    let _ = rd::reply(
+                        m.msg_id.get(),
+                        &rd::body([w[0], fails as usize, controls as usize, checked as usize]),
+                    );
+                }
+                _ => {}
+            },
+            Ok(Received::Abandoned(id)) => {
+                for h in holds[..n].iter_mut() {
+                    if h.msg_id == id.get() {
+                        h.notices += 1;
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+}
+
+// --- The bystander ---
+
+/// The bystander's counting thread: count for the window, report, then end this thread. It does
+/// not `receive` from any endpoint, so it never takes a gift meant for the relay.
+extern "C" fn bystander_count(_: usize) -> ! {
+    let count = spin_until(end_ticks());
+    let _ = rd::send(1, &rd::body([count as usize, 0, 0, 0]), None, rd::FOREVER);
+    rd::thread_exit().ok();
+    crate::park()
+}
+
+/// The bystander: two threads relay the leases' carried handles for the whole run, one more counts
+/// its share over the window. A relay takes a lease-stamped handle from the steward and queues it
+/// to the victim through an unstamped handle, so the lease's death revokes it in flight and the
+/// victim receives it as 0 (R10, R9). A relay's send waits until the victim takes the message, at
+/// that lease's end; two leases are live at once, so two relays keep the steward from waiting on
+/// one lease's end to give the other its handle.
+fn bystander() -> ! {
+    thread(bystander_count, 0);
+    thread(bystander_relay, 0);
+    bystander_relay(0)
+}
+
+extern "C" fn bystander_relay(_: usize) -> ! {
+    loop {
+        if let Ok(Received::Message(m)) = rd::receive(Some(CT_B_GIFT), rd::FOREVER, 0) {
+            let w = m.body.words;
+            if let Some(h) = m.body.handles.as_slice().first().copied().flatten() {
+                let q = if w[1] == 0 { CT_B_QUEUED_D } else { CT_B_QUEUED_H };
+                let _ =
+                    rd::send(q, &rd::body_with([w[0], w[1], w[2], w[3]], &[h.index()]), None, rd::FOREVER);
+            }
+        }
+    }
+}
+
+// --- The steward stand-in ---
+
+/// Mint the lease's call, send and progress handles from the `users`-stamped receive rights the
+/// maker handed over, all stamped with the lease so they die with it.
+fn mint_lease_handles(call_rx: u32, send_rx: u32, progress_rx: u32, lease: u32) -> (u32, u32, u32) {
+    let call_h = rd::mint_from_handle(call_rx, CT_AGENT, Some(lease)).expect("mint call");
+    let send_h = rd::mint_from_handle(send_rx, CT_AGENT, Some(lease)).expect("mint send");
+    let progress_h =
+        rd::mint_from_handle(progress_rx, CT_PROGRESS_BADGE, Some(lease)).expect("mint progress");
+    (call_h, send_h, progress_h)
+}
+
+fn start_agent(image: &Image, lease: u32, exit: u32, slot: u64, r: u64, hs: (u32, u32, u32)) {
+    let mut startup = [0u8; 1 + 8 * 8];
+    startup[0] = Role::Agent as u8;
+    startup[1..9].copy_from_slice(&r.to_le_bytes());
+    startup[9..17].copy_from_slice(&slot.to_le_bytes());
+    let handles = [hs.0, hs.1, hs.2, lease];
+    spawn::spawn(image, lease, exit, child as *const () as usize, &startup, &handles).expect("the agent");
+}
+
+/// Give the bystander this lease's carried handle (minted into the lease, so it dies with it);
+/// whether the lease was still there to mint into.
+fn give_carried(gift: u32, call_rx: u32, lease: u32, slot: u64, r: u64) -> bool {
+    let Ok(carried) = rd::mint_from_handle(call_rx, CT_CARRIED, Some(lease)) else { return false };
+    let _ = rd::send(gift, &rd::body_with([r as usize, slot as usize, 0, 0], &[carried]), None, rd::FOREVER);
+    true
+}
+
+/// Pump one progress message: start the sub-agent in the sub-budget the agent hands over, or note
+/// that a slot armed. Progress is at most progress: no verdict is ever read from the agent.
+fn pump_progress(progress_rx: u32, image: &Image, exit: &[u32; 2], sub_h: &mut [u32], armed: &mut [bool]) {
+    if let Ok(Received::Message(m)) = rd::receive(Some(progress_rx), 50_000, 0) {
+        let w = m.body.words;
+        let idx = (w[1] as usize) * 2 + w[2];
+        if idx >= armed.len() {
+            return;
+        }
+        if w[0] == CT_SUB {
+            if let Some(h) = m.body.handles.as_slice().first().copied().flatten() {
+                let mut st = [0u8; 1 + 8 * 8];
+                st[0] = Role::SubAgent as u8;
+                // Its handle is kept only if it started: a started sub-agent owes a notice.
+                let sub = h.index();
+                if spawn::spawn(image, sub, exit[w[2]], child as *const () as usize, &st, &[sub]).is_ok() {
+                    sub_h[idx] = sub;
+                }
+            }
+        } else if w[0] == CT_ARMED {
+            armed[idx] = true;
+        }
+    }
+}
+
+/// Wait until the lease `lease` (progress index `idx`) has armed, pumping progress for both slots:
+/// how long from `since` it took, µs. `None` if the lease is gone first (its deadline came before
+/// it armed). There is no other way out: a full fill takes as long as it takes.
+fn wait_arm(
+    progress_rx: u32,
+    image: &Image,
+    exit: &[u32; 2],
+    sub_h: &mut [u32],
+    armed: &mut [bool],
+    lease: u32,
+    idx: usize,
+    since: u64,
+) -> Option<u64> {
+    while !armed[idx] {
+        if gone(lease) {
+            return None;
+        }
+        pump_progress(progress_rx, image, exit, sub_h, armed);
+    }
+    Some(rd::time_now().unwrap_or(since).saturating_sub(since))
+}
+
+/// Take a lease's `want` killed notices (the agent's, and the sub-agent's if it started), blaming
+/// nobody; record each deadline notice's lateness and its window. Returns how many notices were
+/// taken.
+fn take_notices(
+    exit: u32,
+    deadline: Option<u64>,
+    want: u64,
+    notice: &mut [Window],
+    nn: &mut usize,
+    fails: &mut u64,
+) -> u64 {
+    let start = rd::time_now().unwrap_or(0);
+    // A deadline notice can only arrive at or after the deadline; wait for it plus a margin.
+    let limit = deadline.map_or(5_000_000, |d| d.saturating_sub(start) + 5_000_000);
+    let mut got = 0;
+    while got < want {
+        if rd::time_now().unwrap_or(0).saturating_sub(start) > limit {
+            *fails |= 8;
+            break;
+        }
+        match rd::receive(Some(exit), 200_000, 0) {
+            Ok(Received::Exit(n)) => {
+                if n.cause != rd::Cause::Killed
+                    || n.blamed_account != 0
+                    || !n.blamed_labels.as_slice().is_empty()
+                {
+                    *fails |= 8;
+                }
+                if let Some(d) = deadline {
+                    if *nn < notice.len() {
+                        let end = rd::time_now().unwrap_or(d);
+                        notice[*nn] = Window { end, gross: end.saturating_sub(d) };
+                        *nn += 1;
+                    }
+                }
+                got += 1;
+            }
+            Err(rd::Error::Timeout) => continue,
+            _ => {
+                *fails |= 8;
+                break;
+            }
+        }
+    }
+    got
+}
+
+/// The steward stand-in: two slots, each with its own exit endpoint. Slot H is ended by hand
+/// (the decision wake, 5 ms after arming); slot D by its deadline. It reuses the latency
+/// stand-in's measuring code ([`Stats`]) rather than copying it.
+fn containment() -> ! {
+    let sessions = CT_S_SESSIONS;
+    let call_rx = CT_S_CALL;
+    let send_rx = [CT_S_SEND_D, CT_S_SEND_H];
+    let progress_rx = CT_S_PROGRESS;
+    let gift = CT_S_GIFT;
+    // Only a receive right mints; the control handle is this steward's own, badged apart.
+    let ctl = rd::mint_from_handle(call_rx, CT_STEWARD, None).expect("the control handle");
+    let now = || rd::time_now().unwrap_or(0);
+    // Each sample's window is held until the launcher asks ([`Bench::samples`]).
+    let mut wake = [Window::default(); 64];
+    for (i, s) in wake.iter_mut().enumerate() {
+        let timeout = 3_000 + (i as u64 * 397) % 1_000;
+        let before = now();
+        let _ = rd::receive(None, timeout, 0);
+        let end = now();
+        *s = Window { end, gross: end.saturating_sub(before + timeout) };
+    }
+    Stats::report(&mut wake.map(|w| w.gross), Stats::TIMER_WAKE);
+
+    let image = spawn::image();
+    let exit = [rd::endpoint_create().expect("exit D"), rd::endpoint_create().expect("exit H")];
+    let (mut destroy, mut nd) = ([0u64; CT_LEASES * 2], 0usize);
+    let (mut decision, mut nw) = ([Window::default(); CT_LEASES * 2], 0usize);
+    let (mut notice, mut nn) = ([Window::default(); MAX_SAMPLES], 0usize);
+    let mut retried = 0usize;
+    let mut sub_h = [0u32; CT_LEASES * 2];
+    let mut armed = [false; CT_LEASES * 2];
+    let mut fails = 0u64;
+
+    let mut arm_hint = CT_ARM_FALLBACK_US;
+    let lease_pages = ct_lease_pages(&image);
+    for r in 0..CT_LEASES as u64 {
+        let base = usage_pages(sessions);
+        // Slot H (1): no deadline; ended by the steward's decision. It is created and armed first,
+        // so the time its agent took to arm calibrates slot D's deadline: the fill takes time, so
+        // the deadline must land after the agent arms for the lease's end to be the destruction.
+        let h_created = now();
+        let h_lease = rd::create(sessions, &rd::spec(lease_pages, 4, CT_LEASE_WEIGHT)).expect("H lease");
+        let h_h = mint_lease_handles(call_rx, send_rx[1], progress_rx, h_lease);
+        start_agent(&image, h_lease, exit[1], 1, r, h_h);
+        let h_idx = (r * 2) as usize + 1;
+        let h_arm = wait_arm(progress_rx, &image, &exit, &mut sub_h, &mut armed, h_lease, h_idx, h_created);
+        // Its carried handle queued while it lives, so its end revokes it in flight.
+        if h_arm.is_none() || !give_carried(gift, call_rx, h_lease, 1, r) {
+            fails |= 16;
+        }
+        if h_arm.is_some() && !filled(&image, h_lease) {
+            fails |= 32;
+        }
+        let h_arm = h_arm.unwrap_or(arm_hint);
+        // Slot D (0): its deadline is calibrated from the measured arming time, so the fill
+        // finishes first and its deadline notice is the measured destruction. A deadline is set
+        // at creation, so a lease whose deadline still comes before it arms, or before its
+        // carried handle is given, is taken down and made again with twice the lead.
+        let d_idx = (r * 2) as usize;
+        let mut lead = h_arm.saturating_mul(CT_ARM_FACTOR).max(CT_D_MARGIN_US);
+        let (d_lease, d_h, d_deadline, d_arm) = loop {
+            let d_deadline = now() + lead + CT_D_MARGIN_US;
+            let d_created = now();
+            let d_lease = rd::create(
+                sessions,
+                &rd::BudgetSpec { deadline: d_deadline, ..rd::spec(lease_pages, 4, CT_LEASE_WEIGHT) },
+            )
+            .expect("D lease");
+            let d_h = mint_lease_handles(call_rx, send_rx[0], progress_rx, d_lease);
+            start_agent(&image, d_lease, exit[0], 0, r, d_h);
+            (armed[d_idx], sub_h[d_idx]) = (false, 0);
+            if let Some(t) =
+                wait_arm(progress_rx, &image, &exit, &mut sub_h, &mut armed, d_lease, d_idx, d_created)
+            {
+                if !filled(&image, d_lease) {
+                    fails |= 32;
+                }
+                if give_carried(gift, call_rx, d_lease, 0, r) {
+                    break (d_lease, d_h, d_deadline, t);
+                }
+            }
+            let want = 1 + u64::from(sub_h[d_idx] != 0);
+            take_notices(exit[0], Some(d_deadline), want, &mut notice, &mut nn, &mut fails);
+            retried += 1;
+            lead = lead.saturating_mul(2);
+        };
+        arm_hint = arm_hint.max(h_arm).max(d_arm);
+        // H: the timeout that is the decision, then destroy.
+        let before = now();
+        let _ = rd::receive(None, CT_DECISION_US, 0);
+        let end = now();
+        decision[nw] = Window { end, gross: end.saturating_sub(before + CT_DECISION_US) };
+        nw += 1;
+        let t0 = now();
+        if rd::destroy(h_lease).is_ok() {
+            destroy[nd] = now() - t0;
+            nd += 1;
+        } else {
+            fails |= 1;
+        }
+        take_notices(exit[1], None, 1 + u64::from(sub_h[h_idx] != 0), &mut notice, &mut nn, &mut fails);
+        if !gone(h_lease) || !gone(h_h.0) || !gone(h_h.1) || !gone(h_h.2) {
+            fails |= 2;
+        }
+        victim_control(ctl, CT_END, 1, r, 0);
+        // D: its deadline's notices.
+        take_notices(
+            exit[0],
+            Some(d_deadline),
+            1 + u64::from(sub_h[d_idx] != 0),
+            &mut notice,
+            &mut nn,
+            &mut fails,
+        );
+        if !gone(d_lease) || !gone(d_h.0) || !gone(d_h.1) || !gone(d_h.2) {
+            fails |= 2;
+        }
+        victim_control(ctl, CT_END, 0, r, 0);
+        // I10: both leases of the round are gone and their notices taken, so sessions' usage is
+        // exactly what it was before the round.
+        if usage_pages(sessions) != base {
+            fails |= 4;
+        }
+    }
+    // The last lease in each slot has no following lease to reuse frames, so a final control
+    // checks it after the run.
+    for slot in 0..2usize {
+        victim_control(ctl, CT_FINAL, slot, (CT_LEASES - 1) as u64, 1);
+    }
+    victim_control(ctl, CT_DONE, 0, 0, 0);
+
+    let gross = |w: &[Window]| {
+        let mut g = [0u64; MAX_SAMPLES];
+        g.iter_mut().zip(w).for_each(|(g, w)| *g = w.gross);
+        g
+    };
+    Stats::report(&mut gross(&decision[..nw])[..nw], Stats::DECISION_WAKE);
+    Stats::report(&mut destroy[..nd], Stats::DESTROY);
+    Stats::report(&mut gross(&notice[..nn])[..nn], Stats::DEADLINE);
+    let _ = rd::send(1, &rd::body([fails as usize, retried, nn, CT_VERDICT | 1 << 8]), None, rd::FOREVER);
+    hand_over(&[
+        (Stats::TIMER_WAKE, &wake),
+        (Stats::DECISION_WAKE, &decision[..nw]),
+        (Stats::DEADLINE, &notice[..nn]),
+    ]);
+    rd::process_exit(0)
+}
+
 /// The launcher.
 pub struct Bench {
     image: Image,
@@ -915,7 +1711,9 @@ impl Bench {
             startup[1 + k * 8..9 + k * 8].copy_from_slice(&p.to_le_bytes());
         }
         startup[1 + 7 * 8..].copy_from_slice(&self.tpu.to_le_bytes());
-        let mut handles = [rep_client, go, 0, 0, 0, 0];
+        let mut handles = [0u32; 32];
+        handles[0] = rep_client;
+        handles[1] = go;
         handles[2..2 + extra.len()].copy_from_slice(extra);
         spawn::spawn(
             &self.image,
@@ -1012,6 +1810,15 @@ impl Bench {
             let w = m.body.words;
             let Some(measure) = Stats::measure(w[3]) else { return };
             let _ = writeln!(Console, "LATENCY-SAMPLE {} {} {} {}", group, measure, join(w[0], w[1]), w[2]);
+        }
+    }
+
+    /// One report message from a child: (its index, its four words). Blocks for ever; a case
+    /// that must wait for the reports it names, not a count, uses this.
+    pub fn receive_report(&mut self) -> Option<(usize, [usize; 4])> {
+        match rd::receive(Some(self.rep), rd::FOREVER, 0) {
+            Ok(Received::Message(m)) => Some(((m.badge as usize).saturating_sub(1), m.body.words)),
+            _ => None,
         }
     }
 

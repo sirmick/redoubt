@@ -125,7 +125,7 @@ the reference to the one it names.*
 
 ## Containment
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:kernel-containment
 
 One boot, `bench:kernel-containment`, shows that the kernel's primitives alone contain hostile
 code before `init`, the steward or any server is built on them. Hostile code in a lease is
@@ -185,12 +185,39 @@ the gate runs, and this page records the sweep. The targets are the ones in
 [responsiveness](scheduling.md#responsiveness), and the gate adds none. If the gate misses one of
 them, that is a finding against the kernel, not a reason to set a new target.
 
+The sweep ran all 16 seeds on both widths, and every run passed. The table gives each run's net
+p99 of the deadline notice, R10's p99 and a lease's end (the decision wake's net p99 plus R10's),
+in µs, against targets of 40000, 30000 and 125000:
+
+| Seed | rv32 notice | rv32 R10 | rv32 lease end | rv64 notice | rv64 R10 | rv64 lease end |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 31253 | 24844 | 34147 | 31101 | 24558 | 33220 |
+| 2 | 30580 | 24540 | 33580 | 30192 | 24262 | 32924 |
+| 3 | 23935 | 24538 | 33597 | 23689 | 24259 | 33023 |
+| 4 | 31336 | 25055 | 34351 | 24015 | 24759 | 33424 |
+| 5 | 24273 | 24789 | 33828 | 24094 | 24499 | 33265 |
+| 6 | 31073 | 24587 | 33872 | 23907 | 24306 | 32875 |
+| 7 | 23983 | 25012 | 34290 | 23782 | 24724 | 33385 |
+| 8 | 24167 | 25017 | 34742 | 23916 | 24720 | 33385 |
+| 9 | 31118 | 24535 | 33677 | 23995 | 24257 | 33024 |
+| 10 | 31016 | 24632 | 33775 | 24083 | 24352 | 33017 |
+| 11 | 31250 | 25058 | 34123 | 23911 | 24762 | 33424 |
+| 12 | 30491 | 24540 | 33581 | 23899 | 24260 | 32829 |
+| 13 | 24519 | 25017 | 34079 | 24219 | 24724 | 33372 |
+| 14 | 30979 | 24943 | 34002 | 24027 | 24648 | 33415 |
+| 15 | 24280 | 24541 | 33592 | 24008 | 24262 | 32923 |
+| 16 | 24518 | 25070 | 34348 | 24160 | 24777 | 33438 |
+
+The deadline notice is the target closest to its limit, at 78% in the worst run. Its p99 falls
+into two groups by seed: about 24 ms, or about 31 ms on rv32 seeds 1, 2, 4, 6, 9, 10, 11, 12 and
+14 and on rv64 seeds 1 and 2. Nothing in the gate chooses the seed, so a 31 ms run is one of those
+seeds and not a regression. The gate runs seed 4, the sweep's worst deadline notice, because it
+leaves the least margin on the tightest target.
+
 The gate replaces none of the focused cases. `budget-deadline`, `redoubt-revoke`,
 `uaf-lent-page`, `endpoint-destroy-open-calls` and `sched-latency` each attack one clause alone,
 and each fails with a narrower message. The gate shows that all of those clauses hold together,
 under load, against one party that tries them all at once.
-
-**Open:** none.
 
 ## The TCB and its size
 
