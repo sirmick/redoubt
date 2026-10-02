@@ -59,6 +59,11 @@ paths = ["libs/wire/src"]
 max_lines = 3067
 
 [[crate]]
+name = "libs/steward"
+paths = ["libs/steward/src"]
+max_lines = 3168
+
+[[crate]]
 name = "libs/littlefs"
 paths = ["libs/littlefs/src"]
 max_lines = 1941
@@ -66,7 +71,7 @@ max_lines = 1941
 [[crate]]
 name = "model"
 paths = ["model/src"]
-max_lines = 10179
+max_lines = 10153
 
 [[crate]]
 name = "servers/keyd"
