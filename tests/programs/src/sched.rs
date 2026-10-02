@@ -1006,6 +1006,22 @@ impl Bench {
         count * 1000 / (self.rate * window_us / 1000).max(1)
     }
 
+    /// A share the bench's post-check (`sched_oracle`) judges, net of the checked build's audits
+    /// inside its window, as it judges the latency targets: printed as `SHARE <name> <start> <end>
+    /// <cpu> <min> <max>`, the window (from [`Bench::go`]) and the CPU `count` stands for in µs,
+    /// and the share's bounds in thousandths. The share gross of audits, for the program's note.
+    pub fn judged_share(
+        &self,
+        name: &str,
+        count: u64,
+        (start, end): (u64, u64),
+        (min, max): (u64, u64),
+    ) -> u64 {
+        let cpu = count * 1000 / self.rate.max(1);
+        let _ = writeln!(Console, "SHARE {} {} {} {} {} {}", name, start, end, cpu, min, max);
+        self.share(count, end - start)
+    }
+
     pub fn check(&mut self, ok: bool, what: core::fmt::Arguments) {
         self.failed |= !ok;
         let _ = writeln!(Console, "[{}] {}: {}", self.name, if ok { "ok" } else { "FAIL" }, what);

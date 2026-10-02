@@ -237,6 +237,43 @@ pub fn bill_irq(irq: usize, started: u64) {
 /// The ticks now, for measuring a piece of kernel work to [`bill`].
 pub fn now_ticks() -> u64 { ticks() }
 
+/// The checked build's audit after a destruction's `Y` (`budget::destroy_subtree`).
+#[cfg(debug_assertions)]
+pub const AUDIT_DESTRUCTION: u64 = 1;
+/// The PID index's audit at a process object's change (`MemoryManager::index_process`).
+#[cfg(debug_assertions)]
+pub const AUDIT_PROCESS_INDEX: u64 = 2;
+
+/// A checked build runs the audit `which`: `check`, which a release build does not have. Its time
+/// is charged to no budget, and the running slice's end and the start of the kernel time being
+/// billed both move forward by its length, so the thread that ran it is picked and preempted as
+/// in a release build. A traced build also stamps it, so the latency targets leave it out of
+/// every window (kernel/scheduling.md, "Responsiveness").
+#[cfg(debug_assertions)]
+pub fn audit(which: u64, check: impl FnOnce()) {
+    #[cfg(feature = "sched-trace")]
+    let _stamp = trace::audit(which);
+    #[cfg(not(feature = "sched-trace"))]
+    let _ = which;
+    // Debug only, never in a bench build but one recorded negative run (feature `audit-billed`):
+    // the audit's time stays billed to the budget that ran it and counts against its slice.
+    #[cfg(not(feature = "audit-billed"))]
+    let started = ticks();
+    check();
+    #[cfg(not(feature = "audit-billed"))]
+    {
+        let ended = ticks();
+        SCHED.with(|s| {
+            if let Some((since, b)) = s.billing {
+                s.billing = Some((since.saturating_add(ended.saturating_sub(started)), b));
+            }
+        });
+        let length =
+            crate::arch::irq::timer::ticks_to_us(ended) - crate::arch::irq::timer::ticks_to_us(started);
+        crate::time::set_slice_end(crate::time::slice_end().saturating_add(length));
+    }
+}
+
 /// Leaving the kernel for `pid` (the kernel itself for PID 1): close the billing, deschedule the
 /// budget that ran if another runs now, reconcile, and start counting user time.
 pub fn leave(pid: Pid) {
@@ -493,21 +530,18 @@ pub mod trace {
     /// target judges (kernel/scheduling.md, "Responsiveness").
     pub const AUDIT_BEGIN: u8 = b'U';
     pub const AUDIT_END: u8 = b'V';
-    /// The audit after a destruction's `Y` (`budget::destroy_subtree`).
-    pub const AUDIT_DESTRUCTION: u64 = 1;
-    /// The PID index's audit at a process object's change (`MemoryManager::index_process`).
-    pub const AUDIT_PROCESS_INDEX: u64 = 2;
 
     /// An audit running: its begin is recorded, and its end when this drops (none if `None`).
     pub struct Audit(Option<u64>);
 
-    /// Stamp the audit `which` that is about to run, until the returned guard drops.
+    /// Stamp the audit `which` that is about to run, until the returned guard drops
+    /// ([`super::audit`]).
     pub fn audit(which: u64) -> Audit {
         // Debug only, never in a bench build but one recorded negative run (feature
         // `audit-unstamped`): the audit after a destruction runs unstamped, to show that the
         // oracle subtracts only what the trace shows it.
         #[cfg(feature = "audit-unstamped")]
-        if which == AUDIT_DESTRUCTION {
+        if which == super::AUDIT_DESTRUCTION {
             return Audit(None);
         }
         record(AUDIT_BEGIN, which, u128::from(crate::time::now_us()));

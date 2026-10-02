@@ -35,7 +35,9 @@
 //! length (`LATENCY-SAMPLE N=16 deadline_notice <end> <gross>`), and how many it took
 //! (`LATENCY-COUNT`, which the windows must number); this check subtracts the audit
 //! time inside each window, judges the net p50 and p99 against the case's bounds
-//! (`deadline_notice_p99_us=40000`), and reports the audit time beside each. An audit unpaired, or
+//! (`deadline_notice_p99_us=40000`), and reports the audit time beside each. A share is a target
+//! too: the program prints its window, the CPU its count stands for and its bounds (`SHARE`), and
+//! this check judges it of the window net of the audit time inside it. An audit unpaired, or
 //! inside a destruction (R10's own window, which then subtracts nothing), fails the check.
 //!
 //! Each process's threads ending, the pumps after them included, is bracketed by `T` and `t`
@@ -429,12 +431,40 @@ fn samples(log: &str) -> Result<BTreeMap<(usize, &str), Vec<(u64, u64)>>, String
     Ok(windows)
 }
 
+/// A share a program judges by this check: `SHARE <name> <start> <end> <cpu> <min> <max>`, a
+/// window `[start, end]` on `time_now` and the CPU in it that a count stands for, in µs, and the
+/// share's bounds in thousandths of the window.
+struct Share<'a> {
+    name: &'a str,
+    window: (u64, u64),
+    cpu: u64,
+    bounds: (u64, u64),
+}
+
+/// The shares the program printed, in order.
+fn shares(log: &str) -> Result<Vec<Share<'_>>, String> {
+    let mut out = Vec::new();
+    for line in log.lines().map(|line| line.trim_end_matches('\r')) {
+        let Some(rest) = line.strip_prefix("SHARE ") else { continue };
+        let bad = || format!("malformed {line:?}");
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        let num = |i: usize| f.get(i).and_then(|v| v.parse::<u64>().ok()).ok_or_else(bad);
+        let (window, bounds) = ((num(1)?, num(2)?), (num(4)?, num(5)?));
+        if f.len() != 6 || window.0 >= window.1 || bounds.0 > bounds.1 || bounds.1 > 1000 {
+            return Err(bad());
+        }
+        out.push(Share { name: f[0], window, cpu: num(3)?, bounds });
+    }
+    Ok(out)
+}
+
 /// The bench's post-check: parse the case's console log and check it. `args` may bound the p99
 /// of R10's durations, `r10_p99_us=N`; each measure's p50 and p99 net of audits,
 /// `<measure>_p50_us=N` and `<measure>_p99_us=N`, in each group the program printed; and a
 /// lease's end from the steward's decision, `lease_end_p99_us=N`: the worst net decision-wake p99
-/// (over every group) plus R10's p99 (kernel/scheduling.md, "Responsiveness"). Every window a
-/// target judges has the checked build's audit time inside it subtracted; R10's has none.
+/// (over every group) plus R10's p99 (kernel/scheduling.md, "Responsiveness"). Each share the
+/// program printed is judged against its own bounds. Every window a target or a share judges has
+/// the checked build's audit time inside it subtracted; R10's has none.
 pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
@@ -508,6 +538,20 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
                 inside.iter().sum::<u64>()
             ));
         }
+    }
+    // Each share, of its window net of the audits inside it.
+    for s in shares(log)? {
+        let (start, end) = s.window;
+        let inside = audit_inside(&sum.audits, start, end);
+        let (gross, net) = (s.cpu * 1000 / (end - start), s.cpu * 1000 / (end - start - inside).max(1));
+        let (min, max) = s.bounds;
+        let met = (min..=max).contains(&net);
+        missed |= !met;
+        lines.push(format!(
+            "share {}: net {net}, gross {gross} of 1000, audits {inside} µs: target {} ({min} <= share <= {max})",
+            s.name,
+            if met { "met" } else { "missed" }
+        ));
     }
     let mut lease_end = String::new();
     if let Some(bound) = bounds.get("lease_end_p99_us") {
@@ -861,6 +905,38 @@ mod tests {
         assert!(run(&audited("LATENCY-SAMPLE N=1 timer_wake 9 6\n"), "").is_err());
         assert!(run(&audited("LATENCY-COUNT N=1 timer_wake 0\n"), "").is_ok());
         assert!(run(&audited(""), "lunch_p99_us=5").is_err());
+    }
+
+    #[test]
+    fn shares_are_judged_net_of_audits() {
+        // The window [100, 300] holds the first audit whole (24 µs) and none of the second: net
+        // 176 µs, of which 88 µs of CPU is half (gross 440).
+        let log = audited("SHARE victim 100 300 88 450 1000\n");
+        let ok = run(&log, "");
+        assert!(
+            ok.as_ref().is_ok_and(|s| s.contains(
+                "share victim: net 500, gross 440 of 1000, audits 24 µs: target met (450 <= share <= 1000)"
+            )),
+            "{ok:?}"
+        );
+        // An upper bound too, and a share out of its bounds.
+        assert!(run(&audited("SHARE shell 100 300 88 450 499\n"), "").is_err_and(|e| {
+            e.contains("share shell: net 500, gross 440 of 1000, audits 24 µs: target missed")
+        }));
+        // Unsubtracted, the same share misses: a stamp the kernel left out is time the oracle
+        // never saw.
+        let unstamped = trace(&[(2, 'W', 1, 5), (2, 'K', 1, 5)]) + "SHARE victim 100 300 88 450 1000\n";
+        assert!(run(&unstamped, "").is_err_and(|e| e.contains("net 440, gross 440")));
+        // Malformed: a field short or over, an empty window, bounds reversed or past the whole.
+        for bad in [
+            "SHARE victim 100 300 88 450\n",
+            "SHARE victim 100 300 88 450 1000 7\n",
+            "SHARE victim 300 300 88 450 1000\n",
+            "SHARE victim 100 300 88 500 450\n",
+            "SHARE victim 100 300 88 450 1001\n",
+        ] {
+            assert!(run(&audited(bad), "").is_err_and(|e| e.contains("malformed")), "{bad:?}");
+        }
     }
 
     #[test]
