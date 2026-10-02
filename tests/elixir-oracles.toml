@@ -1,0 +1,5 @@
+description = "the Elixir oracles on beamlet, under the pinned OTP and Elixir: the steward core's reference over every trace, hand-written and recorded from the model, equal to the Rust core's output byte for byte with every table row taken, and the wire codec's vectors"
+kind = "elixir"
+otp = "28.5.0.6"
+elixir = "1.20.4"
+scripts = ["libs/steward/elixir/run-traces", "libs/wire/elixir/run-vectors"]

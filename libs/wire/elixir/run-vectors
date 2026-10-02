@@ -1,39 +1,25 @@
 #!/usr/bin/env bash
-# Runs the typed-message vector files (redoubt/wire/vectors/example*.txt) through the generated
+# Runs the typed-message vector files (libs/wire/vectors/example*.txt) through the generated
 # Elixir codec on the real BEAM (the oracle) and on beamlet. Each must accept every accepted
 # line exactly and refuse every refused one, and the two outputs must be identical byte for
 # byte. The Rust codec runs the same files (cargo test -p redoubt-wire).
 #
-#   redoubt/wire/elixir/run-vectors
+#   libs/wire/elixir/run-vectors
 #
-# BEAMLET_DIR is the beamlet checkout (default: ../beamlet next to this repository);
-# BEAMLET a prebuilt beamlet binary (default: built from BEAMLET_DIR into a temporary
-# directory, so the beamlet checkout is not written to).
+# BEAMLET is a prebuilt beamlet binary (default: built from userland/otp with the all-Rust regex
+# engine, the one that runs on Redoubt).
 set -euo pipefail
 wire="$(cd "$(dirname "$0")/.." && pwd)"
 repo="$(cd "$wire/../.." && pwd)"
-beamlet_dir="${BEAMLET_DIR:-$repo/../beamlet}"
-. "$beamlet_dir/tools/env.sh"
+. "$repo/userland/otp/tools/oracle.sh"
 
 out="$(mktemp -d)"
 trap 'rm -rf -- "$out"' EXIT
 elixirc --ignore-module-conflict -o "$out/ebin" "$wire/elixir/wire.ex" "$wire"/elixir/proto/*.ex "$wire/elixir/test/vectors_test.ex" > /dev/null
 
-if [ -z "${BEAMLET:-}" ]; then
-    CARGO_TARGET_DIR="$out/target" cargo build --quiet --release --locked --manifest-path "$beamlet_dir/Cargo.toml" -p beamlet
-    BEAMLET="$out/target/release/beamlet"
-fi
-
-otp_lib="$(dirname "$(dirname "$(command -v erl)")")/lib"
-elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
-# OTP's own file modules (kernel's file_server, erts's prim_file) run on beamlet unchanged.
-otp=()
-for app in stdlib kernel erts; do dirs=( "$otp_lib/$app"-*/ebin ); otp+=( -pa "${dirs[0]}" ); done
-
 # Both print the per-file lines, then the result (`ok` or `failed`) on the last line.
 elixir -pa "$out/ebin" -e 'IO.puts(Redoubt.Wire.VectorsTest.start(Enum.at(System.argv(), 0)))' "$wire/vectors" > "$out/beam.txt"
-"$BEAMLET" --root "$wire/vectors" -pa "$out/ebin" "${otp[@]}" -pa "$elixir_lib/elixir/ebin" \
-    Elixir.Redoubt.Wire.VectorsTest start > "$out/beamlet.txt"
+on_beamlet "$wire/vectors" "$out/ebin" Elixir.Redoubt.Wire.VectorsTest > "$out/beamlet.txt"
 sed 's/^/BEAM:    /' "$out/beam.txt"
 if ! cmp -s "$out/beam.txt" "$out/beamlet.txt"; then
     sed 's/^/beamlet: /' "$out/beamlet.txt"

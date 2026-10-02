@@ -8,6 +8,7 @@ mod budget;
 mod build;
 mod case;
 mod cruft;
+mod elixir;
 mod fmt;
 mod peer;
 mod pty;
@@ -236,6 +237,21 @@ fn main() -> Result<()> {
             failures += report(&case.name, outcome, started.elapsed().as_secs_f32());
             continue;
         }
+        if let Kind::Elixir(oracle) = &case.kind {
+            let started = Instant::now();
+            let log = logs.join(format!("{}.log", case.name));
+            // Never a skip: an oracle that does not run catches nothing. Nor what a `must_fail` waits for.
+            let outcome = match elixir::toolchain(&workspace, oracle) {
+                Err(why) => Outcome::Fail(why),
+                Ok(()) => match elixir::run(&workspace, oracle, &log) {
+                    Ok(None) => judge(oracle.must_fail.as_deref(), Outcome::Pass)?,
+                    Ok(Some(why)) => judge(oracle.must_fail.as_deref(), Outcome::Fail(why))?,
+                    Err(e) => Outcome::Fail(format!("bench error: {e:#}")),
+                },
+            };
+            failures += report(&case.name, outcome, started.elapsed().as_secs_f32());
+            continue;
+        }
         for arch in case.arch.iter().filter(|a| args.arch.as_ref().is_none_or(|only| only == *a)) {
             let target =
                 target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
@@ -363,6 +379,7 @@ fn run_case(
         | Kind::NoCruft(_)
         | Kind::Fmt(_)
         | Kind::SshLoopback(_)
+        | Kind::Elixir(_)
         | Kind::HostTests(_) => {
             unreachable!("handled before the per-target loop")
         }
