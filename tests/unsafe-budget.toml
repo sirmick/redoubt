@@ -167,6 +167,14 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# The steward's policy core, linked into the steward server, so it runs on target. The crate says
+# `#![forbid(unsafe_code)]`, so this can only stay at 0.
+name = "redoubt-steward (the steward's policy core)"
+paths = ["libs/steward/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # The kernel-half map and PIDs the loader and kernel share. `#![forbid(unsafe_code)]`, so this
 # can only stay at 0.
 name = "redoubt-layout (kernel-half map)"
