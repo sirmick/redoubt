@@ -1523,6 +1523,8 @@ fn finish_served(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
 /// has ended, so none of them can take a call on the way out; then each endpoint their waits
 /// served is pumped once.
 pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
+    #[cfg(feature = "sched-trace")]
+    let _threads = crate::sched::trace::threads();
     let mut served: [Option<EndpointRef>; MAX_THREADS] = [None; MAX_THREADS];
     let mut n = 0;
     for tid in 1..=MAX_THREADS {

@@ -38,6 +38,10 @@
 //! (`deadline_notice_p99_us=40000`), and reports the audit time beside each. An audit unpaired, or
 //! inside a destruction (R10's own window, which then subtracts nothing), fails the check.
 //!
+//! Each process's threads ending, the pumps after them included, is bracketed by `T` and `t`
+//! records (the time in µs): the check reports each destruction's time in its threads' ending
+//! beside R10's (kernel/budgets.md, "Residual risks"). A span unpaired or nested fails it.
+//!
 //! A weight change (a carve, or a carve returned) is recorded as a group of six records ahead of
 //! the pass it sets, and recomputed from the rule as the spec states it (kernel/scheduling.md
 //! R12, "The lead follows the weight"): W = (pass - floor)+ x old weight + remainder; the budget
@@ -89,7 +93,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUV".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTt".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -201,6 +205,9 @@ pub struct Summary {
     pub r10_frames: u64,
     /// Each checked-build audit's span, µs (`U` to `V`), in trace order.
     pub audits: Vec<(u64, u64)>,
+    /// Each destruction's time in its threads' ending, µs (`T` to `t` inside its `X` and `Y`), in
+    /// trace order.
+    pub r10_threads_us: Vec<u64>,
 }
 
 /// Check every pick in `records` against the four clauses, the floor and every pass's
@@ -211,6 +218,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     let mut floor: u128 = 0;
     let mut open_r10: Option<(u64, u128)> = None;
     let mut open_audit: Option<(u64, u128)> = None;
+    let mut open_threads: Option<u128> = None;
+    let mut threads_us = 0;
     let mut requeues: i128 = 0;
     let mut sum = Summary::default();
     let mut i = 0;
@@ -239,6 +248,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     return Err(format!("record {}: a destruction began inside budget {id}'s", r.seq));
                 }
                 open_r10 = Some((r.id, r.pass));
+                threads_us = 0;
             }
             'Z' => sum.r10_frames = sum.r10_frames.max(r.pass as u64),
             // An audit is off R10's walk: none runs inside a destruction, so R10 subtracts none.
@@ -255,8 +265,24 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 Some((id, t)) if id == r.id && r.pass >= t => sum.audits.push((t as u64, r.pass as u64)),
                 _ => return Err(format!("record {}: audit {} ended without beginning", r.seq, r.id)),
             },
+            'T' => {
+                if open_threads.replace(r.pass).is_some() {
+                    return Err(format!("record {}: a threads span began inside another", r.seq));
+                }
+            }
+            't' => match open_threads.take() {
+                Some(t) if r.pass >= t => {
+                    if open_r10.is_some() {
+                        threads_us += (r.pass - t) as u64;
+                    }
+                }
+                _ => return Err(format!("record {}: a threads span ended without beginning", r.seq)),
+            },
             'Y' => match open_r10.take() {
-                Some((id, t)) if id == r.id => sum.r10_us.push(r.pass.saturating_sub(t) as u64),
+                Some((id, t)) if id == r.id => {
+                    sum.r10_us.push(r.pass.saturating_sub(t) as u64);
+                    sum.r10_threads_us.push(threads_us);
+                }
                 _ => {
                     return Err(format!(
                         "record {}: budget {}'s destruction ended without beginning",
@@ -335,6 +361,9 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     }
     if let Some((id, _)) = open_audit {
         return Err(format!("audit {id} began and never ended"));
+    }
+    if open_threads.is_some() {
+        return Err("a threads span began and never ended".into());
     }
     if sum.picks == 0 {
         return Err("the trace holds no pick: nothing was checked".into());
@@ -416,6 +445,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         percentile(&mut sum.r10_us, 99),
         sum.r10_us.last().copied().unwrap_or(0),
     );
+    let threads = &mut sum.r10_threads_us;
+    let (t50, t99, tmax) =
+        (percentile(threads, 50), percentile(threads, 99), threads.last().copied().unwrap_or(0));
     // Each bound, by its argument's name.
     let mut bounds = BTreeMap::new();
     for arg in args.split_whitespace() {
@@ -490,7 +522,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     }
     let audit_total: u64 = sum.audits.iter().map(|(b, e)| e - b).sum();
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, no audit inside one; {} audits, {audit_total} µs{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs{lease_end}",
         records.len(),
         sum.picks,
         sum.lifts,
@@ -718,6 +750,41 @@ mod tests {
         // Unpaired or nested brackets.
         assert!(verdict(&[(1, 'Y', 7, 1), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
         assert!(verdict(&[(1, 'X', 7, 1), (1, 'X', 8, 2), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
+    }
+
+    #[test]
+    fn a_destructions_threads_ending_is_timed_inside_it() {
+        let pick = [(2, 'W', 1, 5), (2, 'K', 1, 5)];
+        // Two process endings inside the first destruction (4 + 6 µs), none in the second, and one
+        // outside both, which counts in neither.
+        let v = verdict(
+            &[
+                vec![
+                    (1, 'T', 0, 10),
+                    (1, 't', 0, 15),
+                    (1, 'X', 7, 100),
+                    (1, 'T', 0, 104),
+                    (1, 't', 0, 108),
+                    (1, 'T', 0, 110),
+                    (1, 't', 0, 116),
+                    (1, 'Y', 7, 130),
+                    (1, 'X', 8, 200),
+                    (1, 'Y', 8, 250),
+                ],
+                pick.to_vec(),
+            ]
+            .concat(),
+        );
+        assert!(v.as_ref().is_ok_and(|s| s.contains("30/50/50, their threads' ending 0/10/10")), "{v:?}");
+        for (what, head) in [
+            ("a begin with no end", vec![(1, 'T', 0, 130)]),
+            ("an end with no begin", vec![(1, 't', 0, 154)]),
+            ("an end before its begin", vec![(1, 'T', 0, 154), (1, 't', 0, 130)]),
+            ("nested", vec![(1, 'T', 0, 130), (1, 'T', 0, 131), (1, 't', 0, 132), (1, 't', 0, 133)]),
+        ] {
+            let v = verdict(&[head, pick.to_vec()].concat());
+            assert!(v.as_ref().is_err_and(|e| e.contains("threads span")), "{what}: {v:?}");
+        }
     }
 
     /// A destruction from 100 to 130 µs, an audit from 130 to 154 (after `Y`, as the kernel runs

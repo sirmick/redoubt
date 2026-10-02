@@ -383,7 +383,9 @@ figures stay as measured.
 | a lease's end (worst decision wake + R10) | 50201 + 5560 = 55761 | 29483 + 5824 = 35307 |
 
 The run's 837 audits total 7.55 s (rv64) and 7.29 s (rv32) of the hart; R10 itself has none
-inside it, which the oracle asserts. In the containment gate, with two full handle tables live
+inside it, which the oracle asserts. Beside each destruction's R10 time the oracle reports its
+threads' time: the processes' threads ending inside it, their pumps included (the trace's `T` and
+`t` records), at seed 3 a p99 of 32 µs on rv64 and 36 µs on rv32. In the containment gate, with two full handle tables live
 (rv64, seed 3, its D leases' notices), the deadline notice is 23,185 µs net and 53,830 µs gross,
 492,458 µs of audit inside its windows. With the audit after a destruction left unstamped
 (`audit-unstamped`, the recorded negative run), it is 47,270 µs net: the target misses, since the
