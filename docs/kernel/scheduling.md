@@ -781,6 +781,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   spinners still at the floor and waits out the round; `bench:sched-debt-lift` bounds a sibling's
   first run at (runnable budgets + 2) slices. Rounding loses under one pass unit per destroyed
   budget, and the loss falls on the budget that churns.
+- **A checked build's audits move its schedule.** The bench subtracts an audit's time from each
+  window, but the scheduler still charges it to the running budget and counts it against the
+  slice. So a thread that runs an audit can be requeued where a release build would let it run
+  on. With two full leases live, that puts the second `killed` notice of a lease a slice or two
+  late. Follow-up: [todo](../todo/audits-billed.md).
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).
