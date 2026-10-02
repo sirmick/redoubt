@@ -3,6 +3,8 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 icount = "shift=3,sleep=off"
 programs = ["deadline-flood-billed"]
+# A release build: it runs no audit, so the program judges the victim's share itself, net as it is
+# (kernel/scheduling.md, "Responsiveness").
 timeout_secs = 600
 expect = [
     '^\[deadline-flood\] ok: 16 deadlines a round',

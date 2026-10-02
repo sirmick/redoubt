@@ -88,8 +88,10 @@ pub enum Role {
     /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from 200 µs
     /// ahead, each round then counting for 1 ms; report the count.
     DeadlineFlood = 19,
-    /// Carve p0 of this budget's weight (slot 3) to an empty child, count 9 ms, destroy the child
-    /// so the weight comes back, then count until the window ends; report that last count.
+    /// Sleep, so that what follows begins a slice; carve p0 of this budget's weight (slot 3) to an
+    /// empty child, count until 9 ms after the wake, destroy the child so the weight comes back,
+    /// then count until the window ends; report, first, the `time_now` (µs) the destruction
+    /// returned at, then that last count.
     CarveSpin = 20,
 }
 
@@ -420,10 +422,19 @@ pub extern "C" fn child(arg: usize) -> ! {
         }
         Some(Role::BudgetChurn) => budget_churn(end, tpu),
         Some(Role::CarveSpin) => {
+            // The carve must begin a slice, and the count end 9 ms into it, the carve's own time
+            // (about a millisecond) included, so that the destruction falls inside it: requeued at
+            // weight 1, this budget's pass would defer the destruction by seconds. A wake is picked
+            // with a fresh slice; a sleep of a microsecond is over before it blocks.
+            let _ = rd::receive(None, 1_000, 0);
+            let woke = ticks();
             let child = rd::create(3, &rd::spec(0, 0, param(0) as u32)).expect("the carve");
-            spin_until(ticks() + 9_000 * tpu);
+            spin_until(woke + 9_000 * tpu);
             rd::destroy(child).expect("the carve's return");
-            spin_until(end)
+            let returned = rd::time_now().unwrap_or(0);
+            let n = spin_until(end);
+            report(returned);
+            n
         }
         Some(Role::TimerFlood) => {
             let threads = param(2).max(1) as usize;

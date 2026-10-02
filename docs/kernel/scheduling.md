@@ -328,17 +328,20 @@ the one carve from the old weight to the new.
 `libs/stride`'s `rescale` is the conversion; the model makes the same one, and the bench's oracle
 recomputes every weight change a traced kernel records, the one place it lets a pass fall. A host
 test checks that a carve and its return leave pass and remainder unchanged. In
-`bench:sched-carve-return` a budget of weight 1000 carves 999 away, runs 9 ms on the 1 it kept,
-and takes the weight back: it then gets 492 to 494 of 1000 against an equal victim. With the
-remainder alone rescaled, as before, it got 0.
+`bench:sched-carve-return` a budget of weight 1000 carves 999 away at the start of a slice, runs on
+the 1 it kept until 9 ms into it, and takes the weight back: from then on it gets 496 to 499 of
+1000 against an equal victim. With the remainder alone rescaled, as before, it got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - bench:sched-latency
 - bench:budget-destroy-growth
 - bench:sched-budget-churn
+- bench:sched-exit-churn
+- bench:sched-timer-flood
+- bench:sched-carve-return
 - host:testbench::destructions_are_timed_and_bounded
 - host:testbench::audits_are_subtracted_inside_each_window
 - host:testbench::shares_are_judged_net_of_audits
@@ -405,6 +408,14 @@ hostile budget run a slice each before it takes the second. A share is judged th
 parent gets 494 of 1000 net of audits on rv64 (403 gross) and 495 on rv32 (416), and the shell's
 victim 500 and 499. With the audits billed to the budget that ran them, as before, the shell
 paid for scans a release build does not run, and its victim got 650 and 643 net: more than half.
+`sched-exit-churn` and `sched-timer-flood` are judged the same way, since a process's start and
+end and a deadline's destruction each run an audit: against processes that exit, the victim gets
+495 of 1000 net on rv64 (459 gross) and 492 on rv32 (459); against processes that fault, 497
+(464) and 498 (468); against sleepers and staggered budget deadlines, 472 (464) and 471 (468). So
+is `sched-carve-return`'s, from its carve's return, whose destruction and audit come before it: 496
+and 497, net and gross. The other shares stay in their programs, with no audit inside their
+windows: no process or budget is created or destroyed there, or (`deadline-flood-billed`) the
+build is a release one.
 
 **The gate runs one pinned seed.** The guest's boot RNG seed decides the PIDs the kernel draws,
 which shift instruction counts and so the phase of every later event; with it pinned, a run
@@ -715,8 +726,9 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `#[cfg(feature = "sched-trace")]`, so with the feature off the ring, its records and its
   `SCHED-TRACE` console lines are not compiled;
 - the bench turns it on per case (`kernel_features`), only for `sched-ties`,
-  `sched-budget-churn`, `sched-latency` and `sched-latency-tcg`, whose `sched_oracle` post-check
-  reads the trace printed at `system_reset`.
+  `sched-budget-churn`, `sched-exit-churn`, `sched-timer-flood`, `sched-carve-return`,
+  `sched-latency` and `sched-latency-tcg`, whose `sched_oracle` post-check reads the trace printed
+  at `system_reset`.
 
 The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
 debug-only break of the tie rule that implies the trace; `audit-unstamped`, which leaves the audit
@@ -797,10 +809,6 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   spinners still at the floor and waits out the round; `bench:sched-debt-lift` bounds a sibling's
   first run at (runnable budgets + 2) slices. Rounding loses under one pass unit per destroyed
   budget, and the loss falls on the budget that churns.
-- **Some shares are judged gross of audits.** `sched-budget-churn`'s shares are judged by the
-  post-check, net of the audits inside their windows. `sched-exit-churn`, `sched-destroy-billing`
-  and `deadline-flood-billed` still judge theirs in the program, gross, so an audit-heavy variant
-  could fail one on the audits alone. Follow-up: [todo](../todo/shares-judged-gross.md).
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).

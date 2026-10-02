@@ -282,12 +282,15 @@ time. The tracing kernel is a test build only
 
 ## Checked builds
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
 - bench:sched-latency
 - bench:sched-budget-churn
+- bench:sched-exit-churn
+- bench:sched-timer-flood
+- bench:sched-carve-return
 - host:testbench::audits_are_subtracted_inside_each_window
 - host:testbench::shares_are_judged_net_of_audits
 - host:testbench::an_unmatched_audit_fails
@@ -325,11 +328,13 @@ target ([responsiveness](kernel/scheduling.md#responsiveness)). A share is judge
 the program prints its window, the CPU its count stands for and its bounds in thousandths
 (`SHARE <name> <start> <end> <cpu> <min> <max>`), and `sched_oracle` judges it of the window net of
 the audit time inside it (`sched-budget-churn`'s victim, whose attacker destroys a budget each
-slice). An audit that never ends, ends
-without beginning or runs inside a destruction fails the check. The oracle subtracts only what the
-trace shows it: a kernel built with `audit-unstamped`, which leaves the audit after a destruction
-unstamped, misses the containment gate's deadline notice, in a recorded negative run. The audits
-themselves stay full.
+slice; `sched-exit-churn`'s, whose attacker's processes start and end; `sched-timer-flood`'s,
+beside deadlines; `sched-carve-return`'s, from the return of a carve). A case that judges a share
+in its program has no audit inside its window. An audit that never ends, ends without beginning
+or runs inside a destruction fails the check. The oracle subtracts only what the trace shows it: a
+kernel built with `audit-unstamped`, which leaves the audit after a destruction unstamped, misses
+the containment gate's deadline notice, in a recorded negative run. The audits themselves stay
+full.
 
 Many cases use the profile: every case file with `debug_assertions = true`, most of them over
 both widths (`budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc` and `smp-spike` among
