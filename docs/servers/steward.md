@@ -139,7 +139,7 @@ default. The model swaps one entry for a broken one.
 
 | Guard or effect | Rule | Mutation |
 | --- | --- | --- |
-| `login_key`, `approval_key` | a login uses one of the principal's login keys and an approval channel one of its approval keys, never a key `keyd` holds or one enrolled in the other role | `PolicyLoginWithKeydKey`, `PolicyApproveWithLoginKey` |
+| `login_key`, `approval_key` | a login uses only one of the principal's login keys and an approval channel only one of its approval keys; the boot manifest fixes both sets and `keyd`'s keys, and keeps all three apart ([R35 (key separation)](init.md#r35-key-separation)). The mutations widen a guard to the key an attacker could sign with: one `keyd` holds, or a login key | `PolicyLoginWithKeydKey`, `PolicyApproveWithLoginKey` |
 | `owns_labels` | a vault login, a labelled agent, a declassification or a push needs the labels' owner, read from the manifest's owned labels, never from a domain's existence | `PolicyVaultWithoutOwnership` |
 | `caller_unlabelled` | a labelled session or agent starts nothing; it only submits requests | `PolicyLabelledStartsAgent` |
 | `not_locked`, `blame_window` | R40 | `PolicyNoLockout`, `PolicyBlameNoWindow` |
