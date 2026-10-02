@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 128
+revision = 129
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -463,9 +463,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The steward's policy core: one pure state machine, shared by the server and the model"
   template = "package"
   parent = "M1"
-  body = "Builds docs/servers/steward.md#the-policy-core (the crate redoubt-steward, its tables and generator, the model's embedder in place of model/src/steward.rs's policy; the mutations). Design: QA STEWARD0-design; page 99d01496f. Brief: .wash/local/STEWARD0-implementer.md. Needs nothing (library and model work, beside the init chain). Tier A (the steward's policy), size L."
+  body = "Owner's ask 2026-10-02: the steward's policy as a pure Rust state machine in a no_std, unsafe-free crate, keyed by domain, shared by the steward server and the model, with an Elixir reference as a differential oracle (STEWARD1); design docs/servers/steward.md 'The policy core' (99d01496f, a61477f7f, 22ed434d9), QA STEWARD0-design and STEWARD0-tables resolved. PAUSED 2026-10-02: wp-steward0 f62b4da34, clean: the tables as ruled, the generator with drift and coverage checks, the core crate redoubt-steward (28 tests), the bench case steward-host-tests, the model embedder with the families green at 40k seeds and 26 of 28 Policy mutations caught (the two await QA STEWARD0-unreachable-mutations), the pages and the size budget; doccheck and fmt clean. Left: the whole-bench result, the final mutation sweep after the ruling, the autosquash of three fixup commits, the report, then review by the full panel. Two implementers so far; detail .wash/local/STEWARD0-progress.md. Tier A (the steward's policy), size L."
   state = "active"
-  revision = 125
+  revision = 129
 
 [[node]]
   id = "STEWARD1"
