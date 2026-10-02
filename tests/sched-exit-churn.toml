@@ -1,15 +1,21 @@
-description = "Exiting on the CPU is charged (trap-boundary accounting): threads that exit, processes that exit and processes that fault leave an equal-weight victim half (virtual time, checked build)"
+description = "Exiting on the CPU is charged (trap-boundary accounting): threads that exit, processes that exit and processes that fault leave an equal-weight victim half; the victim's share judged by the post-check net of the checked build's audits inside its window (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-exit-churn"]
+# Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
+# judges the victim's share, which the program prints with its window (`SHARE`), net of the audit
+# time inside it (kernel/scheduling.md, "Responsiveness").
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
 timeout_secs = 600
 expect = [
-    '^\[exit-churn\] ok: threads that exit',
-    '^\[exit-churn\] ok: processes that exit',
-    '^\[exit-churn\] ok: processes that fault',
+    '^SHARE threads-exit \d+ \d+ \d+ 450 1000$',
+    '^SHARE processes-exit \d+ \d+ \d+ 450 1000$',
+    '^SHARE processes-fault \d+ \d+ \d+ 450 1000$',
     '^SCHED-EXIT-CHURN TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[exit-churn\] FAIL']
 poweroff = true

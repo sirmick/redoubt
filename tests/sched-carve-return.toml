@@ -1,13 +1,22 @@
-description = "The lead follows the weight: a budget that carves most of its weight away while it runs, then returns it, gets its half back against an equal victim (virtual time, checked build)"
+description = "The lead follows the weight: a budget that carves most of its weight away while it runs, then returns it, gets its half back against an equal victim; its share from the carve's return judged by the post-check net of the checked build's audits inside it (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-carve-return"]
+# Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
+# judges U's share from its carve's return, which the program prints with that window (`SHARE`),
+# net of the audit time inside it (kernel/scheduling.md, "Responsiveness"). U sleeps before it
+# carves, so the carve begins a slice, and runs until 9 ms into it, so the destruction falls inside
+# it: a slice ending first would requeue U at weight 1, whose pass defers the destruction past the
+# window.
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
 timeout_secs = 600
 expect = [
-    '^\[carve-return\] ok: U got its half back',
+    '^SHARE u-after-return \d+ \d+ \d+ 450 1000$',
     '^SCHED-CARVE-RETURN TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[carve-return\] FAIL']
 poweroff = true

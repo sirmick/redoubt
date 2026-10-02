@@ -14,18 +14,24 @@ const TOL: u64 = 50;
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut b = Bench::new("timer-flood");
-    for (leases, what) in
-        [(0u64, "30 sleepers, 1 us apart"), (1, "30 sleepers and 64 staggered budget deadlines")]
-    {
+    for (leases, name, what) in [
+        (0u64, "sleepers", "30 sleepers, 1 us apart"),
+        (1, "sleepers-and-deadlines", "30 sleepers and 64 staggered budget deadlines"),
+    ] {
         // Room for 30 thread stacks and 64 budgets of its own.
         let attacker = b.budget(rd::USERS, 100, 3, rd::FOREVER);
         let victim = b.budget(rd::USERS, 100, 1, rd::FOREVER);
         b.start(attacker, Role::TimerFlood, &[1, 1, 30, leases], &[attacker]);
         let v = b.start(victim, Role::Spin, &[], &[]);
-        let (start, end) = b.go(50_000, WINDOW);
+        let window = b.go(50_000, WINDOW);
         let counts = b.collect(2);
-        let vs = b.share(counts[v], end - start);
-        b.check(vs + TOL >= 500, format_args!("{}: the victim got {} of 1000", what, vs));
+        // The post-check judges the victim's share net of the checked build's audits (each
+        // deadline's destruction runs one), which a release build does not run.
+        let vs = b.judged_share(name, counts[v], window, (500 - TOL, 1000));
+        b.note(format_args!(
+            "{}: the victim got {} of 1000: gross, audits included; net in the post-check",
+            what, vs
+        ));
         rd::destroy(attacker).unwrap();
         rd::destroy(victim).unwrap();
     }
