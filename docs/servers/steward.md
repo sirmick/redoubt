@@ -146,8 +146,8 @@ default. The model swaps one entry for a broken one.
 | `pending_cap`, `fair_share` | the pending cap per domain, a fair share per session | `PolicyNoPendingCap`, `PolicyNoFairShare` |
 | `drop_requests` | a session's end drops its requests | `PolicyDeadSessionRequestsKept` |
 | `lease_bounded`, `carve_lease` | R39: a lease at most `MAX_LEASE`; a sub-agent inside its agent's budget, ending no later | `PolicyUnboundedLease`, `PolicySubAgentOutlivesAgent` |
-| `may_see`, `render`, `notify` | R38's screens: only owners of every label, printable ASCII, capped, no labelled free text; an approval-waiting notice reaches only channels whose labels include all the request's | `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyNotifyLabelledToAll` |
-| `rendered_here`, `hash_matches`, `approver_holds` | R38's binding and its bound | `PolicyApproveOtherChannel`, `PolicyApproveIgnoresHash`, `PolicyApproverExceeds` |
+| `reaches`, `render`, `notify` | R38's screens: an approval channel reaches only its own account's requests, whose every label its principal owns; printable ASCII, capped, no labelled free text; an approval-waiting notice reaches only channels whose labels include all the request's | `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyNotifyLabelledToAll` |
+| `rendered_here`, `hash_matches` | R38's binding | `PolicyApproveOtherChannel`, `PolicyApproveIgnoresHash` |
 | `exact_labels`, `item_fits` | R42: a declassification is submitted from a session with exactly the item's labels, a push from an unlabelled session; a declassified item is at most `DECLASSIFY_MAX` bytes of printable text | `PolicyDeclassifyFromUnlabelled`, `PolicyDeclassifyUnfit` |
 | `carve_crossing`, `copy_out` | R42: a reader or writer budget carries exactly the labelled side's labels; a copy out writes exactly the snapshot | `PolicyDeclassifyWithoutReader`, `PolicyDeclassifyLive` |
 | `sponsor_session` | a lease is ended only from an unlabelled session of its sponsor | `PolicyEndLeaseFromVault` |
@@ -156,14 +156,22 @@ default. The model swaps one entry for a broken one.
 A guard that reads only an object's kind (which crossing it is, whether a request snapshots)
 carries no rule, is named only in the tables, and has no mutation.
 
-Four of the model's mutations break a rule the types now keep, and they cannot be written: blame
-or a pending cap counted per account (`PolicyBlamePerAccount`, `PolicyCapPerAccount`) and a
-session carved from another label set's sub-budget (`PolicyCarveFromUnlabelled`) each need a
-second domain, and a narrowing handle for a session's budget (`PolicyNarrowToSessionBudget`)
-needs a budget where the effect takes only a revocation scope, a type of its own that only a
-zero-limit `CreateScope` makes (R41). They are retired, and this table says why. Ids drawn from
-a counter (`PolicySequentialIds`) and end-lease admitted behind others
-(`PolicyEndLeaseAdmitted`) break the embedder's half, and stay mutations of the model's embedder.
+Each rule has one keeper, and its mutation breaks that keeper: a second check of the same rule
+would hide the mutation. So the approval edge's `reaches`, a function of the policy table, keeps
+R38's screens to their owners, and no guard repeats it.
+
+Five of the model's mutations break a rule the types or the keepers now keep, and they cannot be
+written. Blame or a pending cap counted per account (`PolicyBlamePerAccount`,
+`PolicyCapPerAccount`) and a session carved from another label set's sub-budget
+(`PolicyCarveFromUnlabelled`) each need a second domain. A narrowing handle for a session's
+budget (`PolicyNarrowToSessionBudget`) needs a budget where the effect takes only a revocation
+scope, a type of its own that only a zero-limit `CreateScope` makes (R41). An approval granting
+more than its approver holds (`PolicyApproverExceeds`) needs a request whose labels or asked
+labels its principal does not own, and `owns_labels` refuses every one at entry and at
+submission (its mutation is `PolicyVaultWithoutOwnership`), while `reaches` keeps a request to
+its own principal's channels. They are retired, and this table says why. Ids drawn from a counter
+(`PolicySequentialIds`) and end-lease admitted behind others (`PolicyEndLeaseAdmitted`) break the
+embedder's half, and stay mutations of the model's embedder.
 So does an item written by a session without exactly its labels (`PolicyWriteUp`): that check is
 the volume's ([R25](serving.md#r25-the-label-check)), and no steward event.
 
@@ -382,7 +390,10 @@ trusted key, a declassification. Most things need none.
   shown only to principals owning every label it carries, and otherwise refused at submission. Its
   "approval waiting" notification reaches only channels whose labels include all of the request's,
   and `approve@box`.
-- **An approval grants no more than the approver holds.**
+- **An approval grants no more than the approver holds.** A request reaches only its own
+  principal's approval channels, and that principal owns every label the request carries or asks
+  for, checked when it entered and when it was submitted. A project's requests, which several
+  members may approve from M5 (persist, install, share), bring a check of their own.
 
 ```mermaid
 sequenceDiagram
