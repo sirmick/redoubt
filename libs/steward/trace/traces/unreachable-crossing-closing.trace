@@ -1,0 +1,11 @@
+# A crossing's budget process exiting while it is closing: excluded.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
+keyd [31]
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+event now=1 random=[201,202] reply=1 Login principal="alice" labels=[7] key=11
+event now=1 Done object=session@1/7#201 ok=[budget(901),scope,connection,process(71)]
+event now=2 random=[501,601] reply=2 Submit badge=202 declassify=[7] item=5 reason="r"
+event now=3 Done object=crossing@1/7#601 failed=1,2
+event now=4 Exited object=crossing@1/7#601

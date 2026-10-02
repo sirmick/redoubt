@@ -760,6 +760,14 @@ name = "redoubt-steward-gen"
 version = "0.1.0"
 
 [[package]]
+name = "redoubt-steward-trace"
+version = "0.1.0"
+dependencies = [
+ "redoubt-steward",
+ "redoubt-steward-gen",
+]
+
+[[package]]
 name = "redoubt-stride"
 version = "0.1.0"
 dependencies = [

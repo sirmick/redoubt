@@ -1,0 +1,80 @@
+# Requests and approvals: every Submit refusal, notes rendered and answered, R38's binding
+# (the channel that rendered it last, its hash, a closed channel's renders), the pending cap and
+# fair shares, a session's end dropping its requests, and approved agents: one in another domain
+# of the account, one in the requester's own, one that fails to start.
+principal "alice" account=1 login=[11] approval=[21,23] owned=[7] sets=[[],[7],[8]] top=1000,30,300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+# Two unlabelled sessions (badges 102, 112), a vault session (202), two approval channels.
+event now=1 random=[101,102] reply=1 Login principal="alice" labels=[] key=11
+event now=1 Done object=session@1/#101 ok=[budget(901),scope,connection,process(71)]
+event now=1 random=[111,112] reply=2 Login principal="alice" labels=[] key=11
+event now=1 Done object=session@1/#111 ok=[budget(902),scope,connection,process(72)]
+event now=1 random=[201,202] reply=3 Login principal="alice" labels=[7] key=11
+event now=1 Done object=session@1/7#201 ok=[budget(903),scope,connection,process(73)]
+event now=2 reply=4 ApprovalOpened channel=50 principal="alice" key=21
+event now=2 reply=5 ApprovalOpened channel=60 principal="alice" key=23
+# Refused: an agent in a set Alice has but does not own, in one she has not, a declassification
+# from the wrong session, an unlabelled agent asked by a vault, a lease of 0, a badge naming
+# nothing.
+event now=3 random=[1001] reply=6 Submit badge=102 agent=[8] lease=1000 reason="r"
+event now=3 random=[1001] reply=7 Submit badge=102 agent=[9] lease=1000 reason="r"
+event now=3 random=[1001] reply=8 Submit badge=102 declassify=[7] item=1 reason="r"
+event now=3 random=[1001] reply=9 Submit badge=202 agent=[] lease=1000 reason="r"
+event now=3 random=[1001] reply=10 Submit badge=102 agent=[7] lease=0 reason="r"
+event now=3 random=[1001] reply=11 Submit badge=999 note="n" reason="r"
+# Notes. The second session's share is half the cap: its third is refused.
+event now=4 random=[1001] reply=12 Submit badge=102 note="hello \"there\"\x01" reason="caf\xc3\xa9 \\ \x1b[31m"
+event now=4 random=[1002] reply=13 Submit badge=102 note="again" reason="r"
+event now=4 random=[1003] reply=14 Submit badge=102 note="third" reason="r"
+event now=4 random=[1004] reply=15 Submit badge=112 note="from the other" reason="r"
+event now=4 random=[2001] reply=16 Submit badge=202 note="secret" reason="from the vault"
+# Rendered on channel 50: the vault's text withheld.
+event now=5 reply=17 Pending channel=50
+event now=6 reply=18 Approve channel=50 request=1001 hash=shown
+event now=6 reply=19 Approve channel=60 request=1002 hash=shown
+event now=6 reply=20 Approve channel=50 request=1002 hash=0000000000000000000000000000000000000000000000000000000000000000
+event now=6 reply=21 Deny channel=60 request=1002
+# Rendered again on channel 60, which now answers them, and 50 no longer does.
+event now=7 reply=22 Pending channel=60
+event now=7 reply=23 Deny channel=60 request=1002
+event now=7 reply=24 Approve channel=50 request=1004 hash=shown
+# A frozen request, never rendered, cannot be answered.
+event now=8 random=[1005] reply=25 Submit badge=112 note="unseen" reason="r"
+event now=8 reply=26 Approve channel=50 request=1005 hash=shown
+event now=8 reply=27 Deny channel=50 request=1005
+# The pending cap: four pending in the domain, and a fifth is refused before any share.
+event now=9 random=[1006] reply=28 Submit badge=102 note="six" reason="r"
+event now=9 random=[1007] reply=29 Submit badge=102 note="seven" reason="r"
+event now=9 random=[1008] reply=30 Submit badge=102 note="eight" reason="r"
+# A session's end drops its requests, rendered and frozen.
+event now=10 reply=31 EndSession badge=112
+event now=10 Done object=session@1/#111 ok=[done]
+# A labelled agent, approved from the unlabelled domain: its lease starts in the vault.
+event now=11 random=[3001] reply=32 Submit badge=102 agent=[7] lease=60000000 reason="look"
+event now=11 reply=33 Pending channel=50
+event now=12 random=[3101,3102] reply=34 Approve channel=50 request=3001 hash=shown
+event now=12 Done object=lease@1/7#3101 ok=[budget(904),scope,connection,process(74)]
+# That agent asks for one in its own set; approved, it fails to start.
+event now=13 random=[3201] reply=35 Submit badge=3102 agent=[7] lease=1000000 reason="helper"
+event now=13 reply=36 Pending channel=50
+event now=14 random=[3301,3302] reply=37 Approve channel=50 request=3201 hash=shown
+event now=14 Done object=lease@1/7#3301 failed=0,9
+event now=14 Done object=lease@1/7#3301 ok=[done]
+# A note from the agent, rendered with the agent's name.
+event now=15 random=[3401] reply=38 Submit badge=3102 note="from the agent" reason="r"
+event now=15 reply=39 Pending channel=50
+# Channel 50 closes: what it rendered must be rendered again, and a channel opened under its id
+# answers none of it.
+event now=16 reply=40 ApprovalClosed channel=50
+event now=16 reply=41 Approve channel=60 request=3401 hash=shown
+event now=16 reply=42 ApprovalOpened channel=50 principal="alice" key=21
+event now=16 reply=43 Approve channel=50 request=3401 hash=shown
+# Bob's channel reaches none of Alice's requests; unknown requests and channels name nothing.
+event now=17 reply=44 ApprovalOpened channel=70 principal="bob" key=22
+event now=17 reply=45 Pending channel=70
+event now=17 reply=46 Approve channel=70 request=1006 hash=shown
+event now=17 reply=47 Deny channel=60 request=9999
+event now=17 reply=48 Pending channel=9999
+event now=17 reply=49 Deny channel=60 request=3101

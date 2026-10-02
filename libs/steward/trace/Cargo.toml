@@ -1,0 +1,18 @@
+[package]
+name = "redoubt-steward-trace"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The steward core's event traces: their text encoding, the Rust side's output, and the check against the Elixir reference"
+
+# Host-only (`std`), outside the shipped core: it reads trace files, runs them through the core and
+# compares the output with the Elixir reference's (servers/steward.md, "Two embedders and a
+# reference"). Never on the box.
+[dependencies]
+redoubt-steward = { path = ".." }
+# The tables' rows, for the coverage check.
+redoubt-steward-gen = { path = "../gen" }
+
+[[bin]]
+name = "steward-trace"
+path = "src/main.rs"

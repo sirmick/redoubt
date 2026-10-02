@@ -1,0 +1,46 @@
+# Leases: StartAgent refused for each reason, an agent and its sub-agents, a failed start,
+# ending a lease from each kind of caller, an exit, and an end the guarantee excludes.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
+servers 1
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+# Alice's unlabelled session (badge 102) and her vault session (badge 202).
+event now=1 random=[101,102,103] reply=1 Login principal="alice" labels=[] key=11
+event now=2 Done object=session@1/#101 ok=[budget(901),scope,connection,connection,process(71)]
+event now=3 random=[201,202,203] reply=2 Login principal="alice" labels=[7] key=11
+event now=4 Done object=session@1/7#201 ok=[budget(902),scope,connection,connection,process(72)]
+# Refused: a labelled caller starts nothing; a lease of 0; one over a day; a badge naming nothing.
+event now=5 random=[301,302,303] reply=3 StartAgent badge=202 lease=1000
+event now=5 random=[301,302,303] reply=4 StartAgent badge=102 lease=0
+event now=5 random=[301,302,303] reply=5 StartAgent badge=102 lease=86400000001
+event now=5 random=[301,302,303] reply=6 StartAgent badge=999 lease=1000
+# An agent for a minute (badge 302).
+event now=6 random=[301,302,303] reply=7 StartAgent badge=102 lease=60000000
+event now=7 Done object=lease@1/#301 ok=[budget(903),scope,connection,connection,process(73)]
+# Its sub-agent asks for a day and ends no later than its agent; its start fails.
+event now=8 random=[401,402,403] reply=8 StartAgent badge=302 lease=86400000000
+event now=9 Done object=lease@1/#401 failed=2,4
+event now=10 Done object=lease@1/#401 ok=[done]
+# A second sub-agent starts.
+event now=11 random=[501,502,503] reply=9 StartAgent badge=302 lease=1000000
+event now=12 Done object=lease@1/#501 ok=[budget(904),scope,connection,connection,process(74)]
+# Not the sponsor's unlabelled session: the vault session, and the agent itself.
+event now=13 reply=10 EndLease badge=202 lease=301
+event now=13 reply=11 EndLease badge=302 lease=301
+# Bob's session names nothing of Alice's; nor does a lease that is not there.
+event now=14 random=[601,602,603] reply=12 Login principal="bob" labels=[] key=12
+event now=15 Done object=session@2/#601 ok=[budget(905),scope,connection,connection,process(75)]
+event now=15 reply=13 EndLease badge=602 lease=301
+event now=15 reply=14 EndLease badge=102 lease=999
+event now=15 reply=15 EndLease badge=102 lease=101
+# The sponsor ends the agent: the sponsor's unlabelled sessions are told.
+event now=16 reply=16 EndLease badge=102 lease=301
+event now=17 Done object=lease@1/#301 ok=[done]
+# The sub-agent's process exits.
+event now=18 Exited object=lease@1/#501
+event now=19 Done object=lease@1/#501 failed=0,2
+# A lease still starting is ended: the guarantee excludes it, and the steward exits.
+event now=20 random=[701,702,703] reply=17 StartAgent badge=102 lease=1000
+event now=21 reply=18 EndLease badge=102 lease=701
+event now=22 reply=19 EndSession badge=102
