@@ -35,7 +35,7 @@
 set -euo pipefail
 
 IMAGE=redoubt-dev
-IMAGE_REV=3
+IMAGE_REV=4
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The image contains a real passwd entry for the host identity. OpenSSH refuses to run for a
@@ -58,7 +58,7 @@ image_rev="$(docker image inspect --format '{{ index .Config.Labels "org.redoubt
 image_uid="$(docker image inspect --format '{{ index .Config.Labels "org.redoubt.dev.uid" }}' "$IMAGE" 2>/dev/null || true)"
 image_gid="$(docker image inspect --format '{{ index .Config.Labels "org.redoubt.dev.gid" }}' "$IMAGE" 2>/dev/null || true)"
 if [ "$REBUILD" = 1 ] || [ "$image_rev" != "$IMAGE_REV" ] || [ "$image_uid" != "$UID_N" ] || [ "$image_gid" != "$GID_N" ]; then
-    echo "==> building $IMAGE (this pulls Debian + Node + Rust; a few minutes the first time)"
+    echo "==> building $IMAGE (this pulls Debian + Node + Rust and builds OTP; a few minutes the first time)"
     docker build \
         --build-arg "IMAGE_REV=$IMAGE_REV" \
         --build-arg "USER_UID=$UID_N" \

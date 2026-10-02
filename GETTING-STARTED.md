@@ -108,10 +108,12 @@ sources are in it with `readelf --debug-dump=info` (a `kernel/src/main.rs` compi
 ## beamlet
 
 beamlet, the Elixir VM, runs on the host. Its differential and Elixir suites also need
-OTP 28.5.0.6 and Elixir 1.20.4, which neither the repository nor the container provides:
-`tools/env.sh` puts `toolchains/otp-28.5.0.6/bin` and `toolchains/elixir-1.20.4/bin` on the path,
-and `BEAMLET_TOOLCHAINS` names another root with that layout. The pure-Rust unit tests need
-neither.
+OTP 28.5.0.6 and Elixir 1.20.4. `tools/env.sh` puts `otp-28.5.0.6/bin` and `elixir-1.20.4/bin`
+under `BEAMLET_TOOLCHAINS` on the path, and with that unset, the same directories under the
+repository's untracked `toolchains/`. The container provides both under `/opt/toolchains`, OTP
+built from its release source and Elixir from its release's precompiled zip, each pinned by
+version and sha256 in the [Dockerfile](Dockerfile), and sets `BEAMLET_TOOLCHAINS` to it. Your
+own machine keeps its own build in `toolchains/`. The pure-Rust unit tests need neither.
 
 ```sh
 cd userland/otp
