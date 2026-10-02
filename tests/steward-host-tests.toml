@@ -1,0 +1,3 @@
+description = "the steward's policy core and its generator: the table parser's refusals, the generated dispatch, diagrams and clause skeletons matching the checked-in files (the drift check), and every guard and rule-carrying effect through decide"
+kind = "host-tests"
+packages = ["redoubt-steward-gen", "redoubt-steward"]
