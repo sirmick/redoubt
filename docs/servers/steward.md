@@ -22,7 +22,50 @@ standing labelled reader.
 
 ### The policy core
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (40)</summary>
+
+- host:redoubt-steward::a_manifest_with_a_key_in_two_roles_is_refused
+- host:redoubt-steward::boot_carves_a_fixed_sub_budget_per_label_set
+- host:redoubt-steward::login_key
+- host:redoubt-steward::owns_labels_reads_the_manifest_not_the_domains
+- host:redoubt-steward::a_session_is_carved_from_its_domain_with_a_scope_for_its_connections
+- host:redoubt-steward::the_batch_steps_for_a_session
+- host:redoubt-steward::approval_key
+- host:redoubt-steward::caller_unlabelled
+- host:redoubt-steward::lease_bounded_and_carve_lease
+- host:redoubt-steward::blame_window_and_not_locked
+- host:redoubt-steward::pending_cap_and_fair_share
+- host:redoubt-steward::drop_requests
+- host:redoubt-steward::exact_labels_and_item_fits
+- host:redoubt-steward::may_see_and_render
+- host:redoubt-steward::rendered_here_hash_matches_and_approver_holds
+- host:redoubt-steward::approver_holds_what_it_grants
+- host:redoubt-steward::a_granted_lease_starts_in_its_own_domain
+- host:redoubt-steward::not_locked_keeps_a_grant_pending
+- host:redoubt-steward::a_declassification_copies_out_exactly_its_snapshot
+- host:redoubt-steward::a_push_writes_its_snapshot_through_a_writer_with_the_target_labels
+- host:redoubt-steward::sponsor_session_and_notify_sponsor
+- host:redoubt-steward::a_lease_ends_at_its_deadline_or_its_process_exit
+- host:redoubt-steward::notify_reaches_only_channels_with_the_requests_labels
+- host:redoubt-steward::audit_visible
+- host:redoubt-steward::a_failed_start_ends_the_session
+- host:redoubt-steward::an_excluded_event_makes_the_steward_exit
+- host:redoubt-steward::an_event_naming_nothing_gets_one_answer
+- host:redoubt-steward::the_same_events_give_the_same_effects
+- host:redoubt-steward-gen::parses_tables
+- host:redoubt-steward-gen::refuses_unknown_names
+- host:redoubt-steward-gen::refuses_bad_rows
+- host:redoubt-steward-gen::refuses_bad_machines
+- host:redoubt-steward-gen::every_row_is_read_or_refused
+- host:redoubt-steward-gen::fenced_code_is_not_a_table
+- host:redoubt-steward-gen::link_checks_names_and_vocabulary
+- host:redoubt-steward-gen::dispatch_takes_rows_in_order
+- host:redoubt-steward-gen::the_tables_parse
+- host:redoubt-steward-gen::generated_files_are_current
+- host:redoubt-model::steward_policy
+- host:redoubt-model::steward_noninterference
+
+</details>
 
 Everything the steward decides is one pure state machine, the crate `redoubt-steward` (`no_std`,
 no `unsafe`, no I/O), shared by the steward server and the model. The server is its embedder:
@@ -108,15 +151,6 @@ when it opens and each kind has rows of its own: a declassification's read and a
 through a budget carrying exactly the labelled side's labels; a declassification's copy out is
 the steward's own write to the unlabelled volume, with no budget.
 
-| Machine | States | Events |
-| --- | --- | --- |
-| session | `Starting`, `Running`, `Ending`, `Ended` | `Login`; `Done`; `EndSession`, `ChannelClosed`, `Exited`, `LockedOut` |
-| lease | `Starting`, `Running`, `Ending`, `Ended` | `StartAgent` or a granted request; `Done`; `EndLease`, `Exited` (its deadline), `LockedOut` |
-| request | `Snapshotting`, `Frozen`, `Rendered`, `Approved`, `Denied`, `Dropped` | `Submit`; `Done` (the snapshot); `Pending`, `Approve`, `Deny`; its session's end |
-| crossing | `Open`, `Closing`, `Closed` | opened by a request (a read, a copy out, a push's write); `Done` (the item read or written, or what was left destroyed), `Exited` |
-| blame | `Open`, `LockedOut` | `Blame`; `Login` once the window has passed |
-| approval channel | `Open`, `Closed` | `ApprovalOpened`, `ApprovalClosed` |
-
 The events are `Boot` (the manifest), `Login`, `ChannelClosed`, `ApprovalOpened` and
 `ApprovalClosed` from `sshd`; `StartAgent`, `Submit`, `EndLease` and `EndSession` from a session;
 `Pending`, `Approve` and `Deny` from an approval channel; `Blame` from `init`; `Exited` from the
@@ -129,6 +163,36 @@ named in the table and written by hand in the core. A generator in the style of 
 dispatch (an exhaustive `match` on state and event), the state diagrams on this page, and the
 Elixir reference's clause skeletons, all checked in, with a drift check. No state-machine library
 and no macro.
+
+##### The session
+
+{{#include ../../libs/steward/tables/session.md:table}}
+{{#include ../../libs/steward/tables/session.mermaid.md}}
+
+##### The lease
+
+{{#include ../../libs/steward/tables/lease.md:table}}
+{{#include ../../libs/steward/tables/lease.mermaid.md}}
+
+##### The request
+
+{{#include ../../libs/steward/tables/request.md:table}}
+{{#include ../../libs/steward/tables/request.mermaid.md}}
+
+##### The crossing
+
+{{#include ../../libs/steward/tables/crossing.md:table}}
+{{#include ../../libs/steward/tables/crossing.mermaid.md}}
+
+##### A domain's blame
+
+{{#include ../../libs/steward/tables/blame.md:table}}
+{{#include ../../libs/steward/tables/blame.mermaid.md}}
+
+##### The approval channel
+
+{{#include ../../libs/steward/tables/approval_channel.md:table}}
+{{#include ../../libs/steward/tables/approval_channel.mermaid.md}}
 
 #### Guards and effects
 
@@ -173,18 +237,18 @@ signs nothing, so the steward still holds no key.
 
 #### Two embedders and a reference
 
-- **The steward server** binds effects to the client library and the kernel.
+- **The steward server** (planned, with the mechanism sections below) binds effects to the client
+  library and the kernel.
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
   policy, so the property families (P1 to P16) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
   inspection API that the server does not use.
-- **The Elixir reference**, `decide/2` as multi-clause functions over a `defstruct` state, runs
-  on beamlet on the build host in the bench's host tests, as a differential oracle. The same
-  event traces must give equal states, effects and audit records. It is a test oracle in the
+- **The Elixir reference** (planned; the generator already writes its clause skeletons),
+  `decide/2` as multi-clause functions over a `defstruct` state, runs on beamlet on the build host
+  in the bench's host tests, as a differential oracle. The same event traces must give equal
+  states, effects and audit records. It is a test oracle in the
   sense [tenet 3](../TENETS.md#3-rust-and-assembly-only-where-rust-cannot-reach) allows on the
   build host. It is never authoritative and never runs on the box.
-
-**Open:** none.
 
 ### Principals
 
@@ -214,8 +278,9 @@ pages, processes and weight. Every session and lease of one (principal, label se
 its own sub-budget. So a vault session's leases never change what the unlabelled side can carve:
 carving under one shared top budget would let the unlabelled side read the vault's activity in
 its free limits ([R37 (vault non-interference)](#r37-vault-non-interference)). The model checks
-that every session is carved from its label set's sub-budget (its P1; the mutation
-`PolicyCarveFromUnlabelled` breaks it).
+that every session and lease is carved from its label set's sub-budget (its P1). A carve from
+another label set's sub-budget would need a second domain, which no handler can borrow, so it has
+no mutation ([guards and effects](#guards-and-effects)).
 
 **Open:** none.
 
@@ -330,22 +395,9 @@ or an agent with a person at the top of the chain.
 - **Each agent runs in its own VM**; sub-agents with different authority are separate VMs.
 
 The model checks leases and their end (its P9 and P13; `PolicyUnboundedLease`,
-`PolicySubAgentOutlivesAgent`, `PolicyEndLeaseAdmitted`, `PolicyNoFairShare`) and the lease
-lifecycle ([R39 (leases end)](#r39-leases-end)).
-
-```mermaid
-stateDiagram-v2
-    [*] --> Requested: agent's sponsor asks,<br/>or an approval grants
-    Requested --> Refused: lease over MAX_LEASE
-    Requested --> Running: budget carved under the sponsor,<br/>deadline set
-    Running --> Running: sub-agents inside<br/>its own budget
-    Running --> Ended: sponsor ends it<br/>(ahead of admission)
-    Running --> Ended: deadline passes
-    Running --> Ended: three blamed crashes<br/>of its (account, label set)
-    Ended --> [*]: budget destroyed,<br/>sub-agents with it
-    Refused --> [*]
-```
-*Figure: a lease's life. All of it is planned.*
+`PolicySubAgentOutlivesAgent`, `PolicyEndLeaseAdmitted`, `PolicyEndLeaseFromVault`,
+`PolicyNoFairShare`) and the lease lifecycle ([R39 (leases end)](#r39-leases-end)): the lease
+machine's, whose table and generated diagram are [above](#the-lease).
 
 **Open:** none.
 
@@ -407,8 +459,9 @@ sequenceDiagram
 
 The model checks binding, screens, caps and the approval channel (its P3, P4 and P5;
 `PolicyApproveIgnoresHash`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`,
-`PolicyShowLabelledToAll`, `PolicyCapPerAccount`, `PolicyNoPendingCap`,
-`PolicyDeadSessionRequestsKept`, `PolicyApproveWithLoginKey`, `PolicyNotifyLabelledToAll`)
+`PolicyShowLabelledToAll`, `PolicyNoPendingCap`, `PolicyDeadSessionRequestsKept`,
+`PolicyApproveWithLoginKey`, `PolicyNotifyLabelledToAll`, `PolicyApproveOtherChannel`,
+`PolicyApproverExceeds`)
 ([R38 (out-of-band approval)](#r38-out-of-band-approval)).
 
 **The steward's constants** are the model's, changed only by a new system bundle, never per
@@ -501,7 +554,8 @@ end its owner's unlabelled sessions, which would be a channel out of the vault. 
 current call blames nobody and counts only toward `init`'s restart limit.
 
 The model checks it on the kernel model's own exit notices (its P7; `PolicyBlameNoWindow`,
-`PolicyBlamePerAccount`, `PolicyNoLockout`) ([R40 (blame by label set)](#r40-blame-by-label-set)).
+`PolicyNoLockout`) ([R40 (blame by label set)](#r40-blame-by-label-set)). Blame counted per account
+would need a second domain, which no handler can borrow.
 
 **Open:** none.
 
@@ -685,8 +739,9 @@ Status: planned · M1 (separation and containment)
 
 A server that narrows a session's connection to that session's life holds a revocation scope made
 for it, never a budget holding processes. So a compromised server can revoke what it minted,
-never destroy a session. The model checks it (its P12; `PolicyNarrowToSessionBudget`,
-`PolicyServerHoldsSystemBudget`), and the attack test hands a server a session's budget and
+never destroy a session. The model checks it (its P12; `PolicyServerHoldsSystemBudget`): a
+connection narrowed to a session's budget cannot be written, since `Connect` takes only a scope,
+which only a zero-limit `CreateScope` makes. The attack test hands a server a session's budget and
 expects it refused.
 
 **Open:** none.
