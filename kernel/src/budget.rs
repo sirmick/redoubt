@@ -878,7 +878,7 @@ impl MemoryManager {
 
     /// First step of `budget_destroy(h)`: check the handle and mark the budget and everything
     /// below it dying. The caller then kills every process in a dying budget
-    /// (`process_is_doomed`), and finishes with [`MemoryManager::destroy_marked`].
+    /// (`runs_in_dying`), and finishes with [`MemoryManager::destroy_marked`].
     pub fn destroy_begin(&mut self, pid: Pid, h: u32) -> Result<BudgetFrame, Error> {
         let top = self.budget_handle(pid, h)?;
         self.mark_dying(top);
@@ -1028,9 +1028,19 @@ impl MemoryManager {
         }
     }
 
-    /// Whether `pid` lives in a budget that is being destroyed.
-    pub fn process_is_doomed(&self, pid: Pid) -> bool {
+    /// Whether `pid` runs in a budget that is being destroyed: the processes `destroy_subtree`
+    /// kills first.
+    pub fn runs_in_dying(&self, pid: Pid) -> bool {
         self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
+    }
+
+    /// Whether the destruction under way will kill `pid`: it runs in a dying budget, or its
+    /// process object is charged to one, which frees the object and kills the process with it
+    /// (`process::budgets_dying`).
+    pub fn process_is_doomed(&self, pid: Pid) -> bool {
+        self.runs_in_dying(pid)
+            || crate::process::object_of(self, pid)
+                .is_some_and(|f| self.budget_at(self.process(f).creator).dying)
     }
 
     /// Last step of `budget_destroy`, once the doomed budgets' processes are gone: close every
@@ -1219,7 +1229,7 @@ pub fn destroy_subtree(
     let mut caller_doomed = false;
     for index in 1..=MAX_PROCESS_COUNT {
         let Some(victim) = Pid::new(index as u8) else { continue };
-        if !MemoryManager::with(|mm| mm.process_is_doomed(victim)) {
+        if !MemoryManager::with(|mm| mm.runs_in_dying(victim)) {
             continue;
         }
         if Some(victim) == caller {

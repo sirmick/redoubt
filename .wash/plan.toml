@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 102
+revision = 128
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -180,10 +180,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The steward"
   template = "step"
   parent = "M1"
-  needs = ["fsd", "beamlet-redoubt"]
+  needs = ["fsd", "beamlet-redoubt", "STEWARD1"]
   body = "docs/servers/steward.md; docs/todo/budget-destroy-cost.md (must restore the R10 30 ms and deadline-notice 40 ms targets relaxed in K7); docs/kernel/scheduling.md#responsiveness"
   state = "todo"
-  revision = 2
+  revision = 109
 
 [[node]]
   id = "FMT1"
@@ -258,9 +258,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["K8", "K9", "K10"]
-  body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-10-01: wp-gate1 tip 1bd502c47 on main a678d8928 (K15's protocol adopted: LATENCY-SAMPLE/COUNT under group gate, the program's own target rows gone). rv64 seed 3 passes with every row and every net target met (notice p99 23.5 ms, R10 23.9 ms); rv64 seeds 1-12 pass. Left: rv32, the rest of the 16-seed sweep on both widths and the pinned seed, the page (planned to built, the sweep recorded), the whole bench, the fold into clean commits, review by the full panel. Handoff: .wash/local/handoffs/gate1-implementer.md; detail .wash/local/GATE1-progress.md and GATE1-sweep.md. The notice miss is settled: QA GATE1-notice-late (the checked build's audits; K15 merged a678d8928). Tier A, size M."
-  state = "active"
-  revision = 82
+  body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-10-02 on a kernel finding: wp-gate1 e9ecc5ea5 (a WIP on the two-commit fold 555aeb6a5; the review's BLOCK findings applied: per-lease badges for held calls and progress, strict counts, fail bits, nine leases of each kind, two leases live at a deadline end as the page requires). With two full leases live, the deadline notice misses: net p99 57.1 ms rv64, 48.1 ms rv32 against 40 (every protocol row ok). The earlier green sweep (32/32, seed 4 pinned) was with one lease live at a deadline end. QA GATE1-notice-two-leases (Architect) decides the kernel package; GATE1 resumes on its merge: the sweep again, The run's per-width seed sentence, the whole bench, the fold, the red team's re-review. Detail: .wash/local/GATE1-miss.md, GATE1-progress.md, GATE1-sweep.md. INIT1 (accepted) waits on GATE1's merge. Tier A, size M."
+  state = "parked"
+  revision = 127
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
@@ -455,5 +455,24 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K13"]
   body = "Closes docs/todo/destruction-feeds-the-doomed.md. Builds docs/kernel/ipc.md#r4b-a-server-dies (the rule beside it: a thread of a process in a dying budget takes nothing from a pump) and docs/kernel/processes.md#exit-notices (delivery says the same); removes ipc.md's residual. Design: QA K13-doomed-takes-call. Needs K13 (message.rs). Tier A (kernel), size S."
+  state = "done"
+  revision = 128
+
+[[node]]
+  id = "STEWARD0"
+  title = "The steward's policy core: one pure state machine, shared by the server and the model"
+  template = "package"
+  parent = "M1"
+  body = "Builds docs/servers/steward.md#the-policy-core (the crate redoubt-steward, its tables and generator, the model's embedder in place of model/src/steward.rs's policy; the mutations). Design: QA STEWARD0-design; page 99d01496f. Brief: .wash/local/STEWARD0-implementer.md. Needs nothing (library and model work, beside the init chain). Tier A (the steward's policy), size L."
+  state = "active"
+  revision = 125
+
+[[node]]
+  id = "STEWARD1"
+  title = "The steward core's Elixir reference, a differential oracle on beamlet in the bench"
+  template = "package"
+  parent = "M1"
+  needs = ["STEWARD0"]
+  body = "Builds docs/servers/steward.md#two-embedders-and-a-reference (the Elixir reference: decide/2 over defstruct state from the generated clause skeletons; a trace format both run; a bench host-tests case that runs Elixir on beamlet with the pinned toolchain), and brings libs/wire/elixir/run-vectors under the same case (docs/servers/wire.md#wire-tables-and-the-generator's partly-tested line). Design: QA STEWARD0-design. Brief: the Architect writes it when STEWARD0 is near done. Tier A (the bench), size M."
   state = "todo"
-  revision = 100
+  revision = 109

@@ -69,7 +69,6 @@
   - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
   - [beamlet's modular exponentiation takes operands of any size](todo/beamlet-bignum-bounds.md)
   - [The parked write test races the host's clock](todo/parked-write-clock.md)
-  - [A destruction can feed a receiver it is about to kill](todo/destruction-feeds-the-doomed.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [rv32](beyond/rv32.md)

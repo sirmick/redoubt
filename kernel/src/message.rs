@@ -934,10 +934,10 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
         // An abandoned-call notice goes to the thread holding the call, on the endpoint the call
         // arrived on (R3), before any message.
         let notice = find_thread(mm, |mm, pid, tid| {
-            let s = slot(mm, pid, tid);
-            if s.wait != Wait::Receive || s.endpoint != Some(e) {
+            if !receiver_on(mm, pid, tid, e) {
                 return None;
             }
+            let s = slot(mm, pid, tid);
             (0..s.ncalls).map(|i| nth_call(mm, pid, tid, i)).find_map(|f| {
                 let c = open_call_at(mm, f);
                 (c.flags & F_NOTICE != 0 && c.endpoint == e).then_some((pid, tid, f, c.rid))
@@ -962,11 +962,8 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
         // endpoint -- so whichever thread is receiving here takes it. Taking it frees the
         // process object, which is what frees the PID (kernel/processes.md R20).
         let exit = crate::process::pending_notice(mm, e).and_then(|(frame, notice)| {
-            find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                (s.wait == Wait::Receive && s.endpoint == Some(e)).then_some((pid, tid))
-            })
-            .map(|(pid, tid)| (frame, notice, pid, tid))
+            find_thread(mm, |mm, pid, tid| receiver_on(mm, pid, tid, e).then_some((pid, tid)))
+                .map(|(pid, tid)| (frame, notice, pid, tid))
         });
         if let Some((frame, notice, pid, tid)) = exit {
             // A failed output record does not consume the notice or release its PID.
@@ -980,8 +977,7 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
         }
         // The first receiver that can take a message, and the message R2 picks for it.
         let pick = find_thread(mm, |mm, rpid, rtid| {
-            let s = slot(mm, rpid, rtid);
-            if s.wait != Wait::Receive || s.endpoint != Some(e) {
+            if !receiver_on(mm, rpid, rtid, e) {
                 return None;
             }
             // R4a: a process at `MAX_OPEN_CALLS` takes no calls; sends still arrive.
@@ -991,6 +987,14 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
         let Some((rpid, rtid, spid, stid)) = pick else { return };
         deliver(ss, mm, e, rpid, rtid, spid, stid);
     }
+}
+
+/// Whether `(pid, tid)` is a receiver `pump` may feed on `e`: waiting in `receive` there, in a
+/// process no destruction is about to end. A doomed thread takes nothing, so what it would have
+/// taken stays for a live receiver (R4b).
+fn receiver_on(mm: &MemoryManager, pid: Pid, tid: TID, e: EndpointRef) -> bool {
+    let s = slot(mm, pid, tid);
+    s.wait == Wait::Receive && s.endpoint == Some(e) && !mm.process_is_doomed(pid)
 }
 
 /// R2: the next message to take on `e` — the oldest message of the group served least recently,
