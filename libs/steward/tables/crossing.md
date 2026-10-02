@@ -10,9 +10,9 @@ the notation is in [README.md](README.md).
 <!-- steward: crossing -->
 | From | Event | Guard | To | Effects |
 | --- | --- | --- | --- | --- |
-| - | `Open` | `reading` | `Open` | `carve_crossing`, `cross_item`, `destroy_crossing` |
+| - | `Open` | `reading` | `Open` | `carve_crossing`, `read_item`, `destroy_crossing` |
 | - | `Open` | `copying` | `Open` | `copy_out` |
-| - | `Open` | - | `Open` | `carve_crossing`, `cross_item`, `destroy_crossing` |
+| - | `Open` | - | `Open` | `carve_crossing`, `write_item`, `destroy_crossing` |
 | `Open` | `Done` | `reading` | `Closed` | `pass_snapshot` |
 | `Open` | `Done` | `copying` | `Closed` | `audit_declassified` |
 | `Open` | `Done` | - | `Closed` | `audit_pushed` |
