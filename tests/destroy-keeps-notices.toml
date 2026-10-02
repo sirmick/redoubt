@@ -1,0 +1,16 @@
+description = "R4b and exit notices: destroying a budget whose two processes both receive on their creator's exit endpoint feeds neither the other's notice; the creator receives both, killed (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The program runs first and judges from the kernel's answers: the notices its receive returns.
+# The kernel's own lines name the children in the order the destruction ends them.
+programs = ["destroy-keeps-notices"]
+timeout_secs = 60
+expect = [
+    '^\[destroy-keeps-notices\] ok: P1 and P2 are both receiving on E$',
+    '^\[destroy-keeps-notices\] ok: E holds a first notice, cause killed \(pid \d+\)$',
+    '^\[destroy-keeps-notices\] ok: E holds a second notice, cause killed, for the other child \(pid \d+\)$',
+    '^DESTROY-KEEPS-NOTICES TEST PASSED$',
+]
+forbid = ['\[destroy-keeps-notices\] FAIL', 'PANIC']
+poweroff = true
