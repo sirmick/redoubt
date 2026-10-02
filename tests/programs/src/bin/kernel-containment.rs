@@ -24,7 +24,7 @@
 #![no_main]
 
 use test_programs::rd::{self, Received};
-use test_programs::sched::{Bench, CT_VERDICT, K, R10_P99, Role, Stats, rtc};
+use test_programs::sched::{Bench, CT_CALLERS, CT_LEASES, CT_VERDICT, K, R10_P99, Role, Stats, rtc};
 
 /// The gate's window, µs: long enough for both slots' nine leases at the D deadline.
 const WINDOW_US: u64 = 10_000_000;
@@ -191,8 +191,11 @@ pub extern "C" fn _start() -> ! {
 
     // The steward's own checks: every process killed blaming nobody, every handle closed, and
     // sessions' usage returned (I10).
+    // Every lease the steward made, the slot D leases made again included.
+    let mut leases = None;
     match stat(s, CT_VERDICT) {
         Some(w) => {
+            leases = Some(2 * CT_LEASES + w[1]);
             let fails = w[0] as u64;
             b.check(
                 fails & 8 == 0,
@@ -217,17 +220,23 @@ pub extern "C" fn _start() -> ! {
         None => b.check(false, format_args!("the steward: no verdict")),
     }
 
-    // The victim's checks: one abandonment per held call, lend bytes intact, replies discarded
-    // with mask 0, blocked sends failed, the queued stamped handle arrived as 0, usage back.
+    // The victim's checks: every lease's calls held and each abandoned once, lend bytes intact,
+    // replies discarded with mask 0; nothing sent through a lease's handles left after its end,
+    // the queued stamped handle arrived as 0; usage back. The victim tells leases apart by the
+    // badges the steward minted, so a call no lease made, or one missing, fails the row.
     let vw = words[v][0];
     let vf = vw[0] as u64;
+    let calls = leases.map(|l| l * CT_CALLERS);
     b.check(
-        vf & (16 | 32 | 64) == 0,
-        format_args!("every held call was abandoned once, its lend intact and its reply discarded"),
+        vf & (1 | 16 | 32 | 64) == 0 && calls == Some(vw[2]) && vw[3] == 0,
+        format_args!(
+            "every held call was abandoned once, its lend intact and its reply discarded ({} of {:?} checked, {} left)",
+            vw[2], calls, vw[3]
+        ),
     );
     b.check(
-        vf & (4 | 8) == 0,
-        format_args!("every blocked send failed and no queued message outlived its lease"),
+        vf & (2 | 4 | 8) == 0,
+        format_args!("nothing sent through a lease's handles outlived it, and no queued message did"),
     );
     b.check(vf & 128 == 0, format_args!("the victim's usage returned to its start"));
 

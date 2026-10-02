@@ -157,9 +157,9 @@ handle table and one sub-agent. It does all of these at once:
   so the destruction walks as much as a lease of its size can make it walk.
 
 The bystander also holds a message queued at the victim server that carries a handle stamped with
-a live lease. Two hostile leases are live at any time. One ends at its deadline. The steward
-stand-in ends the other with `budget_destroy` after a timeout, which is its decision. Each lease is
-replaced when it ends, until eight of each kind have ended.
+a live lease. Two hostile leases are live at any time. One ends at its deadline while the other
+lives. The steward stand-in ends the other with `budget_destroy` after a timeout, which is its
+decision. Each lease is replaced when it ends, until nine of each kind have ended.
 
 **Verdicts.** None of them comes from a hostile agent:
 
@@ -167,7 +167,7 @@ replaced when it ends, until eight of each kind have ended.
 | --- | --- | --- |
 | Every process in a lease, its sub-agent's included, is killed at the lease's deadline or at the decision, and each gets a `killed` notice that blames nobody. The tight loop does not put the deadline off | [R10 (destruction)](budgets.md#r10-destruction), [deadlines](budgets.md#deadlines), [R21 (crash blame)](processes.md#r21-crash-blame) | the kernel's exit notices, taken by the steward stand-in |
 | Each call the victim server took from a lease is abandoned, with one notice. Its lend stays mapped in the server with the bytes the agent wrote, while the next lease reuses freed frames. The server's reply is discarded with mask 0, and its usage returns to where it started | [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls), [I15 (abandoned calls reported once)](invariants.md#i15-abandoned-calls-reported-once), [I9 (pages W^X, zeroed, lends unmapped)](invariants.md#i9-pages-wx-zeroed-lends-unmapped) | the victim server |
-| Every blocked send fails, and nothing sent through a lease's handles is received after the lease ends. The bystander's queued message arrives with the stamped handle as 0 | R10, [R9 (stamps)](objects.md#r9-stamps), [I2 (revocation is complete)](invariants.md#i2-revocation-is-complete) | the victim server |
+| Nothing sent through a lease's handles, its blocked sends' included, is received after the lease ends: the victim finds the lease's send endpoint empty. That each blocked send returns failed is seen only by the agent, so no verdict rests on it. The bystander's queued message arrives with the stamped handle as 0 | R10, [R9 (stamps)](objects.md#r9-stamps), [I2 (revocation is complete)](invariants.md#i2-revocation-is-complete) | the victim server |
 | Every handle the steward stand-in holds to a lease is closed. Once the lease's notices are taken, the sessions budget's usage is what it was before the lease was made. The sub-agent's later deadline never fires | R10, I2, [I10 (create-destroy leaves the parent unchanged)](invariants.md#i10-create-destroy-leaves-the-parent-unchanged) | the steward stand-in, from `budget_usage` and the results of its calls |
 | The victims stay responsive: the driver wake, the steward's timer and decision wakes, the deadline notice, R10's kernel time and a lease's end are all within the targets in [responsiveness](scheduling.md#responsiveness) | [R12 (scheduling)](scheduling.md#r12-scheduling), R10 | the RTC (driver), `time_now` (steward), the kernel's trace (R10) and the bench's post-check |
 | Every pick is in rank order, and the bystander keeps its weight's share | R12 | the scheduler oracle over the kernel's trace; the program, from the bystander's count |
