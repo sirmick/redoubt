@@ -41,6 +41,9 @@ sched-inject-tie-fault = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: the audit after a destruction
 # runs unstamped, so the oracle cannot subtract it and the deadline notice must miss.
 audit-unstamped = ["sched-trace"]
+# Debug only, never in a bench build but one recorded negative run: an audit's time stays billed
+# to the budget that ran it and counts against its slice, so the deadline notice must miss.
+audit-billed = ["test-only"]
 # Test builds only: each DMA device's first reset reports "not confirmed" after the
 # real write, so the quarantine path runs. It only ever adds quarantine.
 dma-reset-deaf = ["test-only"]

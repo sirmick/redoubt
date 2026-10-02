@@ -334,12 +334,14 @@ remainder alone rescaled, as before, it got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - bench:sched-latency
 - bench:budget-destroy-growth
+- bench:sched-budget-churn
 - host:testbench::destructions_are_timed_and_bounded
 - host:testbench::audits_are_subtracted_inside_each_window
+- host:testbench::shares_are_judged_net_of_audits
 - host:testbench::an_unmatched_audit_fails
 
 </details>
@@ -365,9 +367,13 @@ milliseconds are for reading. Host load does not change a result.
 **Targets exclude the checked build's audits.** The case is a checked build, since the trace needs
 one ([R23](#r23-no-test-channels)). A checked build runs full audit scans after each destruction
 and at each process-object free, and a release build compiles none of them. Each target counts the
-kernel a release build runs: the audit time inside its window is subtracted, from the trace's
-audit records, and reported beside it ([checked builds](../testbench.md#checked-builds)). With two
-full handle tables live, the audits are about 24 ms after a destruction and 8 ms at a free.
+kernel a release build runs, a share as well as a window, so an audit neither fills a window nor
+moves the schedule. The audit time inside each window, a share's included, is subtracted, from the
+trace's audit records, and reported beside it ([checked builds](../testbench.md#checked-builds)).
+The scheduler does not see an audit either: its time is charged to no budget, and the running
+slice's end and the start of the kernel time being billed both move forward by its length, so the
+thread that ran it is picked and preempted as in a release build (`sched::audit`). With two full
+handle tables live, the audits are about 24 ms after a destruction and 8 ms at a free.
 
 Measured at seed 3, p99 in µs, net / gross (audit time inside the windows): the audits hold the
 deadline notice, which waits out the audit after its own destruction, and little else. The
@@ -376,20 +382,29 @@ figures stay as measured.
 
 | Measure (p99, N = 1 / 4 / 16) | rv64 | rv32 |
 | --- | --- | --- |
-| deadline notice | 4121 / 4766 / 5322 net, 19745 / 21944 / 22928 gross | 4319 / 5015 / 5587 net, 19524 / 21860 / 22887 gross |
-| driver wake | 9622 / 18424 / 33003 net, 9622 / 20033 / 33003 gross | 10037 / 11468 / 34101, net = gross |
-| steward timer wake | 8533 / 9649 / 31939, net = gross | 8908 / 10250 / 34440, net = gross |
-| steward decision wake | 5927 / 17050 / 50201, net = gross | 6165 / 6404 / 29483, net = gross |
-| a lease's end (worst decision wake + R10) | 50201 + 5560 = 55761 | 29483 + 5824 = 35307 |
+| deadline notice | 4233 / 5052 / 13896 net, 19754 / 21994 / 33535 gross | 4435 / 5143 / 13055 net, 19526 / 21718 / 31435 gross |
+| driver wake | 9632 / 10815 / 32350, net = gross | 10045 / 11482 / 33939, net = gross |
+| steward timer wake | 8543 / 9674 / 31740, net = gross | 8917 / 10274 / 32964, net = gross |
+| steward decision wake | 5931 / 6143 / 39449, net = gross | 6169 / 6409 / 29490, net = gross |
+| a lease's end (worst decision wake + R10) | 39449 + 6366 = 45815 | 29490 + 6577 = 36067 |
 
-The run's 837 audits total 7.55 s (rv64) and 7.29 s (rv32) of the hart; R10 itself has none
+The run's 837 audits total 7.52 s (rv64) and 7.25 s (rv32) of the hart; R10 itself has none
 inside it, which the oracle asserts. Beside each destruction's R10 time the oracle reports its
 threads' time: the processes' threads ending inside it, their pumps included (the trace's `T` and
 `t` records), at seed 3 a p99 of 32 µs on rv64 and 36 µs on rv32. In the containment gate, with two full handle tables live
 (rv64, seed 3, its D leases' notices), the deadline notice is 23,185 µs net and 53,830 µs gross,
 492,458 µs of audit inside its windows. With the audit after a destruction left unstamped
 (`audit-unstamped`, the recorded negative run), it is 47,270 µs net: the target misses, since the
-oracle subtracts only what the trace shows it.
+oracle subtracts only what the trace shows it. With two full leases live at a deadline's end
+(seed 4), the deadline notice is 25,292 µs net on rv64 and 25,728 µs on rv32. With each audit's
+time billed to the budget that ran it and counted against its slice (`audit-billed`, the second
+recorded negative run), it is 44,343 and 45,283 µs net: the target misses. The steward stand-in
+spends its slice on the audit at the first `killed` notice, is requeued, and the victim and a
+hostile budget run a slice each before it takes the second. A share is judged the same way: in
+`sched-budget-churn`, whose attacker destroys a budget each slice, the victim of the spinning
+parent gets 494 of 1000 net of audits on rv64 (403 gross) and 495 on rv32 (416), and the shell's
+victim 500 and 499. With the audits billed to the budget that ran them, as before, the shell
+paid for scans a release build does not run, and its victim got 650 and 643 net: more than half.
 
 **The gate runs one pinned seed.** The guest's boot RNG seed decides the PIDs the kernel draws,
 which shift instruction counts and so the phase of every later event; with it pinned, a run
@@ -705,7 +720,8 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 
 The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
 debug-only break of the tie rule that implies the trace; `audit-unstamped`, which leaves the audit
-after a destruction out of the trace, for one recorded negative run
+after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
+budget that ran it and counts it against its slice, each for one recorded negative run
 ([responsiveness](#responsiveness)); and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
 ([devices](devices.md)), and so are `handle-chain-fault` and `process-chain-fault`, a handle
@@ -781,11 +797,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   spinners still at the floor and waits out the round; `bench:sched-debt-lift` bounds a sibling's
   first run at (runnable budgets + 2) slices. Rounding loses under one pass unit per destroyed
   budget, and the loss falls on the budget that churns.
-- **A checked build's audits move its schedule.** The bench subtracts an audit's time from each
-  window, but the scheduler still charges it to the running budget and counts it against the
-  slice. So a thread that runs an audit can be requeued where a release build would let it run
-  on. With two full leases live, that puts the second `killed` notice of a lease a slice or two
-  late. Follow-up: [todo](../todo/audits-billed.md).
+- **Some shares are judged gross of audits.** `sched-budget-churn`'s shares are judged by the
+  post-check, net of the audits inside their windows. `sched-exit-churn`, `sched-destroy-billing`
+  and `deadline-flood-billed` still judge theirs in the program, gross, so an audit-heavy variant
+  could fail one on the audits alone. Follow-up: [todo](../todo/shares-judged-gross.md).
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).

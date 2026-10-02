@@ -253,7 +253,7 @@ so they run a tester in `init`'s place instead.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (12)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - bench:sched-ties
 - host:testbench::a_trace_that_keeps_every_clause_passes
@@ -266,6 +266,7 @@ so they run a tester in `init`'s place instead.
 - host:testbench::the_floor_and_the_passes_are_checked_on_their_own
 - host:testbench::destructions_are_timed_and_bounded
 - host:testbench::audits_are_subtracted_inside_each_window
+- host:testbench::shares_are_judged_net_of_audits
 - host:testbench::an_unmatched_audit_fails
 
 </details>
@@ -281,12 +282,14 @@ time. The tracing kernel is a test build only
 
 ## Checked builds
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
 - bench:sched-latency
+- bench:sched-budget-churn
 - host:testbench::audits_are_subtracted_inside_each_window
+- host:testbench::shares_are_judged_net_of_audits
 - host:testbench::an_unmatched_audit_fails
 
 </details>
@@ -306,15 +309,23 @@ then panic, and every case forbids `PANIC`:
 
 A checked build also runs the kernel's audits, full scans that check the indexes, frame owners and
 handle chains after a destruction and when a process object is freed. They hold the hart while
-they run, and a release build has none of them. So a latency target, which is measured in a checked
-build because the scheduler trace needs one, excludes them. The traced kernel stamps each audit's
-start and end (records `U` and `V`: which audit, and the time). The program prints each latency
+they run, and a release build has none of them. So a latency target or a share, which is measured
+in a checked build because the scheduler trace needs one, excludes them: an audit neither fills a
+window nor moves the schedule. The scheduler charges an audit's time to no budget and moves the
+running slice's end past it, so the thread that ran it is picked and preempted as in a release
+build; a kernel built with `audit-billed`, which keeps the old charge, misses the containment
+gate's deadline notice, in a recorded negative run. The traced kernel stamps each audit's start
+and end (records `U` and `V`: which audit, and the time). The program prints each latency
 sample's window, its end on `time_now` and its length (`LATENCY-SAMPLE <group> <measure> <end>
 <gross>`) and how many it took of each, so a window lost on the way fails the check, and it
 judges none of them. `sched_oracle` subtracts the audit time inside each window,
 counting only the part of an audit that falls in it, and then applies the case's bounds
 (`deadline_notice_p99_us=40000`). It reports the gross, the net and the audit time beside each
-target ([responsiveness](kernel/scheduling.md#responsiveness)). An audit that never ends, ends
+target ([responsiveness](kernel/scheduling.md#responsiveness)). A share is judged the same way:
+the program prints its window, the CPU its count stands for and its bounds in thousandths
+(`SHARE <name> <start> <end> <cpu> <min> <max>`), and `sched_oracle` judges it of the window net of
+the audit time inside it (`sched-budget-churn`'s victim, whose attacker destroys a budget each
+slice). An audit that never ends, ends
 without beginning or runs inside a destruction fails the check. The oracle subtracts only what the
 trace shows it: a kernel built with `audit-unstamped`, which leaves the audit after a destruction
 unstamped, misses the containment gate's deadline notice, in a recorded negative run. The audits

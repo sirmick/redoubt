@@ -22,25 +22,30 @@ const TOL: u64 = 50;
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut b = Bench::new("budget-churn");
-    for (variant, weight, what) in [
-        (0u64, 1u64, "blocking churner"),
-        (1, 1, "spinning parent destroying at its slice's end"),
-        (2, 1, "deadline just after the parent's slice"),
-        (3, 1, "fresh intermediates"),
-        (4, 50, "shell giving and taking back half its weight"),
+    for (variant, weight, name, what) in [
+        (0u64, 1u64, "blocking", "blocking churner"),
+        (1, 1, "spinning-parent", "spinning parent destroying at its slice's end"),
+        (2, 1, "deadline", "deadline just after the parent's slice"),
+        (3, 1, "fresh-intermediates", "fresh intermediates"),
+        (4, 50, "shell", "shell giving and taking back half its weight"),
     ] {
         // Room for the attacker, its children and (variant 3) intermediates.
         let attacker = b.budget(rd::USERS, 100, 3, rd::FOREVER);
         let victim = b.budget(rd::USERS, 100, 1, rd::FOREVER);
         let a = b.start(attacker, Role::BudgetChurn, &[variant, weight], &[attacker]);
         let v = b.start(victim, Role::Spin, &[], &[]);
-        let (start, end) = b.go(50_000, WINDOW);
+        let window = b.go(50_000, WINDOW);
         let counts = b.collect(2);
-        let (vs, as_) = (b.share(counts[v], end - start), b.share(counts[a], end - start));
         // The shell's own share also pays for its calls, which its count leaves out: judge it by
-        // the victim, who gets neither more nor less than half.
-        let ok = if variant == 4 { vs.abs_diff(500) <= TOL } else { vs + TOL >= 500 };
-        b.check(ok, format_args!("{}: victim {} of 1000, attacker's subtree {}", what, vs, as_));
+        // the victim, who gets neither more nor less than half. The post-check judges the victim's
+        // share net of the checked build's audits, which a release build does not run.
+        let bounds = if variant == 4 { (500 - TOL, 500 + TOL) } else { (500 - TOL, 1000) };
+        let vs = b.judged_share(name, counts[v], window, bounds);
+        let as_ = b.share(counts[a], window.1 - window.0);
+        b.note(format_args!(
+            "{}: victim {} of 1000, attacker's subtree {}: gross, audits included; net in the post-check",
+            what, vs, as_
+        ));
         rd::destroy(attacker).unwrap();
         rd::destroy(victim).unwrap();
     }

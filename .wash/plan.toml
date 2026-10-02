@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 151
+revision = 156
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -473,9 +473,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["STEWARD0"]
-  body = "Builds docs/servers/steward.md#two-embedders-and-a-reference (the Elixir reference: decide/2 over defstruct state from the generated clause skeletons; a trace format both run; a bench host-tests case that runs Elixir on beamlet with the pinned toolchain), and brings libs/wire/elixir/run-vectors under the same case (docs/servers/wire.md#wire-tables-and-the-generator's partly-tested line). Design: QA STEWARD0-design. Brief: the Architect writes it when STEWARD0 is near done. Tier A (the bench), size M."
-  state = "todo"
-  revision = 109
+  body = "Builds docs/servers/steward.md#two-embedders-and-a-reference (the Elixir reference: decide/2 over defstruct state from generated clause skeletons, the half STEWARD0 left; a trace format both run, its encoding on the page; traces covering every table row plus traces recorded from the model's families; a bench case that runs Elixir on beamlet with the pinned toolchain in the dev container, never skipped), and brings libs/wire/elixir/run-vectors under the same case (docs/servers/wire.md's partly-tested line and residual go). Checkpoint 1: how the dev image gets the pinned OTP 28.5.0.6 and Elixir 1.20.4, reported before anything else (may go to the owner). Design: QA STEWARD0-design. Brief: .wash/local/STEWARD1-implementer.md. Tier A (the bench), size M."
+  state = "reported"
+  revision = 154
 
 [[node]]
   id = "K18"
@@ -484,8 +484,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K17"]
   body = "Closes docs/todo/audits-billed.md. Builds docs/kernel/scheduling.md#responsiveness ('Targets exclude the checked build's audits': an audit neither fills a window nor moves the schedule; the residual 'A checked build's audits move its schedule' goes) and docs/testbench.md#checked-builds. In a checked build an audit's time is charged to no budget and does not count against the running slice (slice end and charge start move forward by its length); audits stay full; no target moves. Accepted on GATE1's two-lease run (wp-gate1 e9ecc5ea5 fixture, seed 4) meeting the deadline notice on both widths, no regression at seed 3 in sched-latency and kernel-containment, and a recorded negative run (feature audit-billed) that misses. Design: QA GATE1-notice-two-leases (owner's decision A applied in full). Evidence: .wash/local/GATE1-two-lease-split.md. Brief: .wash/local/K18-implementer.md. Tier A (kernel), size S."
-  state = "active"
-  revision = 149
+  state = "done"
+  revision = 156
 
 [[node]]
   id = "B5"
