@@ -195,12 +195,14 @@ ELF image inside the child, are [init](../servers/init.md)'s.
 
 ### Exit notices
 
-<details><summary>Status: built · partly tested: a notice dropped because its exit endpoint was destroyed is not attacked by a case · tested (11)</summary>
+<details><summary>Status: built · partly tested: a notice dropped because its exit endpoint was destroyed is not attacked by a case · tested (13)</summary>
 
 - bench:process
 - bench:process-attack
 - bench:process-review
 - bench:process-lifecycle
+- bench:destroy-keeps-notices
+- bench:destroy-keeps-notices-creator
 - host:redoubt-sys::received_layout
 - host:redoubt-model::exited_object_handles_and_queued_copies_live_until_notice_receipt
 - mutation:ExitNoticeDroppedIfNoReceiver
@@ -233,8 +235,9 @@ the budget it ran in at once, except DMA pages quarantined at this end, which st
 its PID, which that budget keeps counting until the notice goes. The process object's page stays
 charged to the creator's budget as long. Last, the notice is delivered or dropped:
 - **Delivered** to whichever thread receives on the exit endpoint next; notices come before
-  messages. Nothing is allocated, because the notice's page was paid for at `process_create`.
-  A notice with no receiver waits for one.
+  messages. A doomed process's thread takes none ([R4b](ipc.md#r4b-a-server-dies)).
+  Nothing is allocated, because the notice's page was paid for at `process_create`. A notice
+  with no receiver waits for one.
 - **Dropped** if the exit endpoint has been destroyed, or if
   [R1 (flow)](ipc.md#r1-flow) refuses it. An exit notice is a one-way flow from the budget the
   process ran in to the endpoint's owner: it is delivered only if the owner is class `system` or

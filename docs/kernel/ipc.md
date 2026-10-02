@@ -390,11 +390,13 @@ notices. A `send` is never an open call, so `reply` to a send's id is `InvalidAr
 
 ### R4b (a server dies)
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (6)</summary>
 
 - bench:redoubt-dead
 - bench:process-lifecycle
 - bench:ending-pumps-once
+- bench:destroy-keeps-notices
+- bench:destroy-keeps-notices-creator
 - mutation:R4bDeadServerFakesReply
 
 </details>
@@ -402,7 +404,11 @@ notices. A `send` is never an open call, so `reply` to a send's id is `InvalidAr
 When a thread or process exits, faults or is killed holding open calls, each waiting caller
 gets `Dead` and its lend back intact; the lend of an abandoned call is freed. Senders still
 queued on the endpoint keep waiting: the endpoint outlives the server, and a restarted server
-receives them ([init](../servers/init.md#restarts-and-reboots)).
+receives them ([init](../servers/init.md#restarts-and-reboots)). A thread of a
+[doomed](budgets.md#r10-destruction) process (one the destruction will kill: its budget is dying,
+or its creator's is) takes nothing from the endpoint: no message, no exit notice, no
+abandoned-call notice. What it would have taken stays for the next receiver outside the
+destruction.
 
 ### R13 (one outcome per call)
 
@@ -491,11 +497,6 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
   hart the kernel runs with interrupts off. On several (a build for more than one hart), each
   kernel global is guarded by its own lock, and the completion holds the memory manager's for
   the whole step.
-- **A destruction can feed a receiver it is about to kill.** Destroying a budget ends its
-  processes one by one, and each end pumps its endpoints before the next. A thread of a later
-  process in the same budget, still receiving, can take an exit notice or a queued call and end
-  holding it: the notice is lost, or the caller gets `Dead` rather than waiting as R4b says.
-  Follow-up: [todo](../todo/destruction-feeds-the-doomed.md).
 
 ## Why
 
