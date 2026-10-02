@@ -1,7 +1,7 @@
 # The executable model
 
 The executable model is a Rust crate, `redoubt-model` in `model/`, that states the kernel's
-objects, calls, errors, rules and invariants as code, with the steward's policy on top. Seeded
+objects, calls, errors, rules and invariants as code, with the steward's policy core on top. Seeded
 random sequences of calls drive it, and after every step a checker recomputes each invariant
 from the objects themselves. Deliberate breaks of each rule, the **mutations**, show that the
 checks catch what they claim to catch. Every run can be written as a text **trace** and
@@ -50,7 +50,8 @@ Status: built · partly tested: independence from the kernel's source and the em
 | `gen.rs` | the seeded generator of operation sequences |
 | `mutation.rs` | the deliberate breaks |
 | `trace.rs` | the trace format: writing, reading, replaying on the model |
-| `steward.rs`, `policy.rs` | the steward's policy and its properties |
+| `steward.rs`, `policy.rs` | the embedder of the steward's policy core, and its properties |
+| `serving.rs` | a server's admission share ([R26 (admission fairness)](../servers/serving.md#r26-admission-fairness)) |
 
 ### What it abstracts
 
@@ -237,9 +238,11 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 141 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 146 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
-model checks.
+model checks. Each of those but four is one broken entry of the core's `Policy` table
+(`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
+model's embedder: its entropy, its admission, a volume's write check and the server's start.
 
 - `every_rule_has_a_mutation` requires at least one variant for every kernel rule the model
   holds (each R row of the table below, before the steward's) and for I16.
@@ -279,14 +282,22 @@ model checks.
 | [I13 (every blocking call returns by its timeout)](invariants.md#i13-every-blocking-call-returns-by-its-timeout) | `TimeoutIgnoredWhileOthersRun`, `ExpireBudgetsFirst` | timeouts expire while others run; at one instant, timeouts before deadlines |
 | [I16 (DMA pages reset before reuse)](invariants.md#i16-dma-pages-reset-before-reuse) | `DmaFreeBeforeReset`, `DmaQuarantinedSlotCountsAsReset`, `DmaUnmapFrees`, `DmaQuarantineChargeDropped`, `DmaQuarantinedDeviceUsable`, `DmaResetClearsCoHolderReach` | pooling only after a confirmed reset, co-holders included; `unmap` keeping DMA frames; quarantine's charge and sweep |
 | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | `PolicyServerHoldsSystemBudget` | the steward starts with no system-class budget handle |
-| [R35 (key separation)](../servers/init.md#r35-key-separation) | `PolicyLoginWithKeydKey` | no login with a key `keyd` holds |
+| [R35 (key separation)](../servers/init.md#r35-key-separation) | `PolicyLoginWithKeydKey`, `PolicyApproveWithLoginKey` | no login with a key `keyd` holds; no approval channel with a login key |
 | [R36 (unpredictable ids)](../servers/steward.md#r36-unpredictable-ids) | `PolicySequentialIds` | random ids |
-| [R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference) | `PolicyVaultWithoutOwnership`, `PolicyWriteUp`, `PolicyCarveFromUnlabelled`, `PolicyAuditUnfiltered` | vault ownership, no write up, sub-budgets per label set, filtered audit reads |
-| [R38 (out-of-band approval)](../servers/steward.md#r38-out-of-band-approval) | `PolicyApproveIgnoresHash`, `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyNoPendingCap`, `PolicyCapPerAccount`, `PolicyDeadSessionRequestsKept` | approval of the frozen request, what the screen shows, the pending caps |
-| [R39 (leases end)](../servers/steward.md#r39-leases-end) | `PolicyUnboundedLease`, `PolicySubAgentOutlivesAgent`, `PolicyEndLeaseAdmitted`, `PolicyNoFairShare` | bounded leases, sub-agents ending with them, ending always admitted, a fair share |
-| [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `PolicyBlameNoWindow`, `PolicyBlamePerAccount`, `PolicyNoLockout` | the blame window, its key and the lockout |
-| [R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope) | `PolicyNarrowToSessionBudget` | narrowing to a revocation scope |
-| [R42 (one approved item)](../servers/steward.md#r42-one-approved-item) | `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader` | a snapshot, to a named reader |
+| [R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference) | `PolicyVaultWithoutOwnership`, `PolicyWriteUp`, `PolicyLabelledStartsAgent`, `PolicyAgentOtherSet`, `PolicyAuditUnfiltered` | vault ownership, no write up, a labelled session starting nothing and asking for agents only in its own set, filtered audit reads |
+| [R38 (out-of-band approval)](../servers/steward.md#r38-out-of-band-approval) | `PolicyApproveIgnoresHash`, `PolicyApproveOtherChannel`, `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyNotifyLabelledToAll`, `PolicyNoPendingCap`, `PolicyDeadSessionRequestsKept` | approval of the frozen request on the channel that rendered it, by its owner; what the screen and the notices show; the pending cap |
+| [R39 (leases end)](../servers/steward.md#r39-leases-end) | `PolicyUnboundedLease`, `PolicySubAgentOutlivesAgent`, `PolicyEndLeaseAdmitted`, `PolicyEndLeaseFromVault`, `PolicyNoFairShare` | bounded leases, sub-agents ending with them, ending always admitted and only from the sponsor's unlabelled session, a fair share |
+| [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `PolicyBlameNoWindow`, `PolicyNoLockout` | the blame window and the lockout |
+| [R42 (one approved item)](../servers/steward.md#r42-one-approved-item) | `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader`, `PolicyDeclassifyFromUnlabelled`, `PolicyDeclassifyUnfit` | a snapshot, through a reader or writer with the labelled side's labels, from a session with them, of printable text within `DECLASSIFY_MAX` |
+
+Five of the steward's former variants are retired, because the core's types or another rule's
+keeper keep their rules and they cannot be written: blame or a pending cap counted per account and
+a session carved from another label set's sub-budget each need a second domain,
+[R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope)'s
+narrowing to a session's budget needs a budget where the core's `Connect` takes only a scope, and
+an approval granting more than its approver holds needs a request whose labels its principal does
+not own, which `owns_labels` refuses at entry and at submission (`PolicyVaultWithoutOwnership`)
+([guards and effects](../servers/steward.md#guards-and-effects)).
 
 Six rules are outside the model and have no variant: R15 (verified boot), R16 (image confinement), R17 (fail closed), R19 (kernel W^X), R23 (no test channels) and R24 (SUM and MXR clear). The model has no
 loader, no bundle, no kernel mappings of its own and no test build.
@@ -399,51 +410,58 @@ are planned.*
 
 </details>
 
-`model/src/steward.rs` is the steward's policy as a layer on the kernel model, and
-`model/src/policy.rs` holds its properties. `init` creates the shared server's endpoint and
-starts the steward in `system`, with handles to `users`, `system` and that endpoint. The steward
-starts the **server**, a system-class process standing in for `fsd` that holds no budget handle,
-receiving on the endpoint. Every principal's budget, its fixed sub-budget per label set, each
-session and each agent's lease is a `budget_create`. Each session has a process in its budget
-holding its own connection to the server, narrowed to a revocation scope inside the session.
-Sessions' work is real calls to the server, and crash blame comes from the kernel's exit
-notices of the server. So every kernel check runs under everything the policy does. The policy
-is described on [the steward](../servers/steward.md).
+`model/src/steward.rs` embeds the steward's policy core, the crate that ships
+([the policy core](../servers/steward.md#the-policy-core)), on the kernel model, and
+`model/src/policy.rs` holds its properties. `init` creates the shared server's endpoint and the
+steward's own, and starts the steward in `system`, with handles to `users`, `system` and both
+endpoints. The steward starts the **server**, a system-class process standing in for `fsd` that
+holds no budget handle, receiving on the shared endpoint. Every principal's budget and its fixed
+sub-budget per label set is a `budget_create` at boot. Then the core decides every call, and the
+embedder runs each batch it returns as calls on the kernel model, in order, stopping at the first
+failure, and reports it back. So each session and each agent's lease is a budget carved from its
+domain's sub-budget, a revocation scope inside it, connections to the steward's endpoint and the
+server narrowed to that scope, and a process holding them. Sessions' work is real calls to the
+server; crash blame comes from the kernel's exit notices of the server, and a session's end from
+those of its process. So every kernel check runs under everything the policy does. The embedder
+keeps only its own half: admission, the volumes and their write check, an ideal `keyd` signing
+every audit record, and entropy, one stream per domain for the events that draw ids. The policy is
+described on [the steward](../servers/steward.md).
 
 | Property | What must hold |
 | --- | --- |
-| sessions | a session's budget is carved from its principal's sub-budget for its label set (a sub-agent's from its agent's), with the principal's account; its labels are none, or one label the principal owns |
+| sessions | a session's or lease's budget is carved from its domain's sub-budget (a sub-agent's from its agent's), with the principal's account and the domain's labels, which the principal owns |
 | login | a login used one of the principal's login keys, never one `keyd` holds |
-| approvals | an approval came over `approve@box` with the approver's approval key, named the frozen content's hash, and granted no label the approver lacks |
-| screens | an approver sees only its own requests, and labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text |
-| pending cap | at most `PENDING_CAP` (4) pending requests per account and label set, all from live sessions; a session holds at most its fair share |
-| declassification | what is copied out is exactly the snapshot taken at submission, read through a reader budget with exactly the item's label |
-| crash blame | an account and label set's sessions are logged out exactly when three server crashes blamed on it fall within ten minutes; no other session is touched; none of its sessions starts for the next ten minutes |
-| labelled sessions | a labelled session starts nothing; it only submits requests |
+| approvals | an approval channel opened with the principal's approval key; an approval was answered on the channel that rendered the request last, named the hash it showed, which never changed, and granted no label the approver lacks |
+| screens | a channel sees only its own principal's requests, and labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text; an approval-waiting notice reaches only sessions whose labels include the request's |
+| pending cap | at most `PENDING_CAP` (4) pending requests per domain, all from live sessions and agents; each holds at most its fair share |
+| crossings | a declassification comes from a session with exactly the item's labels and a push from an unlabelled one; what is copied out or pushed is exactly the snapshot taken at submission, a declassified item at most `DECLASSIFY_MAX` bytes of printable text, through a reader or writer budget with exactly the labelled side's labels |
+| crash blame | a domain's sessions and leases end exactly when three server crashes blamed on it fall within ten minutes; nothing else is touched; nothing of it starts for the next ten minutes |
+| labelled sessions | a labelled session or agent starts nothing; it only submits requests |
 | leases | an agent's budget has a deadline at most `MAX_LEASE` (24 hours) away; a sub-agent sits in its agent's budget and ends no later; an expired lease is gone |
 | non-interference | a vault session's work changes nothing an unlabelled session observes: its results, its requests' ids, the usage of `users` and of every principal's budget and unlabelled sub-budget, and the audit records an unlabelled reader may read |
-| writes | every write to an item is by a session with exactly the item's labels |
-| system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connection is narrowed to a revocation scope inside the session |
-| leases end | a lease's sponsor can always end it |
+| writes | every write to an item is through a budget with exactly the item's labels; the steward's own write goes only to the unlabelled volume |
+| system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connections are narrowed to a revocation scope inside its budget |
+| leases end | a lease's sponsor can always end it from an unlabelled session, and nothing else can |
 
 `steward_policy` runs 20 to 160 random policy operations per seed and checks the properties and
-the kernel's checks after each. `steward_noninterference` runs one sequence twice, the second
-time without the vault sessions' work (their item writes, requests and calls to the server, and
-the owner's approvals and denials of their requests), and compares everything an unlabelled
-session observes, the order the server takes its calls in included. The other host tests pin
-connection lineage (a delegated badge shares its root's pending share, checked by an oracle that
-walks parent edges itself, with a deliberate break it must catch), audit signatures bound to
-purpose, signer, domain, length and every byte, a confined session refused a read of lower data
-while its owner pushes one approved item up, and `approve` and `deny` authenticating their
-channel before any effect.
+the kernel's checks after each, and that the steward never exits. `steward_noninterference` runs
+one sequence twice, the second time without the vault sessions' work (their item writes, requests
+and calls to the server, and the owner's approvals and denials of their requests), and compares
+everything an unlabelled session observes, the order the server takes its calls in included. The
+other host tests pin connection lineage (a delegated badge shares its root's pending share,
+checked by an oracle that walks parent edges itself, with a deliberate break it must catch), audit
+signatures bound to purpose, signer, domain, length and every byte, a confined session refused a
+read of lower data while its owner pushes one approved item up, and `approve` and `deny` refused
+on a channel that did not open, before any effect.
 
 What the steward model leaves out: SSH (a login is "this key for this user name"), the approval
-terminal (a channel is "a connection that authenticated with this key"), and cryptography. Ids
-come from a keyed mixer and content hashes from FNV-1a, where the steward uses a CSPRNG and a
-cryptographic hash; audit signatures are ideal tokens, and no chaining, truncation detection or
-ordering is claimed. Policy numbers are constants: `PENDING_CAP` (4), `DECLASSIFY_MAX` (256
-bytes of printable ASCII), `FIELD_CAP` (64 characters), `MAX_LEASE` (24 hours), and the blame
-window (3 crashes in 10 minutes).
+terminal (a channel is "a connection that authenticated with this key"), and real entropy: the
+words come from a keyed mixer, where the server draws them from the kernel's `random`. Audit
+signatures are ideal tokens, and no chaining, truncation detection or ordering is claimed. The
+volumes are maps the steward's batches read and write directly; its reader and writer budgets
+stand for the processes that would. The steward's constants are the core's: `PENDING_CAP` (4),
+`DECLASSIFY_MAX` (256 bytes of printable ASCII), `FIELD_CAP` (64 characters), `MAX_LEASE` (24
+hours), and the blame window (3 crashes in 10 minutes).
 
 ## Where the model meets the kernel's code
 
@@ -501,7 +519,8 @@ Replay is what turns the model from a reference into evidence about the kernel.
   `root` has 1,024 pages and 24 processes), and random record changes target blocked calls only.
   Sizes and mapping geometry bound what the runs explore. The million-sequence run is a separate
   test that the bench does not run.
-- **The steward model is checked only against itself.** Its cryptography is ideal, and the
+- **The steward model's embedder is the model's own.** The core it runs ships, but the server's
+  embedder (transport, admission, running batches) is not this one. Its entropy is ideal, and the
   non-interference comparison leaves out a server crash on its own and one a vault's call causes:
   which call such a crash blames, and when the server takes the calls before it, is service timing,
   a stated residual of [R37 (vault non-interference)](../servers/steward.md#residual-risks).
@@ -511,8 +530,9 @@ Replay is what turns the model from a reference into evidence about the kernel.
 ## Why
 
 - **Independent of the kernel's source.** A model that shared code with the kernel would share
-  its bugs. With no dependencies, the model can be read side by side with the design, and every
-  failure is reproduced from one seed.
+  its bugs. Its one dependency is the steward's policy core, which it embeds so that the steward's
+  families attack the code that ships. Otherwise the model can be read side by side with the
+  design, and every failure is reproduced from one seed.
 - **Ghost state apart from the kernel model.** The checks read facts recorded at each event from
   the primary objects, never the kernel model's own counters, so a wrong update cannot also
   correct the check that should catch it.

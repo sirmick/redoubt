@@ -1,0 +1,13 @@
+[package]
+name = "redoubt-steward-gen"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Generates the steward's policy dispatch and state diagrams from its transition tables"
+
+[[bin]]
+name = "steward-gen"
+path = "src/main.rs"
+
+# No dependencies: it reads markdown and writes text.
+[dependencies]

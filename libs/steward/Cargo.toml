@@ -1,0 +1,13 @@
+[package]
+name = "redoubt-steward"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The steward's policy core (docs/servers/steward.md): one pure state machine, keyed by domain"
+
+# `no_std` + `alloc`, no `unsafe`, no I/O. The steward server and the model both embed it.
+[dependencies]
+# MAX_LABELS, so a domain's label set and a budget's agree.
+redoubt-sys = { path = "../sys" }
+# The request binding hash, the core's one cryptographic function.
+sha2 = { version = "0.11", default-features = false }

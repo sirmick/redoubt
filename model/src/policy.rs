@@ -1,21 +1,26 @@
-//! Property tests for the steward's policy (steward.rs): random policy operations, with the
-//! policy's properties and the kernel's invariants checked after each one.
+//! Property tests for the steward's policy core, as the model embeds it (steward.rs): random
+//! policy operations, turned into the core's events, with the policy's properties and the
+//! kernel's invariants checked after each. The checks read the core's state through its read-only
+//! `inspect` API, the kernel model, and what the family itself submitted and was shown.
 //!
 //! | Property | Statement | Source |
 //! | --- | --- | --- |
-//! | P1 sessions | a session's budget is carved from its principal's fixed sub-budget for its label set (a sub-agent's from its agent's), with its account; labels are none or one the principal owns | servers/steward.md, "Fixed sub-budgets per label set" |
+//! | P1 sessions | a session's or a lease's budget is carved from its domain's fixed sub-budget (a sub-agent's from its agent's), with its principal's account and its domain's labels, which the principal owns | servers/steward.md, "Fixed sub-budgets per label set" |
 //! | P2 login | a login used one of the principal's login keys, never one `keyd` holds | servers/steward.md, "Authentication and sessions" |
-//! | P3 approvals | an approval came through `approve@box` with the approver's approval key, named the frozen content's hash, and granted no label the approver lacks | servers/steward.md R38 |
-//! | P4 screens | an approver sees only its own requests, labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text | servers/steward.md, "The powerbox and approvals"; R38 |
-//! | P5 cap | at most `PENDING_CAP` pending requests per (account, label set), all of live sessions; a session holds at most its fair share | servers/steward.md, "The powerbox and approvals"; servers/serving.md R26 |
-//! | P6 declassification | what is copied out is exactly the snapshot taken at submission, read through a reader budget carrying exactly the item's label | servers/steward.md R42 |
-//! | P7 blame | an (account, label set)'s sessions are logged out exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no other sessions are touched; no session of it starts for the next ten minutes | servers/steward.md R40; servers/init.md, "Restarts and reboots" |
-//! | P8 labelled sessions | a labelled session starts nothing; it only submits requests | servers/steward.md, "Authentication and sessions" |
+//! | P3 approvals | an approval channel opened with the principal's approval key; an approval was answered on the channel that rendered the request last, named the hash it showed, which never changed, and granted no label the approver lacks | servers/steward.md R38 |
+//! | P4 screens | a channel sees only its own principal's requests, and labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text; an approval-waiting notice reaches only sessions whose labels include the request's | servers/steward.md, "The powerbox and approvals"; R38 |
+//! | P5 cap | at most `PENDING_CAP` pending requests per domain, all of live sessions and agents; each holds at most its fair share | servers/steward.md, "The powerbox and approvals"; servers/serving.md R26 |
+//! | P6 crossings | a declassification is submitted from a session with exactly the item's labels and a push from an unlabelled one; what is copied out or pushed is exactly the snapshot taken at submission, a declassified item at most `DECLASSIFY_MAX` bytes of printable text, read or written through a budget with exactly the labelled side's labels | servers/steward.md R42 |
+//! | P7 blame | a domain's sessions and leases end exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no others are touched; none of it starts for the next ten minutes | servers/steward.md R40; servers/init.md, "Restarts and reboots" |
+//! | P8 labelled sessions | a labelled session or agent starts nothing; it only submits requests | servers/steward.md, "Authentication and sessions" |
 //! | P9 leases | an agent's budget has a deadline at most `MAX_LEASE` away; a sub-agent sits in its agent's budget and ends no later; an expired lease is gone | servers/steward.md R39 |
 //! | P10 non-interference | a vault session's work (item writes, requests, calls to a shared server) changes nothing an unlabelled session observes: its results, the usage of `users`, of every principal's budget and unlabelled sub-budget, and the audit records an unlabelled reader may read | servers/steward.md R37 |
-//! | P11 writes | every write to an item is by a session with exactly the item's labels | servers/steward.md R42 |
-//! | P12 system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connection to the server is narrowed to a revocation scope inside its session | servers/steward.md R41; servers/init.md R33 |
-//! | P13 leases end | a lease's sponsor can always end it | servers/steward.md R39 |
+//! | P11 writes | every write to an item is through a budget with exactly the item's labels; the steward's own write goes only to the unlabelled volume | servers/steward.md R42 |
+//! | P12 system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connections are narrowed to a revocation scope inside its budget | servers/steward.md R41; servers/init.md R33 |
+//! | P13 leases end | a lease's sponsor can always end it from an unlabelled session, and nothing else can | servers/steward.md R39 |
+//! | P14 audit | every audit record is signed through `keyd`'s audit purpose | servers/steward.md, "The audit log" |
+//! | P15 shares | a chain of self-mints spends one admission share (`connection_lineage`) | servers/serving.md R26 |
+//! | P16 confined reads | a confined labelled caller reads no shared unlabelled volume (`confined_read_observation`) | servers/init.md, "The confinement check" |
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -23,12 +28,22 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use redoubt_steward::audit::Record;
+use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, DECLASSIFY_MAX, FIELD_CAP, MAX_LEASE, PENDING_CAP};
+use redoubt_steward::domain::Labels;
+use redoubt_steward::effect::{Answer, Kind, Notice, Notified, Output};
+use redoubt_steward::event::Content;
+use redoubt_steward::inspect;
+use redoubt_steward::manifest::{Limits, Manifest, PrincipalSpec, Sizes};
+use redoubt_steward::render::{printable, sanitize};
+
 use crate::check::Failure;
 use crate::gen::Rng;
 use crate::invariants::Checker;
 use crate::mutation::Mutation;
+use crate::serving::ConnectionShares;
 use crate::spec::SLICE;
-use crate::steward::*;
+use crate::steward::{Caller, Denied, Steward};
 
 /// A request, named by who submitted it and when, so a sequence means the same thing when
 /// replayed with some operations removed (P10).
@@ -40,18 +55,20 @@ pub struct ReqRef {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashRef {
-    /// The request's own hash.
+    /// The hash the request's screen showed.
     Own,
     /// Another request's hash (a swapped approval).
     Of(ReqRef),
     Literal(u64),
 }
 
+/// The operations. A session is named by its id, an agent by its lease's; an approval channel by
+/// the order it was opened in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PolicyOp {
     Login {
         principal: usize,
-        label: Option<u64>,
+        labels: Vec<u64>,
         key: u64,
     },
     EndSession {
@@ -63,7 +80,7 @@ pub enum PolicyOp {
     },
     WriteItem {
         session: u64,
-        label: u64,
+        labels: Vec<u64>,
         item: u64,
         bytes: Vec<u8>,
     },
@@ -72,22 +89,25 @@ pub enum PolicyOp {
         content: Content,
         reason: String,
     },
-    Pending {
-        principal: usize,
-    },
-    Approve {
+    /// `ssh approve@box` with `key`.
+    Open {
         principal: usize,
         key: u64,
+    },
+    Close {
+        channel: usize,
+    },
+    Pending {
+        channel: usize,
+    },
+    Approve {
+        channel: usize,
         request: ReqRef,
         hash: HashRef,
     },
     Deny {
-        principal: usize,
-        key: u64,
+        channel: usize,
         request: ReqRef,
-    },
-    KeydAdd {
-        key: u64,
     },
     Usage {
         principal: usize,
@@ -96,7 +116,7 @@ pub enum PolicyOp {
     Work {
         session: u64,
     },
-    /// Session `by` ends agent session `lease`.
+    /// Session or agent `by` ends lease `lease`.
     EndLease {
         by: u64,
         lease: u64,
@@ -116,29 +136,41 @@ pub enum PolicyOp {
     },
 }
 
-/// The test manifest: alice owns labels 7 and 8, bob owns 9, carol none. Keys: login 11/21/31,
+/// The test manifest: alice owns labels 7 and 8 and works under {}, {7} and {8}; bob owns 9 and
+/// works under {}, {9} and {7}, which he does not own; carol owns none. Keys: login 11/21/31,
 /// approval 12/22/32; keyd holds 100 and 101.
 pub fn manifest() -> Manifest {
-    let p = |name: &str, account, login, approval, labels: &[u64]| PrincipalSpec {
+    let p = |name: &str, account, login, approval, owned: &[u64], sets: &[&[u64]]| PrincipalSpec {
         name: String::from(name),
         account,
         login_keys: vec![login],
         approval_keys: vec![approval],
-        owned_labels: labels.to_vec(),
-        pages: 500,
-        weight: 100,
+        owned: owned.to_vec(),
+        label_sets: sets.iter().map(|s| s.to_vec()).collect(),
+        top: Limits { pages: 500, processes: 12, weight: 100 },
     };
+    let l = |pages, processes, weight| Limits { pages, processes, weight };
+    let page = crate::kernel::Costs::default().budget;
     Manifest {
         principals: vec![
-            p("alice", 1001, 11, 12, &[7, 8]),
-            p("bob", 1002, 21, 22, &[9]),
-            p("carol", 1003, 31, 32, &[]),
+            p("alice", 1001, 11, 12, &[7, 8], &[&[], &[7], &[8]]),
+            p("bob", 1002, 21, 22, &[9], &[&[], &[9], &[7]]),
+            p("carol", 1003, 31, 32, &[], &[&[]]),
         ],
         keyd_keys: vec![100, 101],
+        servers: 1,
+        sizes: Sizes {
+            session: l(40, 1, 5),
+            agent: l(40, 2, 4),
+            sub_agent: l(16, 1, 1),
+            crossing: l(page, 0, 0),
+            budget_cost: page,
+        },
     }
 }
 
 const ALL_KEYS: [u64; 8] = [11, 12, 21, 22, 31, 32, 100, 101];
+const LABEL_SETS: [&[u64]; 4] = [&[], &[7], &[8], &[9]];
 
 fn text(rng: &mut Rng, max: u64) -> String {
     let n = rng.below(max + 1);
@@ -168,55 +200,122 @@ fn lease(rng: &mut Rng) -> u64 {
     }
 }
 
+/// A label set: usually `mine`, now and then any.
+fn labels(rng: &mut Rng, mine: &[u64]) -> Vec<u64> {
+    if rng.pct(70) { mine.to_vec() } else { LABEL_SETS[rng.below(4) as usize].to_vec() }
+}
+
+/// An approval channel as the family opened it.
+#[derive(Clone, Copy, Debug)]
+pub struct Chan {
+    pub id: u64,
+    pub principal: usize,
+    pub key: u64,
+}
+
+/// What the family submitted: the submitter, the content and reason, and what its snapshot must
+/// be (the item at submission, for a declassification or a push).
+#[derive(Clone, Debug)]
+pub struct Submitted {
+    pub by: Caller,
+    pub content: Content,
+    pub reason: String,
+    pub snapshot: Option<Vec<u8>>,
+}
+
 /// A random policy operation, biased toward what exists.
-pub fn random_op(st: &Steward, subs: &[ReqRef], rng: &mut Rng) -> PolicyOp {
-    let sessions: Vec<u64> = st.sessions.keys().copied().collect();
-    let session = |rng: &mut Rng| rng.pick(&sessions).unwrap_or(rng.range(1, 20));
-    let principal = rng.below(st.principals.len() as u64) as usize;
-    let request = |rng: &mut Rng| rng.pick(subs).unwrap_or(ReqRef { session: 1, nth: 0 });
+pub fn random_op(run: &Run, rng: &mut Rng) -> PolicyOp {
+    let st = &run.st;
+    let callers = st.callers();
+    let ids: Vec<u64> = callers.iter().map(|c| c.id).collect();
+    let session = |rng: &mut Rng| rng.pick(&ids).unwrap_or(rng.range(1, 20));
+    let mine = |id: u64| {
+        callers.iter().find(|c| c.id == id).map_or(Vec::new(), |c| c.domain.labels().as_slice().to_vec())
+    };
+    let fixed = inspect::fixed(&st.store);
+    let principal = rng.below(fixed.principals.len() as u64) as usize;
+    let channel = |rng: &mut Rng| rng.below(run.channels.len().max(1) as u64) as usize;
+    let request = |rng: &mut Rng| rng.pick(&run.subs).unwrap_or(ReqRef { session: 1, nth: 0 });
+    // A channel of the request's principal, usually the one that rendered it last.
+    let answering = |rng: &mut Rng, r: ReqRef| {
+        let id = run.resolve(r);
+        let last = run.shown.get(&id).map(|s| s.1);
+        let of = run.ghost.get(&id).map(|g| g.by.principal);
+        let pick = |want: &dyn Fn(&Chan) -> bool, rng: &mut Rng| {
+            let found: Vec<usize> = (0..run.channels.len()).filter(|i| want(&run.channels[*i])).collect();
+            rng.pick(&found)
+        };
+        match rng.below(10) {
+            0..=5 => pick(&|c: &Chan| Some(c.id) == last, rng),
+            6..=8 => pick(&|c: &Chan| Some(c.principal) == of, rng),
+            _ => None,
+        }
+        .unwrap_or_else(|| channel(rng))
+    };
     match rng.below(100) {
         0..=11 => {
-            let owned = st.principals[principal].spec.owned_labels.clone();
-            let label = match rng.below(10) {
-                0..=4 => None,
-                5..=8 => rng.pick(&owned).or(Some(9)),
-                _ => Some(rng.range(7, 9)),
+            let sets = &fixed.principals[principal].domains;
+            let labels = match rng.below(10) {
+                0..=4 => Vec::new(),
+                5..=8 => sets[rng.below(sets.len() as u64) as usize].labels().as_slice().to_vec(),
+                _ => LABEL_SETS[rng.below(4) as usize].to_vec(),
             };
-            let good = st.principals[principal].spec.login_keys[0];
+            let good = fixed.principals[principal].login_keys[0];
             let key = if rng.pct(80) { good } else { rng.pick(&ALL_KEYS).unwrap() };
-            PolicyOp::Login { principal, label, key }
+            PolicyOp::Login { principal, labels, key }
         }
         12..=14 => PolicyOp::EndSession { session: session(rng) },
         15..=21 => PolicyOp::StartAgent { session: session(rng), lease: lease(rng) },
         22..=28 => {
+            let s = session(rng);
             let len = if rng.pct(85) { rng.below(40) } else { rng.range(200, 300) };
             let bytes = (0..len).map(|_| if rng.pct(97) { b'a' + rng.below(26) as u8 } else { 7 }).collect();
-            PolicyOp::WriteItem { session: session(rng), label: rng.range(7, 9), item: rng.below(3), bytes }
+            PolicyOp::WriteItem { session: s, labels: labels(rng, &mine(s)), item: rng.below(3), bytes }
         }
         29..=43 => {
-            let content = match rng.below(3) {
+            let s = session(rng);
+            let content = match rng.below(4) {
                 0 => Content::Note { what: text(rng, 90) },
-                1 => Content::AgentWithLabel { label: rng.range(7, 9), lease: lease(rng) },
-                _ => Content::Declassify { label: rng.range(7, 9), item: rng.below(3) },
+                1 => {
+                    // A labelled caller mostly asks in its own set, sometimes unlabelled or
+                    // another (R37); an unlabelled one mostly for a vault agent.
+                    let own = mine(s);
+                    let labels = match rng.below(10) {
+                        0..=6 if !own.is_empty() => own,
+                        0..=7 => LABEL_SETS[rng.range(1, 3) as usize].to_vec(),
+                        _ => LABEL_SETS[rng.below(4) as usize].to_vec(),
+                    };
+                    Content::Agent { labels, lease: lease(rng) }
+                }
+                2 => Content::Declassify { labels: labels(rng, &mine(s)), item: rng.below(3) },
+                _ => Content::Push {
+                    source: rng.below(3),
+                    target: LABEL_SETS[rng.range(1, 3) as usize].to_vec(),
+                    item: rng.below(3),
+                },
             };
-            PolicyOp::Submit { session: session(rng), content, reason: text(rng, 100) }
+            PolicyOp::Submit { session: s, content, reason: text(rng, 100) }
         }
-        44..=48 => PolicyOp::Pending { principal },
-        49..=58 => {
-            let good = st.principals[principal].spec.approval_keys[0];
+        44..=46 => {
+            let good = fixed.principals[principal].approval_keys[0];
             let key = if rng.pct(85) { good } else { rng.pick(&ALL_KEYS).unwrap() };
+            PolicyOp::Open { principal, key }
+        }
+        47 => PolicyOp::Close { channel: channel(rng) },
+        48..=53 => PolicyOp::Pending { channel: channel(rng) },
+        54..=60 => {
+            let r = request(rng);
             let hash = match rng.below(10) {
                 0 => HashRef::Of(request(rng)),
                 1 => HashRef::Literal(rng.next_u64()),
                 _ => HashRef::Own,
             };
-            PolicyOp::Approve { principal, key, request: request(rng), hash }
+            PolicyOp::Approve { channel: answering(rng, r), request: r, hash }
         }
-        59..=60 => {
-            let key = st.principals[principal].spec.approval_keys[0];
-            PolicyOp::Deny { principal, key, request: request(rng) }
+        61..=62 => {
+            let r = request(rng);
+            PolicyOp::Deny { channel: answering(rng, r), request: r }
         }
-        61..=62 => PolicyOp::KeydAdd { key: rng.pick(&ALL_KEYS).unwrap() },
         63..=64 => PolicyOp::Usage { principal },
         65..=76 => PolicyOp::Work { session: session(rng) },
         77..=79 => PolicyOp::Serve,
@@ -224,18 +323,17 @@ pub fn random_op(st: &Steward, subs: &[ReqRef], rng: &mut Rng) -> PolicyOp {
         82..=83 => PolicyOp::Crash,
         84..=88 => PolicyOp::CrashServing { session: session(rng) },
         89..=91 => {
-            // Usually an agent and a session of its principal.
-            let agents: Vec<u64> =
-                st.sessions.values().filter(|s| s.kind == SessionKind::Agent).map(|s| s.id).collect();
-            let lease = rng.pick(&agents).unwrap_or_else(|| session(rng));
-            let p = st.sessions.get(&lease).map(|s| s.principal);
-            let mine: Vec<u64> = st
-                .sessions
-                .values()
-                .filter(|s| Some(s.principal) == p && s.labels.is_empty())
-                .map(|s| s.id)
+            // Usually a lease and an unlabelled session of its account.
+            let leases: Vec<u64> = callers.iter().filter(|c| c.kind == Kind::Lease).map(|c| c.id).collect();
+            let lease = rng.pick(&leases).unwrap_or_else(|| session(rng));
+            let account = callers.iter().find(|c| c.id == lease).map(|c| c.domain.account());
+            let sponsors: Vec<u64> = callers
+                .iter()
+                .filter(|c| c.kind == Kind::Session && Some(c.domain.account()) == account && !c.labelled())
+                .map(|c| c.id)
                 .collect();
-            let by = if rng.pct(80) { rng.pick(&mine).unwrap_or_else(|| session(rng)) } else { session(rng) };
+            let by =
+                if rng.pct(80) { rng.pick(&sponsors).unwrap_or_else(|| session(rng)) } else { session(rng) };
             PolicyOp::EndLease { by, lease }
         }
         _ => PolicyOp::Tick {
@@ -252,23 +350,33 @@ pub fn random_op(st: &Steward, subs: &[ReqRef], rng: &mut Rng) -> PolicyOp {
 /// What an operation showed its caller, for P10.
 pub type Obs = String;
 
-/// A run of policy operations with its own record of what was submitted and blamed, independent
-/// of the steward's.
+/// A run of policy operations with its own record of what was submitted, shown and blamed,
+/// independent of the core's.
 pub struct Run {
     pub st: Steward,
     checker: Checker,
     /// (session, nth) -> request id, as the steward returned it.
     pub submitted: BTreeMap<(u64, u64), u64>,
     pub subs: Vec<ReqRef>,
-    /// Request id -> (hash from the steward's screen at submission, declassified bytes then).
-    pub ghost_requests: BTreeMap<u64, (u64, Option<Vec<u8>>)>,
+    /// Request id -> what was submitted.
+    pub ghost: BTreeMap<u64, Submitted>,
+    /// Request id -> the hash its first screen showed, and the channel that rendered it last.
+    pub shown: BTreeMap<u64, ([u8; 32], u64)>,
+    /// The approval channels, in the order opened.
+    pub channels: Vec<Chan>,
     /// Blame times per (account, label set).
     pub ghost_blames: BTreeMap<(u64, Vec<u64>), Vec<u64>>,
     /// The account and labels of the call the server works on (from what `hold` returned), if any.
     held: Option<(u64, Vec<u64>)>,
-    /// (account, label set)s logged out, and when their lockout ends (P7).
+    /// (account, label set)s locked out, and when their lockout ends (P7).
     pub ghost_locked: BTreeMap<(u64, Vec<u64>), u64>,
     pub per_session: BTreeMap<u64, u64>,
+}
+
+fn hash_of(x: u64) -> [u8; 32] {
+    let mut h = [0; 32];
+    h[..8].copy_from_slice(&x.to_le_bytes());
+    h
 }
 
 impl Run {
@@ -280,7 +388,9 @@ impl Run {
             checker,
             submitted: BTreeMap::new(),
             subs: Vec::new(),
-            ghost_requests: BTreeMap::new(),
+            ghost: BTreeMap::new(),
+            shown: BTreeMap::new(),
+            channels: Vec::new(),
             ghost_blames: BTreeMap::new(),
             held: None,
             ghost_locked: BTreeMap::new(),
@@ -295,29 +405,41 @@ impl Run {
             .unwrap_or(r.session.wrapping_mul(7919).wrapping_add(r.nth))
     }
 
-    /// Apply one op, check P1-P9 and the kernel invariants, and return what the caller saw.
+    /// The channel the family opened `n`th; its id is 0, which names none, if none was.
+    fn channel(&self, n: usize) -> Chan {
+        self.channels.get(n).copied().unwrap_or(Chan { id: 0, principal: 0, key: 0 })
+    }
+
+    /// Apply one op, check the properties and the kernel invariants, and return what the caller
+    /// saw.
     pub fn apply(&mut self, op: &PolicyOp) -> Result<Obs, String> {
-        let audit_from = self.st.audit.len();
-        let sessions_before: BTreeMap<u64, Session> = self.st.sessions.clone();
+        let from = (self.st.audit.len(), self.st.outputs.len(), self.st.writes.len());
+        let before: Vec<Caller> = self.st.callers();
         let now = self.st.k.now;
+        let fixed = inspect::fixed(&self.st.store).clone();
         let obs = match op {
-            PolicyOp::Login { principal, label, key } => {
-                let name = self.st.principals[*principal].spec.name.clone();
-                format!("{:?}", self.st.login(&name, *label, *key))
+            PolicyOp::Login { principal, labels, key } => {
+                let name = fixed.principals[*principal].name.clone();
+                format!("{:?}", self.st.login(&name, labels, *key))
             }
             PolicyOp::EndSession { session } => format!("{:?}", self.st.end_session(*session)),
             PolicyOp::StartAgent { session, lease } => {
-                let requester = self.st.sessions.get(session).cloned();
+                let requester = self.st.caller(*session);
                 let r = self.st.start_agent(*session, *lease);
-                if let (Some(req), Ok(id)) = (&requester, &r) {
-                    if !req.labels.is_empty() {
-                        return Err(format!("P8: labelled session {session} started an agent"));
+                if let (Some(req), Some(Answer::Lease { id, .. })) = (&requester, &r) {
+                    if req.labelled() {
+                        return Err(format!("P8: labelled {:?} {session} started an agent", req.kind));
                     }
-                    let new = &self.st.sessions[id];
-                    let b = &self.st.k.budgets[&new.budget];
-                    if req.kind == SessionKind::Agent {
-                        let under = self.st.k.is_descendant_or_self(new.budget, req.budget);
-                        let ends = b.deadline.is_some_and(|d| req.deadline.is_some_and(|rd| d <= rd));
+                    let new = self.st.caller(*id).and_then(|c| self.st.budget_of(&c.object()));
+                    let mine = self.st.budget_of(&req.object());
+                    if req.kind == Kind::Lease {
+                        let k = &self.st.k;
+                        let (Some(new), Some(mine)) = (new, mine) else {
+                            return Err(format!("P9: agent {session}'s sub-agent {id} has no budget"));
+                        };
+                        let deadline = |b: u64| k.budgets.get(&b).and_then(|x| x.deadline);
+                        let under = k.is_descendant_or_self(new, mine);
+                        let ends = deadline(new).is_some_and(|d| deadline(mine).is_some_and(|m| d <= m));
                         if !under || !ends {
                             return Err(format!(
                                 "P9: agent {session}'s sub-agent is outside it or outlives it"
@@ -327,112 +449,108 @@ impl Run {
                 }
                 format!("{r:?}")
             }
-            PolicyOp::WriteItem { session, label, item, bytes } => {
-                format!("{:?}", self.st.write_item(*session, *label, *item, bytes.clone()))
+            PolicyOp::WriteItem { session, labels, item, bytes } => {
+                format!("{:?}", self.st.write_item(*session, labels, *item, bytes.clone()))
             }
             PolicyOp::Submit { session, content, reason } => {
-                // What a snapshot must contain, read from the vault before the steward acts.
-                let expect = match content {
-                    Content::Declassify { label, item } => {
-                        Some(self.st.vault.get(&(*label, *item)).cloned().unwrap_or_default())
-                    }
+                // What a snapshot must contain, read from the volume before the steward acts.
+                let volume = |labels: &[u64], item: u64| {
+                    let labels = Labels::new(labels).unwrap_or_default().as_slice().to_vec();
+                    self.st.volumes.get(&(labels, item)).cloned().unwrap_or_default()
+                };
+                let snapshot = match content {
+                    Content::Declassify { labels, item } => Some(volume(labels, *item)),
+                    Content::Push { source, .. } => Some(volume(&[], *source)),
                     _ => None,
                 };
+                let by = self.st.caller(*session);
                 let r = self.st.submit(*session, content.clone(), reason);
-                if r.is_ok() && self.st.pending_by(*session) > self.st.share(*session) {
-                    return Err(format!(
-                        "P5: session {session} holds {} pending requests, over its fair share {}",
-                        self.st.pending_by(*session),
-                        self.st.share(*session)
-                    ));
-                }
-                if let Ok(id) = r {
-                    let nth = *self.per_session.entry(*session).or_default();
-                    self.per_session.insert(*session, nth + 1);
-                    self.submitted.insert((*session, nth), id);
-                    self.subs.push(ReqRef { session: *session, nth });
-                    let hash = self.st.requests[&id].hash;
-                    self.ghost_requests.insert(id, (hash, expect));
-                    // An id is shown only to its submitter: record that it is fresh, not its value.
-                    format!("Ok(request {nth})")
-                } else {
-                    format!("{r:?}")
+                match (r, by) {
+                    (Some(Answer::Request { id }), Some(by)) => {
+                        self.submitted_checks(&by, from.1)?;
+                        let nth = *self.per_session.entry(*session).or_default();
+                        self.per_session.insert(*session, nth + 1);
+                        self.submitted.insert((*session, nth), id);
+                        self.subs.push(ReqRef { session: *session, nth });
+                        let g = Submitted { by, content: content.clone(), reason: reason.clone(), snapshot };
+                        self.ghost.insert(id, g);
+                        // An id is shown only to its submitter: record that it is fresh, not its value.
+                        format!("Ok(request {nth})")
+                    }
+                    (r, _) => format!("{r:?}"),
                 }
             }
-            PolicyOp::Pending { principal } => {
-                let screen = self.st.pending(*principal);
-                let owned = &self.st.principals[*principal].spec.owned_labels;
-                for r in &screen {
-                    let req = &self.st.requests[&r.id];
-                    let visible = req.approver == *principal && req.labels.iter().all(|l| owned.contains(l));
-                    if !visible {
-                        return Err(format!(
-                            "P4: principal {principal} sees request {} labelled {:?}",
-                            r.id, r.labels
-                        ));
-                    }
-                    if r.text.chars().any(|c| !(' '..='~').contains(&c)) {
-                        return Err(format!(
-                            "P4: rendered request {} is not printable ASCII: {:?}",
-                            r.id, r.text
-                        ));
-                    }
-                    // A labelled request shows only text the steward generates.
-                    let note = match &req.content {
-                        Content::Note { what } => what.clone(),
-                        _ => String::new(),
-                    };
-                    for free in [&req.reason, &note] {
-                        let shown = sanitize(free, FIELD_CAP, true);
-                        if !req.labels.is_empty()
-                            && !shown.is_empty()
-                            && r.text.contains(&format!("\"{shown}\""))
-                        {
-                            return Err(format!(
-                                "P4: labelled request {} shows its free text: {:?}",
-                                r.id, r.text
-                            ));
-                        }
-                    }
+            PolicyOp::Open { principal, key } => {
+                let p = &fixed.principals[*principal];
+                let (id, r) = self.st.open_channel(&p.name, *key);
+                self.channels.push(Chan { id, principal: *principal, key: *key });
+                let approval = p.approval_keys.contains(key)
+                    && !fixed.principals.iter().any(|q| q.login_keys.contains(key))
+                    && !fixed.keyd.contains(key);
+                if r == Some(Answer::Ok) && !approval {
+                    return Err(format!("P3: {}'s approval channel opened with key {key}", p.name));
                 }
-                format!("{} requests", screen.len())
-            }
-            PolicyOp::Approve { principal, key, request, hash } => {
-                let name = self.st.principals[*principal].spec.name.clone();
-                let id = self.resolve(*request);
-                let h = match hash {
-                    HashRef::Own => self.st.requests.get(&id).map_or(0, |r| r.hash),
-                    HashRef::Of(other) => self.st.requests.get(&self.resolve(*other)).map_or(1, |r| r.hash),
-                    HashRef::Literal(x) => *x,
-                };
-                let r = self.st.open_approval(&name, *key).and_then(|ch| self.st.approve(ch, id, h));
                 format!("{r:?}")
             }
-            PolicyOp::Deny { principal, key, request } => {
-                let name = self.st.principals[*principal].spec.name.clone();
-                let id = self.resolve(*request);
-                let r = self.st.open_approval(&name, *key).and_then(|ch| self.st.deny(ch, id));
-                format!("{r:?}")
-            }
-            PolicyOp::KeydAdd { key } => {
-                self.st.keyd_add(*key);
+            PolicyOp::Close { channel } => {
+                self.st.close_channel(self.channel(*channel).id);
                 String::from("ok")
             }
+            PolicyOp::Pending { channel } => {
+                let screens = self.st.pending(self.channel(*channel).id);
+                format!("{} requests", screens.len())
+            }
+            PolicyOp::Approve { channel, request, hash } => {
+                let ch = self.channel(*channel);
+                let id = self.resolve(*request);
+                let h = match hash {
+                    HashRef::Own => self.shown.get(&id).map_or([0; 32], |s| s.0),
+                    HashRef::Of(other) => self.shown.get(&self.resolve(*other)).map_or([1; 32], |s| s.0),
+                    HashRef::Literal(x) => hash_of(*x),
+                };
+                let r = self.st.approve(ch.id, id, h);
+                if r == Some(Answer::Ok) {
+                    self.answered_checks(ch, id)?;
+                    if self.shown.get(&id).map(|s| s.0) != Some(h) {
+                        return Err(format!(
+                            "P3: request {id} approved naming a hash its screen did not show"
+                        ));
+                    }
+                }
+                format!("{r:?}")
+            }
+            PolicyOp::Deny { channel, request } => {
+                let ch = self.channel(*channel);
+                let id = self.resolve(*request);
+                let r = self.st.deny(ch.id, id);
+                if r == Some(Answer::Ok) {
+                    self.answered_checks(ch, id)?;
+                }
+                format!("{r:?}")
+            }
             PolicyOp::Usage { principal } => {
-                let h = self.st.principals[*principal].h;
+                let account = fixed.principals[*principal].account.get();
+                let h = self.st.tops[&account].1;
                 format!("{:?}", self.st.usage(h))
             }
             PolicyOp::Work { session } => format!("{:?}", self.st.work(*session)),
             PolicyOp::EndLease { by, lease } => {
-                let sponsor = match (self.st.sessions.get(by), self.st.sessions.get(lease)) {
-                    (Some(b), Some(l)) => {
-                        b.labels.is_empty() && l.kind == SessionKind::Agent && b.principal == l.principal
-                    }
-                    _ => false,
-                };
+                let (b, l) = (self.st.caller(*by), self.st.caller(*lease));
+                let leased = l.as_ref().is_some_and(|l| l.kind == Kind::Lease);
+                let sponsor = b.as_ref().is_some_and(|b| {
+                    b.kind == Kind::Session
+                        && !b.labelled()
+                        && l.as_ref().is_some_and(|l| l.domain.account() == b.domain.account())
+                });
                 let r = self.st.end_lease(*by, *lease);
-                if sponsor && (r.is_err() || self.st.sessions.contains_key(lease)) {
+                if leased && sponsor && (r != Some(Answer::Ok) || self.st.caller(*lease).is_some()) {
                     return Err(format!("P13: session {by} could not end its agent {lease}: {r:?}"));
+                }
+                if r == Some(Answer::Ok) && !sponsor {
+                    return Err(format!(
+                        "P13: {:?} {by}, not an unlabelled session of its sponsor, ended lease {lease}",
+                        b.map(|b| b.domain)
+                    ));
                 }
                 format!("{r:?}")
             }
@@ -448,7 +566,7 @@ impl Run {
             PolicyOp::Crash => {
                 let held = self.held.take().unwrap_or_default();
                 self.st.crash_server();
-                self.check_blame(held, now, audit_from, &sessions_before)?;
+                self.check_blame(held, now, from.0, &before)?;
                 String::from("ok")
             }
             PolicyOp::CrashServing { session } => {
@@ -466,7 +584,7 @@ impl Run {
                 }
                 self.held = None;
                 self.st.crash_server();
-                self.check_blame(held, now, audit_from, &sessions_before)?;
+                self.check_blame(held, now, from.0, &before)?;
                 format!("{r:?}")
             }
             PolicyOp::Tick { dt } => {
@@ -475,35 +593,78 @@ impl Run {
             }
         };
         self.st.poll();
-        // P7: no session of a logged-out (account, label set) starts within its window.
-        for s in self.st.sessions.values() {
-            let key = (self.st.principals[s.principal].spec.account, s.labels.clone());
+        // P7: nothing of a locked-out domain starts within its window.
+        let existed: BTreeSet<u64> = before.iter().map(|c| c.id).collect();
+        for c in self.st.callers() {
+            let key = (c.domain.account().get(), c.domain.labels().as_slice().to_vec());
             let locked = self.ghost_locked.get(&key).is_some_and(|until| now < *until);
-            if locked && !sessions_before.contains_key(&s.id) {
-                return Err(format!("P7: session {} of {key:?} started while it was locked out", s.id));
+            if locked && !existed.contains(&c.id) {
+                return Err(format!("P7: {:?} {} of {key:?} started while it was locked out", c.kind, c.id));
             }
         }
-        self.check(audit_from)?;
+        self.check(from)?;
         Ok(obs)
     }
 
+    /// P5's fair share and P4's notices, after a submission by `by`.
+    fn submitted_checks(&self, by: &Caller, outputs_from: usize) -> Result<(), String> {
+        let state = inspect::domain(&self.st.store, &by.domain).ok_or("P5: a request in no domain")?;
+        let mine = state.requests.values().filter(|r| r.by.kind == by.kind && r.by.id == by.id).count();
+        let share = (PENDING_CAP / (state.sessions.len() + state.leases.len()).max(1)).max(1);
+        if mine > share {
+            return Err(format!(
+                "P5: {:?} {} holds {mine} pending requests, over its fair share {share}",
+                by.kind, by.id
+            ));
+        }
+        let index = inspect::index(&self.st.store);
+        for o in &self.st.outputs[outputs_from..] {
+            let Output::Notice { to, notice: Notice::ApprovalWaiting } = o else { continue };
+            match to {
+                Notified::Session(b) => {
+                    let labels = index.routes.get(b).map(|r| r.domain.labels().clone());
+                    if !labels.as_ref().is_some_and(|l| l.includes(by.domain.labels())) {
+                        return Err(format!(
+                            "P4: an approval-waiting notice for labels {:?} reached badge {b} with labels {labels:?}",
+                            by.domain.labels()
+                        ));
+                    }
+                }
+                Notified::Channel(c) => {
+                    if !self.channels.iter().any(|x| x.id == *c && x.principal == by.principal) {
+                        return Err(format!(
+                            "P4: an approval-waiting notice reached another principal's channel {c}"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// P3: a request is answered only on the channel that rendered it last.
+    fn answered_checks(&self, ch: Chan, id: u64) -> Result<(), String> {
+        match self.shown.get(&id) {
+            Some((_, last)) if *last == ch.id => Ok(()),
+            _ => Err(format!("P3: request {id} answered on channel {}, which did not render it last", ch.id)),
+        }
+    }
+
     /// P7: the crash was blamed on `held` (the account and labels of the newest message the server
-    /// held), and sessions of that account and label set were logged out exactly when three such
-    /// blames fall within ten minutes.
+    /// held), and the domain's sessions and leases ended exactly when three such blames fall within
+    /// ten minutes.
     fn check_blame(
         &mut self,
         held: (u64, Vec<u64>),
         now: u64,
         audit_from: usize,
-        before: &BTreeMap<u64, Session>,
+        before: &[Caller],
     ) -> Result<(), String> {
         let (account, labels) = held;
         let blamed: Vec<(u64, Vec<u64>)> = self.st.audit[audit_from..]
             .iter()
-            .filter_map(|a| match a {
-                Audit::Blamed { account, labels, .. } => Some((*account, labels.clone())),
-                _ => None,
-            })
+            .filter(|a| *a.record() == Record::Blamed)
+            .map(|a| (a.domain().account().get(), a.domain().labels().as_slice().to_vec()))
             .collect();
         let key = (account, labels.clone());
         if account != 0 && !blamed.contains(&key) {
@@ -518,176 +679,304 @@ impl Run {
         let times = self.ghost_blames.entry(key).or_default();
         times.push(now);
         times.retain(|t| now - *t < BLAME_WINDOW);
-        let logout = times.len() >= BLAME_COUNT;
-        if logout {
+        let lockout = times.len() >= BLAME_COUNT;
+        if lockout {
             times.clear();
             self.ghost_locked.insert((account, labels.clone()), now + BLAME_WINDOW);
         }
-        let principal = self.st.principals.iter().position(|p| p.spec.account == account);
-        for (id, s) in before {
-            let mine = Some(s.principal) == principal && s.labels == labels;
-            // Gone, and not by its lease running out: ended by the steward.
-            let still = self.st.sessions.contains_key(id);
-            let ended = !still && s.deadline.is_none_or(|d| d > self.st.k.now);
-            if mine && logout && still {
+        let after: BTreeSet<u64> = self.st.callers().iter().map(|c| c.id).collect();
+        for c in before {
+            let mine = c.domain.account().get() == account && c.domain.labels().as_slice() == labels;
+            let still = after.contains(&c.id);
+            if mine && lockout && still {
                 return Err(format!(
-                    "P7: account {account} with labels {labels:?} blamed 3 times in 10 minutes, session {id} survived"
+                    "P7: account {account} with labels {labels:?} blamed 3 times in 10 minutes, {:?} {} survived",
+                    c.kind, c.id
                 ));
             }
-            if (!mine || !logout) && ended {
+            if (!mine || !lockout) && !still {
                 return Err(format!(
-                    "P7: blaming account {account} ended session {id} of principal {}",
-                    s.principal
+                    "P7: blaming account {account} ended {:?} {} of {:?}",
+                    c.kind, c.id, c.domain
                 ));
             }
         }
         Ok(())
     }
 
-    /// P1-P6 and P9 on the state, and on the audit entries this step added; the kernel's
-    /// invariants on the kernel underneath.
-    fn check(&mut self, audit_from: usize) -> Result<(), String> {
+    /// The properties on the state, and on the audit records, outputs and writes this step added;
+    /// the kernel's invariants on the kernel underneath.
+    fn check(
+        &mut self,
+        (audit_from, outputs_from, writes_from): (usize, usize, usize),
+    ) -> Result<(), String> {
         if !self.st.audit_authentic() {
             return Err(String::from("P14: altered or unsigned audit record"));
         }
+        if inspect::exited(&self.st.store) {
+            return Err(String::from("the steward exited: an event its guarantee excludes"));
+        }
+        self.checker.check(&self.st.k)?;
+        self.screens(outputs_from)?;
         let st = &self.st;
-        self.checker.check(&st.k)?;
-        for s in st.sessions.values() {
-            let p = &st.principals[s.principal];
-            let b = st.k.budgets.get(&s.budget).ok_or(format!("P1: session {} has no budget", s.id))?;
-            let under = st.k.is_descendant_or_self(s.budget, p.budget) && s.budget != p.budget;
-            if !under || b.account != p.spec.account || b.labels != s.labels {
-                return Err(format!("P1: session {}'s budget is not its principal's", s.id));
+        let k = &st.k;
+        let fixed = inspect::fixed(&st.store);
+        let callers = st.callers();
+        let budget = |c: &Caller| st.budget_of(&c.object());
+        let lease_budgets: BTreeSet<u64> =
+            callers.iter().filter(|c| c.kind == Kind::Lease).filter_map(budget).collect();
+        for c in &callers {
+            let p = &fixed.principals[c.principal];
+            let what = format!("{:?} {} of {:?}", c.kind, c.id, c.domain);
+            let id = budget(c).ok_or(format!("P1: {what} has no budget"))?;
+            let b = k.budgets.get(&id).ok_or(format!("P9: {what}'s budget is gone, and it is not"))?;
+            let top = st.tops[&p.account.get()].0;
+            let under = k.is_descendant_or_self(id, top) && id != top;
+            if !under || b.account != p.account.get() || b.labels != c.domain.labels().as_slice() {
+                return Err(format!("P1: {what}'s budget is not its principal's, with its labels"));
             }
-            // Carved from the principal's sub-budget for its label set, or (a sub-agent) from an
-            // agent's budget of the same principal.
-            let sub = p.subs.get(&s.labels).map(|x| x.0);
-            let in_agent = st.sessions.values().any(|a| {
-                a.kind == SessionKind::Agent && a.principal == s.principal && Some(a.budget) == b.parent
-            });
-            if b.parent != sub && !(s.kind == SessionKind::Agent && in_agent) {
-                return Err(format!(
-                    "P1: session {} with labels {:?} is not carved from its principal's sub-budget for them",
-                    s.id, s.labels
-                ));
+            // Carved from its domain's sub-budget, or (a sub-agent) from an agent's budget there.
+            let sub = st.subs.get(&c.domain).map(|x| x.0);
+            let in_agent = c.kind == Kind::Lease && b.parent.is_some_and(|x| lease_budgets.contains(&x));
+            if b.parent != sub && !in_agent {
+                return Err(format!("P1: {what} is not carved from its domain's sub-budget"));
             }
-            if s.labels.len() > 1 || !s.labels.iter().all(|l| p.spec.owned_labels.contains(l)) {
-                return Err(format!(
-                    "P1: session {} carries labels {:?} its principal does not own",
-                    s.id, s.labels
-                ));
+            if !p.owned.includes(c.domain.labels()) {
+                return Err(format!("P1: {what} carries labels its principal does not own"));
             }
-            if s.kind == SessionKind::Agent && b.deadline.is_none_or(|d| d <= st.k.now) {
-                return Err(format!("P9: agent session {} has no future deadline", s.id));
+            if c.kind == Kind::Lease {
+                if b.deadline.is_none_or(|d| d <= k.now) {
+                    return Err(format!("P9: {what} has no future deadline"));
+                }
+                let parent = b.parent.and_then(|x| k.budgets.get(&x)).and_then(|x| x.deadline);
+                if in_agent && parent.is_none_or(|pd| b.deadline.is_some_and(|d| d > pd)) {
+                    return Err(format!("P9: {what} outlives its agent"));
+                }
             }
         }
         // P12: only init and the steward hold system budgets; connections are narrowed to scopes.
-        for p in st.k.processes.values() {
+        for p in k.processes.values() {
             if p.pid == crate::kernel::INIT_PID || p.pid == st.me.pid {
                 continue;
             }
             for h in p.handles.values() {
                 if let crate::kernel::Object::Budget(b) = h.object {
-                    if st.k.budgets.get(&b).is_some_and(|x| x.class == crate::spec::Class::System) {
+                    if k.budgets.get(&b).is_some_and(|x| x.class == crate::spec::Class::System) {
                         return Err(format!("P12: process {} holds system-class budget {b}", p.pid));
                     }
                 }
             }
         }
-        for s in st.sessions.values() {
-            let Some(p) = st.k.processes.get(&s.pid) else { continue };
+        for (pid, o) in &st.procs {
+            let (Some(p), Some(b)) = (k.processes.get(pid), st.budget_of(o)) else { continue };
             for h in p.handles.values().filter(|h| matches!(h.object, crate::kernel::Object::Endpoint(_))) {
-                let stamp = st.k.budgets.get(&h.stamp);
+                let stamp = k.budgets.get(&h.stamp);
                 let scope =
                     stamp.is_some_and(|x| x.pages_limit == 0 && x.processes_limit == 0 && x.weight == 0);
-                if !scope || !st.k.is_descendant_or_self(h.stamp, s.budget) {
+                if !scope || !k.is_descendant_or_self(h.stamp, b) {
                     return Err(format!(
-                        "P12: session {}'s connection is stamped {}, not a scope in its session",
-                        s.id, h.stamp
+                        "P12: {o:?}'s connection is stamped {}, not a scope in its budget",
+                        h.stamp
                     ));
                 }
             }
         }
-        let mut pending: BTreeMap<(u64, Vec<u64>), usize> = BTreeMap::new();
-        for r in st.requests.values() {
-            *pending.entry((r.account, r.labels.clone())).or_default() += 1;
-            if !st.sessions.contains_key(&r.session) {
-                return Err(format!("P5: request {} of ended session {} is still pending", r.id, r.session));
+        // P5: the cap per domain, and no request of an ended session or agent.
+        for (d, s) in inspect::domains(&st.store) {
+            if s.requests.len() > PENDING_CAP {
+                return Err(format!("P5: {d:?} has {} pending requests", s.requests.len()));
+            }
+            for r in s.requests.values() {
+                let live = match r.by.kind {
+                    Kind::Session => s.sessions.contains_key(&r.by.id),
+                    _ => s.leases.contains_key(&r.by.id),
+                };
+                if !live {
+                    return Err(format!(
+                        "P5: request {} of ended {:?} {} is still pending",
+                        r.id, r.by.kind, r.by.id
+                    ));
+                }
             }
         }
-        if let Some((a, n)) = pending.iter().find(|(_, n)| **n > PENDING_CAP) {
-            return Err(format!("P5: {a:?} has {n} pending requests"));
-        }
-        for e in &st.audit[audit_from..] {
-            match e {
-                Audit::Login { principal, key, .. }
-                    if !st.principals[*principal].spec.login_keys.contains(key) || st.keyd.contains(key) =>
+        let mut copied: Vec<&Vec<u8>> = Vec::new();
+        for a in &st.audit[audit_from..] {
+            let labels = a.domain().labels();
+            match a.record() {
+                Record::Login { principal, key, .. }
+                    if !fixed.principals[*principal].login_keys.contains(key) || fixed.keyd.contains(key) =>
                 {
                     return Err(format!("P2: login to principal {principal} with key {key}"));
                 }
-                Audit::Approved { id, principal, key, hash, .. } => {
-                    let spec = &st.principals[*principal].spec;
-                    let Some((want, _)) = self.ghost_requests.get(id) else {
-                        return Err(format!("P3: approved request {id} was never submitted"));
-                    };
-                    if hash != want {
+                Record::Approved { request, principal, key, .. } => {
+                    let p = &fixed.principals[*principal];
+                    if !self.ghost.contains_key(request) {
+                        return Err(format!("P3: approved request {request} was never submitted"));
+                    }
+                    if !p.approval_keys.contains(key)
+                        || p.login_keys.contains(key)
+                        || fixed.keyd.contains(key)
+                    {
                         return Err(format!(
-                            "P3: request {id} approved with hash {hash:#x}, its content hashes to {want:#x}"
+                            "P3: request {request} approved with key {key}, not an approval key"
                         ));
                     }
-                    if !spec.approval_keys.contains(key)
-                        || spec.login_keys.contains(key)
-                        || st.keyd.contains(key)
-                    {
-                        return Err(format!("P3: request {id} approved with key {key}, not an approval key"));
-                    }
                 }
-                Audit::AgentStarted { sponsor, labels, deadline, .. } => {
-                    if !labels.iter().all(|l| st.principals[*sponsor].spec.owned_labels.contains(l)) {
+                Record::AgentStarted { sponsor, deadline, .. } => {
+                    if !fixed.principals[*sponsor].owned.includes(labels) {
                         return Err(format!(
                             "P3: an agent labelled {labels:?} started for a principal owning fewer"
                         ));
                     }
-                    if *deadline > st.k.now.saturating_add(MAX_LEASE) {
+                    if *deadline > k.now.saturating_add(MAX_LEASE) {
                         return Err(format!(
                             "P9: an agent's lease ends at {deadline}, over MAX_LEASE from {}",
-                            st.k.now
+                            k.now
                         ));
                     }
                 }
-                Audit::Declassified { id, bytes, label, reader } => {
-                    let want = self.ghost_requests.get(id).and_then(|(_, b)| b.clone());
-                    if want.as_ref() != Some(bytes) {
+                Record::Declassified { request, bytes, reader } => {
+                    let g = self
+                        .ghost
+                        .get(request)
+                        .ok_or(format!("P6: declassified request {request} was never submitted"))?;
+                    let Content::Declassify { labels: item, .. } = &g.content else {
                         return Err(format!(
-                            "P6: declassified {bytes:?}, the snapshot at submission was {want:?}"
+                            "P6: request {request} declassified, but it asked for {:?}",
+                            g.content
+                        ));
+                    };
+                    let item = Labels::new(item).unwrap_or_default();
+                    if *g.by.domain.labels() != item {
+                        return Err(format!(
+                            "P6: item of {item:?} declassified from a session labelled {:?}",
+                            g.by.domain.labels()
+                        ));
+                    }
+                    if g.snapshot.as_ref() != Some(bytes) {
+                        return Err(format!(
+                            "P6: declassified {bytes:?}, the snapshot at submission was {:?}",
+                            g.snapshot
+                        ));
+                    }
+                    if bytes.len() > DECLASSIFY_MAX || !printable(bytes) {
+                        return Err(format!(
+                            "P6: declassified {} bytes, not printable text within DECLASSIFY_MAX",
+                            bytes.len()
                         ));
                     }
                     // The kernel's own record of the reader budget.
-                    let labels = st.k.ghost.labels_at_creation.get(reader);
-                    if labels != Some(&vec![*label]) {
+                    let read = k.ghost.labels_at_creation.get(reader);
+                    if read.map(|l| l.as_slice()) != Some(item.as_slice()) {
                         return Err(format!(
-                            "P6: item of label {label} read through budget {reader} with labels {labels:?}"
+                            "P6: item of {item:?} read through budget {reader} with labels {read:?}"
+                        ));
+                    }
+                    copied.push(bytes);
+                }
+                Record::Pushed { request, bytes, writer, .. } => {
+                    let g = self
+                        .ghost
+                        .get(request)
+                        .ok_or(format!("P6: pushed request {request} was never submitted"))?;
+                    if g.by.labelled() {
+                        return Err(format!(
+                            "P6: a push submitted from a session labelled {:?}",
+                            g.by.domain.labels()
+                        ));
+                    }
+                    if g.snapshot.as_ref() != Some(bytes) {
+                        return Err(format!(
+                            "P6: pushed {bytes:?}, the snapshot at submission was {:?}",
+                            g.snapshot
+                        ));
+                    }
+                    let wrote = k.ghost.labels_at_creation.get(writer);
+                    if wrote.map(|l| l.as_slice()) != Some(labels.as_slice()) {
+                        return Err(format!(
+                            "P6: item of {labels:?} pushed through budget {writer} with labels {wrote:?}"
                         ));
                     }
                 }
-                Audit::Wrote { session, labels, label } if labels != &vec![*label] => {
-                    return Err(format!(
-                        "P11: session {session} with labels {labels:?} wrote an item of {label}"
-                    ));
-                }
                 _ => {}
             }
+        }
+        // P11, and P6's copy out: what reached the unlabelled volume is the snapshot.
+        for w in &st.writes[writes_from..] {
+            match &w.through {
+                Some(t) if *t == w.labels => {}
+                None if w.by.kind == Kind::Crossing && w.labels.is_empty() => {
+                    if !copied.contains(&&w.bytes) {
+                        return Err(format!(
+                            "P6: the copy out wrote {:?}, which is no snapshot approved now",
+                            w.bytes
+                        ));
+                    }
+                }
+                t => {
+                    return Err(format!(
+                        "P11: item {} of {:?} written by {:?} through {t:?}",
+                        w.item, w.labels, w.by
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// P4, and P3's frozen hash, on the screens this step showed; each binds its request to its
+    /// channel, as the family records it.
+    fn screens(&mut self, outputs_from: usize) -> Result<(), String> {
+        let fixed = inspect::fixed(&self.st.store);
+        for o in &self.st.outputs[outputs_from..] {
+            let Output::Screen { channel, screen: r } = o else { continue };
+            let ch = self
+                .channels
+                .iter()
+                .find(|c| c.id == *channel)
+                .ok_or(format!("P4: a screen on unknown channel {channel}"))?;
+            let g =
+                self.ghost.get(&r.id).ok_or(format!("P4: a screen of request {} never submitted", r.id))?;
+            let owned = &fixed.principals[ch.principal].owned;
+            if g.by.principal != ch.principal
+                || !owned.includes(g.by.domain.labels())
+                || r.labels != *g.by.domain.labels()
+            {
+                return Err(format!(
+                    "P4: principal {} sees request {} labelled {:?}",
+                    ch.principal, r.id, r.labels
+                ));
+            }
+            if r.text.chars().any(|c| !(' '..='~').contains(&c)) {
+                return Err(format!("P4: rendered request {} is not printable ASCII: {:?}", r.id, r.text));
+            }
+            // A labelled request shows only text the steward generates.
+            let note = match &g.content {
+                Content::Note { what } => what.clone(),
+                _ => String::new(),
+            };
+            for free in [&g.reason, &note] {
+                let shown = sanitize(free, FIELD_CAP);
+                if g.by.labelled() && !shown.is_empty() && r.text.contains(&format!("\"{shown}\"")) {
+                    return Err(format!("P4: labelled request {} shows its free text: {:?}", r.id, r.text));
+                }
+            }
+            let first = self.shown.get(&r.id).map_or(r.hash, |s| s.0);
+            if first != r.hash {
+                return Err(format!("P3: request {}'s hash changed while it was frozen", r.id));
+            }
+            self.shown.insert(r.id, (first, *channel));
         }
         Ok(())
     }
 }
 
-/// P1-P9: a random sequence of policy operations.
+/// P1-P9, P11-P14: a random sequence of policy operations.
 pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let mut rng = Rng::new(seed);
     let mut run = Run::new(mutation, rng.next_u64());
     for i in 0..rng.range(20, 160) {
-        let op = random_op(&run.st, &run.subs, &mut rng);
+        let op = random_op(&run, &mut rng);
         run.apply(&op).map_err(|message| Failure {
             family: "steward_policy",
             seed,
@@ -700,17 +989,17 @@ pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failu
 
 /// P10 (servers/steward.md R37): one sequence runs twice, the second time without the work of the
 /// vault sessions: their item writes, submissions and calls to the shared server, the owner's
-/// approvals and denials of their requests, and whatever names an agent such an approval started.
-/// Everything an unlabelled session observes must be the same: every result it gets, the ids of
-/// its requests, the order the server takes its calls in, the audit records an unlabelled reader
-/// may read, and the usage of every principal's top budget and unlabelled sub-budget and of
-/// `users`.
+/// approvals and denials of their requests, and whatever names a session or agent such work
+/// started. Everything an unlabelled session observes must be the same: every result it gets,
+/// the ids of its requests, the order the server takes its calls in, the audit records an
+/// unlabelled reader may read, and the usage of every principal's top budget and unlabelled
+/// sub-budget and of `users`.
 ///
-/// Since the caps are keyed by (account, label set), the observers include the vault owner's own
-/// unlabelled sessions. Ending a vault session, and a crash an unlabelled session's call causes,
-/// run in both. Left out of the sequence: a crash at an instant, and one a vault's call causes,
-/// whose blame and outcomes are service-slot timing (servers/steward.md R37, "Residual risks").
-/// The owner's approval screen is not an observer.
+/// Since the caps are per domain, the observers include the vault owner's own unlabelled
+/// sessions. Ending a vault session, and a crash an unlabelled session's call causes, run in
+/// both. Left out of the sequence: a crash at an instant, and one a vault's call causes, whose
+/// blame and outcomes are service-slot timing (servers/steward.md R37, "Residual risks"). The
+/// owner's approval screen is not an observer.
 pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let mut rng = Rng::new(seed);
     let secret = rng.next_u64();
@@ -720,12 +1009,12 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
     let mut first = Run::new(mutation, secret);
     let mut ops: Vec<(PolicyOp, bool)> = Vec::new();
     let mut vault_sessions: BTreeSet<u64> = BTreeSet::new();
-    // Sessions vault work started (an agent on an approved vault request): they exist only with
-    // the vault's work, so an op that names one is vault work too.
+    // Sessions and agents vault work started: they exist only with the vault's work, so an op
+    // that names one is vault work too.
     let mut vault_made: BTreeSet<u64> = BTreeSet::new();
     let mut owners: BTreeSet<usize> = BTreeSet::new();
     for _ in 0..rng.range(20, 100) {
-        let op = random_op(&first.st, &first.subs, &mut rng);
+        let op = random_op(&first, &mut rng);
         let vault = match &op {
             PolicyOp::WriteItem { session, .. }
             | PolicyOp::Submit { session, .. }
@@ -744,56 +1033,58 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
             PolicyOp::Hold | PolicyOp::Crash => continue,
             _ => false,
         };
-        let before = first.st.sessions.keys().copied().collect::<BTreeSet<u64>>();
+        let before: BTreeSet<u64> = first.st.callers().iter().map(|c| c.id).collect();
         first.apply(&op).map_err(fail)?;
-        for s in first.st.sessions.values().filter(|s| !before.contains(&s.id)) {
+        for c in first.st.callers().into_iter().filter(|c| !before.contains(&c.id)) {
             if vault {
-                vault_made.insert(s.id);
+                vault_made.insert(c.id);
             }
-            if !s.labels.is_empty() {
-                vault_sessions.insert(s.id);
-                owners.insert(s.principal);
+            if c.labelled() {
+                vault_sessions.insert(c.id);
+                owners.insert(c.principal);
             }
         }
         ops.push((op, vault));
     }
     let mut with = Run::new(mutation, secret);
     let mut without = Run::new(mutation, secret);
-    // A vault session's number, and so its id, follows its label set's own history, which the
-    // vault's work is part of: the session an op names is found in the run without that work as
-    // the one started at the same op. Results are never renamed.
+    // A vault session's id follows its domain's own history, which the vault's work is part of:
+    // the session an op names is found in the run without that work as the one started at the
+    // same op. Results are never renamed.
     let mut renamed: BTreeMap<u64, u64> = BTreeMap::new();
     // How much of each run's take log has been read, and the unlabelled takes read from it.
     let mut seen = (0, 0);
     let mut order: (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
+    let unlabelled = |r: &Run, id: &u64| r.st.caller(*id).is_some_and(|c| !c.labelled());
     for (i, (op, vault)) in ops.iter().enumerate() {
         let observed = match op {
-            PolicyOp::Pending { principal } => !owners.contains(principal),
+            PolicyOp::Pending { channel } => !owners.contains(&with.channel(*channel).principal),
             PolicyOp::EndSession { session }
             | PolicyOp::StartAgent { session, .. }
             | PolicyOp::WriteItem { session, .. }
             | PolicyOp::Submit { session, .. }
-            | PolicyOp::Work { session } => {
-                with.st.sessions.get(session).is_some_and(|s| s.labels.is_empty())
-            }
-            PolicyOp::Login { label, .. } => label.is_none(),
-            PolicyOp::EndLease { by, .. } => with.st.sessions.get(by).is_some_and(|s| s.labels.is_empty()),
-            PolicyOp::Approve { .. } | PolicyOp::Deny { .. } | PolicyOp::Usage { .. } => true,
+            | PolicyOp::Work { session } => unlabelled(&with, session),
+            PolicyOp::Login { labels, .. } => labels.is_empty(),
+            PolicyOp::EndLease { by, .. } => unlabelled(&with, by),
+            PolicyOp::Open { .. }
+            | PolicyOp::Approve { .. }
+            | PolicyOp::Deny { .. }
+            | PolicyOp::Usage { .. } => true,
             _ => false,
         };
-        let ids = |r: &Run| r.st.sessions.keys().copied().collect::<BTreeSet<u64>>();
+        let ids = |r: &Run| r.st.callers().iter().map(|c| c.id).collect::<BTreeSet<u64>>();
         let (before_with, before_without) = (ids(&with), ids(&without));
         let a = with.apply(op).map_err(fail)?;
         if *vault {
             continue;
         }
         let b = without.apply(&rename(op, &renamed)).map_err(fail)?;
-        let mut started: Vec<&Session> =
-            without.st.sessions.values().filter(|s| !before_without.contains(&s.id)).collect();
-        for s in with.st.sessions.values().filter(|s| !before_with.contains(&s.id)) {
-            let same = |t: &&Session| t.principal == s.principal && t.labels == s.labels && t.kind == s.kind;
+        let mut started: Vec<Caller> =
+            without.st.callers().into_iter().filter(|c| !before_without.contains(&c.id)).collect();
+        for c in with.st.callers().into_iter().filter(|c| !before_with.contains(&c.id)) {
+            let same = |t: &Caller| t.principal == c.principal && t.domain == c.domain && t.kind == c.kind;
             if let Some(at) = started.iter().position(same) {
-                renamed.insert(s.id, started.remove(at).id);
+                renamed.insert(c.id, started.remove(at).id);
             }
         }
         if observed && a != b {
@@ -803,8 +1094,7 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
         }
         // Ids of unlabelled sessions' requests.
         for (key, id) in &with.submitted {
-            let unlabelled = with.st.sessions.get(&key.0).is_some_and(|s| s.labels.is_empty());
-            if unlabelled && without.submitted.get(key) != Some(id) {
+            if unlabelled(&with, &key.0) && without.submitted.get(key) != Some(id) {
                 return Err(fail(format!(
                     "P10: session {}'s request {} got a different id without the vault's work",
                     key.0, key.1
@@ -821,13 +1111,19 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
             return Err(fail(format!("P10: the server took unlabelled calls in another order (op {i})")));
         }
         // What an unlabelled reader may read of the audit file.
-        if with.st.audit_view(&[]) != without.st.audit_view(&[]) {
-            return Err(fail(format!("P10: the unlabelled audit view depends on the vault's work (op {i})")));
+        let (x, y) = (with.st.audit_view(&[]), without.st.audit_view(&[]));
+        if x != y {
+            let at = x.iter().zip(&y).position(|(a, b)| a != b).unwrap_or(x.len().min(y.len()));
+            return Err(fail(format!(
+                "P10: the unlabelled audit view depends on the vault's work (op {i} {op:?}: {:?} with, {:?} without)",
+                x.get(at),
+                y.get(at)
+            )));
         }
         // The steward's slot 1 is `users`; each principal's top budget and unlabelled sub-budget.
         let shared: Vec<u64> = core::iter::once(1)
-            .chain(with.st.principals.iter().map(|p| p.h))
-            .chain(with.st.principals.iter().filter_map(|p| p.subs.get(&Vec::new()).map(|s| s.1)))
+            .chain(with.st.tops.values().map(|t| t.1))
+            .chain(with.st.subs.iter().filter(|(d, _)| d.labels().is_empty()).map(|(_, s)| s.1))
             .collect();
         for h in shared {
             let (x, y) = (with.st.usage(h), without.st.usage(h));
@@ -870,7 +1166,7 @@ fn rename(op: &PolicyOp, to: &BTreeMap<u64, u64>) -> PolicyOp {
     op
 }
 
-/// Independent ancestry oracle for the self-minted share (servers/serving.md R26: a chain of
+/// P15. Independent ancestry oracle for the self-minted share (servers/serving.md R26: a chain of
 /// self-mints spends one share). The model stores a root at grant time; this checker instead walks
 /// immutable parent edges and reconstructs connected shares after every operation, including after
 /// disconnect. `break_lineage` deliberately assigns self-minted descendants new roots to establish
@@ -963,16 +1259,16 @@ pub fn connection_lineage(seed: u64, steps: usize, break_lineage: bool) -> Resul
     Ok(())
 }
 
-/// A specification-side observable read oracle. Confined read-down must fail even when the
+/// P16. A specification-side observable read oracle. Confined read-down must fail even when the
 /// lower volume exists and ordinary subset-based `check` would allow the read. Accepting a
 /// supplied success here is the deliberate rule-break control in `policy_current`.
 pub fn confined_read_observation(
     confined: bool,
     caller_labels: &[u64],
-    object_label: Option<u64>,
+    object_labels: &[u64],
     result: &Result<Vec<u8>, Denied>,
 ) -> Result<(), String> {
-    if confined && !caller_labels.is_empty() && object_label.is_none() && result != &Err(Denied::ReadDown) {
+    if confined && !caller_labels.is_empty() && object_labels.is_empty() && result != &Err(Denied::ReadDown) {
         return Err(String::from("P16: a confined labelled caller read a shared unlabelled volume"));
     }
     Ok(())

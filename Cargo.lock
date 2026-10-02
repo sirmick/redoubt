@@ -685,6 +685,9 @@ dependencies = [
 [[package]]
 name = "redoubt-model"
 version = "0.1.0"
+dependencies = [
+ "redoubt-steward",
+]
 
 [[package]]
 name = "redoubt-net-client"
@@ -743,6 +746,18 @@ dependencies = [
  "redoubt-rt",
  "redoubt-sshd",
 ]
+
+[[package]]
+name = "redoubt-steward"
+version = "0.1.0"
+dependencies = [
+ "redoubt-sys",
+ "sha2",
+]
+
+[[package]]
+name = "redoubt-steward-gen"
+version = "0.1.0"
 
 [[package]]
 name = "redoubt-stride"

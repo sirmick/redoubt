@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 128
+revision = 151
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -257,10 +257,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The kernel containment gate: one composite boot"
   template = "package"
   parent = "M1"
-  needs = ["K8", "K9", "K10"]
+  needs = ["K8", "K9", "K10", "K18"]
   body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-10-02 on a kernel finding: wp-gate1 e9ecc5ea5 (a WIP on the two-commit fold 555aeb6a5; the review's BLOCK findings applied: per-lease badges for held calls and progress, strict counts, fail bits, nine leases of each kind, two leases live at a deadline end as the page requires). With two full leases live, the deadline notice misses: net p99 57.1 ms rv64, 48.1 ms rv32 against 40 (every protocol row ok). The earlier green sweep (32/32, seed 4 pinned) was with one lease live at a deadline end. QA GATE1-notice-two-leases (Architect) decides the kernel package; GATE1 resumes on its merge: the sweep again, The run's per-width seed sentence, the whole bench, the fold, the red team's re-review. Detail: .wash/local/GATE1-miss.md, GATE1-progress.md, GATE1-sweep.md. INIT1 (accepted) waits on GATE1's merge. Tier A, size M."
-  state = "parked"
-  revision = 127
+  state = "reported"
+  revision = 133
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
@@ -463,9 +463,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The steward's policy core: one pure state machine, shared by the server and the model"
   template = "package"
   parent = "M1"
-  body = "Builds docs/servers/steward.md#the-policy-core (the crate redoubt-steward, its tables and generator, the model's embedder in place of model/src/steward.rs's policy; the mutations). Design: QA STEWARD0-design; page 99d01496f. Brief: .wash/local/STEWARD0-implementer.md. Needs nothing (library and model work, beside the init chain). Tier A (the steward's policy), size L."
-  state = "active"
-  revision = 125
+  body = "Owner's ask 2026-10-02: the steward's policy as a pure Rust state machine in a no_std, unsafe-free crate, keyed by domain, shared by the steward server and the model, with an Elixir reference as a differential oracle (STEWARD1); design docs/servers/steward.md 'The policy core' (99d01496f, a61477f7f, 22ed434d9), QA STEWARD0-design and STEWARD0-tables resolved. PAUSED 2026-10-02: wp-steward0 f62b4da34, clean: the tables as ruled, the generator with drift and coverage checks, the core crate redoubt-steward (28 tests), the bench case steward-host-tests, the model embedder with the families green at 40k seeds and 26 of 28 Policy mutations caught (the two await QA STEWARD0-unreachable-mutations), the pages and the size budget; doccheck and fmt clean. Left: the whole-bench result, the final mutation sweep after the ruling, the autosquash of three fixup commits, the report, then review by the full panel. Two implementers so far; detail .wash/local/STEWARD0-progress.md. Tier A (the steward's policy), size L."
+  state = "done"
+  revision = 151
 
 [[node]]
   id = "STEWARD1"
@@ -476,3 +476,23 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Builds docs/servers/steward.md#two-embedders-and-a-reference (the Elixir reference: decide/2 over defstruct state from the generated clause skeletons; a trace format both run; a bench host-tests case that runs Elixir on beamlet with the pinned toolchain), and brings libs/wire/elixir/run-vectors under the same case (docs/servers/wire.md#wire-tables-and-the-generator's partly-tested line). Design: QA STEWARD0-design. Brief: the Architect writes it when STEWARD0 is near done. Tier A (the bench), size M."
   state = "todo"
   revision = 109
+
+[[node]]
+  id = "K18"
+  title = "A checked build's audits do not move its schedule"
+  template = "package"
+  parent = "M1"
+  needs = ["K17"]
+  body = "Closes docs/todo/audits-billed.md. Builds docs/kernel/scheduling.md#responsiveness ('Targets exclude the checked build's audits': an audit neither fills a window nor moves the schedule; the residual 'A checked build's audits move its schedule' goes) and docs/testbench.md#checked-builds. In a checked build an audit's time is charged to no budget and does not count against the running slice (slice end and charge start move forward by its length); audits stay full; no target moves. Accepted on GATE1's two-lease run (wp-gate1 e9ecc5ea5 fixture, seed 4) meeting the deadline notice on both widths, no regression at seed 3 in sched-latency and kernel-containment, and a recorded negative run (feature audit-billed) that misses. Design: QA GATE1-notice-two-leases (owner's decision A applied in full). Evidence: .wash/local/GATE1-two-lease-split.md. Brief: .wash/local/K18-implementer.md. Tier A (kernel), size S."
+  state = "active"
+  revision = 149
+
+[[node]]
+  id = "B5"
+  title = "Every scheduler share is judged net of the checked build's audits"
+  template = "package"
+  parent = "M1"
+  needs = ["K18"]
+  body = "Closes docs/todo/shares-judged-gross.md (added by K18's trim). Builds docs/kernel/scheduling.md#responsiveness and docs/testbench.md#checked-builds: every scheduler share is printed as a SHARE line and judged by sched_oracle net of audits, as K18 did for sched-budget-churn. Order: sched-exit-churn (margin ~40 over 450), sched-destroy-billing, deadline-flood-billed, then any other share judged in a program. No kernel change, no bound moves, no attacker weakened. Design: QA GATE1-notice-two-leases (K18's review). Brief: .wash/local/B5-implementer.md. Tier B (bench), size S."
+  state = "todo"
+  revision = 150

@@ -1,292 +1,86 @@
-//! The steward's milestone 1 policy, as a layer above the kernel model.
+//! The model's embedder of the steward's policy core (servers/steward.md, "Two embedders and a
+//! reference"): the crate `redoubt-steward`, which ships, bound to the kernel model.
 //!
-//! Source: servers/steward.md (principals, sessions and vaults, leases, the powerbox and
-//! approvals, declassification and push, crash blame, the audit log), with servers/init.md (the
-//! boot manifest, restarts) and servers/serving.md (admission).
+//! Everything here runs on the kernel model. `init` creates the shared server's endpoint and the
+//! steward's own, and starts the steward in the `system` budget with the `users` and `system`
+//! budgets and both endpoints; the steward starts a **server** (a system-class process, an `fsd`
+//! stand-in, holding no budget) receiving on the shared one. Every principal's top budget and its
+//! fixed sub-budgets (one per label set) are a `budget_create` at boot.
 //!
-//! Everything here runs on the kernel model. `init` creates the server's endpoint and starts the
-//! steward in the `system` budget with the `users` and `system` budgets and that endpoint; the
-//! steward starts a **server** (a system-class process, an `fsd` stand-in, holding no budget)
-//! receiving on it; every principal's top budget, its fixed sub-budgets (one per label set),
-//! session and agent lease is a `budget_create`; every session has a **process** in its budget
-//! holding its own connection to the server, narrowed to a revocation scope in the session.
-//! Sessions' work is real calls to the server, and crash blame comes from the kernel's exit notices
-//! of the server (servers/steward.md, "Crash blame"), which the steward receives. So the kernel's
-//! invariants apply to everything the policy does, and non-interference (P10, policy.rs) is judged
-//! on kernel results.
+//! The core decides; this file decides nothing about policy. It turns each call into an event,
+//! with the kernel model's clock and fresh words from its entropy source, and carries out each
+//! batch the core returns as system calls on the kernel model, in order, stopping at the first
+//! failure, then reports it back as `Done`. So a session or an agent is a budget carved from its
+//! domain's sub-budget, a revocation scope inside it, fresh connections to the steward's endpoint
+//! and the server narrowed to that scope, and a process holding them. The kernel's exit notices
+//! become events: the server's carries crash blame (servers/steward.md, "Crash blame"), a
+//! session's or an agent's process says it is gone. Sessions' work is real calls to the server,
+//! so the kernel's invariants apply to everything the policy does, and non-interference (P10,
+//! policy.rs) is judged on kernel results.
+//!
+//! What stays here is the embedder's half: the transport and admission, the volumes and their
+//! own write check (R25), the ideal `keyd` that signs every audit record, and the entropy source.
 //!
 //! What the model leaves out: SSH itself (a login is "this key for this user name"), the
-//! approval terminal (an approval channel is "a connection that authenticated with this key"), and
-//! real cryptography (ids come from a keyed mixer, content hashes from FNV-1a; the real steward
-//! uses a CSPRNG and a cryptographic hash). Audit signatures are opaque ideal-keyd tokens,
-//! bound to purpose/domain/length/exact bytes; no cryptographic security is inferred. Confined
-//! push/read-down are policy observations only: the confinement check's named exception
-//! (servers/init.md, "The confinement check") is not modelled here.
-//!
-//! Policy numbers the design leaves open are constants here (`PENDING_CAP`, `DECLASSIFY_MAX`,
-//! `FIELD_CAP`, `MAX_LEASE`, session sizes).
+//! approval terminal (an approval channel is "a connection that authenticated with this key"),
+//! and real entropy (the words come from a keyed mixer, one stream per domain, where the server
+//! draws them from the kernel's `random`). Audit signatures are opaque ideal-keyd tokens, bound
+//! to purpose/domain/length/exact bytes; no cryptographic security is inferred. The volumes are
+//! maps the steward's batches read and write directly; the reader and writer budgets stand for
+//! the processes that would. Confined push/read-down are policy observations only: the
+//! confinement check's named exception (servers/init.md, "The confinement check") is not
+//! modelled here.
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::num::NonZeroU64;
 
-use crate::kernel::{Boot, INIT_PID, Kernel, Limits, Note, Object};
+use redoubt_steward::audit::Audit;
+use redoubt_steward::consts::{PENDING_CAP, RANDOM_WORDS};
+use redoubt_steward::domain::{Domain, Labels};
+use redoubt_steward::effect::{
+    Answer, Bytes, Kind, Object, Output, Parent, Produced, Refusal, Rendered, Server, Step, StepFailed, Token,
+};
+use redoubt_steward::event::{Content, Event, EventKind};
+use redoubt_steward::manifest::{self, Manifest};
+use redoubt_steward::{Store, decide, inspect};
+
+use crate::kernel::{Boot, INIT_PID, Kernel, Limits, Note};
 use crate::mutation::Mutation;
 use crate::spec::{Counters, Error, FOREVER, WORDS};
 use crate::syscall::{Message, MintSource, Op, Outcome, Ret, Syscall};
 
-/// Pending approval requests per (account, label set) (servers/steward.md, "The powerbox and
-/// approvals").
-pub const PENDING_CAP: usize = 4;
-/// Crash blame: this many crashes blamed on one (account, label set) within `BLAME_WINDOW` log out
-/// its sessions.
-pub const BLAME_COUNT: usize = 3;
-pub const BLAME_WINDOW: u64 = 10 * 60 * 1_000_000;
-/// Declassification refuses items over this many bytes (servers/steward.md, "Declassification and
-/// push").
-pub const DECLASSIFY_MAX: usize = 256;
-/// Every rendered free-text field is cut to this many characters.
-pub const FIELD_CAP: usize = 64;
-/// The longest lease: 24 hours (servers/steward.md, "Leases": the steward's, not the kernel's).
-pub const MAX_LEASE: u64 = 24 * 3600 * 1_000_000;
-/// Processes in a principal's top budget, split between its sub-budgets.
-pub const PRINCIPAL_PROCESSES: u64 = 12;
-/// What a login session or an agent's lease gets, carved from its parent.
-pub const SESSION: Limits = Limits { pages: 40, processes: 1, weight: 5 };
-pub const AGENT: Limits = Limits { pages: 40, processes: 2, weight: 4 };
+/// The steward's handle to `users`, the parent of every top budget and crossing budget.
+const USERS: u64 = 1;
+/// The slot of a session's or an agent's connection to the server: its first shared server
+/// (the steward's connection comes first).
+const SERVER_SLOT: u64 = 2;
+/// The entropy streams that belong to no domain: the events that draw no id, and `sshd`'s
+/// channel ids.
+const SPARE: u64 = 0x5ba2e;
+const SSHD: u64 = 0x55d;
 
-/// A principal from the boot manifest (servers/init.md, "The boot manifest"). Keys are abstract
-/// ids.
-#[derive(Clone, Debug)]
-pub struct PrincipalSpec {
-    pub name: String,
-    pub account: u64,
-    pub login_keys: Vec<u64>,
-    pub approval_keys: Vec<u64>,
-    pub owned_labels: Vec<u64>,
-    pub pages: u64,
-    pub weight: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct Manifest {
-    pub principals: Vec<PrincipalSpec>,
-    /// Keys `keyd` holds at boot (host keys, principals' signing keys).
-    pub keyd_keys: Vec<u64>,
-}
-
-/// Why the steward said no.
+/// Why the embedder, a volume or the kernel said no: the core's own refusals are its `Answer`s.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Denied {
     BadManifest,
-    UnknownPrincipal,
     UnknownSession,
-    /// Not a key for this role, or a key `keyd` holds.
+    /// A signing purpose `keyd`'s grant does not cover.
     BadKey,
-    /// The principal does not own a label the operation needs.
-    NotOwner,
-    /// Labelled sessions may only submit requests.
-    Labelled,
-    /// The session's pending requests are at `PENDING_CAP`.
+    /// A share or bucket is full (serving.rs).
     Cap,
-    TooBig,
-    NotPrintable,
-    NoSuchRequest,
-    /// The approval named a different content hash.
-    HashMismatch,
-    NotApprover,
-    /// A lease over `MAX_LEASE`, or 0.
-    BadLease,
-    /// The (account, label set) was logged out by crash blame; new sessions wait out the window.
-    LockedOut,
-    /// Only the lease's sponsor ends it.
-    NotSponsor,
+    /// A volume's label check (R25): a read needs the caller's labels to include the item's, a
+    /// write needs them equal.
+    NotOwner,
+    /// A confined labelled caller reads no shared unlabelled volume.
     ReadDown,
-    NoSuchItem,
     Kernel(Error),
 }
 
 type Res<T> = Result<T, Denied>;
-
-#[derive(Clone, Debug)]
-pub struct Principal {
-    pub spec: PrincipalSpec,
-    /// The top budget (kernel id) and the steward's handle to it.
-    pub budget: u64,
-    pub h: u64,
-    /// Fixed sub-budgets of the top budget, one per label set the principal may use (none, and each
-    /// owned label), split at boot: (budget id, handle). Sessions are carved from the one for their
-    /// label set, so one label set's leases never move another's free limits.
-    pub subs: BTreeMap<Vec<u64>, (u64, u64)>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SessionKind {
-    /// `ssh alice@box` or `ssh alice+X@box`.
-    Login,
-    /// An agent under a lease, started by the steward.
-    Agent,
-}
-
-#[derive(Clone, Debug)]
-pub struct Session {
-    pub id: u64,
-    pub principal: usize,
-    pub kind: SessionKind,
-    /// The steward-assigned name the approval screen shows (`session-3`, `agent-7`).
-    pub name: String,
-    /// The session's labels; its SSH channel carries the same (servers/steward.md).
-    pub labels: Vec<u64>,
-    pub budget: u64,
-    pub h: u64,
-    /// The session's process (pid), holding the server's endpoint in slot 1.
-    pub pid: u64,
-    /// For an agent: when its lease ends.
-    pub deadline: Option<u64>,
-    /// Requests this session has submitted (drives its request ids).
-    pub submitted: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Content {
-    /// Start an agent with this label under the sponsor, for `lease` µs.
-    AgentWithLabel { label: u64, lease: u64 },
-    /// Copy vault item `item` of `label` to the unlabelled volume.
-    Declassify { label: u64, item: u64 },
-    /// Anything else an agent asks its sponsor for; only its text matters here.
-    Note { what: String },
-}
-
-#[derive(Clone, Debug)]
-pub struct Request {
-    pub id: u64,
-    pub session: u64,
-    pub account: u64,
-    /// The principal who may approve: the requester's principal.
-    pub approver: usize,
-    /// The requesting session's labels.
-    pub labels: Vec<u64>,
-    pub content: Content,
-    /// Declassification: the item as it was at submission, and the reader budget it was read
-    /// through.
-    pub snapshot: Option<Vec<u8>>,
-    pub reader: u64,
-    pub reason: String,
-    /// Binds the approval to exactly this content.
-    pub hash: u64,
-}
-
-/// A request as the approval screen shows it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Rendered {
-    pub id: u64,
-    pub hash: u64,
-    pub labels: Vec<u64>,
-    pub text: String,
-}
-
-/// An `ssh approve@box` connection, authenticated with a principal's approval key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Channel {
-    pub principal: usize,
-    pub key: u64,
-}
-
-/// The audit file: append-only, written only by the steward.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Audit {
-    Pushed {
-        id: u64,
-        principal: usize,
-        source: u64,
-        target: u64,
-        label: u64,
-        labels: Vec<u64>,
-        bytes: Vec<u8>,
-        writer: u64,
-    },
-    Login {
-        session: u64,
-        principal: usize,
-        key: u64,
-        labels: Vec<u64>,
-    },
-    /// `parent` is the agent session it runs inside, if any (a budget id would count other
-    /// principals' budgets: ids come from one counter).
-    AgentStarted {
-        session: u64,
-        sponsor: usize,
-        parent: Option<u64>,
-        labels: Vec<u64>,
-        deadline: u64,
-    },
-    Submitted {
-        id: u64,
-        account: u64,
-        labels: Vec<u64>,
-    },
-    Approved {
-        id: u64,
-        principal: usize,
-        key: u64,
-        hash: u64,
-        labels: Vec<u64>,
-    },
-    Denied {
-        id: u64,
-        principal: usize,
-        labels: Vec<u64>,
-    },
-    /// `reader` is the budget the snapshot was read through.
-    Declassified {
-        id: u64,
-        label: u64,
-        bytes: Vec<u8>,
-        reader: u64,
-    },
-    /// A session wrote an item of `label`.
-    Wrote {
-        session: u64,
-        labels: Vec<u64>,
-        label: u64,
-    },
-    Blamed {
-        account: u64,
-        labels: Vec<u64>,
-        at: u64,
-    },
-    LoggedOut {
-        account: u64,
-        labels: Vec<u64>,
-        at: u64,
-    },
-    LeaseEnded {
-        session: u64,
-        by: u64,
-        labels: Vec<u64>,
-    },
-}
-
-impl Audit {
-    /// The labels a record carries: a reader sees it only if its labels ⊇ these.
-    pub fn labels(&self) -> &[u64] {
-        match self {
-            Audit::Pushed { labels, .. }
-            | Audit::Login { labels, .. }
-            | Audit::AgentStarted { labels, .. }
-            | Audit::Submitted { labels, .. }
-            | Audit::Approved { labels, .. }
-            | Audit::Denied { labels, .. }
-            | Audit::Wrote { labels, .. }
-            | Audit::Blamed { labels, .. }
-            | Audit::LoggedOut { labels, .. }
-            | Audit::LeaseEnded { labels, .. } => labels,
-            Audit::Declassified { label, .. } => core::slice::from_ref(label),
-        }
-    }
-}
 
 /// A process the steward runs or watches: (pid, a tid).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -295,46 +89,82 @@ pub struct Proc {
     pub tid: u64,
 }
 
-#[derive(Clone, Debug)]
+/// What a batch's step made, by its token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Made {
+    Budget { id: u64, h: u64 },
+    Scope(u64),
+    Connection(u64),
+    Process(u64),
+}
+
+/// One write to a volume, as the model records it for the families (P6, P11).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Write {
+    /// The session or agent that wrote, or the owner of the batch that did.
+    pub by: Object,
+    /// The kernel labels of the budget it went through: the writer's own, or a crossing
+    /// budget's. `None` for the steward's own write.
+    pub through: Option<Vec<u64>>,
+    pub labels: Vec<u64>,
+    pub item: u64,
+    pub bytes: Vec<u8>,
+}
+
+/// A session or an agent, as the families name it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Caller {
+    pub id: u64,
+    pub kind: Kind,
+    pub domain: Domain,
+    pub principal: usize,
+}
+
+impl Caller {
+    pub fn object(&self) -> Object { Object { domain: self.domain.clone(), kind: self.kind, id: self.id } }
+
+    pub fn labelled(&self) -> bool { !self.domain.labels().is_empty() }
+}
+
+#[derive(Clone)]
 pub struct Steward {
     pub mutation: Option<Mutation>,
     pub k: Kernel,
     pub me: Proc,
-    /// The server, and the steward's handles: its receive right to the server's endpoint and to
-    /// the endpoint it names as every process's exit endpoint.
+    /// The server, and the steward's handles: its receive right to the server's endpoint, its own
+    /// endpoint (which sessions' badges route on), and the endpoint it names as every process's
+    /// exit endpoint.
     pub server: Proc,
     srv: u64,
+    own: u64,
     exits: u64,
-    pub principals: Vec<Principal>,
-    pub keyd: BTreeSet<u64>,
-    pub sessions: BTreeMap<u64, Session>,
-    pub requests: BTreeMap<u64, Request>,
-    /// Labelled volumes: (label, item) -> bytes.
-    pub vault: BTreeMap<(u64, u64), Vec<u8>>,
-    /// What declassification copied out, in order: (label, bytes).
-    pub declassified: Vec<(u64, Vec<u8>)>,
-    /// Blame times per (account, label set).
-    pub blames: BTreeMap<(u64, Vec<u64>), Vec<u64>>,
-    /// Logged-out (account, label set)s and when their lockout ends.
-    pub locked: BTreeMap<(u64, Vec<u64>), u64>,
+    /// The core.
+    pub store: Store,
+    /// Each principal's top budget, by account, and each domain's fixed sub-budget: (kernel id,
+    /// the steward's handle).
+    pub tops: BTreeMap<u64, (u64, u64)>,
+    pub subs: BTreeMap<Domain, (u64, u64)>,
+    made: BTreeMap<Token, Made>,
+    /// The session or agent each process runs, by pid.
+    pub procs: BTreeMap<u64, Object>,
+    /// The volumes: (labels, item) -> bytes.
+    pub volumes: BTreeMap<(Vec<u64>, u64), Vec<u8>>,
+    pub writes: Vec<Write>,
+    /// Every reply, notice and screen the core emitted, in order.
+    pub outputs: Vec<Output>,
     pub audit: Vec<Audit>,
     pub audit_signatures: Vec<AuditSignature>,
     audit_keyd: AuditKeyd,
     pub confined: bool,
-    pub unlabelled: BTreeMap<u64, Vec<u8>>,
-    pub push_requests: BTreeMap<u64, PushRequest>,
     /// Every message the server took, in order: its sender's labels and first word (a session's
     /// call carries the session's id). P10 reads the unlabelled ones' order (R2).
     pub taken: Vec<(Vec<u64>, u64)>,
-    push_counter: u64,
-    /// Sessions started so far, per principal and label set (drives session ids and names): no
-    /// counter is shared across a principal's label sets (servers/steward.md R37).
-    started: BTreeMap<(usize, Vec<u64>), u64>,
-    /// The badge of the next session's connection to the server: each session gets its own
-    /// (servers/serving.md, "Minted connections").
-    next_badge: u64,
     secret: u64,
+    /// Words drawn so far, per entropy stream.
+    drawn: BTreeMap<u64, u64>,
+    /// `PolicySequentialIds`'s counter.
     counter: u64,
+    replies: u64,
 }
 
 /// splitmix64's finaliser: the model's stand-in for a keyed random function.
@@ -344,91 +174,25 @@ fn mix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// FNV-1a over a request's exact content (the model's stand-in for a cryptographic hash).
-fn content_hash(content: &Content, snapshot: &Option<Vec<u8>>, reason: &str, labels: &[u64]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut eat = |b: &[u8]| {
-        for x in b {
-            h ^= *x as u64;
-            h = h.wrapping_mul(0x100_0000_01b3);
-        }
-    };
-    match content {
-        Content::AgentWithLabel { label, lease } => {
-            eat(b"agent");
-            eat(&label.to_le_bytes());
-            eat(&lease.to_le_bytes());
-        }
-        Content::Declassify { label, item } => {
-            eat(b"declassify");
-            eat(&label.to_le_bytes());
-            eat(&item.to_le_bytes());
-        }
-        Content::Note { what } => {
-            eat(b"note");
-            eat(what.as_bytes());
-        }
-    }
-    if let Some(s) = snapshot {
-        eat(s);
-    }
-    eat(reason.as_bytes());
-    for l in labels {
-        eat(&l.to_le_bytes());
-    }
-    h
+/// A domain's entropy stream: an id another domain's events never move.
+fn stream(account: u64, labels: &[u64]) -> u64 {
+    let set = Labels::new(labels).unwrap_or_default();
+    set.as_slice().iter().fold(mix(account ^ 0x5e55), |h, l| mix(h ^ l))
 }
 
-/// Printable ASCII only (a whitelist, so bidi and format characters go too), cut to `cap`
-/// characters, with quotes and backslashes escaped so a field cannot end its own quoting.
-pub fn sanitize(s: &str, cap: usize, whitelist: bool) -> String {
-    let mut out = String::new();
-    let keep = |c: &char| if whitelist { (' '..='~').contains(c) } else { !c.is_control() };
-    for c in s.chars().filter(keep).take(cap) {
-        if c == '"' || c == '\\' {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
+fn of(d: &Domain) -> u64 { stream(d.account().get(), d.labels().as_slice()) }
 
-/// A lease in human units: "2 h 5 min", "90 s", "250 ms".
-pub fn human(us: u64) -> String {
-    let (h, m, s, ms) = (us / 3_600_000_000, us / 60_000_000 % 60, us / 1_000_000 % 60, us / 1000 % 1000);
-    match (h, m, s) {
-        (0, 0, 0) => format!("{ms} ms"),
-        (0, 0, s) => format!("{s} s"),
-        (0, m, _) => format!("{m} min"),
-        (h, m, _) => format!("{h} h {m} min"),
-    }
+fn limits(l: &manifest::Limits) -> Limits {
+    Limits { pages: l.pages, processes: l.processes, weight: l.weight }
 }
-
-/// Declassifiable: printable ASCII text and newlines.
-fn printable(b: &[u8]) -> bool { b.iter().all(|c| (0x20..0x7f).contains(c) || *c == b'\n') }
 
 impl Steward {
-    /// Validate the manifest, boot the kernel model, have `init` start the steward in `system`
-    /// with the `users` and `system` budgets; the steward starts the server and creates each
-    /// principal's top budget.
+    /// Check the manifest and boot the core, boot the kernel model, have `init` start the
+    /// steward in `system`; the steward starts the server and carves what boot carves: each
+    /// principal's top budget and its fixed sub-budgets.
     pub fn new(manifest: &Manifest, secret: u64, mutation: Option<Mutation>) -> Res<Steward> {
-        // The manifest: accounts non-zero and distinct; no key in both roles; no login or
-        // approval key that keyd holds (servers/steward.md, "The powerbox and approvals").
-        let mut accounts = BTreeSet::new();
-        let mut logins = BTreeSet::new();
-        let mut approvals = BTreeSet::new();
-        for p in &manifest.principals {
-            if p.account == 0 || !accounts.insert(p.account) {
-                return Err(Denied::BadManifest);
-            }
-            logins.extend(p.login_keys.iter().copied());
-            approvals.extend(p.approval_keys.iter().copied());
-        }
-        if logins.intersection(&approvals).next().is_some()
-            || manifest.keyd_keys.iter().any(|k| logins.contains(k) || approvals.contains(k))
-        {
-            return Err(Denied::BadManifest);
-        }
+        let (store, carves) =
+            Store::boot(manifest, crate::mutation::policy(mutation)).ok_or(Denied::BadManifest)?;
         let boot = Boot {
             root: Limits { pages: 4096, processes: 64, weight: 1000 },
             system: Limits { pages: 512, processes: 8, weight: 250 },
@@ -439,14 +203,16 @@ impl Steward {
         let mut k = Kernel::boot(&boot, mutation).map_err(|_| Denied::BadManifest)?;
         let init = Proc { pid: INIT_PID, tid: *k.processes[&INIT_PID].threads.first().unwrap() };
         let e = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
-        // init creates the server's endpoint (servers/init.md), so its receive right is stamped
-        // `root` and the steward can narrow connections to scopes anywhere (mint only narrows
-        // to the default stamp's descendants).
+        // init creates the server's endpoint and the steward's (servers/init.md), so their receive
+        // rights are stamped `root` and the steward can narrow connections to scopes anywhere
+        // (mint only narrows to the default stamp's descendants).
         let srv = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
-        // init's slots: 1 root, 2 system, 3 users. The steward gets users (1), system (2) and the
-        // server's endpoint (3).
+        let own = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
+        // init's slots: 1 root, 2 system, 3 users. The steward gets users (1), system (2), the
+        // server's endpoint (3) and its own (4).
         let ph = handle(run(&mut k, init, Syscall::ProcessCreate { budget: 2, exit_endpoint: e })?.0)?;
-        let start = Syscall::ProcessStart { process: ph, entry: 0, sp: 0, arg: 0, handles: vec![3, 2, srv] };
+        let start =
+            Syscall::ProcessStart { process: ph, entry: 0, sp: 0, arg: 0, handles: vec![3, 2, srv, own] };
         let me = started(run(&mut k, init, start)?.1)?;
         let mut st = Steward {
             mutation,
@@ -454,51 +220,35 @@ impl Steward {
             me,
             server: me,
             srv: 3,
+            own: 4,
             exits: 0,
-            principals: Vec::new(),
-            keyd: manifest.keyd_keys.iter().copied().collect(),
-            sessions: BTreeMap::new(),
-            requests: BTreeMap::new(),
-            vault: BTreeMap::new(),
-            declassified: Vec::new(),
-            blames: BTreeMap::new(),
-            locked: BTreeMap::new(),
+            store,
+            tops: BTreeMap::new(),
+            subs: BTreeMap::new(),
+            made: BTreeMap::new(),
+            procs: BTreeMap::new(),
+            volumes: BTreeMap::new(),
+            writes: Vec::new(),
+            outputs: Vec::new(),
             audit: Vec::new(),
             audit_signatures: Vec::new(),
             audit_keyd: AuditKeyd::new(1),
             confined: false,
-            unlabelled: BTreeMap::new(),
-            push_requests: BTreeMap::new(),
             taken: Vec::new(),
-            push_counter: 0,
-            started: BTreeMap::new(),
-            next_badge: 1,
             secret,
+            drawn: BTreeMap::new(),
             counter: 0,
+            replies: 0,
         };
         st.exits = handle(st.sys(Syscall::EndpointCreate)?)?;
         st.start_server()?;
-        for spec in &manifest.principals {
-            // The steward's slot 1 is `users`.
-            let l = Limits { pages: spec.pages, processes: PRINCIPAL_PROCESSES, weight: spec.weight };
-            let h = st.budget_create(1, l, &[], spec.account, FOREVER)?;
-            let budget = st.budget_id(h);
-            // An equal share for each label set, less each sub-budget's own page.
-            let sets: Vec<Vec<u64>> =
-                core::iter::once(Vec::new()).chain(spec.owned_labels.iter().map(|l| vec![*l])).collect();
-            let n = sets.len() as u64;
-            let own = st.k.costs.budget;
-            let share = Limits {
-                pages: (spec.pages / n).saturating_sub(own),
-                processes: PRINCIPAL_PROCESSES / n,
-                weight: spec.weight / n,
-            };
-            let mut subs = BTreeMap::new();
-            for labels in sets {
-                let sh = st.budget_create(h, share, &labels, 0, FOREVER)?;
-                subs.insert(labels, (st.budget_id(sh), sh));
+        for c in carves {
+            let h = st.budget_create(USERS, limits(&c.top), &[], c.account.get(), FOREVER)?;
+            st.tops.insert(c.account.get(), (st.budget_id(h), h));
+            for (d, l) in c.subs {
+                let sh = st.budget_create(h, limits(&l), d.labels().as_slice(), 0, FOREVER)?;
+                st.subs.insert(d, (st.budget_id(sh), sh));
             }
-            st.principals.push(Principal { spec: spec.clone(), budget, h, subs });
         }
         Ok(st)
     }
@@ -524,10 +274,6 @@ impl Steward {
         Ok(())
     }
 
-    fn budget_create_labelled(&mut self, parent: u64, l: Limits, labels: &[u64], deadline: u64) -> Res<u64> {
-        self.budget_create(parent, l, labels, 0, deadline)
-    }
-
     fn budget_create(
         &mut self,
         parent: u64,
@@ -541,7 +287,6 @@ impl Steward {
             pages: l.pages,
             processes: l.processes,
             weight: l.weight,
-
             labels: labels.to_vec(),
             account,
             deadline,
@@ -551,7 +296,7 @@ impl Steward {
 
     fn budget_id(&self, h: u64) -> u64 {
         match self.k.processes[&self.me.pid].handles.get(&h).map(|x| x.object) {
-            Some(Object::Budget(b)) => b,
+            Some(crate::kernel::Object::Budget(b)) => b,
             _ => 0,
         }
     }
@@ -564,257 +309,402 @@ impl Steward {
         }
     }
 
-    /// Housekeeping after every operation: exit notices (crash blame, a restarted server) and
-    /// sessions whose budget the kernel destroyed (an expired lease), with their requests.
+    pub fn tick(&mut self, dt: u64) {
+        self.k.step(&Op::Tick { dt: dt.min(crate::kernel::MAX_TICK) });
+        self.poll();
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Events in, effects out.
+
+    /// The fresh words for an event: from the stream of the domain it is about, so no other
+    /// domain's events move them (R37), or, broken, a counter every event moves (R36).
+    fn words(&mut self, kind: &EventKind) -> [u64; RANDOM_WORDS] {
+        let stream = self.stream(kind);
+        let mut w = [0; RANDOM_WORDS];
+        for x in &mut w {
+            if self.broken(Mutation::PolicySequentialIds) {
+                self.counter += 1;
+                *x = self.counter;
+            } else {
+                let n = self.drawn.entry(stream).or_insert(0);
+                *n += 1;
+                *x = mix(self.secret ^ mix(stream ^ mix(*n)));
+            }
+        }
+        w
+    }
+
+    /// The entropy stream of the domain whose ids an event draws: a login's, the caller's for a
+    /// new lease or request, the request's for an approval (its grant or crossing). The events
+    /// that draw no id take theirs from a stream of their own.
+    fn stream(&self, kind: &EventKind) -> u64 {
+        let routes = &inspect::index(&self.store).routes;
+        match kind {
+            EventKind::Login { principal, labels, .. } => {
+                let fixed = inspect::fixed(&self.store);
+                let account = fixed.principal(principal).map_or(0, |p| fixed.principals[p].account.get());
+                stream(account, labels)
+            }
+            EventKind::StartAgent { badge, .. } | EventKind::Submit { badge, .. } => {
+                routes.get(badge).map_or(SPARE, |r| of(&r.domain))
+            }
+            EventKind::Approve { request, .. } => inspect::domains(&self.store)
+                .find(|(_, s)| s.requests.contains_key(request))
+                .map_or(SPARE, |(d, _)| of(d)),
+            _ => SPARE,
+        }
+    }
+
+    /// R26's admission, as the model stands it in: a domain whose pending requests fill its cap is
+    /// busy, and its sessions' and agents' calls wait (here, are refused) unless the tables mark
+    /// them ahead of admission. `Submit` is the core's own cap's to answer.
+    fn admitted(&self, kind: &EventKind) -> bool {
+        let badge = match kind {
+            EventKind::StartAgent { badge, .. }
+            | EventKind::EndLease { badge, .. }
+            | EventKind::EndSession { badge } => badge,
+            _ => return true,
+        };
+        if kind.ahead() && !self.broken(Mutation::PolicyEndLeaseAdmitted) {
+            return true;
+        }
+        let Some(route) = inspect::index(&self.store).routes.get(badge) else { return true };
+        inspect::domain(&self.store, &route.domain).is_none_or(|s| s.requests.len() < PENDING_CAP)
+    }
+
+    /// One call: the event, every batch it starts carried out and reported, and the exit notices
+    /// they cause; the answer to the call, if it got one.
+    fn call(&mut self, kind: EventKind) -> Option<Answer> {
+        self.replies += 1;
+        let reply = self.replies;
+        if !self.admitted(&kind) {
+            let answer = Answer::Refused(Refusal::Cap);
+            self.outputs.push(Output::Reply { to: reply, answer: answer.clone() });
+            return Some(answer);
+        }
+        let from = self.outputs.len();
+        self.feed(reply, kind);
+        self.poll();
+        self.outputs[from..].iter().find_map(|o| match o {
+            Output::Reply { to, answer } if *to == reply => Some(answer.clone()),
+            _ => None,
+        })
+    }
+
+    /// Decides an event and the `Done` of every batch that follows from it, one at a time.
+    fn feed(&mut self, reply: u64, kind: EventKind) {
+        let mut queue = VecDeque::from([(reply, kind)]);
+        while let Some((reply, kind)) = queue.pop_front() {
+            let random = self.words(&kind);
+            let effects = decide(&mut self.store, Event { now: self.k.now, random, reply, kind });
+            if effects.exit {
+                return;
+            }
+            for o in effects.outputs {
+                match o {
+                    Output::Audit(a) => self.record(a),
+                    Output::Forget(object) => self.forget(&object),
+                    o => self.outputs.push(o),
+                }
+            }
+            for b in effects.batches {
+                let result = self.batch(&b.owner, &b.steps);
+                queue.push_back((0, EventKind::Done { object: b.owner, result }));
+            }
+        }
+    }
+
+    /// The steward's exit notices: the server's blames the call it served (servers/init.md: init
+    /// passes each exit notice's blame to the steward) and the server restarts; a session's or an
+    /// agent's process is gone.
     pub fn poll(&mut self) {
         loop {
             match self.sys(Syscall::Receive { h: Some(self.exits), timeout: 0, max_transfer: 0 }) {
                 Ok(Ret::ExitNotice { pid, blamed_account, blamed_labels, .. }) => {
                     if pid == self.server.pid {
-                        // servers/init.md: init passes each exit notice's blame to the steward.
-                        self.blame(blamed_account, blamed_labels);
+                        self.feed(0, EventKind::Blame { account: blamed_account, labels: blamed_labels });
                         let _ = self.start_server();
+                    } else if let Some(object) = self.procs.remove(&pid) {
+                        self.feed(0, EventKind::Exited { object });
                     }
                 }
                 Ok(_) => {}
                 Err(_) => break,
             }
         }
-        let k = &self.k;
-        self.sessions.retain(|_, s| k.budgets.contains_key(&s.budget));
-        // Requests of dead sessions are dropped (and so leave the cap).
-        if !self.broken(Mutation::PolicyDeadSessionRequestsKept) {
-            let sessions = &self.sessions;
-            self.requests.retain(|_, r| sessions.contains_key(&r.session));
+    }
+
+    /// The object is gone: what its steps made goes with it.
+    fn forget(&mut self, object: &Object) {
+        let mine: Vec<Token> = self.made.keys().filter(|t| t.owner == *object).cloned().collect();
+        for t in mine {
+            if let Some(Made::Budget { h, .. } | Made::Scope(h) | Made::Connection(h)) = self.made.remove(&t)
+            {
+                let _ = self.sys(Syscall::HandleClose { h });
+            }
+        }
+        self.procs.retain(|_, o| o != object);
+    }
+
+    /// Runs a batch on the kernel model, in order, stopping at the first failure.
+    fn batch(&mut self, owner: &Object, steps: &[Step]) -> Result<Vec<Produced>, StepFailed> {
+        let mut read: BTreeMap<Token, Vec<u8>> = BTreeMap::new();
+        let mut done = Vec::new();
+        for (i, s) in steps.iter().enumerate() {
+            let error = |e: Denied| StepFailed {
+                step: i,
+                error: if let Denied::Kernel(e) = e { e as u32 + 1 } else { 0 },
+            };
+            done.push(self.step(owner, s, &mut read).map_err(error)?);
+        }
+        Ok(done)
+    }
+
+    fn budget(&self, t: &Token) -> Res<(u64, u64)> {
+        match self.made.get(t) {
+            Some(Made::Budget { id, h }) => Ok((*id, *h)),
+            _ => Err(Denied::Kernel(Error::BadHandle)),
         }
     }
 
-    pub fn tick(&mut self, dt: u64) {
-        self.k.step(&Op::Tick { dt: dt.min(crate::kernel::MAX_TICK) });
-        self.poll();
-    }
-
-    pub fn principal(&self, name: &str) -> Option<usize> {
-        self.principals.iter().position(|p| p.spec.name == name)
-    }
-
-    /// A session: a budget under `parent` (a handle the steward holds), and a process in it holding
-    /// a connection to the server: a handle with its own badge, narrowed to a revocation scope
-    /// inside the session budget, so ending the session revokes it and the steward never hands a
-    /// budget out.
-    fn new_session(
-        &mut self,
-        principal: usize,
-        parent: u64,
-        kind: SessionKind,
-        labels: Vec<u64>,
-        l: Limits,
-        deadline: u64,
-    ) -> Res<u64> {
-        let h = self.budget_create(parent, l, &labels, 0, deadline)?;
-        let budget = self.budget_id(h);
-        let scope = self.budget_create(h, Limits { pages: 0, processes: 0, weight: 0 }, &labels, 0, FOREVER);
-        let narrow = if self.broken(Mutation::PolicyNarrowToSessionBudget) { Ok(h) } else { scope };
-        let process = self.sys(Syscall::ProcessCreate { budget: h, exit_endpoint: self.exits });
-        let badge = self.next_badge;
-        self.next_badge += 1;
-        let mint = match narrow {
-            Ok(sh) => {
-                self.sys(Syscall::Mint { source: MintSource::Handle(self.srv), badge, budget: Some(sh) })
+    /// One step as system calls.
+    fn step(&mut self, owner: &Object, step: &Step, read: &mut BTreeMap<Token, Vec<u8>>) -> Res<Produced> {
+        let bad = Denied::Kernel(Error::BadHandle);
+        match step {
+            Step::CreateBudget { token, parent, limits: l, labels, deadline } => {
+                let parent = match parent {
+                    Parent::Sub(d) => self.subs.get(d).ok_or(bad)?.1,
+                    Parent::Budget(t) => self.budget(t)?.1,
+                    Parent::Users => USERS,
+                };
+                let h =
+                    self.budget_create(parent, limits(l), labels.as_slice(), 0, deadline.unwrap_or(FOREVER))?;
+                let id = self.budget_id(h);
+                self.made.insert(token.clone(), Made::Budget { id, h });
+                Ok(Produced::Budget(id))
             }
-            Err(e) => Err(e),
-        };
-        let (ph, mh) = match (process, mint) {
-            (Ok(Ret::Handle(ph)), Ok(Ret::Handle(mh))) => (ph, mh),
-            (p, m) => {
-                let _ = self.sys(Syscall::BudgetDestroy { h });
-                return Err(p.and(m).err().unwrap_or(Denied::Kernel(Error::Dead)));
+            Step::CreateScope { scope, budget } => {
+                let (id, h) = self.budget(budget)?;
+                let labels = self.k.budgets.get(&id).map(|b| b.labels.clone()).unwrap_or_default();
+                let s =
+                    self.budget_create(h, Limits { pages: 0, processes: 0, weight: 0 }, &labels, 0, FOREVER)?;
+                self.made.insert(scope.token().clone(), Made::Scope(s));
+                Ok(Produced::Scope)
             }
-        };
-        let start = Syscall::ProcessStart { process: ph, entry: 0, sp: 0, arg: 0, handles: vec![mh] };
-        let pid = run(&mut self.k, self.me, start).and_then(|(_, n)| started(n)).map(|p| p.pid);
-        let _ = self.sys(Syscall::HandleClose { h: mh });
-        let _ = self.sys(Syscall::HandleClose { h: ph });
-        let pid = match pid {
-            Ok(pid) => pid,
-            Err(e) => {
-                let _ = self.sys(Syscall::BudgetDestroy { h });
-                return Err(e);
+            Step::Connect { token, scope, server, badge } => {
+                let Some(Made::Scope(s)) = self.made.get(scope.token()).copied() else { return Err(bad) };
+                let source = match server {
+                    Server::Steward => self.own,
+                    Server::Shared(_) => self.srv,
+                };
+                let mint =
+                    Syscall::Mint { source: MintSource::Handle(source), badge: *badge, budget: Some(s) };
+                let h = handle(self.sys(mint)?)?;
+                self.made.insert(token.clone(), Made::Connection(h));
+                Ok(Produced::Connection)
             }
-        };
-        // A random id and a name per (principal, label set): nothing another principal, or another
-        // of this principal's label sets, can count.
-        let n = self.started.entry((principal, labels.clone())).or_insert(0);
-        *n += 1;
-        let name = format!("{}-{}", if kind == SessionKind::Agent { "agent" } else { "session" }, n);
-        let set = labels.iter().fold(0, |h, l| mix(h ^ l));
-        let mut id = mix(self.secret ^ 0x5e55 ^ mix(((principal as u64) << 32) ^ *n) ^ set);
-        while id == 0 || self.sessions.contains_key(&id) {
-            id = mix(id);
+            Step::Launch { token, budget, connections } => {
+                let (_, h) = self.budget(budget)?;
+                let mut handles = Vec::new();
+                for c in connections {
+                    match self.made.remove(c) {
+                        Some(Made::Connection(x)) => handles.push(x),
+                        _ => return Err(bad),
+                    }
+                }
+                let ph = handle(self.sys(Syscall::ProcessCreate { budget: h, exit_endpoint: self.exits })?)?;
+                let start =
+                    Syscall::ProcessStart { process: ph, entry: 0, sp: 0, arg: 0, handles: handles.clone() };
+                let pid = run(&mut self.k, self.me, start).and_then(|(_, n)| started(n)).map(|p| p.pid);
+                for h in handles.into_iter().chain([ph]) {
+                    let _ = self.sys(Syscall::HandleClose { h });
+                }
+                let pid = pid?;
+                self.procs.insert(pid, owner.clone());
+                self.made.insert(token.clone(), Made::Process(pid));
+                Ok(Produced::Process(pid))
+            }
+            Step::DestroyBudget { budget } => {
+                let (_, h) = self.budget(budget)?;
+                self.made.remove(budget);
+                let r = self.sys(Syscall::BudgetDestroy { h });
+                let _ = self.sys(Syscall::HandleClose { h });
+                r.map(|_| Produced::Done)
+            }
+            Step::Read { token, through, labels, item } => {
+                if let Some(t) = through {
+                    self.budget(t)?;
+                }
+                let bytes =
+                    self.volumes.get(&(labels.as_slice().to_vec(), *item)).cloned().unwrap_or_default();
+                read.insert(token.clone(), bytes.clone());
+                Ok(Produced::Bytes(bytes))
+            }
+            Step::Write { through, labels, item, bytes } => {
+                let through = match through {
+                    Some(t) => Some(self.k.ghost.labels(self.budget(t)?.0)),
+                    None => None,
+                };
+                let bytes = match bytes {
+                    Bytes::Literal(b) => b.clone(),
+                    Bytes::Read(t) => read.get(t).cloned().ok_or(bad)?,
+                };
+                let labels = labels.as_slice().to_vec();
+                self.volumes.insert((labels.clone(), *item), bytes.clone());
+                self.writes.push(Write { by: owner.clone(), through, labels, item: *item, bytes });
+                Ok(Produced::Done)
+            }
         }
-        let deadline = if deadline == FOREVER { None } else { Some(deadline) };
-        self.sessions.insert(
-            id,
-            Session { id, principal, kind, name, labels, budget, h, pid, deadline, submitted: 0 },
-        );
-        Ok(id)
     }
 
     // -------------------------------------------------------------------------------------------
-    // Sessions.
+    // What sessions, agents, `sshd` and approval channels ask.
 
-    /// `ssh name@box` (`label` none) or `ssh name+X@box`: the key must be one of the principal's
-    /// login keys and not one `keyd` holds; a vault session carries exactly the one label, which
-    /// the principal must own.
-    pub fn login(&mut self, name: &str, label: Option<u64>, key: u64) -> Res<u64> {
-        let p = self.principal(name).ok_or(Denied::UnknownPrincipal)?;
-        let spec = &self.principals[p].spec;
-        // sshd rejects authentication with any key keyd holds (servers/steward.md): otherwise a
-        // hijacked session could log in over loopback by asking keyd to sign.
-        let held_by_keyd = self.keyd.contains(&key) && !self.broken(Mutation::PolicyLoginWithKeydKey);
-        if !spec.login_keys.contains(&key) || held_by_keyd {
-            return Err(Denied::BadKey);
-        }
-        let labels = match label {
-            None => Vec::new(),
-            Some(x) => {
-                if !spec.owned_labels.contains(&x) && !self.broken(Mutation::PolicyVaultWithoutOwnership) {
-                    return Err(Denied::NotOwner);
-                }
-                vec![x]
+    /// Every session and agent, in the core's state.
+    pub fn callers(&self) -> Vec<Caller> {
+        let mut all = Vec::new();
+        for (d, s) in inspect::domains(&self.store) {
+            for x in s.sessions.values() {
+                all.push(Caller { id: x.id, kind: Kind::Session, domain: d.clone(), principal: x.principal });
             }
-        };
-        self.not_locked(p, &labels)?;
-        let parent = self.sub(p, &labels);
-        let id = self.new_session(p, parent, SessionKind::Login, labels.clone(), SESSION, FOREVER)?;
-        self.record(Audit::Login { session: id, principal: p, key, labels });
-        Ok(id)
-    }
-
-    /// The handle of principal `p`'s sub-budget for `labels`.
-    fn sub(&self, p: usize, labels: &[u64]) -> u64 {
-        let set = if self.broken(Mutation::PolicyCarveFromUnlabelled) { &[][..] } else { labels };
-        // A label set with no sub-budget cannot happen (only owned labels get sessions); the
-        // unlabelled one stands in.
-        let subs = &self.principals[p].subs;
-        subs.get(set).or_else(|| subs.get(&Vec::new())).map_or(self.principals[p].h, |s| s.1)
-    }
-
-    /// New sessions of a logged-out (account, label set) are refused until its window passes.
-    fn not_locked(&self, p: usize, labels: &[u64]) -> Res<()> {
-        let key = (self.principals[p].spec.account, labels.to_vec());
-        match self.locked.get(&key) {
-            Some(until) if self.k.now < *until && !self.broken(Mutation::PolicyNoLockout) => {
-                Err(Denied::LockedOut)
+            for x in s.leases.values() {
+                all.push(Caller { id: x.id, kind: Kind::Lease, domain: d.clone(), principal: x.principal });
             }
-            _ => Ok(()),
+        }
+        all
+    }
+
+    pub fn caller(&self, id: u64) -> Option<Caller> { self.callers().into_iter().find(|c| c.id == id) }
+
+    /// A session's or an agent's badge on the steward's endpoint; 0, which routes nowhere, for
+    /// one that does not run.
+    pub fn badge(&self, id: u64) -> u64 {
+        inspect::index(&self.store).routes.iter().find(|(_, r)| r.id == id).map_or(0, |(b, _)| *b)
+    }
+
+    /// The kernel id of the budget a session's or an agent's batch made.
+    pub fn budget_of(&self, o: &Object) -> Option<u64> {
+        match self.made.get(&Token { owner: o.clone(), slot: 0 }) {
+            Some(Made::Budget { id, .. }) => Some(*id),
+            _ => None,
         }
     }
 
-    /// The session ends (its user logs out); everything in its budget goes with it.
-    pub fn end_session(&mut self, session: u64) -> Res<()> {
-        let s = self.sessions.remove(&session).ok_or(Denied::UnknownSession)?;
-        self.sys(Syscall::BudgetDestroy { h: s.h })?;
-        Ok(())
+    pub fn principal(&self, name: &str) -> Option<usize> { inspect::fixed(&self.store).principal(name) }
+
+    /// `ssh name@box`, or with a label set `ssh name+X@box`.
+    pub fn login(&mut self, principal: &str, labels: &[u64], key: u64) -> Option<Answer> {
+        self.call(EventKind::Login { principal: String::from(principal), labels: labels.to_vec(), key })
     }
 
-    /// Whether `lease` is one the steward grants (at most `MAX_LEASE`).
-    fn lease_ok(&self, lease: u64) -> bool {
-        lease > 0 && (lease <= MAX_LEASE || self.broken(Mutation::PolicyUnboundedLease))
+    pub fn end_session(&mut self, session: u64) -> Option<Answer> {
+        let badge = self.badge(session);
+        self.call(EventKind::EndSession { badge })
     }
 
-    /// An unlabelled session starts an agent on a lease: a budget with a deadline. A login
-    /// session's agent is carved from its principal's budget; an agent's sub-agent from the agent's
-    /// own budget, its lease ending no later than the agent's. Labelled sessions may only submit
-    /// requests (a labelled agent needs an approval).
-    pub fn start_agent(&mut self, session: u64, lease: u64) -> Res<u64> {
-        let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?.clone();
-        if !s.labels.is_empty() {
-            return Err(Denied::Labelled);
-        }
-        if !self.lease_ok(lease) {
-            return Err(Denied::BadLease);
-        }
-        self.not_locked(s.principal, &[])?;
-        let mut deadline = self.k.now.saturating_add(lease);
-        let (parent, parent_session, limits) =
-            if s.kind == SessionKind::Agent && !self.broken(Mutation::PolicySubAgentOutlivesAgent) {
-                deadline = deadline.min(s.deadline.unwrap_or(FOREVER));
-                let free =
-                    self.k.budgets.get(&s.budget).map_or(0, |b| b.pages_limit.saturating_sub(b.pages_used));
-                (s.h, Some(s.id), Limits { pages: free / 2, processes: 1, weight: 1 })
-            } else {
-                (self.sub(s.principal, &[]), None, AGENT)
-            };
-        let id = self.new_session(s.principal, parent, SessionKind::Agent, Vec::new(), limits, deadline)?;
-        let audit = Audit::AgentStarted {
-            session: id,
-            sponsor: s.principal,
-            parent: parent_session,
-            labels: Vec::new(),
-            deadline,
-        };
-        self.record(audit);
-        Ok(id)
+    pub fn start_agent(&mut self, session: u64, lease: u64) -> Option<Answer> {
+        let badge = self.badge(session);
+        self.call(EventKind::StartAgent { badge, lease })
     }
 
-    /// A session writes item `item` of label `label`'s volume. Every write needs equal labels (no
-    /// write down, and no blind write up), so only a vault session carrying exactly that label
-    /// writes there.
-    pub fn write_item(&mut self, session: u64, label: u64, item: u64, bytes: Vec<u8>) -> Res<()> {
-        let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?;
-        let allowed = if self.broken(Mutation::PolicyWriteUp) {
-            s.labels.iter().all(|l| *l == label)
-        } else {
-            s.labels == [label]
-        };
+    pub fn submit(&mut self, session: u64, content: Content, reason: &str) -> Option<Answer> {
+        let badge = self.badge(session);
+        self.call(EventKind::Submit { badge, content, reason: String::from(reason) })
+    }
+
+    /// Session or agent `by` ends lease `lease`.
+    pub fn end_lease(&mut self, by: u64, lease: u64) -> Option<Answer> {
+        let badge = self.badge(by);
+        self.call(EventKind::EndLease { badge, lease })
+    }
+
+    /// `ssh approve@box` with `key`: `sshd`'s new channel id, and the answer.
+    pub fn open_channel(&mut self, principal: &str, key: u64) -> (u64, Option<Answer>) {
+        let channel = mix(self.secret ^ mix(SSHD ^ mix(self.drawn.get(&SSHD).copied().unwrap_or(0))));
+        *self.drawn.entry(SSHD).or_insert(0) += 1;
+        (channel, self.call(EventKind::ApprovalOpened { channel, principal: String::from(principal), key }))
+    }
+
+    pub fn close_channel(&mut self, channel: u64) { self.call(EventKind::ApprovalClosed { channel }); }
+
+    /// What an approval channel shows now.
+    pub fn pending(&mut self, channel: u64) -> Vec<Rendered> {
+        let from = self.outputs.len();
+        self.call(EventKind::Pending { channel });
+        self.outputs[from..]
+            .iter()
+            .filter_map(|o| match o {
+                Output::Screen { channel: c, screen } if *c == channel => Some(screen.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn approve(&mut self, channel: u64, request: u64, hash: [u8; 32]) -> Option<Answer> {
+        self.call(EventKind::Approve { channel, request, hash })
+    }
+
+    pub fn deny(&mut self, channel: u64, request: u64) -> Option<Answer> {
+        self.call(EventKind::Deny { channel, request })
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // The volumes: their own label check (R25), not the steward's.
+
+    /// A session or an agent writes an item: the volume takes a write only with equal labels (no
+    /// write down, no blind write up).
+    pub fn write_item(&mut self, session: u64, labels: &[u64], item: u64, bytes: Vec<u8>) -> Res<()> {
+        let c = self.caller(session).ok_or(Denied::UnknownSession)?;
+        let labels = Labels::new(labels).ok_or(Denied::NotOwner)?;
+        let mine = c.domain.labels();
+        let allowed =
+            if self.broken(Mutation::PolicyWriteUp) { labels.includes(mine) } else { *mine == labels };
         if !allowed {
             return Err(Denied::NotOwner);
         }
-        let labels = s.labels.clone();
-        self.vault.insert((label, item), bytes);
-        self.record(Audit::Wrote { session, labels, label });
+        let through = self.budget_of(&c.object()).map(|b| self.k.ghost.labels(b));
+        let labels = labels.as_slice().to_vec();
+        self.volumes.insert((labels.clone(), item), bytes.clone());
+        self.writes.push(Write { by: c.object(), through, labels, item, bytes });
         Ok(())
     }
 
-    /// Read item `item` of `label` through a short-lived reader budget carrying exactly that label,
-    /// which the steward creates and destroys: the steward itself stays unlabelled. Returns the
-    /// bytes and the reader's budget id. The model reads the volume directly; the reader budget
-    /// stands for the process that would.
-    fn read_item(&mut self, label: u64, item: u64) -> Res<(Vec<u8>, u64)> {
-        let bytes = self.vault.get(&(label, item)).cloned().unwrap_or_default();
-        if self.broken(Mutation::PolicyDeclassifyWithoutReader) {
-            return Ok((bytes, 0));
+    /// A read needs the caller's labels to include the item's; a confined deployment adds the
+    /// explicit refusal of a shared unlabelled volume to a labelled caller. This models policy,
+    /// not unresolved topology 164.
+    pub fn read_volume(&self, session: u64, labels: &[u64], item: u64) -> Res<Vec<u8>> {
+        let c = self.caller(session).ok_or(Denied::UnknownSession)?;
+        let labels = Labels::new(labels).ok_or(Denied::NotOwner)?;
+        if !c.domain.labels().includes(&labels) {
+            return Err(Denied::NotOwner);
         }
-        // Under `users` (the steward's slot 1): one page for its own object, a deadline.
-        let l = Limits { pages: self.k.costs.budget, processes: 0, weight: 0 };
-        let deadline = self.k.now.saturating_add(crate::spec::SLICE);
-        let h = self.budget_create_labelled(1, l, &[label], deadline)?;
-        let reader = self.budget_id(h);
-        self.sys(Syscall::BudgetDestroy { h })?;
-        Ok((bytes, reader))
+        if self.confined && c.labelled() && labels.is_empty() {
+            return Err(Denied::ReadDown);
+        }
+        Ok(self.volumes.get(&(labels.as_slice().to_vec(), item)).cloned().unwrap_or_default())
     }
 
     // -------------------------------------------------------------------------------------------
     // Sessions' work on the kernel: calls to the server, and the server's side.
 
-    /// The session's process calls the server (no timeout), first starting another thread so it
-    /// can call again while this call waits. The result is what the calling thread got now.
+    /// The process of a session or an agent calls the server (no timeout), first starting another
+    /// thread so it can call again while this call waits. The result is what the calling thread
+    /// got now.
     pub fn work(&mut self, session: u64) -> Res<Outcome> {
-        let pid = self.sessions.get(&session).ok_or(Denied::UnknownSession)?.pid;
+        let pid = *self.procs.iter().find(|(_, o)| o.id == session).ok_or(Denied::UnknownSession)?.0;
         let Some(tid) = self.k.runnable().into_iter().find(|(p, _)| *p == pid).map(|x| x.1) else {
             return Ok(Outcome::Blocked);
         };
-        let who = Proc { pid, tid };
         let _ = self.k.step(&Op::Sys { pid, tid, call: Syscall::ThreadCreate { entry: 0, sp: 0, arg: 0 } });
         let call = Syscall::Call {
-            h: 1,
+            h: SERVER_SLOT,
             words: [session; WORDS],
             handles: Vec::new(),
             lend: None,
             timeout: FOREVER,
         };
-        Ok(self.k.step(&Op::Sys { pid: who.pid, tid: who.tid, call }).map_or(Outcome::Gone, |s| s.outcome))
+        Ok(self.k.step(&Op::Sys { pid, tid, call }).map_or(Outcome::Gone, |s| s.outcome))
     }
 
     /// The server answers the calls it holds open (from `hold`), then takes what is waiting and
@@ -877,311 +767,36 @@ impl Steward {
     }
 
     // -------------------------------------------------------------------------------------------
-    // The powerbox.
+    // The audit log.
 
-    /// Pending requests of one session.
-    pub fn pending_by(&self, session: u64) -> usize {
-        self.requests.values().filter(|r| r.session == session).count()
+    /// Every record the core emits, signed through the ideal `keyd`.
+    fn record(&mut self, record: Audit) {
+        let signature = self.audit_keyd.sign("audit", &audit_bytes(&record)).expect("audit-purpose grant");
+        self.audit.push(record);
+        self.audit_signatures.push(signature);
     }
 
-    /// A session's fair share of its bucket: the cap divided among the bucket's live sessions, at
-    /// least one.
-    pub fn share(&self, session: u64) -> usize {
-        let Some(s) = self.sessions.get(&session) else { return 0 };
-        let account = self.principals[s.principal].spec.account;
-        let n = self
-            .sessions
-            .values()
-            .filter(|x| self.principals[x.principal].spec.account == account && x.labels == s.labels)
-            .count();
-        (PENDING_CAP / n.max(1)).max(1)
+    /// Per-record authentication only: dropping or reordering valid record/signature pairs is
+    /// outside the audit log's guarantee. The operator verifier (servers/steward.md, "Retention,
+    /// chaining and the verifier") is not implemented here.
+    pub fn audit_authentic(&self) -> bool {
+        self.audit.len() == self.audit_signatures.len()
+            && self
+                .audit
+                .iter()
+                .zip(&self.audit_signatures)
+                .all(|(r, s)| s.verify(1, "audit", &audit_bytes(r)))
     }
 
-    /// Pending requests of the requester's (account, label set).
-    fn pending_of(&self, account: u64, labels: &[u64]) -> usize {
-        let per_label_set = !self.broken(Mutation::PolicyCapPerAccount);
-        self.requests
-            .values()
-            .filter(|r| r.account == account && (!per_label_set || r.labels == labels))
-            .count()
-    }
-
-    /// Submit a request. The approver is the requester's principal; a labelled request is refused
-    /// unless the approver owns every label on it; a declassification snapshots the item now. Each
-    /// (account, label set) has at most `PENDING_CAP` pending requests, and each session at most
-    /// its fair share of them.
-    pub fn submit(&mut self, session: u64, content: Content, reason: &str) -> Res<u64> {
-        let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?.clone();
-        let approver = s.principal;
-        let owned = &self.principals[approver].spec.owned_labels;
-        let account = self.principals[approver].spec.account;
-        if !s.labels.iter().all(|l| owned.contains(l)) {
-            return Err(Denied::NotOwner);
-        }
-        let mut reader = 0;
-        let snapshot = match &content {
-            Content::AgentWithLabel { label, .. } if !owned.contains(label) => return Err(Denied::NotOwner),
-            Content::AgentWithLabel { lease, .. } if !self.lease_ok(*lease) => return Err(Denied::BadLease),
-            Content::Declassify { label, item } => {
-                // Only the label's owner declassifies, and only from a session carrying it.
-                if !owned.contains(label) || !s.labels.contains(label) {
-                    return Err(Denied::NotOwner);
-                }
-                let (bytes, r) = self.read_item(*label, *item)?;
-                reader = r;
-                if bytes.len() > DECLASSIFY_MAX {
-                    return Err(Denied::TooBig);
-                }
-                if !printable(&bytes) {
-                    return Err(Denied::NotPrintable);
-                }
-                Some(bytes)
-            }
-            _ => None,
-        };
-        if self.pending_of(account, &s.labels) >= PENDING_CAP && !self.broken(Mutation::PolicyNoPendingCap) {
-            return Err(Denied::Cap);
-        }
-        if self.pending_by(session) >= self.share(session) && !self.broken(Mutation::PolicyNoFairShare) {
-            return Err(Denied::Cap);
-        }
-        // A random 64-bit id: nothing another session can observe or predict.
-        let id = if self.broken(Mutation::PolicySequentialIds) {
-            self.counter += 1;
-            self.counter
-        } else {
-            let mut n = s.submitted;
-            loop {
-                let id = mix(self.secret ^ mix(session.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ n));
-                if !self.requests.contains_key(&id) && id != 0 {
-                    break id;
-                }
-                n += 1 << 32;
-            }
-        };
-        self.sessions.get_mut(&session).unwrap().submitted += 1;
-        let snapshot = if self.broken(Mutation::PolicyDeclassifyLive) { None } else { snapshot };
-        let hash = content_hash(&content, &snapshot, reason, &s.labels);
-        self.requests.insert(
-            id,
-            Request {
-                id,
-                session,
-                account,
-                approver,
-                labels: s.labels.clone(),
-                content,
-                snapshot,
-                reader,
-                reason: String::from(reason),
-                hash,
-            },
-        );
-        self.record(Audit::Submitted { id, account, labels: s.labels.clone() });
-        Ok(id)
-    }
-
-    /// What `approver` sees on its approval screen: its own principal's requests, and a labelled
-    /// one only if it owns every label on it. Rendered by the steward from the structured request:
-    /// who asks (the session's kind and steward-assigned name), what, for how long in human units;
-    /// the requester's reason quoted, escaped, capped and marked untrusted; printable ASCII only.
-    pub fn pending(&self, approver: usize) -> Vec<Rendered> {
-        let owned = &self.principals[approver].spec.owned_labels;
-        let wl = !self.broken(Mutation::PolicyRenderNotWhitelisted);
-        let mut out = Vec::new();
-        for r in self.requests.values() {
-            let visible = r.approver == approver && r.labels.iter().all(|l| owned.contains(l));
-            if !visible && !self.broken(Mutation::PolicyShowLabelledToAll) {
-                continue;
-            }
-            let who = sanitize(&self.principals[r.approver].spec.name, FIELD_CAP, wl);
-            let free_text_withheld =
-                !r.labels.is_empty() && !self.broken(Mutation::PolicyLabelledFreeTextShown);
-            let session = self.sessions.get(&r.session).map_or(String::from("(ended)"), |s| s.name.clone());
-            let what = match &r.content {
-                Content::AgentWithLabel { label, lease } => {
-                    format!("start an agent labelled {label} for {}", human(*lease))
-                }
-                Content::Declassify { label, item } => {
-                    let shown = r
-                        .snapshot
-                        .as_ref()
-                        .map(|b| sanitize(&String::from_utf8_lossy(b), DECLASSIFY_MAX, wl));
-                    format!("declassify item {item} of label {label}: \"{}\"", shown.unwrap_or_default())
-                }
-                // A labelled requester's free text is not shown: it could carry the vault out; only
-                // declassification may.
-                Content::Note { .. } if free_text_withheld => {
-                    String::from("a note (text withheld: labelled session)")
-                }
-                Content::Note { what } => {
-                    format!("a note (untrusted): \"{}\"", sanitize(what, FIELD_CAP, wl))
-                }
-            };
-            let reason = if free_text_withheld {
-                String::from("reason withheld (labelled session)")
-            } else {
-                format!("reason (untrusted): \"{}\"", sanitize(&r.reason, FIELD_CAP, wl))
-            };
-            let kind = self
-                .sessions
-                .get(&r.session)
-                .map_or("session", |s| if s.kind == SessionKind::Agent { "agent" } else { "session" });
-            let text =
-                format!("request from {who} ({kind} {session}, labels {:?}): {what}; {reason}", r.labels);
-            out.push(Rendered { id: r.id, hash: r.hash, labels: r.labels.clone(), text });
-        }
-        out
-    }
-
-    /// `ssh approve@box`: only with one of the principal's approval keys, never a login key or
-    /// one `keyd` holds.
-    pub fn open_approval(&self, name: &str, key: u64) -> Res<Channel> {
-        let p = self.principal(name).ok_or(Denied::UnknownPrincipal)?;
-        let spec = &self.principals[p].spec;
-        if !spec.approval_keys.contains(&key) || spec.login_keys.contains(&key) || self.keyd.contains(&key) {
-            return Err(Denied::BadKey);
-        }
-        Ok(Channel { principal: p, key })
-    }
-
-    /// Approve request `id` whose content hash is `hash`, on an approval channel. The request must
-    /// be the channel principal's to approve; the approval grants no more than the approver holds.
-    pub fn approve(&mut self, ch: Channel, id: u64, hash: u64) -> Res<()> {
-        self.authenticated_owner(ch)?;
-        let r = self.requests.get(&id).ok_or(Denied::NoSuchRequest)?.clone();
-        if r.approver != ch.principal {
-            return Err(Denied::NotApprover);
-        }
-        if r.hash != hash && !self.broken(Mutation::PolicyApproveIgnoresHash) {
-            return Err(Denied::HashMismatch);
-        }
-        // The approval grants no more than the approver holds: every label on the request, and
-        // the label it asks for.
-        let owned = self.principals[ch.principal].spec.owned_labels.clone();
-        let asked = match r.content {
-            Content::AgentWithLabel { label, .. } | Content::Declassify { label, .. } => Some(label),
-            Content::Note { .. } => None,
-        };
-        if !r.labels.iter().chain(asked.iter()).all(|l| owned.contains(l)) {
-            return Err(Denied::NotOwner);
-        }
-        if let Content::AgentWithLabel { label, .. } = r.content {
-            self.not_locked(ch.principal, &[label])?;
-        }
-        self.requests.remove(&id);
-        self.record(Audit::Approved {
-            id,
-            principal: ch.principal,
-            key: ch.key,
-            hash,
-            labels: r.labels.clone(),
-        });
-        match r.content {
-            Content::AgentWithLabel { label, lease } => {
-                let deadline = self.k.now.saturating_add(lease);
-                let parent = self.sub(ch.principal, &[label]);
-                let sid =
-                    self.new_session(ch.principal, parent, SessionKind::Agent, vec![label], AGENT, deadline)?;
-                let audit = Audit::AgentStarted {
-                    session: sid,
-                    sponsor: ch.principal,
-                    parent: None,
-                    labels: vec![label],
-                    deadline,
-                };
-                self.record(audit);
-            }
-            Content::Declassify { label, item } => {
-                let bytes = match r.snapshot {
-                    Some(s) => s,
-                    None => self.vault.get(&(label, item)).cloned().unwrap_or_default(),
-                };
-                self.declassified.push((label, bytes.clone()));
-                self.record(Audit::Declassified { id, label, bytes, reader: r.reader });
-            }
-            Content::Note { .. } => {}
-        }
-        Ok(())
-    }
-
-    pub fn deny(&mut self, ch: Channel, id: u64) -> Res<()> {
-        self.authenticated_owner(ch)?;
-        let r = self.requests.get(&id).ok_or(Denied::NoSuchRequest)?;
-        if r.approver != ch.principal {
-            return Err(Denied::NotApprover);
-        }
-        let labels = r.labels.clone();
-        self.requests.remove(&id);
-        self.record(Audit::Denied { id, principal: ch.principal, labels });
-        Ok(())
-    }
-
-    /// Session `by` ends agent session `lease`. Accepted whenever `by` is a session of the lease's
-    /// sponsor, ahead of any admission: an agent filling its sponsor's buckets cannot keep its
-    /// sponsor from ending it.
-    pub fn end_lease(&mut self, by: u64, lease: u64) -> Res<()> {
-        let b = self.sessions.get(&by).ok_or(Denied::UnknownSession)?;
-        let l = self.sessions.get(&lease).ok_or(Denied::UnknownSession)?;
-        if l.kind != SessionKind::Agent || b.principal != l.principal || !b.labels.is_empty() {
-            return Err(Denied::NotSponsor);
-        }
-        let account = self.principals[b.principal].spec.account;
-        if self.broken(Mutation::PolicyEndLeaseAdmitted) && self.pending_of(account, &[]) >= PENDING_CAP {
-            return Err(Denied::Cap);
-        }
-        let labels = l.labels.clone();
-        self.end_session(lease)?;
-        self.record(Audit::LeaseEnded { session: lease, by, labels });
-        Ok(())
-    }
-
-    /// The audit file as a reader with labels `reader` may read it: the records whose labels it
-    /// holds.
+    /// The audit file as a reader with labels `reader` may read it: through the core's filter.
     pub fn audit_view(&self, reader: &[u64]) -> Vec<&Audit> {
-        let all = self.broken(Mutation::PolicyAuditUnfiltered);
-        self.audit.iter().filter(|a| all || crate::spec::superset(reader, a.labels())).collect()
+        inspect::audit_view(&self.store, &self.audit, &Labels::new(reader).unwrap_or_default())
     }
+}
 
-    // -------------------------------------------------------------------------------------------
-    // Crash blame (servers/steward.md R40): from the kernel's exit notices of the server (`poll`).
-
-    /// Three crashes blamed on one (account, label set) within ten minutes log out that account's
-    /// sessions with that label set, and their agents, and refuse new ones until the window has
-    /// passed (keyed by label set too, so a vault crashing a shared server cannot log out its
-    /// owner's unlabelled sessions). Account 0 (nothing being served) blames nobody.
-    fn blame(&mut self, account: u64, labels: Vec<u64>) {
-        if account == 0 {
-            return;
-        }
-        let now = self.k.now;
-        self.record(Audit::Blamed { account, labels: labels.clone(), at: now });
-        let window = !self.broken(Mutation::PolicyBlameNoWindow);
-        let per_account = self.broken(Mutation::PolicyBlamePerAccount);
-        let key = (account, if per_account { Vec::new() } else { labels.clone() });
-        let times = self.blames.entry(key).or_default();
-        times.push(now);
-        if window {
-            times.retain(|t| now - *t < BLAME_WINDOW);
-        }
-        if times.len() >= BLAME_COUNT {
-            times.clear();
-            let doomed: Vec<u64> = self
-                .sessions
-                .values()
-                .filter(|s| self.principals[s.principal].spec.account == account)
-                .filter(|s| per_account || s.labels == labels)
-                .map(|s| s.id)
-                .collect();
-            for s in doomed {
-                let _ = self.end_session(s);
-            }
-            self.locked.insert((account, labels.clone()), now.saturating_add(BLAME_WINDOW));
-            self.record(Audit::LoggedOut { account, labels, at: now });
-        }
-    }
-
-    pub fn keyd_add(&mut self, key: u64) { self.keyd.insert(key); }
+/// A domain of the store: `account` and `labels`, as the manifest names it.
+pub fn domain(account: u64, labels: &[u64]) -> Option<Domain> {
+    Some(Domain::new(NonZeroU64::new(account)?, Labels::new(labels)?))
 }
 
 /// A system call by `who`; its result and notes, or why not.
@@ -1250,209 +865,7 @@ impl AuditSignature {
     /// Observable signed message, for the independent domain/length oracle.
     pub fn preimage(&self) -> &[u8] { &self.preimage }
 }
-impl Audit {
-    /// Abstract serialization: every enum field, including labels, is represented. This is
-    /// deliberately not a proposed audit wire/file format (which this host model does not own).
-    pub fn bytes(&self) -> Vec<u8> { format!("{self:?}").into_bytes() }
-}
 
-/// One owner-triggered push awaiting its one out-of-band approval (servers/steward.md R42). No
-/// requester session API produces these, and a ticket never represents a queue, batch or standing
-/// path.
-#[derive(Clone, Debug)]
-pub struct PushRequest {
-    pub principal: usize,
-    pub source: u64,
-    pub target: u64,
-    pub label: u64,
-    pub labels: Vec<u64>,
-    pub snapshot: Vec<u8>,
-    pub hash: u64,
-}
-
-impl Steward {
-    fn record(&mut self, record: Audit) {
-        let signature = self.audit_keyd.sign("audit", &record.bytes()).expect("audit-purpose grant");
-        self.audit.push(record);
-        self.audit_signatures.push(signature);
-    }
-
-    /// Per-record authentication only: dropping or reordering valid record/signature pairs is
-    /// outside the audit log's guarantee. The operator verifier (servers/steward.md, "Retention,
-    /// chaining and the verifier") is not implemented here.
-    pub fn audit_authentic(&self) -> bool {
-        self.audit.len() == self.audit_signatures.len()
-            && self.audit.iter().zip(&self.audit_signatures).all(|(r, s)| s.verify(1, "audit", &r.bytes()))
-    }
-
-    fn authenticated_owner(&self, ch: Channel) -> Res<()> {
-        let p = self.principals.get(ch.principal).ok_or(Denied::UnknownPrincipal)?;
-        self.open_approval(&p.spec.name, ch.key).map(|_| ())
-    }
-
-    pub fn write_unlabelled(&mut self, session: u64, item: u64, bytes: Vec<u8>) -> Res<()> {
-        let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?;
-        if !s.labels.is_empty() {
-            return Err(Denied::Labelled);
-        }
-        self.unlabelled.insert(item, bytes);
-        Ok(())
-    }
-
-    /// The ordinary `check` read rule remains subset; confined placement adds the explicit
-    /// shared-unlabelled-volume refusal. This models policy, not unresolved topology 164.
-    pub fn read_volume(&self, session: u64, label: Option<u64>, item: u64) -> Res<Vec<u8>> {
-        let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?;
-        match label {
-            Some(label) if s.labels.contains(&label) => {
-                Ok(self.vault.get(&(label, item)).cloned().unwrap_or_default())
-            }
-            Some(_) => Err(Denied::NotOwner),
-            None if self.confined && !s.labels.is_empty() => Err(Denied::ReadDown),
-            None => Ok(self.unlabelled.get(&item).cloned().unwrap_or_default()),
-        }
-    }
-
-    /// An authenticated approval-channel action freezes source, destination and exactly one
-    /// item's bytes. Request labels are explicit and retained on its audit record. Sessions,
-    /// including a confined owner session, possess login credentials rather than this authority.
-    pub fn prepare_push(
-        &mut self,
-        ch: Channel,
-        source: u64,
-        target: u64,
-        label: u64,
-        labels: Vec<u64>,
-    ) -> Res<u64> {
-        self.authenticated_owner(ch)?;
-        let owned = &self.principals[ch.principal].spec.owned_labels;
-        if !owned.contains(&label) || !labels.iter().all(|l| owned.contains(l)) {
-            return Err(Denied::NotOwner);
-        }
-        let snapshot = self.unlabelled.get(&source).cloned().ok_or(Denied::NoSuchItem)?;
-        self.push_counter = self.push_counter.checked_add(1).expect("abstract push id exhausted");
-        let id = mix(self.secret ^ 0x7075_7368 ^ self.push_counter);
-        let content = format!("push:{source}:{target}:{label}:{labels:?}:{snapshot:?}");
-        let hash = content_hash(&Content::Note { what: content }, &None, "", &labels);
-        self.push_requests.insert(
-            id,
-            PushRequest { principal: ch.principal, source, target, label, labels, snapshot, hash },
-        );
-        Ok(id)
-    }
-
-    pub fn approve_push(&mut self, ch: Channel, id: u64, hash: u64) -> Res<()> {
-        self.authenticated_owner(ch)?;
-        let r = self.push_requests.get(&id).ok_or(Denied::NoSuchRequest)?.clone();
-        if r.principal != ch.principal {
-            return Err(Denied::NotApprover);
-        }
-        if r.hash != hash {
-            return Err(Denied::HashMismatch);
-        }
-        let limits = Limits { pages: self.k.costs.budget, processes: 0, weight: 0 };
-        let h = self.budget_create_labelled(
-            1,
-            limits,
-            &[r.label],
-            self.k.now.saturating_add(crate::spec::SLICE),
-        )?;
-        let writer = self.budget_id(h);
-        // The write occurs while this exact-label writer budget exists; no persistent
-        // connection or writer remains after the single approved copy.
-        self.vault.insert((r.label, r.target), r.snapshot.clone());
-        self.sys(Syscall::BudgetDestroy { h })?;
-        self.push_requests.remove(&id);
-        self.record(Audit::Pushed {
-            id,
-            principal: ch.principal,
-            source: r.source,
-            target: r.target,
-            label: r.label,
-            labels: r.labels,
-            bytes: r.snapshot,
-            writer,
-        });
-        Ok(())
-    }
-}
-
-/// An authenticated server bucket. Account zero deliberately groups per badge, as specified
-/// for server admission (not the kernel's separate R2 system-budget grouping).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AdmissionBucket {
-    pub account: u64,
-    pub labels: Vec<u64>,
-    pub system_badge: Option<u64>,
-}
-#[derive(Clone, Debug)]
-pub struct ConnectionShare {
-    pub bucket: AdmissionBucket,
-    pub root: u64,
-    pub used: usize,
-}
-/// Observable admission abstraction for the self-minted share (servers/serving.md R26). `grant`
-/// presupposes the server already checked mint authority; bucket metadata comes from authenticated
-/// kernel metadata. It grants no authority to mint across accounts or labels and models no confined
-/// placement topology.
-#[derive(Clone, Debug)]
-pub struct ConnectionShares {
-    pub connections: BTreeMap<u64, ConnectionShare>,
-    issued: BTreeSet<u64>,
-    cap: usize,
-}
-impl ConnectionShares {
-    pub fn new(cap: usize) -> Res<Self> {
-        if cap < 2 {
-            return Err(Denied::Cap);
-        }
-        Ok(Self { connections: BTreeMap::new(), issued: BTreeSet::new(), cap })
-    }
-
-    /// `through=None` is a separately authorized grant to a client. A self-minted descendant
-    /// keeps its parent's share transitively while used within the same bucket.
-    pub fn grant(&mut self, badge: u64, account: u64, mut labels: Vec<u64>, through: Option<u64>) -> Res<()> {
-        if badge == 0 || self.issued.contains(&badge) {
-            return Err(Denied::BadKey);
-        }
-        labels.sort_unstable();
-        labels.dedup();
-        let bucket = AdmissionBucket { account, labels, system_badge: (account == 0).then_some(badge) };
-        let root = match through {
-            Some(parent) => {
-                let p = self.connections.get(&parent).ok_or(Denied::UnknownSession)?;
-                if p.bucket == bucket { p.root } else { badge }
-            }
-            None => badge,
-        };
-        self.issued.insert(badge);
-        self.connections.insert(badge, ConnectionShare { bucket, root, used: 0 });
-        Ok(())
-    }
-
-    pub fn admit(&mut self, badge: u64) -> Res<()> {
-        let c = self.connections.get(&badge).ok_or(Denied::UnknownSession)?.clone();
-        let bucket: Vec<_> = self.connections.values().filter(|x| x.bucket == c.bucket).collect();
-        let roots: BTreeSet<_> = bucket.iter().map(|x| x.root).collect();
-        let total: usize = bucket.iter().map(|x| x.used).sum();
-        let share: usize = bucket.iter().filter(|x| x.root == c.root).map(|x| x.used).sum();
-        if total >= self.cap || share >= (self.cap / roots.len()).max(1) {
-            return Err(Denied::Cap);
-        }
-        self.connections.get_mut(&badge).unwrap().used += 1;
-        Ok(())
-    }
-
-    pub fn release(&mut self, badge: u64) -> Res<()> {
-        let c = self.connections.get_mut(&badge).ok_or(Denied::UnknownSession)?;
-        if c.used == 0 {
-            return Err(Denied::Cap);
-        }
-        c.used -= 1;
-        Ok(())
-    }
-
-    pub fn disconnect(&mut self, badge: u64) -> Res<()> {
-        self.connections.remove(&badge).map(|_| ()).ok_or(Denied::UnknownSession)
-    }
-}
+/// Abstract serialization: every field, the record's domain included, is represented. This is
+/// deliberately not a proposed audit wire/file format (which this host model does not own).
+pub fn audit_bytes(a: &Audit) -> Vec<u8> { format!("{a:?}").into_bytes() }
