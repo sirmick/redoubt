@@ -118,13 +118,17 @@ pub fn lease_bounded(cx: &Cx<'_>) -> Verdict {
 }
 
 /// R42: a declassification is submitted from a session with exactly the item's labels, a push
-/// from an unlabelled one.
+/// from an unlabelled one. Each crosses a label: an unlabelled item is neither declassified nor
+/// pushed (its record, read unlabelled, would name a crossing budget).
 pub fn exact_labels(cx: &Cx<'_>) -> Verdict {
     match &request(cx).ok_or(Refusal::Unknown)?.content {
         Content::Declassify { labels, .. } => {
-            ok_if(set(labels).as_ref() == Some(cx.domain.labels()), Refusal::NotOwner)
+            let exact = set(labels).as_ref() == Some(cx.domain.labels());
+            ok_if(exact && !cx.domain.labels().is_empty(), Refusal::NotOwner)
         }
-        Content::Push { .. } => ok_if(cx.domain.labels().is_empty(), Refusal::NotOwner),
+        Content::Push { target, .. } => {
+            ok_if(cx.domain.labels().is_empty() && !target.is_empty(), Refusal::NotOwner)
+        }
         _ => Ok(()),
     }
 }

@@ -488,6 +488,10 @@ fn exact_labels_and_item_fits() {
     assert_eq!(refused(r.submit(u, declassify(1), "")), Refusal::NotOwner, "from an unlabelled session");
     let push = Content::Push { source: 1, target: vec![7], item: 1 };
     assert_eq!(refused(r.submit(v, push, "")), Refusal::NotOwner, "a push from a labelled session");
+    let unlabelled = Content::Declassify { labels: vec![], item: 1 };
+    assert_eq!(refused(r.submit(u, unlabelled, "")), Refusal::NotOwner, "an unlabelled item declassified");
+    let unlabelled = Content::Push { source: 1, target: vec![], item: 1 };
+    assert_eq!(refused(r.submit(u, unlabelled, "")), Refusal::NotOwner, "an unlabelled item pushed");
     r.volumes.insert((vec![7], 2), vec![b'a'; DECLASSIFY_MAX + 1]);
     r.volumes.insert((vec![7], 3), vec![b'a', 0x1b]);
     r.volumes.insert((vec![7], 4), vec![b'a'; DECLASSIFY_MAX]);
