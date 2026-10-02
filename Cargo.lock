@@ -745,6 +745,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-steward"
+version = "0.1.0"
+dependencies = [
+ "redoubt-sys",
+ "sha2",
+]
+
+[[package]]
 name = "redoubt-steward-gen"
 version = "0.1.0"
 
