@@ -86,7 +86,6 @@ page.
 
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
-   - **The kernel:** [an ending process pumps each endpoint once](../todo/process-ending-pumps-once.md).
    - **beamlet:** [bounded operands for modular exponentiation](../todo/beamlet-bignum-bounds.md).
 - **A kernel containment gate.** One boot on QEMU that proves the kernel's primitives alone,
    before the whole milestone is layered on them: hostile code preempted and ended at its
