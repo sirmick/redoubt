@@ -5,7 +5,8 @@ authenticates logins that `sshd` passes it, carves every session and agent lease
 `users` budget and launches it, runs the powerbox where a principal asks for authority it lacks,
 declassifies and pushes single items across a label under an out-of-band approval, decides what a
 crash blamed on a principal costs it, and keeps the audit log. It holds no keys and parses no ELF.
-Its policy is modelled on the executable model of the kernel (`model/src/steward.rs`).
+Its policy is one pure state machine ([the policy core](#the-policy-core)), which the model also
+runs, on the executable model of the kernel.
 
 ## Purpose
 
@@ -18,6 +19,152 @@ system (every agent's requests), so it holds nothing it could leak: no keys, no 
 standing labelled reader.
 
 ## Interface
+
+### The policy core
+
+Status: planned · M1 (separation and containment)
+
+Everything the steward decides is one pure state machine, the crate `redoubt-steward` (`no_std`,
+no `unsafe`, no I/O), shared by the steward server and the model. The server is its embedder:
+it turns messages and exit notices into events, carries out the effects the core returns, and
+decides nothing itself.
+
+#### One decision function
+
+`decide(&mut Store, Event) -> Effects`. An event carries the time (`now`, the embedder's clock)
+and the fresh random words the event may need for ids (R36: the embedder draws them from the
+kernel's `random`, so the core holds no generator and no counter). Effects are data: budgets to
+create and destroy, connections to ask for, a program to launch, an item to read or write
+through a crossing budget, a reply, a notification or a rendered screen for an approval
+channel, and audit records. An effect that produces something (a budget, a connection, a
+process, a snapshot) names a token. One event's effects form a batch, which the embedder runs in
+order, giving a later effect the result of an earlier one by its token. It stops at the first
+failure, and then reports the batch as one `Done` event, with every result or the step that
+failed. A machine waiting for a batch is in a state of its own, so every failure has a
+transition.
+
+The embedder guarantees, and the core assumes, that:
+- events come one at a time, and a batch's `Done` arrives before any other event about that
+  object;
+- each event's caller is the one the kernel stamped. The badge class decides the role (`sshd`,
+  `init`, an approval channel, a session's minted badge, the steward's exit endpoint), and the
+  embedder maps a session's badge to its session through the core's routing index;
+- `now` never goes back, and the random words come from the kernel's generator.
+
+The server's own work is transport, admission and effects, all read from the tables: it decodes
+the protocol, admits by [R26 (admission fairness)](serving.md#r26-admission-fairness) except for
+the events the tables mark ahead of admission (`EndLease`), runs each batch through the client
+library, and signs audit records through `keyd`. Rendering, every check and every audit record
+are the core's.
+
+#### Domains
+
+The store is partitioned by **domain**: `(account, label set)`, where the account is a
+principal's (never 0) and the label set is sorted and at most `MAX_LABELS` long. System-class
+callers (`sshd`, `init`, an approval channel) are roles of an event, never domains. A domain
+holds:
+- its fixed sub-budget ([below](#fixed-sub-budgets-per-label-set)), the one budget its sessions
+  and leases are carved from;
+- its sessions and leases, and the counters that number and name them (R37);
+- the pending requests its sessions submitted, with their cap and fair shares;
+- its blame window and lockout (R40).
+
+Outside every domain is what the boot manifest fixes and nothing changes: principals, keys,
+owned labels, the keys `keyd` holds. Then the routing index, written only when a domain's own
+session starts or ends and read only by the dispatch. And the approval channels, which belong to
+a principal across its label sets.
+
+A handler sees one domain: it gets `&mut DomainState` for the domain of the event's caller and
+nothing else. Exactly three functions take two domains, one for each of
+[R34 (confined placement)](init.md#r34-confined-placement)'s control-plane edges:
+- **the request and approval path:** an approval acts on a request in the requester's domain,
+  and a grant may start a lease in another domain of the same account;
+- **the crossing:** declassification and push move one item between a labelled domain and the
+  unlabelled domain of the same account, through a reader or writer budget;
+- **lease supervision:** a sponsor ends a lease, and learns that it ended.
+
+Only the module that holds these three can borrow two domains at once. So no other handler can
+read or change a second domain: [R37 (vault non-interference)](#r37-vault-non-interference) is
+kept by the type, not by review. Audit records have one constructor, which takes a domain and
+stamps its account and labels, so no record can lack the labels it must be read under. An edge's
+record is stamped with the labelled side's domain.
+
+#### Machines
+
+Each object is a plain `enum` with one transition table: a session, a lease, a request, a
+crossing, a domain's blame and an approval channel. A request is rendered before it can be
+approved: `Approve` is a transition only from `Rendered`, on the channel that rendered it.
+
+| Machine | States | Events |
+| --- | --- | --- |
+| session | `Starting`, `Running`, `Ending`, `Ended` | `Login`; `Done`; `EndSession`, `ChannelClosed`, `Exited`, `LockedOut` |
+| lease | `Starting`, `Running`, `Ending`, `Ended` | `StartAgent` or a granted request; `Done`; `EndLease`, `Exited` (its deadline), `LockedOut` |
+| request | `Snapshotting`, `Frozen`, `Rendered`, `Approved`, `Denied`, `Dropped` | `Submit`; `Done` (the snapshot); `Pending`, `Approve`, `Deny`; its session's end |
+| crossing | `Open`, `Closed` | opened by a request; `Done` (the item read or written), `Exited` |
+| blame | `Open`, `LockedOut` | `Blame`; `Login` once the window has passed |
+| approval channel | `Open`, `Closed` | `ApprovalOpened`, `ApprovalClosed` |
+
+The events are `Boot` (the manifest), `Login`, `ChannelClosed`, `ApprovalOpened` and
+`ApprovalClosed` from `sshd`; `StartAgent`, `Submit`, `EndLease` and `EndSession` from a session;
+`Pending`, `Approve` and `Deny` from an approval channel; `Blame` from `init`; `Exited` from the
+steward's exit endpoint (a session, a lease or a crossing budget's process); and `Done` for a
+batch.
+
+Each machine's table has the rows `| From | Event | Guard | To | Effects |`. Guards and effects are
+named in the table and written by hand in the core. A generator in the style of the
+[wire generator](wire.md#wire-tables-and-the-generator) writes from the tables the core's
+dispatch (an exhaustive `match` on state and event), the state diagrams on this page, and the
+Elixir reference's clause skeletons, all checked in, with a drift check. No state-machine library
+and no macro.
+
+#### Guards and effects
+
+Each guard and each effect that carries a rule is one function, and each has a mutation in the
+model that breaks it, which a property family must catch. The shipped crate carries no mutation
+switch: the dispatch calls guards and effects through a table of functions, the shipped one by
+default. The model swaps one entry for a broken one.
+
+| Guard or effect | Rule | Mutation |
+| --- | --- | --- |
+| `login_key` | a login uses one of the principal's login keys, never one `keyd` holds | `PolicyLoginWithKeydKey` |
+| `owns_labels` | a vault login, a labelled agent, a declassification or a push needs the labels' owner | `PolicyVaultWithoutOwnership` |
+| `not_locked`, `blame_window` | R40 | `PolicyNoLockout`, `PolicyBlameNoWindow` |
+| `pending_cap`, `fair_share` | the pending cap per domain, a fair share per session | `PolicyNoPendingCap`, `PolicyNoFairShare` |
+| `drop_requests` | a session's end drops its requests | `PolicyDeadSessionRequestsKept` |
+| `lease_bounded` | R39 | `PolicyUnboundedLease` |
+| `may_see`, `render` | R38's screens: only owners of every label, printable ASCII, capped, no labelled free text | `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown` |
+| `rendered_here`, `hash_matches`, `approver_holds` | R38's binding and its bound | `PolicyApproveOtherChannel`, `PolicyApproveIgnoresHash`, `PolicyApproverExceeds` |
+| `one_item`, `exact_labels` | R42 | `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader`, `PolicyWriteUp` |
+| `sponsor_session` | a lease is ended only from an unlabelled session of its sponsor | `PolicyEndLeaseFromVault` |
+| `audit_visible` | an audit record is read under [R25 (the label check)](serving.md#r25-the-label-check) | `PolicyAuditUnfiltered` |
+
+Three of the model's mutations break a rule the types now keep, and they cannot be written: blame
+or a pending cap counted per account (`PolicyBlamePerAccount`, `PolicyCapPerAccount`) and a
+session carved from another label set's sub-budget (`PolicyCarveFromUnlabelled`) each need a
+second domain, and a narrowing handle for a session's budget (`PolicyNarrowToSessionBudget`)
+needs a budget where the effect takes only a revocation scope, a type of its own that only a
+zero-limit `CreateScope` makes (R41). They are retired, and this table says why. Ids drawn from
+a counter (`PolicySequentialIds`) and end-lease admitted behind others
+(`PolicyEndLeaseAdmitted`) break the embedder's half, and stay mutations of the model's embedder.
+
+The request binding hash is SHA-256 over the request's canonical encoding, through the
+workspace's vendored `sha2`. It is the core's one cryptographic function. It binds content and
+signs nothing, so the steward still holds no key.
+
+#### Two embedders and a reference
+
+- **The steward server** binds effects to the client library and the kernel.
+- **The model** binds the same crate to the kernel model, in place of its own copy of the
+  policy, so the property families (P1 to P16) and the mutations attack the code that ships. The
+  model's families drive events; its checks read the core's state through a read-only
+  inspection API that the server does not use.
+- **The Elixir reference**, `decide/2` as multi-clause functions over a `defstruct` state, runs
+  on beamlet on the build host in the bench's host tests, as a differential oracle. The same
+  event traces must give equal states, effects and audit records. It is a test oracle in the
+  sense [tenet 3](../TENETS.md#3-rust-and-assembly-only-where-rust-cannot-reach) allows on the
+  build host. It is never authoritative and never runs on the box.
+
+**Open:** none.
 
 ### Principals
 
@@ -127,7 +274,10 @@ Status: planned · M1 (separation and containment)
 An agent is its own principal, never an impersonation, with an accountable **sponsor**: a person,
 or an agent with a person at the top of the chain.
 
-- **An agent's budget sits under its sponsor's**, so it shares the sponsor's account. Its requests
+- **An agent's budget sits under its sponsor's**, so it shares the sponsor's account: it is
+  carved from the sponsor's fixed sub-budget for the lease's label set, never from a session's
+  budget. So a lease outlives the login session that started it, and ends only by its sponsor,
+  its deadline or blame. Its requests
   count against the sponsor's admission for its label set, with a fair share per badge inside
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)), so an agent cannot lock its
   sponsor out.
@@ -142,7 +292,9 @@ or an agent with a person at the top of the chain.
   sub-agents with it, whatever their own deadlines. A new durable principal, or a budget with more
   labels than its parent, needs the steward and an approval.
 - **Ending a lease is always accepted from the sponsor**, ahead of admission: the steward answers
-  it straight from its receive loop ([serving](serving.md#admit)).
+  it straight from its receive loop ([serving](serving.md#admit)). The sponsor ends it from any of
+  its unlabelled sessions. A vault session cannot, since ending a lease it does not share labels
+  with would be a flow out of the vault.
 - **Narrowing is a revocation scope.** To give a server a way to narrow a session's or lease's
   connections, the steward passes it a revocation scope made for that purpose, never a budget
   that holds processes, which would let a compromised server end every session
@@ -250,7 +402,8 @@ The attack test: a field full of ANSI escapes renders inert.
 Status: planned · M1 (separation and containment)
 
 **Declassification** moves one item from a label down to an unlabelled volume. Only the label's
-owner declassifies, one item at a time, after a high-stakes approval:
+owner declassifies, from a session carrying that label, one item at a time, after a high-stakes
+approval:
 
 1. At submission the steward **snapshots** the item and hashes the snapshot. The steward is
    unlabelled and cannot read the item, so it creates a short-lived **reader budget** carrying
@@ -268,8 +421,10 @@ A **push** is the mirror, low to high: how input enters a labelled domain in a c
 where the domain reads no shared unlabelled volume ([init](init.md#the-confinement-check)). One
 push moves one item from an unlabelled volume into the labelled domain's volume. The target
 label's owner triggers it through the powerbox with an out-of-band approval; the confined domain
-cannot trigger one, name the item, or pull one. The steward reads the source (it is unlabelled)
-and writes the item through a short-lived **writer budget** carrying exactly the target label set,
+cannot trigger one, name the item, or pull one. The owner submits it from an unlabelled session.
+At submission the steward reads the source (it is unlabelled), snapshots it and hashes the
+snapshot, as a declassification does. On approval it writes exactly that snapshot through a
+short-lived **writer budget** carrying exactly the target label set,
 since a write needs equal labels. There is no standing path, queue or batch, and the push is
 audited with the request's labels. The steward declines a labelled session's mount of a shared
 unlabelled volume in a confined deployment and offers the push instead.
@@ -423,7 +578,8 @@ Status: planned · M1 (separation and containment)
   ([R33 (no server holds a system budget)](init.md#r33-no-server-holds-a-system-budget)).
 - It holds connections to the servers it builds namespaces from, and a `keyd` grant for the
   `audit` purpose. It never holds the host key's badge: the manifest hands that to `sshd`.
-- It holds no keys and no cryptography of its own, and parses no ELF.
+- It holds no keys and signs nothing itself, and parses no ELF. Its one cryptographic function
+  is the request binding hash ([the policy core](#guards-and-effects)).
 - It filters every request by the caller's labels, as the kernel attached them; a labelled caller
   can only submit requests.
 - It passes a server a narrowing handle only as a revocation scope made for that purpose (R41).
@@ -567,15 +723,21 @@ Status: planned · M1 (separation and containment)
   reordered wholesale is not detected.
 - **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's
   one named exception and see several label sets; a bug in either reaches all of them.
-- **The model is not the steward.** It leaves out SSH, the approval terminal and real
-  cryptography; the properties it checks hold for the model, and the steward must be shown to follow
-  it.
+- **The model checks the core, not the embedder.** The model runs the core that ships, but
+  with its own embedder. It leaves out SSH, the approval terminal and real randomness, and the
+  server's embedder (transport, admission, running batches) is shown only by the server's own
+  cases.
 
 ## Why
 
 - **Policy in one server.** People, agents, approvals and blame change more often than kernel
   mechanism; keeping them out of the kernel keeps it small, and keeping them in one server keeps
   them in one reviewable, modelled place.
+- **One pure machine, keyed by domain.** The steward parses the most hostile input in the system
+  and stands across every label set, so the classes of bug that matter are a step the policy
+  forgot and a function that saw two domains. A pure core with exhaustive tables leaves no event
+  without a row, and a store keyed by domain lets only R34's three edges see two. Sharing the
+  core with the model means the properties are checked on the code that ships.
 - **Agents are principals, not impersonations.** Every action is attributable, and a sponsor
   answers for its agents without the agent borrowing its identity.
 - **Fixed sub-budgets.** Anything a vault session changes that its owner's unlabelled side can
