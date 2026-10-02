@@ -490,6 +490,11 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
   hart the kernel runs with interrupts off. On several (a build for more than one hart), each
   kernel global is guarded by its own lock, and the completion holds the memory manager's for
   the whole step.
+- **A destruction can feed a receiver it is about to kill.** Destroying a budget ends its
+  processes one by one, and each end pumps its endpoints before the next. A thread of a later
+  process in the same budget, still receiving, can take an exit notice or a queued call and end
+  holding it: the notice is lost, or the caller gets `Dead` rather than waiting as R4b says.
+  Follow-up: [todo](../todo/destruction-feeds-the-doomed.md).
 
 ## Why
 
