@@ -101,8 +101,6 @@ pub struct Policy {
     pub count_blame: Effect,
     /// Effect, in `lease`, `session`.
     pub create_scope: Effect,
-    /// Effect, in `crossing`.
-    pub cross_item: Effect,
     /// Effect, in `lease`, `session`.
     pub destroy_budget: Effect,
     /// Effect, in `crossing`.
@@ -135,6 +133,8 @@ pub struct Policy {
     pub pass_failure: Effect,
     /// Effect, in `crossing`.
     pub pass_snapshot: Effect,
+    /// Effect, in `crossing`.
+    pub read_item: Effect,
     /// Effect, in `request`.
     pub read_source: Effect,
     /// Effect, in `approval_channel`, `lease`, `request`, `session`.
@@ -153,6 +153,8 @@ pub struct Policy {
     pub route: Effect,
     /// Effect, in `lease`, `session`.
     pub unroute: Effect,
+    /// Effect, in `crossing`.
+    pub write_item: Effect,
     /// Every audit read goes through it: a record is read under R25 (the label check).
     pub audit_visible: crate::cx::AuditFilter,
 }
@@ -202,7 +204,6 @@ impl Policy {
         copy_out: crate::effects::copy_out,
         count_blame: crate::effects::count_blame,
         create_scope: crate::effects::create_scope,
-        cross_item: crate::effects::cross_item,
         destroy_budget: crate::effects::destroy_budget,
         destroy_crossing: crate::effects::destroy_crossing,
         destroy_partial: crate::effects::destroy_partial,
@@ -219,6 +220,7 @@ impl Policy {
         open_write: crate::effects::open_write,
         pass_failure: crate::effects::pass_failure,
         pass_snapshot: crate::effects::pass_snapshot,
+        read_item: crate::effects::read_item,
         read_source: crate::effects::read_source,
         refuse: crate::effects::refuse,
         render: crate::effects::render,
@@ -228,6 +230,7 @@ impl Policy {
         reply_request: crate::effects::reply_request,
         route: crate::effects::route,
         unroute: crate::effects::unroute,
+        write_item: crate::effects::write_item,
         audit_visible: crate::guards::audit_visible,
     };
 }

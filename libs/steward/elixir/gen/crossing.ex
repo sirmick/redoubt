@@ -14,9 +14,9 @@ defmodule Redoubt.Steward.Gen.Crossing do
 
   def rows(nil, :open) do
     [
-      {[:reading], :open, [:carve_crossing, :cross_item, :destroy_crossing]},
+      {[:reading], :open, [:carve_crossing, :read_item, :destroy_crossing]},
       {[:copying], :open, [:copy_out]},
-      {[], :open, [:carve_crossing, :cross_item, :destroy_crossing]},
+      {[], :open, [:carve_crossing, :write_item, :destroy_crossing]},
     ]
   end
 

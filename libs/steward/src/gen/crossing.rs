@@ -48,7 +48,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
                     break 'row;
                 }
                 (p.carve_crossing)(cx);
-                (p.cross_item)(cx);
+                (p.read_item)(cx);
                 (p.destroy_crossing)(cx);
                 return Next::To(State::Open);
             }
@@ -60,7 +60,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
                 return Next::To(State::Open);
             }
             (p.carve_crossing)(cx);
-            (p.cross_item)(cx);
+            (p.write_item)(cx);
             (p.destroy_crossing)(cx);
             Next::To(State::Open)
         }

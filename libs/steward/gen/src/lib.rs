@@ -81,7 +81,6 @@ const EFFECTS: &[(&str, bool)] = &[
     ("copy_out", true),
     ("count_blame", false),
     ("create_scope", false),
-    ("cross_item", false),
     ("destroy_budget", false),
     ("destroy_crossing", false),
     ("destroy_partial", false),
@@ -98,6 +97,7 @@ const EFFECTS: &[(&str, bool)] = &[
     ("open_write", false),
     ("pass_failure", false),
     ("pass_snapshot", false),
+    ("read_item", false),
     ("read_source", false),
     ("refuse", false),
     ("render", true),
@@ -107,6 +107,7 @@ const EFFECTS: &[(&str, bool)] = &[
     ("reply_request", false),
     ("route", false),
     ("unroute", false),
+    ("write_item", false),
 ];
 
 /// Entries of the `Policy` table that no row names: (name, type, shipped function, what it
