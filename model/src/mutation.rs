@@ -3,9 +3,12 @@
 //! Each [`Mutation`] breaks one rule in exactly one place, marked in the code with
 //! `self.broken(Mutation::...)`: a numbered rule of docs/kernel/, another statement of the kernel
 //! pages (messages, the current call, budgets, handles, a call's checks), a design decision
-//! recorded there, or the steward's policy. `tests/mutations.rs` runs the property tests against
-//! every mutation and requires each to be caught; every kernel rule the model holds has at least
-//! one.
+//! recorded there, or the steward's embedder. A break of the steward's policy is one broken entry
+//! of the core's `Policy` table instead ([`policy`]): the shipped crate has no mutation switch.
+//! `tests/mutations.rs` runs the property tests against every mutation and requires each to be
+//! caught; every kernel rule the model holds has at least one.
+
+use redoubt_steward::Policy;
 
 /// One deliberate break. [`Mutation::rule`] names what it breaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -270,54 +273,71 @@ pub enum Mutation {
     ProcessInWeightlessBudget,
     /// A carve may leave a process-holding budget with free weight 0.
     R7CarveToZeroFree,
-    // The steward's policy (servers/steward.md).
-    /// A vault session may carry a label its principal does not own.
+    // The steward's policy (servers/steward.md): each but the embedder's four is a broken entry
+    // of the core's `Policy` table (`policy`, below).
+    /// A vault session may carry a label its principal does not own (`owns_labels`).
     PolicyVaultWithoutOwnership,
-    /// `approve` does not check the request's content hash.
+    /// `approve` does not check the request's content hash (`hash_matches`).
     PolicyApproveIgnoresHash,
-    /// Labelled requests are shown to every approver.
+    /// Labelled requests are shown to every approver (`may_see`).
     PolicyShowLabelledToAll,
-    /// No cap on pending requests.
+    /// No cap on pending requests (`pending_cap`).
     PolicyNoPendingCap,
-    /// The pending cap is per account, not per (account, label set).
-    PolicyCapPerAccount,
-    /// One session may take a whole bucket's pending requests (no fair share).
+    /// One session may take a whole domain's pending requests: no fair share (`fair_share`).
     PolicyNoFairShare,
-    /// Ending a lease is subject to its sponsor's pending cap.
+    /// Ending a lease waits behind its sponsor's admission (the embedder ignores the tables'
+    /// ahead mark).
     PolicyEndLeaseAdmitted,
-    /// Declassification copies the item as it is now, not the snapshot.
+    /// The copy out reads the item as it is now, not the snapshot (`copy_out`).
     PolicyDeclassifyLive,
-    /// Declassification reads the item as the steward, with no reader budget.
+    /// A crossing carves no reader or writer budget: the steward reads and writes the item itself
+    /// (`carve_crossing`).
     PolicyDeclassifyWithoutReader,
-    /// Crashes are blamed without the 10-minute window.
+    /// Crashes are blamed without the 10-minute window (`blame_window`).
     PolicyBlameNoWindow,
-    /// Crash blame is counted per account, not per (account, label set).
-    PolicyBlamePerAccount,
-    /// A logout does not refuse new sessions for the window.
+    /// A lockout does not refuse new sessions for the window (`not_locked`).
     PolicyNoLockout,
-    /// Request ids are a global counter (visible to unlabelled observers).
+    /// The event's fresh words are a global counter (ids visible to unlabelled observers): the
+    /// embedder's entropy source.
     PolicySequentialIds,
-    /// Login accepts a key `keyd` holds.
+    /// Login accepts a key `keyd` holds (`login_key`).
     PolicyLoginWithKeydKey,
-    /// An agent's sub-agent is carved from the sponsor, with a lease outliving the agent's.
+    /// An approval channel opens with a login key (`approval_key`).
+    PolicyApproveWithLoginKey,
+    /// A sub-agent is carved from its domain's sub-budget, with a lease outliving its agent's
+    /// (`carve_lease`).
     PolicySubAgentOutlivesAgent,
-    /// No `MAX_LEASE`.
+    /// No `MAX_LEASE` (`lease_bounded`).
     PolicyUnboundedLease,
-    /// Requests of dead sessions stay pending and count against the cap.
+    /// A session's or agent's end leaves its requests pending, counted against the cap
+    /// (`drop_requests`).
     PolicyDeadSessionRequestsKept,
-    /// Rendered text passes non-ASCII (bidi and format) characters.
+    /// Rendered text passes non-ASCII (bidi and format) characters (`render`).
     PolicyRenderNotWhitelisted,
-    /// A labelled request's free text (reason, note) is shown on the approval screen.
+    /// A labelled request's free text (reason, note) is shown on the approval screen (`render`).
     PolicyLabelledFreeTextShown,
-    /// A session may write an item whose labels contain its own (write up).
+    /// An approval-waiting notice reaches every session of the account, whatever its labels
+    /// (`notify`).
+    PolicyNotifyLabelledToAll,
+    /// A request is answered on a channel that did not render it last (`rendered_here`).
+    PolicyApproveOtherChannel,
+    /// An approval grants labels the approver does not own (`approver_holds`).
+    PolicyApproverExceeds,
+    /// A labelled session starts an agent (`caller_unlabelled`).
+    PolicyLabelledStartsAgent,
+    /// A declassification is submitted from a session without exactly the item's labels, or a
+    /// push from a labelled one (`exact_labels`).
+    PolicyDeclassifyFromUnlabelled,
+    /// A declassified item may be over `DECLASSIFY_MAX` or not printable text (`item_fits`).
+    PolicyDeclassifyUnfit,
+    /// A lease is ended from a labelled session of its sponsor (`sponsor_session`).
+    PolicyEndLeaseFromVault,
+    /// A session may write an item whose labels contain its own (write up): the volume's check, in
+    /// the embedder.
     PolicyWriteUp,
-    /// The server is started holding a system-class budget handle.
+    /// The server is started holding a system-class budget handle: the embedder's.
     PolicyServerHoldsSystemBudget,
-    /// A session's connection is narrowed to its session budget, not to a revocation scope.
-    PolicyNarrowToSessionBudget,
-    /// Sessions of every label set are carved from the principal's unlabelled sub-budget.
-    PolicyCarveFromUnlabelled,
-    /// Audit records are read without their labels.
+    /// Audit records are read without their labels (`audit_visible`).
     PolicyAuditUnfiltered,
     // kernel/devices.md, I16: DMA device reset and frame quarantine.
     /// A dying process's DMA frames are pooled even when a device in its reset set did not
@@ -341,7 +361,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 142] = {
+    pub const ALL: [Mutation; 146] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -460,25 +480,29 @@ impl Mutation {
             PolicyApproveIgnoresHash,
             PolicyShowLabelledToAll,
             PolicyNoPendingCap,
-            PolicyCapPerAccount,
             PolicyNoFairShare,
             PolicyEndLeaseAdmitted,
             PolicyDeclassifyLive,
             PolicyDeclassifyWithoutReader,
             PolicyBlameNoWindow,
-            PolicyBlamePerAccount,
             PolicyNoLockout,
             PolicySequentialIds,
             PolicyLoginWithKeydKey,
+            PolicyApproveWithLoginKey,
             PolicySubAgentOutlivesAgent,
             PolicyUnboundedLease,
             PolicyDeadSessionRequestsKept,
             PolicyRenderNotWhitelisted,
             PolicyLabelledFreeTextShown,
+            PolicyNotifyLabelledToAll,
+            PolicyApproveOtherChannel,
+            PolicyApproverExceeds,
+            PolicyLabelledStartsAgent,
+            PolicyDeclassifyFromUnlabelled,
+            PolicyDeclassifyUnfit,
+            PolicyEndLeaseFromVault,
             PolicyWriteUp,
             PolicyServerHoldsSystemBudget,
-            PolicyNarrowToSessionBudget,
-            PolicyCarveFromUnlabelled,
             PolicyAuditUnfiltered,
             DmaFreeBeforeReset,
             DmaQuarantinedSlotCountsAsReset,
@@ -489,7 +513,7 @@ impl Mutation {
         ]
     };
 
-    /// A break of the steward model's policy rather than of the kernel.
+    /// A break of the steward's policy or its embedder rather than of the kernel.
     pub fn is_policy(self) -> bool { alloc::format!("{self:?}").starts_with("Policy") }
 
     /// The rule or invariant it breaks, by the ID the book defines it under (kernel/model.md,
@@ -598,26 +622,189 @@ impl Mutation {
             | DmaQuarantinedDeviceUsable
             | DmaResetClearsCoHolderReach => "I16",
             PolicyServerHoldsSystemBudget => "R33",
-            PolicyLoginWithKeydKey => "R35",
+            PolicyLoginWithKeydKey | PolicyApproveWithLoginKey => "R35",
             PolicySequentialIds => "R36",
             PolicyVaultWithoutOwnership
             | PolicyWriteUp
-            | PolicyCarveFromUnlabelled
+            | PolicyLabelledStartsAgent
             | PolicyAuditUnfiltered => "R37",
             PolicyApproveIgnoresHash
             | PolicyShowLabelledToAll
             | PolicyRenderNotWhitelisted
             | PolicyLabelledFreeTextShown
+            | PolicyNotifyLabelledToAll
+            | PolicyApproveOtherChannel
+            | PolicyApproverExceeds
             | PolicyNoPendingCap
-            | PolicyCapPerAccount
             | PolicyDeadSessionRequestsKept => "R38",
             PolicyUnboundedLease
             | PolicySubAgentOutlivesAgent
             | PolicyEndLeaseAdmitted
+            | PolicyEndLeaseFromVault
             | PolicyNoFairShare => "R39",
-            PolicyBlameNoWindow | PolicyBlamePerAccount | PolicyNoLockout => "R40",
-            PolicyNarrowToSessionBudget => "R41",
-            PolicyDeclassifyLive | PolicyDeclassifyWithoutReader => "R42",
+            PolicyBlameNoWindow | PolicyNoLockout => "R40",
+            PolicyDeclassifyLive
+            | PolicyDeclassifyWithoutReader
+            | PolicyDeclassifyFromUnlabelled
+            | PolicyDeclassifyUnfit => "R42",
         }
+    }
+}
+
+/// The policy the core decides by: `Policy::SHIPPED`, or with one entry broken.
+pub fn policy(m: Option<Mutation>) -> Policy {
+    use broken::*;
+    let mut p = Policy::SHIPPED;
+    match m {
+        Some(Mutation::PolicyLoginWithKeydKey) => p.login_key = login_key,
+        Some(Mutation::PolicyApproveWithLoginKey) => p.approval_key = approval_key,
+        Some(Mutation::PolicyVaultWithoutOwnership) => p.owns_labels = pass,
+        Some(Mutation::PolicyLabelledStartsAgent) => p.caller_unlabelled = pass,
+        Some(Mutation::PolicyNoLockout) => p.not_locked = pass,
+        Some(Mutation::PolicyBlameNoWindow) => p.blame_window = blame_window,
+        Some(Mutation::PolicyNoPendingCap) => p.pending_cap = pass,
+        Some(Mutation::PolicyNoFairShare) => p.fair_share = pass,
+        Some(Mutation::PolicyDeadSessionRequestsKept) => p.drop_requests = nothing,
+        Some(Mutation::PolicyUnboundedLease) => p.lease_bounded = lease_bounded,
+        Some(Mutation::PolicySubAgentOutlivesAgent) => p.carve_lease = carve_lease,
+        Some(Mutation::PolicyShowLabelledToAll) => p.may_see = pass,
+        Some(Mutation::PolicyRenderNotWhitelisted) => p.render = render_unwhitelisted,
+        Some(Mutation::PolicyLabelledFreeTextShown) => p.render = render_labelled_text,
+        Some(Mutation::PolicyNotifyLabelledToAll) => p.notify = notify,
+        Some(Mutation::PolicyApproveOtherChannel) => p.rendered_here = pass,
+        Some(Mutation::PolicyApproveIgnoresHash) => p.hash_matches = pass,
+        Some(Mutation::PolicyApproverExceeds) => p.approver_holds = pass,
+        Some(Mutation::PolicyDeclassifyFromUnlabelled) => p.exact_labels = pass,
+        Some(Mutation::PolicyDeclassifyUnfit) => p.item_fits = pass,
+        Some(Mutation::PolicyDeclassifyWithoutReader) => p.carve_crossing = nothing,
+        Some(Mutation::PolicyDeclassifyLive) => p.copy_out = copy_out,
+        Some(Mutation::PolicyEndLeaseFromVault) => p.sponsor_session = sponsor_session,
+        Some(Mutation::PolicyAuditUnfiltered) => p.audit_visible = |_, _| true,
+        _ => {}
+    }
+    p
+}
+
+/// The broken entries, written from the core's public context and helpers only.
+mod broken {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    use redoubt_steward::consts::BLAME_COUNT;
+    use redoubt_steward::cx::Cx;
+    use redoubt_steward::domain::Labels;
+    use redoubt_steward::effect::{Bytes, Kind, Notice, Notified, Output, Parent, Refusal, Step};
+    use redoubt_steward::effects::{carve_lease_in, show};
+    use redoubt_steward::guards::{lease, request, session};
+    use redoubt_steward::render::{Rules, screen};
+
+    type Verdict = Result<(), Refusal>;
+
+    /// A guard that always holds.
+    pub fn pass(_: &Cx<'_>) -> Verdict { Ok(()) }
+
+    /// An effect that does nothing.
+    pub fn nothing(_: &mut Cx<'_>) {}
+
+    /// A login key, or any key `keyd` holds.
+    pub fn login_key(cx: &Cx<'_>) -> Verdict {
+        let s = session(cx).ok_or(Refusal::Unknown)?;
+        let p = &cx.fixed().principals[s.principal];
+        if p.login_keys.contains(&s.key) || cx.fixed().keyd.contains(&s.key) {
+            Ok(())
+        } else {
+            Err(Refusal::BadKey)
+        }
+    }
+
+    /// An approval key, or one of the principal's login keys.
+    pub fn approval_key(cx: &Cx<'_>) -> Verdict {
+        let c = cx.index().channels.get(&cx.id()).ok_or(Refusal::Unknown)?;
+        let p = &cx.fixed().principals[c.principal];
+        let ok = p.approval_keys.contains(&c.key) || p.login_keys.contains(&c.key);
+        if ok { Ok(()) } else { Err(Refusal::BadKey) }
+    }
+
+    /// Every blame kept counts, however old.
+    pub fn blame_window(cx: &Cx<'_>) -> Verdict {
+        if cx.state().blame.times.len() + 1 >= BLAME_COUNT { Ok(()) } else { Err(Refusal::Unknown) }
+    }
+
+    /// Any lease but 0.
+    pub fn lease_bounded(cx: &Cx<'_>) -> Verdict {
+        let asked = match cx.kind() {
+            Kind::Lease => lease(cx).ok_or(Refusal::Unknown)?.lease,
+            _ => return Ok(()),
+        };
+        if asked > 0 { Ok(()) } else { Err(Refusal::BadLease) }
+    }
+
+    /// Every lease from its domain's sub-budget, for as long as it asks: a sub-agent outlives its
+    /// agent.
+    pub fn carve_lease(cx: &mut Cx<'_>) {
+        let Some(asked) = lease(cx).map(|l| l.lease) else { return };
+        let (parent, limits) = (Parent::Sub(cx.domain().clone()), cx.fixed().sizes.agent);
+        let deadline = cx.now().saturating_add(asked);
+        carve_lease_in(cx, parent, limits, deadline);
+    }
+
+    /// Printable means not a control character: bidi and format characters pass.
+    fn unwhitelisted(s: &str, cap: usize) -> String {
+        let mut out = String::new();
+        for c in s.chars().filter(|c| !c.is_control()).take(cap) {
+            if c == '"' || c == '\\' {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    fn render_by(cx: &mut Cx<'_>, rules: &Rules) {
+        let Some(r) = request(cx) else { return };
+        let rendered = screen(cx.fixed(), cx.domain(), cx.state(), r, rules);
+        show(cx, rendered);
+    }
+
+    pub fn render_unwhitelisted(cx: &mut Cx<'_>) {
+        render_by(cx, &Rules { field: unwhitelisted, ..Rules::SHIPPED });
+    }
+
+    pub fn render_labelled_text(cx: &mut Cx<'_>) {
+        render_by(cx, &Rules { withhold_labelled: false, ..Rules::SHIPPED });
+    }
+
+    /// Every session of the account, whatever its labels, and the principal's channels.
+    pub fn notify(cx: &mut Cx<'_>) {
+        let Some(principal) = request(cx).map(|r| r.principal) else { return };
+        let account = cx.domain().account();
+        let index = cx.index();
+        let mut to: Vec<Notified> = index
+            .routes
+            .iter()
+            .filter(|(_, x)| x.domain.account() == account)
+            .map(|(b, _)| Notified::Session(*b))
+            .collect();
+        to.extend(
+            index.channels.values().filter(|c| c.principal == principal).map(|c| Notified::Channel(c.id)),
+        );
+        for n in to {
+            cx.output(Output::Notice { to: n, notice: Notice::ApprovalWaiting });
+        }
+    }
+
+    /// The copy out reads the item again, as it is now, and writes that.
+    pub fn copy_out(cx: &mut Cx<'_>) {
+        let Some(item) = cx.state().crossings.get(&cx.id()).map(|c| c.item) else { return };
+        let (token, labels) = (cx.token(1), cx.domain().labels().clone());
+        cx.step(Step::Read { token: token.clone(), through: None, labels, item });
+        cx.step(Step::Write { through: None, labels: Labels::empty(), item, bytes: Bytes::Read(token) });
+    }
+
+    /// Any session of the sponsor's account, labelled or not.
+    pub fn sponsor_session(cx: &Cx<'_>) -> Verdict {
+        let by = cx.caller().ok_or(Refusal::NotSponsor)?;
+        let ok = by.kind == Kind::Session && by.domain.account() == cx.domain().account();
+        if ok { Ok(()) } else { Err(Refusal::NotSponsor) }
     }
 }

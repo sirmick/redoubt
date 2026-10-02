@@ -1,7 +1,7 @@
 //! The executable security model of Redoubt (docs/kernel/model.md): docs/kernel/'s objects,
 //! system calls, errors, rules R1-R12 and invariants I1-I16, with the same names and arguments;
-//! the steward's milestone 1 policy above it; property tests over random operation sequences;
-//! and the trace format the kernel's conformance test replays.
+//! the steward's policy core (`redoubt-steward`) embedded above it; property tests over random
+//! operation sequences; and the trace format the kernel's conformance test replays.
 //!
 //! Read [`kernel`] next to docs/kernel/: one method per system call.
 //! kernel/model.md says what is abstracted, how the checks and mutations run, and the trace
@@ -21,6 +21,7 @@ pub mod kernel;
 pub mod mutation;
 pub mod policy;
 pub mod sched;
+pub mod serving;
 pub mod spec;
 pub mod steward;
 pub mod syscall;
