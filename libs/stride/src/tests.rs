@@ -237,7 +237,7 @@ impl Budgets<u64> for Leaving {
 }
 
 #[test]
-fn a_reconcile_takes_budgets_out_in_slot_order() {
+fn a_reconcile_takes_budgets_out_in_place() {
     let mut bs = Leaving(map(&[1, 4, 9]), Vec::new());
     let mut q: Queue<u64, 4> = Queue::new();
     // One wake per reconcile, so the slots hold 1, 9, 4: not id order.
@@ -245,7 +245,8 @@ fn a_reconcile_takes_budgets_out_in_slot_order() {
     q.reconcile(&mut bs, None, &[1, 9]);
     q.reconcile(&mut bs, None, &[1, 9, 4]);
     assert!(bs.1.is_empty());
-    // The running budget stays; the others leave in the order of their slots.
+    // The running budget stays; the others leave as the walk meets them: 1, then 4, which the
+    // last slot moved into 1's, read again.
     q.reconcile(&mut bs, Some(9), &[]);
     assert_eq!(bs.1, [1, 4]);
     assert!(q.contains(9) && !q.contains(1) && !q.contains(4));

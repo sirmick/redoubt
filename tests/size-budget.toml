@@ -36,7 +36,7 @@ max_lines = 158
 [[crate]]
 name = "libs/stride"
 paths = ["libs/stride/src"]
-max_lines = 329
+max_lines = 332
 
 [[crate]]
 name = "libs/signing"

@@ -177,7 +177,11 @@ pub struct Queue<B, const N: usize> {
     pub floor: u128,
     pub front: i64,
     pub back: i64,
+    /// The queued budgets are `slots[..len]`, in no order: an insert appends and a removal moves
+    /// the last into the gap, so every scan visits only queued budgets. The pick is a minimum over
+    /// a total order, so no order is needed.
     slots: [Option<B>; N],
+    len: usize,
 }
 
 impl<B: Copy + PartialEq, const N: usize> Default for Queue<B, N> {
@@ -185,14 +189,14 @@ impl<B: Copy + PartialEq, const N: usize> Default for Queue<B, N> {
 }
 
 impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
-    pub const fn new() -> Self { Queue { floor: 0, front: 0, back: 0, slots: [None; N] } }
+    pub const fn new() -> Self { Queue { floor: 0, front: 0, back: 0, slots: [None; N], len: 0 } }
 
-    /// The queued budgets, in slot order.
-    pub fn queued(&self) -> impl Iterator<Item = B> + '_ { self.slots.iter().flatten().copied() }
+    /// The queued budgets, in no order.
+    pub fn queued(&self) -> impl Iterator<Item = B> + '_ { self.slots[..self.len].iter().flatten().copied() }
 
-    pub fn contains(&self, b: B) -> bool { self.slots.contains(&Some(b)) }
+    pub fn contains(&self, b: B) -> bool { self.slots[..self.len].contains(&Some(b)) }
 
-    pub fn is_empty(&self) -> bool { self.slots.iter().all(Option::is_none) }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
 
     /// Whether `b` is queued now. A queued budget has a runnable thread, so there are never more
     /// than there are processes, and `N` is the process count: a full queue is a broken invariant,
@@ -201,24 +205,26 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         if self.contains(b) {
             return true;
         }
-        match self.slots.iter_mut().find(|s| s.is_none()) {
-            Some(slot) => {
-                *slot = Some(b);
-                true
-            }
-            None => {
-                debug_assert!(false, "stride queue full");
-                false
-            }
+        if self.len == N {
+            debug_assert!(false, "stride queue full");
+            return false;
         }
+        self.slots[self.len] = Some(b);
+        self.len += 1;
+        true
     }
 
     fn take_out(&mut self, b: B) {
-        for s in self.slots.iter_mut() {
-            if *s == Some(b) {
-                *s = None;
-            }
+        if let Some(i) = self.slots[..self.len].iter().position(|s| *s == Some(b)) {
+            self.remove_at(i);
         }
+    }
+
+    /// Take out the budget at `slots[i]`, moving the last into its place.
+    fn remove_at(&mut self, i: usize) {
+        self.len -= 1;
+        self.slots[i] = self.slots[self.len];
+        self.slots[self.len] = None;
     }
 
     fn reset_if_empty(&mut self) {
@@ -272,17 +278,19 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     /// last runnable thread leave the queue; budgets that gained one wake at `max(own, floor)`,
     /// in descending id so the lowest id ranks first.
     pub fn reconcile(&mut self, bs: &mut impl Budgets<B>, running: Option<B>, runnable: &[B]) {
-        // In slot order and in place, with no copy of the slots: `N` is the process count, and a
-        // copy would be that big on the kernel stack at every entry. Taking a budget out empties
-        // only its own slot, so each slot is read as it was when the walk began.
-        for i in 0..N {
+        // In place, with no copy of the slots: `N` is the process count, and a copy would be that
+        // big on the kernel stack at every entry. Taking a budget out moves the last into its slot,
+        // which is then read again.
+        let mut i = 0;
+        while i < self.len {
             let Some(b) = self.slots[i].filter(|b| !runnable.contains(b) && running != Some(*b)) else {
+                i += 1;
                 continue;
             };
             let mut s = bs.state(b);
             s.queued = false;
             bs.set_state(b, s);
-            self.take_out(b);
+            self.remove_at(i);
             bs.left(b);
         }
         self.raise_floor(bs);
