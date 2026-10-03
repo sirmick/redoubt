@@ -60,7 +60,7 @@ impl Builder {
         features: &[String],
         profile: Profile,
     ) -> Result<()> {
-        self.cargo(target, package, None, features, profile).map(drop)
+        self.cargo(target, None, package, None, features, profile).map(drop)
     }
 
     /// Build `package` (only its binary `bin`, if given) and return the path cargo reports for
@@ -71,9 +71,14 @@ impl Builder {
     /// reports is that copy: the hashed file in the cache's `deps/` is never reported. A build
     /// with features copies into a directory of its own within the run, so a program built with
     /// them never replaces the same program built without.
+    ///
+    /// A package of a workspace of its own (`workspace`, relative to the root) is built the same
+    /// way from that workspace, with its own cache, `target/` in it, and its own directory of
+    /// copies in the run.
     fn cargo(
         &self,
         target: &Target,
+        workspace: Option<&Path>,
         package: &str,
         bin: Option<&str>,
         features: &[String],
@@ -84,19 +89,23 @@ impl Builder {
         // copies cannot land in a shared path; and, unlike the environment, they do not reach
         // the cargo a build script runs (`tests/programs/build.rs`), which keeps a target
         // directory of its own and would wait forever on this build's lock.
-        let cache = self.workspace.join("target").to_string_lossy().into_owned();
+        let root = workspace.map_or_else(|| self.workspace.clone(), |w| self.workspace.join(w));
+        let cache = root.join("target").to_string_lossy().into_owned();
         let build_dir = format!("build.build-dir={}", toml::Value::String(cache));
-        cargo.current_dir(&self.workspace).args([
+        cargo.current_dir(&root).args([
             "build",
             "--message-format=json-render-diagnostics",
             "--config",
             &build_dir,
             "--target-dir",
         ]);
-        let copies = match features {
+        let mut copies = match features {
             [] => String::from("cargo"),
             _ => format!("cargo-{}", features.join("+")),
         };
+        if let Some(workspace) = workspace {
+            copies = format!("{copies}@{}", workspace.to_string_lossy().replace('/', "_"));
+        }
         cargo.arg(self.run.join(copies)).args([
             "--profile",
             profile.name(),
@@ -144,13 +153,13 @@ impl Builder {
         profile: Profile,
     ) -> Result<PathBuf> {
         let what = bin.map_or(package.to_string(), |bin| format!("{package}:{bin}"));
-        self.cargo(target, package, bin, features, profile)?
+        self.cargo(target, None, package, bin, features, profile)?
             .with_context(|| format!("cargo reported no binary for {what} on {}", target.name))
     }
 
     /// Build `program` if it comes from the workspace, and return the path of its ELF.
     pub fn program(&self, target: &Target, program: &Program) -> Result<(String, PathBuf)> {
-        let (package, bin, features): (&str, &str, &[String]) = match program {
+        let (package, bin, features, workspace): (&str, &str, &[String], Option<&Path>) = match program {
             Program::Path { path } => {
                 let name =
                     path.file_name().context("program path has no file name")?.to_string_lossy().into_owned();
@@ -165,10 +174,67 @@ impl Builder {
                 std::fs::write(&path, elf)?;
                 return Ok((name, path));
             }
-            Program::TestProgram(bin) | Program::Bin { bin, .. } => ("test-programs", bin.as_str(), &[]),
-            Program::Package { package, bin, features } => (package.as_str(), bin.as_str(), features),
+            Program::Erlang { erlang } => return self.erlc(erlang),
+            Program::Otp { otp } => return self.otp_module(otp),
+            Program::TestProgram(bin) | Program::Bin { bin, .. } => {
+                ("test-programs", bin.as_str(), &[], None)
+            }
+            Program::Package { package, bin, features, workspace } => {
+                (package.as_str(), bin.as_str(), features, workspace.as_deref())
+            }
         };
-        Ok((bin.to_string(), self.binary(target, package, Some(bin), features, Profile::Release)?))
+        let built = self
+            .cargo(target, workspace, package, Some(bin), features, Profile::Release)?
+            .with_context(|| format!("cargo reported no binary for {package}:{bin} on {}", target.name))?;
+        Ok((bin.to_string(), built))
+    }
+
+    /// Runs `command` with the pinned Erlang toolchain on the path (`userland/otp/tools/env.sh`),
+    /// from the workspace root, and returns what it printed. A VM that crashes writes no
+    /// `erl_crash.dump` into the tree.
+    fn erlang(&self, command: &[&str]) -> Result<String> {
+        let output = Command::new("bash")
+            .current_dir(&self.workspace)
+            .env("ERL_CRASH_DUMP", "/dev/null")
+            .args(["-c", ". userland/otp/tools/env.sh && exec \"$@\"", "_"])
+            .args(command)
+            .output()
+            .with_context(|| format!("running {}", command[0]))?;
+        ensure!(
+            output.status.success(),
+            "{} failed: {}",
+            command.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    /// Compiles the Erlang module at `source` into this run's `erlang/`, and returns the
+    /// module's file name and its `.beam`.
+    fn erlc(&self, source: &Path) -> Result<(String, PathBuf)> {
+        let module = source.file_stem().context("an Erlang source with no name")?.to_string_lossy();
+        let out = self.run.join("erlang");
+        std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
+        self.erlang(&["erlc", "-o", &out.to_string_lossy(), &source.to_string_lossy()])?;
+        let beam = format!("{module}.beam");
+        Ok((beam.clone(), out.join(beam)))
+    }
+
+    /// The `.beam` of OTP's module `module` in the pinned toolchain, by the path its code server
+    /// gives.
+    fn otp_module(&self, module: &str) -> Result<(String, PathBuf)> {
+        ensure!(
+            !module.is_empty()
+                && module.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+            "{module:?} is not an OTP module's name"
+        );
+        // `code:which/1` answers an atom for a module it lacks: printed as nothing.
+        let eval = format!(
+            "case code:which({module}) of P when is_list(P) -> io:put_chars(P); _ -> ok end, halt()."
+        );
+        let path = PathBuf::from(self.erlang(&["erl", "-noshell", "-eval", &eval])?.trim());
+        ensure!(path.is_file(), "the pinned OTP has no module {module}");
+        Ok((format!("{module}.beam"), path))
     }
 
     /// `cargo test` for host packages, for the unit tests a boot cannot reach. Returns what

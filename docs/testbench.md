@@ -142,7 +142,10 @@ programs = [                 # the first in init's place, the rest started by it
     "log-server",                                  # a binary of the test programs
     { package = "my-crate", bin = "my-server" },   # any workspace binary, built for the target
     { package = "my-crate", bin = "my-probe", features = ["probe"] },  # built with these features, in a target directory of its own
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },  # a binary of a workspace of its own, built there
     { path = "prebuilt/thing.elf" },               # or a prebuilt ELF
+    { erlang = "path/to/module.erl" },             # an Erlang module, compiled by the pinned erlc (a bundle file's)
+    { otp = "io" },                                # an OTP module's .beam from the pinned toolchain (a bundle file's)
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
 memory_mib = 32              # guest RAM (default 256)

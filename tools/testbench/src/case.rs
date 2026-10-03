@@ -459,12 +459,15 @@ pub enum Program {
     /// A binary of the `test-programs` package.
     TestProgram(String),
     /// A binary of any workspace package, built for the case's target, with `features` if any
-    /// (`build.rs` keeps that build apart from the one without).
+    /// (`build.rs` keeps that build apart from the one without). With `workspace`, the package
+    /// is in that workspace of its own, a directory relative to the root (`userland/otp`), and is
+    /// built there.
     Package {
         package: String,
         bin: String,
         #[serde(default)]
         features: Vec<String>,
+        workspace: Option<PathBuf>,
     },
     /// A binary of the `test-programs` package, with budgets.
     Bin {
@@ -474,6 +477,11 @@ pub enum Program {
     },
     /// A prebuilt ELF, relative to the workspace root.
     Path { path: PathBuf },
+    /// An Erlang module's source, relative to the workspace root, compiled to its `.beam` by the
+    /// pinned toolchain's `erlc` (`userland/otp/tools/env.sh`).
+    Erlang { erlang: PathBuf },
+    /// The `.beam` of a module of the pinned toolchain's OTP, by module name (`io`).
+    Otp { otp: String },
     /// A `test-programs` binary, corrupted before injection, for testing how the loader
     /// and kernel cope with hostile images.
     Corrupted { corrupt: String, with: Corruption },
@@ -520,6 +528,7 @@ impl Recipe {
                     package: package.clone(),
                     bin: entry.name.clone(),
                     features: Vec::new(),
+                    workspace: None,
                 }),
                 (None, Some(path)) => files.push(BundleFile {
                     name: entry.name.clone(),
@@ -823,5 +832,29 @@ mod tests {
             })
             .collect();
         assert_eq!(features, [&[][..], &["f".to_string()][..]]);
+    }
+
+    /// A package's program may name a workspace of its own, none unless named; an Erlang
+    /// module's source and an OTP module are forms of their own.
+    #[test]
+    fn a_program_may_come_from_another_workspace_or_from_erlang() {
+        #[derive(Deserialize)]
+        struct Programs {
+            programs: Vec<Program>,
+        }
+        let text = "programs = [\n  { package = \"p\", bin = \"b\" },\n  \
+                    { package = \"p\", bin = \"b\", workspace = \"userland/otp\" },\n  \
+                    { erlang = \"m.erl\" },\n  { otp = \"io\" },\n]\n";
+        let programs: Programs = toml::from_str(text).unwrap();
+        let workspaces: Vec<Option<&Path>> = programs.programs[..2]
+            .iter()
+            .map(|p| match p {
+                Program::Package { workspace, .. } => workspace.as_deref(),
+                other => panic!("not a package's program: {other:?}"),
+            })
+            .collect();
+        assert_eq!(workspaces, [None, Some(Path::new("userland/otp"))]);
+        assert!(matches!(&programs.programs[2], Program::Erlang { erlang } if erlang == Path::new("m.erl")));
+        assert!(matches!(&programs.programs[3], Program::Otp { otp } if otp == "io"));
     }
 }
