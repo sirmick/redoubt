@@ -12,6 +12,10 @@ pub const DEFAULT_IN_FLIGHT: u32 = 5;
 pub const DEFAULT_SOCKETS: u32 = 8;
 /// Connections one default bucket may mint (`new_connection`, `grant`).
 pub const DEFAULT_STATE: u32 = 4;
+/// Multiplexed requests one bucket may hold (servers/serving.md, `admit`), and the pages their
+/// transfers may hold: as `fsd`'s. Overrides keep them.
+pub const REQUESTS: u32 = 128;
+pub const PAGES: u32 = 32;
 /// The bytes `ipd` is sized to fit: every bucket at its cap, and the stack itself.
 pub const BUDGET: u64 = 8 << 20;
 /// What `ipd` itself takes before any client: code, the interface, the tables.
@@ -57,8 +61,8 @@ impl Config {
             in_flight: DEFAULT_IN_FLIGHT,
             files: files_for(DEFAULT_SOCKETS),
             state: state_for(DEFAULT_STATE, DEFAULT_SOCKETS),
-            requests: 0,
-            pages: 0,
+            requests: REQUESTS,
+            pages: PAGES,
         };
         let mut overrides = Vec::new();
         for l in &self.limits {
@@ -82,8 +86,8 @@ impl Config {
             in_flight: PARKED_BYTES,
             file: FID_BYTES,
             state: SOCKET_BYTES.max(CONNECTION_BYTES),
-            request: 0,
-            page: 0,
+            request: redoubt_rt::server::ninep::REQUEST_STATE,
+            page: redoubt_rt::abi::PAGE_SIZE as u64,
         };
         if !admission.fits(&cost, BUDGET - OWN_USE) {
             return Err(BadArgs("every bucket at its cap does not fit the budget"));

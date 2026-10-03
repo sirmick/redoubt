@@ -91,7 +91,7 @@ max_lines = 229
 [[crate]]
 name = "servers/consoled"
 paths = ["servers/consoled/src"]
-max_lines = 336
+max_lines = 338
 
 [[crate]]
 name = "servers/blkd"
@@ -108,7 +108,7 @@ max_lines = 1590
 [[crate]]
 name = "servers/ipd"
 paths = ["servers/ipd/src"]
-max_lines = 2926
+max_lines = 2928
 
 [[crate]]
 name = "servers/init"
@@ -118,4 +118,4 @@ max_lines = 1952
 [[crate]]
 name = "servers/fsd"
 paths = ["servers/fsd/src"]
-max_lines = 1403
+max_lines = 1405

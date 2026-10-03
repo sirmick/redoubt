@@ -5,8 +5,9 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use redoubt_rt::abi::PAGE_SIZE;
 use redoubt_rt::ipc::Caller;
-use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, Qid, Read, mode};
+use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, Qid, REQUEST_STATE, Read, mode};
 use redoubt_rt::server::{Cost, Limits};
 
 use crate::uart::Uart;
@@ -27,22 +28,25 @@ pub const MAX_INPUT: usize = 1024;
 /// those consoles and for `init`'s own.
 pub const fn limits(buckets: u32) -> Limits {
     let consoles = redoubt_rt::abi::MAX_THREADS as u32;
-    Limits { buckets, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles, requests: 0, pages: 0 }
+    Limits { buckets, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles, requests: 80, pages: 2 }
 }
 
 /// The fids one console client holds open: the root its namespace attaches
 /// (`redoubt_client::ns::Namespace::from_startup`) and the `cons` file it opens for reading and
 /// writing (`redoubt_client::console::Console::open`).
 pub const CONSOLE_FIDS: u32 = 2;
-/// What one of each costs, in bytes. A parked read holds its caller's lend, charged to this
-/// server until it replies (kernel/ipc.md R3), which is `MAX_LEND_PAGES` pages at worst; a
-/// fid and a minted connection are small records.
-pub const COST: Cost = Cost { in_flight: 64 * 1024, file: 256, state: 256, request: 0, page: 0 };
+/// What one of each costs, in bytes. A parked read, or a multiplexed connection's completion call,
+/// holds its caller's lend, charged to this server until it replies (kernel/ipc.md R3), which is
+/// `MAX_LEND_PAGES` pages at worst; a fid and a minted connection are small records; a multiplexed
+/// request is its record, and a page its transfer brought a page.
+pub const COST: Cost =
+    Cost { in_flight: 64 * 1024, file: 256, state: 256, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 /// The bytes of this server's budget its clients may use between them; its manifest entry gives
 /// it the budget, and the program refuses limits that would not fit. A bucket at its caps costs
-/// 2 parked reads at 64 KiB, and `MAX_THREADS` connections at 256 bytes with 2 fids each at 256:
-/// 154 880 bytes with `MAX_THREADS` at 31, so 13 buckets fit, and 326 912 bytes at 255, so 6 do;
-/// the image's manifest asks for 4.
+/// 2 parked calls at 64 KiB, `MAX_THREADS` connections at 256 bytes with 2 fids each at 256, 80
+/// requests at 256 and 2 pages at 4 KiB, so one account-0 share holds 64 batched reads: 183 552
+/// bytes with `MAX_THREADS` at 31, so 11 buckets fit, and 355 584 at 255, so 5 do; the image's
+/// manifest asks for 4.
 pub const BUDGET: u64 = 2 * 1024 * 1024;
 
 /// Bytes of the prefix a minted connection's lines start with: `[con `, the id in 16 lowercase

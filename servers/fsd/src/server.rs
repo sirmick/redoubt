@@ -5,9 +5,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use littlefs::{BlockDevice, DirRef, Error as FsError, FileHandle, FileType, Filesystem, OpenOptions};
+use redoubt_rt::abi::PAGE_SIZE;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::path;
-use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, QTDIR, Qid, Read, mode};
+use redoubt_rt::server::ninep::{
+    DMDIR, FileServer, FileStat, NineError, QTDIR, Qid, REQUEST_STATE, Read, mode,
+};
 use redoubt_rt::server::{Cost, Limits};
 use redoubt_rt::wire::proto::fsd::ErrorCode;
 
@@ -15,14 +18,21 @@ use crate::quota::{Ledger, Refusal};
 use crate::volume::{BLOCK, Blocks, Mounted, Range};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
-/// manifest's `buckets=N`. Nothing is parked: every request is answered as it arrives.
+/// manifest's `buckets=N`. A call is answered as it arrives; what is held is a multiplexed
+/// connection's completion call (`InFlight`, one per session, so two lets a share hold one), its
+/// requests (`Requests`) and the pages their transfers brought (`Pages`).
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 0, files: 32, state: 8, requests: 0, pages: 0 }
+    Limits { buckets, in_flight: 2, files: 32, state: 8, requests: 128, pages: 32 }
 }
-/// What one of each costs, in bytes: a fid is its table entry and a node per step from its root,
-/// each a path; a minted connection its record and its root's path.
-pub const COST: Cost = Cost { in_flight: 0, file: 2048, state: 512, request: 0, page: 0 };
-/// The bytes of this server's budget its clients may use between them.
+/// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
+/// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its
+/// table entry and a node per step from its root, each a path; a minted connection its record and
+/// its root's path; a request its record; a page a page.
+pub const COST: Cost =
+    Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
+/// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
+/// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 128 requests at 256
+/// and 32 pages at 4 KiB: 364 544 bytes, so the manifests' 4 buckets take 1 458 176, and 5 fit.
 pub const BUDGET: u64 = 2 * 1024 * 1024;
 
 /// Test-only, for the bench's `fsd-restart` (feature `restart-probe`, off in every default build,

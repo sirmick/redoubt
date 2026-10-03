@@ -225,8 +225,10 @@ each appears once.
 
 **Admission.** Fids, minted connections, parked calls and sockets all go through the skeleton's
 admission ([R26 (admission fairness)](serving.md#r26-admission-fairness)): by default 5 parked
-calls, 4 connections and 8 sockets per bucket. A socket is one `State` unit, reserved around each
-request that may make one and held until the socket is gone, lingering included, so one badge
+calls, 4 connections, 8 sockets, and 128 multiplexed requests and 32 pages they brought
+([serving](serving.md#multiplexed-connections)) per bucket. A socket is one `State` unit,
+reserved around each request that may make one and held until the socket is gone, lingering
+included, so one badge
 cannot take all its bucket's sockets. Every bucket at its cap must fit `ipd`'s 8 MiB budget, less 1 MiB for
 its own use, or `ipd` does not start.
 

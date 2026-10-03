@@ -3,11 +3,11 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use redoubt_rt::abi::Handle;
+use redoubt_rt::abi::{Handle, PAGE_SIZE};
 use redoubt_rt::ipc::{Caller, Words};
 use redoubt_rt::path;
 use redoubt_rt::server::ninep::{
-    DMDIR, FIRST_MINTED_BADGE, FileServer, FileStat, NineError, QTDIR, Qid, Read,
+    DMDIR, FIRST_MINTED_BADGE, FileServer, FileStat, NineError, QTDIR, Qid, REQUEST_STATE, Read,
 };
 use redoubt_rt::server::typed::{Answer, Protocol, TypedServer};
 use redoubt_rt::server::{Cost, Limits};
@@ -24,17 +24,24 @@ pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N` ([`redoubt_rt::server::buckets`]), and the program refuses a count whose
-/// buckets at their caps would not fit [`BUDGET`]. Nothing is ever parked here: every request is
-/// answered as it arrives.
+/// buckets at their caps would not fit [`BUDGET`]. A call is answered as it arrives; what is held
+/// is a multiplexed connection's completion call (`InFlight`, one per session, so two lets a share
+/// hold one), its requests (`Requests`), and the pages their transfers brought (`Pages`): nothing is
+/// written here, so two pages, the most one batch of requests needs.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 0, files: 32, state: 8, requests: 0, pages: 0 }
+    Limits { buckets, in_flight: 2, files: 32, state: 8, requests: 64, pages: 2 }
 }
-/// What one of each costs, in bytes: a fid is its table entry and its steps from the root (at
-/// most two, since `/boot` is flat); a minted connection its record.
-pub const COST: Cost = Cost { in_flight: 0, file: 256, state: 256, request: 0, page: 0 };
+/// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
+/// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its table
+/// entry and its steps from the root (at most two, since `/boot` is flat); a minted connection its
+/// record; a request its record; a page a page.
+pub const COST: Cost =
+    Cost { in_flight: 64 * 1024, file: 256, state: 256, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 /// The bytes of this server's budget its clients may use between them, over and above
-/// [`MAX_BYTES`] of published entries.
-pub const BUDGET: u64 = 256 * 1024;
+/// [`MAX_BYTES`] of published entries. A bucket at its caps costs 2 completion calls at 64 KiB,
+/// 32 fids and 8 connections at 256 bytes, 64 requests at 256 and 2 pages at 4 KiB: 165 888 bytes,
+/// so the manifests' 4 buckets take 663 552, and 4 fit here.
+pub const BUDGET: u64 = 768 * 1024;
 
 /// Why an argument list was refused. Each one stops the server starting: a `/boot` that is not
 /// what the manifest named is worse than no `/boot` at all (TENETS.md 2, fail closed).

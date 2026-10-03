@@ -173,8 +173,10 @@ fn the_published_bytes_are_bounded() {
     assert!(offset > 0 && offset <= MAX_BYTES as u64);
 }
 
-/// Every bucket at its cap fits the budget the manifest gives this server (servers/serving.md R26).
+/// Every bucket at its cap fits the budget the manifest gives this server (servers/serving.md R26):
+/// the 4 buckets every manifest asks for, and no more than [`BUDGET`] pays for.
 #[test]
 fn the_limits_fit_the_budget() {
-    assert!(limits(16).fits(&COST, BUDGET));
+    assert!(limits(4).fits(&COST, BUDGET));
+    assert!(!limits(5).fits(&COST, BUDGET));
 }

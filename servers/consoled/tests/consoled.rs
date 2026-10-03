@@ -18,8 +18,10 @@ use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle, MAX_THREADS};
 use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::server::ninep::mode;
+use redoubt_rt::ipc::Buffer;
+use redoubt_rt::server::ninep::{COLLECT_WAIT, IN_WORDS, OPENED, collect_words, mode};
 use redoubt_rt::startup::{Startup, StartupBuilder};
+use redoubt_rt::wire::ninep::{Body, Message};
 
 #[path = "../src/bin/consoled.rs"]
 mod consoled;
@@ -180,6 +182,67 @@ fn typing_on_the_uart_reaches_a_ninep_reader() {
     assert_eq!(reading.join().unwrap(), u32::from(b'z'));
     b.line_quiet();
 
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// A multiplexed read with nothing to read waits in the skeleton, with no one-call read parked
+/// beside it, and is answered into the parked completion call when someone types.
+#[test]
+fn a_multiplexed_read_waits_for_input() {
+    let b = boot();
+    let f = fake();
+    let (reader, conn) = b.client();
+    let collect = move |hold| {
+        let call = Endpoint::from_handle(conn).call(
+            &collect_words(hold),
+            &[],
+            Some(Buffer::new(1).unwrap()),
+            FOREVER,
+        );
+        let (reply, lend) = call.into_result().unwrap();
+        let lend = lend.unwrap();
+        (reply.words, lend[..reply.words[1] as usize].to_vec())
+    };
+    f.as_process(reader, || {
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.open(&mut lend, 0, mode::OREAD).unwrap();
+        assert_eq!(collect(0).0, [0, 0, OPENED, 0], "the session opens");
+        // A read of one byte, its T-message in the send's words.
+        let mut bytes = [0u8; IN_WORDS];
+        let n =
+            Message { tag: 7, body: Body::Tread { fid: 0, offset: 0, count: 1 } }.encode(&mut bytes).unwrap();
+        assert!(n <= IN_WORDS);
+        let mut words = [0u64; 4];
+        for (word, chunk) in words[1..].iter_mut().zip(bytes.chunks(8)) {
+            *word = u64::from_le_bytes(chunk.try_into().unwrap());
+        }
+        Endpoint::from_handle(conn).send(&words, &[], None, FOREVER).unwrap();
+    });
+    let reading = f.run(reader, move || {
+        let (words, bytes) = collect(COLLECT_WAIT);
+        let got = Message::decode(&bytes).map(|m| (m.tag, m.body));
+        u32::from(words[0] == 0 && matches!(got, Ok((7, Body::Rread { data: b"q" }))))
+    });
+    wait_until("the completion call to be taken", || f.open_calls(b.server) == 1);
+    // One thread serves both, so once another client's write is answered the completion call
+    // has been served, and the read is waiting: what is typed now comes after it.
+    let (writer, wconn) = b.client();
+    f.as_process(writer, || {
+        let c = Connection::new(Endpoint::from_handle(wconn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 1, "").unwrap();
+        c.open(&mut lend, 1, mode::OWRITE).unwrap();
+        assert_eq!(c.write(&mut lend, 1, 0, b"!").unwrap(), 1);
+    });
+    assert_eq!(f.open_calls(b.server), 1, "the completion call is still parked");
+    let typed = Instant::now();
+    b.types(b'q');
+    assert_eq!(reading.join().unwrap(), 1, "the read was answered with what was typed");
+    // When the input came, not when the completion call's hold ran out.
+    assert!(typed.elapsed() < Duration::from_micros(COLLECT_WAIT / 2), "answered at the hold's end");
+    b.line_quiet();
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
 

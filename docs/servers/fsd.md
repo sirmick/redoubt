@@ -109,8 +109,10 @@ power-loss safety by design, and a size that can be read.
 - **Removing a file is not revocation.** It ends the file, not anyone's access to the volume;
   revocation is destroying the grant.
 - **Admission** is the serving library's, per (account, label set) with a fair share per badge
-  ([R26 (admission fairness)](serving.md#r26-admission-fairness)); a `disconnect` frees a
-  client's fids.
+  ([R26 (admission fairness)](serving.md#r26-admission-fairness)): 32 fids, 8 minted
+  connections, 2 multiplexed connections' completion calls, 128 of their requests and 32 pages
+  they brought ([serving](serving.md#multiplexed-connections)) per bucket, sized to fit a 2 MiB
+  budget; a `disconnect` frees a client's fids.
 - **Metadata** lives in littlefs user attributes: what `stat` needs (mtime, qid version) and the
   per-file attributes of `get_attr` and `set_attr`. No access time is kept. A file's qid version
   moves with every write and truncation, so a client caching it sees the change. mtime is 0
