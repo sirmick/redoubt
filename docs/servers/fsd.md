@@ -19,12 +19,13 @@ power-loss safety by design, and a size that can be read.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · tested (34)</summary>
+<details><summary>Status: built · tested (35)</summary>
 
 - bench:fsd-boot
 - bench:fsd-confined-labelled
 - bench:fsd-corrupt-volume
 - bench:fsd-label-check
+- bench:fsd-large-directory
 - bench:fsd-one-volume
 - host:redoubt-fsd::attach_walk_open_read_write
 - host:redoubt-fsd::files_and_directories_survive_a_remount
