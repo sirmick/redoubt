@@ -43,7 +43,7 @@ pub struct Counts {
     pub servers: u64,
     /// The endpoints the servers receive on.
     pub endpoints: u64,
-    /// The `handed` items: one badged handle `init` mints for each.
+    /// The `handed` items and the volumes' range badges: one badged handle `init` mints for each.
     pub handed: u64,
     /// What one launch copies through `init`'s pages before `process_map` moves it to the child:
     /// the stub, the largest image (in bytes each) and the stack, the last two `PLACE_PAGES` at a

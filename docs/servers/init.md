@@ -234,7 +234,8 @@ Reset right. The loader maps the bundle into it, read-only
    `root`, so it outlives any one instance of its server, and R1 (flow) does not bind it because `root`
    is `system` class ([IPC](../kernel/ipc.md#r1-flow)). `init` keeps the receive right, hands the
    server a copy, and mints, for each `handed` item that names the endpoint, a handle with the
-   item's badge for the server whose entry lists it;
+   item's badge for the server whose entry lists it, and at `blkd`'s, each volume's range badge
+   for the server attaching it;
 3. starts `keyd` and runs the [key-separation check](#the-key-separation-check) against it. A
    manifest with no `keyd` entry is refused at step 1, since the bundle's key always needs
    asking about;
@@ -588,8 +589,8 @@ kernel
   it maps no device once `consoled` has the UART.
 - Beside those it holds only its own handle at each server it calls, its own connection to
   `consoled`, and each server's exit endpoint. It closes its copy of every badge it minted for a
-  `handed` item, and of each child's console connection, once the child is started, so it calls
-  as no system caller and writes as no child.
+  `handed` item or a volume's range, and of each child's console connection, once the child is
+  started, so it calls as no system caller and writes as no child.
 - It holds no keys and no cryptography, and parses no ELF: launching goes through the loader stub,
   inside the child.
 - It has no network and no user data, and after boot it receives only exit notices.

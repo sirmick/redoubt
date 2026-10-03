@@ -689,7 +689,8 @@ fn counts(m: &Manifest, machine: &Machine) -> Counts {
     Counts {
         servers: m.servers.len() as u64,
         endpoints: m.servers.iter().map(|s| s.receives.len() as u64).sum(),
-        handed: m.servers.iter().map(|s| s.handed.len() as u64).sum(),
+        // Each `handed` item, and each volume's range badge, is a badged handle `init` mints.
+        handed: m.servers.iter().map(|s| s.handed.len() as u64 + u64::from(s.volume.is_some())).sum(),
         stub_bytes: machine.stub_bytes as u64,
         largest_image_bytes: m.servers.iter().map(image).max().unwrap_or(0) as u64,
         stack_pages: machine.stack_pages as u64,

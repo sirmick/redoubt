@@ -100,6 +100,28 @@ fn the_image_manifest_s_bound() {
     assert_eq!(plan.bound, 259 + 13 + 6 + 24 + 48 + (4 + 3 + 64 + 3 + 16 + 3) + 5);
 }
 
+/// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
+/// full to a page's edge, either one opens the next page.
+#[test]
+fn a_volume_s_range_badge_counts_in_the_bound_as_a_handed_item_does() {
+    let mut m = image();
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
+    let bound = |m: &Manifest| on_virt(m).unwrap().bound;
+    let mut handed = m.clone();
+    server(&mut handed, "ipd").handed.push(Handed { endpoint: "bootfsd".into(), badge: 1 });
+    let mut attached = m.clone();
+    attached.servers[0].volume = Some("data".into());
+    // Each endpoint more takes a handle, until the next one opens a page.
+    let mut n = 0;
+    while bound(&handed) == bound(&m) {
+        for m in [&mut m, &mut handed, &mut attached] {
+            server(m, "bootfsd").receives.push(format!("e{n}"));
+        }
+        n += 1;
+    }
+    assert_eq!(bound(&attached), bound(&handed));
+}
+
 // ---- decoding: strict JSON, types, members ----
 
 #[test]
