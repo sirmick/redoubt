@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 392
+revision = 397
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -631,10 +631,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "Asynchronous underneath: the VM's I/O threads, and files over 9P"
   template = "package"
   parent = "beamlet-redoubt"
-  needs = ["BEAM2"]
+  needs = ["BEAM2", "AIO1"]
   body = "docs/userland/beamlet.md#asynchronous-underneath-synchronous-on-top: the thread split (short calls with timeouts, the session's reserved waiting calls, user code's waiting calls, system_limit past them), writes and size queries off the VM thread; the split's scheduler line reworded for one scheduler until several harts. Files: the platform's `files` over the client library's `file` (docs/userland/files.md#files-over-9p), on /boot and on an fsd volume. Brief to come."
   state = "todo"
-  revision = 310
+  revision = 394
 
 [[node]]
   id = "BEAM4"
@@ -780,8 +780,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Owner (2026-10-03): cut B6. Brief: .wash/local/B6-implementer.md (architect-14). Tier B, tools/testbench only, size S, needs nothing (B7's per-run directories are in). It launches when the host queue allows: its own proof boots QEMU.\n\nThe flags: --sweep SEEDS (A..B or a list; one case with qemu_seed), and --jobs J, which defaults to 1, is valid only with --sweep, and is capped at available_parallelism. Never the default. One build; each boot gets its seed directly (TESTBENCH_QEMU_SEED is refused with --sweep) and keeps its files in run-<pid>-<time>/seed-<N>-<arch>/. The join prints each seed's usual result in seed order, then a summary line (N seeds, passed, failed and which), and exits non-zero on any failure. A result under --jobs above 1 is a sweep datum, never a gate verdict; a timeout under --jobs is rerun alone. The merge gate stays serial.\n\nAcceptance: host tests (seed parsing and refusals, unique names, ordered join, summary and exit status); a machine proof of --sweep 1..4 --jobs 2 on the shortest seeded case, plus a serial replay of one seed matching. Page: testbench.md, after the qemu_seed paragraph, and the usage block."
-  state = "active"
-  revision = 390
+  state = "done"
+  revision = 397
 
 [[node]]
   id = "K19"
@@ -792,3 +792,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Owner (2026-10-03): \"pumps at the boundary\", the recommended option of .wash/local/destroy-simplify.md, goes after IPC3. Tier A (the kernel's destroy path: budget.rs destroy_subtree, message.rs budgets_dying/pump/end_thread/abandon/fail_all, process.rs died/settle_notice), size M. No brief yet: the Architect re-cuts it against IPC3's per-endpoint lists once IPC3 merges. The brief must cover the rescan loop's removal (fail_all's quadratic rescan), the five checks it replaces, the to-pump list collected at the mark and pumped at the boundary, and R10 step 4 tightened to \"from the mark on, no message stamped with a dying budget is delivered\" (budgets.md), with the one mutation retired as unwritable and its reason. The destruction does the same work, so it stays inside R10's 30 ms; the gate's R10 p99 is the check."
   state = "todo"
   revision = 388
+
+[[node]]
+  id = "AIO1"
+  title = "One I/O hub per process: many outstanding 9P requests on one thread, the kernel unchanged"
+  template = "package"
+  parent = "beamlet-redoubt"
+  body = "Owner (2026-10-03): one thread on the non-kernel side holds the buffers; AIO goes through it. Brief: .wash/local/AIO1-implementer.md (architect-14). Tier A (the serving library and the 9P skeleton; the client library), size M+, needs nothing. BEAM3 builds on it. Background: .wash/local/async-ipc-assessment.md.\n\nRuled: the completion side is one hub thread plus one thin waiter per server connection (a long-poll completion call each). Completions by send to a client endpoint are refused: the authority would match a reply's (R1), but the server's send blocks on the client's one thread, which can deadlock with that thread's own send, and any timeout drops a result and breaks R26. Exactly one thread needs a kernel notification object (AIO2, the owner's later choice, S-M, after IPC3); an endpoint set does not do it.\n\nDesign: the hub owns every buffer (by value in, by value out), sends tagged 9P requests (transfers for data; a short send timeout, retried, never lost), and dispatches completions. The serving library parks requests under the connection's admission share; undelivered completions count against it; over the share a request is answered busy; tags at most 256 per connection; Tflush answered once; the completion call's abandonment ends the connection.\n\nAcceptance: host attack tests (a never-polling client, death with requests parked, death between polls found at deadlines, a flush racing a completion, a send flood at WAIT_CAP, tag misuse); the machine case aio-many-reads (64 outstanding reads, 1 hub + 1 waiter, another client served meanwhile); today's one-call 9P unchanged. Pages: serving.md (Multiplexed connections, a new rule R7x, R26/R28 sentences), files.md, SECURITY.md."
+  state = "active"
+  revision = 396

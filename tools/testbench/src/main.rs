@@ -78,6 +78,84 @@ struct Args {
     /// Show cargo's output.
     #[arg(long, short)]
     verbose: bool,
+    /// Run the one case the filter names once per guest seed, from one build: `A..B`
+    /// (inclusive) or `A,B,C`, at most 10,000 seeds.
+    #[arg(long, value_name = "SEEDS", value_parser = parse_seeds)]
+    sweep: Option<Seeds>,
+    /// With --sweep, boot up to J seeds at once (1 by default, at most the host's parallelism).
+    /// A result under J above 1 is a sweep datum, never a verdict.
+    #[arg(long, value_name = "J", requires = "sweep")]
+    jobs: Option<usize>,
+}
+
+/// The seeds of a `--sweep`, each once.
+#[derive(Clone, Debug, PartialEq)]
+struct Seeds(Vec<u64>);
+
+/// The most seeds one sweep boots: past it, a typo in a range, not a sweep.
+const MAX_SEEDS: u64 = 10_000;
+
+/// `A..B` (inclusive) or a comma list; empty, reversed or repeated seeds are refused, and so are
+/// more than `MAX_SEEDS`.
+fn parse_seeds(text: &str) -> Result<Seeds, String> {
+    let seed = |text: &str| text.trim().parse::<u64>().map_err(|_| format!("{text:?} is not a seed"));
+    let seeds: Vec<u64> = match text.split_once("..") {
+        Some((first, last)) => {
+            let (first, last) = (seed(first)?, seed(last)?);
+            if first > last {
+                return Err(format!("{first}..{last} is reversed"));
+            }
+            if last - first >= MAX_SEEDS {
+                return Err(format!("{first}..{last} is more than {MAX_SEEDS} seeds"));
+            }
+            (first..=last).collect()
+        }
+        None => text.split(',').map(seed).collect::<Result<_, _>>()?,
+    };
+    if seeds.len() as u64 > MAX_SEEDS {
+        return Err(format!("{} seeds is more than {MAX_SEEDS}", seeds.len()));
+    }
+    let mut seen = HashSet::new();
+    if let Some(again) = seeds.iter().find(|seed| !seen.insert(**seed)) {
+        return Err(format!("seed {again} is given twice"));
+    }
+    Ok(Seeds(seeds))
+}
+
+/// A `--sweep`: one case booted once per seed on each of its targets, `jobs` boots at a time.
+struct Sweep<'a> {
+    case: &'a Case,
+    seeds: Vec<u64>,
+    jobs: usize,
+}
+
+/// The sweep `args` asks for, if any, or why it is refused, before anything builds. `replay` is
+/// TESTBENCH_QEMU_SEED, and `parallelism` the host's.
+fn sweep<'a>(
+    args: &Args,
+    cases: &'a [Case],
+    replay: Option<String>,
+    parallelism: usize,
+) -> Result<Option<Sweep<'a>>> {
+    let Some(Seeds(seeds)) = &args.sweep else { return Ok(None) };
+    if let Some(replay) = replay {
+        bail!("TESTBENCH_QEMU_SEED={replay} replays one seed, and --sweep names its own: not both");
+    }
+    let jobs = args.jobs.unwrap_or(1);
+    if jobs == 0 || jobs > parallelism {
+        bail!("--jobs {jobs}: from 1 to this host's parallelism, {parallelism}");
+    }
+    let Some(filter) = args.filter.as_deref() else { bail!("--sweep runs one case: name it") };
+    let named = Case::only(cases, filter);
+    let [case] = named[..] else { bail!("--sweep runs one case, and {filter:?} names {}", named.len()) };
+    let Kind::Boot(boot) = &case.kind else { bail!("{}: --sweep needs a boot case", case.name) };
+    if boot.qemu_seed.is_none() {
+        bail!("{}: --sweep needs a case that pins qemu_seed", case.name);
+    }
+    if let Some(only) = args.arch.as_deref().filter(|only| !case.arch.iter().any(|a| a == only)) {
+        bail!("{}: --arch {only} is not one of its targets ({})", case.name, case.arch.join(", "));
+    }
+    Ok(Some(Sweep { case, seeds: seeds.clone(), jobs }))
 }
 
 enum Outcome {
@@ -162,6 +240,11 @@ fn main() -> Result<()> {
         .collect();
     paths.sort();
     let cases = paths.iter().map(|p| Case::load(p)).collect::<Result<Vec<_>>>()?;
+    let parallelism = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let replay = std::env::var("TESTBENCH_QEMU_SEED").ok();
+    if let Some(sweep) = sweep(&args, &cases, replay, parallelism)? {
+        return run_sweep(&builder, &sweep, args.arch.as_deref(), &logs, &missing);
+    }
 
     let mut failures = 0;
     // Probed once, at the first loopback case.
@@ -294,15 +377,145 @@ fn main() -> Result<()> {
 
 /// Print one result line; returns 1 for a failure, to count them.
 fn report(label: &str, outcome: Outcome, seconds: f32) -> usize {
+    let (line, failed) = result_line(label, outcome, seconds);
+    println!("{line}");
+    failed
+}
+
+/// One result line, and 1 for a failure.
+fn result_line(label: &str, outcome: Outcome, seconds: f32) -> (String, usize) {
     match outcome {
-        Outcome::Pass => println!("PASS  {label:<32} {seconds:5.1}s"),
-        Outcome::Skip(why) => println!("SKIP  {label:<32}        {why}"),
-        Outcome::Fail(why) => {
-            println!("FAIL  {label:<32} {seconds:5.1}s  {why}");
-            return 1;
+        Outcome::Pass => (format!("PASS  {label:<32} {seconds:5.1}s"), 0),
+        Outcome::Skip(why) => (format!("SKIP  {label:<32}        {why}"), 0),
+        Outcome::Fail(why) => (format!("FAIL  {label:<32} {seconds:5.1}s  {why}"), 1),
+    }
+}
+
+/// One boot of a sweep, as it ended: what it printed before its results, and its results (one
+/// per `smp` entry), or the bench's own error.
+struct SeedRun {
+    seed: u64,
+    arch: &'static str,
+    notes: Vec<String>,
+    results: Result<Results>,
+}
+
+/// Where one boot of a sweep keeps its files: a directory of its own in the run's, so no two
+/// boots share a file.
+fn seed_dir(logs: &Path, seed: u64, arch: &str) -> PathBuf { logs.join(format!("seed-{seed}-{arch}")) }
+
+/// A boot's console log in `logs`; its disk, transcripts and captures are named after it.
+fn boot_log(logs: &Path, case: &str, arch: &str, smp: u32) -> PathBuf {
+    logs.join(format!("{case}-{arch}-smp{smp}.log"))
+}
+
+/// Build `sweep`'s case once for each target, then boot it once per seed, `sweep.jobs` at a time,
+/// and print the join.
+fn run_sweep(
+    builder: &Builder,
+    sweep: &Sweep,
+    only_arch: Option<&str>,
+    logs: &Path,
+    missing: &dyn Fn(String) -> Outcome,
+) -> Result<()> {
+    let case = sweep.case;
+    let mut failures = 0;
+    let mut built = Vec::new();
+    for arch in case.arch.iter().filter(|a| only_arch.is_none_or(|only| only == *a)) {
+        let target = target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
+        match build_case(builder, case, target, logs, missing)? {
+            Ok(ready) => built.push(ready),
+            Err(results) => {
+                for (variant, outcome, seconds) in results {
+                    failures +=
+                        report(&format!("{} [{}{}]", case.name, target.name, variant), outcome, seconds);
+                }
+            }
         }
     }
-    0
+    let boots: Vec<(u64, &Built)> =
+        sweep.seeds.iter().flat_map(|seed| built.iter().map(move |ready| (*seed, ready))).collect();
+    let runs = in_parallel(&boots, sweep.jobs, |&(seed, ready)| {
+        let mut notes = Vec::new();
+        let dir = seed_dir(logs, seed, ready.target.name);
+        let results = std::fs::create_dir(&dir)
+            .with_context(|| format!("creating {}", dir.display()))
+            .and_then(|()| boot_case(builder, ready, Some(seed), &dir, &mut |line| notes.push(line)));
+        SeedRun { seed, arch: ready.target.name, notes, results }
+    });
+    let arches: Vec<&str> = built.iter().map(|ready| ready.target.name).collect();
+    let (text, failed) = join(&case.name, &arches, runs);
+    print!("{text}");
+    failures += failed;
+    if failures > 0 {
+        bail!("{failures} test(s) failed; console logs are in {}", logs.display());
+    }
+    Ok(())
+}
+
+/// Run `work` on every item, up to `jobs` at once; the results come in the order they finished.
+fn in_parallel<T: Sync, R: Send>(items: &[T], jobs: usize, work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done = std::sync::Mutex::new(Vec::with_capacity(items.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.min(items.len()) {
+            scope.spawn(|| {
+                while let Some(item) = items.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                    let result = work(item);
+                    done.lock().unwrap().push(result);
+                }
+            });
+        }
+    });
+    done.into_inner().unwrap()
+}
+
+/// The text a sweep prints when every boot has ended, and its failures: each seed's result
+/// exactly as a single run prints it, in seed order and then in `arches`' order, whatever order
+/// they finished in; then one summary line for each target.
+fn join(case: &str, arches: &[&str], mut runs: Vec<SeedRun>) -> (String, usize) {
+    let arch_index = |arch: &str| arches.iter().position(|a| *a == arch);
+    runs.sort_by_key(|run| (run.seed, arch_index(run.arch)));
+    let mut text = String::new();
+    let mut failures = 0;
+    // Each boot's target, seed and whether it failed.
+    let mut ended: Vec<(&str, u64, bool)> = Vec::new();
+    for run in runs {
+        for note in run.notes {
+            text += &format!("{note}\n");
+        }
+        // The bench's own trouble with one boot is that seed's failure, not the end of the sweep.
+        let results = run
+            .results
+            .unwrap_or_else(|e| vec![(String::new(), Outcome::Fail(format!("bench error: {e:#}")), 0.0)]);
+        let mut failed = 0;
+        for (variant, outcome, seconds) in results {
+            let (line, fail) = result_line(&format!("{case} [{}{variant}]", run.arch), outcome, seconds);
+            text += &format!("{line}\n");
+            failed += fail;
+        }
+        ended.push((run.arch, run.seed, failed > 0));
+        failures += failed;
+    }
+    for arch in arches {
+        let seeds = ended.iter().filter(|(a, _, _)| a == arch).count();
+        let failed: Vec<String> = ended
+            .iter()
+            .filter(|(a, _, failed)| a == arch && *failed)
+            .map(|(_, seed, _)| seed.to_string())
+            .collect();
+        let plural = if seeds == 1 { "" } else { "s" };
+        text += &format!(
+            "sweep {case} {arch}: {seeds} seed{plural}, {} passed, {} failed",
+            seeds - failed.len(),
+            failed.len()
+        );
+        if !failed.is_empty() {
+            text += &format!(": {}", failed.join(","));
+        }
+        text += "\n";
+    }
+    (text, failures)
 }
 
 /// The RustSBI Prototyper binary for `target`, or an error naming where it was looked for.
@@ -406,6 +619,9 @@ fn distinct_within(patterns: &[String], log: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A case's results on one target: a variant (`, smp=N`, or none), its outcome and its seconds.
+type Results = Vec<(String, Outcome, f32)>;
+
 /// Run one case on one target. A boot case yields one result per `smp` entry. `missing` turns
 /// something the host lacks into a failure or, with --allow-skip, a skip.
 fn run_case(
@@ -414,7 +630,33 @@ fn run_case(
     target: &'static Target,
     logs: &Path,
     missing: &dyn Fn(String) -> Outcome,
-) -> Result<Vec<(String, Outcome, f32)>> {
+) -> Result<Results> {
+    match build_case(builder, case, target, logs, missing)? {
+        Ok(ready) => boot_case(builder, &ready, qemu_seed(ready.boot)?, logs, &mut |line| println!("{line}")),
+        Err(results) => Ok(results),
+    }
+}
+
+/// A boot case built and packed for one target, to boot any number of times.
+struct Built<'a> {
+    boot: &'a case::Boot,
+    name: &'a str,
+    target: &'static Target,
+    machine: &'static Machine,
+    firmware: String,
+    loader: PathBuf,
+    bundle: PathBuf,
+}
+
+/// Build a boot case for `target`, or the results of a case that ends here: a build case, a host
+/// that cannot boot it, a build that fails.
+fn build_case<'a>(
+    builder: &Builder,
+    case: &'a Case,
+    target: &'static Target,
+    logs: &Path,
+    missing: &dyn Fn(String) -> Outcome,
+) -> Result<Result<Built<'a>, Results>> {
     let started = Instant::now();
     let elapsed = |since: Instant| since.elapsed().as_secs_f32();
 
@@ -425,7 +667,7 @@ fn run_case(
                 Ok(()) => Outcome::Pass,
                 Err(e) => Outcome::Fail(format!("{e:#}")),
             };
-            return Ok(vec![(String::new(), outcome, elapsed(started))]);
+            return Ok(Err(vec![(String::new(), outcome, elapsed(started))]));
         }
         Kind::Boot(boot) => boot,
         Kind::UnsafeBudget(_)
@@ -440,18 +682,18 @@ fn run_case(
     };
     let machine = match &target.machine {
         Ok(machine) => machine,
-        Err(why) => return Ok(vec![(String::new(), Outcome::Skip(why.to_string()), 0.0)]),
+        Err(why) => return Ok(Err(vec![(String::new(), Outcome::Skip(why.to_string()), 0.0)])),
     };
     let firmware = match rustsbi_prototyper(target) {
         Ok(firmware) => firmware,
-        Err(why) => return Ok(vec![(String::new(), missing(why), 0.0)]),
+        Err(why) => return Ok(Err(vec![(String::new(), missing(why), 0.0)])),
     };
     if let Err(why) = qemu::usable(machine.qemu) {
-        return Ok(vec![(String::new(), missing(why), 0.0)]);
+        return Ok(Err(vec![(String::new(), missing(why), 0.0)]));
     }
     if !boot.session.is_empty() {
         if let Err(why) = ssh_available() {
-            return Ok(vec![(String::new(), missing(why), 0.0)]);
+            return Ok(Err(vec![(String::new(), missing(why), 0.0)]));
         }
     }
 
@@ -472,17 +714,29 @@ fn run_case(
         &bundle,
     ) {
         Ok(built) => built,
-        Err(e) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
+        Err(e) => return Ok(Err(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))])),
     };
+    Ok(Ok(Built { boot, name: &case.name, target, machine, firmware, loader, bundle }))
+}
 
-    let seed = qemu_seed(boot)?;
+/// Boot a built case once per hart count with guest seed `seed`, keeping its files in `logs`.
+/// `out` takes the lines it prints before its results.
+fn boot_case(
+    builder: &Builder,
+    built: &Built,
+    seed: Option<u64>,
+    logs: &Path,
+    out: &mut dyn FnMut(String),
+) -> Result<Results> {
+    let Built { boot, name, target, machine, firmware, loader, bundle } = built;
+    let elapsed = |since: Instant| since.elapsed().as_secs_f32();
     if let Some(seed) = seed {
-        println!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)");
+        out(format!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)"));
     }
     let mut results = Vec::new();
     for smp in &boot.smp {
         let run_started = Instant::now();
-        let log = logs.join(format!("{}-{}-smp{}.log", case.name, target.name, smp));
+        let log = boot_log(logs, name, target.name, *smp);
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
             let disk = log.with_extension("img");
@@ -495,9 +749,9 @@ fn run_case(
             }
             let image = Image {
                 machine,
-                firmware: &firmware,
-                loader: &loader,
-                bundle: &bundle,
+                firmware,
+                loader,
+                bundle,
                 smp: *smp,
                 memory_mib: boot.memory_mib.unwrap_or(target::DEFAULT_MEMORY_MIB),
                 devices: &devices,
@@ -534,7 +788,7 @@ fn run_case(
         // Cases without a `post_check` or peers are judged exactly as before.
         let peers = boot.net.as_ref().is_some_and(|net| !net.peer.is_empty());
         let outcome = match outcome {
-            Outcome::Pass if boot.post_check.is_some() || peers => post_check(boot, &log)?,
+            Outcome::Pass if boot.post_check.is_some() || peers => post_check(boot, &log, out)?,
             other => other,
         };
         results.push((
@@ -556,8 +810,8 @@ fn qemu_seed(boot: &case::Boot) -> Result<Option<u64>> {
 }
 
 /// Run a case's `post_check` (a name, then its arguments) over the console log of a boot that
-/// passed.
-fn post_check(boot: &case::Boot, log: &Path) -> Result<Outcome> {
+/// passed. `out` takes the line a check prints.
+fn post_check(boot: &case::Boot, log: &Path, out: &mut dyn FnMut(String)) -> Result<Outcome> {
     // A network with peers: the peers' counts and the capture of this boot (`peer.rs`).
     if let Some(net) = boot.net.as_ref().filter(|net| !net.peer.is_empty()) {
         if let Err(why) = peer::judge_peers(net, &peer::Files::beside(&log.with_extension("img"))) {
@@ -571,7 +825,7 @@ fn post_check(boot: &case::Boot, log: &Path) -> Result<Outcome> {
     Ok(match (!check.is_empty()).then_some(name) {
         Some("sched_oracle") => match sched_oracle::run(&text, args) {
             Ok(summary) => {
-                println!("      {summary}");
+                out(format!("      {summary}"));
                 Outcome::Pass
             }
             Err(why) => Outcome::Fail(format!("sched_oracle: {why}")),
@@ -654,5 +908,153 @@ mod tests {
         let one = log(&["init: started b, console 1a"]);
         assert!(distinct_within(&pattern, &one).unwrap_err().contains("not two"));
         assert!(distinct_within(&pattern, "").is_err());
+    }
+
+    /// SEEDS is an inclusive range or a comma list; empty, reversed and repeated seeds are refused.
+    #[test]
+    fn sweep_seeds_are_ranges_or_lists() {
+        assert_eq!(parse_seeds("1..4"), Ok(Seeds(vec![1, 2, 3, 4])));
+        assert_eq!(parse_seeds("7..7"), Ok(Seeds(vec![7])));
+        assert_eq!(parse_seeds("3,5,9"), Ok(Seeds(vec![3, 5, 9])));
+        assert_eq!(parse_seeds("12"), Ok(Seeds(vec![12])));
+        assert_eq!(parse_seeds("1..10000").map(|Seeds(s)| s.len()), Ok(10_000));
+        for (refused, why) in [
+            ("", "is not a seed"),
+            ("..", "is not a seed"),
+            ("3,", "is not a seed"),
+            ("4..1", "reversed"),
+            ("3,5,3", "twice"),
+            ("x..2", "is not a seed"),
+            ("0..18446744073709551615", "more than 10000 seeds"),
+            ("1..10001", "more than 10000 seeds"),
+        ] {
+            let err = parse_seeds(refused).unwrap_err();
+            assert!(err.contains(why), "{refused:?}: {err}");
+        }
+    }
+
+    fn case(name: &str, fields: &str) -> Case {
+        let mut case: Case = toml::from_str(&format!("description = 'x'\narch = ['rv64', 'rv32']\n{fields}"))
+            .expect("a test case's TOML");
+        case.name = name.into();
+        case
+    }
+
+    fn args(argv: &[&str]) -> Result<Args, clap::Error> {
+        Args::try_parse_from(std::iter::once("testbench").chain(argv.iter().copied()))
+    }
+
+    /// A sweep names one case that pins its seed; `--jobs` comes only with it, from 1 to the
+    /// host's parallelism; TESTBENCH_QEMU_SEED is refused beside it, and so is an `--arch` the
+    /// case lacks; a run without it is no sweep.
+    #[test]
+    fn a_sweep_is_refused_before_anything_builds() {
+        let seeded = "kind = 'boot'\nprograms = []\nexpect = []\nqemu_seed = 1\n";
+        let cases = [
+            case("sched", seeded),
+            case("sched-ties", seeded),
+            case("timer", "kind = 'boot'\nprograms = []\nexpect = []\n"),
+        ];
+        let plan = |argv: &[&str], replay: Option<&str>| {
+            sweep(&args(argv).unwrap(), &cases, replay.map(String::from), 4)
+                .map(|s| s.map(|s| (&s.case.name, s.jobs)))
+        };
+        let refused = |argv: &[&str], replay: Option<&str>, why: &str| {
+            let err = format!("{:#}", plan(argv, replay).err().unwrap_or_else(|| panic!("{argv:?} ran")));
+            assert!(err.contains(why), "{argv:?}: {err}");
+        };
+
+        assert_eq!(plan(&["sched"], None).unwrap(), None);
+        assert_eq!(plan(&["sched", "--sweep", "1..4"], None).unwrap(), Some((&"sched".to_string(), 1)));
+        assert_eq!(
+            plan(&["ties", "--sweep", "1..4", "--jobs", "4"], None).unwrap(),
+            Some((&"sched-ties".to_string(), 4))
+        );
+        assert!(args(&["sched", "--jobs", "2"]).is_err(), "--jobs without --sweep");
+        refused(&["sched", "--sweep", "1..4"], Some("3"), "TESTBENCH_QEMU_SEED");
+        refused(&["sched", "--sweep", "1..4", "--jobs", "5"], None, "parallelism, 4");
+        refused(&["sched", "--sweep", "1..4", "--jobs", "0"], None, "parallelism");
+        refused(&["--sweep", "1..4"], None, "name it");
+        refused(&["sch", "--sweep", "1..4"], None, "names 2");
+        refused(&["nothing", "--sweep", "1..4"], None, "names 0");
+        refused(&["timer", "--sweep", "1..4"], None, "qemu_seed");
+        refused(&["sched", "--sweep", "1..4", "--arch", "x86"], None, "not one of its targets (rv64, rv32)");
+        assert_eq!(
+            plan(&["sched", "--sweep", "1..4", "--arch", "rv32"], None).unwrap(),
+            Some((&"sched".to_string(), 1))
+        );
+    }
+
+    /// No two boots of a sweep share a file: each seed and target has a directory of its own, and
+    /// within it each hart count a log, a disk and captures of its own.
+    #[test]
+    fn sweep_boots_have_their_own_files() {
+        let logs = Path::new("/run");
+        let mut seen = HashSet::new();
+        for seed in [1, 2, 10, 11, 21, 111] {
+            for arch in ["rv64", "rv32"] {
+                let dir = seed_dir(logs, seed, arch);
+                assert_eq!(dir.parent(), Some(logs));
+                assert!(seen.insert(dir.clone()), "{} twice", dir.display());
+                for smp in [1, 2, 4] {
+                    let log = boot_log(&dir, "sched", arch, smp);
+                    assert_eq!(log.parent(), Some(dir.as_path()));
+                    for file in
+                        [log.clone(), log.with_extension("img"), log.with_extension("second-boot.log")]
+                    {
+                        assert!(seen.insert(file.clone()), "{} twice", file.display());
+                    }
+                }
+            }
+        }
+        assert_eq!(seed_dir(logs, 3, "rv64"), Path::new("/run/seed-3-rv64"));
+    }
+
+    fn seed_run(seed: u64, arch: &'static str, outcome: Outcome) -> SeedRun {
+        let notes = vec![format!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)")];
+        SeedRun { seed, arch, notes, results: Ok(vec![(", smp=1".into(), outcome, 1.0)]) }
+    }
+
+    /// The join prints each seed as a single run would, in seed order then by target, whatever
+    /// order they finished in; then each target's summary, naming the failed seeds, and counts
+    /// the failures, which make the run's exit status non-zero.
+    #[test]
+    fn the_join_prints_in_seed_order_and_counts_failures() {
+        let runs = vec![
+            seed_run(3, "rv32", Outcome::Pass),
+            seed_run(10, "rv64", Outcome::Pass),
+            seed_run(3, "rv64", Outcome::Fail("timed out".into())),
+            seed_run(1, "rv32", Outcome::Pass),
+            seed_run(1, "rv64", Outcome::Pass),
+            SeedRun { seed: 10, arch: "rv32", notes: vec![], results: Err(anyhow::anyhow!("no disk")) },
+        ];
+        let (text, failures) = join("sched", &["rv64", "rv32"], runs);
+        let lines: Vec<&str> = text.lines().collect();
+        let seed_lines: Vec<&str> =
+            lines.iter().filter(|l| l.contains("qemu seed")).map(|l| l.trim()).collect();
+        assert_eq!(
+            seed_lines,
+            [1, 1, 3, 3, 10].map(|s| format!("qemu seed {s} (TESTBENCH_QEMU_SEED={s} replays it)")),
+        );
+        let results: Vec<&str> =
+            lines.iter().filter_map(|l| l.split_once("sched [").map(|(_, r)| r)).collect();
+        assert_eq!(results.len(), 6);
+        assert!(results[0].starts_with("rv64, smp=1]") && lines[1].starts_with("PASS"), "{text}");
+        assert!(results[1].starts_with("rv32, smp=1]"), "{text}");
+        assert!(lines[5].starts_with("FAIL") && lines[5].ends_with("timed out"), "{text}");
+        assert!(lines[10].starts_with("FAIL") && lines[10].contains("bench error: no disk"), "{text}");
+        assert_eq!(lines[1], format!("PASS  {:<32}   1.0s", "sched [rv64, smp=1]"));
+        assert_eq!(
+            &lines[11..],
+            [
+                "sweep sched rv64: 3 seeds, 2 passed, 1 failed: 3",
+                "sweep sched rv32: 3 seeds, 2 passed, 1 failed: 10"
+            ]
+        );
+        assert_eq!(failures, 2);
+
+        let (text, failures) = join("sched", &["rv64"], vec![seed_run(2, "rv64", Outcome::Pass)]);
+        assert_eq!(failures, 0);
+        assert!(text.ends_with("sweep sched rv64: 1 seed, 1 passed, 0 failed\n"), "{text}");
     }
 }
