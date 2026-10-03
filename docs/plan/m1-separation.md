@@ -52,12 +52,12 @@ Bob, attacking Alice.
 | System fairness: a busy `fsd:data` does not fill `blkd`'s `WAIT_CAP` for `fsd:alice-secrets` | R2 | not yet |
 | Server CPU: expensive requests to a server delay other users only by that server's weight | R12 | `sched-server-busy`, `sched-large-weight` |
 | Shared pools: filling the `data` volume does not fail Alice's saves; flooding `fsd` with handles does not grow its table | [R48 (a quota per attach root)](../servers/fsd.md#r48-a-quota-per-attach-root) | not yet |
-| Server authority: no server's startup block holds its budget, a manifest granting one is refused, and no server can destroy a session | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | not yet |
+| Server authority: no server's startup block holds its budget, a manifest granting one is refused, and no server can destroy a session | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | `init-refuses-budget-handle`; that no server can destroy a session is the steward's, not yet |
 | `process_create` with a badged exit endpoint, to aim exit notices and blame at a server | R21 | `process-attack` |
 | A reused PID carries authority | [R20 (PID reuse)](../kernel/processes.md#r20-pid-reuse) | `pid-reuse-authority` |
 | Loopback login: a session connects to the box's own `sshd` with a key `keyd` holds | [R59 (never the box's own addresses)](../servers/ipd.md#r59-never-the-boxs-own-addresses) | `net-attacks` for `ipd`'s refusal; the login not yet |
 | No leaky state: while a vault session works, an unlabelled observer sees no change in usage, request and session ids, message ids, PIDs, file versions, qids, directory listings, audit records or approval notifications, and cannot write, truncate, create or remove anything in the vault's volume | R37, R25 | not yet |
-| Hostile launch: a malformed ELF or startup block from a user parent hurts only the child | [R32 (a hostile image hurts only its process)](../servers/init.md#r32-a-hostile-image-hurts-only-its-process), [R31 (startup block checked whole)](../servers/init.md#r31-startup-block-checked-whole) | `stub-launch` for a malformed ELF, `process-attack` for malformed startup records at `process_start`; from a user parent not yet |
+| Hostile launch: a malformed ELF or startup block from a user parent hurts only the child | [R32 (a hostile image hurts only its process)](../servers/init.md#r32-a-hostile-image-hurts-only-its-process), [R31 (startup block checked whole)](../servers/init.md#r31-startup-block-checked-whole) | `stub-launch` for a malformed ELF, `process-attack` for malformed startup records at `process_start`; from a user parent, the steward's, not yet |
 | Approval flood: requests hit the per-(account, label set) cap; the steward and Alice's approval screen are unaffected | R38, R26 | not yet |
 | Admission: a crashed or killed client's fids and quota come back when its launcher disconnects it; a system daemon filling its admission slots does not lock out the steward | R26 | not yet in a boot |
 
@@ -95,23 +95,6 @@ page.
   name, whole reads and writes, and generated Elixir clients
   ([native programs](../userland/native.md#dropped-files-error-names-and-generated-calls),
   [wire](../servers/wire.md#error-names)).
-- **`init` and the boot manifest.** The loader loads only the kernel and `init`
-   ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)); `init` reads the
-   manifest, builds the budget tree from it
-   ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)), hands each server its
-   devices ([devices](../kernel/devices.md#which-process-gets-which-device)), runs the
-   confinement and key-separation checks
-   ([bucket counts among them](../servers/init.md#the-boot-manifest)), and starts every server through the loader stub with
-   fresh connections ([init](../servers/init.md)). `blkd`, `netd`, `ipd`, `bootfsd`, `consoled`
-   and `keyd` move from the bench's rigs to `init`. A launcher releases its children's grants
-   ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)). A shared server's
-   terminal fallback and rollback are exercised in a boot, not only in host tests
-   ([serving](../servers/serving.md#replies-and-rollback)), and restarting a driver is a case of
-   its own ([netd](../servers/netd.md#started-by-init)). The loader already starts only `init`,
-   and the kernel's cases start their programs from a tester in `init`'s place, each in a budget
-   of its own with the budgets the case names; the servers' cases boot `init` itself with a
-   manifest of their own, and `consoled` says who wrote each line
-   ([starting a case's programs](../testbench.md#starting-a-cases-programs)).
 - **beamlet on Redoubt, and the shell on the console.** The VM runs on the kernel with its natives and
    asynchronous platform ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)); an interactive
    Elixir shell on the UART console, before SSH exists
@@ -143,9 +126,8 @@ Every follow-up page is placed above.
 ## Progress
 
 Built and attack-tested today:
-- **The kernel**, except SUM and MXR clearing and the three places `init` takes over from the
-  bench (what the loader loads, the budget tree, which process gets which device): handles and
-  objects, IPC, memory, budgets, scheduling, the timer, processes, devices and DMA, verified boot
+- **The kernel**, except SUM and MXR clearing: handles and objects, IPC, memory, budgets,
+  scheduling, the timer, processes, devices and DMA, verified boot
   ([the kernel](../kernel/README.md)), and the executable model with its mutations
   ([the model](../kernel/model.md)).
 - **The kernel containment gate:** hostile leases preempted, ended at their deadlines and revoked
@@ -155,13 +137,19 @@ Built and attack-tested today:
   parked calls, typed dispatch, the 9P skeleton ([serving](../servers/serving.md),
   [wire](../servers/wire.md)).
 - **The drivers and the network:** `blkd` and `netd` attacked by hostile devices in host tests,
-  `netd` and `ipd` on the real kernel through a test rig ([blkd](../servers/blkd.md),
+  `blkd`, `netd` and `ipd` on the real kernel under `init` ([blkd](../servers/blkd.md),
   [netd](../servers/netd.md), [ipd](../servers/ipd.md)).
 - **The file system's core:** littlefs against a hostile medium and power loss
   ([fsd](../servers/fsd.md#littlefs)).
-- **`bootfsd`, `consoled` and `keyd`**, served and attacked in host tests
+- **`bootfsd`, `consoled` and `keyd`**, attacked in host tests and booted under `init`
   ([bootfsd](../servers/bootfsd.md), [consoled](../servers/consoled.md), [keyd](../servers/keyd.md)).
 - **Launching:** the startup block and the loader stub ([init](../servers/init.md#the-startup-block)).
+- **`init` and the boot manifest:** the loader loads only the kernel and `init`; `init` checks
+  the manifest, builds the budget tree, hands each server its devices, and starts every server
+  through the loader stub with fresh connections. It restarts a server that ends, a driver on its
+  reset device, and reboots when one cannot stay up. Every server's case boots `init`
+  ([init](../servers/init.md),
+  [starting a case's programs](../testbench.md#starting-a-cases-programs)).
 - **The client library**, tested on the host against real servers
   ([native programs](../userland/native.md#the-client-library)).
 - **beamlet** on the host, loading hostile code with limits inside one VM
@@ -175,5 +163,4 @@ Built and attack-tested today:
   OpenSSH's server as the reference ([sshd](../servers/sshd.md#the-core-and-its-platforms),
   [SSH sessions](../testbench.md#sessions-and-the-loopback-server)).
 
-Not built: `init`'s manifest handling, the `fsd` server, the steward, `sshd` on the box, sessions
-and the agent.
+Not built: the `fsd` server, the steward, `sshd` on the box, sessions and the agent.
