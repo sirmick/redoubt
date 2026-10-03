@@ -1,7 +1,8 @@
-//! `net-client`: one unprivileged program of the network rig, in the role its arguments name
-//! (`redoubt_net_client::Role`). It talks to `ipd` only through the connection the rig granted it
-//! (`net`), exactly as a principal's program would, and to the rig only to report
-//! (`redoubt_net_client::REPORT`).
+//! `net-client`: one unprivileged program of the net cases, in the role its arguments name
+//! (`redoubt_net_client::Role`). It talks to `ipd` only through the badge its manifest entry is
+//! handed (`ipd`), exactly as a principal's program would, and to the judge only to report
+//! (`redoubt_net_client::REPORT`). It begins on its turn, reports how its role ended, and parks.
+//! Launched by the rig instead, it reports to `rig` and exits.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -12,8 +13,8 @@ extern crate alloc;
 use alloc::format;
 
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
-use redoubt_net_client::{Args, NET, REPORT, RIG, Role, code, event};
-use redoubt_rt::abi::FOREVER;
+use redoubt_net_client::{Args, IPD, JUDGE, REPORT, RIG, Role, code, event};
+use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
@@ -35,11 +36,30 @@ const ESTABLISHED: u32 = 2;
 const LISTENING: u32 = 5;
 
 fn run(startup: &Startup) -> u32 {
+    let judge = startup.handle(JUDGE);
+    let outcome = act(startup, judge);
+    // The rig waits for its exit.
+    let Some(judge) = judge else { return outcome };
+    // Under `init` an exit is a restart: it parks whether or not the judge heard it.
+    let _ = report(Some(&Endpoint::from_handle(judge)), event::DONE, u64::from(outcome));
+    loop {
+        let _ = redoubt_rt::handle::sleep(FOREVER);
+    }
+}
+
+/// The role, from its turn to its end: its outcome.
+fn act(startup: &Startup, judge: Option<Handle>) -> u32 {
     let Some(args) = Args::parse(startup.args()) else { return code::BAD_ARGS };
-    let rig = startup.handle(RIG).map(Endpoint::from_handle);
-    let Some(net) = startup.handle(NET) else { return code::NO_NET };
+    let reports = judge.or_else(|| startup.handle(RIG)).map(Endpoint::from_handle);
+    let Some(net) = startup.handle(IPD) else { return code::NO_NET };
     let Ok(lend) = Lend::new(2) else { return code::NO_MEMORY };
-    let mut me = Me { c: Connection::new(Endpoint::from_handle(net)), lend, net, rig, next_fid: 10 };
+    let mut me =
+        Me { c: Connection::new(Endpoint::from_handle(net)), lend, net, judge: reports, next_fid: 10 };
+    if judge.is_some() {
+        if let Err(code) = me.report(event::START, 0) {
+            return code;
+        }
+    }
     let done = match args.role {
         Role::Echo => me.echo(&args),
         Role::Listen => me.listen(&args),
@@ -54,12 +74,23 @@ fn run(startup: &Startup) -> u32 {
     }
 }
 
+/// One report, answered (for [`event::START`], when the judge gives the turn).
+fn report(judge: Option<&Endpoint>, what: u64, value: u64) -> Result<(), u32> {
+    let judge = judge.ok_or(code::REPORT)?;
+    judge
+        .call(&[REPORT, what, value, 0], &[], None, FOREVER)
+        .into_result()
+        .map(|_| ())
+        .map_err(|_| code::REPORT)
+}
+
 struct Me {
     c: Connection,
     lend: Lend,
     /// The same connection as `c`'s, for a typed call beside 9P.
-    net: redoubt_rt::abi::Handle,
-    rig: Option<Endpoint>,
+    net: Handle,
+    /// Where it reports: the judge, or the rig.
+    judge: Option<Endpoint>,
     next_fid: u32,
 }
 
@@ -76,13 +107,7 @@ fn op(message: net_ctl::Message<'_>) -> ([u8; 16], usize) {
 }
 
 impl Me {
-    fn report(&self, what: u64, value: u64) -> Result<(), u32> {
-        let rig = self.rig.as_ref().ok_or(code::REPORT)?;
-        rig.call(&[REPORT, what, value, 0], &[], None, FOREVER)
-            .into_result()
-            .map(|_| ())
-            .map_err(|_| code::REPORT)
-    }
+    fn report(&self, what: u64, value: u64) -> Result<(), u32> { report(self.judge.as_ref(), what, value) }
 
     fn fid(&mut self) -> u32 {
         self.next_fid += 1;

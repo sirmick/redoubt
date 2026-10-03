@@ -37,7 +37,14 @@ path = "src/bin/net-rig-pinned.rs"
 name = "net-rig-probe"
 path = "src/bin/net-rig-probe.rs"
 
+# The reporter of the net cases under init: a servers entry the clients report to.
+[[bin]]
+name = "net-judge"
+path = "src/bin/net-judge.rs"
+test = false
+
 [dependencies]
+redoubt-init-programs = { path = "../init-programs" }
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-ipd = { path = "../../servers/ipd" }
 redoubt-net-client = { path = "client" }

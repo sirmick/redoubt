@@ -480,11 +480,13 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
 - bench:init-boot
+- bench:net-tcp
+- host:testbench::devices_sit_on_fixed_slots
 - host:testbench::every_network_is_restricted
 - host:testbench::virtio_devices_are_modern
 
@@ -500,7 +502,10 @@ forward = [22]               # guest TCP ports reachable from the host (default:
 host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions accept
 ```
 
-Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. The guest reaches
+Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
+virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,
+the disk at `0x10008000` with interrupt 8, whether or not the case has the other. So a case's
+manifest names its devices as the image's does. The guest reaches
 nothing outside QEMU (`restrict=on`, checked for every `[net]` case): there is no outside peer, only
 forwarded connections coming in, unless a case adds one deliberately. Each boot gets its own host
 ports, chosen by the operating system, so benches running side by side do not collide.

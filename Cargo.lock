@@ -732,6 +732,7 @@ dependencies = [
 name = "redoubt-net-tests"
 version = "0.1.0"
 dependencies = [
+ "redoubt-init-programs",
  "redoubt-ipd",
  "redoubt-net-client",
  "redoubt-rt",

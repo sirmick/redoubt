@@ -28,7 +28,7 @@ use core::fmt::{self, Write};
 use core::num::NonZeroU64;
 
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
-use redoubt_net_client::{REPORT, code, event};
+use redoubt_net_client::{REPORT, RIG, code, event};
 use redoubt_rt::abi::{
     BudgetSpec, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels, MemFlags, PAGE_SIZE, ResetKind,
 };
@@ -485,7 +485,13 @@ impl Rig {
         // Every client is user-class, under USERS, as a principal's program is; a labelled one too:
         // adding labels needs the *caller's* budget to be system-class (kernel/budgets.md,
         // "Labels on budgets"), and the rig runs in the root budget, which is.
-        let child = self.launch(USERS, &spec, CLIENT, &[("net", conn), ("rig", report.handle())], args)?;
+        let child = self.launch(
+            USERS,
+            &spec,
+            CLIENT,
+            &[(redoubt_net_client::IPD, conn), (RIG, report.handle())],
+            args,
+        )?;
         // The child has its own copies now.
         let _ = redoubt_rt::handle::close(conn);
         let _ = report.close();

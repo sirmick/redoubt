@@ -177,6 +177,14 @@ fn free_ports(count: usize) -> Result<Vec<u16>> {
 /// QEMU presents, so every case with a virtio device asks for the modern one.
 pub const MODERN_VIRTIO: [&str; 2] = ["-global", "virtio-mmio.force-legacy=false"];
 
+/// The virtio-mmio slots the devices sit on, the ones `image/manifest.json` names, whether or not
+/// the case has the other device (docs/testbench.md, "Disks and network cards"). QEMU's `virt`
+/// machine names its eight transports `virtio-mmio-bus.0` to `.7`, bus `i` at `0x10001000 + i *
+/// 0x1000` with interrupt `1 + i`; left to itself it fills them from the top, so a card's slot
+/// would depend on whether a disk came first.
+pub const NET_BUS: &str = "virtio-mmio-bus.6";
+pub const DISK_BUS: &str = "virtio-mmio-bus.7";
+
 /// A disk sector, in bytes.
 const SECTOR: u64 = 512;
 
@@ -206,7 +214,7 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
         // QEMU's option syntax separates with commas; a comma inside a value is doubled.
         let file = disk.display().to_string().replace(',', ",,");
         args.extend(["-drive".into(), format!("if=none,format=raw,id=disk0,file={file}")]);
-        args.extend(["-device".into(), "virtio-blk-device,drive=disk0".into()]);
+        args.extend(["-device".into(), format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}")]);
     }
     let mut forwards = Vec::new();
     if let Some(net) = &boot.net {
@@ -220,7 +228,12 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
         // Peers: the wider network, a guestfwd each, and the capture (`peer.rs`).
         let peers = peer::Files::beside(disk);
         netdev += &peer::netdev_options(net, &peers)?;
-        args.extend(["-netdev".into(), netdev, "-device".into(), "virtio-net-device,netdev=net0".into()]);
+        args.extend([
+            "-netdev".into(),
+            netdev,
+            "-device".into(),
+            format!("virtio-net-device,netdev=net0,bus={NET_BUS}"),
+        ]);
         args.extend(peer::capture_args(net, &peers));
     }
     Ok((args, forwards))
@@ -624,6 +637,33 @@ mod tests {
         assert_eq!(modern(&args("[disk]\nsize_kib = 64\n")), 1);
         assert_eq!(modern(&args("[net]\n[disk]\nsize_kib = 64\n")), 1);
         assert!(args("").is_empty());
+    }
+
+    /// Each device sits on its fixed slot, alone or with the other: the card on bus 6
+    /// (`0x10007000`, interrupt 7), the disk on bus 7 (`0x10008000`, interrupt 8), as
+    /// `image/manifest.json` names them. A boot proves QEMU puts them there: `init` refuses a
+    /// device that is not where its manifest says (`net-tcp` has no disk, `init-boot` both).
+    #[test]
+    fn devices_sit_on_fixed_slots() {
+        let net = format!("virtio-net-device,netdev=net0,bus={NET_BUS}");
+        let disk = format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}");
+        let devices = |case: &str| -> Vec<String> {
+            args(case).windows(2).filter(|w| w[0] == "-device").map(|w| w[1].clone()).collect()
+        };
+        assert_eq!(devices("[net]\n"), [net.clone()]);
+        assert_eq!(devices("[disk]\nsize_kib = 64\n"), [disk.clone()]);
+        assert_eq!(devices("[net]\n[disk]\nsize_kib = 64\n"), [disk, net]);
+        // The image's manifest names each device on one line.
+        let manifest = include_str!("../../../image/manifest.json");
+        for (name, bus) in [("net0", NET_BUS), ("disk0", DISK_BUS)] {
+            let i: u64 = bus.strip_prefix("virtio-mmio-bus.").unwrap().parse().unwrap();
+            let line = format!(
+                "{{ \"name\": \"{name}\", \"base\": \"{}\", \"irq\": {}, \"dma\": true }}",
+                0x1000_1000 + i * 0x1000,
+                1 + i
+            );
+            assert!(manifest.contains(&line), "image/manifest.json lacks {line}");
+        }
     }
 
     /// The guest reaches nothing outside QEMU: every network is `restrict=on`, the wider one a

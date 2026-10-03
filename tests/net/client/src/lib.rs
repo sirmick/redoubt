@@ -1,24 +1,34 @@
-//! What the network rig (`tests/net`) and the programs it launches agree on: the roles, their
-//! arguments, the reports a program makes to the rig, and the exit codes.
+//! What the net cases' programs (`tests/net`) agree on: the clients' roles, their arguments, the
+//! reports a client makes to the judge, the outcomes and the badges.
 //!
-//! A launched program holds two handles: `net`, its connection to `ipd` (granted by the rig), and
-//! `rig`, where it reports. It has no console. **Nothing a program reports is a verdict** on the
-//! network: the rig uses reports only to know when to go on (a listener is ready, a slot is held),
-//! and every verdict on what reached the network comes from the bench's peers and capture, or from
-//! the victim that was supposed to be reached.
+//! Each net case's manifest makes every client a `servers` entry of its own, handed two badges
+//! with the same number ([`badge`]): one to `ipd`, which `ipd`'s `scope=` for that badge confines,
+//! and one to `judge`, where it reports. **Nothing a client reports is a verdict** on the network:
+//! the judge uses reports to know when to go on (a listener is ready, a slot is held), and every
+//! verdict on what reached the network comes from the bench's peers and capture, or from the
+//! victim that was supposed to be reached.
 
 #![no_std]
 
-/// Handle names in a program's startup block.
-pub const NET: &str = "net";
+/// Handle names in a client's startup block: the endpoints its manifest entry is handed.
+pub const IPD: &str = "ipd";
+pub const JUDGE: &str = "judge";
+/// The rig's name for where a program it launches reports.
 pub const RIG: &str = "rig";
 
-/// A report is a call on `rig` with these words: `[REPORT, event, value, 0]`. The rig answers at
-/// once with nothing.
+/// A report is a call on `judge` with these words: `[REPORT, event, value, 0]`. The judge answers
+/// every report at once with nothing, except [`event::START`], which it holds until the client's
+/// turn.
 pub const REPORT: u64 = 0x5245_504f;
 
 /// What a report says.
 pub mod event {
+    /// The client is ready to begin; the answer is its turn. The judge gives no turn before
+    /// `ipd` has a link, and sequences the clients (a victim listens before it is attacked).
+    pub const START: u64 = 5;
+    /// The role ended; the value is its outcome ([`super::code`]). The client then parks: under
+    /// `init` an exit is a restart, and a restarted client would act again.
+    pub const DONE: u64 = 6;
     /// A listener is listening.
     pub const READY: u64 = 1;
     /// A listener accepted a connection and echoed it; the value is how many so far.
@@ -29,7 +39,20 @@ pub mod event {
     pub const LABELLED: u64 = 4;
 }
 
-/// Exit codes. 0 is success for every role; the rest name the step that failed.
+/// The badges a net case's manifest hands: a client's badge at `ipd` and at the judge are the same
+/// number, so the judge knows a client by the badge its reports arrive on.
+pub mod badge {
+    /// The judge's own at `ipd`: its scope listens only on [`PROBE_PORT`], to learn the link is up.
+    pub const PROBE: u64 = 10;
+    /// `net-tcp`'s echo client, and its listener.
+    pub const ECHO: u64 = 11;
+    pub const LISTEN: u64 = 12;
+    /// The port the judge's probe listens on, and closes before anything can connect.
+    pub const PROBE_PORT: u16 = 9;
+}
+
+/// Outcomes, reported with [`event::DONE`] (and the rig's exit codes). 0 is success for every
+/// role; the rest name the step that failed.
 pub mod code {
     pub const OK: u32 = 0;
     pub const BAD_ARGS: u32 = 20;
