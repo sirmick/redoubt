@@ -262,7 +262,9 @@ the loader stub.
   that owns them, so the raw address it once took is no longer a way round. `map_anon` only makes
   memory, and hands back an address that takes `unsafe` to use. A public `unmap` does not compile
   (a `compile_fail` test in `handle.rs`). A `dma_alloc` run is held by a `Dma`, which unmaps
-  it on drop and not before; the frames stay the kernel's until the process ends.
+  it on drop and not before; the frames stay the kernel's until the process ends. A device's
+  `Registers` are unmapped only by `Registers::unmap`, which takes the value, so no access is left
+  to reach them (how `init` gives the UART up to `consoled`).
 - **No raw call from safe code.** `redoubt_rt::abi` is the kernel's types and limits without
   `redoubt-sys`'s `syscall`, so a program built on the runtime makes every call through it. The
   no-cruft case refuses a wholesale re-export and a single-line re-export or `pub` item naming
