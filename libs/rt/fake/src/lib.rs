@@ -12,8 +12,9 @@
 //! For launchers it models budgets as handles (`Fake::budget`), `process_create`, `process_map`,
 //! `process_start` and `budget_destroy`, and keeps what each child was given for a test to read
 //! back (`Fake::launched`); a child runs nothing, and a test ends it (`Fake::exit`), which sends
-//! its one exit notice. Every call is logged by name (`Fake::calls`), and a test can have the next
-//! call of a name refused (`Fake::refuse`).
+//! its one exit notice. Every call is logged by name (`Fake::calls`), a test can have the next
+//! call of a name refused (`Fake::refuse`), or a later one (`Fake::refuse_after`), and it can read
+//! the most pages a process held at once (`Fake::held_peak`).
 //!
 //! It also has what a driver needs: device objects (`Fake::mmio` and `Fake::irq`), `map_device`
 //! over a page of host memory a test can read and write as if it were registers, `receive` on an
@@ -107,6 +108,18 @@ struct Process {
     handles: Vec<Option<Object>>,
     /// Mapped ranges: address -> length.
     mappings: HashMap<usize, usize>,
+    /// The most pages mapped at once since [`Fake::held_peak`] last read it.
+    peak: usize,
+}
+
+impl Process {
+    /// Maps `len` bytes at `addr`, raising the peak if it passes it.
+    fn map(&mut self, addr: usize, len: usize) {
+        self.mappings.insert(addr, len);
+        self.peak = self.peak.max(self.held());
+    }
+
+    fn held(&self) -> usize { self.mappings.values().map(|len| len / PAGE_SIZE).sum() }
 }
 
 struct Pending {
@@ -162,8 +175,8 @@ struct State {
     exits_due: VecDeque<(usize, ExitNotice)>,
     /// Every system call, by process: its name.
     calls: Vec<(usize, &'static str)>,
-    /// Calls to refuse once: (process, call name, error).
-    refusals: Vec<(usize, &'static str, Error)>,
+    /// Calls to refuse once: (process, call name, matching calls to let through first, error).
+    refusals: Vec<(usize, &'static str, usize, Error)>,
 }
 
 pub struct Fake {
@@ -212,7 +225,7 @@ impl Fake {
     pub fn process(&self, account: u64, labels: &[u64]) -> usize {
         let mut s = self.lock();
         let labels = Labels::from_slice(labels).unwrap();
-        s.processes.push(Process { account, labels, handles: vec![None], mappings: HashMap::new() });
+        s.processes.push(Process { account, labels, handles: vec![None], mappings: HashMap::new(), peak: 0 });
         s.processes.len() - 1
     }
 
@@ -297,7 +310,16 @@ impl Fake {
     pub fn held(&self, pid: usize) -> (usize, usize) {
         let s = self.lock();
         let p = &s.processes[pid];
-        (p.handles.iter().flatten().count(), p.mappings.values().map(|len| len / PAGE_SIZE).sum())
+        (p.handles.iter().flatten().count(), p.held())
+    }
+
+    /// The most pages `pid` had mapped at once since the last read (or since it was made); the
+    /// next read starts from what it holds now.
+    pub fn held_peak(&self, pid: usize) -> usize {
+        let mut s = self.lock();
+        let p = &mut s.processes[pid];
+        let held = p.held();
+        std::mem::replace(&mut p.peak, held)
     }
 
     /// The `serve` and `reply` calls `pid` made, in order: ("serve" or "reply", message id).
@@ -332,6 +354,14 @@ impl Fake {
         s.launched[index].clone()
     }
 
+    /// What each child made in the budget `owner` holds as `budget` was given, oldest first: read
+    /// even after the launcher closed the child's handle.
+    pub fn launched_in(&self, owner: usize, budget: Handle) -> Vec<Launched> {
+        let s = self.lock();
+        let Ok(Object::Budget(index)) = lookup(&s, owner, budget) else { panic!("not a budget handle") };
+        s.launched.iter().filter(|child| child.budget == index).cloned().collect()
+    }
+
     /// Whether the `slot`th handle (from 0) `owner`'s child `process` was started with is the object
     /// `owner`'s `handle` names.
     pub fn installed(&self, owner: usize, process: Handle, slot: usize, handle: Handle) -> bool {
@@ -355,7 +385,12 @@ impl Fake {
 
     /// Refuses `pid`'s next call named `call` with `error`, before it does anything.
     pub fn refuse(&self, pid: usize, call: &'static str, error: Error) {
-        self.lock().refusals.push((pid, call, error));
+        self.refuse_after(pid, call, 0, error)
+    }
+
+    /// Lets `skip` of `pid`'s calls named `call` through, then refuses the next with `error`.
+    pub fn refuse_after(&self, pid: usize, call: &'static str, skip: usize, error: Error) {
+        self.lock().refusals.push((pid, call, skip, error));
     }
 
     /// Runs `body` as process `pid` on its own thread; the handle yields its exit code.
@@ -503,8 +538,11 @@ impl redoubt_rt::HostKernel for Fake {
             let name = call.number().name();
             let mut s = self.lock();
             s.calls.push((pid, name));
-            if let Some(i) = s.refusals.iter().position(|(p, c, _)| *p == pid && *c == name) {
-                return Err(s.refusals.remove(i).2);
+            if let Some(i) = s.refusals.iter().position(|(p, c, _, _)| *p == pid && *c == name) {
+                if s.refusals[i].2 == 0 {
+                    return Err(s.refusals.remove(i).3);
+                }
+                s.refusals[i].2 -= 1;
             }
         }
         match *call {
@@ -520,7 +558,7 @@ impl redoubt_rt::HostKernel for Fake {
                     return Err(Error::OutOfMemory);
                 }
                 let mut s = self.lock();
-                s.processes[pid].mappings.insert(addr, len);
+                s.processes[pid].map(addr, len);
                 s.anon.insert(addr, AtomicPtr::new(pages));
                 Ok(Return::Addr(addr))
             }
@@ -795,7 +833,7 @@ impl Fake {
                     self.changed.notify_all();
                     let lend = pages.map(|pages| {
                         let len = s.processes[pid].mappings.remove(&pages.addr).unwrap();
-                        s.processes[receiver].mappings.insert(pages.addr, len);
+                        s.processes[receiver].map(pages.addr, len);
                         (pages.addr, len)
                     });
                     s.abandoned.insert(id.get(), lend);
@@ -867,7 +905,7 @@ impl Fake {
                     // A transfer changes owner: the mapping moves to the receiver.
                     if let Some(pages) = p.pages {
                         let len = s.processes[p.from].mappings.remove(&pages.addr).unwrap();
-                        s.processes[pid].mappings.insert(pages.addr, len);
+                        s.processes[pid].map(pages.addr, len);
                     }
                     s.taken.insert(p.id.get());
                     MessageKind::Send { transfer: p.pages }
