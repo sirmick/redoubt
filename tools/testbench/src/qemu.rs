@@ -177,6 +177,20 @@ fn free_ports(count: usize) -> Result<Vec<u16>> {
 /// QEMU presents, so every case with a virtio device asks for the modern one.
 pub const MODERN_VIRTIO: [&str; 2] = ["-global", "virtio-mmio.force-legacy=false"];
 
+/// A disk sector, in bytes.
+const SECTOR: u64 = 512;
+
+/// A disk of `sectors` sectors holding a GPT with `partitions` equal partitions after the table.
+fn gpt_disk(sectors: u64, partitions: u64) -> Vec<u8> {
+    use redoubt_blkd::image::{Entry, FIRST_USABLE, Image};
+    // The backup table at the end takes as many sectors as the array and a header.
+    let share = sectors.saturating_sub(2 * FIRST_USABLE) / partitions;
+    let parts: Vec<Entry> = (0..partitions)
+        .map(|i| Entry { first_lba: FIRST_USABLE + i * share, last_lba: FIRST_USABLE + (i + 1) * share - 1 })
+        .collect();
+    Image::new(sectors, &parts).bytes
+}
+
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at
 /// `disk`, so no boot sees another's writes, and picks free host ports for the forwards.
 pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forward>)> {
@@ -186,6 +200,9 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
     }
     if let Some(spec) = &boot.disk {
         std::fs::File::create(disk)?.set_len(spec.size_kib * 1024)?;
+        if spec.partitions > 0 {
+            std::fs::write(disk, gpt_disk(spec.size_kib * 1024 / SECTOR, spec.partitions))?;
+        }
         // QEMU's option syntax separates with commas; a comma inside a value is doubled.
         let file = disk.display().to_string().replace(',', ",,");
         args.extend(["-drive".into(), format!("if=none,format=raw,id=disk0,file={file}")]);

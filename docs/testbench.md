@@ -463,6 +463,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 ```toml
 [disk]                       # a virtio-blk disk, zeroed, created afresh for every boot
 size_kib = 4096
+partitions = 1               # optional: a GPT of this many equal partitions, by blkd's builder
 
 [net]                        # a virtio-net card on QEMU's user-mode network
 forward = [22]               # guest TCP ports reachable from the host (default: none)

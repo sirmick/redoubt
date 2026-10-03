@@ -1131,6 +1131,7 @@ dependencies = [
  "clap",
  "ed25519-compact",
  "libc",
+ "redoubt-blkd",
  "redoubt-model",
  "redoubt-signing",
  "regex",

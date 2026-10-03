@@ -319,6 +319,10 @@ pub struct BundleFile {
 pub struct Disk {
     /// Size in KiB (a whole number of 512-byte sectors). The disk starts zeroed.
     pub size_kib: u64,
+    /// Partitions in a GPT written on the disk before the boot, equal shares of the space after
+    /// the table, by `blkd`'s own image builder; 0 leaves the disk zeroed, with no table.
+    #[serde(default)]
+    pub partitions: u64,
 }
 
 #[derive(Debug, Deserialize)]
