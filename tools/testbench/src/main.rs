@@ -48,6 +48,10 @@ struct Args {
     /// With --run, a program to start: a test-programs binary name or a path to an ELF file.
     #[arg(long = "program", value_name = "PROGRAM")]
     programs: Vec<String>,
+    /// With --run, pack the bundle from this recipe instead (`image/boot.toml`, which `./mkimage`
+    /// uses): the kernel, `init`, the servers and the manifest.
+    #[arg(long, value_name = "RECIPE", conflicts_with = "programs")]
+    recipe: Option<PathBuf>,
     /// Hart count for --run.
     #[arg(long, default_value_t = 1)]
     smp: u32,
@@ -89,23 +93,29 @@ fn main() -> Result<()> {
         let target = target::find(args.arch.as_deref().unwrap_or("rv64")).context("unknown arch")?;
         let machine =
             target.machine.as_ref().map_err(|why| anyhow::anyhow!("{} cannot boot: {why}", target.name))?;
-        let programs: Vec<_> = args
-            .programs
-            .iter()
-            .map(|p| {
-                if p.contains('/') {
-                    Program::Path { path: p.into() }
-                } else {
-                    Program::TestProgram(p.clone())
-                }
-            })
-            .collect();
+        let (programs, files) = match &args.recipe {
+            Some(recipe) => case::Recipe::load(recipe)?.contents()?,
+            None => {
+                let programs = args
+                    .programs
+                    .iter()
+                    .map(|p| {
+                        if p.contains('/') {
+                            Program::Path { path: p.into() }
+                        } else {
+                            Program::TestProgram(p.clone())
+                        }
+                    })
+                    .collect();
+                (programs, Vec::new())
+            }
+        };
         let bundle = prepare(
             &builder,
             target,
             machine,
             &programs,
-            &[],
+            &files,
             &[],
             false,
             false,

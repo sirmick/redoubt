@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
 /// Output that fails any boot test, on top of the case's own `forbid` list.
@@ -224,7 +224,12 @@ pub struct Budget {
 pub struct Boot {
     /// The case's programs: the first in `init`'s place, the loader's one process; the tester
     /// starts the others in this order (docs/testbench.md, "Starting a case's programs").
+    #[serde(default)]
     pub programs: Vec<Program>,
+    /// A bundle recipe, relative to the workspace root, whose entries are the case's programs and
+    /// data entries instead of `programs` and `file`: `image/boot.toml`, so that the bundle
+    /// `./mkimage` packs is the one a case boots ([`Recipe`]).
+    pub recipe: Option<PathBuf>,
     /// Hart counts to run with. One run per entry.
     #[serde(default = "default_smp")]
     pub smp: Vec<u32>,
@@ -455,6 +460,58 @@ pub enum Program {
     Corrupted { corrupt: String, with: Corruption },
 }
 
+/// A boot bundle's recipe, `image/boot.toml`: its entries in bundle order, the kernel first, then
+/// `init` and the rest (docs/kernel/boot.md, "The boot bundle").
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Recipe {
+    pub entry: Vec<RecipeEntry>,
+}
+
+/// One entry: a program, the binary of `package` named as the entry, or data read from `path`,
+/// relative to the workspace root.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeEntry {
+    pub name: String,
+    pub package: Option<String>,
+    pub path: Option<PathBuf>,
+}
+
+impl Recipe {
+    pub fn load(path: &Path) -> Result<Recipe> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// The programs and the data entries after the kernel, which the builder always packs first
+    /// from its own build.
+    pub fn contents(&self) -> Result<(Vec<Program>, Vec<BundleFile>)> {
+        let Some((kernel, rest)) = self.entry.split_first() else { bail!("a recipe with no entries") };
+        ensure!(
+            kernel.name == "kernel"
+                && kernel.package.as_deref() == Some("redoubt-kernel")
+                && kernel.path.is_none(),
+            "a recipe's first entry is the kernel"
+        );
+        let (mut programs, mut files) = (Vec::new(), Vec::new());
+        for entry in rest {
+            match (&entry.package, &entry.path) {
+                (Some(package), None) => {
+                    programs.push(Program::Package { package: package.clone(), bin: entry.name.clone() })
+                }
+                (None, Some(path)) => files.push(BundleFile {
+                    name: entry.name.clone(),
+                    from: Program::Path { path: path.clone() },
+                }),
+                _ => bail!("recipe entry {:?} needs a package or a path, not both", entry.name),
+            }
+        }
+        ensure!(programs.first().is_some_and(Program::is_init), "a recipe's second entry is init");
+        Ok((programs, files))
+    }
+}
+
 impl Program {
     /// Whether it is the real `init`, which starts the other programs from its manifest.
     pub fn is_init(&self) -> bool {
@@ -530,6 +587,18 @@ impl Case {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut case: Case = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         case.name = path.file_stem().unwrap().to_string_lossy().into_owned();
+        if let Kind::Boot(boot) = &mut case.kind {
+            if let Some(recipe) = &boot.recipe {
+                ensure!(
+                    boot.programs.is_empty() && boot.file.is_empty(),
+                    "in {}: a case with a recipe takes its programs and files from it",
+                    path.display()
+                );
+                // Cases live in `tests/`, one below the workspace root.
+                let root = path.parent().and_then(Path::parent).context("a case outside tests/")?;
+                (boot.programs, boot.file) = Recipe::load(&root.join(recipe))?.contents()?;
+            }
+        }
         case.check().with_context(|| format!("in {}", path.display()))?;
         Ok(case)
     }
@@ -657,6 +726,41 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The image's recipe is the kernel, `init`, the six servers and the manifest; a recipe that
+    /// does not start with the kernel and `init`, or an entry that is neither a program nor data,
+    /// is refused before anything is built.
+    #[test]
+    fn the_image_recipe_packs_init_the_servers_and_the_manifest() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let (programs, files) = Recipe::load(&root.join("image/boot.toml")).unwrap().contents().unwrap();
+        let bins: Vec<&str> = programs
+            .iter()
+            .map(|p| match p {
+                Program::Package { bin, .. } => bin.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(bins, ["init", "keyd", "consoled", "bootfsd", "blkd", "netd", "ipd"]);
+        assert!(programs[0].is_init());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "manifest");
+        assert!(matches!(&files[0].from, Program::Path { path } if path == Path::new("image/manifest.json")));
+
+        let recipe = |text: &str| -> Result<(Vec<Program>, Vec<BundleFile>)> {
+            toml::from_str::<Recipe>(text).unwrap().contents()
+        };
+        let kernel = "[[entry]]\nname = \"kernel\"\npackage = \"redoubt-kernel\"\n";
+        let init = "[[entry]]\nname = \"init\"\npackage = \"redoubt-init\"\n";
+        assert!(recipe(&format!("{kernel}{init}")).is_ok());
+        assert!(recipe(init).is_err(), "no kernel first");
+        assert!(recipe(kernel).is_err(), "no init second");
+        assert!(recipe(&format!("{init}{kernel}")).is_err());
+        let both = "[[entry]]\nname = \"x\"\npackage = \"p\"\npath = \"x\"\n";
+        assert!(recipe(&format!("{kernel}{init}{both}")).is_err(), "a program and data at once");
+        let neither = "[[entry]]\nname = \"x\"\n";
+        assert!(recipe(&format!("{kernel}{init}{neither}")).is_err());
+    }
 
     /// `resize` works only on a session's terminal, so a session without one is refused at load.
     #[test]

@@ -1,18 +1,10 @@
-description = "init boots the image's six servers from the boot manifest (servers/init.md, \"Starting the servers\"): it checks the manifest whole, starts keyd and finds it holds none of the keys the box is authenticated by, gives the UART up to consoled and writes through it, starts the rest with a console connection each, pushes the public entries to bootfsd and seals it, and no server exits"
+description = "The image's bundle, packed from image/boot.toml as ./mkimage packs it, boots to init's last line (servers/init.md, \"Starting the servers\"): init checks the manifest whole, starts keyd and finds it holds none of the keys the box is authenticated by, gives the UART up to consoled and writes through it, starts the rest with a console connection each, pushes the public entries to bootfsd and seals it, holds no more of root than its bound, and no server exits"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# The real init in its place, the six servers' images and the image's manifest as bundle entries.
-# Every verdict is init's own line, on the UART it maps and then through consoled; a refusal
-# would be init's line and a power-off reporting a system failure.
-programs = [
-    { package = "redoubt-init", bin = "init" },
-    { package = "redoubt-keyd", bin = "keyd" },
-    { package = "redoubt-consoled", bin = "consoled" },
-    { package = "redoubt-bootfsd", bin = "bootfsd" },
-    { package = "redoubt-blkd", bin = "blkd" },
-    { package = "redoubt-netd", bin = "netd" },
-    { package = "redoubt-ipd", bin = "ipd" },
-]
+# The recipe's bundle: the kernel, the real init, the six servers' images and the image's
+# manifest. Every verdict is init's own line, on the UART it maps and then through consoled; a
+# refusal would be init's line and a power-off reporting a system failure.
+recipe = "image/boot.toml"
 timeout_secs = 60
 expect = [
     '^init: up$',
@@ -30,10 +22,6 @@ expect = [
     '^init: the boot is done: 6 servers, root holds \d+ pages for it, within the bound of \d+$',
 ]
 forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed), code']
-
-[[file]]
-name = "manifest"
-from = { path = "image/manifest.json" }
 
 [disk]
 size_kib = 4096
