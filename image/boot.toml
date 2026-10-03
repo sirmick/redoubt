@@ -42,5 +42,9 @@ name = "ipd"
 package = "redoubt-ipd"
 
 [[entry]]
+name = "fsd"
+package = "redoubt-fsd"
+
+[[entry]]
 name = "manifest"
 path = "image/manifest.json"

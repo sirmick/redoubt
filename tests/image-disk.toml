@@ -1,0 +1,43 @@
+description = "The image's disk serves its staged files (image/README.md): the disk is packed from image/disk.toml as ./mkimage packs it, its data partition a littlefs volume written through fsd's own code, here holding the fsd cases' stage; init boots the image's manifest, whose fsd:data mounts that volume without formatting it, and a client handed a root badge at fsd:data reads each staged file back"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the image's seven servers, and fsd-client; the manifest is the image's with the
+# client added.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-fsd", bin = "fsd" },
+    { package = "redoubt-fsd-programs", bin = "fsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 8 servers, bound \d+ pages$',
+    '^init: started fsd:data, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] fsd-client read 2 files$',
+    '^\[con [0-9a-f]{16}\] fsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'fsd-client TEST FAILED']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+
+[[file.servers]]
+name = "client"
+program = "fsd-client"
+budget = { pages = "256", processes = 1, weight = 100 }
+handed = [{ endpoint = "fsd:data", badge = "7" }]
+args = ["read", "fsd:data", "/motd", "Redoubt, from the image disk\n", "/etc/notes", "staged under etc\n"]
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/fsd/stage"
+
+[net]

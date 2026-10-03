@@ -367,12 +367,19 @@ impl BundleFile {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disk {
-    /// Size in KiB (a whole number of 512-byte sectors). The disk starts zeroed.
+    /// Size in KiB (a whole number of 512-byte sectors). The disk starts zeroed. Not given with
+    /// a `recipe`, which sizes the disk.
+    #[serde(default)]
     pub size_kib: u64,
     /// Partitions in a GPT written on the disk before the boot, equal shares of the space after
     /// the table, by `blkd`'s own image builder; 0 leaves the disk zeroed, with no table.
     #[serde(default)]
     pub partitions: u64,
+    /// A disk recipe (`image/disk.toml`) packed for every boot instead, as `./mkimage` packs it
+    /// (`disk.rs`).
+    pub recipe: Option<PathBuf>,
+    /// With a `recipe`, the directory every partition holds instead of the recipe's own stage.
+    pub stage: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -693,6 +700,18 @@ impl Case {
                         "sessions need net.forward = [22]"
                     );
                 }
+                if let Some(disk) = &boot.disk {
+                    match &disk.recipe {
+                        Some(_) => ensure!(
+                            disk.size_kib == 0 && disk.partitions == 0,
+                            "a disk recipe sizes and partitions the disk itself"
+                        ),
+                        None => {
+                            ensure!(disk.size_kib > 0, "a disk needs size_kib or a recipe");
+                            ensure!(disk.stage.is_none(), "a stage needs a disk recipe");
+                        }
+                    }
+                }
                 if let Some(net) = &boot.net {
                     check_net(net)?;
                     // The post-check judges one boot's peer files.
@@ -832,7 +851,7 @@ mod tests {
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(bins, ["init", "keyd", "consoled", "bootfsd", "blkd", "netd", "ipd"]);
+        assert_eq!(bins, ["init", "keyd", "consoled", "bootfsd", "blkd", "netd", "ipd", "fsd"]);
         assert!(programs[0].is_init());
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "manifest");

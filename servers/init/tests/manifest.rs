@@ -18,6 +18,15 @@ const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0
 
 fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
 
+/// The image's manifest without its volume and the `fsd` serving it, for tests that lay out
+/// volumes of their own.
+fn without_volumes() -> Manifest {
+    let mut m = image();
+    m.volumes.clear();
+    m.servers.retain(|s| s.volume.is_none());
+    m
+}
+
 fn on_virt(m: &Manifest) -> Result<Plan, Refusal> {
     let devices = virt_devices();
     check(m, &machine(&devices, &ENTRIES), BUNDLE_KEY)
@@ -69,8 +78,9 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert!(plan.placements[0].is_empty());
     // No principals: only the bundle key is asked about.
     assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
-    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge.
-    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1)]);
+    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; fsd:data: nobody's
+    // yet, a principal's connection being the steward's to grant.
+    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
 }
@@ -89,22 +99,23 @@ fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
 #[test]
 fn the_image_manifest_s_bound() {
     let plan = on_virt(&image()).unwrap();
-    // The arena (256 + 3 tables), 6 receive and 6 exit endpoints and init's reports endpoint, 6
-    // process objects, 6 blocks with 3 tables each, 6 watching threads (an IPC page, 4 stack pages
+    // The arena (256 + 3 tables), 7 receive and 7 exit endpoints and init's reports endpoint, 7
+    // process objects, 7 blocks with 3 tables each, 7 watching threads (an IPC page, 4 stack pages
     // and 3 tables each), one launch (stub 4 + 3, one 64-page batch of ipd's 147-page image + 3,
     // stack 16 + 3), the lend (2 + 3), and no handle-table page: 22 handles at the start (3
-    // budgets, the Reset right, 18 devices) and 6 + 2 + 24 + 3 + 1 = 36 added still fit page 0.
+    // budgets, the Reset right, 18 devices) and 7 + 3 + 28 + 3 + 1 = 42 added (fsd:data's range
+    // among the 3 badges) still fit page 0.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 13 + 6 + 24 + 48 + (4 + 3 + 64 + 3 + 16 + 3) + 5);
+    assert_eq!(plan.bound, 259 + 15 + 7 + 28 + 56 + (4 + 3 + 64 + 3 + 16 + 3) + 5);
 }
 
 /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
 /// full to a page's edge, either one opens the next page.
 #[test]
 fn a_volume_s_range_badge_counts_in_the_bound_as_a_handed_item_does() {
-    let mut m = image();
+    let mut m = without_volumes();
     m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
     let bound = |m: &Manifest| on_virt(m).unwrap().bound;
     let mut handed = m.clone();
@@ -185,7 +196,7 @@ fn names_follow_the_rule_and_differ() {
 #[test]
 fn references_name_what_the_manifest_and_bundle_hold() {
     let mut m = image();
-    m.servers[0].program = "fsd".into();
+    m.servers[0].program = "sshd".into();
     refused_at(&m, "servers[0].program", Why::Unknown);
     let mut m = image();
     m.servers[0].program = MANIFEST.into();
@@ -194,7 +205,7 @@ fn references_name_what_the_manifest_and_bundle_hold() {
     server(&mut m, "ipd").handed[0].endpoint = "fsd".into();
     refused_at(&m, "servers[5].handed[0].endpoint", Why::Unknown);
     let mut m = image();
-    m.servers[0].volume = Some("data".into());
+    m.servers[0].volume = Some("nowhere".into());
     refused_at(&m, "servers[0].volume", Why::Unknown);
     let mut m = image();
     m.servers[0].labels = vec!["alice-secrets".into()];
@@ -231,9 +242,8 @@ fn principals_values_are_checked() {
     m.principals.push(Principal { name: "bob".into(), ..alice() });
     refused_at(&m, "principals[1].account", Why::Twice);
     let mut m = image();
-    m.principals.push(Principal { home: Some("data:/home/alice".into()), ..alice() });
+    m.principals.push(Principal { home: Some("nowhere:/home/alice".into()), ..alice() });
     refused_at(&m, "principals[0].home", Why::Value);
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
     m.principals[0].home = Some("data:home/../x".into());
     refused_at(&m, "principals[0].home", Why::Value);
     m.principals[0].home = Some("data:/home/alice".into());
@@ -358,9 +368,9 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let devices = virt_devices();
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
-    // keyd 256, consoled 1024, bootfsd and blkd 512 each, netd 1024 and ipd 4096 pages, and a
-    // page each for the budgets.
-    let pages = 256 + 1024 + 512 * 2 + 1024 + 4096 + 6;
+    // keyd 256, consoled 1024, bootfsd and blkd 512 each, netd 1024, ipd 4096 and fsd:data 1024
+    // pages, and a page each for the budgets.
+    let pages = 256 + 1024 + 512 * 2 + 1024 + 4096 + 1024 + 7;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),
@@ -368,11 +378,11 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     );
     machine.system.pages_limit += 1;
     assert!(on(&m, &machine).is_ok());
-    machine.system.processes_usage = machine.system.processes_limit - 5;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 6, free: 5 });
+    machine.system.processes_usage = machine.system.processes_limit - 6;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 7, free: 6 });
     machine.system.processes_usage = 0;
-    machine.system.weight_carved = machine.system.weight_limit - 3299;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 3300, free: 3299 });
+    machine.system.weight_carved = machine.system.weight_limit - 3399;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 3400, free: 3399 });
 }
 
 // ---- public ----
@@ -422,7 +432,7 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
 /// manifest"; servers/blkd.md, "Ranges and badges").
 #[test]
 fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
-    let mut m = image();
+    let mut m = without_volumes();
     secrets(&mut m);
     m.principals.push(alice());
     m.volumes.push(Volume { name: "scratch".into(), partition: 0, labels: vec![] });
@@ -443,20 +453,20 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
 #[test]
 fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
     let data = || Volume { name: "data".into(), partition: 0, labels: vec![] };
-    let mut m = image();
+    let mut m = without_volumes();
     m.volumes = vec![data(), Volume { name: "other".into(), ..data() }];
     refused_at(&m, "volumes[1].partition", Why::Twice);
-    let mut m = image();
+    let mut m = without_volumes();
     m.volumes.push(data());
     m.servers[0].volume = Some("data".into());
     m.servers[2].volume = Some("data".into());
     refused_at(&m, "servers[2].volume", Why::Twice);
-    let mut m = image();
+    let mut m = without_volumes();
     m.volumes.push(data());
     m.servers[0].volume = Some("data".into());
     m.servers.retain(|s| s.program != "blkd");
     refused_at(&m, "servers[0].volume", Why::NoBlkd);
-    let mut m = image();
+    let mut m = without_volumes();
     m.volumes.push(data());
     m.servers[0].volume = Some("data".into());
     let mut second = server(&mut m, "blkd").clone();
@@ -465,12 +475,12 @@ fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
     second.devices.clear();
     m.servers.push(second);
     refused_at(&m, "servers[0].volume", Why::NoBlkd);
-    let mut m = image();
+    let mut m = without_volumes();
     m.volumes.push(data());
     m.servers[0].volume = Some("data".into());
     m.servers[0].args.push("labels=1".into());
     refused_at(&m, "servers[0].args[3]", Why::Argument);
-    let mut m = image();
+    let mut m = without_volumes();
     server(&mut m, "blkd").args.push("labels.0=1".into());
     refused_at(&m, "servers[3].args[0]", Why::Argument);
 }
@@ -479,7 +489,7 @@ fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
 /// a server handed one would hold the raw blocks of a volume another server attaches.
 #[test]
 fn no_server_is_handed_a_badge_at_blkd() {
-    let mut m = image();
+    let mut m = without_volumes();
     m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
     m.servers[0].volume = Some("data".into());
     assert!(on_virt(&m).is_ok());
@@ -489,7 +499,7 @@ fn no_server_is_handed_a_badge_at_blkd() {
     let k = m.servers[netd].handed.len() - 1;
     refused_at(&m, &format!("servers[{netd}].handed[{k}].endpoint"), Why::BlkdHanded);
     // With no volume at all, and at any badge.
-    let mut m = image();
+    let mut m = without_volumes();
     server(&mut m, "keyd").handed.push(Handed { endpoint: blkd, badge: 9 });
     refused_at(&m, "servers[0].handed[0].endpoint", Why::BlkdHanded);
 }
@@ -632,7 +642,8 @@ fn confined_refuses_two_label_sets_on_one_endpoint() {
 
 #[test]
 fn confined_refuses_two_label_sets_on_one_volume() {
-    let mut m = confined();
+    let mut m = without_volumes();
+    m.confined = true;
     secrets(&mut m);
     m.principals.push(alice());
     m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
@@ -664,7 +675,8 @@ fn confined_gives_a_labelled_domain_no_network() {
 /// disk whose `blkd` carries its one volume's set boots.
 #[test]
 fn confined_refuses_two_label_sets_on_one_disk() {
-    let mut m = confined();
+    let mut m = without_volumes();
+    m.confined = true;
     secrets(&mut m);
     m.labels.push(Label { name: "alice-other".into(), owner: "alice".into(), id: 8 });
     m.principals.push(alice());
@@ -742,6 +754,7 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
         let receives = (0..60).map(|e| format!("e{n}-{e}")).collect();
         m.servers.push(Server {
             name: format!("s{n}"),
+            program: "fsd".into(),
             budget: budget(16),
             receives,
             ..m.servers[3].clone()
@@ -771,7 +784,13 @@ fn more_servers_than_init_has_threads_to_watch_are_refused() {
     while m.servers.len() < MAX_THREADS {
         let n = m.servers.len();
         let receives = vec![format!("e{n}")];
-        m.servers.push(Server { name: format!("s{n}"), receives, budget: budget(1), ..m.servers[3].clone() });
+        m.servers.push(Server {
+            name: format!("s{n}"),
+            program: "fsd".into(),
+            receives,
+            budget: budget(1),
+            ..m.servers[3].clone()
+        });
         m.servers.last_mut().unwrap().devices.clear();
     }
     let devices = virt_devices();

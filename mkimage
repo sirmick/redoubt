@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# mkimage -- build the signed boot bundle from image/boot.toml into target/image/, and prepare the
-# disk-image staging directory the image builder fills before packaging a littlefs volume.
+# mkimage -- build the signed boot bundle from image/boot.toml and the disk image from
+# image/disk.toml into target/image/.
 #
 # Usage: ./mkimage [--arch rv32|rv64]
 #
 #   target/image/redoubt.bundle   signed "signature || ustar" archive the loader verifies: the
 #                                 kernel, init, the servers and the boot manifest
-#   target/image/stage/           tree to be packed into the disk image (filled later;
-#                                 sources and recipes live in image/)
+#   target/image/stage/           the tree the disk's data volume holds; put files here first
+#   target/image/disk.img         raw virtio-blk disk: a GPT, then the data partition as a
+#                                 littlefs volume written by fsd's own code
 #
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -27,9 +28,12 @@ mkdir -p target/image/stage
 
 # The bench's builder packs the recipe, the same bundle the `init-boot` case boots: `--run
 # --print-only` builds and signs it, then stops before booting. The archive lands at
-# target/testbench/interactive.tar.
+# target/testbench/last/interactive.tar, in the run's own directory.
 cargo run --quiet -p testbench -- --arch "$arch" --run --print-only --recipe image/boot.toml
 
-cp -f target/testbench/interactive.tar target/image/redoubt.bundle
+cp -f target/testbench/last/interactive.tar target/image/redoubt.bundle
 echo "==> boot bundle: target/image/redoubt.bundle"
-echo "==> disk staging: target/image/stage (sources and recipes live in image/)"
+
+# The same packer a case's `[disk] recipe` boots: the table by blkd's builder, each volume by fsd's.
+cargo run --quiet -p testbench -- --pack-disk image/disk.toml target/image/disk.img
+echo "==> disk image: target/image/disk.img (the tree of target/image/stage)"

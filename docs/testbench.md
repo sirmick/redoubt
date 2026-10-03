@@ -501,12 +501,15 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
+- bench:image-disk
 - bench:init-boot
 - bench:net-tcp
+- host:testbench::a_recipe_packs_a_table_and_a_volume_per_partition
+- host:testbench::a_stage_is_walked_parents_first_in_name_order
 - host:testbench::devices_sit_on_fixed_slots
 - host:testbench::every_network_is_restricted
 - host:testbench::virtio_devices_are_modern
@@ -517,11 +520,19 @@ a program reads it again through `/boot` once the manifest's `public` list names
 [disk]                       # a virtio-blk disk, zeroed, created afresh for every boot
 size_kib = 4096
 partitions = 1               # optional: a GPT of this many equal partitions, by blkd's builder
+# or, instead of both: a disk recipe packed for every boot as ./mkimage packs it
+# recipe = "image/disk.toml"
+# stage = "tests/data/fsd/stage"   # optional: what every partition holds instead of its stage
 
 [net]                        # a virtio-net card on QEMU's user-mode network
 forward = [22]               # guest TCP ports reachable from the host (default: none)
 host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions accept
 ```
+
+A disk `recipe` (`image/disk.toml`) is packed by the code `./mkimage` runs (`testbench
+--pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as a littlefs
+volume holding its stage's tree, written through `fsd`'s own code, so a case boots the disk the
+image ships.
 
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
 virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,

@@ -7,6 +7,7 @@
 //!   and notes their qid paths; it and the next five exit with [`REBOOT_EXIT`], so `init`'s sixth exit notice
 //!   reboots the machine (servers/init.md, "Restarts and reboots"). The start after the reboot finds six and
 //!   reads both back, with the same qid paths.
+//! - `read ENDPOINT PATH TEXT...`: each path holds exactly the text after it.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -47,6 +48,7 @@ fn run(startup: &Startup) -> u32 {
     let checked = match (args.next(), args.next()) {
         (Some("boot"), Some(at)) => boot(startup, &mut out, at).map(|()| Ends::Passed),
         (Some("reboot"), Some(at)) => reboot(startup, &mut out, at),
+        (Some("read"), Some(at)) => read(startup, &mut out, at, args).map(|()| Ends::Passed),
         (check, _) => Err(format!("no such check, or no endpoint: {check:?}")),
     };
     let line = match checked {
@@ -181,4 +183,24 @@ fn reboot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Ends, Stri
     }
     put(&conn, out, "/", "starts", format!("{}", starts + 1).as_bytes())?;
     Ok(Ends::Exit(REBOOT_EXIT))
+}
+
+/// `image-disk`: each path holds exactly the text after it.
+fn read<'a>(
+    startup: &Startup,
+    out: &mut Out,
+    endpoint: &str,
+    mut pairs: impl Iterator<Item = &'a str>,
+) -> Result<(), String> {
+    let conn = attach(startup, out, endpoint)?;
+    let mut read = 0;
+    while let Some(path) = pairs.next() {
+        let want = pairs.next().ok_or_else(|| format!("no text for {path}"))?;
+        let got = read_file(&conn, out, path)?;
+        if got != want.as_bytes() {
+            return Err(format!("{path} holds {:?}, not {want:?}", String::from_utf8_lossy(&got)));
+        }
+        read += 1;
+    }
+    out.say(&format!("fsd-client read {read} files\n")).map_err(|e| format!("say: {e:?}"))
 }
