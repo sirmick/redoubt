@@ -297,9 +297,11 @@ an R-message sent to a server is refused, and nothing a vector sends mints a con
 
 ### Replies and rollback
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · partly tested: the exit when even the malformed reply is rejected is host-tested only, since no caller can make the kernel reject it · tested (7)</summary>
 
 - bench:ninep-newconn-discard
+- bench:init-rollback
+- bench:init-restart
 - host:redoubt-rt::what_was_minted_here_can_be_undone
 - host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says
 - host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery

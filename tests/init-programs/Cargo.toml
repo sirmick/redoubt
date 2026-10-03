@@ -37,6 +37,11 @@ name = "restart-faulter"
 path = "src/bin/restart-faulter.rs"
 test = false
 
+[[bin]]
+name = "rollback-client"
+path = "src/bin/rollback-client.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

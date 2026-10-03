@@ -1,0 +1,25 @@
+description = "A real shared server rolls back a new_connection whose reply lost its capability (servers/serving.md, \"Replies and rollback\"): a program under init, its handle table full, asks consoled for more connections than a bucket holds, each reply's capability dropped by the kernel, and with one slot free the next new_connection stands, which it could not had consoled kept any of the others"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The real init, keyd, consoled and bootfsd, and rollback-client. Its connection at consoled was
+# minted through init's, so the bucket it fills is the one every console init minted is charged
+# to; the verdict is consoled's answer to the last request, which the client prints.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-init-programs", bin = "rollback-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started rollback-client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] rollback-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', 'init: rebooting', 'init: rollback-client \(PID']
+reporter = "rollback-client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/rollback.json" }
