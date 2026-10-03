@@ -9,6 +9,7 @@ members = [
   "kernel",
   "loader",
   "libs/client",
+  "libs/ipclist",
   "libs/layout",
   "libs/paging",
   "libs/rt",

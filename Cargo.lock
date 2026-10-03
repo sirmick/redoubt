@@ -683,6 +683,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-ipclist"
+version = "0.1.0"
+
+[[package]]
 name = "redoubt-ipd"
 version = "0.1.0"
 dependencies = [
@@ -698,6 +702,7 @@ dependencies = [
  "paging",
  "plic",
  "rand_chacha",
+ "redoubt-ipclist",
  "redoubt-layout",
  "redoubt-stride",
  "redoubt-sys",

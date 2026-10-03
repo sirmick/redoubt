@@ -23,6 +23,7 @@ sbi-rt = { version = "0.0.3", optional = true }
 plic = { version = "0.0.3", optional = true, features = ["primitive-id"] }
 riscv = "0.16"
 paging = { path = "../libs/paging" }
+redoubt-ipclist = { path = "../libs/ipclist" }
 redoubt-layout = { path = "../libs/layout" }
 redoubt-stride = { path = "../libs/stride" }
 redoubt-sys = { path = "../libs/sys" }
