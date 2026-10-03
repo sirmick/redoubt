@@ -13,6 +13,11 @@
 //! - `quota ENDPOINT`: mints two roots with a quota each; one fills its quota, and the other still writes.
 //! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends an `fsd` built with its test-only
 //!   feature `restart-probe`, and reads the file back through a fresh connection.
+//! - `labelled ENDPOINT [OWN PEER]`, `outsider ENDPOINT OWN PEER`: under the volume's labels a file is
+//!   written, and read back unchanged by the next start; without them the attach is refused. With `OWN` and
+//!   `PEER`, the endpoints each receives on and is handed at the other's, the next start sends on `PEER` and
+//!   reads back only once the outsider, which waits for that send, was refused and sent back. `labelled` runs
+//!   labelled, so it cannot write the console: it exits with its verdict ([`verdict`]), which `init` reports.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -24,11 +29,13 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use redoubt_client::Error;
 use redoubt_client::file::{Connection, File};
 use redoubt_client::fsd::rename;
+use redoubt_client::{Error, Lend};
 use redoubt_init_programs::Out;
+use redoubt_rt::abi::FOREVER;
 use redoubt_rt::handle::Endpoint;
+use redoubt_rt::ipc::Event;
 use redoubt_rt::server::ninep::{DMDIR, mode};
 use redoubt_rt::startup::Startup;
 
@@ -46,6 +53,11 @@ const REBOOT_EXIT: u32 = 7;
 const STARTS_BEFORE_REBOOT: u32 = 6;
 
 fn run(startup: &Startup) -> u32 {
+    // A labelled check has no console to say anything on.
+    let mut first = startup.args();
+    if let (Some("labelled"), Some(at)) = (first.next(), first.next()) {
+        return labelled_run(startup, at, first.next().zip(first.next()));
+    }
     let mut out = match Out::open(startup) {
         Ok(out) => out,
         Err(code) => return code,
@@ -58,6 +70,9 @@ fn run(startup: &Startup) -> u32 {
         (Some("apart"), Some(at)) => apart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (Some("corrupt"), Some(at)) => corrupt(startup, &mut out, at).map(|()| Ends::Passed),
         (Some("quota"), Some(at)) => quota(startup, &mut out, at).map(|()| Ends::Passed),
+        (Some("outsider"), Some(at)) => {
+            outsider(startup, &mut out, at, args.next().zip(args.next())).map(|()| Ends::Passed)
+        }
         (Some("restart"), Some(at)) => restart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (check, _) => Err(format!("no such check, or no endpoint: {check:?}")),
     };
@@ -102,20 +117,19 @@ fn write_file(conn: &Connection, out: &mut Out, dir: &str, name: &str, data: &[u
     file.close(&mut out.lend).map_err(|e| format!("clunk {name}: {e:?}"))
 }
 
-fn read_file(conn: &Connection, out: &mut Out, path: &str) -> Result<Vec<u8>, String> {
-    let file = conn.open(&mut out.lend, path, mode::OREAD).map_err(|e| format!("open {path}: {e:?}"))?;
+fn read_file(conn: &Connection, lend: &mut Lend, path: &str) -> Result<Vec<u8>, String> {
+    let file = conn.open(lend, path, mode::OREAD).map_err(|e| format!("open {path}: {e:?}"))?;
     let mut got = Vec::new();
     let mut chunk = [0u8; 512];
     loop {
-        let n = file
-            .read_at(&mut out.lend, got.len() as u64, &mut chunk)
-            .map_err(|e| format!("read {path}: {e:?}"))?;
+        let n =
+            file.read_at(lend, got.len() as u64, &mut chunk).map_err(|e| format!("read {path}: {e:?}"))?;
         if n == 0 {
             break;
         }
         got.extend_from_slice(&chunk[..n]);
     }
-    file.close(&mut out.lend).map_err(|e| format!("clunk {path}: {e:?}"))?;
+    file.close(lend).map_err(|e| format!("clunk {path}: {e:?}"))?;
     Ok(got)
 }
 
@@ -129,7 +143,7 @@ fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> 
     let conn = attach(startup, out, endpoint)?;
     let text = b"written through fsd under init\n";
     write_file(&conn, out, "/", "hello", text)?;
-    if read_file(&conn, out, "/hello")? != text {
+    if read_file(&conn, &mut out.lend, "/hello")? != text {
         return Err("hello does not read back".into());
     }
     conn.create(&mut out.lend, "/", "d", DMDIR | 0o755, mode::OREAD)
@@ -137,7 +151,7 @@ fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> 
         .map_err(|e| format!("mkdir d: {e:?}"))?;
     let (root, d) = (dir(&conn, out, "/")?, dir(&conn, out, "/d")?);
     rename(&mut out.lend, &root, "hello", &d, "moved").map_err(|e| format!("rename: {e:?}"))?;
-    if read_file(&conn, out, "/d/moved")? != text {
+    if read_file(&conn, &mut out.lend, "/d/moved")? != text {
         return Err("d/moved does not read back".into());
     }
     if conn.stat(&mut out.lend, "/hello").is_ok() {
@@ -157,7 +171,7 @@ fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> 
 /// `fsd-reboot`: what the first boot writes is there after the reboot, with the same qid paths.
 fn reboot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Ends, String> {
     let conn = attach(startup, out, endpoint)?;
-    let starts = match read_file(&conn, out, "/starts") {
+    let starts = match read_file(&conn, &mut out.lend, "/starts") {
         Ok(text) => {
             core::str::from_utf8(&text).ok().and_then(|t| t.parse().ok()).ok_or("starts holds no count")?
         }
@@ -167,12 +181,12 @@ fn reboot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Ends, Stri
     if starts >= STARTS_BEFORE_REBOOT {
         let kept = conn.stat(&mut out.lend, "/kept").map_err(|e| format!("stat kept: {e:?}"))?;
         let file = conn.stat(&mut out.lend, "/kept/notes").map_err(|e| format!("stat kept/notes: {e:?}"))?;
-        let noted = read_file(&conn, out, "/qids")?;
+        let noted = read_file(&conn, &mut out.lend, "/qids")?;
         let now = format!("{} {}", kept.qid.path, file.qid.path);
         if noted != now.as_bytes() {
             return Err(format!("qid paths {now}, noted {:?}", String::from_utf8_lossy(&noted)));
         }
-        if read_file(&conn, out, "/kept/notes")? != notes {
+        if read_file(&conn, &mut out.lend, "/kept/notes")? != notes {
             return Err("kept/notes does not read back".into());
         }
         out.say(&format!("fsd-client read back kept and kept/notes after the reboot, qid paths {now}\n"))
@@ -206,7 +220,7 @@ fn read<'a>(
     let mut read = 0;
     while let Some(path) = pairs.next() {
         let want = pairs.next().ok_or_else(|| format!("no text for {path}"))?;
-        let got = read_file(&conn, out, path)?;
+        let got = read_file(&conn, &mut out.lend, path)?;
         if got != want.as_bytes() {
             return Err(format!("{path} holds {:?}, not {want:?}", String::from_utf8_lossy(&got)));
         }
@@ -226,7 +240,7 @@ fn apart(startup: &Startup, out: &mut Out, first: &str, second: Option<&str>) ->
         conns.push(conn);
     }
     for (conn, at) in conns.iter().zip([first, second]) {
-        if read_file(conn, out, "/which")? != at.as_bytes() {
+        if read_file(conn, &mut out.lend, "/which")? != at.as_bytes() {
             return Err(format!("{at}'s which does not read back"));
         }
     }
@@ -316,10 +330,84 @@ fn restart(startup: &Startup, out: &mut Out, endpoint: &str, probe: Option<&str>
         other => return Err(format!("the probe's walk got {other:?}, not Dead")),
     }
     let fresh = attach(startup, out, endpoint)?;
-    if read_file(&fresh, out, "/kept")? != text {
+    if read_file(&fresh, &mut out.lend, "/kept")? != text {
         return Err("kept does not read back after the restart".into());
     }
     // One line, after the new instance answered: init's lines on the exit come before it.
     out.say("fsd-client's call got Dead, and a fresh connection read kept back\n")
         .map_err(|e| format!("say: {e:?}"))
+}
+
+/// `fsd-label-check`: a caller without the volume's labels is refused at its attach, a read of
+/// the root, so it never holds a fid to walk, stat or write through. It tries once the labelled
+/// client's next start, which found its file written, sends on `own`, and sends on `peer` after.
+fn outsider(
+    startup: &Startup,
+    out: &mut Out,
+    endpoint: &str,
+    ends: Option<(&str, &str)>,
+) -> Result<(), String> {
+    let (own, peer) = ends.ok_or("no endpoints to wait and answer on")?;
+    let own = Endpoint::from_handle(startup.handle(own).ok_or_else(|| format!("no {own} handle"))?);
+    let peer = Endpoint::from_handle(startup.handle(peer).ok_or_else(|| format!("no {peer} handle"))?);
+    while !matches!(own.receive(FOREVER, 0), Ok(Event::Send(_))) {}
+    let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
+    match Connection::attach(Endpoint::from_handle(handle), &mut out.lend) {
+        Err(Error::Rerror) => {}
+        Err(e) => return Err(format!("attach: {e:?}, not Rerror")),
+        Ok(_) => return Err("attached without the volume's labels".into()),
+    }
+    out.say("fsd-client without the labels was refused at attach\n").map_err(|e| format!("say: {e:?}"))?;
+    peer.send(&[0; 4], &[], None, FOREVER).map_err(|(e, _)| format!("send: {e:?}"))
+}
+
+/// The file `labelled` writes and reads back, and what it holds.
+const SECRET: (&str, &[u8]) = ("/secret", b"written under the volume's labels\n");
+
+/// What `labelled` exits with. A labelled program cannot write the unlabelled console
+/// (servers/consoled.md), so its verdict is its exit code, which `init` reports.
+mod verdict {
+    pub const WROTE: u32 = 10;
+    pub const READ_BACK: u32 = 11;
+    pub const NO_HANDLE: u32 = 20;
+    pub const ATTACH: u32 = 21;
+    pub const WRITE: u32 = 22;
+    pub const READ: u32 = 23;
+    pub const OUTSIDER: u32 = 24;
+}
+
+/// `fsd-label-check`: a caller whose labels equal the volume's writes a file and exits; its next
+/// start reads the file back unchanged and exits again, with `ends` only once the outsider was
+/// refused.
+fn labelled_run(startup: &Startup, endpoint: &str, ends: Option<(&str, &str)>) -> u32 {
+    let Ok(mut lend) = Lend::new(redoubt_init_programs::LEND_PAGES) else {
+        return redoubt_init_programs::code::NO_LEND;
+    };
+    let Some(handle) = startup.handle(endpoint) else { return verdict::NO_HANDLE };
+    let Ok(conn) = Connection::attach(Endpoint::from_handle(handle), &mut lend) else {
+        return verdict::ATTACH;
+    };
+    let lend = &mut lend;
+    if conn.stat(lend, SECRET.0).is_ok() {
+        if let Some((own, peer)) = ends {
+            let (Some(own), Some(peer)) = (startup.handle(own), startup.handle(peer)) else {
+                return verdict::NO_HANDLE;
+            };
+            if Endpoint::from_handle(peer).send(&[0; 4], &[], None, FOREVER).is_err()
+                || !matches!(Endpoint::from_handle(own).receive(FOREVER, 0), Ok(Event::Send(_)))
+            {
+                return verdict::OUTSIDER;
+            }
+        }
+        return if read_file(&conn, lend, SECRET.0).as_deref() == Ok(SECRET.1) {
+            verdict::READ_BACK
+        } else {
+            verdict::READ
+        };
+    }
+    let Ok(file) = conn.create(lend, "/", &SECRET.0[1..], 0o644, mode::OWRITE) else { return verdict::WRITE };
+    if file.write_at(lend, 0, SECRET.1) != Ok(SECRET.1.len()) || file.close(lend).is_err() {
+        return verdict::WRITE;
+    }
+    verdict::WROTE
 }

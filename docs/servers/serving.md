@@ -433,7 +433,7 @@ or decoded again when it is served; which typed operations may park at all
 
 ### R25 (the label check)
 
-<details><summary>Status: built · partly tested: the check and its use in the 9P skeleton are attacked in host tests; in a boot only `ipd`'s refusal of labelled callers is · tested (7)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
 - host:redoubt-rt::matches_the_set_definition
 - host:redoubt-rt::properties
@@ -442,6 +442,7 @@ or decoded again when it is served; which typed operations may park at all
 - host:redoubt-rt::labelled_metadata_does_not_flow_down
 - host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it
 - bench:net-attacks
+- bench:fsd-label-check
 
 </details>
 
