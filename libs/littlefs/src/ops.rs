@@ -274,7 +274,7 @@ impl<D: BlockDevice> Filesystem<D> {
             let child = fs.empty_dir(&dir.c.entries[id as usize])?;
             fs.commit(dir.pair, &[attr_delete(id)])?;
             if let Some(child) = child {
-                fs.drop_orphan(child)?;
+                fs.without_pairs(|fs| fs.drop_orphan(child))?;
             }
             Ok(())
         })
@@ -377,10 +377,10 @@ impl<D: BlockDevice> Filesystem<D> {
 
             if !samepair {
                 fs.prep_move(None);
-                fs.commit(oldcwd.pair, &[attr_delete(oldid)])?;
+                fs.without_pairs(|fs| fs.commit(oldcwd.pair, &[attr_delete(oldid)]))?;
             }
             if let Some(child) = orphan {
-                fs.drop_orphan(child)?;
+                fs.without_pairs(|fs| fs.drop_orphan(child))?;
             }
 
             if !following.is_empty() {

@@ -180,7 +180,7 @@ root with quota 0 cannot create a file.
 
 ### littlefs
 
-<details><summary>Status: built · tested (15)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - fuzz:littlefs/image
 - fuzz:littlefs/mutate
@@ -197,6 +197,7 @@ root with quota 0 cannot create a file.
 - host:littlefs::a_create_with_attributes_is_never_seen_without_them
 - host:littlefs::a_create_refuses_attributes_set_attr_would
 - host:littlefs::a_directory_read_carries_attributes_and_pairs
+- host:littlefs::one_commit_splits_only_as_far_as_its_room
 
 </details>
 
