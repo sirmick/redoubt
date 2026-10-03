@@ -138,10 +138,15 @@ attacked before the next, in this order:
    through `sscratch`, and scheduling on every hart.
 3. **One big kernel lock** taken at trap entry, and one global run queue
    ([scheduling](../kernel/scheduling.md)).
-4. **Cross-hart interrupts, shootdowns and fences.** Inter-processor interrupts to reschedule; a
-   TLB shootdown (SBI remote fences, by address-space id) on unmap, lend and return before a page
-   is reused; an instruction fence on every hart when a page becomes executable, and when a thread
-   moves ([memory](../kernel/memory.md#residual-risks),
+4. **Cross-hart interrupts, shootdowns and fences.** Inter-processor interrupts to reschedule.
+   Every address-space switch flushes the whole TLB, so a process's translations live only on
+   the harts running it now, and a TLB shootdown goes to exactly those harts, which flush and
+   acknowledge before a page is reused. It comes in two stages: first at a destruction, while a
+   budget runs on one hart at a time; then at every unmap, lend and return, once one process's
+   threads run on several harts at once, as a beamlet VM's schedulers do. There are no
+   address-space ids: they would widen the harts to flush to every hart that ran the process.
+   An instruction fence goes to the harts running a process when a page of it becomes
+   executable, and when a thread moves ([memory](../kernel/memory.md#residual-risks),
    [memory layout](../kernel/memory-layout.md#residual-risks)).
 5. **Finer locking:** the per-process thread-context pages first, and anything finer only once
    the steps above are stable and attacked.

@@ -423,7 +423,8 @@ A configuration the bench does not boot is not supported.
 - **Harts.** Through M1 (separation and containment) Redoubt runs on one hart; the others stay
   parked in the firmware. A checked-build case starts a second hart to test the kernel lock, and a
   few cases boot with two or four harts to show the extra harts change nothing. M2 (usable shell)
-  brings several harts: the kernel runs user code on every hart, first under one big lock
+  brings several harts: the kernel runs user code on every hart, first under one big lock, and
+  one process's threads on several harts at once, so a beamlet VM's schedulers run in parallel
   ([several harts](plan/m2-usable-shell.md#several-harts)). The reason: the FPGA platform's cores
   have two hardware threads each, and by the end of M1 (separation and containment) the kernel's rules are attacked on one
   hart, so a second hart multiplies what can go wrong only in rules already attacked.
