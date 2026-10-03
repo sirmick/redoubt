@@ -376,8 +376,8 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
     let mut m = image();
     m.public = vec!["trace".into()];
     let bootfsd = &m.servers[2];
-    assert_eq!(redoubt_init::check::args(&m, bootfsd).collect::<Vec<_>>(), ["buckets=4", "trace"]);
-    assert_eq!(redoubt_init::check::args(&m, &m.servers[0]).count(), 3, "only bootfsd gets it");
+    assert_eq!(redoubt_init::check::args(&m, bootfsd), ["buckets=4", "trace"]);
+    assert_eq!(redoubt_init::check::args(&m, &m.servers[0]).len(), 3, "only bootfsd gets it");
     // The names bootfsd serves come from public alone.
     server(&mut m, "bootfsd").args.push("trace".into());
     refused_at(&m, "servers[2].args[1]", Why::Argument);
@@ -394,6 +394,83 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
 }
 
 // ---- startup blocks ----
+
+/// A volume's server gets `labels=` its volume's ids, and `blkd` one `labels.P=` per labelled
+/// volume, P its GPT entry; an unlabelled volume gets neither (servers/init.md, "The boot
+/// manifest"; servers/blkd.md, "Ranges and badges").
+#[test]
+fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
+    let mut m = image();
+    secrets(&mut m);
+    m.principals.push(alice());
+    m.volumes.push(Volume { name: "scratch".into(), partition: 0, labels: vec![] });
+    m.volumes.push(Volume { name: "vault".into(), partition: 2, labels: vec!["alice-secrets".into()] });
+    server(&mut m, "keyd").volume = Some("vault".into());
+    server(&mut m, "bootfsd").volume = Some("scratch".into());
+    assert!(on_virt(&m).is_ok());
+    let args = |m: &Manifest, name: &str| {
+        redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap())
+    };
+    assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
+    assert_eq!(args(&m, "bootfsd"), ["buckets=4"]);
+    assert_eq!(args(&m, "blkd"), ["labels.2=7"]);
+}
+
+/// R47 (one volume per instance): a volume is one GPT entry, attached by one server, whose range
+/// is minted at the one `blkd`; and no entry carries an argument `init` passes itself.
+#[test]
+fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
+    let data = || Volume { name: "data".into(), partition: 0, labels: vec![] };
+    let mut m = image();
+    m.volumes = vec![data(), Volume { name: "other".into(), ..data() }];
+    refused_at(&m, "volumes[1].partition", Why::Twice);
+    let mut m = image();
+    m.volumes.push(data());
+    m.servers[0].volume = Some("data".into());
+    m.servers[2].volume = Some("data".into());
+    refused_at(&m, "servers[2].volume", Why::Twice);
+    let mut m = image();
+    m.volumes.push(data());
+    m.servers[0].volume = Some("data".into());
+    m.servers.retain(|s| s.program != "blkd");
+    refused_at(&m, "servers[0].volume", Why::NoBlkd);
+    let mut m = image();
+    m.volumes.push(data());
+    m.servers[0].volume = Some("data".into());
+    let mut second = server(&mut m, "blkd").clone();
+    second.name = "blkd2".into();
+    second.receives = vec!["blkd2".into()];
+    second.devices.clear();
+    m.servers.push(second);
+    refused_at(&m, "servers[0].volume", Why::NoBlkd);
+    let mut m = image();
+    m.volumes.push(data());
+    m.servers[0].volume = Some("data".into());
+    m.servers[0].args.push("labels=1".into());
+    refused_at(&m, "servers[0].args[3]", Why::Argument);
+    let mut m = image();
+    server(&mut m, "blkd").args.push("labels.0=1".into());
+    refused_at(&m, "servers[3].args[0]", Why::Argument);
+}
+
+/// R47 (one volume per instance): `blkd` resolves a badge at its endpoint to a volume's range, so
+/// a server handed one would hold the raw blocks of a volume another server attaches.
+#[test]
+fn no_server_is_handed_a_badge_at_blkd() {
+    let mut m = image();
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
+    m.servers[0].volume = Some("data".into());
+    assert!(on_virt(&m).is_ok());
+    let blkd = server(&mut m, "blkd").receives[0].clone();
+    server(&mut m, "netd").handed.push(Handed { endpoint: blkd.clone(), badge: 1 });
+    let netd = m.servers.iter().position(|s| s.program == "netd").unwrap();
+    let k = m.servers[netd].handed.len() - 1;
+    refused_at(&m, &format!("servers[{netd}].handed[{k}].endpoint"), Why::BlkdHanded);
+    // With no volume at all, and at any badge.
+    let mut m = image();
+    server(&mut m, "keyd").handed.push(Handed { endpoint: blkd, badge: 9 });
+    refused_at(&m, "servers[0].handed[0].endpoint", Why::BlkdHanded);
+}
 
 #[test]
 fn handles_and_arguments_must_fit_one_startup_block() {

@@ -46,8 +46,8 @@ it asks the device to touch can be checked.
   comes through a badge its launcher minted, and a client can make `blkd` hold nothing beyond its
   request, so there is no admission to keep. A flood of requests is bounded by the kernel's fair
   waiting ([R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting)) and by `MAX_SECTORS` per request.
-- **The label check** runs on every request against the range's labels, which `blkd` takes as
-  arguments (`labels.P=ID,...` for partition entry P; a range named by none has none)
+- **The label check** runs on every request against the range's labels, which `init` gives
+  `blkd` as arguments (`labels.P=ID,...` for partition entry P; a range named by none has none)
   ([R25 (the label check)](serving.md#r25-the-label-check)): reading is a read, writing and
   flushing are writes. A badge that names no range and a caller who fails the check get the same
   `not_permitted`.

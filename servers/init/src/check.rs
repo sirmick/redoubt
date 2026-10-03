@@ -38,6 +38,16 @@ pub const BOOTFSD: &str = "bootfsd";
 /// The programs `init` calls itself, each through a root badge of its own there: `keyd` for
 /// `holds`, `consoled` for its own lines, `bootfsd` for the public entries.
 pub const INIT_CALLS: [&str; 3] = ["keyd", "consoled", BOOTFSD];
+/// The program that serves the disk's ranges: `init` mints each volume's range at it.
+pub const BLKD: &str = "blkd";
+/// The startup-block name of a volume's range, handed to the server attaching it.
+pub const VOLUME: &str = "volume";
+/// The argument giving a volume's server its label ids (servers/fsd.md, "Volumes, connections
+/// and labels").
+pub const LABELS_ARG: &str = "labels=";
+/// The prefix of the arguments giving `blkd` each labelled range's ids, `labels.P=ID,...` for
+/// GPT entry P (servers/blkd.md, "Ranges and badges").
+pub const RANGE_LABELS_ARG: &str = "labels.";
 /// Where [`Plan::keys`] says the bundle's verifying key comes from.
 pub const BUNDLE_KEY: &str = "bundle key";
 
@@ -93,6 +103,7 @@ pub fn check(m: &Manifest, machine: &Machine, bundle_key: [u8; KEY_LEN]) -> Resu
     names(m)?;
     references(m, machine)?;
     init_calls(m)?;
+    volumes(m)?;
     let placements = devices(m, machine)?;
     budgets(m)?;
     fit(m, &machine.system)?;
@@ -235,6 +246,53 @@ fn init_calls(m: &Manifest) -> Result<(), Refusal> {
     }
     if !m.servers.iter().any(|s| s.program == "keyd") {
         return Err(at(String::from("servers"), Why::NoKeyd));
+    }
+    Ok(())
+}
+
+/// The `blkd` a volume's range is minted at, when there is exactly one.
+pub fn blkd(m: &Manifest) -> Option<&Server> {
+    let mut found = m.servers.iter().filter(|s| s.program == BLKD);
+    found.next().filter(|_| found.next().is_none())
+}
+
+/// Each volume is one GPT entry served by at most one server (R47 (one volume per instance)),
+/// and a volume a server attaches has one `blkd`, receiving on an endpoint, to mint its range at.
+/// No entry is handed a badge where a `blkd` receives, since `blkd` resolves each badge there to
+/// a volume's range, and no entry carries an argument `init` passes itself: `labels=` on a
+/// volume's server, `labels.` on `blkd`.
+fn volumes(m: &Manifest) -> Result<(), Refusal> {
+    for (i, v) in m.volumes.iter().enumerate() {
+        if m.volumes[..i].iter().any(|w| w.partition == v.partition) {
+            return Err(at(format!("volumes[{i}].partition"), Why::Twice));
+        }
+    }
+    for (i, s) in m.servers.iter().enumerate() {
+        let Some(volume) = &s.volume else { continue };
+        if m.servers[..i].iter().any(|t| t.volume.as_ref() == Some(volume)) {
+            return Err(at(format!("servers[{i}].volume"), Why::Twice));
+        }
+        if blkd(m).is_none_or(|b| b.receives.is_empty()) {
+            return Err(at(format!("servers[{i}].volume"), Why::NoBlkd));
+        }
+    }
+    let ranges = |e: &str| m.servers.iter().any(|s| s.program == BLKD && s.receives.iter().any(|r| r == e));
+    for (i, s) in m.servers.iter().enumerate() {
+        if let Some(k) = s.handed.iter().position(|h| ranges(&h.endpoint)) {
+            return Err(at(format!("servers[{i}].handed[{k}].endpoint"), Why::BlkdHanded));
+        }
+    }
+    for (i, s) in m.servers.iter().enumerate() {
+        let own = if s.program == BLKD {
+            RANGE_LABELS_ARG
+        } else if s.volume.is_some() {
+            LABELS_ARG
+        } else {
+            continue;
+        };
+        if let Some(k) = s.args.iter().position(|a| a.starts_with(own)) {
+            return Err(at(format!("servers[{i}].args[{k}]"), Why::Argument));
+        }
     }
     Ok(())
 }
@@ -453,10 +511,34 @@ fn fit(m: &Manifest, system: &Usage) -> Result<(), Refusal> {
 }
 
 /// The arguments `init` gives server `s`: its entry's own, then, for `bootfsd`, the `public` list,
-/// which `bootfsd` builds its table from (servers/bootfsd.md, "Started by `init`").
-pub fn args<'a>(m: &'a Manifest, s: &'a Server) -> impl Iterator<Item = &'a str> {
-    let public = if s.program == BOOTFSD { &m.public[..] } else { &[] };
-    s.args.iter().chain(public).map(String::as_str)
+/// which `bootfsd` builds its table from (servers/bootfsd.md, "Started by `init`"); for a
+/// volume's server, `labels=` its volume's label ids, absent when the set is empty; and for
+/// `blkd`, `labels.P=` each labelled volume's ids, P its GPT entry (servers/blkd.md, "Ranges and
+/// badges"). A label the manifest does not define is left out: the check refused it before.
+pub fn args(m: &Manifest, s: &Server) -> Vec<String> {
+    let ids = |names: &[String]| {
+        let ids: Vec<String> = names
+            .iter()
+            .filter_map(|n| m.labels.iter().find(|l| &l.name == n))
+            .map(|l| format!("{}", l.id))
+            .collect();
+        ids.join(",")
+    };
+    let mut args = s.args.clone();
+    if s.program == BOOTFSD {
+        args.extend(m.public.iter().cloned());
+    }
+    if let Some(v) = s.volume.as_ref().and_then(|n| m.volumes.iter().find(|v| &v.name == n)) {
+        if !v.labels.is_empty() {
+            args.push(format!("{LABELS_ARG}{}", ids(&v.labels)));
+        }
+    }
+    if s.program == BLKD {
+        for v in m.volumes.iter().filter(|v| !v.labels.is_empty()) {
+            args.push(format!("{RANGE_LABELS_ARG}{}={}", v.partition, ids(&v.labels)));
+        }
+    }
+    args
 }
 
 /// `public` names bundle entries, each once, never the manifest, and a `bootfsd` serves them
@@ -494,6 +576,9 @@ fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
         let refused = || at(format!("servers[{i}]"), Why::Block);
         let mut names: Vec<String> = s.receives.clone();
         names.extend(s.handed.iter().map(|h| h.endpoint.clone()));
+        if s.volume.is_some() {
+            names.push(String::from(VOLUME));
+        }
         for d in &s.devices {
             names.push(d.name.clone());
             names.push(format!("{}{IRQ_SUFFIX}", d.name));
@@ -509,7 +594,7 @@ fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
         }
         block.namespace("/dev/cons", handle(count)?);
         for a in args(m, s) {
-            block.arg(a);
+            block.arg(&a);
         }
         let len = machine.entries.iter().find(|(e, _)| *e == s.program).map_or(0, |(_, len)| *len);
         block.image(stub::IMAGE_AT, len);

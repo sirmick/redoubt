@@ -113,7 +113,7 @@ max_lines = 2887
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 1828
+max_lines = 1914
 
 [[crate]]
 name = "servers/fsd"

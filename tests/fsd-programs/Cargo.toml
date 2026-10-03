@@ -1,0 +1,18 @@
+[package]
+name = "redoubt-fsd-programs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The client fsd's cases start under the real init, a servers entry of their manifests (docs/testbench.md)"
+
+# A program like a server: the runtime's start-up, its handles by name from the block init
+# writes, and its lines through the /dev/cons connection init minted for it.
+[[bin]]
+name = "fsd-client"
+path = "src/bin/fsd-client.rs"
+test = false
+
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+redoubt-client = { path = "../../libs/client" }
+redoubt-init-programs = { path = "../init-programs" }

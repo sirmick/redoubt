@@ -47,7 +47,7 @@ and `init`'s only input. Its entries:
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume, the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), and arguments |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), and arguments |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -85,6 +85,15 @@ and `init`'s only input. Its entries:
   carries the smallest badge from 1 that no `handed` item there uses. A manifest names each of
   these programs at most once, `keyd` exactly once: a second would run beside the one `init`
   calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35).
+- **Volumes.** A `volumes` entry is one GPT entry of the one disk, which no other entry names,
+  and at most one server attaches it, and no entry is handed a badge at the endpoint a `blkd`
+  receives on ([R47 (one volume per instance)](fsd.md#r47-one-volume-per-instance)). For that
+  server `init` mints the range badge, the entry number + 1, at the endpoint the one `blkd`
+  receives on first, hands it as `volume`, and adds `labels=` the volume's label ids after the
+  entry's own arguments (none for an unlabelled volume); it gives `blkd` one `labels.P=ID,...`
+  per labelled volume, P its entry number ([blkd](blkd.md#ranges-and-badges)). A volume a server
+  attaches without exactly one `blkd`, and an entry carrying one of these arguments itself, are
+  refused.
 - **Sizing.** Every shared server takes `buckets=N` as an argument, parsed once in the serving
   library; none has a compiled-in count. `init` refuses the boot unless N is at least the number
   of (account, label set)s the manifest declares (each principal's unlabelled set and every label
@@ -186,10 +195,11 @@ multi-tenancy and the serving library's residual risks apply.
 
 ### Starting the servers
 
-<details><summary>Status: built · partly tested: step 6, the steward and `sshd`, and an `fsd` for each volume are not built · tested (12)</summary>
+<details><summary>Status: built · partly tested: step 6, the steward and `sshd` are not built · tested (16)</summary>
 
 - bench:init-boot
 - bench:init-servers
+- bench:fsd-boot
 - bench:init-refuses-system-fit
 - bench:init-refuses-device-unmatched
 - bench:init-refuses-bound
@@ -200,6 +210,9 @@ multi-tenancy and the serving library's residual risks apply.
 - host:redoubt-init::init_calls_one_of_each_server_it_calls
 - host:redoubt-init::more_servers_than_init_has_threads_to_watch_are_refused
 - host:redoubt-init::no_server_is_handed_a_root_badge_at_consoled
+- host:redoubt-init::a_volume_s_labels_go_to_its_server_and_to_blkd
+- host:redoubt-init::a_volume_is_one_entry_for_one_server_at_one_blkd
+- host:redoubt-init::no_server_is_handed_a_badge_at_blkd
 
 </details>
 
