@@ -103,6 +103,9 @@ pub struct Filesystem<D: BlockDevice> {
     poisoned: bool,
     /// The orphan repair has run since mount (see `force_consistency`).
     repaired: bool,
+    /// How many more metadata pairs may be allocated ([`Filesystem::set_pair_room`]);
+    /// `u32::MAX` is no limit.
+    pair_room: u32,
 }
 
 impl<D: BlockDevice> Filesystem<D> {
@@ -133,6 +136,7 @@ impl<D: BlockDevice> Filesystem<D> {
             file_generation: 0,
             commits: 0,
             poisoned: false,
+            pair_room: u32::MAX,
             repaired: false,
         })
     }
@@ -214,8 +218,28 @@ impl<D: BlockDevice> Filesystem<D> {
         self.check_poison()?;
         // Between operations every allocated block is on disk or held by an open file.
         self.alloc_ckpoint();
-        self.guarded(|fs| fs.force_consistency())?;
+        self.guarded(|fs| fs.without_pairs(|fs| fs.force_consistency()))?;
         self.guarded(op)
+    }
+
+    /// How many new metadata pairs the operations from now on may allocate between them: a
+    /// split, or a new directory's own pair, each takes one. With none left a split is not
+    /// made (compaction keeps the entries in the pairs they are in, which is still valid
+    /// littlefs, only compacted sooner) and a new directory is `NoSpace`. A commit then
+    /// fails only if its pair's entries do not fit one block. `u32::MAX`, the default, is no
+    /// limit. Commits outside the directory an operation is about (a repair at the first write
+    /// after a mount, a rename's source, the list link of a removed directory) never take one.
+    pub fn set_pair_room(&mut self, pairs: u32) { self.pair_room = pairs }
+
+    /// Runs `op` with no room for new pairs, then gives the room back.
+    pub(crate) fn without_pairs<T>(
+        &mut self,
+        op: impl FnOnce(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let room = core::mem::replace(&mut self.pair_room, 0);
+        let r = op(self);
+        self.pair_room = room;
+        r
     }
 
     // ---- metadata pairs ----
@@ -601,12 +625,18 @@ impl<D: BlockDevice> Filesystem<D> {
 
     /// Allocates a pair and writes `c` into it. Not linked anywhere yet.
     pub(crate) fn new_pair(&mut self, c: &Contents) -> Result<Pair, Error> {
+        if self.pair_room == 0 {
+            return Err(Error::NoSpace);
+        }
         let b1 = self.alloc_block()?;
         let b0 = self.alloc_block()?;
         // The block not written now may hold a stale log; ours must win the revision
         // comparison against it.
         let rev = self.read_u32(b0, 0)?;
         self.write_pair([b0, b1], rev, c)?;
+        if self.pair_room != u32::MAX {
+            self.pair_room -= 1;
+        }
         Ok([b1, b0])
     }
 

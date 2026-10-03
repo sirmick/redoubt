@@ -251,6 +251,7 @@ pub enum ErrorCode {
     Removed,
     TooLarge,
     Corrupt,
+    NoSpace,
 }
 
 impl ErrorCode {
@@ -264,6 +265,7 @@ impl ErrorCode {
             ErrorCode::Removed => 6,
             ErrorCode::TooLarge => 7,
             ErrorCode::Corrupt => 8,
+            ErrorCode::NoSpace => 9,
         }
     }
 
@@ -277,6 +279,7 @@ impl ErrorCode {
             6 => Some(ErrorCode::Removed),
             7 => Some(ErrorCode::TooLarge),
             8 => Some(ErrorCode::Corrupt),
+            9 => Some(ErrorCode::NoSpace),
             _ => None,
         }
     }

@@ -332,6 +332,131 @@ fn a_failed_write_commits_nothing() {
     fs.fsck().unwrap();
 }
 
+/// `file_blocks` is what a file holds: its skip-list's blocks walked on the medium, or none
+/// inline, whatever writes and truncations made it.
+#[test]
+fn file_blocks_counts_what_a_file_holds() {
+    use crate::fs::Struct;
+    use crate::ops::Lookup;
+    let held = |fs: &mut Filesystem<&mut Ram>| {
+        let Lookup::Found { dir, id } = fs.lookup("/f").unwrap().0 else { panic!("found") };
+        match fs.decode(&dir.c.entries[id as usize]).unwrap() {
+            Struct::Ctz { head, size } => {
+                let mut n = 0;
+                fs.ctz_traverse(head, size, None, &mut |_| Ok(n += 1)).unwrap();
+                (size, n)
+            }
+            Struct::Inline(v) => (v.len() as u32, 0),
+            Struct::Dir(_) => panic!("a file"),
+        }
+    };
+    let mut ram = Ram(vec![0xff; 256 * 64], 256);
+    Filesystem::format(&mut ram, CFG).unwrap();
+    let mut fs = Filesystem::mount(&mut ram, CFG).unwrap();
+    let rw = OpenOptions { read: true, write: true, ..Default::default() };
+    for size in [0, 1, 32, 33, 248, 249, 256, 496, 497, 1000, 2500, 5000] {
+        write_all(&mut fs, "/f", &vec![7u8; size]);
+        let (stored, blocks) = held(&mut fs);
+        assert_eq!((stored, fs.file_blocks(stored)), (size as u32, blocks), "written {size}");
+        // A rewrite at the start and a truncation leave the count the medium's.
+        let h = fs.open("/f", rw).unwrap();
+        fs.write(h, b"ab").unwrap();
+        fs.truncate(h, size as u32 / 2).unwrap();
+        fs.close(h).unwrap();
+        let (stored, blocks) = held(&mut fs);
+        assert_eq!((stored, fs.file_blocks(stored)), (size as u32 / 2, blocks), "cut {size}");
+    }
+}
+
+/// With no pair room a directory is never split and a new one is `NoSpace`: compaction keeps
+/// the entries in the pair they are in until they do not fit one block, which is then a
+/// commit's `NoSpace` that changes nothing. Each pair of room is one split, and no more.
+#[test]
+fn pair_room_bounds_splits_and_new_directories() {
+    let mut ram = Ram(vec![0xff; 256 * 64], 256);
+    Filesystem::format(&mut ram, CFG).unwrap();
+    let mut fs = Filesystem::mount(&mut ram, CFG).unwrap();
+    fs.set_pair_room(0);
+    assert_eq!(fs.mkdir("/d"), Err(Error::NoSpace));
+    assert_eq!(fs.stat("/d"), Err(Error::NoEntry));
+    fs.set_pair_room(1);
+    fs.mkdir("/d").unwrap();
+    fs.set_pair_room(0);
+    let new = OpenOptions { write: true, create_new: true, ..Default::default() };
+    let mut made = 0;
+    loop {
+        match fs.open(&std::format!("/d/{made:02}"), new) {
+            Ok(h) => fs.close(h).unwrap(),
+            Err(e) => {
+                assert_eq!(e, Error::NoSpace);
+                break;
+            }
+        }
+        made += 1;
+    }
+    assert!(made > 3, "{made} entries fit one pair");
+    assert_eq!(
+        fs.stat(&std::format!("/d/{made:02}")),
+        Err(Error::NoEntry),
+        "the refused create left nothing"
+    );
+    assert_eq!(fs.read_dir("/d", |_| {}).unwrap(), 1, "never split");
+    fs.set_pair_room(1);
+    for i in made..3 * made {
+        let h = fs.open(&std::format!("/d/{i:02}"), new);
+        if h.is_err() {
+            break;
+        }
+        fs.close(h.unwrap()).unwrap();
+    }
+    assert_eq!(fs.read_dir("/d", |_| {}).unwrap(), 2, "one split, as the room allowed");
+    let mut listed = 0;
+    fs.read_dir("/d", |_| listed += 1).unwrap();
+    assert!(listed > made);
+    fs.fsck().unwrap();
+}
+
+/// The room is counted down at each new pair, not checked once a commit: a directory whose
+/// next compaction splits it into four pairs, given room for one, makes one split and keeps the
+/// rest in the pair it has.
+#[test]
+fn one_commit_splits_only_as_far_as_its_room() {
+    // Seven files of 280 inline bytes (2030 bytes of entries, under the half block a pair
+    // keeps), then 49 empty ones. Halving the entries, a compaction moves the last 28, then 14,
+    // then 7 to new pairs: what is left is over half a block each time until only the seven
+    // remain.
+    let pairs_after = |room: u32| {
+        let cfg = Config { block_size: 4096, block_count: 64, prog_size: 16 };
+        let mut ram = Ram(vec![0xff; 4096 * 64], 4096);
+        Filesystem::format(&mut ram, cfg).unwrap();
+        let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
+        fs.mkdir("/d").unwrap();
+        fs.set_pair_room(0);
+        for i in 0..56 {
+            let data = if i < 7 { &[7u8; 280][..] } else { &[] };
+            write_all(&mut fs, &std::format!("/d/{i:02}"), data);
+        }
+        assert_eq!(fs.read_dir("/d", |_| {}).unwrap(), 1, "kept in one pair");
+        // Commits to the directory until its log is full and it compacts with the room.
+        fs.set_pair_room(room);
+        let mut pairs = 1;
+        for n in 0..1000u32 {
+            fs.set_attr("/d/55", 1, &n.to_le_bytes()).unwrap();
+            pairs = fs.read_dir("/d", |_| {}).unwrap();
+            if pairs > 1 {
+                break;
+            }
+        }
+        fs.fsck().unwrap();
+        let mut listed = 0;
+        fs.read_dir("/d", |_| listed += 1).unwrap();
+        assert_eq!(listed, 56);
+        pairs
+    };
+    assert_eq!(pairs_after(u32::MAX), 4, "unbounded, the compaction makes three pairs");
+    assert_eq!(pairs_after(1), 2, "with room for one, it makes one");
+}
+
 /// Paths: a trailing slash names a directory; NUL is not a name byte; stale handles fail.
 #[test]
 fn path_and_handle_rules() {

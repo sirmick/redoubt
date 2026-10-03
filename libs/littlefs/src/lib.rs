@@ -55,6 +55,9 @@
 //! - Mounting requires the configured block count to equal the superblock's.
 //! - [`Filesystem::unmount`] drops open handles unsynced.
 //! - A file's attributes and its data are two commits (the reference can do both in one).
+//! - [`Filesystem::set_pair_room`] can bound the new metadata pairs operations allocate: past it a directory
+//!   is compacted in the pairs it has instead of split, which the reference does only when a split finds no
+//!   free block.
 //! - Only on-disk version 2.1: 2.0 images, which the reference upgrades in place, are refused with
 //!   [`Error::Invalid`]; `fsd` formats its own volumes.
 //!

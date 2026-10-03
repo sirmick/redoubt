@@ -208,7 +208,7 @@ fn a_copy_that_does_not_fit_leaves_nothing() {
     for i in 0..19 {
         t.write(&who, 1, i * 8000, &chunk).unwrap();
     }
-    assert_eq!(copy(&mut t, &who, 1, 0, "copy"), Err(ErrorCode::TooLarge));
+    assert_eq!(copy(&mut t, &who, 1, 0, "copy"), Err(ErrorCode::NoSpace));
     assert_eq!(t.walk(&who, 0, 2, &["copy"]).unwrap_err(), "file does not exist");
 }
 

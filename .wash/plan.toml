@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 300
+revision = 305
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -448,7 +448,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["GATE1", "INIT1", "K13", "K17"]
   body = "Owner's values on QA K16-limits (2026-10-02): MAX_PROCESS_COUNT 512 with 16-bit PIDs; MAX_THREADS 255 with each thread's saved registers in its own IPC page; MAX_OPEN_CALLS 256, WAIT_CAP 32, MAX_DEPTH 16, MAX_LABELS 16, MAX_START_HANDLES 128. Brief: .wash/local/K16-implementer.md. Builds docs/kernel/processes.md (PIDs, threads), objects.md#what-objects-cost, memory-layout.md (per-process kernel data, satp without the PID), boot.md (the handoff record), abi.md (constants, record slots), budgets.md (MAX_DEPTH, MAX_LABELS, residual-risks for #r10-destruction), ipc.md (#r2-fair-waiting, #r4a-open-calls, residual risks), invariants.md, timer.md (residual risks), scheduling.md (R12 fixed terms). Needs GATE1 (its numbers are the baseline), INIT1 (budget.rs boot_*, setup_loader_process, the loader's handoff and process-area mapping) and K13 (message.rs, where the walks are). Tier A (kernel and loader), size L."
   state = "active"
-  revision = 272
+  revision = 304
   overrides = ["2026-10-02: started by Orchestrator before GATE1 (active), INIT1 (active): Owner asked to run more in parallel (2026-10-02). K16's first two commits touch neither INIT1's files (budget.rs boot_*, setup_loader_process, the loader) nor GATE1's; GATE1's merged numbers remain the baseline, and the branch rebases onto both merges before commit 3.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); an early read of commit 1 while K16 waits for INIT1's merge.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); this commit touches none of INIT1's or GATE1's files and changes no value.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); commits 1 and 4 touch none of INIT1's or GATE1's files; the branch rebases onto both merges before commit 2."]
 
 [[node]]
@@ -553,8 +553,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FSD1"]
   body = "Builds docs/servers/fsd.md 'Quotas' and R48 (a quota per attach root). Brief: .wash/local/FSD2-implementer.md. A live root holds what lies under it less the live roots below (their quotas in reserve), counted by a walk at the first mint and kept in memory, nothing stored; carving from the nearest live root above; rewrites count littlefs's tail copy; renames never move a live root; the volume root's reserve derived from littlefs; typed no_space (row 9); and FSD1's hostile-image residual closed (a metadata pair named by two directories is corrupt at mount). Host tests only, R48's two attack tests among them. Tier A, size M."
-  state = "reported"
-  revision = 294
+  state = "done"
+  revision = 305
 
 [[node]]
   id = "FSD3"

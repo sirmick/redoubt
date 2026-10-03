@@ -32,7 +32,8 @@ defmodule Redoubt.Wire.Proto.Fsd do
     5 => :not_dir,
     6 => :removed,
     7 => :too_large,
-    8 => :corrupt
+    8 => :corrupt,
+    9 => :no_space
   }
 
   @doc """

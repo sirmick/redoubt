@@ -218,6 +218,33 @@ fn creates_with_attributes_read_in_c() {
     assert_eq!(c.list("/d").unwrap().len(), 30);
 }
 
+/// A directory the reference split over three or more pairs: `read_dir_at` hands over every
+/// pair it reads, each once, as many as it says it read and as `read_dir` counts, and lists
+/// what the reference lists.
+#[test]
+fn read_dir_at_reports_every_pair_of_a_split_directory() {
+    let cfg = SMALL;
+    let mut c = CFs::mount(cfg, CFs::format(cfg).into_image()).expect("the reference mounts");
+    c.mkdir("/d").unwrap();
+    for i in 0..40 {
+        c.write(&format!("/d/a-longer-name-for-splitting-{i}"), true, true, 0, b"x", None).unwrap();
+    }
+    let want = c.list("/d").unwrap().len();
+    let mut ram = Ram::from_image(rust_cfg(cfg), c.into_image());
+    let mut fs = Filesystem::mount(&mut ram, rust_cfg(cfg)).unwrap();
+    let mut d = None;
+    fs.read_dir_at(fs.root_dir(), |e| d = d.or(e.dir()), |_| Ok(())).unwrap();
+    let (mut pairs, mut names) = (Vec::new(), 0);
+    let read = fs.read_dir_at(d.expect("d"), |_| names += 1, |p| Ok(pairs.push(p.blocks()))).unwrap();
+    assert!(read >= 3, "d spans {read} pairs");
+    assert_eq!((pairs.len(), names), (read as usize, want));
+    let mut blocks: Vec<u32> = pairs.concat();
+    blocks.sort_unstable();
+    blocks.dedup();
+    assert_eq!(blocks.len(), 2 * pairs.len(), "every pair once: {pairs:?}");
+    assert_eq!(fs.read_dir("d", |_| {}).unwrap(), read);
+}
+
 #[test]
 fn c_writes_rust_reads() {
     for seed in 101..=120 {
