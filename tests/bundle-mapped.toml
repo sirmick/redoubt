@@ -13,7 +13,7 @@ expect = [
     '^\[bundle-mapped\] ok: the first entry is the kernel.s ELF$',
     '^\[bundle-mapped\] ok: the second entry is this program$',
     '^\[bundle-mapped\] ok: its read-only segments are this program.s own image \([0-9]+ bytes compared\)$',
-    '^\[bundle-mapped\] ok: system 15 processes, users 47, and root keeps one for this one$',
+    '^\[bundle-mapped\] ok: system 127 processes, users 382, and root keeps one for this one$',
     '^\[bundle-mapped\] ok: root pays for the bundle.s [0-9]+ pages and the rest of this process \([0-9]+\)$',
     '^\[bundle-mapped\] ok: map_fixed over the bundle -> Err\(InvalidArgument\), nothing charged$',
     '^\[bundle-mapped\] writing to the bundle$',

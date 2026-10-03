@@ -1,6 +1,6 @@
 # Processes
 
-A process is an address space, a handle table and up to 31 threads, running in one budget. A
+A process is an address space, a handle table and up to 255 threads, running in one budget. A
 parent makes one in three steps: `process_create` makes it empty, `process_map` moves pages into
 it, and `process_start` gives it its handles and starts its first thread. After that the parent
 cannot touch it. When a process ends, the kernel sends one **exit notice** to the endpoint its
@@ -34,14 +34,15 @@ A process has:
   carries none; [memory layout](memory-layout.md#satp));
 - the **budget it runs in**, which pays for everything it holds, counts its PID against its
   process limit and sets its CPU share ([scheduling](scheduling.md));
-- an address space, a handle table ([objects](objects.md)) and up to `MAX_THREADS` (31) threads;
+- an address space, a handle table ([objects](objects.md)) and up to `MAX_THREADS` (255) threads;
 - an **exit endpoint**, named by its creator, where its exit notice goes;
-- its open calls, at most `MAX_OPEN_CALLS` (64) ([IPC](ipc.md#r4a-open-calls));
+- its open calls, at most `MAX_OPEN_CALLS` (256) ([IPC](ipc.md#r4a-open-calls));
 - a **process object**: one page charged to its creator's budget, which holds the exit notice
   (see [Exit notices](#exit-notices)). A process handle names this object.
 
-PIDs run from 2 to `MAX_PROCESS_COUNT` (64: the PIDs there are, the kernel's included); PID 1 is
-the kernel. `process_create` draws the PID at random from the free ones: a PID is free when no
+PIDs run from 2 to `MAX_PROCESS_COUNT` (511: the PIDs there are, the kernel's included, held
+below 2^9 so that each fits Sv32's ASID field ([`satp`](memory-layout.md#satp))); PID 1 is the
+kernel. `process_create` draws the PID at random from the free ones: a PID is free when no
 process holds it and no process object still names it. So a PID is held from `process_create`
 until the process object is freed, which is after the process has ended (PID lifetime, below).
 The creator is not told the PID. It appears only in the exit notice, so a launcher that must
@@ -80,12 +81,12 @@ and its pages until its budget or its creator's is destroyed.
 
 </details>
 
-A thread's number within its process, its **TID**, runs from 1 to `MAX_THREADS` (31); the first
-thread is 1. A process holds at most 31 threads, the first one included.
+A thread's number within its process, its **TID**, runs from 1 to `MAX_THREADS` (255); the first
+thread is 1. A process holds at most 255 threads, the first one included.
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
-| `thread_create` | entry, sp, arg -> TID | Start a thread of the caller's process at `entry`, with stack pointer `sp` and `arg` in its first argument register. `TooManyThreads` past 31; `OutOfMemory` if the budget cannot pay the thread's page. |
+| `thread_create` | entry, sp, arg -> TID | Start a thread of the caller's process at `entry`, with stack pointer `sp` and `arg` in its first argument register. `TooManyThreads` past 255; `OutOfMemory` if the budget cannot pay the thread's page. |
 | `thread_exit` | none; does not return | End the calling thread. |
 | `process_exit` | code (32 bits); does not return | End the whole process with `code`. A code wider than 32 bits is `InvalidArgument`, and the process goes on. |
 
@@ -174,7 +175,7 @@ parent and child share a budget, the pages (`OutOfMemory`). The exact order is i
 are charged to its budget; the page rules are in [memory](memory.md#the-mapping-calls). The
 image and the startup block reach a process this way.
 
-**`process_start`** takes a record of up to `MAX_START_HANDLES` (64: the handles one start
+**`process_start`** takes a record of up to `MAX_START_HANDLES` (128: the handles one start
 copies) handle slots. It refuses, in this order, while decoding: a process handle of 0 or
 wider than 32 bits (`BadHandle`), a longer list (`TooLarge`) before reading it, an unreadable
 record (`InvalidArgument`), a slot of 0 or wider than 32 bits (`BadHandle`); then a process

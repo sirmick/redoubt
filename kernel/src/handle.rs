@@ -378,7 +378,7 @@ impl MemoryManager {
 
     /// Remove every handle for which `doomed` holds, from every process's table (R10).
     pub fn sweep_handles(&mut self, doomed: impl Fn(&Self, &Handle) -> bool) {
-        for pid in crate::budget::pids() {
+        for pid in self.live_pids() {
             if self.account(pid).is_some() {
                 self.remove_handles_where(pid, &doomed);
             }

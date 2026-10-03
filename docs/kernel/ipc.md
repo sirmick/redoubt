@@ -286,12 +286,12 @@ groups are served is the same whatever other label sets send. A single cursor ov
 would not keep that: a vault session's take would move the cursor, and with it which unlabelled
 caller is served next, which crash blame then shows to unlabelled readers
 ([R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference)). A group that
-already has `WAIT_CAP` (16) messages queued on the endpoint gets `Busy` at once. Only queued messages count; a taken call is
-bounded by [R4a](#r4a-open-calls) instead. Keying by label set keeps a vault session and its
-owner's ordinary session, which share an account, from sharing a turn or a cap. Keying
-account-0 callers by budget keeps one busy system server from filling another's cap. With k groups
-waiting and the receiver below its open-call limit, each group's oldest message is taken within
-k receives (I11 (fair turns)).
+already has `WAIT_CAP` (32) messages queued on the endpoint gets `Busy` at once. Only queued
+messages count; a taken call is bounded by [R4a](#r4a-open-calls) instead. Keying by label set
+keeps a vault session and its owner's ordinary session, which share an account, from sharing a
+turn or a cap. Keying account-0 callers by budget keeps one busy system server from filling
+another's cap. With k groups waiting and the receiver below its open-call limit, each group's
+oldest message is taken within k receives (I11 (fair turns)).
 
 ### R3 (lends and abandoned calls)
 
@@ -384,7 +384,7 @@ other handles arrive, and the caller's `call` returns `OutOfMemory` with the rep
 Status: built · tested: bench:redoubt-ipc, mutation:R4aOpenCallsPerThread, mutation:R4aFullTakesNothing
 
 Taking a call opens it and charges one page to the receiving process's budget; `reply` closes
-it and frees the page. A process holding `MAX_OPEN_CALLS` (64) open calls takes no more: calls
+it and frees the page. A process holding `MAX_OPEN_CALLS` (256) open calls takes no more: calls
 stay queued and R2's turns skip them, while its `receive` still delivers sends, interrupts and
 notices. A `send` is never an open call, so `reply` to a send's id is `InvalidArgument`.
 
@@ -491,10 +491,11 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
   that cannot afford that must not lend them with a short timeout.
 - **Delivery walks every thread, twice over.** Finding a receiver scans all threads, and for
   each waiting receiver finding the next sender scans them all again: up to the square of the
-  threads that exist. A walk skips a PID with no process and visits only the threads that have
-  an IPC page, so it follows the threads the budgets have paid for, at most `MAX_PROCESS_COUNT` x
-  `MAX_THREADS`, compile-time constants no process can change. It costs time on every delivery,
-  and that cost is not charged to the caller's budget.
+  threads that exist. A walk visits only the PIDs that have a process, through a set of them,
+  and only the threads that have an IPC page, so it follows the threads the budgets have paid
+  for, at most `MAX_PROCESS_COUNT` x `MAX_THREADS` (511 x 255), compile-time constants no process
+  can change. It costs time on every delivery, and that cost is not charged to the caller's
+  budget.
 - **Completion races between harts** are argued from the code, not attacked by a case. On one
   hart the kernel runs with interrupts off. On several (a build for more than one hart), each
   kernel global is guarded by its own lock, and the completion holds the memory manager's for

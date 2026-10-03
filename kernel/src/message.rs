@@ -47,7 +47,8 @@ use redoubt_sys::{
 };
 
 use crate::arch::process::TID;
-use crate::budget::{BudgetFrame, Class, pids};
+use crate::budget::{BudgetFrame, Class};
+use crate::cell::KernelCell;
 use crate::endpoint::Group;
 use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
 use crate::kframe;
@@ -432,7 +433,7 @@ fn open_call_of(mm: &MemoryManager, pid: Pid, tid: TID, rid: u64) -> Option<u32>
 /// Call `f` for every thread that has an IPC page, in (pid, tid) order, until it answers `Some`.
 /// Only threads that exist are visited ([`MemoryManager::live_tids`]).
 fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, Pid, TID) -> Option<T>) -> Option<T> {
-    pids().find_map(|pid| mm.live_tids(pid).find_map(|tid| f(mm, pid, tid)))
+    mm.live_pids().find_map(|pid| mm.live_tids(pid).find_map(|tid| f(mm, pid, tid)))
 }
 
 /// Whether `(pid, tid)` is a sender queued on `e`.
@@ -1524,19 +1525,29 @@ fn finish_served(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
 pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
     #[cfg(feature = "sched-trace")]
     let _threads = crate::sched::trace::threads();
-    let mut served: [Option<EndpointRef>; MAX_THREADS] = [None; MAX_THREADS];
-    let mut n = 0;
-    for tid in mm.live_tids(pid) {
-        let e = end_thread(ss, mm, pid, tid);
-        if e.is_some() && !served[..n].contains(&e) {
-            served[n] = e;
-            n += 1;
+    let n = SERVED.with(|served| {
+        let mut n = 0;
+        for tid in mm.live_tids(pid) {
+            match end_thread(ss, mm, pid, tid) {
+                Some(e) if !served[..n].contains(&e) => {
+                    served[n] = e;
+                    n += 1;
+                }
+                _ => {}
+            }
         }
-    }
-    for e in served[..n].iter().flatten() {
-        pump(ss, mm, *e);
+        n
+    });
+    for i in 0..n {
+        let e = SERVED.with(|served| served[i]);
+        pump(ss, mm, e);
     }
 }
+
+/// `process_ending`'s endpoints to pump, one per thread at most: a static, not 4 KiB of the 32 KiB
+/// kernel stack. All zeros, so `.bss`.
+static SERVED: KernelCell<[EndpointRef; MAX_THREADS]> =
+    KernelCell::new([EndpointRef { frame: 0, id: 0 }; MAX_THREADS]);
 
 /// R10, the part that reaches messages: after `budget_destroy` marked a subtree dying and before
 /// its budgets are freed, destroy the devices it owns and fail every message sent through a handle
@@ -1582,7 +1593,7 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
     let mut first = true;
     loop {
         let mut failed = false;
-        for pid in pids() {
+        for pid in mm.live_pids() {
             for tid in mm.live_tids(pid) {
                 if first {
                     drop_dying_notices(mm, pid, tid);
@@ -1704,7 +1715,7 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> Timeouts {
     let mut due: Option<(u64, Pid, TID)> = None;
     let mut next = u64::MAX;
     let mut stale = None;
-    for pid in pids() {
+    for pid in mm.live_pids() {
         let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
         if earliest > now {
             next = next.min(earliest);

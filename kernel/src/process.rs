@@ -212,16 +212,22 @@ impl MemoryManager {
         }
     }
 
-    /// The lowest process-object frame for which `f` holds: at most `MAX_PROCESS_COUNT` objects,
-    /// through the PID index, never a scan of the object frames (R12).
+    /// The lowest process-object frame for which `f` holds: the objects that exist, through the
+    /// PID index, never a scan of the object frames (R12).
     fn find_process(&self, f: impl Fn(&MemoryManager, u32) -> bool) -> Option<u32> {
-        self.objects.processes.iter().flatten().copied().filter(|frame| f(self, *frame)).min()
+        let frames = self.objects.process_pids.iter().filter_map(|i| self.objects.processes[i]);
+        frames.filter(|frame| f(self, *frame)).min()
     }
 
     /// `pid`'s process object is now `frame` (`None`: freed), in the PID index.
     fn index_process(&mut self, pid: Pid, frame: Option<u32>) {
         let i = crate::budget::account_index(pid).expect("a process object names a PID");
         self.objects.processes[i] = frame;
+        self.objects.process_pids = if frame.is_some() {
+            self.objects.process_pids.with(i)
+        } else {
+            self.objects.process_pids.without(i)
+        };
         // The audit neither moves the schedule nor counts in a latency target (`sched::audit`).
         // Inside a destruction it does nothing: the destruction audits once, after its walk.
         #[cfg(debug_assertions)]
@@ -243,8 +249,9 @@ impl MemoryManager {
             return;
         };
         let to = BudgetRef { frame: parent, id: self.budget_id(parent) };
-        let frames = self.objects.processes;
-        for frame in frames.iter().flatten().copied() {
+        // The set is read once: the walk changes the objects, never which exist.
+        for i in self.objects.process_pids.iter() {
+            let Some(frame) = self.objects.processes[i] else { continue };
             let mut p = self.process(frame);
             if !self.budget(p.counted_in.frame).dying {
                 continue;
@@ -273,6 +280,13 @@ impl MemoryManager {
             self.objects.processes.iter().flatten().count(),
             "the PID index names a frame that is no process object"
         );
+        for (i, frame) in self.objects.processes.iter().enumerate() {
+            assert_eq!(
+                self.objects.process_pids.contains(i),
+                frame.is_some(),
+                "the PID set misses the index"
+            );
+        }
     }
 
     /// The checked build's audit, run once after a destruction's walk: the PID and IRQ indexes

@@ -44,10 +44,9 @@
 
 use redoubt_layout::{KERNEL_PID, Pid};
 use redoubt_stride::{Budgets, Cpu, State};
-use redoubt_sys::MAX_THREADS;
 
 use crate::arch::process::MAX_PROCESS_COUNT;
-use crate::arch::process::TID;
+use crate::arch::process::{TID, TidMask};
 use crate::budget::BudgetFrame;
 use crate::cell::KernelCell;
 use crate::handle::BudgetRef;
@@ -165,17 +164,15 @@ impl Runnable {
     /// Fill the list from the process table and return it.
     fn fill(&mut self, ss: &ProcessTable, mm: &MemoryManager) -> &[BudgetRef] {
         self.n = 0;
-        for p in ss.processes.iter() {
-            if p.free() || p.pid().get() == 1 {
-                continue;
-            }
-            let ready = p.ready_threads().is_none_or(|x| x != 0);
+        for pid in mm.live_pids() {
+            let p = &ss.processes[usize::from(pid.get()) - 1];
+            let ready = p.ready_threads().is_none_or(|x| !x.is_empty());
             if !ready {
                 continue;
             }
             let Some(frame) = mm.budget_of(p.pid()) else { continue };
             let b = budget_ref(mm, frame);
-            if !self.list[..self.n].contains(&b) && self.n < self.list.len() {
+            if !self.list[..self.n].contains(&b) {
                 self.list[self.n] = b;
                 self.n += 1;
             }
@@ -384,15 +381,13 @@ fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(P
     let cursor = mm.budget(b.frame).cursor;
     let mut first: Option<(Pid, TID)> = None;
     let mut after: Option<(Pid, TID)> = None;
-    for p in ss.processes.iter() {
-        if p.free() || p.running() || p.pid().get() == 1 || mm.budget_of(p.pid()) != Some(b.frame) {
+    for pid in mm.live_pids() {
+        let p = &ss.processes[usize::from(pid.get()) - 1];
+        if p.free() || p.running() || mm.budget_of(pid) != Some(b.frame) {
             continue;
         }
-        let tids: [bool; MAX_THREADS + 1] = match p.ready_threads() {
-            Some(mask) => core::array::from_fn(|t| mask & (1 << t) != 0),
-            None => core::array::from_fn(|t| t == 0),
-        };
-        for (tid, _) in tids.iter().enumerate().filter(|(_, r)| **r) {
+        let tids = p.ready_threads().unwrap_or(TidMask::of(0));
+        for tid in tids.iter() {
             let key = (p.pid(), tid);
             first.get_or_insert((p.pid(), tid));
             if after.is_none() && cursor.is_some_and(|c| key > c) {

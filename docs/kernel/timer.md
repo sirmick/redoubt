@@ -290,7 +290,7 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   call. A firmware that failed to arm it would stop slices, timeouts and deadlines. The firmware
   is TCB ([boot](boot.md)).
 - **Expiry walks threads.** A walk visits only the threads that exist, in the processes whose
-  earliest timeout has come, so it is bounded by `MAX_PROCESS_COUNT` x `MAX_THREADS` (64 x 31,
+  earliest timeout has come, so it is bounded by `MAX_PROCESS_COUNT` x `MAX_THREADS` (511 x 255,
   compile-time constants no process can change) plus the deadline list. Each walk that finds an
   item, or a wait that ended early, is billed to its budget. A budget destroyed before its
   deadline leaves the timer early: one walk of the deadline list, nobody's, for each such

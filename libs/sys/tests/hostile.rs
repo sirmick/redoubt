@@ -69,6 +69,8 @@ fn kinds_are_separated_only_by_slot_zero() {
 #[test]
 fn per_kind_field_sets_match_the_spec() {
     let all: Vec<usize> = (1..RECEIVED_SLOTS).collect();
+    // Every label slot holds a label.
+    let every: Vec<u64> = (1..=MAX_LABELS as u64).collect();
     let exit_set: Vec<usize> = std::iter::once(3).chain(4..WORD0).chain(WORD0..WORD0 + 3).collect();
     let full = |kind| {
         Received::Message(Message {
@@ -76,7 +78,7 @@ fn per_kind_field_sets_match_the_spec() {
             msg_id: nz(BIG),
             badge: 7,
             account: 9,
-            labels: Labels::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap(),
+            labels: Labels::from_slice(&every).unwrap(),
             body: received(&[5, 6, 7, 8]),
         })
     };
@@ -85,7 +87,7 @@ fn per_kind_field_sets_match_the_spec() {
         cause: Cause::Faulted,
         code: 1,
         blamed_account: 4,
-        blamed_labels: Labels::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap(),
+        blamed_labels: Labels::from_slice(&every).unwrap(),
     });
     let cases: Vec<(Received, Vec<usize>)> = vec![
         (full(MessageKind::Call { lend: Some(pages(0x6000, 2)) }), all.clone()),
@@ -98,7 +100,7 @@ fn per_kind_field_sets_match_the_spec() {
         let base = record.encode();
         for slot in 1..RECEIVED_SLOTS {
             let mut decodes = false;
-            for value in [1u64, 2, 3, 4, 8, 0x1000, 1 << 32, u64::MAX] {
+            for value in [1u64, 2, 3, 4, 8, MAX_LABELS as u64, 0x1000, 1 << 32, u64::MAX] {
                 let mut slots = base;
                 slots[slot] = value;
                 if let Ok(r) = Received::decode(&slots) {

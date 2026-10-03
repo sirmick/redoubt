@@ -201,7 +201,7 @@ startup block and resolves paths against it
 ([`libs/rt/src/startup.rs`](../../libs/rt/src/startup.rs),
 [`libs/rt/src/path.rs`](../../libs/rt/src/path.rs)).
 - The block names the handles `process_start` installed (slots 1 to n, at most
-  `MAX_START_HANDLES`, 64), namespace entries (a handle and a clean absolute path), named handles
+  `MAX_START_HANDLES`, 128), namespace entries (a handle and a clean absolute path), named handles
   (a handle and a name) and the arguments. Paths are unique, names are unique, and a block that
   breaks any rule is refused whole: the parent may be hostile.
 - `resolve` returns the entry with the longest matching prefix and what is left of the path; a

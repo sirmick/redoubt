@@ -22,6 +22,7 @@ mod arch;
 
 #[macro_use]
 mod args;
+mod bits;
 mod budget;
 mod cell;
 mod device;

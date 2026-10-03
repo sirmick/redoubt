@@ -348,21 +348,25 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     Ok(())
 }
 
+/// Threads in each of Bob's flood processes: a fixed shape for the attack, so a seed's process
+/// count is its senders over 31, not the thread limit (`MAX_THREADS`).
+const FLOOD_THREADS: u64 = 31;
+
 /// The flood (plan/m1-separation.md's attack case "endpoint flooding: 10,000 sender threads
 /// calling `fsd`, and Alice is still served in her turn"), on a boot big enough to hold it. A
 /// system server receives on one endpoint; Bob's processes (two label sets of one account, so two
-/// R2 groups) run up to 31 threads each, every thread calling with no timeout; a crowd of up to
-/// eight other accounts queues `WAIT_CAP` calls each; Alice makes one call in the middle of the
-/// flood. Most of Bob's calls get `Busy` (R2's cap per group); Alice's call must be taken within
-/// as many receives as there are groups (I11). The server receives with two threads in turn; half
-/// the seeds' servers hoard: they receive without replying, so open calls pile up to
+/// R2 groups) run up to `FLOOD_THREADS` threads each, every thread calling with no timeout; a
+/// crowd of up to eight other accounts queues `WAIT_CAP` calls each; Alice makes one call in the
+/// middle of the flood. Most of Bob's calls get `Busy` (R2's cap per group); Alice's call must be
+/// taken within as many receives as there are groups (I11). The server receives with two threads
+/// in turn; half the seeds' servers hoard: they receive without replying, so open calls pile up to
 /// `MAX_OPEN_CALLS` for the process, spread over both threads (R4a counts per process).
 ///
 /// Up to 10,000 senders per seed, so the invariants are checked every 512 steps and at the end
 /// (ghost violations are recorded as they happen and reported at the next check).
 pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     use crate::kernel::{DeviceSpec, INIT_PID, Limits, Note};
-    use crate::spec::{Error, FOREVER, WORDS};
+    use crate::spec::{Error, FOREVER, MAX_OPEN_CALLS, WAIT_CAP, WORDS};
     use crate::syscall::{Outcome, Ret, Syscall};
     let mut rng = Rng::new(seed);
     let fail = |message: String| Failure { family: "flood", seed, message, ops: Vec::new() };
@@ -404,8 +408,9 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     // init's slots: 1 root, 2 system, 3 users, 4 the Reset device.
     let e =
         handle(&run(&mut k, INIT_PID, 1, Syscall::EndpointCreate)?).ok_or_else(|| fail("endpoint".into()))?;
-    let (system_h, users_h) = (2, 3);
-    let hs = handle(&run(&mut k, INIT_PID, 1, budget(200, 2, 500, alloc::vec![], 0, system_h))?);
+    // The server pays a page for each open call (R6): room for MAX_OPEN_CALLS, and 136 besides.
+    let (system_h, users_h, pages) = (2, 3, MAX_OPEN_CALLS + 136);
+    let hs = handle(&run(&mut k, INIT_PID, 1, budget(pages, 2, 500, alloc::vec![], 0, system_h))?);
     let hs = hs.ok_or_else(|| fail("server budget".into()))?;
     let ps =
         handle(&run(&mut k, INIT_PID, 1, Syscall::ProcessCreate { budget: hs, exit_endpoint: e })?).unwrap();
@@ -422,7 +427,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     };
     // Bob: two label sets of account 1002 (two R2 groups); Alice: account 1001.
     let senders = if rng.pct(20) { 10_000 } else { rng.range(40, 2_000) };
-    let procs = senders.div_ceil(31);
+    let procs = senders.div_ceil(FLOOD_THREADS);
     let hb =
         handle(&run(&mut k, INIT_PID, 1, budget(50_000, procs + 2, 4_000, alloc::vec![], 1002, users_h))?)
             .unwrap();
@@ -461,8 +466,9 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     }
     // The crowd: other accounts, one process each, WAIT_CAP threads calling. The first two have
     // account 0, so each is its own group only by its budget id.
-    // At least three, so that more than MAX_OPEN_CALLS calls can queue.
-    let crowd = rng.range(3, 8);
+    // Enough that more than MAX_OPEN_CALLS calls can queue, Bob's WAIT_CAP and Alice's one with
+    // them.
+    let crowd = rng.range(MAX_OPEN_CALLS / WAIT_CAP - 1, MAX_OPEN_CALLS / WAIT_CAP + 4);
     let mut crowd_threads = Vec::new();
     for i in 0..crowd {
         let hc = handle(&run(
@@ -520,7 +526,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let mut alice_msg = None;
     'flood: for (pid, first) in bobs {
         let mut tid = first;
-        for _ in 0..31 {
+        for _ in 0..FLOOD_THREADS {
             if sent == alice_at && alice_msg.is_none() {
                 run(&mut k, apid, atid, call.clone())?;
                 alice_msg = k.msgs.values().find(|m| m.sender_tid == atid).map(|m| m.id);

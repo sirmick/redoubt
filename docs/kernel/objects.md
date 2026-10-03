@@ -194,7 +194,7 @@ a new table page), the call is undone and costs nothing.
 Handles are **copied**, never moved:
 - a message carries up to `MAX_MSG_HANDLES` (4) handles, installed in the receiver's table when it
   is delivered while the sender keeps its own ([IPC](ipc.md#messages));
-- `process_start` copies up to `MAX_START_HANDLES` (64) of the caller's handles into the new
+- `process_start` copies up to `MAX_START_HANDLES` (128) of the caller's handles into the new
   process's table, at indices 1 to n in the order given ([processes](processes.md)).
 
 A copy is the same object, badge and stamp at a new index in another table. Copies are equal:
@@ -460,7 +460,7 @@ is being destroyed.
   frees the dying tables whole; it walks the dying subtree and its owner lists, not the object
   frames or the live tables ([budgets](budgets.md#residual-risks)). Destroying a quarantined
   device still closes its handles in one pass over every table of every process (up to
-  `MAX_PROCESS_COUNT` (64) processes of 64 table pages), bounded by compile-time constants.
+  `MAX_PROCESS_COUNT` (511) processes of 64 table pages), bounded by compile-time constants.
   Installing a handle searches for the lowest free slot of one table.
 
 ## Why

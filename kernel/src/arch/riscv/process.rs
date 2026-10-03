@@ -65,13 +65,31 @@ pub type TID = usize;
 /// The first thread of every process.
 pub const INITIAL_TID: TID = 1;
 
+/// Words in a [`TidMask`].
+const TID_WORDS: usize = 4;
+// Every TID, 0 included, has a bit.
+const _: () = assert!(MAX_THREADS < TID_WORDS * u64::BITS as usize);
+
+/// A set of TIDs, bit `tid` for thread `tid` (bit 0, TID 0, names no thread).
+pub type TidMask = crate::bits::Bits<TID_WORDS>;
+
 use redoubt_layout::Pid;
 use redoubt_sys::{MAX_THREADS, PAGE_SIZE};
 
 use crate::cell::KernelCell;
 use crate::ptable::ProcessInner;
 
-pub const MAX_PROCESS_COUNT: usize = 64;
+pub const MAX_PROCESS_COUNT: usize = 511;
+
+/// The width of `satp`'s ASID field: 9 bits in Sv32, 16 in Sv39 (the privileged spec).
+#[cfg(target_pointer_width = "32")]
+pub const ASID_BITS: u32 = 9;
+#[cfg(target_pointer_width = "64")]
+pub const ASID_BITS: u32 = 16;
+
+// Every PID, 1..=MAX_PROCESS_COUNT, fits the ASID field, so a PID can be its own ASID with no table
+// between them (kernel/memory-layout.md, `satp`).
+const _: () = assert!(MAX_PROCESS_COUNT < 1 << ASID_BITS);
 
 /// Base of a range of addresses that are never mapped. Jumping to one of them faults into
 /// the kernel, which uses the faulting address to tell what the program is returning from.
@@ -103,7 +121,7 @@ struct ProcessImpl {
     pub inner: ProcessInner,
 
     /// Allocated contexts, independent of their untrusted program counters.
-    allocated_threads: u32,
+    allocated_threads: TidMask,
 
     /// The last thread ID that was allocated
     last_tid_allocated: u8,
@@ -232,7 +250,7 @@ impl Process {
     pub fn current_tid(&self) -> TID { process_impl().hardware_thread }
 
     pub fn thread_exists(&self, tid: TID) -> bool {
-        valid_tid(tid) && process_impl().allocated_threads & (1 << tid) != 0
+        valid_tid(tid) && process_impl().allocated_threads.contains(tid)
     }
 
     /// Set the current thread, and the context the trap handler saves into.
@@ -257,7 +275,7 @@ impl Process {
         let start = process.last_tid_allocated as usize;
         for offset in 0..MAX_THREADS {
             let tid = (start + offset) % MAX_THREADS + 1;
-            if process.allocated_threads & (1 << tid) == 0 {
+            if !process.allocated_threads.contains(tid) {
                 process.last_tid_allocated = u8::try_from(tid).expect("a TID fits a byte");
                 return Some(tid);
             }
@@ -311,7 +329,7 @@ impl Process {
         let context = context_addr(INITIAL_TID);
         let process = process_impl();
         process.hardware_thread = INITIAL_TID;
-        process.allocated_threads = 0;
+        process.allocated_threads = TidMask::EMPTY;
         process.last_tid_allocated = u8::try_from(INITIAL_TID).expect("a TID fits a byte");
         process.no_thread = Default::default();
         process.context = context;
@@ -326,7 +344,10 @@ impl Process {
     /// The process's own address space must be the active one.
     pub fn setup_first_thread(pid: Pid, entry: usize, sp: usize, arg: usize) {
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
-        process_impl().allocated_threads |= 1 << INITIAL_TID;
+        {
+            let process = process_impl();
+            process.allocated_threads = process.allocated_threads.with(INITIAL_TID);
+        }
         let thread = context(INITIAL_TID);
         *thread = Default::default();
         thread.sepc = entry;
@@ -343,7 +364,8 @@ impl Process {
         thread.registers[0] = EXIT_THREAD;
         thread.registers[1] = sp;
         thread.registers[9] = arg;
-        process_impl().allocated_threads |= 1 << new_tid;
+        let process = process_impl();
+        process.allocated_threads = process.allocated_threads.with(new_tid);
     }
 
     /// Destroy a given thread: `false` if it did not exist.
@@ -359,7 +381,7 @@ impl Process {
         }
         thread.sepc = 0;
         let process = process_impl();
-        process.allocated_threads &= !(1 << tid);
+        process.allocated_threads = process.allocated_threads.without(tid);
         // Its IPC page goes back next (`thread_ended`): a trap must never save into it after.
         if process.hardware_thread == tid {
             process.context = PROCESS + mem::offset_of!(ProcessImpl, no_thread);

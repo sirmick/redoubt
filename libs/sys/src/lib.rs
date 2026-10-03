@@ -129,14 +129,14 @@ pub const MAX_MSG_HANDLES: usize = 4;
 /// Pages in one lend (= the 9P `msize`, 64 KiB; servers/wire.md).
 pub const MAX_LEND_PAGES: usize = 16;
 /// Threads per process.
-pub const MAX_THREADS: usize = 31;
+pub const MAX_THREADS: usize = 255;
 /// Labels per budget.
-pub const MAX_LABELS: usize = 8;
+pub const MAX_LABELS: usize = 16;
 /// Budget tree depth; the root is at depth 0.
-pub const MAX_DEPTH: usize = 8;
+pub const MAX_DEPTH: usize = 16;
 /// Queued messages (sent, not yet taken) per group (R2: (account, label set), and budget for
 /// account 0) per endpoint; `Busy` beyond.
-pub const WAIT_CAP: usize = 16;
+pub const WAIT_CAP: usize = 32;
 /// Stride scheduling numerator.
 pub const STRIDE: u64 = 1 << 20;
 /// The time slice, in microseconds (10 ms).
@@ -145,9 +145,9 @@ pub const SLICE: u64 = 10_000;
 pub const FOREVER: u64 = u64::MAX;
 /// Open calls per process (taken by `receive`, not yet replied to). At the limit the process
 /// takes no more calls, while sends, interrupts and notices still arrive (R4a).
-pub const MAX_OPEN_CALLS: usize = 64;
+pub const MAX_OPEN_CALLS: usize = 256;
 /// Handles one `process_start` copies into the child at most.
-pub const MAX_START_HANDLES: usize = 64;
+pub const MAX_START_HANDLES: usize = 128;
 /// Handles one process may hold (kernel/objects.md, "Handles"): a call that would add one past
 /// it gets `TooLarge` (`Number::can_return`), and at delivery it is a cost the receiver cannot pay
 /// (R4).

@@ -253,7 +253,7 @@ the same with a handle the server minted for it; `process-attack` names a badged
 For every budget, pages, processes and carved weight used are at most its limits, and its
 children's limits and own pages, plus its own objects, fit within them. A server's charge for the
 lends it holds is at most `MAX_LEND_PAGES` (16 pages) per open call, and a process holds at most
-`MAX_OPEN_CALLS` (64), so a process's lends cost it at most 1024 pages.
+`MAX_OPEN_CALLS` (256), so a process's lends cost it at most 4,096 pages.
 
 **Kept in** `charge` (`kernel/src/budget.rs`: `OutOfMemory` past the limit, for every
 allocation); the carve checks in `budget_create` (pages, processes, weight, in that order);
@@ -425,7 +425,7 @@ this family's own check may be doing no unique work.
 
 **Attacks:** `budget` destroys a nested subtree and checks the parent's usage exactly, then runs
 500 create-nest-destroy cycles; `budget-deadline` checks `system`'s usage after a deadline
-destroys a lease; `process-lifecycle` checks exact budgets after 260 exits; `process-attack`
+destroys a lease; `process-lifecycle` checks exact budgets after 520 exits; `process-attack`
 checks that receiving notices refunds the creator's pages exactly.
 
 ### I11 (fair turns)
@@ -579,7 +579,7 @@ has been told of every abandoned call it holds; `Checker::flows`: a notice goes 
 holder, only when its caller no longer waits, and never twice. `AbandonNoticeMissing` and
 `AbandonNoticeRepeated` fail here.
 
-**Attacks:** `redoubt-ipc` abandons 64 calls and counts 64 notices, and holds one abandoned call
+**Attacks:** `redoubt-ipc` abandons 256 calls and counts 256 notices, and holds one abandoned call
 back to see it reported once; `timeouts` races a reply against the caller's timeout 200 times and
 checks each lands as exactly one of a delivered reply, one notice then `discarded`, or `discarded`
 with no notice; `budget-deadline` abandons a taken call by a deadline; `process-lifecycle` by the

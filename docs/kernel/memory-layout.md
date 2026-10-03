@@ -121,7 +121,7 @@ Inside the kernel area:
 | `0xffff_ffff_f000_0000` | PLIC window (`KERNEL_PLIC_BASE`), up to 64 MiB |
 | `0xffff_ffff_f400_0000` | DMA register window (`KERNEL_DMA_REGS`): `KERNEL_DMA_PAGES` (16) pages, one per DMA device |
 | `0xffff_ffff_ffd0_0000` | kernel code and constants (512 KiB) |
-| `0xffff_ffff_ffd8_0000` | kernel data (512 KiB) |
+| `0xffff_ffff_ffd8_0000` | kernel data (1 MiB) |
 | `0xffff_ffff_fff8_0000` | top of the kernel stack (`KERNEL_STACK_TOP`), 8 pages below it |
 | `0xffff_ffff_ffff_0000` | top of the trap stack (`TRAP_STACK_TOP`), 8 pages below it |
 
@@ -148,7 +148,7 @@ Root entries are 4 MiB each, 1024 of them. Every 32-bit address is canonical.
 | 1020..=1021 | `0xff00_0000` | PLIC window, up to 8 MiB less the DMA window | yes |
 | 1021, last 64 KiB | `0xff7f_0000` | DMA register window: 16 pages | yes |
 | 1022 | `0xff80_0000` | per-process kernel data (`PROCESS_AREA`) | no |
-| 1023 | `0xffc0_0000` | kernel area: code at `0xffd0_0000`, data at `0xffd8_0000`, kernel stack top `0xfff8_0000`, trap stack top `0xffff_0000` (8 pages each) | yes |
+| 1023 | `0xffc0_0000` | kernel area: code at `0xffd0_0000`, data at `0xffd8_0000` (1 MiB), kernel stack top `0xfff8_0000`, trap stack top `0xffff_0000` (8 pages each) | yes |
 
 A QEMU `virt` PLIC is 6 MiB, which is why the PLIC window takes two root entries.
 
@@ -320,12 +320,15 @@ question does not arise.
 Status: built · partly tested: no case attacks a translation that outlives an address-space switch or an unmap directly; one hart and a whole-TLB flush at every switch are argued from the code · tested: bench:pid-reuse-authority, bench:uaf-lent-page
 
 `satp` holds the mode and the root table's physical page number (`make_satp`); its ASID is 0 on
-both widths. A PID is 16 bits, wider than Sv32's 9-bit ASID, and nothing needs it there: every
-switch, map and unmap flushes the whole TLB (below), so no translation is ever looked up by
-ASID. The kernel is PID 1; the loader numbers boot processes from 2 and names each one's PID in a
-field of its own in the handoff record ([boot](boot.md)). The kernel's one record of the running
-PID is `current_pid`, set whenever it switches address space (`set_current_pid`). Several harts
-need no ASID either: a TLB shootdown goes to the harts running the process
+both widths. Every switch, map and unmap flushes the whole TLB (below), so no translation is
+looked up by ASID yet. The process limit is held to the ASID field so that one can be:
+`MAX_PROCESS_COUNT` is below 2 to the power of `ASID_BITS`, 9 in Sv32 and 16 in Sv39, and PID 0
+is never a process, so every PID fits the field, and once the kernel flushes by ASID a process's
+PID is its ASID with no table between them. A compile-time assert holds it on each width. The
+kernel is PID 1; the loader numbers boot processes from 2 and names each one's PID in a field of
+its own in the handoff record ([boot](boot.md)). The kernel's one record of the running PID is
+`current_pid`, set whenever it switches address space (`set_current_pid`). Several harts need no
+ASID either: a TLB shootdown goes to the harts running the process
 ([several harts](../plan/m2-usable-shell.md#several-harts)).
 
 The kernel runs in whichever address space was current when it trapped, because every address

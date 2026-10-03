@@ -1,7 +1,9 @@
 //! Callers for the `MAX_OPEN_CALLS` part of the Redoubt IPC case. Each blocked caller
 //! holds exactly one open call in the server, and one process cannot hold `MAX_OPEN_CALLS`
 //! threads, so the count is made up from this program, `redoubt-client` and the server's own
-//! threads. These threads never return: the server never replies to `op::KEEP`.
+//! threads. This program offers half of it, which leaves the server room to take
+//! `redoubt-client`'s abandoned calls first. These threads never return: the server never replies
+//! to `op::KEEP`.
 //!
 //! See `tests/redoubt-ipc.toml`.
 
@@ -18,8 +20,12 @@ fn caller(_arg: usize) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Every thread this process can have, each offering one call.
-    while rd::thread(caller, 0).is_ok() {}
+    // Half of `MAX_OPEN_CALLS` threads, this one included, each offering one call.
+    for _ in 1..rd::MAX_OPEN_CALLS / 2 {
+        if rd::thread(caller, 0).is_err() {
+            break;
+        }
+    }
     caller(0);
     test_programs::park()
 }

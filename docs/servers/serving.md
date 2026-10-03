@@ -77,7 +77,7 @@ per kind of resource:
   has one share and the bucket's cap is that share's.
 - **Caps sized to fit.** `Limits` names each resource's cap per bucket and the number of buckets
   that may hold anything at once. `Admission::new` refuses limits (`Unsized`) whose buckets could
-  hold more open calls than `MAX_OPEN_CALLS` (64) less `OPEN_CALL_HEADROOM` (16), or with a
+  hold more open calls than `MAX_OPEN_CALLS` (256) less `OPEN_CALL_HEADROOM` (64), or with a
   non-zero cap below `SMALLEST_CAP` (2): below two, a lone badge's share is the whole bucket.
   `Limits::fits` says whether every bucket at its cap fits a budget of so many bytes; a server
   checks it against its own budget at start.

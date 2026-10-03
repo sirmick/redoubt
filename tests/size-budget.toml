@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 8029
+max_lines = 8081
 
 [[crate]]
 name = "loader"
@@ -71,7 +71,7 @@ max_lines = 2033
 [[crate]]
 name = "model"
 paths = ["model/src"]
-max_lines = 10239
+max_lines = 10240
 
 [[crate]]
 name = "servers/keyd"

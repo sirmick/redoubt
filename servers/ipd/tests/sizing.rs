@@ -1,15 +1,22 @@
 //! `ipd`'s sizing (servers/ipd.md, "Sizing"): the worst case, every
-//! override's bucket and every other at the defaults, must leave `MAX_OPEN_CALLS`' headroom (48)
-//! and fit the budget, or `ipd` does not start.
+//! override's bucket and every other at the defaults, must leave `MAX_OPEN_CALLS`' headroom
+//! (`OPEN_CALL_HEADROOM`) and fit the budget, or `ipd` does not start.
 
-use redoubt_ipd::args::parse;
+use redoubt_ipd::args::{BadArgs, parse};
+use redoubt_ipd::sizing::{BUDGET, PARKED_BYTES};
+use redoubt_rt::abi::MAX_OPEN_CALLS;
+use redoubt_rt::server::MAX_BUCKETS;
+use redoubt_rt::server::admit::OPEN_CALL_HEADROOM;
+
+/// The open calls every bucket at its cap may hold together.
+const BOUND: usize = MAX_OPEN_CALLS - OPEN_CALL_HEADROOM;
 
 fn sizing_of(args: &[&str]) -> Result<redoubt_ipd::sizing::Sizing, redoubt_ipd::args::BadArgs> {
     parse(args.iter().copied()).unwrap().sizing()
 }
 
-/// One client given every scope, and the milestone manifest's arguments, fit: 23 + 5 (the
-/// steward's slot at its worst) + 4 x 5 = 48; with sshd at 24 they do not.
+/// One client given every scope, and the milestone manifest's arguments, fit: sshd 23 + 5 (the
+/// steward's slot at its worst) + 4 x 5 parked calls.
 #[test]
 fn every_scope_and_the_milestone_fit() {
     let every_scope = [
@@ -33,9 +40,6 @@ fn every_scope_and_the_milestone_fit() {
         "limits=5:23:0:20",
         "limits=4:2:32:0",
     ];
-    let mut over = milestone;
-    over[7] = "limits=5:24:0:20";
-    assert!(sizing_of(&over).is_err(), "sshd 24 with the steward at 2 admits 49");
     let sizing = sizing_of(&milestone).unwrap();
     // Sockets are `State` units: sshd's 0 + 20, the steward's 32 + 0, and four defaults of 4 + 8.
     // At their worst: 20, 32, and 4 x 12, each override slot at the larger of its units and the
@@ -49,7 +53,7 @@ fn every_scope_and_the_milestone_fit() {
 }
 
 /// Sizing: the worst case, every override's bucket and every other at the defaults, must leave
-/// `MAX_OPEN_CALLS`' headroom (48) and fit the budget, or `ipd` does not start.
+/// `MAX_OPEN_CALLS`' headroom and fit the budget, or `ipd` does not start.
 #[test]
 fn the_worst_case_must_fit_or_ipd_does_not_start() {
     let with = |extra: &[&str]| {
@@ -59,11 +63,20 @@ fn the_worst_case_must_fit_or_ipd_does_not_start() {
     };
     // 6 x 5 = 30.
     assert!(with(&["buckets=6"]).is_ok());
-    // 10 x 5 = 50 > 48.
-    assert!(with(&["buckets=10"]).is_err());
-    // 30 + 3 x 5 = 45; 31 + 3 x 5 = 46; 34 + 3 x 5 = 49 > 48.
-    assert!(with(&["buckets=4", "limits=5:30:0:8"]).is_ok());
-    assert!(with(&["buckets=4", "limits=5:34:0:8"]).is_err());
+    // The budget binds before the headroom: defaults alone stay inside `BOUND` (`MAX_BUCKETS` x 5),
+    // and the budget holds fewer parked calls than `BOUND`, so a worst case at `BOUND`, overrides
+    // at the largest `limits=` takes (64) and defaults, is refused by the budget.
+    assert!(MAX_BUCKETS as usize * 5 <= BOUND);
+    assert!(BUDGET / PARKED_BYTES < BOUND as u64);
+    let full = BOUND / 64;
+    let defaults = BOUND % 64 / 5;
+    let at = |buckets: usize| {
+        let mut args = vec![format!("buckets={buckets}"), "addr=10.0.2.15/24".into(), "ingress=3".into()];
+        args.extend((10..10 + full).map(|b| format!("scope={b}:l:22")));
+        args.extend((10..10 + full).map(|b| format!("limits={b}:64:0:8")));
+        sizing_of(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(|_| ())
+    };
+    assert_eq!(at(full + defaults), Err(BadArgs("every bucket at its cap does not fit the budget")));
     // An override of 1 is below the smallest useful cap.
     assert!(with(&["buckets=4", "limits=5:1:0:8"]).is_err());
     // More overrides than buckets.

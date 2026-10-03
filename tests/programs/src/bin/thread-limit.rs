@@ -16,15 +16,22 @@ pub extern "C" fn _start() -> ! {
     let mut logger = test_programs::logsrv::start();
 
     // The initial thread holds one TID; every other one is created here, each on its own page.
-    let mut seen = 1u64 << 1;
+    // One bit per TID 0..=MAX_THREADS.
+    let mut seen = [0u64; MAX_THREADS / 64 + 1];
+    let bit = |tid: usize| (tid / 64, 1u64 << (tid % 64));
+    seen[0] = 1 << 1;
     let mut in_range = true;
     let mut threads = 1;
     let refusal = loop {
         let stack = rd::map_anon(rd::PAGE_SIZE, rd::rw()).expect("a stack page");
         match rd::thread_create(parked as *const () as usize, stack + rd::PAGE_SIZE - 16, 0) {
             Ok(tid) => {
-                in_range &= (1..=MAX_THREADS as u32).contains(&tid) && seen & (1 << tid) == 0;
-                seen |= 1 << tid;
+                in_range &= (1..=MAX_THREADS as u32).contains(&tid);
+                if in_range {
+                    let (word, mask) = bit(tid as usize);
+                    in_range &= seen[word] & mask == 0;
+                    seen[word] |= mask;
+                }
                 threads += 1;
             }
             Err(e) => break e,
@@ -33,7 +40,10 @@ pub extern "C" fn _start() -> ! {
             break Error::InvalidArgument;
         }
     };
-    let all = seen == ((1u64 << (MAX_THREADS + 1)) - 2);
+    let all = (1..=MAX_THREADS).all(|tid| {
+        let (word, mask) = bit(tid);
+        seen[word] & mask != 0
+    });
     log!(logger, "[thread-limit] {} threads, the initial one included", threads);
     log!(
         logger,

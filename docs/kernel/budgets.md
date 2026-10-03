@@ -41,9 +41,9 @@ if the steward is busy or gone.
 | --- | --- |
 | `id` | a u64 shared with endpoints' ids, never reused (I12 (ids never reused)) |
 | `parent` | the budget it was carved from; none only for `root` |
-| `depth` | 0 for `root`; always below `MAX_DEPTH` (8: the levels a tree may have) |
+| `depth` | 0 for `root`; always below `MAX_DEPTH` (16: the levels a tree may have) |
 | `class` | `system` or `user`, its parent's; see [Class is trust, not order](#class-is-trust-not-order) |
-| `labels` | a sorted set of u64 labels, at most `MAX_LABELS` (8), fixed at creation, containing all of its parent's |
+| `labels` | a sorted set of u64 labels, at most `MAX_LABELS` (16), fixed at creation, containing all of its parent's |
 | `account` | the principal it bills to, a u64; 0 for none ([R8](#r8-accounts)) |
 | `deadline` | microseconds since boot at which the kernel destroys it; `FOREVER` (`u64::MAX`) for none |
 | `pages` | limit and usage, in pages ([R6](#r6-charging)) |
@@ -84,7 +84,7 @@ handle to it does not destroy it: its carve stays out of its parent (see Residua
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
-| `budget_create` | parent budget handle, spec record -> budget handle | Carve a child from the parent. The spec is `(pages, processes, weight, labels, account, deadline)` in `BUDGET_SPEC_SLOTS` (14) slots: three limits, a label count and `MAX_LABELS` label slots, the account and the deadline. |
+| `budget_create` | parent budget handle, spec record -> budget handle | Carve a child from the parent. The spec is `(pages, processes, weight, labels, account, deadline)` in `BUDGET_SPEC_SLOTS` (22) slots: three limits, a label count and `MAX_LABELS` label slots, the account and the deadline. |
 | `budget_destroy` | budget handle | Destroy the budget and everything below it ([R10](#r10-destruction)). If the caller runs in that subtree, or its process object is charged to a budget in it, the call never returns. |
 | `budget_usage` | budget handle, usage record | Write the budget's limits and usage ([`budget_usage`](#budget_usage)). |
 
@@ -122,9 +122,9 @@ At boot the kernel creates three budgets, all with account 0, no labels and no d
 
 | Budget | Class | Pages | Processes | Weight |
 | --- | --- | --- | --- | --- |
-| `root` | `system` | every RAM page the kernel did not keep for itself or for the DMA pool, less `root`'s own page | 63 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
-| `system` | `system` | a quarter of what `root` does not keep for `init` | 15 (a quarter) | 250,000 (a quarter) |
-| `users` | `user` | the rest, less the two budgets' own pages | 47 (the rest, less `init`'s) | 749,000 |
+| `root` | `system` | every RAM page the kernel did not keep for itself or for the DMA pool, less `root`'s own page | 510 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
+| `system` | `system` | a quarter of what `root` does not keep for `init` | 127 (a quarter) | 250,000 (a quarter) |
+| `users` | `user` | the rest, less the two budgets' own pages | 382 (the rest, less `init`'s) | 749,000 |
 
 `root` pays for the two budgets' own pages and carves the rest of its pages and processes into
 them, but what it keeps for `init`: one process, `INIT_WEIGHT` (1,000) of its weight, because a
@@ -143,7 +143,7 @@ to `system`. A boot whose `init` and `INIT_PAGES` do not fit does not boot: the 
 
 ```mermaid
 flowchart TD
-    R["root<br/>class system, 63 processes<br/>weight 1,000,000, keeps 1,000 free"]
+    R["root<br/>class system, 510 processes<br/>weight 1,000,000, keeps 1,000 free"]
     S["system<br/>class system<br/>a quarter of the pages, 15 processes<br/>weight 250,000"]
     U["users<br/>class user<br/>the rest, 47 processes<br/>weight 749,000"]
     I[init]
@@ -639,8 +639,9 @@ without preemption.*
      every object frame for one whose owner is dying. Its first walk of the chains destroys the
      devices, which leave them, each moved to its chain's head first so that leaving does not
      walk the endpoints ahead of it; the endpoints stay until the handle chains are closed, and a
-     second walk frees each in a link read and a free. Process objects are not scanned either: the PID index
-     (`Objects::processes`) finds them in a constant (64) lookups.
+     second walk frees each in a link read and a free. Process objects are not scanned either:
+     the PID index (`Objects::processes`) finds them in at most 510 lookups, one for each PID a
+     process can take ([R12 (scheduling)](scheduling.md#r12-scheduling)).
   3. **Handles held outside a budget are chained to it.** A handle dies when the object it names
      is destroyed or when the budget that stamped it is. A handle whose holder runs inside that
      budget's subtree dies with its holder's table, so it needs nothing more. A handle held
@@ -791,8 +792,8 @@ without preemption.*
   same reason.
 - **A budget's own page is its parent's.** A child cannot use up the page it lives in, and a
   revocation scope, with zero limits, needs no special rule.
-- **A lend is charged to both sides.** A server's budget covers its open lends up front (64 open
-  9P calls of 16 pages each is 4 MiB), a server that cannot pay does not take the call
+- **A lend is charged to both sides.** A server's budget covers its open lends up front (256 open
+  9P calls of 16 pages each is 16 MiB), a server that cannot pay does not take the call
   (R4 (delivery)), and no budget is ever over its limit.
 - **Class is inherited, with no class argument.** A class check on `budget_create` alone would
   guard one of three doors (`process_create` and `budget_destroy` are the others). Inheriting it

@@ -34,7 +34,8 @@ fn every_call_and_error_is_reached() {
         let mut blocked: std::collections::BTreeMap<u64, &'static str> = Default::default();
         let mut k = Kernel::boot(&Boot::testing(), None).unwrap();
         let mut g = Gen::new(seed);
-        for _ in 0..150 {
+        // Long enough for a thread bomb to reach `MAX_THREADS`.
+        for _ in 0..450 {
             if k.halted.is_some() {
                 break;
             }

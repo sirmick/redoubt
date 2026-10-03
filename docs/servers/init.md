@@ -339,7 +339,7 @@ encoding of its fields ([wire](wire.md#the-message-convention)). The rest of the
 | Field | Holds |
 | --- | --- |
 | `version` | 1 |
-| `handle_count` | n, the handles `process_start` installed, at most `MAX_START_HANDLES` (64) |
+| `handle_count` | n, the handles `process_start` installed, at most `MAX_START_HANDLES` (128) |
 | `namespace` | entries `handle: u32`, `path: string`: where a handle is bound, a clean absolute path (`/`, `/dev/cons`) |
 | `handles` | entries `handle: u32`, `name: string`: a named handle, the name under the manifest's rule |
 | `argv` | `string`s, the arguments in order (each may be empty) |

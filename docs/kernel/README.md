@@ -22,7 +22,7 @@ Status: built · partly tested: that no driver, file system or policy sits in th
 | Job | What the kernel holds | Calls | Page |
 | --- | --- | --- | --- |
 | Memory | who owns every RAM frame, each process's page tables, the physmap | `map_anon`, `unmap`, `set_flags`, `map_fixed`, `process_map`, `map_device`, `dma_alloc` | [memory](memory.md), [memory layout](memory-layout.md) |
-| Threads | processes, up to `MAX_THREADS` (31) threads each, and one stride queue over every runnable budget | `process_create`, `process_start`, `thread_create`, `thread_exit`, `process_exit` | [processes](processes.md), [scheduling](scheduling.md) |
+| Threads | processes, up to `MAX_THREADS` (255) threads each, and one stride queue over every runnable budget | `process_create`, `process_start`, `thread_create`, `thread_exit`, `process_exit` | [processes](processes.md), [scheduling](scheduling.md) |
 | IPC | endpoints and the messages of blocked senders | `endpoint_create`, `mint`, `call`, `send`, `receive`, `reply`, `serve`, `handle_close` | [IPC](ipc.md), [objects](objects.md) |
 | Interrupt delivery | the interrupt controller (a PLIC), mapped for the kernel alone, and one IRQ device object per line | `receive` naming an IRQ handle | [devices](devices.md) |
 | The timer | one hardware timer, always armed for the earliest slice end, timeout or budget deadline | `time_now`, and the timeout of every blocking call | [timer](timer.md) |
@@ -95,13 +95,13 @@ Each object lives in a RAM frame of its own. Every lookup compares the id in the
 id in the handle, and a mismatch stops the kernel rather than naming a reused frame
 ([I1 (handles name live objects)](invariants.md#i1-handles-name-live-objects)). Threads,
 handle-table pages and open calls are not objects: no handle names them. A thread is named by
-its process and its TID (1 to 31). Details, costs and `mint` are in [objects](objects.md).
+its process and its TID (1 to 255). Details, costs and `mint` are in [objects](objects.md).
 
 ```mermaid
 flowchart LR
     H["handle<br/>(object, badge, stamp)"]
     P["process<br/>address space, handle table,<br/>exit slot"]
-    T["thread<br/>TID 1 to 31"]
+    T["thread<br/>TID 1 to 255"]
     E["endpoint"]
     D["device object<br/>MMIO, IRQ or Reset"]
     B["budget"]

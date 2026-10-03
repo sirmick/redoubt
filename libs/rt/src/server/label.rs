@@ -27,7 +27,7 @@ pub fn check(caller_labels: &[u64], object_labels: &[u64], access: Access) -> Re
     if allowed { Ok(()) } else { Err(Denied) }
 }
 
-/// `a ⊆ b`. Label sets hold at most `MAX_LABELS` (8), so the quadratic scan is the simplest
+/// `a ⊆ b`. Label sets hold at most `MAX_LABELS` (16), so the quadratic scan is the simplest
 /// correct choice.
 fn subset(a: &[u64], b: &[u64]) -> bool { a.iter().all(|label| b.contains(label)) }
 

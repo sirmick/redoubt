@@ -29,7 +29,7 @@
 use redoubt_layout::Pid;
 use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, MAX_THREADS, Usage};
 
-use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
+use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, TidMask};
 use crate::handle::{BudgetRef, Handle, HandleTable, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
@@ -167,7 +167,7 @@ pub struct Account {
     /// The TIDs whose IPC page is in the header's table, bit `tid` for thread `tid`: what every
     /// walk of the threads iterates, so its cost follows the threads that exist
     /// ([`MemoryManager::live_tids`]).
-    pub live: u64,
+    pub live: TidMask,
     /// Open calls this process's threads hold (R4a): at `MAX_OPEN_CALLS` it takes no more.
     pub open_calls: u32,
     /// The last message id its threads handed a sender, 0 before the first: ids are never 0,
@@ -189,7 +189,7 @@ impl Account {
         frames: 0,
         handles: HandleTable::EMPTY,
         header: 0,
-        live: 0,
+        live: TidMask::EMPTY,
         open_calls: 0,
         last_msg_id: 0,
         earliest_timeout: 0,
@@ -213,9 +213,15 @@ pub struct Objects {
     /// (`Budget::next_deadline`), so finding the next deadline never scans every frame.
     deadlines: Option<BudgetFrame>,
     accounts: [Account; MAX_PROCESS_COUNT],
+    /// The PIDs with an account, bit `account_index`: what every walk of the processes iterates
+    /// ([`MemoryManager::live_pids`]), so its cost follows the processes that exist.
+    live_pids: PidMask,
     /// Each PID's process object, by `account_index`: kept at `process_create` and `free_object`
     /// (`process.rs`), so finding one is a lookup, never a scan of the object frames (R12).
     pub(crate) processes: [Option<u32>; MAX_PROCESS_COUNT],
+    /// The PIDs `processes` names an object for, bit `account_index`: what a walk of the process
+    /// objects iterates, so its cost follows the objects that exist.
+    pub(crate) process_pids: PidMask,
     /// Each interrupt's IRQ object: kept at `boot_devices` and `free_device` (`device.rs`), so an
     /// interrupt finds its object in one lookup (R12).
     pub(crate) irqs: [Option<u32>; crate::device::MAX_IRQS],
@@ -235,7 +241,9 @@ impl Objects {
             high_frame: 0,
             deadlines: None,
             accounts: [Account::NONE; MAX_PROCESS_COUNT],
+            live_pids: PidMask::EMPTY,
             processes: [None; MAX_PROCESS_COUNT],
+            process_pids: PidMask::EMPTY,
             irqs: [None; crate::device::MAX_IRQS],
             deferred: None,
             deferring: false,
@@ -260,12 +268,13 @@ pub(crate) fn pid_from(n: impl core::convert::TryInto<u16>) -> Option<Pid> {
     n.try_into().ok().and_then(Pid::new)
 }
 
-/// Every PID, lowest first. A walk of the threads asks each for its [`MemoryManager::live_tids`],
-/// so a PID with no process costs it one lookup.
+/// Every PID, lowest first: what drawing a free one walks. A walk of the processes iterates
+/// [`MemoryManager::live_pids`] instead.
 pub(crate) fn pids() -> impl Iterator<Item = Pid> { (1..=MAX_PROCESS_COUNT).filter_map(pid_from) }
 
-// `Account::live` has a bit for every TID.
-const _: () = assert!(MAX_THREADS < u64::BITS as usize);
+/// A set of PIDs, bit `account_index` for each.
+type PidMask = crate::bits::Bits<{ MAX_PROCESS_COUNT.div_ceil(64) }>;
+
 // A PID is 16 bits, and the scheduler's cursor keeps a TID plus one in the 16 bits below it.
 const _: () = assert!(MAX_PROCESS_COUNT <= u16::MAX as usize && MAX_THREADS < u16::MAX as usize);
 
@@ -457,7 +466,8 @@ impl MemoryManager {
         }
         let frame = self.alloc_object_frame().expect("R6: a thread's page was charged but has no frame");
         self.set_ipc_entry(pid, tid, frame);
-        self.account_mut(pid).expect("account").live |= 1 << tid;
+        let account = self.account_mut(pid).expect("account");
+        account.live = account.live.with(tid);
     }
 
     /// Take thread `tid`'s IPC page back. Its contents are dead by now: `message.rs` unwinds
@@ -465,7 +475,8 @@ impl MemoryManager {
     fn take_ipc_frame(&mut self, pid: Pid, tid: usize) {
         if let Some(frame) = self.ipc_frame(pid, tid) {
             self.set_ipc_entry(pid, tid, 0);
-            self.account_mut(pid).expect("account").live &= !(1 << tid);
+            let account = self.account_mut(pid).expect("account");
+            account.live = account.live.without(tid);
             self.free_object_frame(frame);
         }
     }
@@ -474,12 +485,27 @@ impl MemoryManager {
     /// account. The mask is read once, so the walk may end the threads it visits: one it has
     /// not reached yet and that has ended meanwhile reads as a thread with no page.
     pub fn live_tids(&self, pid: Pid) -> impl Iterator<Item = usize> + use<> {
-        let mut mask = self.account(pid).map_or(0, |a| a.live);
-        core::iter::from_fn(move || {
-            let tid = (mask != 0).then(|| mask.trailing_zeros() as usize)?;
-            mask &= mask - 1;
-            Some(tid)
-        })
+        self.account(pid).map_or(TidMask::EMPTY, |a| a.live).iter()
+    }
+
+    /// The PIDs with an account, lowest first: what every walk of the processes visits, so its
+    /// cost follows the processes that exist. The set is read once, as [`Self::live_tids`] reads
+    /// its mask: a process that ends meanwhile reads as one with no account.
+    pub fn live_pids(&self) -> impl Iterator<Item = Pid> + use<> {
+        self.objects.live_pids.iter().filter_map(|index| pid_from(index + 1))
+    }
+
+    /// R12's index rule for the live set: it holds exactly the PIDs with an account.
+    #[cfg(debug_assertions)]
+    fn check_live_pids(&self) {
+        for (index, account) in self.objects.accounts.iter().enumerate() {
+            assert_eq!(
+                self.objects.live_pids.contains(index),
+                account.budget.is_some(),
+                "live PID {}",
+                index + 1
+            );
+        }
     }
 
     // --- Charging (R6) ------------------------------------------------------------------------
@@ -592,6 +618,9 @@ impl MemoryManager {
         // No thread has a timeout yet.
         self.objects.accounts[index] =
             Account { budget: Some(budget), earliest_timeout: u64::MAX, ..Account::NONE };
+        self.objects.live_pids = self.objects.live_pids.with(index);
+        #[cfg(debug_assertions)]
+        self.check_live_pids();
         Ok(())
     }
 
@@ -603,9 +632,13 @@ impl MemoryManager {
         let Some(budget) = self.budget_of(pid) else { return };
         self.close_all_handles(pid);
         let account = self.account_mut(pid).expect("account");
-        debug_assert!(account.live == 0, "process {} ended with IPC pages", pid);
+        assert!(account.live.is_empty(), "process {} ended with IPC pages", pid);
         let pages = account.threads * THREAD_PAGES + account.frames;
         *account = Account::NONE;
+        self.objects.live_pids =
+            self.objects.live_pids.without(account_index(pid).expect("an account's PID"));
+        #[cfg(debug_assertions)]
+        self.check_live_pids();
         self.uncharge(budget, pages);
         if crate::process::object_of(self, pid).is_none() {
             self.uncount_process(budget);
@@ -650,7 +683,7 @@ impl MemoryManager {
     /// kernel did not keep at boot, every PID but the kernel's, and all the weight. It keeps for
     /// `init` one process, `INIT_WEIGHT`, and `init`'s pages: everything the loader gave it (its
     /// image, stack, page tables, header page and the bundle's frames), its first thread and
-    /// `INIT_PAGES` to work in. `system` gets a quarter of the rest of the pages, 15 processes
+    /// `INIT_PAGES` to work in. `system` gets a quarter of the rest of the pages, 127 processes
     /// and a quarter of the weight; `users` what is left. `init` gets handles to the three
     /// budgets in slots 1-3, stamped with `root`, then the devices.
     ///
@@ -1204,7 +1237,7 @@ impl MemoryManager {
 
     /// Whether a process runs in `frame`.
     fn holds_process(&self, frame: BudgetFrame) -> bool {
-        self.objects.accounts.iter().any(|a| a.budget == Some(frame))
+        self.live_pids().any(|pid| self.budget_of(pid) == Some(frame))
     }
 
     /// The dying budgets, deepest first (every one's descendants before it): R10's bottom-up
@@ -1247,7 +1280,7 @@ pub fn destroy_subtree(
     // into `destroy_marked`'s single pass (I1, I2).
     MemoryManager::with_mut(|mm| mm.begin_destruction());
     let mut caller_doomed = false;
-    for victim in pids() {
+    for victim in MemoryManager::with(|mm| mm.live_pids()) {
         if !MemoryManager::with(|mm| mm.runs_in_dying(victim)) {
             continue;
         }

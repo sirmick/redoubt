@@ -13,13 +13,13 @@ pub const MAX_HANDLES: u64 = 4096;
 /// Pages in one lend.
 pub const MAX_LEND_PAGES: u64 = 16;
 /// Threads per process.
-pub const MAX_THREADS: u64 = 31;
+pub const MAX_THREADS: u64 = 255;
 /// Labels per budget.
-pub const MAX_LABELS: usize = 8;
+pub const MAX_LABELS: usize = 16;
 /// Budget tree depth, root = 0.
-pub const MAX_DEPTH: u64 = 8;
+pub const MAX_DEPTH: u64 = 16;
 /// Queued messages per group (R2) per endpoint.
-pub const WAIT_CAP: u64 = 16;
+pub const WAIT_CAP: u64 = 32;
 /// Stride scheduling numerator.
 pub const STRIDE: u64 = 1 << 20;
 /// Time slice, in microseconds (10 ms).
@@ -29,9 +29,9 @@ pub const FOREVER: u64 = u64::MAX;
 /// Live `dma_alloc` runs per device (kernel/devices.md, "`dma_alloc`").
 pub const MAX_RUNS: usize = 32;
 /// Taken-but-unreplied calls per process.
-pub const MAX_OPEN_CALLS: u64 = 64;
+pub const MAX_OPEN_CALLS: u64 = 256;
 /// Handles in `process_start`'s list.
-pub const MAX_START_HANDLES: usize = 64;
+pub const MAX_START_HANDLES: usize = 128;
 /// "No handle" in an optional-handle slot, and never a handle index. The ABI's sentinel; this is
 /// the one place the model names it.
 pub const NO_HANDLE: u64 = 0;

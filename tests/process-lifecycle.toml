@@ -12,7 +12,7 @@ expect = [
     '^\[lifecycle\] native caller process_exit abandons live lend without a stale PID$',
     '^\[lifecycle\] thread exit preserves siblings and returns same-process lend exactly$',
     '^\[lifecycle\] whole-process exit cleans both sides of same-process loan$',
-    '^\[lifecycle\] 260 exits restore exact budgets and reuse freed PIDs$',
+    '^\[lifecycle\] 520 exits restore exact budgets and reuse freed PIDs$',
 ]
 forbid = ['\[lifecycle\] FAIL']
 poweroff = true

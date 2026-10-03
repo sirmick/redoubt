@@ -23,6 +23,9 @@ use test_programs::rd;
 const OWN_NAME: &[u8] = b"bundle-mapped";
 /// The signature before the archive (kernel/boot.md, "Verified boot").
 const SIGNATURE_LEN: usize = 64;
+/// The processes `root` has at boot: one for every PID but the kernel's (`MAX_PROCESS_COUNT` is
+/// 511, kernel/processes.md).
+const PROCESSES: u32 = 510;
 
 macro_rules! say {
     ($out:expr, $($arg:tt)*) => {{ writeln!($out, $($arg)*).ok(); }};
@@ -102,15 +105,21 @@ pub extern "C" fn _start(bundle: usize, len: usize) -> ! {
     let (same, compared) = own.map_or((false, 0), |e| matches_own_image(e.data));
     check!(out, same, "its read-only segments are this program's own image ({} bytes compared)", compared);
 
-    // The boot table (kernel/budgets.md, "The tree from the boot manifest"): `root` carves 15
-    // processes into `system` and 47 into `users`, and keeps one, this process's.
+    // The boot table (kernel/budgets.md, "The tree from the boot manifest"): `root` has a
+    // process for every PID but the kernel's, carves a quarter into `system` and the rest but
+    // one into `users`, and keeps that one, this process's.
     let (root, system, users) = (rd::usage(rd::ROOT), rd::usage(rd::SYSTEM), rd::usage(rd::USERS));
     let (root, system, users) = (root.expect("root"), system.expect("system"), users.expect("users"));
     let own_processes = root.processes_usage - system.processes_limit - users.processes_limit;
+    let (sys_processes, users_processes) = (PROCESSES / 4, PROCESSES - PROCESSES / 4 - 1);
     check!(
         out,
-        system.processes_limit == 15 && users.processes_limit == 47 && own_processes == 1,
-        "system 15 processes, users 47, and root keeps one for this one"
+        system.processes_limit == sys_processes
+            && users.processes_limit == users_processes
+            && own_processes == 1,
+        "system {} processes, users {}, and root keeps one for this one",
+        sys_processes,
+        users_processes
     );
     // The bundle's frames are `init`'s, charged to `root` with the rest of what the loader gave
     // it: what `root` pays beyond the two budgets it carved and their own pages.

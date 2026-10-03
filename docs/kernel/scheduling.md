@@ -713,9 +713,11 @@ dying processes' own tables and page tables, and the chains of the handles held 
 ([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by
 interrupt number it finds in an index the kernel keeps as objects are made and freed: a process
 object in one of `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's
-sources; a boot naming a higher interrupt stops). So `process_create`'s PID draw looks at most at
-63 slots, an owed exit notice is sought among at most 63 process objects, and an interrupt finds
-its object in one lookup; a checked build proves each index against a scan of every object frame.
+sources; a boot naming a higher interrupt stops). PID 1 is the kernel's, which has no process
+object, so processes take PIDs 2 to `MAX_PROCESS_COUNT` (511): `process_create`'s PID draw looks
+at most at those 510 slots, an owed exit notice is sought among at most 510 process objects, and
+an interrupt finds its object in one lookup; a checked build proves each index against a scan of
+every object frame.
 In `bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
 its exit notice and an interrupt take what they took on an empty system; with the old scans, the
 first took 1.2 s against 22 ms. So do a one-page `map_anon`, a `budget_create` and a

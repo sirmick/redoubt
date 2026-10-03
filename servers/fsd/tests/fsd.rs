@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use redoubt_client::file::Connection;
 use redoubt_client::{Error, Lend, fsd};
 use redoubt_fake_kernel::fake;
-use redoubt_rt::abi::{FOREVER, Handle};
+use redoubt_rt::abi::{FOREVER, Handle, MAX_LABELS};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event, Words};
 use redoubt_rt::server::ninep::{DMDIR, mode};
@@ -270,6 +270,9 @@ fn files_survive_a_restart() {
 /// Arguments are parsed strictly: anything `fsd` does not understand stops it before it serves.
 #[test]
 fn arguments_it_does_not_understand_stop_it_before_serving() {
+    // One label more than a set holds.
+    let ids: Vec<String> = (1..=MAX_LABELS + 1).map(|id| id.to_string()).collect();
+    let too_many = format!("labels={}", ids.join(","));
     for args in [
         &[][..],
         &["buckets=4", "labels="],
@@ -277,7 +280,7 @@ fn arguments_it_does_not_understand_stop_it_before_serving() {
         &["buckets=4", "labels=07"],
         &["buckets=4", "labels=x"],
         &["buckets=4", "labels=1", "labels=2"],
-        &["buckets=4", "labels=1,2,3,4,5,6,7,8,9"],
+        &["buckets=4", too_many.as_str()],
         &["buckets=4", "readonly"],
         &["buckets=4", "block=512"],
     ] {

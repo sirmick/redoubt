@@ -146,10 +146,10 @@ ones 0.
 | Record | Slots | Layout | Used by |
 | --- | --- | --- | --- |
 | body | 9 (`BODY_SLOTS`) | words 0-3; handle count (at most `MAX_MSG_HANDLES` (4)); handles 0-3 | `call` (request in, reply out), `send`, `reply` |
-| receive record | 24 (`RECEIVED_SLOTS`) | [below](#the-receive-record) | `receive` (out) |
-| budget spec | 14 (`BUDGET_SPEC_SLOTS`) | pages; processes; weight; label count (at most `MAX_LABELS` (8)); labels 0-7; account; deadline | `budget_create` (in) |
+| receive record | 32 (`RECEIVED_SLOTS`) | [below](#the-receive-record) | `receive` (out) |
+| budget spec | 22 (`BUDGET_SPEC_SLOTS`) | pages; processes; weight; label count (at most `MAX_LABELS` (16)); labels 0-15; account; deadline | `budget_create` (in) |
 | usage | 6 (`USAGE_SLOTS`) | page limit; pages used; process limit; processes used; weight limit; weight carved to children | `budget_usage` (out) |
-| handle list | the call's count, at most `MAX_START_HANDLES` (64) | one handle per slot | `process_start` (in) |
+| handle list | the call's count, at most `MAX_START_HANDLES` (128) | one handle per slot | `process_start` (in) |
 
 In a body going in, every handle within the count is a handle; a slot of 0 there is
 `BadHandle`. In a body coming out (the reply `call` writes back over its request, and a
@@ -163,13 +163,13 @@ handle the caller could not take ([R4 (delivery)](ipc.md#r4-delivery)).
 | 4 | handle count, 0 to 4 | 1 | `msg_id` |
 | 5 to 8 | handles 0 to 3 | 2 | badge |
 | | | 3 | account |
-| | | 4 | label count, 0 to 8 |
-| | | 5 to 12 | labels 0 to 7 |
-| | | 13 to 16 | words 0 to 3 |
-| | | 17 | handle count, 0 to 4 |
-| | | 18 to 21 | handles 0 to 3 |
-| | | 22 | buffer address |
-| | | 23 | buffer pages |
+| | | 4 | label count, 0 to 16 |
+| | | 5 to 20 | labels 0 to 15 |
+| | | 21 to 24 | words 0 to 3 |
+| | | 25 | handle count, 0 to 4 |
+| | | 26 to 29 | handles 0 to 3 |
+| | | 30 | buffer address |
+| | | 31 | buffer pages |
 *Table: record slot layout of a body and of the receive record, the same on rv32 and rv64. Slot n
 is at byte 8n, and every unused slot is 0.*
 
@@ -217,7 +217,7 @@ does not use is 0. What each kind means is on the [IPC page](ipc.md#what-receive
 | `call` | 1 | all; the buffer is the lend, at the address the kernel chose |
 | `send` | 2 | all; the buffer is the transfer |
 | `interrupt` | 3 | none |
-| `exit` | 4 | 3 (blamed account), 4-12 (blamed labels), 13-15 (pid, cause, code) |
+| `exit` | 4 | 3 (blamed account), 4-20 (blamed labels), 21-23 (pid, cause, code) |
 | `abandoned` | 5 | 1 (the abandoned call's message id) |
 
 An exit's cause is 1 exited, 2 faulted, 3 killed ([processes](processes.md#exit-notices)).
@@ -249,11 +249,11 @@ at 1.
 | 3 | `InvalidArgument` | a malformed or out-of-range value: an unknown number, tag or flag bit, a bad range, a bad record, a message id that is not an open call |
 | 4 | `OutOfMemory` | the paying budget's page limit, or no room in the address space, no free frame, no free DMA run |
 | 5 | `OutOfProcesses` | a budget's process limit |
-| 6 | `TooManyThreads` | the process has `MAX_THREADS` (31) threads |
+| 6 | `TooManyThreads` | the process has `MAX_THREADS` (255) threads |
 | 7 | `NotPermitted` | the right object, without the standing: a badged handle where badge 0 is needed, a started process, a `mint` budget outside the default stamp, `dma_alloc` on a device without DMA |
 | 8 | `ClassDenied` | labels added by a caller whose budget is not of class `system` |
 | 9 | `LabelDenied` | a flow [R1 (flow)](ipc.md#r1-flow) forbids |
-| 10 | `Busy` | the sender's group already has `WAIT_CAP` (16) messages queued on the endpoint ([R2 (fair waiting)](ipc.md#r2-fair-waiting)) |
+| 10 | `Busy` | the sender's group already has `WAIT_CAP` (32) messages queued on the endpoint ([R2 (fair waiting)](ipc.md#r2-fair-waiting)) |
 | 11 | `Refused` | the receiver's budget cannot pay for the message (R4) |
 | 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), budget depth, `MAX_HANDLES` (4096) |
 | 13 | `Timeout` | a blocking call's timeout passed |
@@ -348,7 +348,7 @@ list, in order.
 | `reply` | message id 0: `InvalidArgument`; body: the record (read), handle count `TooLarge`, each handle slot `BadHandle` | `InvalidArgument` (not an open call of the caller's thread, a `send`'s id included), `BadHandle` (each handle); nothing after these fails |
 | `serve` | message id 0: `InvalidArgument` | `InvalidArgument` (not an open call of the caller's thread) |
 | `handle_close` | handle: `BadHandle` | `BadHandle` |
-| `budget_create` | parent: `BadHandle`; spec: the record (read), then its slots: processes or weight wider than 32 bits `InvalidArgument`, label count over `MAX_LABELS` `TooLarge`, a label slot past the count non-zero `InvalidArgument` | `BadHandle`, `WrongObject`, `TooLarge` (the child would be at depth `MAX_DEPTH` (8)), `LabelDenied` (the labels, sorted and deduplicated, are not a superset of the parent's), `ClassDenied` (labels added by a caller not of class `system`), `OutOfMemory` (pages plus the budget's own page over the parent's free pages), `OutOfProcesses` (over the parent's free processes), `InvalidArgument` (weight over the parent's free weight, or all of it from a parent that holds a process; [R7 (carving)](budgets.md#r7-carving)), `OutOfMemory` (no free frame for the budget object), handle table |
+| `budget_create` | parent: `BadHandle`; spec: the record (read), then its slots: processes or weight wider than 32 bits `InvalidArgument`, label count over `MAX_LABELS` `TooLarge`, a label slot past the count non-zero `InvalidArgument` | `BadHandle`, `WrongObject`, `TooLarge` (the child would be at depth `MAX_DEPTH` (16)), `LabelDenied` (the labels, sorted and deduplicated, are not a superset of the parent's), `ClassDenied` (labels added by a caller not of class `system`), `OutOfMemory` (pages plus the budget's own page over the parent's free pages), `OutOfProcesses` (over the parent's free processes), `InvalidArgument` (weight over the parent's free weight, or all of it from a parent that holds a process; [R7 (carving)](budgets.md#r7-carving)), `OutOfMemory` (no free frame for the budget object), handle table |
 | `budget_destroy` | budget: `BadHandle` | `BadHandle`, `WrongObject` |
 | `budget_usage` | budget: `BadHandle`; counters: the record (written) | `BadHandle`, `WrongObject`, `LabelDenied` (R1: a caller not of class `system` whose labels do not include the target's) |
 | `time_now` | - | - |

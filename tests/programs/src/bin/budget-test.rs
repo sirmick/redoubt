@@ -18,6 +18,7 @@
 #![no_std]
 #![no_main]
 
+use redoubt_sys::MAX_DEPTH;
 use test_programs::rd::{self, Error, FOREVER, Labels, Usage};
 use test_programs::{Logger, log};
 
@@ -179,34 +180,37 @@ pub extern "C" fn _start() -> ! {
     let _ = expect!(t, rd::destroy(more), Ok(()));
     let _ = expect!(t, rd::destroy(same), Ok(()));
 
-    // --- MAX_DEPTH: system is at depth 1 and its own budget at 2, so five more levels fit and
-    // the sixth is refused. `a` is at depth 3, so chain[1..=4] are at depths 4 to 7, and a child
-    // of chain[4] would be at MAX_DEPTH = 8. Each level leaves its parent one free page.
-    let mut chain = [0u32; 5];
+    // --- MAX_DEPTH: system is at depth 1 and its own budget at 2. `a` is at depth 3, so
+    // chain[1..=LEVELS] are at depths 4 to MAX_DEPTH - 1, and a child of chain[LEVELS] would be
+    // at MAX_DEPTH. Each level leaves its parent one free page.
+    const LEVELS: usize = MAX_DEPTH - 4;
+    let mut chain = [0u32; LEVELS + 1];
     chain[0] = a;
-    for depth in 1..5 {
-        let pages = 20 - 2 * depth as u64;
+    for depth in 1..=LEVELS {
+        let pages = 2 * (LEVELS + 1 - depth) as u64;
         chain[depth] =
             expect!(t, rd::create(chain[depth - 1], &rd::spec(pages, 0, 0)), Ok(base + 2 + depth as u32))
                 .unwrap_or(0);
     }
-    let _ = expect!(t, rd::create(chain[4], &rd::spec(1, 0, 0)), Err(Error::TooLarge));
-    let _ = expect!(t, rd::create(chain[4], &labelled(1, &[])), Err(Error::TooLarge));
+    let _ = expect!(t, rd::create(chain[LEVELS], &rd::spec(1, 0, 0)), Err(Error::TooLarge));
+    let _ = expect!(t, rd::create(chain[LEVELS], &labelled(1, &[])), Err(Error::TooLarge));
     t.i5("depth");
 
     // --- R10, I2, I10: destroy a subtree ----------------------------------------------------
-    // `chain[1]` holds chain[2..=4]; handles to every one of them go, and `a` gets back exactly
-    // what chain[1] carved from it.
+    // `chain[1]` holds chain[2..=LEVELS]; handles to every one of them go, and `a` gets back
+    // exactly what chain[1] carved from it.
     let before = rd::usage(a).unwrap();
-    // chain[1] carved 18 pages from `a`, and `a` paid its object's page.
-    let tree = expect!(t, rd::create(chain[1], &rd::spec(0, 0, 0)), Ok(base + 7)).unwrap_or(base + 7);
+    // chain[1] carved 2 * LEVELS pages from `a`, and `a` paid its object's page.
+    let carved = 2 * LEVELS as u64 + 1;
+    let at = base + 3 + LEVELS as u32;
+    let tree = expect!(t, rd::create(chain[1], &rd::spec(0, 0, 0)), Ok(at)).unwrap_or(at);
     let _ = expect!(t, rd::destroy(chain[1]), Ok(()));
-    for gone in [chain[1], chain[2], chain[3], chain[4], tree] {
+    for gone in chain[1..].iter().copied().chain([tree]) {
         let _ = expect!(t, rd::usage(gone), Err(Error::BadHandle));
         let _ = expect!(t, rd::close(gone), Err(Error::BadHandle));
         let _ = expect!(t, rd::destroy(gone), Err(Error::BadHandle));
     }
-    let _ = expect!(t, rd::usage(a), Ok(Usage { pages_usage: before.pages_usage - 19, ..before }));
+    let _ = expect!(t, rd::usage(a), Ok(Usage { pages_usage: before.pages_usage - carved, ..before }));
     // What was never carved from `a`'s subtree is untouched: the scope and the labelled budget.
     let _ = expect!(t, rd::usage(scope), Ok(usage(0, 0, 0, 0, 0, 0)));
     let _ = expect!(t, rd::usage(lab).map(|u| u.pages_limit), Ok(20));
