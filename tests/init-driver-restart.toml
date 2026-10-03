@@ -1,0 +1,28 @@
+description = "A driver that faults is restarted with its device placed again from init's copy (servers/init.md, \"Restarts and reboots\"): dma-driver, given an empty virtio-mmio slot with DMA, takes a page of DMA and faults while it serves a client; the kernel resets the slot at its end, init restarts it, and the new instance finds the device by name, takes its page again and answers the client"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The real init, keyd, consoled and bootfsd, dma-driver on the empty slot at 0x10005000, and
+# driver-client, handed a badge at it. The fault and restart lines are init's, bare; the verdict
+# is the client's, which only an answer from an instance that took its page gives.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-init-programs", bin = "dma-driver" },
+    { package = "redoubt-init-programs", bin = "driver-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started dma-driver, console [0-9a-f]{16}$',
+    '^init: dma-driver \(PID [0-9]+\) faulted, code 101, serving nobody, labels none; blamed on nobody: no steward$',
+    '^init: restarted dma-driver, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] driver-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', 'init: rebooting', 'init: dma-driver \(PID [0-9]+\) exited', 'quarantined']
+reporter = "driver-client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/driver.json" }

@@ -44,6 +44,16 @@ pub mod restartee {
     pub const OK: [u64; 4] = [0; 4];
 }
 
+/// The requests `dma-driver` serves, each a call of four words, the opcode first.
+pub mod dma_driver {
+    /// Faults while it holds the call.
+    pub const FAULT: u64 = 1;
+    /// Answers [`OK`]: the instance that answers holds its DMA run.
+    pub const PING: u64 = 2;
+    /// The words of an answer: status 0.
+    pub const OK: [u64; 4] = [0; 4];
+}
+
 /// A file server with one empty directory: a connection needs a root, nothing more.
 pub struct Empty;
 

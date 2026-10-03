@@ -179,7 +179,7 @@ badge and the steward the `audit` key's; the steward never holds the host key's 
 
 ### Running under `init`
 
-Status: built · partly tested: restarts are not built · tested: bench:init-boot, bench:init-refuses-held-bundle-key, bench:init-refuses-held-login-key
+Status: built · partly tested: a restarted `keyd`'s check is read from the code, not attacked · tested: bench:init-boot, bench:init-refuses-held-bundle-key, bench:init-refuses-held-login-key
 
 `init` starts `keyd` through the loader stub before the steward and `sshd`, then asks it `holds`
 for every login and approval key and the bundle key ([init](init.md#the-key-separation-check)).

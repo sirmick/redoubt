@@ -166,7 +166,7 @@ flowchart TB
 
 ### Started by `init`
 
-Status: built · partly tested: restarts are not built · tested: bench:init-boot
+Status: built · partly tested: a killed `netd`'s restart has no case yet · tested: bench:init-boot
 
 `init` starts `netd` with the network card's MMIO region (DMA allowed) and interrupt, placed by
 name from the boot manifest's `devices` list, and its one argument, the badge `ipd`'s handle

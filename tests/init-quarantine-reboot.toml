@@ -1,0 +1,28 @@
+description = "A driver whose device was quarantined is not restarted: init finds its own copy of the device handle closed, and reboots (servers/init.md, \"Restarts and reboots\"; kernel/devices.md, \"Which process gets which device\"): dma-driver, holding a page of DMA on an empty virtio-mmio slot, faults on a kernel whose first reset of a slot fails (dma-reset-deaf); the kernel quarantines the slot, and init's reboot line names it, followed by the next boot's first line, the loader's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+kernel_features = ["dma-reset-deaf"]
+# As init-driver-restart, on the deaf kernel. The verdict is the kernel's quarantine line, init's
+# bare reboot line, and the loader's first line, which only a reset of the machine prints again.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-init-programs", bin = "dma-driver" },
+    { package = "redoubt-init-programs", bin = "driver-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started dma-driver, console [0-9a-f]{16}$',
+    '^DMA: device 0*10005000 did not confirm its reset; quarantined until reboot',
+    '^init: dma-driver \(PID [0-9]+\) faulted, code 101, ',
+    '^init: rebooting: dma-driver.s device slot5 was quarantined$',
+    '^loader: Redoubt rv(64|32) loader, boot hart 0$',
+]
+forbid = ['init: refused the boot', 'init: restarted dma-driver']
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/driver.json" }

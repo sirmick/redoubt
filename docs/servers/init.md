@@ -428,7 +428,18 @@ launcher could not free the child's state without losing its own.
 
 ### Restarts and reboots
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: blame, `blame`'s badge, a wedged steward and the steward's restart are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked; a killed `netd`'s restart has no case yet · tested (8)</summary>
+
+- bench:init-restart
+- bench:init-reboot
+- bench:init-driver-restart
+- bench:init-quarantine-reboot
+- host:redoubt-init::the_fifth_restart_goes_ahead_and_the_sixth_exit_reboots
+- host:redoubt-init::a_restart_older_than_the_window_is_dropped_from_the_count
+- host:redoubt-init::restarts_spread_wider_than_the_window_never_reboot
+- host:redoubt-init::a_clock_that_reads_earlier_counts_the_restart_as_recent
+
+</details>
 
 - **Restart.** A server that exits is restarted on the same endpoint. Calls it had taken get
   `Dead` ([R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)), and clients see the error
@@ -498,8 +509,6 @@ connection ids are dead; a killed driver, `netd` among them, is restarted and it
 served again ([netd](netd.md#started-by-init)); more than 5 restarts in 60 seconds reboot the
 machine.
 
-**Open:** none.
-
 ### A worked configuration
 
 Status: planned · M1 (separation and containment)
@@ -542,9 +551,11 @@ kernel
 
 ## Authority
 
-<details><summary>Status: built · partly tested: the steward's `users` budget and the copies kept for a restart are not exercised; restarts are not built; `init-boot` shows each copy `init` closed gone from the kernel's side, but no call lists a handle table, so a copy `init` never closed would not be caught · tested (2)</summary>
+<details><summary>Status: built · partly tested: the steward's `users` budget is not exercised; `init-boot` shows each copy `init` closed gone from the kernel's side, but no call lists a handle table, so a copy `init` never closed would not be caught · tested (4)</summary>
 
 - bench:init-boot
+- bench:init-restart
+- bench:init-driver-restart
 - host:redoubt-init::a_server_handed_a_budget_is_refused
 
 </details>

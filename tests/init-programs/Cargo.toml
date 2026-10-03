@@ -42,6 +42,16 @@ name = "rollback-client"
 path = "src/bin/rollback-client.rs"
 test = false
 
+[[bin]]
+name = "dma-driver"
+path = "src/bin/dma-driver.rs"
+test = false
+
+[[bin]]
+name = "driver-client"
+path = "src/bin/driver-client.rs"
+test = false
+
 [lib]
 test = false
 doctest = false
