@@ -332,6 +332,42 @@ fn a_failed_write_commits_nothing() {
     fs.fsck().unwrap();
 }
 
+/// `file_blocks` is what a file holds: its skip-list's blocks walked on the medium, or none
+/// inline, whatever writes and truncations made it.
+#[test]
+fn file_blocks_counts_what_a_file_holds() {
+    use crate::fs::Struct;
+    use crate::ops::Lookup;
+    let held = |fs: &mut Filesystem<&mut Ram>| {
+        let Lookup::Found { dir, id } = fs.lookup("/f").unwrap().0 else { panic!("found") };
+        match fs.decode(&dir.c.entries[id as usize]).unwrap() {
+            Struct::Ctz { head, size } => {
+                let mut n = 0;
+                fs.ctz_traverse(head, size, None, &mut |_| Ok(n += 1)).unwrap();
+                (size, n)
+            }
+            Struct::Inline(v) => (v.len() as u32, 0),
+            Struct::Dir(_) => panic!("a file"),
+        }
+    };
+    let mut ram = Ram(vec![0xff; 256 * 64], 256);
+    Filesystem::format(&mut ram, CFG).unwrap();
+    let mut fs = Filesystem::mount(&mut ram, CFG).unwrap();
+    let rw = OpenOptions { read: true, write: true, ..Default::default() };
+    for size in [0, 1, 32, 33, 248, 249, 256, 496, 497, 1000, 2500, 5000] {
+        write_all(&mut fs, "/f", &vec![7u8; size]);
+        let (stored, blocks) = held(&mut fs);
+        assert_eq!((stored, fs.file_blocks(stored)), (size as u32, blocks), "written {size}");
+        // A rewrite at the start and a truncation leave the count the medium's.
+        let h = fs.open("/f", rw).unwrap();
+        fs.write(h, b"ab").unwrap();
+        fs.truncate(h, size as u32 / 2).unwrap();
+        fs.close(h).unwrap();
+        let (stored, blocks) = held(&mut fs);
+        assert_eq!((stored, fs.file_blocks(stored)), (size as u32 / 2, blocks), "cut {size}");
+    }
+}
+
 /// Paths: a trailing slash names a directory; NUL is not a name byte; stale handles fail.
 #[test]
 fn path_and_handle_rules() {

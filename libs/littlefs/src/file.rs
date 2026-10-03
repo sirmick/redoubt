@@ -243,6 +243,14 @@ impl<D: BlockDevice> Filesystem<D> {
         Ok(self.file(i)?.size())
     }
 
+    /// The blocks a file of `size` bytes holds as this implementation writes it: none up to
+    /// `inline_max`, where it lives inline, and above that every block of its skip-list,
+    /// pointers included. It goes by the size alone, so an inline file longer than
+    /// `inline_max` (another writer's) counts as blocks it does not hold.
+    pub fn file_blocks(&self, size: u32) -> u32 {
+        if size <= self.inline_max { 0 } else { ctz::index(self.block_size, size - 1).0 + 1 }
+    }
+
     pub fn read(&mut self, h: FileHandle, buf: &mut [u8]) -> Result<usize, Error> {
         let i = self.slot(h)?;
         if !self.file(i)?.read {
