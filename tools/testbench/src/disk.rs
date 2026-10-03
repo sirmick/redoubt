@@ -31,6 +31,31 @@ pub struct Partition {
     pub fs: String,
     /// For `littlefs`, the directory whose tree the volume holds, relative to the workspace root.
     pub stage: Option<PathBuf>,
+    /// For `littlefs`, files made for the pack in the volume's root, beside the stage's tree.
+    pub generated: Option<Generated>,
+}
+
+/// `files` files in a volume's root, `f000` and on, as many digits as the last needs: empty, but
+/// for `read`, which holds its own name and a newline.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Generated {
+    pub files: usize,
+    pub read: String,
+}
+
+impl Generated {
+    /// The files, in name order.
+    fn files(&self) -> Vec<(String, Option<Vec<u8>>)> {
+        let width = self.files.saturating_sub(1).to_string().len();
+        (0..self.files)
+            .map(|i| {
+                let name = format!("f{i:0width$}");
+                let data = if name == self.read { format!("{name}\n").into_bytes() } else { Vec::new() };
+                (name, Some(data))
+            })
+            .collect()
+    }
 }
 
 impl Recipe {
@@ -41,11 +66,29 @@ impl Recipe {
         for p in &recipe.partition {
             match p.fs.as_str() {
                 "littlefs" => {
-                    ensure!(p.stage.is_some(), "{}: partition {}: no stage", path.display(), p.name)
+                    let (stage, generated) = (p.stage.is_some(), p.generated.as_ref());
+                    ensure!(
+                        stage || generated.is_some(),
+                        "{}: partition {}: no stage and nothing generated",
+                        path.display(),
+                        p.name
+                    );
+                    if let Some(g) = generated {
+                        ensure!(
+                            g.files().iter().any(|(n, _)| *n == g.read),
+                            "{}: partition {}: {} is not among the generated files",
+                            path.display(),
+                            p.name,
+                            g.read
+                        );
+                    }
                 }
-                "noise" => {
-                    ensure!(p.stage.is_none(), "{}: partition {}: noise has no stage", path.display(), p.name)
-                }
+                "noise" => ensure!(
+                    p.stage.is_none() && p.generated.is_none(),
+                    "{}: partition {}: noise is neither staged nor generated",
+                    path.display(),
+                    p.name
+                ),
                 fs => {
                     bail!("{}: partition {}: fs {fs:?} is neither littlefs nor noise", path.display(), p.name)
                 }
@@ -122,11 +165,22 @@ pub fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<V
     let mut disk = Image::new(sectors, &parts).bytes;
     for (p, at) in recipe.partition.iter().zip(&parts) {
         let (start, end) = ((at.first_lba * SECTOR) as usize, ((at.last_lba + 1) * SECTOR) as usize);
-        let Some(own) = &p.stage else {
+        if p.fs == "noise" {
             noise(&mut disk[start..end]);
             continue;
+        }
+        let mut staged = match stage.or(p.stage.as_deref()) {
+            Some(dir) => tree(&root.join(dir))?,
+            None => Vec::new(),
         };
-        let staged = tree(&root.join(stage.unwrap_or(own)))?;
+        for (name, data) in p.generated.iter().flat_map(Generated::files) {
+            ensure!(
+                !staged.iter().any(|(path, _)| *path == name),
+                "{}: {name} is staged and generated",
+                p.name
+            );
+            staged.push((name, data));
+        }
         let entries: Vec<pack::Entry> = staged
             .iter()
             .map(|(path, data)| match data {
@@ -177,6 +231,38 @@ mod tests {
         let at = (FIRST_USABLE * SECTOR) as usize;
         assert!(disk[at..at + 4096].windows(8).any(|w| w == b"littlefs"));
         assert!(disk[at + 4096..].iter().any(|b| *b != 0), "the files are past the superblock pair");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A generated directory is its files in the volume's root, beside the stage's tree: all
+    /// empty but the one to read, and none in the stage's place.
+    #[test]
+    fn a_recipe_can_generate_a_directory_of_files() {
+        let recipe = |extra: &str| {
+            let text = format!("size_kib = 1024\n[[partition]]\nname = \"data\"\nfs = \"littlefs\"\n{extra}");
+            let path = std::env::temp_dir().join(format!("testbench-recipe-{}.toml", std::process::id()));
+            std::fs::write(&path, text).unwrap();
+            let recipe = Recipe::load(&path);
+            std::fs::remove_file(path).unwrap();
+            recipe
+        };
+        let g = Generated { files: 600, read: "f007".into() };
+        let files = g.files();
+        assert_eq!((files.len(), files[0].0.as_str(), files[599].0.as_str()), (600, "f000", "f599"));
+        assert!(
+            files.iter().all(|(n, d)| d.as_deref() == Some(if n == "f007" { &b"f007\n"[..] } else { b"" }))
+        );
+        assert!(recipe("generated = { files = 10, read = \"f10\" }\n").is_err(), "f10 is not made");
+        assert!(recipe("").is_err(), "a littlefs partition holds something");
+        let only = recipe("generated = { files = 10, read = \"f9\" }\n").unwrap();
+        let disk = pack_disk(&only, Path::new("/"), None).unwrap();
+        assert!(disk.windows(3).any(|w| w == b"f9\n"), "f9 holds its line");
+        let dir = stage("generated");
+        std::fs::write(dir.join("f1"), b"staged").unwrap();
+        assert!(pack_disk(&only, Path::new("/"), Some(&dir)).is_err(), "f1 is staged and generated");
+        std::fs::remove_file(dir.join("f1")).unwrap();
+        let both = pack_disk(&only, Path::new("/"), Some(&dir)).unwrap();
+        assert!(both.windows(5).any(|w| w == b"hello") && both.windows(3).any(|w| w == b"f9\n"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
