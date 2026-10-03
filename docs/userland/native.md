@@ -217,7 +217,7 @@ the loader stub.
 
 | Module | What it gives |
 | --- | --- |
-| `start` | the entry point (`entry!`), exit codes (`OK` 0, `PANIC` 101, `BAD_STARTUP` 102) and the panic handler |
+| `start` | the entry point (`entry!`, and `first_entry!` for `init`), exit codes (`OK` 0, `PANIC` 101, `BAD_STARTUP` 102) and the panic handler |
 | `startup` | the startup block, parsed defensively ([sessions](sessions.md#how-a-program-reads-its-namespace)) |
 | `handle` | typed handles and the system calls that are not IPC |
 | `ipc` | lends and transfers, `call`, `send`, `receive`, `reply`, `serve` |
@@ -231,6 +231,9 @@ the loader stub.
   parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program
   has one, and exits with `PANIC`; if the program held open calls, the kernel blames the sender
   of the call it was serving ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
+  `init`, which the loader starts with no startup block, declares `first_entry!(run)` instead:
+  `run` receives the bundle the loader mapped read-only, as a `&'static [u8]`
+  ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)).
 - **The lend belongs to the call.** `call` takes ownership of the buffer it lends. When the call
   completes, the outcome hands the buffer back unless the server had received the call and it
   was then abandoned, in which case the buffer is consumed: disarmed without touching or

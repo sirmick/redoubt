@@ -5,7 +5,8 @@
 //! - [`handle`]: typed handles and the system calls that are not IPC.
 //! - [`ipc`]: lends and transfers, `call`, `send`, `receive`, `reply`.
 //! - [`heap`]: the global allocator, over `map_anon`, or over one fixed arena.
-//! - [`start`]: the entry point ([`entry!`]), exit codes and the panic handler.
+//! - [`start`]: the entry point ([`entry!`], and [`first_entry!`] for `init`), exit codes and the panic
+//!   handler.
 //! - [`path`]: lexical path cleaning, so `..` never climbs above a root.
 //! - [`client`]: a small synchronous 9P client.
 //! - [`server`]: the shared server library (servers/serving.md): `admit` with a fair share per badge,
