@@ -211,8 +211,10 @@ impl Unique {
 
 /// The servers `init` calls itself ([`INIT_CALLS`]) each receive on an endpoint, the first of
 /// which `init` calls; each runs once, since a second would run beside the one `init` calls and
-/// go unchecked (a second `keyd` would hold keys `init` never asked about, R35); and there is a
-/// `keyd`, since the bundle key is always asked about.
+/// go unchecked (a second `keyd` would hold keys `init` never asked about, R35); there is a
+/// `keyd`, since the bundle key is always asked about; and no server is handed an endpoint a
+/// `consoled` receives on, since a root badge there writes bare lines, which only `init`'s may be
+/// (servers/consoled.md, "Started by `init`").
 fn init_calls(m: &Manifest) -> Result<(), Refusal> {
     let called = |s: &&Server| INIT_CALLS.contains(&s.program.as_str());
     if let Some(i) = m.servers.iter().position(|s| called(&s) && s.receives.is_empty()) {
@@ -222,6 +224,13 @@ fn init_calls(m: &Manifest) -> Result<(), Refusal> {
         let Some(&program) = INIT_CALLS.iter().find(|p| **p == s.program) else { continue };
         if m.servers[..i].iter().any(|t| t.program == program) {
             return Err(at(format!("servers[{i}].program"), Why::Second(program)));
+        }
+    }
+    let consoled =
+        |e: &str| m.servers.iter().any(|s| s.program == "consoled" && s.receives.iter().any(|r| r == e));
+    for (i, s) in m.servers.iter().enumerate() {
+        if let Some(k) = s.handed.iter().position(|h| consoled(&h.endpoint)) {
+            return Err(at(format!("servers[{i}].handed[{k}].endpoint"), Why::ConsoledRoot));
         }
     }
     if !m.servers.iter().any(|s| s.program == "keyd") {

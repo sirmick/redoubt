@@ -345,7 +345,9 @@ mod machine {
             let console = console.map(|(_, id)| id);
             // `consoled` itself starts while `init` writes nowhere: `attach_console` says it.
             match console {
-                Some(id) => self.say(format_args!("init: started {}, console {id}", s.name)),
+                // The id bare, as `consoled` prefixes the child's lines with it
+                // (servers/consoled.md, "Started by `init`").
+                Some(id) => self.say(format_args!("init: started {}, console {id:016x}", s.name)),
                 None if !matches!(self.out, Out::Nowhere) => {
                     self.say(format_args!("init: started {}", s.name))
                 }

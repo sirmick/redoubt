@@ -88,6 +88,9 @@ pub enum Why {
     NoBootfsd,
     /// No `keyd` to ask about the keys the box is authenticated by (R35).
     NoKeyd,
+    /// An endpoint a `consoled` receives on, handed to a server: only `init` holds a root badge
+    /// there, so only `init`'s lines are bare.
+    ConsoledRoot,
     /// A second entry for a program `init` calls itself (`keyd`, `consoled`, `bootfsd`): `init`
     /// starts and calls one of each.
     Second(&'static str),
@@ -128,6 +131,7 @@ impl fmt::Display for Why {
             Why::PublicManifest => "the manifest is never public",
             Why::NoBootfsd => "public entries but no bootfsd",
             Why::NoKeyd => "no keyd to ask about the keys the box is authenticated by (R35)",
+            Why::ConsoledRoot => "only init holds a root badge at consoled",
         })
     }
 }

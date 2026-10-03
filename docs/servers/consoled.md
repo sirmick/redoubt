@@ -17,10 +17,11 @@ channel by [`sshd`](sshd.md), not here.
 
 ### `/dev/cons`
 
-<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel; in a boot the console is held by the bench's interim log server, so `consoled` is only built; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested (9)</summary>
+<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested (10)</summary>
 
 - bench:r4-host-tests
 - bench:consoled-build
+- bench:init-boot
 - host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
 - host:redoubt-consoled::typing_on_the_uart_reaches_a_ninep_reader
 - host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up
@@ -34,7 +35,8 @@ channel by [`sshd`](sshd.md), not here.
 `/dev/cons` is served over the [9P server skeleton](serving.md#the-9p-server-skeleton) as one file
 with nothing below it.
 
-- **A write** sends its bytes out of the UART, in order.
+- **A write** sends its bytes out of the UART, in order, each line saying who wrote it
+  ([started by `init`](#started-by-init)).
 - **A read** returns the input held, from the start of the queue; the offset is ignored, since a
   console is a stream. With no input it **parks** its call with no deadline, because it waits on a
   person, and is served again, unchanged, when a key arrives; a caller that gives up abandons it
@@ -93,7 +95,19 @@ The table: [libs/wire/tables/consol.md](../../libs/wire/tables/consol.md).
 
 ### Started by `init`
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (9)</summary>
+
+- bench:init-boot
+- host:redoubt-consoled::the_prefix_is_the_id_in_sixteen_hex_digits
+- host:redoubt-consoled::a_root_line_is_bare_and_a_minted_one_carries_its_id_on_every_line
+- host:redoubt-consoled::a_line_is_continued_by_its_writer_and_ended_by_any_other
+- host:redoubt-consoled::whatever_the_uart_takes_no_line_mixes_writers_or_carries_another_s_id
+- host:redoubt-rt::the_file_server_learns_the_id_the_requester_got
+- host:redoubt-consoled::a_console_with_no_device_does_not_start
+- bench:init-refuses-consoled-handed
+- host:redoubt-init::no_server_is_handed_a_root_badge_at_consoled
+
+</details>
 
 `init` starts `consoled` once the manifest and the keys are checked, with the UART's MMIO region
 and interrupt as named handles and its endpoint, placed from the boot manifest's `devices` list
@@ -103,19 +117,23 @@ readers of one FIFO would each take half the line. `init` writes to the UART its
 `consoled` starts, and unmaps it first.
 
 **Every line says who wrote it.** A write through `init`'s own connection goes out as it is.
-`init` holds the only handle to the root, and it never hands the root to a child. A write through
+`init` holds the only handle to the root, and it never hands the root to a child: its check
+refuses a manifest that hands any server an endpoint `consoled` receives on
+([init](init.md#starting-the-servers)). A write through
 any connection minted under the root starts each of its lines with `[con N] `, where N is that
-connection's id. `init` prints the id of each child's connection, bare, when it starts the child,
-so a reader of the console can tell `init` from every program and each program from the others,
+connection's id, the one its requester was given, in 16 lowercase hex digits. `init` prints the id
+of each child's connection, bare, when it starts the child (`init: started NAME, console N`), so a
+reader of the console can tell `init` from every program and each program from the others,
 as the bench's log server does today
 ([rule F](../testbench.md#rule-f-trusted-verdicts)). If a write comes from a different connection
 than the one that left the last line unfinished, `consoled` ends that line first. So a line a
-program writes cannot come out bare, and it cannot carry another connection's id.
+program writes cannot come out bare, and it cannot carry another connection's id. A transmitter
+that takes only part of a prefix leaves the line open, and the rest of the prefix goes out before
+any more of the writer's bytes; ended by another writer, such a line holds the start of its
+writer's prefix and nothing else.
 
 The rule names the handles `NAME` and `NAME-irq` from one `devices` entry
 ([init](init.md#the-boot-manifest)); `consoled` takes `uart` and `uart-irq`.
-
-**Open:** none.
 
 ## Authority
 
@@ -159,8 +177,6 @@ Status: built · partly tested: the restart claims are read from the code, not a
   admission slots until a key arrives or its caller gives up.
 - **Anyone with a connection reads the console.** What is typed on the physical console is visible to
   every holder of a `consoled` connection.
-- **`consoled` does not run in a boot.** The bench's console is an interim log server holding the
-  same UART; the two must never run together.
 
 ## Why
 

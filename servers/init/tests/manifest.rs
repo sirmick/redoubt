@@ -79,11 +79,11 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
 fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
     let mut m = image();
     for (holder, badge) in [("ipd", 1), ("netd", 2), ("blkd", 4)] {
-        server(&mut m, holder).handed.push(Handed { endpoint: "consoled".into(), badge });
+        server(&mut m, holder).handed.push(Handed { endpoint: "bootfsd".into(), badge });
     }
-    server(&mut m, "bootfsd").handed.push(Handed { endpoint: "keyd".into(), badge: 2 });
+    server(&mut m, "consoled").handed.push(Handed { endpoint: "keyd".into(), badge: 1 });
     let plan = on_virt(&m).unwrap();
-    assert_eq!(plan.init_badges, vec![(0, 1), (1, 3), (2, 1)]);
+    assert_eq!(plan.init_badges, vec![(0, 2), (1, 1), (2, 3)]);
 }
 
 #[test]
@@ -419,6 +419,24 @@ fn a_manifest_without_keyd_is_refused_and_init_calls_each_server_at_an_endpoint(
         server(&mut m, name).receives.clear();
         refused_at(&m, &format!("servers[{i}].receives"), Why::Unknown);
     }
+}
+
+/// Only `init` holds a root badge at `consoled`: a server handed one would write bare lines,
+/// which only `init`'s may be (servers/consoled.md, "Started by `init`").
+#[test]
+fn no_server_is_handed_a_root_badge_at_consoled() {
+    let mut m = image();
+    server(&mut m, "netd").handed.push(Handed { endpoint: "consoled".into(), badge: 7 });
+    refused_at(&m, "servers[4].handed[1].endpoint", Why::ConsoledRoot);
+    // Whatever the endpoint is called, and whichever server is handed it.
+    let mut m = image();
+    server(&mut m, "consoled").receives = vec!["cons".into()];
+    server(&mut m, "keyd").handed.push(Handed { endpoint: "cons".into(), badge: 2 });
+    refused_at(&m, "servers[0].handed[0].endpoint", Why::ConsoledRoot);
+    // Another server's endpoint is still handed as before.
+    let mut m = image();
+    server(&mut m, "keyd").handed.push(Handed { endpoint: "bootfsd".into(), badge: 7 });
+    assert!(on_virt(&m).is_ok());
 }
 
 #[test]
