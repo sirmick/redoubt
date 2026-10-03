@@ -696,6 +696,17 @@ impl Case {
         self.matches(filter) && (self.whole_run || filter == Some(self.name.as_str()))
     }
 
+    /// The cases `filter` names for a run of one case (`--sweep`): the case whose whole name it
+    /// is, if there is one, else every case `chosen` takes. A serial run runs every case
+    /// `chosen` takes; a run of one would otherwise refuse a case whose name is part of
+    /// another's (`sched-latency`, `sched-latency-tcg`).
+    pub fn only<'a>(cases: &'a [Case], filter: &str) -> Vec<&'a Case> {
+        match cases.iter().find(|case| case.name == filter) {
+            Some(case) => vec![case],
+            None => cases.iter().filter(|case| case.chosen(Some(filter))).collect(),
+        }
+    }
+
     /// Catch mistakes before booting anything, where they would otherwise show up only as a
     /// timeout or a confusing failure.
     fn check(&self) -> Result<()> {

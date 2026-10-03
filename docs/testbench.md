@@ -14,6 +14,7 @@ cargo testbench                 # every case but those run only by name
 cargo testbench timer           # cases whose name contains "timer"
 cargo testbench --arch rv64     # one target
 cargo testbench --list          # names and descriptions, those run only by name marked
+cargo testbench sched-latency --sweep 1..20 --jobs 4   # one case, a seed sweep, 4 boots at a time
 ./test                          # the same, from the repository root
 ```
 
@@ -127,7 +128,7 @@ description says so ("verdict: survival only").
 
 ### The case file
 
-Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name
+Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures
 
 A case is one TOML file. Paths in it are relative to the workspace root, and an unknown field or
 table is an error, so a misspelling cannot silently drop a check. The one exception is a `programs`
@@ -182,7 +183,15 @@ on every boot, the kernel draws PIDs from it, and that moves every later event. 
 pins it (QEMU `-seed N`, which fills the device tree's `/chosen/rng-seed`), and with `icount` a
 run then repeats exactly. The bench prints the seed before the result, and
 `TESTBENCH_QEMU_SEED=M` replaces the pinned seed of every case that has one, to replay a run or
-to sweep. A timing gate runs one pinned seed and states its target from a sweep of seeds
+to sweep. `--sweep SEEDS` runs one case once per seed (`1..20`, or `3,5,9`), from one build, and
+prints each seed's result in seed order and a summary line; each boot keeps its files in
+`seed-<N>-<arch>/` inside the run's directory. `--jobs J` boots up to J seeds at once. It is
+never the default, and a result under `--jobs` above 1 is a sweep datum, not a verdict: guest
+times under `icount` do not move with the host's load, but the bench's timeouts do. A merge
+runs the whole bench serially, and a seed that failed only by timing out under `--jobs` is rerun
+alone. A residual: the bench picks a `[net]` case's host ports by binding and releasing them, so
+two such boots under `--jobs` may race for one port; no seeded case has a `[net]` today. A timing
+gate runs one pinned seed and states its target from a sweep of seeds
 ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
