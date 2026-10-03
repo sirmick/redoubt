@@ -408,12 +408,13 @@ fn new_address_space(ss: &mut ProcessTable, mm: &mut MemoryManager, child: Pid) 
 /// run, so nothing waits on it and nothing holds its handles; this is `Process::terminate` minus
 /// everything that needs the memory manager it does not already hold.
 fn drop_unstarted(ss: &mut ProcessTable, mm: &mut MemoryManager, child: Pid) {
-    // Not `release_all_memory_for_process`: that one first walks the page tables for frames the
-    // process lent out, and a process that has never run has lent nothing. What is left is the
-    // frames it owns, which is what this frees -- and it needs no address space, so a
-    // `process_create` that ran out of pages halfway through building one is the same case.
-    mm.release_owned_frames(child);
-    // Nor `dma_release`: a process that has never run has allocated no DMA memory.
+    // One walk of what the creation built: its space, which names every frame the child owns. A
+    // space that could not be built whole was given back as it failed, and no slot holds it.
+    if let Ok(process) = ss.get_process(child) {
+        let space = process.mapping;
+        mm.release_owned_frames(child, &space);
+    }
+    // No `dma_release`: a process that has never run has allocated no DMA memory.
     debug_assert!(!mm.dma_holds_any(child), "an unstarted process holds a DMA run");
     mm.process_ended(child);
     ss.free_process_slot(child);

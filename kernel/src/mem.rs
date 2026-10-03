@@ -108,7 +108,7 @@ pub struct MemoryManager {
 
 /// Owner, in the ownership table, of frames that hold kernel objects (budgets, handle-table
 /// pages). No process has this PID (there are `MAX_PROCESS_COUNT` of them), so such a frame is
-/// never mapped into a process, and `release_all_memory_for_process` never frees one.
+/// never mapped into a process, and `release_owned_frames` never frees one.
 pub const OBJECT_OWNER: Pid = match Pid::new(255) {
     Some(pid) => pid,
     None => unreachable!(),
@@ -870,23 +870,22 @@ impl MemoryManager {
         None
     }
 
-    /// Free all memory that belongs to a process. This does not unmap the memory from the
-    /// process, it only marks it as free. Because a freed frame can be re-allocated
-    /// immediately, only call this as part of destroying a process.
-    ///
-    /// # Safety
-    /// Only sound as the final step of destroying `pid`: after this, frames it owned may
-    /// be handed to other processes, so `pid` must never run again.
-    pub unsafe fn release_all_memory_for_process(&mut self, pid: Pid, space: &MemoryMapping) {
+    /// Give back every frame `pid`'s tables name that is still credited to it, the tables
+    /// themselves included: an ended process's (`Process::terminate`, as its last step, since a
+    /// frame given back may be handed out at once) or one's that never ran (`process_create`'s
+    /// rollback). A space is whole or does not exist (`MemoryMapping::allocate` gives back what it
+    /// took when it fails), so its tables name every frame the process owns: the root, the tables,
+    /// the saved contexts, and the pages `process_map` moved in.
+    pub fn release_owned_frames(&mut self, pid: Pid, space: &MemoryMapping) {
         let kernel = Pid::new(1).unwrap();
         // One walk of the process's own tables, never of every frame of RAM (R12;
         // kernel/budgets.md, "Residual risks"). A frame it has lent out is still mapped in the
         // borrower: it is reparented to the kernel so it is not reused while the borrower holds
         // it, and freed when the borrower returns it (the caller's charge ends here; the lend
         // stays charged to the server that holds it, kernel/ipc.md R3). Every other frame its
-        // tables name that is still credited to it goes back, the tables themselves included; a
-        // borrowed page is its lender's. A page lent to itself ends the kernel's whichever of its
-        // two entries the walk meets first.
+        // tables name that is still credited to it goes back; a borrowed page is its lender's. A
+        // page lent to itself ends the kernel's whichever of its two entries the walk meets first.
+        // A process that never ran has lent nothing.
         space.for_each_owned_frame(|phys, lent| {
             // The frame's entry: in RAM's table (`true`), or else in the extra regions'.
             let entry = if self.is_main_memory(phys as *mut u8) {
@@ -915,9 +914,9 @@ impl MemoryManager {
     }
 
     /// The checked build's proof that no frame is credited to a process that has ended: a frame
-    /// its tables did not name would have been left out of `release_all_memory_for_process`. A
-    /// scan of all of RAM, so never during a destruction: that build runs it once after the
-    /// walk instead (`destroy_subtree`), where it does not scale the destruction.
+    /// its tables did not name would have been left out of `release_owned_frames`. A scan of all
+    /// of RAM, so never during a destruction: that build runs it once after the walk instead
+    /// (`destroy_subtree`), where it does not scale the destruction.
     #[cfg(debug_assertions)]
     pub(crate) fn check_frame_owners(&self) {
         if self.objects.deferring {
@@ -935,24 +934,6 @@ impl MemoryManager {
             !self.extra_allocations.iter().any(ended),
             "I1: a device frame is credited to a process that ended"
         );
-    }
-
-    /// Give back every frame still owned by a process that never ran (`process_create`'s
-    /// rollback). A scan of all of RAM, which needs no page-table access, so it serves a
-    /// partially built space; an ended process is walked from its tables instead
-    /// ([`MemoryManager::release_all_memory_for_process`]).
-    pub fn release_owned_frames(&mut self, pid: Pid) {
-        for idx in 0..self.allocations.len() {
-            if self.allocations[idx] == Some(pid) {
-                self.set_owner(idx, None);
-            }
-        }
-        for idx in 0..self.extra_allocations.len() {
-            if self.extra_allocations[idx] == Some(pid) {
-                self.extra_allocations[idx] = None;
-            }
-        }
-        self.uncharge_all_frames(pid);
     }
 }
 

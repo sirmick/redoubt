@@ -295,17 +295,30 @@ impl MemoryMapping {
             root.slot(index).copy_from(current.slot(index));
         }
 
-        for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
-            // Saved contexts are frames charged to the running budget (kernel/objects.md).
-            let context_phys = mm.alloc_context_page(pid)?;
-            // SAFETY: a freshly allocated frame, as above.
-            unsafe { window().zero_frame(context_phys) };
-            let virt = PROCESS_AREA + page * PAGE_SIZE;
-            map_page_in(root, mm, pid, context_phys, virt, PteFlags::R | PteFlags::W)?;
-        }
-
+        // From here the space names everything it takes, so a failure gives it all back by one
+        // walk of its tables, and the space is whole or does not exist (`process_create`'s
+        // rollback walks it, `release_owned_frames`).
         self.satp = make_satp(pid, root_phys);
+        for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
+            if let Err(e) = Self::add_context_page(root, mm, pid, page) {
+                mm.release_owned_frames(pid, self);
+                self.satp = 0;
+                return Err(e);
+            }
+        }
         Ok(())
+    }
+
+    /// Back and map saved-context page `page` of a new space: a frame charged to the running
+    /// budget (kernel/objects.md). On failure the frame is given back, and any table the mapping
+    /// took is in the space.
+    fn add_context_page(root: Table, mm: &mut MemoryManager, pid: Pid, page: usize) -> Result<(), PageError> {
+        let context_phys = mm.alloc_context_page(pid)?;
+        // SAFETY: `alloc_context_page` returns a RAM frame that was free until now.
+        unsafe { window().zero_frame(context_phys) };
+        let virt = PROCESS_AREA + page * PAGE_SIZE;
+        map_page_in(root, mm, pid, context_phys, virt, PteFlags::R | PteFlags::W)
+            .inspect_err(|_| mm.free_frame_of(context_phys, pid).expect("the frame just taken"))
     }
 
     /// Get the currently active memory mapping.
@@ -346,7 +359,7 @@ impl MemoryMapping {
     /// which the caller tells apart by the ownership table. One walk, whose cost follows the
     /// tables the space has, not RAM. Each table comes after everything under it, and the root
     /// last, so `f` may give a frame back as soon as it sees it, and nothing is read from a frame
-    /// after (`release_all_memory_for_process`).
+    /// after (`release_owned_frames`).
     pub fn for_each_owned_frame(&self, mut f: impl FnMut(usize, bool)) {
         let root = root_of(self.satp);
         for index in (0..ROOT_KERNEL_START).chain([ROOT_PROCESS_AREA]) {

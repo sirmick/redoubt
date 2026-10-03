@@ -490,7 +490,7 @@ impl MemoryManager {
         }
     }
 
-    /// Every frame of `pid`'s was just freed at once (`release_all_memory_for_process`).
+    /// Every frame of `pid`'s was just freed at once (`release_owned_frames`).
     pub fn uncharge_all_frames(&mut self, pid: Pid) {
         if let Some(budget) = self.budget_of(pid) {
             let frames = core::mem::take(&mut self.account_mut(pid).expect("account").frames);
