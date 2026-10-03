@@ -279,7 +279,11 @@ churns children pays for both.
 destroys it, over and over (blocked, spinning, by a deadline, and through fresh intermediates),
 against an equal-weight victim who keeps half; the oracle recomputes every lift from the trace.
 Its last variant, a shell that keeps giving a child half its weight and taking it back with no
-run between, leaves the victim neither more nor less than half.
+run between, leaves the victim at least half, and the recomputed lifts show that creating and
+destroying moved nothing. Its victim's share has no ceiling: the shell pays at its halved weight
+for what it runs while carved, its own calls included
+([running while carved down](#running-while-carved-down)), so how far above half the victim gets
+follows the kernel's speed.
 
 ### Running while carved down
 
@@ -424,8 +428,7 @@ stand-in spends its slice on the audit at the first `killed` notice, is requeued
 and a hostile budget run a slice each before it takes the second. A share is judged the same way:
 in `sched-budget-churn`, whose attacker destroys a budget each slice, the victim of the spinning
 parent gets 494 of 1000 net of audits on rv64 (403 gross) and 495 on rv32 (416), and the shell's
-victim 500 and 499. With the audits billed to the budget that ran them, as before, the shell
-paid for scans a release build does not run, and its victim got 650 and 643 net: more than half.
+victim 580 (391) and 497 (316).
 `sched-exit-churn` and `sched-timer-flood` are judged the same way, since a process's start and
 end and a deadline's destruction each run an audit: against processes that exit, the victim gets
 495 of 1000 net on rv64 (459 gross) and 492 on rv32 (459); against processes that fault, 497

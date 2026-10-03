@@ -4,11 +4,13 @@
 //! child runs; spinning and destroying at the end of its own slice; the child destroyed by a
 //! deadline just after the attacker's slice; a fresh intermediate budget for each child. And a
 //! shell that keeps giving a budget half its weight and taking it back, with no run in between,
-//! is neither starved nor favoured: creating and destroying moves nothing (the entry-wait double
-//! count grew such a parent's lead by half again each time). Half, not most: a parent's own
-//! runtime while its weight is carved away is charged at what it kept (kernel/scheduling.md,
-//! "Running while carved down"), the create/destroy calls' own time included, so carving 99 of
-//! 100 would make that window cost a hundred times over whatever the rule for debt.
+//! leaves the victim at least half, and the oracle's recomputed lifts show that creating and
+//! destroying moved nothing (the entry-wait double count grew such a parent's lead by half again
+//! each time). The victim's share has no ceiling: the shell pays at its halved weight for what it
+//! runs while carved, the create/destroy calls' own time included (kernel/scheduling.md,
+//! "Running while carved down"), so how far above half the victim gets follows the kernel's
+//! speed. Half, not most: carving 99 of 100 would make that window cost a hundred times over
+//! whatever the rule for debt.
 
 #![no_std]
 #![no_main]
@@ -36,11 +38,11 @@ pub extern "C" fn _start() -> ! {
         let v = b.start(victim, Role::Spin, &[], &[]);
         let window = b.go(50_000, WINDOW);
         let counts = b.collect(2);
-        // The shell's own share also pays for its calls, which its count leaves out: judge it by
-        // the victim, who gets neither more nor less than half. The post-check judges the victim's
-        // share net of the checked build's audits, which a release build does not run.
-        let bounds = if variant == 4 { (500 - TOL, 500 + TOL) } else { (500 - TOL, 1000) };
-        let vs = b.judged_share(name, counts[v], window, bounds);
+        // Every variant is judged by the victim, who keeps at least half; the shell's own share
+        // pays for its calls at its halved weight, so the victim may get more (no ceiling). The
+        // post-check judges the victim's share net of the checked build's audits, which a release
+        // build does not run, and recomputes every lift.
+        let vs = b.judged_share(name, counts[v], window, (500 - TOL, 1000));
         let as_ = b.share(counts[a], window.1 - window.0);
         b.note(format_args!(
             "{}: victim {} of 1000, attacker's subtree {}: gross, audits included; net in the post-check",

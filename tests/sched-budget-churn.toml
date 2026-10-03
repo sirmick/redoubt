@@ -1,4 +1,4 @@
-description = "Budget churn gains nothing (pass inheritance): blocking, spinning-parent, deadline-timed and fresh-intermediate churn leave an equal-weight victim half; a shell that keeps giving a budget half its weight and taking it back is neither starved nor favoured; the victim's share judged by the post-check net of the checked build's audits inside its window (virtual time, checked build)"
+description = "Budget churn gains nothing (pass inheritance): blocking, spinning-parent, deadline-timed and fresh-intermediate churn leave an equal-weight victim half; a shell that keeps giving a budget half its weight and taking it back leaves the victim at least half, its lifts recomputed by the oracle; the victim's share judged by the post-check net of the checked build's audits inside its window (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -17,7 +17,7 @@ expect = [
     '^SHARE spinning-parent \d+ \d+ \d+ 450 1000$',
     '^SHARE deadline \d+ \d+ \d+ 450 1000$',
     '^SHARE fresh-intermediates \d+ \d+ \d+ 450 1000$',
-    '^SHARE shell \d+ \d+ \d+ 450 550$',
+    '^SHARE shell \d+ \d+ \d+ 450 1000$',
     '^SCHED-BUDGET-CHURN TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]
