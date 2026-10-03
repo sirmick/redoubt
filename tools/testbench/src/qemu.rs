@@ -333,7 +333,14 @@ struct Console {
     announced: Option<Regex>,
     reporter: Option<String>,
     passed_seen: bool,
+    /// The loader's first line, which only a reset of the machine prints again: a new boot, in
+    /// which `init` announces the reporter anew.
+    loader: Regex,
 }
+
+/// The loader's first line (loader/src/main.rs), bare: nothing but the loader and `init` prints
+/// bare, and `init` never prints this.
+const LOADER_LINE: &str = r"^loader: Redoubt rv(64|32) loader, boot hart \d+$";
 
 /// A line `log-server` prints for `DONE`. Anchored: every relayed line starts `[pid N]` or
 /// `[badge N]`, so no program's text can start this way.
@@ -352,8 +359,14 @@ impl Console {
             return Ok(Line::Forbidden(format!("forbidden output /{pattern}/: {line}")));
         }
         if let Some(announced) = &self.announced {
+            // A reboot: the next boot's `init` announces the reporter again, under a console
+            // connection of the new `consoled`. The verdict is still one line in the whole run.
+            if self.loader.is_match(&line) {
+                self.reporter = None;
+            }
             // `init`'s own lines are the only bare ones (`consoled` prefixes every other), so the
-            // anchored announcement cannot be a program's; and `init` announces each child once.
+            // anchored announcement cannot be a program's; and `init` announces each child once a
+            // boot.
             if let Some(id) = announced.captures(&line).and_then(|c| c.get(1)) {
                 if self.reporter.is_some() {
                     return Ok(Line::Forbidden(format!("the reporter announced twice: {line}")));
@@ -465,6 +478,7 @@ pub fn run(
         announced: boot.reporter_announced().map(|r| Regex::new(&r)).transpose()?,
         reporter: None,
         passed_seen: false,
+        loader: Regex::new(LOADER_LINE)?,
     };
     let deadline = Instant::now() + Duration::from_secs_f64(boot.timeout_secs);
     let mut next = 0;

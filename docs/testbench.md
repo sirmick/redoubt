@@ -267,12 +267,13 @@ so they run a tester in `init`'s place instead.
 
 ### The servers' cases under `init`
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:init-servers
 - bench:init-console-forgery
 - bench:bench-init-reporter-forged
 - bench:init-boot
+- bench:fsd-reboot
 
 </details>
 
@@ -284,10 +285,13 @@ their own included, as no server does
 connection id, `[con N] ` with N in 16 lowercase hex digits
 ([consoled](servers/consoled.md#started-by-init)). A case's `reporter` names a manifest entry, and
 the bench reads that entry's connection id only from `init`'s bare line announcing it,
-`init: started NAME, console N`; a second such line fails the case. A restarted server is
-announced as `init: restarted NAME, console N`, and the bench never reads a reporter's id from
-that line, so a reporter that restarts cannot pass its case. A case that judges a reboot expects
-`init`'s reboot line and then the next boot's first line, and ends there. The case passes only if
+`init: started NAME, console N`; a second such line in one boot fails the case. A restarted
+server is announced as `init: restarted NAME, console N`, and the bench never reads a reporter's
+id from that line, so a reporter that restarts cannot pass its case. A case that judges a reboot
+expects `init`'s reboot line and then the next boot's first line, the loader's. The machine
+resets in the same QEMU run, with the same disk, and from that line on the bench reads the
+reporter's id afresh from the next boot's announcement, so a case may go on to its verdict in the
+next boot; still only one `TEST PASSED` line, in the whole run, may pass it. The case passes only if
 exactly one line says `TEST PASSED` and it starts with that `[con N] `; any other such line fails
 it, wherever it came from. Such a case ends at its last `expect`, which waits for the verdict,
 since no test program holds the Reset right. The test programs are `redoubt-init-programs`
@@ -453,13 +457,23 @@ to launch, is a bundle file.
 
 ### Bundle files
 
-Status: built · tested: bench:bench-bundle-file, bench:programs-unknown-budget-attack
+Status: built · tested: bench:bench-bundle-file, bench:programs-unknown-budget-attack, bench:fsd-reboot, host:testbench::a_file_s_servers_merge_into_its_manifest_by_name
 
 ```toml
 [[file]]                     # a data entry, after the programs
 name = "trace"
 from = { path = "tests/data/bundle-file.txt" }   # or any `programs` form, corrupted ones included
+
+[[file]]                     # a manifest, with entries merged into its `servers`
+name = "manifest"
+from = { path = "tests/data/fsd/boot.json" }
+servers = [{ name = "client", args = ["reboot", "fsd:data"] }]
 ```
+
+A file read from a path may be a manifest with `servers` entries merged in by name: each replaces
+the members it gives in the entry of its name, or is added after the rest if none has it, so cases
+that differ in one entry share one manifest, and a case can boot the image's own manifest with a
+client added.
 
 Entry names must differ from each other and from `kernel`. A file named `programs` replaces the
 listing the builder writes, so an attack case can hand the tester a hostile one. The bench

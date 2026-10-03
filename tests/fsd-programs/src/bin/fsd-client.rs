@@ -3,6 +3,10 @@
 //! checks, and the next the endpoints of the badges it uses:
 //!
 //! - `boot ENDPOINT`: writes, reads, renames and removes a file and a directory through 9P.
+//! - `reboot ENDPOINT`: counts its starts in a file on the volume. The first writes a directory and a file
+//!   and notes their qid paths; it and the next five exit with [`REBOOT_EXIT`], so `init`'s sixth exit notice
+//!   reboots the machine (servers/init.md, "Restarts and reboots"). The start after the reboot finds six and
+//!   reads both back, with the same qid paths.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -23,6 +27,17 @@ use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(run);
 
+/// What a check ends in: a verdict, or an exit its case expects `init` to report.
+enum Ends {
+    Passed,
+    Exit(u32),
+}
+
+/// The code `reboot` exits with before the reboot.
+const REBOOT_EXIT: u32 = 7;
+/// The starts `init` allows before an exit reboots: five restarts, so six starts.
+const STARTS_BEFORE_REBOOT: u32 = 6;
+
 fn run(startup: &Startup) -> u32 {
     let mut out = match Out::open(startup) {
         Ok(out) => out,
@@ -30,11 +45,13 @@ fn run(startup: &Startup) -> u32 {
     };
     let mut args = startup.args();
     let checked = match (args.next(), args.next()) {
-        (Some("boot"), Some(at)) => boot(startup, &mut out, at),
+        (Some("boot"), Some(at)) => boot(startup, &mut out, at).map(|()| Ends::Passed),
+        (Some("reboot"), Some(at)) => reboot(startup, &mut out, at),
         (check, _) => Err(format!("no such check, or no endpoint: {check:?}")),
     };
     let line = match checked {
-        Ok(()) => String::from("fsd-client TEST PASSED\n"),
+        Ok(Ends::Exit(code)) => return code,
+        Ok(Ends::Passed) => String::from("fsd-client TEST PASSED\n"),
         Err(why) => format!("fsd-client TEST FAILED: {why}\n"),
     };
     match out.say(&line) {
@@ -47,6 +64,19 @@ fn run(startup: &Startup) -> u32 {
 fn attach(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Connection, String> {
     let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
     Connection::attach(Endpoint::from_handle(handle), &mut out.lend).map_err(|e| format!("attach: {e:?}"))
+}
+
+/// Replaces `path`'s bytes with `data`, creating it if it is not there.
+fn put(conn: &Connection, out: &mut Out, dir: &str, name: &str, data: &[u8]) -> Result<(), String> {
+    let path = if dir == "/" { format!("/{name}") } else { format!("{dir}/{name}") };
+    let Ok(file) = conn.open(&mut out.lend, &path, mode::OWRITE | mode::OTRUNC) else {
+        return write_file(conn, out, dir, name, data);
+    };
+    let n = file.write_at(&mut out.lend, 0, data).map_err(|e| format!("write {path}: {e:?}"))?;
+    if n != data.len() {
+        return Err(format!("wrote {n} of {} bytes to {path}", data.len()));
+    }
+    file.close(&mut out.lend).map_err(|e| format!("clunk {path}: {e:?}"))
 }
 
 fn write_file(conn: &Connection, out: &mut Out, dir: &str, name: &str, data: &[u8]) -> Result<(), String> {
@@ -110,4 +140,45 @@ fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> 
         return Err("d is still there after its remove".into());
     }
     out.say("fsd-client wrote, read, renamed and removed\n").map_err(|e| format!("say: {e:?}"))
+}
+
+/// `fsd-reboot`: what the first boot writes is there after the reboot, with the same qid paths.
+fn reboot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Ends, String> {
+    let conn = attach(startup, out, endpoint)?;
+    let starts = match read_file(&conn, out, "/starts") {
+        Ok(text) => {
+            core::str::from_utf8(&text).ok().and_then(|t| t.parse().ok()).ok_or("starts holds no count")?
+        }
+        Err(_) => 0u32,
+    };
+    let notes = b"kept across a reboot\n";
+    if starts >= STARTS_BEFORE_REBOOT {
+        let kept = conn.stat(&mut out.lend, "/kept").map_err(|e| format!("stat kept: {e:?}"))?;
+        let file = conn.stat(&mut out.lend, "/kept/notes").map_err(|e| format!("stat kept/notes: {e:?}"))?;
+        let noted = read_file(&conn, out, "/qids")?;
+        let now = format!("{} {}", kept.qid.path, file.qid.path);
+        if noted != now.as_bytes() {
+            return Err(format!("qid paths {now}, noted {:?}", String::from_utf8_lossy(&noted)));
+        }
+        if read_file(&conn, out, "/kept/notes")? != notes {
+            return Err("kept/notes does not read back".into());
+        }
+        out.say(&format!("fsd-client read back kept and kept/notes after the reboot, qid paths {now}\n"))
+            .map_err(|e| format!("say: {e:?}"))?;
+        return Ok(Ends::Passed);
+    }
+    if starts == 0 {
+        conn.create(&mut out.lend, "/", "kept", DMDIR | 0o755, mode::OREAD)
+            .and_then(|d| d.close(&mut out.lend))
+            .map_err(|e| format!("mkdir kept: {e:?}"))?;
+        write_file(&conn, out, "/kept", "notes", notes)?;
+        let kept = conn.stat(&mut out.lend, "/kept").map_err(|e| format!("stat kept: {e:?}"))?;
+        let file = conn.stat(&mut out.lend, "/kept/notes").map_err(|e| format!("stat kept/notes: {e:?}"))?;
+        let qids = format!("{} {}", kept.qid.path, file.qid.path);
+        write_file(&conn, out, "/", "qids", qids.as_bytes())?;
+        out.say(&format!("fsd-client wrote kept and kept/notes, qid paths {qids}\n"))
+            .map_err(|e| format!("say: {e:?}"))?;
+    }
+    put(&conn, out, "/", "starts", format!("{}", starts + 1).as_bytes())?;
+    Ok(Ends::Exit(REBOOT_EXIT))
 }

@@ -341,7 +341,15 @@ fn prepare(
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
     let files = files
         .iter()
-        .map(|file| Ok((file.name.clone(), builder.program(target, &file.from)?.1)))
+        .map(|file| {
+            let path = builder.program(target, &file.from)?.1;
+            if file.servers.is_empty() {
+                return Ok((file.name.clone(), path));
+            }
+            let merged = builder.run.join(format!("{}-{}.json", file.name, target.name));
+            std::fs::write(&merged, file.merged(&std::fs::read(&path)?)?)?;
+            Ok((file.name.clone(), merged))
+        })
         .collect::<Result<Vec<_>>>()?;
     // A case may bring its own `programs` entry, a hostile one, as a file; the real `init` reads a
     // manifest instead, and is given none.
