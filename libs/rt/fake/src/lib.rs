@@ -151,9 +151,10 @@ struct State {
     devices: Vec<Device>,
     /// Budgets, by the index their handles carry: true once destroyed.
     budgets: Vec<bool>,
-    /// The pointer `MapAnon` allocated at each address, so pages a process never unmaps (its
-    /// heap's) stay reachable from here and Miri does not report them leaked. An entry is
-    /// replaced when its address is mapped again.
+    /// The pointer `MapAnon` or `device` allocated at each address, so memory nothing frees (a
+    /// heap's pages, a device's registers) stays reachable from here and Miri does not report it
+    /// leaked. An entry is replaced when its address is allocated again; after an `Unmap` it is
+    /// left dangling, which is harmless because nothing reads it.
     anon: HashMap<usize, AtomicPtr<u8>>,
     /// Launched processes, by the index their handles carry.
     launched: Vec<Launched>,
@@ -230,7 +231,9 @@ impl Fake {
         let layout = Layout::from_size_align(len.max(1), PAGE_SIZE).unwrap();
         // SAFETY: the layout has a non-zero size; the allocation lives as long as the fake,
         // which is leaked, so the addresses `map_device` hands out stay valid.
-        let registers = unsafe { alloc_zeroed(layout) } as usize;
+        let bytes = unsafe { alloc_zeroed(layout) };
+        let registers = bytes as usize;
+        s.anon.insert(registers, AtomicPtr::new(bytes));
         s.devices.push(Device { registers, len, fired: false, masked: false });
         let index = s.devices.len() - 1;
         let mmio = install(&mut s, owner, Object::Mmio(index));
