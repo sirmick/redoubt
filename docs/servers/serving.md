@@ -453,7 +453,7 @@ could read a's labels itself (`properties` checks exactly that).
 - host:redoubt-bootfsd::a_bad_public_list_stops_the_server
 - host:redoubt-consoled::a_console_with_no_device_does_not_start
 - host:redoubt-keyd::bad_key_arguments_stop_keyd_starting
-- host:redoubt-ipd::the_rig_and_the_milestone_parse
+- host:redoubt-ipd::every_scope_and_the_milestone_parse
 
 </details>
 

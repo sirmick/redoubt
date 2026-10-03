@@ -238,3 +238,23 @@ pub fn take_rx_part() -> Option<RxPart> {
     // `Box::from_raw` of that allocation.
     Some(*unsafe { Box::from_raw(raw) })
 }
+
+/// An address on page 0, which no launcher, loader or `map_anon` places anything on
+/// (kernel/memory-layout.md, "Page 0") and which `netd` never maps itself.
+#[cfg(feature = "restart-probe")]
+const UNMAPPED: usize = 0x8;
+
+/// Faults this process, for the bench's `netd-restart` (feature `restart-probe`, off in every
+/// default build): a load from [`UNMAPPED`] traps, and the kernel ends `netd` as a fault, running
+/// none of its code, so the device is reset by the kernel, as on any driver's fault. A panic would
+/// not do: its hook resets the device first ([`Regs::arm_panic_reset`]).
+#[cfg(feature = "restart-probe")]
+pub fn fault() -> ! {
+    // SAFETY: test-only, under feature `restart-probe`. `UNMAPPED` is on page 0, chosen because
+    // nothing maps it in `netd`, so the load traps and the kernel ends the process: no value is
+    // ever read, and nothing after it runs.
+    let _ = unsafe { (UNMAPPED as *const u32).read_volatile() };
+    loop {
+        let _ = redoubt_rt::handle::sleep(redoubt_rt::abi::FOREVER);
+    }
+}

@@ -138,10 +138,11 @@ max_undocumented = 0
 [[budget]]
 # netd is a DMA driver, TCB like blkd. src/kernel.rs holds all of it: volatile
 # register reads (32- and 8-bit) and writes, volatile DMA byte reads, writes and zeroing, and the
-# one Box::from_raw that hands the receive thread its half.
+# one Box::from_raw that hands the receive thread its half; and, in builds with the test-only
+# feature restart-probe alone, the load from page 0 that faults netd for netd-restart.
 name = "netd (virtio-net driver; DMA, so TCB)"
 paths = ["servers/netd/src"]
-max_unsafe = 7
+max_unsafe = 8
 max_undocumented = 0
 
 [[budget]]
@@ -229,11 +230,11 @@ reason = "the test programs the servers' cases start under init, never in a ship
 
 [[uncounted]]
 path = "tests/net"
-reason = "the network test rig's programs, never in a shipped image"
+reason = "the net cases' judge, never in a shipped image"
 
 [[uncounted]]
 path = "tests/net/client"
-reason = "the network test rig's client, never in a shipped image"
+reason = "the net cases' clients, never in a shipped image"
 
 [[uncounted]]
 path = "tools/vendor-check"

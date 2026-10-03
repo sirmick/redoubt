@@ -2,7 +2,7 @@ description = "netd against a hostile virtio-net device: bring-up refusals, ring
 kind = "host-tests"
 # QEMU's honest virtio-net cannot lie; the malicious rings, ids, lengths, headers and scribbles
 # live in servers/netd/tests/, against redoubt_netd::fake::FakeNic. These host tests do not
-# establish boot integration: the tests/net rig does that.
+# establish boot integration: the net cases, under init, do that.
 # Retained gate: before netd is used off the bench, both fuzz targets in servers/netd/fuzz run
 # for at least 5 minutes each with no crash:
 #     cd servers/netd && cargo +nightly fuzz run -s none <device|request> -- -max_total_time=300

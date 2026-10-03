@@ -2,5 +2,5 @@ description = "ipd on the host: strict arguments and sizing; scopes, grants that
 kind = "host-tests"
 # Every frame ipd sends in these tests is checked as it goes: no SYN to the box's own addresses,
 # ARP only for the gateway among them, nothing but TCP. These do not establish boot integration:
-# the tests/net rig does that. Fuzz targets: servers/ipd/fuzz (frames, session, args).
+# the net cases, under init, do that. Fuzz targets: servers/ipd/fuzz (frames, session, args).
 packages = ["redoubt-ipd"]

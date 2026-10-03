@@ -295,8 +295,6 @@ Status: built · partly tested: the exits without a device, a disk or a partitio
   that tears differently honour that.
 - **Wrong bytes are not detected.** A device that returns wrong data within the protocol is believed;
   neither `blkd` nor littlefs checksums data. Disk encryption with authentication is beyond M5.
-- **`blkd` does not boot in the bench.** It is attacked by host tests against a hostile fake device
-  (`blkd-host-tests`); `blkd-build` only builds it for both widths.
 
 ## Why
 

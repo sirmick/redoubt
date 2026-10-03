@@ -317,8 +317,8 @@ inside `gatewayd` until the web stack needs `tlsd` beyond M5.
   server's share of the CPU from its other callers, never more
   ([scheduling](../kernel/scheduling.md#residual-risks)).
 - **The DMA drivers are TCB** while there is no IOMMU ([devices](../kernel/devices.md#residual-risks)).
-- **Until `init` places them, servers run only under test launchers.** Their rules hold where a
-  test launches them; the planned sections above are what the running system adds.
+- **Until `init` places it, `fsd` runs only under test launchers.** Its rules hold where a test
+  launches it; one instance per volume is what the running system adds ([fsd](fsd.md)).
 
 ## Why
 

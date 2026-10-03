@@ -68,7 +68,9 @@ impl Builder {
     /// `target/`, as for any cargo build there (`build.build-dir`); but cargo copies the finished
     /// binaries into this run's own target directory, under its own lock, so another run building
     /// other features in the same cache never replaces the file this run packs. The path cargo
-    /// reports is that copy: the hashed file in the cache's `deps/` is never reported.
+    /// reports is that copy: the hashed file in the cache's `deps/` is never reported. A build
+    /// with features copies into a directory of its own within the run, so a program built with
+    /// them never replaces the same program built without.
     fn cargo(
         &self,
         target: &Target,
@@ -91,7 +93,11 @@ impl Builder {
             &build_dir,
             "--target-dir",
         ]);
-        cargo.arg(self.run.join("cargo")).args([
+        let copies = match features {
+            [] => String::from("cargo"),
+            _ => format!("cargo-{}", features.join("+")),
+        };
+        cargo.arg(self.run.join(copies)).args([
             "--profile",
             profile.name(),
             "--target",
@@ -144,7 +150,7 @@ impl Builder {
 
     /// Build `program` if it comes from the workspace, and return the path of its ELF.
     pub fn program(&self, target: &Target, program: &Program) -> Result<(String, PathBuf)> {
-        let (package, bin) = match program {
+        let (package, bin, features): (&str, &str, &[String]) = match program {
             Program::Path { path } => {
                 let name =
                     path.file_name().context("program path has no file name")?.to_string_lossy().into_owned();
@@ -159,10 +165,10 @@ impl Builder {
                 std::fs::write(&path, elf)?;
                 return Ok((name, path));
             }
-            Program::TestProgram(bin) | Program::Bin { bin, .. } => ("test-programs", bin.as_str()),
-            Program::Package { package, bin } => (package.as_str(), bin.as_str()),
+            Program::TestProgram(bin) | Program::Bin { bin, .. } => ("test-programs", bin.as_str(), &[]),
+            Program::Package { package, bin, features } => (package.as_str(), bin.as_str(), features),
         };
-        Ok((bin.to_string(), self.binary(target, package, Some(bin), &[], Profile::Release)?))
+        Ok((bin.to_string(), self.binary(target, package, Some(bin), features, Profile::Release)?))
     }
 
     /// `cargo test` for host packages, for the unit tests a boot cannot reach. Returns what
@@ -542,6 +548,12 @@ mod tests {
         let before = compiled();
         assert_eq!(build(&a, "a"), built_a);
         assert_eq!(compiled(), before, "a build of features already in the cache compiled again");
+        // In one run, the binary built without features and with them land apart, so neither
+        // replaces the other (`netd`, and `netd` with `restart-probe`).
+        let plain = a.binary(&target, "fixture", None, &[], Profile::Release).unwrap();
+        assert_ne!(plain, built_a);
+        assert_eq!(printed(&plain), "built with b\n");
+        assert_eq!(printed(&built_a), "built with a\n");
         std::fs::remove_dir_all(&workspace).unwrap();
     }
 

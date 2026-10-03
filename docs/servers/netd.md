@@ -166,13 +166,14 @@ flowchart TB
 
 ### Started by `init`
 
-Status: built · partly tested: a killed `netd`'s restart has no case yet · tested: bench:init-boot
+Status: built · tested: bench:init-boot, bench:netd-restart
 
 `init` starts `netd` with the network card's MMIO region (DMA allowed) and interrupt, placed by
 name from the boot manifest's `devices` list, and its one argument, the badge `ipd`'s handle
 carries; it hands `ipd` the matching handle to `netd` and `netd` a handle to `ipd`'s endpoint for
-frames ([init](init.md#starting-the-servers)). The net rig (`tests/net/src/rig.rs`) does this in
-the bench, finding the card by its virtio device ID.
+frames ([init](init.md#starting-the-servers)). In the bench, a case's own manifest does the same,
+naming the card at the fixed slot the bench gives it
+([disks and network cards](../testbench.md#disks-and-network-cards)).
 
 **A restart** is a driver's restart, like any other server's
 ([init](init.md#restarts-and-reboots)). A killed or faulted `netd` runs none of its own reset
@@ -185,6 +186,12 @@ instance, and `ipd` meets the failure as `unreachable` and asks again with backo
 ([ipd](ipd.md#failure-and-restart)). Frames in flight are lost, and TCP resends them. If the
 card was quarantined, `init` reboots instead
 ([devices](../kernel/devices.md#which-process-gets-which-device)).
+
+**The restart probe** is a test-only feature, `restart-probe` (`src/restart_probe.rs`), off in every
+default build; the bench's `netd-restart` builds `netd` with it. `netd` then faults on one UDP
+datagram the bench sends from outside the guest, and answers a call carrying `INSTANCE` with 32
+bits it drew when it started. That call is answered before `netd`'s check of the caller's badge and
+labels, so in that build any caller holding a handle to `netd` gets the answer.
 
 ## Authority
 
@@ -258,8 +265,6 @@ Status: built · partly tested: the exit codes (`NO_DEVICE`, `BAD_ARGS`, `NO_RES
   drops fall on every connection `ipd` serves.
 - **A reset stops the device for everyone.** One lie ends the network for every principal until the
   device is brought up again; `netd` is not restarted to do that.
-- **`netd` does not boot under `init` in the bench.** The net rig launches it through the stub in
-  place of `init`.
 
 ## Why
 

@@ -32,7 +32,7 @@ fallback to QEMU's own firmware.
 | `tools/testbench/` | the bench: builds, injects programs, boots QEMU, judges the console, sessions and network |
 | `tests/*.toml` | the cases, one per file (`tests/data/`: files they read; `tests/keys/`: SSH test keys) |
 | `tests/programs/` | `no_std` programs that run inside Redoubt: the log server, victims, attackers, checkers |
-| `tests/net/` | the network rig: boots the real `netd` and `ipd` through the loader stub, with clients and attackers |
+| `tests/net/` | the network clients and the judge that the net cases start under `init`, and the host test that checks each net case's manifest against its case file |
 
 ## Verdicts
 
@@ -141,6 +141,7 @@ kind = "boot"
 programs = [                 # the first in init's place, the rest started by it
     "log-server",                                  # a binary of the test programs
     { package = "my-crate", bin = "my-server" },   # any workspace binary, built for the target
+    { package = "my-crate", bin = "my-probe", features = ["probe"] },  # built with these features, in a target directory of its own
     { path = "prebuilt/thing.elf" },               # or a prebuilt ELF
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
@@ -480,11 +481,13 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
 - bench:init-boot
+- bench:net-tcp
+- host:testbench::devices_sit_on_fixed_slots
 - host:testbench::every_network_is_restricted
 - host:testbench::virtio_devices_are_modern
 
@@ -500,19 +503,25 @@ forward = [22]               # guest TCP ports reachable from the host (default:
 host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions accept
 ```
 
-Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. The guest reaches
-nothing outside QEMU (`restrict=on`, checked for every `[net]` case): there is no outside peer, only
-forwarded connections coming in, unless a case adds one deliberately. Each boot gets its own host
-ports, chosen by the operating system, so benches running side by side do not collide.
+Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
+virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,
+the disk at `0x10008000` with interrupt 8, whether or not the case has the other. So a case's
+manifest names its devices as the image's does. The guest reaches nothing outside QEMU
+(`restrict=on`, checked for every `[net]` case): there is no outside peer, only forwarded
+connections coming in, unless a case adds one deliberately. Nor is it offered IPv6 (`ipv6=off`),
+which it does not speak: slirp would otherwise send it router advertisements. Each boot gets its
+own host ports, chosen by the operating system, so benches running side by side do not collide.
 
 ### Peers, dials and the capture
 
-<details><summary>Status: built · tested (11)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - bench:bench-net-peer
 - bench:bench-net-peer-twice
 - bench:bench-net-peer-count
 - bench:bench-net-peer-pcap-empty
+- bench:netd-restart
+- host:testbench::a_poke_gets_a_udp_forward
 - host:testbench::peers_are_judged_on_records_and_capture
 - host:testbench::a_capture_is_read_fail_closed
 - host:testbench::what_the_guest_sends_is_checked
@@ -539,12 +548,20 @@ connections = 1
 port = 8000
 send = "hello\n"
 expect = "hello\n"
+
+[net.poke]                   # one UDP datagram into the guest, sent when a console line matches
+port = 47000
+payload = "redoubt netd restart probe"
+after = '^\[con [0-9a-f]{16}\] judge knows netd.s instance: poke it$'
 ```
 
 - **Peers** are QEMU `guestfwd`s to a program: for each connection the guest makes, the bench's own
   binary starts as a helper on it, records the connection as a file before it echoes a byte, and
   then echoes. After the boot each peer's count must equal its `connections`. There is no host
   listener another process could take.
+- **The poke** is one UDP datagram, sent once, through a host port QEMU forwards to its guest port,
+  when a console line first matches its `after`: a trigger from outside that nothing resends, as
+  TCP would. `netd-restart` faults `netd` with it, through a test-only feature.
 - **The network.** A case with peers widens slirp's network to a /16 in which its host, resolver
   and the guest's address stay where they were; the peers sit outside the /24 the guest is
   configured for, reached through its gateway. `restrict=on` still holds.

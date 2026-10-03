@@ -1,24 +1,38 @@
-description = "The real netd and ipd, launched through the loader stub by the tests/net rig until init starts the servers. A client granted 10.0.9.100/32 port 7 connects to the bench's peer there and round-trips bytes (the peer counts exactly 1 connection); a listener granted port 8000 with a backlog of 2 echoes the bench's dial through a forwarded port. The capture shows no SYN to the box's own addresses, no non-TCP IPv4 and ARP only for the gateway"
-arch = ["rv64"]
+description = "The real netd and ipd under the real init, on the card at its fixed slot, with their clients as servers entries of the case's manifest. A client granted 10.0.9.100/32 port 7 (ipd's scope for its badge) connects to the bench's peer there and round-trips bytes (the peer counts exactly 1 connection); a listener granted port 8000 with a backlog of 2 echoes the bench's dial through a forwarded port. The capture shows no SYN to the box's own addresses, no non-TCP IPv4 and ARP only for the gateway"
+arch = ["rv64", "rv32"]
 kind = "boot"
-programs = [{ package = "redoubt-net-tests", bin = "net-rig" }]
+# The real init, the servers, the judge and the clients (tests/data/net/tcp.json). The judge is
+# the reporter; it holds no Reset right, so the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-net-tests", bin = "net-judge" },
+    { package = "redoubt-net-client", bin = "net-client" },
+]
 timeout_secs = 120
 expect = [
-    '^\[net-rig\] net device: virtio-mmio version 2$',
-    '^\[net-rig\] started netd and ipd \(self=10\.0\.2\.0/24 self=10\.0\.9\.102/32\)$',
-    '^\[net-rig\] ipd has a link ',
-    '^\[net-rig\] ok: echo through 10\.0\.9\.100:7, 1 round\(s\): exited 0$',
-    '^\[net-rig\] listening on 8000 with a backlog of 2$',
-    '^\[net-rig\] ok: the listener accepted and echoed the bench.s dial \(1\)$',
-    '^\[net-rig\] ok: netd and ipd still run ',
-    '^\[net-rig\] NET TCP PASSED$',
+    '^init: the manifest is checked: 7 servers, bound \d+ pages$',
+    '^init: started judge, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] judge ipd has a link ',
+    '^\[con [0-9a-f]{16}\] judge ok: echo through 10\.0\.9\.100:7, 1 round\(s\): outcome 0$',
+    '^\[con [0-9a-f]{16}\] judge listening on 8000 with a backlog of 2$',
+    '^\[con [0-9a-f]{16}\] judge ok: the listener accepted and echoed the bench.s dial \(1\)$',
+    '^\[con [0-9a-f]{16}\] judge TEST PASSED$',
 ]
-forbid = ['\[net-rig\] FAIL']
-poweroff = true
+# A server or client that ends is restarted by init, and says so: none may.
+forbid = ['init: refused the boot', '^init: \S+ .*(exited|faulted|was killed)', '^init: restarted ', 'judge FAIL']
+reporter = "judge"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/net/tcp.json" }
 
 [net]
 forward = [8000]
-# tests/net/src/lib.rs: SELF_ARGS then SELF_ALWAYS (a host test keeps them equal).
+# ipd's self= in the manifest, then SELF_ALWAYS (tests/net/src/lib.rs); a host test keeps them equal.
 self_forbidden = ["10.0.2.0/24", "10.0.9.102/32", "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32"]
 
 [[net.peer]]

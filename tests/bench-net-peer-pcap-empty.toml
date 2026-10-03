@@ -1,16 +1,33 @@
 description = "Bench self-check (must fail): the capture is cut to nothing before it is judged, and an empty capture proves nothing, so the case fails however right the counts are"
-arch = ["rv64"]
+arch = ["rv64", "rv32"]
 kind = "boot"
-programs = [{ package = "redoubt-net-tests", bin = "net-rig-twice" }]
+# The real init, the servers, the judge and the clients (tests/data/net/twice.json).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-net-tests", bin = "net-judge" },
+    { package = "redoubt-net-client", bin = "net-client" },
+]
 timeout_secs = 120
 expect = [
-    '^\[net-rig\] ok: echo through 10\.0\.9\.100:7, 2 round\(s\): exited 0$',
-    '^\[net-rig\] ok: the listener accepted and echoed the bench.s dial \(1\)$',
-    '^\[net-rig\] NET TCP PASSED$',
+    '^init: the manifest is checked: 7 servers, bound \d+ pages$',
+    '^init: started judge, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] judge ipd has a link ',
+    '^\[con [0-9a-f]{16}\] judge ok: echo through 10\.0\.9\.100:7, 2 round\(s\): outcome 0$',
+    '^\[con [0-9a-f]{16}\] judge ok: the listener accepted and echoed the bench.s dial \(1\)$',
+    '^\[con [0-9a-f]{16}\] judge TEST PASSED$',
 ]
-forbid = ['\[net-rig\] FAIL']
-poweroff = true
+# A server or client that ends is restarted by init, and says so: none may.
+forbid = ['init: refused the boot', '^init: \S+ .*(exited|faulted|was killed)', '^init: restarted ', 'judge FAIL']
+reporter = "judge"
 must_fail = '^the capture is 0 bytes, shorter than a pcap header$'
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/net/twice.json" }
 
 [net]
 forward = [8000]

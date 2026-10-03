@@ -288,7 +288,7 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 
 ### The startup block
 
-<details><summary>Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks the net rig and `stub-launch` write are parsed · tested (13)</summary>
+<details><summary>Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks `init` and `stub-launch` write are parsed · tested (13)</summary>
 
 - bench:rt-host-tests
 - host:redoubt-rt::round_trip
@@ -405,8 +405,7 @@ The stub allocates nothing. It links the wire crate, which declares an allocator
 a zero-sized global allocator, `NullAlloc` (`stub/src/lib.rs`), whose `alloc` returns null and is
 never reached: the typed decoding the stub uses does not allocate.
 
-The bench's launcher, `stub-launch`, and the net rig (`tests/net/src/rig.rs`, which stands in for
-`init` to launch the real `netd` and `ipd`) both launch this way
+The bench's launcher, `stub-launch`, and `init` both launch this way
 ([R32 (a hostile image hurts only its process)](#r32-a-hostile-image-hurts-only-its-process)).
 
 ### Fresh connections per child
@@ -428,12 +427,13 @@ launcher could not free the child's state without losing its own.
 
 ### Restarts and reboots
 
-<details><summary>Status: built · partly tested: blame, `blame`'s badge, a wedged steward and the steward's restart are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked; a killed `netd`'s restart has no case yet · tested (9)</summary>
+<details><summary>Status: built · partly tested: blame, `blame`'s badge, a wedged steward and the steward's restart are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked · tested (10)</summary>
 
 - bench:init-restart
 - bench:init-handed-revoked
 - bench:init-reboot
 - bench:init-driver-restart
+- bench:netd-restart
 - bench:init-quarantine-reboot
 - host:redoubt-init::the_fifth_restart_goes_ahead_and_the_sixth_exit_reboots
 - host:redoubt-init::a_restart_older_than_the_window_is_dropped_from_the_count

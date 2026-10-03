@@ -156,7 +156,7 @@ pub fn shell_quote(s: &str) -> String {
     }
 }
 
-/// A forwarded TCP port: (guest port, host port).
+/// A forwarded port, (guest port, host port): each TCP `forward`, then the UDP poke's.
 pub type Forward = (u16, u16);
 
 /// `count` distinct TCP ports on the loopback interface that nothing was listening on a
@@ -176,6 +176,14 @@ fn free_ports(count: usize) -> Result<Vec<u16>> {
 /// layout (servers/blkd.md, servers/netd.md), and carry no second layout for a device only
 /// QEMU presents, so every case with a virtio device asks for the modern one.
 pub const MODERN_VIRTIO: [&str; 2] = ["-global", "virtio-mmio.force-legacy=false"];
+
+/// The virtio-mmio slots the devices sit on, the ones `image/manifest.json` names, whether or not
+/// the case has the other device (docs/testbench.md, "Disks and network cards"). QEMU's `virt`
+/// machine names its eight transports `virtio-mmio-bus.0` to `.7`, bus `i` at `0x10001000 + i *
+/// 0x1000` with interrupt `1 + i`; left to itself it fills them from the top, so a card's slot
+/// would depend on whether a disk came first.
+pub const NET_BUS: &str = "virtio-mmio-bus.6";
+pub const DISK_BUS: &str = "virtio-mmio-bus.7";
 
 /// A disk sector, in bytes.
 const SECTOR: u64 = 512;
@@ -206,21 +214,33 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
         // QEMU's option syntax separates with commas; a comma inside a value is doubled.
         let file = disk.display().to_string().replace(',', ",,");
         args.extend(["-drive".into(), format!("if=none,format=raw,id=disk0,file={file}")]);
-        args.extend(["-device".into(), "virtio-blk-device,drive=disk0".into()]);
+        args.extend(["-device".into(), format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}")]);
     }
     let mut forwards = Vec::new();
     if let Some(net) = &boot.net {
         // restrict=on: the guest reaches nothing outside QEMU; only forwarded connections
-        // reach it. A case that needs an outside peer must add one deliberately.
-        let mut netdev = "user,id=net0,restrict=on".to_string();
+        // reach it. A case that needs an outside peer must add one deliberately. ipv6=off: the
+        // guest speaks only IPv4, and slirp would otherwise advertise itself as an IPv6 router.
+        let mut netdev = "user,id=net0,restrict=on,ipv6=off".to_string();
         for (guest, host) in net.forward.iter().zip(free_ports(net.forward.len())?) {
             netdev += &format!(",hostfwd=tcp:127.0.0.1:{host}-:{guest}");
             forwards.push((*guest, host));
         }
+        // The poke's forward goes with the others, found by its guest port (`Console::poke`).
+        if let Some(poke) = &net.poke {
+            let host = peer::free_udp_port()?;
+            netdev += &format!(",hostfwd=udp:127.0.0.1:{host}-:{}", poke.port);
+            forwards.push((poke.port, host));
+        }
         // Peers: the wider network, a guestfwd each, and the capture (`peer.rs`).
         let peers = peer::Files::beside(disk);
         netdev += &peer::netdev_options(net, &peers)?;
-        args.extend(["-netdev".into(), netdev, "-device".into(), "virtio-net-device,netdev=net0".into()]);
+        args.extend([
+            "-netdev".into(),
+            netdev,
+            "-device".into(),
+            format!("virtio-net-device,netdev=net0,bus={NET_BUS}"),
+        ]);
         args.extend(peer::capture_args(net, &peers));
     }
     Ok((args, forwards))
@@ -299,6 +319,9 @@ struct Console {
     capture: Vec<Regex>,
     captured: Vec<Option<String>>,
     inputs: Vec<(Regex, String)>,
+    /// The poke not sent yet: the line it waits for, the host port QEMU forwards to the guest's,
+    /// and its payload (`peer::poke`).
+    poke: Option<(Regex, u16, String)>,
     stdin: ChildStdin,
     /// Whether the guest has printed a line yet.
     seen: bool,
@@ -367,6 +390,9 @@ impl Console {
             }
         }
         self.inputs = pending;
+        if let Some((_, host, payload)) = self.poke.take_if(|(after, _, _)| after.is_match(&line)) {
+            peer::poke(host, &payload).context("sending the poke")?;
+        }
         Ok(Line::Text(line))
     }
 }
@@ -389,6 +415,15 @@ pub fn run(
     let capture = compile(&mut boot.distinct_across_boots.iter().map(String::as_str))?;
     let inputs =
         boot.input.iter().map(|i| Ok((Regex::new(&i.after)?, i.send.clone()))).collect::<Result<Vec<_>>>()?;
+
+    let poke = match boot.net.as_ref().and_then(|net| net.poke.as_ref()) {
+        Some(poke) => {
+            let host = forwards.iter().find(|(guest, _)| *guest == poke.port).map(|(_, host)| *host);
+            let host = host.context("the poke's port is not forwarded")?;
+            Some((Regex::new(&poke.after)?, host, poke.payload.clone()))
+        }
+        None => None,
+    };
 
     let done = boot
         .reporter_pid()
@@ -422,6 +457,7 @@ pub fn run(
         captured: vec![None; capture.len()],
         capture,
         inputs,
+        poke,
         stdin,
         seen: false,
         done,
@@ -626,8 +662,50 @@ mod tests {
         assert!(args("").is_empty());
     }
 
+    /// Each device sits on its fixed slot, alone or with the other: the card on bus 6
+    /// (`0x10007000`, interrupt 7), the disk on bus 7 (`0x10008000`, interrupt 8), as
+    /// `image/manifest.json` names them. A boot proves QEMU puts them there: `init` refuses a
+    /// device that is not where its manifest says (`net-tcp` has no disk, `init-boot` both).
+    #[test]
+    fn devices_sit_on_fixed_slots() {
+        let net = format!("virtio-net-device,netdev=net0,bus={NET_BUS}");
+        let disk = format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}");
+        let devices = |case: &str| -> Vec<String> {
+            args(case).windows(2).filter(|w| w[0] == "-device").map(|w| w[1].clone()).collect()
+        };
+        assert_eq!(devices("[net]\n"), [net.clone()]);
+        assert_eq!(devices("[disk]\nsize_kib = 64\n"), [disk.clone()]);
+        assert_eq!(devices("[net]\n[disk]\nsize_kib = 64\n"), [disk, net]);
+        // The image's manifest names each device on one line.
+        let manifest = include_str!("../../../image/manifest.json");
+        for (name, bus) in [("net0", NET_BUS), ("disk0", DISK_BUS)] {
+            let i: u64 = bus.strip_prefix("virtio-mmio-bus.").unwrap().parse().unwrap();
+            let line = format!(
+                "{{ \"name\": \"{name}\", \"base\": \"{}\", \"irq\": {}, \"dma\": true }}",
+                0x1000_1000 + i * 0x1000,
+                1 + i
+            );
+            assert!(manifest.contains(&line), "image/manifest.json lacks {line}");
+        }
+    }
+
+    /// A poke gets a UDP forward from a host port of its own to its guest port, listed with the
+    /// TCP forwards; a case without one gets none.
+    #[test]
+    fn a_poke_gets_a_udp_forward() {
+        let case = "[net]\nforward = [8000]\n[net.poke]\nport = 47000\npayload = 'x'\nafter = 'go'\n";
+        let disk = std::env::temp_dir().join(format!("testbench-qemu-poke-{}.img", std::process::id()));
+        let (args, forwards) = virtio_devices(&boot(case), &disk).expect("device arguments");
+        let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
+        let (guest, host) = forwards[1];
+        assert_eq!((forwards.len(), forwards[0].0, guest), (2, 8000, 47000));
+        assert!(netdev.contains(&format!(",hostfwd=udp:127.0.0.1:{host}-:47000")), "{netdev}");
+        assert!(!self::args("[net]\nforward = [8000]\n").iter().any(|a| a.contains("hostfwd=udp")));
+    }
+
     /// The guest reaches nothing outside QEMU: every network is `restrict=on`, the wider one a
-    /// case with peers gets included, since it widens what maps to the host's loopback.
+    /// case with peers gets included, since it widens what maps to the host's loopback. And none
+    /// offers IPv6: slirp's router advertisements are frames the guest never asked for.
     #[test]
     fn every_network_is_restricted() {
         let peers = "[net]\nforward = [8000]\n[[net.peer]]\naddr = '10.0.9.100:7'\nconnections = 1\n";
@@ -635,6 +713,7 @@ mod tests {
             let args = args(case);
             let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
             assert!(netdev.split(',').any(|o| o == "restrict=on"), "{netdev}");
+            assert!(netdev.split(',').any(|o| o == "ipv6=off"), "{netdev}");
         }
     }
 

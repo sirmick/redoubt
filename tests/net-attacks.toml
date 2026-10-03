@@ -1,34 +1,47 @@
-description = "Attacks on the real netd and ipd, each from its own account with its positive control in the same boot (tests/net rig, until init starts the servers). Outside its prefix: scoped to 10.0.9.110/32 port 7, a client's connect to 10.0.9.101:7 reaches nothing (the peer counts 0), its control to 10.0.9.110:7 does (1). The box's own addresses, from a scope allowing everything: a forwarded self address (10.0.9.102, the peer counts 0), ipd's own address, loopback and the gateway are refused before any SYN (the capture), the victim listening on 8000 accepts only the bench's dial, and the unlabelled twin reaches its own peer (1). A labelled caller with a wide scope is refused everywhere (its peer counts 0) and holds no bucket: with 4 buckets, the rig and the victim hold two, two more accounts attach and a third is refused"
-arch = ["rv64"]
+description = "Attacks on the real netd and ipd, each from its own account with its positive control in the same boot (under the real init, each attacker a servers entry of the case's manifest with a badge of its own at ipd). Outside its prefix: scoped to 10.0.9.110/32 port 7, a client's connect to 10.0.9.101:7 reaches nothing (the peer counts 0), its control to 10.0.9.110:7 does (1). The box's own addresses, from a scope allowing everything: a forwarded self address (10.0.9.102, the peer counts 0), ipd's own address, loopback and the gateway are refused before any SYN (the capture), the victim listening on 8000 accepts only the bench's dial, and the unlabelled twin reaches its own peer (1). A labelled caller with a wide scope: its connect reaches nothing (its peer counts 0)"
+arch = ["rv64", "rv32"]
 kind = "boot"
-programs = [{ package = "redoubt-net-tests", bin = "net-rig-attacks" }]
+# The real init, the servers, the judge and the clients (tests/data/net/attacks.json).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-net-tests", bin = "net-judge" },
+    { package = "redoubt-net-client", bin = "net-client" },
+]
 timeout_secs = 180
 expect = [
-    '^\[net-rig\] started netd and ipd \(self=10\.0\.2\.0/24 self=10\.0\.9\.102/32\)$',
-    '^\[net-rig\] ipd has a link ',
-    '^\[net-rig\] victim listening on 8000$',
-    '^\[net-rig\] attack outside the prefix to 10\.0\.9\.101:7: ',
-    '^\[net-rig\] its control to 10\.0\.9\.110:7: ',
-    '^\[net-rig\] attack on the box.s own 10\.0\.9\.102:7: ',
-    '^\[net-rig\] attack on the box.s own 10\.0\.2\.15:8000: ',
-    '^\[net-rig\] attack on the box.s own 127\.0\.0\.1:8000: ',
-    '^\[net-rig\] attack on the box.s own 127\.1\.2\.3:8000: ',
-    '^\[net-rig\] attack on the box.s own 10\.0\.2\.2:8000: ',
-    '^\[net-rig\] attack on the box.s own 10\.0\.2\.2:22: ',
-    '^\[net-rig\] the twin to 10\.0\.9\.111:7: ',
-    '^\[net-rig\] the labelled caller reports \(information only\): ',
-    '^\[net-rig\] ok: the victim accepted the bench.s dial \(1\)$',
-    '^\[net-rig\] ok: the victim accepted nothing more and still runs$',
-    '^\[net-rig\] ok: buckets: two more accounts held, a third refused \(\[true, true, false\]\)$',
-    '^\[net-rig\] ok: netd and ipd still run ',
-    '^\[net-rig\] NET ATTACKS PASSED$',
+    '^init: the manifest is checked: 9 servers, bound \d+ pages$',
+    '^init: started judge, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] judge ipd has a link ',
+    '^\[con [0-9a-f]{16}\] judge victim listening on 8000$',
+    '^\[con [0-9a-f]{16}\] judge attack outside the prefix to 10\.0\.9\.101:7: ',
+    '^\[con [0-9a-f]{16}\] judge its control to 10\.0\.9\.110:7: ',
+    '^\[con [0-9a-f]{16}\] judge attack on the box.s own 10\.0\.9\.102:7: ',
+    '^\[con [0-9a-f]{16}\] judge attack on the box.s own 10\.0\.2\.15:8000: ',
+    '^\[con [0-9a-f]{16}\] judge attack on the box.s own 127\.0\.0\.1:8000: ',
+    '^\[con [0-9a-f]{16}\] judge attack on the box.s own 127\.1\.2\.3:8000: ',
+    '^\[con [0-9a-f]{16}\] judge attack on the box.s own 10\.0\.2\.2:8000: ',
+    '^\[con [0-9a-f]{16}\] judge attack on the box.s own 10\.0\.2\.2:22: ',
+    '^\[con [0-9a-f]{16}\] judge the twin to 10\.0\.9\.111:7: ',
+    '^\[con [0-9a-f]{16}\] judge the labelled caller reports \(information only\): ',
+    '^\[con [0-9a-f]{16}\] judge ok: the victim accepted the bench.s dial \(1\)$',
+    '^\[con [0-9a-f]{16}\] judge ok: the victim accepted nothing more and still runs$',
+    '^\[con [0-9a-f]{16}\] judge TEST PASSED$',
 ]
-forbid = ['\[net-rig\] FAIL']
-poweroff = true
+# A server or client that ends is restarted by init, and says so: none may.
+forbid = ['init: refused the boot', '^init: \S+ .*(exited|faulted|was killed)', '^init: restarted ', 'judge FAIL']
+reporter = "judge"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/net/attacks.json" }
 
 [net]
 forward = [8000]
-# tests/net/src/lib.rs: SELF_ARGS then SELF_ALWAYS (a host test keeps them equal).
+# ipd's self= in the manifest, then SELF_ALWAYS (tests/net/src/lib.rs); a host test keeps them equal.
 self_forbidden = ["10.0.2.0/24", "10.0.9.102/32", "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32"]
 
 # The attack outside its prefix, and its control.

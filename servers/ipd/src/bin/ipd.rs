@@ -7,9 +7,8 @@
 //! polled and parked calls whose sockets moved are served again. A call is followed by a
 //! `receive` with no wait, so the stack is polled as soon as nothing more is queued.
 //!
-//! **Started by the net rig until `init` exists.** The `tests/net` rig starts this program
-//! through the loader stub with the startup block `init` will write; `init` starting it is
-//! planned (servers/ipd.md, "Started by `init`"; plan/m1-separation.md).
+//! **Started by `init`,** one per network, with its arguments from the boot manifest
+//! (servers/ipd.md, "Started by `init`").
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 

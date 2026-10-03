@@ -8,11 +8,11 @@ fn sizing_of(args: &[&str]) -> Result<redoubt_ipd::sizing::Sizing, redoubt_ipd::
     parse(args.iter().copied()).unwrap().sizing()
 }
 
-/// The rig's and the milestone manifest's arguments fit: 23 + 5 (the steward's slot at its worst)
-/// + 4 x 5 = 48; with sshd at 24 they do not.
+/// One client given every scope, and the milestone manifest's arguments, fit: 23 + 5 (the
+/// steward's slot at its worst) + 4 x 5 = 48; with sshd at 24 they do not.
 #[test]
-fn the_rig_and_the_milestone_fit() {
-    let rig = [
+fn every_scope_and_the_milestone_fit() {
+    let every_scope = [
         "addr=10.0.2.15/24",
         "gateway=10.0.2.2",
         "self=10.0.2.0/24",
@@ -21,7 +21,7 @@ fn the_rig_and_the_milestone_fit() {
         "scope=4:c:0.0.0.0/0:1-65535,l:1-65535",
         "buckets=4",
     ];
-    assert!(sizing_of(&rig).is_ok());
+    assert!(sizing_of(&every_scope).is_ok());
     let milestone = [
         "addr=10.0.2.15/24",
         "gateway=10.0.2.2",

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 305
+revision = 306
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -303,8 +303,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["INIT3"]
   body = "Brief: .wash/local/INIT4-implementer.md (order, manifests, owned paths, context rules, the init step's close).\n\nThe net rig's cases boot the real init with a case manifest, keeping their names and claims: net-tcp, bench-net-peer and its self-checks, net-pinned, net-attacks with bench-net-self-unrefused. bench-virtio-legacy-off moves to the tester (virtio-probe), and net-host-tests reads the manifests. The bench places the card and the disk on the fixed slots image/manifest.json names. Clients get their ipd scopes from scope= and handed badges; a judge program is the reporter; clients park. tests/net/src/rig.rs is deleted.\n\nMoved from INIT3: docs/servers/netd.md#started-by-init, netd-restart. A test-only netd feature (off in every default build, as dma-reset-deaf is) faults netd once, on an outside trigger; init restarts it, and ipd and a client are served again.\n\nkeyd, bootfsd and consoled are already under init (INIT2). blkd's use on target is the fsd step's. sshd's loopback stays on the host until the sshd step.\n\nDesign: QA INIT1-design. Tier A (the bench, and a test feature in netd), size L."
-  state = "reported"
-  revision = 297
+  state = "done"
+  revision = 306
 
 [[node]]
   id = "K9"

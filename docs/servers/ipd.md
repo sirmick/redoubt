@@ -191,9 +191,9 @@ listener's `ctl` read at the 60 s one, and the connection still works after.
 
 <details><summary>Status: built · tested (12)</summary>
 
-- host:redoubt-ipd::the_rig_and_the_milestone_parse
+- host:redoubt-ipd::every_scope_and_the_milestone_parse
 - host:redoubt-ipd::anything_else_stops_ipd
-- host:redoubt-ipd::the_rig_and_the_milestone_fit
+- host:redoubt-ipd::every_scope_and_the_milestone_fit
 - host:redoubt-ipd::the_worst_case_must_fit_or_ipd_does_not_start
 - host:redoubt-ipd::clone_stops_at_the_buckets_socket_cap
 - host:redoubt-ipd::sockets_stop_at_the_buckets_cap
@@ -263,8 +263,8 @@ Status: built · partly tested: no session's launcher is started, so no scope is
 `init` starts one `ipd` per network, with its arguments from the manifest: its addresses, its
 `self=` prefixes, the ingress badge, a root scope per badge it hands out, and its bucket count
 ([init](init.md#the-boot-manifest)). It hands each session's launcher a root badge with that
-session's scope, never including the box's own addresses. The net rig (`tests/net/src/rig.rs`)
-does this in the bench.
+session's scope, never including the box's own addresses. In the bench, a case's manifest does the
+same: one `scope=` and one handed badge for each client.
 
 ### Name-scoped connections
 

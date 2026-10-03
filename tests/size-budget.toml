@@ -99,9 +99,11 @@ paths = ["servers/blkd/src"]
 max_lines = 1579
 
 [[crate]]
+# Includes the test-only feature restart-probe (src/restart_probe.rs and its two uses), off
+# in every default build.
 name = "servers/netd"
 paths = ["servers/netd/src"]
-max_lines = 1552
+max_lines = 1592
 
 [[crate]]
 name = "servers/ipd"
