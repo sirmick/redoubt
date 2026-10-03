@@ -96,9 +96,10 @@ pub(crate) fn unmap(addr: usize, len: usize) -> Result<(), Error> {
 
 /// Starts a thread at `entry` with `arg` in its first argument register, on `stack`, which it
 /// takes for good: the thread's stack grows down from the top of the pages, and they are never
-/// unmapped, even after it exits, so no owner can hand them out underneath it. If the thread
-/// cannot be started, the stack is dropped. The entry is a function and the stack a [`Buffer`],
-/// so there is no raw form to reach:
+/// unmapped, even after it exits, so no owner can hand them out underneath it. If the kernel
+/// refuses the thread, the stack is dropped, but not on `InvalidArgument`
+/// ([`spawn`](crate::thread::spawn) says why). The entry is a function and the stack a
+/// [`Buffer`], so there is no raw form to reach:
 ///
 /// ```compile_fail
 /// redoubt_rt::handle::thread_create(0x1000, 0x2000, 0);
@@ -106,11 +107,17 @@ pub(crate) fn unmap(addr: usize, len: usize) -> Result<(), Error> {
 pub fn thread_create(entry: extern "C" fn(usize) -> !, stack: Buffer, arg: usize) -> Result<u32, Error> {
     // The top of page-aligned pages is aligned for any call frame.
     let sp = stack.as_ptr() as usize + stack.len();
-    let Return::Tid(tid) = syscall(&Call::ThreadCreate { entry: entry as usize, sp, arg })? else {
-        return Err(Error::InvalidArgument);
-    };
-    stack.into_pages();
-    Ok(tid)
+    match syscall(&Call::ThreadCreate { entry: entry as usize, sp, arg }) {
+        Err(e) if e != Error::InvalidArgument => Err(e),
+        Ok(Return::Tid(tid)) => {
+            stack.into_pages();
+            Ok(tid)
+        }
+        _ => {
+            stack.into_pages();
+            Err(Error::InvalidArgument)
+        }
+    }
 }
 
 pub fn thread_exit() -> ! {

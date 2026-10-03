@@ -1,5 +1,6 @@
 //! `thread::spawn`: a closure runs on a new thread of the same process; one the kernel refuses to
-//! start is dropped without running, and one whose start cannot be read is left alone.
+//! start is dropped without running, with its stack, and one whose start cannot be read is left
+//! alone, with its stack.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -44,7 +45,7 @@ fn a_spawned_thread_runs_its_closure_as_this_process() {
     assert_eq!(Arc::strong_count(&token), 1, "its captures were dropped once");
 }
 
-/// A refused start drops the closure, and what it holds, without running it.
+/// A refused start drops the closure, and what it holds, without running it, and its stack.
 #[test]
 fn a_refused_thread_drops_its_closure_unrun() {
     let f = fake();
@@ -55,10 +56,11 @@ fn a_refused_thread_drops_its_closure_unrun() {
     let got = f.as_process(pid, move || spawn(Box::new(move || drop(held)), 1));
     assert_eq!(got, Err(Error::OutOfMemory));
     assert_eq!(Arc::strong_count(&token), 1, "the closure was dropped, not leaked");
+    assert_eq!(f.held(pid).1, 0, "its stack was unmapped");
 }
 
-/// A start whose result cannot be read may have started the thread: the closure is left alone,
-/// never freed under a thread that may be running it.
+/// A start whose result cannot be read may have started the thread: the closure and its stack
+/// are left alone, never freed under a thread that may be running on them.
 #[test]
 fn an_unreadable_start_leaves_its_closure_alone() {
     let f = fake();
@@ -69,4 +71,5 @@ fn an_unreadable_start_leaves_its_closure_alone() {
     let got = f.as_process(pid, move || spawn(Box::new(move || drop(held)), 1));
     assert_eq!(got, Err(Error::InvalidArgument));
     assert_eq!(Arc::strong_count(&token), 2, "the closure was neither run nor freed");
+    assert_eq!(f.held(pid).1, 1, "its stack is still mapped");
 }

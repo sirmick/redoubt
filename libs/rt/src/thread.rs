@@ -23,9 +23,9 @@ type Body = Box<dyn FnOnce() + Send + 'static>;
 /// - **A panic on the thread ends the process**, as any panic does ([`crate::start`]).
 ///
 /// If the kernel refuses the thread, `body` is dropped without running, with its stack. A start
-/// whose result cannot be read (`InvalidArgument`: the kernel answered, but not with a thread id)
-/// may have started the thread, so `body` is then never freed: it leaks rather than being freed
-/// under a thread that may be running it. The stack is [`thread_create`]'s to keep or free.
+/// whose answer cannot be read (`InvalidArgument`, which a refusal of a bad argument cannot be
+/// told from) may have started the thread, so `body` is then never freed, and [`thread_create`]
+/// keeps its stack: both leak rather than being freed under a thread that may be running on them.
 pub fn spawn(body: Body, stack_pages: usize) -> Result<u32, Error> {
     let stack = Buffer::new(stack_pages)?;
     let arg = Box::into_raw(Box::new(body)) as usize;
