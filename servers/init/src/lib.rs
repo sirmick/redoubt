@@ -1,7 +1,7 @@
 //! `init`'s reading of the boot manifest (servers/init.md): the manifest decoded from strict JSON
 //! ([`manifest`]), checked whole against the machine ([`check`], [`confine`]), and the bound on
-//! what the boot will cost `init` in `root` ([`bound`]). All of it is pure, so the host tests and
-//! the fuzz target run the code the boot runs.
+//! what the boot will cost `init` in `root` ([`bound`]), and the reboot rule ([`restarts`]). All
+//! of it is pure, so the host tests and the fuzz target run the code the boot runs.
 //!
 //! `init` works in a fixed arena (kernel/budgets.md, "The tree from the boot manifest"), so a
 //! manifest the arena cannot parse is refused before it is parsed: see [`read`].
@@ -17,6 +17,7 @@ pub mod check;
 pub mod confine;
 pub mod manifest;
 pub mod refusal;
+pub mod restarts;
 pub mod sshkey;
 
 #[cfg(any(test, feature = "fuzz"))]

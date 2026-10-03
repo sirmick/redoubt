@@ -442,12 +442,25 @@ Status: planned · M1 (separation and containment)
   manifest entry, so nothing the dead instance made or held outlives it
   ([R10 (destruction)](../kernel/budgets.md#r10-destruction)). The receive endpoint is `init`'s,
   owned by `root`, so the budget's destruction does not reach it, and every client's handle to it
-  stays good.
+  stays good. The badges `init` hands the instance are stamped with its budget
+  ([R9 (stamps)](../kernel/objects.md#r9-stamps)), so a copy it passed on dies with it, and the
+  badge minted again for the next instance has no other holder.
 - **A driver** gets its device handles again from `init`'s copies. The kernel reset the device at
   the dead instance's end, before its DMA pages were reused
   ([devices](../kernel/devices.md#reset-before-reuse)), and the new instance brings it up from a
-  reset of its own. A driver whose device was quarantined is not restarted: `init` reboots
+  reset of its own. A driver whose device was quarantined is not restarted: `init` finds its own
+  copy of the device handle closed, and reboots
   ([devices](../kernel/devices.md#which-process-gets-which-device)).
+- **The boot's own steps, again.** A restart repeats what the boot did after starting that
+  server: `keyd` is checked again ([the key-separation check](#the-key-separation-check)),
+  `init` attaches to a new `consoled` again, and it pushes the `public` entries to a new
+  `bootfsd` and seals it again. Until then a client meets the new instance as the boot left
+  it: `bootfsd` answers "does not exist", never a half-written entry. If one of these steps
+  fails, `init` reboots.
+- **During the boot too.** A server that exits before the boot is done is restarted and
+  counted the same way, and a step that was calling it waits for the new instance and tries
+  again. So a server that cannot start reboots the machine by the rule below: `consoled`
+  refusing a `buckets=N` its budget cannot hold is one.
 - **Blame.** Each exit notice for a fault names the account and label set of the call the faulting
   thread was serving ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)). `init` passes
   them to the steward in one typed call, `blame(account, labels, server)`, in the steward's table,
@@ -460,7 +473,9 @@ Status: planned · M1 (separation and containment)
   timeout; a blame lost to the timeout is reported on the console. A fault before the steward
   runs is reported on the console and blamed on nobody.
 - **Reboot.** More than 5 restarts of one server within 60 seconds, not stopped by blame, reboots
-  the machine: failing closed beats a server that cannot stay up.
+  the machine: failing closed beats a server that cannot stay up. So does a restart `init`
+  cannot make: a budget it cannot carve, a badge or console connection it cannot mint, or a
+  launch the kernel refuses.
 - **The steward** is part of the trusted base; its crash is a bug. If it dies, `init` destroys and
   recreates the `users` budget, which logs every session out, and starts it again.
 
@@ -474,7 +489,8 @@ stateDiagram-v2
     Exited --> Reboot: more than 5 restarts<br/>in 60 seconds
     Reboot --> [*]
 ```
-*Figure: a system server's restarts. All of it is planned.*
+*Figure: a system server's restarts. Until the steward runs, a fault is reported on the
+console and blamed on nobody.*
 
 The attack tests: `blame` from any badge but `init`'s is refused; a restarted server's old
 connection ids are dead; a killed driver, `netd` among them, is restarted and its clients are
@@ -691,6 +707,11 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   own.
 - **A restart loop reboots the machine.** A client that can crash a server repeatedly without
   being blamed (a bug the blame rule does not reach) can reboot the box.
+- **A restarted `consoled` forgets every server's console.** The servers' connections lived
+  in the dead instance's tables, and `init` has no way to hand a running server a new one, so
+  a server's lines are refused until it restarts too. `init` attaches again and says so.
+- **A console that cannot start reboots silently.** `init` has given up the UART, so its
+  lines about `consoled`'s restarts and the reboot go nowhere.
 
 ## Why
 

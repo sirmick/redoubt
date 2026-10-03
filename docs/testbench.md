@@ -276,12 +276,17 @@ their own included, as no server does
 connection id, `[con N] ` with N in 16 lowercase hex digits
 ([consoled](servers/consoled.md#started-by-init)). A case's `reporter` names a manifest entry, and
 the bench reads that entry's connection id only from `init`'s bare line announcing it,
-`init: started NAME, console N`; a second such line fails the case. The case passes only if
+`init: started NAME, console N`; a second such line fails the case. A restarted server is
+announced as `init: restarted NAME, console N`, and the bench never reads a reporter's id from
+that line, so a reporter that restarts cannot pass its case. A case that judges a reboot expects
+`init`'s reboot line and then the next boot's first line, and ends there. The case passes only if
 exactly one line says `TEST PASSED` and it starts with that `[con N] `; any other such line fails
 it, wherever it came from. Such a case ends at its last `expect`, which waits for the verdict,
 since no test program holds the Reset right. The test programs are `redoubt-init-programs`
 (`tests/init-programs`): `boot-reader` reads a public entry through the root badge at `bootfsd`
-its entry is handed, and `con-forger` prints its arguments as lines.
+its entry is handed, `con-forger` prints its arguments as lines, and the rest are the servers,
+clients and drivers of `init`'s restart cases. Since `init` restarts a program that exits, each
+parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 

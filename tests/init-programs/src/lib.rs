@@ -22,6 +22,14 @@ pub mod code {
     pub const NO_CONSOLE: u32 = 3;
 }
 
+/// Where a program ends once it has said its lines: `init` restarts a server that exits, so a
+/// program whose exit is not the point of its case never exits.
+pub fn park() -> ! {
+    loop {
+        let _ = redoubt_rt::handle::sleep(redoubt_rt::abi::FOREVER);
+    }
+}
+
 /// The console `init` gave the program, and the lend its calls use.
 pub struct Out {
     pub lend: Lend,

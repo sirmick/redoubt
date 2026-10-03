@@ -17,6 +17,11 @@ name = "con-forger"
 path = "src/bin/con-forger.rs"
 test = false
 
+[[bin]]
+name = "quitter"
+path = "src/bin/quitter.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

@@ -26,5 +26,5 @@ fn run(startup: &Startup) -> u32 {
             return redoubt_init_programs::code::NO_CONSOLE;
         }
     }
-    redoubt_rt::exit::OK
+    redoubt_init_programs::park()
 }
