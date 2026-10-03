@@ -12,9 +12,7 @@ use alloc::vec::Vec;
 
 use redoubt_keyd::keys::Keys;
 use redoubt_keyd::server::{BUDGET, COST, KeyServer, limits};
-use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::Event;
 use redoubt_rt::server::own_args;
 use redoubt_rt::startup::Startup;
 
@@ -22,8 +20,6 @@ redoubt_rt::entry!(serve);
 
 /// The startup block named no endpoint for `keyd` to receive on.
 pub const NO_ENDPOINT: u32 = 2;
-/// `receive` failed for a reason other than the endpoint going away.
-pub const RECEIVE_FAILED: u32 = 3;
 /// No `buckets=N` in the arguments, or one whose buckets at their caps do not fit the budget or
 /// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
@@ -53,25 +49,6 @@ pub fn serve(startup: &Startup) -> u32 {
         return BAD_LIMITS;
     };
     let endpoint = Endpoint::from_handle(handle);
-    loop {
-        match endpoint.receive(FOREVER, 0) {
-            Ok(Event::Call(request)) => {
-                // Shared finish completes a rejected reply with a handle-free refusal (or
-                // exits under R4b); serve rolls back provisional state before returning an error.
-                let _ = server.serve(request);
-            }
-            // Every message of this protocol is a `call`. A `send` is
-            // dropped, and what it brought is closed, so it cannot grow the handle table.
-            Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice().iter().flatten() {
-                    let _ = redoubt_rt::handle::close(*handle);
-                }
-            }
-            // No call is ever held open here: every request is answered as it is taken, so no
-            // abandoned-call notice can name one.
-            Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
-            Err(Error::Dead) => return redoubt_rt::exit::OK,
-            Err(_) => return RECEIVE_FAILED,
-        }
-    }
+    // The handler answers every call; what it returns is dropped.
+    redoubt_rt::server::serve(&endpoint, |request| server.serve(request))
 }

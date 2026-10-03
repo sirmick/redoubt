@@ -24,17 +24,13 @@ extern crate alloc;
 use redoubt_blkd::kernel::Device;
 use redoubt_blkd::server::BlockServer;
 use redoubt_blkd::{Disk, read_partitions};
-use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
-use redoubt_rt::ipc::Event;
 use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(serve);
 
 /// The startup block named no endpoint for `blkd` to receive on.
 pub const NO_ENDPOINT: u32 = 2;
-/// `receive` failed for a reason other than the endpoint going away.
-pub const RECEIVE_FAILED: u32 = 3;
 /// The startup block named no [`DISK`] handle, or no [`DISK_IRQ`] handle, so there is no disk to
 /// serve.
 pub const NO_DEVICE: u32 = 5;
@@ -66,25 +62,6 @@ pub fn serve(startup: &Startup) -> u32 {
     let Ok(roots) = read_partitions(&mut disk) else { return NO_PARTITIONS };
     let mut server = BlockServer::new(disk, roots);
     let endpoint = Endpoint::from_handle(handle);
-    loop {
-        match endpoint.receive(FOREVER, 0) {
-            Ok(Event::Call(request)) => {
-                // A failed reply means the caller is gone; there is nobody to tell.
-                let _ = server.serve(request);
-            }
-            // Every message of this protocol is a `call`. A `send` is dropped, and what it
-            // brought is closed, so it cannot grow the handle table.
-            Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice().iter().flatten() {
-                    let _ = redoubt_rt::handle::close(*handle);
-                }
-            }
-            // No call is ever held open here: every request is answered as it is taken, so no
-            // abandoned-call notice can name one. The interrupt arrives on the IRQ handle inside
-            // a request, never here.
-            Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
-            Err(Error::Dead) => return redoubt_rt::exit::OK,
-            Err(_) => return RECEIVE_FAILED,
-        }
-    }
+    // The handler answers every call; what it returns is dropped.
+    redoubt_rt::server::serve(&endpoint, |request| server.serve(request))
 }

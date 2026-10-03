@@ -23,6 +23,7 @@ use redoubt_rt::abi::{Error, FOREVER, Handles};
 use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Event, Request};
+use redoubt_rt::server::close_delivery;
 use redoubt_rt::server::ninep::mode;
 use redoubt_rt::server::typed::{Outcome, finish};
 use redoubt_rt::startup::Startup;
@@ -219,11 +220,7 @@ impl Judge {
                     }
                     return Ok(true);
                 }
-                Ok(Event::Send(delivery)) => {
-                    for handle in delivery.handles.as_slice().iter().flatten() {
-                        let _ = redoubt_rt::handle::close(*handle);
-                    }
-                }
+                Ok(Event::Send(delivery)) => close_delivery(&delivery),
                 Ok(_) => {}
                 Err(Error::Timeout) => return Ok(false),
                 Err(e) => return Err(format!("receiving reports: {e:?}")),

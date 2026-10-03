@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 use redoubt_rt::abi::{Error as SysError, ExitNotice, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE};
 use redoubt_rt::handle::{Budget, Endpoint, Process};
 use redoubt_rt::ipc::{Buffer, Event};
+use redoubt_rt::server::close_delivery;
 use redoubt_rt::startup::StartupBuilder;
 use stub::{IMAGE_AT, STACK_TOP, STARTUP_AT, STUB_ENTRY};
 
@@ -194,11 +195,7 @@ impl Job {
                 Event::Exit(notice) => return Ok(Ended { notice, released: self.grants.release_all() }),
                 // Refused on drop: the handles it carried are closed and it is answered malformed.
                 Event::Call(request) => drop(request),
-                Event::Send(delivery) => {
-                    for handle in delivery.handles.as_slice().iter().flatten() {
-                        let _ = redoubt_rt::handle::close(*handle);
-                    }
-                }
+                Event::Send(delivery) => close_delivery(&delivery),
                 Event::Interrupt | Event::Abandoned(_) => {}
             }
         }

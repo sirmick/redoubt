@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 309
+revision = 323
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -108,13 +108,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "beamlet-redoubt"
-  title = "beamlet on Redoubt; IEx on the console"
+  title = "beamlet on Redoubt; the shell on the console"
   template = "step"
   parent = "M1"
   needs = ["init", "API1"]
-  body = "docs/userland/beamlet.md#beamlet-on-redoubt; docs/userland/shell.md#iex-in-a-session"
+  body = "docs/userland/beamlet.md#beamlet-on-redoubt; docs/userland/shell.md#the-shell-in-a-session (Redoubt.Shell, not IEx). Packages BEAM1-BEAM5 under it; cut by architect-10, BEAM1's brief at .wash/local/BEAM1-implementer.md."
   state = "todo"
-  revision = 2
+  revision = 311
 
 [[node]]
   id = "fsd"
@@ -593,8 +593,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FSD1"]
   body = "Simplification, not a hole. Tier B, size S. The receive loop is copied in seven servers (bootfsd, keyd, blkd, fsd, consoled, netd, ipd, and libs/rt's echo-server), each with its own RECEIVE_FAILED = 3.\n\nBuild in libs/rt/src/server:\n- serve(endpoint, f) -> u32, for a server that takes only calls: each call to f (its result dropped, as now: the shared finish path answers a rejected reply); a send dropped and its handles closed; Interrupt, Exit and Abandoned ignored; Dead -> exit::OK; any other error -> exit::RECEIVE_FAILED.\n- close_delivery(&delivery), the handle-closing, for the loops that keep their own shape;\n- RECEIVE_FAILED moves to redoubt_rt::exit, still 3.\n\nbootfsd, keyd, blkd, fsd and echo-server call serve. consoled (abandoned parked reads), netd (meaningful sends, break_device on exit) and ipd (timeouts, two-word receive) keep their loops and use close_delivery and exit::RECEIVE_FAILED. No helper with hooks for their cases.\n\nKeepers: a host test of serve over the fake endpoint: a send's handles are closed, Dead exits OK, another error exits RECEIVE_FAILED. Every server's bench cases unchanged.\n\nPage line, serving.md, a bullet at the top of Interface: 'A server that takes only calls runs redoubt_rt::server::serve, the one receive loop: a send is dropped and what it brought closed, and the endpoint's death ends the server with OK.' Needs FSD1 (fsd's loop); start after INIT4 merges if INIT4 is still in netd's and ipd's bins."
-  state = "active"
-  revision = 308
+  state = "done"
+  revision = 323
 
 [[node]]
   id = "SMP3"
@@ -605,3 +605,63 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "The owner's goal (QA SMP1-design): a beamlet VM's schedulers run on several harts at once. Brief: .wash/local/SMP3-implementer.md (design: .wash/local/SMP1-multihart.md). Tier A, size M.\n\n- The pick: a hart takes the lowest-pass budget with a runnable thread no hart is running (SMP1's one-runner predicate replaced). Stride arithmetic per budget unchanged; each hart charges its runner under the lock; the floor counts a budget with several runners once.\n- SMP1's shootdown gains its callers, before the call returns or the frame is reused: unmap, a narrowing set_flags, process_map's source, a lend or transfer sent, a reply returning a lend. Every site that clears or narrows a VALID user entry is listed.\n- fence.i: any call installing an executable entry shoots the process down (the shootdown fences). A thread that moves needs no fence of its own (Architect: one user entry per frame plus W^X).\n- Cases: smp-shootdown (unmap, lend returned, lend within one process; recorded negative smp-no-shootdown), smp-fence (verdict from a trace shootdown record), the whole bench at --smp 2.\n- Pages: scheduling.md's pick, cursor, floor and charging lines; memory.md's fence paragraph, lending status, several-harts residual (lend-within-one-process residual deleted); memory-layout.md's flush residual; m2 step 4 and Progress.\n\nR12 across harts is SMP2's, after this."
   state = "todo"
   revision = 275
+
+[[node]]
+  id = "BEAM1"
+  title = "beamlet runs on the machine under init: the console, the clock, randomness, modules from /boot"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["init", "API1"]
+  body = "Brief: .wash/local/BEAM1-implementer.md. Tier A, M-L. The `beamlet` program (beamlet-redoubt's machine binary) started by init with a console, a budget and bootfsd; one scheduler thread until several harts; redoubt_rt::thread::spawn; modules read whole from /boot by name; the bench builds a binary from userland/otp's workspace. Cases: beamlet-boot, beamlet-console, beamlet-heap-flood (rv64); rv32 attempted and reported. Pages: docs/userland/beamlet.md#beamlet-on-redoubt, docs/userland/native.md#the-client-library."
+  state = "reported"
+  revision = 322
+
+[[node]]
+  id = "BEAM2"
+  title = "The userland disk: OTP, Elixir and the shell as hash-checked objects, and the shell on the UART console"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM1", "FSD3"]
+  body = "The owner's decision (shell plan, decided 5): a read-only virtio disk of one object per module named by its SHA-256, served by an fsd instance init starts on it; system.index in the signed bundle's /boot; load_module hashes what it read and loads only a match, a program likewise before launch. The packer (stripped, deterministic beams). Books the new rule (verified boot extended to the userland: packages.md, bootfsd.md, beamlet.md's load_module row, a SECURITY.md row) and closes beamlet.md's Open on where the Elixir modules live. Redoubt.Shell on /dev/cons from init on the UART: docs/userland/shell.md#the-shell-in-a-session. Attack: a flipped byte in an object fails loudly, nothing loads. Brief to come."
+  state = "todo"
+  revision = 310
+
+[[node]]
+  id = "BEAM3"
+  title = "Asynchronous underneath: the VM's I/O threads, and files over 9P"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM2"]
+  body = "docs/userland/beamlet.md#asynchronous-underneath-synchronous-on-top: the thread split (short calls with timeouts, the session's reserved waiting calls, user code's waiting calls, system_limit past them), writes and size queries off the VM thread; the split's scheduler line reworded for one scheduler until several harts. Files: the platform's `files` over the client library's `file` (docs/userland/files.md#files-over-9p), on /boot and on an fsd volume. Brief to come."
+  state = "todo"
+  revision = 310
+
+[[node]]
+  id = "BEAM4"
+  title = "The natives: namespace, calls, serving, budgets, labels and launching; the shell launches a native program"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM3"]
+  body = "docs/userland/beamlet.md#natives: ns_lookup/bind/ns, call/send, serve/reply, budget_create/destroy/usage, labels, launch; handles as resource terms that no term format carries; generated clients from wire tables (docs/servers/wire.md#generated-clients) and Redoubt.Namespace/Budget/Process/Keys. The M1 shell's launch (docs/userland/shell.md#the-shell-in-a-session). Attacks: hostile native arguments, a decoded handle grants nothing. Brief to come."
+  state = "todo"
+  revision = 310
+
+[[node]]
+  id = "BEAM5"
+  title = "gen_tcp over /net"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM3"]
+  body = "docs/userland/beamlet.md#beamlet-on-redoubt: gen_tcp over a backend that opens /net/tcp/clone and reads and writes the data file, framing in Erlang. M1's attack suite needs a session's TCP (the loopback login row, R59). Brief to come."
+  state = "todo"
+  revision = 310
+
+[[node]]
+  id = "INIT5"
+  title = "A launch holds at most one batch of the image; INIT_PAGES returns to 1,024"
+  template = "package"
+  parent = "M1"
+  needs = ["BEAM1"]
+  body = "Brief: .wash/local/INIT5-implementer.md (architect-10). Tier A, S-M. libs/client's launch places the image and the stack in batches of PLACE_PAGES (64), each copied into fresh pages and moved into the unstarted child with process_map, so a launcher never holds a whole image; init's bound (servers/init/src/bound.rs) counts one batch, not the largest image; INIT_PAGES goes back from BEAM1's 2,048 to 1,024 if twice the bound fits. No kernel or stub change; each child still pays for its own copy (init.md's residual: no shared text). Pages: docs/kernel/budgets.md (INIT_PAGES bullet), docs/userland/native.md (launch step 3), docs/servers/init.md (launching through the loader stub, step 2). Cases: init-boot's printed bound, init-refuses-bound at 1,024, a client host test of batching and its failure path, beamlet-boot at 1,024."
+  state = "todo"
+  revision = 317

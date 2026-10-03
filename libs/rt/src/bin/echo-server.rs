@@ -11,9 +11,8 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::{Caller, Event};
+use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, NineServer, QTDIR, Qid, Read, mode};
 use redoubt_rt::server::{Cost, Limits};
 use redoubt_rt::startup::Startup;
@@ -23,9 +22,8 @@ redoubt_rt::entry!(serve);
 /// The most the file holds.
 const MAX_DATA: usize = 64 * 1024;
 
-/// Exit codes: 0 when the endpoint goes away.
+/// Exit codes: 0 when the endpoint goes away, 3 when `receive` fails (`redoubt_rt::exit`).
 pub const NO_ENDPOINT: u32 = 2;
-pub const RECEIVE_FAILED: u32 = 3;
 pub const BAD_LIMITS: u32 = 4;
 /// The kernel would not give a random word, and a server's first minted badge must be
 /// unpredictable (servers/serving.md R27). A server that cannot get one does not start.
@@ -124,22 +122,6 @@ pub fn serve(startup: &Startup) -> u32 {
     let endpoint = Endpoint::from_handle(handle);
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
     let Ok(mut server) = NineServer::new(EchoFs::default(), LIMITS, random) else { return BAD_LIMITS };
-    loop {
-        match endpoint.receive(FOREVER, 0) {
-            Ok(Event::Call(request)) => {
-                // A failed reply means the caller is gone; there is nobody to tell.
-                let _ = server.serve(request);
-            }
-            // Nothing here is sent one-way: drop it, and close what it brought.
-            Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice().iter().flatten() {
-                    let _ = redoubt_rt::handle::close(*handle);
-                }
-            }
-            // No call is ever held open here, so no abandoned-call notice names one.
-            Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
-            Err(Error::Dead) => return redoubt_rt::exit::OK,
-            Err(_) => return RECEIVE_FAILED,
-        }
-    }
+    // The handler answers every call; what it returns is dropped.
+    redoubt_rt::server::serve(&endpoint, |request| server.serve(request))
 }

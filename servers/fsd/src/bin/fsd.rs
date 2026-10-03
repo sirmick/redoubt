@@ -13,9 +13,7 @@ use alloc::vec::Vec;
 use redoubt_fsd::blkd::Blkd;
 use redoubt_fsd::typed::{Fsds, Typed};
 use redoubt_fsd::{BUDGET, COST, Fsd, limits, mount, parse_labels};
-use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::Event;
 use redoubt_rt::server::ninep::NineServer;
 use redoubt_rt::server::own_args;
 use redoubt_rt::server::typed::serve_call;
@@ -25,8 +23,6 @@ redoubt_rt::entry!(serve);
 
 /// The startup block named no endpoint for `fsd` to receive on.
 pub const NO_ENDPOINT: u32 = 2;
-/// `receive` failed for a reason other than the endpoint going away.
-pub const RECEIVE_FAILED: u32 = 3;
 /// No `buckets=N`, one whose buckets at their caps do not fit the budget, or an argument `fsd`
 /// does not understand (`labels=` malformed, or anything else): it does not guess.
 pub const BAD_ARGS: u32 = 4;
@@ -54,24 +50,8 @@ pub fn serve(startup: &Startup) -> u32 {
     // not become a restart loop.
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
     let Ok(mut server) = NineServer::new(Fsd::new(mounted, labels), limits, random) else { return BAD_ARGS };
-    loop {
-        match endpoint.receive(FOREVER, 0) {
-            Ok(Event::Call(request)) => {
-                // 9P and `ninep_common` in the skeleton; the four typed operations are ours. The
-                // shared finish path answers a rejected reply, so an error leaves no open call.
-                let _ =
-                    server.serve_with(request, |s, request| serve_call::<Fsds, _>(&mut Typed(s), request));
-            }
-            // Nothing here is sent one-way: drop it, and close what it brought.
-            Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice().iter().flatten() {
-                    let _ = redoubt_rt::handle::close(*handle);
-                }
-            }
-            // No call is ever held open here.
-            Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
-            Err(Error::Dead) => return redoubt_rt::exit::OK,
-            Err(_) => return RECEIVE_FAILED,
-        }
-    }
+    // 9P and `ninep_common` in the skeleton; the four typed operations are ours.
+    redoubt_rt::server::serve(&endpoint, |request| {
+        server.serve_with(request, |s, request| serve_call::<Fsds, _>(&mut Typed(s), request))
+    })
 }

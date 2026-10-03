@@ -17,6 +17,23 @@ Written once, those answers are tested once and cannot drift between servers.
 
 ## Interface
 
+### `serve`
+
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-rt::serve_answers_calls_and_closes_what_a_send_brought
+- host:redoubt-rt::serve_survives_abandoned_and_exit_notices
+- host:redoubt-rt::serve_exits_ok_when_the_endpoint_dies
+- host:redoubt-rt::serve_exits_receive_failed_on_any_other_error
+
+</details>
+
+A server that takes only calls runs `redoubt_rt::server::serve`, the one receive loop. Each call
+goes to the server's handler, which replies to it; a send is dropped and what it brought closed.
+The endpoint's death ends the server with `OK`, and any other failure to receive with
+`RECEIVE_FAILED` (3). A server whose handler must still reply or undo after an error keeps a
+loop of its own, closing a send's handles with `close_delivery`: `consoled`, `netd` and `ipd`.
+
 ### `admit`
 
 <details><summary>Status: built · tested (12)</summary>
@@ -404,8 +421,9 @@ or decoded again when it is served; which typed operations may park at all
     try, so it carries none. Sound.
   - `Parked::resume`'s `Request::serve` changes which call a fault blames, not what it holds.
     Sound.
-  - Every server's `Event::Send` arm closes the delivery's handles itself; a `Delivery` owns
-    none of them. Sound. `serve_parking` closes a held call's handles and empties its list, so
+  - Every server's `Event::Send` arm closes the delivery's handles, in `serve` or with
+    `close_delivery`; a `Delivery` owns none of them. Sound. `serve_parking` closes a held
+    call's handles and empties its list, so
     serving it again cannot close them twice. Sound.
   - `Request::reply` is the library's alone (a `compile_fail` test in `ipc.rs`), so there is no
     raw reply left to add, and a `Request` dropped unanswered is refused: its carried handles
