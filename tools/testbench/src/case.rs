@@ -328,19 +328,58 @@ pub struct Boot {
 pub struct BundleFile {
     /// The bundle entry's name. Must differ from every other entry's.
     pub name: String,
-    /// Where the bytes come from: anything a `programs` entry can name. Injected as they are.
+    /// Where the bytes come from: anything a `programs` entry can name. Injected as they are,
+    /// unless `servers` is given.
     pub from: Program,
+    /// For a manifest read from a path: entries merged into its `servers` by name, each replacing
+    /// the members it gives in the entry of its name, or added after the rest if none has it.
+    #[serde(default)]
+    pub servers: Vec<toml::Table>,
+}
+
+impl BundleFile {
+    /// The file's bytes, `base` with [`BundleFile::servers`] merged in, or `base` itself if there
+    /// are none.
+    pub fn merged(&self, base: &[u8]) -> Result<Vec<u8>> {
+        use serde_json::Value;
+        if self.servers.is_empty() {
+            return Ok(base.to_vec());
+        }
+        let mut manifest: Value = serde_json::from_slice(base).context("a merged file is JSON")?;
+        let servers = manifest
+            .get_mut("servers")
+            .and_then(Value::as_array_mut)
+            .context("a merged file has a servers array")?;
+        for entry in &self.servers {
+            let name =
+                entry.get("name").and_then(toml::Value::as_str).context("a merged entry has a name")?;
+            let Value::Object(fields) = serde_json::to_value(entry)? else { unreachable!("a table") };
+            match servers.iter_mut().find(|s| s["name"] == name) {
+                Some(Value::Object(server)) => server.extend(fields),
+                Some(_) => bail!("servers entry {name:?} is not an object"),
+                None => servers.push(Value::Object(fields)),
+            }
+        }
+        Ok(serde_json::to_vec_pretty(&manifest)?)
+    }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disk {
-    /// Size in KiB (a whole number of 512-byte sectors). The disk starts zeroed.
+    /// Size in KiB (a whole number of 512-byte sectors). The disk starts zeroed. Not given with
+    /// a `recipe`, which sizes the disk.
+    #[serde(default)]
     pub size_kib: u64,
     /// Partitions in a GPT written on the disk before the boot, equal shares of the space after
     /// the table, by `blkd`'s own image builder; 0 leaves the disk zeroed, with no table.
     #[serde(default)]
     pub partitions: u64,
+    /// A disk recipe (`image/disk.toml`) packed for every boot instead, as `./mkimage` packs it
+    /// (`disk.rs`).
+    pub recipe: Option<PathBuf>,
+    /// With a `recipe`, the directory every partition holds instead of the recipe's own stage.
+    pub stage: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -541,6 +580,7 @@ impl Recipe {
                 (None, Some(path)) => files.push(BundleFile {
                     name: entry.name.clone(),
                     from: Program::Path { path: path.clone() },
+                    servers: Vec::new(),
                 }),
                 _ => bail!("recipe entry {:?} needs a package or a path, not both", entry.name),
             }
@@ -660,12 +700,31 @@ impl Case {
                         "sessions need net.forward = [22]"
                     );
                 }
+                if let Some(disk) = &boot.disk {
+                    match &disk.recipe {
+                        Some(_) => ensure!(
+                            disk.size_kib == 0 && disk.partitions == 0,
+                            "a disk recipe sizes and partitions the disk itself"
+                        ),
+                        None => {
+                            ensure!(disk.size_kib > 0, "a disk needs size_kib or a recipe");
+                            ensure!(disk.stage.is_none(), "a stage needs a disk recipe");
+                        }
+                    }
+                }
                 if let Some(net) = &boot.net {
                     check_net(net)?;
                     // The post-check judges one boot's peer files.
                     ensure!(
                         net.peer.is_empty() || boot.distinct_across_boots.is_empty(),
                         "peers need one boot"
+                    );
+                }
+                for file in &boot.file {
+                    ensure!(
+                        file.servers.is_empty() || matches!(file.from, Program::Path { .. }),
+                        "file {:?}: servers merge only into a manifest read from a path",
+                        file.name
                     );
                 }
                 for (index, program) in boot.programs.iter().enumerate() {
@@ -792,7 +851,7 @@ mod tests {
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(bins, ["init", "keyd", "consoled", "bootfsd", "blkd", "netd", "ipd"]);
+        assert_eq!(bins, ["init", "keyd", "consoled", "bootfsd", "blkd", "netd", "ipd", "fsd"]);
         assert!(programs[0].is_init());
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "manifest");
@@ -811,6 +870,35 @@ mod tests {
         assert!(recipe(&format!("{kernel}{init}{both}")).is_err(), "a program and data at once");
         let neither = "[[entry]]\nname = \"x\"\n";
         assert!(recipe(&format!("{kernel}{init}{neither}")).is_err());
+    }
+
+    /// A manifest file's `servers` entries merge by name: one replaces the members it gives in the
+    /// entry of its name and keeps the rest, one naming no entry is added after the others; a file
+    /// not read from a path takes none.
+    #[test]
+    fn a_file_s_servers_merge_into_its_manifest_by_name() {
+        let text = "name = \"manifest\"\nfrom = { path = \"m.json\" }\n\
+                    servers = [{ name = \"client\", args = [\"read\", \"x\\n\"] }, { name = \"extra\" }]\n";
+        let file: BundleFile = toml::from_str(text).unwrap();
+        let base = br#"{"servers": [{"name": "fsd", "args": ["a"]}, {"name": "client", "program": "c", "args": ["boot"]}]}"#;
+        let merged: serde_json::Value = serde_json::from_slice(&file.merged(base).unwrap()).unwrap();
+        let expected = serde_json::json!({"servers": [
+            {"name": "fsd", "args": ["a"]},
+            {"name": "client", "program": "c", "args": ["read", "x\n"]},
+            {"name": "extra"},
+        ]});
+        assert_eq!(merged, expected);
+        assert!(file.merged(b"{}").is_err(), "no servers array");
+        let case = |from: &str| -> Case {
+            let text = format!(
+                "description = \"d\"\nkind = \"boot\"\nprograms = [\"tester\"]\nexpect = []\n\
+                 [[file]]\nname = \"manifest\"\nfrom = {from}\nservers = [{{ name = \"client\" }}]\n"
+            );
+            toml::from_str(&text).unwrap()
+        };
+        assert!(case("{ path = \"m.json\" }").check().is_ok());
+        let err = case("\"tester\"").check().unwrap_err().to_string();
+        assert!(err.contains("only into a manifest read from a path"), "{err}");
     }
 
     /// `resize` works only on a session's terminal, so a session without one is refused at load.

@@ -96,7 +96,7 @@ max_lines = 339
 [[crate]]
 name = "servers/blkd"
 paths = ["servers/blkd/src"]
-max_lines = 1562
+max_lines = 1606
 
 [[crate]]
 # Includes the test-only feature restart-probe (src/restart_probe.rs and its two uses), off
@@ -113,9 +113,9 @@ max_lines = 2887
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 1828
+max_lines = 1917
 
 [[crate]]
 name = "servers/fsd"
 paths = ["servers/fsd/src"]
-max_lines = 1156
+max_lines = 1343

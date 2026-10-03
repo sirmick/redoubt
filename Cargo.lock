@@ -654,6 +654,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-fsd-programs"
+version = "0.1.0"
+dependencies = [
+ "redoubt-client",
+ "redoubt-init-programs",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-init"
 version = "0.1.0"
 dependencies = [
@@ -1156,6 +1165,7 @@ dependencies = [
  "ed25519-compact",
  "libc",
  "redoubt-blkd",
+ "redoubt-fsd",
  "redoubt-model",
  "redoubt-signing",
  "regex",

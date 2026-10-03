@@ -18,7 +18,7 @@ it asks the device to touch can be checked.
 
 ### Ranges and badges
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (12)</summary>
 
 - bench:blkd-host-tests
 - host:redoubt-blkd::a_block_round_trips_through_a_range_badge
@@ -29,6 +29,8 @@ it asks the device to touch can be checked.
 - host:redoubt-blkd::roots_have_one_slot_per_gpt_entry
 - host:redoubt-blkd::a_gap_in_the_table_does_not_renumber_the_volumes_after_it
 - host:redoubt-blkd::a_labelled_caller_may_read_but_not_write
+- host:redoubt-blkd::a_ranges_labels_come_from_its_argument
+- host:redoubt-blkd::a_malformed_argument_a_partition_named_twice_or_none_is_refused
 - host:redoubt-blkd::one_clients_read_never_carries_anothers_bytes
 
 </details>
@@ -44,7 +46,8 @@ it asks the device to touch can be checked.
   comes through a badge its launcher minted, and a client can make `blkd` hold nothing beyond its
   request, so there is no admission to keep. A flood of requests is bounded by the kernel's fair
   waiting ([R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting)) and by `MAX_SECTORS` per request.
-- **The label check** runs on every request against the range's labels
+- **The label check** runs on every request against the range's labels, which `init` gives
+  `blkd` as arguments (`labels.P=ID,...` for partition entry P; a range named by none has none)
   ([R25 (the label check)](serving.md#r25-the-label-check)): reading is a read, writing and
   flushing are writes. A badge that names no range and a caller who fails the check get the same
   `not_permitted`.
@@ -205,7 +208,7 @@ The GPT (UEFI 2.10, section 5.3) is the one on-disk structure `blkd` parses, onc
 
 ### Started by `init`
 
-Status: built · partly tested: no `fsd` is started yet, so no range badge is minted from `volumes` · tested: bench:init-boot
+Status: built · tested: bench:init-boot, bench:fsd-boot, bench:fsd-one-volume
 
 `init` starts `blkd` with two named handles in its startup block, `disk` (the virtio MMIO region,
 with DMA allowed) and `disk-irq` (its interrupt), placed from the boot manifest's `devices` list

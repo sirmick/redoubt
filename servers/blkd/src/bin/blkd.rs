@@ -11,16 +11,15 @@
 //! no device tree and hardcodes no address; without both handles it does not start, which is the
 //! honest thing for a driver that has no device.
 //!
-//! **Nothing starts it yet.** The kernel's device objects, `dma_alloc` and IRQ receive are wired
-//! here. What is still missing is the `init` that reads the boot manifest, creates `blkd`'s
-//! endpoint and writes this startup block (docs/plan/m1-separation.md, step 3), so nothing boots
-//! this program yet; until then its behaviour is covered by host tests against a hostile fake
-//! device (`blkd-host-tests`).
+//! **Its ranges' labels are handed in too:** one argument per labelled volume, `labels.P=ID,...`
+//! for GPT entry P ([`redoubt_blkd::args`]), parsed against the table before anything is served;
+//! an argument it cannot take stops it with [`BAD_ARGS`].
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
 extern crate alloc;
 
+use redoubt_blkd::args::range_labels;
 use redoubt_blkd::kernel::Device;
 use redoubt_blkd::server::BlockServer;
 use redoubt_blkd::{Disk, read_partitions};
@@ -48,6 +47,9 @@ pub const NO_DISK: u32 = 6;
 /// and exits again, so an unreadable disk is a reboot loop rather than a degraded boot
 /// (servers/blkd.md, "Failure and restart"; servers/init.md, "Restarts and reboots").
 pub const NO_PARTITIONS: u32 = 7;
+/// An argument that is not `labels.P=ID[,ID...]`, names P twice, or names no partition
+/// (`redoubt_blkd::args`): `blkd` never serves a range under labels it misread.
+pub const BAD_ARGS: u32 = 4;
 
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
@@ -60,7 +62,8 @@ pub fn serve(startup: &Startup) -> u32 {
     };
     let Ok(mut disk) = Disk::new(device) else { return NO_DISK };
     let Ok(roots) = read_partitions(&mut disk) else { return NO_PARTITIONS };
-    let mut server = BlockServer::new(disk, roots);
+    let Ok(labels) = range_labels(startup.args(), &roots) else { return BAD_ARGS };
+    let mut server = BlockServer::new(disk, roots, labels);
     let endpoint = Endpoint::from_handle(handle);
     // The handler answers every call; what it returns is dropped.
     redoubt_rt::server::serve(&endpoint, |request| server.serve(request))

@@ -39,6 +39,7 @@
       "program": "netd",
       "budget": {"pages": "1024", "processes": 1, "weight": 1000},
       "devices": [{"device": "net0", "as": "net"}],
+      "labels": ["alice-secrets"],
       "receives": ["netd"],
       "handed": [{"endpoint": "ipd", "badge": "3"}],
       "args": ["client=5"]

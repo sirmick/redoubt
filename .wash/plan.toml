@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 355
+revision = 356
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -563,8 +563,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FSD2", "INIT4"]
   body = "fsd under init. Brief: .wash/local/FSD3-implementer.md. init mints each fsd's range badge from `volumes` and passes the volume's labels (re-minted at a restart); blkd takes each range's labels as `labels.P=` arguments (NO_LABELS goes); a confined labelled volume starts and writes; mkimage packs image/disk.toml through fsd's own code (Rust-writes-C-reads oracle case, run by hand); a restarted fsd mounts and serves with no whole-volume check (fsd.md's Open item); files survive a reboot. Cases: fsd-boot, fsd-reboot, fsd-confined-labelled, fsd-one-volume (R47), fsd-quota (R48), fsd-restart, fsd-corrupt-volume, image-disk. Tier A, size L."
-  state = "reported"
-  revision = 351
+  state = "done"
+  revision = 356
 
 [[node]]
   id = "SMP1"

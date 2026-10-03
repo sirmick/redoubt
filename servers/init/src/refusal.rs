@@ -72,7 +72,8 @@ pub enum Why {
     Budget,
     /// More labels than a budget holds.
     TooManyLabels,
-    /// An argument with a NUL, or one a `bootfsd` entry may not carry.
+    /// An argument with a NUL, one a `bootfsd` entry may not carry, or one `init` passes itself
+    /// (`labels=` to a volume's server, `labels.` to `blkd`).
     Argument,
     /// A `buckets=` argument the serving library would refuse.
     BucketsArgument,
@@ -91,6 +92,12 @@ pub enum Why {
     /// An endpoint a `consoled` receives on, handed to a server: only `init` holds a root badge
     /// there, so only `init`'s lines are bare.
     ConsoledRoot,
+    /// A volume a server attaches, but not exactly one `blkd`, receiving on an endpoint, to mint
+    /// its range at.
+    NoBlkd,
+    /// An endpoint a `blkd` receives on, handed to a server: each badge there is a volume's
+    /// range, which only `init` mints, for the one server attaching it (R47).
+    BlkdHanded,
     /// A second entry for a program `init` calls itself (`keyd`, `consoled`, `bootfsd`): `init`
     /// starts and calls one of each.
     Second(&'static str),
@@ -123,13 +130,17 @@ impl fmt::Display for Why {
             Why::Badge => "not a root badge given once at its endpoint",
             Why::Budget => "no process could run in this budget",
             Why::TooManyLabels => "more labels than a budget holds",
-            Why::Argument => "an argument with a NUL, or on bootfsd one that is not buckets=N",
+            Why::Argument => {
+                "an argument with a NUL, on bootfsd one that is not buckets=N, or one init passes itself"
+            }
             Why::BucketsArgument => "not one buckets=N of 1 to 32",
             Why::Block => "the handles and arguments do not fit a startup block",
             Why::Key => "not one ssh-ed25519 key",
             Why::Value => "not a value this member takes",
             Why::PublicManifest => "the manifest is never public",
             Why::NoBootfsd => "public entries but no bootfsd",
+            Why::NoBlkd => "a volume's range needs exactly one blkd, receiving on an endpoint",
+            Why::BlkdHanded => "only init mints a badge at blkd, a volume's range (R47)",
             Why::NoKeyd => "no keyd to ask about the keys the box is authenticated by (R35)",
             Why::ConsoledRoot => "only init holds a root badge at consoled",
         })

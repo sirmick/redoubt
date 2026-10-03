@@ -9,6 +9,7 @@ mod budget;
 mod build;
 mod case;
 mod cruft;
+mod disk;
 mod elixir;
 mod fmt;
 mod peer;
@@ -55,6 +56,10 @@ struct Args {
     /// uses): the kernel, `init`, the servers and the manifest.
     #[arg(long, value_name = "RECIPE", conflicts_with = "programs")]
     recipe: Option<PathBuf>,
+    /// Instead of running tests, pack the disk recipe RECIPE (`image/disk.toml`, which `./mkimage`
+    /// uses) into the raw disk image OUT, and exit.
+    #[arg(long, num_args = 2, value_names = ["RECIPE", "OUT"])]
+    pack_disk: Option<Vec<PathBuf>>,
     /// Hart count for --run.
     #[arg(long, default_value_t = 1)]
     smp: u32,
@@ -88,6 +93,11 @@ fn main() -> Result<()> {
     }
     let args = Args::parse();
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
+    if let Some([recipe, out]) = args.pack_disk.as_deref() {
+        let disk = disk::pack_disk(&disk::Recipe::load(recipe)?, &workspace, None)?;
+        std::fs::write(out, disk).with_context(|| format!("writing {}", out.display()))?;
+        return Ok(());
+    }
     let run = run::Run::start(&workspace.join("target/testbench"))?;
     let logs = run.dir.clone();
     let builder = Builder { workspace: workspace.clone(), run: run.dir.clone(), verbose: args.verbose };
@@ -341,7 +351,15 @@ fn prepare(
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
     let files = files
         .iter()
-        .map(|file| Ok((file.name.clone(), builder.program(target, &file.from)?.1)))
+        .map(|file| {
+            let path = builder.program(target, &file.from)?.1;
+            if file.servers.is_empty() {
+                return Ok((file.name.clone(), path));
+            }
+            let merged = builder.run.join(format!("{}-{}.json", file.name, target.name));
+            std::fs::write(&merged, file.merged(&std::fs::read(&path)?)?)?;
+            Ok((file.name.clone(), merged))
+        })
         .collect::<Result<Vec<_>>>()?;
     // A case may bring its own `programs` entry, a hostile one, as a file; the real `init` reads a
     // manifest instead, and is given none.

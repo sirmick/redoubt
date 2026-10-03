@@ -14,5 +14,9 @@ description = "Host-only: differential tests of the littlefs crate against the C
 [dependencies]
 littlefs = { path = ".." }
 
+# fsd's packer, the one writer of the image's disk: its volume must read back in the reference.
+[dev-dependencies]
+redoubt-fsd = { path = "../../../servers/fsd" }
+
 [build-dependencies]
 cc = "1"

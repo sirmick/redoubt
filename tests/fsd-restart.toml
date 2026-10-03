@@ -1,0 +1,44 @@
+description = "`fsd` is killed (a test feature triggered once) and `init` restarts it; the restarted `fsd` mounts with a boot's checks; an old connection's call gets `Dead`, and a fresh one reads the files."
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, fsd built with its test-only feature
+# restart-probe, and fsd-client, which walks to the probe once.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-fsd", bin = "fsd", features = ["restart-probe"] },
+    { package = "redoubt-fsd-programs", bin = "fsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started fsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    # 9: PROBE_EXIT (servers/fsd/src/server.rs). An exit holding the client's call is faulted,
+    # with the code given (kernel/processes.md).
+    '^init: fsd \(PID [0-9]+\) faulted, code 9, serving nobody, labels none; blamed on nobody: no steward$',
+    '^init: restarted fsd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] fsd-client.s call got Dead, and a fresh connection read kept back$',
+    '^\[con [0-9a-f]{16}\] fsd-client TEST PASSED$',
+]
+# fsd's one exit is the point; nothing else may end, and the machine may not reboot.
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|blkd|client) .*(exited|faulted|was killed)',
+    '^init: fsd .*(exited|was killed)',
+    '^init: restarted (keyd|consoled|blkd|client)\b',
+    'init: rebooting',
+    'fsd-client TEST FAILED',
+]
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/fsd/boot.json" }
+servers = [{ name = "client", args = ["restart", "fsd:data", "fsd-restart-probe"] }]
+
+[disk]
+size_kib = 4096
+partitions = 1

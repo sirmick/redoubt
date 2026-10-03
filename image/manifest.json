@@ -4,6 +4,9 @@
     { "name": "disk0", "base": "268468224", "irq": 8, "dma": true },
     { "name": "net0", "base": "268464128", "irq": 7, "dma": true }
   ],
+  "volumes": [
+    { "name": "data", "partition": 0 }
+  ],
   "servers": [
     { "name": "keyd", "program": "keyd",
       "budget": { "pages": "256", "processes": 1, "weight": 100 },
@@ -35,7 +38,12 @@
       "receives": ["ipd"],
       "handed": [ { "endpoint": "netd", "badge": "5" } ],
       "args": ["addr=10.0.2.15/24", "gateway=10.0.2.2", "ingress=3",
-               "scope=4:c:0.0.0.0/0:1-65535", "buckets=4"] }
+               "scope=4:c:0.0.0.0/0:1-65535", "buckets=4"] },
+    { "name": "fsd:data", "program": "fsd",
+      "budget": { "pages": "1024", "processes": 1, "weight": 100 },
+      "volume": "data",
+      "receives": ["fsd:data"],
+      "args": ["endpoint=fsd:data", "buckets=4"] }
   ],
   "public": []
 }

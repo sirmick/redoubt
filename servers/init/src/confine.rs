@@ -5,16 +5,18 @@
 //!
 //! The domains are each `servers` entry, under its `labels`, and each label set a principal
 //! works under, its unlabelled one included. The manifest does not route principals to servers
-//! (the steward does), so a shared server, one sized with `buckets=N`, is used by every
-//! principal's domains, as its bucket count assumes (servers/init.md, Sizing); a server is also
-//! used by every server handed one of its endpoints. The steward and `sshd` serve every domain by
+//! (the steward does, within a label set by this same rule), so a shared server, one sized with
+//! `buckets=N`, is used by every principal domain with its own label set: only such a domain may
+//! later be granted a connection there. A server is also used by every server handed one of its
+//! endpoints, and `blkd` by every server attaching a volume, whose range `init` mints at it, so a
+//! confined disk holds one label set's volumes. The steward and `sshd` serve every domain by
 //! design and are exempt, by program name.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::check::BUCKETS_ARG;
+use crate::check::{BLKD, BUCKETS_ARG};
 use crate::manifest::{Manifest, Server};
 use crate::refusal::{Refusal, Sharing};
 
@@ -47,18 +49,21 @@ fn exempt(s: &Server) -> bool { EXEMPT.contains(&s.program.as_str()) }
 
 fn shared(s: &Server) -> bool { s.args.iter().any(|a| a.starts_with(BUCKETS_ARG)) }
 
-/// The label sets that use server `i`: its own, every server handed one of its endpoints, and
-/// every principal's domains if it is shared.
+/// The label sets that use server `i`: its own, every server handed one of its endpoints or a
+/// volume's range at it (an `fsd` on `blkd`'s disk), and, if it is shared, every principal
+/// domain with its own set.
 fn users<'a>(m: &'a Manifest, i: usize) -> Vec<Set<'a>> {
     let s = &m.servers[i];
     let mut sets = alloc::vec![set(&s.labels)];
     for t in &m.servers {
-        if t.handed.iter().any(|h| s.receives.contains(&h.endpoint)) {
+        let range = s.program == BLKD && t.volume.is_some();
+        if range || t.handed.iter().any(|h| s.receives.contains(&h.endpoint)) {
             sets.push(set(&t.labels));
         }
     }
     if shared(s) {
-        sets.extend(principal_sets(m).into_iter().map(|(_, set)| set));
+        let own = set(&s.labels);
+        sets.extend(principal_sets(m).into_iter().map(|(_, set)| set).filter(|d| *d == own));
     }
     sets
 }
@@ -117,7 +122,8 @@ pub fn check(m: &Manifest) -> Result<(), Refusal> {
             return refuse(format!("servers[{i}].devices"), Sharing::Device);
         }
     }
-    // A server instance: any other server used by two sets.
+    // A server instance: any other server used by two sets, as a `blkd` with no devices whose
+    // volumes carry a set of their own.
     for (i, _) in m.servers.iter().enumerate().filter(|(_, s)| !exempt(s)) {
         if differ(&users(m, i)) {
             return refuse(format!("servers[{i}]"), Sharing::Server);

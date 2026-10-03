@@ -18,6 +18,15 @@ const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0
 
 fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
 
+/// The image's manifest without its volume and the `fsd` serving it, for tests that lay out
+/// volumes of their own.
+fn without_volumes() -> Manifest {
+    let mut m = image();
+    m.volumes.clear();
+    m.servers.retain(|s| s.volume.is_none());
+    m
+}
+
 fn on_virt(m: &Manifest) -> Result<Plan, Refusal> {
     let devices = virt_devices();
     check(m, &machine(&devices, &ENTRIES), BUNDLE_KEY)
@@ -69,8 +78,9 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert!(plan.placements[0].is_empty());
     // No principals: only the bundle key is asked about.
     assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
-    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge.
-    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1)]);
+    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; fsd:data: nobody's
+    // yet, a principal's connection being the steward's to grant.
+    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
 }
@@ -89,15 +99,38 @@ fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
 #[test]
 fn the_image_manifest_s_bound() {
     let plan = on_virt(&image()).unwrap();
-    // The arena (256 + 3 tables), 6 receive and 6 exit endpoints and init's reports endpoint, 6
-    // process objects, 6 blocks with 3 tables each, 6 watching threads (an IPC page, 4 stack pages
+    // The arena (256 + 3 tables), 7 receive and 7 exit endpoints and init's reports endpoint, 7
+    // process objects, 7 blocks with 3 tables each, 7 watching threads (an IPC page, 4 stack pages
     // and 3 tables each), one launch (stub 4 + 3, one 64-page batch of ipd's 147-page image + 3,
     // stack 16 + 3), the lend (2 + 3), and no handle-table page: 22 handles at the start (3
-    // budgets, the Reset right, 18 devices) and 6 + 2 + 24 + 3 + 1 = 36 added still fit page 0.
+    // budgets, the Reset right, 18 devices) and 7 + 3 + 28 + 3 + 1 = 42 added (fsd:data's range
+    // among the 3 badges) still fit page 0.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 13 + 6 + 24 + 48 + (4 + 3 + 64 + 3 + 16 + 3) + 5);
+    assert_eq!(plan.bound, 259 + 15 + 7 + 28 + 56 + (4 + 3 + 64 + 3 + 16 + 3) + 5);
+}
+
+/// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
+/// full to a page's edge, either one opens the next page.
+#[test]
+fn a_volume_s_range_badge_counts_in_the_bound_as_a_handed_item_does() {
+    let mut m = without_volumes();
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
+    let bound = |m: &Manifest| on_virt(m).unwrap().bound;
+    let mut handed = m.clone();
+    server(&mut handed, "ipd").handed.push(Handed { endpoint: "bootfsd".into(), badge: 1 });
+    let mut attached = m.clone();
+    attached.servers[0].volume = Some("data".into());
+    // Each endpoint more takes a handle, until the next one opens a page.
+    let mut n = 0;
+    while bound(&handed) == bound(&m) {
+        for m in [&mut m, &mut handed, &mut attached] {
+            server(m, "bootfsd").receives.push(format!("e{n}"));
+        }
+        n += 1;
+    }
+    assert_eq!(bound(&attached), bound(&handed));
 }
 
 // ---- decoding: strict JSON, types, members ----
@@ -163,7 +196,7 @@ fn names_follow_the_rule_and_differ() {
 #[test]
 fn references_name_what_the_manifest_and_bundle_hold() {
     let mut m = image();
-    m.servers[0].program = "fsd".into();
+    m.servers[0].program = "sshd".into();
     refused_at(&m, "servers[0].program", Why::Unknown);
     let mut m = image();
     m.servers[0].program = MANIFEST.into();
@@ -172,7 +205,7 @@ fn references_name_what_the_manifest_and_bundle_hold() {
     server(&mut m, "ipd").handed[0].endpoint = "fsd".into();
     refused_at(&m, "servers[5].handed[0].endpoint", Why::Unknown);
     let mut m = image();
-    m.servers[0].volume = Some("data".into());
+    m.servers[0].volume = Some("nowhere".into());
     refused_at(&m, "servers[0].volume", Why::Unknown);
     let mut m = image();
     m.servers[0].labels = vec!["alice-secrets".into()];
@@ -209,9 +242,8 @@ fn principals_values_are_checked() {
     m.principals.push(Principal { name: "bob".into(), ..alice() });
     refused_at(&m, "principals[1].account", Why::Twice);
     let mut m = image();
-    m.principals.push(Principal { home: Some("data:/home/alice".into()), ..alice() });
+    m.principals.push(Principal { home: Some("nowhere:/home/alice".into()), ..alice() });
     refused_at(&m, "principals[0].home", Why::Value);
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
     m.principals[0].home = Some("data:home/../x".into());
     refused_at(&m, "principals[0].home", Why::Value);
     m.principals[0].home = Some("data:/home/alice".into());
@@ -336,9 +368,9 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let devices = virt_devices();
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
-    // keyd 256, consoled 1024, bootfsd and blkd 512 each, netd 1024 and ipd 4096 pages, and a
-    // page each for the budgets.
-    let pages = 256 + 1024 + 512 * 2 + 1024 + 4096 + 6;
+    // keyd 256, consoled 1024, bootfsd and blkd 512 each, netd 1024, ipd 4096 and fsd:data 1024
+    // pages, and a page each for the budgets.
+    let pages = 256 + 1024 + 512 * 2 + 1024 + 4096 + 1024 + 7;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),
@@ -346,11 +378,11 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     );
     machine.system.pages_limit += 1;
     assert!(on(&m, &machine).is_ok());
-    machine.system.processes_usage = machine.system.processes_limit - 5;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 6, free: 5 });
+    machine.system.processes_usage = machine.system.processes_limit - 6;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 7, free: 6 });
     machine.system.processes_usage = 0;
-    machine.system.weight_carved = machine.system.weight_limit - 3299;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 3300, free: 3299 });
+    machine.system.weight_carved = machine.system.weight_limit - 3399;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 3400, free: 3399 });
 }
 
 // ---- public ----
@@ -376,8 +408,8 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
     let mut m = image();
     m.public = vec!["trace".into()];
     let bootfsd = &m.servers[2];
-    assert_eq!(redoubt_init::check::args(&m, bootfsd).collect::<Vec<_>>(), ["buckets=4", "trace"]);
-    assert_eq!(redoubt_init::check::args(&m, &m.servers[0]).count(), 3, "only bootfsd gets it");
+    assert_eq!(redoubt_init::check::args(&m, bootfsd), ["buckets=4", "trace"]);
+    assert_eq!(redoubt_init::check::args(&m, &m.servers[0]).len(), 3, "only bootfsd gets it");
     // The names bootfsd serves come from public alone.
     server(&mut m, "bootfsd").args.push("trace".into());
     refused_at(&m, "servers[2].args[1]", Why::Argument);
@@ -394,6 +426,83 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
 }
 
 // ---- startup blocks ----
+
+/// A volume's server gets `labels=` its volume's ids, and `blkd` one `labels.P=` per labelled
+/// volume, P its GPT entry; an unlabelled volume gets neither (servers/init.md, "The boot
+/// manifest"; servers/blkd.md, "Ranges and badges").
+#[test]
+fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
+    let mut m = without_volumes();
+    secrets(&mut m);
+    m.principals.push(alice());
+    m.volumes.push(Volume { name: "scratch".into(), partition: 0, labels: vec![] });
+    m.volumes.push(Volume { name: "vault".into(), partition: 2, labels: vec!["alice-secrets".into()] });
+    server(&mut m, "keyd").volume = Some("vault".into());
+    server(&mut m, "bootfsd").volume = Some("scratch".into());
+    assert!(on_virt(&m).is_ok());
+    let args = |m: &Manifest, name: &str| {
+        redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap())
+    };
+    assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
+    assert_eq!(args(&m, "bootfsd"), ["buckets=4"]);
+    assert_eq!(args(&m, "blkd"), ["labels.2=7"]);
+}
+
+/// R47 (one volume per instance): a volume is one GPT entry, attached by one server, whose range
+/// is minted at the one `blkd`; and no entry carries an argument `init` passes itself.
+#[test]
+fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
+    let data = || Volume { name: "data".into(), partition: 0, labels: vec![] };
+    let mut m = without_volumes();
+    m.volumes = vec![data(), Volume { name: "other".into(), ..data() }];
+    refused_at(&m, "volumes[1].partition", Why::Twice);
+    let mut m = without_volumes();
+    m.volumes.push(data());
+    m.servers[0].volume = Some("data".into());
+    m.servers[2].volume = Some("data".into());
+    refused_at(&m, "servers[2].volume", Why::Twice);
+    let mut m = without_volumes();
+    m.volumes.push(data());
+    m.servers[0].volume = Some("data".into());
+    m.servers.retain(|s| s.program != "blkd");
+    refused_at(&m, "servers[0].volume", Why::NoBlkd);
+    let mut m = without_volumes();
+    m.volumes.push(data());
+    m.servers[0].volume = Some("data".into());
+    let mut second = server(&mut m, "blkd").clone();
+    second.name = "blkd2".into();
+    second.receives = vec!["blkd2".into()];
+    second.devices.clear();
+    m.servers.push(second);
+    refused_at(&m, "servers[0].volume", Why::NoBlkd);
+    let mut m = without_volumes();
+    m.volumes.push(data());
+    m.servers[0].volume = Some("data".into());
+    m.servers[0].args.push("labels=1".into());
+    refused_at(&m, "servers[0].args[3]", Why::Argument);
+    let mut m = without_volumes();
+    server(&mut m, "blkd").args.push("labels.0=1".into());
+    refused_at(&m, "servers[3].args[0]", Why::Argument);
+}
+
+/// R47 (one volume per instance): `blkd` resolves a badge at its endpoint to a volume's range, so
+/// a server handed one would hold the raw blocks of a volume another server attaches.
+#[test]
+fn no_server_is_handed_a_badge_at_blkd() {
+    let mut m = without_volumes();
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
+    m.servers[0].volume = Some("data".into());
+    assert!(on_virt(&m).is_ok());
+    let blkd = server(&mut m, "blkd").receives[0].clone();
+    server(&mut m, "netd").handed.push(Handed { endpoint: blkd.clone(), badge: 1 });
+    let netd = m.servers.iter().position(|s| s.program == "netd").unwrap();
+    let k = m.servers[netd].handed.len() - 1;
+    refused_at(&m, &format!("servers[{netd}].handed[{k}].endpoint"), Why::BlkdHanded);
+    // With no volume at all, and at any badge.
+    let mut m = without_volumes();
+    server(&mut m, "keyd").handed.push(Handed { endpoint: blkd, badge: 9 });
+    refused_at(&m, "servers[0].handed[0].endpoint", Why::BlkdHanded);
+}
 
 #[test]
 fn handles_and_arguments_must_fit_one_startup_block() {
@@ -533,7 +642,8 @@ fn confined_refuses_two_label_sets_on_one_endpoint() {
 
 #[test]
 fn confined_refuses_two_label_sets_on_one_volume() {
-    let mut m = confined();
+    let mut m = without_volumes();
+    m.confined = true;
     secrets(&mut m);
     m.principals.push(alice());
     m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![] });
@@ -560,37 +670,100 @@ fn confined_gives_a_labelled_domain_no_network() {
     assert_eq!(sharing(&m), Sharing::Network);
 }
 
+/// A volume's range is a handle at `blkd`'s endpoint, so its server is one of `blkd`'s users: two
+/// volumes with differing label sets on one disk share `blkd` and its device, and are refused; a
+/// disk whose `blkd` carries its one volume's set boots.
 #[test]
-fn confined_refuses_a_driver_serving_two_label_sets() {
-    let mut m = confined();
+fn confined_refuses_two_label_sets_on_one_disk() {
+    let mut m = without_volumes();
+    m.confined = true;
     secrets(&mut m);
-    m.principals.push(Principal {
-        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) }],
-        ..alice()
-    });
-    // Only consoled is shared: its device reaches both of alice's sets.
+    m.labels.push(Label { name: "alice-other".into(), owner: "alice".into(), id: 8 });
+    m.principals.push(alice());
     for s in &mut m.servers {
-        if s.program != "consoled" {
-            s.args.retain(|a| !a.starts_with("buckets="));
-        }
+        s.args.retain(|a| !a.starts_with("buckets="));
+    }
+    // An fsd for each volume, each carrying its volume's set.
+    for (name, partition, label) in [("vault", 0, "alice-secrets"), ("other", 1, "alice-other")] {
+        m.volumes.push(Volume { name: name.into(), partition, labels: vec![label.into()] });
+        let endpoint = format!("fsd:{name}");
+        m.servers.push(Server {
+            name: endpoint.clone(),
+            program: "fsd".into(),
+            volume: Some(name.into()),
+            labels: vec![label.into()],
+            receives: vec![endpoint.clone()],
+            handed: vec![],
+            devices: vec![],
+            args: vec![format!("endpoint={endpoint}")],
+            ..server(&mut image(), "fsd:data").clone()
+        });
     }
     assert_eq!(sharing(&m), Sharing::Device);
+    // One label set on the disk, and blkd carrying it.
+    m.servers.pop();
+    m.volumes.pop();
+    assert_eq!(sharing(&m), Sharing::Device, "an unlabelled blkd serving a labelled volume");
+    server(&mut m, "blkd").labels = vec!["alice-secrets".into()];
+    assert!(on_virt(&m).is_ok());
 }
 
+/// A `blkd` with no devices serving a labelled volume shares no endpoint, volume or device with
+/// its `fsd`, yet the volume's range at it puts two sets on the one instance.
 #[test]
 fn confined_refuses_a_server_instance_serving_two_label_sets() {
-    let mut m = confined();
+    let mut m = without_volumes();
+    m.confined = true;
+    secrets(&mut m);
+    m.principals.push(alice());
+    let secret = || vec![String::from("alice-secrets")];
+    m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: secret() });
+    server(&mut m, "blkd").devices.clear();
+    let base = server(&mut image(), "fsd:data").clone();
+    m.servers.push(Server { labels: secret(), volume: Some("vault".into()), ..base });
+    let blkd = m.servers.iter().position(|s| s.program == "blkd").unwrap();
+    assert_eq!(
+        on_virt(&m).unwrap_err(),
+        Refusal::Confined { at: format!("servers[{blkd}]"), sharing: Sharing::Server }
+    );
+    m.servers[blkd].labels = secret();
+    assert!(on_virt(&m).is_ok());
+}
+
+/// A shared server's users are the principal domains with its own label set, since only those
+/// may later be granted a connection there: alice working under {alice-secrets} beside unlabelled
+/// shared keyd and consoled, with a labelled blkd, fsd and client, boots; the client unlabelled
+/// shares fsd's endpoint across two sets and is refused.
+#[test]
+fn confined_counts_only_a_shared_servers_own_label_set() {
+    let mut m = without_volumes();
+    m.confined = true;
     secrets(&mut m);
     m.principals.push(Principal {
         label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) }],
         ..alice()
     });
-    for s in &mut m.servers {
-        if s.program != "keyd" {
-            s.args.retain(|a| !a.starts_with("buckets="));
-        }
-    }
-    assert_eq!(sharing(&m), Sharing::Server);
+    let secret = || vec![String::from("alice-secrets")];
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret() });
+    server(&mut m, "blkd").labels = secret();
+    let base = server(&mut image(), "fsd:data").clone();
+    m.servers.push(Server { labels: secret(), ..base.clone() });
+    m.servers.push(Server {
+        name: "client".into(),
+        volume: None,
+        labels: secret(),
+        receives: vec!["client".into()],
+        handed: vec![Handed { endpoint: "fsd:data".into(), badge: 7 }],
+        args: vec!["endpoint=client".into(), "buckets=4".into()],
+        ..base
+    });
+    assert!(on_virt(&m).is_ok());
+    m.servers.last_mut().unwrap().labels.clear();
+    let fsd = m.servers.len() - 2;
+    assert_eq!(
+        on_virt(&m).unwrap_err(),
+        Refusal::Confined { at: format!("servers[{fsd}].receives[0]"), sharing: Sharing::Endpoint }
+    );
 }
 
 #[test]
@@ -615,6 +788,7 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
         let receives = (0..60).map(|e| format!("e{n}-{e}")).collect();
         m.servers.push(Server {
             name: format!("s{n}"),
+            program: "fsd".into(),
             budget: budget(16),
             receives,
             ..m.servers[3].clone()
@@ -644,7 +818,13 @@ fn more_servers_than_init_has_threads_to_watch_are_refused() {
     while m.servers.len() < MAX_THREADS {
         let n = m.servers.len();
         let receives = vec![format!("e{n}")];
-        m.servers.push(Server { name: format!("s{n}"), receives, budget: budget(1), ..m.servers[3].clone() });
+        m.servers.push(Server {
+            name: format!("s{n}"),
+            program: "fsd".into(),
+            receives,
+            budget: budget(1),
+            ..m.servers[3].clone()
+        });
         m.servers.last_mut().unwrap().devices.clear();
     }
     let devices = virt_devices();

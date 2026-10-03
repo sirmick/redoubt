@@ -47,7 +47,7 @@ and `init`'s only input. Its entries:
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume, the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), and arguments |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), and arguments |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -85,6 +85,15 @@ and `init`'s only input. Its entries:
   carries the smallest badge from 1 that no `handed` item there uses. A manifest names each of
   these programs at most once, `keyd` exactly once: a second would run beside the one `init`
   calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35).
+- **Volumes.** A `volumes` entry is one GPT entry of the one disk, which no other entry names,
+  and at most one server attaches it, and no entry is handed a badge at the endpoint a `blkd`
+  receives on ([R47 (one volume per instance)](fsd.md#r47-one-volume-per-instance)). For that
+  server `init` mints the range badge, the entry number + 1, at the endpoint the one `blkd`
+  receives on first, hands it as `volume`, and adds `labels=` the volume's label ids after the
+  entry's own arguments (none for an unlabelled volume); it gives `blkd` one `labels.P=ID,...`
+  per labelled volume, P its entry number ([blkd](blkd.md#ranges-and-badges)). A volume a server
+  attaches without exactly one `blkd`, and an entry carrying one of these arguments itself, are
+  refused.
 - **Sizing.** Every shared server takes `buckets=N` as an argument, parsed once in the serving
   library; none has a compiled-in count. `init` refuses the boot unless N is at least the number
   of (account, label set)s the manifest declares (each principal's unlabelled set and every label
@@ -117,7 +126,7 @@ and `init`'s only input. Its entries:
 ```json
 { "servers": [ { "name": "fsd:data", "program": "fsd", "volume": "data",
                  "budget": { "pages": "4096", "processes": 1, "weight": 100 },
-                 "receives": ["fsd:data"], "handed": [ { "endpoint": "blkd", "badge": "1" } ] } ],
+                 "receives": ["fsd:data"], "args": ["endpoint=fsd:data", "buckets=4"] } ],
   "principals": [ { "name": "alice", "account": "1001", "labels": ["alice-secrets"],
                     "ssh_keys": ["ssh-ed25519 AAAA..."], "home": "data:/home/alice",
                     "net": [ { "prefix": "0.0.0.0/0", "ports": [22, 443] } ] } ] }
@@ -132,14 +141,15 @@ M5 (persist, install, share).
 
 ### The confinement check
 
-<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the steward's, not built · tested (7)</summary>
+<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the steward's, not built · tested (8)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
 - host:redoubt-init::confined_gives_a_labelled_domain_no_network
-- host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
+- host:redoubt-init::confined_counts_only_a_shared_servers_own_label_set
 - host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
 
 </details>
@@ -167,10 +177,14 @@ steward ([steward](steward.md)). The refusal is a boot failure, not a warning
 ([R34 (confined placement)](#r34-confined-placement)).
 
 The domains compared are each `servers` entry, under its `labels` (`{}` if none), and each
-principal's label sets. A server's users are the servers handed one of its endpoints and, for a
-shared server (one that takes `buckets=N`), every principal domain: the same count as the bucket
-rule, so a server a session may later reach is never missed. The kinds are checked in the order
-listed, and the refusal names the kind.
+principal's label sets. A server's users are the servers handed one of its endpoints, or a
+volume's range at it (an `fsd` on a `blkd` disk), and, for a shared server (one that takes
+`buckets=N`), every principal domain with the server's own label set. Only such a domain may later
+be granted a connection there, since the steward grants within a label set by this same rule, so
+a server a session may later reach is never missed; a domain with another set is not counted, and
+the bucket rule still sizes the server for every principal domain. The kinds are checked in the
+order listed, and the refusal names the kind. So in a confined boot a disk holds one label set's
+volumes, and its `blkd` carries that set.
 
 **The one named exception** is the control plane: the steward and `sshd` may reach across label
 sets, and only by three kinds of edge: the request and owner-approval path; per-item reader and
@@ -186,10 +200,11 @@ multi-tenancy and the serving library's residual risks apply.
 
 ### Starting the servers
 
-<details><summary>Status: built · partly tested: step 6, the steward and `sshd`, and an `fsd` for each volume are not built · tested (12)</summary>
+<details><summary>Status: built · partly tested: step 6, the steward and `sshd` are not built · tested (16)</summary>
 
 - bench:init-boot
 - bench:init-servers
+- bench:fsd-boot
 - bench:init-refuses-system-fit
 - bench:init-refuses-device-unmatched
 - bench:init-refuses-bound
@@ -200,6 +215,9 @@ multi-tenancy and the serving library's residual risks apply.
 - host:redoubt-init::init_calls_one_of_each_server_it_calls
 - host:redoubt-init::more_servers_than_init_has_threads_to_watch_are_refused
 - host:redoubt-init::no_server_is_handed_a_root_badge_at_consoled
+- host:redoubt-init::a_volume_s_labels_go_to_its_server_and_to_blkd
+- host:redoubt-init::a_volume_is_one_entry_for_one_server_at_one_blkd
+- host:redoubt-init::no_server_is_handed_a_badge_at_blkd
 
 </details>
 
@@ -218,7 +236,8 @@ Reset right. The loader maps the bundle into it, read-only
    `root`, so it outlives any one instance of its server, and R1 (flow) does not bind it because `root`
    is `system` class ([IPC](../kernel/ipc.md#r1-flow)). `init` keeps the receive right, hands the
    server a copy, and mints, for each `handed` item that names the endpoint, a handle with the
-   item's badge for the server whose entry lists it;
+   item's badge for the server whose entry lists it, and at `blkd`'s, each volume's range badge
+   for the server attaching it;
 3. starts `keyd` and runs the [key-separation check](#the-key-separation-check) against it. A
    manifest with no `keyd` entry is refused at step 1, since the bundle's key always needs
    asking about;
@@ -572,8 +591,8 @@ kernel
   it maps no device once `consoled` has the UART.
 - Beside those it holds only its own handle at each server it calls, its own connection to
   `consoled`, and each server's exit endpoint. It closes its copy of every badge it minted for a
-  `handed` item, and of each child's console connection, once the child is started, so it calls
-  as no system caller and writes as no child.
+  `handed` item or a volume's range, and of each child's console connection, once the child is
+  started, so it calls as no system caller and writes as no child.
 - It holds no keys and no cryptography, and parses no ELF: launching goes through the loader stub,
   inside the child.
 - It has no network and no user data, and after boot it receives only exit notices.
@@ -648,14 +667,15 @@ server from a manifest that grants it a budget and expects the boot refused.
 
 ### R34 (confined placement)
 
-<details><summary>Status: built · partly tested: the control plane's exception is the steward's and `sshd`'s, not built · tested (7)</summary>
+<details><summary>Status: built · partly tested: the control plane's exception is the steward's and `sshd`'s, not built · tested (8)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
 - host:redoubt-init::confined_gives_a_labelled_domain_no_network
-- host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
+- host:redoubt-init::confined_counts_only_a_shared_servers_own_label_set
 - host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
 
 </details>

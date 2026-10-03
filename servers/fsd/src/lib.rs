@@ -23,6 +23,9 @@
 //! **Typed operations.** `rename`, `copy_file`, `set_attr` and `get_attr` on the 9P endpoint
 //! ([`typed`]), naming the caller's own fids through the skeleton.
 //!
+//! **Packing.** On the host, [`pack`] writes a tree into a volume's bytes through this same code,
+//! for the disk image, so no second writer has to keep the id rule.
+//!
 //! **No `unsafe`.** The crate forbids it outright.
 
 #![no_std]
@@ -31,10 +34,14 @@
 extern crate alloc;
 
 pub mod blkd;
+#[cfg(feature = "one-volume-probe")]
+pub mod one_volume;
+#[cfg(not(target_os = "none"))]
+pub mod pack;
 mod quota;
 pub mod server;
 pub mod typed;
 pub mod volume;
 
-pub use server::{BUDGET, BadArgs, COST, Fsd, limits, parse_labels};
+pub use server::{Args, BUDGET, BadArgs, COST, Fsd, limits, parse_args};
 pub use volume::{Mounted, NoVolume, Range, mount};

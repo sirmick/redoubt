@@ -1,0 +1,31 @@
+description = "fsd under init (servers/fsd.md, \"Volumes, connections and labels\"): init starts blkd and an fsd for the manifest's one volume, minting its range badge at blkd; fsd formats the blank partition; a client handed a root badge at fsd writes, reads, renames and removes a file and a directory through 9P"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and fsd-client, which holds no Reset right, so
+# the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-fsd", bin = "fsd" },
+    { package = "redoubt-fsd-programs", bin = "fsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started fsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] fsd-client wrote, read, renamed and removed$',
+    '^\[con [0-9a-f]{16}\] fsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/fsd/boot.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1

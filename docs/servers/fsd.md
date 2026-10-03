@@ -19,8 +19,13 @@ power-loss safety by design, and a size that can be read.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · partly tested: one instance per volume under `init`, and the line a volume served as corrupt prints there, are not built until `fsd` runs under `init` · tested (26)</summary>
+<details><summary>Status: built · tested (31)</summary>
 
+- bench:fsd-boot
+- bench:fsd-confined-labelled
+- bench:fsd-corrupt-volume
+- bench:fsd-label-check
+- bench:fsd-one-volume
 - host:redoubt-fsd::attach_walk_open_read_write
 - host:redoubt-fsd::files_and_directories_survive_a_remount
 - host:redoubt-fsd::a_removed_files_other_fids_get_removed
@@ -55,12 +60,14 @@ power-loss safety by design, and a size that can be read.
   holding only that medium, so a parser exploit reaches that medium and nothing else
   ([R47 (one volume per instance)](#r47-one-volume-per-instance)).
 - **Arguments.** `fsd` gets one named handle, `volume`, its range at `blkd`, and the arguments
+  `endpoint=NAME`, the manifest name of the endpoint it receives on (`fsd:data`),
   `labels=ID[,ID...]`, the volume's label set, and `buckets=N`. littlefs blocks are 4096 bytes,
   eight of `blkd`'s sectors, so the volume's block count is its range's sectors divided by 8.
 - **Mounting.** At start `fsd` mounts its range. A range whose first two blocks are all zero
   has never been written, and `fsd` formats it. Any other range that does not mount is served
-  as corrupt: every attach is refused with `corrupt`, and `fsd` stays up, so a damaged or
-  hostile medium never becomes a restart loop. `fsd` never formats a range that holds anything.
+  as corrupt: every attach is refused with `corrupt`, `fsd` says so on its console, and it stays
+  up, so a damaged or hostile medium never becomes a restart loop. `fsd` never formats a range
+  that holds anything.
   A range that mounts is then checked, without writing: every file and directory carries its id,
   no two the same, and the id counter is above the highest, and no metadata pair is named
   twice, within one directory's chain or across two; a volume that fails is served as corrupt
@@ -329,30 +336,33 @@ The crash tests inject exactly these failures at every block write of fixed and 
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:fsd-one-volume
 
-`fsd` holds its endpoint, its one block-range handle at `blkd`, and the connections it minted. It
-holds no device, no budget handle and no connection to any other file server. What a client may
-reach is the subtree its connection is rooted at, under the volume's labels and its root's quota.
-
-**Open:** none.
+`fsd` holds its endpoint, its one block-range handle at `blkd`, the console `init` gave it, and
+the connections it minted. It holds no device, no budget handle and no connection to any other
+file server. What a client may reach is the subtree its connection is rooted at, under the
+volume's labels and its root's quota.
 
 ## Security properties
 
 ### R47 (one volume per instance)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (2)</summary>
+
+- bench:fsd-one-volume
+- host:redoubt-init::no_server_is_handed_a_badge_at_blkd
+
+</details>
 
 Each `fsd` instance serves one volume and holds only that volume's block range. A client who
 exploits the filesystem parser through a crafted volume or request reaches that volume's data and
 nothing else: no other volume, no other partition, no device.
 
-**Open:** none.
-
 ### R48 (a quota per attach root)
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
+- bench:fsd-quota
 - host:redoubt-fsd::a_write_past_one_roots_quota_is_refused_while_another_still_writes
 - host:redoubt-fsd::a_root_with_quota_0_cannot_create_but_can_read_and_remove
 
@@ -399,7 +409,7 @@ metadata change either done or not done, and the next mount reads a consistent v
 
 ## Failure and restart
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:fsd-restart, bench:fsd-corrupt-volume
 
 - **`fsd` crashes:** its clients' calls get `Dead`, `init` restarts it on the same endpoint
   ([init](init.md#restarts-and-reboots)), and littlefs's copy-on-write keeps the volume
@@ -407,7 +417,10 @@ Status: planned · M1 (separation and containment)
 - **The medium is corrupt:** requests that reach the corruption fail; the volume check reports it.
 - **An I/O error from `blkd`** poisons the filesystem until it is mounted again.
 
-**Open:** whether a restarted `fsd` runs the volume check before serving.
+A restarted `fsd` mounts as it does at boot, with the same checks over every metadata pair, then
+serves; it reads no file's blocks first. A power cut leaves the volume consistent
+([R50](#r50-power-loss-leaves-before-or-after)), and damage in a file's blocks is `corrupt`
+wherever a request meets it ([R49](#r49-a-hostile-medium-is-corrupt-not-a-crash)).
 
 ## Residual risks
 

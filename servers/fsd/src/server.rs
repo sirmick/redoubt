@@ -23,6 +23,15 @@ pub const COST: Cost = Cost { in_flight: 0, file: 2048, state: 512 };
 /// The bytes of this server's budget its clients may use between them.
 pub const BUDGET: u64 = 2 * 1024 * 1024;
 
+/// Test-only, for the bench's `fsd-restart` (feature `restart-probe`, off in every default build,
+/// as netd's is): a walk to this name ends the instance with [`PROBE_EXIT`] while it holds the
+/// call, so its caller gets `Dead` and `init` restarts `fsd`. Only the client that walks there
+/// triggers it, and it walks there once.
+#[cfg(feature = "restart-probe")]
+pub const PROBE: &str = "fsd-restart-probe";
+#[cfg(feature = "restart-probe")]
+pub const PROBE_EXIT: u32 = 9;
+
 /// `fsd`'s own attribute types, 0 to 15 (servers/fsd.md, "Attributes"): a client's `set_attr`
 /// cannot touch them.
 pub const OWN_ATTRS: u8 = 16;
@@ -61,16 +70,34 @@ pub mod text {
     pub const READ_ONLY: NineError = NineError("read-only volume");
 }
 
-/// Why `labels=` was refused.
+/// Why the arguments were refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BadArgs;
 
-/// The volume's label set from the arguments other than `buckets=`: `labels=ID[,ID...]` at most
-/// once, each ID decimal without leading zeros, at most `MAX_LABELS`; absent, the set is empty.
-/// Anything else is refused, so `fsd` never serves a volume under labels it misread.
-pub fn parse_labels<'a>(args: impl Iterator<Item = &'a str>) -> Result<Vec<u64>, BadArgs> {
-    let mut labels = None;
+/// What `fsd`'s arguments other than `buckets=` say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Args<'a> {
+    /// The manifest name of the endpoint it receives on (`fsd:data`): its startup block holds
+    /// that endpoint under this name.
+    pub endpoint: &'a str,
+    /// The volume's label set; empty when `labels=` is absent.
+    pub labels: Vec<u64>,
+}
+
+/// The arguments other than `buckets=`: `endpoint=NAME` exactly once, a name under the
+/// manifest's rule, never defaulted; and `labels=ID[,ID...]` at most once, each ID decimal
+/// without leading zeros, at most `MAX_LABELS`, absent for an empty set. Anything else is refused,
+/// so `fsd` never serves under an endpoint or labels it misread.
+pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, BadArgs> {
+    let (mut endpoint, mut labels) = (None, None);
     for arg in args {
+        if let Some(name) = arg.strip_prefix("endpoint=") {
+            if endpoint.is_some() || !redoubt_rt::startup::valid_name(name) {
+                return Err(BadArgs);
+            }
+            endpoint = Some(name);
+            continue;
+        }
         let list = arg.strip_prefix("labels=").ok_or(BadArgs)?;
         if labels.is_some() {
             return Err(BadArgs);
@@ -89,7 +116,7 @@ pub fn parse_labels<'a>(args: impl Iterator<Item = &'a str>) -> Result<Vec<u64>,
         }
         labels = Some(set);
     }
-    Ok(labels.unwrap_or_default())
+    Ok(Args { endpoint: endpoint.ok_or(BadArgs)?, labels: labels.unwrap_or_default() })
 }
 
 /// What a fid rests on: a path from the volume's root, built only from names clients walked or
@@ -189,6 +216,9 @@ impl<R: Range> Fsd<R> {
             out_of_room: 0,
         }
     }
+
+    /// Whether the volume is served as corrupt: every attach refused with `corrupt`.
+    pub fn is_corrupt(&self) -> bool { self.fs.is_none() }
 
     /// Refuses a change to a read-only volume, so a refused write never reaches the device and
     /// never poisons the volume for everyone.
@@ -709,6 +739,10 @@ impl<R: Range> FileServer for Fsd<R> {
     fn labels(&self, _: &Node) -> &[u64] { &self.labels }
 
     fn walk(&mut self, _: &Caller, dir: &Node, name: &str) -> Result<(Node, Qid), NineError> {
+        #[cfg(feature = "restart-probe")]
+        if name == PROBE {
+            redoubt_rt::handle::process_exit(PROBE_EXIT);
+        }
         self.find(dir).map_err(nine)?;
         let node = self.node_at(join(&dir.path, name)?).map_err(nine)?;
         let qid = self.qid(&node).map_err(nine)?;

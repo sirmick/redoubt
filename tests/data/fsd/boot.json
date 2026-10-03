@@ -1,0 +1,48 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "disk0", "base": "268468224", "irq": 8, "dma": true}
+  ],
+  "volumes": [
+    {"name": "data", "partition": 0}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "blkd",
+      "program": "blkd",
+      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "devices": [{"device": "disk0", "as": "disk"}],
+      "receives": ["blkd"]
+    },
+    {
+      "name": "fsd",
+      "program": "fsd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "volume": "data",
+      "receives": ["fsd:data"],
+      "args": ["endpoint=fsd:data", "buckets=4"]
+    },
+    {
+      "name": "client",
+      "program": "fsd-client",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "handed": [{"endpoint": "fsd:data", "badge": "7"}],
+      "args": ["boot", "fsd:data"]
+    }
+  ]
+}

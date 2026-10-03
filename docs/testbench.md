@@ -267,12 +267,13 @@ so they run a tester in `init`'s place instead.
 
 ### The servers' cases under `init`
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:init-servers
 - bench:init-console-forgery
 - bench:bench-init-reporter-forged
 - bench:init-boot
+- bench:fsd-reboot
 
 </details>
 
@@ -284,10 +285,13 @@ their own included, as no server does
 connection id, `[con N] ` with N in 16 lowercase hex digits
 ([consoled](servers/consoled.md#started-by-init)). A case's `reporter` names a manifest entry, and
 the bench reads that entry's connection id only from `init`'s bare line announcing it,
-`init: started NAME, console N`; a second such line fails the case. A restarted server is
-announced as `init: restarted NAME, console N`, and the bench never reads a reporter's id from
-that line, so a reporter that restarts cannot pass its case. A case that judges a reboot expects
-`init`'s reboot line and then the next boot's first line, and ends there. The case passes only if
+`init: started NAME, console N`; a second such line in one boot fails the case. A restarted
+server is announced as `init: restarted NAME, console N`, and the bench never reads a reporter's
+id from that line, so a reporter that restarts cannot pass its case. A case that judges a reboot
+expects `init`'s reboot line and then the next boot's first line, the loader's. The machine
+resets in the same QEMU run, with the same disk, and from that line on the bench reads the
+reporter's id afresh from the next boot's announcement, so a case may go on to its verdict in the
+next boot; still only one `TEST PASSED` line, in the whole run, may pass it. The case passes only if
 exactly one line says `TEST PASSED` and it starts with that `[con N] `; any other such line fails
 it, wherever it came from. Such a case ends at its last `expect`, which waits for the verdict,
 since no test program holds the Reset right. The test programs are `redoubt-init-programs`
@@ -453,13 +457,23 @@ to launch, is a bundle file.
 
 ### Bundle files
 
-Status: built · tested: bench:bench-bundle-file, bench:programs-unknown-budget-attack
+Status: built · tested: bench:bench-bundle-file, bench:programs-unknown-budget-attack, bench:fsd-reboot, host:testbench::a_file_s_servers_merge_into_its_manifest_by_name
 
 ```toml
 [[file]]                     # a data entry, after the programs
 name = "trace"
 from = { path = "tests/data/bundle-file.txt" }   # or any `programs` form, corrupted ones included
+
+[[file]]                     # a manifest, with entries merged into its `servers`
+name = "manifest"
+from = { path = "tests/data/fsd/boot.json" }
+servers = [{ name = "client", args = ["reboot", "fsd:data"] }]
 ```
+
+A file read from a path may be a manifest with `servers` entries merged in by name: each replaces
+the members it gives in the entry of its name, or is added after the rest if none has it, so cases
+that differ in one entry share one manifest, and a case can boot the image's own manifest with a
+client added.
 
 Entry names must differ from each other and from `kernel`. A file named `programs` replaces the
 listing the builder writes, so an attack case can hand the tester a hostile one. The bench
@@ -487,12 +501,15 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
+- bench:image-disk
 - bench:init-boot
 - bench:net-tcp
+- host:testbench::a_recipe_packs_a_table_and_a_volume_per_partition
+- host:testbench::a_stage_is_walked_parents_first_in_name_order
 - host:testbench::devices_sit_on_fixed_slots
 - host:testbench::every_network_is_restricted
 - host:testbench::virtio_devices_are_modern
@@ -503,11 +520,19 @@ a program reads it again through `/boot` once the manifest's `public` list names
 [disk]                       # a virtio-blk disk, zeroed, created afresh for every boot
 size_kib = 4096
 partitions = 1               # optional: a GPT of this many equal partitions, by blkd's builder
+# or, instead of both: a disk recipe packed for every boot as ./mkimage packs it
+# recipe = "image/disk.toml"
+# stage = "tests/data/fsd/stage"   # optional: what every partition holds instead of its stage
 
 [net]                        # a virtio-net card on QEMU's user-mode network
 forward = [22]               # guest TCP ports reachable from the host (default: none)
 host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions accept
 ```
+
+A disk `recipe` (`image/disk.toml`) is packed by the code `./mkimage` runs (`testbench
+--pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as a littlefs
+volume holding its stage's tree, written through `fsd`'s own code, so a case boots the disk the
+image ships.
 
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
 virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,

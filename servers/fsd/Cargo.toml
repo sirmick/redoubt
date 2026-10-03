@@ -15,6 +15,15 @@ path = "src/bin/fsd.rs"
 redoubt-rt = { path = "../../libs/rt" }
 littlefs = { path = "../../libs/littlefs" }
 
+[features]
+# Test-only, for the bench's fsd-restart case, and off in every default build, as netd's
+# restart-probe is: a walk to one name ends the instance (src/server.rs, PROBE).
+restart-probe = []
+# Test-only, for the bench's fsd-one-volume case, and off in every default build: before
+# serving, fsd tries to reach past its endpoint and its range and says what it found
+# (src/one_volume.rs).
+one-volume-probe = []
+
 [dev-dependencies]
 redoubt-fake-kernel = { path = "../../libs/rt/fake" }
 redoubt-client = { path = "../../libs/client" }
