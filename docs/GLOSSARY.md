@@ -118,8 +118,8 @@ syntax of its own. Defined in [the shell](userland/shell.md#commands).
 ### confined deployment
 
 A boot in which `init` refuses any manifest that lets two different label sets share a server
-instance, volume, endpoint, network instance, device or core, except the two named control-plane
-mediators. Defined in [init](servers/init.md#the-confinement-check).
+instance, volume, endpoint, network instance or device, except the two named control-plane
+mediators. The kernel and the cores stay shared. Defined in [init](servers/init.md#the-confinement-check).
 
 ### connection
 

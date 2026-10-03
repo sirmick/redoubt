@@ -110,9 +110,11 @@ makes `init` **refuse the boot** whenever two entries with differing label sets 
 - an **endpoint**: one name in a `servers` entry's receives or handed list both hold;
 - a **network instance**: one `ipd` or `netd` both use (a labelled domain gets no `/net` at all);
 - a **device object**: one `devices` entry both hold, since a shared disk or NIC is a shared
-  scheduler, cache and timing surface;
-- a **core**: a hardware core both budgets run on; a confined manifest naming fewer cores than
-  budget groups is refused rather than time-sharing a core between two label sets.
+  scheduler, cache and timing surface.
+
+The kernel and the cores are not on the list. Every label set shares the one kernel, which is the
+trusted base, and its cores, whose timing is no more partitioned than the caches around them
+([side channels](../TENETS.md#side-channels)).
 
 The label set compared is a budget's labels (a server's `labels`, a principal's label sets) and,
 for a volume, its `volumes` entry's label set. Two sets differ when they are not equal: `{a}`
@@ -125,7 +127,7 @@ steward ([steward](steward.md)). The refusal is a boot failure, not a warning
 **The one named exception** is the control plane: the steward and `sshd` may reach across label
 sets, and only by three kinds of edge: the request and owner-approval path; per-item reader and
 writer budgets, each carrying exactly one label set and dying after one item (declassification and
-push); and lease-ending supervision. No shared data server, device or core is exempt. `init`
+push); and lease-ending supervision. No shared data server or device is exempt. `init`
 checks the declared graph at boot, and the steward enforces the same rule for the budgets and
 grants it creates later.
 
@@ -529,7 +531,7 @@ server from a manifest that grants it a budget and expects the boot refused.
 Status: planned · M1 (separation and containment)
 
 With `confined` set, no two entries with differing label sets share a server instance, volume,
-endpoint, network instance, device object or core, and no labelled domain reads a shared
+endpoint, network instance or device object, and no labelled domain reads a shared
 unlabelled volume; a manifest that would place them so fails the boot. The one exception is the
 control plane: the steward and `sshd`, by the request and owner-approval path, per-item single-label
 reader and writer budgets, and lease-ending supervision only. The attack verdict is the boot

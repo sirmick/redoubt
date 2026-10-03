@@ -129,8 +129,8 @@ different labels ([labels and vaults](userland/agents.md#labels-and-vaults)).
   ([R42 (one approved item)](servers/steward.md#r42-one-approved-item)).
 
 **Confinement.** In a confined deployment no two label sets share a server instance, volume,
-endpoint, network instance, device or core, and no labelled domain reads a shared unlabelled
-volume; a manifest that would place them so fails the boot
+endpoint, network instance or device, and no labelled domain reads a shared unlabelled volume;
+a manifest that would place them so fails the boot
 ([R34 (confined placement)](servers/init.md#r34-confined-placement)). R34 names the one exception,
 the **control plane**: the steward and `sshd`, and only by three kinds of edge.
 
@@ -139,7 +139,7 @@ the **control plane**: the steward and `sshd`, and only by three kinds of edge.
   (declassification and push);
 - lease supervision: ending a lease, and learning that it ended.
 
-No data server, device or core is exempt. `init` checks the declared graph at boot, and the
+No data server or device is exempt. `init` checks the declared graph at boot, and the
 steward checks every budget and grant it creates later against the same rule. The residual is
 stated: **the named mediators are trusted across the labels they serve.** A bug in the steward or
 `sshd` reaches every label set it mediates.
@@ -254,7 +254,8 @@ sponsor's to allow.
 
 Timing, shared caches and shared hardware couple budgets in ways software can reduce but not
 close:
-- the scheduler, when two label sets share a core, and server CPU spent on a caller's behalf;
+- the kernel and the scheduler, which every label set shares, confined or not, and server CPU spent
+  on a caller's behalf;
 - CPU caches, the shared second-level cache and memory bandwidth; on QEMU and ordinary hardware
   none of these is partitioned;
 - a shared server's caches and the disk: a vault's reads warm a cache an unlabelled session can
@@ -266,8 +267,10 @@ close:
 - a server sized for fewer buckets than the label sets it serves, which refuses latecomers
   ([serving](servers/serving.md#residual-risks)).
 
-A confined deployment removes the shared servers, endpoints, devices and cores; what is left is
-hardware's, and hardware placement is [beyond M5](beyond/fpga-platform.md).
+A confined deployment removes the shared servers, endpoints and devices. What is left is the
+kernel's and the hardware's: every label set shares the one kernel and its cores, because the
+kernel is the trusted base and a core's timing is no more partitioned than the caches around it.
+Hardware placement is [beyond M5](beyond/fpga-platform.md).
 
 Constant time is claimed for one thing: `keyd`'s signing, whatever the key and the nonce
 ([R45 (constant-time signing)](servers/keyd.md#r45-constant-time-signing)). That claim is partly

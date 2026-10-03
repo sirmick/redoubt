@@ -305,7 +305,7 @@ nobody did, against real agents told to get out, and it runs continuously. Its s
 
 A referee sets each match up (which of the kernel and the servers are assumed correct; a confined
 manifest, in which differing label sets share no server instance, volume, endpoint, network
-instance or core; a planted secret and a canary; B's egress and the audit log recorded) and
+instance or device; a planted secret and a canary; B's egress and the audit log recorded) and
 decides from the record, never from an agent's own output. Every confirmed finding is classified:
 
 | Class | Meaning | What follows |
