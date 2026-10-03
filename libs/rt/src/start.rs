@@ -22,9 +22,13 @@ use crate::handle::Endpoint;
 use crate::server::ninep::mode;
 use crate::startup::Startup;
 
-/// Exit codes the runtime itself uses, distinct from each other and from success.
+/// Exit codes the runtime itself uses, distinct from each other and from success: 0, 3, 101 and
+/// 102. A program's own codes are the others below 101: a server numbers its own 2 for a startup
+/// block with no endpoint, then from 4, so none is ever [`exit::RECEIVE_FAILED`].
 pub mod exit {
     pub const OK: u32 = 0;
+    /// A server's `receive` failed for a reason other than its endpoint going away.
+    pub const RECEIVE_FAILED: u32 = 3;
     /// The program panicked (the code Rust's `std` uses).
     pub const PANIC: u32 = 101;
     /// The startup block did not parse: the parent is broken or hostile.

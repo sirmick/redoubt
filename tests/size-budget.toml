@@ -51,7 +51,7 @@ max_lines = 626
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 2920
+max_lines = 2926
 
 [[crate]]
 name = "libs/wire"
@@ -76,7 +76,7 @@ max_lines = 10239
 [[crate]]
 name = "servers/keyd"
 paths = ["servers/keyd/src"]
-max_lines = 556
+max_lines = 539
 
 [[crate]]
 name = "servers/sshd"
@@ -86,7 +86,7 @@ max_lines = 388
 [[crate]]
 name = "servers/bootfsd"
 paths = ["servers/bootfsd/src"]
-max_lines = 242
+max_lines = 227
 
 [[crate]]
 name = "servers/consoled"
@@ -96,7 +96,7 @@ max_lines = 343
 [[crate]]
 name = "servers/blkd"
 paths = ["servers/blkd/src"]
-max_lines = 1579
+max_lines = 1562
 
 [[crate]]
 # Includes the test-only feature restart-probe (src/restart_probe.rs and its two uses), off
@@ -118,4 +118,4 @@ max_lines = 1828
 [[crate]]
 name = "servers/fsd"
 paths = ["servers/fsd/src"]
-max_lines = 1172
+max_lines = 1156
