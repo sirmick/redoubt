@@ -70,7 +70,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: runs on the host only · tested (12)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (14)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::full_own_mailbox_kills_the_sender
@@ -84,6 +84,8 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::jump_loops_are_preempted
 - host:beamlet-vm::garbage_is_collected_and_live_data_survives
 - host:beamlet-vm::unreferenced_binaries_are_freed
+- bench:beamlet-heap-flood
+- bench:beamlet-budget-flood
 
 </details>
 
@@ -105,10 +107,20 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
 - **Fixed limits**, each `system_limit`: 2^20 atoms of at most 255 characters, 2^16 processes, a
   stack of 2^24 slots, bignums of 2^24 bits, binaries of 2^30 bits.
 
-These limits are measurements, not an allocator: one native that allocates a lot at once is
-caught afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session
-budget's page limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). CPU between VMs is the
-kernel's to share, by budget weight ([scheduling](../kernel/scheduling.md)).
+These limits are measurements, not an allocator: one native that allocates a lot at once is caught
+afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session budget's page
+limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). On Redoubt the platform lowers
+`max_heap_words` and `max_ets_words` to a sixteenth of the VM's budget each, which it takes from its
+required argument `budget_pages=N`, the budget's pages
+([todo](../todo/beamlet-budget-from-startup.md)). A flooding process peaks at about four times its
+heap limit, the old heap, the collector's copy and its growth, so the budget must be at least twice
+what the VM uses with no Erlang process running; then one flooding process, or the tables, meets its
+limit while the VM still has pages. Several flooding at once, or a native's single large allocation,
+reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
+under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
+manifest without `budget_pages`) is restarted until the limit, and then the machine reboots
+([init](../servers/init.md#restarts-and-reboots)). CPU between VMs is the kernel's to share, by
+budget weight ([scheduling](../kernel/scheduling.md)).
 
 ### The `Platform` boundary
 
@@ -258,7 +270,7 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: files, programs, `/net` and the natives are not built, and the modules are read from `/boot` unchecked · tested: bench:beamlet-boot, bench:beamlet-console
+Status: built · partly tested: files, programs, `/net` and the natives are not built, and the modules are read from `/boot` unchecked · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood
 
 On Redoubt, beamlet is a native program whose `Platform` is written against the system: thin
 adapters over the client library ([native programs](native.md#the-client-library)) for the

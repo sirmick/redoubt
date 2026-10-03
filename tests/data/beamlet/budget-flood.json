@@ -30,8 +30,8 @@
       "program": "beamlet",
       "budget": {"pages": "4096", "processes": 1, "weight": 100},
       "handed": [{"endpoint": "bootfsd", "badge": "7"}],
-      "args": ["budget_pages=4096", "beamlet_console"]
+      "args": ["budget_pages=4096", "beamlet_budget_flood"]
     }
   ],
-  "public": ["beamlet_console.beam", "io.beam", "io_lib.beam", "io_lib_format.beam", "unicode.beam", "crypto.beam"]
+  "public": ["beamlet_budget_flood.beam", "io.beam", "io_lib.beam", "io_lib_format.beam", "unicode.beam"]
 }

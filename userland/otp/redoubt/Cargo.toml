@@ -31,3 +31,7 @@ required-features = ["fake"]
 [[test]]
 name = "console"
 required-features = ["fake"]
+
+[[test]]
+name = "limits"
+required-features = ["fake"]

@@ -69,6 +69,7 @@ fn main() -> ExitCode {
             Box::new(Dirs(dirs)),
             &module,
             &function,
+            None,
         )
     });
     let status = vm.join().unwrap_or(1);

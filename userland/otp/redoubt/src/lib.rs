@@ -38,12 +38,12 @@ use core::num::NonZeroU64;
 
 use beamlet_vm::bif::NativeSpec;
 use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError};
-use beamlet_vm::vm::Config;
+use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
 use redoubt_client::console::Console;
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend};
-use redoubt_rt::abi::FOREVER;
+use redoubt_rt::abi::{FOREVER, PAGE_SIZE};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Delivery, Event};
 use redoubt_rt::startup::Startup;
@@ -253,23 +253,62 @@ impl Platform for Redoubt {
     fn load_app(&mut self, app: &str) -> Option<Vec<u8>> { self.modules.load(&format!("{app}.app")) }
 }
 
+/// The argument that gives the VM its budget's pages, required on the machine: a program cannot
+/// read its own budget (it holds no budget handle), so the manifest that sets the budget says it
+/// again here.
+pub const BUDGET_PAGES: &str = "budget_pages=";
+
+/// The share of the budget each of the heap and ETS limits gets: one part in this many
+/// (docs/userland/beamlet.md, "Limits inside one VM").
+pub const LIMIT_SHARE: u64 = 16;
+
+/// The pages of `budget_pages=N` among `args`: exactly one, with N a decimal number above zero;
+/// otherwise `None`.
+pub fn budget_pages<'a>(args: impl Iterator<Item = &'a str>) -> Option<u64> {
+    let mut given = args.filter_map(|arg| arg.strip_prefix(BUDGET_PAGES));
+    let (Some(n), None) = (given.next(), given.next()) else { return None };
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    n.parse().ok().filter(|&pages| pages > 0)
+}
+
+/// The VM's limits for a budget of `budget_pages` pages: one process's heap (`max_heap_words`) and
+/// all ETS tables together (`max_ets_words`) each get a sixteenth of it ([`LIMIT_SHARE`]), in
+/// machine words: the same bytes at either width. A flooding process peaks at about four times its
+/// heap limit (the old heap, the collector's copy and its growth), so with a budget at least twice
+/// what the VM uses on its own, one flooding process or table meets its limit, and is killed or
+/// refused in Erlang, while the VM still has pages. Without a budget, the VM's defaults.
+pub fn limits(budget_pages: Option<u64>) -> Limits {
+    let mut limits = Limits::default();
+    if let Some(pages) = budget_pages {
+        let share =
+            pages.saturating_mul(PAGE_SIZE as u64) / LIMIT_SHARE / core::mem::size_of::<usize>() as u64;
+        limits.max_heap_words = share;
+        limits.max_ets_words = share;
+    }
+    limits
+}
+
 /// Runs `module:function()` in a new VM on the platform of the process started with `startup`,
 /// with the natives the shell's modules need, and writes how it ended to the console: the value
 /// it returned, or the exception that ended it. The result is the process's exit code: 0 once the
-/// function ran, however it ended; 1 if the VM could not start it or failed.
+/// function ran, however it ended; 1 if the VM could not start it or failed. The VM's limits
+/// are sized to its budget, `budget_pages`, if the embedder knows it ([`limits`]).
 pub fn run(
     startup: &Startup,
     threads: Box<dyn Threads>,
     modules: Box<dyn Modules>,
     module: &str,
     function: &str,
+    budget_pages: Option<u64>,
 ) -> u32 {
     // Without a console there is nowhere to say why.
     let Ok(platform) = Redoubt::new(startup, threads, modules) else { return 1 };
     let console = Arc::clone(&platform.console);
     let natives: &'static [NativeSpec] =
         Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
-    let mut vm = Vm::with_config(Box::new(platform), Config { natives, ..Default::default() });
+    let mut vm = Vm::with_config(Box::new(platform), Config { natives, limits: limits(budget_pages) });
     let first = match vm.spawn(module, function, |_| Vec::new()) {
         Ok(pid) => pid,
         Err(e) => {

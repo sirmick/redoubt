@@ -28,9 +28,9 @@
     {
       "name": "beamlet",
       "program": "beamlet",
-      "budget": {"pages": "3072", "processes": 1, "weight": 100},
+      "budget": {"pages": "4096", "processes": 1, "weight": 100},
       "handed": [{"endpoint": "bootfsd", "badge": "7"}],
-      "args": ["beamlet_boot"]
+      "args": ["budget_pages=4096", "beamlet_boot"]
     }
   ],
   "public": ["beamlet_boot.beam", "io.beam"]

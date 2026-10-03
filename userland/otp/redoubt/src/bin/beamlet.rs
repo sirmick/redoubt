@@ -1,9 +1,10 @@
 //! `beamlet`: the Elixir VM on Redoubt, a program `init` starts like any other
 //! (docs/userland/beamlet.md, "beamlet on Redoubt").
 //!
-//!     beamlet MODULE [FUNCTION]
+//!     beamlet budget_pages=N MODULE [FUNCTION]
 //!
-//! Its arguments, from its startup block, name the function it runs, `start` by default; it runs
+//! Its arguments, from its startup block, give its budget's pages, which size the VM's limits
+//! ([`beamlet_redoubt::limits`]), and name the function it runs, `start` by default; it runs
 //! it as `fake-redoubt` does on a host (`beamlet_redoubt::run`), and exits with the code that
 //! returns. Its console is `/dev/cons` in its namespace. Its modules are `/boot`'s files, read
 //! whole by name through its handle `bootfsd`; its threads are the runtime's.
@@ -32,6 +33,9 @@ redoubt_rt::entry!(start);
 
 /// The exit code for a startup block without a module to run, or without `bootfsd`.
 const USAGE: u32 = 2;
+/// The exit code for a missing or malformed `budget_pages=N`, before the VM starts: without it
+/// the VM's limits would be its defaults, far above any budget.
+const BAD_ARGS: u32 = 4;
 /// The pages of each thread's stack. The reader thread, the only one, reached 2,832 bytes on rv64
 /// and 2,240 on rv32 in beamlet-console, and 5,600 and 4,720 when made to panic at the bottom of
 /// its read, the system call, so that the panic's report ran on it too (measured by filling its
@@ -46,7 +50,12 @@ const TRIES: u32 = 200;
 const APART: u64 = 10_000;
 
 fn start(startup: &Startup) -> u32 {
-    let mut args = startup.args();
+    // `budget_pages=N`, anywhere, sizes the VM's limits. The rest are MODULE [FUNCTION].
+    let Some(budget_pages) = beamlet_redoubt::budget_pages(startup.args()) else {
+        say(startup, "beamlet: no budget_pages=N, or a malformed one, in its arguments");
+        return BAD_ARGS;
+    };
+    let mut args = startup.args().filter(|arg| !arg.starts_with(beamlet_redoubt::BUDGET_PAGES));
     let Some(module) = args.next() else {
         say(startup, "beamlet: no module to run in its arguments");
         return USAGE;
@@ -64,7 +73,7 @@ fn start(startup: &Startup) -> u32 {
             return USAGE;
         }
     };
-    beamlet_redoubt::run(startup, Box::new(Machine), Box::new(modules), module, function)
+    beamlet_redoubt::run(startup, Box::new(Machine), Box::new(modules), module, function, Some(budget_pages))
 }
 
 /// Says why it is exiting on its console, before there is a VM to: as best it can, since a

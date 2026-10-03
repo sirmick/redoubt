@@ -870,4 +870,43 @@ mod tests {
         assert!(matches!(&programs.programs[3], Program::Otp { otp } if otp == "io"));
         assert!(matches!(&programs.programs[4], Program::Zeros { zeros: 4096 }));
     }
+
+    /// Every manifest that starts `beamlet`, the image's and the cases', gives it
+    /// `budget_pages=N` with N its budget's pages: the argument sizes the VM's limits, and
+    /// nothing else keeps it equal to the budget. The stopgap until the startup block carries
+    /// the budget (docs/todo/beamlet-budget-from-startup.md).
+    #[test]
+    fn every_beamlet_is_told_its_own_budget() {
+        fn manifests(dir: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    manifests(&path, found);
+                } else if path.extension().is_some_and(|e| e == "json") {
+                    found.push(path);
+                }
+            }
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = vec![root.join("image/manifest.json")];
+        manifests(&root.join("tests/data"), &mut found);
+        let mut beamlets = 0;
+        for path in found {
+            // Not every file is a manifest, nor a well-formed one: refusal cases' are not.
+            let Ok(json) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()) else {
+                continue;
+            };
+            let Some(servers) = json.get("servers").and_then(|s| s.as_array()) else { continue };
+            for server in servers.iter().filter(|s| s["program"] == "beamlet") {
+                let pages =
+                    server["budget"]["pages"].as_str().unwrap_or_else(|| panic!("{path:?}: no budget"));
+                let args: Vec<&str> =
+                    server["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str()).collect();
+                let given: Vec<&str> = args.iter().filter_map(|a| a.strip_prefix("budget_pages=")).collect();
+                assert_eq!(given, [pages], "{path:?}: beamlet's budget_pages, against its budget");
+                beamlets += 1;
+            }
+        }
+        assert!(beamlets >= 4, "the beamlet cases' manifests were not found ({beamlets})");
+    }
 }
