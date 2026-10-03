@@ -495,13 +495,16 @@ fn raised<T: Limit>(before: &[T], now: &[T]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The entries a commit message gives a reason for, `<prefix>: <name>: <reason>`.
-fn reasons<'a>(message: &'a str, prefix: &str) -> Vec<&'a str> {
-    message
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix(prefix)?.strip_prefix(": "))
-        .filter_map(|l| l.split_once(": ").filter(|(_, why)| !why.trim().is_empty()).map(|(name, _)| name))
-        .collect()
+/// Whether a commit message gives `name` a reason, a line `<prefix>: <name>: <reason>`. The name is
+/// matched whole, so a name that itself holds `: ` (`kernel: core`) is still found.
+fn explains(message: &str, prefix: &str, name: &str) -> bool {
+    message.lines().any(|l| {
+        let why = l
+            .trim()
+            .strip_prefix(prefix)
+            .and_then(|l| l.strip_prefix(": ")?.strip_prefix(name)?.strip_prefix(": "));
+        why.is_some_and(|why| !why.trim().is_empty())
+    })
 }
 
 fn git(workspace: &Path, args: &[&str]) -> Result<Option<String>> {
@@ -569,8 +572,7 @@ pub fn ratchet<T: Limit>(workspace: &Path, file: &str, prefix: &str) -> Result<O
         };
         let message =
             git(workspace, &["log", "--format=%B", &format!("{commit}^..{commit}")])?.unwrap_or_default();
-        let given = reasons(&message, prefix);
-        let unexplained = changed.into_iter().find(|(name, _)| !given.contains(&name.as_str()));
+        let unexplained = changed.into_iter().find(|(name, _)| !explains(&message, prefix, name));
         if let Some((name, what)) = unexplained {
             return Ok(Some(format!(
                 "{name}: {what} in {commit} without a `{prefix}: {name}: <reason>` line"
@@ -723,10 +725,17 @@ fn h() {}
         assert_eq!(raised(&before, &renamed), one("loader", "dropped (max_lines = 50)"));
         let narrowed = crates(&[("kernel", &["k/src"], 100), ("loader", &["l"], 50)]);
         assert_eq!(raised(&before, &narrowed), one("kernel", "paths narrowed (no longer counts k)"));
-        assert_eq!(
-            reasons("x\nSize budget: kernel: the timer wheel\nSize budget: loader:\n", "Size budget"),
-            vec!["kernel"]
-        );
+        let message = "x\nSize budget: kernel: the timer wheel\nSize budget: loader:\n";
+        assert!(explains(message, "Size budget", "kernel"));
+        assert!(!explains(message, "Size budget", "loader"), "a reason is never empty");
+        assert!(!explains(message, "Size budget", "kern"), "a name is matched whole");
+        // Budget names that hold `: ` themselves, as the unsafe budget's kernel and runtime ones do.
+        let message = "Unsafe budget: kernel: core: a new trap path\n";
+        assert!(explains(message, "Unsafe budget", "kernel: core"));
+        assert!(!explains(message, "Unsafe budget", "kernel: Sv39, SBI and PLIC backends"));
+        let rt =
+            "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page";
+        assert!(explains(&format!("Unsafe budget: {rt}: the fixed arena's run list\n"), "Unsafe budget", rt));
     }
 
     /// A throwaway git repository holding one budget file, `b.toml`, on the main branch `redoubt`.
