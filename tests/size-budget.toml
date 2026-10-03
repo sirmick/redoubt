@@ -66,7 +66,7 @@ max_lines = 3160
 [[crate]]
 name = "libs/littlefs"
 paths = ["libs/littlefs/src"]
-max_lines = 2004
+max_lines = 2015
 
 [[crate]]
 name = "model"
@@ -116,4 +116,4 @@ max_lines = 1828
 [[crate]]
 name = "servers/fsd"
 paths = ["servers/fsd/src"]
-max_lines = 799
+max_lines = 803

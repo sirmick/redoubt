@@ -746,12 +746,12 @@ fn two_directories_sharing_a_pair_are_corrupt() {
         let Ok(Mounted::Files { mut fs, .. }) = mount(disk.clone()) else { panic!("mounts") };
         let mut a = None;
         let root = fs.root_dir();
-        fs.read_dir_at(root, |e| {
+        let named_a = |e: &littlefs::DirEntry| {
             if e.name == b"a" {
                 a = e.dir();
             }
-        })
-        .unwrap();
+        };
+        fs.read_dir_at(root, named_a, |_| Ok(())).unwrap();
         a.unwrap().blocks()
     };
     assert_eq!(forge_root(&disk, a), 2);

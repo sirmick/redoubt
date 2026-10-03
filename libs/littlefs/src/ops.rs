@@ -165,30 +165,47 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Names are the medium's bytes, unchecked: a hostile image can hold names no path can
     /// name (empty, `.`, `..`, containing `/` or NUL; [`Filesystem::check`] reports them).
     /// Treat them as opaque: never join one into a path that is then resolved.
-    pub fn read_dir(&mut self, path: &str, f: impl FnMut(&DirEntry)) -> Result<(), Error> {
+    ///
+    /// Returns how many pairs the directory spans, which a commit to it can change.
+    pub fn read_dir(&mut self, path: &str, f: impl FnMut(&DirEntry)) -> Result<u32, Error> {
         self.check_poison()?;
         let pair = self.dir_head(path)?;
-        self.read_pairs(pair, f).map(|_| ())
+        self.read_pairs(pair, f, |_| Ok(()))
     }
 
     /// The root directory, for [`Filesystem::read_dir_at`].
     pub fn root_dir(&self) -> DirRef { DirRef(self.root) }
 
     /// [`Filesystem::read_dir`] of the directory whose first pair is `dir` (the root's, or one a
-    /// [`DirEntry::dir`] gave), with no path to resolve. Returns how many pairs it read, so a
-    /// caller walking a hostile volume can bound its whole walk by the volume's pairs.
-    pub fn read_dir_at(&mut self, dir: DirRef, f: impl FnMut(&DirEntry)) -> Result<u32, Error> {
+    /// [`DirEntry::dir`] gave), with no path to resolve. Before it reads each of the
+    /// directory's pairs, its first included, it hands it (inside the volume, or the read is
+    /// `Corrupt`) to `pair`, which may stop the read
+    /// with an error: so a caller walking a hostile volume can refuse a pair named twice,
+    /// within one directory's chain or across two, without reading it again. Returns how many
+    /// pairs it read, so the caller can also bound its whole walk by the volume's pairs.
+    pub fn read_dir_at(
+        &mut self,
+        dir: DirRef,
+        f: impl FnMut(&DirEntry),
+        pair: impl FnMut(DirRef) -> Result<(), Error>,
+    ) -> Result<u32, Error> {
         self.check_poison()?;
-        if dir.0.iter().any(|b| *b >= self.block_count) {
-            return Err(Error::Corrupt);
-        }
-        self.read_pairs(dir.0, f)
+        self.read_pairs(dir.0, f, pair)
     }
 
-    fn read_pairs(&mut self, mut pair: Pair, mut f: impl FnMut(&DirEntry)) -> Result<u32, Error> {
+    fn read_pairs(
+        &mut self,
+        mut pair: Pair,
+        mut f: impl FnMut(&DirEntry),
+        mut each: impl FnMut(DirRef) -> Result<(), Error>,
+    ) -> Result<u32, Error> {
         let mut walk = self.walk();
         let mut pairs = 1;
         loop {
+            if pair.iter().any(|b| *b >= self.block_count) {
+                return Err(Error::Corrupt);
+            }
+            each(DirRef(pair))?;
             let dir = self.fetch(pair)?;
             for (_, e) in self.visible(&dir) {
                 let m = self.metadata(e)?;

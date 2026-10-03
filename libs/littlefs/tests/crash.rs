@@ -337,7 +337,7 @@ fn a_create_refuses_attributes_set_attr_would() {
 /// A directory read carries each entry's attributes as `get_attr` reads them, changed or
 /// removed since included, and a directory's first pair, so a walk of the whole volume reads
 /// each directory by its pair (`read_dir_at`), not by a path resolved again from the root, and
-/// counts the pairs it read.
+/// counts the pairs it read, each handed over once, as `read_dir` counts them.
 #[test]
 fn a_directory_read_carries_attributes_and_pairs() {
     let cfg = Config { block_size: 256, block_count: 64, prog_size: 16 };
@@ -355,14 +355,18 @@ fn a_directory_read_carries_attributes_and_pairs() {
     fs.remove_attr("d", 2).unwrap();
     let mut seen = Vec::new();
     let pairs = fs
-        .read_dir_at(fs.root_dir(), |e| {
-            seen.push((
-                e.name.to_vec(),
-                e.attr(1).map(<[u8]>::to_vec),
-                e.attr(2).map(<[u8]>::to_vec),
-                e.dir(),
-            ))
-        })
+        .read_dir_at(
+            fs.root_dir(),
+            |e| {
+                seen.push((
+                    e.name.to_vec(),
+                    e.attr(1).map(<[u8]>::to_vec),
+                    e.attr(2).map(<[u8]>::to_vec),
+                    e.dir(),
+                ))
+            },
+            |_| Ok(()),
+        )
         .unwrap();
     assert_eq!(pairs, 1);
     seen.sort_by(|a, b| a.0.cmp(&b.0));
@@ -374,10 +378,16 @@ fn a_directory_read_carries_attributes_and_pairs() {
     );
     let d = seen[0].3.expect("a directory has its pair");
     let mut by_pair = Vec::new();
-    let pairs = fs.read_dir_at(d, |e| by_pair.push(e.name.to_vec())).unwrap();
+    let mut chain = Vec::new();
+    let pairs = fs.read_dir_at(d, |e| by_pair.push(e.name.to_vec()), |p| Ok(chain.push(p))).unwrap();
     let mut by_path = Vec::new();
-    fs.read_dir("d", |e| by_path.push(e.name.to_vec())).unwrap();
+    assert_eq!(fs.read_dir("d", |e| by_path.push(e.name.to_vec())).unwrap(), pairs);
     assert_eq!(by_pair, by_path);
+    assert_eq!((chain.len(), chain[0]), (pairs as usize, d), "each pair handed over, the first first");
+    let mut blocks: Vec<u32> = chain.iter().flat_map(|p| p.blocks()).collect();
+    blocks.sort_unstable();
+    blocks.dedup();
+    assert_eq!(blocks.len(), 2 * pairs as usize, "each pair once");
     assert_eq!(by_pair.len(), 12);
     assert!(pairs > 1, "d split over {pairs} pairs");
 }

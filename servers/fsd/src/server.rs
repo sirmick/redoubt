@@ -357,29 +357,33 @@ fn ids_are_sound<D: BlockDevice>(fs: &mut Filesystem<D>, blocks: u32) -> Result<
     let mut pairs = blocks / 2;
     while let Some(dir) = dirs.pop() {
         let mut failed = None;
-        let read = fs.read_dir_at(dir, |entry| {
-            if failed.is_some() {
-                return;
-            }
-            let named = core::str::from_utf8(entry.name).is_ok_and(path::valid_name);
-            let Some(Ok(id)) = entry.attr(ATTR_ID).map(decode_id).filter(|_| named) else {
-                failed = Some(FsError::Corrupt);
-                return;
-            };
-            if room(&mut ids).is_err() {
-                failed = Some(FsError::NoSpace);
-                return;
-            }
-            ids.push(id);
-            if let Some(child) = entry.dir() {
-                if heads.try_reserve(2).is_err() || room(&mut dirs).is_err() {
+        let read = fs.read_dir_at(
+            dir,
+            |entry| {
+                if failed.is_some() {
+                    return;
+                }
+                let named = core::str::from_utf8(entry.name).is_ok_and(path::valid_name);
+                let Some(Ok(id)) = entry.attr(ATTR_ID).map(decode_id).filter(|_| named) else {
+                    failed = Some(FsError::Corrupt);
+                    return;
+                };
+                if room(&mut ids).is_err() {
                     failed = Some(FsError::NoSpace);
                     return;
                 }
-                heads.extend_from_slice(&child.blocks());
-                dirs.push(child);
-            }
-        })?;
+                ids.push(id);
+                if let Some(child) = entry.dir() {
+                    if heads.try_reserve(2).is_err() || room(&mut dirs).is_err() {
+                        failed = Some(FsError::NoSpace);
+                        return;
+                    }
+                    heads.extend_from_slice(&child.blocks());
+                    dirs.push(child);
+                }
+            },
+            |_| Ok(()),
+        )?;
         if let Some(e) = failed {
             return Err(e);
         }
