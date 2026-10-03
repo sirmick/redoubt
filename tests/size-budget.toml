@@ -44,6 +44,11 @@ paths = ["libs/verity/src"]
 max_lines = 130
 
 [[crate]]
+name = "libs/ipclist"
+paths = ["libs/ipclist/src"]
+max_lines = 499
+
+[[crate]]
 name = "libs/signing"
 paths = ["libs/signing/src"]
 max_lines = 15
