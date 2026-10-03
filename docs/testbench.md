@@ -775,9 +775,11 @@ workspace's members, and `userland/otp` is its own workspace whose `no_std` crat
 the workspace and the gate sees it.
 
 The ratchet counts `unsafe`; it does not check it. `rt-miri` runs the native runtime's host tests
-under Miri (Stacked Borrows, isolation off), which checks the heap's free lists, page buffers and
-lends that a native run only executes. It runs the files that finish in seconds; `ipc` and `echo`
-take minutes under Miri and are run by hand. Without nightly Miri the case is missing, not passed.
+under Miri (Stacked Borrows, isolation off), which checks the heap's free lists, page buffers,
+lends and device registers that a native run only executes. It runs the files that finish in
+seconds, among them `registers` over the fake kernel's real device memory, and the heap's own,
+`heap`, in under a minute (fewer random rounds under Miri); `ipc` and `echo` take minutes under
+Miri and are run by hand. Without nightly Miri the case is missing, not passed.
 With the runtime's page-buffer aliasing fix reverted, `mapping_views` fails it with the Stacked
 Borrows error `not granting access to tag <wildcard> because that would remove [Unique for <…>]
 which is strongly protected`.
