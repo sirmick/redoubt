@@ -91,7 +91,7 @@ max_lines = 229
 [[crate]]
 name = "servers/consoled"
 paths = ["servers/consoled/src"]
-max_lines = 339
+max_lines = 336
 
 [[crate]]
 name = "servers/blkd"

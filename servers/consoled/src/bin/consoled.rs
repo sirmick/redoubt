@@ -4,7 +4,8 @@
 //!   answers a read from the input it holds, and when it holds none it **parks the call**
 //!   ([`redoubt_rt::server::parked`]) instead of blocking, so every other client is still served. Nothing of
 //!   a parked read is kept but the call itself: serving it again reads its T-message out of its own lend
-//!   afresh (`NineServer::serve_parking`).
+//!   afresh (`NineServer::serve_parking`). A multiplexed connection's reads wait the same way, as requests in
+//!   the skeleton, served again whenever input comes (`NineServer::wake`).
 //! - **The interrupt thread** does nothing but `receive` on the IRQ handle (kernel/devices.md R5: the kernel
 //!   masks the source when it fires and the next receive unmasks it; there is no acknowledge) and `send` one
 //!   word to the serving thread's own endpoint. It touches no register, so the UART stays on one thread and
@@ -32,9 +33,8 @@ use redoubt_consoled::server::{BUDGET, COST, Console, limits};
 use redoubt_consoled::uart::Uart;
 use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
-use redoubt_rt::ipc::{Buffer, Event, Request};
-use redoubt_rt::server::close_delivery;
-use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse, refuse_malformed};
+use redoubt_rt::ipc::{Buffer, Request};
+use redoubt_rt::server::ninep::{Around, NineError, NineServer, WORDS_9P, refuse, refuse_malformed};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::startup::Startup;
 
@@ -127,14 +127,35 @@ fn serve_or_park(
     }
 }
 
-/// Reads everything the UART has and answers the parked calls it satisfies, longest wait first.
-fn wake_readers(server: &mut NineServer<Console>, parked: &mut Parked<()>, now: u64) {
-    server.fs.drain();
-    while server.fs.has_input() {
-        let Some(call) = parked.resume_first(server.admission_mut(), |_| true) else { return };
-        // A call this thread cannot serve is a server bug; it is gone either way.
-        let Ok((request, ())) = call else { continue };
-        let _ = serve_or_park(server, parked, request, now);
+/// The parked console reads, beside the skeleton's loop. A wake-up from the interrupt thread is a
+/// send the skeleton drops: the turn after it is what answers it.
+struct Readers(Parked<()>);
+
+impl Around<Console> for Readers {
+    fn call(&mut self, server: &mut NineServer<Console>, request: Request, now: u64) {
+        // A failed reply means the caller is gone; there is nobody to tell.
+        let _ = serve_or_park(server, &mut self.0, request, now);
+    }
+
+    /// Reads everything the UART has and answers the parked calls it satisfies, longest wait
+    /// first, then the multiplexed reads waiting for it.
+    fn turn(&mut self, server: &mut NineServer<Console>, now: u64) {
+        server.fs.drain();
+        while server.fs.has_input() {
+            let Some(call) = self.0.resume_first(server.admission_mut(), |_| true) else { break };
+            // A call this thread cannot serve is a server bug; it is gone either way.
+            let Ok((request, ())) = call else { continue };
+            let _ = serve_or_park(server, &mut self.0, request, now);
+        }
+        if server.fs.has_input() {
+            server.wake(now);
+        }
+    }
+
+    /// A caller gave up on a parked read: replying frees the call and its lend, and the reply
+    /// reaches nobody (R3).
+    fn abandoned(&mut self, server: &mut NineServer<Console>, id: NonZeroU64) {
+        self.0.abandoned(server.admission_mut(), id, &WORDS_9P);
     }
 }
 
@@ -161,7 +182,8 @@ pub fn serve(startup: &Startup) -> u32 {
     let Ok(mut server) = NineServer::new(Console::new(uart), limits, random) else { return BAD_LIMITS };
     // A console read waits on a person, so it has no deadline: what reclaims it is its caller
     // giving up, which arrives as an abandoned-call notice.
-    let mut parked: Parked<()> = Parked::new(FOREVER);
+    let parked: Parked<()> = Parked::new(FOREVER);
+    server.requests_wait(FOREVER);
     // The interrupt thread, started before any client can be served, so no key press is missed.
     let wake_badge = match NonZeroU64::new(WAKE_BADGE).ok_or(Error::InvalidArgument) {
         Ok(badge) => endpoint.mint(badge, None),
@@ -175,25 +197,5 @@ pub fn serve(startup: &Startup) -> u32 {
     if !matches!(started, Some(Ok(()))) {
         return NO_IRQ;
     }
-    loop {
-        let now = redoubt_rt::handle::time_now().unwrap_or(0);
-        wake_readers(&mut server, &mut parked, now);
-        match endpoint.receive(FOREVER, 0) {
-            Ok(Event::Call(request)) => {
-                // A failed reply means the caller is gone; there is nobody to tell.
-                let _ = serve_or_park(&mut server, &mut parked, request, now);
-            }
-            // A wake-up from the interrupt thread; the draining at the top of the loop is what
-            // answers it. Anything else sent one-way is dropped, and what it brought closed.
-            Ok(Event::Send(delivery)) => close_delivery(&delivery),
-            // A caller gave up on a parked read: replying frees the call and its lend, and the
-            // reply reaches nobody (R3).
-            Ok(Event::Abandoned(id)) => {
-                parked.abandoned(server.admission_mut(), id, &WORDS_9P);
-            }
-            Ok(Event::Interrupt | Event::Exit(_)) => {}
-            Err(Error::Dead) => return redoubt_rt::exit::OK,
-            Err(_) => return redoubt_rt::exit::RECEIVE_FAILED,
-        }
-    }
+    server.run_around(&endpoint, Readers(parked))
 }

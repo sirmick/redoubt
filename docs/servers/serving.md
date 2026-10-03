@@ -259,7 +259,7 @@ connection. (`libs/rt/src/server/ninep_mux.rs`.)
   for the next call. A
   request the file server asks to hold (`Read::Wait`) stays where it is, served again at the next
   completion call, the next request, or the server's wake-up, and is answered `Rerror` "timeout"
-  at the server's deadline for it.
+  at the server's deadline for it (none for `consoled`, whose reads wait on a person).
 - **Tags.** At most `MAX_TAGS` (256) are outstanding on a connection: a request's tag from its
   arrival until its answer is delivered. A tag in use or out of range, a message that does not
   frame, or a `Tversion` (whose tag is `NOTAG`) is a protocol error, which ends the session.
@@ -289,10 +289,11 @@ connection. (`libs/rt/src/server/ninep_mux.rs`.)
 `MAX_LEND_PAGES`, abandoned-call notices and deadlines. One that keeps state beside its files runs
 `run_around` with its `Around`, which is given the calls, the abandoned-call notices that are no
 completion call's, and a turn before each receive, after what the deadlines made due, for whatever
-moved since. A server with a loop of its own hands each send to `deliver` and each abandoned-call
-notice to `abandoned` first, calls `expire` and bounds its `receive` by `next_deadline`, and calls
-`wake` when its files may have moved. A file server that pays for what a request makes around it
-does so in the `serving` and `served` hooks.
+moved since: `consoled` parks its own reads, and at each turn reads its UART and serves again the
+reads that wait for input. A server with a loop of its own hands each send to `deliver` and each
+abandoned-call notice to `abandoned` first, calls `expire` and bounds its `receive` by
+`next_deadline`, and calls `wake` when its files may have moved. A file server that pays for what a
+request makes around it does so in the `serving` and `served` hooks.
 
 ### Typed dispatch
 
