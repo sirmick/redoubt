@@ -176,10 +176,14 @@ fn main() -> Result<()> {
     if let Some([recipe, out]) = args.pack_disk.as_deref() {
         let recipe = disk::Recipe::load(recipe)?;
         // The userland disk: its objects staged first, and its index written for the bundle.
-        if let (Some(objects), Some(stage)) = (&recipe.objects, &recipe.partition[0].stage) {
-            let index = workspace.join(&objects.index);
-            let (count, bytes) = userland::stage(&workspace, objects, &workspace.join(stage), &index)?;
-            println!("{count} objects, {bytes} bytes; index {}", index.display());
+        if let Some(objects) = &recipe.objects {
+            let stage = recipe.partition[0]
+                .stage
+                .as_ref()
+                .context("a userland recipe --pack-disk packs needs a stage")?;
+            let index = workspace.join(objects.index.as_ref().context("a userland recipe with no index")?);
+            let (names, bytes) = userland::stage(&workspace, objects, &workspace.join(stage), &index)?;
+            println!("{} objects, {bytes} bytes; index {}", names.len(), index.display());
         }
         let disk = disk::pack_disk(&recipe, &workspace, None)?;
         std::fs::write(out, disk).with_context(|| format!("writing {}", out.display()))?;
@@ -187,7 +191,12 @@ fn main() -> Result<()> {
     }
     let run = run::Run::start(&workspace.join("target/testbench"))?;
     let logs = run.dir.clone();
-    let builder = Builder { workspace: workspace.clone(), run: run.dir.clone(), verbose: args.verbose };
+    let builder = Builder {
+        workspace: workspace.clone(),
+        run: run.dir.clone(),
+        verbose: args.verbose,
+        staged: Default::default(),
+    };
 
     if args.run {
         let target = target::find(args.arch.as_deref().unwrap_or("rv64")).context("unknown arch")?;
@@ -655,7 +664,7 @@ struct Built<'a> {
     firmware: String,
     loader: PathBuf,
     bundle: PathBuf,
-    userland: Option<(PathBuf, PathBuf)>,
+    userland: Option<userland::Staged>,
 }
 
 /// Build a boot case for `target`, or the results of a case that ends here: a build case, a host
@@ -754,8 +763,7 @@ fn boot_case(
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
             let disk = log.with_extension("img");
-            let staged = userland.as_ref().map(|(stage, index)| (stage.as_path(), index.as_path()));
-            let (mut devices, forwards) = qemu::virtio_devices(boot, &disk, staged)?;
+            let (mut devices, forwards) = qemu::virtio_devices(boot, &disk, userland.as_ref())?;
             if let Some(icount) = &boot.icount {
                 devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
             }

@@ -16,6 +16,7 @@ use crate::case::{ALWAYS_FORBIDDEN, Boot, PASSED};
 use crate::peer;
 use crate::ssh;
 use crate::target::Machine;
+use crate::userland::Staged;
 
 /// How long the bench keeps reading the console after the last `expect` (and the sessions),
 /// so that a panic right after the last expected line still fails the case. Cases that end
@@ -189,12 +190,12 @@ pub const USERLAND_BUS: &str = "virtio-mmio-bus.5";
 
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at
 /// `disk`, so no boot sees another's writes, and picks free host ports for the forwards. The
-/// userland disk is packed beside it from `userland`, its staged objects and their index
-/// ([`crate::build::Builder::userland`]), and attached read-only.
+/// userland disk is packed beside it from `userland`, its staged objects and what their index
+/// names ([`crate::build::Builder::userland`]), and attached read-only.
 pub fn virtio_devices(
     boot: &Boot,
     disk: &Path,
-    userland: Option<(&Path, &Path)>,
+    userland: Option<&Staged>,
 ) -> Result<(Vec<String>, Vec<Forward>)> {
     let mut args = Vec::new();
     if boot.disk.is_some() || boot.net.is_some() || boot.userland.is_some() {
@@ -222,18 +223,18 @@ pub fn virtio_devices(
         args.extend(["-device".into(), format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}")]);
     }
     if let Some(spec) = &boot.userland {
-        let (stage, index) = userland.context("a userland disk with nothing staged")?;
+        let staged = userland.context("a userland disk with nothing staged")?;
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let recipe = crate::disk::Recipe::load(&root.join(&spec.recipe))?;
         let image = disk.with_extension("userland.img");
         // The case's damage goes on a copy of the objects, after the index was written.
         let damaged = disk.with_extension("userland");
         let stage = if spec.flip.is_some() || spec.remove.is_some() {
-            let index = std::fs::read_to_string(index)?;
-            crate::userland::damaged(stage, &index, spec.flip.as_deref(), spec.remove.as_deref(), &damaged)?;
+            let (flip, remove) = (spec.flip.as_deref(), spec.remove.as_deref());
+            crate::userland::damaged(&staged.objects, &staged.names, flip, remove, &damaged)?;
             damaged.as_path()
         } else {
-            stage
+            staged.objects.as_path()
         };
         std::fs::write(&image, crate::disk::pack_disk(&recipe, &root, Some(stage))?)?;
         let file = image.display().to_string().replace(',', ",,");
@@ -736,11 +737,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("testbench-qemu-userland-{}", std::process::id()));
         let (stage, index) = (dir.join("objects"), dir.join("system.index"));
         let objects = vec![(String::from("lists.beam"), b"FOR1 lists".to_vec())];
-        crate::userland::write(&objects, &stage, &index).unwrap();
+        let names = crate::userland::write(&objects, &stage, &index).unwrap();
+        let staged = Staged { objects: stage.clone(), index, names };
         let disk = dir.join("boot.img");
         let case =
             "[disk]\nsize_kib = 64\n[userland]\nrecipe = \"image/userland.toml\"\nflip = \"lists.beam\"\n";
-        let (args, _) = virtio_devices(&boot(case), &disk, Some((&stage, &index))).unwrap();
+        let (args, _) = virtio_devices(&boot(case), &disk, Some(&staged)).unwrap();
         let drive = format!(
             "if=none,format=raw,id=disk1,readonly=on,file={}",
             disk.with_extension("userland.img").display()

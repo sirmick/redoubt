@@ -474,6 +474,28 @@ printing `bundle signature ok`. The two boot cases forbid that line and the kern
 length fails for free; the host test pins that, and the bare-archive case shows the loader has
 no second acceptance path.
 
+### R75 (verified userland)
+
+Status: built · partly tested: built for modules; a program launched from the userland disk is checked by launching, which is BEAM4's and not built · tested: host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is
+
+A module or application resource the system resolves by name, and a program it launches from the
+userland disk, is used only if its bytes hash to the entry `system.index` in the signed bundle gives
+it; a mismatch, a missing object or a short read loads nothing and says so. The index is a bundle
+entry, so [R15](#r15-verified-boot) covers it, and `/boot` serves it
+([bootfsd](../servers/bootfsd.md)). beamlet reads it before the VM runs anything and parses it
+strictly: one line per object, `<file> <sha256 hex> <bytes>`, the file being the name the VM asks
+for (`Elixir.Enum.beam`, `elixir.app`), sorted byte-wise, each LF-terminated, and a malformed line
+refuses the whole index and stops the VM. For a file the index has, beamlet reads the object
+`/<sha256 hex>` whole from the userland disk's `fsd`, hashes it with SHA-256, and gives the loader
+the bytes only if their length and hash are the entry's; otherwise it writes one line on its console
+naming the module or application and the reason, and the lookup finds nothing, with nothing retried
+and nothing looked for elsewhere ([beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)).
+The disk is attached read-only by the host and served read-only by its `fsd`, but the rule rests on
+the hash alone: the file system in between is not trusted. It does not stop code from running:
+`code:load_binary/3` still loads bytes a session holds, within the session's own authority
+([a lookup, not a gate](../userland/beamlet.md#the-platform-boundary)), so the rule extends verified
+boot to the userland's integrity, not to a code-signing gate.
+
 ### R16 (image confinement)
 
 Status: built · partly tested: an image cut short inside its segment data and a writable and executable segment are not attacked by a case; the truncated-image case runs on rv64 only · tested: bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, bench:loader-rejects-truncated-elf

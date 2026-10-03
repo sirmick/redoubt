@@ -7,6 +7,8 @@ programs = [
     { package = "redoubt-keyd", bin = "keyd" },
     { package = "redoubt-consoled", bin = "consoled" },
     { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-fsd", bin = "fsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
 ]
 timeout_secs = 60
@@ -29,25 +31,12 @@ forbid = [
 ]
 
 [[file]]
+name = "system.index"
+from = { userland_index = "tests/data/beamlet/userland.toml" }
+
+[[file]]
 name = "manifest"
 from = { path = "tests/data/beamlet/budget-flood.json" }
 
-[[file]]
-name = "beamlet_budget_flood.beam"
-from = { erlang = "userland/otp/redoubt/tests/erlang/beamlet_budget_flood.erl" }
-
-[[file]]
-name = "io.beam"
-from = { otp = "io" }
-
-[[file]]
-name = "io_lib.beam"
-from = { otp = "io_lib" }
-
-[[file]]
-name = "io_lib_format.beam"
-from = { otp = "io_lib_format" }
-
-[[file]]
-name = "unicode.beam"
-from = { otp = "unicode" }
+[userland]
+recipe = "tests/data/beamlet/userland.toml"

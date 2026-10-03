@@ -2,10 +2,11 @@
 //! one boundary, answered by the client library (`redoubt-client`) and the runtime's kernel calls.
 //!
 //! This first part serves the console, the clock and randomness; the module source is the
-//! embedder's ([`Modules`]): `/boot` on the machine, directories on a host; there are no files and
-//! no programs yet. What it proves is the shape the rest will take: a call that waits, here a
-//! console read, is made by a thread of its own, never by the thread the VM runs on, and its
-//! result reaches the VM as a message, which [`Platform::idle`] waits for (beamlet.md,
+//! embedder's ([`Modules`]): the userland disk on the machine, each object checked against the
+//! signed `system.index` ([`userland`]), directories on a host; there are no files and no programs
+//! yet. What it proves is the shape the rest will take: a call that waits, here a console read,
+//! is made by a thread of its own, never by the thread the VM runs on, and its result reaches the
+//! VM as a message, which [`Platform::idle`] waits for (beamlet.md,
 //! "Asynchronous underneath, synchronous on top"). The VM's thread never waits for input. It does
 //! write to the console and ask its size itself, calls a live console answers at once; a console
 //! that stops answering them stops the VM until those calls move to the I/O threads.
@@ -28,6 +29,7 @@ extern crate alloc;
 
 #[cfg(feature = "fake")]
 pub mod fixture;
+pub mod userland;
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
@@ -59,7 +61,17 @@ pub trait Threads: Send {
 /// Where the VM's modules and applications come from, by file name (`lists.beam`, `kernel.app`).
 /// `Send`, as [`Threads`] is.
 pub trait Modules: Send {
-    fn load(&mut self, file: &str) -> Option<Vec<u8>>;
+    fn load(&mut self, file: &str) -> Result<Vec<u8>, Unloaded>;
+}
+
+/// Why [`Modules::load`] gave nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unloaded {
+    /// The source has no such name: the VM's lookup goes on, as for any name it lacks.
+    Absent,
+    /// The source names it, but its bytes failed the check, for this reason: the platform says so
+    /// on the console, and the VM finds nothing (R75 (verified userland)).
+    Refused(&'static str),
 }
 
 /// The badge the reader thread's messages come with: the VM thread's own mint off its endpoint.
@@ -125,6 +137,19 @@ impl Redoubt {
         // With no thread to read it, there is no input either.
         if self.threads.spawn(Box::new(move || read_console(&console, &to))).is_err() {
             self.ended = true;
+        }
+    }
+
+    /// `file` from the module source, for `name`: one the source refuses is said on the console,
+    /// naming it and why, and is not found.
+    fn load(&mut self, name: &str, file: &str) -> Option<Vec<u8>> {
+        match self.modules.load(file) {
+            Ok(bytes) => Some(bytes),
+            Err(Unloaded::Absent) => None,
+            Err(Unloaded::Refused(why)) => {
+                say(&self.console, &format!("beamlet: {name} not loaded: {why}"));
+                None
+            }
         }
     }
 
@@ -247,10 +272,10 @@ impl Platform for Redoubt {
     }
 
     fn load_module(&mut self, module: &str) -> Option<Vec<u8>> {
-        self.modules.load(&format!("{module}.beam"))
+        self.load(module, &format!("{module}.beam"))
     }
 
-    fn load_app(&mut self, app: &str) -> Option<Vec<u8>> { self.modules.load(&format!("{app}.app")) }
+    fn load_app(&mut self, app: &str) -> Option<Vec<u8>> { self.load(app, &format!("{app}.app")) }
 }
 
 /// The argument that gives the VM its budget's pages, required on the machine: a program cannot

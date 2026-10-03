@@ -485,6 +485,10 @@ from = { path = "tests/data/bundle-file.txt" }   # or any `programs` form, corru
 name = "manifest"
 from = { path = "tests/data/fsd/boot.json" }
 servers = [{ name = "client", args = ["reboot", "fsd:data"] }]
+
+[[file]]                     # the system.index of the userland disk a recipe packs
+name = "system.index"
+from = { userland_index = "image/userland.toml" }
 ```
 
 A file read from a path may be a manifest with `servers` entries merged in by name: each replaces
@@ -547,8 +551,8 @@ partitions = 1               # optional: a GPT of this many equal partitions, by
 
 [userland]                   # the userland disk, attached read-only, packed for every boot
 recipe = "image/userland.toml"
-# flip = "Elixir.Enum"       # optional: this module's object has one byte flipped on the disk
-# remove = "Elixir.Enum"     # optional: this module's object is not on the disk
+# flip = "Elixir.Enum.beam"  # optional: this file's object has one byte flipped on the disk
+# remove = "Elixir.Enum.beam"  # optional: this file's object is not on the disk
 
 [net]                        # a virtio-net card on QEMU's user-mode network
 forward = [22]               # guest TCP ports reachable from the host (default: none)
@@ -570,9 +574,13 @@ staged, each module of the applications the recipe names, compiled by the pinned
 stripped, as one file named by the SHA-256 of its bytes, with `system.index`, the table naming
 each by its hash; then its one partition is packed as a littlefs volume of those files. A case
 puts the index in its bundle with a `[[file]]` `from = { userland_index = "image/userland.toml" }`,
-and attaches the disk with `[userland]`; both come from one staging per run. A `flip` or a
-`remove` damages a copy of the objects for that boot, after the index was written, so the bundle
-names an object the disk no longer holds whole. Nothing is generated beside the objects.
+and attaches the disk with `[userland]`; both come from one staging per run. `--pack-disk` writes
+an index only for a recipe whose `[objects]` declares one, so `image/disk.toml` packs as before. A `flip` or a
+`remove` names a file and damages a copy of the objects for that boot, after the index was
+written: it changes only the disk, and the bundle's index is the unchanged pack's, so the bundle
+names an object the disk no longer holds whole
+([R75 (verified userland)](kernel/boot.md#r75-verified-userland)). Nothing is generated beside the
+objects.
 
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
 virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,

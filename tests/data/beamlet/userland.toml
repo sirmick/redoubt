@@ -1,0 +1,18 @@
+# The beamlet cases' userland disk (docs/testbench.md, "Disks and network cards"): the test
+# modules and the few OTP modules they need, one object each, packed as image/userland.toml is,
+# with the index each case's bundle signs. No whole application, so the VM keeps its own
+# stand-in logger, as it does without kernel's.
+size_kib = 2048
+
+[objects]
+modules = ["io", "io_lib", "io_lib_format", "unicode", "crypto", "lists"]
+erlang = [
+    "userland/otp/redoubt/tests/erlang/beamlet_boot.erl",
+    "userland/otp/redoubt/tests/erlang/beamlet_budget_flood.erl",
+    "userland/otp/redoubt/tests/erlang/beamlet_console.erl",
+    "userland/otp/redoubt/tests/erlang/beamlet_flood.erl",
+]
+
+[[partition]]
+name = "system"
+fs = "littlefs"

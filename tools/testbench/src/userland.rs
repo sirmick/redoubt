@@ -6,6 +6,7 @@
 //! module and `elixir.app` for an application's resource, which is an object too. The same inputs
 //! stage the same bytes, index and tree.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -18,7 +19,15 @@ use sha2::{Digest, Sha256};
 pub struct Objects {
     /// The applications whose modules the disk holds, each whole, by the modules its resource
     /// lists: OTP's and Elixir's from the pinned toolchain, and those the `mix` projects build.
+    #[serde(default)]
     pub applications: Vec<String>,
+    /// Single modules besides, by name, from the same code path: a test's few.
+    #[serde(default)]
+    pub modules: Vec<String>,
+    /// Erlang sources, relative to the workspace root, compiled by the pinned `erlc`
+    /// (`+deterministic`): a test's own modules.
+    #[serde(default)]
+    pub erlang: Vec<PathBuf>,
     /// Mix projects, relative to the workspace root, compiled first: their applications join the
     /// code path the others are found on.
     #[serde(default)]
@@ -30,8 +39,20 @@ pub struct Objects {
     /// Whether each module keeps its `Docs` chunk.
     #[serde(default)]
     pub docs: bool,
-    /// Where `./mkimage` writes `system.index`, relative to the workspace root.
+    /// Where `--pack-disk` writes `system.index`, relative to the workspace root: the image's
+    /// recipe has one; a case's index goes in its run.
+    pub index: Option<PathBuf>,
+}
+
+/// Each file the index names and the object it is staged under.
+pub type Names = BTreeMap<String, String>;
+
+/// A staged userland disk: its objects' directory, its `system.index`, and what the index names.
+#[derive(Clone, Debug)]
+pub struct Staged {
+    pub objects: PathBuf,
     pub index: PathBuf,
+    pub names: Names,
 }
 
 /// The name an object is staged under: the lowercase hex of its SHA-256.
@@ -64,8 +85,8 @@ fn read_objects(dir: &Path, exclude: &[String]) -> Result<Vec<(String, Vec<u8>)>
 }
 
 /// Writes `objects` into `stage`, emptied first, each under its [`name`], and their index to
-/// `index`. Two keys with the same bytes are one object.
-pub fn write(objects: &[(String, Vec<u8>)], stage: &Path, index_path: &Path) -> Result<()> {
+/// `index`, and returns what the index names. Two keys with the same bytes are one object.
+pub fn write(objects: &[(String, Vec<u8>)], stage: &Path, index_path: &Path) -> Result<Names> {
     if stage.exists() {
         std::fs::remove_dir_all(stage).with_context(|| format!("emptying {}", stage.display()))?;
     }
@@ -76,12 +97,15 @@ pub fn write(objects: &[(String, Vec<u8>)], stage: &Path, index_path: &Path) -> 
     if let Some(dir) = index_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(index_path, index(objects)).with_context(|| format!("writing {}", index_path.display()))
+    std::fs::write(index_path, index(objects))
+        .with_context(|| format!("writing {}", index_path.display()))?;
+    Ok(objects.iter().map(|(file, bytes)| (file.clone(), name(bytes))).collect())
 }
 
 /// Builds what `objects` names with the pinned toolchain, strips it, and stages it into `stage`
-/// with its index at `index_path` ([`write`]). Returns the objects' count and total bytes.
-pub fn stage(workspace: &Path, objects: &Objects, stage: &Path, index_path: &Path) -> Result<(usize, usize)> {
+/// with its index at `index_path` ([`write`]). Returns what the index names and the objects'
+/// total bytes.
+pub fn stage(workspace: &Path, objects: &Objects, stage: &Path, index_path: &Path) -> Result<(Names, usize)> {
     let mut command: Vec<String> = vec!["elixir".into()];
     for project in &objects.mix {
         // A build of its own, apart from the development one `./shell` runs.
@@ -107,33 +131,46 @@ pub fn stage(workspace: &Path, objects: &Objects, stage: &Path, index_path: &Pat
             command.extend(["-pa".into(), app.path().join("ebin").to_string_lossy().into_owned()]);
         }
     }
-    let out = stage.with_extension("modules");
-    if out.exists() {
-        std::fs::remove_dir_all(&out)?;
+    let (out, compiled) = (stage.with_extension("modules"), stage.with_extension("erlang"));
+    for dir in [&out, &compiled] {
+        if dir.exists() {
+            std::fs::remove_dir_all(dir)?;
+        }
+        std::fs::create_dir_all(dir)?;
     }
-    std::fs::create_dir_all(&out)?;
+    let mut modules = objects.modules.clone();
+    for source in &objects.erlang {
+        let module = source.file_stem().context("an Erlang source with no name")?.to_string_lossy();
+        let (to, source) = (compiled.to_string_lossy(), workspace.join(source));
+        crate::build::erlang(workspace, &["erlc", "+deterministic", "-o", &to, &source.to_string_lossy()])?;
+        modules.push(module.into_owned());
+    }
+    if !objects.erlang.is_empty() {
+        command.extend(["-pa".into(), compiled.to_string_lossy().into_owned()]);
+    }
     let script = workspace.join("tools/testbench/src/userland.exs");
     command.extend([script.to_string_lossy().into_owned(), out.to_string_lossy().into_owned()]);
     command.push(if objects.docs { "docs" } else { "nodocs" }.into());
-    command.extend(objects.applications.iter().cloned());
+    command.extend(objects.applications.iter().map(|app| format!("app:{app}")));
+    command.extend(modules.iter().map(|module| format!("module:{module}")));
     let command: Vec<&str> = command.iter().map(String::as_str).collect();
     crate::build::erlang(workspace, &command)?;
     let found = read_objects(&out, &objects.exclude)?;
-    ensure!(!found.is_empty(), "no modules for {:?}", objects.applications);
-    write(&found, stage, index_path)?;
-    Ok((found.len(), found.iter().map(|(_, b)| b.len()).sum()))
+    ensure!(!found.is_empty(), "no modules staged");
+    let names = write(&found, stage, index_path)?;
+    Ok((names, found.iter().map(|(_, b)| b.len()).sum()))
 }
 
 /// A copy of `stage` for one boot at `to`, with the object of the file `flip` one byte different
-/// and that of `remove` absent, each found through `index`.
-pub fn damaged(stage: &Path, index: &str, flip: Option<&str>, remove: Option<&str>, to: &Path) -> Result<()> {
-    let object = |file: &str| -> Result<String> {
-        index
-            .lines()
-            .find_map(|line| line.strip_prefix(file)?.strip_prefix(' ')?.split(' ').next())
-            .map(str::to_string)
-            .with_context(|| format!("the index has no file {file}"))
-    };
+/// and that of `remove` absent, each found through `names`.
+pub fn damaged(
+    stage: &Path,
+    names: &Names,
+    flip: Option<&str>,
+    remove: Option<&str>,
+    to: &Path,
+) -> Result<()> {
+    let object = |file: &str| names.get(file).with_context(|| format!("the index has no file {file}"));
     if to.exists() {
         std::fs::remove_dir_all(to)?;
     }
@@ -224,14 +261,13 @@ mod tests {
         let input = modules("damage");
         let objects = read_objects(&input, &[]).unwrap();
         let (stage, index_path, to) = (dir("dstage"), dir("dindex"), dir("dto"));
-        write(&objects, &stage, &index_path).unwrap();
-        let index = std::fs::read_to_string(&index_path).unwrap();
-        damaged(&stage, &index, Some("lists.beam"), Some("Elixir.Enum.beam"), &to).unwrap();
+        let names = write(&objects, &stage, &index_path).unwrap();
+        damaged(&stage, &names, Some("lists.beam"), Some("Elixir.Enum.beam"), &to).unwrap();
         let flipped = std::fs::read(to.join(name(b"FOR1 lists"))).unwrap();
         assert_eq!(flipped.iter().zip(b"FOR1 lists").filter(|(a, b)| a != b).count(), 1);
         assert!(!to.join(name(b"FOR1 Enum")).exists());
         assert_eq!(std::fs::read(to.join(name(b"FOR1 embedded"))).unwrap(), b"FOR1 embedded");
-        assert!(damaged(&stage, &index, Some("Elixir.Enum"), None, &to).is_err(), "a prefix is not a file");
+        assert!(damaged(&stage, &names, Some("Elixir.Enum"), None, &to).is_err(), "a prefix is not a file");
         for d in [input, stage, to] {
             std::fs::remove_dir_all(d).unwrap();
         }

@@ -2,12 +2,14 @@ description = "beamlet's console, clock and randomness on the machine (docs/user
 arch = ["rv64", "rv32"]
 kind = "boot"
 # As beamlet-boot, with the test module and the OTP modules it needs (io, io_lib,
-# io_lib_format, unicode and crypto, whose NIFs are beamlet-crypto's natives) as public entries.
+# io_lib_format, unicode and crypto, whose NIFs are beamlet-crypto's natives) on the userland disk.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
     { package = "redoubt-consoled", bin = "consoled" },
     { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-fsd", bin = "fsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
 ]
 timeout_secs = 60
@@ -34,29 +36,12 @@ after = '^\[con [0-9a-f]{16}\] beamlet-console: type a line$'
 send = "typed into beamlet 42\n"
 
 [[file]]
+name = "system.index"
+from = { userland_index = "tests/data/beamlet/userland.toml" }
+
+[[file]]
 name = "manifest"
 from = { path = "tests/data/beamlet/console.json" }
 
-[[file]]
-name = "beamlet_console.beam"
-from = { erlang = "userland/otp/redoubt/tests/erlang/beamlet_console.erl" }
-
-[[file]]
-name = "io.beam"
-from = { otp = "io" }
-
-[[file]]
-name = "io_lib.beam"
-from = { otp = "io_lib" }
-
-[[file]]
-name = "io_lib_format.beam"
-from = { otp = "io_lib_format" }
-
-[[file]]
-name = "unicode.beam"
-from = { otp = "unicode" }
-
-[[file]]
-name = "crypto.beam"
-from = { otp = "crypto" }
+[userland]
+recipe = "tests/data/beamlet/userland.toml"
