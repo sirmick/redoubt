@@ -210,7 +210,7 @@ handle to it closes, in every table.
 
 ### What objects cost
 
-<details><summary>Status: built · partly tested: an endpoint's page is attacked only in the model, a device's page by no case, and the header page is pinned by no case; the boot code departs from R6 (charging) for `root`'s own page · tested (10)</summary>
+<details><summary>Status: built · partly tested: an endpoint's page is attacked only in the model, a device's page by no case; the boot code departs from R6 (charging) for `root`'s own page · tested (11)</summary>
 
 - bench:budget
 - bench:budget-table-attack
@@ -218,6 +218,7 @@ handle to it closes, in every table.
 - bench:process-attack
 - bench:process-review
 - bench:process-lifecycle
+- bench:thread-limit
 - mutation:R6EndpointsFree
 - mutation:R6ProcessObjectChargedToBudget
 - mutation:R6OwnPageChargedToItself

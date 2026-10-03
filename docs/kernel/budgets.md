@@ -381,7 +381,7 @@ labelled child's handle to a `user`-class caller is a flow R1 must check.
 
 ### R6 (charging)
 
-<details><summary>Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the header page is pinned by no case · tested (20)</summary>
+<details><summary>Status: built · partly tested: an endpoint's page charge is attacked only in the model · tested (21)</summary>
 
 - bench:budget
 - bench:budget-mem-churn
@@ -392,6 +392,7 @@ labelled child's handle to a `user`-class caller is a flow R1 must check.
 - bench:redoubt-tight
 - bench:process-attack
 - bench:pid-pinning-attack
+- bench:thread-limit
 - mutation:R6ChargeAncestors
 - mutation:R6OwnPageChargedToItself
 - mutation:R6EndpointsFree
