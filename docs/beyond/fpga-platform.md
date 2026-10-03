@@ -47,6 +47,13 @@ are stated today as residual risks.
   state, the PMP entries and the LR/SC reservation. No open Linux-class RISC-V core does this
   yet, so it is new RTL, worth offering upstream. The two harts of a core share its
   first-level cache and its TLB; that is a stated channel ([side channels](#side-channels)).
+  - **The TLB tags each entry with its hart.** Each hart's translations stay its own, as the
+    privileged spec requires of a translation cache harts share. The kernel's TLB rules rely on
+    it ([several harts](../plan/m2-usable-shell.md#several-harts)). A hart's flush may empty
+    its sibling's entries too, which costs time, never correctness.
+  - **The barrel stays strict.** A hart's rate does not depend on what its sibling runs, which
+    the scheduler's shares across harts count on
+    ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)).
 - **The 16550** from the `pcie_7x` project, so the kernel keeps one console driver.
 - **The virtio-mmio shim:** each slot is a register window. A write to `QueueNotify` becomes a
   doorbell to the driver app; the app's answer raises a PLIC line.
@@ -164,7 +171,9 @@ Standard extensions that make Redoubt faster without weakening it, each testable
   - **Zicboz,** for the zeroing [R11 (memory)](../kernel/memory.md#r11-memory) does on every
     fresh frame (new RTL in VexiiRiscv).
   - **Zba, Zbb and Zbs.**
-  - **Zihintpause,** so a spinning hart gives its issue slots to its sibling.
+  - **Zihintpause,** for the kernel's spins. On this card's strict barrel it gives the sibling
+    nothing, since each hart keeps its alternate cycles; it pays on a core whose harts share
+    issue slots, and runs as a no-op on one without it.
   - **Zkt,** stated by the platform for `keyd`'s constant-time signing
     ([R45 (constant-time signing)](../servers/keyd.md#r45-constant-time-signing)), after an
     audit of the multiplier's and the bit-manipulation unit's timing.
@@ -210,6 +219,7 @@ Standard extensions that make Redoubt faster without weakening it, each testable
 - A loader the boot ROM does not accept does not run.
 - User `seed`, `cbo.inval` and counter reads fault.
 - Every scheduling and memory case reruns on several harts.
+- Two harts of one core, running two processes at one virtual address, each read their own page.
 
 **Undecided:**
 - Whether the DE10-Nano's softcore RAM is a slice of the HPS DDR3 or the MiSTer SDRAM board.
