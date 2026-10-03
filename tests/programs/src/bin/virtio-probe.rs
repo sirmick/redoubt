@@ -1,6 +1,8 @@
 //! Reports which virtio devices QEMU attached, then powers the machine off. The bench's
 //! self-checks use it to prove that a case's `disk` and `net` reach the guest: it prints
-//! each device's kind and what identifies it (a disk's size, a network card's MAC).
+//! each device's kind and what identifies it (a disk's size, a network card's MAC), then its slot's
+//! physical base and its transport's version, which proves the bench's fixed slots and its modern
+//! transport (docs/testbench.md, "Disks and network cards").
 //!
 //! It runs as the bundle's first program, so it holds every device object the loader made (until
 //! `init` places each device: kernel/devices.md, "Which process gets which device"), maps each
@@ -13,11 +15,12 @@
 
 use core::fmt::Write;
 
-use test_programs::rd::{self, ResetKind};
+use test_programs::rd::{self, DeviceInfo, ResetKind};
 use uart_16550::MmioSerialPort;
 
 // Register offsets within a slot (virtio 1.2, section 4.2.2).
 const MAGIC: usize = 0x000; // "virt"
+const VERSION: usize = 0x004; // 2 for the modern transport
 const DEVICE_ID: usize = 0x008; // 0 for an empty slot
 const CONFIG: usize = 0x100; // device-specific configuration space
 
@@ -53,21 +56,34 @@ pub extern "C" fn _start() -> ! {
                 let (low, high) = (read(CONFIG).to_le_bytes(), read(CONFIG + 4).to_le_bytes());
                 say!(
                     out,
-                    "[virtio] handle {}: network device, mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    "[virtio] handle {}: network device, mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, {}",
                     handle,
                     low[0],
                     low[1],
                     low[2],
                     low[3],
                     high[0],
-                    high[1]
+                    high[1],
+                    Slot(handle, read(VERSION))
                 );
             }
             2 => {
                 let sectors = read(CONFIG) as u64 | (read(CONFIG + 4) as u64) << 32;
-                say!(out, "[virtio] handle {}: block device, {} sectors", handle, sectors);
+                say!(
+                    out,
+                    "[virtio] handle {}: block device, {} sectors, {}",
+                    handle,
+                    sectors,
+                    Slot(handle, read(VERSION))
+                );
             }
-            other => say!(out, "[virtio] handle {}: device type {}", handle, other),
+            other => say!(
+                out,
+                "[virtio] handle {}: device type {}, {}",
+                handle,
+                other,
+                Slot(handle, read(VERSION))
+            ),
         }
         found += 1;
     }
@@ -78,6 +94,18 @@ pub extern "C" fn _start() -> ! {
     rd::system_reset(rd::RESET, ResetKind::PowerOff).ok();
     say!(out, "[virtio] FAIL: system_reset returned");
     test_programs::park()
+}
+
+/// A device's slot, as the kernel names its handle, and its transport's version.
+struct Slot(u32, u32);
+
+impl core::fmt::Display for Slot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match rd::device_info(self.0) {
+            Ok(DeviceInfo::Mmio { base, .. }) => write!(f, "at {base:#x}, version {}", self.1),
+            other => write!(f, "at {other:?}, version {}", self.1),
+        }
+    }
 }
 
 #[panic_handler]
