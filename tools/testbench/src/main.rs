@@ -166,9 +166,13 @@ fn main() -> Result<()> {
     let mut failures = 0;
     // Probed once, at the first loopback case.
     let mut loopback_usable: Option<Result<(), ssh::Unusable>> = None;
-    for case in cases.iter().filter(|c| args.filter.as_ref().is_none_or(|f| c.name.contains(f.as_str()))) {
+    for case in cases.iter().filter(|c| c.matches(args.filter.as_deref())) {
         if args.list {
-            println!("{:<16} [{}] {}", case.name, case.arch.join(", "), case.description);
+            let mark = if case.whole_run { "" } else { "(by name only) " };
+            println!("{:<16} [{}] {mark}{}", case.name, case.arch.join(", "), case.description);
+            continue;
+        }
+        if !case.chosen(args.filter.as_deref()) {
             continue;
         }
         if let Kind::UnsafeBudget(check) = &case.kind {

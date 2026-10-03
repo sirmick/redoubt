@@ -10,10 +10,10 @@ case in `tests/`.
 ## How to use it
 
 ```sh
-cargo testbench                 # every case
+cargo testbench                 # every case but those run only by name
 cargo testbench timer           # cases whose name contains "timer"
 cargo testbench --arch rv64     # one target
-cargo testbench --list          # names and descriptions
+cargo testbench --list          # names and descriptions, those run only by name marked
 ./test                          # the same, from the repository root
 ```
 
@@ -127,7 +127,7 @@ description says so ("verdict: survival only").
 
 ### The case file
 
-Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing
+Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name
 
 A case is one TOML file. Paths in it are relative to the workspace root, and an unknown field or
 table is an error, so a misspelling cannot silently drop a check. The one exception is a `programs`
@@ -137,6 +137,7 @@ is ignored rather than refused (`tools/testbench/src/case.rs`).
 ```toml
 description = "What this proves"
 arch = ["rv64", "rv32"]      # targets to run on
+whole_run = true             # false: run only when the filter is the case's name
 kind = "boot"
 programs = [                 # the first in init's place, the rest started by it
     "log-server",                                  # a binary of the test programs
@@ -184,7 +185,11 @@ run then repeats exactly. The bench prints the seed before the result, and
 to sweep. A timing gate runs one pinned seed and states its target from a sweep of seeds
 ([responsiveness](kernel/scheduling.md#responsiveness)).
 
-The kinds, and the fields each takes besides `description` and `arch`:
+A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
+is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
+name only". It has one reason: a measurement too long to repeat at every merge.
+
+The kinds, and the fields each takes besides `description`, `arch` and `whole_run`:
 
 | Kind | What it does | Its fields |
 | --- | --- | --- |
