@@ -108,7 +108,7 @@ max_lines = 1590
 [[crate]]
 name = "servers/ipd"
 paths = ["servers/ipd/src"]
-max_lines = 2894
+max_lines = 2926
 
 [[crate]]
 name = "servers/init"

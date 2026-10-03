@@ -23,13 +23,13 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use redoubt_rt::ipc::Caller;
-use redoubt_rt::server::AdmitKey;
 use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, QTDIR, Qid, Read, Write, mode};
+use redoubt_rt::server::{Admission, AdmitKey, Resource};
 use redoubt_rt::wire::proto::net_ctl;
 
 use crate::link::Netif;
 use crate::scope::Scope;
-use crate::stack::{CtlError, Entropy, Owner, Ready, Stack, WaitFor};
+use crate::stack::{CtlError, Entropy, Owner, Ready, Room, Stack, WaitFor};
 
 /// A scope's id: never reused. 64 bits, so no count of grants a box could make wraps it (a 32-bit
 /// counter would panic or wrap after 2^32).
@@ -165,6 +165,31 @@ pub const NO_CHARGE: NineError = NineError("no charge");
 fn ctl(e: CtlError) -> NineError { NineError(e.name()) }
 
 impl<N: Netif, E: Entropy> NetFs<N, E> {
+    /// Before a 9P request: reserves, for its `charge` (bucket and share), as many `State` units
+    /// as `admission` gives, up to [`crate::server::SOCKETS_PER_REQUEST`], for the sockets the
+    /// request may make ([`crate::server::open_sockets`], and a multiplexed request's
+    /// [`FileServer::serving`]).
+    pub fn reserve(&mut self, (key, share): (AdmitKey, u64), admission: &mut Admission) {
+        self.charge = Some(key);
+        let mut left = 0;
+        while left < crate::server::SOCKETS_PER_REQUEST
+            && admission.admit(key, share, Resource::State).is_ok()
+        {
+            left += 1;
+        }
+        self.stack.open_room(Room { key, share, left });
+    }
+
+    /// After a request: gives back what its reservation did not spend.
+    pub fn unreserve(&mut self, admission: &mut Admission) {
+        self.charge = None;
+        if let Some(room) = self.stack.close_room() {
+            for _ in 0..room.left {
+                admission.release(room.key, room.share, Resource::State);
+            }
+        }
+    }
+
     /// The bucket the request's sockets are charged to: the one set for this request, which folds
     /// an account-0 chain to its root badge (servers/serving.md R26). None set is a request served
     /// outside `open_sockets`: refused, never charged to an unfolded key.
@@ -276,6 +301,12 @@ impl<N: Netif, E: Entropy> NetFs<N, E> {
 
 impl<N: Netif, E: Entropy> FileServer for NetFs<N, E> {
     type Node = Node;
+
+    fn serving(&mut self, _: &Caller, charge: (AdmitKey, u64), admission: &mut Admission) {
+        self.reserve(charge, admission);
+    }
+
+    fn served(&mut self, admission: &mut Admission) { self.unreserve(admission); }
 
     fn attach(&mut self, caller: &Caller, aname: &str) -> Result<(Node, Qid), NineError> {
         // Only a root badge with a scope attaches; the ingress badge has none, so no `/net`.

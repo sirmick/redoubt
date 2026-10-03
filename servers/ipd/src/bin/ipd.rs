@@ -20,7 +20,7 @@ use redoubt_ipd::link::Link;
 use redoubt_ipd::netd::NetdLink;
 use redoubt_ipd::server::Ipd;
 use redoubt_ipd::stack::{Entropy, Net, Stack, Use};
-use redoubt_rt::abi::{Error, FOREVER};
+use redoubt_rt::abi::{Error, FOREVER, MAX_LEND_PAGES};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Event;
 use redoubt_rt::server::ninep::NineServer;
@@ -92,14 +92,19 @@ pub fn serve(startup: &Startup) -> u32 {
         }
         let timeout = if poll_now { 0 } else { timeout.map_or(FOREVER, |d| d.max(1)) };
         poll_now = false;
-        match endpoint.receive(timeout, 1) {
+        // A multiplexed request too long for its words comes in a transfer, as a frame does.
+        match endpoint.receive(timeout, MAX_LEND_PAGES) {
             Ok(Event::Call(request)) => {
                 ipd.on_call(request, now());
                 poll_now = true;
                 continue;
             }
             Ok(Event::Send(delivery)) => {
-                ipd.on_send(delivery, now());
+                // A multiplexed request was served as a call is: receive again before polling.
+                if ipd.on_send(delivery, now()) {
+                    poll_now = true;
+                    continue;
+                }
             }
             Ok(Event::Abandoned(id)) => ipd.on_abandoned(id),
             Ok(Event::Interrupt | Event::Exit(_)) | Err(Error::Timeout) => ipd.received_no_call(),

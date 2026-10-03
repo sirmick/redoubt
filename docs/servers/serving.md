@@ -290,10 +290,14 @@ connection. (`libs/rt/src/server/ninep_mux.rs`.)
 `run_around` with its `Around`, which is given the calls, the abandoned-call notices that are no
 completion call's, and a turn before each receive, after what the deadlines made due, for whatever
 moved since: `consoled` parks its own reads, and at each turn reads its UART and serves again the
-reads that wait for input. A server with a loop of its own hands each send to `deliver` and each
-abandoned-call notice to `abandoned` first, calls `expire` and bounds its `receive` by
-`next_deadline`, and calls `wake` when its files may have moved. A file server that pays for what a
-request makes around it does so in the `serving` and `served` hooks.
+reads that wait for input. `ipd` keeps a loop of its own: it polls its network stack only after a
+`receive` that returned no call, so never with a call current
+([R21](../kernel/processes.md#r21-crash-blame)), receives without waiting after each call, takes
+frames from `netd`, and bounds each wait by its stack's timers and its link's retry, so hooks for
+all of that would be its loop again. It hands each send to `deliver` and each abandoned-call notice
+to `abandoned` first, calls `expire` and bounds its `receive` by `next_deadline`, and calls `wake`
+after each poll. A file server that pays for what a request makes around it does so in the `serving`
+and `served` hooks (`ipd`'s sockets, [ipd](ipd.md)).
 
 ### Typed dispatch
 
