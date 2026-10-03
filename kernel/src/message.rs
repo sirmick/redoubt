@@ -51,7 +51,7 @@ use redoubt_sys::{
     Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
 };
 
-use crate::arch::process::TID;
+use crate::arch::process::{MAX_PROCESS_COUNT, TID};
 use crate::budget::{BudgetFrame, Class};
 use crate::cell::KernelCell;
 use crate::endpoint::Group;
@@ -452,9 +452,44 @@ fn object_of(r: u64) -> u32 { frame_of(r).expect("I1: a list names no process ob
 /// storing the object rewrites; a budget's two chain heads beside its handle chains' heads.
 struct Frames<'a>(&'a MemoryManager);
 
+/// The lists' words that are the kernel's own: an expiry's due list's head and tail
+/// ([`collect_due`]), empty outside an expiry, and each process slot's timed waits' head
+/// ([`timed`]). All zeros, so `.bss`.
+static KERNEL_WORDS: KernelCell<[u64; lists::kernel_words(MAX_PROCESS_COUNT)]> =
+    KernelCell::new([0; lists::kernel_words(MAX_PROCESS_COUNT)]);
+
+/// `pid`'s threads in a wait with a deadline: what an expiry reads of it.
+fn timed(pid: Pid) -> List {
+    List::timed(crate::budget::account_index(pid).expect("I1: a waiting thread's PID has a slot"))
+}
+
+/// `(pid, tid)`'s wait has ended: it leaves its process's timed waits, if it was on them (a wait
+/// with no deadline never was).
+fn untime(mm: &MemoryManager, pid: Pid, tid: TID) {
+    timing(|| {
+        let (w, me) = (&mut Frames(mm), tref(pid, tid));
+        if timed(pid).contains(w, me) {
+            timed(pid).remove(w, me);
+        }
+    })
+}
+
 /// Whether a list changed since the last audit ([`audit`]).
 #[cfg(debug_assertions)]
 static CHANGED: KernelCell<bool> = KernelCell::new(false);
+
+/// `f`, whose changes to the timed waits and the due list are none for the per-exit audit
+/// ([`audit`]): a plain sleep would otherwise walk every thread at its call and at its expiry, a
+/// checked build's time spent in the sleeper's entries and taken from the budgets beside it. Those
+/// lists are audited whole by every [`check_lists`] another change triggers and by [`check_all`].
+fn timing<R>(f: impl FnOnce() -> R) -> R {
+    #[cfg(debug_assertions)]
+    let changed = CHANGED.with(|c| *c);
+    let result = f();
+    #[cfg(debug_assertions)]
+    CHANGED.with(|c| *c = changed);
+    result
+}
 
 impl Frames<'_> {
     /// The physical page and byte offset of `page`'s list word `word`; `None` for a thread with
@@ -478,16 +513,29 @@ impl Frames<'_> {
         };
         Some((phys, at * 8))
     }
+
+    /// Thread `r`'s deadline: the expiry's order.
+    fn deadline(&self, r: u64) -> u64 {
+        let (pid, tid) = thread_of(r);
+        tword(self.0, pid, tid, W_DEADLINE)
+    }
 }
 
 impl Words for Frames<'_> {
     fn read(&self, page: Page, word: usize) -> u64 {
+        if page == Page::Kernel {
+            return KERNEL_WORDS.with(|words| words[word]);
+        }
         self.at(page, word).map_or(0, |(phys, at)| kframe::read(phys, at))
     }
 
     fn write(&mut self, page: Page, word: usize, value: u64) {
         #[cfg(debug_assertions)]
         CHANGED.with(|changed| *changed = true);
+        if page == Page::Kernel {
+            KERNEL_WORDS.with(|words| words[word] = value);
+            return;
+        }
         if let Some((phys, at)) = self.at(page, word) {
             if let Page::Thread(_) = page {
                 // A fresh page is stamped the first time it is written (`set_tword`).
@@ -571,6 +619,7 @@ fn is_running(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
 /// the call was never off it.
 fn wake(ss: &mut ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID, result: Result<Return, Error>) {
     unlist(mm, pid, tid);
+    untime(mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
     if !is_running(ss, pid, tid) {
         // A waiting thread belongs to a live process, so this cannot fail.
@@ -609,6 +658,12 @@ fn mark(mm: &mut MemoryManager, pid: Pid, tid: TID, wait: Wait, timeout: u64) {
     let deadline = crate::time::now_us().saturating_add(timeout);
     set_tword(mm, pid, tid, W_WAIT, wait as u64);
     set_tword(mm, pid, tid, W_DEADLINE, deadline);
+    // A wait with a deadline is on its process's timed waits until it ends (`wake`,
+    // `end_thread`), so an expiry reads only those.
+    untime(mm, pid, tid);
+    if deadline != u64::MAX {
+        timing(|| timed(pid).push_front(&mut Frames(mm), tref(pid, tid)));
+    }
 }
 
 /// What a blocking call does once delivery has had its chance: resume with the answer it already
@@ -1663,6 +1718,13 @@ fn end_thread(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID)
     // Not `fail_wait`: a dying thread gets no answer and must not go back on the ready list.
     let served = unwind(ss, mm, pid, tid);
     unlist(mm, pid, tid);
+    // An expiry's due list may hold it: a deadline's destruction ends threads mid-expiry, and
+    // their pages go.
+    let (w, me) = (&mut Frames(mm), tref(pid, tid));
+    if List::due().contains(w, me) {
+        List::due().remove(w, me);
+    }
+    untime(mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
     // R4b: every call it holds open ends, its caller told.
     while slot(mm, pid, tid).ncalls > 0 {
@@ -1870,11 +1932,10 @@ fn fail_one(ss: &mut ProcessTable, mm: &mut MemoryManager, r: u64) {
     fail_wait(ss, mm, pid, tid, Error::Dead);
 }
 
-/// What a walk for timeouts found.
-pub struct Timeouts {
-    /// The timeout due first at `now`: the earliest deadline at or before `now` (at an equal
-    /// deadline, the first in (pid, tid) order).
-    pub due: Option<(u64, Pid, TID)>,
+/// What an expiry's collect walk found ([`collect_due`]).
+pub struct Due {
+    /// The waits due, on the due list in the order the timer ends them.
+    pub count: u64,
     /// The earliest deadline still to come (`u64::MAX` for none).
     pub next: u64,
     /// The last process whose cached earliest timeout had come with none of its threads due: a
@@ -1883,46 +1944,62 @@ pub struct Timeouts {
     pub stale: Option<Pid>,
 }
 
-/// I13: walk for timeouts at `now` ([`Timeouts`]). Only the threads of processes whose cached
-/// earliest timeout has come are read; each such cache is recomputed on the way.
-pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> Timeouts {
-    let mut due: Option<(u64, Pid, TID)> = None;
-    let mut next = u64::MAX;
-    let mut stale = None;
+/// I13: an expiry's one walk at `now`. Only the timed waits of processes whose cached earliest
+/// timeout has come are read ([`timed`]), never their other threads; every wait due is linked on
+/// the due list, and each such cache is set to the earliest of its process's deadlines still to
+/// come, since every wait listed ends in this expiry or has ended. Then the list is sorted by
+/// deadline, then (pid, tid): the order the timer ends them in (kernel/timer.md, "Expiry"), in R
+/// log R steps for R waits.
+pub fn collect_due(mm: &mut MemoryManager, now: u64) -> Due {
+    let mut due = Due { count: 0, next: u64::MAX, stale: None };
     for pid in mm.live_pids() {
         let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
         if earliest > now {
-            next = next.min(earliest);
+            due.next = due.next.min(earliest);
             continue;
         }
         let mut exact = u64::MAX;
         let mut found = false;
-        for tid in mm.live_tids(pid) {
-            if Wait::from_word(tword(mm, pid, tid, W_WAIT)) == Wait::None {
-                continue;
-            }
-            let deadline = tword(mm, pid, tid, W_DEADLINE);
-            if deadline == u64::MAX {
-                continue;
-            }
-            exact = exact.min(deadline);
+        let (w, list) = (&mut Frames(mm), timed(pid));
+        let mut r = list.first(w);
+        while r != 0 {
+            let deadline = w.deadline(r);
             if deadline <= now {
                 found = true;
-                if due.is_none_or(|(d, _, _)| deadline < d) {
-                    due = Some((deadline, pid, tid));
-                }
+                due.count += 1;
+                timing(|| List::due().push_back(w, r));
             } else {
-                next = next.min(deadline);
+                exact = exact.min(deadline);
+                due.next = due.next.min(deadline);
             }
+            r = list.next(w, r);
         }
         if !found {
-            stale = Some(pid);
+            due.stale = Some(pid);
         }
         if let Some(a) = mm.account_mut(pid) {
             a.earliest_timeout = exact;
         }
     }
-    Timeouts { due, next, stale }
+    timing(|| List::due().sort(&mut Frames(mm), |w, r| (w.deadline(r), r)));
+    due
+}
+
+/// The first wait on the due list: (deadline, pid, tid).
+pub fn first_due(mm: &MemoryManager) -> Option<(u64, Pid, TID)> {
+    let w = &Frames(mm);
+    let r = List::due().first(w);
+    (r != 0).then(|| {
+        let (pid, tid) = thread_of(r);
+        (w.deadline(r), pid, tid)
+    })
+}
+
+/// Take `(pid, tid)` off the due list: whether it still waits, so that its timeout is due. One
+/// that a pump answered, or a destruction failed, meanwhile has ended.
+pub fn pop_due(mm: &MemoryManager, pid: Pid, tid: TID) -> bool {
+    timing(|| List::due().remove(&mut Frames(mm), tref(pid, tid)));
+    slot(mm, pid, tid).wait != Wait::None
 }
 
 /// The blocking call of `(pid, tid)` reached its timeout: it returns `Timeout` (I13), with what
@@ -1977,15 +2054,17 @@ struct Listed {
     notices: usize,
     exits: usize,
     reporters: usize,
+    timed: usize,
 }
 
-/// The checked build's full audit of the lists, at its full-audit points: after each destruction,
-/// at each process-object free and before the hart idles. [`check_lists`], and then every list
-/// from the objects that head it, with no scan of the frames: the budget tree from its root, each
-/// budget's two stamp chains and its owner chain's endpoints and devices. Those must hold what the
-/// threads say, so a list none of whose members waits, which a teardown that failed to unlink would
-/// leave, is found here. An endpoint whose list words are all 0 is skipped, as a destruction skips
-/// it; one with any other has its lists audited whole, so a stray head or tail fails.
+/// The checked build's full audit of the lists, at its full-audit points: after each destruction (a
+/// deadline's, once its expiry ends), at each process-object free and before the hart idles.
+/// [`check_lists`], and then every list from the objects that head it, with no scan of the frames:
+/// the budget tree from its root, each budget's two stamp chains and its owner chain's endpoints
+/// and devices. Those must hold what the threads say, so a list none of whose members waits, which
+/// a teardown that failed to unlink would leave, is found here. An endpoint whose list words are
+/// all 0 is skipped, as a destruction skips it; one with any other has its lists audited whole, so
+/// a stray head or tail fails.
 #[cfg(debug_assertions)]
 pub fn check_all(mm: &MemoryManager) {
     let want = check_lists(mm);
@@ -1997,11 +2076,12 @@ pub fn check_all(mm: &MemoryManager) {
 /// every thread and its open calls, and of every process object, counts what must be listed, and
 /// audits each list whole from the member at its head (`redoubt-ipclist`: its links, its order, and
 /// every member's own words); each kind of list must then hold exactly what the threads and process
-/// objects say. It walks no budget, so its cost follows the threads. Returns what the threads and
-/// process objects say.
+/// objects say. It walks no budget, so its cost follows the threads. The due list is empty outside
+/// an expiry. Returns what the threads and process objects say.
 #[cfg(debug_assertions)]
 fn check_lists(mm: &MemoryManager) -> Listed {
     let w = &Frames(mm);
+    assert!(List::due().is_empty(w), "I1: the due list outlived its expiry");
     let mut listed = Listed::default();
     let mut want = Listed::default();
     for pid in mm.live_pids() {
@@ -2009,7 +2089,15 @@ fn check_lists(mm: &MemoryManager) -> Listed {
             let Some(phys) = thread_phys(mm, pid, tid) else { continue };
             let me = tref(pid, tid);
             let on = frame_of(kframe::read(phys, W_OBJECT * 8)).unwrap_or(0);
-            match Wait::from_word(kframe::read(phys, W_WAIT * 8)) {
+            let wait = Wait::from_word(kframe::read(phys, W_WAIT * 8));
+            // Every thread waiting with a deadline is on its process's timed waits.
+            if wait != Wait::None && kframe::read(phys, W_DEADLINE * 8) != u64::MAX {
+                want.timed += 1;
+                if timed(pid).first(w) == me {
+                    listed.timed += audit_timed(mm, timed(pid), Some(pid));
+                }
+            }
+            match wait {
                 Wait::Receive => {
                     want.receivers += 1;
                     if List::receivers(on).first(w) == me {
@@ -2091,6 +2179,11 @@ fn enumerate_lists(mm: &MemoryManager) -> Listed {
         }
         b
     });
+    // Every process slot's timed waits, from the kernel's words: one left on a slot with no
+    // process fails its members' check.
+    for slot in 0..MAX_PROCESS_COUNT {
+        all.timed += audit_timed(mm, List::timed(slot), crate::budget::pid_from(slot as u64 + 1));
+    }
     let mut cur = root;
     while let Some(b) = cur {
         all.stamped += audit_stamped(mm, b);
@@ -2194,6 +2287,17 @@ fn audit_stamped(mm: &MemoryManager, b: u32) -> usize {
             member(queued && frame_of(member_word(mm, r, W_STAMP)) == Some(b), Page::Thread(r))
         })
         .unwrap_or_else(|f| audit_failed(f))
+}
+
+/// A process's timed waits: each a thread of `pid` waiting with a deadline.
+#[cfg(debug_assertions)]
+fn audit_timed(mm: &MemoryManager, list: List, pid: Option<Pid>) -> usize {
+    list.audit(&Frames(mm), |_, r| {
+        let waits = member_word(mm, r, W_WAIT) != Wait::None as u64;
+        let timed = member_word(mm, r, W_DEADLINE) != u64::MAX;
+        member(Some(thread_of(r).0) == pid && waits && timed, Page::Thread(r))
+    })
+    .unwrap_or_else(|f| audit_failed(f))
 }
 
 /// Endpoint `e`'s exits or reporters: each a process object naming `e`, its notice queued on the

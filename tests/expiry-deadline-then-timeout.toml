@@ -1,0 +1,15 @@
+description = "One expiry ends a budget's deadline and, after it, an unrelated thread's receive timeout one microsecond later, both due inside one long system call: the checked build's audits hold through the destruction while the timeout is still listed due, the budget's process is killed, and the thread gets Timeout with its handle stamped with the budget already revoked (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["expiry-deadline-then-timeout"]
+timeout_secs = 120
+expect = [
+    '^\[expiry\] ok: the call straddled the deadline ',
+    '^\[expiry\] ok: the lease ended at its deadline ',
+    '^\[expiry\] ok: R timed out after the lease.s destruction, its stamped handle revoked$',
+    '^EXPIRY-DEADLINE-THEN-TIMEOUT TEST PASSED$',
+]
+forbid = ['\[expiry\] FAIL']
+poweroff = true

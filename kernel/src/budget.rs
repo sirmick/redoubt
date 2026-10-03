@@ -184,7 +184,7 @@ pub struct Account {
     /// The DMA registry slots it has mapped with `map_device` (`dma.rs`): half of the
     /// set its death must reset. Zero again for a new process in the same PID.
     pub dma_mapped: u16,
-    /// No thread of this process has a timeout earlier than this (`message::next_timeout`): only
+    /// No thread of this process has a timeout earlier than this (`message::collect_due`): only
     /// ever early, so expiry walks just the processes it might be due in.
     pub earliest_timeout: u64,
 }
@@ -1335,14 +1335,23 @@ pub fn destroy_subtree(
     });
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);
-    // The audit, off the measured walk: the links and indexes name exactly the live objects. It
-    // neither moves the schedule nor counts in a latency target (`sched::audit`).
+    // The audit, off the measured walk. A deadline's is its expiry's, once the waits it still
+    // holds due are off the due list (`time::expire_due`).
     #[cfg(debug_assertions)]
+    if deadline_since.is_none() {
+        audit_destruction();
+    }
+    caller_doomed
+}
+
+/// The checked build's audit after a destruction: the links and indexes name exactly the live
+/// objects. It neither moves the schedule nor counts in a latency target (`sched::audit`).
+#[cfg(debug_assertions)]
+pub fn audit_destruction() {
     crate::sched::audit(crate::sched::AUDIT_DESTRUCTION, || {
         MemoryManager::with(|mm| {
             mm.check_object_indexes();
             crate::message::check_all(mm);
         })
     });
-    caller_doomed
 }
