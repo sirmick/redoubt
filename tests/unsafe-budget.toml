@@ -81,12 +81,13 @@ paths = [
 ]
 # time.rs and sched.rs (the kernel's timer and scheduler) have no unsafe, and device.rs none of
 # its own (it reaches frames through kframe.rs and the page tables through arch::mem). Among
-# the 19: kframe.rs's three (words of kernel-object frames and of records, through the
-# physmap); cell.rs's three (`SpinLock`/`KernelCell` `Sync` and the lock's access); the debug
-# console's two (setting `OUTPUT` at boot and `print!`'s use of it); dma.rs's volatile read and
-# write of a DMA device's registers through the kernel's register window (the reset before reuse,
-# I16), the only access to a device's registers that needs one.
-max_unsafe = 19
+# the 20: kframe.rs's three (words of kernel-object frames and of records, through the
+# physmap); mem.rs's slice of the free-frame bitmap, made once at boot over kernel-owned
+# frames like the ownership table's; cell.rs's three (`SpinLock`/`KernelCell` `Sync` and the
+# lock's access); the debug console's two (setting `OUTPUT` at boot and `print!`'s use of it);
+# dma.rs's volatile read and write of a DMA device's registers through the kernel's register
+# window (the reset before reuse, I16), the only access to a device's registers that needs one.
+max_unsafe = 20
 max_undocumented = 0
 
 [[budget]]

@@ -698,20 +698,22 @@ budgets, or arming timeouts and deadlines gets it more. The rule's parts are the
 free weight, the preemption points, the wake rule and ranks, charging and inheritance.
 
 A system call's kernel time is bounded by a constant plus a term linear in the pages it maps or
-the objects it names. It never depends on the extent of an address area or on what other
-processes hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant,
-and never in `len` (`bench:map-anon-search-bound`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the platform's
-interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in RAM
-frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
+the objects it names. It never depends on the extent of an address area or on what other processes
+hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant, and never in
+`len` (`bench:map-anon-search-bound`). A RAM frame is taken from the free-frame bitmap and given
+back to it, so backing a page, a page table or an object costs no search of RAM, however much of it
+is in use (`bench:scan-bounds`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the
+platform's interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in
+RAM frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
 every wake waits for it. R10 (destruction) walks only the dying subtree, its owner lists, the
 dying processes' own tables and page tables, and the chains of the handles held outside it
-([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by interrupt number
-it finds in an index the kernel keeps as objects are made and freed: a process object in one of
-`MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's sources; a boot
-naming a higher interrupt stops). So `process_create`'s PID draw looks at most at 63 slots, an
-owed exit notice is sought among at most 63 process objects, and an interrupt finds its object
-in one lookup; a checked build proves each index against a scan of every object frame. In
-`bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
+([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by
+interrupt number it finds in an index the kernel keeps as objects are made and freed: a process
+object in one of `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's
+sources; a boot naming a higher interrupt stops). So `process_create`'s PID draw looks at most at
+63 slots, an owed exit notice is sought among at most 63 process objects, and an interrupt finds
+its object in one lookup; a checked build proves each index against a scan of every object frame.
+In `bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
 its exit notice and an interrupt take what they took on an empty system; with the old scans, the
 first took 1.2 s against 22 ms.
 

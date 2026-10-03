@@ -276,14 +276,15 @@ impl MemoryManager {
     }
 
     /// The checked build's audit, run once after a destruction's walk: the PID and IRQ indexes
-    /// name exactly the live objects, no frame is credited to a process that ended, and every
-    /// handle is in the chains it should be. Off the walk, so it never scales the destruction's
-    /// cost.
+    /// name exactly the live objects, no frame is credited to a process that ended, the
+    /// free-frame bitmap is the table's free frames, and every handle is in the chains it should
+    /// be. Off the walk, so it never scales the destruction's cost.
     #[cfg(debug_assertions)]
     pub(crate) fn check_object_indexes(&self) {
         self.check_process_index();
         self.check_irq_index();
         self.check_frame_owners();
+        self.check_free_frames();
         self.check_handle_chains();
     }
 }

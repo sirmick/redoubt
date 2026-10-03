@@ -90,6 +90,8 @@ pub struct MemoryManager {
     /// Who owns each page of RAM, indexed by page number within RAM. The loader builds
     /// this table and hands it over in `init_from_memory`.
     allocations: &'static mut [RamAllocation],
+    /// The table's free entries, one bit each, with their summaries ([`FreeFrames`]).
+    free: FreeFrames,
     /// The same, for the pages of every region in `extra_regions`, back to back.
     extra_allocations: &'static mut [Option<Pid>],
     /// Memory outside RAM that processes may claim: memory-mapped devices. The data of the
@@ -122,6 +124,48 @@ pub const DMA_OWNER: Pid = match Pid::new(254) {
 const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 254);
 type RamAllocation = Option<Pid>;
 
+/// Every free RAM frame, a set bit in a bitmap the kernel keeps in frames of its own (owned by
+/// `KERNEL_PID`, taken at boot), with a summary bit for every word of it, level above level, to a
+/// fixed depth, [`LEVELS`]. Taking the lowest free frame reads one word a level, and giving one
+/// back, or claiming one by address, writes its bit and at most one word a level above it, so
+/// neither searches RAM (R12, kernel/scheduling.md), and no free frame holds anything of the
+/// kernel's. Every write of the ownership table goes through [`MemoryManager::set_owner`], which
+/// keeps level 0 equal to the table's `None` entries (`check_free_frames`). All zeros is an
+/// empty bitmap, so the memory manager's starting value stays all zeros.
+struct FreeFrames {
+    /// Every level's words, back to back, in the bitmap's frames.
+    bits: &'static mut [u64],
+    /// The word each level starts at, level 0 (a bit a frame) first; the last entry is the total.
+    level_start: [usize; LEVELS + 1],
+}
+
+/// The bitmap's depth: a level of one bit a frame, then a level of one bit a word below, up to a
+/// single word, for the most RAM the physmap reaches. Sv39's 128 GiB is 2^25 frames: 2^19, 2^13,
+/// 2^7, 2 and 1 words, so 5. Sv32's 2032 MiB is 520,192 frames: 8,128, 127, 2 and 1, so 4. A
+/// kernel constant, so a take's cost is one under R12; RAM's size sets only the levels' widths.
+const LEVELS: usize = {
+    let (mut words, mut levels) = ((redoubt_layout::PHYSMAP_SIZE / PAGE_SIZE).div_ceil(64), 1);
+    while words > 1 {
+        (words, levels) = (words.div_ceil(64), levels + 1);
+    }
+    levels
+};
+
+impl FreeFrames {
+    /// The levels for `frames` frames of RAM, each a word for every 64 entries below it.
+    fn sized(frames: usize) -> Self {
+        let (mut level_start, mut words) = ([0; LEVELS + 1], frames);
+        for level in 0..LEVELS {
+            words = words.div_ceil(64);
+            level_start[level + 1] = level_start[level] + words;
+        }
+        assert!(words == 1, "mm: RAM is larger than the physmap reaches");
+        FreeFrames { bits: &mut [], level_start }
+    }
+
+    fn words(&self, level: usize) -> usize { self.level_start[level + 1] - self.level_start[level] }
+}
+
 impl Default for MemoryManager {
     fn default() -> Self { Self::default_hack() }
 }
@@ -139,6 +183,7 @@ impl MemoryManager {
             ram_size: 0,
             ram_name: 0,
             allocations: &mut [],
+            free: FreeFrames { bits: &mut [], level_start: [0; LEVELS + 1] },
             extra_allocations: &mut [],
             extra_regions: &[],
             objects: crate::budget::Objects::new(),
@@ -209,6 +254,35 @@ impl MemoryManager {
         unsafe {
             self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<Pid>, extra_size)
         }
+        // The free-frame bitmap takes the lowest run of free frames, the kernel's, so the budget
+        // tree counts them as kept (`boot_budgets`). These are the table's only writes outside
+        // `set_owner`, made before there is a bitmap to keep. Then the one scan of the table
+        // sets a bit for every frame the loader left free, and the summaries above them.
+        self.free = FreeFrames::sized(self.allocations.len());
+        let frames = (self.free.level_start[LEVELS] * 8).div_ceil(PAGE_SIZE);
+        let mut run = 0;
+        let last = (0..self.allocations.len())
+            .find(|index| {
+                run = if self.allocations[*index].is_none() { run + 1 } else { 0 };
+                run == frames
+            })
+            .expect("mm: no room in RAM for the free-frame bitmap");
+        let first = last + 1 - frames;
+        self.allocations[first..=last].fill(Some(redoubt_layout::KERNEL_PID));
+        let virt = redoubt_layout::physmap_virt(self.ram_start + first * PAGE_SIZE);
+        // SAFETY: The bitmap's frames were taken from free RAM at boot, before anything else ran,
+        // and are KERNEL_PID's for the kernel's whole life: never mapped into a process, never
+        // freed and never handed to `kframe`. This is the one place that makes a slice of them,
+        // once, at boot, so it is the only reference. The memory manager reaches it only through
+        // `&mut self`, under the kernel's one lock.
+        self.free.bits =
+            unsafe { slice::from_raw_parts_mut(virt as *mut u64, self.free.level_start[LEVELS]) };
+        for level in 0..LEVELS {
+            for word in 0..self.free.words(level) {
+                let value = self.summary(level, word);
+                self.free.bits[self.free.level_start[level] + word] = value;
+            }
+        }
         Ok(())
     }
 
@@ -218,7 +292,7 @@ impl MemoryManager {
     pub fn alloc_page(&mut self, pid: Pid) -> Result<usize, PageError> {
         let index = self.alloc_frame(pid)?;
         if self.charge_frame(pid).is_err() {
-            self.allocations[index] = None;
+            self.set_owner(index, None);
             return Err(PageError::NoFrame);
         }
         Ok(self.ram_start + index * PAGE_SIZE)
@@ -229,22 +303,101 @@ impl MemoryManager {
     /// charges what a process really costs instead of holding it back from `root` at boot).
     pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> { self.alloc_page(pid) }
 
-    /// Take a free frame for `owner`; its index in the ownership table.
+    /// Take a free frame for `owner`, the lowest; its index in the ownership table.
     fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
-        // First fit. (The previous next-fit search computed its starting point with `max`
-        // where `min` was meant, so it always scanned from the start anyway.)
-        let index = self.allocations.iter().position(Option::is_none).ok_or(PageError::NoFrame)?;
-        self.allocations[index] = Some(owner);
+        let index = self.find_free(false).ok_or(PageError::NoFrame)?;
+        self.set_owner(index, Some(owner));
         Ok(index)
     }
 
     /// A frame for the kernel itself (the test-only trace ring), taken at boot before the budget
-    /// tree counts what the kernel keeps. It comes from the top of RAM, so that the frames below
-    /// it, every object's and process's, sit where a release kernel's do.
+    /// tree counts what the kernel keeps: the highest free frame. It comes from the top of RAM,
+    /// so that the frames below it, every object's and process's, sit where a release kernel's
+    /// do.
     #[cfg(feature = "sched-trace")]
     pub fn kernel_frame(&mut self) -> Result<usize, PageError> {
-        let i = self.allocations.iter().rposition(Option::is_none).ok_or(PageError::NoFrame)?;
-        Ok(self.ram_start + i * PAGE_SIZE).inspect(|_| self.allocations[i] = Some(redoubt_layout::KERNEL_PID))
+        let index = self.find_free(true).ok_or(PageError::NoFrame)?;
+        self.set_owner(index, Some(redoubt_layout::KERNEL_PID));
+        Ok(self.ram_start + index * PAGE_SIZE)
+    }
+
+    /// Write the ownership table's entry for RAM frame `index`, keeping the free-frame bitmap's
+    /// level 0 equal to the table's `None` entries: a frame that becomes owned has its bit
+    /// cleared, one that becomes free has it set. Every write of the table goes through here.
+    fn set_owner(&mut self, index: usize, owner: Option<Pid>) {
+        match (self.allocations[index], owner) {
+            (None, Some(_)) => self.mark_free(index, false),
+            (Some(_), None) => self.mark_free(index, true),
+            _ => {}
+        }
+        self.allocations[index] = owner;
+    }
+
+    /// Word `word` of the bitmap's level `level`.
+    fn word(&self, level: usize, word: usize) -> u64 { self.free.bits[self.free.level_start[level] + word] }
+
+    /// Set (`free`) or clear frame `index`'s bit, then the summary bit above each word that
+    /// changes between zero and non-zero: at most one word a level.
+    fn mark_free(&mut self, index: usize, free: bool) {
+        let FreeFrames { bits, level_start } = &mut self.free;
+        let mut entry = index;
+        for start in &level_start[..LEVELS] {
+            let word = &mut bits[start + entry / 64];
+            let old = *word;
+            *word = if free { old | 1 << (entry % 64) } else { old & !(1 << (entry % 64)) };
+            if (old == 0) == (*word == 0) {
+                return;
+            }
+            entry /= 64;
+        }
+    }
+
+    /// The lowest free frame, or with `highest` the highest (only for the sched-trace build's
+    /// `kernel_frame`): down from the top word, one word a level, by its lowest or highest set
+    /// bit. Only the top word can be zero, since a summary bit is set only over a non-zero word.
+    fn find_free(&self, highest: bool) -> Option<usize> {
+        let mut entry = 0;
+        for level in (0..LEVELS).rev() {
+            let word = self.word(level, entry);
+            if word == 0 {
+                return None;
+            }
+            let bit = if highest { 63 - word.leading_zeros() } else { word.trailing_zeros() };
+            entry = 64 * entry + bit as usize;
+        }
+        Some(entry)
+    }
+
+    /// What word `word` of level `level` must hold: bit `b` set exactly when entry `64 * word + b`
+    /// below is free, a frame whose table entry is `None` for level 0, a non-zero word of the
+    /// level below for the others. The boot builds the bitmap from it; the audit checks it.
+    fn summary(&self, level: usize, word: usize) -> u64 {
+        (0..64).fold(0, |value, bit| {
+            let below = 64 * word + bit;
+            let free = if level == 0 {
+                self.allocations.get(below).is_some_and(Option::is_none)
+            } else {
+                below < self.free.words(level - 1) && self.word(level - 1, below) != 0
+            };
+            value | u64::from(free) << bit
+        })
+    }
+
+    /// The checked build's proof that the free-frame bitmap is exactly the table's `None`
+    /// entries and every summary is exact. A scan of all of RAM, so it runs once after a
+    /// destruction, in its stamped audit (`check_object_indexes`), never on a call path.
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_free_frames(&self) {
+        for level in 0..LEVELS {
+            for word in 0..self.free.words(level) {
+                assert!(
+                    self.word(level, word) == self.summary(level, word),
+                    "I1: word {} of the free-frame bitmap's level {} is wrong",
+                    word,
+                    level
+                );
+            }
+        }
     }
 
     /// A zeroed frame for a kernel object, owned by `OBJECT_OWNER`. The caller charges it to the
@@ -258,7 +411,7 @@ impl MemoryManager {
 
     pub fn free_object_frame(&mut self, frame: u32) {
         self.object_phys(frame);
-        self.allocations[frame as usize] = None;
+        self.set_owner(frame as usize, None);
     }
 
     /// A dying object's frame is due to be freed. Inside a destruction the free is deferred past
@@ -326,7 +479,9 @@ impl MemoryManager {
             })
             .map(|last| last + 1 - npages)
             .ok_or(redoubt_sys::Error::OutOfMemory)?;
-        self.allocations[start..start + npages].fill(Some(owner));
+        for index in start..start + npages {
+            self.set_owner(index, Some(owner));
+        }
         let phys = self.ram_start + start * PAGE_SIZE;
         for page in 0..npages {
             crate::kframe::zero(phys + page * PAGE_SIZE);
@@ -337,9 +492,9 @@ impl MemoryManager {
     /// Give back `npages` frames from `phys` that `alloc_contiguous` claimed for `owner`.
     pub fn free_contiguous(&mut self, owner: Pid, phys: usize, npages: usize) {
         let start = (phys - self.ram_start) / PAGE_SIZE;
-        for entry in &mut self.allocations[start..start + npages] {
-            assert!(*entry == Some(owner), "I1: a contiguous run changed owner");
-            *entry = None;
+        for index in start..start + npages {
+            assert!(self.allocations[index] == Some(owner), "I1: a contiguous run changed owner");
+            self.set_owner(index, None);
         }
     }
 
@@ -639,10 +794,10 @@ impl MemoryManager {
         if self.is_main_memory(addr as *mut u8) {
             offset += (addr - self.ram_start) / PAGE_SIZE;
             let before = self.allocations[offset];
-            action_inner(&mut self.allocations[offset], pid, action, false, addr)?;
+            let mut after = before;
+            action_inner(&mut after, pid, action, false, addr)?;
             // A RAM frame changing owner changes who pays for it (R6). The new owner's budget
             // may refuse; then nothing changes.
-            let after = self.allocations[offset];
             if before != after {
                 // Uncharge first, so a move between two processes of one budget nets to nothing.
                 if let Some(old) = before {
@@ -650,13 +805,13 @@ impl MemoryManager {
                 }
                 if let Some(new) = after {
                     if self.charge_frame(new).is_err() {
-                        self.allocations[offset] = before;
                         if let Some(old) = before {
                             self.charge_frame(old).expect("re-charging the page just uncharged");
                         }
                         return Err(PageError::NoFrame);
                     }
                 }
+                self.set_owner(offset, after);
             }
             return Ok(());
         }
@@ -723,35 +878,40 @@ impl MemoryManager {
     /// Only sound as the final step of destroying `pid`: after this, frames it owned may
     /// be handed to other processes, so `pid` must never run again.
     pub unsafe fn release_all_memory_for_process(&mut self, pid: Pid, space: &MemoryMapping) {
-        {
-            let kernel = Pid::new(1).unwrap();
-
-            // One walk of the process's own tables, never of every frame of RAM (R12;
-            // kernel/budgets.md, "Residual risks"). A frame it has lent out is still mapped in
-            // the borrower: it is reparented to the kernel so it is not reused while the
-            // borrower holds it, and freed when the borrower returns it (the caller's charge
-            // ends here; the lend stays charged to the server that holds it, kernel/ipc.md R3).
-            // Every other frame its tables name that is still credited to it goes back, the
-            // tables themselves included; a borrowed page is its lender's. A page lent to itself
-            // ends the kernel's whichever of its two entries the walk meets first.
-            space.for_each_owned_frame(|phys, lent| {
-                let owner = if self.is_main_memory(phys as *mut u8) {
-                    &mut self.allocations[(phys - self.ram_start) / PAGE_SIZE]
-                } else if let Some(idx) = self.extra_index(phys) {
-                    &mut self.extra_allocations[idx]
-                } else {
-                    return;
-                };
-                // A DMA frame is never lent (kernel/devices.md), and stays `DMA_OWNER`'s
-                // whatever happens: only `dma_release` pools it.
-                if lent && *owner != Some(DMA_OWNER) {
-                    *owner = Some(kernel);
-                } else if !lent && *owner == Some(pid) {
-                    *owner = None;
-                }
-            });
-            self.uncharge_all_frames(pid);
-        }
+        let kernel = Pid::new(1).unwrap();
+        // One walk of the process's own tables, never of every frame of RAM (R12;
+        // kernel/budgets.md, "Residual risks"). A frame it has lent out is still mapped in the
+        // borrower: it is reparented to the kernel so it is not reused while the borrower holds
+        // it, and freed when the borrower returns it (the caller's charge ends here; the lend
+        // stays charged to the server that holds it, kernel/ipc.md R3). Every other frame its
+        // tables name that is still credited to it goes back, the tables themselves included; a
+        // borrowed page is its lender's. A page lent to itself ends the kernel's whichever of its
+        // two entries the walk meets first.
+        space.for_each_owned_frame(|phys, lent| {
+            // The frame's entry: in RAM's table (`true`), or else in the extra regions'.
+            let entry = if self.is_main_memory(phys as *mut u8) {
+                Some((true, (phys - self.ram_start) / PAGE_SIZE))
+            } else {
+                self.extra_index(phys).map(|index| (false, index))
+            };
+            let Some((ram, index)) = entry else { return };
+            let owner = if ram { self.allocations[index] } else { self.extra_allocations[index] };
+            // A DMA frame is never lent (kernel/devices.md), and stays `DMA_OWNER`'s whatever
+            // happens: only `dma_release` pools it.
+            let owner = if lent && owner != Some(DMA_OWNER) {
+                Some(kernel)
+            } else if !lent && owner == Some(pid) {
+                None
+            } else {
+                return;
+            };
+            if ram {
+                self.set_owner(index, owner);
+            } else {
+                self.extra_allocations[index] = owner;
+            }
+        });
+        self.uncharge_all_frames(pid);
     }
 
     /// The checked build's proof that no frame is credited to a process that has ended: a frame
@@ -784,7 +944,7 @@ impl MemoryManager {
     pub fn release_owned_frames(&mut self, pid: Pid) {
         for idx in 0..self.allocations.len() {
             if self.allocations[idx] == Some(pid) {
-                self.allocations[idx] = None;
+                self.set_owner(idx, None);
             }
         }
         for idx in 0..self.extra_allocations.len() {

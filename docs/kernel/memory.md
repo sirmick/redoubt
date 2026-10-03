@@ -57,7 +57,7 @@ the kernel and the [model](model.md), is in the
 
 ### Backing and zeroing
 
-<details><summary>Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames; QEMU models no cache, so `cbo-user-fault` shows that user cache-block operations trap, not that zeroes could be lost, and the firmware's flush is read from the code · tested (7)</summary>
+<details><summary>Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames; QEMU models no cache, so `cbo-user-fault` shows that user cache-block operations trap, not that zeroes could be lost, and the firmware's flush is read from the code · tested (8)</summary>
 
 - bench:device
 - bench:mem-attack
@@ -65,6 +65,7 @@ the kernel and the [model](model.md), is in the
 - bench:lend-untouched-page
 - bench:touch-beyond-ram
 - bench:cbo-user-fault
+- bench:scan-bounds
 - mutation:R11NoZeroing
 
 </details>
@@ -74,7 +75,12 @@ to the caller's budget ([R6 (charging)](budgets.md#r6-charging)), zeroes it thro
 [physmap](memory-layout.md#the-direct-physical-map), and only then writes the entry that maps
 it. So a page is zero the first time its process can see it, whoever held the frame before. The
 page tables a mapping needs are allocated, zeroed and charged as it goes, to the budget of the
-process they map into.
+process they map into. A free frame is a set bit in a bitmap the kernel keeps, with a summary bit
+for every word of it, level above level, to a fixed depth set by the most RAM the kernel can map.
+Taking the lowest free frame reads one word a level, and giving one back sets its bit and at most
+one word a level, so neither searches RAM, however much of it is in use (`bench:scan-bounds`). A
+checked build proves after each destruction that the bitmap is exactly the free frames and every
+summary is exact.
 
 The one exception is the stack of a program the loader starts: it is **reserved**, its entries
 holding permissions but no frame. A page of it is backed with a zeroed, charged frame on first
@@ -421,6 +427,13 @@ kernel, running the call to its end with interrupts off, would stall every other
   attacks it on one hart, the process ending with the call open included.
 - **The physmap maps every user frame writable for the kernel,** code included. Only the
   kernel can use that alias ([memory layout](memory-layout.md#residual-risks)).
+- **A freed frame may still be mapped on another hart.** A free writes nothing into the
+  frame, so a stale mapping could reach only its next owner's data, never the kernel. Every
+  path that frees a mapped frame unmaps it and flushes the TLB first, or frees an ended
+  process's frames or a refused `process_create`'s, which no user code reaches before the
+  global `sfence.vma` of the next address-space switch; on one hart that leaves no stale mapping.
+  Several harts need the TLB shootdown before the free
+  (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
 
 ## Why
 
@@ -430,7 +443,7 @@ kernel, running the call to its end with interrupts off, would stall every other
   stacks are reserved, because their programs have no parent to map them.
 - **Zero on allocation, through the physmap.** Every path that hands a frame to a process
   zeroes it before the entry exists, so no path can forget and no process ever sees a page
-  before it is zero. Freeing costs nothing.
+  before it is zero. Freeing costs only the frame's bit: no zeroing, and no search.
 - **The kernel chooses addresses,** so no program depends on a layout and no call lands on
   another mapping. `map_fixed` exists because a program's segments must sit at their link
   addresses and the loader stub, running inside the new process, is the only code that parses

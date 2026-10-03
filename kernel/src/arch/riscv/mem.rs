@@ -14,9 +14,9 @@
 //! not pointer arithmetic. Functions that take a bare virtual address operate on the
 //! currently active address space.
 
-use ::riscv::register::satp;
 use redoubt_layout::{KERNEL_AREA, PROCESS_AREA, Pid, physmap_virt};
 use redoubt_sys::{MemFlags, PAGE_SIZE, USER_AREA_END};
+use riscv::register::satp;
 
 use super::mmu_flags::translate_flags;
 use super::physmap::{self, Pte, PteFlags, Slot, Table, window};
@@ -189,8 +189,9 @@ fn for_each_leaf(table: Table, level: usize, base: usize, f: &mut impl FnMut(usi
     for_each_entry(table, level, base, false, f);
 }
 
-/// [`for_each_leaf`], and with `tables` also every entry that links a table below `table`, before
-/// the leaves under it: one traversal for both.
+/// [`for_each_leaf`], and with `tables` also every entry that links a table below `table`, after
+/// everything under it, so `f` may give that table's frame back as soon as it sees it: one
+/// traversal for both.
 fn for_each_entry(table: Table, level: usize, base: usize, tables: bool, f: &mut impl FnMut(usize, Pte)) {
     for index in 0..physmap::ENTRIES {
         let pte = table.get(index);
@@ -200,10 +201,10 @@ fn for_each_entry(table: Table, level: usize, base: usize, tables: bool, f: &mut
                 f(virt, pte);
             }
         } else if let Some(child) = table.child(index) {
+            for_each_entry(child, level - 1, virt, tables, f);
             if tables {
                 f(virt, pte);
             }
-            for_each_entry(child, level - 1, virt, tables, f);
         }
     }
 }
@@ -343,18 +344,20 @@ impl MemoryMapping {
     /// (the kernel half's other entries are shared, never this space's). `lent` marks a page this
     /// space lent out (`S` without `VALID`); a borrowed page (`VALID | S`) is another's frame,
     /// which the caller tells apart by the ownership table. One walk, whose cost follows the
-    /// tables the space has, not RAM.
+    /// tables the space has, not RAM. Each table comes after everything under it, and the root
+    /// last, so `f` may give a frame back as soon as it sees it, and nothing is read from a frame
+    /// after (`release_all_memory_for_process`).
     pub fn for_each_owned_frame(&self, mut f: impl FnMut(usize, bool)) {
         let root = root_of(self.satp);
-        f(physmap::satp_root(self.satp), false);
         for index in (0..ROOT_KERNEL_START).chain([ROOT_PROCESS_AREA]) {
             let Some(child) = root.child(index) else { continue };
-            f(root.get(index).phys(), false);
             let base = index * physmap::leaf_size(physmap::LEVELS - 1);
             for_each_entry(child, physmap::LEVELS - 2, base, true, &mut |_virt, pte| {
                 f(pte.phys(), pte.has(PteFlags::S) && !pte.is_valid())
             });
+            f(root.get(index).phys(), false);
         }
+        f(physmap::satp_root(self.satp), false);
     }
 
     pub fn print_map(&self) {
@@ -639,9 +642,10 @@ pub fn free_empty_tables(mm: &mut MemoryManager, space: &MemoryMapping, start: u
             // as the ownership table records it. A table with no owner there is not one
             // `walk` made, and is left where it is.
             let Some(owner) = mm.ram_owner(frame) else { break };
-            mm.free_frame_of(frame, owner).expect("the owner just read releases its frame");
+            // Unlinked first, so no walk reaches a table that is free.
             slot.set(Pte::EMPTY);
             flush_tlb();
+            mm.free_frame_of(frame, owner).expect("the owner just read releases its frame");
         }
         virt += leaf_span;
     }
