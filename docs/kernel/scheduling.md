@@ -658,7 +658,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); a delivery's and a timer expiry's walks of every thread are measured at full occupancy by `bench:worst-walk`, run by name, and break it there ([residual risks](#residual-risks)); `worst-walk` also measures a reconcile with 250 budgets waking at once, on rv64 only (on rv32 the deadline's waits end one per entry) · tested (40)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (41)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -674,6 +674,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:sched-carve-return
 - bench:map-anon-search-bound
 - bench:scan-bounds
+- bench:worst-walk
 - host:redoubt-stride::the_crate_and_the_model_agree
 - host:redoubt-stride::a_broken_model_disagrees
 - host:redoubt-model::scheduler_fairness
@@ -881,11 +882,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
-- **A delivery and a timer expiry walk every thread.** At full occupancy they break R12's "never
-  depends on what other processes hold" ([IPC](ipc.md#residual-risks),
-  [timer](timer.md#residual-risks)). A reconcile does not: it visits only the budgets whose
-  runnable state changed in the entry
-  ([the current minimum and ties](#the-current-minimum-and-ties)).
+- **A destruction walks every process.** At full occupancy (510 processes) a destruction takes
+  53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30, and breaks R12's "never depends on what
+  other processes hold": three of its steps walk every process object
+  ([destruction walks every process](../todo/destruction-walks-every-process.md)).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
   decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to

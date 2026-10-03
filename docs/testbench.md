@@ -225,10 +225,7 @@ oracles) have no clock, and are verdicts anywhere.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
-name only". It has one reason: a measurement too long to repeat at every train. `worst-walk`
-is one: every thread the limits allow, about 22 minutes, a residual it checks with `must_fail`
-until delivery stops walking every thread
-([delivery walks every thread](todo/delivery-walks-every-thread.md)).
+name only". It has one reason: a measurement too long to repeat at every train.
 
 The kinds, and the fields each takes besides `description`, `arch` and `whole_run`:
 
@@ -254,7 +251,9 @@ feature, so the two cases do not combine their Cargo features.
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
 reading of the rules ([scheduling](kernel/scheduling.md)); a limit such as `r10_p99_us=30000`
-bounds a measured cost.
+bounds a measured cost. A `walk-trace` kernel's walks are bounded by their longest, net of the
+audits inside them (`pump_max_us`, `expiry_max_us`, `reconcile_max_us`), judged before
+`r10_p99_us`, so `worst-walk`, whose destruction bound must fail, still holds its walks.
 
 ### Starting a case's programs
 

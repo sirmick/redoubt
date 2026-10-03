@@ -1,21 +1,25 @@
-description = "The worst walk, measured (kernel/ipc.md, kernel/timer.md, kernel/scheduling.md, kernel/budgets.md, \"Residual risks\"): every PID in use, each child in a budget of its own holding MAX_THREADS threads (129,796 live threads, 509 x 255 and init's); one timer expiry ends 250 children's waits at once and one reconcile wakes their 250 budgets; then one receive's pump and one destruction. The walks' times come from the trace (walk-trace), net of the checked build's audits. Must fail while the residual stands: the oracle says \"sched_oracle: R10's p99 is 11716783 µs over 2 destructions, above 30000\" (one holder's destruction, 6.9 s of it one pump that walks every thread); once delivery follows the endpoint, the case passes with must_fail gone (docs/todo/delivery-walks-every-thread.md)"
-arch = ["rv64"]
-# About 22 minutes: run by name (`cargo testbench worst-walk`), never in every merge's run.
+description = "The worst walk, measured (kernel/ipc.md, kernel/timer.md, kernel/scheduling.md, kernel/budgets.md, \"Residual risks\"): every PID in use, each child in a budget of its own holding MAX_THREADS threads (509 x 255 and init's, 129,796 threads); one timer expiry ends 250 children's waits at once and one reconcile wakes their budgets; then one receive's pump and one destruction. The walks' times come from the trace (walk-trace), net of the checked build's audits: no pump or expiry walks every thread, each within its bound, and the reconcile is reported. Must fail while the residual stands: R10 at full occupancy is over 30 ms, three of its steps walking every process object (docs/todo/destruction-walks-every-process.md); once they follow the dying subtree, the case passes with must_fail gone"
+arch = ["rv64", "rv32"]
+# About 5 minutes a width, every audited exit walking every thread: run by name
+# (`cargo testbench worst-walk`), never in every merge's run.
 whole_run = false
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 qemu_seed = 3
-# 509 holders of ~540 pages each, the trace ring's 64 MiB and the boot's own.
-memory_mib = 4608
+# The most rv32's physmap maps (kernel/memory-layout.md), and enough on both widths: 509 holders
+# of ~540 pages each, the trace ring's 64 MiB and the boot's own.
+memory_mib = 2032
 # init alone; what it checks is that the threads all existed. The numbers are the trace's.
 programs = ["worst-walk"]
 # Test builds only: the trace ring, with each pump, expiry and reconcile bracketed.
 kernel_features = ["sched-trace", "walk-trace"]
-post_check = "sched_oracle r10_p99_us=30000"
-# A residual, not a target (docs/todo/delivery-walks-every-thread.md): the run passes while R10
-# at full occupancy is past 30 ms and fails once it is under. The change that brings it under
-# removes this line and whole_run's, and the case joins the whole run.
+# A pump takes about 1 ms at most at either fill, so 2 ms catches any walk of every process; the
+# expiry's own walk is within R12's 30 ms (about 27 ms on rv64 and 29 ms on rv32).
+post_check = "sched_oracle pump_max_us=2000 expiry_max_us=30000 r10_p99_us=30000"
+# A residual, not a target (docs/todo/destruction-walks-every-process.md): the run passes while R10
+# at full occupancy is past 30 ms and fails once it is under, or once a walk is past its bound. The
+# change that brings R10 under removes this line.
 must_fail = '^sched_oracle: R10.s p99 is \d+ µs over 2 destructions, above 30000$'
 timeout_secs = 3600
 expect = [

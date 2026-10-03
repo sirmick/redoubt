@@ -549,6 +549,10 @@ pub fn audit_inside(audits: &[(u64, u64)], from: u64, to: u64) -> u64 {
 /// (`LATENCY-COUNT <group> <measure> <n>`), so a window lost on the way fails the check.
 const MEASURES: [&str; 4] = ["driver_wake", "timer_wake", "decision_wake", "deadline_notice"];
 
+/// The walks a `walk-trace` kernel brackets, by their ids 1 to 3, each with a `<name>_max_us`
+/// bound: a receive's pump, a timer expiry's own walk, and a reconcile.
+const WALKS: [&str; 3] = ["pump", "expiry", "reconcile"];
+
 /// The windows the program printed, `(end, gross)` in µs, and the count it took, by measure (its
 /// index in [`MEASURES`]) and group. Every group's windows must number its count.
 fn samples(log: &str) -> Result<BTreeMap<(usize, &str), Vec<(u64, u64)>>, String> {
@@ -620,9 +624,10 @@ fn shares(log: &str) -> Result<Vec<Share<'_>>, String> {
 /// lease's end from the steward's decision, `lease_end_p99_us=N`: the worst net decision-wake p99
 /// (over every group) plus R10's p99 (kernel/scheduling.md, "Responsiveness"). Each share the
 /// program printed is judged against its own bounds, and `stale_waits_in=<share>` requires a timer
-/// interrupt that found another budget's wait ended early inside that share's window. Every window
-/// a target or a share judges has the checked build's audit time inside it subtracted; R10's has
-/// none.
+/// interrupt that found another budget's wait ended early inside that share's window. A
+/// `walk-trace` kernel's walks may each be bounded, `pump_max_us=N`, `expiry_max_us=N` and
+/// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99. Every window a target
+/// or a share judges has the checked build's audit time inside it subtracted; R10's has none.
 pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
@@ -649,12 +654,33 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             .and_then(|(name, v)| Some((name, v.parse::<u64>().ok()?)))
             .ok_or_else(|| format!("unknown sched_oracle argument {arg:?}"))?;
         let measure = name.strip_suffix("_p50_us").or_else(|| name.strip_suffix("_p99_us"));
+        let walk = name.strip_suffix("_max_us");
         if !(["r10_p99_us", "lease_end_p99_us"].contains(&name)
-            || measure.is_some_and(|m| MEASURES.contains(&m)))
+            || measure.is_some_and(|m| MEASURES.contains(&m))
+            || walk.is_some_and(|w| WALKS.contains(&w)))
         {
             return Err(format!("unknown sched_oracle argument {arg:?}"));
         }
         bounds.insert(name, bound);
+    }
+    // Each walk net of the audits inside it, as a release kernel runs it; a walk's bound is
+    // judged before R10's, so a case whose R10 must fail still holds its walks.
+    let walks: Vec<(Vec<u64>, u64)> = sum
+        .walks
+        .iter()
+        .map(|spans| {
+            let inside: Vec<u64> = spans.iter().map(|&(b, e)| audit_inside(&sum.audits, b, e)).collect();
+            let net = spans.iter().zip(&inside).map(|(&(b, e), a)| (e - b).saturating_sub(*a)).collect();
+            (net, inside.iter().sum())
+        })
+        .collect();
+    for (name, (net, _)) in WALKS.iter().zip(&walks) {
+        let Some(bound) = bounds.get(&*format!("{name}_max_us")) else { continue };
+        let max =
+            net.iter().max().ok_or(format!("a {name} bound is set, but the trace holds no {name} walk"))?;
+        if max > bound {
+            return Err(format!("the {name} walk's max is {max} µs net of audits, above {bound}"));
+        }
     }
     if n == 0 && (bounds.contains_key("r10_p99_us") || bounds.contains_key("lease_end_p99_us")) {
         return Err("an R10 bound is set, but the trace holds no destruction".into());
@@ -753,28 +779,24 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.timer_slice_ends,
         sum.timer_empty.len()
     );
-    // Each walk net of the audits inside it, as a release kernel runs it.
-    let mut walks = Vec::new();
-    for (name, spans) in ["pump", "expiry", "reconcile"].iter().zip(&sum.walks) {
-        if spans.is_empty() {
+    let mut report = Vec::new();
+    for (name, (net, audits)) in WALKS.iter().zip(walks) {
+        let mut net = net;
+        if net.is_empty() {
             continue;
         }
-        let inside: Vec<u64> = spans.iter().map(|&(b, e)| audit_inside(&sum.audits, b, e)).collect();
-        let mut net: Vec<u64> =
-            spans.iter().zip(&inside).map(|(&(b, e), a)| (e - b).saturating_sub(*a)).collect();
         let n = net.len();
         let (p50, p99) = (percentile(&mut net, 50), percentile(&mut net, 99));
-        let audits: u64 = inside.iter().sum();
-        walks.push(format!(
+        report.push(format!(
             "{name} {n}, {p50}/{p99}/{}, audits {audits} µs",
             net.last().copied().unwrap_or(0)
         ));
     }
-    if !walks.is_empty() {
+    if !report.is_empty() {
         let inside: Vec<String> = sum.r10_pumps.iter().map(|(n, us)| format!("{n} ({us} µs)")).collect();
         lines.push(format!(
             "walks, net of audits, µs p50/p99/max: {}; pumps inside each destruction: {}",
-            walks.join("; "),
+            report.join("; "),
             inside.join(", ")
         ));
     }
@@ -825,6 +847,33 @@ mod tests {
             let err = verdict(&[[(1, 'W', 5, 0x10), (1, 'K', 5, 0x10)].as_slice(), &bad].concat());
             assert!(err.as_ref().is_err_and(|e| e.contains("walk")), "{err:?}");
         }
+    }
+
+    /// A walk's bound is its longest net of audits, judged before R10's: a case whose R10 must
+    /// fail still fails on a walk past its bound, with a message of its own.
+    #[test]
+    fn a_walk_is_bounded_net_of_audits_before_r10() {
+        let t = trace(&[
+            (1, 'W', 5, 0x10),
+            (1, 'K', 5, 0x10),
+            (1, 'M', 1, 100),
+            (1, 'U', 7, 110),
+            (1, 'V', 7, 130),
+            (1, 'm', 1, 150),
+            (2, 'M', 2, 200),
+            (2, 'm', 2, 205),
+            (3, 'X', 9, 300),
+            (3, 'Y', 9, 400),
+        ]);
+        assert!(run(&t, "pump_max_us=30 expiry_max_us=5").is_ok());
+        let err = run(&t, "pump_max_us=29 r10_p99_us=50");
+        assert!(
+            err.as_ref().is_err_and(|e| e.contains("pump walk's max is 30 µs") && e.contains("above 29")),
+            "{err:?}"
+        );
+        assert!(run(&t, "pump_max_us=30 r10_p99_us=50").is_err_and(|e| e.contains("R10's p99")));
+        assert!(run(&t, "reconcile_max_us=10").is_err_and(|e| e.contains("no reconcile walk")));
+        assert!(run(&t, "walk_max_us=10").is_err_and(|e| e.contains("unknown")));
     }
 
     #[test]
