@@ -216,7 +216,7 @@ replies with the encoded reply or the error's status.
 
 ### The 9P server skeleton
 
-<details><summary>Status: built · tested (15)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - fuzz:redoubt-rt/ninep_server
 - bench:r4-host-tests
@@ -227,6 +227,7 @@ replies with the encoded reply or the error's status.
 - host:redoubt-rt::depth_is_bounded
 - host:redoubt-rt::fids_are_bounded_per_connection_and_per_account
 - host:redoubt-rt::copies_of_one_badge_in_other_accounts_or_label_sets_share_nothing
+- host:redoubt-rt::a_typed_operation_resolves_only_the_callers_own_fids
 - host:redoubt-rt::offsets_counts_and_modes_are_not_trusted
 - host:redoubt-rt::malformed_requests_get_errors
 - host:redoubt-rt::random_requests_never_panic

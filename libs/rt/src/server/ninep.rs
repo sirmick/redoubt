@@ -433,6 +433,13 @@ impl<S: FileServer> NineServer<S> {
         self.conn(&self.conn_key(caller)).map_or(0, |i| self.conns[i].fids.len())
     }
 
+    /// The node `caller`'s `fid` rests on, and its qid: the lookup every 9P request makes, for a
+    /// typed operation that names the caller's fids (`fsd`'s). A fid of another connection is
+    /// [`NineError::UNKNOWN_FID`], as one that was never made is.
+    pub fn fid_node(&self, caller: &Caller, fid: u32) -> Result<(S::Node, Qid), NineError> {
+        self.fid(&self.conn_key(caller), fid).map(|f| f.here().clone())
+    }
+
     /// Connections minted and not yet disconnected.
     pub fn connections(&self) -> usize { self.minted.len() }
 
