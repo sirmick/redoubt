@@ -1,0 +1,87 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "net0", "base": "268464128", "irq": 7, "dma": true}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "audit,audit,2222222222222222222222222222222222222222222222222222222222222222", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "netd",
+      "program": "netd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "net0", "as": "net"}],
+      "receives": ["netd"],
+      "handed": [{"endpoint": "ipd", "badge": "3"}],
+      "args": ["client=5"]
+    },
+    {
+      "name": "ipd",
+      "program": "ipd",
+      "budget": {"pages": "4096", "processes": 1, "weight": 100},
+      "receives": ["ipd"],
+      "handed": [{"endpoint": "netd", "badge": "5"}],
+      "args": ["addr=10.0.2.15/24", "gateway=10.0.2.2", "self=10.0.2.0/24", "ingress=3", "scope=10:l:9", "scope=15:l:8000", "scope=16:c:10.0.9.110/32:7", "scope=17:c:0.0.0.0/0:1-65535", "scope=18:c:0.0.0.0/0:1-65535", "buckets=7"]
+    },
+    {
+      "name": "judge",
+      "program": "net-judge",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["judge"],
+      "handed": [{"endpoint": "ipd", "badge": "10"}],
+      "args": ["case=attacks"]
+    },
+    {
+      "name": "victim",
+      "program": "net-client",
+      "budget": {"pages": "512", "processes": 1, "weight": 10},
+      "handed": [{"endpoint": "ipd", "badge": "15"}, {"endpoint": "judge", "badge": "15"}],
+      "args": ["role=listen", "port=8000", "backlog=1"]
+    },
+    {
+      "name": "narrow",
+      "program": "net-client",
+      "budget": {"pages": "512", "processes": 1, "weight": 10},
+      "handed": [{"endpoint": "ipd", "badge": "16"}, {"endpoint": "judge", "badge": "16"}],
+      "args": ["role=connect", "to=10.0.9.101:7", "to=10.0.9.110:7"]
+    },
+    {
+      "name": "any",
+      "program": "net-client",
+      "budget": {"pages": "512", "processes": 1, "weight": 10},
+      "handed": [{"endpoint": "ipd", "badge": "17"}, {"endpoint": "judge", "badge": "17"}],
+      "args": ["role=connect", "to=10.0.9.102:7", "to=10.0.2.15:8000", "to=127.0.0.1:8000", "to=127.1.2.3:8000", "to=10.0.2.2:8000", "to=10.0.2.2:22", "to=10.0.9.111:7"]
+    },
+    {
+      "name": "labelled",
+      "program": "net-client",
+      "budget": {"pages": "512", "processes": 1, "weight": 10},
+      "labels": ["secrets"],
+      "handed": [{"endpoint": "ipd", "badge": "18"}, {"endpoint": "judge", "badge": "18"}],
+      "args": ["role=labelled"]
+    }
+  ],
+  "public": [],
+  "labels": [{"name": "secrets", "owner": "alice", "id": "7"}],
+  "principals": [
+    {
+      "name": "alice",
+      "account": "1001",
+      "budget": {"pages": "4096", "processes": 1, "weight": 100},
+      "ssh_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g"]
+    }
+  ]
+}

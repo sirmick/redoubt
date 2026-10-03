@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 
 use redoubt_init_programs::Out;
 use redoubt_net_client::{IPD, JUDGE, REPORT, badge, code, event};
-use redoubt_rt::abi::{FOREVER, Handles};
+use redoubt_rt::abi::{Error, FOREVER, Handles};
 use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Event, Request};
@@ -43,6 +43,9 @@ enum Case {
     Peer,
     /// `case=pinned` (`net-pinned`): one client pins `ipd` with abandoned and parked calls.
     Pinned,
+    /// `case=attacks` (`net-attacks`, `bench-net-self-unrefused`): every attack with its positive
+    /// control.
+    Attacks,
 }
 
 fn parse<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<Case> {
@@ -51,6 +54,7 @@ fn parse<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<Case> {
         "case=twice" => Case::Tcp { rounds: 2 },
         "case=peer" => Case::Peer,
         "case=pinned" => Case::Pinned,
+        "case=attacks" => Case::Attacks,
         _ => return None,
     };
     args.next().is_none().then_some(case)
@@ -107,6 +111,7 @@ impl Judge {
             Case::Tcp { rounds } => self.tcp(rounds),
             Case::Peer => self.peer(),
             Case::Pinned => self.pinned(),
+            Case::Attacks => self.attacks(),
         }
     }
 
@@ -176,9 +181,21 @@ impl Judge {
     /// The next report: a `START` is held for [`Judge::turn`]; every other one is answered at
     /// once and kept.
     fn take(&mut self) -> Result<(), String> {
+        while !self.take_within(FOREVER)? {}
+        Ok(())
+    }
+
+    /// Takes every report already sent, waiting for none.
+    fn take_sent(&mut self) -> Result<(), String> {
+        while self.take_within(0)? {}
+        Ok(())
+    }
+
+    /// [`Judge::take`], giving up after `timeout` µs: whether a report came.
+    fn take_within(&mut self, timeout: u64) -> Result<bool, String> {
         let at = self.at.as_ref().ok_or("no judge endpoint")?;
         loop {
-            match at.receive(FOREVER, 0) {
+            match at.receive(timeout, 0) {
                 Ok(Event::Call(request)) => {
                     let (words, badge) = (request.words, request.caller.badge);
                     if words[0] != REPORT {
@@ -191,7 +208,7 @@ impl Judge {
                         answer(request)?;
                         self.backlog.push((badge, words[1], words[2]));
                     }
-                    return Ok(());
+                    return Ok(true);
                 }
                 Ok(Event::Send(delivery)) => {
                     for handle in delivery.handles.as_slice().iter().flatten() {
@@ -199,6 +216,7 @@ impl Judge {
                     }
                 }
                 Ok(_) => {}
+                Err(Error::Timeout) => return Ok(false),
                 Err(e) => return Err(format!("receiving reports: {e:?}")),
             }
         }
@@ -247,7 +265,63 @@ impl Judge {
         self.check(outcome == u64::from(code::OK), &what);
         Ok(())
     }
+
+    /// Every attack with its positive control in the same boot, each attacker a badge of its own
+    /// at `ipd`. What an attacker reports is printed as information only: the
+    /// verdicts on the network are the bench's peer counts and capture, and the victim's.
+    fn attacks(&mut self) -> Result<(), String> {
+        self.turn(badge::VICTIM)?;
+        self.report(badge::VICTIM, event::READY)?;
+        self.say("victim listening on 8000");
+
+        // Outside its prefix: scoped to 10.0.9.110/32 port 7, it tries 10.0.9.101:7 (the peer must
+        // count 0), then its control, 10.0.9.110:7 (the peer must count 1).
+        let narrow = ["attack outside the prefix to 10.0.9.101:7", "its control to 10.0.9.110:7"];
+        self.connects(badge::NARROW, &narrow)?;
+        // The box's own addresses, then the labelled caller's unlabelled twin with the same scope:
+        // its own peer is reachable (the peer must count 1).
+        let mut any: Vec<String> =
+            SELF_ATTACKS.iter().map(|t| format!("attack on the box's own {t}")).collect();
+        any.push(String::from("the twin to 10.0.9.111:7"));
+        self.connects(badge::ANY, &any.iter().map(String::as_str).collect::<Vec<_>>())?;
+
+        // A labelled caller with a wide scope: its connect reaches nothing (its peer must count
+        // 0); what else it was not refused is information only. It parks holding whatever it was
+        // given.
+        self.turn(badge::LABELLED)?;
+        let opened = self.report(badge::LABELLED, event::LABELLED)?;
+        self.say(&format!("the labelled caller reports (information only): not refused {opened:#x}"));
+
+        // The victim got exactly the bench's dial.
+        let accepted = self.report(badge::VICTIM, event::ACCEPTED)?;
+        self.check(accepted == 1, &format!("the victim accepted the bench's dial ({accepted})"));
+        self.take_sent()?;
+        let more = self.backlog.iter().any(|(b, _, _)| *b == badge::VICTIM);
+        self.check(!more, "the victim accepted nothing more and still runs");
+
+        Ok(())
+    }
+
+    /// Gives the `connect` client on `badge` its turn and prints each of its connects' outcomes
+    /// under `lines`, in order; its role must end attached (outcome 0), still holding its bucket.
+    fn connects(&mut self, badge: u64, lines: &[&str]) -> Result<(), String> {
+        self.turn(badge)?;
+        for line in lines {
+            let outcome = self.report(badge, event::CONNECT)?;
+            self.say(&format!("{line}: outcome {outcome}"));
+        }
+        match self.report(badge, event::DONE)? {
+            0 => Ok(()),
+            outcome => Err(format!("client {badge} ended with outcome {outcome}")),
+        }
+    }
 }
+
+/// The attacks on the box's own addresses, from a scope that allows everything: a forwarded self
+/// address (its peer must count 0), `ipd`'s own address and loopback (the victim must see none,
+/// and the capture no SYN), and the gateway, where the forwarded ports are.
+const SELF_ATTACKS: [&str; 6] =
+    ["10.0.9.102:7", "10.0.2.15:8000", "127.0.0.1:8000", "127.1.2.3:8000", "10.0.2.2:8000", "10.0.2.2:22"];
 
 /// Answers a report with nothing.
 fn answer(request: Request) -> Result<(), String> {

@@ -29,6 +29,9 @@ pub mod event {
     /// The role ended; the value is its outcome ([`super::code`]). The client then parks: under
     /// `init` an exit is a restart, and a restarted client would act again.
     pub const DONE: u64 = 6;
+    /// One connect of a `connect` client's targets ended; the value is its outcome
+    /// (`code::REFUSED`, `code::TIMED_OUT` or `code::CONNECTED` + state). Information only.
+    pub const CONNECT: u64 = 7;
     /// A listener is listening.
     pub const READY: u64 = 1;
     /// A listener accepted a connection and echoed it; the value is how many so far.
@@ -51,6 +54,13 @@ pub mod badge {
     pub const NOWHERE: u64 = 13;
     /// `net-pinned`'s client.
     pub const PIN: u64 = 14;
+    /// `net-attacks`: the victim; the attacker scoped to 10.0.9.110/32 port 7, outside whose
+    /// prefix it attacks; the attacker whose scope allows everything, at the box's own addresses
+    /// and then its own peer, as the labelled caller's unlabelled twin; and the labelled caller.
+    pub const VICTIM: u64 = 15;
+    pub const NARROW: u64 = 16;
+    pub const ANY: u64 = 17;
+    pub const LABELLED: u64 = 18;
     /// The port the judge's probe listens on, and closes before anything can connect.
     pub const PROBE_PORT: u16 = 9;
 }
@@ -98,6 +108,8 @@ pub enum Role {
     /// Listen on `port` with `backlog`; echo each connection accepted and report it.
     Listen,
     /// One connect to `addr:port`: an attack, or its control. Exits `REFUSED` or `CONNECTED + state`.
+    /// Given `to=` targets instead, one connect to each in turn, each one's outcome reported
+    /// (`event::CONNECT`), and then `OK`.
     Connect,
     /// Tries attach, clone, connect, `new_connection` and `grant`, reports the bits of those not
     /// refused, then stays, holding whatever it got, until it is killed. Run in a labelled budget.
@@ -111,8 +123,11 @@ pub enum Role {
     Pin,
 }
 
-/// A program's arguments: `role=R`, and `addr=A.B.C.D`, `port=P`, `backlog=B`, `times=N` as its
-/// role needs.
+/// The most `to=` targets a `connect` client takes.
+pub const MAX_TARGETS: usize = 8;
+
+/// A program's arguments: `role=R`, and `addr=A.B.C.D`, `port=P`, `backlog=B`, `times=N` and
+/// `to=A.B.C.D:P` (repeated, in order) as its role needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Args {
     pub role: Role,
@@ -120,11 +135,22 @@ pub struct Args {
     pub port: u16,
     pub backlog: u8,
     pub times: u32,
+    /// The `to=` targets, the first `targets` of them.
+    pub to: [([u8; 4], u16); MAX_TARGETS],
+    pub targets: usize,
 }
 
 impl Args {
+    /// `role`, with every other argument at its default.
+    pub const fn of(role: Role) -> Args {
+        Args { role, addr: [0; 4], port: 0, backlog: 1, times: 1, to: [([0; 4], 0); MAX_TARGETS], targets: 0 }
+    }
+
+    /// The `to=` targets given.
+    pub fn targets(&self) -> &[([u8; 4], u16)] { &self.to[..self.targets] }
+
     pub fn parse<'a>(args: impl Iterator<Item = &'a str>) -> Option<Args> {
-        let mut parsed = Args { role: Role::Hold, addr: [0; 4], port: 0, backlog: 1, times: 1 };
+        let mut parsed = Args::of(Role::Hold);
         let mut role = None;
         for arg in args {
             let (key, value) = arg.split_once('=')?;
@@ -144,6 +170,11 @@ impl Args {
                 "port" => parsed.port = value.parse().ok()?,
                 "backlog" => parsed.backlog = value.parse().ok()?,
                 "times" => parsed.times = value.parse().ok()?,
+                "to" => {
+                    let (addr, port) = value.split_once(':')?;
+                    *parsed.to.get_mut(parsed.targets)? = (dotted(addr)?, port.parse().ok()?);
+                    parsed.targets += 1;
+                }
                 _ => return None,
             }
         }
@@ -169,7 +200,12 @@ mod tests {
     #[test]
     fn arguments_parse_strictly() {
         let a = Args::parse(["role=echo", "addr=10.0.9.100", "port=7", "times=2"].into_iter()).unwrap();
-        assert_eq!(a, Args { role: Role::Echo, addr: [10, 0, 9, 100], port: 7, backlog: 1, times: 2 });
+        assert_eq!(a, Args { addr: [10, 0, 9, 100], port: 7, times: 2, ..Args::of(Role::Echo) });
+        let c = Args::parse(["role=connect", "to=10.0.9.101:7", "to=10.0.2.2:22"].into_iter()).unwrap();
+        assert_eq!(c.targets(), [([10, 0, 9, 101], 7), ([10, 0, 2, 2], 22)]);
+        assert!(Args::parse(["role=connect", "to=10.0.9.101"].into_iter()).is_none(), "no port");
+        let nine = ["role=connect"].into_iter().chain(core::iter::repeat_n("to=10.0.9.101:7", 9));
+        assert!(Args::parse(nine).is_none(), "more than MAX_TARGETS");
         assert!(Args::parse(["addr=10.0.9.100"].into_iter()).is_none(), "no role");
         assert!(Args::parse(["role=echo", "addr=10.0.9"].into_iter()).is_none());
         assert!(Args::parse(["role=echo", "addr=10.0.9.1.2"].into_iter()).is_none());

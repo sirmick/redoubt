@@ -63,6 +63,7 @@ fn act(startup: &Startup, judge: Option<Handle>) -> u32 {
     let done = match args.role {
         Role::Echo => me.echo(&args),
         Role::Listen => me.listen(&args),
+        Role::Connect if args.targets > 0 => me.connect_each(&args),
         Role::Connect => me.connect_once(&args),
         Role::Labelled => me.labelled(),
         Role::Hold => me.hold(),
@@ -250,17 +251,47 @@ impl Me {
     /// which the socket is aborted.
     fn connect_once(&mut self, args: &Args) -> Result<(), u32> {
         self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
-        let s = self.socket()?;
-        self.connect(&s, args)?;
-        // One wait: if nobody answers, it ends with `ipd`'s `ctl` deadline (or smoltcp's own).
-        let mut words = [0u8; 8];
-        let state = match self.c.read(&mut self.lend, s.ctl, 0, &mut words) {
-            Ok(8) => u32::from_le_bytes([words[0], words[1], words[2], words[3]]),
-            Err(ClientError::Remote) => return Err(code::TIMED_OUT),
-            _ => return Err(code::STATUS),
+        Err(self.attempt(args))
+    }
+
+    /// One connect to each `to=` target in turn, through one attachment, each one's outcome
+    /// reported as [`connect_once`](Me::connect_once)'s exit code would say it.
+    fn connect_each(&mut self, args: &Args) -> Result<(), u32> {
+        self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
+        for &(addr, port) in args.targets() {
+            let outcome = self.attempt(&Args { addr, port, ..*args });
+            self.report(event::CONNECT, u64::from(outcome))?;
+        }
+        Ok(())
+    }
+
+    /// One connect on a fresh socket: refused (`REFUSED`), or the state it reached
+    /// (`CONNECTED + state`), after which the socket is aborted and its fids clunked.
+    fn attempt(&mut self, args: &Args) -> u32 {
+        let s = match self.socket() {
+            Ok(s) => s,
+            Err(code) => return code,
         };
-        let _ = self.ctl(&s, net_ctl::Message::Abort(net_ctl::Abort {}), code::CLOSE);
-        Err(code::CONNECTED + state.min(5))
+        let outcome = match self.connect(&s, args) {
+            Err(refused) => refused,
+            Ok(()) => {
+                // One wait: if nobody answers, it ends with `ipd`'s `ctl` deadline (or smoltcp's
+                // own).
+                let mut words = [0u8; 8];
+                match self.c.read(&mut self.lend, s.ctl, 0, &mut words) {
+                    Ok(8) => {
+                        let state = u32::from_le_bytes([words[0], words[1], words[2], words[3]]);
+                        let _ = self.ctl(&s, net_ctl::Message::Abort(net_ctl::Abort {}), code::CLOSE);
+                        code::CONNECTED + state.min(5)
+                    }
+                    Err(ClientError::Remote) => code::TIMED_OUT,
+                    _ => code::STATUS,
+                }
+            }
+        };
+        let _ = self.c.clunk(&mut self.lend, s.ctl);
+        let _ = self.c.clunk(&mut self.lend, s.data);
+        outcome
     }
 
     /// Pins `ipd` with abandoned calls (plan 6.5, `net-pinned`): `times` data reads on a quiet
@@ -330,7 +361,7 @@ impl Me {
         let ctl = self.fid();
         let opened_ctl = self.c.walk(&mut self.lend, ROOT, ctl, &format!("tcp/{number}/ctl")).is_ok()
             && self.c.open(&mut self.lend, ctl, mode::ORDWR).is_ok();
-        let wide = Args { role: Role::Connect, addr: [10, 0, 9, 112], port: 7, backlog: 1, times: 1 };
+        let wide = Args { addr: [10, 0, 9, 112], port: 7, ..Args::of(Role::Connect) };
         let connected = self.connect(&Socket { ctl, data: ctl }, &wide).is_ok();
         tried(4, opened_ctl && connected);
         if connected {

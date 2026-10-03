@@ -26,9 +26,17 @@ enum Network {
     Rig,
 }
 
-/// Every net case: its file name, its `[net]` table and how it starts its network. A net case is
-/// one whose manifest starts the judge, or one booting the rig.
-fn net_cases() -> Vec<(String, toml::Value, Network)> {
+/// A net case: its file name, its `[net]` table, how it starts its network and what it must fail
+/// on, if it must.
+struct NetCase {
+    name: String,
+    net: toml::Value,
+    network: Network,
+    must_fail: Option<String>,
+}
+
+/// Every net case. A net case is one whose manifest starts the judge, or one booting the rig.
+fn net_cases() -> Vec<NetCase> {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut cases = Vec::new();
     for entry in std::fs::read_dir(workspace.join("tests")).unwrap() {
@@ -39,20 +47,21 @@ fn net_cases() -> Vec<(String, toml::Value, Network)> {
         let case: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         let net = case.get("net").cloned().unwrap_or(toml::Value::Table(Default::default()));
+        let must_fail = case.get("must_fail").and_then(|m| m.as_str()).map(String::from);
         let rig = case.get("programs").and_then(|p| p.as_array()).is_some_and(|programs| {
             programs
                 .iter()
                 .any(|p| p.get("bin").and_then(|b| b.as_str()).is_some_and(|b| b.starts_with("net-rig")))
         });
         if rig {
-            cases.push((name, net, Network::Rig));
+            cases.push(NetCase { name, net, network: Network::Rig, must_fail });
         } else if let Some(manifest) = manifest(&workspace, &case) {
             if manifest.servers.iter().any(|s| s.program == "net-judge") {
-                cases.push((name, net, Network::Manifest(manifest)));
+                cases.push(NetCase { name, net, network: Network::Manifest(manifest), must_fail });
             }
         }
     }
-    cases.sort_by(|a, b| a.0.cmp(&b.0));
+    cases.sort_by(|a, b| a.name.cmp(&b.name));
     cases
 }
 
@@ -79,8 +88,8 @@ fn badge(server: &Server, endpoint: &str) -> Option<u64> {
 #[test]
 fn every_net_case_forbids_exactly_its_ipds_own_addresses() {
     let cases = net_cases();
-    assert!(cases.len() >= 8, "found only {:?}", cases.iter().map(|c| &c.0).collect::<Vec<_>>());
-    for (name, net, network) in cases {
+    assert!(cases.len() >= 8, "found only {:?}", cases.iter().map(|c| &c.name).collect::<Vec<_>>());
+    for NetCase { name, net, network, must_fail } in cases {
         let forbidden: Vec<Prefix> = net
             .get("self_forbidden")
             .unwrap_or_else(|| panic!("{name}: no self_forbidden"))
@@ -98,7 +107,17 @@ fn every_net_case_forbids_exactly_its_ipds_own_addresses() {
             Network::Rig => SELF_ARGS.iter().map(|p| prefix(p)).collect(),
         };
         let expected: Vec<Prefix> = own.into_iter().chain(SELF_ALWAYS.iter().map(|p| prefix(p))).collect();
-        assert_eq!(forbidden, expected, "{name}");
+        // A self-check that its ipd misses one of the box's own addresses forbids that one too,
+        // so the capture's catching the SYN is the failure it must show.
+        if must_fail.is_some_and(|m| m.contains("one of the box.s own addresses")) {
+            let missing: Vec<&Prefix> = forbidden.iter().filter(|p| !expected.contains(p)).collect();
+            assert!(
+                missing.len() == 1 && expected.iter().all(|p| forbidden.contains(p)),
+                "{name}: {missing:?}"
+            );
+        } else {
+            assert_eq!(forbidden, expected, "{name}");
+        }
     }
 }
 
@@ -106,7 +125,7 @@ fn every_net_case_forbids_exactly_its_ipds_own_addresses() {
 /// scope and the same badge at the judge, which is how the judge knows it.
 #[test]
 fn every_client_is_scoped_and_known_to_the_judge() {
-    for (name, _, network) in net_cases() {
+    for NetCase { name, network, .. } in net_cases() {
         let Network::Manifest(manifest) = network else { continue };
         let ipd = the(&manifest, "ipd");
         let config = redoubt_ipd::args::parse(ipd.args.iter().map(String::as_str)).unwrap();
