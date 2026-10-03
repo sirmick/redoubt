@@ -1,0 +1,5 @@
+{"devices": [{"name": "uart0", "base": "268435456", "irq": 10, "dma": false}, {"name": "disk0", "base": "268468224", "irq": 8, "dma": true}, {"name": "net0", "base": "268464128", "irq": 7, "dma": true}], "servers": [{"name": "keyd", "program": "keyd", "budget": {"pages": "256", "processes": 1, "weight": 0 },
+        "devices": [ { "device": "net0", "as": "net" } ],
+      "receives": ["netd"],
+      "handed": [ { "endpoint": "ipd", "badge": "3" } ],
+      "args": ["clien111kets22222222222222222", "buckets=4"], "labels": ["alice-secrets"]}, {"name": "consoled", "program": "consoled", "budget": {"pages": "512", "processes": 1, "weight": 1000}, "devices": [{"device": "uart0", "as": "uart"}], "reet": {"pages": "512", "processes": 1, "weight": 100}, "receivesdevices": [{"device": "net0", "as": "net"}], "receives": ["netd"], "handed": [], "label_sets": [{"labels": ["alice-secrets"], "budget": {"pages": "512", "processes": 1, "weight": 10}}], "home": "data:/h++++++++++++++++++++++++++++++++++ome/alice", "net": [{"prefix": "0.0.0.0/0", "ports": [22, 443]}]}], "confined": true}

@@ -1,0 +1,1 @@
+[{"labels": [{"name": "alice-secrets", "owner":"alice", "id": "8"}],"volumes": [{"name": "data", "partition":1, "labels": ["alice-se++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++i+++++++++++++++++++++++++++ets"],"home": "data:/", "net": [{"prefix": "0.0.0.0/0", "ports":[43]}]}]}A

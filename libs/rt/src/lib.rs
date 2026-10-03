@@ -4,8 +4,9 @@
 //! - [`startup`]: the startup block a parent writes (servers/init.md), parsed defensively.
 //! - [`handle`]: typed handles and the system calls that are not IPC.
 //! - [`ipc`]: lends and transfers, `call`, `send`, `receive`, `reply`.
-//! - [`heap`]: the global allocator, over `map_anon`.
-//! - [`start`]: the entry point ([`entry!`]), exit codes and the panic handler.
+//! - [`heap`]: the global allocator, over `map_anon`, or over one fixed arena.
+//! - [`start`]: the entry point ([`entry!`], and [`first_entry!`] for `init`), exit codes and the panic
+//!   handler.
 //! - [`path`]: lexical path cleaning, so `..` never climbs above a root.
 //! - [`client`]: a small synchronous 9P client.
 //! - [`server`]: the shared server library (servers/serving.md): `admit` with a fair share per badge,
@@ -70,3 +71,9 @@ pub use sys::{HostKernel, install_host_kernel};
 #[cfg(target_os = "none")]
 #[global_allocator]
 static HEAP: heap::Heap = heap::Heap::new();
+
+/// Fixes this program's heap to one arena of `pages` pages, mapped now ([`heap::Heap::fix`]): for
+/// a program that bounds its memory before it starts work (`init`, kernel/budgets.md, "The tree
+/// from the boot manifest"). Every other program's heap grows on demand.
+#[cfg(target_os = "none")]
+pub fn fix_heap(pages: usize) -> Result<(), abi::Error> { HEAP.fix(pages) }

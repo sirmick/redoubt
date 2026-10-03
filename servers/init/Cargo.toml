@@ -1,0 +1,27 @@
+[package]
+name = "redoubt-init"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "init: reads the boot manifest from the signed bundle, checks all of it, and starts the system servers through the loader stub"
+
+[[bin]]
+name = "init"
+path = "src/bin/init.rs"
+
+[features]
+# The body of the fuzz target, for `fuzz/` (servers/init/fuzz); host tests build it as well.
+fuzz = []
+
+# Only our own crates: the most privileged process after the kernel reads one file, through
+# wire's strict JSON parser (TENETS.md 5).
+[dependencies]
+redoubt-client = { path = "../../libs/client" }
+redoubt-rt = { path = "../../libs/rt" }
+redoubt-signing = { path = "../../libs/signing" }
+redoubt-sys = { path = "../../libs/sys" }
+stub = { path = "../../stub" }
+
+[dev-dependencies]
+# The fuzz body and the fixtures, for the tests in tests/.
+redoubt-init = { path = ".", features = ["fuzz"] }

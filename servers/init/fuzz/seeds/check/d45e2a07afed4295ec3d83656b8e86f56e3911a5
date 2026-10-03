@@ -1,0 +1,3 @@
+{ "servers": [
+    { "name": "d", "program":"keyd",   "budget": { "pages": "56","processes": 1, "weight":2}, "args": ["hbNu\\\\\u00008"] }]
+}

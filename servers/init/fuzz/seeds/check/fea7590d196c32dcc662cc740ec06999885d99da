@@ -1,0 +1,21 @@
+{
+ "devices": [
+  {
+   "i+q": false
+  },
+  {    "dma": true
+  }
+ ],
+	 "ers"		: [
+  {
+   "ngr": {
+  
+    "w": 100
+   },
+  "ives": [
+    "keyd"
+   ],
+   "args": [
+    "1#=4"
+   ]
+  }

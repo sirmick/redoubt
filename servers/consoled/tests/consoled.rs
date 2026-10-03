@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use redoubt_consoled::MAX_INPUT;
 use redoubt_consoled::uart::FIFO;
 use redoubt_fake_kernel::fake;
-use redoubt_rt::abi::{FOREVER, Handle};
+use redoubt_rt::abi::{FOREVER, Handle, MAX_THREADS};
 use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::mode;
@@ -345,6 +345,28 @@ fn the_console_refuses_what_it_is_not() {
         assert_eq!(c.read(&mut lend, 0, 0, &mut got).unwrap_err(), ClientError::Remote);
         c.open(&mut lend, 0, mode::OREAD).unwrap();
         assert_eq!(c.write(&mut lend, 0, 0, b"x").unwrap_err(), ClientError::Remote);
+    });
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// `init` mints every server's console through its one root badge here, and starts at most
+/// `MAX_THREADS - 1` servers: that badge's one bucket holds them all, and the next is refused.
+#[test]
+fn init_s_badge_mints_a_console_for_every_server_init_can_start() {
+    let b = boot();
+    let f = fake();
+    // `init` runs in account 0, where a badge has a bucket of its own and no shares.
+    let init = f.process(0, &[]);
+    let conn = f.grant(b.server, b.receive, init, 1);
+    f.as_process(init, || {
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        for i in 0..MAX_THREADS - 1 {
+            c.new_connection(&mut lend, "", 0).unwrap_or_else(|e| panic!("connection {i}: {e:?}"));
+        }
+        // One more still fits the bucket; past it, the bucket is full.
+        c.new_connection(&mut lend, "", 0).unwrap();
+        assert_eq!(c.new_connection(&mut lend, "", 0).unwrap_err(), ClientError::Remote);
     });
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }

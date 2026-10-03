@@ -258,15 +258,13 @@ its own use, or `ipd` does not start.
 
 ### Started by `init`
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: no session's launcher is started, so no scope is handed one · tested: bench:init-boot
 
 `init` starts one `ipd` per network, with its arguments from the manifest: its addresses, its
 `self=` prefixes, the ingress badge, a root scope per badge it hands out, and its bucket count
 ([init](init.md#the-boot-manifest)). It hands each session's launcher a root badge with that
 session's scope, never including the box's own addresses. The net rig (`tests/net/src/rig.rs`)
 does this in the bench.
-
-**Open:** none.
 
 ### Name-scoped connections
 

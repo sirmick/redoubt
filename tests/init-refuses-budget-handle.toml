@@ -1,0 +1,24 @@
+description = "init refuses a manifest that hands a server a budget handle (R33): one line saying where and why, then a power-off reporting a system failure (system_reset kind 3, status 255), before any server runs"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the images its manifest names, and the manifest: image/manifest.json with keyd is
+# handed system. The verdict is init's line and the firmware's status, which only system_reset
+# kind 3 gives.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+]
+timeout_secs = 30
+expect = ['^init: refused the boot: servers\[0\]\.handed\[0\]\.endpoint: a server may not hold a budget handle \(R33\)$']
+forbid = ['^init: started']
+poweroff = true
+poweroff_status = 255
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/budget-handle.json" }

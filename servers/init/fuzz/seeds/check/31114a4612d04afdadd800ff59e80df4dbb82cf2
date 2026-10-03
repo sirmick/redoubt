@@ -1,0 +1,14 @@
+{
+  "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "net0", "base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    
+    { "name": "bootfsd", "program": "bootfsd",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },"receives": ["bltd"],
+      
+      "args": ["addr=10.e=4:c:0.0.0.0/0:1-65535", "buckets=4devices"] }
+  ],
+  "public": []
+}

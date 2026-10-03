@@ -1,0 +1,9 @@
+{
+  "devices": [   
+  {  "name": "net0", "base": "268464128", "irq": 7,"dma": true }],
+  "servers": [
+   { "name": "keyd","program": "keyd",
+ "budget": { "pages": "825", "processes":1, "weight":0 },     
+    "receives": ["con34112", "system"] }
+  ],
+  "public": []}

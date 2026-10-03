@@ -3,11 +3,14 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
 /// Output that fails any boot test, on top of the case's own `forbid` list.
 pub const ALWAYS_FORBIDDEN: &[&str] = &["PANIC", "TEST FAILED", "WARNING: INSECURE"];
+
+/// What a test program's verdict line says, after its name.
+pub const PASSED: &str = "TEST PASSED";
 
 #[derive(Debug, Deserialize)]
 pub struct Case {
@@ -221,7 +224,12 @@ pub struct Budget {
 pub struct Boot {
     /// The case's programs: the first in `init`'s place, the loader's one process; the tester
     /// starts the others in this order (docs/testbench.md, "Starting a case's programs").
+    #[serde(default)]
     pub programs: Vec<Program>,
+    /// A bundle recipe, relative to the workspace root, whose entries are the case's programs and
+    /// data entries instead of `programs` and `file`: `image/boot.toml`, so that the bundle
+    /// `./mkimage` packs is the one a case boots ([`Recipe`]).
+    pub recipe: Option<PathBuf>,
     /// Hart counts to run with. One run per entry.
     #[serde(default = "default_smp")]
     pub smp: Vec<u32>,
@@ -249,6 +257,11 @@ pub struct Boot {
     /// The program whose `DONE` to `log-server` ends a `poweroff` case (docs/testbench.md, rule
     /// F). The case passes only if the one console line starting `[server] done:` names this
     /// program's PID. Any other such line fails it, as does one in a case with no reporter.
+    ///
+    /// Under the real `init` ([`Boot::under_init`]) it names a `servers` entry of the case's
+    /// manifest instead, and the case passes only if exactly one line says `TEST PASSED`, and it
+    /// starts with the `[con N] ` of the console connection `init` announced for that entry
+    /// (docs/testbench.md, "The servers' cases under `init`").
     pub reporter: Option<String>,
     /// Regular expressions with one capture group. The case is booted twice, and what
     /// each captures must differ between the two boots (for randomness, ASLR, ...).
@@ -319,6 +332,10 @@ pub struct BundleFile {
 pub struct Disk {
     /// Size in KiB (a whole number of 512-byte sectors). The disk starts zeroed.
     pub size_kib: u64,
+    /// Partitions in a GPT written on the disk before the boot, equal shares of the space after
+    /// the table, by `blkd`'s own image builder; 0 leaves the disk zeroed, with no table.
+    #[serde(default)]
+    pub partitions: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -443,7 +460,64 @@ pub enum Program {
     Corrupted { corrupt: String, with: Corruption },
 }
 
+/// A boot bundle's recipe, `image/boot.toml`: its entries in bundle order, the kernel first, then
+/// `init` and the rest (docs/kernel/boot.md, "The boot bundle").
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Recipe {
+    pub entry: Vec<RecipeEntry>,
+}
+
+/// One entry: a program, the binary of `package` named as the entry, or data read from `path`,
+/// relative to the workspace root.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeEntry {
+    pub name: String,
+    pub package: Option<String>,
+    pub path: Option<PathBuf>,
+}
+
+impl Recipe {
+    pub fn load(path: &Path) -> Result<Recipe> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// The programs and the data entries after the kernel, which the builder always packs first
+    /// from its own build.
+    pub fn contents(&self) -> Result<(Vec<Program>, Vec<BundleFile>)> {
+        let Some((kernel, rest)) = self.entry.split_first() else { bail!("a recipe with no entries") };
+        ensure!(
+            kernel.name == "kernel"
+                && kernel.package.as_deref() == Some("redoubt-kernel")
+                && kernel.path.is_none(),
+            "a recipe's first entry is the kernel"
+        );
+        let (mut programs, mut files) = (Vec::new(), Vec::new());
+        for entry in rest {
+            match (&entry.package, &entry.path) {
+                (Some(package), None) => {
+                    programs.push(Program::Package { package: package.clone(), bin: entry.name.clone() })
+                }
+                (None, Some(path)) => files.push(BundleFile {
+                    name: entry.name.clone(),
+                    from: Program::Path { path: path.clone() },
+                }),
+                _ => bail!("recipe entry {:?} needs a package or a path, not both", entry.name),
+            }
+        }
+        ensure!(programs.first().is_some_and(Program::is_init), "a recipe's second entry is init");
+        Ok((programs, files))
+    }
+}
+
 impl Program {
+    /// Whether it is the real `init`, which starts the other programs from its manifest.
+    pub fn is_init(&self) -> bool {
+        matches!(self, Program::Package { package, bin } if package == "redoubt-init" && bin == "init")
+    }
+
     /// The `test-programs` binary it names, if it names one.
     pub fn test_program(&self) -> Option<&str> {
         match self {
@@ -488,10 +562,21 @@ fn default_smp() -> Vec<u32> { vec![1] }
 fn default_timeout() -> f64 { 60.0 }
 
 impl Boot {
+    /// Whether the real `init` is in the first program's place: then the other programs are only
+    /// bundle entries, which `init` starts as its manifest says.
+    pub fn under_init(&self) -> bool { self.programs.first().is_some_and(Program::is_init) }
+
+    /// Under `init`, the line in which `init` announces the reporter's console connection, bare:
+    /// its one capture is the connection's id.
+    pub fn reporter_announced(&self) -> Option<String> {
+        let reporter = self.reporter.as_ref().filter(|_| self.under_init())?;
+        Some(format!(r"^init: started {}, console ([0-9a-f]{{16}})$", regex::escape(reporter)))
+    }
+
     /// The reporter's place, which the tester prints as its PID: the case's programs are places
     /// 2 on, in order.
     pub fn reporter_pid(&self) -> Option<usize> {
-        let reporter = self.reporter.as_ref()?;
+        let reporter = self.reporter.as_ref().filter(|_| !self.under_init())?;
         let index = self.programs.iter().position(|p| p.test_program() == Some(reporter.as_str()))?;
         Some(index + 2)
     }
@@ -502,6 +587,18 @@ impl Case {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut case: Case = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         case.name = path.file_stem().unwrap().to_string_lossy().into_owned();
+        if let Kind::Boot(boot) = &mut case.kind {
+            if let Some(recipe) = &boot.recipe {
+                ensure!(
+                    boot.programs.is_empty() && boot.file.is_empty(),
+                    "in {}: a case with a recipe takes its programs and files from it",
+                    path.display()
+                );
+                // Cases live in `tests/`, one below the workspace root.
+                let root = path.parent().and_then(Path::parent).context("a case outside tests/")?;
+                (boot.programs, boot.file) = Recipe::load(&root.join(recipe))?.contents()?;
+            }
+        }
         case.check().with_context(|| format!("in {}", path.display()))?;
         Ok(case)
     }
@@ -540,12 +637,24 @@ impl Case {
                         ensure!(!budgets[..i].contains(budget), "budget {budget:?} named twice");
                     }
                 }
-                if let Some(reporter) = &boot.reporter {
-                    ensure!(boot.poweroff, "a reporter needs poweroff = true");
-                    ensure!(
-                        boot.reporter_pid().is_some(),
-                        "reporter {reporter:?} is not one of the programs"
-                    );
+                match &boot.reporter {
+                    // No program under `init` holds the Reset right, so the case ends at its last
+                    // expect, which waits for the reporter's verdict.
+                    Some(_) if boot.under_init() => {
+                        ensure!(!boot.poweroff, "a reporter under init needs poweroff = false");
+                        ensure!(
+                            boot.expect.last().is_some_and(|e| e.contains(PASSED)),
+                            "a reporter under init needs a last expect waiting for its {PASSED:?}"
+                        );
+                    }
+                    Some(reporter) => {
+                        ensure!(boot.poweroff, "a reporter needs poweroff = true");
+                        ensure!(
+                            boot.reporter_pid().is_some(),
+                            "reporter {reporter:?} is not one of the programs"
+                        );
+                    }
+                    None => {}
                 }
                 check_sessions(&boot.session)
             }
@@ -617,6 +726,41 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The image's recipe is the kernel, `init`, the six servers and the manifest; a recipe that
+    /// does not start with the kernel and `init`, or an entry that is neither a program nor data,
+    /// is refused before anything is built.
+    #[test]
+    fn the_image_recipe_packs_init_the_servers_and_the_manifest() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let (programs, files) = Recipe::load(&root.join("image/boot.toml")).unwrap().contents().unwrap();
+        let bins: Vec<&str> = programs
+            .iter()
+            .map(|p| match p {
+                Program::Package { bin, .. } => bin.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(bins, ["init", "keyd", "consoled", "bootfsd", "blkd", "netd", "ipd"]);
+        assert!(programs[0].is_init());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "manifest");
+        assert!(matches!(&files[0].from, Program::Path { path } if path == Path::new("image/manifest.json")));
+
+        let recipe = |text: &str| -> Result<(Vec<Program>, Vec<BundleFile>)> {
+            toml::from_str::<Recipe>(text).unwrap().contents()
+        };
+        let kernel = "[[entry]]\nname = \"kernel\"\npackage = \"redoubt-kernel\"\n";
+        let init = "[[entry]]\nname = \"init\"\npackage = \"redoubt-init\"\n";
+        assert!(recipe(&format!("{kernel}{init}")).is_ok());
+        assert!(recipe(init).is_err(), "no kernel first");
+        assert!(recipe(kernel).is_err(), "no init second");
+        assert!(recipe(&format!("{init}{kernel}")).is_err());
+        let both = "[[entry]]\nname = \"x\"\npackage = \"p\"\npath = \"x\"\n";
+        assert!(recipe(&format!("{kernel}{init}{both}")).is_err(), "a program and data at once");
+        let neither = "[[entry]]\nname = \"x\"\n";
+        assert!(recipe(&format!("{kernel}{init}{neither}")).is_err());
+    }
 
     /// `resize` works only on a session's terminal, so a session without one is refused at load.
     #[test]

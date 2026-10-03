@@ -2,7 +2,10 @@
 //! panic handler.
 //!
 //! The startup page's address arrives in the first argument register (`a0`): `process_start`'s
-//! argument (servers/init.md, "The startup block"), passed on by the loader stub.
+//! argument (servers/init.md, "The startup block"), passed on by the loader stub. The bundle's
+//! first program has no startup block: the loader passes it the bundle's address and length in
+//! `a0` and `a1` instead (kernel/boot.md, "The loader loads only the kernel and `init`"), and
+//! [`first_entry!`] gives its `main` the bundle as a slice.
 //!
 //! A panic exits through `process_exit` with [`exit::PANIC`]. If the process holds open calls
 //! then, the kernel counts it as a fault and blames the sender of the panicking thread's current
@@ -66,6 +69,37 @@ macro_rules! entry {
         #[allow(dead_code)]
         fn main() {}
     };
+}
+
+/// Declares `main` as the entry of the bundle's first program, `init`: `fn(&'static [u8]) -> u32`,
+/// given the bundle the loader mapped, whose result is the exit code. On the host it declares an
+/// empty `main`, as [`entry!`] does.
+#[macro_export]
+macro_rules! first_entry {
+    ($main:path) => {
+        /// The entry point: the loader jumps here with the bundle's address in `a0` and its
+        /// length in `a1`.
+        #[cfg(target_os = "none")]
+        #[no_mangle]
+        pub extern "C" fn _start(bundle: usize, len: usize) -> ! {
+            $crate::start::start_first($main, bundle, len)
+        }
+
+        #[cfg(not(target_os = "none"))]
+        #[allow(dead_code)]
+        fn main() {}
+    };
+}
+
+/// Views the bundle at `bundle`, `len` bytes, runs `main` on it, and exits with its code.
+#[cfg(target_os = "none")]
+pub fn start_first(main: fn(&'static [u8]) -> u32, bundle: usize, len: usize) -> ! {
+    // SAFETY: only the loader starts a program through `first_entry!`: it maps the whole verified
+    // bundle at `bundle`, `len` bytes, read-only for the life of the process, and nothing writes
+    // it (kernel/boot.md, "The loader loads only the kernel and `init`"). The same invariant as
+    // the startup page's: pages mapped read-only for this process before it ran, never unmapped.
+    let bundle: &'static [u8] = unsafe { core::slice::from_raw_parts(bundle as *const u8, len) };
+    crate::handle::process_exit(main(bundle))
 }
 
 /// Parses the startup block at `block` (0 = none), runs `main`, and exits with its code.

@@ -1,0 +1,9 @@
+{"devices": [{"name": "u28", "irq": 7, "dma": true}], "servers": [{"name": "keyd", "program": "keyd", "budget": {"pages": "256", "processes": 1, "weight": 101}, "receives": ["keyd"], "args": ["1kets=11111111111111111", "22222222ice-secrets"]}], "principals": [{"name": "alice", "account": "1001", "budget": {"pages": "4096", "processes": 4, "weight": 100}, "ssh_keys": ["ssedZDI1NTE5AAAA+I+AAg+++++++++festg"], "labels": ["c0437\\bbb111111",
+               "audit,audi\\\\\u0437bbres=3",
+               "''37\\bb^u\\\\\u0437011511111111111",
+               "111111111",
+        "au1111",
+               "auu437bbress=3",
+               "scope=5:151111111111111111",
+               "audit,audi874\\\b;^11",
+               "a^u434bbrerets"], "label_sets": [{"labels": ["alice-secie]s"], "budget": {"pages": "512", "processes": 1, "weight": 10}}], "home": "data:/h++*++++++++++++++++++++++/alice", "net": [{"prefix": "1.0.0.0/0", "ports": [22,3]}]}], "confined": true}

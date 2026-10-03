@@ -1,0 +1,1 @@
+{ "servers": [{"name": "keyd", "program":"keybo", "budget": {"pages": "512", "processes": 1, "weight": 1001}, "devices": [{"device": "net0", "as": ""}], "args": ["addr1ecrets"]}], "p": true}

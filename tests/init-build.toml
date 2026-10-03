@@ -1,0 +1,4 @@
+description = "init builds for both widths (rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+package = "redoubt-init"

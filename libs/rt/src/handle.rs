@@ -302,9 +302,10 @@ impl Registers {
             return None;
         }
         // SAFETY: `base..base + len` is the device mapping the kernel made for this process in
-        // `map_device`; it stays mapped for the life of the process (a device mapping outlives
-        // its handle, kernel/devices.md), `offset < len` is checked just above, and a `u8` needs no
-        // alignment. `Registers` is not `Sync`, so no other thread holds this same region.
+        // `map_device`; it stays mapped while this value lives (a device mapping outlives its
+        // handle, kernel/devices.md, and only `unmap`, which consumes the value, ends it; each
+        // `map_device` makes a mapping of its own), `offset < len` is checked just above, and a `u8`
+        // needs no alignment. `Registers` is not `Sync`, so no other thread holds this same region.
         Some(unsafe { ((self.base + offset) as *const u8).read_volatile() })
     }
 
@@ -317,6 +318,18 @@ impl Registers {
         unsafe { ((self.base + offset) as *mut u8).write_volatile(value) };
         true
     }
+
+    /// Unmaps the registers: what a program does before it hands the device to another, as
+    /// `init` hands the UART to `consoled` (servers/init.md). It takes the value, so nothing is
+    /// left to reach the range afterwards, refused or not.
+    ///
+    /// ```compile_fail
+    /// fn after(registers: redoubt_rt::handle::Registers) {
+    ///     let _ = registers.unmap();
+    ///     registers.read_u8(0);
+    /// }
+    /// ```
+    pub fn unmap(self) -> Result<(), Error> { unmap(self.base, self.len) }
 }
 
 impl Irq {

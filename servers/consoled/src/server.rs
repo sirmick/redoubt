@@ -3,6 +3,7 @@
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, Qid, Read, mode};
@@ -18,14 +19,113 @@ pub const MAX_INPUT: usize = 1024;
 /// manifest's `buckets=N` ([`redoubt_rt::server::buckets`]). The program refuses a count whose
 /// buckets at their caps would not fit [`BUDGET`], or whose parked reads together would not stay
 /// under `MAX_OPEN_CALLS` with its headroom ([`redoubt_rt::server::Admission::new`] checks that).
-pub const fn limits(buckets: u32) -> Limits { Limits { buckets, in_flight: 2, files: 4, state: 4 } }
+///
+/// A bucket holds `MAX_THREADS` minted connections: `init` starts at most `MAX_THREADS - 1`
+/// servers, one thread watching each, and mints every one of their consoles through its one root
+/// badge here, so that badge's one bucket must hold them all (servers/consoled.md, "Started by
+/// `init`").
+pub const fn limits(buckets: u32) -> Limits {
+    Limits { buckets, in_flight: 2, files: 4, state: redoubt_rt::abi::MAX_THREADS as u32 }
+}
 /// What one of each costs, in bytes. A parked read holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), which is `MAX_LEND_PAGES` pages at worst; a
 /// fid and a minted connection are small records.
 pub const COST: Cost = Cost { in_flight: 64 * 1024, file: 256, state: 256 };
 /// The bytes of this server's budget its clients may use between them; its manifest entry gives
-/// it the budget, and the program refuses limits that would not fit.
+/// it the budget, and the program refuses limits that would not fit. A bucket at its caps costs
+/// 2 parked reads at 64 KiB, 4 fids and `MAX_THREADS` connections at 256 bytes: 140 032 bytes
+/// with `MAX_THREADS` at 31, so 7 buckets fit, and 197 376 bytes at 255, so 5 do; the image's
+/// manifest asks for 4.
 pub const BUDGET: u64 = 1024 * 1024;
+
+/// Bytes of the prefix a minted connection's lines start with: `[con `, the id in 16 lowercase
+/// hex digits, and `] ` (servers/consoled.md, "Started by `init`").
+pub const PREFIX_LEN: usize = 23;
+
+/// The prefix for the connection with `id`.
+pub fn prefix(id: u64) -> [u8; PREFIX_LEN] {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut p = *b"[con 0000000000000000] ";
+    for (i, slot) in p[5..21].iter_mut().enumerate() {
+        *slot = HEX[(id >> (60 - 4 * i)) as usize & 0xf];
+    }
+    p
+}
+
+/// Who is writing the console's current line, so that every line says who wrote it
+/// (servers/consoled.md, "Started by `init`"). A line written through a minted connection starts
+/// with that connection's [`prefix`]; one through a root badge goes out as it is. A write through
+/// another badge than the one that left a line unfinished ends that line first, so no line holds
+/// two writers' bytes.
+///
+/// The output is any sink that takes what it can of some bytes and says how many it took: the
+/// UART in the program, a buffer in the tests. A sink that takes less leaves the line open with
+/// as much of its prefix as went out, and the rest goes first next time: a prefix cut short and
+/// finished by the writer's own bytes could spell another connection's id.
+#[derive(Debug, Default)]
+pub struct Lines {
+    /// The line a writer left unfinished, if one did.
+    open: Option<Open>,
+}
+
+/// An unfinished line: the badge it was written through, and how many bytes of its prefix went
+/// out (all of them, for a line with none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Open {
+    badge: u64,
+    prefix: usize,
+}
+
+impl Lines {
+    pub const fn new() -> Lines { Lines { open: None } }
+
+    /// Writes `data` from the caller with `badge`, which is the minted connection `id` or, with
+    /// `None`, a root badge; how many bytes of `data` went out.
+    pub fn write(
+        &mut self,
+        badge: u64,
+        id: Option<u64>,
+        data: &[u8],
+        out: &mut impl FnMut(&[u8]) -> usize,
+    ) -> usize {
+        if data.is_empty() {
+            return 0;
+        }
+        if self.open.is_some_and(|open| open.badge != badge) {
+            if out(b"\n") != 1 {
+                return 0;
+            }
+            self.open = None;
+        }
+        let mut done = 0;
+        while done < data.len() {
+            if let Some(id) = id {
+                let sent = self.open.map_or(0, |open| open.prefix);
+                if sent < PREFIX_LEN {
+                    let n = out(&prefix(id)[sent..]);
+                    self.open = Some(Open { badge, prefix: sent + n });
+                    if sent + n < PREFIX_LEN {
+                        return done;
+                    }
+                }
+            }
+            let rest = &data[done..];
+            let line = rest.iter().position(|&b| b == b'\n').map_or(rest.len(), |i| i + 1);
+            let n = out(&rest[..line]);
+            if n > 0 {
+                self.open = Some(Open { badge, prefix: PREFIX_LEN });
+            }
+            done += n;
+            if n < line {
+                return done;
+            }
+            if rest[line - 1] == b'\n' {
+                self.open = None;
+            }
+        }
+        done
+    }
+}
 
 /// What a fid rests on: there is one file, so there is one node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,10 +138,17 @@ pub struct Console {
     /// Bytes taken from the FIFO that the ring had no room for, and so were dropped. No program
     /// path reports it; only tests read it, through [`Console::dropped`].
     dropped: u64,
+    /// (badge, id) of every connection minted here and not yet gone: a write through one of these
+    /// badges is prefixed with its id. A badge not here is a root badge, `init`'s own.
+    minted: Vec<(u64, u64)>,
+    /// Who is writing the current line.
+    lines: Lines,
 }
 
 impl Console {
-    pub fn new(uart: Uart) -> Console { Console { uart, input: VecDeque::new(), dropped: 0 } }
+    pub fn new(uart: Uart) -> Console {
+        Console { uart, input: VecDeque::new(), dropped: 0, minted: Vec::new(), lines: Lines::new() }
+    }
 
     /// Takes what the UART has, up to [`crate::uart::FIFO`] bytes, and keeps each one unless the
     /// ring already holds [`MAX_INPUT`] bytes or cannot reserve room for it, in which case the byte
@@ -85,6 +192,23 @@ impl FileServer for Console {
     /// (servers/consoled.md, "`/dev/cons`"; the runtime's panic reporter does exactly that).
     fn attach(&mut self, _: &Caller, _aname: &str) -> Result<(Cons, Qid), NineError> { Ok((Cons, qid())) }
 
+    /// Keeps the id the connection's requester was given, which its lines will carry.
+    fn minted(
+        &mut self,
+        _: &Caller,
+        badge: u64,
+        id: u64,
+        _root: &Cons,
+        _quota: u64,
+    ) -> Result<(), NineError> {
+        self.minted.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
+        self.minted.push((badge, id));
+        Ok(())
+    }
+
+    /// A line it left unfinished stays so: the next writer ends it.
+    fn disconnected(&mut self, badge: u64) { self.minted.retain(|(b, _)| *b != badge); }
+
     /// The physical console carries no labels (servers/consoled.md R69). So anyone may read it,
     /// and `check` lets only an unlabelled caller write to it: no write down onto a screen someone
     /// else is looking at.
@@ -124,10 +248,13 @@ impl FileServer for Console {
         Ok(Read::Done(n))
     }
 
-    /// Output. The offset is ignored, as for a read. A byte the transmitter would not take is a
-    /// short write, which 9P allows, rather than a server that spins.
-    fn write(&mut self, _: &Caller, _: &Cons, _offset: u64, data: &[u8]) -> Result<usize, NineError> {
-        Ok(self.uart.put_all(data))
+    /// Output, every line of it saying who wrote it ([`Lines`]). The offset is ignored, as for
+    /// a read. A byte the transmitter would not take is a short write, which 9P allows, rather
+    /// than a server that spins.
+    fn write(&mut self, caller: &Caller, _: &Cons, _offset: u64, data: &[u8]) -> Result<usize, NineError> {
+        let id = self.minted.iter().find(|(b, _)| *b == caller.badge).map(|(_, id)| *id);
+        let uart = &self.uart;
+        Ok(self.lines.write(caller.badge, id, data, &mut |bytes| uart.put_all(bytes)))
     }
 
     /// Length 0: a console has no size, and a client that believed one would read the wrong

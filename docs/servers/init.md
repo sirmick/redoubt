@@ -18,7 +18,26 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (16)</summary>
+
+- bench:init-boot
+- bench:init-refuses-public-manifest
+- bench:init-refuses-device-dma
+- host:redoubt-init::what_is_not_strict_json_is_refused_with_where
+- host:redoubt-init::names_follow_the_rule_and_differ
+- host:redoubt-init::references_name_what_the_manifest_and_bundle_hold
+- host:redoubt-init::a_handed_badge_is_a_root_badge_given_once_at_its_endpoint
+- host:redoubt-init::principals_values_are_checked
+- host:redoubt-init::a_device_name_is_at_most_60_bytes_and_never_ends_in_irq
+- host:redoubt-init::a_device_split_between_two_entries_is_refused
+- host:redoubt-init::the_dma_flag_must_be_the_kernel_s
+- host:redoubt-init::one_device_has_one_holder
+- host:redoubt-init::public_names_entries_the_bundle_holds_never_the_manifest
+- host:redoubt-init::a_shared_server_needs_a_bucket_per_declared_domain_and_root_badge
+- host:redoubt-init::handles_and_arguments_must_fit_one_startup_block
+- host:redoubt-init::the_fuzz_corpus_still_passes
+
+</details>
 
 The boot manifest is one strict JSON file ([wire](wire.md#strict-json)) in the signed bundle,
 and `init`'s only input. Its entries:
@@ -28,9 +47,9 @@ and `init`'s only input. Its entries:
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume, the endpoints it receives on, the endpoints it is handed, and arguments |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume, the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), and arguments |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
-| `principals` | each principal's name, SSH public keys for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
+| `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
 
 - **Types.** Each field has one JSON type. A 64-bit quantity (a label id, an account, a size in
@@ -48,21 +67,34 @@ and `init`'s only input. Its entries:
   two holders, and the interrupt's holder could then mask the other's device and time its
   activity. A device name, and a name a server looks a device up by, is at most 60 bytes and may
   not end in `-irq`, so `NAME-irq` never collides and fits the name rule. `consoled` takes `uart`
-  and `uart-irq`, so two machines' manifests may call the same UART by different names.
+  and `uart-irq`, so two machines' manifests may call the same UART by different names. A
+  `devices` entry is held by at most one server, and an endpoint is received on by at most one; a
+  manifest naming either twice is refused, confined or not.
 - **No server gets a budget handle.** A `servers` entry names the budget `init` creates for the
   server, never a handle to one; a manifest that grants a server a budget handle is refused
-  ([R33 (no server holds a system budget)](#r33-no-server-holds-a-system-budget)).
+  ([R33 (no server holds a system budget)](#r33-no-server-holds-a-system-budget)). `root`,
+  `system` and `users` are reserved: no endpoint takes one of those names, and a `receives` or
+  `handed` item that names one is refused as a budget grant.
 - **Arguments** are opaque strings. `init` passes them unchanged and in order as the startup
   block's `argv` and never interprets them; each server's page defines its own (`keyd`'s keys,
   `ipd`'s addresses and bucket count). `init` checks only that each is UTF-8 with no NUL, and that
-  together they leave the startup block inside its page.
+  together they leave the startup block inside its page. A badge a server's arguments name for a
+  caller is that caller's `handed` badge, written in both places by the manifest's author; `init`
+  mints it from the `handed` item, never from the argument. Where `init` calls a server itself
+  (`keyd`, `consoled` and `bootfsd`, at the first endpoint each receives on), its own handle
+  carries the smallest badge from 1 that no `handed` item there uses. A manifest names each of
+  these programs at most once, `keyd` exactly once: a second would run beside the one `init`
+  calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35).
 - **Sizing.** Every shared server takes `buckets=N` as an argument, parsed once in the serving
   library; none has a compiled-in count. `init` refuses the boot unless N is at least the number
-  of distinct (account, label set)s the manifest routes to that server, plus its system callers.
-  So a server's bucket count never binds in normal use, and a full server cannot tell a latecomer
-  that others hold state ([serving](serving.md#residual-risks)). A server whose block has no `buckets=N`, or
-  one outside 1 to 32, does not start. `init` does not exist yet, so the check against the
-  manifest's routes is not built ([todo](../todo/server-bucket-counts.md)).
+  of (account, label set)s the manifest declares (each principal's unlabelled set and every label
+  set it works under) plus the root badges `init` mints at that server, one per system caller. It
+  counts every declared domain at every shared server, not only those a session will reach: an
+  over-count costs buckets, and an under-count would bind. `init` reads `buckets=N` from a
+  server's arguments, with the serving library's parser, and no other argument. So a server's
+  bucket count never binds in normal use, and a full server cannot tell a latecomer that others
+  hold state ([serving](serving.md#residual-risks)). A server whose block has no `buckets=N`, or
+  one outside 1 to 32, does not start.
 - **Weights.** One stride queue serves every budget ([scheduling](../kernel/scheduling.md)), so
   the manifest's weights are the whole scheduling policy. `init`, the steward and the drivers
   (`consoled`, `blkd`, `netd`) get weights an order of magnitude above a session's (1000 against
@@ -85,7 +117,7 @@ and `init`'s only input. Its entries:
 ```json
 { "servers": [ { "name": "fsd:data", "program": "fsd", "volume": "data",
                  "budget": { "pages": "4096", "processes": 1, "weight": 100 },
-                 "receives": ["fsd:data"], "handed": ["blkd"] } ],
+                 "receives": ["fsd:data"], "handed": [ { "endpoint": "blkd", "badge": "1" } ] } ],
   "principals": [ { "name": "alice", "account": "1001", "labels": ["alice-secrets"],
                     "ssh_keys": ["ssh-ed25519 AAAA..."], "home": "data:/home/alice",
                     "net": [ { "prefix": "0.0.0.0/0", "ports": [22, 443] } ] } ] }
@@ -95,22 +127,32 @@ and `init`'s only input. Its entries:
 The attack tests: a manifest that splits a device between two entries, or names a device ending
 in `-irq`, is refused; a manifest giving a server fewer buckets than it serves refuses the boot.
 
-**Open:** none. Sizing a server when principals are added at run time is the steward's, in
+Sizing a server when principals are added at run time is the steward's, in
 M5 (persist, install, share).
 
 ### The confinement check
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the steward's, not built · tested (7)</summary>
+
+- bench:init-refuses-confined-server
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
+- host:redoubt-init::confined_gives_a_labelled_domain_no_network
+- host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
+- host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
+- host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
+
+</details>
 
 A manifest may set `confined`, a deployment profile for the whole boot, never per domain. Set, it
 makes `init` **refuse the boot** whenever two entries with differing label sets share any of:
 
-- a **server instance**: one `servers` entry serving both;
-- a **volume**: one `volumes` entry both attach;
 - an **endpoint**: one name in a `servers` entry's receives or handed list both hold;
+- a **volume**: one `volumes` entry both attach;
 - a **network instance**: one `ipd` or `netd` both use (a labelled domain gets no `/net` at all);
 - a **device object**: one `devices` entry both hold, since a shared disk or NIC is a shared
-  scheduler, cache and timing surface.
+  scheduler, cache and timing surface;
+- a **server instance**: one `servers` entry serving both.
 
 The kernel and the cores are not on the list. Every label set shares the one kernel, which is the
 trusted base, and its cores, whose timing is no more partitioned than the caches around them
@@ -124,6 +166,12 @@ shared unlabelled volume is refused too; data enters such a domain by an audited
 steward ([steward](steward.md)). The refusal is a boot failure, not a warning
 ([R34 (confined placement)](#r34-confined-placement)).
 
+The domains compared are each `servers` entry, under its `labels` (`{}` if none), and each
+principal's label sets. A server's users are the servers handed one of its endpoints and, for a
+shared server (one that takes `buckets=N`), every principal domain: the same count as the bucket
+rule, so a server a session may later reach is never missed. The kinds are checked in the order
+listed, and the refusal names the kind.
+
 **The one named exception** is the control plane: the steward and `sshd` may reach across label
 sets, and only by three kinds of edge: the request and owner-approval path; per-item reader and
 writer budgets, each carrying exactly one label set and dying after one item (declassification and
@@ -136,27 +184,49 @@ It is a check on the manifest, not a run-time invariant: a capability handed ove
 across label sets is at fault, not the kernel. Without `confined`, a shared server is ordinary
 multi-tenancy and the serving library's residual risks apply.
 
-**Open:** none.
-
 ### Starting the servers
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: step 6, the steward and `sshd`, and an `fsd` for each volume are not built · tested (12)</summary>
+
+- bench:init-boot
+- bench:init-servers
+- bench:init-refuses-system-fit
+- bench:init-refuses-device-unmatched
+- bench:init-refuses-bound
+- bench:init-refuses-held-bundle-key
+- bench:init-refuses-consoled-handed
+- host:redoubt-init::the_image_manifest_passes_and_its_plan_is_what_the_boot_follows
+- host:redoubt-init::a_manifest_without_keyd_is_refused_and_init_calls_each_server_at_an_endpoint
+- host:redoubt-init::init_calls_one_of_each_server_it_calls
+- host:redoubt-init::more_servers_than_init_has_threads_to_watch_are_refused
+- host:redoubt-init::no_server_is_handed_a_root_badge_at_consoled
+
+</details>
 
 The kernel gives `init` the `root`, `system` and `users` budgets, every device object and the
 Reset right. The loader maps the bundle into it, read-only
 ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)). `init` then:
 
-1. parses and checks the manifest, and refuses the boot on any error. Until `consoled` starts,
-   `init` writes its own lines to the UART, which it maps for itself. A refusal is printed there,
-   and the machine powers off with a system-failure status, before any other process has run;
+1. parses and checks the manifest, and refuses the boot on any error, or if what the manifest
+   will cost `init` does not fit in what `root` keeps for it
+   ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)), or if it names more servers
+   than `init` can watch, one thread each beside its own: at most `MAX_THREADS` - 1. Until
+   `consoled` starts, `init` writes its own lines to the UART, which it maps for itself. A refusal
+   is printed there, and the machine powers off with a system-failure status, before any other
+   process has run;
 2. creates every endpoint the manifest's servers receive on. Each is owned by and charged to
    `root`, so it outlives any one instance of its server, and R1 (flow) does not bind it because `root`
    is `system` class ([IPC](../kernel/ipc.md#r1-flow)). `init` keeps the receive right, hands the
-   server a copy, and mints the badged handles the server's arguments name for its callers;
-3. starts `keyd` and runs the [key-separation check](#the-key-separation-check) against it;
+   server a copy, and mints, for each `handed` item that names the endpoint, a handle with the
+   item's badge for the server whose entry lists it;
+3. starts `keyd` and runs the [key-separation check](#the-key-separation-check) against it. A
+   manifest with no `keyd` entry is refused at step 1, since the bundle's key always needs
+   asking about;
 4. unmaps the UART and starts `consoled` with it. From then on, `init` writes through its own
    connection to `consoled`, and it prints each child's console connection id when it starts
-   the child ([consoled](consoled.md#started-by-init));
+   the child ([consoled](consoled.md#started-by-init)). The check refuses a manifest that hands
+   any server an endpoint `consoled` receives on: a root badge there writes bare lines, and only
+   `init` holds one. Without a `consoled` entry, `init` keeps the UART;
 5. starts the rest of the drivers and the servers below the steward: `bootfsd`, `blkd`, `fsd`
    (one per volume), `netd` and `ipd`, then pushes the `public` entries to `bootfsd`;
 6. starts the steward, handing it the `users` budget, and `sshd`.
@@ -175,31 +245,38 @@ sequenceDiagram
     participant KD as keyd
     participant ST as steward
     participant SH as sshd
-    Note over L,SH: planned
-    L-->>K: verified bundle: kernel and init
-    L-->>I: the bundle, read-only
-    K-->>I: root, system, users budgets,<br/>devices, Reset
-    I-->>I: parse and check the manifest,<br/>make the servers' endpoints
-    I-->>KD: launch keyd with its keys
-    I-->>KD: holds(each login, approval and bundle key)
-    KD-->>I: no (a yes stops the boot)
-    I-->>S: launch through the stub:<br/>consoled, then bootfsd, blkd, fsd, netd, ipd
+    Note over ST,SH: planned
+    L->>K: verified bundle: kernel and init
+    L->>I: the bundle, read-only
+    K->>I: root, system, users budgets,<br/>devices, Reset
+    I->>I: parse and check the manifest,<br/>make the servers' endpoints
+    I->>KD: launch keyd with its keys
+    I->>KD: holds(each login, approval and bundle key)
+    KD->>I: no (a yes stops the boot)
+    I->>S: launch through the stub:<br/>consoled, then bootfsd, blkd, netd, ipd
+    I-->>S: launch fsd, one per volume
     I-->>ST: launch, with the users budget
     I-->>SH: launch, with keyd's host-key badge
     SH-->>ST: a login: whose key is this?
     ST-->>ST: carve the session budget,<br/>launch the first session
 ```
-*Figure: the boot from the loader to the first session. All of it is planned.*
+*Figure: the boot from the loader to the first session. Dashed: planned (`fsd`, the steward and `sshd`).*
 
 The attack tests: a manifest whose servers do not fit in `system`, or whose device entries do not
 match the kernel's device objects, is refused before any server runs. The verdict is `init`'s
 refusal line, printed when nothing else has run, and the power-off status.
 
-**Open:** none.
-
 ### The key-separation check
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:init-refuses-held-login-key
+- bench:init-refuses-held-bundle-key
+- bench:init-refuses-second-keyd
+- host:redoubt-init::every_login_and_approval_key_then_the_bundle_key_is_asked_about
+- host:redoubt-init::init_calls_one_of_each_server_it_calls
+
+</details>
 
 `init` refuses a manifest that hands `keyd` a key the box is authenticated by: a key listed both
 as a principal's login or approval key and as a `keyd` key, or the key the loader verifies the
@@ -208,8 +285,6 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 `init` holds no cryptography, so once `keyd` is started and before anything else runs, it asks
 `keyd` `holds(public key)` for each such key ([keyd](keyd.md)), and a yes stops the boot
 ([R35 (key separation)](#r35-key-separation)).
-
-**Open:** none.
 
 ### The startup block
 
@@ -336,7 +411,12 @@ The bench's launcher, `stub-launch`, and the net rig (`tests/net/src/rig.rs`, wh
 
 ### Fresh connections per child
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: no case watches a connection disconnected when its child exits · tested (2)</summary>
+
+- bench:init-servers
+- bench:init-console-forgery
+
+</details>
 
 A launcher never passes its own connection to a child. Every handle in a child's namespace is a
 fresh connection the server made for that child with `new_connection`
@@ -344,8 +424,6 @@ fresh connection the server made for that child with `new_connection`
 launcher disconnects it when the child exits ([releasing grants](wire.md#a-launcher-releases-its-childs-grants)).
 A copied connection would share the launcher's fids and admission with the child, and the
 launcher could not free the child's state without losing its own.
-
-**Open:** none.
 
 ### Restarts and reboots
 
@@ -447,7 +525,12 @@ kernel
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the steward's `users` budget and the copies kept for a restart are not exercised; restarts are not built; `init-boot` shows each copy `init` closed gone from the kernel's side, but no call lists a handle table, so a copy `init` never closed would not be caught · tested (2)</summary>
+
+- bench:init-boot
+- host:redoubt-init::a_server_handed_a_budget_is_refused
+
+</details>
 
 - `init` holds the `root`, `system` and `users` budgets, every device object, the Reset right and
   the bundle's pages. It gives each driver only its own device objects, each server only the
@@ -455,13 +538,15 @@ Status: planned · M1 (separation and containment)
 - It keeps what it needs to restart a server: the receive right of every endpoint it made, a copy
   of every device handle it placed, and the bundle. It never receives on a server's endpoint, and
   it maps no device once `consoled` has the UART.
+- Beside those it holds only its own handle at each server it calls, its own connection to
+  `consoled`, and each server's exit endpoint. It closes its copy of every badge it minted for a
+  `handed` item, and of each child's console connection, once the child is started, so it calls
+  as no system caller and writes as no child.
 - It holds no keys and no cryptography, and parses no ELF: launching goes through the loader stub,
   inside the child.
 - It has no network and no user data, and after boot it receives only exit notices.
 - The loader stub holds nothing but what the child holds: it runs as the child, in the child's
   budget, with the child's handles.
-
-**Open:** none.
 
 ## Security properties
 
@@ -516,7 +601,12 @@ stub's host tests.
 
 ### R33 (no server holds a system budget)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the steward's half is the steward's, not built · tested (2)</summary>
+
+- bench:init-refuses-budget-handle
+- host:redoubt-init::a_server_handed_a_budget_is_refused
+
+</details>
 
 Only `init` and the steward ever hold a handle to a `system`-class budget. A server's startup
 block carries no budget handle, and `init` refuses a manifest that grants one. A compromised
@@ -524,11 +614,19 @@ server holding its budget could create `system`-class children with any labels a
 and so forge admission keys and crash blame at every other server. The attack test starts a
 server from a manifest that grants it a budget and expects the boot refused.
 
-**Open:** none.
-
 ### R34 (confined placement)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the control plane's exception is the steward's and `sshd`'s, not built · tested (7)</summary>
+
+- bench:init-refuses-confined-server
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
+- host:redoubt-init::confined_gives_a_labelled_domain_no_network
+- host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
+- host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
+- host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
+
+</details>
 
 With `confined` set, no two entries with differing label sets share a server instance, volume,
 endpoint, network instance or device object, and no labelled domain reads a shared
@@ -537,18 +635,22 @@ control plane: the steward and `sshd`, by the request and owner-approval path, p
 reader and writer budgets, and lease-ending supervision only. The attack verdict is the boot
 failing, not the manifest's claim.
 
-**Open:** none.
-
 ### R35 (key separation)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:init-refuses-held-login-key
+- bench:init-refuses-held-bundle-key
+- bench:init-refuses-second-keyd
+- host:redoubt-init::every_login_and_approval_key_then_the_bundle_key_is_asked_about
+- host:redoubt-init::init_calls_one_of_each_server_it_calls
+
+</details>
 
 `keyd` never holds a key that authenticates anyone to the box: not a principal's login or
 approval key, and not the key the loader verifies the bundle with. `init` asks `keyd` about each
 before anything else runs, and a yes stops the boot. So the boot root and a key some badge may
 sign with are never one key, and no badge at `keyd` can sign a login.
-
-**Open:** none.
 
 ## Failure and restart
 

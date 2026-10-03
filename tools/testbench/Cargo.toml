@@ -15,6 +15,7 @@ toml = "0.8"
 ed25519-compact = { version = "2", default-features = false }
 libc = "0.2"                                                             # openpty for a session's terminal (pty.rs)
 redoubt-signing = { path = "../../libs/signing" }                        # the bundle signature's preimage
+redoubt-blkd = { path = "../../servers/blkd" }                           # a case disk's GPT, written by blkd's own builder
 
 [dev-dependencies]
 # The oracle's own evidence (sched_oracle.rs): traces from the executable model, with its tie

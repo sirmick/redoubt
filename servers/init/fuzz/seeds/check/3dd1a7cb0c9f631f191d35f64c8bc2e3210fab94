@@ -1,0 +1,8 @@
+{
+  "dvices": [  ],
+  "servers": [
+  { "name": "keyd", "program": "keyd",
+   "budget": { "pages": "630", "processes": 1, "weight": 10},
+     "devices": [ { "device": "k1", "as": "dk" } , "bucketes=0"] }
+  ]
+}

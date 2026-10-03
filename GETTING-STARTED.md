@@ -51,7 +51,7 @@ configuration that fits a debug image. The scripts default to rv64.
 
 **The signing key is public.** `mkimage`, `launch` and the bench sign every bundle with a
 development key derived from a fixed, public seed (`DEV_SEED` in `tools/testbench/src/build.rs`),
-and the loader accepts its public half (`DEV_PUBLIC_KEY` in `loader/src/verify.rs`). Anyone can
+and the loader accepts its public half (`DEV_PUBLIC_KEY` in `libs/signing/src/lib.rs`). Anyone can
 sign a bundle the stock loader boots, so a bundle built this way is for development only. A
 deployment generates its own Ed25519 key pair, keeps the secret half off the machine, signs with
 it, and compiles its public half into the loader in place of `DEV_PUBLIC_KEY`

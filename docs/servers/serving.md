@@ -539,8 +539,8 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
   label set)s it serves refuses the latecomers, which tells them others hold state: across
   accounts, and between the label sets of one account, where it is a channel out of a vault. The
   manifest sizes each server's bucket count to the label sets it serves, and a server not sized
-  does not start ([init](init.md#the-boot-manifest)); `init` does not yet check N against the
-  manifest's routes ([todo](../todo/server-bucket-counts.md)).
+  does not start, and `init` refuses a boot whose N for a server is below the domains the
+  manifest declares there ([init](init.md#the-boot-manifest)).
 - **A full bucket makes the last comer wait.** With three or more badges in one bucket, the
   bucket can fill, and a further badge is refused until one gives something back.
 - **A parked call costs its caller and the server.** Each holds one of the caller's

@@ -1,0 +1,27 @@
+{
+  "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "disk0", "base": "134234112", "irq": 8, "dma": true },
+    { "name": "net0", "base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "256", "processes": 1, "weight": 100 },
+   "receives": ["iqd"],
+      "handed": [ { "endpoint": "netd", "badge": "0" } ],
+      "args": ["222222222222222222buckets=4"] },
+    { "name": "consoled", "program": "consoled",
+      "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+      "devices": [ ],
+      "receives": ["netd"],
+      "handed": [ { "endpoint": "ipd", "badge": "3" } ],
+      "args": ["client=5"] },
+    	{ "name": "ipd", "program": "ipd",
+      "budget": { "pages": "4096", "processes": 1, "weight": 100 },
+      "receives": ["ipd"],
+      "handed": [ { "endpoint": "netd", "badge": "0" } ],
+      "args": ["addr=10.0.2.15/24", "gateway=1050.2.2", "ingress=3",
+               "scope=4:c:0.0.0.0/0:1-6553ckets=4"] }
+  ],
+  "public": []
+}

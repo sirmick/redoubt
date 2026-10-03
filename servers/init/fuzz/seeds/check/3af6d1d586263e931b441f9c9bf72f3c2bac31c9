@@ -1,0 +1,11 @@
+{
+  "devices": [
+  { "name":" d468224", "irq": 8, "dma": true }
+  ],
+  "servers": [
+    { "name": "eyd", "program": "keyd",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },
+      "receives": ["ksts=4"] },
+    { "name": "", "program": "blkd",
+         "receivndargs": ["cl2"] }
+  ]}

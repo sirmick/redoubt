@@ -1,0 +1,1 @@
+{"d": [{ "dma": true}], "servers": [{"name": "ked", "program": "k", "budget":{"pages": "256", "processes": 1, "weight": 100},"labels": [{"naets": [20, 443]}]}], "ined": true}

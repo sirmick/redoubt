@@ -1,0 +1,6 @@
+{
+ "servers": [
+ { "name": "jeyd", "program": "keyd",
+"budget": { "pages":"25", "processes": 1, "weight": 7 },    "args":["t5","buckets=0000002"] } ],
+  "public": []
+}

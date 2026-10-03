@@ -273,7 +273,7 @@ flowchart LR
     L --> K[kernel]
     L --> I[init]
     K --> I
-    I -.-> S[servers, launched<br/>through the loader stub]
+    I --> S[servers, launched<br/>through the loader stub]
 ```
 *Figure: the handoff. Dashed: planned ([what `init` does with the bundle](#what-init-does-with-the-bundle)).*
 
@@ -304,7 +304,16 @@ other and grants nothing. The loader reads no entry it does not load, and the ke
 
 ### What `init` does with the bundle
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:init-boot
+- bench:init-servers
+- bench:init-refuses-held-bundle-key
+- bench:init-refuses-device-unmatched
+- bench:bench-bundle-file
+- host:testbench::the_image_recipe_packs_init_the_servers_and_the_manifest
+
+</details>
 
 `init` learns which device each handle names from the kernel, with
 [`device_info`](devices.md#device_info), and matches that to the manifest, which names each
@@ -322,9 +331,7 @@ from the bundle's pages in `init`'s place, and a case under `init` reads it agai
 ([test bench](../testbench.md#data-entries-for-init)). The bundle's contents come from one
 recipe, `image/boot.toml`: the kernel, `init`, the manifest and the servers. The bench's
 builder is the one tool that packs a bundle. It reads a case for the bench, and `image/boot.toml`
-for `./mkimage`.
-
-**Open:** none.
+for `./mkimage` and for `init-boot`, which boots the recipe's bundle to `init`'s last line.
 
 ### Verified boot
 

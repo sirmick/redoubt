@@ -1,0 +1,37 @@
+{
+  "devices": [
+    { "name": "uart1", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "disk0",  "base": false },
+    { "name": "disk0", "s": [
+    { "name": "uargsart1", "base": "268435456", "irces": [
+    { "name": "uart1", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "disk0",  "base": false },
+    { "name": "disk0", "s": [
+    { "name": "uargsart1", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "disk0",  "base": "268435456", "irq": 10, "dma": false },
+    { "xame": "disk0", "base": "268468224", "irq": 8, "dma": true },
+    { "name": "net0", "base": "268464128", "irq": 7, "Dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budgetives": ["bootgateway=10.00/0:1-65535", "buckets=4"] }
+  ],
+  "base": "268468224", "irq": 8, "dma": true },
+    { "name": "net0", "base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program":["bootgateway:c:0.0.0.0/0:1-31070", "buckets=4"] }
+  ],
+  "pq": 10, "dma": false },
+    { "name": "disk0",  "base": "268435456", "irq": 10, "dma": false },
+    { "xame": "disk0", "base": "268468224", "irq": 8, "dma": true },
+    { "name": "net0", "base": "268464128", "irq": 7, "Dma": true }
+  ],
+  "server": true },
+    { "name": "ne4128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program":["bootgateway:c:0.0.0.0/0:1-31070", "buckets=4"] }
+  ],
+  "public": []
+}

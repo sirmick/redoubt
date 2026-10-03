@@ -1,0 +1,1 @@
+{"dvicse": [{"name": "uarn8", "irq": 7, "dma": true}], "servers": [{"name":"keyd", "program": "{eyd", "budget": {"pages": "256", "processes": 1, "weight": 100}, "devices": [{"device":[22, 443]}]}], "confined": true}

@@ -106,6 +106,8 @@ pub enum MintSource {
 pub enum ResetKind {
     PowerOff = 1,
     Reboot = 2,
+    /// Power off reporting a system failure: the one kind that gives the firmware a reason.
+    PowerOffFailure = 3,
 }
 
 /// How each kind of argument travels in registers (the table in the crate docs).
@@ -193,7 +195,9 @@ impl Arg for MintSource {
 impl Arg for ResetKind {
     fn write(&self, w: &mut Writer) { w.u32(*self as u32) }
 
-    fn read(r: &mut Reader) -> Result<Self, Error> { r.tag(&[ResetKind::PowerOff, ResetKind::Reboot]) }
+    fn read(r: &mut Reader) -> Result<Self, Error> {
+        r.tag(&[ResetKind::PowerOff, ResetKind::Reboot, ResetKind::PowerOffFailure])
+    }
 }
 
 /// Added to every call's number in the table below. Every `a0` outside the table, this one and

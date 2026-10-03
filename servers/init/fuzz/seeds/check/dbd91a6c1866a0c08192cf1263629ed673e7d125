@@ -1,0 +1,12 @@
+{
+  "devices": [
+],
+  "servers": [
+    { "name": "keyd", "program": "keyd",     "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+ "receives": ["blkd"] },
+    { "name": "netd", "program":{
+ "de\\\badge,i":1000 },     "devices": [ { "device": "nett" } ], 
+      "args": ["addr=10uc@ek4"] }
+  ],
+  "public": []
+}

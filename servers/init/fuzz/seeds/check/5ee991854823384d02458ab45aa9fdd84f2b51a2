@@ -1,0 +1,1 @@
+{"servers": [{"name": "keyd", "program": "keyd", "budget": {"pages": "256", "processes": 1, "weight": 100}, "recei": {"t": 1000}, "devices": ["a"], "ts": [{ "betorts": [22,3]}]}], "publiced": true}

@@ -14,16 +14,12 @@
 //! through `check`, since the physical console carries no labels — a write from a labelled
 //! caller: no write down onto a screen someone else is looking at.
 //!
-//! **Until `init` starts it, `log-server` keeps the UART.** Nothing starts `consoled` yet: it
-//! takes its device handles from a startup block, and no `init` writes one
-//! (docs/plan/m1-separation.md, step 3). So the bench's console is still `log-server`, which
-//! holds the same ns16550 and the same interrupt because the kernel hands every device to the
-//! bundle's first program (kernel/devices.md), and this crate is only built and host tested.
-//! **The two must never run together**: two holders of one device handle both reach the
-//! registers (kernel/devices.md, "Authority"), and two readers of one receive FIFO would each
-//! take half the line. What separates them is that only one of them is ever started — today
-//! `log-server`, and once `init` starts the servers `consoled`, which the manifest gives the
-//! UART's handles and whose arrival is what retires `log-server`'s console duties.
+//! **Every line says who wrote it.** `init` starts it with the UART `init` has unmapped, attaches
+//! through a root badge of its own, and mints each child's `/dev/cons` from it: a line written
+//! through a minted connection starts with `[con N] `, its id, and only `init`'s lines are bare
+//! ([`server::Lines`]; servers/consoled.md, "Started by `init`"). In the bench's other cases
+//! `log-server` holds the UART instead; the two are never started together, since two holders of
+//! one device would both reach its registers (kernel/devices.md, "Authority").
 //!
 //! **Stated residual: one line, one queue.** There is one physical keyboard, so there is one
 //! input queue, and a byte goes to whichever connection has waited longest. A client that reads
@@ -39,5 +35,5 @@ extern crate alloc;
 pub mod server;
 pub mod uart;
 
-pub use server::{BUDGET, COST, Console, MAX_INPUT, limits};
+pub use server::{BUDGET, COST, Console, Lines, MAX_INPUT, PREFIX_LEN, limits, prefix};
 pub use uart::Uart;

@@ -1,0 +1,7 @@
+{ "devices": [
+   ],
+  "servers": [
+    { "name": "keyd","program": "keyd",     "budget": { "pages": "129", "processes": 2, "weight": 100 },    "args": ["buckets=_host,1111111", ",1111111", "y=0.01.2.2", "ingress=3",    "scS65535", "s=4"] }
+  ],
+  "public": []
+}

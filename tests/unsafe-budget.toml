@@ -104,12 +104,12 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page"
+name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page, the bundle's view"
 paths = ["libs/rt/src"]
 # Includes start.rs turning the panic hook's stored address back into its `fn()`,
 # the one way a program (netd) can stop its device before the panic handler exits, and a page
 # buffer's two views, shared and mutable, each made for one borrow (ipc.rs, `Mapping`).
-max_unsafe = 11
+max_unsafe = 14
 max_undocumented = 0
 
 [[budget]]
@@ -175,6 +175,14 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# init, the most privileged process after the kernel. Its library and its program both say
+# `#![forbid(unsafe_code)]`: the runtime views the bundle for it (`first_entry!`).
+name = "redoubt-init (init)"
+paths = ["servers/init/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # The kernel-half map and PIDs the loader and kernel share. `#![forbid(unsafe_code)]`, so this
 # can only stay at 0.
 name = "redoubt-layout (kernel-half map)"
@@ -206,6 +214,10 @@ reason = "the executable model: a host crate that is no_std only to share the ke
 [[uncounted]]
 path = "tests/programs"
 reason = "test programs, never in a shipped image"
+
+[[uncounted]]
+path = "tests/init-programs"
+reason = "the test programs the servers' cases start under init, never in a shipped image"
 
 [[uncounted]]
 path = "tests/net"

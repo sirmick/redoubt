@@ -84,15 +84,13 @@ The table: [libs/wire/tables/bootfs.md](../../libs/wire/tables/bootfs.md).
 
 ### Started by `init`
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: no session's launcher is started, so no fresh connection is rooted at `/boot` for one · tested: bench:init-servers, bench:init-boot, bench:init-refuses-public-manifest
 
 `init` starts `bootfsd` from the bundle's pages with the manifest's `public` list as its
 arguments, reads the bundle itself, pushes each public entry's bytes with `add`, and sends `seal`
 ([init](init.md#starting-the-servers)). `init` refuses a manifest whose `public` list names an
 entry the bundle does not hold, or the manifest itself. Sessions get fresh connections to
 `bootfsd`, rooted at `/boot`, from their launcher.
-
-**Open:** none.
 
 ## Authority
 

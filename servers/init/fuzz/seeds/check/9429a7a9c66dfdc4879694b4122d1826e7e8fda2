@@ -1,0 +1,10 @@
+{
+ "devices": [{ "name": "uart1","base": "268464128", "irq": 7, "dma": true }
+ ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": {"pages": "128", "processes": 1, "weight": 100 },
+ "args": ["host,s65535", "buckets=00,09608"] }
+ ],
+  "public": []
+}

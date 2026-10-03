@@ -1,0 +1,8 @@
+{
+  "devices": [ ],
+  "servers":[
+ { "name": "ke", "program": "keyd",     "budget": { "pages": "2048", "processes": 1, "weight":0 },
+       "handed": [ {"endpoint": "root", "badge": "5" } ] }
+  ],
+  "public": []
+}

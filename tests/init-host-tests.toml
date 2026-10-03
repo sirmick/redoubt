@@ -1,0 +1,6 @@
+description = "init's reading of the boot manifest: strict JSON decoding, every check with its refusal, the bound on root, and the fuzz corpus rerun"
+kind = "host-tests"
+# One test per refusal, each changing the image's own manifest (image/manifest.json) in one way
+# (servers/init.md, "The boot manifest", "The confinement check", "Starting the servers"). They do
+# not boot init: the cases under init do.
+packages = ["redoubt-init"]

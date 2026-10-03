@@ -65,7 +65,6 @@
 - [M5 (persist, install, share)](plan/m5-persist.md)
 - [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
-  - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
   - [beamlet's modular exponentiation takes operands of any size](todo/beamlet-bignum-bounds.md)
   - [The parked write test races the host's clock](todo/parked-write-clock.md)

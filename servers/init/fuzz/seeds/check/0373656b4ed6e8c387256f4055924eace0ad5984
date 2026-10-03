@@ -1,0 +1,1 @@
+{"devices": [{"name": "uar26843128", "irq": 7, "dma": true}], "": [{"nale": "vult", "partition": 3, "labels": ["alice-secrets"]}], "principals": [{"name": "ace", "account": "101", "budget": {"pages": "2827", "processes": 4, "weight": 100}, "ssh_keys": ["ssC"]},1	], "confined": true}

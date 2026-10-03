@@ -237,13 +237,15 @@ pub trait FileServer {
     fn attach(&mut self, caller: &Caller, aname: &str) -> Result<(Self::Node, Qid), NineError>;
 
     /// A connection is being minted through `caller`'s, with `badge`, rooted at `root`; the
-    /// requester asked for `quota` bytes for it (0: none of its own). A server that meters bytes
-    /// records the grant here and may refuse it; the skeleton then mints nothing and gives the
-    /// requester's admission back.
+    /// requester asked for `quota` bytes for it (0: none of its own), and will be given `id` for
+    /// it. A server that meters bytes records the grant here and may refuse it; the skeleton then
+    /// mints nothing and gives the requester's admission back. A server that names a connection to
+    /// others, as `consoled` names a line's writer, names it by `id`, which its requester knows.
     fn minted(
         &mut self,
         _caller: &Caller,
         _badge: u64,
+        _id: u64,
         _root: &Self::Node,
         _quota: u64,
     ) -> Result<(), NineError> {
@@ -859,7 +861,7 @@ impl<S: FileServer> NineServer<S> {
         })?;
         // The file server has the last word (its quota), before any handle exists.
         let badge = ticket.badge();
-        self.fs.minted(caller, badge, &new_root.0, quota)?;
+        self.fs.minted(caller, badge, ticket.id(), &new_root.0, quota)?;
         match self.minted.commit(ticket, new_root, kernel) {
             Ok(made) => Ok(made),
             Err(_) => {

@@ -8,13 +8,18 @@
 //!   small blocks go back on their list; their pages are never returned to the kernel.
 //! - **Large blocks**: whole pages from `map_anon`, unmapped when freed. Alignment above a page is refused
 //!   (null), since `map_anon` promises only page alignment.
+//! - **A fixed arena** ([`Heap::fix`]): a program that must bound its memory up front (`init`,
+//!   kernel/budgets.md, "The tree from the boot manifest") maps one region once, and from then on every page,
+//!   small classes' and large blocks', comes from it and never from `map_anon`. Freed large blocks go on a
+//!   first-fit list of page runs instead of being unmapped; when the region is spent, an allocation fails
+//!   (null) like an exhausted `map_anon`.
 //!
 //! One spin lock guards the lists. Contention costs spinning, never correctness.
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use redoubt_sys::{MemFlags, PAGE_SIZE};
+use redoubt_sys::{Error, MemFlags, PAGE_SIZE};
 
 use crate::handle::{map_anon, unmap};
 
@@ -28,6 +33,13 @@ pub struct Heap {
     lock: AtomicBool,
     /// The first free block of each class; 0 = none. Changed only under `lock`.
     free: [AtomicUsize; CLASSES],
+    /// The fixed arena's unused tail, `next..end`; `end` is 0 until [`Heap::fix`]. Changed only
+    /// under `lock`.
+    next: AtomicUsize,
+    end: AtomicUsize,
+    /// The arena's first freed run of pages; 0 = none. Each run holds its length and the next run
+    /// at its start. Changed only under `lock`.
+    runs: AtomicUsize,
 }
 
 impl Default for Heap {
@@ -57,7 +69,13 @@ impl Drop for Locked<'_> {
 
 impl Heap {
     pub const fn new() -> Heap {
-        Heap { lock: AtomicBool::new(false), free: [const { AtomicUsize::new(0) }; CLASSES] }
+        Heap {
+            lock: AtomicBool::new(false),
+            free: [const { AtomicUsize::new(0) }; CLASSES],
+            next: AtomicUsize::new(0),
+            end: AtomicUsize::new(0),
+            runs: AtomicUsize::new(0),
+        }
     }
 
     fn lock(&self) -> Locked<'_> {
@@ -65,6 +83,89 @@ impl Heap {
             core::hint::spin_loop();
         }
         Locked(self)
+    }
+
+    /// Maps one region of `pages` pages and takes every later page from it, never from `map_anon`
+    /// again. Blocks allocated before keep working. Once only: a second call is `InvalidArgument`.
+    pub fn fix(&self, pages: usize) -> Result<(), Error> {
+        let _locked = self.lock();
+        let len = pages.checked_mul(PAGE_SIZE).filter(|len| *len != 0).ok_or(Error::InvalidArgument)?;
+        if self.end.load(Ordering::Relaxed) != 0 {
+            return Err(Error::InvalidArgument);
+        }
+        let base = map_anon(len, MemFlags::READ | MemFlags::WRITE)?;
+        self.next.store(base, Ordering::Relaxed);
+        self.end.store(base + len, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// `len` bytes of fresh pages (a multiple of the page size): the arena's, once fixed, first
+    /// from a freed run and then from its tail; else `map_anon`'s. Needs the lock. 0 if memory is
+    /// exhausted.
+    fn pages(&self, locked: &Locked, len: usize) -> usize {
+        let end = self.end.load(Ordering::Relaxed);
+        if end == 0 {
+            return map_anon(len, MemFlags::READ | MemFlags::WRITE).unwrap_or(0);
+        }
+        // First fit: `prev` is the run before `run`, 0 for the list's head.
+        let (mut prev, mut run) = (0, self.runs.load(Ordering::Relaxed));
+        while run != 0 {
+            let [run_len, next] = self.run(locked, run);
+            if run_len >= len {
+                let rest = if run_len == len {
+                    next
+                } else {
+                    self.set_run(locked, run + len, [run_len - len, next]);
+                    run + len
+                };
+                if prev == 0 {
+                    self.runs.store(rest, Ordering::Relaxed);
+                } else {
+                    let [prev_len, _] = self.run(locked, prev);
+                    self.set_run(locked, prev, [prev_len, rest]);
+                }
+                return run;
+            }
+            (prev, run) = (run, next);
+        }
+        let next = self.next.load(Ordering::Relaxed);
+        if end - next < len {
+            return 0;
+        }
+        self.next.store(next + len, Ordering::Relaxed);
+        next
+    }
+
+    /// Gives back a large block's `len` bytes at `addr`: to the arena's runs once fixed, else to
+    /// the kernel. Needs the lock.
+    fn free_pages(&self, locked: &Locked, addr: usize, len: usize) {
+        if self.end.load(Ordering::Relaxed) == 0 {
+            // The kernel refuses to unmap what is not ours, so a failure here would be a bug in
+            // the caller, which GlobalAlloc's contract rules out; there is nothing to report to.
+            let _ = unmap(addr, len);
+            return;
+        }
+        self.set_run(locked, addr, [len, self.runs.load(Ordering::Relaxed)]);
+        self.runs.store(addr, Ordering::Relaxed);
+    }
+
+    /// A freed run's length and the next run. Needs the lock. Private, and called only on a run
+    /// `set_run` wrote, which is what makes the read sound.
+    fn run(&self, _: &Locked, addr: usize) -> [usize; 2] {
+        // SAFETY: `addr` starts a run of whole pages that `set_run` wrote its two words to,
+        // page-aligned, that this heap mapped read-write and never unmaps, and nothing has
+        // written to it since (it is on no free list and in no live block).
+        unsafe { (addr as *const [usize; 2]).read() }
+    }
+
+    /// Writes a run's length and next run at `addr`. Needs the lock. Private, and called only by
+    /// `pages` (the rest of a run it split, or the run before one it took) and `free_pages` (a
+    /// large block being freed), which is what makes the write sound.
+    fn set_run(&self, _: &Locked, addr: usize, words: [usize; 2]) {
+        // SAFETY: `addr` starts at least a page this heap mapped read-write and, once fixed, never
+        // unmaps, that is in no live block: a freed large block, the unused rest of a run, or a
+        // run already on the list. It is page-aligned, so two words are in bounds and aligned.
+        unsafe { (addr as *mut [usize; 2]).write(words) };
     }
 
     /// Puts the free block at `addr` on its class's list. Needs the lock. Private, and called
@@ -85,7 +186,10 @@ impl Heap {
     fn pop(&self, locked: &Locked, class: usize) -> usize {
         let head = &self.free[class];
         if head.load(Ordering::Relaxed) == 0 {
-            let Ok(page) = map_anon(PAGE_SIZE, MemFlags::READ | MemFlags::WRITE) else { return 0 };
+            let page = self.pages(locked, PAGE_SIZE);
+            if page == 0 {
+                return 0;
+            }
             for addr in (page..page + PAGE_SIZE).step_by(class_size(class)).rev() {
                 self.push(locked, class, addr);
             }
@@ -101,17 +205,16 @@ impl Heap {
 
 // SAFETY: `alloc` returns null or a block of at least `layout.size()` bytes aligned to
 // `layout.align()` (see the module docs) that no other live allocation overlaps: small blocks are
-// on exactly one free list until taken, and large ones are fresh mappings. `dealloc` gets back
-// the class or page count from the same `layout`, as GlobalAlloc's contract guarantees.
+// on exactly one free list until taken, and large ones are fresh mappings, or a fixed arena's
+// pages on no run list and below its tail. `dealloc` gets back the class or page count from the
+// same `layout`, as GlobalAlloc's contract guarantees.
 unsafe impl GlobalAlloc for Heap {
     // SAFETY: GlobalAlloc's contract (a non-zero size); see the impl's comment for what it returns.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match class(layout) {
             Some(class) => self.pop(&self.lock(), class) as *mut u8,
             None if layout.align() > PAGE_SIZE => core::ptr::null_mut(),
-            None => large_len(layout)
-                .and_then(|len| map_anon(len, MemFlags::READ | MemFlags::WRITE).ok())
-                .map_or(core::ptr::null_mut(), |addr| addr as *mut u8),
+            None => large_len(layout).map_or(0, |len| self.pages(&self.lock(), len)) as *mut u8,
         }
     }
 
@@ -119,11 +222,9 @@ unsafe impl GlobalAlloc for Heap {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         match class(layout) {
             Some(class) => self.push(&self.lock(), class, ptr as usize),
-            // The kernel refuses to unmap what is not ours, so a failure here would be a bug in
-            // the caller, which GlobalAlloc's contract rules out; there is nothing to report to.
             None => {
                 if let Some(len) = large_len(layout) {
-                    let _ = unmap(ptr as usize, len);
+                    self.free_pages(&self.lock(), ptr as usize, len);
                 }
             }
         }

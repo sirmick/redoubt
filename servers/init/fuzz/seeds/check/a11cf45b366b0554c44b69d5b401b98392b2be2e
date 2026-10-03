@@ -1,0 +1,1 @@
+{"volumes": [{"name": "data", "partition": 0, "labels": []}], "principals": [{"name":"alice", "account": "101", "budget": {"pages": "2827", "processes": 4, "weight": 100}, "home": "data:/homee/ac/l/", "net": [{"prefix": "0.0.0.+", "ports":[22443]}]}], "confined": true}

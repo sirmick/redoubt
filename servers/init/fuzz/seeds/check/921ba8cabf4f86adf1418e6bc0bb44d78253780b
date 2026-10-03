@@ -1,0 +1,7 @@
+{"devices": [
+    ],
+  "servers": [
+    { "name":"keyd","program": "keyd",     "budget": { "pages": "512", "processes": 1,"weight": 1000 },
+ "receives": ["blkd55", "pro535", "=4"] }
+  ]
+}

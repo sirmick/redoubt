@@ -1,0 +1,1 @@
+{"devi.eS": [{"nir": []}, {"same":  ["ali-secrets"]}], "principals": [{"name": "alice", "account": "1001", "budget": {"pages": "4096", "processes": 5, "weight": 100},"net": [{"prefix": [21, 443]}]}], "onfined": true}

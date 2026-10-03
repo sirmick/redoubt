@@ -1,0 +1,9 @@
+{
+  
+  "servers": [  {"name": "eyd", "program": "keyd",
+      "budget": { "pages": "253", "processes": 1, "weight":100 },
+  "args":[" ssh_hos222",
+"buckets=+"] }
+  ],
+  "public": []
+}

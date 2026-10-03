@@ -21,7 +21,7 @@ max_lines = 361
 [[crate]]
 name = "libs/sys"
 paths = ["libs/sys/src"]
-max_lines = 1006
+max_lines = 1009
 
 [[crate]]
 name = "libs/layout"
@@ -41,7 +41,7 @@ max_lines = 328
 [[crate]]
 name = "libs/signing"
 paths = ["libs/signing/src"]
-max_lines = 11
+max_lines = 15
 
 [[crate]]
 name = "libs/client"
@@ -51,7 +51,7 @@ max_lines = 626
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 2824
+max_lines = 2914
 
 [[crate]]
 name = "libs/wire"
@@ -91,7 +91,7 @@ max_lines = 242
 [[crate]]
 name = "servers/consoled"
 paths = ["servers/consoled/src"]
-max_lines = 254
+max_lines = 341
 
 [[crate]]
 name = "servers/blkd"
@@ -106,4 +106,9 @@ max_lines = 1552
 [[crate]]
 name = "servers/ipd"
 paths = ["servers/ipd/src"]
-max_lines = 2883
+max_lines = 2890
+
+[[crate]]
+name = "servers/init"
+paths = ["servers/init/src"]
+max_lines = 1606

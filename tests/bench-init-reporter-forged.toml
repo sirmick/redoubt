@@ -1,0 +1,34 @@
+description = "Bench self-check: under the real init, a verdict printed by another program than the reporter fails the case, as it comes out under that program's [con N] (docs/testbench.md, \"The servers' cases under init\")"
+arch = ["rv64"]
+kind = "boot"
+# con-forger, started first, prints boot-reader's verdict; boot-reader, the reporter, prints its
+# own once it has read its entry.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-init-programs", bin = "con-forger" },
+    { package = "redoubt-init-programs", bin = "boot-reader" },
+]
+timeout_secs = 60
+expect = ['^init: started boot-reader, console [0-9a-f]{16}$', '^\[con [0-9a-f]{16}\] boot-reader TEST PASSED$']
+reporter = "boot-reader"
+must_fail = '^a PASSED line not the reporter.s: \[con [0-9a-f]{16}\] boot-reader TEST PASSED$'
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/reporter-forged.json" }
+
+[[file]]
+name = "greeting"
+from = { path = "tests/data/init/greeting.txt" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[net]

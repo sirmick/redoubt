@@ -1,0 +1,15 @@
+{
+  "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "disk0", "base":"268468224", "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "256", "processes": 1, "weight": 100 },
+  "args": [          "buckets=#"] },
+    { "name": "consoled", "program": "consoled",
+      "budget": { "pages": "512", "processes": 1, "weight": 10 },
+   "args": [ "gatts=4"] }
+  ],
+  "public": []
+}

@@ -185,3 +185,38 @@ fn heap_over_map_anon() {
         assert!(unsafe { heap.alloc(Layout::from_size_align(8, 2 * PAGE_SIZE).unwrap()) }.is_null());
     });
 }
+
+#[test]
+fn heap_in_a_fixed_arena() {
+    let f = fake();
+    let pid = f.process(0, &[]);
+    f.as_process(pid, || {
+        let heap = Heap::new();
+        let before = f.held(pid).1;
+        heap.fix(8).unwrap();
+        assert_eq!(f.held(pid).1, before + 8, "the arena is mapped once, whole");
+        assert_eq!(heap.fix(8), Err(Error::InvalidArgument), "and only once");
+        let pages = |n| Layout::from_size_align(n * PAGE_SIZE, 8).unwrap();
+        let small = Layout::from_size_align(16, 8).unwrap();
+        // SAFETY: every layout has a non-zero size, and each block is freed with its layout.
+        unsafe {
+            // A small class's page and two large blocks, all from the arena's tail.
+            let s = heap.alloc(small);
+            let a = heap.alloc(pages(3));
+            let b = heap.alloc(pages(2));
+            assert_eq!((a as usize - s as usize, b as usize - a as usize), (PAGE_SIZE, 3 * PAGE_SIZE));
+            // A freed run is reused first fit, and split.
+            heap.dealloc(a, pages(3));
+            assert_eq!(heap.alloc(pages(2)), a);
+            assert_eq!(heap.alloc(pages(1)) as usize, a as usize + 2 * PAGE_SIZE);
+            // The two pages left, then nothing: never another map_anon.
+            assert_eq!(heap.alloc(pages(2)) as usize, b as usize + 2 * PAGE_SIZE);
+            assert!(heap.alloc(pages(1)).is_null());
+            heap.dealloc(b, pages(2));
+            assert_eq!(heap.alloc(pages(3)), core::ptr::null_mut(), "a run shorter than asked is skipped");
+            assert_eq!(heap.alloc(small), s.add(16), "small blocks still come from their page");
+            assert_eq!(heap.alloc(Layout::from_size_align(64, 64).unwrap()), b, "a class page from a run");
+        }
+        assert_eq!(f.held(pid).1, before + 8);
+    });
+}

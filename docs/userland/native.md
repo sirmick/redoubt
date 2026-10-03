@@ -189,7 +189,7 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 
 ### `redoubt-rt`, the native runtime
 
-<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (15)</summary>
+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (16)</summary>
 
 - bench:rt-build
 - bench:net-tcp
@@ -198,6 +198,7 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 - host:redoubt-rt::exit_codes_reach_the_parent
 - host:redoubt-rt::a_panic_is_reported_on_the_console_once
 - host:redoubt-rt::heap_over_map_anon
+- host:redoubt-rt::heap_in_a_fixed_arena
 - host:redoubt-rt::call_lend_and_reply
 - host:redoubt-rt::send_transfers_pages_for_good
 - host:redoubt-rt::timeouts_dead_endpoints_and_refusals
@@ -216,11 +217,11 @@ the loader stub.
 
 | Module | What it gives |
 | --- | --- |
-| `start` | the entry point (`entry!`), exit codes (`OK` 0, `PANIC` 101, `BAD_STARTUP` 102) and the panic handler |
+| `start` | the entry point (`entry!`, and `first_entry!` for `init`), exit codes (`OK` 0, `PANIC` 101, `BAD_STARTUP` 102) and the panic handler |
 | `startup` | the startup block, parsed defensively ([sessions](sessions.md#how-a-program-reads-its-namespace)) |
 | `handle` | typed handles and the system calls that are not IPC |
 | `ipc` | lends and transfers, `call`, `send`, `receive`, `reply`, `serve` |
-| `heap` | the global allocator, over `map_anon` |
+| `heap` | the global allocator, over `map_anon`, or over one arena mapped once (`fix_heap`, for `init`'s [bound](../kernel/budgets.md#the-tree-from-the-boot-manifest)) |
 | `path` | lexical path cleaning, so `..` never climbs above a root |
 | `client` | a small synchronous 9P client |
 | `server` | the shared server library ([the serving library](../servers/serving.md)) |
@@ -230,6 +231,9 @@ the loader stub.
   parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program
   has one, and exits with `PANIC`; if the program held open calls, the kernel blames the sender
   of the call it was serving ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
+  `init`, which the loader starts with no startup block, declares `first_entry!(run)` instead:
+  `run` receives the bundle the loader mapped read-only, as a `&'static [u8]`
+  ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)).
 - **The lend belongs to the call.** `call` takes ownership of the buffer it lends. When the call
   completes, the outcome hands the buffer back unless the server had received the call and it
   was then abandoned, in which case the buffer is consumed: disarmed without touching or
@@ -258,7 +262,9 @@ the loader stub.
   that owns them, so the raw address it once took is no longer a way round. `map_anon` only makes
   memory, and hands back an address that takes `unsafe` to use. A public `unmap` does not compile
   (a `compile_fail` test in `handle.rs`). A `dma_alloc` run is held by a `Dma`, which unmaps
-  it on drop and not before; the frames stay the kernel's until the process ends.
+  it on drop and not before; the frames stay the kernel's until the process ends. A device's
+  `Registers` are unmapped only by `Registers::unmap`, which takes the value, so no access is left
+  to reach them (how `init` gives the UART up to `consoled`).
 - **No raw call from safe code.** `redoubt_rt::abi` is the kernel's types and limits without
   `redoubt-sys`'s `syscall`, so a program built on the runtime makes every call through it. The
   no-cruft case refuses a wholesale re-export and a single-line re-export or `pub` item naming

@@ -1,0 +1,15 @@
+{
+ "d$viaes":[
+  {
+  }
+ ],
+ "principals": [
+  {"name": "lice","account": "1001",   "budget": {
+    "pages": "4096","processes": 3,
+    "weight": 2},
+   "net": [
+    {
+ }
+   ] }
+ ]
+}

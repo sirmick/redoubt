@@ -1,0 +1,1 @@
+{"devs": [{"a": true}], "servers": [{"name": "keydr", "program": "keyd", "budget": {"pages": "128", "processes": 1, "weight": 100}, "rece": ["%2d"], "handed": 0, "s": []}, {"l_sets": [{"labeprerts": [22, 4]}]}], "confined": true}

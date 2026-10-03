@@ -644,6 +644,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-init"
+version = "0.1.0"
+dependencies = [
+ "redoubt-client",
+ "redoubt-init",
+ "redoubt-rt",
+ "redoubt-signing",
+ "redoubt-sys",
+ "stub",
+]
+
+[[package]]
+name = "redoubt-init-programs"
+version = "0.1.0"
+dependencies = [
+ "redoubt-client",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-ipd"
 version = "0.1.0"
 dependencies = [
@@ -1121,6 +1141,7 @@ dependencies = [
  "clap",
  "ed25519-compact",
  "libc",
+ "redoubt-blkd",
  "redoubt-model",
  "redoubt-signing",
  "regex",

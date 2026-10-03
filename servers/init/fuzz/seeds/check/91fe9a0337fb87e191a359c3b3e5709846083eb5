@@ -1,0 +1,1 @@
+{"devices": [{"name": "disk0", "base": "24128", "irq": 7, "dma": true}], "servers": [{"name": "keyd", "program": "keyd", "budget": {"pages": "256", "processes": 1, "weight": 100}, "t": {"pagsght": 1000}, "devices": [{"device": "net0", "as": false}], "relabnet": [{"prefix": "0.0.0.0/0", "ts": [22, 443]}]}], "": true}

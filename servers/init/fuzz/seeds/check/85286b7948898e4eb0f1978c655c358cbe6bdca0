@@ -1,0 +1,5 @@
+{
+"servers": [
+    { "name": "keyd", "program": "keyd",
+    "budget": { "pages": "256", "processes": 1, "weight": 100}, "args": ["o", "buckets=0000yI08"] }]
+}

@@ -1,0 +1,30 @@
+{
+  "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "disk0", "base": "132234112", "irq": 8, "dma": true },
+    { "name": "net0", "base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "bootfsd",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },
+"handed": [ { "endpoint": "ipd", "badge": "2" } ],
+      "args": ["client=5"] },
+    { "name": "ipd", "program": "ipd",
+      "budget": { "pages": "4096", "processes": 1, "weight": 100 },
+      "receives": ["iqd"],
+      "handed": [ { "endpoint": "netd", "badge": "5" } ],
+      "args": ["22222222222222222222222222buckets=4"] },
+    { "name": "consoled", "program": "consoled",
+      "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+      "devices": [ { "device": "ua", "as": "net" } ],
+      "receives": ["netd"],
+      "handed": [ { "endpoint": "iqd", "badge": "2" } ],
+      "args": ["client=5"] },
+    { "name": "ipd3333333333333333333333333333", "program": "ipd",
+      "budget": { "pages": "4096", "processes": 1, "weight": 100 },
+      "receives": ["ipd"],
+      "handed": [ { "endpoint": "net::::::::::::::::::", "badge": "5" } ],
+      "args": ["addr=10.0.2.15/240.0.0/0:1-65535"] }
+  ],
+  "public": []
+}

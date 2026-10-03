@@ -48,6 +48,10 @@ struct Args {
     /// With --run, a program to start: a test-programs binary name or a path to an ELF file.
     #[arg(long = "program", value_name = "PROGRAM")]
     programs: Vec<String>,
+    /// With --run, pack the bundle from this recipe instead (`image/boot.toml`, which `./mkimage`
+    /// uses): the kernel, `init`, the servers and the manifest.
+    #[arg(long, value_name = "RECIPE", conflicts_with = "programs")]
+    recipe: Option<PathBuf>,
     /// Hart count for --run.
     #[arg(long, default_value_t = 1)]
     smp: u32,
@@ -89,23 +93,29 @@ fn main() -> Result<()> {
         let target = target::find(args.arch.as_deref().unwrap_or("rv64")).context("unknown arch")?;
         let machine =
             target.machine.as_ref().map_err(|why| anyhow::anyhow!("{} cannot boot: {why}", target.name))?;
-        let programs: Vec<_> = args
-            .programs
-            .iter()
-            .map(|p| {
-                if p.contains('/') {
-                    Program::Path { path: p.into() }
-                } else {
-                    Program::TestProgram(p.clone())
-                }
-            })
-            .collect();
+        let (programs, files) = match &args.recipe {
+            Some(recipe) => case::Recipe::load(recipe)?.contents()?,
+            None => {
+                let programs = args
+                    .programs
+                    .iter()
+                    .map(|p| {
+                        if p.contains('/') {
+                            Program::Path { path: p.into() }
+                        } else {
+                            Program::TestProgram(p.clone())
+                        }
+                    })
+                    .collect();
+                (programs, Vec::new())
+            }
+        };
         let bundle = prepare(
             &builder,
             target,
             machine,
             &programs,
-            &[],
+            &files,
             &[],
             false,
             false,
@@ -324,14 +334,17 @@ fn prepare(
     builder.cargo_build(target, "redoubt-kernel", &features, profile)?;
     builder.cargo_build(target, machine.loader_package, &[], profile)?;
     let budgets: Vec<&[String]> = programs.iter().map(Program::budgets).collect();
+    let under_init = programs.first().is_some_and(Program::is_init);
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
     let files = files
         .iter()
         .map(|file| Ok((file.name.clone(), builder.program(target, &file.from)?.1)))
         .collect::<Result<Vec<_>>>()?;
-    // A case may bring its own `programs` entry, a hostile one, as a file.
+    // A case may bring its own `programs` entry, a hostile one, as a file; the real `init` reads a
+    // manifest instead, and is given none.
     let listing = build::programs_entry(&programs, &budgets);
-    let listing = (!files.iter().any(|(name, _)| name == "programs")).then_some(listing.as_slice());
+    let listing =
+        (!files.iter().any(|(name, _)| name == "programs") && !under_init).then_some(listing.as_slice());
     build::bundle(
         bundle,
         &builder.artifact(target, "redoubt-kernel", profile),

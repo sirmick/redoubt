@@ -1,0 +1,4 @@
+{
+"devices": [  { "name": "u-irq","irq":0, "dma":true }],
+  "public": []
+}

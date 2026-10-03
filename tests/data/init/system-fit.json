@@ -1,0 +1,56 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "disk0", "base": "268468224", "irq": 8, "dma": true},
+    {"name": "net0", "base": "268464128", "irq": 7, "dma": true}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "audit,audit,2222222222222222222222222222222222222222222222222222222222222222", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "bootfsd",
+      "program": "bootfsd",
+      "budget": {"pages": "512", "processes": 1, "weight": 100},
+      "receives": ["bootfsd"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "blkd",
+      "program": "blkd",
+      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "devices": [{"device": "disk0", "as": "disk"}],
+      "receives": ["blkd"]
+    },
+    {
+      "name": "netd",
+      "program": "netd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "net0", "as": "net"}],
+      "receives": ["netd"],
+      "handed": [{"endpoint": "ipd", "badge": "3"}],
+      "args": ["client=5"]
+    },
+    {
+      "name": "ipd",
+      "program": "ipd",
+      "budget": {"pages": "1000000000", "processes": 1, "weight": 100},
+      "receives": ["ipd"],
+      "handed": [{"endpoint": "netd", "badge": "5"}],
+      "args": ["addr=10.0.2.15/24", "gateway=10.0.2.2", "ingress=3", "scope=4:c:0.0.0.0/0:1-65535", "buckets=4"]
+    }
+  ],
+  "public": []
+}

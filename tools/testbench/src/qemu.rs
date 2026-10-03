@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use regex::Regex;
 
-use crate::case::{ALWAYS_FORBIDDEN, Boot};
+use crate::case::{ALWAYS_FORBIDDEN, Boot, PASSED};
 use crate::peer;
 use crate::ssh;
 use crate::target::Machine;
@@ -177,6 +177,20 @@ fn free_ports(count: usize) -> Result<Vec<u16>> {
 /// QEMU presents, so every case with a virtio device asks for the modern one.
 pub const MODERN_VIRTIO: [&str; 2] = ["-global", "virtio-mmio.force-legacy=false"];
 
+/// A disk sector, in bytes.
+const SECTOR: u64 = 512;
+
+/// A disk of `sectors` sectors holding a GPT with `partitions` equal partitions after the table.
+fn gpt_disk(sectors: u64, partitions: u64) -> Vec<u8> {
+    use redoubt_blkd::image::{Entry, FIRST_USABLE, Image};
+    // The backup table at the end takes as many sectors as the array and a header.
+    let share = sectors.saturating_sub(2 * FIRST_USABLE) / partitions;
+    let parts: Vec<Entry> = (0..partitions)
+        .map(|i| Entry { first_lba: FIRST_USABLE + i * share, last_lba: FIRST_USABLE + (i + 1) * share - 1 })
+        .collect();
+    Image::new(sectors, &parts).bytes
+}
+
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at
 /// `disk`, so no boot sees another's writes, and picks free host ports for the forwards.
 pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forward>)> {
@@ -186,6 +200,9 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
     }
     if let Some(spec) = &boot.disk {
         std::fs::File::create(disk)?.set_len(spec.size_kib * 1024)?;
+        if spec.partitions > 0 {
+            std::fs::write(disk, gpt_disk(spec.size_kib * 1024 / SECTOR, spec.partitions))?;
+        }
         // QEMU's option syntax separates with commas; a comma inside a value is doubled.
         let file = disk.display().to_string().replace(',', ",,");
         args.extend(["-drive".into(), format!("if=none,format=raw,id=disk0,file={file}")]);
@@ -288,6 +305,11 @@ struct Console {
     /// The reporter's `DONE` line, and whether it has been seen (`Boot::reporter`).
     done: Option<Regex>,
     done_seen: bool,
+    /// Under `init`: its line announcing the reporter (`Boot::reporter_announced`), the
+    /// `[con N] ` prefix it gave, once seen, and whether the reporter's verdict has been seen.
+    announced: Option<Regex>,
+    reporter: Option<String>,
+    passed_seen: bool,
 }
 
 /// A line `log-server` prints for `DONE`. Anchored: every relayed line starts `[pid N]` or
@@ -305,6 +327,24 @@ impl Console {
         self.seen = true;
         if let Some(pattern) = self.forbid.iter().find(|p| p.is_match(&line)) {
             return Ok(Line::Forbidden(format!("forbidden output /{pattern}/: {line}")));
+        }
+        if let Some(announced) = &self.announced {
+            // `init`'s own lines are the only bare ones (`consoled` prefixes every other), so the
+            // anchored announcement cannot be a program's; and `init` announces each child once.
+            if let Some(id) = announced.captures(&line).and_then(|c| c.get(1)) {
+                if self.reporter.is_some() {
+                    return Ok(Line::Forbidden(format!("the reporter announced twice: {line}")));
+                }
+                self.reporter = Some(format!("[con {}] ", id.as_str()));
+            }
+            if line.contains(PASSED) {
+                match &self.reporter {
+                    Some(prefix) if !self.passed_seen && line.starts_with(prefix.as_str()) => {
+                        self.passed_seen = true
+                    }
+                    _ => return Ok(Line::Forbidden(format!("a PASSED line not the reporter's: {line}"))),
+                }
+            }
         }
         if line.starts_with(DONE_LINE) {
             match &self.done {
@@ -386,6 +426,9 @@ pub fn run(
         seen: false,
         done,
         done_seen: false,
+        announced: boot.reporter_announced().map(|r| Regex::new(&r)).transpose()?,
+        reporter: None,
+        passed_seen: false,
     };
     let deadline = Instant::now() + Duration::from_secs_f64(boot.timeout_secs);
     let mut next = 0;
@@ -430,6 +473,9 @@ pub fn run(
             }
             Line::Exited => break,
         }
+    }
+    if console.announced.is_some() && !console.passed_seen {
+        return Ok(Verdict::Fail("ended without the reporter's PASSED".into()));
     }
     Ok(Verdict::Pass(console.captured))
 }

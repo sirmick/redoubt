@@ -117,6 +117,9 @@ pub struct Ticket {
 
 impl Ticket {
     pub fn badge(&self) -> u64 { self.badge.get() }
+
+    /// The id the requester will be given, drawn with the badge.
+    pub fn id(&self) -> u64 { self.id }
 }
 
 /// The table: in mint order (appended, removed with `remove`), so a capability always sits after

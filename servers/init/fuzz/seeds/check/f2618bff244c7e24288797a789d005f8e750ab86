@@ -1,0 +1,155 @@
+	{
+ "devices": [
+  {
+   "name": "uart0",
+   "base":"5456",
+   "irq": 10,
+ "dma": false
+  },
+  {
+   "name": "d",
+   "base": "68468224",
+   "irq": 8,
+   "dma": true
+  },
+  {
+   "name": "285405149",
+ "irq": 6,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "dma":true  },
+  {
+  "name": "net0",
+ "irq": 8,"dma": false
+  },
+  {
+   "name": "d",
+   "basq": 8,
+   "dma": true
+  },
+  {
+   "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "dma":true  },
+  { "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "dma":true  },
+  {
+  "name": "net0",
+ "irq": 8,
+   "dma":true  },
+  {
+  "name": "net0",
+ "irq": 8,"dma": false
+  },
+  {
+   "name": "d",
+"irq": 8,
+   "dma": true
+  },
+  {
+   "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "dma":true  },
+  {
+  "name": "net0",
+ "irq": false
+  },
+  {
+    "dma": true
+  },
+  {
+   "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "dma":true  },
+  { "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "dma":true  },
+  {
+  "name": "ne49",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "base": "68468224",
+   "irq": 8,
+   "dma": true
+  },
+  {
+   "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "d": 8,"dma": false
+  },
+  {
+   "name": "d",
+   "base": "68468224",
+   "irq": 8,
+   "dma": true
+  },
+  {
+   "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "dma":true  },
+  {
+   "name": "net0",
+ "irq": 8,
+   "dma": true
+  },
+  {
+   "name": "net0",
+ "irq": 8,
+   "dme": true
+  },
+  {
+   "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+    "dma": true
+  }
+ ],
+ "servers": [
+  {
+   }
+ ]
+}

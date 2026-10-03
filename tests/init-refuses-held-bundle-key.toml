@@ -1,0 +1,25 @@
+description = "init refuses a manifest that gives keyd the bundle key (R35): one line saying where and why, then a power-off reporting a system failure (system_reset kind 3, status 255), after keyd alone has run"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the images its manifest names, and the manifest: image/manifest.json with keyd's
+# ssh_host seed replaced by the development signing seed, whose public half the loader verifies
+# the bundle with. The verdict is init's line and the firmware's status, which only system_reset
+# kind 3 gives.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+]
+timeout_secs = 30
+expect = ['^init: started keyd$', '^init: refused the boot: bundle key: keyd holds this key, and the box is authenticated by it \(R35\)$']
+forbid = ['^init: started consoled', '^init: keyd holds none']
+poweroff = true
+poweroff_status = 255
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/held-bundle-key.json" }

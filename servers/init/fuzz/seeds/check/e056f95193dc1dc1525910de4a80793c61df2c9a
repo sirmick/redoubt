@@ -1,0 +1,9 @@
+{
+  "servers": [
+ {    "name":"keyd", "program": "yd",     "budget": { "pages": "256", "processes": 1, "weight":10},
+     "receives": ["ke22",
+        "a",
+  "aud", "bwcket"] }
+  ],
+  "public": []
+}

@@ -1,0 +1,3 @@
+{ "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 40, "dma": false }   ]
+}

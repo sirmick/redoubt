@@ -1,0 +1,11 @@
+{
+  "devices": [
+     ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+   "budget": {"pages": "256", "processes": 0, "weight": 0 },
+    "handed": [ { "endpoint": "users", "badge": "5" } ],
+      "args": ["ad=4"] }
+  ],
+  "public": []
+}

@@ -1,0 +1,11 @@
+{
+  "devs": [
+    { "name": "uart1",  "dma": true }
+  ],
+  "servers": [   { "name": "consoled", "program": "consnled",
+    "budget": { "pages": "512", "processes": 1, "weight": 1000 }, 
+
+      "volume":["adlr=1s=4"] }
+  ],
+  "public": []
+}

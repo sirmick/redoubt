@@ -1,0 +1,16 @@
+{
+  "devices": [
+    { "name": "uart8", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "256", "processes": 1, "weight": 100 },
+      "receives": ["keyd"],
+      "args": ["host1audit,auditbuckets=4"] },
+    { "name": "consoled", "program": "manifest",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },
+      "receives": ["bosd"],
+      "args": [             "buckets=4"] }
+  ],
+  "public": []
+}

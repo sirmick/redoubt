@@ -29,8 +29,10 @@ members = [
   "servers/blkd",
   "servers/netd",
   "servers/ipd",
+  "servers/init",
   "stub",
   "tests/programs",
+  "tests/init-programs",
   "tests/net",
   "tests/net/client",
   "tools/doccheck",
@@ -62,6 +64,8 @@ exclude = [
   "servers/ipd/fuzz",
   # Host-only fuzz target for the loader stub's ELF bounds-checking (see stub/fuzz/Cargo.toml).
   "stub/fuzz",
+  # Host-only fuzz target for init's manifest checks (see servers/init/fuzz/Cargo.toml).
+  "servers/init/fuzz",
   # beamlet, the BEAM VM for the OTP userland: its own workspace (host tools and `no_std`
   # target crates, its own test toolchain), built by its own `cargo` invocations.
   "userland/otp",

@@ -90,6 +90,24 @@ const REFUSED: u32 = 3;
 /// The caller using connection `badge`, in `who`'s account and label set.
 fn through(who: &Caller, badge: u64) -> Caller { Caller { badge, ..*who } }
 
+/// The file server is told each connection's id with its badge, the id its requester got, so it
+/// can name the connection to others by it (`consoled`'s `[con N]`); the id goes with the badge.
+#[test]
+fn the_file_server_learns_the_id_the_requester_got() {
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    let a = alice();
+    let (b1, id1) = t.connect(&mut k, &a, "", 0).unwrap();
+    let (b2, id2) = t.connect(&mut k, &through(&a, b1), "a", 0).unwrap();
+    assert_ne!(id1, id2);
+    assert_eq!(t.server.fs.ids, [(b1, id1), (b2, id2)]);
+    // A refused mint tells the server nothing to keep.
+    assert_eq!(t.connect(&mut k, &a, "", REFUSED_QUOTA), Err(REFUSED));
+    assert_eq!(t.server.fs.ids, [(b1, id1), (b2, id2)]);
+    // Disconnecting the first takes the one minted through it too.
+    t.disconnect(&mut k, &a, id1).unwrap();
+    assert!(t.server.fs.ids.is_empty());
+}
+
 #[test]
 fn new_connection_is_rooted_below_the_callers_root() {
     let (mut t, mut k) = (T::new(), FakeKernel::new());

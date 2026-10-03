@@ -1,0 +1,23 @@
+{
+ "devices": [
+  {
+   "name": "u6128",
+   "irq": 7,
+   "dma": true
+  }
+ ],
+ "volumes": [
+  {
+   "name": "data",
+   "partition": 0,
+   "labels": []
+  },
+  {
+   "name": "vault",
+   "partition": 1,
+   "labels": [
+    "alice-secrss"
+]
+  }
+ ]
+}

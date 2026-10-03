@@ -1,0 +1,9 @@
+{ "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "26", "processes": 1, "weight": 100 },
+ "receives": ["ke"] }
+ ]
+}

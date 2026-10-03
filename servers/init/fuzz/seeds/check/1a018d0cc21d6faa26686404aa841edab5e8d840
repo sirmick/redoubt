@@ -1,0 +1,1 @@
+{"de":[{"irq": 7, "dma": true}], "servers": [{"name": "keyd", "program":  "", "budget": {"pages": "512", "processes":  1, "weight": 1000}}], "confined": true}

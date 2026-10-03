@@ -226,13 +226,15 @@ the kernel prints `DMA: device <base> did not confirm its reset; quarantined unt
 
 ### `system_reset`
 
-Status: built · partly tested: a reboot (`kind` 2) is not attacked by a case; the cases power off, and ask for a reboot only through a handle not held · tested: bench:device, bench:irq-attack
+Status: built · partly tested: a reboot (`kind` 2) is not attacked by a case; the cases power off, and ask for a reboot only through a handle not held · tested: bench:device, bench:irq-attack, bench:init-refuses-public-manifest
 
-`system_reset(h(Reset), kind)` powers the machine off (`kind` 1) or reboots it (`kind` 2)
-through the firmware's system reset call. On success it does not return. Errors:
-`InvalidArgument` (an unknown kind, refused as the call is decoded), `BadHandle`, `WrongObject`
-(not the Reset right). The kernel lets go of its memory lock before it calls the firmware,
-because that call never returns.
+`system_reset(h(Reset), kind)` powers the machine off (`kind` 1), reboots it (`kind` 2), or
+powers it off reporting a system failure (`kind` 3), through the firmware's system reset call;
+only `kind` 3 gives the firmware a reason, `SystemFailure`. `init` refuses a boot with `kind` 3,
+as the loader and the kernel refuse one ([R17 (fail closed)](boot.md#r17-fail-closed)). On
+success it does not return. Errors: `InvalidArgument` (an unknown kind, refused as the call is
+decoded), `BadHandle`, `WrongObject` (not the Reset right). The kernel lets go of its memory lock
+before it calls the firmware, because that call never returns.
 
 ### Devices handed to the first program
 
@@ -247,7 +249,18 @@ and the handles are stamped with `root`, so they are revoked only with the whole
 
 ### Which process gets which device
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: restarts, which place a kept copy again, and the quarantine reboot are not built · tested (8)</summary>
+
+- bench:init-boot
+- bench:init-refuses-device-unmatched
+- bench:init-refuses-device-dma
+- host:redoubt-init::a_device_no_handle_names_is_refused
+- host:redoubt-init::a_device_split_between_two_entries_is_refused
+- host:redoubt-init::the_dma_flag_must_be_the_kernel_s
+- host:redoubt-init::a_device_name_is_at_most_60_bytes_and_never_ends_in_irq
+- host:redoubt-init::one_device_has_one_holder
+
+</details>
 
 The loader loads only the kernel and `init`, and `init` holds every device object. The boot
 manifest's `devices` entry names each device object by its register base and interrupt, and
@@ -277,8 +290,6 @@ two label sets share a device.
   device's object is gone, and only a hardware reset can make a device whose reset was never
   confirmed safe to hand out again. This is the same fail-closed reboot as a server that cannot
   stay up ([init](../servers/init.md#restarts-and-reboots)).
-
-**Open:** none.
 
 ## Authority
 

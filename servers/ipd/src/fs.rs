@@ -287,7 +287,14 @@ impl<N: Netif, E: Entropy> FileServer for NetFs<N, E> {
         Ok((node, node.qid()))
     }
 
-    fn minted(&mut self, caller: &Caller, badge: u64, root: &Node, _quota: u64) -> Result<(), NineError> {
+    fn minted(
+        &mut self,
+        caller: &Caller,
+        badge: u64,
+        _id: u64,
+        root: &Node,
+        _quota: u64,
+    ) -> Result<(), NineError> {
         // `new_connection` may root a connection at `""` or `"tcp"`, never at a socket's
         // directory (a socket is not delegated in milestone 1).
         if !matches!(root.at, At::Root | At::Tcp) {

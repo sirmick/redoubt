@@ -1,0 +1,3 @@
+{
+  "servers": [   { "name": "eyd", "program": "k",
+    "budget":{ "pages": "622", "processes": 1, "weight": 10 },"receives": ["root"] }]}

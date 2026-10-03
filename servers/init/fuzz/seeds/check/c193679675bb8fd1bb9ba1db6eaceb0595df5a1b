@@ -1,0 +1,1 @@
+{"devices": [{"name": "u8435k0", "base": "268468220",  "dma": true}], "servers": [{"name": "keyd", "program": "{eyd", "budget": {"pages": "256", "processes": 1, "weight": 100}, "receives": ["keyts=4"]}], "confined": true}

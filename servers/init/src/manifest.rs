@@ -1,0 +1,257 @@
+//! The boot manifest's structure, decoded from strict JSON (servers/init.md, "The boot manifest";
+//! servers/wire.md, "Strict JSON"). Decoding checks only types and members: the wrong JSON type,
+//! a missing member, an unknown member or a repeated one is an error. What the values must say
+//! (names, references, sizes) is [`crate::check`]'s.
+//!
+//! The members, with their JSON types (a 64-bit quantity is a decimal string, a small count a
+//! number):
+//!
+//! | Entry | Members |
+//! | --- | --- |
+//! | `confined` | a boolean, optional |
+//! | `devices[]` | `name`; `base` (string), `irq` (number), either may be absent, not both; `dma` (boolean) |
+//! | `labels[]` | `name`, `owner` (a principal), `id` (string) |
+//! | `volumes[]` | `name`, `partition` (number), `labels` (label names, optional) |
+//! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
+//! | `public` | bundle entry names |
+//! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`, `budget`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
+//!
+//! A `budget` is `{ "pages": string, "processes": number, "weight": number }`. Every list is
+//! optional and empty when absent.
+
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use redoubt_rt::wire::json::{self, Members, SchemaError, SchemaKind, Value};
+
+/// The decoded manifest.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Manifest {
+    pub confined: bool,
+    pub devices: Vec<Device>,
+    pub labels: Vec<Label>,
+    pub volumes: Vec<Volume>,
+    pub servers: Vec<Server>,
+    pub public: Vec<String>,
+    pub principals: Vec<Principal>,
+}
+
+/// One device: its register region by base, its interrupt by number, or both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Device {
+    pub name: String,
+    pub base: Option<u64>,
+    pub irq: Option<i64>,
+    pub dma: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Label {
+    pub name: String,
+    pub owner: String,
+    pub id: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Volume {
+    pub name: String,
+    pub partition: i64,
+    pub labels: Vec<String>,
+}
+
+/// The limits of a budget `init` creates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Budget {
+    pub pages: u64,
+    pub processes: i64,
+    pub weight: i64,
+}
+
+/// A device a server gets: the `devices` entry, and the name the program looks it up by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceUse {
+    pub device: String,
+    pub name: String,
+}
+
+/// An endpoint a server is handed, and the root badge `init` mints for it there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Handed {
+    pub endpoint: String,
+    pub badge: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Server {
+    pub name: String,
+    pub program: String,
+    pub budget: Budget,
+    pub labels: Vec<String>,
+    pub devices: Vec<DeviceUse>,
+    pub volume: Option<String>,
+    pub receives: Vec<String>,
+    pub handed: Vec<Handed>,
+    pub args: Vec<String>,
+}
+
+/// A label set a principal works under, with its fixed sub-budget.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LabelSet {
+    pub labels: Vec<String>,
+    pub budget: Budget,
+}
+
+/// A network scope: an IP prefix and the ports in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Net {
+    pub prefix: String,
+    pub ports: Vec<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Principal {
+    pub name: String,
+    pub account: u64,
+    pub budget: Budget,
+    pub ssh_keys: Vec<String>,
+    pub approval_keys: Vec<String>,
+    pub labels: Vec<String>,
+    pub label_sets: Vec<LabelSet>,
+    pub home: Option<String>,
+    pub net: Vec<Net>,
+}
+
+/// Why the file is not a manifest: not strict JSON, or not this structure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DecodeError {
+    Json(json::Error),
+    Schema(SchemaError),
+}
+
+/// Parses and decodes `input`.
+pub fn decode(input: &[u8]) -> Result<Manifest, DecodeError> {
+    let value = json::parse(input).map_err(DecodeError::Json)?;
+    manifest(&value).map_err(DecodeError::Schema)
+}
+
+fn manifest(v: &Value) -> Result<Manifest, SchemaError> {
+    v.object(|m| {
+        Ok(Manifest {
+            confined: m.optional("confined", Value::bool)?.unwrap_or(false),
+            devices: list(m, "devices", device)?,
+            labels: list(m, "labels", label)?,
+            volumes: list(m, "volumes", volume)?,
+            servers: list(m, "servers", server)?,
+            public: list(m, "public", string)?,
+            principals: list(m, "principals", principal)?,
+        })
+    })
+}
+
+/// An optional array member, empty when absent.
+fn list<'v, 'a: 'v, T>(
+    m: &mut Members<'v, 'a>,
+    name: &str,
+    decode: impl FnMut(&Value<'a>) -> Result<T, SchemaError>,
+) -> Result<Vec<T>, SchemaError> {
+    Ok(m.optional(name, |v| v.items(decode))?.unwrap_or_default())
+}
+
+fn string(v: &Value) -> Result<String, SchemaError> { v.str().map(ToString::to_string) }
+
+fn device(v: &Value) -> Result<Device, SchemaError> {
+    v.object(|m| {
+        let name = m.required("name", string)?;
+        let base = m.optional("base", Value::u64_string)?;
+        let irq = m.optional("irq", Value::int)?;
+        let dma = m.required("dma", Value::bool)?;
+        // A device is named by its register region, its interrupt, or both: never neither.
+        if base.is_none() && irq.is_none() {
+            return Err(SchemaError { path: "base".to_string(), kind: SchemaKind::Missing });
+        }
+        Ok(Device { name, base, irq, dma })
+    })
+}
+
+fn label(v: &Value) -> Result<Label, SchemaError> {
+    v.object(|m| {
+        Ok(Label {
+            name: m.required("name", string)?,
+            owner: m.required("owner", string)?,
+            id: m.required("id", Value::u64_string)?,
+        })
+    })
+}
+
+fn volume(v: &Value) -> Result<Volume, SchemaError> {
+    v.object(|m| {
+        Ok(Volume {
+            name: m.required("name", string)?,
+            partition: m.required("partition", Value::int)?,
+            labels: list(m, "labels", string)?,
+        })
+    })
+}
+
+fn budget(v: &Value) -> Result<Budget, SchemaError> {
+    v.object(|m| {
+        Ok(Budget {
+            pages: m.required("pages", Value::u64_string)?,
+            processes: m.required("processes", Value::int)?,
+            weight: m.required("weight", Value::int)?,
+        })
+    })
+}
+
+fn device_use(v: &Value) -> Result<DeviceUse, SchemaError> {
+    v.object(|m| Ok(DeviceUse { device: m.required("device", string)?, name: m.required("as", string)? }))
+}
+
+fn handed(v: &Value) -> Result<Handed, SchemaError> {
+    v.object(|m| {
+        Ok(Handed {
+            endpoint: m.required("endpoint", string)?,
+            badge: m.required("badge", Value::u64_string)?,
+        })
+    })
+}
+
+fn server(v: &Value) -> Result<Server, SchemaError> {
+    v.object(|m| {
+        Ok(Server {
+            name: m.required("name", string)?,
+            program: m.required("program", string)?,
+            budget: m.required("budget", budget)?,
+            labels: list(m, "labels", string)?,
+            devices: list(m, "devices", device_use)?,
+            volume: m.optional("volume", string)?,
+            receives: list(m, "receives", string)?,
+            handed: list(m, "handed", handed)?,
+            args: list(m, "args", string)?,
+        })
+    })
+}
+
+fn label_set(v: &Value) -> Result<LabelSet, SchemaError> {
+    v.object(|m| Ok(LabelSet { labels: list(m, "labels", string)?, budget: m.required("budget", budget)? }))
+}
+
+fn net(v: &Value) -> Result<Net, SchemaError> {
+    v.object(|m| Ok(Net { prefix: m.required("prefix", string)?, ports: list(m, "ports", Value::int)? }))
+}
+
+fn principal(v: &Value) -> Result<Principal, SchemaError> {
+    v.object(|m| {
+        Ok(Principal {
+            name: m.required("name", string)?,
+            account: m.required("account", Value::u64_string)?,
+            budget: m.required("budget", budget)?,
+            ssh_keys: list(m, "ssh_keys", string)?,
+            approval_keys: list(m, "approval_keys", string)?,
+            labels: list(m, "labels", string)?,
+            label_sets: list(m, "label_sets", label_set)?,
+            home: m.optional("home", string)?,
+            net: list(m, "net", net)?,
+        })
+    })
+}
