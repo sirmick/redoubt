@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 
 use redoubt_fsd::blkd::Blkd;
 use redoubt_fsd::typed::{Fsds, Typed};
-use redoubt_fsd::{BUDGET, COST, Fsd, limits, mount, parse_labels};
+use redoubt_fsd::{Args, BUDGET, COST, Fsd, limits, mount, parse_args};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::NineServer;
 use redoubt_rt::server::own_args;
@@ -21,10 +21,9 @@ use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(serve);
 
-/// The startup block named no endpoint for `fsd` to receive on.
-pub const NO_ENDPOINT: u32 = 2;
-/// No `buckets=N`, one whose buckets at their caps do not fit the budget, or an argument `fsd`
-/// does not understand (`labels=` malformed, or anything else): it does not guess.
+/// No `buckets=N`, one whose buckets at their caps do not fit the budget, no `endpoint=NAME` or
+/// none the startup block holds a handle by, or an argument `fsd` does not understand (`labels=`
+/// malformed, or anything else): it does not guess.
 pub const BAD_ARGS: u32 = 4;
 /// No `volume` handle, a range `blkd` would not size, or one of fewer than four blocks.
 pub const NO_VOLUME: u32 = 5;
@@ -32,13 +31,18 @@ pub const NO_VOLUME: u32 = 5;
 /// unpredictable (servers/serving.md R27).
 pub const NO_RANDOM: u32 = 6;
 
+/// The endpoint `fsd` receives on: the startup block's handle `endpoint=` names. One place, so
+/// where the name comes from can change without touching the rest.
+fn receive_endpoint(startup: &Startup, name: &str) -> Option<Endpoint> {
+    startup.handle(name).map(Endpoint::from_handle)
+}
+
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
-    let Some(handle) = startup.handle("fsd") else { return NO_ENDPOINT };
-    let endpoint = Endpoint::from_handle(handle);
     let args: Vec<&str> = startup.args().collect();
     let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_ARGS };
-    let Ok(labels) = parse_labels(own_args(&args)) else { return BAD_ARGS };
+    let Ok(Args { endpoint, labels }) = parse_args(own_args(&args)) else { return BAD_ARGS };
+    let Some(endpoint) = receive_endpoint(startup, endpoint) else { return BAD_ARGS };
     let limits = limits(buckets);
     if !limits.fits(&COST, BUDGET) {
         return BAD_ARGS;

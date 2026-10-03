@@ -1,8 +1,8 @@
-//! `fsd-client`: a `servers` entry that uses an `fsd` started by `init` through the root badge
-//! its entry is handed (`fsd`), and prints its verdict on its console. Its first argument names
-//! what it checks:
+//! `fsd-client`: a `servers` entry that uses an `fsd` started by `init` through the root badges
+//! its entry is handed, and prints its verdict on its console. Its first argument names what it
+//! checks, and the next the endpoints of the badges it uses:
 //!
-//! - `boot`: writes, reads, renames and removes a file and a directory through 9P.
+//! - `boot ENDPOINT`: writes, reads, renames and removes a file and a directory through 9P.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -29,9 +29,9 @@ fn run(startup: &Startup) -> u32 {
         Err(code) => return code,
     };
     let mut args = startup.args();
-    let checked = match args.next() {
-        Some("boot") => boot(startup, &mut out),
-        other => Err(format!("no such check: {other:?}")),
+    let checked = match (args.next(), args.next()) {
+        (Some("boot"), Some(at)) => boot(startup, &mut out, at),
+        (check, _) => Err(format!("no such check, or no endpoint: {check:?}")),
     };
     let line = match checked {
         Ok(()) => String::from("fsd-client TEST PASSED\n"),
@@ -43,9 +43,9 @@ fn run(startup: &Startup) -> u32 {
     }
 }
 
-/// The connection at the `fsd` root badge the entry is handed.
-fn attach(startup: &Startup, out: &mut Out) -> Result<Connection, String> {
-    let handle = startup.handle("fsd").ok_or("no fsd handle")?;
+/// The connection at the root badge the entry is handed at `endpoint`.
+fn attach(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Connection, String> {
+    let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
     Connection::attach(Endpoint::from_handle(handle), &mut out.lend).map_err(|e| format!("attach: {e:?}"))
 }
 
@@ -83,8 +83,8 @@ fn dir(conn: &Connection, out: &mut Out, path: &str) -> Result<File, String> {
 
 /// `fsd-boot`: the volume `fsd` formatted takes a file and a directory, the file reads back, is
 /// renamed into the directory and reads back there, and both are removed.
-fn boot(startup: &Startup, out: &mut Out) -> Result<(), String> {
-    let conn = attach(startup, out)?;
+fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> {
+    let conn = attach(startup, out, endpoint)?;
     let text = b"written through fsd under init\n";
     write_file(&conn, out, "/", "hello", text)?;
     if read_file(&conn, out, "/hello")? != text {

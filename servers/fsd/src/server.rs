@@ -61,16 +61,34 @@ pub mod text {
     pub const READ_ONLY: NineError = NineError("read-only volume");
 }
 
-/// Why `labels=` was refused.
+/// Why the arguments were refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BadArgs;
 
-/// The volume's label set from the arguments other than `buckets=`: `labels=ID[,ID...]` at most
-/// once, each ID decimal without leading zeros, at most `MAX_LABELS`; absent, the set is empty.
-/// Anything else is refused, so `fsd` never serves a volume under labels it misread.
-pub fn parse_labels<'a>(args: impl Iterator<Item = &'a str>) -> Result<Vec<u64>, BadArgs> {
-    let mut labels = None;
+/// What `fsd`'s arguments other than `buckets=` say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Args<'a> {
+    /// The manifest name of the endpoint it receives on (`fsd:data`): its startup block holds
+    /// that endpoint under this name.
+    pub endpoint: &'a str,
+    /// The volume's label set; empty when `labels=` is absent.
+    pub labels: Vec<u64>,
+}
+
+/// The arguments other than `buckets=`: `endpoint=NAME` exactly once, a name under the
+/// manifest's rule, never defaulted; and `labels=ID[,ID...]` at most once, each ID decimal
+/// without leading zeros, at most `MAX_LABELS`, absent for an empty set. Anything else is refused,
+/// so `fsd` never serves under an endpoint or labels it misread.
+pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, BadArgs> {
+    let (mut endpoint, mut labels) = (None, None);
     for arg in args {
+        if let Some(name) = arg.strip_prefix("endpoint=") {
+            if endpoint.is_some() || !redoubt_rt::startup::valid_name(name) {
+                return Err(BadArgs);
+            }
+            endpoint = Some(name);
+            continue;
+        }
         let list = arg.strip_prefix("labels=").ok_or(BadArgs)?;
         if labels.is_some() {
             return Err(BadArgs);
@@ -89,7 +107,7 @@ pub fn parse_labels<'a>(args: impl Iterator<Item = &'a str>) -> Result<Vec<u64>,
         }
         labels = Some(set);
     }
-    Ok(labels.unwrap_or_default())
+    Ok(Args { endpoint: endpoint.ok_or(BadArgs)?, labels: labels.unwrap_or_default() })
 }
 
 /// What a fid rests on: a path from the volume's root, built only from names clients walked or

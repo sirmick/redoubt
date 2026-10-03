@@ -126,7 +126,7 @@ and `init`'s only input. Its entries:
 ```json
 { "servers": [ { "name": "fsd:data", "program": "fsd", "volume": "data",
                  "budget": { "pages": "4096", "processes": 1, "weight": 100 },
-                 "receives": ["fsd:data"], "handed": [ { "endpoint": "blkd", "badge": "1" } ] } ],
+                 "receives": ["fsd:data"], "args": ["endpoint=fsd:data", "buckets=4"] } ],
   "principals": [ { "name": "alice", "account": "1001", "labels": ["alice-secrets"],
                     "ssh_keys": ["ssh-ed25519 AAAA..."], "home": "data:/home/alice",
                     "net": [ { "prefix": "0.0.0.0/0", "ports": [22, 443] } ] } ] }

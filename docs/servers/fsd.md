@@ -55,6 +55,7 @@ power-loss safety by design, and a size that can be read.
   holding only that medium, so a parser exploit reaches that medium and nothing else
   ([R47 (one volume per instance)](#r47-one-volume-per-instance)).
 - **Arguments.** `fsd` gets one named handle, `volume`, its range at `blkd`, and the arguments
+  `endpoint=NAME`, the manifest name of the endpoint it receives on (`fsd:data`),
   `labels=ID[,ID...]`, the volume's label set, and `buckets=N`. littlefs blocks are 4096 bytes,
   eight of `blkd`'s sectors, so the volume's block count is its range's sectors divided by 8.
 - **Mounting.** At start `fsd` mounts its range. A range whose first two blocks are all zero

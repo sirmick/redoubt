@@ -34,15 +34,15 @@
       "program": "fsd",
       "budget": {"pages": "1024", "processes": 1, "weight": 100},
       "volume": "data",
-      "receives": ["fsd"],
-      "args": ["buckets=4"]
+      "receives": ["fsd:data"],
+      "args": ["endpoint=fsd:data", "buckets=4"]
     },
     {
       "name": "client",
       "program": "fsd-client",
       "budget": {"pages": "256", "processes": 1, "weight": 100},
-      "handed": [{"endpoint": "fsd", "badge": "7"}],
-      "args": ["boot"]
+      "handed": [{"endpoint": "fsd:data", "badge": "7"}],
+      "args": ["boot", "fsd:data"]
     }
   ]
 }

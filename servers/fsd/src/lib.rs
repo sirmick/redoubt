@@ -41,5 +41,5 @@ pub mod server;
 pub mod typed;
 pub mod volume;
 
-pub use server::{BUDGET, BadArgs, COST, Fsd, limits, parse_labels};
+pub use server::{Args, BUDGET, BadArgs, COST, Fsd, limits, parse_args};
 pub use volume::{Mounted, NoVolume, Range, mount};

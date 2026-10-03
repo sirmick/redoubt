@@ -111,6 +111,10 @@ struct Volume {
     thread: std::thread::JoinHandle<u32>,
 }
 
+/// The endpoint the tests' `fsd` receives on, and the argument naming it.
+const ENDPOINT: &str = "fsd:data";
+const ENDPOINT_ARG: &str = "endpoint=fsd:data";
+
 impl Volume {
     /// `fsd` started with `args` on a range holding `bytes`.
     fn start(bytes: Vec<u8>, args: &[&str]) -> Volume { Volume::start_with(bytes, args, false) }
@@ -118,7 +122,14 @@ impl Volume {
     /// `fsd` on a read-only range holding `bytes`.
     fn start_read_only(bytes: Vec<u8>) -> Volume { Volume::start_with(bytes, &["buckets=4"], true) }
 
+    /// `fsd` receiving on `fsd:data`, its `endpoint=` argument first, then `args`.
     fn start_with(bytes: Vec<u8>, args: &[&str], read_only: bool) -> Volume {
+        let args: Vec<&str> = [ENDPOINT_ARG].iter().chain(args).copied().collect();
+        Volume::start_raw(bytes, &args, read_only)
+    }
+
+    /// `fsd` receiving on `fsd:data`, with exactly `args`.
+    fn start_raw(bytes: Vec<u8>, args: &[&str], read_only: bool) -> Volume {
         let f = fake();
         let disk: Shared = Arc::new(Mutex::new(Disk { bytes, failing: false, read_only }));
         let blkd = f.process(0, &[]);
@@ -141,7 +152,7 @@ impl Volume {
         let receive = f.endpoint(fsd);
         let volume = f.grant(blkd, blkd_receive, fsd, 1);
         let mut builder = StartupBuilder::new(receive.index().max(volume.index()));
-        builder.handle("fsd", receive).handle("volume", volume);
+        builder.handle(ENDPOINT, receive).handle("volume", volume);
         for arg in args {
             builder.arg(arg);
         }
@@ -276,6 +287,17 @@ fn arguments_it_does_not_understand_stop_it_before_serving() {
     }
     let ok = Volume::blank(512, &["buckets=4", "labels=0,7"]);
     assert_eq!(ok.stop(), redoubt_rt::exit::OK);
+    // `endpoint=` is required, given once, a name, and names a handle the block holds.
+    for args in [
+        &["buckets=4"][..],
+        &["endpoint=", "buckets=4"],
+        &["endpoint=fsd:other", "buckets=4"],
+        &["endpoint=Fsd", "buckets=4"],
+        &[ENDPOINT_ARG, ENDPOINT_ARG, "buckets=4"],
+    ] {
+        let volume = Volume::start_raw(vec![0; 512 * SECTOR], args, false);
+        assert_eq!(volume.thread.join().unwrap(), program::BAD_ARGS, "{args:?}");
+    }
 }
 
 /// A range of fewer than four blocks is no volume.
