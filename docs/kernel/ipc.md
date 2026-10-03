@@ -125,8 +125,11 @@ buffer, pages)`. A field a kind does not use is 0.
 
 `Timeout` is an error, not a record. Notices come before messages: first an abandoned-call
 notice for the receiving thread, then an exit notice, then the next message by
-[R2](#r2-fair-waiting). A handle revoked while its message was queued arrives as 0 in its slot,
-so slots keep their positions.
+[R2](#r2-fair-waiting). Receivers waiting on one endpoint are served in the order they began to
+wait; a receiver at `MAX_OPEN_CALLS` is passed over while no group has a send. An abandoned-call
+notice goes to the holder that began waiting first, and exit notices go in the order their
+processes ended. A handle revoked while its message was queued arrives as 0 in its slot, so slots
+keep their positions.
 
 The record is checked when `receive` starts, and again just before a message or exit notice is
 delivered, because another thread of the process may have unmapped it meanwhile. If it can no
@@ -295,20 +298,23 @@ Senders blocked on an endpoint are grouped by their budget's account and label s
 account 0 (no principal: the boot budgets, and any budget carved without one, of either class),
 by budget as well. Each `receive` takes the oldest message of the group served least recently: a
 group's turn is due from when it was last served, or from when its oldest message arrived if it
-has not been served since. Ties go to the lower group key. Each queued message carries its group's
-turn, read from one kernel counter no process reads: its arrival, re-stamped on every waiting
-message of the group when the group is served, so a group with nothing queued keeps nothing. A
-group's place therefore depends only on its own history, so the order in which one label set's
-groups are served is the same whatever other label sets send. A single cursor over all groups
-would not keep that: a vault session's take would move the cursor, and with it which unlabelled
-caller is served next, which crash blame then shows to unlabelled readers
+has not been served since. Ties go to the lower group key. A group's turn is read from one kernel
+counter no process reads: its oldest queued message's arrival, or the group's last take if that came
+later, kept with the group only while it has a message queued, so a group with nothing queued keeps
+nothing. Each endpoint keeps its waiting groups in the order their turns fall due, and apart those
+with a send queued in the order their oldest sends fall due, for a receiver at `MAX_OPEN_CALLS`
+([R4a](#r4a-open-calls)); a take moves its group behind the others on both, one write whatever the
+group holds. A group's place therefore depends only on its own history, so the order in which one
+label set's groups are served is the same whatever other label sets send. A single cursor over all
+groups would not keep that: a vault session's take would move the cursor, and with it which
+unlabelled caller is served next, which crash blame then shows to unlabelled readers
 ([R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference)). A group that
 already has `WAIT_CAP` (32) messages queued on the endpoint gets `Busy` at once. Only queued
-messages count; a taken call is bounded by [R4a](#r4a-open-calls) instead. Keying by label set
-keeps a vault session and its owner's ordinary session, which share an account, from sharing a
-turn or a cap. Keying account-0 callers by budget keeps one busy system server from filling
-another's cap. With k groups waiting and the receiver below its open-call limit, each group's
-oldest message is taken within k receives (I11 (fair turns)).
+messages count; a taken call is bounded by [R4a](#r4a-open-calls) instead. Keying by label set keeps
+a vault session and its owner's ordinary session, which share an account, from sharing a turn or a
+cap. Keying account-0 callers by budget keeps one busy system server from filling another's cap.
+With k groups waiting and the receiver below its open-call limit, each group's oldest message is
+taken within k receives (I11 (fair turns)).
 
 ### R3 (lends and abandoned calls)
 
@@ -507,20 +513,6 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
   never another budget's.
 - **A `consumed` lend is gone.** A caller whose taken call times out loses those pages. Callers
   that cannot afford that must not lend them with a short timeout.
-- **Delivery walks every thread, twice over.** Finding a receiver scans all threads, and for
-  each waiting receiver finding the next sender scans them all again: up to the square of the
-  threads that exist. A walk visits only the PIDs that have a process, through a set of them,
-  and only the threads that have an IPC page, so it follows the threads the budgets have paid
-  for, at most `MAX_PROCESS_COUNT` x `MAX_THREADS` (511 x 255), compile-time constants no process
-  can change. It costs time on every delivery, and that cost is not charged to the caller's
-  budget. The bound is a constant only by the letter: the walk is over every process's threads,
-  not the receiver's, so a delivery's time depends on what other processes hold, which
-  [R12 (scheduling)](scheduling.md#r12-scheduling) forbids, and every wake on the machine waits
-  for it. `bench:worst-walk` measures it with every PID in use and each process holding
-  `MAX_THREADS` threads (rv64, checked build, net of its audits, 129,796 live threads across 510
-  processes): one receive's delivery takes 6.9 s, and destroying one such process 11.7 s against
-  R10's 30 ms, 6.9 s of it the pump of its exit notice. The case runs by name only, and passes
-  while R10 misses ([delivery walks every thread](../todo/delivery-walks-every-thread.md)).
 - **Completion races between harts** are argued from the code, not attacked by a case. On one
   hart the kernel runs with interrupts off. On several (a build for more than one hart), each
   kernel global is guarded by its own lock, and the completion holds the memory manager's for
@@ -532,7 +524,9 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
   sender's own thread page (already paid for) holds it. So queueing a `call` or `send`
   allocates no kernel memory and cannot make the kernel allocate on a receiver's behalf. The
   only pages they may allocate are the sender's own untouched buffer pages, backed and charged
-  to the sender (R3). The cost is the thread walk above; clarity wins over speed.
+  to the sender (R3). Finding a message's parties costs a few links in pages already paid for:
+the endpoint's frame heads its receivers and its groups, and the links are in the waiting threads'
+own pages.
 - **Lend, not copy.** A 9P message is up to 64 KiB. Moving pages costs page-table updates, not
   copies, and unmapping them from the caller means neither side can see the other change them
   mid-call.

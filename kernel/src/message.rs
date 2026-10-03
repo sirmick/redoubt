@@ -4,9 +4,9 @@
 //! R10).
 //!
 //! # Where a message lives
-//! There is no message queue anywhere. A message is queued exactly while its sender is blocked in
+//! There is no message buffer anywhere. A message is queued exactly while its sender is blocked in
 //! `send` or `call`, and a thread blocks at most once, so **the queue is the set of blocked
-//! senders**, which the kernel finds by walking the threads. Each thread keeps what it is waiting
+//! senders**, linked through their own pages. Each thread keeps what it is waiting
 //! for, the message it is sending and the calls it holds open in a page of its own
 //! ([`crate::budget::Account::ipc`]) — the page the cost table already charges for a thread. Two
 //! things follow, and they are the reason for this shape:
@@ -20,11 +20,16 @@
 //! the receiving process's budget (R4a) and freed by `reply`. That page holds everything a reply
 //! needs: whom to wake, the lend to give back, and who pays for it (R3).
 //!
-//! Walking every thread to pick the next sender costs more than a queue would. The design asks
-//! for the walk anyway: R2 serves groups round-robin, so a receive must consider every waiting
-//! group. The walk visits only the threads that exist ([`find_thread`]), so it is bounded by the
-//! threads the budgets have paid a page for, and at most by `MAX_PROCESS_COUNT * MAX_THREADS`, a
-//! compile-time constant no process can influence (TENETS.md: clarity beats speed).
+//! # Who waits where
+//! What waits is found from what it waits on, never by walking the threads (kernel/scheduling.md
+//! R12): each endpoint keeps its receivers in the order they began to wait, R2's groups in the
+//! order their turns fall due, the calls owing a notice there and the calls taken there whose
+//! callers wait; each device keeps the threads waiting for its interrupt; each budget keeps what
+//! was sent under its stamp, for R10. The lists are intrusive, their heads in those objects'
+//! frames and their links in the threads' and the open calls' own pages, so they cost no
+//! allocation; their links and R2's order are `redoubt-ipclist`'s, host-tested, and every rule
+//! here. A checked build audits them against the threads at the end of the kernel entry that
+//! changed one ([`audit`]).
 //!
 //! # Locks
 //! Every entry point takes the scheduler (`ss`) and the memory manager (`mm`) together, borrowed
@@ -35,9 +40,9 @@
 //! timer comes by then (`settle`), and [`expire_due`] answers every thread whose deadline has
 //! passed, earliest first. The timer and when expiry runs are `time.rs`'s.
 
-use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
 
+use redoubt_ipclist::{self as lists, List, Page, Words};
 use redoubt_layout::{KERNEL_PID, Pid};
 use redoubt_sys::PAGE_SIZE;
 use redoubt_sys::{
@@ -68,33 +73,31 @@ const CALL_MAGIC: u64 = u64::from_le_bytes(*b"opencall");
 // invalid bit patterns (`kframe.rs`).
 const W_WAIT: usize = 1;
 const W_DEADLINE: usize = 2;
-const W_SEQ: usize = 3;
 /// What the thread is waiting on, as frame + 1 and id: the endpoint while sending or
 /// receiving, the open call while waiting for a reply, the device object while in `receive` on
 /// an IRQ handle (R5). `Wait` says which, so one pair of words serves all three.
-const W_OBJECT: usize = 4;
-const W_OBJECT_ID: usize = 5;
-const W_MAX_TRANSFER: usize = 6;
+const W_OBJECT: usize = 3;
+const W_OBJECT_ID: usize = 4;
+const W_MAX_TRANSFER: usize = 5;
 /// `receive`'s record, or the record `call` writes its reply back into.
-const W_REC: usize = 7;
-const W_KIND: usize = 8;
-const W_BADGE: usize = 9;
-const W_STAMP: usize = 10; // frame + 1
-const W_STAMP_ID: usize = 11;
-const W_SENDER_BUDGET: usize = 12; // frame + 1
-const W_SENDER_BUDGET_ID: usize = 13;
-const W_BUF_ADDR: usize = 14;
-const W_BUF_PAGES: usize = 15;
-/// While queued, when its group's turn became due (R2): `W_SEQ`, or its group's last take if that
-/// came later.
-const W_DUE: usize = 16;
-const W_WORDS: usize = 17; // WORDS words
+const W_REC: usize = 6;
+const W_KIND: usize = 7;
+const W_BADGE: usize = 8;
+const W_STAMP: usize = 9; // frame + 1
+const W_STAMP_ID: usize = 10;
+const W_SENDER_BUDGET: usize = 11; // frame + 1
+const W_SENDER_BUDGET_ID: usize = 12;
+const W_BUF_ADDR: usize = 13;
+const W_BUF_PAGES: usize = 14;
+const W_WORDS: usize = 15; // WORDS words
 const W_NHANDLES: usize = W_WORDS + WORDS;
 const W_HANDLES: usize = W_NHANDLES + 1; // MAX_MSG_HANDLES * 4 words
 const W_NCALLS: usize = W_HANDLES + MAX_MSG_HANDLES * 4;
 const W_CURRENT: usize = W_NCALLS + 1; // open-call frame + 1
 const W_CALLS: usize = W_CURRENT + 1; // MAX_OPEN_CALLS frame numbers
-const THREAD_WORDS: usize = W_CALLS + MAX_OPEN_CALLS;
+/// The lists' words (`redoubt-ipclist`): its links, its arrival, its group's node.
+const W_LISTS: usize = W_CALLS + MAX_OPEN_CALLS;
+const THREAD_WORDS: usize = W_LISTS + lists::THREAD_WORDS;
 // The thread's saved registers take the page's last bytes (`arch::process`).
 const _: () = assert!(THREAD_WORDS * 8 <= crate::arch::process::CONTEXT_OFFSET);
 
@@ -163,9 +166,6 @@ struct Slot {
     wait: Wait,
     /// Absolute µs since boot; `u64::MAX` never expires.
     deadline: u64,
-    /// Its message's place in the one order of arrivals and takes (`next_seq`).
-    seq: u64,
-    due: u64,
     /// The endpoint it is sending on or receiving from.
     endpoint: Option<EndpointRef>,
     /// While waiting for a reply, the open call's frame.
@@ -213,8 +213,6 @@ fn slot(mm: &MemoryManager, pid: Pid, tid: TID) -> Slot {
     Slot {
         wait,
         deadline: w(W_DEADLINE),
-        seq: w(W_SEQ),
-        due: w(W_DUE),
         endpoint: match (wait, frame_of(w(W_OBJECT))) {
             (Wait::Reply | Wait::Irq, _) => None,
             (_, frame) => frame.map(|frame| EndpointRef { frame, id: w(W_OBJECT_ID) }),
@@ -309,7 +307,10 @@ const C_PAYER_ID: usize = 16;
 const C_ACCOUNT: usize = 17;
 const C_NLABELS: usize = 18;
 const C_LABELS: usize = 19; // MAX_LABELS words
-const CALL_WORDS: usize = C_LABELS + MAX_LABELS;
+/// The lists' words (`redoubt-ipclist`): its links on its endpoint's and its stamp's lists.
+/// `store_open_call` writes only below them.
+const C_LISTS: usize = C_LABELS + MAX_LABELS;
+const CALL_WORDS: usize = C_LISTS + lists::CALL_WORDS;
 const _: () = assert!(CALL_WORDS * 8 <= PAGE_SIZE);
 
 /// The caller is still waiting for the reply.
@@ -367,7 +368,7 @@ fn open_call_at(mm: &MemoryManager, frame: u32) -> OpenCall {
 
 fn store_open_call(mm: &MemoryManager, frame: u32, c: &OpenCall) {
     let phys = mm.object_phys(frame);
-    let mut words = [0u64; CALL_WORDS];
+    let mut words = [0u64; C_LISTS];
     words[0] = CALL_MAGIC;
     words[C_RID] = c.rid;
     words[C_CALLER_PID] = u64::from(c.caller.0.get());
@@ -428,21 +429,132 @@ fn open_call_of(mm: &MemoryManager, pid: Pid, tid: TID, rid: u64) -> Option<u32>
     (0..n).map(|i| nth_call(mm, pid, tid, i)).find(|f| open_call_at(mm, *f).rid == rid)
 }
 
-// --- Walking the threads ---------------------------------------------------------------------------
+// --- The lists --------------------------------------------------------------------------------------
 
-/// Call `f` for every thread that has an IPC page, in (pid, tid) order, until it answers `Some`.
-/// Only threads that exist are visited ([`MemoryManager::live_tids`]).
-fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, Pid, TID) -> Option<T>) -> Option<T> {
-    mm.live_pids().find_map(|pid| mm.live_tids(pid).find_map(|tid| f(mm, pid, tid)))
+/// A thread as the lists name it (`redoubt-ipclist`): `pid << 8 | tid`.
+fn tref(pid: Pid, tid: TID) -> u64 { u64::from(pid.get()) << 8 | tid as u64 }
+
+/// The thread a list names.
+fn thread_of(r: u64) -> (Pid, TID) {
+    (crate::budget::pid_from(r >> 8).expect("I1: a list names no process"), (r & 0xff) as TID)
 }
 
-/// Whether `(pid, tid)` is a sender queued on `e`.
-fn queued_on(mm: &MemoryManager, pid: Pid, tid: TID, e: EndpointRef) -> bool {
+/// An open call as the lists name it: its frame + 1.
+fn cref(frame: u32) -> u64 { frame_word(frame) }
+
+/// The open call a list names.
+fn call_of(r: u64) -> u32 { frame_of(r).expect("I1: a list names no open call") }
+
+/// The process object a list names: its frame, + 1 as the list holds it.
+fn object_of(r: u64) -> u32 { frame_of(r).expect("I1: a list names no process object") }
+
+/// The lists' words in the kernel's frames: in each kind of page above its own words, which
+/// storing the object rewrites; a budget's two chain heads beside its handle chains' heads.
+struct Frames<'a>(&'a MemoryManager);
+
+/// Whether a list changed since the last audit ([`audit`]).
+#[cfg(debug_assertions)]
+static CHANGED: KernelCell<bool> = KernelCell::new(false);
+
+impl Frames<'_> {
+    /// The physical page and byte offset of `page`'s list word `word`; `None` for a thread with
+    /// no page, which waits on nothing.
+    fn at(&self, page: Page, word: usize) -> Option<(usize, usize)> {
+        let mm = self.0;
+        let (phys, at) = match page {
+            Page::Thread(r) => {
+                let (pid, tid) = thread_of(r);
+                (thread_phys(mm, pid, tid)?, W_LISTS + word)
+            }
+            Page::Call(r) => (mm.object_phys(call_of(r)), C_LISTS + word),
+            Page::Process(r) => (mm.object_phys(object_of(r)), crate::process::LIST_WORD + word),
+            Page::Endpoint(frame) => (mm.object_phys(frame), crate::endpoint::LIST_WORD + word),
+            Page::Device(frame) => (mm.object_phys(frame), crate::device::LIST_WORD + word),
+            Page::Budget(frame) => {
+                let at = [crate::budget::QUEUED_WORD, crate::budget::TAKEN_WORD][word];
+                (mm.object_phys(frame), at)
+            }
+            Page::Kernel => unreachable!("the kernel's words are no frame's"),
+        };
+        Some((phys, at * 8))
+    }
+}
+
+impl Words for Frames<'_> {
+    fn read(&self, page: Page, word: usize) -> u64 {
+        self.at(page, word).map_or(0, |(phys, at)| kframe::read(phys, at))
+    }
+
+    fn write(&mut self, page: Page, word: usize, value: u64) {
+        #[cfg(debug_assertions)]
+        CHANGED.with(|changed| *changed = true);
+        if let Some((phys, at)) = self.at(page, word) {
+            if let Page::Thread(_) = page {
+                // A fresh page is stamped the first time it is written (`set_tword`).
+                kframe::write(phys, 0, THREAD_MAGIC);
+            }
+            kframe::write(phys, at, value);
+        }
+    }
+}
+
+/// `(pid, tid)` stops waiting: it leaves the list its wait put it on. Every wait ends through
+/// here (`wake`, `end_thread`), but a taken call's, whose caller `deliver` moves on to wait for
+/// the reply.
+fn unlist(mm: &MemoryManager, pid: Pid, tid: TID) {
     let s = slot(mm, pid, tid);
-    s.wait == Wait::Send && s.endpoint == Some(e)
+    let me = tref(pid, tid);
+    let list = match (s.wait, s.endpoint, s.irq) {
+        (Wait::Receive, Some(e), _) => List::receivers(e.frame),
+        (Wait::Irq, _, Some(d)) => List::irq_waiters(d.frame),
+        (Wait::Send, Some(e), _) => return unqueue(mm, e, pid, tid),
+        _ => return,
+    };
+    let w = &mut Frames(mm);
+    // Unlinking a thread that is not on the list would empty it.
+    assert!(list.contains(w, me), "I1: a waiting thread is not on its list");
+    list.remove(w, me);
 }
 
-/// The R2 group of a queued sender.
+/// `(pid, tid)`'s message leaves `e`'s queue, taken or not, and its stamp's chain.
+fn unqueue(mm: &MemoryManager, e: EndpointRef, pid: Pid, tid: TID) {
+    let me = tref(pid, tid);
+    let send = tword(mm, pid, tid, W_KIND) == MsgKind::Send as u64;
+    let stamp = frame_of(tword(mm, pid, tid, W_STAMP)).expect("a queued message has a stamp");
+    let w = &mut Frames(mm);
+    assert!(lists::group_of(w, me) != 0, "I1: a queued message is in no group");
+    lists::dequeue(w, e.frame, me, send);
+    List::queued(stamp).remove(w, me);
+}
+
+/// Open call `frame` leaves the lists its flags put it on: its endpoint's open list and its
+/// stamp's chain while its caller waits, its endpoint's notice list while a notice is owed.
+fn unlist_call(mm: &MemoryManager, frame: u32, call: &OpenCall) {
+    let w = &mut Frames(mm);
+    let c = cref(frame);
+    if call.flags & F_WAITING != 0 {
+        List::open(call.endpoint.frame).remove(w, c);
+        List::taken(call.stamp.frame).remove(w, c);
+    }
+    if call.flags & F_NOTICE != 0 {
+        List::notices(call.endpoint.frame).remove(w, c);
+    }
+}
+
+/// Whether every list word of endpoint or device `frame` is 0: nothing waits on it, and no head or
+/// tail is left behind. One frame lookup, whatever the object.
+#[cfg(debug_assertions)]
+fn lists_empty(mm: &MemoryManager, frame: u32, endpoint: bool) -> bool {
+    let phys = mm.object_phys(frame);
+    let (at, n) = if endpoint {
+        (crate::endpoint::LIST_WORD, lists::ENDPOINT_WORDS)
+    } else {
+        (crate::device::LIST_WORD, lists::DEVICE_WORDS)
+    };
+    (at..at + n).all(|i| kframe::read(phys, i * 8) == 0)
+}
+
+/// The R2 group of the message `(pid, tid)` sends, or its group node holds.
 fn group_of(mm: &MemoryManager, pid: Pid, tid: TID) -> Group {
     Group::of(&mm.budget_at(msg(mm, pid, tid).sender_budget))
 }
@@ -458,6 +570,7 @@ fn is_running(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
 /// Hand a thread its result. One that was blocked goes back on the ready list; the thread making
 /// the call was never off it.
 fn wake(ss: &mut ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID, result: Result<Return, Error>) {
+    unlist(mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
     if !is_running(ss, pid, tid) {
         // A waiting thread belongs to a live process, so this cannot fail.
@@ -705,16 +818,14 @@ pub fn send(
     if sender.class == Class::User && owner.class == Class::User && sender.labels_of() != owner.labels_of() {
         return Err(Error::LabelDenied);
     }
-    // Stage 4, R2: a group with `WAIT_CAP` messages already queued here gets `Busy`.
+    // Stage 4, R2: a group with `WAIT_CAP` messages already queued here gets `Busy`. Its node
+    // counts them; finding it walks this endpoint's groups, at most one per sending budget.
     let group = Group::of(&sender);
-    let mut waiting = 0;
-    find_thread::<()>(mm, |mm, qpid, qtid| {
-        if queued_on(mm, qpid, qtid, endpoint) && group_of(mm, qpid, qtid) == group {
-            waiting += 1;
-        }
-        None
+    let node = lists::find(&Frames(mm), endpoint.frame, |w, node| {
+        let (npid, ntid) = thread_of(node);
+        group_of(w.0, npid, ntid) == group
     });
-    if waiting >= WAIT_CAP {
+    if node.is_some_and(|node| lists::count(&Frames(mm), node) >= WAIT_CAP as u64) {
         return Err(Error::Busy);
     }
     // Everything is checked: take the buffer out of the sender (I9) and record the message.
@@ -737,15 +848,17 @@ pub fn send(
         nhandles,
     };
     store_msg(mm, pid, tid, &m);
-    let seq = mm.next_seq();
-    set_tword(mm, pid, tid, W_SEQ, seq);
-    set_tword(mm, pid, tid, W_DUE, seq);
     set_tword(mm, pid, tid, W_OBJECT, frame_word(endpoint.frame));
     set_tword(mm, pid, tid, W_OBJECT_ID, endpoint.id);
     set_tword(mm, pid, tid, W_REC, body_rec as u64);
     // The sender is queued first, so a receiver taking the message right away finds it waiting
-    // and simply answers it: one delivery path, whether a receiver was waiting or not.
+    // and simply answers it: one delivery path, whether a receiver was waiting or not. It goes in
+    // its group on the endpoint and on its stamp's chain (R10).
     mark(mm, pid, tid, Wait::Send, timeout);
+    let seq = mm.next_seq();
+    let w = &mut Frames(mm);
+    lists::enqueue(w, endpoint.frame, node, tref(pid, tid), kind == MsgKind::Send, seq);
+    List::queued(via.stamp.frame).push_front(w, tref(pid, tid));
     pump(ss, mm, endpoint);
     settle(ss, mm, pid, tid)
 }
@@ -812,6 +925,7 @@ fn receive_irq(
     set_tword(mm, pid, tid, W_OBJECT_ID, device.id);
     set_tword(mm, pid, tid, W_REC, rec as u64);
     mark(mm, pid, tid, Wait::Irq, timeout);
+    List::irq_waiters(device.frame).push_back(&mut Frames(mm), tref(pid, tid));
     // Unmask first, then look at `fired`, in the order R5 states. Unmasking a source that is
     // already asserted makes it fire again at once, which is what a level-triggered device
     // wants: the kernel masks it again and the next receive is answered immediately.
@@ -834,12 +948,12 @@ pub fn irq_ready(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     if !mm.device(frame).fired {
         return;
     }
-    let id = mm.device(frame).id;
-    let waiting = find_thread(mm, |mm, pid, tid| {
-        let s = slot(mm, pid, tid);
-        (s.wait == Wait::Irq && s.irq == Some(DeviceRef { frame, id })).then_some((pid, tid))
-    });
-    let Some((pid, tid)) = waiting else { return };
+    // The thread that began to wait first.
+    let waiting = List::irq_waiters(frame).first(&Frames(mm));
+    if waiting == 0 {
+        return;
+    }
+    let (pid, tid) = thread_of(waiting);
     if let Err(error) = check_receive_record(ss, pid, tid, mm) {
         wake(ss, mm, pid, tid, Err(error));
         return;
@@ -856,7 +970,7 @@ pub fn irq_ready(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
 pub fn destroy_device(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     let id = mm.device(frame).id;
     let r = DeviceRef { frame, id };
-    fail_all(ss, mm, Error::Dead, |mm, pid, tid| slot(mm, pid, tid).irq == Some(r));
+    fail_each(ss, mm, List::irq_waiters(frame));
     let d = mm.device(frame);
     if d.kind == crate::device::Kind::Irq {
         crate::arch::irq::disable_irq(d.irq as usize);
@@ -911,8 +1025,52 @@ pub fn receive(
     set_tword(mm, pid, tid, W_MAX_TRANSFER, max_transfer as u64);
     set_tword(mm, pid, tid, W_REC, rec as u64);
     mark(mm, pid, tid, Wait::Receive, timeout);
+    // Last among the endpoint's receivers, in the one order of arrivals: an abandoned-call notice
+    // goes to the holder that began to wait first.
+    let seq = mm.next_seq();
+    let w = &mut Frames(mm);
+    w.write(Page::Thread(tref(pid, tid)), lists::T_SEQ, seq);
+    List::receivers(endpoint.frame).push_back(w, tref(pid, tid));
     pump(ss, mm, endpoint);
     settle(ss, mm, pid, tid)
+}
+
+// --- Exit notices (kernel/processes.md) ------------------------------------------------------------
+
+/// Process object `frame`, just made, names exit endpoint `e`: it joins `e`'s reporters.
+pub fn reporting(mm: &MemoryManager, e: u32, frame: u32) {
+    List::reporters(e).push_front(&mut Frames(mm), frame_word(frame))
+}
+
+/// Process object `frame`'s notice is owed on `e`: it leaves `e`'s reporters for its exits' tail,
+/// so notices are received in the order they came.
+pub fn exit_owed(mm: &MemoryManager, e: u32, frame: u32) {
+    let w = &mut Frames(mm);
+    List::reporters(e).remove(w, frame_word(frame));
+    List::exits(e).push_back(w, frame_word(frame));
+}
+
+/// Process object `frame` leaves exit endpoint `e`: from its exits if its notice is owed there,
+/// else from its reporters.
+pub fn unreport(mm: &MemoryManager, e: u32, frame: u32, owed: bool) {
+    let list = if owed { List::exits(e) } else { List::reporters(e) };
+    let w = &mut Frames(mm);
+    assert!(list.contains(w, frame_word(frame)), "I1: a process object is not on its endpoint's list");
+    list.remove(w, frame_word(frame));
+}
+
+/// The process object whose exit notice came first of those owed on `e`.
+pub fn first_exit(mm: &MemoryManager, e: u32) -> Option<u32> { frame_of(List::exits(e).first(&Frames(mm))) }
+
+/// Unlink and return the first process object naming dying endpoint `e`: its exits first, then its
+/// reporters (R10).
+pub fn pop_naming(mm: &MemoryManager, e: u32) -> Option<u32> {
+    let w = &mut Frames(mm);
+    let r = match List::exits(e).pop_front(w) {
+        0 => List::reporters(e).pop_front(w),
+        r => r,
+    };
+    frame_of(r)
 }
 
 // --- Delivery (R2, R4, R4a) --------------------------------------------------------------------
@@ -921,7 +1079,9 @@ pub fn receive(
 pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) { pump(ss, mm, e); }
 
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
-/// delivered. Notices come before messages (kernel/ipc.md, "What `receive` returns").
+/// delivered. Notices come before messages (kernel/ipc.md, "What `receive` returns"). Each pick
+/// reads `e`'s own lists: its owed notices, its receivers from the first until one can take, and
+/// two group heads (R2), never another endpoint's or every thread.
 fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
     #[cfg(feature = "walk-trace")]
     let _walk = crate::sched::trace::walk(crate::sched::trace::PUMP);
@@ -931,17 +1091,7 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
         }
         // An abandoned-call notice goes to the thread holding the call, on the endpoint the call
         // arrived on (R3), before any message.
-        let notice = find_thread(mm, |mm, pid, tid| {
-            if !receiver_on(mm, pid, tid, e) {
-                return None;
-            }
-            let s = slot(mm, pid, tid);
-            (0..s.ncalls).map(|i| nth_call(mm, pid, tid, i)).find_map(|f| {
-                let c = open_call_at(mm, f);
-                (c.flags & F_NOTICE != 0 && c.endpoint == e).then_some((pid, tid, f, c.rid))
-            })
-        });
-        if let Some((pid, tid, frame, rid)) = notice {
+        if let Some((pid, tid, frame, rid)) = owed_notice(mm, e) {
             // A bad record takes nothing: the notice stays owed for the next `receive`.
             if let Err(error) = check_receive_record(ss, pid, tid, mm) {
                 wake(ss, mm, pid, tid, Err(error));
@@ -949,6 +1099,7 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
             }
             // I15: reported exactly once.
             let mut c = open_call_at(mm, frame);
+            unlist_call(mm, frame, &c);
             c.flags &= !F_NOTICE;
             store_open_call(mm, frame, &c);
             let id = NonZeroU64::new(rid).expect("I12: a message id is never 0");
@@ -957,12 +1108,10 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
         }
         // Then an exit notice (kernel/ipc.md: notices before messages). Unlike an
         // abandoned-call notice it belongs to no particular thread -- it is addressed to the
-        // endpoint -- so whichever thread is receiving here takes it. Taking it frees the
+        // endpoint -- so the receiver that began to wait first takes it. Taking it frees the
         // process object, which is what frees the PID (kernel/processes.md R20).
-        let exit = crate::process::pending_notice(mm, e).and_then(|(frame, notice)| {
-            find_thread(mm, |mm, pid, tid| receiver_on(mm, pid, tid, e).then_some((pid, tid)))
-                .map(|(pid, tid)| (frame, notice, pid, tid))
-        });
+        let exit = crate::process::pending_notice(mm, e)
+            .and_then(|(frame, notice)| next_receiver(mm, e, 0).map(|(pid, tid)| (frame, notice, pid, tid)));
         if let Some((frame, notice, pid, tid)) = exit {
             // A failed output record does not consume the notice or release its PID.
             if let Err(error) = check_receive_record(ss, pid, tid, mm) {
@@ -974,54 +1123,71 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
             continue;
         }
         // The first receiver that can take a message, and the message R2 picks for it.
-        let pick = find_thread(mm, |mm, rpid, rtid| {
-            if !receiver_on(mm, rpid, rtid, e) {
-                return None;
-            }
-            // R4a: a process at `MAX_OPEN_CALLS` takes no calls; sends still arrive.
-            let calls = (mm.account(rpid).map_or(0, |a| a.open_calls) as usize) < MAX_OPEN_CALLS;
-            next_sender(mm, e, calls).map(|(spid, stid)| (rpid, rtid, spid, stid))
-        });
-        let Some((rpid, rtid, spid, stid)) = pick else { return };
+        let Some((rpid, rtid, spid, stid)) = pick(mm, e) else { return };
         deliver(ss, mm, e, rpid, rtid, spid, stid);
     }
 }
 
-/// Whether `(pid, tid)` is a receiver `pump` may feed on `e`: waiting in `receive` there, in a
-/// process no destruction is about to end. A doomed thread takes nothing, so what it would have
+/// The receiver on `e` after list member `after` (0: from the first) that `pump` may feed: one in
+/// a process no destruction is about to end. A doomed thread takes nothing, so what it would have
 /// taken stays for a live receiver (R4b).
-fn receiver_on(mm: &MemoryManager, pid: Pid, tid: TID, e: EndpointRef) -> bool {
-    let s = slot(mm, pid, tid);
-    s.wait == Wait::Receive && s.endpoint == Some(e) && !mm.process_is_doomed(pid)
+fn next_receiver(mm: &MemoryManager, e: EndpointRef, after: u64) -> Option<(Pid, TID)> {
+    let w = &Frames(mm);
+    let list = List::receivers(e.frame);
+    let mut r = if after == 0 { list.first(w) } else { list.next(w, after) };
+    while r != 0 {
+        let (pid, tid) = thread_of(r);
+        if !mm.process_is_doomed(pid) {
+            return Some((pid, tid));
+        }
+        r = list.next(w, r);
+    }
+    None
 }
 
-/// R2: the next message to take on `e` — the oldest message of the group served least recently,
-/// the group whose turn has been due longest, ties to the lower group. A group's messages all
-/// carry its turn from their arrival on, and a take moves it to now, so the head of the group is
-/// the first of its messages in (due, arrival) order. Without `calls` a process at
-/// `MAX_OPEN_CALLS` skips calls, so a group's oldest *send* is its message (R4a).
-fn next_sender(mm: &MemoryManager, e: EndpointRef, calls: bool) -> Option<(Pid, TID)> {
-    let mut best: Option<(u64, Group, u64, Pid, TID)> = None;
-    find_thread::<()>(mm, |mm, pid, tid| {
-        if !queued_on(mm, pid, tid, e) || (!calls && msg(mm, pid, tid).kind == MsgKind::Call) {
-            return None;
-        }
-        let group = group_of(mm, pid, tid);
+/// The abandoned-call notice `pump` delivers next on `e`, with the thread it goes to: of the
+/// notices owed on `e` (R3), one held by the receiver there that began to wait first, its call
+/// taken first. A walk of `e`'s owed notices only.
+fn owed_notice(mm: &MemoryManager, e: EndpointRef) -> Option<(Pid, TID, u32, u64)> {
+    let w = &Frames(mm);
+    let list = List::notices(e.frame);
+    let mut best: Option<(u64, u64, Pid, TID, u32)> = None;
+    let mut c = list.first(w);
+    while c != 0 {
+        let frame = call_of(c);
+        let call = open_call_at(mm, frame);
+        let (pid, tid) = call.server;
         let s = slot(mm, pid, tid);
-        let better = match &best {
-            None => true,
-            Some((bdue, bgroup, bseq, _, _)) => match s.due.cmp(bdue).then(group.order(bgroup)) {
-                Ordering::Less => true,
-                Ordering::Greater => false,
-                Ordering::Equal => s.seq < *bseq,
-            },
-        };
-        if better {
-            best = Some((s.due, group, s.seq, pid, tid));
+        if s.wait == Wait::Receive && s.endpoint == Some(e) && !mm.process_is_doomed(pid) {
+            let arrived = w.read(Page::Thread(tref(pid, tid)), lists::T_SEQ);
+            if best.is_none_or(|(a, rid, ..)| (arrived, call.rid) < (a, rid)) {
+                best = Some((arrived, call.rid, pid, tid, frame));
+            }
         }
-        None
-    });
-    best.map(|(_, _, _, pid, tid)| (pid, tid))
+        c = list.next(w, c);
+    }
+    best.map(|(_, rid, pid, tid, frame)| (pid, tid, frame, rid))
+}
+
+/// R2 and R4a: the first receiver on `e` that can take a message, and the message it takes: the
+/// head group's oldest, or, for a receiver in a process at `MAX_OPEN_CALLS`, which takes no
+/// calls, the oldest send of the group whose oldest send is due first. Returns (receiver,
+/// sender).
+fn pick(mm: &MemoryManager, e: EndpointRef) -> Option<(Pid, TID, Pid, TID)> {
+    if lists::no_groups(&Frames(mm), e.frame) {
+        return None;
+    }
+    let mut at = next_receiver(mm, e, 0);
+    while let Some((rpid, rtid)) = at {
+        let calls = (mm.account(rpid).map_or(0, |a| a.open_calls) as usize) < MAX_OPEN_CALLS;
+        let sender = lists::pick(&Frames(mm), e.frame, calls);
+        if sender != 0 {
+            let (spid, stid) = thread_of(sender);
+            return Some((rpid, rtid, spid, stid));
+        }
+        at = next_receiver(mm, e, tref(rpid, rtid));
+    }
+    None
 }
 
 /// Deliver the message of `(spid, stid)` on `e` to the receiving thread `(rpid, rtid)`, or refuse
@@ -1047,27 +1213,24 @@ fn deliver(
         return;
     }
     // Delivered or refused, the group has had its turn, so one sender cannot hold up the rest: its
-    // turn is due again from now, behind every group already waiting. Only its own messages carry
-    // that, so a group with nothing queued keeps nothing, and other groups' turns do not move.
-    // The restamp is one write per message still queued in the group, at most `WAIT_CAP`. `W_DUE`
-    // is never readable by a process, like `next_seq` it comes from.
-    let group = group_of(mm, spid, stid);
+    // turn is due again from now, behind every group already waiting. Only its own node carries
+    // that, so a group with nothing queued keeps nothing, and other groups' turns do not move:
+    // one write and the group's two moves to the lists' tails. The take is never readable by a
+    // process, like `next_seq` it comes from.
     let now = mm.next_seq();
-    find_thread::<()>(mm, |mm, pid, tid| {
-        if queued_on(mm, pid, tid, e) && group_of(mm, pid, tid) == group {
-            set_tword(mm, pid, tid, W_DUE, now);
-        }
-        None
-    });
+    lists::served(&mut Frames(mm), e.frame, tref(spid, stid), now);
     let kind = msg(mm, spid, stid).kind;
     match prepare(ss, mm, e, rpid, rtid, spid, stid) {
         Err(error) => fail_wait(ss, mm, spid, stid, error),
         Ok(received) => {
             answer_record(ss, mm, rpid, rtid, &Received::Message(received).encode(), Ok(Return::Nothing));
             match kind {
-                // A `send` is done with; a `call` now waits for its reply.
+                // A `send` is done with; a `call` now waits for its reply, off the queue.
                 MsgKind::Send => wake(ss, mm, spid, stid, Ok(Return::Nothing)),
-                MsgKind::Call => set_tword(mm, spid, stid, W_WAIT, Wait::Reply as u64),
+                MsgKind::Call => {
+                    unqueue(mm, e, spid, stid);
+                    set_tword(mm, spid, stid, W_WAIT, Wait::Reply as u64);
+                }
             }
         }
     }
@@ -1183,6 +1346,10 @@ fn prepare(
             },
         );
         push_open_call(mm, rpid, rtid, frame);
+        // While its caller waits, it is on its endpoint's open list and its stamp's chain (R10).
+        let w = &mut Frames(mm);
+        List::open(e.frame).push_front(w, cref(frame));
+        List::taken(m.stamp.frame).push_front(w, cref(frame));
         set_tword(mm, rpid, rtid, W_CURRENT, frame_word(frame));
         // The caller now waits for the reply, not for a taker: its page names the open call.
         set_tword(mm, spid, stid, W_OBJECT, frame_word(frame));
@@ -1429,6 +1596,7 @@ fn free_abandoned_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCal
 
 /// Free an open call's page and the charges it carried (R4a).
 fn close_call(mm: &mut MemoryManager, frame: u32, call: &OpenCall) {
+    unlist_call(mm, frame, call);
     if mm.is_live_budget(call.payer) {
         // An abandoned call's lend stopped being the payer's when it was abandoned (R3).
         let lend = if call.flags & F_ABANDONED == 0 { call.lend_pages as u64 } else { 0 };
@@ -1451,8 +1619,12 @@ fn abandon(ss: &ProcessTable, mm: &mut MemoryManager, frame: u32) {
     // No notice is owed on an endpoint that is being destroyed: nobody is left to receive it on
     // (R3), and the destruction drops the ones owed before it began (`budgets_dying`).
     let notice = if mm.budget_at(mm.endpoint_at(call.endpoint).owner).dying { 0 } else { F_NOTICE };
+    unlist_call(mm, frame, &call);
     call.flags = (call.flags & !F_WAITING) | F_ABANDONED | notice;
     store_open_call(mm, frame, &call);
+    if notice != 0 {
+        List::notices(call.endpoint.frame).push_front(&mut Frames(mm), cref(frame));
+    }
     if call.lend_pages == 0 {
         return;
     }
@@ -1490,6 +1662,7 @@ pub fn thread_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, ti
 fn end_thread(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID) -> Option<EndpointRef> {
     // Not `fail_wait`: a dying thread gets no answer and must not go back on the ready list.
     let served = unwind(ss, mm, pid, tid);
+    unlist(mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
     // R4b: every call it holds open ends, its caller told.
     while slot(mm, pid, tid).ncalls > 0 {
@@ -1562,7 +1735,8 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
     // device alike, reading each object's link and kind words alone: the walk ends exactly what
     // the subtree owns, never a scan of every frame. A destroyed device leaves the chain, so
     // only endpoints are left on it; it is moved to the chain's head first, so leaving it does
-    // not walk the endpoints ahead of it.
+    // not walk the endpoints ahead of it. Each endpoint's message reach is its own lists
+    // (`endpoint_dying`); one that nothing waits on costs one read, its count of members.
     let mut cur = Some(top);
     while let Some(frame) = cur {
         let (mut owned, mut prev) = (mm.budget(frame).first_owned, None);
@@ -1570,6 +1744,9 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
             owned = mm.owned_next(o);
             if mm.is_endpoint_frame(o) {
                 prev = Some(o);
+                if lists::waiting(&Frames(mm), o) != 0 {
+                    endpoint_dying(ss, mm, o);
+                }
             } else {
                 mm.owned_to_head(frame, prev, o);
                 destroy_device(ss, mm, o);
@@ -1577,53 +1754,19 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
         }
         cur = mm.subtree_next(top, frame);
     }
-    // R10 step 4's message reach, two bounded walks for the whole subtree, never one per endpoint.
-    // Receivers and senders on a dying endpoint go first, so a receiver is never offered an
-    // abandoned call's notice on the way out.
-    fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
-        let s = slot(mm, pid, tid);
-        matches!(s.wait, Wait::Send | Wait::Receive)
-            && s.endpoint.is_some_and(|e| mm.budget_at(mm.endpoint_at(e).owner).dying)
-    });
-    // Then callers waiting for a reply through one, and every queued message or taken call whose
-    // stamp is dying (R3, R10). The same walk drops every abandoned-call notice owed on a dying
-    // endpoint: there is no endpoint left to receive one on (R3), and no notice may name a frame
-    // about to be freed (I1). Each was owed before the destruction began, since `abandon` owes
-    // none on a dying endpoint, so neither these failures nor the kills before them add one, and
-    // the walk's first pass meets each once. A pass that fails a thread is followed by another,
-    // as `fail_all` rescans.
-    let mut first = true;
-    loop {
-        let mut failed = false;
-        for pid in mm.live_pids() {
-            for tid in mm.live_tids(pid) {
-                if first {
-                    drop_dying_notices(mm, pid, tid);
-                }
-                let s = slot(mm, pid, tid);
-                let doomed = match s.wait {
-                    Wait::Send => mm.budget_at(msg(mm, pid, tid).stamp).dying,
-                    Wait::Reply => {
-                        let call = open_call_at(mm, s.open);
-                        mm.budget_at(call.stamp).dying
-                            || mm.budget_at(mm.endpoint_at(call.endpoint).owner).dying
-                    }
-                    _ => false,
-                };
-                if doomed {
-                    fail_wait(ss, mm, pid, tid, Error::Dead);
-                    failed = true;
-                }
-            }
-        }
-        first = false;
-        if !failed {
-            break;
-        }
+    // Then what was sent through a handle stamped with a dying budget, on any endpoint: every
+    // dying budget's queued messages first, so that no pump the failed callers below make takes
+    // one, then the taken calls whose callers wait, each caller failed and its call abandoned.
+    let mut cur = Some(top);
+    while let Some(frame) = cur {
+        fail_each(ss, mm, List::queued(frame));
+        cur = mm.subtree_next(top, frame);
     }
-    // Every exit notice owed to a dying endpoint is dropped, and a process still running loses the
-    // ear it was to report to (R10; `process.rs`).
-    crate::process::endpoints_dying(mm);
+    let mut cur = Some(top);
+    while let Some(frame) = cur {
+        fail_callers(ss, mm, List::taken(frame));
+        cur = mm.subtree_next(top, frame);
+    }
 }
 
 /// A DMA device whose reset did not confirm is destroyed as R10 destroys one (kernel/devices.md,
@@ -1664,38 +1807,67 @@ pub fn destroy_quarantined_devices(ss: &mut ProcessTable, mm: &mut MemoryManager
     }
 }
 
-/// Drop the abandoned-call notices `(pid, tid)` owes on a dying endpoint. A call's flags word is
-/// read alone, and the endpoint only for a call that owes a notice.
-fn drop_dying_notices(mm: &mut MemoryManager, pid: Pid, tid: TID) {
-    let ncalls = (tword(mm, pid, tid, W_NCALLS) as usize).min(MAX_OPEN_CALLS);
-    for i in 0..ncalls {
-        let frame = nth_call(mm, pid, tid, i);
-        let phys = mm.object_phys(frame);
-        assert!(kframe::read(phys, 0) == CALL_MAGIC, "I1: frame {} holds no open call", frame);
-        let flags = kframe::read(phys, C_FLAGS * 8);
-        if flags & F_NOTICE == 0 {
-            continue;
+/// R10 step 4 for one dying endpoint `e`, from its own lists: its receivers and its queued
+/// senders fail with `Dead`, the notices owed on it are dropped (there is no endpoint left to
+/// receive one on, R3, and no notice may name a frame about to be freed, I1), and the callers
+/// waiting for a reply through it fail with `Dead`, their calls abandoned with no notice
+/// (`abandon` owes none on an endpoint whose owner is dying). A failed caller's pump of `e` finds
+/// no receiver there, and no other endpoint is pumped. Then the exit notices owed on it are
+/// dropped and the processes reporting to it lose their ear (`process.rs`).
+fn endpoint_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, e: u32) {
+    fail_each(ss, mm, List::receivers(e));
+    loop {
+        let sender = lists::pick(&Frames(mm), e, true);
+        if sender == 0 {
+            break;
         }
-        let endpoint = EndpointRef {
-            frame: frame_of(kframe::read(phys, C_ENDPOINT * 8)).unwrap_or(0),
-            id: kframe::read(phys, C_ENDPOINT_ID * 8),
-        };
-        if mm.budget_at(mm.endpoint_at(endpoint).owner).dying {
-            kframe::write(phys, C_FLAGS * 8, flags & !F_NOTICE);
+        fail_one(ss, mm, sender);
+    }
+    loop {
+        let c = List::notices(e).first(&Frames(mm));
+        if c == 0 {
+            break;
         }
+        let mut call = open_call_at(mm, call_of(c));
+        unlist_call(mm, call_of(c), &call);
+        call.flags &= !F_NOTICE;
+        store_open_call(mm, call_of(c), &call);
+    }
+    fail_callers(ss, mm, List::open(e));
+    crate::process::endpoint_dying(mm, e);
+}
+
+/// Fail every thread on `list` with `Dead`, the first first, until it is empty: each leaves the
+/// list as it is answered (`wake`).
+fn fail_each(ss: &mut ProcessTable, mm: &mut MemoryManager, list: List) {
+    loop {
+        let r = list.first(&Frames(mm));
+        if r == 0 {
+            return;
+        }
+        fail_one(ss, mm, r);
     }
 }
 
-/// Fail every blocked thread `doomed` picks, one at a time, until none is left.
-fn fail_all(
-    ss: &mut ProcessTable,
-    mm: &mut MemoryManager,
-    error: Error,
-    mut doomed: impl FnMut(&MemoryManager, Pid, TID) -> bool,
-) {
-    while let Some((pid, tid)) = find_thread(mm, |mm, pid, tid| doomed(mm, pid, tid).then_some((pid, tid))) {
-        fail_wait(ss, mm, pid, tid, error);
+/// Fail the caller of every open call on `list` with `Dead`, the first first, until it is empty:
+/// each call is abandoned and leaves the list (`abandon`).
+fn fail_callers(ss: &mut ProcessTable, mm: &mut MemoryManager, list: List) {
+    loop {
+        let c = list.first(&Frames(mm));
+        if c == 0 {
+            return;
+        }
+        let (pid, tid) = open_call_at(mm, call_of(c)).caller;
+        fail_one(ss, mm, tref(pid, tid));
     }
+}
+
+/// Fail the waiting thread `r` names with `Dead` (R10). It leaves every list it waited on, so a
+/// loop over a list's first member ends.
+fn fail_one(ss: &mut ProcessTable, mm: &mut MemoryManager, r: u64) {
+    let (pid, tid) = thread_of(r);
+    assert!(slot(mm, pid, tid).wait != Wait::None, "I1: a list names a thread that waits for nothing");
+    fail_wait(ss, mm, pid, tid, Error::Dead);
 }
 
 /// What a walk for timeouts found.
@@ -1770,4 +1942,285 @@ fn poke_receivers(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
             }
         }
     }
+}
+
+// --- The checked build's audit -----------------------------------------------------------------------
+
+/// The checked build's audit of every IPC list from the threads ([`check_lists`]), if one changed
+/// since the last, at the end of each outermost kernel entry that can change one: a system call
+/// (`redoubt::handle`), an expiry (`time::expire_due`) and an interrupt's delivery
+/// (`device::irq_fired`). Never inside a destruction or a pump, which nest in those. An entry that
+/// ends otherwise (a fault that kills) leaves it to the next. Like every audit, it neither moves the
+/// schedule nor counts in a latency target (`sched::audit`). The full audit, from the objects, runs
+/// at the full-audit points ([`check_all`]).
+pub fn audit(mm: &MemoryManager) {
+    #[cfg(debug_assertions)]
+    if CHANGED.with(core::mem::take) {
+        crate::sched::audit(crate::sched::AUDIT_IPC_LISTS, || {
+            check_lists(mm);
+        });
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = mm;
+}
+
+/// What the lists hold, or the threads say they must.
+#[cfg(debug_assertions)]
+#[derive(Default, PartialEq, Eq, Debug)]
+struct Listed {
+    receivers: usize,
+    irq: usize,
+    queued: usize,
+    stamped: usize,
+    waiting: usize,
+    taken: usize,
+    notices: usize,
+    exits: usize,
+    reporters: usize,
+}
+
+/// The checked build's full audit of the lists, at its full-audit points: after each destruction,
+/// at each process-object free and before the hart idles. [`check_lists`], and then every list
+/// from the objects that head it, with no scan of the frames: the budget tree from its root, each
+/// budget's two stamp chains and its owner chain's endpoints and devices. Those must hold what the
+/// threads say, so a list none of whose members waits, which a teardown that failed to unlink would
+/// leave, is found here. An endpoint whose list words are all 0 is skipped, as a destruction skips
+/// it; one with any other has its lists audited whole, so a stray head or tail fails.
+#[cfg(debug_assertions)]
+pub fn check_all(mm: &MemoryManager) {
+    let want = check_lists(mm);
+    let all = enumerate_lists(mm);
+    assert!(all == want, "I1: the objects' lists hold {:?}, the threads {:?}", all, want);
+}
+
+/// The checked build's audit of the lists at an exit that changed one ([`audit`]). One walk of
+/// every thread and its open calls, and of every process object, counts what must be listed, and
+/// audits each list whole from the member at its head (`redoubt-ipclist`: its links, its order, and
+/// every member's own words); each kind of list must then hold exactly what the threads and process
+/// objects say. It walks no budget, so its cost follows the threads. Returns what the threads and
+/// process objects say.
+#[cfg(debug_assertions)]
+fn check_lists(mm: &MemoryManager) -> Listed {
+    let w = &Frames(mm);
+    let mut listed = Listed::default();
+    let mut want = Listed::default();
+    for pid in mm.live_pids() {
+        for tid in mm.live_tids(pid) {
+            let Some(phys) = thread_phys(mm, pid, tid) else { continue };
+            let me = tref(pid, tid);
+            let on = frame_of(kframe::read(phys, W_OBJECT * 8)).unwrap_or(0);
+            match Wait::from_word(kframe::read(phys, W_WAIT * 8)) {
+                Wait::Receive => {
+                    want.receivers += 1;
+                    if List::receivers(on).first(w) == me {
+                        listed.receivers += audit_receivers(mm, on);
+                    }
+                }
+                Wait::Irq => {
+                    want.irq += 1;
+                    if List::irq_waiters(on).first(w) == me {
+                        listed.irq += audit_irq(mm, on);
+                    }
+                }
+                Wait::Send => {
+                    want.queued += 1;
+                    want.stamped += 1;
+                    if lists::first_group(w, on) == me {
+                        listed.queued += audit_queue(mm, on);
+                    }
+                    let stamp = frame_of(kframe::read(phys, W_STAMP * 8)).unwrap_or(0);
+                    if List::queued(stamp).first(w) == me {
+                        listed.stamped += audit_stamped(mm, stamp);
+                    }
+                }
+                _ => {}
+            }
+            let ncalls = (kframe::read(phys, W_NCALLS * 8) as usize).min(MAX_OPEN_CALLS);
+            for i in 0..ncalls {
+                let frame = kframe::read(phys, (W_CALLS + i) * 8) as u32;
+                let call = mm.object_phys(frame);
+                let flags = kframe::read(call, C_FLAGS * 8);
+                let e = frame_of(kframe::read(call, C_ENDPOINT * 8)).unwrap_or(0);
+                let c = cref(frame);
+                if flags & F_WAITING != 0 {
+                    want.waiting += 1;
+                    want.taken += 1;
+                    if List::open(e).first(w) == c {
+                        listed.waiting += audit_calls(mm, List::open(e), F_WAITING, e, None);
+                    }
+                    let stamp = frame_of(kframe::read(call, C_STAMP * 8)).unwrap_or(0);
+                    if List::taken(stamp).first(w) == c {
+                        listed.taken += audit_calls(mm, List::taken(stamp), F_WAITING, 0, Some(stamp));
+                    }
+                }
+                if flags & F_NOTICE != 0 {
+                    want.notices += 1;
+                    if List::notices(e).first(w) == c {
+                        listed.notices += audit_calls(mm, List::notices(e), F_NOTICE, e, None);
+                    }
+                }
+            }
+        }
+    }
+    // And every process object naming an exit endpoint: on its exits or its reporters.
+    for frame in mm.process_frames() {
+        let p = mm.process(frame);
+        let Some(e) = p.endpoint else { continue };
+        let (list, held, n) = if p.notice_queued() {
+            (List::exits(e.frame), &mut listed.exits, &mut want.exits)
+        } else {
+            (List::reporters(e.frame), &mut listed.reporters, &mut want.reporters)
+        };
+        *n += 1;
+        if list.first(w) == frame_word(frame) {
+            *held += audit_processes(mm, list, e.frame);
+        }
+    }
+    assert!(listed == want, "I1: the IPC lists hold {:?}, the threads and processes {:?}", listed, want);
+    want
+}
+
+/// Every list, from the objects that head it ([`check_all`]).
+#[cfg(debug_assertions)]
+fn enumerate_lists(mm: &MemoryManager) -> Listed {
+    let mut all = Listed::default();
+    // Every budget is below `root`, found from any process's budget.
+    let root = mm.live_pids().find_map(|pid| mm.budget_of(pid)).map(|mut b| {
+        while let Some(parent) = mm.budget(b).parent {
+            b = parent;
+        }
+        b
+    });
+    let mut cur = root;
+    while let Some(b) = cur {
+        all.stamped += audit_stamped(mm, b);
+        all.taken += audit_calls(mm, List::taken(b), F_WAITING, 0, Some(b));
+        let mut owned = mm.budget(b).first_owned;
+        while let Some(o) = owned {
+            owned = mm.owned_next(o);
+            if !mm.is_endpoint_frame(o) {
+                all.irq += audit_irq(mm, o);
+                continue;
+            }
+            // A destruction skips an endpoint whose count is 0, so that must mean every list
+            // word is 0; and the count is exactly what its lists hold.
+            let count = lists::waiting(&Frames(mm), o) as usize;
+            if count == 0 {
+                assert!(lists_empty(mm, o, true), "I1: endpoint {} counts no member but has a list", o);
+                continue;
+            }
+            let held = [
+                audit_receivers(mm, o),
+                audit_queue(mm, o),
+                audit_calls(mm, List::notices(o), F_NOTICE, o, None),
+                audit_calls(mm, List::open(o), F_WAITING, o, None),
+                audit_processes(mm, List::exits(o), o),
+                audit_processes(mm, List::reporters(o), o),
+            ];
+            assert!(held.iter().sum::<usize>() == count, "I1: endpoint {} miscounts its members", o);
+            all.receivers += held[0];
+            all.queued += held[1];
+            all.notices += held[2];
+            all.waiting += held[3];
+            all.exits += held[4];
+            all.reporters += held[5];
+        }
+        cur = root.and_then(|root| mm.subtree_next(root, b));
+    }
+    all
+}
+
+/// Word `i` of the page of the thread a list names, read from its page alone.
+#[cfg(debug_assertions)]
+fn member_word(mm: &MemoryManager, r: u64, i: usize) -> u64 {
+    let (pid, tid) = thread_of(r);
+    thread_phys(mm, pid, tid).map_or(0, |phys| kframe::read(phys, i * 8))
+}
+
+/// Whether the thread `r` names waits as `wait` on object frame `on`.
+#[cfg(debug_assertions)]
+fn waits_on(mm: &MemoryManager, r: u64, wait: Wait, on: u32) -> bool {
+    member_word(mm, r, W_WAIT) == wait as u64 && frame_of(member_word(mm, r, W_OBJECT)) == Some(on)
+}
+
+/// An audit's verdict on one member.
+#[cfg(debug_assertions)]
+fn member(good: bool, page: Page) -> Result<(), lists::Fault> {
+    if good { Ok(()) } else { Err(lists::Fault::Member(page)) }
+}
+
+#[cfg(debug_assertions)]
+fn audit_failed(fault: lists::Fault) -> ! { panic!("I1: the IPC lists: {:?}", fault) }
+
+/// Endpoint `e`'s receivers: each in `receive` there, in the order they began to wait.
+#[cfg(debug_assertions)]
+fn audit_receivers(mm: &MemoryManager, e: u32) -> usize {
+    let mut last = 0;
+    List::receivers(e)
+        .audit(&Frames(mm), |w, r| {
+            let arrived = w.read(Page::Thread(r), lists::T_SEQ);
+            let after = arrived > last;
+            last = arrived;
+            member(waits_on(mm, r, Wait::Receive, e), Page::Thread(r))?;
+            if after { Ok(()) } else { Err(lists::Fault::Order(Page::Thread(r))) }
+        })
+        .unwrap_or_else(|f| audit_failed(f))
+}
+
+/// Device `d`'s interrupt waiters: each in `receive` on it.
+#[cfg(debug_assertions)]
+fn audit_irq(mm: &MemoryManager, d: u32) -> usize {
+    List::irq_waiters(d)
+        .audit(&Frames(mm), |_, r| member(waits_on(mm, r, Wait::Irq, d), Page::Thread(r)))
+        .unwrap_or_else(|f| audit_failed(f))
+}
+
+/// Endpoint `e`'s queue, R2's groups: each member sending there, as the kind its chain says.
+#[cfg(debug_assertions)]
+fn audit_queue(mm: &MemoryManager, e: u32) -> usize {
+    lists::audit_groups(&Frames(mm), e, |_, r, send| {
+        let kind = member_word(mm, r, W_KIND) == MsgKind::Send as u64;
+        member(waits_on(mm, r, Wait::Send, e) && kind == send, Page::Thread(r))
+    })
+    .unwrap_or_else(|f| audit_failed(f))
+}
+
+/// Budget `b`'s chain of queued messages: each queued, under its stamp.
+#[cfg(debug_assertions)]
+fn audit_stamped(mm: &MemoryManager, b: u32) -> usize {
+    List::queued(b)
+        .audit(&Frames(mm), |_, r| {
+            let queued = member_word(mm, r, W_WAIT) == Wait::Send as u64;
+            member(queued && frame_of(member_word(mm, r, W_STAMP)) == Some(b), Page::Thread(r))
+        })
+        .unwrap_or_else(|f| audit_failed(f))
+}
+
+/// Endpoint `e`'s exits or reporters: each a process object naming `e`, its notice queued on the
+/// exits and not on the reporters; one on the exits is no longer alive (one on the reporters may be
+/// ending, its notice not yet settled).
+#[cfg(debug_assertions)]
+fn audit_processes(mm: &MemoryManager, list: List, e: u32) -> usize {
+    let exits = list == List::exits(e);
+    list.audit(&Frames(mm), |_, r| {
+        let p = mm.process(object_of(r));
+        let at = p.endpoint.map(|x| x.frame) == Some(e);
+        member(at && p.notice_queued() == exits && !(exits && p.alive()), Page::Process(r))
+    })
+    .unwrap_or_else(|f| audit_failed(f))
+}
+
+/// A list of open calls: each with `flag`, on endpoint `e` (an endpoint's list) or under stamp
+/// `stamp` (a budget's chain).
+#[cfg(debug_assertions)]
+fn audit_calls(mm: &MemoryManager, list: List, flag: u64, e: u32, stamp: Option<u32>) -> usize {
+    list.audit(&Frames(mm), |_, c| {
+        let call = open_call_at(mm, call_of(c));
+        let at = match stamp {
+            Some(b) => call.stamp.frame == b,
+            None => call.endpoint.frame == e,
+        };
+        member(call.flags & flag != 0 && at, Page::Call(c))
+    })
+    .unwrap_or_else(|f| audit_failed(f))
 }

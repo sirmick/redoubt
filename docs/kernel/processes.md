@@ -240,7 +240,8 @@ charged to the creator's budget as long. Last, the notice is delivered or droppe
 - **Delivered** to whichever thread receives on the exit endpoint next; notices come before
   messages. A doomed process's thread takes none ([R4b](ipc.md#r4b-a-server-dies)).
   Nothing is allocated, because the notice's page was paid for at `process_create`. A notice
-  with no receiver waits for one.
+  with no receiver waits for one, and the notices waiting on one endpoint are received in the
+  order their processes ended.
 - **Dropped** if the exit endpoint has been destroyed, or if
   [R1 (flow)](ipc.md#r1-flow) refuses it. An exit notice is a one-way flow from the budget the
   process ran in to the endpoint's owner: it is delivered only if the owner is class `system` or

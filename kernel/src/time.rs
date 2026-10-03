@@ -189,11 +189,12 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
         t.armed = 0;
     });
     rearm();
-    if let Some(b) = last {
-        MemoryManager::with_mut(|mm| {
-            crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started))
-        });
-    }
+    MemoryManager::with_mut(|mm| {
+        if let Some(b) = last {
+            crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started));
+        }
+        crate::message::audit(mm);
+    });
     Expired { destroyed, last }
 }
 

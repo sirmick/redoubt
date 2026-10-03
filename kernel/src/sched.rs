@@ -298,6 +298,9 @@ pub const AUDIT_DESTRUCTION: u64 = 1;
 /// The PID index's audit at a process object's change (`MemoryManager::index_process`).
 #[cfg(debug_assertions)]
 pub const AUDIT_PROCESS_INDEX: u64 = 2;
+/// The IPC lists' audit at the end of an entry that changed one (`message::audit`).
+#[cfg(debug_assertions)]
+pub const AUDIT_IPC_LISTS: u64 = 3;
 /// The scheduler's marks' audit after a reconcile ([`audit_marks`]).
 #[cfg(debug_assertions)]
 pub const AUDIT_MARKS: u64 = 4;

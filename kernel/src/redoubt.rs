@@ -43,6 +43,8 @@ pub enum Outcome {
 pub fn handle(pid: Pid, tid: TID, regs: &[u64; REGS]) -> Outcome {
     // Deadlines that have passed were answered at this entry, before anything else (`time.rs`).
     let result = Call::decode(regs).and_then(|c| dispatch(pid, tid, c));
+    // A checked build audits the IPC lists once the call is done, destructions and pumps included.
+    MemoryManager::with(crate::message::audit);
     // Every error a call returns is in its row of the spec's error table (`Number::can_return`).
     // An unknown number has no row (it is `InvalidArgument`).
     if let (Err(error), Some(number)) = (&result, Number::from_raw(regs[0])) {
