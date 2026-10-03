@@ -9,6 +9,7 @@
 //!   reads both back, with the same qid paths.
 //! - `read ENDPOINT PATH TEXT...`: each path holds exactly the text after it.
 //! - `corrupt ENDPOINT`: every attach is refused, and `fsd` still answers the next.
+//! - `quota ENDPOINT`: mints two roots with a quota each; one fills its quota, and the other still writes.
 //! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends an `fsd` built with its test-only
 //!   feature `restart-probe`, and reads the file back through a fresh connection.
 
@@ -54,6 +55,7 @@ fn run(startup: &Startup) -> u32 {
         (Some("reboot"), Some(at)) => reboot(startup, &mut out, at),
         (Some("read"), Some(at)) => read(startup, &mut out, at, args).map(|()| Ends::Passed),
         (Some("corrupt"), Some(at)) => corrupt(startup, &mut out, at).map(|()| Ends::Passed),
+        (Some("quota"), Some(at)) => quota(startup, &mut out, at).map(|()| Ends::Passed),
         (Some("restart"), Some(at)) => restart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (check, _) => Err(format!("no such check, or no endpoint: {check:?}")),
     };
@@ -223,6 +225,61 @@ fn corrupt(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), Strin
         }
     }
     out.say("fsd-client was refused at each of 3 attaches\n").map_err(|e| format!("say: {e:?}"))
+}
+
+/// Each root's quota in `quota`, in bytes.
+const QUOTA: u64 = 64 * 1024;
+
+/// `fsd-quota` (R48): two roots minted at one volume with [`QUOTA`] each; one writes until a
+/// write is refused, within its quota, and the other still writes half a quota.
+fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> {
+    let base = attach(startup, out, endpoint)?;
+    let mut roots = Vec::new();
+    for name in ["hog", "saver"] {
+        base.create(&mut out.lend, "/", name, DMDIR | 0o755, mode::OREAD)
+            .and_then(|d| d.close(&mut out.lend))
+            .map_err(|e| format!("mkdir {name}: {e:?}"))?;
+        let (minted, _) = base
+            .new_connection(&mut out.lend, &format!("/{name}"), QUOTA)
+            .map_err(|e| format!("mint {name}: {e:?}"))?;
+        roots.push(Connection::attach(minted, &mut out.lend).map_err(|e| format!("attach {name}: {e:?}"))?);
+    }
+    let chunk = [7u8; 4096];
+    let hog = roots[0]
+        .create(&mut out.lend, "/", "full", 0o644, mode::OWRITE)
+        .map_err(|e| format!("create full: {e:?}"))?;
+    let mut filled = 0u64;
+    loop {
+        match hog.write_at(&mut out.lend, filled, &chunk) {
+            Ok(0) => return Err("a write took nothing".into()),
+            Ok(n) => filled += n as u64,
+            Err(Error::Rerror) => break,
+            Err(e) => return Err(format!("write full: {e:?}")),
+        }
+        if filled > QUOTA {
+            return Err(format!("wrote {filled} bytes past a quota of {QUOTA}"));
+        }
+    }
+    let half = [9u8; 4096];
+    let saver = roots[1]
+        .create(&mut out.lend, "/", "kept", 0o644, mode::OWRITE)
+        .map_err(|e| format!("create kept: {e:?}"))?;
+    // A write may take less than it is given (the lend bounds it); each goes on where it ended.
+    let mut kept = 0u64;
+    while kept < QUOTA / 2 {
+        match saver
+            .write_at(&mut out.lend, kept, &half[..half.len().min((QUOTA / 2 - kept) as usize)])
+            .map_err(|e| format!("write kept at {kept}: {e:?}"))?
+        {
+            0 => return Err(format!("a write to kept at {kept} took nothing")),
+            n => kept += n as u64,
+        }
+    }
+    out.say(&format!(
+        "fsd-client filled one root at {filled} bytes, and the other still wrote {}\n",
+        QUOTA / 2
+    ))
+    .map_err(|e| format!("say: {e:?}"))
 }
 
 /// `fsd-restart`: a file written, then a walk to `probe` ends `fsd` with the call held, so the

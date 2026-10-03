@@ -354,8 +354,9 @@ nothing else: no other volume, no other partition, no device.
 
 ### R48 (a quota per attach root)
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
+- bench:fsd-quota
 - host:redoubt-fsd::a_write_past_one_roots_quota_is_refused_while_another_still_writes
 - host:redoubt-fsd::a_root_with_quota_0_cannot_create_but_can_read_and_remove
 

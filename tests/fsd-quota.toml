@@ -1,0 +1,32 @@
+description = "A quota per attach root, in a boot (servers/fsd.md, R48): under init a client handed a root badge at fsd mints two roots at directories of the volume with a 64 KiB quota each; one writes until fsd refuses a write, having written no more than its quota, and the other still writes half its quota"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and fsd-client, which holds no Reset right, so
+# the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-fsd", bin = "fsd" },
+    { package = "redoubt-fsd-programs", bin = "fsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started fsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] fsd-client filled one root at [0-9]+ bytes, and the other still wrote 32768$',
+    '^\[con [0-9a-f]{16}\] fsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'fsd-client TEST FAILED']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/fsd/boot.json" }
+servers = [{ name = "client", args = ["quota", "fsd:data"] }]
+
+[disk]
+size_kib = 4096
+partitions = 1
