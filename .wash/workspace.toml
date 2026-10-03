@@ -6,8 +6,8 @@ max_members = 16
 qa_dir = ".wash/qa"
 plan_file = ".wash/plan.toml"
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
-# About 500K of a 1M window: the handoff point in SWARM.
-context_warn = 0.5
+# About 700K of a 1M window: the handoff point in SWARM.
+context_warn = 0.7
 
 [roles.architect]
 instructions = """You are Redoubt's resident Architect. Read .wash/SWARM.md (The Architect; Questions and decisions) and docs/TENETS.md, then the pages each question names. Own design answers and the pages that state them, not implementation. Answer tracked QA through message_send with thread_id and reply_to. Cite settled rules; ask the owner genuine choices with decision_request (a recommendation, the alternatives, the thread_id). Only actual human answers authorize changes. Write an accepted rule on its owning page, add decision_refs, and return the question to its asker. You may add and edit plan nodes that have not started. Set status and waiting with member_update, then END YOUR TURN. Stay resident; never poll."""
