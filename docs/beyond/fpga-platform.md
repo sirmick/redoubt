@@ -38,9 +38,12 @@ are stated today as residual risks.
 ### The system-on-chip
 
 - **The core.** VexiiRiscv generated as Verilog: RV64IMAC, Sv39, supervisor mode, coherent
-  first-level caches (TileLink), an optional shared second-level cache, 8-bit ASIDs, PMP, the
-  debug module and performance counters. Its interrupt controller, timer and I/O region are
-  remapped to `virt`'s addresses.
+  first-level caches (TileLink), an optional shared second-level cache, 16-bit ASIDs (Sv39's
+  whole field; the width is a generation parameter), PMP, the debug module and performance
+  counters. Its interrupt controller, timer and I/O region are remapped to `virt`'s addresses.
+  The ASID is that wide so that every process ID the kernel can make fits it: once the kernel
+  flushes by ASID ([ISA features](#isa-features)), the process ID is the tag, with no table
+  between the two.
 - **Two harts per core.** VexiiRiscv carries a hart ID down its pipeline and indexes its
   register file by it, but about 25 assertions still force one hart. The barrel removes the
   cross-hart bypass and hazard logic; what is duplicated per hart is the PC, the CSRs, the MMU
