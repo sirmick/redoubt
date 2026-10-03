@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 399
+revision = 400
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -683,8 +683,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16"]
   body = "Brief: .wash/local/HW1-implementer.md; sweep: .wash/local/hardware-bounds.md. Tier A (kernel constants, libs/layout, loader), size S. Needs K16 (the ASID assert, same lines).\n\nOwner (2026-10-03): be within hardware limits, and say where else. Adds: MAX_THREADS <= u8::MAX; USER_AREA_END within Sv39's 2^38 lower half and below rv32's kernel half; the rv64 kernel-half bases canonical; the loader refuses a 33rd MMIO region or interrupt instead of dropping it (three host tests). No value changes.\n\nBuilds docs/kernel/boot.md: a new 'Hardware bounds' section (the rule: an ISA-fixed field is a compile-time assert on each width; a platform-reported limit is checked at boot and a machine past it is refused, never truncated; and the table), and R17's test list. The hart bounds are SMP1's (its brief, item 1)."
-  state = "reported"
-  revision = 381
+  state = "done"
+  revision = 400
 
 [[node]]
   id = "K22"

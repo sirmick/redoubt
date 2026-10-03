@@ -86,6 +86,37 @@ pub use sv32::*;
 #[cfg(target_pointer_width = "64")]
 pub use sv39::*;
 
+// User space ends where the kernel half begins. Sv39 translates only addresses whose bits 63..=38
+// are all equal, so its lower half is the 2^38 bytes below bit 38.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(redoubt_sys::USER_AREA_END <= 1 << 38, "user space past Sv39's lower half");
+// Sv32 has no hole: the kernel half starts at the physmap, its lowest address.
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(redoubt_sys::USER_AREA_END <= PHYSMAP_BASE, "user space reaches the kernel half");
+
+/// Whether `addr` is a canonical Sv39 address in the upper half: bits 63..=38 all set. Any other
+/// kernel-half address is not canonical, and every access to it faults.
+#[cfg(target_pointer_width = "64")]
+const fn canonical(addr: usize) -> bool { (addr as isize) >> 38 == -1 }
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    let bases = [
+        PHYSMAP_BASE,
+        KERNEL_PLIC_BASE,
+        KERNEL_DMA_REGS,
+        PROCESS_AREA,
+        KERNEL_AREA,
+        KERNEL_TEXT,
+        KERNEL_STACK_TOP,
+        TRAP_STACK_TOP,
+    ];
+    let mut i = 0;
+    while i < bases.len() {
+        assert!(canonical(bases[i]), "a kernel-half base is not a canonical Sv39 address");
+        i += 1;
+    }
+};
+
 // The physmap's end is an address of this width: `physmap_covers` adds the two unchecked.
 const _: () = assert!(PHYSMAP_PHYS_BASE.checked_add(PHYSMAP_SIZE).is_some(), "the physmap ends past usize");
 
