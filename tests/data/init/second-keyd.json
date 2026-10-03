@@ -22,7 +22,7 @@
     {
       "name": "consoled",
       "program": "consoled",
-      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
       "devices": [{"device": "uart0", "as": "uart"}],
       "receives": ["consoled"],
       "args": ["buckets=4"]

@@ -23,20 +23,27 @@ pub const MAX_INPUT: usize = 1024;
 /// A bucket holds `MAX_THREADS` minted connections: `init` starts at most `MAX_THREADS - 1`
 /// servers, one thread watching each, and mints every one of their consoles through its one root
 /// badge here, so that badge's one bucket must hold them all (servers/consoled.md, "Started by
-/// `init`").
+/// `init`"). Their fids are charged to that bucket too, so it holds [`CONSOLE_FIDS`] for each of
+/// those consoles and for `init`'s own.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 2, files: 4, state: redoubt_rt::abi::MAX_THREADS as u32 }
+    let consoles = redoubt_rt::abi::MAX_THREADS as u32;
+    Limits { buckets, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles }
 }
+
+/// The fids one console client holds open: the root its namespace attaches
+/// (`redoubt_client::ns::Namespace::from_startup`) and the `cons` file it opens for reading and
+/// writing (`redoubt_client::console::Console::open`).
+pub const CONSOLE_FIDS: u32 = 2;
 /// What one of each costs, in bytes. A parked read holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), which is `MAX_LEND_PAGES` pages at worst; a
 /// fid and a minted connection are small records.
 pub const COST: Cost = Cost { in_flight: 64 * 1024, file: 256, state: 256 };
 /// The bytes of this server's budget its clients may use between them; its manifest entry gives
 /// it the budget, and the program refuses limits that would not fit. A bucket at its caps costs
-/// 2 parked reads at 64 KiB, 4 fids and `MAX_THREADS` connections at 256 bytes: 140 032 bytes
-/// with `MAX_THREADS` at 31, so 7 buckets fit, and 197 376 bytes at 255, so 5 do; the image's
-/// manifest asks for 4.
-pub const BUDGET: u64 = 1024 * 1024;
+/// 2 parked reads at 64 KiB, and `MAX_THREADS` connections at 256 bytes with 2 fids each at 256:
+/// 154 880 bytes with `MAX_THREADS` at 31, so 13 buckets fit, and 326 912 bytes at 255, so 6 do;
+/// the image's manifest asks for 4.
+pub const BUDGET: u64 = 2 * 1024 * 1024;
 
 /// Bytes of the prefix a minted connection's lines start with: `[con `, the id in 16 lowercase
 /// hex digits, and `] ` (servers/consoled.md, "Started by `init`").

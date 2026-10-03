@@ -371,6 +371,35 @@ fn init_s_badge_mints_a_console_for_every_server_init_can_start() {
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
 
+/// The fids of those consoles are charged to the same bucket: `init`'s own console and one for
+/// each of the `MAX_THREADS - 1` servers it can start each attach and open `cons`, as a program's
+/// console does, and a fid beyond them is refused.
+#[test]
+fn every_console_init_mints_attaches_and_opens_in_its_one_bucket() {
+    let b = boot();
+    let f = fake();
+    let init = f.process(0, &[]);
+    let conn = f.grant(b.server, b.receive, init, 1);
+    f.as_process(init, || {
+        let mut lend = Lend::new(4).unwrap();
+        let own = Connection::new(Endpoint::from_handle(conn));
+        let mut consoles = vec![Connection::new(Endpoint::from_handle(conn))];
+        for i in 0..MAX_THREADS - 1 {
+            let (minted, _) =
+                own.new_connection(&mut lend, "", 0).unwrap_or_else(|e| panic!("console {i}: {e:?}"));
+            consoles.push(Connection::new(minted));
+        }
+        // The root, and `cons` walked from it and opened (redoubt_client's console).
+        for (i, c) in consoles.iter().enumerate() {
+            c.attach(&mut lend, 0, "").unwrap_or_else(|e| panic!("console {i} attaches: {e:?}"));
+            c.walk(&mut lend, 0, 1, "").unwrap_or_else(|e| panic!("console {i} walks: {e:?}"));
+            c.open(&mut lend, 1, mode::ORDWR).unwrap_or_else(|e| panic!("console {i} opens: {e:?}"));
+        }
+        assert_eq!(consoles[0].walk(&mut lend, 0, 2, "").unwrap_err(), ClientError::Remote);
+    });
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+}
+
 /// `consoled` serves no typed protocol of its own, so it refuses every typed opcode, and the
 /// handles such a request carries are closed with the refusal: a client repeating them cannot
 /// grow the server's handle table (servers/serving.md, "Authority").

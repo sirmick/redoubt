@@ -336,8 +336,9 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let devices = virt_devices();
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
-    // 256 + 512 * 3 + 1024 + 4096 pages, and a page each for the budgets.
-    let pages = 256 + 512 * 3 + 1024 + 4096 + 6;
+    // keyd 256, consoled 1024, bootfsd and blkd 512 each, netd 1024 and ipd 4096 pages, and a
+    // page each for the budgets.
+    let pages = 256 + 1024 + 512 * 2 + 1024 + 4096 + 6;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),

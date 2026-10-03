@@ -17,8 +17,8 @@ use alloc::string::String;
 
 use redoubt_client::file::Connection;
 use redoubt_client::{Error, Lend};
+use redoubt_init_programs::Out;
 use redoubt_init_programs::restartee::{CONSOLE, MISREPLY, OK, PING, WAIT};
-use redoubt_init_programs::{LEND_PAGES, Out};
 use redoubt_rt::abi::{self, FOREVER, Handle};
 use redoubt_rt::client;
 use redoubt_rt::handle::Endpoint;
@@ -33,17 +33,12 @@ const TIMEOUT: u64 = 1_000_000;
 /// The fid it writes restartee's console through.
 const CONS_FID: u32 = 1;
 
-/// Its console is opened only for the verdict, after the checks: `consoled` charges the files of
-/// every console `init` minted to one share with `init`'s own, and that share has room for
-/// `init`'s and one more program's, not also the fid on restartee's console.
 fn run(startup: &Startup) -> u32 {
-    let Ok(mut lend) = Lend::new(LEND_PAGES) else { return redoubt_init_programs::code::NO_LEND };
-    let checked = check(startup, &mut lend);
     let mut out = match Out::open(startup) {
         Ok(out) => out,
         Err(code) => return code,
     };
-    let line = match checked {
+    let line = match check(startup, &mut out.lend) {
         Ok(()) => format!("restart-client TEST PASSED\n"),
         Err(why) => format!("restart-client TEST FAILED: {why}\n"),
     };
@@ -75,35 +70,25 @@ fn check(startup: &Startup, lend: &mut Lend) -> Result<(), String> {
         client::Connection::new(Endpoint::from_handle(copy.ok_or("its console came without a handle")?));
     cons.version(lend).map_err(|e| format!("version its console: {e:?}"))?;
     cons.attach(lend, CONS_FID, "").map_err(|e| format!("attach to its console: {e:?}"))?;
-    let checked = across(&at, &cons, second, lend);
-    if checked.is_err() {
-        // Its fid would keep the verdict off the console.
-        let _ = cons.clunk(lend, CONS_FID);
-    }
-    checked
-}
-
-/// The checks after the console copy is attached, through restartee's restart.
-fn across(at: &Endpoint, cons: &client::Connection, second: u64, lend: &mut Lend) -> Result<(), String> {
     cons.open(lend, CONS_FID, mode::OWRITE).map_err(|e| format!("open its console: {e:?}"))?;
     cons.write(lend, CONS_FID, 0, b"restart-client writes through restartee's console\n")
         .map_err(|e| format!("write through its console: {e:?}"))?;
 
-    let (words, _) = call(at, MISREPLY).map_err(|e| format!("misreply: {e:?}"))?;
+    let (words, _) = call(&at, MISREPLY).map_err(|e| format!("misreply: {e:?}"))?;
     if words != MALFORMED {
         return Err(format!("a rejected reply came back as {words:?}, not malformed"));
     }
-    if call(at, PING).map_err(|e| format!("ping after the misreply: {e:?}"))?.0 != OK {
+    if call(&at, PING).map_err(|e| format!("ping after the misreply: {e:?}"))?.0 != OK {
         return Err("no answer after the misreply".into());
     }
 
     // Held until `restart-faulter`'s call arrives and restartee faults serving it.
-    match call(at, WAIT) {
+    match call(&at, WAIT) {
         Err(abi::Error::Dead) => {}
         other => return Err(format!("the call held at the fault ended {other:?}, not Dead")),
     }
     // Queued on the endpoint until the new instance takes it.
-    if call(at, PING).map_err(|e| format!("ping the new instance: {e:?}"))?.0 != OK {
+    if call(&at, PING).map_err(|e| format!("ping the new instance: {e:?}"))?.0 != OK {
         return Err("the new instance did not answer".into());
     }
     let again = Connection::attach(Endpoint::from_handle(at.handle()), lend)
