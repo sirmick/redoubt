@@ -6,6 +6,8 @@ use redoubt_rt::abi::FOREVER;
 use redoubt_rt::client::Lend;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::MALFORMED;
+#[cfg(feature = "one-volume-probe")]
+use redoubt_rt::wire::proto::blkd::ErrorCode;
 use redoubt_rt::wire::proto::blkd::{Flush, Info, Message, Read, Reply, Write};
 
 use crate::volume::{Fault, Geometry, Range, SECTOR};
@@ -55,6 +57,23 @@ impl Blkd {
             _ => Err(Fault),
         }
     }
+}
+
+#[cfg(feature = "one-volume-probe")]
+impl Blkd {
+    /// Test-only, for the bench's `fsd-one-volume` (feature `one-volume-probe`): `blkd`'s answer
+    /// to a one-sector read at `sector`, its error code if it refuses.
+    pub fn read_one(&mut self, sector: u64) -> Result<Result<(), ErrorCode>, Fault> {
+        let words = Message::Read(Read { sector, count: 1 }).encode(self.lend.pages().map_err(|_| Fault)?);
+        let words = words.map_err(|_| Fault)?;
+        let (reply, _) =
+            self.lend.call(&self.endpoint, &words, &[], FOREVER).into_result().map_err(|_| Fault)?;
+        let reply = Reply::decode(2, &reply.words, self.lend.bytes(), reply.handles.as_slice().len());
+        reply.map(|r| r.map(|_| ())).map_err(|_| Fault)
+    }
+
+    /// The range's badge, for the probe to try minting from.
+    pub fn endpoint(&self) -> &Endpoint { &self.endpoint }
 }
 
 impl Range for Blkd {

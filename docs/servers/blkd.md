@@ -208,7 +208,7 @@ The GPT (UEFI 2.10, section 5.3) is the one on-disk structure `blkd` parses, onc
 
 ### Started by `init`
 
-Status: built · partly tested: no `fsd` is started yet, so no range badge is minted from `volumes` · tested: bench:init-boot
+Status: built · tested: bench:init-boot, bench:fsd-boot, bench:fsd-one-volume
 
 `init` starts `blkd` with two named handles in its startup block, `disk` (the virtio MMIO region,
 with DMA allowed) and `disk-irq` (its interrupt), placed from the boot manifest's `devices` list

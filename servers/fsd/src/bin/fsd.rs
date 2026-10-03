@@ -58,14 +58,21 @@ fn receive_endpoint(startup: &Startup, name: &str) -> Option<Endpoint> {
 pub fn serve(startup: &Startup) -> u32 {
     let args: Vec<&str> = startup.args().collect();
     let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_ARGS };
-    let Ok(Args { endpoint, labels }) = parse_args(own_args(&args)) else { return BAD_ARGS };
-    let Some(endpoint) = receive_endpoint(startup, endpoint) else { return BAD_ARGS };
+    let Ok(Args { endpoint: name, labels }) = parse_args(own_args(&args)) else { return BAD_ARGS };
+    let Some(endpoint) = receive_endpoint(startup, name) else { return BAD_ARGS };
     let limits = limits(buckets);
     if !limits.fits(&COST, BUDGET) {
         return BAD_ARGS;
     }
     let Some(volume) = startup.handle("volume") else { return NO_VOLUME };
     let Ok(range) = Blkd::new(Endpoint::from_handle(volume)) else { return NO_VOLUME };
+    // Test-only: R47 tried from inside, before anything is served (src/one_volume.rs).
+    #[cfg(feature = "one-volume-probe")]
+    let range = {
+        let mut range = range;
+        say(startup, &redoubt_fsd::one_volume::verdict(startup, name, &mut range));
+        range
+    };
     let Ok(mounted) = mount(range) else { return NO_VOLUME };
     // A range that does not mount is served as corrupt, not exited on: a damaged medium must
     // not become a restart loop.

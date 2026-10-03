@@ -19,9 +19,13 @@ power-loss safety by design, and a size that can be read.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · partly tested: one instance per volume under `init` has no case yet · tested (27)</summary>
+<details><summary>Status: built · tested (31)</summary>
 
+- bench:fsd-boot
+- bench:fsd-reboot
 - bench:fsd-corrupt-volume
+- bench:fsd-one-volume
+- bench:image-disk
 - host:redoubt-fsd::attach_walk_open_read_write
 - host:redoubt-fsd::files_and_directories_survive_a_remount
 - host:redoubt-fsd::a_removed_files_other_fids_get_removed
@@ -332,25 +336,27 @@ The crash tests inject exactly these failures at every block write of fixed and 
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:fsd-one-volume
 
-`fsd` holds its endpoint, its one block-range handle at `blkd`, and the connections it minted. It
-holds no device, no budget handle and no connection to any other file server. What a client may
-reach is the subtree its connection is rooted at, under the volume's labels and its root's quota.
-
-**Open:** none.
+`fsd` holds its endpoint, its one block-range handle at `blkd`, the console `init` gave it, and
+the connections it minted. It holds no device, no budget handle and no connection to any other
+file server. What a client may reach is the subtree its connection is rooted at, under the
+volume's labels and its root's quota.
 
 ## Security properties
 
 ### R47 (one volume per instance)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (2)</summary>
+
+- bench:fsd-one-volume
+- host:redoubt-init::no_server_is_handed_a_badge_at_blkd
+
+</details>
 
 Each `fsd` instance serves one volume and holds only that volume's block range. A client who
 exploits the filesystem parser through a crafted volume or request reaches that volume's data and
 nothing else: no other volume, no other partition, no device.
-
-**Open:** none.
 
 ### R48 (a quota per attach root)
 

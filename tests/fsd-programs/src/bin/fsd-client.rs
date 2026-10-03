@@ -8,6 +8,7 @@
 //!   reboots the machine (servers/init.md, "Restarts and reboots"). The start after the reboot finds six and
 //!   reads both back, with the same qid paths.
 //! - `read ENDPOINT PATH TEXT...`: each path holds exactly the text after it.
+//! - `apart ENDPOINT ENDPOINT`: writes a file of the same name through each, and reads each back.
 //! - `corrupt ENDPOINT`: every attach is refused, and `fsd` still answers the next.
 //! - `quota ENDPOINT`: mints two roots with a quota each; one fills its quota, and the other still writes.
 //! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends an `fsd` built with its test-only
@@ -54,6 +55,7 @@ fn run(startup: &Startup) -> u32 {
         (Some("boot"), Some(at)) => boot(startup, &mut out, at).map(|()| Ends::Passed),
         (Some("reboot"), Some(at)) => reboot(startup, &mut out, at),
         (Some("read"), Some(at)) => read(startup, &mut out, at, args).map(|()| Ends::Passed),
+        (Some("apart"), Some(at)) => apart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (Some("corrupt"), Some(at)) => corrupt(startup, &mut out, at).map(|()| Ends::Passed),
         (Some("quota"), Some(at)) => quota(startup, &mut out, at).map(|()| Ends::Passed),
         (Some("restart"), Some(at)) => restart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
@@ -211,6 +213,25 @@ fn read<'a>(
         read += 1;
     }
     out.say(&format!("fsd-client read {read} files\n")).map_err(|e| format!("say: {e:?}"))
+}
+
+/// `fsd-one-volume`: two `fsd`s, each on a volume of its own, hold a file of the same name
+/// apart.
+fn apart(startup: &Startup, out: &mut Out, first: &str, second: Option<&str>) -> Result<(), String> {
+    let second = second.ok_or("no second endpoint")?;
+    let mut conns = Vec::new();
+    for at in [first, second] {
+        let conn = attach(startup, out, at)?;
+        write_file(&conn, out, "/", "which", at.as_bytes())?;
+        conns.push(conn);
+    }
+    for (conn, at) in conns.iter().zip([first, second]) {
+        if read_file(conn, out, "/which")? != at.as_bytes() {
+            return Err(format!("{at}'s which does not read back"));
+        }
+    }
+    out.say(&format!("fsd-client read {first}'s which and {second}'s apart\n"))
+        .map_err(|e| format!("say: {e:?}"))
 }
 
 /// `fsd-corrupt-volume`: a volume served as corrupt refuses each attach with an `Rerror`, and
