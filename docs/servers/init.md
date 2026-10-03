@@ -428,9 +428,10 @@ launcher could not free the child's state without losing its own.
 
 ### Restarts and reboots
 
-<details><summary>Status: built · partly tested: blame, `blame`'s badge, a wedged steward and the steward's restart are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked; a killed `netd`'s restart has no case yet · tested (8)</summary>
+<details><summary>Status: built · partly tested: blame, `blame`'s badge, a wedged steward and the steward's restart are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked; a killed `netd`'s restart has no case yet · tested (9)</summary>
 
 - bench:init-restart
+- bench:init-handed-revoked
 - bench:init-reboot
 - bench:init-driver-restart
 - bench:init-quarantine-reboot

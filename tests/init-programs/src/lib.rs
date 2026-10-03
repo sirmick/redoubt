@@ -75,6 +75,12 @@ pub mod orphan {
     pub const OK: [u64; 4] = [0; 4];
 }
 
+/// What `keeper` sends `passer`, four words, the opcode first.
+pub mod passer {
+    /// Exit: the next instance passes a badge of its own.
+    pub const EXIT: u64 = 1;
+}
+
 /// A file server with one empty directory: a connection needs a root, nothing more.
 pub struct Empty;
 

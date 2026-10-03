@@ -67,6 +67,16 @@ name = "orphan-child"
 path = "src/bin/orphan-child.rs"
 test = false
 
+[[bin]]
+name = "passer"
+path = "src/bin/passer.rs"
+test = false
+
+[[bin]]
+name = "keeper"
+path = "src/bin/keeper.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

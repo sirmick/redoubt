@@ -1,0 +1,52 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "disk0", "base": "268468224", "irq": 8, "dma": true},
+    {"name": "net0", "base": "268464128", "irq": 7, "dma": true}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "audit,audit,2222222222222222222222222222222222222222222222222222222222222222", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "bootfsd",
+      "program": "bootfsd",
+      "budget": {"pages": "512", "processes": 1, "weight": 100},
+      "receives": ["bootfsd"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "orphan-server",
+      "program": "orphan-server",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["orphan-server"]
+    },
+    {
+      "name": "keeper",
+      "program": "keeper",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keeper"],
+      "handed": [{"endpoint": "passer", "badge": "7"}]
+    },
+    {
+      "name": "passer",
+      "program": "passer",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["passer"],
+      "handed": [{"endpoint": "orphan-server", "badge": "7"}, {"endpoint": "keeper", "badge": "7"}]
+    }
+  ],
+  "public": []
+}

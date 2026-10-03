@@ -1,0 +1,28 @@
+description = "A badge init handed a server dies with the instance (servers/init.md, \"Restarts and reboots\"): passer passes a copy of its badge at orphan-server to keeper and exits; init restarts it with the same badge minted again, and keeper finds the dead instance's copy gone while the new instance's is answered, so the badge has no holder init does not know"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The real init, keyd, consoled and bootfsd, orphan-server, keeper and passer. The exit and restart
+# lines are init's; the verdict is keeper's, judged from the kernel's and the server's answers.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-init-programs", bin = "orphan-server" },
+    { package = "redoubt-init-programs", bin = "keeper" },
+    { package = "redoubt-init-programs", bin = "passer" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started passer, console [0-9a-f]{16}$',
+    '^init: passer \(PID [0-9]+\) exited, code 9$',
+    '^init: restarted passer, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] keeper TEST PASSED$',
+]
+forbid = ['init: refused the boot', 'init: rebooting']
+reporter = "keeper"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/handed.json" }
