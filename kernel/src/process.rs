@@ -556,15 +556,17 @@ pub fn process_start(
         return Err(Error::TooLarge);
     }
     let slots = crate::redoubt::read_slots::<MAX_START_HANDLES>(mm, handles_rec, count)?;
-    let mut decoded = [None; MAX_START_HANDLES];
-    for (i, slot) in slots.iter().enumerate().take(count) {
-        decoded[i] = Some(AbiHandle::from_raw(*slot)?);
+    // Decoding comes first in the row; it is redone below rather than kept, so that only one
+    // array sized by `MAX_START_HANDLES` beside the slots is on the kernel stack.
+    for slot in &slots[..count] {
+        AbiHandle::from_raw(*slot)?;
     }
     let r = mm.process_handle(pid, process_h)?;
     let p = mm.process_at(r);
     let mut handles = [None; MAX_START_HANDLES];
-    for (i, handle) in decoded.iter().enumerate().take(count) {
-        handles[i] = Some(mm.handle(pid, handle.expect("decoded above").index())?);
+    for (i, slot) in slots.iter().enumerate().take(count) {
+        let handle = AbiHandle::from_raw(*slot).expect("decoded above");
+        handles[i] = Some(mm.handle(pid, handle.index())?);
     }
     if p.started() || !p.alive() {
         return Err(Error::NotPermitted);

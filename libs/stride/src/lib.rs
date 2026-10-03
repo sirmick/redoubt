@@ -272,9 +272,13 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     /// last runnable thread leave the queue; budgets that gained one wake at `max(own, floor)`,
     /// in descending id so the lowest id ranks first.
     pub fn reconcile(&mut self, bs: &mut impl Budgets<B>, running: Option<B>, runnable: &[B]) {
-        let gone: [Option<B>; N] =
-            self.slots.map(|s| s.filter(|b| !runnable.contains(b) && running != Some(*b)));
-        for b in gone.into_iter().flatten() {
+        // In slot order and in place, with no copy of the slots: `N` is the process count, and a
+        // copy would be that big on the kernel stack at every entry. Taking a budget out empties
+        // only its own slot, so each slot is read as it was when the walk began.
+        for i in 0..N {
+            let Some(b) = self.slots[i].filter(|b| !runnable.contains(b) && running != Some(*b)) else {
+                continue;
+            };
             let mut s = bs.state(b);
             s.queued = false;
             bs.set_state(b, s);

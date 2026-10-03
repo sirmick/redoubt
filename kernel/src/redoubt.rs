@@ -238,19 +238,19 @@ pub fn read_record<const N: usize>(mm: &MemoryManager, addr: usize, output: bool
     Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_sys::PAGE_SIZE)))
 }
 
-/// Read a handle-list record under the ownership guard used by fixed records.
+/// Read a handle-list record under the ownership guard used by fixed records. Each slot is read
+/// as soon as its frame is checked, so no second `N`-sized array of frames is on the kernel
+/// stack; a read changes nothing, so a slot that fails its check still refuses the whole record
+/// with nothing done, as when every frame was checked first.
 pub fn read_slots<const N: usize>(mm: &MemoryManager, addr: usize, n: usize) -> Result<[u64; N], Error> {
     if n > N {
         return Err(Error::TooLarge);
     }
     let mut slots = [0u64; N];
-    let mut frames = [0usize; N];
-    for (i, frame) in frames.iter_mut().enumerate().take(n) {
+    for (i, slot) in slots.iter_mut().enumerate().take(n) {
         let at = addr.checked_add(i * 8).ok_or(Error::InvalidArgument)?;
-        *frame = record_frames::<1>(mm, at, false)?[0];
-    }
-    for i in 0..n {
-        slots[i] = kframe::read(frames[i], (addr + i * 8) % redoubt_sys::PAGE_SIZE);
+        let frame = record_frames::<1>(mm, at, false)?[0];
+        *slot = kframe::read(frame, at % redoubt_sys::PAGE_SIZE);
     }
     Ok(slots)
 }

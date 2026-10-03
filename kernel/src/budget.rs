@@ -169,9 +169,9 @@ pub struct Account {
     pub live: u64,
     /// Open calls this process's threads hold (R4a): at `MAX_OPEN_CALLS` it takes no more.
     pub open_calls: u32,
-    /// The next message id its threads will hand a sender. Never 0, never reused within this
-    /// process, and from no counter anyone else can see (I12).
-    pub next_msg_id: u64,
+    /// The last message id its threads handed a sender, 0 before the first: ids are never 0,
+    /// never reused within this process, and from no counter anyone else can see (I12).
+    pub last_msg_id: u64,
     /// The DMA registry slots it has mapped with `map_device` (`dma.rs`): half of the
     /// set its death must reset. Zero again for a new process in the same PID.
     pub dma_mapped: u16,
@@ -181,6 +181,7 @@ pub struct Account {
 }
 
 impl Account {
+    /// A PID with no process: all zeros, so the table of accounts is `.bss`.
     const NONE: Account = Account {
         budget: None,
         threads: 0,
@@ -189,20 +190,22 @@ impl Account {
         ipc: [0; MAX_THREADS + 1],
         live: 0,
         open_calls: 0,
-        next_msg_id: 1,
-        earliest_timeout: u64::MAX,
+        last_msg_id: 0,
+        earliest_timeout: 0,
         dma_mapped: 0,
     };
 }
 
+/// The kernel's objects and the per-PID tables. Its starting value is all zeros, so it is `.bss`
+/// and a table sized by a limit costs RAM, never image.
 pub struct Objects {
-    /// The next object id, shared by budgets and endpoints. Ids are never reused (I12); a
-    /// `u64` cannot run out.
-    next_id: u64,
-    /// The next value of the one order of message arrivals and takes (R2: "the group served least
-    /// recently"). A `u64` cannot run out, and userspace never sees it, so it is no covert
-    /// channel.
-    next_seq: u64,
+    /// The last object id handed out, 0 before the first; ids are shared by budgets and
+    /// endpoints, never 0 and never reused (I12), and a `u64` cannot run out.
+    last_id: u64,
+    /// The last value of the one order of message arrivals and takes (R2: "the group served least
+    /// recently"), 0 before the first. A `u64` cannot run out, and userspace never sees it, so it
+    /// is no covert channel.
+    last_seq: u64,
     /// The highest frame ever given to a kernel object: where a scan for budgets stops.
     pub high_frame: u32,
     /// The first of the budgets with a deadline, linked through their frames
@@ -226,8 +229,8 @@ pub struct Objects {
 impl Objects {
     pub const fn new() -> Objects {
         Objects {
-            next_id: 1,
-            next_seq: 1,
+            last_id: 0,
+            last_seq: 0,
             high_frame: 0,
             deadlines: None,
             accounts: [Account::NONE; MAX_PROCESS_COUNT],
@@ -391,24 +394,21 @@ impl MemoryManager {
 
     /// The next never-reused object id (budgets, endpoints).
     pub fn next_object_id(&mut self) -> u64 {
-        let id = self.objects.next_id;
-        self.objects.next_id = id.checked_add(1).expect("I12: object ids exhausted");
-        id
+        self.objects.last_id = self.objects.last_id.checked_add(1).expect("I12: object ids exhausted");
+        self.objects.last_id
     }
 
     /// The next value of the one order of message arrivals and R2 takes.
     pub fn next_seq(&mut self) -> u64 {
-        let seq = self.objects.next_seq;
-        self.objects.next_seq = seq.checked_add(1).expect("send order exhausted");
-        seq
+        self.objects.last_seq = self.objects.last_seq.checked_add(1).expect("send order exhausted");
+        self.objects.last_seq
     }
 
     /// The next message id process `pid` hands a sender (I12).
     pub fn next_msg_id(&mut self, pid: Pid) -> u64 {
         let account = self.account_mut(pid).expect("account");
-        let id = account.next_msg_id;
-        account.next_msg_id = id.checked_add(1).expect("I12: message ids exhausted");
-        id
+        account.last_msg_id = account.last_msg_id.checked_add(1).expect("I12: message ids exhausted");
+        account.last_msg_id
     }
 
     /// The frame of thread `tid`'s IPC page, if it has one.
@@ -562,7 +562,9 @@ impl MemoryManager {
         if self.budget(budget).free_weight() == 0 {
             return Err(Error::InvalidArgument);
         }
-        self.objects.accounts[index] = Account { budget: Some(budget), ..Account::NONE };
+        // No thread has a timeout yet.
+        self.objects.accounts[index] =
+            Account { budget: Some(budget), earliest_timeout: u64::MAX, ..Account::NONE };
         Ok(())
     }
 

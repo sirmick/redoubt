@@ -92,8 +92,9 @@ const _: () = assert!(PROCESS_IMPL_PAGES == redoubt_layout::THREAD_CONTEXT_PAGES
 /// Which PIDs have an address space the hardware may switch to, and which one is current. The
 /// process table proper is `ptable::ProcessTable`; this is the arch layer's view of it.
 struct PidSlots {
-    /// The process upon which the current syscall is operating
-    current: Pid,
+    /// The process upon which the current syscall is operating; `None` is the kernel, until the
+    /// first switch, so that the starting value is all zeros and the table is `.bss`.
+    current: Option<Pid>,
 
     /// The actual table contents. `true` if a process is allocated,
     /// `false` if it is free.
@@ -101,7 +102,7 @@ struct PidSlots {
 }
 
 static PID_SLOTS: KernelCell<PidSlots> =
-    KernelCell::new(PidSlots { current: redoubt_layout::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] });
+    KernelCell::new(PidSlots { current: None, table: [false; MAX_PROCESS_COUNT] });
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -154,7 +155,7 @@ pub struct Thread {
 
 impl Process {
     pub fn current() -> Process {
-        let pid = PID_SLOTS.with(|pt| pt.current);
+        let pid = current_pid();
         let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
         assert_eq!((pid.get() as usize), hardware_pid);
         Process { pid }
@@ -400,8 +401,8 @@ pub fn set_current_pid(pid: Pid) {
             None | Some(false) => panic!("PID {} does not exist", pid),
             _ => (),
         }
-        pt.current = pid;
+        pt.current = Some(pid);
     });
 }
 
-pub fn current_pid() -> Pid { PID_SLOTS.with(|pt| pt.current) }
+pub fn current_pid() -> Pid { PID_SLOTS.with(|pt| pt.current).unwrap_or(redoubt_layout::KERNEL_PID) }

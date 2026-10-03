@@ -69,10 +69,17 @@ struct Sched {
     billing: Option<(u64, BudgetRef)>,
     /// Billing paused while `kmain` expires deadlines (the walk is nobody's), to resume after.
     paused: Option<BudgetRef>,
+    /// Rebuilt at every kernel entry's end and every pick.
+    runnable: Runnable,
 }
 
-static SCHED: KernelCell<Sched> =
-    KernelCell::new(Sched { cpu: Cpu::new(), user_since: None, billing: None, paused: None });
+static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
+    cpu: Cpu::new(),
+    user_since: None,
+    billing: None,
+    paused: None,
+    runnable: Runnable { list: [BudgetRef { frame: 0, id: 0 }; MAX_PROCESS_COUNT], n: 0 },
+});
 
 fn ticks() -> u64 { crate::arch::irq::timer::now_ticks() }
 
@@ -147,34 +154,43 @@ impl Sched {
             self.billing = Some((now, b));
         }
     }
+}
 
-    /// Budgets with a thread waiting for the CPU, each once.
-    fn runnable(ss: &ProcessTable, mm: &MemoryManager) -> ([BudgetRef; MAX_PROCESS_COUNT], usize) {
-        let mut out = [BudgetRef { frame: 0, id: 0 }; MAX_PROCESS_COUNT];
-        let mut n = 0;
+/// The budgets with a thread waiting for the CPU, each once: the first `n` of `list`. Kept in
+/// [`SCHED`] rather than built on the kernel stack, because it is sized by `MAX_PROCESS_COUNT`.
+struct Runnable {
+    list: [BudgetRef; MAX_PROCESS_COUNT],
+    n: usize,
+}
+
+impl Runnable {
+    /// Fill the list from the process table and return it.
+    fn fill(&mut self, ss: &ProcessTable, mm: &MemoryManager) -> &[BudgetRef] {
+        self.n = 0;
         for p in ss.processes.iter() {
-            if p.free() || p.pid.get() == 1 {
+            if p.free() || p.pid().get() == 1 {
                 continue;
             }
             let ready = p.ready_threads().is_none_or(|x| x != 0);
             if !ready {
                 continue;
             }
-            let Some(frame) = mm.budget_of(p.pid) else { continue };
+            let Some(frame) = mm.budget_of(p.pid()) else { continue };
             let b = budget_ref(mm, frame);
-            if !out[..n].contains(&b) && n < out.len() {
-                out[n] = b;
-                n += 1;
+            if !self.list[..self.n].contains(&b) && self.n < self.list.len() {
+                self.list[self.n] = b;
+                self.n += 1;
             }
         }
-        (out, n)
+        &self.list[..self.n]
     }
+}
 
-    fn reconcile(&mut self, mm: &mut MemoryManager, runnable: &[BudgetRef]) {
-        #[cfg(feature = "sched-trace")]
-        trace::entry();
-        self.cpu.reconcile(mm, runnable);
-    }
+/// The end of a kernel entry: the queue takes in `runnable`.
+fn reconcile(cpu: &mut Cpu<BudgetRef, MAX_PROCESS_COUNT>, mm: &mut MemoryManager, runnable: &[BudgetRef]) {
+    #[cfg(feature = "sched-trace")]
+    trace::entry();
+    cpu.reconcile(mm, runnable);
 }
 
 /// A trap from user mode: the user time since the last return is `cur`'s.
@@ -300,8 +316,7 @@ pub fn leave(pid: Pid) {
                 let payer = s.billing.map(|(_, b)| b);
                 s.close_billing(mm, now);
                 let next = if pid.get() == 1 { None } else { mm.budget_of(pid).map(|f| budget_ref(mm, f)) };
-                let (list, n) = Sched::runnable(ss, mm);
-                let runnable = &list[..n];
+                let runnable = s.runnable.fill(ss, mm);
                 if next != s.cpu.cur {
                     let left = s.cpu.switch(mm, next, |_, b| runnable.contains(&b));
                     s.user_since = None;
@@ -324,7 +339,7 @@ pub fn leave(pid: Pid) {
                         s.billing = payer.map(|b| (now, b));
                     }
                 }
-                s.reconcile(mm, runnable);
+                reconcile(&mut s.cpu, mm, runnable);
                 next.is_some()
             })
         })
@@ -350,8 +365,8 @@ pub fn leave(pid: Pid) {
 /// a slice. `None` when nothing is runnable.
 pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
     let chosen = SCHED.with(|s| {
-        let (list, n) = Sched::runnable(ss, mm);
-        s.reconcile(mm, &list[..n]);
+        let runnable = s.runnable.fill(ss, mm);
+        reconcile(&mut s.cpu, mm, runnable);
         s.cpu.pick(mm, |mm, b| next_thread(ss, mm, b))
     });
     let (b, (pid, tid)) = chosen?;
@@ -372,7 +387,7 @@ fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(P
     let mut first: Option<(Pid, TID)> = None;
     let mut after: Option<(Pid, TID)> = None;
     for p in ss.processes.iter() {
-        if p.free() || p.running() || p.pid.get() == 1 || mm.budget_of(p.pid) != Some(b.frame) {
+        if p.free() || p.running() || p.pid().get() == 1 || mm.budget_of(p.pid()) != Some(b.frame) {
             continue;
         }
         let tids: [bool; MAX_THREADS + 1] = match p.ready_threads() {
@@ -380,10 +395,10 @@ fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(P
             None => core::array::from_fn(|t| t == 0),
         };
         for (tid, _) in tids.iter().enumerate().filter(|(_, r)| **r) {
-            let key = (p.pid.get(), tid);
-            first.get_or_insert((p.pid, tid));
+            let key = (p.pid().get(), tid);
+            first.get_or_insert((p.pid(), tid));
             if after.is_none() && cursor.is_some_and(|c| key > c) {
-                after = Some((p.pid, tid));
+                after = Some((p.pid(), tid));
             }
         }
     }

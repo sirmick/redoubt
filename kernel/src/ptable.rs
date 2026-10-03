@@ -86,8 +86,9 @@ pub struct Process {
     /// Where this process is in terms of lifecycle
     state: ProcessState,
 
-    /// This process' PID. This should match up with the index in the process table.
-    pub pid: Pid,
+    /// This process' PID. This should match up with the index in the process table. `None` in
+    /// a slot never used, so that the table's starting value is all zeros and it is `.bss`.
+    pid: Option<Pid>,
 
     /// The current thread ID
     pub current_thread: TID,
@@ -142,8 +143,11 @@ impl Process {
     /// Whether the process is on the CPU.
     pub fn running(&self) -> bool { matches!(self.state, ProcessState::Running(_)) }
 
+    /// This process's PID; a slot is given one before it is first used.
+    pub fn pid(&self) -> Pid { self.pid.expect("a process slot in use has a PID") }
+
     pub fn activate(&self) {
-        crate::arch::process::set_current_pid(self.pid);
+        crate::arch::process::set_current_pid(self.pid());
         self.mapping.activate();
     }
 
@@ -152,22 +156,23 @@ impl Process {
             return Err(ProcessError::NotFound);
         }
 
-        println!("[!] Terminating process with PID {}", self.pid);
+        let pid = self.pid();
+        println!("[!] Terminating process with PID {}", pid);
 
         // Free all associated memory pages, and give its budget back what the process had
         // charged to it (budget.rs).
         crate::mem::MemoryManager::with_mut(|mm| {
             // The final teardown step: a frame given back here may be handed to another process
             // at once, so this process never runs again.
-            mm.release_owned_frames(self.pid, &self.mapping);
+            mm.release_owned_frames(pid, &self.mapping);
             // Its DMA frames are pooled only once every device that could hold their address
             // confirms a reset, or quarantined for ever (kernel/devices.md, `dma.rs`).
-            mm.dma_release(self.pid);
-            mm.process_ended(self.pid);
+            mm.dma_release(pid);
+            mm.process_ended(pid);
         });
 
         // Remove this PID from the process table
-        ArchProcess::destroy(self.pid);
+        ArchProcess::destroy(pid);
         self.state = ProcessState::Free;
         // And forget its address space. `process_create` draws PIDs from the free ones, and
         // `MemoryMapping::allocate` refuses a mapping that still names an address space, so a
@@ -181,9 +186,9 @@ impl Process {
 static PROCESS_TABLE: KernelCell<ProcessTable> = KernelCell::new(ProcessTable {
     processes: [Process {
         state: ProcessState::Free,
-        pid: KERNEL_PID,
+        pid: None,
         mapping: arch::mem::DEFAULT_MEMORY_MAPPING,
-        current_thread: INITIAL_TID,
+        current_thread: 0,
     }; MAX_PROCESS_COUNT],
 });
 
@@ -192,7 +197,7 @@ impl core::fmt::Debug for Process {
         write!(
             fmt,
             "Process {} state: {:?}  TID: {}  Memory mapping: {:?}",
-            self.pid.get(),
+            self.pid.map_or(0, |pid| pid.get()),
             self.state,
             self.current_thread,
             self.mapping
@@ -237,8 +242,9 @@ impl ProcessTable {
             // table.
             unsafe {
                 process.mapping.from_init_process(*init);
-                process.pid = Pid::new(pid as _).unwrap();
+                process.pid = Pid::new(pid as _);
             };
+            process.current_thread = INITIAL_TID;
             process.state = if pid == 1 {
                 ProcessState::Running(0)
             } else {
@@ -265,7 +271,7 @@ impl ProcessTable {
         if entry.state != ProcessState::Free {
             return Err(ProcessError::NotFound);
         }
-        entry.pid = pid;
+        entry.pid = Some(pid);
         entry.state = ProcessState::Allocated;
         entry.current_thread = INITIAL_TID as TID;
         entry.mapping.allocate(mm, pid).map_err(ProcessError::Page).inspect_err(|_| {
