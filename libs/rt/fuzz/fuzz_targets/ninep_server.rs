@@ -105,7 +105,7 @@ impl FileServer for Tree {
     }
 
     /// Refuses one grant size, as a server metering bytes may.
-    fn minted(&mut self, _: &Caller, _: u64, _: &usize, quota: u64) -> Result<(), NineError> {
+    fn minted(&mut self, _: &Caller, _: u64, _: u64, _: &usize, quota: u64) -> Result<(), NineError> {
         if quota == 1 { Err(NineError("quota refused")) } else { Ok(()) }
     }
 
