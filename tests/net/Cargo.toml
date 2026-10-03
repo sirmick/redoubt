@@ -51,4 +51,6 @@ redoubt-net-client = { path = "client" }
 stub = { path = "../../stub" }
 
 [dev-dependencies]
+# Each case's manifest, read with init's own decoder (tests/cases.rs).
+redoubt-init = { path = "../../servers/init" }
 toml = "0.8"
