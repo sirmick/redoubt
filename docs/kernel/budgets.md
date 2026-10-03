@@ -160,7 +160,7 @@ principals' budgets.*
 
 ### The tree from the boot manifest
 
-<details><summary>Status: built · partly tested: the steward's carving of `users` is not built · tested (7)</summary>
+<details><summary>Status: built · partly tested: the steward's carving of `users` is not built · tested (8)</summary>
 
 - bench:init-boot
 - bench:init-servers
@@ -168,6 +168,7 @@ principals' budgets.*
 - bench:init-refuses-bound
 - host:redoubt-init::servers_that_do_not_fit_in_system_are_refused
 - host:redoubt-init::the_image_manifest_s_bound
+- host:redoubt-init::an_image_and_a_stack_larger_than_a_batch_count_one_batch
 - host:redoubt-init::a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused
 
 </details>
@@ -188,13 +189,14 @@ keeps free. What `init` launches counts in the budgets it launches into.
   - a page for each server endpoint it owns;
   - a thread for each server, watching its exit endpoint: the thread's stack and IPC page;
   - a process object for each process it starts (at most `system`'s process limit);
-  - the image of each program it starts, copied whole from the bundle through its pages on the
-    way to the child: the largest image counts.
+  - one batch of the program it is starting, at most 64 pages of its image and 64 of its
+    stack at a time, copied through its pages and moved to the child
+    ([the loader stub](../userland/native.md#the-loader-stub)).
 
-  With `beamlet`, whose image is the largest, the bound is 1,059 pages on rv64 and 1,286 on
-  rv32 (`beamlet-boot` prints it), and 2,048 leaves 989 and 762 to spare. It is a fixed count,
-  not a share of RAM, because `init`'s needs grow with the largest program it starts, not with
-  the machine, and a share of a large machine would sit idle in `root`. The manifest cannot
+  With `beamlet`, the bound is 416 pages on both widths (`beamlet-boot` prints it), and 2,048
+  leaves 1,632 to spare. It is a fixed count, not a share of RAM, because `init`'s
+  needs do not grow with the machine, nor with the size of a program it starts, and a share of
+  a large machine would sit idle in `root`. The manifest cannot
   change it, because the kernel reads no manifest. `init`
   works in a fixed arena, and before it creates anything it bounds what the manifest will cost it
   in `root`: the endpoints it makes, a process object, a startup block and a thread watching its

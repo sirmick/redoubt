@@ -91,13 +91,13 @@ fn the_image_manifest_s_bound() {
     let plan = on_virt(&image()).unwrap();
     // The arena (256 + 3 tables), 6 receive and 6 exit endpoints and init's reports endpoint, 6
     // process objects, 6 blocks with 3 tables each, 6 watching threads (an IPC page, 4 stack pages
-    // and 3 tables each), the largest launch (stub 4 + 3, ipd's 147 pages + 3, stack 16 + 3), the
-    // lend (2 + 3), and no handle-table page: 22 handles at the start (3 budgets, the Reset right,
-    // 18 devices) and 6 + 2 + 24 + 3 + 1 = 36 added still fit page 0.
+    // and 3 tables each), one launch (stub 4 + 3, one 64-page batch of ipd's 147-page image + 3,
+    // stack 16 + 3), the lend (2 + 3), and no handle-table page: 22 handles at the start (3
+    // budgets, the Reset right, 18 devices) and 6 + 2 + 24 + 3 + 1 = 36 added still fit page 0.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 13 + 6 + 24 + 48 + (4 + 3 + 147 + 3 + 16 + 3) + 5);
+    assert_eq!(plan.bound, 259 + 13 + 6 + 24 + 48 + (4 + 3 + 64 + 3 + 16 + 3) + 5);
 }
 
 // ---- decoding: strict JSON, types, members ----

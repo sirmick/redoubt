@@ -345,10 +345,12 @@ The table: [libs/wire/tables/startup.md](../../libs/wire/tables/startup.md).
 
 ### Launching through the loader stub
 
-<details><summary>Status: built · partly tested: on target the kernel's refusal masks the stub's overlap checks, which only host tests pin · tested (19)</summary>
+<details><summary>Status: built · partly tested: on target the kernel's refusal masks the stub's overlap checks, which only host tests pin · tested (21)</summary>
 
 - bench:rt-host-tests
 - bench:stub-launch
+- host:redoubt-client::an_image_moves_one_batch_at_a_time
+- host:redoubt-client::a_refusal_on_the_third_batch_leaves_the_launcher_as_it_was
 - host:stub::plan_maps_a_well_formed_segment
 - host:stub::plan_refuses_a_segment_reaching_outside_the_image
 - host:stub::plan_refuses_a_segment_overlapping_an_excluded_range
@@ -375,9 +377,10 @@ image can hurt only the process it was going to become.
 
 1. The launcher creates the child's budget and process (`process_create`) with an exit endpoint.
 2. It maps into the child, with `process_map`: the stub, read-only and executable, at
-   `STUB_ENTRY` (`0x1FF0_0000`); a copy of the program's ELF image, read-write; the stack; and
-   the startup block, read-only, naming the image with `image_addr` and `image_len`. Where each
-   goes is on [memory layout](../kernel/memory-layout.md#launcher-placement).
+   `STUB_ENTRY` (`0x1FF0_0000`); a copy of the program's ELF image, read-write, placed 64 pages
+   at a time; the stack; and the startup block, read-only, naming the image with `image_addr`
+   and `image_len`. Where each goes is on
+   [memory layout](../kernel/memory-layout.md#launcher-placement).
 3. It starts the child's first thread at `STUB_ENTRY`, with the startup block's address as the
    argument, installing the child's handles.
 4. The stub reads `image_addr` and `image_len` from the block, checks that the image lies clear

@@ -1,14 +1,15 @@
 //! `launch` and `grants` on the fake kernel, which keeps what each child was given: the stub, the
 //! image, the stack and the startup block where the launching convention puts them, the block
 //! read back by the runtime's own parser; refusals before any kernel call; a refusal midway
-//! handing the budget back; and a child's grants released at every server by its exit notice.
+//! handing the budget back; an image moved one batch at a time; and a child's grants released at
+//! every server by its exit notice.
 
 mod common;
 
 use common::{AUDIT_BADGE, Boot, Keyd};
 use redoubt_client::file::Connection;
 use redoubt_client::grants::{Grants, RELEASE_TIMEOUT};
-use redoubt_client::launch::{Job, Launch};
+use redoubt_client::launch::{Job, Launch, PLACE_PAGES};
 use redoubt_client::{Error, Lend, Refusal, typed};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Cause, Error as SysError, FOREVER, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE};
@@ -139,6 +140,80 @@ fn a_refusal_midway_hands_the_budget_back() {
         assert_eq!(failed.budget.handle(), budget);
     }
     f.as_process(launcher, || Budget::from_handle(budget).destroy().unwrap());
+    assert!(f.destroyed(launcher, budget));
+}
+
+/// An image of three batches and a page moves in four batches, and a stack of a batch and a page
+/// in two, each copied into fresh pages and moved before the next is made, so the launcher holds
+/// one batch at most; the child's image reads back whole.
+#[test]
+fn an_image_moves_one_batch_at_a_time() {
+    let f = fake();
+    let (launcher, budget, exit) = launcher();
+    let image: Vec<u8> = (0..(3 * PLACE_PAGES + 1) * PAGE_SIZE).map(|i| (i % 251) as u8).collect();
+    let held = f.held(launcher).1;
+    f.held_peak(launcher);
+    let job = f.as_process(launcher, || {
+        let mut launch = Launch::new(STUB, &image, Budget::from_handle(budget), Endpoint::from_handle(exit));
+        launch.stack_pages(PLACE_PAGES + 1);
+        launch.start().ok().unwrap()
+    });
+    let child = f.launched(launcher, job.process().handle());
+    let moves = &child.maps[1..5];
+    let batch = PLACE_PAGES * PAGE_SIZE;
+    let at: Vec<_> = moves.iter().map(|(dst, flags, bytes)| (*dst, *flags, bytes.len())).collect();
+    let rw = MemFlags::READ | MemFlags::WRITE;
+    assert_eq!(
+        at,
+        [
+            (IMAGE_AT, rw, batch),
+            (IMAGE_AT + batch, rw, batch),
+            (IMAGE_AT + 2 * batch, rw, batch),
+            (IMAGE_AT + 3 * batch, rw, PAGE_SIZE)
+        ]
+    );
+    assert_eq!(moves.iter().flat_map(|(_, _, bytes)| bytes.iter().copied()).collect::<Vec<_>>(), image);
+    let stack_at = STACK_TOP - (PLACE_PAGES + 1) * PAGE_SIZE;
+    let stack: Vec<_> =
+        child.maps[5..7].iter().map(|(dst, flags, bytes)| (*dst, *flags, bytes.len())).collect();
+    assert_eq!(stack, [(stack_at, rw, batch), (stack_at + batch, rw, PAGE_SIZE)]);
+    assert_eq!((child.maps[7].0, child.maps.len()), (STARTUP_AT, 8));
+    assert_eq!(f.held_peak(launcher), held + PLACE_PAGES);
+    assert_eq!(f.held(launcher).1, held);
+}
+
+/// A launch refused on its image's third batch leaves the two moved batches in the child, which
+/// never started, hands the budget back for the caller to destroy with them, and leaves the
+/// launcher's pages as they were.
+#[test]
+fn a_refusal_on_the_third_batch_leaves_the_launcher_as_it_was() {
+    let f = fake();
+    let (launcher, budget, exit) = launcher();
+    let image = vec![7u8; (3 * PLACE_PAGES + 1) * PAGE_SIZE];
+    let held = f.held(launcher).1;
+    let calls = f.calls(launcher).len();
+    f.held_peak(launcher);
+    // The stub's move and the image's first two go through.
+    f.refuse_after(launcher, "process_map", 3, SysError::OutOfMemory);
+    let failed = f.as_process(launcher, || {
+        Launch::new(STUB, &image, Budget::from_handle(budget), Endpoint::from_handle(exit))
+            .start()
+            .err()
+            .unwrap()
+    });
+    assert_eq!(failed.error, Error::Sys(SysError::OutOfMemory));
+    assert_eq!(failed.budget.handle(), budget);
+    let made = &f.calls(launcher)[calls..];
+    assert_eq!(made.iter().filter(|call| **call == "process_map").count(), 4);
+    // The child, never started, holds the stub and the image's first two batches.
+    let [child] = &f.launched_in(launcher, budget)[..] else { panic!("one child in the budget") };
+    let moved: Vec<_> = child.maps.iter().map(|(dst, _, bytes)| (*dst, bytes.len())).collect();
+    let batch = PLACE_PAGES * PAGE_SIZE;
+    assert_eq!(moved, [(STUB_ENTRY, PAGE_SIZE), (IMAGE_AT, batch), (IMAGE_AT + batch, batch)]);
+    assert_eq!(child.start, None);
+    assert_eq!(f.held_peak(launcher), held + PLACE_PAGES);
+    assert_eq!(f.held(launcher).1, held);
+    f.as_process(launcher, || failed.budget.destroy().unwrap());
     assert!(f.destroyed(launcher, budget));
 }
 

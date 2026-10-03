@@ -24,6 +24,11 @@ use crate::grants::Grants;
 /// The child's stack unless the launcher says otherwise.
 const STACK_PAGES: usize = 16;
 
+/// The most pages a launch holds at once: it copies the image and the stack into the child this
+/// many pages at a time (servers/init.md, "Launching through the loader stub"), and `init`'s
+/// bound counts one batch.
+pub const PLACE_PAGES: usize = 64;
+
 /// One launch, assembled.
 pub struct Launch<'a> {
     stub: &'a [u8],
@@ -103,10 +108,11 @@ impl<'a> Launch<'a> {
             Err(error) => return Err(self.failed(error.into())),
         };
         let rw = MemFlags::READ | MemFlags::WRITE;
-        let started = place(&process, self.stub, STUB_ENTRY, MemFlags::READ | MemFlags::EXECUTE)
-            .and_then(|()| place(&process, self.image, IMAGE_AT, rw))
-            .and_then(|()| process.map(Buffer::new(self.stack_pages)?, stack_at, rw))
-            .and_then(|()| place(&process, &block, STARTUP_AT, MemFlags::READ))
+        let rx = MemFlags::READ | MemFlags::EXECUTE;
+        let started = place(&process, self.stub, pages_of(self.stub), STUB_ENTRY, rx)
+            .and_then(|()| place(&process, self.image, pages_of(self.image), IMAGE_AT, rw))
+            .and_then(|()| place(&process, &[], self.stack_pages, stack_at, rw))
+            .and_then(|()| place(&process, &block, pages_of(&block), STARTUP_AT, MemFlags::READ))
             .and_then(|()| process.start(STUB_ENTRY, STACK_TOP - 16, STARTUP_AT, &slots));
         match started {
             Ok(()) => Ok(Job { process, budget: self.budget, exit: self.exit, grants: self.grants }),
@@ -163,11 +169,24 @@ impl<'a> Launch<'a> {
     }
 }
 
-/// Copies `bytes` into fresh pages and moves them into the child at `dst`.
-fn place(process: &Process, bytes: &[u8], dst: usize, flags: MemFlags) -> Result<(), SysError> {
-    let mut pages = Buffer::new(bytes.len().max(1).div_ceil(PAGE_SIZE))?;
-    pages[..bytes.len()].copy_from_slice(bytes);
-    process.map(pages, dst, flags)
+/// The pages of `bytes`, at least one.
+fn pages_of(bytes: &[u8]) -> usize { bytes.len().max(1).div_ceil(PAGE_SIZE) }
+
+/// Fills `pages` pages at `dst` in the child with `bytes`, zeroes after them, `PLACE_PAGES` at a
+/// time: each batch is copied into fresh pages and moved in before the next is made, so the
+/// caller never holds more than one batch. A refusal leaves the batches already moved in the
+/// child, which has not started, and returns the refused batch's pages to the caller.
+fn place(process: &Process, bytes: &[u8], pages: usize, dst: usize, flags: MemFlags) -> Result<(), SysError> {
+    // At least one batch: one of no pages is refused, as a whole one was.
+    for done in (0..pages.max(1)).step_by(PLACE_PAGES) {
+        let n = (pages - done).min(PLACE_PAGES);
+        let mut batch = Buffer::new(n)?;
+        let from = bytes.get(done * PAGE_SIZE..).unwrap_or_default();
+        let len = from.len().min(n * PAGE_SIZE);
+        batch[..len].copy_from_slice(&from[..len]);
+        process.map(batch, dst + done * PAGE_SIZE, flags)?;
+    }
+    Ok(())
 }
 
 /// A started child: its exit notice arrives once, on the job's endpoint, and destroying its

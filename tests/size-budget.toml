@@ -46,7 +46,7 @@ max_lines = 15
 [[crate]]
 name = "libs/client"
 paths = ["libs/client/src"]
-max_lines = 623
+max_lines = 632
 
 [[crate]]
 name = "libs/rt"
@@ -113,7 +113,7 @@ max_lines = 2887
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 1825
+max_lines = 1828
 
 [[crate]]
 name = "servers/fsd"
