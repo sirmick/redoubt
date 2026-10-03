@@ -18,6 +18,26 @@ pub struct Builder {
     pub verbose: bool,
 }
 
+/// Runs `command` with the pinned Erlang toolchain on the path (`userland/otp/tools/env.sh`),
+/// from `workspace`, and returns what it printed. A VM that crashes writes no `erl_crash.dump`
+/// into the tree.
+pub fn erlang(workspace: &Path, command: &[&str]) -> Result<String> {
+    let output = Command::new("bash")
+        .current_dir(workspace)
+        .env("ERL_CRASH_DUMP", "/dev/null")
+        .args(["-c", ". userland/otp/tools/env.sh && exec \"$@\"", "_"])
+        .args(command)
+        .output()
+        .with_context(|| format!("running {}", command[0]))?;
+    ensure!(
+        output.status.success(),
+        "{} failed: {}",
+        command.join(" "),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Which cargo profile builds a package: the workspace's `release`, or `checked` (Cargo.toml):
 /// release with debug assertions and overflow checks on, so every precondition check in
 /// `core` (`slice::from_raw_parts`, `ptr::read`, ...), every `debug_assert!` and every
@@ -176,6 +196,9 @@ impl Builder {
             }
             Program::Erlang { erlang } => return self.erlc(erlang),
             Program::Otp { otp } => return self.otp_module(otp),
+            Program::UserlandIndex { userland_index } => {
+                return Ok((String::from("system.index"), self.userland(userland_index)?.1));
+            }
             Program::Zeros { zeros } => return self.zeros(*zeros),
             Program::TestProgram(bin) | Program::Bin { bin, .. } => {
                 ("test-programs", bin.as_str(), &[], None)
@@ -190,6 +213,21 @@ impl Builder {
         Ok((bin.to_string(), built))
     }
 
+    /// The userland disk `recipe` packs, staged once in this run: its objects' directory and its
+    /// `system.index` (`userland.rs`).
+    pub fn userland(&self, recipe: &Path) -> Result<(PathBuf, PathBuf)> {
+        let stem = recipe.file_stem().context("a recipe with no name")?.to_string_lossy();
+        let dir = self.run.join("userland").join(&*stem);
+        let (stage, index) = (dir.join("objects"), dir.join("system.index"));
+        if !index.exists() {
+            let loaded = crate::disk::Recipe::load(&self.workspace.join(recipe))?;
+            let objects =
+                loaded.objects.as_ref().with_context(|| format!("{}: no objects", recipe.display()))?;
+            crate::userland::stage(&self.workspace, objects, &stage, &index)?;
+        }
+        Ok((stage, index))
+    }
+
     /// A file of `len` zero bytes in this run, named for its length.
     fn zeros(&self, len: u64) -> Result<(String, PathBuf)> {
         let name = format!("zeros-{len}");
@@ -199,25 +237,7 @@ impl Builder {
         Ok((name, path))
     }
 
-    /// Runs `command` with the pinned Erlang toolchain on the path (`userland/otp/tools/env.sh`),
-    /// from the workspace root, and returns what it printed. A VM that crashes writes no
-    /// `erl_crash.dump` into the tree.
-    fn erlang(&self, command: &[&str]) -> Result<String> {
-        let output = Command::new("bash")
-            .current_dir(&self.workspace)
-            .env("ERL_CRASH_DUMP", "/dev/null")
-            .args(["-c", ". userland/otp/tools/env.sh && exec \"$@\"", "_"])
-            .args(command)
-            .output()
-            .with_context(|| format!("running {}", command[0]))?;
-        ensure!(
-            output.status.success(),
-            "{} failed: {}",
-            command.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
+    fn erlang(&self, command: &[&str]) -> Result<String> { erlang(&self.workspace, command) }
 
     /// Compiles the Erlang module at `source` into this run's `erlang/`, and returns the
     /// module's file name and its `.beam`.

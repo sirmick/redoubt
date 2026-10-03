@@ -45,5 +45,5 @@
       "receives": ["fsd:data"],
       "args": ["endpoint=fsd:data", "buckets=4"] }
   ],
-  "public": []
+  "public": ["system.index"]
 }

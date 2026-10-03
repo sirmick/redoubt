@@ -451,7 +451,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
         redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap())
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=4"]);
+    assert_eq!(args(&m, "bootfsd"), ["buckets=4", "system.index"]);
     assert_eq!(args(&m, "blkd"), ["labels.2=7"]);
 }
 

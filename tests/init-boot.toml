@@ -1,8 +1,8 @@
 description = "The image's bundle, packed from image/boot.toml as ./mkimage packs it, on the image's disk, packed from image/disk.toml as ./mkimage packs it, boots to init's last line (servers/init.md, \"Starting the servers\"): init checks the manifest whole, starts keyd and finds it holds none of the keys the box is authenticated by, gives the UART up to consoled and writes through it, starts the rest with a console connection each, pushes the public entries to bootfsd and seals it, holds no more of root than its bound, and no server exits"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# The recipe's bundle: the kernel, the real init, the seven servers' images and the image's
-# manifest. Every verdict is init's own line, on the UART it maps and then through consoled; a
+# The recipe's bundle: the kernel, the real init, the seven servers' images, the userland disk's
+# system.index, public, and the image's manifest. Every verdict is init's own line, on the UART it maps and then through consoled; a
 # refusal would be init's line and a power-off reporting a system failure.
 recipe = "image/boot.toml"
 timeout_secs = 60
@@ -17,7 +17,7 @@ expect = [
     '^init: started netd, console [0-9a-f]{16}$',
     '^init: started ipd, console [0-9a-f]{16}$',
     '^init: started fsd:data, console [0-9a-f]{16}$',
-    '^init: 0 public entries pushed to bootfsd, and sealed$',
+    '^init: 1 public entries pushed to bootfsd, and sealed$',
     # The manifest's two handed items, fsd:data's range, and the five consoles after consoled's,
     # each found gone.
     '^init: holds none of the 3 badges and 5 console connections it handed$',

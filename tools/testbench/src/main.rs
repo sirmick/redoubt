@@ -20,6 +20,7 @@ mod sched_oracle;
 mod size;
 mod ssh;
 mod target;
+mod userland;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -56,8 +57,9 @@ struct Args {
     /// uses): the kernel, `init`, the servers and the manifest.
     #[arg(long, value_name = "RECIPE", conflicts_with = "programs")]
     recipe: Option<PathBuf>,
-    /// Instead of running tests, pack the disk recipe RECIPE (`image/disk.toml`, which `./mkimage`
-    /// uses) into the raw disk image OUT, and exit.
+    /// Instead of running tests, pack the disk recipe RECIPE (`image/disk.toml` or
+    /// `image/userland.toml`, which `./mkimage` uses) into the raw disk image OUT, and exit. The
+    /// userland disk's objects are staged first, and its `system.index` written for the bundle.
     #[arg(long, num_args = 2, value_names = ["RECIPE", "OUT"])]
     pack_disk: Option<Vec<PathBuf>>,
     /// Hart count for --run.
@@ -172,7 +174,14 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
     if let Some([recipe, out]) = args.pack_disk.as_deref() {
-        let disk = disk::pack_disk(&disk::Recipe::load(recipe)?, &workspace, None)?;
+        let recipe = disk::Recipe::load(recipe)?;
+        // The userland disk: its objects staged first, and its index written for the bundle.
+        if let (Some(objects), Some(stage)) = (&recipe.objects, &recipe.partition[0].stage) {
+            let index = workspace.join(&objects.index);
+            let (count, bytes) = userland::stage(&workspace, objects, &workspace.join(stage), &index)?;
+            println!("{count} objects, {bytes} bytes; index {}", index.display());
+        }
+        let disk = disk::pack_disk(&recipe, &workspace, None)?;
         std::fs::write(out, disk).with_context(|| format!("writing {}", out.display()))?;
         return Ok(());
     }
@@ -646,6 +655,7 @@ struct Built<'a> {
     firmware: String,
     loader: PathBuf,
     bundle: PathBuf,
+    userland: Option<(PathBuf, PathBuf)>,
 }
 
 /// Build a boot case for `target`, or the results of a case that ends here: a build case, a host
@@ -716,7 +726,11 @@ fn build_case<'a>(
         Ok(built) => built,
         Err(e) => return Ok(Err(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))])),
     };
-    Ok(Ok(Built { boot, name: &case.name, target, machine, firmware, loader, bundle }))
+    let userland = match boot.userland.as_ref().map(|u| builder.userland(&u.recipe)).transpose() {
+        Ok(staged) => staged,
+        Err(e) => return Ok(Err(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))])),
+    };
+    Ok(Ok(Built { boot, name: &case.name, target, machine, firmware, loader, bundle, userland }))
 }
 
 /// Boot a built case once per hart count with guest seed `seed`, keeping its files in `logs`.
@@ -728,7 +742,7 @@ fn boot_case(
     logs: &Path,
     out: &mut dyn FnMut(String),
 ) -> Result<Results> {
-    let Built { boot, name, target, machine, firmware, loader, bundle } = built;
+    let Built { boot, name, target, machine, firmware, loader, bundle, userland } = built;
     let elapsed = |since: Instant| since.elapsed().as_secs_f32();
     if let Some(seed) = seed {
         out(format!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)"));
@@ -740,7 +754,8 @@ fn boot_case(
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
             let disk = log.with_extension("img");
-            let (mut devices, forwards) = qemu::virtio_devices(boot, &disk)?;
+            let staged = userland.as_ref().map(|(stage, index)| (stage.as_path(), index.as_path()));
+            let (mut devices, forwards) = qemu::virtio_devices(boot, &disk, staged)?;
             if let Some(icount) = &boot.icount {
                 devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
             }

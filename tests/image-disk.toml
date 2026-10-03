@@ -26,6 +26,10 @@ forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'in
 reporter = "client"
 
 [[file]]
+name = "system.index"
+from = { userland_index = "image/userland.toml" }
+
+[[file]]
 name = "manifest"
 from = { path = "image/manifest.json" }
 

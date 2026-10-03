@@ -518,7 +518,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (11)</summary>
+<details><summary>Status: built · tested (14)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -531,6 +531,9 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::devices_sit_on_fixed_slots
 - host:testbench::every_network_is_restricted
 - host:testbench::virtio_devices_are_modern
+- host:testbench::the_userland_disk_sits_on_its_slot_read_only
+- host:testbench::the_userland_pack_is_deterministic_and_names_each_object_by_its_hash
+- host:testbench::a_case_flips_one_object_and_removes_another
 
 </details>
 
@@ -541,6 +544,11 @@ partitions = 1               # optional: a GPT of this many equal partitions, by
 # or, instead of both: a disk recipe packed for every boot as ./mkimage packs it
 # recipe = "image/disk.toml"
 # stage = "tests/data/fsd/stage"   # optional: what every partition holds instead of its stage
+
+[userland]                   # the userland disk, attached read-only, packed for every boot
+recipe = "image/userland.toml"
+# flip = "Elixir.Enum"       # optional: this module's object has one byte flipped on the disk
+# remove = "Elixir.Enum"     # optional: this module's object is not on the disk
 
 [net]                        # a virtio-net card on QEMU's user-mode network
 forward = [22]               # guest TCP ports reachable from the host (default: none)
@@ -557,10 +565,21 @@ contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in
 (as many digits as the last needs), all empty except `read`, which holds its own name and a
 newline. They sit beside the stage's tree, if there is one, and a name in both is refused.
 
+The userland disk (`image/userland.toml`) is packed by the same code: first its objects are
+staged, each module of the applications the recipe names, compiled by the pinned toolchain and
+stripped, as one file named by the SHA-256 of its bytes, with `system.index`, the table naming
+each by its hash; then its one partition is packed as a littlefs volume of those files. A case
+puts the index in its bundle with a `[[file]]` `from = { userland_index = "image/userland.toml" }`,
+and attaches the disk with `[userland]`; both come from one staging per run. A `flip` or a
+`remove` damages a copy of the objects for that boot, after the index was written, so the bundle
+names an object the disk no longer holds whole. Nothing is generated beside the objects.
+
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
 virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,
-the disk at `0x10008000` with interrupt 8, whether or not the case has the other. So a case's
-manifest names its devices as the image's does. The guest reaches nothing outside QEMU
+the data disk at `0x10008000` with interrupt 8, and the userland disk at `0x10006000` with
+interrupt 6, whether or not the case has the others. So a case's manifest names its devices as the
+image's does. The userland disk is attached read-only (`readonly=on`): QEMU refuses every write
+to it, so nothing on the box can change it. The guest reaches nothing outside QEMU
 (`restrict=on`, checked for every `[net]` case): there is no outside peer, only forwarded
 connections coming in, unless a case adds one deliberately. Nor is it offered IPv6 (`ipv6=off`),
 which it does not speak: slirp would otherwise send it router advertisements. Each boot gets its
