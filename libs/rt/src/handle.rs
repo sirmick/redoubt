@@ -7,8 +7,8 @@
 //! copies, and an implicit close would be an easy use-after-close. Close them with `close`.
 
 use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE, ResetKind,
-    Return, USAGE_SLOTS, Usage,
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE,
+    ResetKind, Return, USAGE_SLOTS, Usage,
 };
 
 use crate::ipc::Buffer;
@@ -219,6 +219,15 @@ impl Process {
         let count = handles.len() as u32;
         let call = Call::ProcessStart { process: self.0, entry, sp, arg, handles_rec: rec.addr(), count };
         nothing(syscall(&call))
+    }
+}
+
+/// Which device `device` names, an MMIO range, an interrupt or the Reset right
+/// (kernel/devices.md, `device_info`): any device handle, whichever typed handle holds it.
+pub fn device_info(device: Handle) -> Result<DeviceInfo, Error> {
+    match syscall(&Call::DeviceInfo { device })? {
+        Return::Device(info) => Ok(info),
+        _ => Err(Error::InvalidArgument),
     }
 }
 

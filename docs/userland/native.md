@@ -262,7 +262,9 @@ the loader stub.
 - **Tested on the host against a fake kernel.** Every system call goes through one function, to
   a `Transport`: on the machine the `ecall`, on the host the fake kernel a test installs, and any
   other backend the same way, so the runtime and programs built on it (the echo client and
-  server) run in host tests.
+  server) run in host tests. Nothing above the runtime calls the `ecall` itself: only the loader
+  stub and the kernel's test programs, which test the ABI from below it, use
+  `redoubt_sys::syscall`.
 - **No safe call pulls memory from under its owner.** The runtime's calls that could invalidate
   memory a safe owner holds are its owners' alone: `unmap` is private to the heap, `Buffer`, `Dma`
   and `Registers`, each unmapping only what it mapped itself, `set_flags` is not offered at all,
