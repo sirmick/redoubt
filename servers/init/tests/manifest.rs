@@ -637,6 +637,34 @@ fn confined_gives_a_labelled_domain_no_network() {
     assert_eq!(sharing(&m), Sharing::Network);
 }
 
+/// A volume's range is a handle at `blkd`'s endpoint, so its server is one of `blkd`'s users: two
+/// volumes with differing label sets on one disk share `blkd` and its device, and are refused; a
+/// disk whose `blkd` carries its one volume's set boots.
+#[test]
+fn confined_refuses_two_label_sets_on_one_disk() {
+    let mut m = confined();
+    secrets(&mut m);
+    m.labels.push(Label { name: "alice-other".into(), owner: "alice".into(), id: 8 });
+    m.principals.push(alice());
+    for s in &mut m.servers {
+        s.args.retain(|a| !a.starts_with("buckets="));
+    }
+    m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: vec!["alice-secrets".into()] });
+    m.volumes.push(Volume { name: "other".into(), partition: 1, labels: vec!["alice-other".into()] });
+    server(&mut m, "keyd").volume = Some("vault".into());
+    server(&mut m, "keyd").labels = vec!["alice-secrets".into()];
+    server(&mut m, "bootfsd").volume = Some("other".into());
+    server(&mut m, "bootfsd").labels = vec!["alice-other".into()];
+    assert_eq!(sharing(&m), Sharing::Device);
+    // One label set on the disk, and blkd carrying it.
+    server(&mut m, "bootfsd").volume = None;
+    server(&mut m, "bootfsd").labels = vec![];
+    m.volumes.pop();
+    assert_eq!(sharing(&m), Sharing::Device, "an unlabelled blkd serving a labelled volume");
+    server(&mut m, "blkd").labels = vec!["alice-secrets".into()];
+    assert!(on_virt(&m).is_ok());
+}
+
 #[test]
 fn confined_refuses_a_driver_serving_two_label_sets() {
     let mut m = confined();

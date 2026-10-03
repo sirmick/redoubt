@@ -141,13 +141,14 @@ M5 (persist, install, share).
 
 ### The confinement check
 
-<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the steward's, not built · tested (7)</summary>
+<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the steward's, not built · tested (8)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
 - host:redoubt-init::confined_gives_a_labelled_domain_no_network
 - host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
 - host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
 
@@ -176,10 +177,12 @@ steward ([steward](steward.md)). The refusal is a boot failure, not a warning
 ([R34 (confined placement)](#r34-confined-placement)).
 
 The domains compared are each `servers` entry, under its `labels` (`{}` if none), and each
-principal's label sets. A server's users are the servers handed one of its endpoints and, for a
-shared server (one that takes `buckets=N`), every principal domain: the same count as the bucket
-rule, so a server a session may later reach is never missed. The kinds are checked in the order
-listed, and the refusal names the kind.
+principal's label sets. A server's users are the servers handed one of its endpoints, or a
+volume's range at it (an `fsd` on a `blkd` disk), and, for a shared server (one that takes
+`buckets=N`), every principal domain: the same count as the bucket rule, so a server a session
+may later reach is never missed. The kinds are checked in the order listed, and the refusal names
+the kind. So in a confined boot a disk holds one label set's volumes, and its `blkd` carries that
+set.
 
 **The one named exception** is the control plane: the steward and `sshd` may reach across label
 sets, and only by three kinds of edge: the request and owner-approval path; per-item reader and
@@ -661,13 +664,14 @@ server from a manifest that grants it a budget and expects the boot refused.
 
 ### R34 (confined placement)
 
-<details><summary>Status: built · partly tested: the control plane's exception is the steward's and `sshd`'s, not built · tested (7)</summary>
+<details><summary>Status: built · partly tested: the control plane's exception is the steward's and `sshd`'s, not built · tested (8)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
 - host:redoubt-init::confined_gives_a_labelled_domain_no_network
 - host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
 - host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
 
