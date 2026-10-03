@@ -218,6 +218,47 @@ fn creates_with_attributes_read_in_c() {
     assert_eq!(c.list("/d").unwrap().len(), 30);
 }
 
+/// A volume `fsd` packs for the disk image (`redoubt_fsd::pack`, fsd's own create and write)
+/// mounts in the reference and reads back the same tree: every directory, every file's bytes,
+/// and each entry's id attribute.
+#[test]
+fn fsd_packed_volume_reads_back_in_c() {
+    use redoubt_fsd::pack::{Entry, pack};
+    let big: Vec<u8> = (0..50_000u32).map(|i| (i * 7) as u8).collect();
+    let names: Vec<String> = (0..40).map(|i| format!("etc/a-longer-name-for-splitting-{i}")).collect();
+    let mut tree = vec![
+        Entry::Dir("etc"),
+        Entry::Dir("etc/empty"),
+        Entry::File("big", &big),
+        Entry::File("nothing", b""),
+    ];
+    tree.extend(names.iter().map(|n| Entry::File(n, n.as_bytes())));
+    let cfg = CConfig { block_size: 4096, block_count: 64, prog_size: 512, block_cycles: -1 };
+    let image = pack(u64::from(cfg.block_count) * 8, &tree).expect("fsd packs it");
+    let mut c = CFs::mount(cfg, image).expect("the reference mounts it");
+    let mut ids = Vec::new();
+    for entry in &tree {
+        let (path, data) = match entry {
+            Entry::Dir(p) => (*p, None),
+            Entry::File(p, d) => (*p, Some(*d)),
+        };
+        if let Some(data) = data {
+            assert_eq!(c.read(&format!("/{path}")).unwrap(), data, "{path}");
+        }
+        // fsd's id attribute (servers/fsd.md: every entry carries its id).
+        ids.push(c.get_attr(&format!("/{path}"), 0).unwrap_or_else(|e| panic!("{path}: no id ({e})")));
+    }
+    let mut unique = ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), ids.len(), "every id differs");
+    let mut root: Vec<String> = c.list("/").unwrap().into_iter().map(|(_, _, n)| n).collect();
+    root.sort();
+    assert_eq!(root, ["big", "etc", "nothing"]);
+    assert_eq!(c.list("/etc").unwrap().len(), 41);
+    assert!(c.list("/etc/empty").unwrap().is_empty());
+}
+
 /// A directory the reference split over three or more pairs: `read_dir_at` hands over every
 /// pair it reads, each once, as many as it says it read and as `read_dir` counts, and lists
 /// what the reference lists.
