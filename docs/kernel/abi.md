@@ -191,7 +191,7 @@ so every record it passes is backed.
 
 A record may overlap the pages a call acts on. The kernel copies a record in before it changes
 those pages, and writes results only to memory still the caller's: a `call` body may lie
-inside its own lend, and the lend is mapped back before the reply is written into it.
+inside its own lend, and the lend is the caller's again before the reply is written into it.
 
 The kernel holds its memory lock from the check through the copy, so no other thread of the
 process can unmap or remap a record between the two. A record the kernel writes after a call

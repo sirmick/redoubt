@@ -17,12 +17,17 @@ page change hands in a way either side did not agree to.
 
 ### Messages
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (9)</summary>
 
 - bench:ipc
 - bench:redoubt-ipc
 - bench:all-together
 - host:redoubt-sys::received_layout
+- host:redoubt-rt::a_lent_page_is_refused_to_every_call_until_the_call_returns
+- host:redoubt-rt::a_transferred_page_is_refused_to_its_sender_once_taken
+- host:redoubt-rt::an_abandoned_lend_is_refused_to_its_caller_until_the_server_replies
+- host:redoubt-rt::queued_pages_are_refused_until_the_message_times_out_and_gives_them_back
+- host:redoubt-rt::a_destroyed_endpoint_abandons_a_taken_lend_to_the_server_until_it_replies
 
 </details>
 
@@ -32,22 +37,34 @@ A message carries:
   its stamp (the budget whose destruction revokes it; [objects](objects.md#r9-stamps));
 - at most one buffer of whole pages: a **lend** on a `call`, or a **transfer** on a `send`.
 
-A **lend** is up to `MAX_LEND_PAGES` (16 pages, 64 KiB) of the caller's own writable memory. The
-pages leave the caller's address space while the call is open and come back with the reply.
-The server sees them at an address the kernel picks. A **transfer** is pages given away for
-good: they leave the sender and become the receiver's, owner and payer both. A receiver takes a
-transfer only if its `receive` named a `max_transfer` at least that large.
+A message's pages move by **ownership**: every page has one owner at a time, and only its owner
+touches it.
+- A **lend** is up to `MAX_LEND_PAGES` (16 pages, 64 KiB) of pages the caller owns and may
+  write. From the `call` until it returns, the caller has given them up: it may not read, write,
+  lend, transfer, map or unmap them. A server that takes the call may read and write them, at an
+  address the kernel picks, until it replies. The call's return says who owns them: `returned`,
+  as before the call; `consumed`, the server, whose reply frees them
+  ([R3](#r3-lends-and-abandoned-calls)).
+- A **transfer** is pages the sender owns, given away for good: the sender gives them up at the
+  `send`, and when a receiver takes the message they become the receiver's, owner and payer
+  both. A `send` that fails before a receiver takes it gives them back. A receiver takes a
+  transfer only if its `receive` named a `max_transfer` at least that large.
+
+On this kernel giving pages up removes them from the giver's address space, so a touch is a
+fault ([I9 (pages W^X, zeroed, lends unmapped)](invariants.md#i9-pages-wx-zeroed-lends-unmapped)),
+and taking them maps them in the taker's ([memory](memory.md#lending-at-the-page-table-level)). A
+backend without an MMU may hand the same buffer over instead, as long as every rule above holds.
 
 ```mermaid
 sequenceDiagram
     participant C as caller
     participant S as server
     C->>S: call: four words, up to four handles, a lend of pages
-    Note over C,S: the lent pages move: unmapped from the caller until the reply,<br/>mapped in the server at an address the kernel chose
+    Note over C,S: the caller gives the lent pages up until the reply;<br/>the server reads and writes them at an address the kernel chose
     S-->>C: reply: four words, copies of the handles
-    Note over C,S: the pages come back to the caller
+    Note over C,S: the pages are the caller's again
 ```
-*Figure: what a call carries. The lent pages are mapped in exactly one address space at a time.*
+*Figure: what a call carries. The lent pages have one owner at a time.*
 
 The kernel attaches three facts the sender cannot choose ([R14](#r14-unforgeable-sender)): the
 **badge** of the handle the message came through, the sender budget's **account** (the principal
@@ -159,8 +176,8 @@ Status: built · partly tested: completion races between harts are not attacked 
 A `call` returns three separate facts, and a caller must read all three
 ([R13](#r13-one-outcome-per-call)):
 - the **status**: success or an error;
-- the **lend disposition**: `none` (no lend), `returned` (the pages are the caller's again) or
-  `consumed` (they are gone; never touch or unmap them);
+- the **lend disposition**, who owns the lent pages now: `none` (no lend), `returned` (as
+  before the call) or `consumed` (the server, until its reply frees them; never touch them again);
 - the **reply disposition**: `present` (the whole reply record was written) or `absent` (the
   record holds nothing; never decode it).
 
@@ -204,12 +221,12 @@ sequenceDiagram
     S->>K: receive(E, timeout, max_transfer)
     Note over S,K: blocks: nothing queued
     C->>K: call(E, words, handles, lend 4 pages, timeout)
-    Note over K: checks, R1 labels, R2 cap,<br/>lend unmapped from client
+    Note over K: checks, R1 labels, R2 cap,<br/>client gives the lend up
     K->>S: record: kind=call, msg_id, badge,<br/>account, labels, words, handles, lend at A
     Note over K: open call page charged to server (R4a),<br/>lend charged to both sides (R3)
     S->>S: read and write the lend at A
     S->>K: reply(msg_id, words, handles)
-    Note over K: lend unmapped from server, remapped<br/>in client, reply record written
+    Note over K: lend the client's again,<br/>reply record written
     K-->>C: status 0, lend returned, reply present
     K-->>S: delivered, mask
 ```
@@ -320,7 +337,8 @@ gives it back. The page tables that map the lend in the receiver are charged to 
 too, and go at the reply that leaves them mapping nothing ([memory](memory.md#page-tables)).
 
 A taken call is **abandoned** when its caller dies, times out, or is failed by revocation. Then:
-- the caller's charge ends and the lend becomes the server's alone, still mapped there;
+- the caller's charge ends and the lend becomes the server's alone: it may still read and write
+  it until its reply;
 - the thread holding the call gets one abandoned-call notice, on the endpoint the call arrived
   on (I15 (abandoned calls reported once));
 - the call stays open, and counts against the server's limit, until the server replies; that
@@ -350,7 +368,7 @@ stateDiagram-v2
     Abandoned --> [*]: server replies<br/>(discarded, lend freed)
     Abandoned --> [*]: server dies<br/>(lend freed)
 ```
-*Figure: the life of a call. The lend is mapped in exactly one address space in every state.*
+*Figure: the life of a call. The lend has exactly one owner in every state.*
 
 ### R4 (delivery)
 

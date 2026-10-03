@@ -5,6 +5,8 @@
 use crate::regs::{REGS, Reader, Writer};
 use crate::{Error, Handle, MAX_MSG_HANDLES, Number};
 
+/// Who owns a call's lent pages once it returns: `None`, there was no lend; `Returned`, as
+/// before the call; `Consumed`, the server, until its reply frees them: never touch them again.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LendDisposition {
     None,
