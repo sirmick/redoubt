@@ -1,16 +1,32 @@
-description = "ipd pinned with abandoned calls and its deadlines on the machine (tests/net rig). A client with an established connection to the peer 10.0.9.100:7 parks 64 data reads that its own 20 ms timeout abandons, each one of which ipd must answer and free (a leaked one would fill the share's parked calls and the next read would be refused at once); then one read with nothing coming, which ipd's 30 s parked deadline ends with timeout; then the echo still works; then a listener's ctl read with no peer coming, which ipd's 60 s ctl deadline ends with timeout. Virtual time (icount), so the deadlines pass at once"
-arch = ["rv64"]
+description = "ipd pinned with abandoned calls and its deadlines on the machine under the real init, its client a servers entry of the case's manifest. A client with an established connection to the peer 10.0.9.100:7 parks 64 data reads that its own 20 ms timeout abandons, each one of which ipd must answer and free (a leaked one would fill the share's parked calls and the next read would be refused at once); then one read with nothing coming, which ipd's 30 s parked deadline ends with timeout; then the echo still works; then a listener's ctl read with no peer coming, which ipd's 60 s ctl deadline ends with timeout. Virtual time (icount), so the deadlines pass at once"
+arch = ["rv64", "rv32"]
 kind = "boot"
-programs = [{ package = "redoubt-net-tests", bin = "net-rig-pinned" }]
+# The real init, the servers, the judge and the client (tests/data/net/pinned.json).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-net-tests", bin = "net-judge" },
+    { package = "redoubt-net-client", bin = "net-client" },
+]
 icount = "shift=3,sleep=off"
 timeout_secs = 180
 expect = [
-    '^\[net-rig\] ok: 64 abandoned reads, a read and an accept ended by ipd.s deadlines, the echo: exited 0$',
-    '^\[net-rig\] ok: netd and ipd still run ',
-    '^\[net-rig\] NET PINNED PASSED$',
+    '^init: the manifest is checked: 6 servers, bound \d+ pages$',
+    '^init: started judge, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] judge ipd has a link ',
+    '^\[con [0-9a-f]{16}\] judge ok: 64 abandoned reads, a read and an accept ended by ipd.s deadlines, the echo: outcome 0$',
+    '^\[con [0-9a-f]{16}\] judge TEST PASSED$',
 ]
-forbid = ['\[net-rig\] FAIL']
-poweroff = true
+# A server or client that ends is restarted by init, and says so: none may.
+forbid = ['init: refused the boot', '^init: \S+ .*(exited|faulted|was killed)', '^init: restarted ', 'judge FAIL']
+reporter = "judge"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/net/pinned.json" }
 
 [net]
 # tests/net/src/lib.rs: SELF_ARGS then SELF_ALWAYS (a host test keeps them equal).

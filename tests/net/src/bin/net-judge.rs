@@ -41,6 +41,8 @@ enum Case {
     /// `case=peer` (`bench-net-peer`): the echo through the peer, then a connect in scope to an
     /// address with no peer, which slirp refuses.
     Peer,
+    /// `case=pinned` (`net-pinned`): one client pins `ipd` with abandoned and parked calls.
+    Pinned,
 }
 
 fn parse<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<Case> {
@@ -48,6 +50,7 @@ fn parse<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<Case> {
         "case=tcp" => Case::Tcp { rounds: 1 },
         "case=twice" => Case::Tcp { rounds: 2 },
         "case=peer" => Case::Peer,
+        "case=pinned" => Case::Pinned,
         _ => return None,
     };
     args.next().is_none().then_some(case)
@@ -103,6 +106,7 @@ impl Judge {
         match case {
             Case::Tcp { rounds } => self.tcp(rounds),
             Case::Peer => self.peer(),
+            Case::Pinned => self.pinned(),
         }
     }
 
@@ -228,6 +232,19 @@ impl Judge {
         let outcome = self.report(badge::NOWHERE, event::DONE)?;
         let closed = outcome == u64::from(code::CONNECTED + 4);
         self.check(closed, &format!("the connect slirp refuses ended closed: outcome {outcome}"));
+        Ok(())
+    }
+
+    /// Pinned (plan 6.5): 64 parked reads given up by their caller, one parked read ended by
+    /// `ipd`'s 30 s data deadline, the echo, then a listener's `ctl` read ended by `ipd`'s 60 s
+    /// `ctl` deadline: the client's outcome is 0 only if every step held.
+    fn pinned(&mut self) -> Result<(), String> {
+        self.turn(badge::PIN)?;
+        let outcome = self.report(badge::PIN, event::DONE)?;
+        let what = format!(
+            "64 abandoned reads, a read and an accept ended by ipd's deadlines, the echo: outcome {outcome}"
+        );
+        self.check(outcome == u64::from(code::OK), &what);
         Ok(())
     }
 }

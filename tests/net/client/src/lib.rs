@@ -49,6 +49,8 @@ pub mod badge {
     pub const LISTEN: u64 = 12;
     /// `bench-net-peer`'s connect to an address no peer answers.
     pub const NOWHERE: u64 = 13;
+    /// `net-pinned`'s client.
+    pub const PIN: u64 = 14;
     /// The port the judge's probe listens on, and closes before anything can connect.
     pub const PROBE_PORT: u16 = 9;
 }
