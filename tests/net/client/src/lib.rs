@@ -47,6 +47,8 @@ pub mod badge {
     /// `net-tcp`'s echo client, and its listener.
     pub const ECHO: u64 = 11;
     pub const LISTEN: u64 = 12;
+    /// `bench-net-peer`'s connect to an address no peer answers.
+    pub const NOWHERE: u64 = 13;
     /// The port the judge's probe listens on, and closes before anything can connect.
     pub const PROBE_PORT: u16 = 9;
 }

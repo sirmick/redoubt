@@ -38,12 +38,16 @@ enum Case {
     /// `case=tcp` (`net-tcp`), or `case=twice` (the peer self-checks, two rounds): a client
     /// round-trips bytes through the peer, then a listener echoes the bench's dial.
     Tcp { rounds: u32 },
+    /// `case=peer` (`bench-net-peer`): the echo through the peer, then a connect in scope to an
+    /// address with no peer, which slirp refuses.
+    Peer,
 }
 
 fn parse<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<Case> {
     let case = match args.next()? {
         "case=tcp" => Case::Tcp { rounds: 1 },
         "case=twice" => Case::Tcp { rounds: 2 },
+        "case=peer" => Case::Peer,
         _ => return None,
     };
     args.next().is_none().then_some(case)
@@ -98,6 +102,7 @@ impl Judge {
         self.wait_for_link(Endpoint::from_handle(probe))?;
         match case {
             Case::Tcp { rounds } => self.tcp(rounds),
+            Case::Peer => self.peer(),
         }
     }
 
@@ -209,6 +214,20 @@ impl Judge {
         self.say("listening on 8000 with a backlog of 2");
         let accepted = self.report(badge::LISTEN, event::ACCEPTED)?;
         self.check(accepted == 1, &format!("the listener accepted and echoed the bench's dial ({accepted})"));
+        Ok(())
+    }
+
+    /// The bench's peer, both ways: the echo peer counts one connection, and a connect in scope to
+    /// an address with no peer ends closed: slirp (`restrict=on`) refuses it at once with an RST
+    /// (a refusal, not a timeout; `net-pinned` tests the deadlines).
+    fn peer(&mut self) -> Result<(), String> {
+        self.turn(badge::ECHO)?;
+        let outcome = self.report(badge::ECHO, event::DONE)?;
+        self.check(outcome == u64::from(code::OK), &format!("echo through 10.0.9.100:7: outcome {outcome}"));
+        self.turn(badge::NOWHERE)?;
+        let outcome = self.report(badge::NOWHERE, event::DONE)?;
+        let closed = outcome == u64::from(code::CONNECTED + 4);
+        self.check(closed, &format!("the connect slirp refuses ended closed: outcome {outcome}"));
         Ok(())
     }
 }

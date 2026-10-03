@@ -1,17 +1,33 @@
-description = "Bench self-check: the peer and the capture work both ways on the real netd and ipd (tests/net rig). A client granted 10.0.9.100/32 port 7 reaches the peer there (exactly 1 connection); one granted 10.0.9.200/32 port 7, where no peer is, sees its connect refused at once by slirp (restrict=on answers the SYN with an RST: a refusal, not a timeout; net-pinned tests ipd's deadlines) and end closed; the peer at 10.0.9.101:7 counts 0"
-arch = ["rv64"]
+description = "Bench self-check: the peer and the capture work both ways on the real netd and ipd under the real init. A client granted 10.0.9.100/32 port 7 reaches the peer there (exactly 1 connection); one granted 10.0.9.200/32 port 7, where no peer is, sees its connect refused at once by slirp (restrict=on answers the SYN with an RST: a refusal, not a timeout; net-pinned tests ipd's deadlines) and end closed; the peer at 10.0.9.101:7 counts 0"
+arch = ["rv64", "rv32"]
 kind = "boot"
-programs = [{ package = "redoubt-net-tests", bin = "net-rig-peer" }]
+# The real init, the servers, the judge and the clients (tests/data/net/peer.json).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-net-tests", bin = "net-judge" },
+    { package = "redoubt-net-client", bin = "net-client" },
+]
 icount = "shift=3,sleep=off"
 timeout_secs = 180
 expect = [
-    '^\[net-rig\] ok: echo through 10\.0\.9\.100:7: exited 0$',
-    '^\[net-rig\] ok: the connect slirp refuses ended closed: exited 44$',
-    '^\[net-rig\] ok: netd and ipd still run ',
-    '^\[net-rig\] NET PEER PASSED$',
+    '^init: the manifest is checked: 7 servers, bound \d+ pages$',
+    '^init: started judge, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] judge ipd has a link ',
+    '^\[con [0-9a-f]{16}\] judge ok: echo through 10\.0\.9\.100:7: outcome 0$',
+    '^\[con [0-9a-f]{16}\] judge ok: the connect slirp refuses ended closed: outcome 44$',
+    '^\[con [0-9a-f]{16}\] judge TEST PASSED$',
 ]
-forbid = ['\[net-rig\] FAIL']
-poweroff = true
+# A server or client that ends is restarted by init, and says so: none may.
+forbid = ['init: refused the boot', '^init: \S+ .*(exited|faulted|was killed)', '^init: restarted ', 'judge FAIL']
+reporter = "judge"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/net/peer.json" }
 
 [net]
 # tests/net/src/lib.rs: SELF_ARGS then SELF_ALWAYS (a host test keeps them equal).
