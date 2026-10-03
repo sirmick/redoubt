@@ -33,6 +33,7 @@ use redoubt_consoled::uart::Uart;
 use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Buffer, Event, Request};
+use redoubt_rt::server::close_delivery;
 use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse, refuse_malformed};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::startup::Startup;
@@ -50,8 +51,6 @@ pub const UART_IRQ: &str = "uart-irq";
 
 /// The startup block named no endpoint to receive on.
 pub const NO_ENDPOINT: u32 = 2;
-/// `receive` failed for a reason other than the endpoint going away.
-pub const RECEIVE_FAILED: u32 = 3;
 /// No `buckets=N` in the arguments, or one whose buckets at their caps do not fit the budget or
 /// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
@@ -186,11 +185,7 @@ pub fn serve(startup: &Startup) -> u32 {
             }
             // A wake-up from the interrupt thread; the draining at the top of the loop is what
             // answers it. Anything else sent one-way is dropped, and what it brought closed.
-            Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice().iter().flatten() {
-                    let _ = redoubt_rt::handle::close(*handle);
-                }
-            }
+            Ok(Event::Send(delivery)) => close_delivery(&delivery),
             // A caller gave up on a parked read: replying frees the call and its lend, and the
             // reply reaches nobody (R3).
             Ok(Event::Abandoned(id)) => {
@@ -198,7 +193,7 @@ pub fn serve(startup: &Startup) -> u32 {
             }
             Ok(Event::Interrupt | Event::Exit(_)) => {}
             Err(Error::Dead) => return redoubt_rt::exit::OK,
-            Err(_) => return RECEIVE_FAILED,
+            Err(_) => return redoubt_rt::exit::RECEIVE_FAILED,
         }
     }
 }

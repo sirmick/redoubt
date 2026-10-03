@@ -48,6 +48,7 @@ mod machine {
     use redoubt_rt::client::Lend;
     use redoubt_rt::handle::{Budget, Endpoint, Mmio, Registers, Reset};
     use redoubt_rt::ipc::{Buffer, Event};
+    use redoubt_rt::server::close_delivery;
     use redoubt_rt::server::ninep::mode;
     use redoubt_rt::wire::proto::{bootfs, keyd};
     use redoubt_sys::DeviceInfo;
@@ -748,11 +749,7 @@ mod machine {
                     let _ = reports.send(&words, &[], None, FOREVER);
                 }
                 Ok(Event::Call(request)) => drop(request),
-                Ok(Event::Send(delivery)) => {
-                    for handle in delivery.handles.as_slice().iter().flatten() {
-                        let _ = redoubt_rt::handle::close(*handle);
-                    }
-                }
+                Ok(Event::Send(delivery)) => close_delivery(&delivery),
                 Ok(_) => {}
                 Err(_) => break,
             }

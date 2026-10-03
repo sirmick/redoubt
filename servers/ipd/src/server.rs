@@ -27,7 +27,7 @@ use redoubt_rt::server::minted::{Kernel, Minter};
 use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::server::typed::{Outcome, finish};
-use redoubt_rt::server::{MALFORMED, Resource};
+use redoubt_rt::server::{MALFORMED, Resource, close_delivery};
 use redoubt_rt::wire::proto::ipd::{ErrorCode, GrantReply, Message, Reply};
 use redoubt_rt::wire::typed::error_reply;
 
@@ -205,9 +205,7 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
     /// changed.
     pub fn on_send(&mut self, delivery: Delivery, now: u64) -> bool {
         self.current = None;
-        for handle in delivery.handles.as_slice().iter().flatten() {
-            let _ = redoubt_rt::handle::close(*handle);
-        }
+        close_delivery(&delivery);
         let from_netd = delivery.caller.badge == self.ingress && delivery.caller.labels.as_slice().is_empty();
         let (Some(page), true) = (delivery.transfer.as_ref(), from_netd) else { return false };
         match Message::decode(&delivery.words, page, 0) {

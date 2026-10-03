@@ -28,6 +28,7 @@ use redoubt_netd::{BROKEN, FIRST_MINTED_BADGE, NetServer, RxPart, bring_up, pars
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Buffer, Event};
+use redoubt_rt::server::close_delivery;
 use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::proto::ipd::{Frame as FrameMsg, Message as IpdMessage};
 
@@ -35,8 +36,6 @@ redoubt_rt::entry!(serve, panic_hook = redoubt_netd::kernel::panic_reset);
 
 /// The startup block named no endpoint `netd` for it to receive on.
 pub const NO_ENDPOINT: u32 = 2;
-/// `receive` failed for a reason other than the endpoint going away.
-pub const RECEIVE_FAILED: u32 = 3;
 /// The startup block lacks `net`, `net-irq` or `ipd`, or the device would not map or give DMA
 /// pages. A driver with no device does not start.
 pub const NO_DEVICE: u32 = 5;
@@ -150,14 +149,12 @@ pub fn serve(startup: &Startup) -> u32 {
                 let _ = server.serve(request);
             }
             Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice().iter().flatten() {
-                    let _ = redoubt_rt::handle::close(*handle);
-                }
+                close_delivery(&delivery);
                 server.sent(delivery.caller.badge, &delivery.words);
             }
             Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
             Err(Error::Dead) => break redoubt_rt::exit::OK,
-            Err(_) => break RECEIVE_FAILED,
+            Err(_) => break redoubt_rt::exit::RECEIVE_FAILED,
         }
     };
     // Every exit `netd` controls stops the device first.

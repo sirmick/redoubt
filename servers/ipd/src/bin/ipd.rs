@@ -30,8 +30,6 @@ redoubt_rt::entry!(serve);
 
 /// The startup block named no endpoint `ipd` for it to receive on.
 pub const NO_ENDPOINT: u32 = 2;
-/// `receive` failed for a reason other than the endpoint going away.
-pub const RECEIVE_FAILED: u32 = 3;
 /// The startup block has no `netd` handle.
 pub const NO_NETD: u32 = 5;
 /// The arguments are not ones `ipd` will run with ([`args::parse`], [`args::Config::sizing`]).
@@ -106,7 +104,7 @@ pub fn serve(startup: &Startup) -> u32 {
             Ok(Event::Abandoned(id)) => ipd.on_abandoned(id),
             Ok(Event::Interrupt | Event::Exit(_)) | Err(Error::Timeout) => ipd.received_no_call(),
             Err(Error::Dead) => return redoubt_rt::exit::OK,
-            Err(_) => return RECEIVE_FAILED,
+            Err(_) => return redoubt_rt::exit::RECEIVE_FAILED,
         }
         ipd.poll(now());
     }

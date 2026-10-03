@@ -46,12 +46,12 @@ max_lines = 15
 [[crate]]
 name = "libs/client"
 paths = ["libs/client/src"]
-max_lines = 626
+max_lines = 623
 
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 2926
+max_lines = 2927
 
 [[crate]]
 name = "libs/wire"
@@ -91,7 +91,7 @@ max_lines = 227
 [[crate]]
 name = "servers/consoled"
 paths = ["servers/consoled/src"]
-max_lines = 343
+max_lines = 339
 
 [[crate]]
 name = "servers/blkd"
@@ -103,17 +103,17 @@ max_lines = 1562
 # in every default build.
 name = "servers/netd"
 paths = ["servers/netd/src"]
-max_lines = 1592
+max_lines = 1590
 
 [[crate]]
 name = "servers/ipd"
 paths = ["servers/ipd/src"]
-max_lines = 2890
+max_lines = 2887
 
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 1828
+max_lines = 1825
 
 [[crate]]
 name = "servers/fsd"

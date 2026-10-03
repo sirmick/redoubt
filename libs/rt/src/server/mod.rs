@@ -8,13 +8,14 @@
 //! - [`minted`]: the capabilities a server mints for its clients, and their release.
 //! - [`typed`]: typed-message dispatch over the generated codecs.
 //! - [`parked`]: calls held open for later, each with a deadline, resumed under `serve`.
-//! - [`serve`]: the one receive loop of a server that takes only calls.
+//! - [`serve`]: the one receive loop of a server that takes only calls; [`close_delivery`] for the loops that
+//!   keep their own shape.
 
 use redoubt_sys::{Error, FOREVER};
 
 use crate::exit;
 use crate::handle::Endpoint;
-use crate::ipc::{Event, Request};
+use crate::ipc::{Delivery, Event, Request};
 
 pub mod admit;
 pub mod label;
@@ -53,14 +54,18 @@ pub fn serve<R>(endpoint: &Endpoint, mut f: impl FnMut(Request) -> R) -> u32 {
             Ok(Event::Call(request)) => {
                 let _ = f(request);
             }
-            Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice().iter().flatten() {
-                    let _ = crate::handle::close(*handle);
-                }
-            }
+            Ok(Event::Send(delivery)) => close_delivery(&delivery),
             Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
             Err(Error::Dead) => return exit::OK,
             Err(_) => return exit::RECEIVE_FAILED,
         }
+    }
+}
+
+/// Closes the handles `delivery` brought, so a `send` cannot grow the handle table: for a server
+/// that drops a send, or keeps only its words and pages.
+pub fn close_delivery(delivery: &Delivery) {
+    for handle in delivery.handles.as_slice().iter().flatten() {
+        let _ = crate::handle::close(*handle);
     }
 }
