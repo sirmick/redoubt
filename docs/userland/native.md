@@ -78,9 +78,10 @@ calls, made in the bench by a user-class parent, and the stub
    receive its exit notice ([processes](../kernel/processes.md#creating-and-starting)).
 2. It maps the **loader stub** into the process at its fixed address: a flat binary, the same for
    everyone, which needs no parsing to map.
-3. It copies the program's ELF bytes into pages and moves them into the process as data, writes
-   the startup block (namespace, named handles, arguments) into a page mapped read-only, and
-   starts the process at the stub with the startup page's address as its argument.
+3. It copies the program's ELF bytes into the process as data, 64 pages at a time, each batch
+   into fresh pages it then moves in, so a launcher never holds more than one batch, writes the
+   startup block (namespace, named handles, arguments) into a page mapped read-only, and starts
+   the process at the stub with the startup page's address as its argument.
 4. The stub, running inside the new process's own budget, parses the ELF from memory, maps its
    segments at their link addresses (code executable, never writable), frees the image pages,
    and jumps to the entry point.

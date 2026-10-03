@@ -12,9 +12,9 @@ programs = [
 ]
 timeout_secs = 60
 expect = [
-    # init's bound, which budgets.md quotes ("the tree from the boot manifest"): rv64's, then
-    # rv32's. A beamlet that grows changes it, and the page with it.
-    '^init: the manifest is checked: 4 servers, bound (1059|1286) pages$',
+    # init's bound, which budgets.md quotes ("the tree from the boot manifest"), the same on both
+    # widths: beamlet's image counts one batch, so it changes only with init's own costs.
+    '^init: the manifest is checked: 4 servers, bound 416 pages$',
     '^init: started beamlet, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] beamlet-boot: hello from the VM$',
     '^init: beamlet \(PID [0-9]+\) exited, code 0$',

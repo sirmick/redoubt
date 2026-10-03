@@ -2,8 +2,8 @@ description = "init refuses a manifest that would cost init more of root than IN
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The real init, the images its manifest names, and the manifest: image/manifest.json with eight
-# more servers receiving on 60 endpoints each, a page of root's apiece, and s7's program 6 MiB of
-# zeros (below). The verdict is init's line and the firmware's status, which only system_reset
+# more servers receiving on 60 endpoints each, a page of root's apiece, and s7's program a batch
+# of zeros (below). The verdict is init's line and the firmware's status, which only system_reset
 # kind 3 gives.
 programs = [
     { package = "redoubt-init", bin = "init" },
@@ -16,8 +16,8 @@ programs = [
 ]
 timeout_secs = 30
 # The printed bound, so the number is real: the same on both widths, the image term in it being
-# the entry's length.
-expect = ['^init: refused the boot: the boot would cost init 2521 pages of root and root keeps 2047 \(INIT_PAGES\)$']
+# one batch.
+expect = ['^init: refused the boot: the boot would cost init 1047 pages of root and root keeps 1023 \(INIT_PAGES\)$']
 forbid = ['^init: started']
 poweroff = true
 poweroff_status = 255
@@ -26,10 +26,11 @@ poweroff_status = 255
 name = "manifest"
 from = { path = "tests/data/init/bound.json" }
 
-# The largest image is the one term of the bound that reaches INIT_PAGES: no manifest gets there
-# through endpoints, which each server's 64 start handles and system's 15 processes cap. s7's
-# program is 6 MiB of zeros; init refuses on the bound before it reads any image, so the entry's
-# bytes never need to be an ELF.
+# The refusal comes from the servers, their endpoints and init's own costs (980 pages) and one
+# batch of the largest image with its tables (64 + 3): any image of 64 pages or more counts that
+# one batch, and ipd's already does, so the size of this entry does not move the bound. s7 only
+# needs a program, here a batch (64 pages of 4 KiB) of zeros; init refuses on the bound before it
+# reads any image, so the entry's bytes never need to be an ELF.
 [[file]]
 name = "big"
-from = { zeros = 6291456 }
+from = { zeros = 262144 }

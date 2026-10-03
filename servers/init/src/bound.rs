@@ -7,6 +7,7 @@
 //! The kernel exports no prices, so the ones `init` pays are named here, each from the table, and
 //! `tests/bound.rs` reads each back from the page.
 
+use redoubt_client::launch::PLACE_PAGES;
 use redoubt_rt::abi::PAGE_SIZE;
 
 /// An endpoint's page, charged to its owner (kernel/objects.md, "What objects cost").
@@ -44,8 +45,9 @@ pub struct Counts {
     pub endpoints: u64,
     /// The `handed` items: one badged handle `init` mints for each.
     pub handed: u64,
-    /// The largest one launch copies through `init`'s pages: the stub, the image and the stack,
-    /// in bytes each, before `process_map` moves them to the child.
+    /// What one launch copies through `init`'s pages before `process_map` moves it to the child:
+    /// the stub, the largest image (in bytes each) and the stack, the last two `PLACE_PAGES` at a
+    /// time.
     pub stub_bytes: u64,
     pub largest_image_bytes: u64,
     pub stack_pages: u64,
@@ -70,9 +72,12 @@ pub fn bound(c: &Counts) -> u64 {
     let blocks = c.servers.saturating_mul(BLOCK_PAGES + tables(BLOCK_PAGES));
     // A thread per server watching its exit endpoint: its IPC page, its stack and their tables.
     let watchers = c.servers.saturating_mul(THREAD_IPC_PAGES + WATCH_STACK_PAGES + tables(WATCH_STACK_PAGES));
-    // One launch at a time holds its copies in `init`'s pages until they move.
-    let (stub, image) = (pages(c.stub_bytes), pages(c.largest_image_bytes));
-    let launch = sum(&[stub, tables(stub), image, tables(image), c.stack_pages, tables(c.stack_pages)]);
+    // One launch at a time holds its copies in `init`'s pages until they move: the stub whole, and
+    // at most one batch of the image and of the stack.
+    let batch = |pages: u64| pages.min(PLACE_PAGES as u64);
+    let (stub, image, stack) =
+        (pages(c.stub_bytes), batch(pages(c.largest_image_bytes)), batch(c.stack_pages));
+    let launch = sum(&[stub, tables(stub), image, tables(image), stack, tables(stack)]);
     // The handle table's growth: every page the added handles may open beyond those in use.
     let added = sum(&[
         c.endpoints,
@@ -119,6 +124,20 @@ mod tests {
             Counts { stub_bytes: 1, largest_image_bytes: PAGE_SIZE as u64 + 1, stack_pages: 16, ..none() };
         // Beside the launch: the lend and its tables, and the reports endpoint.
         assert_eq!(bound(&c), 1 + 3 + 2 + 3 + 16 + 3 + (2 + 3 + 1));
+    }
+
+    #[test]
+    fn an_image_and_a_stack_larger_than_a_batch_count_one_batch() {
+        let batch = PLACE_PAGES as u64;
+        let at = |image_pages: u64, stack_pages: u64| {
+            bound(&Counts { largest_image_bytes: image_pages * PAGE_SIZE as u64, stack_pages, ..none() })
+        };
+        // An image of one batch, or of ten, costs the same, and so does a stack.
+        assert_eq!(at(batch, 0), at(10 * batch, 0));
+        assert_eq!(at(0, batch), at(0, 10 * batch));
+        // One batch and its tables, beside the lend and its tables, and the reports endpoint.
+        assert_eq!(at(10 * batch, 10 * batch), 2 * (batch + 3) + (2 + 3 + 1));
+        assert!(at(batch - 1, 0) < at(batch, 0));
     }
 
     #[test]
