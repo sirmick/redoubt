@@ -219,8 +219,9 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
     let mut forwards = Vec::new();
     if let Some(net) = &boot.net {
         // restrict=on: the guest reaches nothing outside QEMU; only forwarded connections
-        // reach it. A case that needs an outside peer must add one deliberately.
-        let mut netdev = "user,id=net0,restrict=on".to_string();
+        // reach it. A case that needs an outside peer must add one deliberately. ipv6=off: the
+        // guest speaks only IPv4, and slirp would otherwise advertise itself as an IPv6 router.
+        let mut netdev = "user,id=net0,restrict=on,ipv6=off".to_string();
         for (guest, host) in net.forward.iter().zip(free_ports(net.forward.len())?) {
             netdev += &format!(",hostfwd=tcp:127.0.0.1:{host}-:{guest}");
             forwards.push((*guest, host));
@@ -667,7 +668,8 @@ mod tests {
     }
 
     /// The guest reaches nothing outside QEMU: every network is `restrict=on`, the wider one a
-    /// case with peers gets included, since it widens what maps to the host's loopback.
+    /// case with peers gets included, since it widens what maps to the host's loopback. And none
+    /// offers IPv6: slirp's router advertisements are frames the guest never asked for.
     #[test]
     fn every_network_is_restricted() {
         let peers = "[net]\nforward = [8000]\n[[net.peer]]\naddr = '10.0.9.100:7'\nconnections = 1\n";
@@ -675,6 +677,7 @@ mod tests {
             let args = args(case);
             let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
             assert!(netdev.split(',').any(|o| o == "restrict=on"), "{netdev}");
+            assert!(netdev.split(',').any(|o| o == "ipv6=off"), "{netdev}");
         }
     }
 

@@ -505,10 +505,11 @@ host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions ac
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
 virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,
 the disk at `0x10008000` with interrupt 8, whether or not the case has the other. So a case's
-manifest names its devices as the image's does. The guest reaches
-nothing outside QEMU (`restrict=on`, checked for every `[net]` case): there is no outside peer, only
-forwarded connections coming in, unless a case adds one deliberately. Each boot gets its own host
-ports, chosen by the operating system, so benches running side by side do not collide.
+manifest names its devices as the image's does. The guest reaches nothing outside QEMU
+(`restrict=on`, checked for every `[net]` case): there is no outside peer, only forwarded
+connections coming in, unless a case adds one deliberately. Nor is it offered IPv6 (`ipv6=off`),
+which it does not speak: slirp would otherwise send it router advertisements. Each boot gets its
+own host ports, chosen by the operating system, so benches running side by side do not collide.
 
 ### Peers, dials and the capture
 
