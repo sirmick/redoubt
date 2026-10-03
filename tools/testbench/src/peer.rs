@@ -15,6 +15,9 @@
 //! - **The capture.** QEMU's `filter-dump` writes every frame on the guest's network card to a pcap file,
 //!   before slirp sees it, so a SYN `restrict=on` would drop is in it too. After the boot it is parsed fail
 //!   closed: a missing, empty, cut or malformed file fails the case.
+//! - **The poke.** A `[net.poke]` is one UDP datagram the bench sends into the guest through a host port QEMU
+//!   forwards to its guest port, when a console line first matches its `after`: a trigger from outside the
+//!   guest that nothing resends, as a TCP segment would be.
 //!
 //! What a case with peers must show: every peer counted exactly its `connections`, both in the
 //! records and in the capture (distinct source ports of SYNs to it), no SYN from the guest to a
@@ -24,7 +27,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -301,6 +304,19 @@ fn dial_once(dial: &Dial, host: u16, deadline: Instant) -> Result<(), String> {
 }
 
 // --- The capture --------------------------------------------------------------------------------
+
+/// A host UDP port nothing was bound to a moment ago, for the poke's forward. As with the TCP
+/// forwards' ports (`qemu.rs`), another process taking it before QEMU binds it fails the boot.
+pub fn free_udp_port() -> Result<u16> { Ok(UdpSocket::bind("127.0.0.1:0")?.local_addr()?.port()) }
+
+/// Sends the poke's one datagram to `host`, the port QEMU forwards to the guest's.
+pub fn poke(host: u16, payload: &str) -> std::io::Result<()> {
+    let sent = UdpSocket::bind("127.0.0.1:0")?.send_to(payload.as_bytes(), ("127.0.0.1", host))?;
+    if sent != payload.len() {
+        return Err(std::io::Error::other(format!("the poke sent {sent} of {} bytes", payload.len())));
+    }
+    Ok(())
+}
 
 /// The frames of a pcap file as QEMU's `filter-dump` writes it: little-endian, microsecond
 /// timestamps, version 2.4, Ethernet. Anything else, a cut frame, trailing bytes or no frame at all

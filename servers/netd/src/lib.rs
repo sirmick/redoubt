@@ -50,6 +50,7 @@ pub mod device;
 #[allow(unsafe_code)]
 pub mod kernel;
 pub mod receiver;
+pub mod restart_probe;
 pub mod ring;
 pub mod rxq;
 pub mod server;

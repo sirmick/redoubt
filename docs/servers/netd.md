@@ -166,7 +166,7 @@ flowchart TB
 
 ### Started by `init`
 
-Status: built · partly tested: a killed `netd`'s restart has no case yet · tested: bench:init-boot
+Status: built · tested: bench:init-boot, bench:netd-restart
 
 `init` starts `netd` with the network card's MMIO region (DMA allowed) and interrupt, placed by
 name from the boot manifest's `devices` list, and its one argument, the badge `ipd`'s handle
@@ -185,6 +185,12 @@ instance, and `ipd` meets the failure as `unreachable` and asks again with backo
 ([ipd](ipd.md#failure-and-restart)). Frames in flight are lost, and TCP resends them. If the
 card was quarantined, `init` reboots instead
 ([devices](../kernel/devices.md#which-process-gets-which-device)).
+
+**The restart probe** is a test-only feature, `restart-probe` (`src/restart_probe.rs`), off in every
+default build; the bench's `netd-restart` builds `netd` with it. `netd` then faults on one UDP
+datagram the bench sends from outside the guest, and answers a call carrying `INSTANCE` with 32
+bits it drew when it started. That call is answered before `netd`'s check of the caller's badge and
+labels, so in that build any caller holding a handle to `netd` gets the answer.
 
 ## Authority
 

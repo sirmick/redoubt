@@ -13,7 +13,7 @@
 //! **Every exit `netd` controls resets the device first** (status 0, read back), so the device
 //! stops touching its rings before its pages can return to the pool. A kill or a fault runs none
 //! of this code; then the kernel resets the device before its DMA pages are reused
-//! (kernel/invariants.md I16). Whether and how `init` restarts `netd` is still open
+//! (kernel/invariants.md I16), and `init` starts a new instance on the same device
 //! (servers/netd.md, "Started by `init`").
 //!
 //! **Nothing starts it under `init` yet**, because `init` does not exist yet
@@ -85,6 +85,11 @@ fn receive_frames(part: RxPart) {
 /// Sends one frame to `ipd` as its `frame` message: a `send`, the frame in one transferred page.
 /// A frame `ipd` does not take within [`SEND_TIMEOUT_US`] is dropped.
 fn forward(ipd: &Endpoint, frame: &[u8]) {
+    // Test-only: the bench's poke faults this instance (servers/netd/src/restart_probe.rs).
+    #[cfg(feature = "restart-probe")]
+    if redoubt_netd::restart_probe::is_poke(frame) {
+        kernel::fault();
+    }
     let Ok(mut page) = Buffer::new(1) else { return };
     let Ok(words) = IpdMessage::Frame(FrameMsg { frame }).encode(&mut page) else { return };
     // On failure the page comes back with the error and is unmapped when dropped.
@@ -129,8 +134,21 @@ pub fn serve(startup: &Startup) -> u32 {
         },
         None => server.break_device(),
     }
+    // Test-only: the word this instance answers the instance call with, 32 bits as a word is on
+    // rv32.
+    #[cfg(feature = "restart-probe")]
+    let Ok(instance) = redoubt_rt::handle::random_u64().map(|r| r & u64::from(u32::MAX)) else {
+        return NO_RESOURCES;
+    };
     let exit = loop {
         match endpoint.receive(FOREVER, 0) {
+            #[cfg(feature = "restart-probe")]
+            Ok(Event::Call(request)) if redoubt_netd::restart_probe::is_instance(&request.words) => {
+                let words = [instance, 0, 0, 0];
+                let none = redoubt_rt::abi::Handles::new();
+                let outcome = redoubt_rt::server::typed::Outcome { words, send: none, close: none };
+                let _ = redoubt_rt::server::typed::finish(request, &outcome);
+            }
             Ok(Event::Call(request)) => {
                 // A failed reply means the caller is gone; there is nobody to tell.
                 let _ = server.serve(request);

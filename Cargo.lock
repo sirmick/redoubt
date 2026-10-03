@@ -736,6 +736,7 @@ dependencies = [
  "redoubt-init-programs",
  "redoubt-ipd",
  "redoubt-net-client",
+ "redoubt-netd",
  "redoubt-rt",
  "stub",
  "toml",

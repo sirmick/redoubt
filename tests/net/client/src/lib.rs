@@ -61,6 +61,9 @@ pub mod badge {
     pub const NARROW: u64 = 16;
     pub const ANY: u64 = 17;
     pub const LABELLED: u64 = 18;
+    /// `netd-restart`'s second echo client, after the restart, and the judge's badge at `netd`.
+    pub const AGAIN: u64 = 22;
+    pub const NETD: u64 = 9;
     /// The port the judge's probe listens on, and closes before anything can connect.
     pub const PROBE_PORT: u16 = 9;
 }
@@ -126,8 +129,8 @@ pub enum Role {
 /// The most `to=` targets a `connect` client takes.
 pub const MAX_TARGETS: usize = 8;
 
-/// A program's arguments: `role=R`, and `addr=A.B.C.D`, `port=P`, `backlog=B`, `times=N` and
-/// `to=A.B.C.D:P` (repeated, in order) as its role needs.
+/// A program's arguments: `role=R`, and `addr=A.B.C.D`, `port=P`, `backlog=B`, `times=N`,
+/// `tries=N` and `to=A.B.C.D:P` (repeated, in order) as its role needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Args {
     pub role: Role,
@@ -135,6 +138,8 @@ pub struct Args {
     pub port: u16,
     pub backlog: u8,
     pub times: u32,
+    /// How many times `echo` asks for its connect while `ipd` refuses it at once (default 1).
+    pub tries: u32,
     /// The `to=` targets, the first `targets` of them.
     pub to: [([u8; 4], u16); MAX_TARGETS],
     pub targets: usize,
@@ -143,7 +148,16 @@ pub struct Args {
 impl Args {
     /// `role`, with every other argument at its default.
     pub const fn of(role: Role) -> Args {
-        Args { role, addr: [0; 4], port: 0, backlog: 1, times: 1, to: [([0; 4], 0); MAX_TARGETS], targets: 0 }
+        Args {
+            role,
+            addr: [0; 4],
+            port: 0,
+            backlog: 1,
+            times: 1,
+            tries: 1,
+            to: [([0; 4], 0); MAX_TARGETS],
+            targets: 0,
+        }
     }
 
     /// The `to=` targets given.
@@ -170,6 +184,7 @@ impl Args {
                 "port" => parsed.port = value.parse().ok()?,
                 "backlog" => parsed.backlog = value.parse().ok()?,
                 "times" => parsed.times = value.parse().ok()?,
+                "tries" => parsed.tries = value.parse().ok().filter(|t| *t > 0)?,
                 "to" => {
                     let (addr, port) = value.split_once(':')?;
                     *parsed.to.get_mut(parsed.targets)? = (dotted(addr)?, port.parse().ok()?);
@@ -211,5 +226,7 @@ mod tests {
         assert!(Args::parse(["role=echo", "addr=10.0.9.1.2"].into_iter()).is_none());
         assert!(Args::parse(["role=spy"].into_iter()).is_none());
         assert!(Args::parse(["role=hold", "extra=1"].into_iter()).is_none());
+        assert_eq!(Args::parse(["role=echo", "tries=50"].into_iter()).unwrap().tries, 50);
+        assert!(Args::parse(["role=echo", "tries=0"].into_iter()).is_none());
     }
 }

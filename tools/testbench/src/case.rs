@@ -360,6 +360,19 @@ pub struct Net {
     /// Cut the capture to this many bytes before judging it: self-checks that a cut or empty
     /// capture fails.
     pub truncate_capture: Option<u64>,
+    /// One UDP datagram the bench sends into the guest, once, from outside (`peer.rs`).
+    pub poke: Option<Poke>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Poke {
+    /// The guest UDP port it goes to; QEMU forwards a host port of its own there.
+    pub port: u16,
+    /// Its whole payload.
+    pub payload: String,
+    /// It is sent when a console line matches this regular expression, the first time.
+    pub after: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,8 +458,14 @@ pub struct Build {
 pub enum Program {
     /// A binary of the `test-programs` package.
     TestProgram(String),
-    /// A binary of any workspace package, built for the case's target.
-    Package { package: String, bin: String },
+    /// A binary of any workspace package, built for the case's target, with `features` if any
+    /// (`build.rs` keeps that build apart from the one without).
+    Package {
+        package: String,
+        bin: String,
+        #[serde(default)]
+        features: Vec<String>,
+    },
     /// A binary of the `test-programs` package, with budgets.
     Bin {
         bin: String,
@@ -497,9 +516,11 @@ impl Recipe {
         let (mut programs, mut files) = (Vec::new(), Vec::new());
         for entry in rest {
             match (&entry.package, &entry.path) {
-                (Some(package), None) => {
-                    programs.push(Program::Package { package: package.clone(), bin: entry.name.clone() })
-                }
+                (Some(package), None) => programs.push(Program::Package {
+                    package: package.clone(),
+                    bin: entry.name.clone(),
+                    features: Vec::new(),
+                }),
                 (None, Some(path)) => files.push(BundleFile {
                     name: entry.name.clone(),
                     from: Program::Path { path: path.clone() },
@@ -515,7 +536,7 @@ impl Recipe {
 impl Program {
     /// Whether it is the real `init`, which starts the other programs from its manifest.
     pub fn is_init(&self) -> bool {
-        matches!(self, Program::Package { package, bin } if package == "redoubt-init" && bin == "init")
+        matches!(self, Program::Package { package, bin, .. } if package == "redoubt-init" && bin == "init")
     }
 
     /// The `test-programs` binary it names, if it names one.
@@ -686,6 +707,15 @@ fn check_net(net: &Net) -> Result<()> {
         ensure!(net.forward.contains(&dial.port), "dial to {}: not in net.forward", dial.port);
         ensure!(!dial.expect.is_empty(), "dial to {}: expect nothing", dial.port);
     }
+    if let Some(poke) = &net.poke {
+        // Its host port is found among the forwards by guest port, so it cannot share one.
+        ensure!(
+            poke.port != 0 && !net.forward.contains(&poke.port),
+            "poke to {}: a TCP forward's port",
+            poke.port
+        );
+        regex::Regex::new(&poke.after).with_context(|| format!("poke after {:?}", poke.after))?;
+    }
     Ok(())
 }
 
@@ -772,5 +802,26 @@ mod tests {
         assert!(check_sessions(&[session(true)]).is_ok());
         let err = check_sessions(&[session(false)]).unwrap_err().to_string();
         assert!(err.contains("`resize` needs `pty = true`"), "{err}");
+    }
+
+    /// A package's program takes `features`, none unless named.
+    #[test]
+    fn a_package_program_takes_features() {
+        #[derive(Deserialize)]
+        struct Programs {
+            programs: Vec<Program>,
+        }
+        let text = "programs = [\n  { package = \"p\", bin = \"b\" },\n  \
+                    { package = \"p\", bin = \"b\", features = [\"f\"] },\n]\n";
+        let programs: Programs = toml::from_str(text).unwrap();
+        let features: Vec<&[String]> = programs
+            .programs
+            .iter()
+            .map(|p| match p {
+                Program::Package { features, .. } => features.as_slice(),
+                other => panic!("not a package's program: {other:?}"),
+            })
+            .collect();
+        assert_eq!(features, [&[][..], &["f".to_string()][..]]);
     }
 }

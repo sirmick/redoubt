@@ -141,6 +141,7 @@ kind = "boot"
 programs = [                 # the first in init's place, the rest started by it
     "log-server",                                  # a binary of the test programs
     { package = "my-crate", bin = "my-server" },   # any workspace binary, built for the target
+    { package = "my-crate", bin = "my-probe", features = ["probe"] },  # built with these features, in a target directory of its own
     { path = "prebuilt/thing.elf" },               # or a prebuilt ELF
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
@@ -513,12 +514,14 @@ own host ports, chosen by the operating system, so benches running side by side 
 
 ### Peers, dials and the capture
 
-<details><summary>Status: built · tested (11)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - bench:bench-net-peer
 - bench:bench-net-peer-twice
 - bench:bench-net-peer-count
 - bench:bench-net-peer-pcap-empty
+- bench:netd-restart
+- host:testbench::a_poke_gets_a_udp_forward
 - host:testbench::peers_are_judged_on_records_and_capture
 - host:testbench::a_capture_is_read_fail_closed
 - host:testbench::what_the_guest_sends_is_checked
@@ -545,12 +548,20 @@ connections = 1
 port = 8000
 send = "hello\n"
 expect = "hello\n"
+
+[net.poke]                   # one UDP datagram into the guest, sent when a console line matches
+port = 47000
+payload = "redoubt netd restart probe"
+after = '^\[con [0-9a-f]{16}\] judge knows netd.s instance: poke it$'
 ```
 
 - **Peers** are QEMU `guestfwd`s to a program: for each connection the guest makes, the bench's own
   binary starts as a helper on it, records the connection as a file before it echoes a byte, and
   then echoes. After the boot each peer's count must equal its `connections`. There is no host
   listener another process could take.
+- **The poke** is one UDP datagram, sent once, through a host port QEMU forwards to its guest port,
+  when a console line first matches its `after`: a trigger from outside that nothing resends, as
+  TCP would. `netd-restart` faults `netd` with it, through a test-only feature.
 - **The network.** A case with peers widens slirp's network to a /16 in which its host, resolver
   and the guest's address stay where they were; the peers sit outside the /24 the guest is
   configured for, reached through its gateway. `restrict=on` still holds.

@@ -144,6 +144,16 @@ fn every_client_is_scoped_and_known_to_the_judge() {
     }
 }
 
+/// The case that pokes `netd` sends exactly what `netd`'s test-only feature faults on.
+#[test]
+fn the_poke_is_netds() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../netd-restart.toml");
+    let case: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let poke = &case["net"]["poke"];
+    assert_eq!(poke["port"].as_integer(), Some(i64::from(redoubt_netd::restart_probe::PORT)));
+    assert_eq!(poke["payload"].as_str().map(str::as_bytes), Some(redoubt_netd::restart_probe::PAYLOAD));
+}
+
 /// `SELF_ALWAYS` is what `ipd` refuses without being told: each of its prefixes, first and last
 /// address, is in the self set of an `ipd` given no `self=` at all, and nothing just outside is.
 #[test]

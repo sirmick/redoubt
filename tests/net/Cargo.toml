@@ -47,6 +47,8 @@ test = false
 redoubt-init-programs = { path = "../init-programs" }
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-ipd = { path = "../../servers/ipd" }
+# The restart probe's constants, shared with netd's test-only feature (net-judge, tests/cases.rs).
+redoubt-netd = { path = "../../servers/netd" }
 redoubt-net-client = { path = "client" }
 stub = { path = "../../stub" }
 

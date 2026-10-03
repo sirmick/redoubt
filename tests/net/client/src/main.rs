@@ -27,6 +27,8 @@ redoubt_rt::entry!(run);
 /// The connection's root fid, and the scratch fid `clone` is read through.
 const ROOT: u32 = 0;
 const CLONE: u32 = 1;
+/// How long a refused connect waits before it is asked again (`tries=`), in µs.
+const RETRY_US: u64 = 100_000;
 /// How many times a waiting read that timed out (`ipd`'s deadline) is asked again.
 const WAITS: u32 = 64;
 
@@ -190,11 +192,30 @@ impl Me {
         self.ctl(s, connect, code::REFUSED)
     }
 
+    /// A socket whose connect `ipd` took, asked for again on a fresh socket, after [`RETRY_US`],
+    /// while `ipd` refuses it at once, up to `args.tries` times: a refused connect sends no SYN, so
+    /// at most one connection is ever made.
+    fn connected(&mut self, args: &Args) -> Result<Socket, u32> {
+        let mut left = args.tries;
+        loop {
+            let s = self.socket()?;
+            match self.connect(&s, args) {
+                Ok(()) => return Ok(s),
+                Err(_) if left > 1 => {
+                    left -= 1;
+                    let _ = self.c.clunk(&mut self.lend, s.ctl);
+                    let _ = self.c.clunk(&mut self.lend, s.data);
+                    let _ = redoubt_rt::handle::sleep(RETRY_US);
+                }
+                Err(refused) => return Err(refused),
+            }
+        }
+    }
+
     fn echo(&mut self, args: &Args) -> Result<(), u32> {
         self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
         for round in 0..args.times {
-            let s = self.socket()?;
-            self.connect(&s, args)?;
+            let s = self.connected(args)?;
             if self.status(&s)?.0 != ESTABLISHED {
                 return Err(code::STATUS);
             }

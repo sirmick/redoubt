@@ -18,6 +18,7 @@ use alloc::vec::Vec;
 
 use redoubt_init_programs::Out;
 use redoubt_net_client::{IPD, JUDGE, REPORT, badge, code, event};
+use redoubt_netd::restart_probe::INSTANCE;
 use redoubt_rt::abi::{Error, FOREVER, Handles};
 use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::Endpoint;
@@ -46,6 +47,9 @@ enum Case {
     /// `case=attacks` (`net-attacks`, `bench-net-self-unrefused`): every attack with its positive
     /// control.
     Attacks,
+    /// `case=restart` (`netd-restart`): an echo through the peer, the bench's poke faulting
+    /// `netd`, `init`'s restart of it, and a second echo through the new instance.
+    Restart,
 }
 
 fn parse<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<Case> {
@@ -55,6 +59,7 @@ fn parse<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<Case> {
         "case=peer" => Case::Peer,
         "case=pinned" => Case::Pinned,
         "case=attacks" => Case::Attacks,
+        "case=restart" => Case::Restart,
         _ => return None,
     };
     args.next().is_none().then_some(case)
@@ -112,6 +117,10 @@ impl Judge {
             Case::Peer => self.peer(),
             Case::Pinned => self.pinned(),
             Case::Attacks => self.attacks(),
+            Case::Restart => {
+                let netd = startup.handle(NETD).ok_or("no badge at netd")?;
+                self.restart(&Endpoint::from_handle(netd))
+            }
         }
     }
 
@@ -302,6 +311,37 @@ impl Judge {
         Ok(())
     }
 
+    /// `netd`'s restart from the clients' side: an echo before it, the poke, which only the
+    /// bench sends, from outside, when it reads the judge's line saying it knows `netd`'s
+    /// instance, then a new instance answering, and an echo through it. The fault and the restart
+    /// themselves are `init`'s lines, and the peer counts both connections.
+    fn restart(&mut self, netd: &Endpoint) -> Result<(), String> {
+        self.turn(badge::ECHO)?;
+        let outcome = self.report(badge::ECHO, event::DONE)?;
+        let before = format!("echo through 10.0.9.100:7 before netd's fault: outcome {outcome}");
+        self.check(outcome == u64::from(code::OK), &before);
+        let old = instance(netd)?.ok_or("netd died before the poke")?;
+        self.say("knows netd's instance: poke it");
+        let new = loop {
+            match instance(netd)? {
+                Some(word) if word != old => break word,
+                _ => {
+                    let _ = redoubt_rt::handle::sleep(ASK_EVERY);
+                }
+            }
+        };
+        self.say("a new netd answers");
+        self.turn(badge::AGAIN)?;
+        let outcome = self.report(badge::AGAIN, event::DONE)?;
+        let after = format!("echo through 10.0.9.100:7 after netd's restart: outcome {outcome}");
+        self.check(outcome == u64::from(code::OK), &after);
+        // One restart only: the instance that served the second echo is still the one that
+        // answered after the fault.
+        let unchanged = instance(netd)? == Some(new);
+        self.check(unchanged, "netd's instance is unchanged since its restart");
+        Ok(())
+    }
+
     /// Gives the `connect` client on `badge` its turn and prints each of its connects' outcomes
     /// under `lines`, in order; its role must end attached (outcome 0), still holding its bucket.
     fn connects(&mut self, badge: u64, lines: &[&str]) -> Result<(), String> {
@@ -322,6 +362,21 @@ impl Judge {
 /// and the capture no SYN), and the gateway, where the forwarded ports are.
 const SELF_ATTACKS: [&str; 6] =
     ["10.0.9.102:7", "10.0.2.15:8000", "127.0.0.1:8000", "127.1.2.3:8000", "10.0.2.2:8000", "10.0.2.2:22"];
+
+/// The handle name of the judge's badge at `netd`, in `netd-restart`.
+const NETD: &str = "netd";
+/// How long the judge waits between asking `netd` which instance it is, in µs.
+const ASK_EVERY: u64 = 10_000;
+
+/// `netd`'s answer to the instance call (servers/netd/src/restart_probe.rs), or `None` if the
+/// instance that took the call died holding it.
+fn instance(netd: &Endpoint) -> Result<Option<u64>, String> {
+    match netd.call(&[INSTANCE, 0, 0, 0], &[], None, FOREVER).into_result() {
+        Ok((reply, _)) => Ok(Some(reply.words[0])),
+        Err(Error::Dead) => Ok(None),
+        Err(e) => Err(format!("asking netd which instance it is: {e:?}")),
+    }
+}
 
 /// Answers a report with nothing.
 fn answer(request: Request) -> Result<(), String> {

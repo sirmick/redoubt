@@ -9,6 +9,12 @@ description = "netd: the virtio-net driver, serving Ethernet frames to one ipd"
 name = "netd"
 path = "src/bin/netd.rs"
 
+[features]
+# Test-only, for the bench's netd-restart case (src/restart_probe.rs), and off in every default
+# build, as the kernel's dma-reset-deaf is: netd faults on the bench's UDP poke, and answers a
+# call asking which instance it is.
+restart-probe = []
+
 # No outside crates: netd inherits blkd's reasoning for writing its own virtqueues rather than
 # taking `virtio-drivers` (docs/servers/blkd.md).
 [dependencies]
