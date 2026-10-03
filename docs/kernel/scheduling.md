@@ -409,20 +409,20 @@ figures stay as measured.
 | steward decision wake | 5931 / 6143 / 39449, net = gross | 6169 / 6409 / 29490, net = gross |
 | a lease's end (worst decision wake + R10) | 39449 + 6366 = 45815 | 29490 + 6577 = 36067 |
 
-The run's 837 audits total 7.52 s (rv64) and 7.25 s (rv32) of the hart; R10 itself has none
-inside it, which the oracle asserts. Beside each destruction's R10 time the oracle reports its
-threads' time: the processes' threads ending inside it, their pumps included (the trace's `T` and
-`t` records), at seed 3 a p99 of 32 µs on rv64 and 36 µs on rv32. In the containment gate, with two full handle tables live
-(rv64, seed 3, its D leases' notices), the deadline notice is 23,185 µs net and 53,830 µs gross,
-492,458 µs of audit inside its windows. With the audit after a destruction left unstamped
-(`audit-unstamped`, the recorded negative run), it is 47,270 µs net: the target misses, since the
-oracle subtracts only what the trace shows it. With two full leases live at a deadline's end
-(seed 4), the deadline notice is 25,292 µs net on rv64 and 25,728 µs on rv32. With each audit's
-time billed to the budget that ran it and counted against its slice (`audit-billed`, the second
-recorded negative run), it is 44,343 and 45,283 µs net: the target misses. The steward stand-in
-spends its slice on the audit at the first `killed` notice, is requeued, and the victim and a
-hostile budget run a slice each before it takes the second. A share is judged the same way: in
-`sched-budget-churn`, whose attacker destroys a budget each slice, the victim of the spinning
+The run's 837 audits total 7.52 s (rv64) and 7.25 s (rv32) of the hart; R10 itself has none inside
+it, which the oracle asserts. Beside each destruction's R10 time the oracle reports its threads'
+time: the processes' threads ending inside it, their pumps included (the trace's `T` and `t`
+records), at seed 3 a p99 of 32 µs on rv64 and 36 µs on rv32. In the containment gate, with two
+full leases live at a deadline's end (its pinned seed 13), the deadline notice's p99 is 25,794 µs
+net and 95,579 µs gross on rv64, with 1,158,114 µs of audit inside its windows, and 26,197 µs net
+and 97,703 µs gross on rv32; the sweep is on [containment](README.md#containment). With the audit
+after a destruction left unstamped (`audit-unstamped`, the recorded negative run), it is 84,710 µs
+net on rv64: the target misses, since the oracle subtracts only what the trace shows it. With each
+audit's time billed to the budget that ran it and counted against its slice (`audit-billed`, the
+second recorded negative run), it is 44,761 and 45,577 µs net: the target misses. The steward
+stand-in spends its slice on the audit at the first `killed` notice, is requeued, and the victim
+and a hostile budget run a slice each before it takes the second. A share is judged the same way:
+in `sched-budget-churn`, whose attacker destroys a budget each slice, the victim of the spinning
 parent gets 494 of 1000 net of audits on rv64 (403 gross) and 495 on rv32 (416), and the shell's
 victim 500 and 499. With the audits billed to the budget that ran them, as before, the shell
 paid for scans a release build does not run, and its victim got 650 and 643 net: more than half.
@@ -834,12 +834,13 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).
-- **Measured on QEMU, on one hart.** The targets are guest instructions under `icount`; no
-  hardware run is measured, and a hardware run will characterise in cycles, not gate. A target
-  set from a sweep holds for the seeds swept, not for every seed. The queue and its accounting
-  drive one hart until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases that read the trace run a
-  kernel built with it, which has a record at every queue event and 32 MiB less RAM for the budget
-  tree.
+- **Measured on QEMU, on one hart.** The targets are guest instructions under `icount`; no hardware
+  run is measured, and a hardware run will characterise in cycles, not gate. A target set from a
+  sweep holds for the seeds swept, not for every seed. The queue and its accounting drive one hart
+  until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases
+  that read the trace run a kernel built with it, which has a record at every queue event and 64
+  MiB less RAM for the budget tree, taken from the top of RAM so the frames below sit where a
+  release kernel's do.
 
 ## Why
 

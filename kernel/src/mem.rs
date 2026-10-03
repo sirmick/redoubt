@@ -239,11 +239,12 @@ impl MemoryManager {
     }
 
     /// A frame for the kernel itself (the test-only trace ring), taken at boot before the budget
-    /// tree counts what the kernel keeps.
+    /// tree counts what the kernel keeps. It comes from the top of RAM, so that the frames below
+    /// it, every object's and process's, sit where a release kernel's do.
     #[cfg(feature = "sched-trace")]
     pub fn kernel_frame(&mut self) -> Result<usize, PageError> {
-        let index = self.alloc_frame(redoubt_layout::KERNEL_PID)?;
-        Ok(self.ram_start + index * PAGE_SIZE)
+        let i = self.allocations.iter().rposition(Option::is_none).ok_or(PageError::NoFrame)?;
+        Ok(self.ram_start + i * PAGE_SIZE).inspect(|_| self.allocations[i] = Some(redoubt_layout::KERNEL_PID))
     }
 
     /// A zeroed frame for a kernel object, owned by `OBJECT_OWNER`. The caller charges it to the

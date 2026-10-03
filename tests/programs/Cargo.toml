@@ -35,6 +35,7 @@ bin = [
     { name = "ipc-outcomes", test = false },
     { name = "irq-attack", test = false },
     { name = "irq-first-receive", test = false },
+    { name = "kernel-containment", test = false },
     { name = "kernel-half-attack", test = false },
     { name = "legacy-gone", test = false },
     { name = "lend-untouched", test = false },

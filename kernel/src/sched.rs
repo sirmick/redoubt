@@ -517,8 +517,8 @@ pub mod trace {
     pub const R10_BEGIN: u8 = b'X';
     pub const R10_END: u8 = b'Y';
 
-    /// Frames the ring takes (32 MiB), and the records they hold: four words each.
-    const PAGES: usize = 8192;
+    /// Frames the ring takes (64 MiB), and the records they hold: four words each.
+    const PAGES: usize = 16384;
     const PER_PAGE: usize = redoubt_sys::PAGE_SIZE / 32;
     const CAP: usize = PAGES * PER_PAGE;
 
