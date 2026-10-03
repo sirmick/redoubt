@@ -18,7 +18,26 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (16)</summary>
+
+- bench:init-boot
+- bench:init-refuses-public-manifest
+- bench:init-refuses-device-dma
+- host:redoubt-init::what_is_not_strict_json_is_refused_with_where
+- host:redoubt-init::names_follow_the_rule_and_differ
+- host:redoubt-init::references_name_what_the_manifest_and_bundle_hold
+- host:redoubt-init::a_handed_badge_is_a_root_badge_given_once_at_its_endpoint
+- host:redoubt-init::principals_values_are_checked
+- host:redoubt-init::a_device_name_is_at_most_60_bytes_and_never_ends_in_irq
+- host:redoubt-init::a_device_split_between_two_entries_is_refused
+- host:redoubt-init::the_dma_flag_must_be_the_kernel_s
+- host:redoubt-init::one_device_has_one_holder
+- host:redoubt-init::public_names_entries_the_bundle_holds_never_the_manifest
+- host:redoubt-init::a_shared_server_needs_a_bucket_per_declared_domain_and_root_badge
+- host:redoubt-init::handles_and_arguments_must_fit_one_startup_block
+- host:redoubt-init::the_fuzz_corpus_still_passes
+
+</details>
 
 The boot manifest is one strict JSON file ([wire](wire.md#strict-json)) in the signed bundle,
 and `init`'s only input. Its entries:
@@ -108,7 +127,7 @@ and `init`'s only input. Its entries:
 The attack tests: a manifest that splits a device between two entries, or names a device ending
 in `-irq`, is refused; a manifest giving a server fewer buckets than it serves refuses the boot.
 
-**Open:** none. Sizing a server when principals are added at run time is the steward's, in
+Sizing a server when principals are added at run time is the steward's, in
 M5 (persist, install, share).
 
 ### The confinement check
@@ -167,7 +186,22 @@ multi-tenancy and the serving library's residual risks apply.
 
 ### Starting the servers
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: step 6, the steward and `sshd`, and an `fsd` for each volume are not built · tested (12)</summary>
+
+- bench:init-boot
+- bench:init-servers
+- bench:init-refuses-system-fit
+- bench:init-refuses-device-unmatched
+- bench:init-refuses-bound
+- bench:init-refuses-held-bundle-key
+- bench:init-refuses-consoled-handed
+- host:redoubt-init::the_image_manifest_passes_and_its_plan_is_what_the_boot_follows
+- host:redoubt-init::a_manifest_without_keyd_is_refused_and_init_calls_each_server_at_an_endpoint
+- host:redoubt-init::init_calls_one_of_each_server_it_calls
+- host:redoubt-init::more_servers_than_init_has_threads_to_watch_are_refused
+- host:redoubt-init::no_server_is_handed_a_root_badge_at_consoled
+
+</details>
 
 The kernel gives `init` the `root`, `system` and `users` budgets, every device object and the
 Reset right. The loader maps the bundle into it, read-only
@@ -190,8 +224,9 @@ Reset right. The loader maps the bundle into it, read-only
    asking about;
 4. unmaps the UART and starts `consoled` with it. From then on, `init` writes through its own
    connection to `consoled`, and it prints each child's console connection id when it starts
-   the child ([consoled](consoled.md#started-by-init)). Without a `consoled` entry, `init` keeps
-   the UART;
+   the child ([consoled](consoled.md#started-by-init)). The check refuses a manifest that hands
+   any server an endpoint `consoled` receives on: a root badge there writes bare lines, and only
+   `init` holds one. Without a `consoled` entry, `init` keeps the UART;
 5. starts the rest of the drivers and the servers below the steward: `bootfsd`, `blkd`, `fsd`
    (one per volume), `netd` and `ipd`, then pushes the `public` entries to `bootfsd`;
 6. starts the steward, handing it the `users` budget, and `sshd`.
@@ -210,27 +245,26 @@ sequenceDiagram
     participant KD as keyd
     participant ST as steward
     participant SH as sshd
-    Note over L,SH: planned
-    L-->>K: verified bundle: kernel and init
-    L-->>I: the bundle, read-only
-    K-->>I: root, system, users budgets,<br/>devices, Reset
-    I-->>I: parse and check the manifest,<br/>make the servers' endpoints
-    I-->>KD: launch keyd with its keys
-    I-->>KD: holds(each login, approval and bundle key)
-    KD-->>I: no (a yes stops the boot)
-    I-->>S: launch through the stub:<br/>consoled, then bootfsd, blkd, fsd, netd, ipd
+    Note over ST,SH: planned
+    L->>K: verified bundle: kernel and init
+    L->>I: the bundle, read-only
+    K->>I: root, system, users budgets,<br/>devices, Reset
+    I->>I: parse and check the manifest,<br/>make the servers' endpoints
+    I->>KD: launch keyd with its keys
+    I->>KD: holds(each login, approval and bundle key)
+    KD->>I: no (a yes stops the boot)
+    I->>S: launch through the stub:<br/>consoled, then bootfsd, blkd, netd, ipd
+    I-->>S: launch fsd, one per volume
     I-->>ST: launch, with the users budget
     I-->>SH: launch, with keyd's host-key badge
     SH-->>ST: a login: whose key is this?
     ST-->>ST: carve the session budget,<br/>launch the first session
 ```
-*Figure: the boot from the loader to the first session. All of it is planned.*
+*Figure: the boot from the loader to the first session. Dashed: planned (`fsd`, the steward and `sshd`).*
 
 The attack tests: a manifest whose servers do not fit in `system`, or whose device entries do not
 match the kernel's device objects, is refused before any server runs. The verdict is `init`'s
 refusal line, printed when nothing else has run, and the power-off status.
-
-**Open:** none.
 
 ### The key-separation check
 
@@ -377,7 +411,12 @@ The bench's launcher, `stub-launch`, and the net rig (`tests/net/src/rig.rs`, wh
 
 ### Fresh connections per child
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: no case watches a connection disconnected when its child exits · tested (2)</summary>
+
+- bench:init-servers
+- bench:init-console-forgery
+
+</details>
 
 A launcher never passes its own connection to a child. Every handle in a child's namespace is a
 fresh connection the server made for that child with `new_connection`
@@ -385,8 +424,6 @@ fresh connection the server made for that child with `new_connection`
 launcher disconnects it when the child exits ([releasing grants](wire.md#a-launcher-releases-its-childs-grants)).
 A copied connection would share the launcher's fids and admission with the child, and the
 launcher could not free the child's state without losing its own.
-
-**Open:** none.
 
 ### Restarts and reboots
 
@@ -488,7 +525,12 @@ kernel
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the steward's `users` budget and the copies kept for a restart are not exercised; restarts are not built; `init-boot` shows each copy `init` closed gone from the kernel's side, but no call lists a handle table, so a copy `init` never closed would not be caught · tested (2)</summary>
+
+- bench:init-boot
+- host:redoubt-init::a_server_handed_a_budget_is_refused
+
+</details>
 
 - `init` holds the `root`, `system` and `users` budgets, every device object, the Reset right and
   the bundle's pages. It gives each driver only its own device objects, each server only the
@@ -505,8 +547,6 @@ Status: planned · M1 (separation and containment)
 - It has no network and no user data, and after boot it receives only exit notices.
 - The loader stub holds nothing but what the child holds: it runs as the child, in the child's
   budget, with the child's handles.
-
-**Open:** none.
 
 ## Security properties
 

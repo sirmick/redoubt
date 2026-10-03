@@ -17,11 +17,12 @@ channel by [`sshd`](sshd.md), not here.
 
 ### `/dev/cons`
 
-<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested (10)</summary>
+<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested (11)</summary>
 
 - bench:r4-host-tests
 - bench:consoled-build
 - bench:init-boot
+- bench:init-servers
 - host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
 - host:redoubt-consoled::typing_on_the_uart_reaches_a_ninep_reader
 - host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up
@@ -98,9 +99,12 @@ The table: [libs/wire/tables/consol.md](../../libs/wire/tables/consol.md).
 
 ### Started by `init`
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - bench:init-boot
+- bench:init-servers
+- bench:init-console-forgery
+- bench:bench-init-reporter-forged
 - host:redoubt-consoled::the_prefix_is_the_id_in_sixteen_hex_digits
 - host:redoubt-consoled::a_root_line_is_bare_and_a_minted_one_carries_its_id_on_every_line
 - host:redoubt-consoled::a_line_is_continued_by_its_writer_and_ended_by_any_other

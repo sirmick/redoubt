@@ -152,43 +152,46 @@ flowchart TD
     R --> S
     R --> U
     I -- runs in --> R
-    SV -. carved from .-> S
+    SV -- carved from --> S
     P -. carved from .-> U
 ```
-*Figure: the budget tree at boot. Solid: built. Dashed: planned, once `init` builds the tree
-from the boot manifest.*
+*Figure: the budget tree at boot. Solid: built. Dashed: planned, once the steward carves the
+principals' budgets.*
 
 ### The tree from the boot manifest
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the steward's carving of `users` is not built · tested (7)</summary>
+
+- bench:init-boot
+- bench:init-servers
+- bench:init-refuses-system-fit
+- bench:init-refuses-bound
+- host:redoubt-init::servers_that_do_not_fit_in_system_are_refused
+- host:redoubt-init::the_image_manifest_s_bound
+- host:redoubt-init::a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused
+
+</details>
 
 The loader starts only `init`, which runs in `root` on the weight and the one process `root`
 keeps free. What `init` launches counts in the budgets it launches into.
 
-- **The kernel keeps its fixed split.** It creates `root`, `system` and `users` at boot, as in
-  the table above, except that `root` keeps one process and some pages for `init`:
-  - `system` gets 15 processes and `users` 47;
-  - `root` keeps everything the loader gave `init` (its image, page tables, saved contexts and
-    the bundle's frames), measured at boot from the frames the loader gave it, plus
-    `INIT_PAGES` (1,024 pages, 4 MiB) for `init` to work in;
-  - `system` gets a quarter of the pages left and `users` the rest.
-
-  A boot whose `init` charges and `INIT_PAGES` do not fit stops (fail closed). The boot manifest
-  does not size `system`. The kernel reads no manifest and the
-  loader parses no JSON, so the split is set in one place, the kernel. `init` adds up what the
-  manifest's servers ask for and refuses the boot if it does not fit in `system`, before it
-  starts anything ([init](../servers/init.md#the-boot-manifest)).
+- **The kernel keeps its fixed split**, the table above. The boot manifest does not size
+  `system`: the kernel reads no manifest and the loader parses no JSON, so the split is set in
+  one place, the kernel. `init` adds up what the manifest's servers ask for and refuses the boot
+  if it does not fit in `system`, before it starts anything
+  ([init](../servers/init.md#the-boot-manifest)).
 - **`INIT_PAGES` is `init`'s working set, with room to spare.** Everything `init` uses is charged
   to `root`:
   - its first thread's 32-page stack;
-  - its heap, for the manifest and the startup blocks it builds;
+  - its heap, one fixed arena mapped once, for the manifest and the startup blocks it builds;
   - a handle table of up to 64 pages;
   - a page for each server endpoint it owns;
-  - a process object for each process it starts (at most 63).
+  - a thread for each server, watching its exit endpoint: the thread's stack and IPC page;
+  - a process object for each process it starts (at most `system`'s process limit).
 
-  That is about 500 pages, and 1,024 doubles it. It is a fixed count, not a share of RAM,
-  because `init`'s needs do not grow with the machine, and a share of a large machine would sit
-  idle in `root`. The manifest cannot change it, because the kernel reads no manifest. `init`
+  For the image's six servers the bound is under 500 pages (`init-boot` prints it), and 1,024
+  doubles that. It is a fixed count, not a share of RAM, because `init`'s needs do not grow with
+  the machine, and a share of a large machine would sit idle in `root`. The manifest cannot change it, because the kernel reads no manifest. `init`
   works in a fixed arena, and before it creates anything it bounds what the manifest will cost it
   in `root`: the endpoints it makes, a process object, a startup block and a thread watching its
   exit endpoint (the thread's IPC page and stack) for each server, the handles it keeps and mints,
@@ -210,8 +213,6 @@ manifest entry names. Only `init` and the steward ever hold a handle to a `syste
 and a manifest that grants a server a budget handle is refused ([init](../servers/init.md)). The
 steward holds `users` and carves each principal's budget from it, then a fixed sub-budget per
 label set ([steward](../servers/steward.md)).
-
-**Open:** none.
 
 ### Class is trust, not order
 

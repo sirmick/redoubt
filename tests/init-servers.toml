@@ -1,0 +1,40 @@
+description = "A servers' case under the real init (docs/testbench.md, \"The servers' cases under init\"): init boots the image's six servers and a test program from the manifest, pushes a public entry to bootfsd, and the program reads it through the root badge at bootfsd its entry is handed; its verdict counts only under the [con N] init announced for it"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the six servers, boot-reader, and the image's manifest with boot-reader added and
+# greeting public. boot-reader holds no Reset right, so the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-init-programs", bin = "boot-reader" },
+]
+timeout_secs = 60
+# boot-reader's verdict may come before or after init's lines after the push, so the case waits
+# for it after the announcement alone; init-boot holds the lines after the push.
+expect = [
+    '^init: the manifest is checked: 7 servers, bound \d+ pages$',
+    '^init: started consoled, and writes through it$',
+    '^init: started boot-reader, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] boot-reader TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: (keyd|consoled|bootfsd|blkd|netd|ipd) .* (exited|faulted|was killed), code']
+reporter = "boot-reader"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/servers.json" }
+
+[[file]]
+name = "greeting"
+from = { path = "tests/data/init/greeting.txt" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[net]

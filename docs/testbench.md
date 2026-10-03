@@ -75,7 +75,7 @@ program that owns the UART.
 
 ### Rule F (trusted verdicts)
 
-Status: built · tested: bench:bench-attack-forgery, bench:bench-reporter-mismatch, bench:logsrv-badge-forgery
+Status: built · tested: bench:bench-attack-forgery, bench:bench-reporter-mismatch, bench:logsrv-badge-forgery, bench:bench-init-reporter-forged, bench:init-console-forgery
 
 A verdict comes only from a party the attacker cannot impersonate. The console does not say who
 wrote a line, and an attacker can print anything, including another program's `PASSED`, so an
@@ -95,6 +95,11 @@ attack case passes only on a line the attacker cannot write:
   powers off. A case that names a `reporter` passes only if exactly one line starts
   `[server] done:` and it names the reporter's place; any other such line fails it, as does one
   in a case with no `reporter`.
+- **`consoled`'s prefix, under `init`.** In a servers' case the real `init` holds the UART until
+  `consoled` starts, and `consoled` starts every line written through a child's connection with
+  that connection's `[con N]`, so only `init`'s lines are bare. The bench learns the reporter's N
+  from `init`'s bare announcement and takes a `TEST PASSED` only under it
+  ([the servers' cases under `init`](#the-servers-cases-under-init)).
 - **A sole first program judging the kernel.** In `map-fixed-attack`, `write-only-attack` and
   `process-attack` one program runs, alone: it holds the console and the reset, makes every
   refused call itself, and prints its own unprefixed `ok:` lines. It is trusted because nothing
@@ -254,18 +259,29 @@ so they run a tester in `init`'s place instead.
 
 ### The servers' cases under `init`
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (4)</summary>
+
+- bench:init-servers
+- bench:init-console-forgery
+- bench:bench-init-reporter-forged
+- bench:init-boot
+
+</details>
 
 A servers' case boots the real `init` with a manifest of its own, packed as the `manifest`
 entry, and its test programs are `servers` entries in that manifest. They get no budget handle,
 their own included, as no server does
 ([R33 (no server holds a system budget)](servers/init.md#r33-no-server-holds-a-system-budget)).
 `init` prints its own lines bare, and `consoled` starts every other program's line with its
-connection id ([consoled](servers/consoled.md#started-by-init)). A case's `reporter` names a
-manifest entry, and the bench reads that entry's connection id from `init`'s line announcing it.
-Such a case ends at its last `expect`, since no test program holds the Reset right.
-
-**Open:** none.
+connection id, `[con N] ` with N in 16 lowercase hex digits
+([consoled](servers/consoled.md#started-by-init)). A case's `reporter` names a manifest entry, and
+the bench reads that entry's connection id only from `init`'s bare line announcing it,
+`init: started NAME, console N`; a second such line fails the case. The case passes only if
+exactly one line says `TEST PASSED` and it starts with that `[con N] `; any other such line fails
+it, wherever it came from. Such a case ends at its last `expect`, which waits for the verdict,
+since no test program holds the Reset right. The test programs are `redoubt-init-programs`
+(`tests/init-programs`): `boot-reader` reads a public entry through the root badge at `bootfsd`
+its entry is handed, and `con-forger` prints its arguments as lines.
 
 ### The scheduler oracle
 
@@ -437,15 +453,17 @@ bundle's pages and compares it, byte for byte, with the file it was built with.
 
 ### Data entries for `init`
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: no model trace is replayed under `init` yet · tested (1)</summary>
+
+- bench:init-servers
+
+</details>
 
 `init` receives the verified bundle and hands the public entries to `bootfsd`, and a data entry
 is how a model trace reaches an in-guest replayer, which compares results itself and prints its
 verdict ([boot](kernel/boot.md#what-init-does-with-the-bundle)). The program in `init`'s place
 already reads a data entry from the bundle's pages ([bundle files](#bundle-files)); under `init`,
 a program reads it again through `/boot` once the manifest's `public` list names the entry.
-
-**Open:** none.
 
 ## Devices and the network
 
@@ -672,12 +690,13 @@ shell, a login context or a container.
 
 ## Self-checks
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (14)</summary>
 
 - bench:bench-attack-forgery
 - bench:bench-console-after-expect
 - bench:bench-poweroff-missing
 - bench:bench-reporter-mismatch
+- bench:bench-init-reporter-forged
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
 - bench:bench-net-peer-twice

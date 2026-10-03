@@ -170,25 +170,21 @@ library's minted table ([minted connections](serving.md#minted-connections)):
 
 ### Seeds from the manifest
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: no `sshd` or steward is started, so no badge is handed them · tested: bench:init-boot, bench:init-refuses-held-login-key
 
 The seeds are written in `keyd`'s `servers` entry in the boot manifest, which `init` passes
 through unchanged as `keyd`'s arguments ([init](init.md#the-boot-manifest)). The manifest is
 never public, so no session can read them. The manifest hands `sshd` the `ssh_host` key's root
 badge and the steward the `audit` key's; the steward never holds the host key's badge.
 
-**Open:** none.
-
 ### Running under `init`
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: restarts are not built · tested: bench:init-boot, bench:init-refuses-held-bundle-key, bench:init-refuses-held-login-key
 
 `init` starts `keyd` through the loader stub before the steward and `sshd`, then asks it `holds`
 for every login and approval key and the bundle key ([init](init.md#the-key-separation-check)).
 `keyd` answers calls on its endpoint until the endpoint is destroyed. Restarted, it reads the same
 arguments and gives each root badge the same key, and every earlier grant names nothing.
-
-**Open:** none.
 
 ### Sealed keys, labelled keys and keys in leases
 

@@ -9,6 +9,9 @@ use serde::Deserialize;
 /// Output that fails any boot test, on top of the case's own `forbid` list.
 pub const ALWAYS_FORBIDDEN: &[&str] = &["PANIC", "TEST FAILED", "WARNING: INSECURE"];
 
+/// What a test program's verdict line says, after its name.
+pub const PASSED: &str = "TEST PASSED";
+
 #[derive(Debug, Deserialize)]
 pub struct Case {
     /// Taken from the file name.
@@ -249,6 +252,11 @@ pub struct Boot {
     /// The program whose `DONE` to `log-server` ends a `poweroff` case (docs/testbench.md, rule
     /// F). The case passes only if the one console line starting `[server] done:` names this
     /// program's PID. Any other such line fails it, as does one in a case with no reporter.
+    ///
+    /// Under the real `init` ([`Boot::under_init`]) it names a `servers` entry of the case's
+    /// manifest instead, and the case passes only if exactly one line says `TEST PASSED`, and it
+    /// starts with the `[con N] ` of the console connection `init` announced for that entry
+    /// (docs/testbench.md, "The servers' cases under `init`").
     pub reporter: Option<String>,
     /// Regular expressions with one capture group. The case is booted twice, and what
     /// each captures must differ between the two boots (for randomness, ASLR, ...).
@@ -448,6 +456,11 @@ pub enum Program {
 }
 
 impl Program {
+    /// Whether it is the real `init`, which starts the other programs from its manifest.
+    pub fn is_init(&self) -> bool {
+        matches!(self, Program::Package { package, bin } if package == "redoubt-init" && bin == "init")
+    }
+
     /// The `test-programs` binary it names, if it names one.
     pub fn test_program(&self) -> Option<&str> {
         match self {
@@ -492,10 +505,21 @@ fn default_smp() -> Vec<u32> { vec![1] }
 fn default_timeout() -> f64 { 60.0 }
 
 impl Boot {
+    /// Whether the real `init` is in the first program's place: then the other programs are only
+    /// bundle entries, which `init` starts as its manifest says.
+    pub fn under_init(&self) -> bool { self.programs.first().is_some_and(Program::is_init) }
+
+    /// Under `init`, the line in which `init` announces the reporter's console connection, bare:
+    /// its one capture is the connection's id.
+    pub fn reporter_announced(&self) -> Option<String> {
+        let reporter = self.reporter.as_ref().filter(|_| self.under_init())?;
+        Some(format!(r"^init: started {}, console ([0-9a-f]{{16}})$", regex::escape(reporter)))
+    }
+
     /// The reporter's place, which the tester prints as its PID: the case's programs are places
     /// 2 on, in order.
     pub fn reporter_pid(&self) -> Option<usize> {
-        let reporter = self.reporter.as_ref()?;
+        let reporter = self.reporter.as_ref().filter(|_| !self.under_init())?;
         let index = self.programs.iter().position(|p| p.test_program() == Some(reporter.as_str()))?;
         Some(index + 2)
     }
@@ -544,12 +568,24 @@ impl Case {
                         ensure!(!budgets[..i].contains(budget), "budget {budget:?} named twice");
                     }
                 }
-                if let Some(reporter) = &boot.reporter {
-                    ensure!(boot.poweroff, "a reporter needs poweroff = true");
-                    ensure!(
-                        boot.reporter_pid().is_some(),
-                        "reporter {reporter:?} is not one of the programs"
-                    );
+                match &boot.reporter {
+                    // No program under `init` holds the Reset right, so the case ends at its last
+                    // expect, which waits for the reporter's verdict.
+                    Some(_) if boot.under_init() => {
+                        ensure!(!boot.poweroff, "a reporter under init needs poweroff = false");
+                        ensure!(
+                            boot.expect.last().is_some_and(|e| e.contains(PASSED)),
+                            "a reporter under init needs a last expect waiting for its {PASSED:?}"
+                        );
+                    }
+                    Some(reporter) => {
+                        ensure!(boot.poweroff, "a reporter needs poweroff = true");
+                        ensure!(
+                            boot.reporter_pid().is_some(),
+                            "reporter {reporter:?} is not one of the programs"
+                        );
+                    }
+                    None => {}
                 }
                 check_sessions(&boot.session)
             }

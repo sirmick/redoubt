@@ -324,14 +324,17 @@ fn prepare(
     builder.cargo_build(target, "redoubt-kernel", &features, profile)?;
     builder.cargo_build(target, machine.loader_package, &[], profile)?;
     let budgets: Vec<&[String]> = programs.iter().map(Program::budgets).collect();
+    let under_init = programs.first().is_some_and(Program::is_init);
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
     let files = files
         .iter()
         .map(|file| Ok((file.name.clone(), builder.program(target, &file.from)?.1)))
         .collect::<Result<Vec<_>>>()?;
-    // A case may bring its own `programs` entry, a hostile one, as a file.
+    // A case may bring its own `programs` entry, a hostile one, as a file; the real `init` reads a
+    // manifest instead, and is given none.
     let listing = build::programs_entry(&programs, &budgets);
-    let listing = (!files.iter().any(|(name, _)| name == "programs")).then_some(listing.as_slice());
+    let listing =
+        (!files.iter().any(|(name, _)| name == "programs") && !under_init).then_some(listing.as_slice());
     build::bundle(
         bundle,
         &builder.artifact(target, "redoubt-kernel", profile),

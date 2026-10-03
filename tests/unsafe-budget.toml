@@ -216,6 +216,10 @@ path = "tests/programs"
 reason = "test programs, never in a shipped image"
 
 [[uncounted]]
+path = "tests/init-programs"
+reason = "the test programs the servers' cases start under init, never in a shipped image"
+
+[[uncounted]]
 path = "tests/net"
 reason = "the network test rig's programs, never in a shipped image"
 

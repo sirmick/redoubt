@@ -32,6 +32,7 @@ members = [
   "servers/init",
   "stub",
   "tests/programs",
+  "tests/init-programs",
   "tests/net",
   "tests/net/client",
   "tools/doccheck",

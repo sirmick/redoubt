@@ -166,7 +166,7 @@ flowchart TB
 
 ### Started by `init`
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: restarts are not built · tested: bench:init-boot
 
 `init` starts `netd` with the network card's MMIO region (DMA allowed) and interrupt, placed by
 name from the boot manifest's `devices` list, and its one argument, the badge `ipd`'s handle
@@ -185,8 +185,6 @@ instance, and `ipd` meets the failure as `unreachable` and asks again with backo
 ([ipd](ipd.md#failure-and-restart)). Frames in flight are lost, and TCP resends them. If the
 card was quarantined, `init` reboots instead
 ([devices](../kernel/devices.md#which-process-gets-which-device)).
-
-**Open:** none.
 
 ## Authority
 
