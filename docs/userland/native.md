@@ -356,17 +356,21 @@ Every one is also to build for rv32, where the vendored crates are checked too, 
 
 </details>
 
-`redoubt-client` ([`libs/client`](../../libs/client/src/lib.rs)) is the one client API every userland binds to: native programs
-link it, beamlet's Redoubt platform and natives are thin adapters over it
-([beamlet](beamlet.md#beamlet-on-redoubt)), and `init` launches and asks its servers through it.
+`redoubt-client` ([`libs/client`](../../libs/client/src/lib.rs)) is the one client API every
+userland binds to: native programs link it, beamlet's Redoubt platform and natives are thin
+adapters over it ([beamlet](beamlet.md#beamlet-on-redoubt)), and `init` launches and asks its
+servers through it.
 It is `no_std` with `alloc`, has no `unsafe`, and sits on the runtime and the wire codecs, adding
-what is more than one typed call. Its calls block, one per thread; beamlet makes them from its
-pool of I/O threads ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)).
+what is more than one typed call. Its calls block, one per thread, or a hub keeps many 9P requests
+outstanding on as few threads as one ([below](#many-requests-at-once)); beamlet makes its calls
+from its pool of I/O threads
+([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)).
 
 | Module | What it gives |
 | --- | --- |
 | `ns` | the namespace, built from the startup block: the longest matching prefix, `bind`, the listing |
 | `file` | files over 9P on a connection: walk, open, create, read, write, stat, read a directory, remove; one fid per open file |
+| `aio` | the hub: many 9P requests outstanding on multiplexed connections, their buffers in and out by value ([below](#many-requests-at-once)) |
 | `fsd` | the file server's typed operations that name open files' fids: `rename`, `copy_file`, `set_attr`, `get_attr` ([fsd](../servers/fsd.md#typed-operations)) |
 | `console` | `/dev/cons`: read, write, `size`, and the parked `resize` ([consoled](../servers/consoled.md#the-consol-protocol)) |
 | `launch` | the process builder: the image bytes the caller read, a budget the caller carved, the endpoint for the exit notice, namespace entries, named handles and arguments, written by the runtime's `StartupBuilder`; it returns a job, whose exit notice the caller waits for and whose budget ends it |
@@ -434,6 +438,64 @@ call); an error path never leaks a handle (a partial reply, a server that dies m
 reply carrying handles); a request refused before it is sent costs no fid; a child's grants are
 released at every server when its exit notice arrives, and a server that never answers delays the
 reaping by one timeout, no more.
+
+### Many requests at once
+
+<details><summary>Status: built · partly tested: only on the host; no boot has run it yet · tested (9)</summary>
+
+- host:redoubt-client::an_inline_submit_to_a_busy_server_returns_and_goes_at_the_next_poll
+- host:redoubt-client::one_connection_needs_no_waiter_thread
+- host:redoubt-client::buffers_come_back_to_their_submitter_by_value_in_any_order
+- host:redoubt-client::a_flushed_requests_buffer_is_returned_exactly_once
+- host:redoubt-client::a_tag_a_flush_names_is_not_reused_before_its_rflush
+- host:redoubt-client::a_batch_goes_a_page_at_a_time
+- host:redoubt-client::a_write_is_at_most_one_page
+- host:redoubt-client::two_connections_have_a_waiter_each_and_the_caller_idles_in_receive
+- host:redoubt-client::a_server_that_breaks_its_hold_loses_the_session_at_the_margin
+
+</details>
+
+A call holds its thread until its reply, so a thread per call is a thread per outstanding
+request. `aio`'s **hub** is the client half of a multiplexed connection
+([the serving library](../servers/serving.md#multiplexed-connections)): many 9P requests
+outstanding on a connection, and as few threads as one.
+
+- **The hub owns; it does not run.** One `Hub` value holds every connection's tags, its queue and
+  its completion buffer, and every buffer a request was submitted with. A buffer goes in by value
+  with its request and comes back by value with its completion, once, whatever became of the
+  request, so a page has one owner at a time. Its methods take the hub mutably: whichever thread
+  holds it runs it. It is `Send`, never `Sync`: a process that shares it between threads locks it
+  itself.
+- **Submitting is inline.** A submit sends the request from the caller's own thread, waiting at
+  most `SUBMIT_TIMEOUT_US` (1 ms) for the server to take it, so a busy server never stalls the
+  caller (a VM's scheduler). A request not taken stays queued, in order, and goes at the hub's
+  next entry: a submit, a completion handed in, a wait or a poll. A caller enters the hub at
+  least whenever it is about to idle. Requests sent together go end to end in transfers of one
+  page, so a batch of 64 reads is one page on either width, and a send never needs more than the
+  one page a server's share may give a badge (a bucket of 2 pages is a page a badge); a request
+  longer than a page goes alone.
+- **Data moves as the kernel moves pages.** A write's data goes in a page of its own, transferred
+  to the server; a read's data comes back in the completion call's lend and is copied into the
+  read's buffer, which is handed back. Writes go a page at a time, at most `MAX_WRITE` (4 072
+  bytes) each, so a server whose share is one page a badge takes every one; a longer write is
+  refused `TooLarge`, for its caller to split.
+- **One connection needs no other thread.** The caller waits in the completion call itself when
+  it would idle, asking the server to hold it no longer than its own next deadline, and timing it
+  out only a margin (1 s) after that, so a timeout means the server broke its promise. That holds
+  only while nothing else must wake the caller, and only for a caller that idles at least every
+  `COLLECT_WAIT / 2` (5 s), since a session with no completion call parked for its session bound
+  (at most `COLLECT_WAIT`) ends. Any other gives the connection a waiter.
+- **More connections have a waiter each**, a thread blocked in that connection's completion call.
+  The caller idles in `receive` on an endpoint of its own, taking transfers of a completion
+  buffer's size; a waiter hands its filled buffer over as the transfer of a one-word wake-up
+  `send` there, and calls again at once with a fresh one. A waiter
+  owns no other buffer and talks to no other server, and the hub takes a wake-up only from the
+  badge it minted for that waiter.
+- **The server is not trusted.** An answer must frame, decode, carry a tag outstanding on its
+  connection and, for a read, fit its buffer; anything else ends the connection, as the server's
+  own end does, and every request outstanding comes back ended, with its buffer, its fate
+  unknown. A request flushed before it was sent comes back flushed at once; one already sent
+  comes back with its answer, or flushed with the `Rflush`.
 
 ### Dropped files, error names and generated calls
 

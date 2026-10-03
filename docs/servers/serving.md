@@ -234,7 +234,9 @@ A call holds its caller's thread until the reply, so a client with one call per 
 thread per outstanding request. The 9P skeleton also serves a connection **multiplexed**: many
 requests outstanding on its one badge, sent without waiting, and answered together through one
 long-poll call. Both ways are served on one endpoint, and a client may use both on one
-connection. (`libs/rt/src/server/ninep_mux.rs`.)
+connection; the client half is the client library's hub
+([native programs](../userland/native.md#many-requests-at-once)).
+(`libs/rt/src/server/ninep_mux.rs`.)
 
 - **A request** is a `send` on the connection's badge with word 0 = 0: one T-message, packed into
   words 1 to 3 (three machine words: 24 bytes on rv64, 12 on rv32), or one or more T-messages end
