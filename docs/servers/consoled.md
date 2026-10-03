@@ -52,9 +52,12 @@ with nothing below it.
   opcodes, and any other typed opcode, are answered `malformed` ([below](#the-consol-protocol)).
   That reply does not close the handles the request carried, a departure from the serving
   library's rule that unasked handles are closed (Residual risks).
-- **Admission:** at most 2 parked reads, 4 fids and 4 connections per (account, label set), across
-  at most `buckets=N` of those, sized to fit its 1 MiB budget; a block with no `buckets=N`, or
-  one the budget cannot hold, and `consoled` does not start ([init](init.md#the-boot-manifest)).
+- **Admission:** at most 2 parked reads, 4 fids and `MAX_THREADS` connections per (account, label
+  set), across at most `buckets=N` of those, sized to fit its 1 MiB budget; a block with no
+  `buckets=N`, or one the budget cannot hold, and `consoled` does not start
+  ([init](init.md#the-boot-manifest)). The connections are `MAX_THREADS` because `init` mints
+  every server's console through its one root badge, and starts at most `MAX_THREADS - 1`
+  servers ([started by `init`](#started-by-init)).
 
 ### Two threads and the UART
 
@@ -95,7 +98,7 @@ The table: [libs/wire/tables/consol.md](../../libs/wire/tables/consol.md).
 
 ### Started by `init`
 
-<details><summary>Status: built · tested (9)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - bench:init-boot
 - host:redoubt-consoled::the_prefix_is_the_id_in_sixteen_hex_digits
@@ -104,6 +107,7 @@ The table: [libs/wire/tables/consol.md](../../libs/wire/tables/consol.md).
 - host:redoubt-consoled::whatever_the_uart_takes_no_line_mixes_writers_or_carries_another_s_id
 - host:redoubt-rt::the_file_server_learns_the_id_the_requester_got
 - host:redoubt-consoled::a_console_with_no_device_does_not_start
+- host:redoubt-consoled::init_s_badge_mints_a_console_for_every_server_init_can_start
 - bench:init-refuses-consoled-handed
 - host:redoubt-init::no_server_is_handed_a_root_badge_at_consoled
 

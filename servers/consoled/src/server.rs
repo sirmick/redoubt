@@ -19,13 +19,23 @@ pub const MAX_INPUT: usize = 1024;
 /// manifest's `buckets=N` ([`redoubt_rt::server::buckets`]). The program refuses a count whose
 /// buckets at their caps would not fit [`BUDGET`], or whose parked reads together would not stay
 /// under `MAX_OPEN_CALLS` with its headroom ([`redoubt_rt::server::Admission::new`] checks that).
-pub const fn limits(buckets: u32) -> Limits { Limits { buckets, in_flight: 2, files: 4, state: 4 } }
+///
+/// A bucket holds `MAX_THREADS` minted connections: `init` starts at most `MAX_THREADS - 1`
+/// servers, one thread watching each, and mints every one of their consoles through its one root
+/// badge here, so that badge's one bucket must hold them all (servers/consoled.md, "Started by
+/// `init`").
+pub const fn limits(buckets: u32) -> Limits {
+    Limits { buckets, in_flight: 2, files: 4, state: redoubt_rt::abi::MAX_THREADS as u32 }
+}
 /// What one of each costs, in bytes. A parked read holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), which is `MAX_LEND_PAGES` pages at worst; a
 /// fid and a minted connection are small records.
 pub const COST: Cost = Cost { in_flight: 64 * 1024, file: 256, state: 256 };
 /// The bytes of this server's budget its clients may use between them; its manifest entry gives
-/// it the budget, and the program refuses limits that would not fit.
+/// it the budget, and the program refuses limits that would not fit. A bucket at its caps costs
+/// 2 parked reads at 64 KiB, 4 fids and `MAX_THREADS` connections at 256 bytes: 140 032 bytes
+/// with `MAX_THREADS` at 31, so 7 buckets fit, and 197 376 bytes at 255, so 5 do; the image's
+/// manifest asks for 4.
 pub const BUDGET: u64 = 1024 * 1024;
 
 /// Bytes of the prefix a minted connection's lines start with: `[con `, the id in 16 lowercase
