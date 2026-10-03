@@ -67,8 +67,9 @@ pub const INITIAL_TID: TID = 1;
 
 /// Words in a [`TidMask`].
 const TID_WORDS: usize = 4;
-// Every TID, 0 included, has a bit.
-const _: () = assert!(MAX_THREADS < TID_WORDS * u64::BITS as usize);
+// Every TID, 0 included, has a bit, and every TID fits `last_tid_allocated: u8`, the field a
+// free-TID search starts from.
+const _: () = assert!(MAX_THREADS < TID_WORDS * u64::BITS as usize && MAX_THREADS <= u8::MAX as usize);
 
 /// A set of TIDs, bit `tid` for thread `tid` (bit 0, TID 0, names no thread).
 pub type TidMask = crate::bits::Bits<TID_WORDS>;
