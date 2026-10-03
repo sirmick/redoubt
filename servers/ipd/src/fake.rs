@@ -323,7 +323,7 @@ impl World {
         // As the program sizes itself (`crate::sizing`): sockets are `State` units, so a bucket
         // holds 4 connections and 8 sockets' worth, and the listener badge 20 sockets'.
         let state = crate::sizing::state_for(4, 8);
-        let limits = Limits { buckets: 8, in_flight: 5, files: 24, state };
+        let limits = Limits { buckets: 8, in_flight: 5, files: 24, state, requests: 0, pages: 0 };
         let listener = Override {
             badge: LISTENER,
             in_flight: 5,

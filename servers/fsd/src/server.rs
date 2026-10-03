@@ -16,10 +16,12 @@ use crate::volume::{BLOCK, Blocks, Mounted, Range};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N`. Nothing is parked: every request is answered as it arrives.
-pub const fn limits(buckets: u32) -> Limits { Limits { buckets, in_flight: 0, files: 32, state: 8 } }
+pub const fn limits(buckets: u32) -> Limits {
+    Limits { buckets, in_flight: 0, files: 32, state: 8, requests: 0, pages: 0 }
+}
 /// What one of each costs, in bytes: a fid is its table entry and a node per step from its root,
 /// each a path; a minted connection its record and its root's path.
-pub const COST: Cost = Cost { in_flight: 0, file: 2048, state: 512 };
+pub const COST: Cost = Cost { in_flight: 0, file: 2048, state: 512, request: 0, page: 0 };
 /// The bytes of this server's budget its clients may use between them.
 pub const BUDGET: u64 = 2 * 1024 * 1024;
 

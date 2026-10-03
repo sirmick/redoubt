@@ -162,7 +162,7 @@ fn serve(
     output: Box<dyn Write + Send>,
 ) -> u32 {
     let endpoint = Endpoint::from_handle(endpoint);
-    let limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4 };
+    let limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4, requests: 0, pages: 0 };
     let random = redoubt_rt::handle::random_u64().unwrap_or(1);
     let stream = Stream { input: VecDeque::new(), ended: false, output };
     let Ok(mut server) = NineServer::new(stream, limits, random) else { return 1 };

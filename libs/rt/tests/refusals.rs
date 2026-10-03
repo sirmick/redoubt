@@ -42,7 +42,9 @@ fn a_rejected_reply_closes_no_carried_handle_twice() {
 
     // Abandoned: the carried handle is closed once, though the reply is rejected and the
     // request's drop refuses it again.
-    let mut admission = Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0 }).unwrap();
+    let mut admission =
+        Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0, requests: 0, pages: 0 })
+            .unwrap();
     let mut parked: Parked<()> = Parked::new(FOREVER);
     let request = receive(kernel);
     let (id, key) = (request.id(), AdmitKey::of(&request.caller));

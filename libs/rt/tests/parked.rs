@@ -35,7 +35,9 @@ fn until(step: &str, mut cond: impl FnMut() -> bool) {
 /// `WAKE`, until its endpoint goes, counting in `abandoned` the abandoned-call notices it has
 /// handled. Returns how many it handled and how many calls expired.
 fn serve(ep: Endpoint, longest: u64, abandoned: Arc<AtomicU32>) -> (u32, u32) {
-    let mut admission = Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0 }).unwrap();
+    let mut admission =
+        Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0, requests: 0, pages: 0 })
+            .unwrap();
     let mut parked: Parked<u64> = Parked::new(longest);
     let mut expired = 0;
     loop {
@@ -170,7 +172,9 @@ fn parking_is_admitted_per_bucket_and_share() {
     let conn = f.grant(server, receive, client, 7);
     let server_thread = f.run(server, move || {
         let ep = Endpoint::from_handle(receive);
-        let mut admission = Admission::new(Limits { buckets: 2, in_flight: 4, files: 0, state: 0 }).unwrap();
+        let mut admission =
+            Admission::new(Limits { buckets: 2, in_flight: 4, files: 0, state: 0, requests: 0, pages: 0 })
+                .unwrap();
         let mut parked: Parked<()> = Parked::new(10_000_000);
         let mut refused = 0;
         while let Ok(event) = ep.receive(FOREVER, 0) {
@@ -225,7 +229,9 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
         (f.grant(server, receive, agent, 20), f.grant(server, receive, sponsor, 21));
     let server_thread = f.run(server, move || {
         let ep = Endpoint::from_handle(receive);
-        let mut admission = Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0 }).unwrap();
+        let mut admission =
+            Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0, requests: 0, pages: 0 })
+                .unwrap();
         let mut parked: Parked<()> = Parked::new(10_000_000);
         while let Ok(event) = ep.receive(FOREVER, 0) {
             let Event::Call(request) = event else { continue };

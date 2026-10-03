@@ -235,7 +235,7 @@ impl T {
 
     /// A server whose buckets may hold `files` fids each; a lone share holds half of that.
     fn with_limit(files: u32) -> T {
-        let limits = Limits { buckets: 8, in_flight: 0, files, state: 8 };
+        let limits = Limits { buckets: 8, in_flight: 0, files, state: 8, requests: 0, pages: 0 };
         T { server: NineServer::new(MemFs::new(), limits, TEST_RANDOM).unwrap(), buf: vec![0; MSIZE] }
     }
 

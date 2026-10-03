@@ -28,7 +28,7 @@ const NO_RANDOM: u32 = 4;
 const BAD_LIMITS: u32 = 5;
 
 /// A few connections per bucket: its client attaches and mints two.
-const LIMITS: Limits = Limits { buckets: 2, in_flight: 0, files: 4, state: 4 };
+const LIMITS: Limits = Limits { buckets: 2, in_flight: 0, files: 4, state: 4, requests: 0, pages: 0 };
 
 fn serve(startup: &Startup) -> u32 {
     let Some(endpoint) = startup.handle("restartee") else { return NO_ENDPOINT };

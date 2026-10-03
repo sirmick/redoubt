@@ -57,6 +57,8 @@ impl Config {
             in_flight: DEFAULT_IN_FLIGHT,
             files: files_for(DEFAULT_SOCKETS),
             state: state_for(DEFAULT_STATE, DEFAULT_SOCKETS),
+            requests: 0,
+            pages: 0,
         };
         let mut overrides = Vec::new();
         for l in &self.limits {
@@ -76,8 +78,13 @@ impl Config {
         let max_sockets =
             self.limits.iter().map(|l| u64::from(state_for(l.state, l.sockets).max(default))).sum::<u64>()
                 + rest * u64::from(default);
-        let cost =
-            Cost { in_flight: PARKED_BYTES, file: FID_BYTES, state: SOCKET_BYTES.max(CONNECTION_BYTES) };
+        let cost = Cost {
+            in_flight: PARKED_BYTES,
+            file: FID_BYTES,
+            state: SOCKET_BYTES.max(CONNECTION_BYTES),
+            request: 0,
+            page: 0,
+        };
         if !admission.fits(&cost, BUDGET - OWN_USE) {
             return Err(BadArgs("every bucket at its cap does not fit the budget"));
         }

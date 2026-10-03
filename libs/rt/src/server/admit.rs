@@ -15,11 +15,13 @@
 //!   ([`crate::server::ninep`], Connections).
 //! - **Caps sized to fit**: at most [`Limits::buckets`] buckets hold anything at once, so that every bucket
 //!   at its cap fits the server's budget ([`Limits::fits`]) and the calls they may hold open sum to less than
-//!   `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). A bucket beyond that is refused. Stated
-//!   residual: a server sized for fewer buckets than it serves refuses the latecomers, which tells them that
-//!   others hold state - across accounts, and between the label sets of one account, where it is a channel
-//!   out of a vault (servers/serving.md, "Residual risks"). Sizing closes it: a server's manifest sizes its
-//!   bucket count to the (account, label set)s it serves, so the cap never binds in normal use.
+//!   `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). Multiplexed requests and their pages
+//!   ([`Resource::Requests`], [`Resource::Pages`]) are sends, not open calls, so they are outside that
+//!   headroom, and only the budget bounds them. A bucket beyond that is refused. Stated residual: a server
+//!   sized for fewer buckets than it serves refuses the latecomers, which tells them that others hold state -
+//!   across accounts, and between the label sets of one account, where it is a channel out of a vault
+//!   (servers/serving.md, "Residual risks"). Sizing closes it: a server's manifest sizes its bucket count to
+//!   the (account, label set)s it serves, so the cap never binds in normal use.
 //! - **Caps big enough for a share to mean anything**: a non-zero cap is at least [`SMALLEST_CAP`], so that
 //!   one badge alone can never fill its bucket (its share is at most half of it) and a second badge - the
 //!   sponsor an agent shares the bucket with - always finds a slot. With three or more badges a bucket can
@@ -91,9 +93,16 @@ pub enum Resource {
     Files = 1,
     /// Any other per-client state the server keeps: 9P connections minted by `new_connection`.
     State = 2,
+    /// Multiplexed requests ([`crate::server::ninep`], multiplexed connections), each from its take
+    /// until its answer is delivered. A request is a `send`, not an open call, so these are outside
+    /// the open-call headroom.
+    Requests = 3,
+    /// The pages multiplexed requests' transfers brought, one per page however many requests it
+    /// carries, each held until the last of them is answered. Outside the open-call headroom too.
+    Pages = 4,
 }
 
-const RESOURCES: usize = 3;
+const RESOURCES: usize = 5;
 
 /// The most of each [`Resource`] one bucket may hold, and how many buckets may hold anything at
 /// once.
@@ -103,6 +112,8 @@ pub struct Limits {
     pub in_flight: u32,
     pub files: u32,
     pub state: u32,
+    pub requests: u32,
+    pub pages: u32,
 }
 
 /// What one of each [`Resource`] costs the server, in bytes of its budget.
@@ -111,6 +122,10 @@ pub struct Cost {
     pub in_flight: u64,
     pub file: u64,
     pub state: u64,
+    /// One multiplexed request: the server's record of it.
+    pub request: u64,
+    /// One page a multiplexed request's transfer brought.
+    pub page: u64,
 }
 
 impl Limits {
@@ -119,6 +134,8 @@ impl Limits {
             Resource::InFlight => self.in_flight,
             Resource::Files => self.files,
             Resource::State => self.state,
+            Resource::Requests => self.requests,
+            Resource::Pages => self.pages,
         }
     }
 
@@ -132,6 +149,8 @@ impl Limits {
             u64::from(self.in_flight).checked_mul(cost.in_flight),
             u64::from(self.files).checked_mul(cost.file),
             u64::from(self.state).checked_mul(cost.state),
+            u64::from(self.requests).checked_mul(cost.request),
+            u64::from(self.pages).checked_mul(cost.page),
         ];
         let bucket = one.iter().try_fold(0u64, |sum, part| sum.checked_add((*part)?));
         bucket.and_then(|b| b.checked_mul(u64::from(self.buckets))).is_some_and(|all| all <= budget)
@@ -172,9 +191,9 @@ pub fn own_args<'a>(args: &'a [&'a str]) -> impl Iterator<Item = &'a str> + 'a {
 
 /// Caps for the bucket of one account-0 root badge, in place of [`Limits`]' per-bucket caps
 /// (`ipd` gives `sshd` room for a parked accept and two calls per session, and the
-/// steward room for its grants). It applies only to a caller with account 0 calling on exactly
-/// this badge: a server cannot know a badge's account when it reads its arguments, and a client
-/// with an account never lands in a badge's bucket (`AdmitKey::of`).
+/// steward room for its grants). Multiplexed requests and their pages keep the default caps. It applies only
+/// to a caller with account 0 calling on exactly this badge: a server cannot know a badge's account when it
+/// reads its arguments, and a client with an account never lands in a badge's bucket (`AdmitKey::of`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Override {
     pub badge: u64,
@@ -184,11 +203,12 @@ pub struct Override {
 }
 
 impl Override {
-    fn of(&self, resource: Resource) -> u32 {
+    fn of(&self, resource: Resource) -> Option<u32> {
         match resource {
-            Resource::InFlight => self.in_flight,
-            Resource::Files => self.files,
-            Resource::State => self.state,
+            Resource::InFlight => Some(self.in_flight),
+            Resource::Files => Some(self.files),
+            Resource::State => Some(self.state),
+            Resource::Requests | Resource::Pages => None,
         }
     }
 }
@@ -211,7 +231,8 @@ impl Admission {
         if limits.open_calls() > (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u64 {
             return Err(Unsized);
         }
-        let caps = [limits.buckets, limits.in_flight, limits.files, limits.state];
+        let caps =
+            [limits.buckets, limits.in_flight, limits.files, limits.state, limits.requests, limits.pages];
         if caps.iter().any(|cap| (1..SMALLEST_CAP).contains(cap)) {
             return Err(Unsized);
         }
@@ -257,11 +278,16 @@ impl Admission {
     /// override slot at the larger of its cap and the default, per resource, and every other slot
     /// at the default.
     pub fn fits(&self, cost: &Cost, budget: u64) -> bool {
+        let multiplexed = u64::from(self.limits.requests)
+            .checked_mul(cost.request)
+            .zip(u64::from(self.limits.pages).checked_mul(cost.page))
+            .and_then(|(r, p)| r.checked_add(p));
         let one = |in_flight: u32, files: u32, state: u32| {
             u64::from(in_flight)
                 .checked_mul(cost.in_flight)?
                 .checked_add(u64::from(files).checked_mul(cost.file)?)?
-                .checked_add(u64::from(state).checked_mul(cost.state)?)
+                .checked_add(u64::from(state).checked_mul(cost.state)?)?
+                .checked_add(multiplexed?)
         };
         let d = &self.limits;
         let named = self.overrides.iter().try_fold(0u64, |sum, o| {
@@ -277,10 +303,8 @@ impl Admission {
 
     /// `key`'s cap for `resource`: an override's, for an account-0 root badge that has one.
     fn cap(&self, key: AdmitKey, resource: Resource) -> u32 {
-        match self.overrides.iter().find(|o| key.account == 0 && key.badge == o.badge) {
-            Some(o) => o.of(resource),
-            None => self.limits.of(resource),
-        }
+        let named = self.overrides.iter().find(|o| key.account == 0 && key.badge == o.badge);
+        named.and_then(|o| o.of(resource)).unwrap_or(self.limits.of(resource))
     }
 
     fn bucket(&self, key: AdmitKey) -> Option<usize> { self.buckets.iter().position(|(k, _)| *k == key) }
@@ -395,8 +419,11 @@ mod tests {
 
     fn key(account: u64) -> AdmitKey { AdmitKey::of(&caller(account, &[])) }
 
-    fn limits(in_flight: u32, files: u32, state: u32) -> Limits {
-        Limits { buckets: 8, in_flight, files, state }
+    fn limits(in_flight: u32, files: u32, state: u32) -> Limits { caps(8, in_flight, files, state) }
+
+    /// Caps with no multiplexed requests or pages.
+    fn caps(buckets: u32, in_flight: u32, files: u32, state: u32) -> Limits {
+        Limits { buckets, in_flight, files, state, requests: 0, pages: 0 }
     }
 
     /// A cap of one would be a whole bucket for the first badge; the sponsor's guarantee needs
@@ -406,7 +433,7 @@ mod tests {
         assert!(Admission::new(limits(0, 1, 0)).is_err());
         assert!(Admission::new(limits(0, 0, 1)).is_err());
         assert!(Admission::new(limits(1, 2, 2)).is_err());
-        assert!(Admission::new(Limits { buckets: 1, in_flight: 0, files: 2, state: 0 }).is_err());
+        assert!(Admission::new(caps(1, 0, 2, 0)).is_err());
         let mut a = Admission::new(limits(0, SMALLEST_CAP, 0)).unwrap();
         // One badge alone never fills the bucket, so its sponsor still finds a slot.
         let alice = key(1001);
@@ -435,7 +462,7 @@ mod tests {
 
     #[test]
     fn released_keys_leave_the_table() {
-        let mut a = Admission::new(Limits { buckets: 100, in_flight: 0, files: 2, state: 2 }).unwrap();
+        let mut a = Admission::new(caps(100, 0, 2, 2)).unwrap();
         for account in 0..100 {
             a.admit(key(account), 1, Resource::Files).unwrap();
         }
@@ -477,7 +504,7 @@ mod tests {
     #[test]
     fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share() {
         let (agent, agent2, sponsor) = (1, 2, 3);
-        let mut a = Admission::new(Limits { buckets: 4, in_flight: 0, files: 12, state: 0 }).unwrap();
+        let mut a = Admission::new(caps(4, 0, 12, 0)).unwrap();
         let alice = key(1001);
         while a.admit(alice, agent, Resource::Files).is_ok() {}
         assert_eq!(a.held_by(alice, agent, Resource::Files), 6, "alone, half the bucket");
@@ -500,7 +527,7 @@ mod tests {
 
     #[test]
     fn buckets_are_bounded_so_caps_fit() {
-        let mut a = Admission::new(Limits { buckets: 2, in_flight: 2, files: 2, state: 2 }).unwrap();
+        let mut a = Admission::new(caps(2, 2, 2, 2)).unwrap();
         a.admit(key(1), 1, Resource::Files).unwrap();
         a.admit(key(2), 1, Resource::Files).unwrap();
         assert_eq!(a.admit(key(3), 1, Resource::Files), Err(Refused));
@@ -509,20 +536,39 @@ mod tests {
     }
 
     #[test]
+    fn requests_and_pages_are_outside_the_open_call_headroom() {
+        // A multiplexed request is a send, never an open call: neither its cap nor its pages' is
+        // bounded by `MAX_OPEN_CALLS`, but each is a cap a share means something under, apart.
+        let limits = Limits { buckets: 32, in_flight: 2, files: 0, state: 0, requests: 1000, pages: 100 };
+        let mut a = Admission::new(limits).unwrap();
+        assert!(Admission::new(Limits { requests: 1, ..limits }).is_err());
+        assert!(Admission::new(Limits { pages: 1, ..limits }).is_err());
+        let (agent, sponsor) = (key(1), key(1));
+        while a.admit(agent, 1, Resource::Requests).is_ok() {}
+        while a.admit(agent, 1, Resource::Pages).is_ok() {}
+        assert_eq!(a.held(agent, Resource::Requests), 500, "a lone badge takes half its requests");
+        assert_eq!(a.held(agent, Resource::Pages), 50, "and half its pages");
+        assert_eq!(a.admit(sponsor, 2, Resource::Requests), Ok(()));
+        assert_eq!(a.admit(sponsor, 2, Resource::Pages), Ok(()));
+        assert_eq!(a.held(agent, Resource::InFlight), 0, "requests take no open-call slot");
+        let cost = Cost { in_flight: 0, file: 0, state: 0, request: 256, page: 4096 };
+        let all = 32 * (1000 * 256 + 100 * 4096);
+        assert!(limits.fits(&cost, all) && !limits.fits(&cost, all - 1));
+    }
+
+    #[test]
     fn open_calls_leave_headroom() {
         let most = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32 / 2;
-        assert!(Admission::new(Limits { buckets: most, in_flight: 2, files: 2, state: 2 }).is_ok());
-        assert!(Admission::new(Limits { buckets: most + 1, in_flight: 2, files: 2, state: 2 }).is_err());
-        assert!(Admission::new(Limits { buckets: 4, in_flight: most / 2 + 2, files: 0, state: 0 }).is_err());
-        assert!(
-            Admission::new(Limits { buckets: u32::MAX, in_flight: u32::MAX, files: 0, state: 0 }).is_err()
-        );
+        assert!(Admission::new(caps(most, 2, 2, 2)).is_ok());
+        assert!(Admission::new(caps(most + 1, 2, 2, 2)).is_err());
+        assert!(Admission::new(caps(4, most / 2 + 2, 0, 0)).is_err());
+        assert!(Admission::new(caps(u32::MAX, u32::MAX, 0, 0)).is_err());
     }
 
     #[test]
     fn caps_fit_the_budget() {
-        let cost = Cost { in_flight: 4096, file: 512, state: 256 };
-        let l = Limits { buckets: 4, in_flight: 2, files: 10, state: 2 };
+        let cost = Cost { in_flight: 4096, file: 512, state: 256, request: 0, page: 0 };
+        let l = caps(4, 2, 10, 2);
         let need = 4 * (2 * 4096 + 10 * 512 + 2 * 256);
         assert!(l.fits(&cost, need));
         assert!(!l.fits(&cost, need - 1));
@@ -539,9 +585,7 @@ mod tests {
     #[test]
     fn an_override_is_its_root_badge_s_alone() {
         let sshd = Override { badge: 3, in_flight: 24, files: 32, state: 20 };
-        let mut a =
-            Admission::with_overrides(Limits { buckets: 5, in_flight: 5, files: 8, state: 4 }, &[sshd])
-                .unwrap();
+        let mut a = Admission::with_overrides(caps(5, 5, 8, 4), &[sshd]).unwrap();
         // sshd's bucket takes 24 calls; the 25th is refused.
         for _ in 0..24 {
             a.admit(root(3, 0), 3, Resource::InFlight).unwrap();
@@ -559,7 +603,7 @@ mod tests {
     /// open-call headroom; bad badges and small caps are refused.
     #[test]
     fn overrides_are_sized_and_checked() {
-        let limits = Limits { buckets: 6, in_flight: 5, files: 8, state: 4 };
+        let limits = caps(6, 5, 8, 4);
         let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
         let bound = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32;
         // The milestone manifest: sshd 23, the steward 2 (a slot of 5 at worst), four more at 5.
@@ -583,7 +627,7 @@ mod tests {
     /// badges at 5 while the steward was idle).
     #[test]
     fn the_worst_order_never_passes_the_headroom() {
-        let limits = Limits { buckets: 6, in_flight: 5, files: 8, state: 4 };
+        let limits = caps(6, 5, 8, 4);
         let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
         let root = |badge| AdmitKey::of(&Caller { badge, account: 0, labels: Default::default() });
         let bound = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32;
@@ -608,11 +652,11 @@ mod tests {
 
     #[test]
     fn fits_counts_overrides_at_their_caps() {
-        let limits = Limits { buckets: 2, in_flight: 2, files: 2, state: 2 };
+        let limits = caps(2, 2, 2, 2);
         let a =
             Admission::with_overrides(limits, &[Override { badge: 1, in_flight: 10, files: 0, state: 0 }])
                 .unwrap();
-        let cost = Cost { in_flight: 100, file: 10, state: 1 };
+        let cost = Cost { in_flight: 100, file: 10, state: 1, request: 0, page: 0 };
         // 10 x 100 for the override (its files and state below the default count at the
         // default, 2 x 10 + 2 x 1), and 2 x 100 + 2 x 10 + 2 x 1 for the other bucket.
         assert!(a.fits(&cost, 1244));

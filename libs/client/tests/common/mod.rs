@@ -40,7 +40,7 @@ impl Boot {
         let init = f.process(0, &[]);
         let founding = f.grant(server, receive, init, 1);
         let mut block = StartupBuilder::new(receive.index());
-        block.handle("bootfsd", receive).arg("buckets=16");
+        block.handle("bootfsd", receive).arg("buckets=4");
         for (name, _) in BOOT {
             block.arg(name);
         }
@@ -269,7 +269,7 @@ impl Served {
         let receive = f.endpoint(server);
         let thread = f.run(server, move || {
             // Room in one client's share for every fid a connection can hold.
-            let limits = Limits { buckets: 8, in_flight: 0, files: 128, state: 8 };
+            let limits = Limits { buckets: 8, in_flight: 0, files: 128, state: 8, requests: 0, pages: 0 };
             let mut nine = NineServer::new(Files::new(), limits, 0x5eed).unwrap();
             let endpoint = Endpoint::from_handle(receive);
             let mut own = own;

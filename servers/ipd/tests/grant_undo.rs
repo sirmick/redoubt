@@ -31,7 +31,7 @@ fn ipd() -> Ipd<Pipe, Seeds> {
     let net = Net { addr: ADDR, len: LEN, gateway: Some(GATEWAY), selfset: selfset() };
     let stack = Stack::new(net, Link::new(Pipe(wire)), entropy, 64);
     let fs = NetFs::new(stack, &[(ANY, anywhere())], SocketCaps { default: 8, overrides: vec![] });
-    let limits = Limits { buckets: 8, in_flight: 5, files: 24, state: 4 };
+    let limits = Limits { buckets: 8, in_flight: 5, files: 24, state: 4, requests: 0, pages: 0 };
     Ipd::new(NineServer::new(fs, limits, 7).unwrap(), INGRESS)
 }
 

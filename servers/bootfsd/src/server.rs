@@ -26,10 +26,12 @@ pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 /// manifest's `buckets=N` ([`redoubt_rt::server::buckets`]), and the program refuses a count whose
 /// buckets at their caps would not fit [`BUDGET`]. Nothing is ever parked here: every request is
 /// answered as it arrives.
-pub const fn limits(buckets: u32) -> Limits { Limits { buckets, in_flight: 0, files: 32, state: 8 } }
+pub const fn limits(buckets: u32) -> Limits {
+    Limits { buckets, in_flight: 0, files: 32, state: 8, requests: 0, pages: 0 }
+}
 /// What one of each costs, in bytes: a fid is its table entry and its steps from the root (at
 /// most two, since `/boot` is flat); a minted connection its record.
-pub const COST: Cost = Cost { in_flight: 0, file: 256, state: 256 };
+pub const COST: Cost = Cost { in_flight: 0, file: 256, state: 256, request: 0, page: 0 };
 /// The bytes of this server's budget its clients may use between them, over and above
 /// [`MAX_BYTES`] of published entries.
 pub const BUDGET: u64 = 256 * 1024;

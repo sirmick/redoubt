@@ -27,7 +27,7 @@ pub const MAX_INPUT: usize = 1024;
 /// those consoles and for `init`'s own.
 pub const fn limits(buckets: u32) -> Limits {
     let consoles = redoubt_rt::abi::MAX_THREADS as u32;
-    Limits { buckets, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles }
+    Limits { buckets, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles, requests: 0, pages: 0 }
 }
 
 /// The fids one console client holds open: the root its namespace attaches
@@ -37,7 +37,7 @@ pub const CONSOLE_FIDS: u32 = 2;
 /// What one of each costs, in bytes. A parked read holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), which is `MAX_LEND_PAGES` pages at worst; a
 /// fid and a minted connection are small records.
-pub const COST: Cost = Cost { in_flight: 64 * 1024, file: 256, state: 256 };
+pub const COST: Cost = Cost { in_flight: 64 * 1024, file: 256, state: 256, request: 0, page: 0 };
 /// The bytes of this server's budget its clients may use between them; its manifest entry gives
 /// it the budget, and the program refuses limits that would not fit. A bucket at its caps costs
 /// 2 parked reads at 64 KiB, and `MAX_THREADS` connections at 256 bytes with 2 fids each at 256:

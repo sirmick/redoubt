@@ -113,6 +113,12 @@ pub const DMDIR: u32 = 0x8000_0000;
 use super::minted::NotYours;
 pub use super::minted::{FIRST_MINTED_BADGE, Minter, first_badge};
 
+#[path = "ninep_mux.rs"]
+mod mux;
+pub use mux::{
+    Around, COLLECT, COLLECT_WAIT, ENDED, IN_WORDS, MAX_TAGS, OPENED, REFUSED, REQUEST_STATE, collect_words,
+};
+
 /// The typed opcodes `ninep_common` owns on every 9P endpoint (servers/wire.md). A
 /// server's own protocol on the same endpoint uses opcodes above them; an opcode in this range
 /// that `ninep_common` does not define is malformed.
@@ -141,6 +147,8 @@ impl NineError {
     pub const BAD_MODE: NineError = NineError("bad open mode");
     pub const BAD_NAME: NineError = NineError("bad file name");
     pub const BAD_OFFSET: NineError = NineError("bad offset");
+    /// A multiplexed request over its connection's share ([`mux`]).
+    pub const BUSY: NineError = NineError("busy");
     pub const FID_IN_USE: NineError = NineError("fid already in use");
     pub const IS_OPEN: NineError = NineError("fid is open");
     pub const NOT_DIR: NineError = NineError("not a directory");
@@ -152,6 +160,8 @@ impl NineError {
     pub const NO_ID: NineError = NineError("no connection id");
     pub const NO_MEMORY: NineError = NineError("out of memory");
     pub const PERMISSION: NineError = NineError("permission denied");
+    /// A multiplexed request still waiting at its deadline ([`mux`]).
+    pub const TIMEOUT: NineError = NineError("timeout");
     pub const TOO_DEEP: NineError = NineError("path too deep");
     pub const TOO_MANY: NineError = NineError("too many open files");
     pub const TOO_SMALL: NineError = NineError("count too small");
@@ -327,6 +337,15 @@ pub trait FileServer {
         Err(NineError::NOT_SUPPORTED)
     }
 
+    /// A multiplexed request of `caller`'s, charged to `charge` in `admission`, is about to be
+    /// answered ([`mux`]): a file server that charges what a request makes (`ipd`'s sockets)
+    /// reserves it here, as it does around a call it serves itself.
+    fn serving(&mut self, _caller: &Caller, _charge: (AdmitKey, u64), _admission: &mut Admission) {}
+
+    /// The request [`FileServer::serving`] began has been answered, or waits: what it reserved
+    /// and did not spend goes back.
+    fn served(&mut self, _admission: &mut Admission) {}
+
     /// A fid went away (clunked, removed, reset by `Tversion`, or its connection disconnected);
     /// `node` is the one it rested on. Only that node is clunked: nodes passed on a walk, and
     /// nodes a failed request produced, are simply dropped, which is why a node must hold no
@@ -388,6 +407,8 @@ pub struct NineServer<S: FileServer> {
     scratch: Vec<u8>,
     /// The last `Tstat`'s answer, for the same reason.
     stat: FileStat,
+    /// Multiplexed connections' sessions and requests ([`mux`]).
+    mux: mux::Mux,
 }
 
 /// How answering one 9P request ended short of an R-message: refused, or held for later.
@@ -425,6 +446,7 @@ impl<S: FileServer> NineServer<S> {
             admission,
             scratch: Vec::new(),
             stat: FileStat::default(),
+            mux: mux::Mux::new(),
         }
     }
 
@@ -449,6 +471,10 @@ impl<S: FileServer> NineServer<S> {
     /// Admission, to charge a server's parked calls in the same buckets and shares as its fids
     /// ([`super::parked::Parked`], which takes it on every call).
     pub fn admission_mut(&mut self) -> &mut Admission { &mut self.admission }
+
+    /// The file server and admission at once, for a file server that charges what a request makes
+    /// around the requests it serves ([`FileServer::serving`]).
+    pub fn fs_and_admission(&mut self) -> (&mut S, &mut Admission) { (&mut self.fs, &mut self.admission) }
 
     /// The bucket and share `caller`'s requests are charged to, which is what a parked call is
     /// charged to: [`Minted::key`] and [`Minted::share`] (servers/serving.md R26).
@@ -498,6 +524,9 @@ impl<S: FileServer> NineServer<S> {
             Ok(handles) => (handles, false),
             Err(present) => (present, true),
         };
+        if words[..2] == [0, COLLECT] && words[3] == 0 {
+            return self.collect(request).map(|()| None);
+        }
         if words[0] == 0 {
             // Handles are no part of 9P; closing them keeps a client from filling our table.
             let words = if missing || words != WORDS_9P {
@@ -607,31 +636,30 @@ impl<S: FileServer> NineServer<S> {
     pub fn answer_in_place(&mut self, caller: &Caller, lend: &mut [u8]) -> Answer {
         // Room for the reply: the lend, within the msize. Read data is bounded by it.
         let room = lend.len().min(MSIZE);
-        let (tag, reply) = match Message::decode(lend) {
+        let (tag, reply) = self.reply_to(caller, lend, room);
+        write_reply(tag, reply, &mut lend[..room])
+    }
+
+    /// As [`NineServer::answer_in_place`], for a T-message in `request` answered into `out`, a
+    /// different buffer (a multiplexed request, [`mux`]): nothing is written to `out` when the
+    /// request waits.
+    fn answer_into(&mut self, caller: &Caller, request: &[u8], out: &mut [u8]) -> Answer {
+        let room = out.len().min(MSIZE);
+        let (tag, reply) = self.reply_to(caller, request, room);
+        write_reply(tag, reply, &mut out[..room])
+    }
+
+    /// The tag of the T-message in `request` and what answers it, in at most `room` bytes.
+    fn reply_to<'s>(
+        &'s mut self,
+        caller: &Caller,
+        request: &[u8],
+        room: usize,
+    ) -> (u16, Result<Body<'s>, Held>) {
+        match Message::decode(request) {
             Ok(message) => (message.tag, self.answer(caller, message.body, room)),
             // The tag, if the header is there, so the client can match the error.
-            Err(_) => {
-                let tag = lend.get(5..7).map_or(NOTAG, |t| u16::from_le_bytes([t[0], t[1]]));
-                (tag, Err(Held::Error(NineError::BAD_MESSAGE)))
-            }
-        };
-        // The file server asked to hold the call: leave its T-message where it is.
-        if matches!(reply, Err(Held::Wait)) {
-            return Answer::Waiting;
-        }
-        let lend = &mut lend[..room];
-        let body = reply.unwrap_or_else(|e| match e {
-            Held::Error(e) => Body::Rerror { ename: e.0 },
-            // Ruled out just above; an `Rerror` is the safe thing to write if it ever were not.
-            Held::Wait => Body::Rerror { ename: NineError::NOT_OPEN.0 },
-        });
-        if (Message { tag, body }).encode(lend).is_ok() {
-            return Answer::Replied;
-        }
-        // The answer did not fit the lend: say so if even that fits.
-        match (Message { tag, body: Body::Rerror { ename: "reply too large" } }).encode(lend) {
-            Ok(_) => Answer::Replied,
-            Err(_) => Answer::NoRoom,
+            Err(_) => (tag_of(request).unwrap_or(NOTAG), Err(Held::Error(NineError::BAD_MESSAGE))),
         }
     }
 
@@ -881,23 +909,26 @@ impl<S: FileServer> NineServer<S> {
     /// `disconnect(id)` from `caller`: frees the connection and every connection minted under
     /// it (the shared table's order). `Err` if the caller did not receive `id`.
     fn disconnect(&mut self, caller: &Caller, id: u64) -> Result<(), NotYours> {
-        let Self { minted, conns, admission, fs, .. } = self;
-        minted.disconnect(caller, id, |gone| Self::connection_gone(conns, admission, fs, gone))
+        let Self { minted, conns, admission, fs, mux, .. } = self;
+        minted.disconnect(caller, id, |gone| Self::connection_gone(conns, admission, fs, mux, gone))
     }
 
     /// Frees the minted connection with `badge` and everything under it.
     fn forget(&mut self, badge: u64) {
-        let Self { minted, conns, admission, fs, .. } = self;
-        minted.forget(badge, |gone| Self::connection_gone(conns, admission, fs, gone));
+        let Self { minted, conns, admission, fs, mux, .. } = self;
+        minted.forget(badge, |gone| Self::connection_gone(conns, admission, fs, mux, gone));
     }
 
-    /// A minted connection is gone: its fids, its admission, the file server's record of it.
+    /// A minted connection is gone: its fids, its session, its admission, the file server's
+    /// record of it.
     fn connection_gone(
         conns: &mut Vec<Fids<S::Node>>,
         admission: &mut Admission,
         fs: &mut S,
+        mux: &mut mux::Mux,
         gone: super::minted::Entry<(S::Node, Qid)>,
     ) {
+        mux.end_badge(admission, gone.badge);
         while let Some(i) = conns.iter().position(|c| c.key.badge == gone.badge) {
             let conn = conns.swap_remove(i);
             for (_, fid) in conn.fids {
@@ -1188,7 +1219,7 @@ impl<S: FileServer> NineServer<S> {
 pub fn refuse(mut request: Request, error: NineError) -> Result<(), Error> {
     let lend = request.lend();
     let room = lend.len().min(MSIZE);
-    let tag = lend.get(5..7).map_or(NOTAG, |t| u16::from_le_bytes([t[0], t[1]]));
+    let tag = tag_of(lend).unwrap_or(NOTAG);
     let body = Body::Rerror { ename: error.0 };
     let words = match (Message { tag, body }).encode(&mut lend[..room]) {
         Ok(_) => WORDS_9P,
@@ -1205,6 +1236,27 @@ pub fn refuse_malformed(request: Request) -> Result<(), Error> {
     let close = super::typed::carried(&request);
     finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close }).map(|_| ())
 }
+
+/// Writes the answer to the request tagged `tag` into `out`: nothing if the file server asked the
+/// request to wait ([`Answer::Waiting`]), so its T-message survives where it was.
+fn write_reply(tag: u16, reply: Result<Body<'_>, Held>, out: &mut [u8]) -> Answer {
+    let body = match reply {
+        Ok(body) => body,
+        Err(Held::Wait) => return Answer::Waiting,
+        Err(Held::Error(e)) => Body::Rerror { ename: e.0 },
+    };
+    if (Message { tag, body }).encode(out).is_ok() {
+        return Answer::Replied;
+    }
+    // The answer did not fit: say so if even that fits.
+    match (Message { tag, body: Body::Rerror { ename: "reply too large" } }).encode(out) {
+        Ok(_) => Answer::Replied,
+        Err(_) => Answer::NoRoom,
+    }
+}
+
+/// The tag of the 9P message at the front of `bytes`, if its header is there.
+fn tag_of(bytes: &[u8]) -> Option<u16> { bytes.get(5..7).map(|t| u16::from_le_bytes([t[0], t[1]])) }
 
 /// Refuses unknown mode bits, and anything but plain reading for a directory.
 fn check_mode(mode: u8, is_dir: bool) -> Result<(), NineError> {
