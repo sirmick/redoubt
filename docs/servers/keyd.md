@@ -308,8 +308,6 @@ of one signature; the claim itself rests on reading the code.
   while keys are unlabelled; with labelled keys it needs a per-key check.
 - **An `ssh_host` badge speaks as the box.** Its holder can complete a key exchange as the box with
   any peer, for as long as it holds the badge.
-- **`keyd` does not boot in the bench.** Its behaviour is attacked by host tests against the
-  runtime's fake kernel (`r4-host-tests`); `keyd-build` only builds it for both widths.
 
 ## Why
 

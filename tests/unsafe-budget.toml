@@ -230,11 +230,11 @@ reason = "the test programs the servers' cases start under init, never in a ship
 
 [[uncounted]]
 path = "tests/net"
-reason = "the network test rig's programs, never in a shipped image"
+reason = "the net cases' judge, never in a shipped image"
 
 [[uncounted]]
 path = "tests/net/client"
-reason = "the network test rig's client, never in a shipped image"
+reason = "the net cases' clients, never in a shipped image"
 
 [[uncounted]]
 path = "tools/vendor-check"

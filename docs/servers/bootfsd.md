@@ -137,8 +137,6 @@ Status: built · partly tested: that a restarted `bootfsd` serves nothing until 
   published entry; a secret put on the `public` list is a secret published.
 - **A restart empties `/boot`** until its launcher fills it again; who does that after boot is
   [init](init.md#restarts-and-reboots)'s.
-- **`bootfsd` does not boot in the bench.** It is attacked by host tests against the runtime's
-  fake kernel (`r4-host-tests`); `bootfsd-build` only builds it for both widths.
 
 ## Why
 

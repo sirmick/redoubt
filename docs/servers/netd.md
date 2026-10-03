@@ -171,8 +171,9 @@ Status: built · tested: bench:init-boot, bench:netd-restart
 `init` starts `netd` with the network card's MMIO region (DMA allowed) and interrupt, placed by
 name from the boot manifest's `devices` list, and its one argument, the badge `ipd`'s handle
 carries; it hands `ipd` the matching handle to `netd` and `netd` a handle to `ipd`'s endpoint for
-frames ([init](init.md#starting-the-servers)). The net rig (`tests/net/src/rig.rs`) does this in
-the bench, finding the card by its virtio device ID.
+frames ([init](init.md#starting-the-servers)). In the bench, a case's own manifest does the same,
+naming the card at the fixed slot the bench gives it
+([disks and network cards](../testbench.md#disks-and-network-cards)).
 
 **A restart** is a driver's restart, like any other server's
 ([init](init.md#restarts-and-reboots)). A killed or faulted `netd` runs none of its own reset
@@ -264,8 +265,6 @@ Status: built · partly tested: the exit codes (`NO_DEVICE`, `BAD_ARGS`, `NO_RES
   drops fall on every connection `ipd` serves.
 - **A reset stops the device for everyone.** One lie ends the network for every principal until the
   device is brought up again; `netd` is not restarted to do that.
-- **`netd` does not boot under `init` in the bench.** The net rig launches it through the stub in
-  place of `init`.
 
 ## Why
 

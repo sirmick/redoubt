@@ -738,7 +738,6 @@ dependencies = [
  "redoubt-net-client",
  "redoubt-netd",
  "redoubt-rt",
- "stub",
  "toml",
 ]
 

@@ -15,10 +15,6 @@
 //! of this code; then the kernel resets the device before its DMA pages are reused
 //! (kernel/invariants.md I16), and `init` starts a new instance on the same device
 //! (servers/netd.md, "Started by `init`").
-//!
-//! **Nothing starts it under `init` yet**, because `init` does not exist yet
-//! (docs/plan/m1-separation.md, step 3). The net rig (`tests/net/src/rig.rs`) starts this program
-//! through the stub with the startup block `init` will write.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 

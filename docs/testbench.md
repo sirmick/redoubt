@@ -32,7 +32,7 @@ fallback to QEMU's own firmware.
 | `tools/testbench/` | the bench: builds, injects programs, boots QEMU, judges the console, sessions and network |
 | `tests/*.toml` | the cases, one per file (`tests/data/`: files they read; `tests/keys/`: SSH test keys) |
 | `tests/programs/` | `no_std` programs that run inside Redoubt: the log server, victims, attackers, checkers |
-| `tests/net/` | the network rig: boots the real `netd` and `ipd` through the loader stub, with clients and attackers |
+| `tests/net/` | the network clients and the judge that the net cases start under `init`, and the host test that checks each net case's manifest against its case file |
 
 ## Verdicts
 

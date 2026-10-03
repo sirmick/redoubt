@@ -3,39 +3,7 @@ name = "redoubt-net-tests"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "The network rig: boots the real netd and ipd through the loader stub and attacks them (docs/servers/ipd.md)"
-build = "build.rs"
-
-# One rig, one binary per case (src/rig.rs, `Mode`): the first program of the bundle, it holds
-# the devices and budgets and launches everything else through the stub until `init` starts the
-# servers (docs/plan/m1-separation.md; docs/testbench.md, "Peers, dials and the capture").
-[[bin]]
-name = "net-rig"
-path = "src/bin/net-rig.rs"
-
-[[bin]]
-name = "net-rig-twice"
-path = "src/bin/net-rig-twice.rs"
-
-[[bin]]
-name = "net-rig-attacks"
-path = "src/bin/net-rig-attacks.rs"
-
-[[bin]]
-name = "net-rig-unrefused"
-path = "src/bin/net-rig-unrefused.rs"
-
-[[bin]]
-name = "net-rig-peer"
-path = "src/bin/net-rig-peer.rs"
-
-[[bin]]
-name = "net-rig-pinned"
-path = "src/bin/net-rig-pinned.rs"
-
-[[bin]]
-name = "net-rig-probe"
-path = "src/bin/net-rig-probe.rs"
+description = "The net cases' judge, and the host test that checks each net case's manifest against its case file (docs/testbench.md)"
 
 # The reporter of the net cases under init: a servers entry the clients report to.
 [[bin]]
@@ -46,13 +14,13 @@ test = false
 [dependencies]
 redoubt-init-programs = { path = "../init-programs" }
 redoubt-rt = { path = "../../libs/rt" }
-redoubt-ipd = { path = "../../servers/ipd" }
 # The restart probe's constants, shared with netd's test-only feature (net-judge, tests/cases.rs).
 redoubt-netd = { path = "../../servers/netd" }
 redoubt-net-client = { path = "client" }
-stub = { path = "../../stub" }
 
 [dev-dependencies]
-# Each case's manifest, read with init's own decoder (tests/cases.rs).
+# Each case's manifest, read with init's own decoder, and ipd's arguments with its own parser
+# (tests/cases.rs).
 redoubt-init = { path = "../../servers/init" }
+redoubt-ipd = { path = "../../servers/ipd" }
 toml = "0.8"

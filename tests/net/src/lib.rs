@@ -1,20 +1,10 @@
-//! The network rig: the real `netd` and `ipd`, booted through the loader stub by a launcher that
-//! stands in for `init` until `init` starts the servers (docs/plan/m1-separation.md), with
-//! clients, a victim and attackers beside them. What each case checks is in `src/rig.rs`; what
-//! the bench checks from outside (the peers' counts and the capture) is in its
-//! `tests/net-*.toml` and `tests/bench-net-*.toml`.
+//! The net cases (docs/testbench.md, "Peers, dials and the capture"): the real `netd` and `ipd`
+//! under `init`, each case from a manifest of its own, with the clients as `servers` entries
+//! (`tests/net/client`) and the judge (`src/bin/net-judge.rs`) as the reporter. What the bench
+//! checks from outside (the peers' counts, the dials and the capture) is in each case's file,
+//! and `tests/cases.rs` keeps each case file and its manifest in step.
 
 #![no_std]
-
-extern crate alloc;
-
-#[cfg(target_os = "none")]
-pub mod rig;
-
-/// The prefixes the rig's `ipd` lists as its own (`self=`), beyond its own address and network.
-/// 10.0.2.0/24 is slirp's network, every address of which but the resolver leads to the host's
-/// loopback; 10.0.9.102 is a peer standing in for an address that routes back to the box.
-pub const SELF_ARGS: &[&str] = &["10.0.2.0/24", "10.0.9.102/32"];
 
 /// Every address `ipd` refuses whatever its arguments (servers/ipd.md, "The box's own addresses"),
 /// as the bench's capture check names them.

@@ -2,7 +2,6 @@
 //! (`redoubt_net_client::Role`). It talks to `ipd` only through the badge its manifest entry is
 //! handed (`ipd`), exactly as a principal's program would, and to the judge only to report
 //! (`redoubt_net_client::REPORT`). It begins on its turn, reports how its role ended, and parks.
-//! Launched by the rig instead, it reports to `rig` and exits.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -13,7 +12,7 @@ extern crate alloc;
 use alloc::format;
 
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
-use redoubt_net_client::{Args, IPD, JUDGE, REPORT, RIG, Role, code, event};
+use redoubt_net_client::{Args, IPD, JUDGE, REPORT, Role, code, event};
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
@@ -40,10 +39,8 @@ const LISTENING: u32 = 5;
 fn run(startup: &Startup) -> u32 {
     let judge = startup.handle(JUDGE);
     let outcome = act(startup, judge);
-    // The rig waits for its exit.
-    let Some(judge) = judge else { return outcome };
     // Under `init` an exit is a restart: it parks whether or not the judge heard it.
-    let _ = report(Some(&Endpoint::from_handle(judge)), event::DONE, u64::from(outcome));
+    let _ = report(judge.map(Endpoint::from_handle).as_ref(), event::DONE, u64::from(outcome));
     loop {
         let _ = redoubt_rt::handle::sleep(FOREVER);
     }
@@ -52,15 +49,12 @@ fn run(startup: &Startup) -> u32 {
 /// The role, from its turn to its end: its outcome.
 fn act(startup: &Startup, judge: Option<Handle>) -> u32 {
     let Some(args) = Args::parse(startup.args()) else { return code::BAD_ARGS };
-    let reports = judge.or_else(|| startup.handle(RIG)).map(Endpoint::from_handle);
     let Some(net) = startup.handle(IPD) else { return code::NO_NET };
     let Ok(lend) = Lend::new(2) else { return code::NO_MEMORY };
-    let mut me =
-        Me { c: Connection::new(Endpoint::from_handle(net)), lend, net, judge: reports, next_fid: 10 };
-    if judge.is_some() {
-        if let Err(code) = me.report(event::START, 0) {
-            return code;
-        }
+    let judge = judge.map(Endpoint::from_handle);
+    let mut me = Me { c: Connection::new(Endpoint::from_handle(net)), lend, net, judge, next_fid: 10 };
+    if let Err(code) = me.report(event::START, 0) {
+        return code;
     }
     let done = match args.role {
         Role::Echo => me.echo(&args),
@@ -92,7 +86,7 @@ struct Me {
     lend: Lend,
     /// The same connection as `c`'s, for a typed call beside 9P.
     net: Handle,
-    /// Where it reports: the judge, or the rig.
+    /// Where it reports.
     judge: Option<Endpoint>,
     next_fid: u32,
 }
@@ -276,7 +270,7 @@ impl Me {
     }
 
     /// One connect to each `to=` target in turn, through one attachment, each one's outcome
-    /// reported as [`connect_once`](Me::connect_once)'s exit code would say it.
+    /// reported as [`connect_once`](Me::connect_once)'s outcome would say it.
     fn connect_each(&mut self, args: &Args) -> Result<(), u32> {
         self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
         for &(addr, port) in args.targets() {
@@ -361,7 +355,7 @@ impl Me {
     }
 
     /// Every door a labelled caller might try. Each one not refused sets a bit of the report;
-    /// then it stays, so a slot it was wrongly given is still held when the rig counts buckets.
+    /// then it stays, holding whatever it was wrongly given.
     fn labelled(&mut self) -> Result<(), u32> {
         let mut opened = 0;
         let mut tried = |n: u32, ok: bool| {
@@ -386,7 +380,7 @@ impl Me {
         let connected = self.connect(&Socket { ctl, data: ctl }, &wide).is_ok();
         tried(4, opened_ctl && connected);
         if connected {
-            // Wait for it to finish, so the connection is made (and counted) before the rig goes on.
+            // Wait for it to finish, so the connection is made (and counted) before the judge goes on.
             let _ = self.status(&Socket { ctl, data: ctl });
         }
         tried(5, self.c.new_connection(&mut self.lend, "", 0).is_ok());

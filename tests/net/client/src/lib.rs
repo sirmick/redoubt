@@ -13,8 +13,6 @@
 /// Handle names in a client's startup block: the endpoints its manifest entry is handed.
 pub const IPD: &str = "ipd";
 pub const JUDGE: &str = "judge";
-/// The rig's name for where a program it launches reports.
-pub const RIG: &str = "rig";
 
 /// A report is a call on `judge` with these words: `[REPORT, event, value, 0]`. The judge answers
 /// every report at once with nothing, except [`event::START`], which it holds until the client's
@@ -68,7 +66,7 @@ pub mod badge {
     pub const PROBE_PORT: u16 = 9;
 }
 
-/// Outcomes, reported with [`event::DONE`] (and the rig's exit codes). 0 is success for every
+/// Outcomes, reported with [`event::DONE`]. 0 is success for every
 /// role; the rest name the step that failed.
 pub mod code {
     pub const OK: u32 = 0;
@@ -110,7 +108,7 @@ pub enum Role {
     Echo,
     /// Listen on `port` with `backlog`; echo each connection accepted and report it.
     Listen,
-    /// One connect to `addr:port`: an attack, or its control. Exits `REFUSED` or `CONNECTED + state`.
+    /// One connect to `addr:port`: an attack, or its control. Ends `REFUSED` or `CONNECTED + state`.
     /// Given `to=` targets instead, one connect to each in turn, each one's outcome reported
     /// (`event::CONNECT`), and then `OK`.
     Connect,

@@ -10,8 +10,8 @@ fn run(args: &[&str]) -> Result<Config, BadArgs> {
     parse(args.iter().copied().chain((!sized).then_some("buckets=4")))
 }
 
-/// The rig's arguments (tests/net) and the milestone manifest's.
-const RIG: &[&str] = &[
+/// One client given every scope, and the milestone manifest's arguments.
+const EVERY_SCOPE: &[&str] = &[
     "addr=10.0.2.15/24",
     "gateway=10.0.2.2",
     "self=10.0.2.0/24",
@@ -34,8 +34,8 @@ const MILESTONE: &[&str] = &[
 ];
 
 #[test]
-fn the_rig_and_the_milestone_parse() {
-    let c = run(RIG).unwrap();
+fn every_scope_and_the_milestone_parse() {
+    let c = run(EVERY_SCOPE).unwrap();
     assert_eq!((c.addr, c.len, c.gateway), (ip(10, 0, 2, 15), 24, Some(ip(10, 0, 2, 2))));
     assert_eq!(
         c.selfs,
