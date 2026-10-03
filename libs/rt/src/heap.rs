@@ -26,6 +26,9 @@ use crate::handle::{map_anon, unmap};
 /// The largest small block.
 pub const MAX_SMALL: usize = 2048;
 const MIN_SMALL: usize = 16;
+// `words` and `set_words` touch two words at a free block's start: the smallest class holds them,
+// aligned for them, on both widths (rt-build compiles rv32 and rv64).
+const _: () = assert!(MIN_SMALL >= size_of::<[usize; 2]>() && MIN_SMALL % align_of::<[usize; 2]>() == 0);
 const CLASSES: usize = 8; // 16, 32, ..., 2048
 
 /// The allocator. On the machine it is the global allocator; tests make their own.
@@ -110,19 +113,19 @@ impl Heap {
         // First fit: `prev` is the run before `run`, 0 for the list's head.
         let (mut prev, mut run) = (0, self.runs.load(Ordering::Relaxed));
         while run != 0 {
-            let [run_len, next] = self.run(locked, run);
+            let [run_len, next] = self.words(locked, run);
             if run_len >= len {
                 let rest = if run_len == len {
                     next
                 } else {
-                    self.set_run(locked, run + len, [run_len - len, next]);
+                    self.set_words(locked, run + len, [run_len - len, next]);
                     run + len
                 };
                 if prev == 0 {
                     self.runs.store(rest, Ordering::Relaxed);
                 } else {
-                    let [prev_len, _] = self.run(locked, prev);
-                    self.set_run(locked, prev, [prev_len, rest]);
+                    let [prev_len, _] = self.words(locked, prev);
+                    self.set_words(locked, prev, [prev_len, rest]);
                 }
                 return run;
             }
@@ -145,40 +148,33 @@ impl Heap {
             let _ = unmap(addr, len);
             return;
         }
-        self.set_run(locked, addr, [len, self.runs.load(Ordering::Relaxed)]);
+        self.set_words(locked, addr, [len, self.runs.load(Ordering::Relaxed)]);
         self.runs.store(addr, Ordering::Relaxed);
     }
 
-    /// A freed run's length and the next run. Needs the lock. Private, and called only on a run
-    /// `set_run` wrote, which is what makes the read sound.
-    fn run(&self, _: &Locked, addr: usize) -> [usize; 2] {
-        // SAFETY: `addr` starts a run of whole pages that `set_run` wrote its two words to,
-        // page-aligned, that this heap mapped read-write and never unmaps, and nothing has
-        // written to it since (it is on no free list and in no live block).
+    /// Puts the free block at `addr` on its class's list. Needs the lock.
+    fn push(&self, locked: &Locked, class: usize, addr: usize) {
+        let head = &self.free[class];
+        self.set_words(locked, addr, [head.load(Ordering::Relaxed), 0]);
+        head.store(addr, Ordering::Relaxed);
+    }
+
+    /// The first two words of the free block or run at `addr`, as `set_words` wrote them. Needs
+    /// the lock.
+    fn words(&self, _: &Locked, addr: usize) -> [usize; 2] {
+        // SAFETY: as for `set_words`, which wrote these two words; nothing has written them since.
         unsafe { (addr as *const [usize; 2]).read() }
     }
 
-    /// Writes a run's length and next run at `addr`. Needs the lock. Private, and called only by
-    /// `pages` (the rest of a run it split, or the run before one it took) and `free_pages` (a
-    /// large block being freed), which is what makes the write sound.
-    fn set_run(&self, _: &Locked, addr: usize, words: [usize; 2]) {
-        // SAFETY: `addr` starts at least a page this heap mapped read-write and, once fixed, never
-        // unmaps, that is in no live block: a freed large block, the unused rest of a run, or a
-        // run already on the list. It is page-aligned, so two words are in bounds and aligned.
+    /// Writes the first two words of the free block or run at `addr`: a class's next block, or a
+    /// run's length and next run. Needs the lock.
+    fn set_words(&self, _: &Locked, addr: usize, words: [usize; 2]) {
+        // SAFETY: `addr` starts a block in no live allocation (fresh, freed, or on a list), at
+        // least the smallest class, 16 bytes, aligned to its size (a run is page-aligned), so two
+        // words are in bounds and aligned on both widths (asserted beside `MIN_SMALL`). Who
+        // guarantees it: the kernel mapped the page read-write (`map_anon`), this heap does not
+        // unmap it while the block is free, and `Locked` keeps every other thread off it.
         unsafe { (addr as *mut [usize; 2]).write(words) };
-    }
-
-    /// Puts the free block at `addr` on its class's list. Needs the lock. Private, and called
-    /// only by `pop` (a fresh page's blocks) and `dealloc` (a block of this class being freed),
-    /// which is what makes the write below sound.
-    fn push(&self, _: &Locked, class: usize, addr: usize) {
-        let head = &self.free[class];
-        // SAFETY: `addr` is a block of `class_size(class)` (at least 16) bytes, aligned to that
-        // size, in a page this heap mapped read-write and never unmaps, and no longer in use (it
-        // is fresh from a new page in `pop` or was freed by `dealloc`); so writing one `usize` at its start
-        // is in bounds, aligned, and aliases nothing live.
-        unsafe { (addr as *mut usize).write(head.load(Ordering::Relaxed)) };
-        head.store(addr, Ordering::Relaxed);
     }
 
     /// Takes a free block of `class`, mapping a page for the class if it has none. Needs the
@@ -195,9 +191,7 @@ impl Heap {
             }
         }
         let addr = head.load(Ordering::Relaxed);
-        // SAFETY: `addr` is the head of the list, so `push` wrote a `usize` link at its start
-        // (see there) and nothing has written to the block since.
-        let next = unsafe { (addr as *const usize).read() };
+        let [next, _] = self.words(locked, addr);
         head.store(next, Ordering::Relaxed);
         addr
     }
