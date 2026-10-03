@@ -28,6 +28,14 @@ pub enum Refusal {
     Confined { at: String, sharing: Sharing },
     /// What the manifest will cost `init` in `root` is more than `root` keeps for it.
     Bound { need: u64, free: u64 },
+    /// More servers than `init` has threads to watch, one each beside its own (`MAX_THREADS`).
+    Watchers { servers: usize, most: usize },
+    /// `keyd` holds a key the box is authenticated by (R35): `at` is where the manifest lists it,
+    /// or `bundle key`.
+    KeyHeld { at: String },
+    /// A step of the boot failed after the checks passed: a bug in the bound or the checks, and
+    /// no boot runs half started. `at` names the server, `step` what failed.
+    Failed { at: String, step: &'static str },
 }
 
 /// What is wrong with one value.
@@ -73,6 +81,11 @@ pub enum Why {
     PublicManifest,
     /// Entries for `bootfsd` to serve, but no `bootfsd` to serve them.
     NoBootfsd,
+    /// No `keyd` to ask about the keys the box is authenticated by (R35).
+    NoKeyd,
+    /// A second entry for a program `init` calls itself (`keyd`, `consoled`, `bootfsd`): `init`
+    /// starts and calls one of each.
+    Second(&'static str),
 }
 
 /// What two label sets would share under `confined` (servers/init.md, "The confinement check").
@@ -88,6 +101,7 @@ pub enum Sharing {
 impl fmt::Display for Why {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Why::Second(program) => return write!(f, "a second {program}, and init calls only one"),
             Why::NotAName => "not a name",
             Why::Twice => "named twice",
             Why::Unknown => "names nothing the manifest or the bundle holds",
@@ -108,6 +122,7 @@ impl fmt::Display for Why {
             Why::Value => "not a value this member takes",
             Why::PublicManifest => "the manifest is never public",
             Why::NoBootfsd => "public entries but no bootfsd",
+            Why::NoKeyd => "no keyd to ask about the keys the box is authenticated by (R35)",
         })
     }
 }
@@ -154,6 +169,13 @@ impl fmt::Display for Refusal {
             Refusal::Bound { need, free } => {
                 write!(f, "the boot would cost init {need} pages of root and root keeps {free} (INIT_PAGES)")
             }
+            Refusal::Watchers { servers, most } => {
+                write!(f, "{servers} servers, and init has threads to watch {most} (MAX_THREADS)")
+            }
+            Refusal::KeyHeld { at } => {
+                write!(f, "{at}: keyd holds this key, and the box is authenticated by it (R35)")
+            }
+            Refusal::Failed { at, step } => write!(f, "{at}: could not {step}"),
         }
     }
 }

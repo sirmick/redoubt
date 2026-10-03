@@ -29,6 +29,11 @@ pub const HANDLES_PER_SERVER: u64 = 4;
 /// The connections `init` holds as a caller itself: `keyd` (to ask `holds`), `consoled` (its
 /// own console) and `bootfsd` (to push the public entries).
 pub const INIT_CALLER_HANDLES: u64 = 3;
+/// The endpoints `init` makes for itself: the one its watching threads report exits on.
+pub const INIT_ENDPOINTS: u64 = 1;
+/// The pages `init` lends in its own calls (`holds`, its console, the public entries), one lend
+/// used for all of them.
+pub const LEND_PAGES: u64 = 2;
 
 /// What the bound is computed from: the manifest's counts, and what `init` holds at the start.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -59,8 +64,8 @@ fn tables(pages: u64) -> u64 { if pages == 0 { 0 } else { pages.div_ceil(TABLE_E
 
 /// The bound, in pages, on what `init`'s calls charge to `root` for this boot, saturating.
 pub fn bound(c: &Counts) -> u64 {
-    // Every endpoint a server receives on, and an exit endpoint per server.
-    let endpoints = sum(&[c.endpoints, c.servers]).saturating_mul(ENDPOINT_PAGES);
+    // Every endpoint a server receives on, an exit endpoint per server, and `init`'s own.
+    let endpoints = sum(&[c.endpoints, c.servers, INIT_ENDPOINTS]).saturating_mul(ENDPOINT_PAGES);
     let processes = c.servers.saturating_mul(PROCESS_OBJECT_PAGES);
     let blocks = c.servers.saturating_mul(BLOCK_PAGES + tables(BLOCK_PAGES));
     // A thread per server watching its exit endpoint: its IPC page, its stack and their tables.
@@ -69,12 +74,18 @@ pub fn bound(c: &Counts) -> u64 {
     let (stub, image) = (pages(c.stub_bytes), pages(c.largest_image_bytes));
     let launch = sum(&[stub, tables(stub), image, tables(image), c.stack_pages, tables(c.stack_pages)]);
     // The handle table's growth: every page the added handles may open beyond those in use.
-    let added =
-        sum(&[c.endpoints, c.handed, c.servers.saturating_mul(HANDLES_PER_SERVER), INIT_CALLER_HANDLES]);
+    let added = sum(&[
+        c.endpoints,
+        c.handed,
+        c.servers.saturating_mul(HANDLES_PER_SERVER),
+        INIT_CALLER_HANDLES,
+        INIT_ENDPOINTS,
+    ]);
     let table = c.handles_at_start.saturating_add(added).div_ceil(HANDLES_PER_TABLE_PAGE)
         - c.handles_at_start.div_ceil(HANDLES_PER_TABLE_PAGE);
     let arena = sum(&[c.arena_pages, tables(c.arena_pages)]);
-    sum(&[endpoints, processes, blocks, watchers, launch, table, arena])
+    let lend = LEND_PAGES + tables(LEND_PAGES);
+    sum(&[endpoints, processes, blocks, watchers, launch, table, arena, lend])
 }
 
 fn sum(parts: &[u64]) -> u64 { parts.iter().fold(0u64, |sum, part| sum.saturating_add(*part)) }
@@ -88,8 +99,9 @@ mod tests {
     #[test]
     fn an_empty_manifest_costs_the_arena_and_init_s_own_connections() {
         let c = Counts { arena_pages: 512, ..none() };
-        // The arena, its tables (1 + 2), and no table page: 10 + 3 handles fit page 0.
-        assert_eq!(bound(&c), 512 + 3);
+        // The arena, its tables (1 + 2), the lend and its tables, the reports endpoint, and no
+        // table page: 10 + 4 handles fit page 0.
+        assert_eq!(bound(&c), 512 + 3 + 2 + 3 + 1);
     }
 
     #[test]
@@ -105,15 +117,18 @@ mod tests {
     fn the_largest_launch_counts_once_and_whole() {
         let c =
             Counts { stub_bytes: 1, largest_image_bytes: PAGE_SIZE as u64 + 1, stack_pages: 16, ..none() };
-        assert_eq!(bound(&c), 1 + 3 + 2 + 3 + 16 + 3);
+        // Beside the launch: the lend and its tables, and the reports endpoint.
+        assert_eq!(bound(&c), 1 + 3 + 2 + 3 + 16 + 3 + (2 + 3 + 1));
     }
 
     #[test]
     fn handle_table_pages_count_only_past_those_in_use() {
-        let at = |handles_at_start, handed| bound(&Counts { handles_at_start, handed, ..Counts::default() });
-        // 61 + 3 init handles fill page 0 exactly; one more opens page 1.
-        assert_eq!(at(61, 0), 0);
-        assert_eq!(at(61, 1), 1);
+        // Less what every boot costs: the lend and its tables, and the reports endpoint.
+        let at =
+            |handles_at_start, handed| bound(&Counts { handles_at_start, handed, ..Counts::default() }) - 6;
+        // 60 + 4 init handles fill page 0 exactly; one more opens page 1.
+        assert_eq!(at(60, 0), 0);
+        assert_eq!(at(60, 1), 1);
         assert_eq!(at(64, 0), 1);
         assert_eq!(at(64, 64 * 3), 4);
     }

@@ -63,7 +63,9 @@ and `init`'s only input. Its entries:
   caller is that caller's `handed` badge, written in both places by the manifest's author; `init`
   mints it from the `handed` item, never from the argument. Where `init` calls a server itself
   (`keyd`, `consoled` and `bootfsd`, at the first endpoint each receives on), its own handle
-  carries the smallest badge from 1 that no `handed` item there uses.
+  carries the smallest badge from 1 that no `handed` item there uses. A manifest names each of
+  these programs at most once, `keyd` exactly once: a second would run beside the one `init`
+  calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35).
 - **Sizing.** Every shared server takes `buckets=N` as an argument, parsed once in the serving
   library; none has a compiled-in count. `init` refuses the boot unless N is at least the number
   of (account, label set)s the manifest declares (each principal's unlabelled set and every label
@@ -166,9 +168,11 @@ Reset right. The loader maps the bundle into it, read-only
 
 1. parses and checks the manifest, and refuses the boot on any error, or if what the manifest
    will cost `init` does not fit in what `root` keeps for it
-   ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Until `consoled` starts,
-   `init` writes its own lines to the UART, which it maps for itself. A refusal is printed there,
-   and the machine powers off with a system-failure status, before any other process has run;
+   ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)), or if it names more servers
+   than `init` can watch, one thread each beside its own: at most `MAX_THREADS` - 1. Until
+   `consoled` starts, `init` writes its own lines to the UART, which it maps for itself. A refusal
+   is printed there, and the machine powers off with a system-failure status, before any other
+   process has run;
 2. creates every endpoint the manifest's servers receive on. Each is owned by and charged to
    `root`, so it outlives any one instance of its server, and R1 (flow) does not bind it because `root`
    is `system` class ([IPC](../kernel/ipc.md#r1-flow)). `init` keeps the receive right, hands the

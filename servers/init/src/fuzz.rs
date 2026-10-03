@@ -87,7 +87,7 @@ pub fn check_one(data: &[u8]) {
         assert!(devices.iter().any(|(d, info)| d == h && *info != DeviceInfo::Reset));
         assert!(!placed[..n].contains(h));
     }
-    assert_eq!(plan.keys.last(), Some(&BUNDLE_KEY));
+    assert_eq!(plan.keys.last().map(|(_, key)| key), Some(&BUNDLE_KEY));
     let free = machine.root.pages_limit - machine.root.pages_usage;
     assert!(plan.bound <= free);
 }

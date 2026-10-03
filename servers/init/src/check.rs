@@ -10,7 +10,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::IpAddr;
 
-use redoubt_rt::abi::{Handle, MAX_LABELS, MAX_START_HANDLES, Usage};
+use redoubt_rt::abi::{Handle, MAX_LABELS, MAX_START_HANDLES, MAX_THREADS, Usage};
 use redoubt_rt::server::minted::FIRST_MINTED_BADGE;
 use redoubt_rt::startup::{StartupBuilder, valid_name};
 use redoubt_sys::DeviceInfo;
@@ -38,6 +38,8 @@ pub const BOOTFSD: &str = "bootfsd";
 /// The programs `init` calls itself, each through a root badge of its own there: `keyd` for
 /// `holds`, `consoled` for its own lines, `bootfsd` for the public entries.
 pub const INIT_CALLS: [&str; 3] = ["keyd", "consoled", BOOTFSD];
+/// Where [`Plan::keys`] says the bundle's verifying key comes from.
+pub const BUNDLE_KEY: &str = "bundle key";
 
 /// What `init` learned from the machine before it checks: everything [`check`] compares the
 /// manifest with.
@@ -66,9 +68,9 @@ pub struct Plan {
     /// For each server, in manifest order, its devices' handles under the names it looks them up
     /// by.
     pub placements: Vec<Vec<(String, Handle)>>,
-    /// The public keys `init` asks `keyd` about: every login and approval key, then `bundle_key`
-    /// (R35 (key separation)).
-    pub keys: Vec<[u8; KEY_LEN]>,
+    /// The public keys `init` asks `keyd` about, each with where the manifest lists it: every
+    /// login and approval key, then `bundle_key` as [`BUNDLE_KEY`] (R35 (key separation)).
+    pub keys: Vec<(String, [u8; KEY_LEN])>,
     /// For each shared server, by index, the domains declared there: its `buckets=N` is at least
     /// this.
     pub buckets: Vec<(usize, u32)>,
@@ -84,21 +86,28 @@ fn at(at: String, why: Why) -> Refusal { Refusal::At { at, why } }
 
 /// Checks `manifest` against `machine` and returns the plan, or the refusal that stops the boot.
 /// The checks run in a fixed order, so a manifest that breaks several rules is refused for the
-/// first: names, references, devices, budgets and the fit in `system`, `public`, the startup
-/// blocks, keys, buckets, confinement, and last the bound on `root`.
+/// first: names, references, the servers `init` calls, devices, budgets and the fit in `system`,
+/// `public`, the startup blocks, keys, buckets, confinement, and last the bound on `root`: the
+/// threads that watch the servers, then the pages.
 pub fn check(m: &Manifest, machine: &Machine, bundle_key: [u8; KEY_LEN]) -> Result<Plan, Refusal> {
     names(m)?;
     references(m, machine)?;
+    init_calls(m)?;
     let placements = devices(m, machine)?;
     budgets(m)?;
     fit(m, &machine.system)?;
     public(m, machine)?;
     blocks(m, machine)?;
     let mut keys = keys(m)?;
-    keys.push(bundle_key);
+    keys.push((String::from(BUNDLE_KEY), bundle_key));
     let buckets = buckets(m)?;
     if m.confined {
         confine::check(m)?;
+    }
+    // One thread per server watches its exit endpoint, beside `init`'s own.
+    let most = MAX_THREADS - 1;
+    if m.servers.len() > most {
+        return Err(Refusal::Watchers { servers: m.servers.len(), most });
     }
     let bound = bound::bound(&counts(m, machine));
     let free = machine.root.pages_limit.saturating_sub(machine.root.pages_usage);
@@ -198,6 +207,27 @@ impl Unique {
     fn add(&mut self, name: &str, kind: &'static str, path: impl Fn() -> String) -> Result<(), Refusal> {
         if self.0.insert((kind, String::from(name))) { Ok(()) } else { Err(at(path(), Why::Twice)) }
     }
+}
+
+/// The servers `init` calls itself ([`INIT_CALLS`]) each receive on an endpoint, the first of
+/// which `init` calls; each runs once, since a second would run beside the one `init` calls and
+/// go unchecked (a second `keyd` would hold keys `init` never asked about, R35); and there is a
+/// `keyd`, since the bundle key is always asked about.
+fn init_calls(m: &Manifest) -> Result<(), Refusal> {
+    let called = |s: &&Server| INIT_CALLS.contains(&s.program.as_str());
+    if let Some(i) = m.servers.iter().position(|s| called(&s) && s.receives.is_empty()) {
+        return Err(at(format!("servers[{i}].receives"), Why::Unknown));
+    }
+    for (i, s) in m.servers.iter().enumerate() {
+        let Some(&program) = INIT_CALLS.iter().find(|p| **p == s.program) else { continue };
+        if m.servers[..i].iter().any(|t| t.program == program) {
+            return Err(at(format!("servers[{i}].program"), Why::Second(program)));
+        }
+    }
+    if !m.servers.iter().any(|s| s.program == "keyd") {
+        return Err(at(String::from("servers"), Why::NoKeyd));
+    }
+    Ok(())
 }
 
 /// Every reference names something the manifest or the bundle holds.
@@ -480,15 +510,15 @@ fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
 }
 
 /// Every principal's login and approval key, decoded (R35 (key separation)).
-fn keys(m: &Manifest) -> Result<Vec<[u8; KEY_LEN]>, Refusal> {
+fn keys(m: &Manifest) -> Result<Vec<(String, [u8; KEY_LEN])>, Refusal> {
     let mut keys = Vec::new();
     for (i, p) in m.principals.iter().enumerate() {
         let lists = [("ssh_keys", &p.ssh_keys), ("approval_keys", &p.approval_keys)];
         for (member, list) in lists {
             for (k, text) in list.iter().enumerate() {
-                let key = sshkey::ed25519(text)
-                    .ok_or_else(|| at(format!("principals[{i}].{member}[{k}]"), Why::Key))?;
-                keys.push(key);
+                let path = format!("principals[{i}].{member}[{k}]");
+                let key = sshkey::ed25519(text).ok_or_else(|| at(path.clone(), Why::Key))?;
+                keys.push((path, key));
             }
         }
     }

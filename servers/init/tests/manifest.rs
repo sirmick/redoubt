@@ -68,7 +68,7 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert_eq!(plan.placements[4], vec![("net".into(), h(13)), ("net-irq".into(), h(21))]);
     assert!(plan.placements[0].is_empty());
     // No principals: only the bundle key is asked about.
-    assert_eq!(plan.keys, vec![BUNDLE_KEY]);
+    assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
     // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge.
     assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
@@ -89,14 +89,15 @@ fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
 #[test]
 fn the_image_manifest_s_bound() {
     let plan = on_virt(&image()).unwrap();
-    // The arena (256 + 3 tables), 6 receive and 6 exit endpoints, 6 process objects, 6 blocks
-    // with 3 tables each, 6 watching threads (an IPC page, 4 stack pages and 3 tables each), the
-    // largest launch (stub 4 + 3, ipd's 147 pages + 3, stack 16 + 3), and no handle-table page: 22 handles at
-    // the start (3 budgets, the Reset right, 18 devices) and 6 + 2 + 24 + 3 = 35 added still fit page 0.
+    // The arena (256 + 3 tables), 6 receive and 6 exit endpoints and init's reports endpoint, 6
+    // process objects, 6 blocks with 3 tables each, 6 watching threads (an IPC page, 4 stack pages
+    // and 3 tables each), the largest launch (stub 4 + 3, ipd's 147 pages + 3, stack 16 + 3), the
+    // lend (2 + 3), and no handle-table page: 22 handles at the start (3 budgets, the Reset right,
+    // 18 devices) and 6 + 2 + 24 + 3 + 1 = 36 added still fit page 0.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 12 + 6 + 24 + 48 + (4 + 3 + 147 + 3 + 16 + 3));
+    assert_eq!(plan.bound, 259 + 13 + 6 + 24 + 48 + (4 + 3 + 147 + 3 + 16 + 3) + 5);
 }
 
 // ---- decoding: strict JSON, types, members ----
@@ -409,6 +410,31 @@ fn handles_and_arguments_must_fit_one_startup_block() {
 // ---- R35: the keys keyd is asked about ----
 
 #[test]
+fn a_manifest_without_keyd_is_refused_and_init_calls_each_server_at_an_endpoint() {
+    let mut m = image();
+    m.servers.retain(|s| s.program != "keyd");
+    refused_at(&m, "servers", Why::NoKeyd);
+    for (i, name) in ["keyd", "consoled", "bootfsd"].into_iter().enumerate() {
+        let mut m = image();
+        server(&mut m, name).receives.clear();
+        refused_at(&m, &format!("servers[{i}].receives"), Why::Unknown);
+    }
+}
+
+#[test]
+fn init_calls_one_of_each_server_it_calls() {
+    for name in ["keyd", "consoled", "bootfsd"] {
+        let mut m = image();
+        let mut second = server(&mut m, name).clone();
+        second.name = format!("{name}2");
+        second.receives = vec![format!("{name}2")];
+        m.servers.push(second);
+        let at = format!("servers[{}].program", m.servers.len() - 1);
+        refused_at(&m, &at, Why::Second(name));
+    }
+}
+
+#[test]
 fn every_login_and_approval_key_then_the_bundle_key_is_asked_about() {
     let mut m = image();
     let mut approval = [0u8; 32];
@@ -420,7 +446,14 @@ fn every_login_and_approval_key_then_the_bundle_key_is_asked_about() {
         ..alice()
     });
     let counting: [u8; 32] = core::array::from_fn(|i| i as u8 + 1);
-    assert_eq!(on_virt(&m).unwrap().keys, vec![counting, approval, BUNDLE_KEY]);
+    assert_eq!(
+        on_virt(&m).unwrap().keys,
+        vec![
+            ("principals[0].ssh_keys[0]".into(), counting),
+            ("principals[0].approval_keys[0]".into(), approval),
+            ("bundle key".into(), BUNDLE_KEY)
+        ]
+    );
     m.principals[0].ssh_keys.push("ssh-rsa AAAA".into());
     refused_at(&m, "principals[0].ssh_keys[1]", Why::Key);
 }
@@ -563,7 +596,6 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
         let receives = (0..60).map(|e| format!("e{n}-{e}")).collect();
         m.servers.push(Server {
             name: format!("s{n}"),
-            program: "keyd".into(),
             budget: budget(16),
             receives,
             ..m.servers[3].clone()
@@ -583,6 +615,26 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
     let mut roomier = machine;
     roomier.root.pages_limit = roomier.root.pages_usage + need;
     assert_eq!(on(&m, &roomier).unwrap().bound, need);
+}
+
+#[test]
+fn more_servers_than_init_has_threads_to_watch_are_refused() {
+    use redoubt_rt::abi::MAX_THREADS;
+    let mut m = image();
+    // One thread watches each server, beside init's own.
+    while m.servers.len() < MAX_THREADS {
+        let n = m.servers.len();
+        let receives = vec![format!("e{n}")];
+        m.servers.push(Server { name: format!("s{n}"), receives, budget: budget(1), ..m.servers[3].clone() });
+        m.servers.last_mut().unwrap().devices.clear();
+    }
+    let devices = virt_devices();
+    let mut machine = machine(&devices, &ENTRIES);
+    machine.system.processes_limit = u32::MAX;
+    let most = MAX_THREADS - 1;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::Watchers { servers: most + 1, most });
+    m.servers.pop();
+    assert!(on(&m, &machine).is_ok());
 }
 
 #[test]
