@@ -495,7 +495,14 @@ else's traffic, and a stale id cannot reach a later message (I12 (ids never reus
   and only the threads that have an IPC page, so it follows the threads the budgets have paid
   for, at most `MAX_PROCESS_COUNT` x `MAX_THREADS` (511 x 255), compile-time constants no process
   can change. It costs time on every delivery, and that cost is not charged to the caller's
-  budget.
+  budget. The bound is a constant only by the letter: the walk is over every process's threads,
+  not the receiver's, so a delivery's time depends on what other processes hold, which
+  [R12 (scheduling)](scheduling.md#r12-scheduling) forbids, and every wake on the machine waits
+  for it. `bench:worst-walk` measures it with every PID in use and each process holding
+  `MAX_THREADS` threads (rv64, checked build, net of its audits, 129,796 live threads across 510
+  processes): one receive's delivery takes 6.9 s, and destroying one such process 11.7 s against
+  R10's 30 ms, 6.9 s of it the pump of its exit notice. The case runs by name only, and passes
+  while R10 misses ([delivery walks every thread](../todo/delivery-walks-every-thread.md)).
 - **Completion races between harts** are argued from the code, not attacked by a case. On one
   hart the kernel runs with interrupts off. On several (a build for more than one hart), each
   kernel global is guarded by its own lock, and the completion holds the memory manager's for

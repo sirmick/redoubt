@@ -649,7 +649,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`) · tested (40)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); a delivery's, a timer expiry's and a reconcile's walks of every thread or process are measured at full occupancy by `bench:worst-walk`, run by name, and break it there ([residual risks](#residual-risks)) · tested (40)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -761,8 +761,10 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `sched-latency` and `sched-latency-tcg`, whose `sched_oracle` post-check reads the trace printed
   at `system_reset`.
 
-The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
-debug-only break of the tie rule that implies the trace; `audit-unstamped`, which leaves the audit
+The other diagnostic features are off by default in the same way: `walk-trace`, which implies
+the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
+alone; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
+`audit-unstamped`, which leaves the audit
 after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
 budget that ran it and counts it against its slice, each for one recorded negative run
 ([responsiveness](#responsiveness)); `timer-tail-billed`, which bills the rest of a timer
@@ -837,6 +839,12 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
+- **Reconcile walks every process.** The budgets with a ready thread are found at the end of
+  every kernel entry by walking every live process, and woken one at a time, each wake searching
+  them all. At full occupancy this, a delivery and a timer expiry break R12's "never depends on
+  what other processes hold"
+  ([reconcile walks every process](../todo/reconcile-walks-every-process.md),
+  [IPC](ipc.md#residual-risks), [timer](timer.md#residual-risks)).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
   decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to

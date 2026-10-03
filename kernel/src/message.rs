@@ -923,6 +923,8 @@ pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointR
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
 /// delivered. Notices come before messages (kernel/ipc.md, "What `receive` returns").
 fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
+    #[cfg(feature = "walk-trace")]
+    let _walk = crate::sched::trace::walk(crate::sched::trace::PUMP);
     loop {
         if !mm.is_live_endpoint(e) {
             return;

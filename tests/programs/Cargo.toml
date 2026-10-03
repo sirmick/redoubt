@@ -105,6 +105,7 @@ bin = [
     { name = "uaf-holder", test = false },
     { name = "uaf-victim", test = false },
     { name = "virtio-probe", test = false },
+    { name = "worst-walk", test = false },
     { name = "write-only-attack", test = false },
     { name = "wx-test", test = false },
 ]

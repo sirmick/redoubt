@@ -760,6 +760,10 @@ without preemption.*
     server's endpoint, a walk of every thread, not four;
   - the thread walks, 1.3 ms (2 ms);
   - the rest, 2.9 ms (3 ms).
+
+  Those are the gate's fill. At full occupancy, every PID in use with every thread, the walks of
+  every thread dominate and one destruction takes seconds
+  ([delivery walks every thread](../todo/delivery-walks-every-thread.md)).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

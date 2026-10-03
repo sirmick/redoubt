@@ -1,0 +1,29 @@
+description = "The worst walk, measured (kernel/ipc.md, kernel/timer.md, kernel/scheduling.md, kernel/budgets.md, \"Residual risks\"): every PID in use, each child in a budget of its own holding MAX_THREADS threads (129,796 live threads, 509 x 255 and init's); one timer expiry ends 250 children's waits at once and one reconcile wakes their 250 budgets; then one receive's pump and one destruction. The walks' times come from the trace (walk-trace), net of the checked build's audits. Must fail while the residual stands: the oracle says \"sched_oracle: R10's p99 is 11716783 µs over 2 destructions, above 30000\" (one holder's destruction, 6.9 s of it one pump that walks every thread); once delivery follows the endpoint, the case passes with must_fail gone (docs/todo/delivery-walks-every-thread.md)"
+arch = ["rv64"]
+# About 22 minutes: run by name (`cargo testbench worst-walk`), never in every merge's run.
+whole_run = false
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+qemu_seed = 3
+# 509 holders of ~540 pages each, the trace ring's 64 MiB and the boot's own.
+memory_mib = 4608
+# init alone; what it checks is that the threads all existed. The numbers are the trace's.
+programs = ["worst-walk"]
+# Test builds only: the trace ring, with each pump, expiry and reconcile bracketed.
+kernel_features = ["sched-trace", "walk-trace"]
+post_check = "sched_oracle r10_p99_us=30000"
+# A residual, not a target (docs/todo/delivery-walks-every-thread.md): the run passes while R10
+# at full occupancy is past 30 ms and fails once it is under. The change that brings it under
+# removes this line and whole_run's, and the case joins the whole run.
+must_fail = '^sched_oracle: R10.s p99 is \d+ µs over 2 destructions, above 30000$'
+timeout_secs = 3600
+expect = [
+    '^\[worst-walk\] 509 holders of \d+ pages, 129796 threads live$',
+    '^\[worst-walk\] 250 holders waited for one deadline: true$',
+    '^\[worst-walk\] one holder destroyed, killed: true$',
+    '^WORST-WALK DONE$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[worst-walk\] FAIL', 'PANIC']
+poweroff = true

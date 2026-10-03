@@ -87,6 +87,13 @@ page.
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
    - **beamlet:** [bounded operands for modular exponentiation](../todo/beamlet-bignum-bounds.md).
+   - **kernel:**
+     - [delivery that follows the endpoint](../todo/delivery-walks-every-thread.md), not every
+       thread;
+     - [a reconcile that follows the budgets that changed](../todo/reconcile-walks-every-process.md),
+       not every process;
+     - [an expiry that walks once](../todo/expiry-walks-once-per-wait.md) for all the waits a
+       deadline ends, not once for each.
 - **The client library.** `redoubt-client`: the namespace, files over 9P, the file server's
   typed operations, the console, launching, a launcher's grants and one typed call, the API every
   userland binds to, tested on the host against real servers

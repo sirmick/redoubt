@@ -128,6 +128,8 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     if TIMER.with(|t| t.threads > now && t.budgets > now) {
         return Expired { destroyed: false, last: None };
     }
+    #[cfg(feature = "walk-trace")]
+    let _walk = crate::sched::trace::walk(crate::sched::trace::EXPIRY);
     let mut destroyed = false;
     let mut expired = false;
     let mut last = None;

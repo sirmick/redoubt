@@ -294,7 +294,9 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   compile-time constants no process can change) plus the deadline list. Each walk that finds an
   item, or a wait that ended early, is billed to its budget. A budget destroyed before its
   deadline leaves the timer early: one walk of the deadline list, nobody's, for each such
-  destruction, which its destroyer pays for in full.
+  destruction, which its destroyer pays for in full. The walk finds one due wait, so a deadline
+  that ends many waits at once walks once for each, which takes seconds at full occupancy
+  ([expiry walks once per wait](../todo/expiry-walks-once-per-wait.md)).
 - **Equal-instant order is argued, not attacked.** Timeouts before deadlines at one instant is
   checked by the model's mutation only; no bench case lands a timeout and a deadline on the same
   microsecond.

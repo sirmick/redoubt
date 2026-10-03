@@ -185,6 +185,8 @@ impl Runnable {
 fn reconcile(cpu: &mut Cpu<BudgetRef, MAX_PROCESS_COUNT>, mm: &mut MemoryManager, runnable: &[BudgetRef]) {
     #[cfg(feature = "sched-trace")]
     trace::entry();
+    #[cfg(feature = "walk-trace")]
+    let _walk = trace::walk(trace::RECONCILE);
     cpu.reconcile(mm, runnable);
 }
 
@@ -537,10 +539,12 @@ pub mod trace {
         entry: u64,
         /// Inside a timer interrupt from user mode, until it returns: its charges are recorded.
         timer: bool,
+        /// The walk measured now (`walk-trace`), 0 for none.
+        walk: u64,
     }
 
     static RING: KernelCell<Ring> =
-        KernelCell::new(Ring { pages: [0; PAGES], n: 0, dropped: 0, entry: 0, timer: false });
+        KernelCell::new(Ring { pages: [0; PAGES], n: 0, dropped: 0, entry: 0, timer: false, walk: 0 });
 
     /// Take the ring's frames, zeroed (at boot, before `boot_budgets` counts what the kernel
     /// keeps).
@@ -670,6 +674,45 @@ pub mod trace {
 
     impl Drop for Threads {
         fn drop(&mut self) { record(THREADS_END, 0, u128::from(crate::time::now_us())); }
+    }
+
+    /// A walk began and ended (`walk-trace`): which walk, and the time in µs in the pass field.
+    /// The worst-walk case reads them (kernel/ipc.md and kernel/timer.md, "Residual risks").
+    pub const WALK_BEGIN: u8 = b'M';
+    pub const WALK_END: u8 = b'm';
+    /// The walks: a receive's pump (`message::pump`), a timer interrupt's expiry
+    /// (`time::expire_due`), and the end of a kernel entry (`reconcile`, its wakes included).
+    pub const PUMP: u64 = 1;
+    pub const EXPIRY: u64 = 2;
+    pub const RECONCILE: u64 = 3;
+
+    /// A walk running: its begin is recorded, and its end when this drops. A walk inside another
+    /// is the outer one's (none recorded).
+    pub struct Walk(Option<u64>);
+
+    /// Stamp the walk `which` that is about to run, until the returned guard drops.
+    pub fn walk(which: u64) -> Walk {
+        let inside = RING.with(|r| {
+            let open = r.walk != 0;
+            if !open {
+                r.walk = which;
+            }
+            open
+        });
+        if inside {
+            return Walk(None);
+        }
+        record(WALK_BEGIN, which, u128::from(crate::time::now_us()));
+        Walk(Some(which))
+    }
+
+    impl Drop for Walk {
+        fn drop(&mut self) {
+            if let Some(which) = self.0 {
+                record(WALK_END, which, u128::from(crate::time::now_us()));
+                RING.with(|r| r.walk = 0);
+            }
+        }
     }
 
     /// A destroyed child's work moved to its parent: every operand of the rule and its result,
