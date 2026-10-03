@@ -48,6 +48,9 @@ audit-billed = ["test-only"]
 # after its expiry, and the return's own walk, are billed as before the fix to the budget it
 # interrupted, so the oracle's timer-entry check must fail.
 timer-tail-billed = ["sched-trace"]
+# Debug only, never in a bench build but one recorded negative run: a frame is taken by the
+# first-fit scan of the ownership table the bitmap replaced, so `scan-bounds` must fail.
+alloc-first-fit = ["test-only"]
 # Test builds only: each DMA device's first reset reports "not confirmed" after the
 # real write, so the quarantine path runs. It only ever adds quarantine.
 dma-reset-deaf = ["test-only"]

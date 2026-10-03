@@ -646,7 +646,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range and `process_create` · tested (40)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`) · tested (40)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -698,22 +698,28 @@ budgets, or arming timeouts and deadlines gets it more. The rule's parts are the
 free weight, the preemption points, the wake rule and ranks, charging and inheritance.
 
 A system call's kernel time is bounded by a constant plus a term linear in the pages it maps or
-the objects it names. It never depends on the extent of an address area or on what other
-processes hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant,
-and never in `len` (`bench:map-anon-search-bound`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the platform's
-interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in RAM
-frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
+the objects it names. It never depends on the extent of an address area or on what other processes
+hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant, and never in
+`len` (`bench:map-anon-search-bound`). A RAM frame is taken from the free-frame bitmap and given
+back to it, so backing a page, a page table or an object costs no search of RAM, however much of it
+is in use (`bench:scan-bounds`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the
+platform's interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in
+RAM frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
 every wake waits for it. R10 (destruction) walks only the dying subtree, its owner lists, the
 dying processes' own tables and page tables, and the chains of the handles held outside it
-([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by interrupt number
-it finds in an index the kernel keeps as objects are made and freed: a process object in one of
-`MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's sources; a boot
-naming a higher interrupt stops). So `process_create`'s PID draw looks at most at 63 slots, an
-owed exit notice is sought among at most 63 process objects, and an interrupt finds its object
-in one lookup; a checked build proves each index against a scan of every object frame. In
-`bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
+([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by
+interrupt number it finds in an index the kernel keeps as objects are made and freed: a process
+object in one of `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's
+sources; a boot naming a higher interrupt stops). So `process_create`'s PID draw looks at most at
+63 slots, an owed exit notice is sought among at most 63 process objects, and an interrupt finds
+its object in one lookup; a checked build proves each index against a scan of every object frame.
+In `bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
 its exit notice and an interrupt take what they took on an empty system; with the old scans, the
-first took 1.2 s against 22 ms.
+first took 1.2 s against 22 ms. So do a one-page `map_anon`, a `budget_create` and a
+`process_create` rolled back for want of pages, on both widths; a kernel built with
+`alloc-first-fit`, which takes each frame by the first-fit scan of RAM the bitmap replaced,
+fails the case on both widths in a recorded negative run (a one-page `map_anon`: 1174 µs against
+374 µs on rv64, 1274 against 474 on rv32).
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
@@ -756,7 +762,8 @@ after a destruction out of the trace, and `audit-billed`, which bills each audit
 budget that ran it and counts it against its slice, each for one recorded negative run
 ([responsiveness](#responsiveness)); `timer-tail-billed`, which bills the rest of a timer
 interrupt after its expiry, and its return, to the budget it interrupted, for one recorded
-negative run ([charging](#charging)); and `debug-print`, which prints every
+negative run ([charging](#charging)); `alloc-first-fit`, the first-fit frame scan, for one
+recorded negative run ([R12](#r12-scheduling)); and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
 ([devices](devices.md)), and so are `handle-chain-fault` and `process-chain-fault`, a handle
 installed without its stamp entry or its process object entry for the chain audit to catch
@@ -839,8 +846,8 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   sweep holds for the seeds swept, not for every seed. The queue and its accounting drive one hart
   until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases
   that read the trace run a kernel built with it, which has a record at every queue event and 64
-  MiB less RAM for the budget tree, taken from the top of RAM so the frames below sit where a
-  release kernel's do.
+  MiB less RAM for the budget tree, taken from the top of RAM below the DMA pool so the frames
+  below sit where a release kernel's do.
 
 ## Why
 

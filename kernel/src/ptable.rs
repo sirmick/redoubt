@@ -157,8 +157,9 @@ impl Process {
         // Free all associated memory pages, and give its budget back what the process had
         // charged to it (budget.rs).
         crate::mem::MemoryManager::with_mut(|mm| {
-            // SAFETY: called only here, as the final teardown step for a process that will not run again.
-            unsafe { mm.release_all_memory_for_process(self.pid, &self.mapping) };
+            // The final teardown step: a frame given back here may be handed to another process
+            // at once, so this process never runs again.
+            mm.release_owned_frames(self.pid, &self.mapping);
             // Its DMA frames are pooled only once every device that could hold their address
             // confirms a reset, or quarantined for ever (kernel/devices.md, `dma.rs`).
             mm.dma_release(self.pid);

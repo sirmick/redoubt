@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 299
+revision = 300
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -534,8 +534,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Kernel finding from QA GATE1-trace-ring, against R12 (scheduling.md: 'A term linear in RAM frames ... is not [a constant]. Billing it to the caller does not excuse it').\n\nmem.rs scans RAM on call paths in three places:\n- alloc_frame is first fit from frame 0, for every page, page table and object frame;\n- alloc_contiguous (dma_alloc) runs a first-fit search;\n- release_owned_frames (process_create's rollback) scans all of RAM.\n\nGATE1 exposed the first: the trace ring's frames below everything moved sched-budget-churn's victim from 499 to 559.\n\nThe fix:\n- an O(1) free list (intrusive, through the physmap);\n- the rollback walks what the creation built;\n- dma_alloc gets a fixed-size boot pool, or a run allocator, whichever is decided.\n\nscan-bounds is extended, with a recorded negative (alloc-first-fit), and a checked-build audit proves the free list equals the table's free entries.\n\nPage lines: scheduling.md R12's paragraph and memory.md. Brief: .wash/local/K21-implementer.md. Tier A, size M, no needs."
-  state = "reported"
-  revision = 286
+  state = "done"
+  revision = 300
 
 [[node]]
   id = "FSD1"

@@ -397,7 +397,10 @@ the containment gate's deadline notice, in a recorded negative run. The audits t
 full. The same trace records each timer interrupt from user mode with every charge inside it, and
 `sched_oracle` checks that the budget it interrupted pays only for its own items or its slice's end
 ([charging](kernel/scheduling.md#charging)); a kernel built with `timer-tail-billed`, which keeps
-the old billing, fails that check in a recorded negative run.
+the old billing, fails that check in a recorded negative run. A kernel built with
+`alloc-first-fit`, which takes each frame by the first-fit scan of RAM the bitmap replaced,
+fails `scan-bounds` on both widths in a recorded negative run
+([R12 (scheduling)](kernel/scheduling.md#r12-scheduling)).
 
 Many cases use the profile: every case file with `debug_assertions = true`, most of them over
 both widths (`budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc` and `smp-spike` among

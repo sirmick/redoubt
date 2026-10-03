@@ -127,8 +127,18 @@ whatever the device. The [executable model](model.md) checks every answer it giv
 mapped readable and writable at an address the kernel chooses, and their physical address. It is
 the one call that returns a physical address, and only through a device the loader flagged as a
 bus master. Errors, in order: `BadHandle`, `WrongObject` (not MMIO), `InvalidArgument` (no
-pages), `NotPermitted` (no DMA flag), `OutOfMemory` (the pages, the page tables, or the
-device's `MAX_RUNS` (32) runs all in use).
+pages), `NotPermitted` (no DMA flag), `OutOfMemory` (the device's `MAX_RUNS` (32) runs all in
+use, the caller's budget, no free run of `npages` in the DMA pool, or the page tables).
+
+Runs come from the **DMA pool**: `DMA_POOL_PAGES` (1024) contiguous pages, 4 MiB on both widths,
+which the kernel takes from the top of RAM at boot and keeps outside every budget, `root`'s limit
+included. A run is the first free stretch of `npages` in the pool, found by a search linear in the
+pool's 1024 pages, a constant, never in RAM ([R12 (scheduling)](scheduling.md#r12-scheduling)).
+The pool holds one device's `MAX_RUNS` runs at 32 pages each; the largest run a driver asks for
+today is 9 pages. A request longer than the pool's longest free stretch is `OutOfMemory`,
+whatever the caller's budget holds. A held run is still charged to the caller's budget, though
+the pool, not the budget tree, supplies its frames: while runs are held, up to `DMA_POOL_PAGES`
+frames of the budget tree go unbought, which is conservative and never short.
 
 Each allocation is a **run**, recorded against the device it came through. Its pages are
 charged to the caller's budget ([R6 (charging)](budgets.md)), but the ownership table records
@@ -467,9 +477,9 @@ the PLIC for itself alone.
   its device list defeats the kernel's `Ctrl` check: the kernel's own list of controllers comes
   from the same tree ([boot](boot.md)).
 - **Quarantine costs memory for good**, in exactly the hostile case, a device that ignores its
-  reset: its runs stay charged to the dead driver's budget, then its parent, until reboot. A
-  quarantined run through a device still in service also keeps one of that device's
-  `MAX_RUNS` places.
+  reset: its runs stay charged to the dead driver's budget, then its parent, and out of the DMA
+  pool, until reboot. A quarantined run through a device still in service also keeps one of that
+  device's `MAX_RUNS` places.
 - **The reset poll is not preemptible:** up to 1 ms per device in the reset set, 16 ms at most
   for one process end, on top of the rest of its teardown ([scheduling](scheduling.md)).
 - **The order inside the kernel is argued, not attacked.** `dma-reset-reuse` reads the device's

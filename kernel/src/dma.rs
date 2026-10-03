@@ -27,7 +27,7 @@ use redoubt_layout::{KERNEL_DMA_PAGES, KERNEL_DMA_REGS};
 use redoubt_sys::{Error, PAGE_SIZE};
 
 use crate::handle::BudgetRef;
-use crate::mem::{DMA_OWNER, MemoryManager};
+use crate::mem::MemoryManager;
 
 /// DMA devices the kernel can reset: one window page each.
 pub const MAX_DMA_DEVICES: usize = KERNEL_DMA_PAGES;
@@ -161,7 +161,7 @@ impl MemoryManager {
         })
     }
 
-    /// `dma_alloc`'s memory: `npages` contiguous zeroed frames owned by `DMA_OWNER`, charged to
+    /// `dma_alloc`'s memory: `npages` contiguous zeroed frames of the DMA pool, charged to
     /// `pid`'s budget directly (never through its frame ledger, which `uncharge_all_frames`
     /// empties before the reset), recorded as a Live run of `slot` held by `pid`. Nothing changes
     /// on failure.
@@ -170,7 +170,7 @@ impl MemoryManager {
         let index = self.slot_mut(slot).runs.iter().position(Option::is_none).ok_or(oom)?;
         let budget = self.budget_of(pid).ok_or(oom)?;
         self.charge(budget, npages as u64)?;
-        let Ok(phys) = self.alloc_contiguous(DMA_OWNER, npages) else {
+        let Ok(phys) = self.dma_pool_take(npages) else {
             self.uncharge(budget, npages as u64);
             return Err(oom);
         };
@@ -191,7 +191,7 @@ impl MemoryManager {
 
     /// A run's frames back to the pool, and its charge back to its budget.
     fn pool(&mut self, run: Run) {
-        self.free_contiguous(DMA_OWNER, run.phys, run.npages);
+        self.dma_pool_give(run.phys, run.npages);
         if let Some(b) = run.charged.filter(|b| self.is_live_budget(*b)) {
             self.uncharge(b.frame, run.npages as u64);
         }

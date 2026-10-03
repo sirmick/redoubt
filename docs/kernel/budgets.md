@@ -122,7 +122,7 @@ At boot the kernel creates three budgets, all with account 0, no labels and no d
 
 | Budget | Class | Pages | Processes | Weight |
 | --- | --- | --- | --- | --- |
-| `root` | `system` | every RAM page the kernel did not keep for itself, less `root`'s own page | 63 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
+| `root` | `system` | every RAM page the kernel did not keep for itself or for the DMA pool, less `root`'s own page | 63 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
 | `system` | `system` | a quarter of what `root` does not keep for `init` | 15 (a quarter) | 250,000 (a quarter) |
 | `users` | `user` | the rest, less the two budgets' own pages | 47 (the rest, less `init`'s) | 749,000 |
 
@@ -404,8 +404,11 @@ labelled child's handle to a `user`-class caller is a flow R1 must check.
 Every kernel object is charged in pages to one budget, and a charge over the budget's limit fails
 with `OutOfMemory` before anything changes. Who pays:
 - a budget's own page: its **parent**, always (`BUDGET_PAGES`, 1), and `root`'s own page to
-  `root`: `root`'s limit is the RAM frames the kernel did not keep, less `root`'s own page, so
-  the sum of all charges never exceeds the free frames. A revocation scope is no special case;
+  `root`: `root`'s limit is the RAM frames the kernel did not keep for itself or for the DMA
+  pool, less `root`'s own page, so the sum of all charges never exceeds the free frames. A held
+  DMA run is charged to its caller's budget as well, though its frames are the pool's, so while
+  runs are held up to `DMA_POOL_PAGES` free frames cannot be charged for: conservative, never
+  short ([devices](devices.md#dma_alloc)). A revocation scope is no special case;
 - a process object, which holds the exit notice: the **creator's** budget, the budget of
   `process_create`'s caller (`PROCESS_PAGES`, 1), until the notice is received or dropped;
 - a thread's IPC page (`THREAD_PAGES`, 1), its saved registers, its process's page tables (each
