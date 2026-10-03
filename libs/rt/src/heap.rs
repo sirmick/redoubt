@@ -200,8 +200,9 @@ impl Heap {
 // SAFETY: `alloc` returns null or a block of at least `layout.size()` bytes aligned to
 // `layout.align()` (see the module docs) that no other live allocation overlaps: small blocks are
 // on exactly one free list until taken, and large ones are fresh mappings, or a fixed arena's
-// pages on no run list and below its tail. `dealloc` gets back the class or page count from the
-// same `layout`, as GlobalAlloc's contract guarantees.
+// pages on no run list and below its tail. Who guarantees it: the heap's own lists, changed only
+// under `Locked`, over pages the kernel mapped (`map_anon`); and the caller, by GlobalAlloc's
+// contract, for `dealloc`'s `layout`, from which it gets back the class or page count.
 unsafe impl GlobalAlloc for Heap {
     // SAFETY: GlobalAlloc's contract (a non-zero size); see the impl's comment for what it returns.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {

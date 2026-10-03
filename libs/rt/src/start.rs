@@ -157,7 +157,8 @@ fn premapped(addr: usize, len: usize) -> &'static [u8] {
     // `addr`, `len` bytes (kernel/boot.md, "The loader loads only the kernel and `init`"); for the
     // startup page, the parent, which maps one whole page at the address the loader stub passes
     // (servers/init.md). A parent that passes a bad address can only fault its own child, which
-    // it controls anyway.
+    // it controls anyway. Target only, so its keepers are the boot cases: `bundle-mapped` and
+    // `init-boot` for the bundle, every server `init-servers` starts for the startup page.
     unsafe { core::slice::from_raw_parts(addr as *const u8, len) }
 }
 
