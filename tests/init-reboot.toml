@@ -1,0 +1,44 @@
+description = "A server that exits at every start, listed before the last so that it exits during the boot, is restarted five times, and its sixth exit reboots the machine instead (servers/init.md, \"Restarts and reboots\"): init's exit and restarted lines five times, its reboot line, then the next boot's first line, the loader's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the six servers, and quitter, which exits with code 7 at once, listed before ipd.
+# The verdict is init's bare lines, which no server can print bare, then the loader's first line,
+# which only a reset of the machine prints again.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-init-programs", bin = "quitter" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started quitter, console [0-9a-f]{16}$',
+    '^init: quitter \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted quitter, console [0-9a-f]{16}$',
+    '^init: quitter \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted quitter, console [0-9a-f]{16}$',
+    '^init: quitter \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted quitter, console [0-9a-f]{16}$',
+    '^init: quitter \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted quitter, console [0-9a-f]{16}$',
+    '^init: quitter \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted quitter, console [0-9a-f]{16}$',
+    '^init: quitter \(PID [0-9]+\) exited, code 7$',
+    '^init: rebooting: quitter was restarted 5 times within 60 seconds$',
+    '^loader: Redoubt rv(64|32) loader, boot hart 0$',
+]
+forbid = ['init: refused the boot']
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/reboot.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[net]

@@ -17,6 +17,66 @@ name = "con-forger"
 path = "src/bin/con-forger.rs"
 test = false
 
+[[bin]]
+name = "quitter"
+path = "src/bin/quitter.rs"
+test = false
+
+[[bin]]
+name = "restartee"
+path = "src/bin/restartee.rs"
+test = false
+
+[[bin]]
+name = "restart-client"
+path = "src/bin/restart-client.rs"
+test = false
+
+[[bin]]
+name = "restart-faulter"
+path = "src/bin/restart-faulter.rs"
+test = false
+
+[[bin]]
+name = "rollback-client"
+path = "src/bin/rollback-client.rs"
+test = false
+
+[[bin]]
+name = "dma-driver"
+path = "src/bin/dma-driver.rs"
+test = false
+
+[[bin]]
+name = "driver-client"
+path = "src/bin/driver-client.rs"
+test = false
+
+[[bin]]
+name = "orphan-server"
+path = "src/bin/orphan-server.rs"
+test = false
+
+[[bin]]
+name = "orphan-launcher"
+path = "src/bin/orphan-launcher.rs"
+test = false
+
+[[bin]]
+name = "orphan-child"
+path = "src/bin/orphan-child.rs"
+test = false
+
+[[bin]]
+name = "passer"
+path = "src/bin/passer.rs"
+test = false
+
+[[bin]]
+name = "keeper"
+path = "src/bin/keeper.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

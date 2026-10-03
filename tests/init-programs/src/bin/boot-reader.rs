@@ -36,7 +36,7 @@ fn run(startup: &Startup) -> u32 {
         Err(why) => format!("boot-reader TEST FAILED: {why}\n"),
     };
     match out.say(&line) {
-        Ok(()) => redoubt_rt::exit::OK,
+        Ok(()) => redoubt_init_programs::park(),
         Err(_) => redoubt_init_programs::code::NO_CONSOLE,
     }
 }

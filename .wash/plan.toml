@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 277
+revision = 282
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -292,8 +292,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["INIT2"]
   body = "Brief: .wash/local/INIT3-implementer.md (rules, exact page lines, cases, owned paths, context rules).\n\nBuilds:\n- docs/servers/init.md#restarts-and-reboots: a fresh budget, the same endpoint, the boot's own steps repeated, exits during the boot counted, the reboot rule (more than 5 restarts in 60 s), a fault reported and blamed on nobody (blame itself waits for the steward step);\n- docs/servers/wire.md#a-launcher-releases-its-childs-grants: init releases through Grants; the launcher-orphan case;\n- docs/servers/serving.md#replies-and-rollback, in a boot: rollback against consoled, and the malformed fallback;\n- docs/kernel/devices.md: a driver restart, and a quarantined driver reboots (test driver, dma-reset-deaf).\n\nAlso, from INIT2's review:\n- a case that watches a child's console connection disconnected when the child exits;\n- a server that exits while the boot is starting falls under the reboot rule, consoled refusing a buckets=N among them.\n\nnetd's restart case moved to INIT4. Design: QA INIT1-design. Tier A, size M."
-  state = "active"
-  revision = 253
+  state = "done"
+  revision = 282
   overrides = ["2026-10-03: started by Orchestrator before INIT2 (reported): Owner asked to run more in parallel (2026-10-02); INIT2 is reviewed on INIT1's merge and awaits only its merge-gate bench; INIT3 starts on INIT2's rebased tip 7135c5fed and rebases onto INIT2's merge before any page commit and before acceptance."]
 
 [[node]]
@@ -517,7 +517,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["INIT2"]
   body = "The owner's request. This is TCB hygiene, not a hole: a process is memory-safe from other processes whatever its runtime does. Tier A, size S. It needs INIT2, which adds the bundle view and the fixed arena's run words.\n\nThe ratchet goes from 14 (after INIT2) to a target of 10:\n- The panic hook is named in entry!, so the stored-address transmute goes. If no sound form exists, it stays with its reason.\n- The heap's four raw word accesses fold onto one private read/write pair.\n- The startup-page and bundle views fold onto one private premapped().\n\nThe floor: GlobalAlloc's three, the MMIO pair, and Mapping's two views.\n\nEvery remaining site gets a keeper. The heap's tests move out of tests/ipc.rs into rt-miri's list: today they are not under Miri in the bench. Registers gets a Miri test if the fake can map it.\n\nNo bitmap free lists, and no unsafe-fn slice_at (it counts more, not less).\n\nPages: native.md's runtime section and testbench.md's unsafe budget. Brief and exact lines: .wash/local/RT1-implementer.md."
   state = "reported"
-  revision = 276
+  revision = 280
 
 [[node]]
   id = "B7"
@@ -553,8 +553,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FSD1"]
   body = "Builds docs/servers/fsd.md 'Quotas' and R48 (a quota per attach root). Brief: .wash/local/FSD2-implementer.md. A live root holds what lies under it less the live roots below (their quotas in reserve), counted by a walk at the first mint and kept in memory, nothing stored; carving from the nearest live root above; rewrites count littlefs's tail copy; renames never move a live root; the volume root's reserve derived from littlefs; typed no_space (row 9); and FSD1's hostile-image residual closed (a metadata pair named by two directories is corrupt at mount). Host tests only, R48's two attack tests among them. Tier A, size M."
-  state = "todo"
-  revision = 265
+  state = "active"
+  revision = 278
 
 [[node]]
   id = "FSD3"

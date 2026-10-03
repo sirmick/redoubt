@@ -226,7 +226,15 @@ the kernel prints `DMA: device <base> did not confirm its reset; quarantined unt
 
 ### `system_reset`
 
-Status: built · partly tested: a reboot (`kind` 2) is not attacked by a case; the cases power off, and ask for a reboot only through a handle not held · tested: bench:device, bench:irq-attack, bench:init-refuses-public-manifest
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:device
+- bench:irq-attack
+- bench:init-refuses-public-manifest
+- bench:init-reboot
+- bench:init-quarantine-reboot
+
+</details>
 
 `system_reset(h(Reset), kind)` powers the machine off (`kind` 1), reboots it (`kind` 2), or
 powers it off reporting a system failure (`kind` 3), through the firmware's system reset call;
@@ -249,9 +257,11 @@ and the handles are stamped with `root`, so they are revoked only with the whole
 
 ### Which process gets which device
 
-<details><summary>Status: built · partly tested: restarts, which place a kept copy again, and the quarantine reboot are not built · tested (8)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - bench:init-boot
+- bench:init-driver-restart
+- bench:init-quarantine-reboot
 - bench:init-refuses-device-unmatched
 - bench:init-refuses-device-dma
 - host:redoubt-init::a_device_no_handle_names_is_refused

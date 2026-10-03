@@ -1,0 +1,24 @@
+description = "A launcher's end leaves its orphan's connections dead at every server (servers/wire.md, \"A launcher releases its child's grants\"): a tester in init's place launches a server, a child C in a budget of its own, and a launcher L with a connection recorded in its Grants; L mints C's connection through its own and faults, the tester's Job::wait releases L's grants, and the server's own count shows L's connection and C's, minted under it, both gone while C runs on"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The tester in init's place, since servers under init hold no budget handle (R33), and the three
+# programs it launches from the bundle. The verdict is the server's count, asked by the tester;
+# C's word on its next attach is only a trace.
+programs = [
+    "launcher-orphan",
+    { package = "redoubt-init-programs", bin = "orphan-server" },
+    { package = "redoubt-init-programs", bin = "orphan-child" },
+    { package = "redoubt-init-programs", bin = "orphan-launcher" },
+]
+timeout_secs = 60
+expect = [
+    # The connections the server minted and holds: L's, and C's under it.
+    '^\[launcher-orphan\] ok: L minted C.s connection under its own; the server holds 2$',
+    '^PROGRAM HALT: CPU Exception on PID [0-9]+: Store page fault ',
+    '^\[launcher-orphan\] ok: L faulted and its grants were released; the server holds 0$',
+    '^\[launcher-orphan\] trace: C, still running, says its next attach was refused$',
+    '^\[launcher-orphan\] LAUNCHER ORPHAN TEST PASSED$',
+]
+forbid = ['\[launcher-orphan\] FAIL']
+poweroff = true

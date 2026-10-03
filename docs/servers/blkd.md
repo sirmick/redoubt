@@ -273,7 +273,7 @@ partition, and no two partitions share one.
 
 ## Failure and restart
 
-Status: built · partly tested: the exits without a device, a disk or a partition table (`NO_DEVICE`, `NO_DISK`, `NO_PARTITIONS` in `servers/blkd/src/bin/blkd.rs`) are read from the code, not attacked; the restart itself is `init`'s and planned; the device reset before reused DMA pages is the kernel's · tested: host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed, host:redoubt-blkd::a_disk_with_no_signature_is_refused
+Status: built · partly tested: the exits without a device, a disk or a partition table (`NO_DEVICE`, `NO_DISK`, `NO_PARTITIONS` in `servers/blkd/src/bin/blkd.rs`) are read from the code, not attacked; no case restarts `blkd`, whose restart is `init`'s; the device reset before reused DMA pages is the kernel's · tested: host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed, host:redoubt-blkd::a_disk_with_no_signature_is_refused
 
 - **No device handles, or no disk, or no valid partition table:** `blkd` exits with a code
   before serving.

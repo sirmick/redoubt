@@ -1,7 +1,7 @@
 {
   "devices": [
     {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
-    {"name": "disk0", "base": "4096", "irq": 8, "dma": true},
+    {"name": "disk0", "base": "268468224", "irq": 8, "dma": true},
     {"name": "net0", "base": "268464128", "irq": 7, "dma": true}
   ],
   "servers": [
@@ -42,6 +42,11 @@
       "receives": ["netd"],
       "handed": [{"endpoint": "ipd", "badge": "3"}],
       "args": ["client=5"]
+    },
+    {
+      "name": "quitter",
+      "program": "quitter",
+      "budget": {"pages": "256", "processes": 1, "weight": 100}
     },
     {
       "name": "ipd",
