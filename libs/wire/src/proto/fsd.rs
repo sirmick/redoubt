@@ -250,6 +250,7 @@ pub enum ErrorCode {
     NotDir,
     Removed,
     TooLarge,
+    Corrupt,
 }
 
 impl ErrorCode {
@@ -262,6 +263,7 @@ impl ErrorCode {
             ErrorCode::NotDir => 5,
             ErrorCode::Removed => 6,
             ErrorCode::TooLarge => 7,
+            ErrorCode::Corrupt => 8,
         }
     }
 
@@ -274,6 +276,7 @@ impl ErrorCode {
             5 => Some(ErrorCode::NotDir),
             6 => Some(ErrorCode::Removed),
             7 => Some(ErrorCode::TooLarge),
+            8 => Some(ErrorCode::Corrupt),
             _ => None,
         }
     }

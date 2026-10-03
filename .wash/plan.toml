@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 269
+revision = 277
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -448,7 +448,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["GATE1", "INIT1", "K13", "K17"]
   body = "Owner's values on QA K16-limits (2026-10-02): MAX_PROCESS_COUNT 512 with 16-bit PIDs; MAX_THREADS 255 with each thread's saved registers in its own IPC page; MAX_OPEN_CALLS 256, WAIT_CAP 32, MAX_DEPTH 16, MAX_LABELS 16, MAX_START_HANDLES 128. Brief: .wash/local/K16-implementer.md. Builds docs/kernel/processes.md (PIDs, threads), objects.md#what-objects-cost, memory-layout.md (per-process kernel data, satp without the PID), boot.md (the handoff record), abi.md (constants, record slots), budgets.md (MAX_DEPTH, MAX_LABELS, residual-risks for #r10-destruction), ipc.md (#r2-fair-waiting, #r4a-open-calls, residual risks), invariants.md, timer.md (residual risks), scheduling.md (R12 fixed terms). Needs GATE1 (its numbers are the baseline), INIT1 (budget.rs boot_*, setup_loader_process, the loader's handoff and process-area mapping) and K13 (message.rs, where the walks are). Tier A (kernel and loader), size L."
   state = "active"
-  revision = 250
+  revision = 272
   overrides = ["2026-10-02: started by Orchestrator before GATE1 (active), INIT1 (active): Owner asked to run more in parallel (2026-10-02). K16's first two commits touch neither INIT1's files (budget.rs boot_*, setup_loader_process, the loader) nor GATE1's; GATE1's merged numbers remain the baseline, and the branch rebases onto both merges before commit 3.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); an early read of commit 1 while K16 waits for INIT1's merge.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); this commit touches none of INIT1's or GATE1's files and changes no value.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); commits 1 and 4 touch none of INIT1's or GATE1's files; the branch rebases onto both merges before commit 2."]
 
 [[node]]
@@ -516,8 +516,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["INIT2"]
   body = "The owner's request. This is TCB hygiene, not a hole: a process is memory-safe from other processes whatever its runtime does. Tier A, size S. It needs INIT2, which adds the bundle view and the fixed arena's run words.\n\nThe ratchet goes from 14 (after INIT2) to a target of 10:\n- The panic hook is named in entry!, so the stored-address transmute goes. If no sound form exists, it stays with its reason.\n- The heap's four raw word accesses fold onto one private read/write pair.\n- The startup-page and bundle views fold onto one private premapped().\n\nThe floor: GlobalAlloc's three, the MMIO pair, and Mapping's two views.\n\nEvery remaining site gets a keeper. The heap's tests move out of tests/ipc.rs into rt-miri's list: today they are not under Miri in the bench. Registers gets a Miri test if the fake can map it.\n\nNo bitmap free lists, and no unsafe-fn slice_at (it counts more, not less).\n\nPages: native.md's runtime section and testbench.md's unsafe budget. Brief and exact lines: .wash/local/RT1-implementer.md."
-  state = "todo"
-  revision = 192
+  state = "reported"
+  revision = 276
 
 [[node]]
   id = "B7"
@@ -543,8 +543,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Brief: .wash/local/FSD1-implementer.md.\n\nBuilds docs/servers/fsd.md 'Volumes, connections and labels' (labels per volume, remove ends other fids with `removed`, mounting: blank formatted, unmountable served as corrupt) and 'Typed operations' (rename, copy_file, get_attr, set_attr, and the new `corrupt` error). Also one public fid resolver in the 9P skeleton.\n\nHost tests only (fsd-host-tests), with the client library unchanged against the real fsd. No init, no blkd change, no quotas.\n\nTier A, size M, no needs."
-  state = "reported"
-  revision = 267
+  state = "done"
+  revision = 277
 
 [[node]]
   id = "FSD2"
@@ -582,9 +582,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["SMP3"]
-  body = "docs/kernel/scheduling.md R12 restated across harts, once, with several runners per budget (after SMP3): a budget gets its weight's share of the machine, at most one hart per runnable thread, and gains nothing by being spread across harts; the stride crate, the model and the mutations with several harts; the oracle judges multi-hart traces; a lock-contention latency case. Targets (owner, QA SMP1-design): gated at 1 and 2 harts, recorded at 4. Every case at 2 and 4 harts. A case with a beamlet VM's two schedulers on two harts once beamlet runs on Redoubt. Brief to come. Tier A, size M-L."
+  body = "docs/kernel/scheduling.md R12 restated across harts, once, with several runners per budget (after SMP3). Brief: .wash/local/SMP2-implementer.md. Tier A, size M-L.\n\n- R12: a budget gets its weight's share of the harts, at most one per runnable thread, what it cannot use going to the others by weight (water-filling); spreading gains nothing.\n- Architect's ruling: the floor leaves out capped budgets (weight share above their runnable threads, found by water-filling over the top H-1 by w/k); a budget leaving the cap is lifted to the floor. At one hart nothing is capped, so nothing changes.\n- Checkpoint before kernel work: four scenarios (late join, second cap, uncap, spread) in the model, under the old floor and the new rule, sent to the Architect.\n- The stride crate, the model (1, 2, 4 harts, independent water-filling) and five new mutations; the oracle judges multi-hart traces.\n- Cases: unpin SMP1's pins to [1, 2, 4]; sched-capped; sched-lock-contention (FIFO wait from the trace); sched-latency swept at 2 harts.\n- Targets (owner, QA SMP1-design): gated at 1 and 2 harts, recorded at 4.\n- The VM's two schedulers on two harts, once beamlet runs on Redoubt; else cut to its own node."
   state = "todo"
-  revision = 263
+  revision = 275
 
 [[node]]
   id = "RT2"
@@ -602,6 +602,6 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["SMP1"]
-  body = "The owner's goal (QA SMP1-design): a beamlet VM's schedulers run on several harts at once. Design: .wash/local/SMP1-multihart.md. Brief to come. Tier A, size M.\n\n- The pick: a hart takes the lowest-pass budget with a runnable thread not running on any hart (SMP1's one-runner predicate replaced). Stride arithmetic per budget unchanged; each hart charges its runner under the lock; the floor counts a budget with several runners once.\n- SMP1's shootdown gains its callers: unmap, a lend's end, a transfer, process_map's move, a reply returning a lend, and any narrowing of a mapping, before the call returns or the frame is reused.\n- fence.i on the harts running a process when a page of it becomes executable, and on a hart a thread moves to.\n- Cases: smp-shootdown (a thread on one hart writes a page its sibling on another unmaps or returns as a lend; the checker sees no stale write; a recorded negative feature), smp-fence (code mapped while a sibling runs elsewhere), the whole bench at --smp 2.\n- Pages: memory.md's several-harts residual, memory-layout.md's flush residual, scheduling.md's one-runner sentence, and memory.md's lend-within-one-process residual.\n\nR12 across harts is SMP2's, after this."
+  body = "The owner's goal (QA SMP1-design): a beamlet VM's schedulers run on several harts at once. Brief: .wash/local/SMP3-implementer.md (design: .wash/local/SMP1-multihart.md). Tier A, size M.\n\n- The pick: a hart takes the lowest-pass budget with a runnable thread no hart is running (SMP1's one-runner predicate replaced). Stride arithmetic per budget unchanged; each hart charges its runner under the lock; the floor counts a budget with several runners once.\n- SMP1's shootdown gains its callers, before the call returns or the frame is reused: unmap, a narrowing set_flags, process_map's source, a lend or transfer sent, a reply returning a lend. Every site that clears or narrows a VALID user entry is listed.\n- fence.i: any call installing an executable entry shoots the process down (the shootdown fences). A thread that moves needs no fence of its own (Architect: one user entry per frame plus W^X).\n- Cases: smp-shootdown (unmap, lend returned, lend within one process; recorded negative smp-no-shootdown), smp-fence (verdict from a trace shootdown record), the whole bench at --smp 2.\n- Pages: scheduling.md's pick, cursor, floor and charging lines; memory.md's fence paragraph, lending status, several-harts residual (lend-within-one-process residual deleted); memory-layout.md's flush residual; m2 step 4 and Progress.\n\nR12 across harts is SMP2's, after this."
   state = "todo"
-  revision = 263
+  revision = 275

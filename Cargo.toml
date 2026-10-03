@@ -30,6 +30,7 @@ members = [
   "servers/netd",
   "servers/ipd",
   "servers/init",
+  "servers/fsd",
   "stub",
   "tests/programs",
   "tests/init-programs",

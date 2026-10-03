@@ -552,6 +552,22 @@ fn copies_of_one_badge_in_other_accounts_or_label_sets_share_nothing() {
     t.walk(&alice, 0, 7, &[]);
 }
 
+/// `fid_node`, the lookup a typed operation makes for the caller's fids, is a 9P request's: a
+/// fid of another connection, account or label set, or a clunked one, is unknown.
+#[test]
+fn a_typed_operation_resolves_only_the_callers_own_fids() {
+    let mut t = T::new();
+    let alice = caller(42, 1001, &[]);
+    t.attach(&alice, 0, "");
+    let walked = t.walk(&alice, 0, 1, &["notes"]);
+    assert_eq!(t.server.fid_node(&alice, 1).map(|(_, qid)| qid.path), Ok(walked[0]));
+    for other in [caller(43, 1001, &[]), caller(42, 2002, &[]), caller(42, 1001, &[7])] {
+        assert_eq!(t.server.fid_node(&other, 1).err(), Some(NineError::UNKNOWN_FID));
+    }
+    t.clunk(&alice, 1);
+    assert_eq!(t.server.fid_node(&alice, 1).err(), Some(NineError::UNKNOWN_FID));
+}
+
 #[test]
 fn only_the_node_a_fid_rests_on_is_clunked() {
     let mut t = T::new();

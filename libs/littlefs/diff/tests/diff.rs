@@ -178,6 +178,46 @@ fn rust_writes_c_reads() {
     }
 }
 
+/// Creates that write their attributes in their own commit (`mkdir_with_attrs`,
+/// `open_with_attrs`) make plain v2.1 tags: the reference reads every entry with them, in a
+/// directory long enough to split as in one that is not.
+#[test]
+fn creates_with_attributes_read_in_c() {
+    let cfg = SMALL;
+    let mut ram = Ram::new(rust_cfg(cfg));
+    Filesystem::format(&mut ram, rust_cfg(cfg)).unwrap();
+    let mut paths = Vec::new();
+    {
+        let mut fs = Filesystem::mount(&mut ram, rust_cfg(cfg)).unwrap();
+        fs.mkdir_with_attrs("d", &[(0, b"dir d"), (200, b"x")]).unwrap();
+        paths.push(("d".to_string(), true));
+        for i in 0..30 {
+            let path = format!("d/a-longer-name-for-splitting-{i}");
+            let value = path.clone().into_bytes();
+            if i % 5 == 0 {
+                fs.mkdir_with_attrs(&path, &[(0, &value), (200, b"x")]).unwrap();
+                paths.push((path, true));
+            } else {
+                let new = littlefs::OpenOptions { write: true, create_new: true, ..Default::default() };
+                let h = fs.open_with_attrs(&path, new, &[(0, &value), (200, b"x")]).unwrap();
+                fs.write(h, &value).unwrap();
+                fs.close(h).unwrap();
+                paths.push((path, false));
+            }
+        }
+    }
+    let mut c = CFs::mount(cfg, ram.data.clone()).expect("the reference mounts it");
+    for (path, is_dir) in &paths {
+        let want: &[u8] = if path == "d" { b"dir d" } else { path.as_bytes() };
+        assert_eq!(c.get_attr(&format!("/{path}"), 0).unwrap(), want, "{path}");
+        assert_eq!(c.get_attr(&format!("/{path}"), 200).unwrap(), b"x", "{path}");
+        if !is_dir {
+            assert_eq!(c.read(&format!("/{path}")).unwrap(), path.as_bytes());
+        }
+    }
+    assert_eq!(c.list("/d").unwrap().len(), 30);
+}
+
 #[test]
 fn c_writes_rust_reads() {
     for seed in 101..=120 {
