@@ -195,10 +195,10 @@ t = rem + ticks x STRIDE;   pass += t / w;   rem = t mod w      (w: the free wei
 Kernel time is billed as well:
 - a system call's time is its caller's;
 - an expired timeout is billed to its thread's budget, and a deadline's destruction as below,
-  each with the walk that found it. The timer is armed for a timeout only when its thread
-  blocks; a wait that ends before its timeout leaves it early, and the walk that finds the wait
-  gone is billed to that thread's budget. The rest of an entry that found either, its last walk
-  and the timer's own handling included, is billed to the budget it found last: the budget it
+  each with its share of the walk that found it. The timer is armed for a timeout only when its
+  thread blocks; a wait that ends before its timeout leaves it early, and the walk that finds the
+  wait gone is billed to that thread's budget. The rest of an entry that found either, the
+  timer's own handling included, is billed to the budget it found last: the budget it
   interrupted pays for none of it. A timer interrupt that found neither is the running budget's
   when it ends that budget's slice, and nobody's otherwise;
 - an interrupt's handling is billed to the owner of its device object

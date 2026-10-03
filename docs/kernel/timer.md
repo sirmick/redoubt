@@ -147,7 +147,7 @@ runs.
 
 ### Expiry
 
-Status: built · partly tested: the order at an equal instant is attacked only in the model · tested: bench:budget-deadline, bench:timeouts, mutation:ExpireBudgetsFirst
+Status: built · partly tested: the order at an equal instant is attacked only in the model · tested: bench:budget-deadline, bench:timeouts, bench:expiry-deadline-then-timeout, mutation:ExpireBudgetsFirst
 
 **Expiry** answers everything due at or before the current time. It runs first at every kernel
 entry except `kmain`'s switch to a thread, before anything reads the entering process. `kmain`
@@ -159,9 +159,10 @@ timeouts among themselves go in (pid, tid) order, and deadlines by budget id. Th
 matters: a caller whose taken call times out at the instant its server's budget reaches its
 deadline gets `Timeout` with its lend consumed, not `Dead` with it returned.
 
-Finding what is due walks the threads of each process whose cached earliest timeout has come,
-and the deadline list. Both walks are skipped while the hints are in the future. After expiry
-the kernel recomputes both hints and re-arms.
+Finding what is due reads the waits with a deadline of each process whose cached earliest
+timeout has come, which each process keeps on a list of its own, and walks the deadline list.
+Both are skipped while the hints are in the future. After expiry the kernel recomputes both hints
+and re-arms.
 
 ### Wall-clock time and time sync
 
@@ -245,12 +246,13 @@ Status: built · tested: bench:sched-timer-flood, bench:deadline-flood-billed
 R12 is owned by [scheduling](scheduling.md#r12-scheduling); this is how its charging applies to
 the timer's work. Each expired item's work is billed under it: a timeout to its thread's budget, a deadline's
 whole destruction to the dying budget's parent, after its carve returns, or to the nearest
-ancestor with free weight above 0 ([scheduling](scheduling.md#charging)). So is the walk that
-found the item, and a budget with many timeouts due at once pays one walk for each. The timer is
-armed for a timeout only when its thread blocks, so a call whose timeout has passed, or that is
-answered at once, arms nothing. A wait that ends before its timeout leaves the timer early; the
-walk that finds it gone is billed to the waiting thread's budget. The rest of the entry, its last
-walk and the timer's own handling, goes to the budget whose item or wait it found last, so the
+ancestor with free weight above 0 ([scheduling](scheduling.md#charging)). The one walk that
+finds what is due, and its ordering by deadline, is billed in equal shares to the items it
+handles, each with its own ending, so a budget pays for its own share of a shared instant, not a
+neighbour's. The timer is armed for a timeout only when its thread blocks, so a call whose timeout
+has passed, or that is answered at once, arms nothing. A wait that ends before its timeout leaves
+the timer early; the walk that finds it gone is billed to the waiting thread's budget. The rest of
+the entry, the timer's own handling, goes to the budget whose item or wait it found last, so the
 budget the timer interrupted pays for none of it. So a process that arms many timers a
 microsecond apart, or creates many budgets with staggered deadlines, spends its own CPU share, not
 a neighbour's.
@@ -293,14 +295,18 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
 - **The firmware arms the timer.** The kernel does not check the result of the SBI `set_timer`
   call. A firmware that failed to arm it would stop slices, timeouts and deadlines. The firmware
   is TCB ([boot](boot.md)).
-- **Expiry walks threads.** A walk visits only the threads that exist, in the processes whose
-  earliest timeout has come, so it is bounded by `MAX_PROCESS_COUNT` x `MAX_THREADS` (511 x 255,
-  compile-time constants no process can change) plus the deadline list. Each walk that finds an
-  item, or a wait that ended early, is billed to its budget. A budget destroyed before its
-  deadline leaves the timer early: one walk of the deadline list, nobody's, for each such
-  destruction, which its destroyer pays for in full. The walk finds one due wait, so a deadline
-  that ends many waits at once walks once for each, which takes seconds at full occupancy
-  ([expiry walks once per wait](../todo/expiry-walks-once-per-wait.md)).
+- **Expiry walks the processes.** An expiry reads every live process's earliest timeout
+  (`MAX_PROCESS_COUNT`, 511, a compile-time constant no process can change) and, in those whose
+  earliest timeout has come, only their waits with a deadline, never their other threads, plus
+  the deadline list. One walk finds every wait due and orders them by deadline, so a deadline
+  that ends many waits at once walks once, and ordering its R waits takes R log R steps; both are
+  billed in equal shares to the waits it found. At full occupancy, every PID in use with every
+  thread, the walk that finds 250 waits due at once takes 26.8 ms on rv64 and 28.9 ms on rv32,
+  within R12's 30 (`bench:worst-walk`). A wait the walk finds ended early is billed to its
+  budget. A budget destroyed before its deadline leaves the timer early: one walk of the deadline
+  list, nobody's, for each such destruction, which its destroyer pays for in full. A wait that a
+  deadline's destruction fails during the same expiry leaves its process's earliest timeout
+  early: one more early interrupt, billed as a wait that ended early.
 - **Equal-instant order is argued, not attacked.** Timeouts before deadlines at one instant is
   checked by the model's mutation only; no bench case lands a timeout and a deadline on the same
   microsecond.
