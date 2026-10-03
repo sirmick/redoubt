@@ -160,6 +160,11 @@ pub fn random(bytes: &mut [u8]) -> Result<(), Error> {
 }
 
 /// Sleeps for `timeout` microseconds: `receive` from nothing, which can only time out.
+///
+/// `sleep(0)` is the runtime's yield: it enters the kernel and returns at once. Redoubt's kernel
+/// runs no other thread first: a deadline already past times out without blocking, and the caller
+/// resumes without the scheduler picking again. A backend that switches threads cooperatively
+/// switches there.
 pub fn sleep(timeout: u64) -> Result<(), Error> {
     match crate::ipc::receive_raw(None, timeout, 0) {
         Err(Error::Timeout) => Ok(()),

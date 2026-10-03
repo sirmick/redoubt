@@ -6,7 +6,11 @@
 //! runtime and the echo pair use (endpoints, badges, `mint`, the four IPC calls, `serve`,
 //! abandoned calls and their notices, `map_anon`, `unmap`, `handle_close`, `time_now`, `random`,
 //! `process_exit`) and not the rest: no charging, no label check between user budgets (R1), no fair waiting
-//! (R2), no lend unmapping from the caller. The executable model (`model/`) should replace it. Calls it does
+//! (R2). A lend's or a transfer's pages are given up for the message, as the kernel's are
+//! (docs/kernel/ipc.md, Messages): a given-up range is refused to every call (a second lend or
+//! transfer, `unmap`, `process_map`, and a record inside it, all `InvalidArgument`) until the
+//! reply, or the take; a message that fails while still queued gives it back. A direct touch is
+//! prevented only by the runtime's types. The executable model (`model/`) should replace it. Calls it does
 //! not model panic, so a test cannot rely on them by accident.
 //!
 //! For launchers it models budgets as handles (`Fake::budget`), `process_create`, `process_map`,
@@ -158,6 +162,9 @@ struct State {
     /// Taken calls whose caller gave up, with the lend each left with its server (address,
     /// length): the reply reaches nobody and frees the lend (R3).
     abandoned: HashMap<u64, Option<(usize, usize)>>,
+    /// Pages given up to a message not yet settled: message id -> (giving process, address,
+    /// length). Every call of that process naming one of them is refused.
+    given_up: HashMap<u64, (usize, usize, usize)>,
     /// `serve` and `reply` as they happened: (process, call, message id).
     log: Vec<(usize, &'static str, u64)>,
     /// Device objects, by the index their handles carry.
@@ -325,6 +332,13 @@ impl Fake {
     /// The `serve` and `reply` calls `pid` made, in order: ("serve" or "reply", message id).
     pub fn log(&self, pid: usize) -> Vec<(&'static str, u64)> {
         self.lock().log.iter().filter(|(p, _, _)| *p == pid).map(|(_, call, id)| (*call, *id)).collect()
+    }
+
+    /// Messages queued on the endpoint `owner`'s `handle` names, not yet taken.
+    pub fn queued(&self, owner: usize, handle: Handle) -> usize {
+        let s = self.lock();
+        let ep = as_endpoint(&s, owner, handle).expect("an endpoint");
+        s.endpoints[ep.id].queue.len()
     }
 
     /// Calls taken and not yet replied to, by any process.
@@ -519,6 +533,40 @@ fn owns(s: &State, pid: usize, pages: Pages) -> bool {
         && s.processes[pid].mappings.iter().any(|(&a, &l)| a <= pages.addr && pages.addr + len <= a + l)
 }
 
+/// `InvalidArgument` if any byte of `addr..addr + len` lies in pages `pid` has given up.
+fn not_given_up(s: &State, pid: usize, addr: usize, len: usize) -> Result<(), Error> {
+    // An end that overflows lies past every other, so it overlaps.
+    let ends_after = |start: usize, len: usize, at: usize| start.checked_add(len).is_none_or(|end| at < end);
+    if s.given_up.values().any(|&(p, a, l)| p == pid && ends_after(a, l, addr) && ends_after(addr, len, a)) {
+        return Err(Error::InvalidArgument);
+    }
+    Ok(())
+}
+
+/// The taken call `id` of `pid`'s loses its caller (R3), which gets `status`: it stays open at
+/// `receiver` until the reply, which reaches nobody and frees the lend. Until then the lend is the
+/// server's alone and stays given up by its caller; the reply releases both.
+fn abandon(
+    s: &mut State,
+    pid: usize,
+    receiver: usize,
+    id: NonZeroU64,
+    pages: Option<Pages>,
+    status: Error,
+) -> Return {
+    let lend = pages.map(|pages| {
+        let len = s.processes[pid].mappings.remove(&pages.addr).unwrap();
+        s.processes[receiver].map(pages.addr, len);
+        (pages.addr, len)
+    });
+    s.abandoned.insert(id.get(), lend);
+    Return::Call(CallOutcome {
+        status: Err(status),
+        lend: if pages.is_some() { LendDisposition::Consumed } else { LendDisposition::None },
+        reply_present: false,
+    })
+}
+
 fn read_body(addr: usize) -> Result<Body, Error> {
     // SAFETY: the runtime passes the address of a live, 8-aligned `[u64; BODY_SLOTS]` record
     // it owns for the duration of the call (redoubt-rt `sys::Record`), in this address space.
@@ -569,6 +617,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 if s.processes[pid].mappings.get(&addr) != Some(&len) {
                     return Err(Error::InvalidArgument);
                 }
+                not_given_up(&s, pid, addr, len)?;
                 s.processes[pid].mappings.remove(&addr);
                 free(addr, len);
                 Ok(Return::Nothing)
@@ -644,8 +693,9 @@ unsafe impl redoubt_rt::Transport for Fake {
                 self.receive(pid, from, timeout, received_rec)
             }
             Call::Reply { msg_id, body_rec } => {
-                let body = read_body(body_rec)?;
                 let mut s = self.lock();
+                not_given_up(&s, pid, body_rec, BODY_SLOTS * 8)?;
+                let body = read_body(body_rec)?;
                 match s.open.get(&msg_id.get()) {
                     Some(&(receiver, _)) if receiver == pid => {}
                     _ => return Err(Error::InvalidArgument),
@@ -657,6 +707,8 @@ unsafe impl redoubt_rt::Transport for Fake {
                     .map(|h| lookup(&s, pid, *h))
                     .collect::<Result<Vec<_>, _>>()?;
                 s.open.remove(&msg_id.get());
+                // The lend is the caller's again (or, abandoned, the server's to free).
+                s.given_up.remove(&msg_id.get());
                 s.log.push((pid, "reply", msg_id.get()));
                 // An abandoned call's reply is discarded, and frees its lend (R3).
                 let abandoned = s.abandoned.remove(&msg_id.get());
@@ -719,6 +771,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 if s.processes[pid].mappings.get(&src) != Some(&len) {
                     return Err(Error::InvalidArgument);
                 }
+                not_given_up(&s, pid, src, len)?;
                 s.processes[pid].mappings.remove(&src);
                 // SAFETY: `src..src + len` is a whole mapping this kernel made for `pid` (checked
                 // just above) and has just left its table, so nothing else reads or frees it.
@@ -728,10 +781,11 @@ unsafe impl redoubt_rt::Transport for Fake {
                 Ok(Return::Nothing)
             }
             Call::ProcessStart { process, entry, sp, arg, handles_rec, count } => {
+                let mut s = self.lock();
+                not_given_up(&s, pid, handles_rec, MAX_START_HANDLES * 8)?;
                 // SAFETY: the runtime passes the address of a live, 8-aligned
                 // `[u64; MAX_START_HANDLES]` record it owns for the call (`Process::start`).
                 let raw = unsafe { (handles_rec as *const [u64; MAX_START_HANDLES]).read() };
-                let mut s = self.lock();
                 let Object::Process(index) = lookup(&s, pid, process)? else {
                     return Err(Error::WrongObject);
                 };
@@ -777,13 +831,17 @@ impl Fake {
         timeout: u64,
         is_call: bool,
     ) -> Result<Return, Error> {
-        let body = read_body(body_rec)?;
         let mut s = self.lock();
+        not_given_up(&s, pid, body_rec, BODY_SLOTS * 8)?;
+        let body = read_body(body_rec)?;
         let ep = as_endpoint(&s, pid, endpoint)?;
         let handles =
             body.handles.as_slice().iter().map(|h| lookup(&s, pid, *h)).collect::<Result<Vec<_>, _>>()?;
-        if pages.is_some_and(|p| !owns(&s, pid, p)) {
-            return Err(Error::InvalidArgument);
+        if let Some(p) = pages {
+            if !owns(&s, pid, p) {
+                return Err(Error::InvalidArgument);
+            }
+            not_given_up(&s, pid, p.addr, p.npages.get() * PAGE_SIZE)?;
         }
         // The fake transfers whole mappings only (a Buffer always is one).
         let whole = |p: Pages| s.processes[pid].mappings.get(&p.addr) == Some(&(p.npages.get() * PAGE_SIZE));
@@ -797,64 +855,71 @@ impl Fake {
         let pending =
             Pending { id, call: is_call, badge: ep.badge, account, labels, words, handles, pages, from: pid };
         s.endpoints[ep.id].queue.push_back(pending);
+        // From here until the message settles, the pages are given up (docs/kernel/ipc.md,
+        // Messages).
+        if let Some(p) = pages {
+            s.given_up.insert(id.get(), (pid, p.addr, p.npages.get() * PAGE_SIZE));
+        }
         self.changed.notify_all();
         let deadline = deadline(timeout);
         let mut guard = Some(s);
-        loop {
+        let result = loop {
             let s = guard.as_mut().unwrap();
             if is_call {
                 if let Some((words, handles)) = s.replies.remove(&id.get()) {
                     let handles: Vec<Handle> = handles.into_iter().map(|e| install(s, pid, e)).collect();
                     write_body(body_rec, &Body { words, handles: Handles::from_slice(&handles).unwrap() });
-                    return Ok(Return::Call(CallOutcome {
+                    break Ok(Return::Call(CallOutcome {
                         status: Ok(()),
                         lend: if pages.is_some() { LendDisposition::Returned } else { LendDisposition::None },
                         reply_present: true,
                     }));
                 }
             } else if s.taken.remove(&id.get()) {
-                return Ok(Return::Nothing);
+                break Ok(Return::Nothing);
             }
             let queued = s.endpoints[ep.id].queue.iter().position(|p| p.id == id);
             if s.endpoints[ep.id].dead {
                 if let Some(i) = queued {
                     s.endpoints[ep.id].queue.remove(i);
+                    break Err(Error::Dead);
                 }
-                return Err(Error::Dead);
+                // A call already taken is abandoned by the endpoint's destruction, and no notice
+                // follows: there is no endpoint left to receive one on (R3).
+                if let Some(&(receiver, _)) = s.open.get(&id.get()) {
+                    return Ok(abandon(s, pid, receiver, id, pages, Error::Dead));
+                }
+                break Err(Error::Dead);
             }
             if !self.wait(&mut guard, deadline) {
                 let s = guard.as_mut().unwrap();
                 if let Some(i) = s.endpoints[ep.id].queue.iter().position(|p| p.id == id) {
                     s.endpoints[ep.id].queue.remove(i);
-                    return Err(Error::Timeout);
+                    break Err(Error::Timeout);
                 }
                 // A call the server took is abandoned (R3): it stays open there until the
                 // server replies, and the server is told.
                 if let Some(&(receiver, endpoint)) = s.open.get(&id.get()) {
                     s.notices.push_back((receiver, endpoint, id.get()));
                     self.changed.notify_all();
-                    let lend = pages.map(|pages| {
-                        let len = s.processes[pid].mappings.remove(&pages.addr).unwrap();
-                        s.processes[receiver].map(pages.addr, len);
-                        (pages.addr, len)
-                    });
-                    s.abandoned.insert(id.get(), lend);
-                    return Ok(Return::Call(CallOutcome {
-                        status: Err(Error::Timeout),
-                        lend: if pages.is_some() { LendDisposition::Consumed } else { LendDisposition::None },
-                        reply_present: false,
-                    }));
+                    return Ok(abandon(s, pid, receiver, id, pages, Error::Timeout));
                 }
                 if !is_call {
-                    return Err(Error::Timeout);
+                    break Err(Error::Timeout);
                 }
             }
-        }
+        };
+        // Settled: refused or timed out while queued, replied to, or taken (a transfer). The pages
+        // are the sender's again, or the receiver's. An abandoned call returned above: its pages
+        // stay given up until the server's reply.
+        guard.as_mut().unwrap().given_up.remove(&id.get());
+        result
     }
 
     fn receive(&self, pid: usize, from: Option<Handle>, timeout: u64, rec: usize) -> Result<Return, Error> {
         let deadline = deadline(timeout);
         let mut guard = Some(self.lock());
+        not_given_up(guard.as_ref().unwrap(), pid, rec, RECEIVED_SLOTS * 8)?;
         let Some(from) = from else {
             while self.wait(&mut guard, deadline) {}
             return Err(Error::Timeout);
@@ -908,6 +973,7 @@ impl Fake {
                     if let Some(pages) = p.pages {
                         let len = s.processes[p.from].mappings.remove(&pages.addr).unwrap();
                         s.processes[pid].map(pages.addr, len);
+                        s.given_up.remove(&p.id.get());
                     }
                     s.taken.insert(p.id.get());
                     MessageKind::Send { transfer: p.pages }

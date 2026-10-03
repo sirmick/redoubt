@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 385
+revision = 392
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -722,8 +722,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["ABI1"]
   body = "Owner (2026-10-03). Brief: .wash/local/ABI2-implementer.md. Tier A (the IPC pages, the fake kernel), size S. Needs ABI1 (shared files: the fake, libs/sys docs).\n\nipc.md states lend and transfer as ownership: the caller gives a lend up for the whole call, the server may read and write it until its reply, the return says who owns it (returned / consumed); a transfer is given up at send and becomes the receiver's, owner and payer, at the take, or comes back if the send fails. One owner in every state. The MMU's remap is this kernel's enforcement (I9), stated once; a no-MMU backend may hand the buffer over. No kernel change (verified: take_buffer, give_buffer_back, move_buffer); a false rule is a stop-and-report. The fake refuses every call naming a given-up page. LendDisposition and Buffer docs say ownership; no type changes.\n\nAcceptance: the fake's new host tests; every host test and machine case unchanged, both widths."
-  state = "todo"
-  revision = 362
+  state = "done"
+  revision = 392
 
 [[node]]
   id = "MEM1"
@@ -773,3 +773,22 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Brief: .wash/local/FSD4-implementer.md (architect-14). Tier A (servers/fsd), size S, needs nothing. Found by BEAM2 (2026-10-03): listing the userland root (587 files) was unfinished after 400 s, and fsd answered no one else meanwhile. Cause: entry_name (server.rs:426) walks the whole directory for each entry, and each entry is then looked up again by path (node_at, stat_of, qid).\n\nDesign: one listing window per fsd, up to 64 entries with their stats (name, id, kind, size, qid version from the DirEntry's metadata and attributes), filled by one pass and keyed by the directory and a change generation that every volume change moves. dir_entry answers from it and refills on a miss, finding the directory once (its id check stays). Memory bounded (try_reserve). Listing n entries costs about n/64 passes with no per-entry lookup; one request costs at most a bounded number of passes, fixed by msize. The skeleton and littlefs are unchanged.\n\nAcceptance: host tests (pass count for 600 entries, a change between reads refills, one reply's bound); machine case fsd-large-directory, both widths: 600 files packed, listed in under 2 s, a second client's read answered during the listing. Page: fsd.md, a bullet \"A directory is listed a window at a time\" and the residual \"a listing is linear in the directory\"."
   state = "active"
   revision = 384
+
+[[node]]
+  id = "B6"
+  title = "A seed sweep runs its boots in parallel, when asked"
+  template = "package"
+  parent = "M1"
+  body = "Owner (2026-10-03): cut B6. Brief: .wash/local/B6-implementer.md (architect-14). Tier B, tools/testbench only, size S, needs nothing (B7's per-run directories are in). It launches when the host queue allows: its own proof boots QEMU.\n\nThe flags: --sweep SEEDS (A..B or a list; one case with qemu_seed), and --jobs J, which defaults to 1, is valid only with --sweep, and is capped at available_parallelism. Never the default. One build; each boot gets its seed directly (TESTBENCH_QEMU_SEED is refused with --sweep) and keeps its files in run-<pid>-<time>/seed-<N>-<arch>/. The join prints each seed's usual result in seed order, then a summary line (N seeds, passed, failed and which), and exits non-zero on any failure. A result under --jobs above 1 is a sweep datum, never a gate verdict; a timeout under --jobs is rerun alone. The merge gate stays serial.\n\nAcceptance: host tests (seed parsing and refusals, unique names, ordered join, summary and exit status); a machine proof of --sweep 1..4 --jobs 2 on the shortest seeded case, plus a serial replay of one seed matching. Page: testbench.md, after the qemu_seed paragraph, and the usage block."
+  state = "active"
+  revision = 390
+
+[[node]]
+  id = "K19"
+  title = "A destruction's deliveries happen at its boundary: pumps after the mark, not in its middle"
+  template = "package"
+  parent = "M1"
+  needs = ["IPC3"]
+  body = "Owner (2026-10-03): \"pumps at the boundary\", the recommended option of .wash/local/destroy-simplify.md, goes after IPC3. Tier A (the kernel's destroy path: budget.rs destroy_subtree, message.rs budgets_dying/pump/end_thread/abandon/fail_all, process.rs died/settle_notice), size M. No brief yet: the Architect re-cuts it against IPC3's per-endpoint lists once IPC3 merges. The brief must cover the rescan loop's removal (fail_all's quadratic rescan), the five checks it replaces, the to-pump list collected at the mark and pumped at the boundary, and R10 step 4 tightened to \"from the mark on, no message stamped with a dying budget is delivered\" (budgets.md), with the one mutation retired as unwritable and its reason. The destruction does the same work, so it stays inside R10's 30 ms; the gate's R10 p99 is the check."
+  state = "todo"
+  revision = 388

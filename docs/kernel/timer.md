@@ -89,12 +89,13 @@ flowchart TD
 
 ### Timeouts and `FOREVER`
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:timeouts
 - bench:timeouts-tcg
 - bench:sched-wake-no-preempt
 - mutation:R12TimeoutWakePreempts
+- host:redoubt-rt::sleep_zero_is_one_receive_from_nothing_that_returns_at_once
 
 </details>
 
@@ -105,7 +106,10 @@ enough to saturate. There is no maximum timeout and no minimum. A timeout of 0 i
 call delivers what it can at once and otherwise returns `Timeout` without blocking.
 
 A **sleep** is `receive` with no handle: it can only time out. The Rust runtime's `sleep`
-(`libs/rt/src/handle.rs`) is exactly that.
+(`libs/rt/src/handle.rs`) is exactly that. `sleep(0)` is the runtime's yield: it enters the kernel
+and returns at once. Redoubt's kernel runs no other thread first: a deadline already past times out
+without blocking, and the caller resumes without the scheduler picking again. A backend that
+switches threads cooperatively switches there.
 
 When a timeout passes, the blocked call returns `Timeout` with what it waited for unwound. A
 queued `call` or `send` gets its buffer back. A `call` the server already took is abandoned: the

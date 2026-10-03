@@ -30,8 +30,9 @@ pub struct Caller {
     pub labels: Labels,
 }
 
-/// Pages this process owns, mapped read-write: what it lends in a `call`, transfers in a `send`,
-/// or was transferred. Unmapped on drop.
+/// Pages this process owns, readable and writable: what it lends in a `call`, transfers in a
+/// `send`, or was transferred. Lending or transferring takes it by value, so no safe code touches
+/// pages it has given up. Unmapped on drop.
 #[derive(Debug)]
 pub struct Buffer {
     mapping: Mapping,
