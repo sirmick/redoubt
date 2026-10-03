@@ -431,6 +431,8 @@ freed and for a program the loader started is while it lives. It counts there wh
 the process. If that budget is destroyed while the PID is still held, the count moves to the
 destroyed budget's parent ([R10](#r10-destruction)). A `process_create` over the limit fails
 with `OutOfProcesses` before a PID is drawn ([processes](processes.md#creating-and-starting)).
+`root` holds every PID but the kernel's, so the limits run out no later than the PIDs do: with
+every PID in use, every budget refuses with `OutOfProcesses` (`process-fill`).
 
 The page counts per object are in [objects](objects.md#what-objects-cost). A parent's usage
 counts its children's **limits** and their own pages, never their live usage, so one child

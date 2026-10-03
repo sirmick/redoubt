@@ -20,10 +20,11 @@ process that draws a PID used before inherits nothing.
 
 ### Processes and PIDs
 
-<details><summary>Status: built · partly tested: that PIDs are drawn at random is not attacked by a case · tested (4)</summary>
+<details><summary>Status: built · partly tested: that PIDs are drawn at random is not attacked by a case · tested (5)</summary>
 
 - bench:process
 - bench:process-attack
+- bench:process-fill
 - bench:process-lifecycle
 - host:redoubt-model::pid_reuse_only_after_notice_receipt
 
