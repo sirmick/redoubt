@@ -75,8 +75,7 @@ and `init`'s only input. Its entries:
   server's arguments, with the serving library's parser, and no other argument. So a server's
   bucket count never binds in normal use, and a full server cannot tell a latecomer that others
   hold state ([serving](serving.md#residual-risks)). A server whose block has no `buckets=N`, or
-  one outside 1 to 32, does not start. `init` does not exist yet, so the check against the
-  manifest's routes is not built ([todo](../todo/server-bucket-counts.md)).
+  one outside 1 to 32, does not start.
 - **Weights.** One stride queue serves every budget ([scheduling](../kernel/scheduling.md)), so
   the manifest's weights are the whole scheduling policy. `init`, the steward and the drivers
   (`consoled`, `blkd`, `netd`) get weights an order of magnitude above a session's (1000 against
@@ -114,7 +113,17 @@ M5 (persist, install, share).
 
 ### The confinement check
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the steward's, not built · tested (7)</summary>
+
+- bench:init-refuses-confined-server
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
+- host:redoubt-init::confined_gives_a_labelled_domain_no_network
+- host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
+- host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
+- host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
+
+</details>
 
 A manifest may set `confined`, a deployment profile for the whole boot, never per domain. Set, it
 makes `init` **refuse the boot** whenever two entries with differing label sets share any of:
@@ -155,8 +164,6 @@ It is a check on the manifest, not a run-time invariant: a capability handed ove
 `mint`, by a `grant`, by a system server) is outside it, and a system server that hands one
 across label sets is at fault, not the kernel. Without `confined`, a shared server is ordinary
 multi-tenancy and the serving library's residual risks apply.
-
-**Open:** none.
 
 ### Starting the servers
 
@@ -227,7 +234,15 @@ refusal line, printed when nothing else has run, and the power-off status.
 
 ### The key-separation check
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:init-refuses-held-login-key
+- bench:init-refuses-held-bundle-key
+- bench:init-refuses-second-keyd
+- host:redoubt-init::every_login_and_approval_key_then_the_bundle_key_is_asked_about
+- host:redoubt-init::init_calls_one_of_each_server_it_calls
+
+</details>
 
 `init` refuses a manifest that hands `keyd` a key the box is authenticated by: a key listed both
 as a principal's login or approval key and as a `keyd` key, or the key the loader verifies the
@@ -236,8 +251,6 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 `init` holds no cryptography, so once `keyd` is started and before anything else runs, it asks
 `keyd` `holds(public key)` for each such key ([keyd](keyd.md)), and a yes stops the boot
 ([R35 (key separation)](#r35-key-separation)).
-
-**Open:** none.
 
 ### The startup block
 
@@ -548,7 +561,12 @@ stub's host tests.
 
 ### R33 (no server holds a system budget)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the steward's half is the steward's, not built · tested (2)</summary>
+
+- bench:init-refuses-budget-handle
+- host:redoubt-init::a_server_handed_a_budget_is_refused
+
+</details>
 
 Only `init` and the steward ever hold a handle to a `system`-class budget. A server's startup
 block carries no budget handle, and `init` refuses a manifest that grants one. A compromised
@@ -556,11 +574,19 @@ server holding its budget could create `system`-class children with any labels a
 and so forge admission keys and crash blame at every other server. The attack test starts a
 server from a manifest that grants it a budget and expects the boot refused.
 
-**Open:** none.
-
 ### R34 (confined placement)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the control plane's exception is the steward's and `sshd`'s, not built · tested (7)</summary>
+
+- bench:init-refuses-confined-server
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
+- host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
+- host:redoubt-init::confined_gives_a_labelled_domain_no_network
+- host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
+- host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
+- host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
+
+</details>
 
 With `confined` set, no two entries with differing label sets share a server instance, volume,
 endpoint, network instance or device object, and no labelled domain reads a shared
@@ -569,18 +595,22 @@ control plane: the steward and `sshd`, by the request and owner-approval path, p
 reader and writer budgets, and lease-ending supervision only. The attack verdict is the boot
 failing, not the manifest's claim.
 
-**Open:** none.
-
 ### R35 (key separation)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:init-refuses-held-login-key
+- bench:init-refuses-held-bundle-key
+- bench:init-refuses-second-keyd
+- host:redoubt-init::every_login_and_approval_key_then_the_bundle_key_is_asked_about
+- host:redoubt-init::init_calls_one_of_each_server_it_calls
+
+</details>
 
 `keyd` never holds a key that authenticates anyone to the box: not a principal's login or
 approval key, and not the key the loader verifies the bundle with. `init` asks `keyd` about each
 before anything else runs, and a yes stops the boot. So the boot root and a key some badge may
 sign with are never one key, and no badge at `keyd` can sign a login.
-
-**Open:** none.
 
 ## Failure and restart
 

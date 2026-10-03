@@ -249,7 +249,18 @@ and the handles are stamped with `root`, so they are revoked only with the whole
 
 ### Which process gets which device
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: restarts, which place a kept copy again, and the quarantine reboot are not built · tested (8)</summary>
+
+- bench:init-boot
+- bench:init-refuses-device-unmatched
+- bench:init-refuses-device-dma
+- host:redoubt-init::a_device_no_handle_names_is_refused
+- host:redoubt-init::a_device_split_between_two_entries_is_refused
+- host:redoubt-init::the_dma_flag_must_be_the_kernel_s
+- host:redoubt-init::a_device_name_is_at_most_60_bytes_and_never_ends_in_irq
+- host:redoubt-init::one_device_has_one_holder
+
+</details>
 
 The loader loads only the kernel and `init`, and `init` holds every device object. The boot
 manifest's `devices` entry names each device object by its register base and interrupt, and
@@ -279,8 +290,6 @@ two label sets share a device.
   device's object is gone, and only a hardware reset can make a device whose reset was never
   confirmed safe to hand out again. This is the same fail-closed reboot as a server that cannot
   stay up ([init](../servers/init.md#restarts-and-reboots)).
-
-**Open:** none.
 
 ## Authority
 

@@ -101,7 +101,7 @@ page.
    ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)), hands each server its
    devices ([devices](../kernel/devices.md#which-process-gets-which-device)), runs the
    confinement and key-separation checks
-   ([bucket counts among them](../todo/server-bucket-counts.md)), and starts every server through the loader stub with
+   ([bucket counts among them](../servers/init.md#the-boot-manifest)), and starts every server through the loader stub with
    fresh connections ([init](../servers/init.md)). `blkd`, `netd`, `ipd`, `bootfsd`, `consoled`
    and `keyd` move from the bench's rigs to `init`. A launcher releases its children's grants
    ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)). A shared server's
