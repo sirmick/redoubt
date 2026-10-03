@@ -214,8 +214,10 @@ stateDiagram-v2
 
 ### Multiplexed connections
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; no boot has run it yet · tested (11)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (13)</summary>
 
+- bench:aio-many-reads
+- bench:aio-many-reads-two
 - host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
 - host:redoubt-rt::a_completion_call_is_held_at_most_its_hold_and_the_servers_bound
 - host:redoubt-rt::a_never_polling_client_holds_only_its_share

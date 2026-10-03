@@ -441,8 +441,10 @@ reaping by one timeout, no more.
 
 ### Many requests at once
 
-<details><summary>Status: built · partly tested: only on the host; no boot has run it yet · tested (9)</summary>
+<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (11)</summary>
 
+- bench:aio-many-reads
+- bench:aio-many-reads-two
 - host:redoubt-client::an_inline_submit_to_a_busy_server_returns_and_goes_at_the_next_poll
 - host:redoubt-client::one_connection_needs_no_waiter_thread
 - host:redoubt-client::buffers_come_back_to_their_submitter_by_value_in_any_order
