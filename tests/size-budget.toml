@@ -41,7 +41,7 @@ max_lines = 328
 [[crate]]
 name = "libs/signing"
 paths = ["libs/signing/src"]
-max_lines = 11
+max_lines = 15
 
 [[crate]]
 name = "libs/client"

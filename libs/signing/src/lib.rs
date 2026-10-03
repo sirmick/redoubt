@@ -26,6 +26,16 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+/// The key the boot bundle's signature verifies under: the development public key, derived from the
+/// public seed `[0x42; 32]`. NOT FOR PRODUCTION: a real build replaces this with the public half of
+/// a secret key (kernel/boot.md, "Verified boot"). The loader verifies the bundle with it, and
+/// `init` asks `keyd` about it by name, so no copy of its bytes can drift from the one the loader
+/// trusts.
+pub const DEV_PUBLIC_KEY: [u8; 32] = [
+    0x21, 0x52, 0xf8, 0xd1, 0x9b, 0x79, 0x1d, 0x24, 0x45, 0x32, 0x42, 0xe1, 0x5f, 0x2e, 0xab, 0x6c, 0xb7,
+    0xcf, 0xfa, 0x7b, 0x6a, 0x5e, 0xd3, 0x00, 0x97, 0x96, 0x0e, 0x06, 0x98, 0x81, 0xdb, 0x12,
+];
+
 /// The boot bundle signing domain, NUL-terminated (kernel/boot.md, "Verified boot").
 pub const BUNDLE_DOMAIN: &[u8] = b"redoubt.bundle.v1\0";
 

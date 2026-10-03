@@ -374,6 +374,13 @@ mod tests {
     /// whatever the container holds.
     const ARCHIVE: &[u8] = b"not really a tar, but signed the same way";
 
+    /// The bench signs with the half of the key pair the loader verifies with: the public key in
+    /// `redoubt_signing`, which `init` also asks `keyd` about, is `DEV_SEED`'s.
+    #[test]
+    fn the_signing_seed_is_the_key_the_loader_trusts() {
+        assert_eq!(*KeyPair::from_seed(Seed::new(DEV_SEED)).pk, redoubt_signing::DEV_PUBLIC_KEY);
+    }
+
     /// What the bench signs is the documented preimage, and nothing else. The loader hashes
     /// `redoubt_signing::bundle_preamble(len)` and then the archive; the bench writes the same
     /// two pieces into one buffer. Both are asserted here against the bytes kernel/boot.md
