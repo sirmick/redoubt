@@ -339,7 +339,7 @@ paragraph, stages those files in the merge, and ends the package's members.
 - `.wash/plan.toml` and `.wash/qa/` are committed only with a package's merge, or in one commit
   when the owner parks or ends the workspace. Nothing else commits them.
 - Nobody pushes without the owner's word.
-- **Handoff** at about 300K tokens of context (Wash warns the orchestrator at `context_warn`): the
+- **Handoff** at about 500K tokens of context (Wash warns the orchestrator at `context_warn`): the
   member finishes and commits its current step, writes its handoff with `member_update {handoff}`
   (state, next steps, traps, open questions; Wash keeps it in `.wash/local/`, out of git), reports
   and stops. The orchestrator ends it and launches a fresh member with `handoff_from`, and a
