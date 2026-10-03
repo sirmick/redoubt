@@ -760,13 +760,16 @@ without preemption.*
   - the threads' teardown, 3.1 ms (8 ms; 6.7 ms pumping after each thread). Every thread ends
     first, and then each endpoint their waits served is pumped once, so the cost follows the
     served endpoints, not the parked calls: the four parked lend calls are one pump of the
-    server's endpoint, a walk of every thread, not four;
-  - the thread walks, 1.3 ms (2 ms);
+    server's endpoint, which reads that endpoint's own lists, not four;
+  - the message reach, 1.3 ms (2 ms) when it was two walks of every thread; it now reads the
+    dying endpoints' lists and the dying budgets' two stamp chains;
   - the rest, 2.9 ms (3 ms).
 
-  Those are the gate's fill. At full occupancy, every PID in use with every thread, the walks of
-  every thread dominate and one destruction takes seconds
-  ([delivery walks every thread](../todo/delivery-walks-every-thread.md)).
+  Those are the gate's fill.
+- **A destruction at full occupancy walks every process.** At full occupancy (510 processes) a
+  destruction takes 53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30: three of its steps walk
+  every process object
+  ([destruction walks every process](../todo/destruction-walks-every-process.md)).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).
