@@ -375,6 +375,7 @@ fn a_blank_range_is_formatted_and_only_a_blank_one() {
     assert!(formatted.iter().any(|b| *b != 0), "a blank range is formatted");
     assert!(matches!(mount(disk.clone()), Ok(Mounted::Files { .. })));
     assert!(disk.bytes() == formatted, "a formatted range is mounted, not formatted again");
+    assert!(!Fsd::new(mount(disk.clone()).unwrap(), vec![]).is_corrupt());
     assert_eq!(mount(Memory::blank(3 * 8 + 7)).err(), Some(crate::volume::NoVolume::TooSmall));
     assert!(matches!(mount(Memory::blank(4 * 8)), Ok(Mounted::Files { .. })));
 }
@@ -404,6 +405,10 @@ fn noise_is_never_formatted_and_never_mounted() {
         assert_eq!(t.read(&who, 0, 0, 1).unwrap_err(), "unknown fid");
     }
     assert!(disk.bytes() == noise, "a range that holds anything is never formatted");
+    assert!(
+        Fsd::new(mount(disk.clone()).unwrap(), vec![]).is_corrupt(),
+        "the program says so on its console"
+    );
     // A superblock pair with one byte set is not blank either.
     let mut almost = vec![0u8; SECTORS * SECTOR as usize];
     almost[4096 + 100] = 1;

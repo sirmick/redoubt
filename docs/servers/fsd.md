@@ -19,8 +19,9 @@ power-loss safety by design, and a size that can be read.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · partly tested: one instance per volume under `init`, and the line a volume served as corrupt prints there, are not built until `fsd` runs under `init` · tested (26)</summary>
+<details><summary>Status: built · partly tested: one instance per volume under `init` has no case yet · tested (27)</summary>
 
+- bench:fsd-corrupt-volume
 - host:redoubt-fsd::attach_walk_open_read_write
 - host:redoubt-fsd::files_and_directories_survive_a_remount
 - host:redoubt-fsd::a_removed_files_other_fids_get_removed
@@ -60,8 +61,9 @@ power-loss safety by design, and a size that can be read.
   eight of `blkd`'s sectors, so the volume's block count is its range's sectors divided by 8.
 - **Mounting.** At start `fsd` mounts its range. A range whose first two blocks are all zero
   has never been written, and `fsd` formats it. Any other range that does not mount is served
-  as corrupt: every attach is refused with `corrupt`, and `fsd` stays up, so a damaged or
-  hostile medium never becomes a restart loop. `fsd` never formats a range that holds anything.
+  as corrupt: every attach is refused with `corrupt`, `fsd` says so on its console, and it stays
+  up, so a damaged or hostile medium never becomes a restart loop. `fsd` never formats a range
+  that holds anything.
   A range that mounts is then checked, without writing: every file and directory carries its id,
   no two the same, and the id counter is above the highest, and no metadata pair is named
   twice, within one directory's chain or across two; a volume that fails is served as corrupt

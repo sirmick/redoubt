@@ -26,10 +26,11 @@ pub struct Recipe {
 pub struct Partition {
     /// The volume's name, as the manifest's `volumes` entry names it.
     pub name: String,
-    /// What the partition holds: `littlefs`, the only filesystem there is.
+    /// What the partition holds: `littlefs`, the only filesystem there is, or, for a case,
+    /// `noise`: the same pseudo-random bytes every time, which no filesystem mounts.
     pub fs: String,
-    /// The directory whose tree the volume holds, relative to the workspace root.
-    pub stage: PathBuf,
+    /// For `littlefs`, the directory whose tree the volume holds, relative to the workspace root.
+    pub stage: Option<PathBuf>,
 }
 
 impl Recipe {
@@ -38,13 +39,17 @@ impl Recipe {
         let recipe: Recipe = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         ensure!(!recipe.partition.is_empty(), "{}: no partition", path.display());
         for p in &recipe.partition {
-            ensure!(
-                p.fs == "littlefs",
-                "{}: partition {}: fs {:?} is not littlefs",
-                path.display(),
-                p.name,
-                p.fs
-            );
+            match p.fs.as_str() {
+                "littlefs" => {
+                    ensure!(p.stage.is_some(), "{}: partition {}: no stage", path.display(), p.name)
+                }
+                "noise" => {
+                    ensure!(p.stage.is_none(), "{}: partition {}: noise has no stage", path.display(), p.name)
+                }
+                fs => {
+                    bail!("{}: partition {}: fs {fs:?} is neither littlefs nor noise", path.display(), p.name)
+                }
+            }
         }
         Ok(recipe)
     }
@@ -97,15 +102,31 @@ fn tree(stage: &Path) -> Result<Vec<(String, Option<Vec<u8>>)>> {
     Ok(out)
 }
 
+/// Fills `bytes` with the same pseudo-random bytes every time (xorshift64).
+fn noise(bytes: &mut [u8]) {
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    for b in bytes {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        *b = seed as u8;
+    }
+}
+
 /// The disk `recipe` describes, its stages read under `root`; `stage`, if given, stands in for
-/// every partition's own.
+/// every littlefs partition's own.
 pub fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<Vec<u8>> {
     ensure!(recipe.size_kib > 0, "a disk of no size");
     let sectors = recipe.size_kib * 1024 / SECTOR;
     let parts = shares(sectors, recipe.partition.len() as u64);
     let mut disk = Image::new(sectors, &parts).bytes;
     for (p, at) in recipe.partition.iter().zip(&parts) {
-        let staged = tree(&root.join(stage.unwrap_or(&p.stage)))?;
+        let (start, end) = ((at.first_lba * SECTOR) as usize, ((at.last_lba + 1) * SECTOR) as usize);
+        let Some(own) = &p.stage else {
+            noise(&mut disk[start..end]);
+            continue;
+        };
+        let staged = tree(&root.join(stage.unwrap_or(own)))?;
         let entries: Vec<pack::Entry> = staged
             .iter()
             .map(|(path, data)| match data {
@@ -115,7 +136,6 @@ pub fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<V
             .collect();
         let volume = pack::pack(at.last_lba - at.first_lba + 1, &entries)
             .map_err(|e| anyhow::anyhow!("packing {}: {}: {}", p.name, e.path, e.why))?;
-        let start = (at.first_lba * SECTOR) as usize;
         disk[start..start + volume.len()].copy_from_slice(&volume);
     }
     Ok(disk)
@@ -158,5 +178,19 @@ mod tests {
         assert!(disk[at..at + 4096].windows(8).any(|w| w == b"littlefs"));
         assert!(disk[at + 4096..].iter().any(|b| *b != 0), "the files are past the superblock pair");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A `noise` partition is the same bytes in every pack, and no littlefs superblock.
+    #[test]
+    fn a_noise_partition_is_the_same_noise_every_time() {
+        let recipe: Recipe = toml::from_str(
+            "size_kib = 1024\n[[partition]]\nname = \"a\"\nfs = \"noise\"\n[[partition]]\nname = \"b\"\nfs = \"noise\"\n",
+        )
+        .unwrap();
+        let disk = pack_disk(&recipe, Path::new("/"), None).unwrap();
+        assert_eq!(disk, pack_disk(&recipe, Path::new("/"), None).unwrap());
+        let at = (FIRST_USABLE * SECTOR) as usize;
+        assert!(!disk[at..at + 8192].windows(8).any(|w| w == b"littlefs"));
+        assert!(disk[at..at + 512].iter().any(|b| *b != 0));
     }
 }

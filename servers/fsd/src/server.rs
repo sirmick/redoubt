@@ -208,6 +208,9 @@ impl<R: Range> Fsd<R> {
         }
     }
 
+    /// Whether the volume is served as corrupt: every attach refused with `corrupt`.
+    pub fn is_corrupt(&self) -> bool { self.fs.is_none() }
+
     /// Refuses a change to a read-only volume, so a refused write never reaches the device and
     /// never poisons the volume for everyone.
     pub(crate) fn writable(&self) -> Result<(), Failure> {

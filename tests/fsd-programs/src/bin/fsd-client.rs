@@ -8,6 +8,7 @@
 //!   reboots the machine (servers/init.md, "Restarts and reboots"). The start after the reboot finds six and
 //!   reads both back, with the same qid paths.
 //! - `read ENDPOINT PATH TEXT...`: each path holds exactly the text after it.
+//! - `corrupt ENDPOINT`: every attach is refused, and `fsd` still answers the next.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -19,6 +20,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use redoubt_client::Error;
 use redoubt_client::file::{Connection, File};
 use redoubt_client::fsd::rename;
 use redoubt_init_programs::Out;
@@ -49,6 +51,7 @@ fn run(startup: &Startup) -> u32 {
         (Some("boot"), Some(at)) => boot(startup, &mut out, at).map(|()| Ends::Passed),
         (Some("reboot"), Some(at)) => reboot(startup, &mut out, at),
         (Some("read"), Some(at)) => read(startup, &mut out, at, args).map(|()| Ends::Passed),
+        (Some("corrupt"), Some(at)) => corrupt(startup, &mut out, at).map(|()| Ends::Passed),
         (check, _) => Err(format!("no such check, or no endpoint: {check:?}")),
     };
     let line = match checked {
@@ -203,4 +206,18 @@ fn read<'a>(
         read += 1;
     }
     out.say(&format!("fsd-client read {read} files\n")).map_err(|e| format!("say: {e:?}"))
+}
+
+/// `fsd-corrupt-volume`: a volume served as corrupt refuses each attach with an `Rerror`, and
+/// the same instance answers again.
+fn corrupt(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> {
+    let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
+    for _ in 0..3 {
+        match Connection::attach(Endpoint::from_handle(handle), &mut out.lend) {
+            Err(Error::Rerror) => {}
+            Err(e) => return Err(format!("attach: {e:?}, not Rerror")),
+            Ok(_) => return Err("a corrupt volume was attached".into()),
+        }
+    }
+    out.say("fsd-client was refused at each of 3 attaches\n").map_err(|e| format!("say: {e:?}"))
 }
