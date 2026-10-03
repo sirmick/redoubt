@@ -231,7 +231,7 @@ interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
-<details><summary>Status: built · partly tested: on the host only, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in no boot · tested (7)</summary>
+<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (7)</summary>
 
 - host:beamlet-redoubt::writes_reach_the_screen
 - host:beamlet-redoubt::typing_reaches_the_vm_then_its_end
@@ -254,11 +254,11 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
   stops the VM, until those calls move to the I/O threads
   ([asynchronous underneath](#asynchronous-underneath-synchronous-on-top)).
 - **Randomness is the kernel's.** On the fake kernel it is seeded from the host for a person's
-  run, and fixed for a test's, so a test repeats.
+  run, and fixed for a test's, so a test repeats. On the machine it is the kernel's own.
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: files, programs, `/net` and the natives are not built, and the modules are read from `/boot` unchecked · tested: bench:beamlet-boot
+Status: built · partly tested: files, programs, `/net` and the natives are not built, and the modules are read from `/boot` unchecked · tested: bench:beamlet-boot, bench:beamlet-console
 
 On Redoubt, beamlet is a native program whose `Platform` is written against the system: thin
 adapters over the client library ([native programs](native.md#the-client-library)) for the
@@ -288,7 +288,7 @@ budget and a connection to `bootfsd`. It runs one scheduler thread until several
 runtime's `thread::spawn`.
 
 The timer's counter frequency is not needed: `time_now`'s microseconds serve the clock and
-`idle`'s deadlines.
+`idle`'s deadlines (bench:beamlet-console).
 
 ### Natives
 

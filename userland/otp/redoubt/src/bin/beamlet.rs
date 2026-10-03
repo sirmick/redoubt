@@ -32,7 +32,11 @@ redoubt_rt::entry!(start);
 
 /// The exit code for a startup block without a module to run, or without `bootfsd`.
 const USAGE: u32 = 2;
-/// The pages of each thread's stack: the reader thread makes one blocking read at a time.
+/// The pages of each thread's stack. The reader thread, the only one, reached 2,832 bytes on rv64
+/// and 2,240 on rv32 in beamlet-console, and 5,600 and 4,720 when made to panic at the bottom of
+/// its read, the system call, so that the panic's report ran on it too (measured by filling its
+/// stack with a pattern); 16 KiB is near three times the deepest, and the stack has no guard page
+/// below it.
 const STACK_PAGES: usize = 4;
 /// The pages of the lend `/boot` is read through: what one read asks for.
 const LEND_PAGES: usize = 4;

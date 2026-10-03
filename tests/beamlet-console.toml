@@ -1,0 +1,62 @@
+description = "beamlet's console, clock and randomness on the machine (docs/userland/beamlet.md, \"The console, the clock and randomness\"): under init, the VM prints a prompt, reads the line the bench types and echoes it; sleeps 200 ms in a receive and prints how far erlang:monotonic_time advanced across it, at least 200,000 us (the kernel's time_now and idle); and prints 32 bytes of crypto:strong_rand_bytes/1 (the kernel's random) as hex, 64 digits not all zero"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-boot, with the test module and the OTP modules it needs (io, io_lib,
+# io_lib_format, unicode and crypto, whose NIFs are beamlet-crypto's natives) as public entries.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started beamlet, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] beamlet-console: type a line$',
+    '^\[con [0-9a-f]{16}\] echo: typed into beamlet 42$',
+    '^\[con [0-9a-f]{16}\] slept: ([2-9][0-9]{5}|[1-9][0-9]{6,}) us$',
+    '^\[con [0-9a-f]{16}\] random: [0-9a-f]{64}$',
+    '^init: beamlet \(PID [0-9]+\) exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd) .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'random: 0{64}$',
+    'EXCEPTION',
+    # A module the VM lacks shows as ??? before the echo.
+    '\?\?\?',
+]
+
+[[input]]
+after = '^\[con [0-9a-f]{16}\] beamlet-console: type a line$'
+send = "typed into beamlet 42\n"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/console.json" }
+
+[[file]]
+name = "beamlet_console.beam"
+from = { erlang = "userland/otp/redoubt/tests/erlang/beamlet_console.erl" }
+
+[[file]]
+name = "io.beam"
+from = { otp = "io" }
+
+[[file]]
+name = "io_lib.beam"
+from = { otp = "io_lib" }
+
+[[file]]
+name = "io_lib_format.beam"
+from = { otp = "io_lib_format" }
+
+[[file]]
+name = "unicode.beam"
+from = { otp = "unicode" }
+
+[[file]]
+name = "crypto.beam"
+from = { otp = "crypto" }

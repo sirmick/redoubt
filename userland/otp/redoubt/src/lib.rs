@@ -12,7 +12,7 @@
 //!
 //! - **The console** is `/dev/cons` in the process's namespace, opened once. The VM's thread writes to it and
 //!   asks its size; a reader thread, with its own lend, reads it, and sends what it read to the VM's thread,
-//!   sixteen bytes to a message, on an endpoint of the VM's own, then its end. The two threads share the open
+//!   eight bytes to a message, on an endpoint of the VM's own, then its end. The two threads share the open
 //!   file and nothing else: a second open would take more fids than `consoled` allows one session.
 //! - **Time** is the kernel's microseconds since boot, and `system_time_us` is `None`: there is no wall clock
 //!   until M5 (persist, install, share) brings one. **Randomness** is the kernel's.
@@ -64,12 +64,13 @@ pub trait Modules: Send {
 
 /// The badge the reader thread's messages come with: the VM thread's own mint off its endpoint.
 const READER: u64 = 1;
-/// Word 0 of a message from the reader: bytes follow (word 1 their count, words 2 and 3 them).
+/// Word 0 of a message from the reader: bytes follow (word 1 their count, words 2 and 3 them, four
+/// each: a word is 32 bits on rv32, and the kernel refuses a wider one).
 const BYTES: u64 = 1;
 /// Word 0 of a message from the reader: the console has no more input.
 const END: u64 = 2;
 /// The most bytes one message holds.
-const CHUNK: usize = 16;
+const CHUNK: usize = 8;
 
 /// The platform of one VM, on Redoubt.
 pub struct Redoubt {
@@ -147,8 +148,8 @@ impl Redoubt {
             BYTES => {
                 let n = (words[1] as usize).min(CHUNK);
                 let mut bytes = [0u8; CHUNK];
-                bytes[..8].copy_from_slice(&words[2].to_le_bytes());
-                bytes[8..].copy_from_slice(&words[3].to_le_bytes());
+                bytes[..4].copy_from_slice(&(words[2] as u32).to_le_bytes());
+                bytes[4..].copy_from_slice(&(words[3] as u32).to_le_bytes());
                 self.input.extend(&bytes[..n]);
             }
             END => self.ended = true,
@@ -189,10 +190,11 @@ fn read_console(console: &Console, to: &Endpoint) {
             }
             let mut chunk = [0u8; CHUNK];
             chunk[..n].copy_from_slice(&buf[..n]);
-            let low = u64::from_le_bytes(chunk[..8].try_into().expect("8 bytes"));
-            let high = u64::from_le_bytes(chunk[8..].try_into().expect("8 bytes"));
+            let low = u32::from_le_bytes(chunk[..4].try_into().expect("4 bytes"));
+            let high = u32::from_le_bytes(chunk[4..].try_into().expect("4 bytes"));
             // Waits until the VM's thread takes it: a VM that is busy slows the reader down.
-            to.send(&[BYTES, n as u64, low, high], &[], None, FOREVER).map_err(|(e, _)| Error::from(e))?;
+            to.send(&[BYTES, n as u64, u64::from(low), u64::from(high)], &[], None, FOREVER)
+                .map_err(|(e, _)| Error::from(e))?;
         }
     };
     // Whatever ended the reading, the VM is told there is no more.
