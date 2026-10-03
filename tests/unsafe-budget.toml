@@ -105,12 +105,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-name = "redoubt-rt (native runtime): the allocator's trait, the heap's two words of a free block, a page buffer's two views, the device registers' read and write, the pages mapped before the first instruction"
+name = "redoubt-rt (native runtime): the allocator's trait, the heap's two words of a free block, a page buffer's two views, the device registers' read and write, the pages mapped before the first instruction, a spawned thread's closure taken back in its entry"
 paths = ["libs/rt/src"]
 # A page buffer's two views stay two, shared and mutable, each made for one borrow (ipc.rs,
 # `Mapping`): one unsafe fn behind both would count three, and a safe one cannot make a mutable
 # view from a shared borrow.
-max_unsafe = 10
+# thread.rs: a closure crosses thread_create as its one usize argument; no lock exists to hold it in a table.
+max_unsafe = 11
 max_undocumented = 0
 
 [[budget]]
