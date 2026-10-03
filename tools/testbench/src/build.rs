@@ -5,12 +5,16 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail, ensure};
 use ed25519_compact::{KeyPair, Seed};
+use serde::Deserialize;
 
 use crate::case::{Corruption, HostTests, Program};
 use crate::target::Target;
 
 pub struct Builder {
     pub workspace: PathBuf,
+    /// This run's own directory (`run.rs`): the binaries it packs and boots, and every file it
+    /// makes from them, are copied or written here and nowhere another run writes.
+    pub run: PathBuf,
     pub verbose: bool,
 }
 
@@ -34,11 +38,20 @@ impl Profile {
     }
 }
 
-impl Builder {
-    fn out_dir(&self, target: &Target, profile: Profile) -> PathBuf {
-        self.workspace.join("target").join(target.triple).join(profile.name())
-    }
+/// What cargo's `--message-format=json` says about one unit it built.
+#[derive(Deserialize)]
+struct Message {
+    reason: String,
+    target: Option<MessageTarget>,
+    executable: Option<PathBuf>,
+}
 
+#[derive(Deserialize)]
+struct MessageTarget {
+    name: String,
+}
+
+impl Builder {
     /// `cargo build` one package for `target` with `profile`.
     pub fn cargo_build(
         &self,
@@ -47,9 +60,15 @@ impl Builder {
         features: &[String],
         profile: Profile,
     ) -> Result<()> {
-        self.cargo(target, package, None, features, profile)
+        self.cargo(target, package, None, features, profile).map(drop)
     }
 
+    /// Build `package` (only its binary `bin`, if given) and return the path cargo reports for
+    /// that binary, `bin` or else the package's name. The build cache is the workspace's one
+    /// `target/`, as for any cargo build there (`build.build-dir`); but cargo copies the finished
+    /// binaries into this run's own target directory, under its own lock, so another run building
+    /// other features in the same cache never replaces the file this run packs. The path cargo
+    /// reports is that copy: the hashed file in the cache's `deps/` is never reported.
     fn cargo(
         &self,
         target: &Target,
@@ -57,10 +76,22 @@ impl Builder {
         bin: Option<&str>,
         features: &[String],
         profile: Profile,
-    ) -> Result<()> {
+    ) -> Result<Option<PathBuf>> {
         let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+        // On the command line, both win over a user's cargo config and environment, so a run's
+        // copies cannot land in a shared path; and, unlike the environment, they do not reach
+        // the cargo a build script runs (`tests/programs/build.rs`), which keeps a target
+        // directory of its own and would wait forever on this build's lock.
+        let cache = self.workspace.join("target").to_string_lossy().into_owned();
+        let build_dir = format!("build.build-dir={}", toml::Value::String(cache));
         cargo.current_dir(&self.workspace).args([
             "build",
+            "--message-format=json-render-diagnostics",
+            "--config",
+            &build_dir,
+            "--target-dir",
+        ]);
+        cargo.arg(self.run.join("cargo")).args([
             "--profile",
             profile.name(),
             "--target",
@@ -86,7 +117,29 @@ impl Builder {
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
-        Ok(())
+        let want = bin.unwrap_or(package);
+        let mut executable = None;
+        for line in output.stdout.split(|&b| b == b'\n').filter(|line| line.starts_with(b"{")) {
+            let message: Message = serde_json::from_slice(line).context("reading cargo's report")?;
+            if message.reason == "compiler-artifact" && message.target.is_some_and(|t| t.name == want) {
+                executable = message.executable.or(executable);
+            }
+        }
+        Ok(executable)
+    }
+
+    /// `cargo` for a binary the run packs or boots: an error if cargo reports none.
+    pub fn binary(
+        &self,
+        target: &Target,
+        package: &str,
+        bin: Option<&str>,
+        features: &[String],
+        profile: Profile,
+    ) -> Result<PathBuf> {
+        let what = bin.map_or(package.to_string(), |bin| format!("{package}:{bin}"));
+        self.cargo(target, package, bin, features, profile)?
+            .with_context(|| format!("cargo reported no binary for {what} on {}", target.name))
     }
 
     /// Build `program` if it comes from the workspace, and return the path of its ELF.
@@ -98,24 +151,18 @@ impl Builder {
                 return Ok((name, self.workspace.join(path)));
             }
             Program::Corrupted { corrupt, with } => {
-                self.cargo(target, "test-programs", Some(corrupt), &[], Profile::Release)?;
-                let mut elf = std::fs::read(self.out_dir(target, Profile::Release).join(corrupt))?;
+                let built = self.binary(target, "test-programs", Some(corrupt), &[], Profile::Release)?;
+                let mut elf = std::fs::read(built)?;
                 corrupt_elf(&mut elf, with)?;
                 let name = format!("{corrupt}-corrupted");
-                let path =
-                    self.workspace.join("target/testbench").join(format!("{name}-{}.elf", target.name));
+                let path = self.run.join(format!("{name}-{}.elf", target.name));
                 std::fs::write(&path, elf)?;
                 return Ok((name, path));
             }
             Program::TestProgram(bin) | Program::Bin { bin, .. } => ("test-programs", bin.as_str()),
             Program::Package { package, bin } => (package.as_str(), bin.as_str()),
         };
-        self.cargo(target, package, Some(bin), &[], Profile::Release)?;
-        Ok((bin.to_string(), self.out_dir(target, Profile::Release).join(bin)))
-    }
-
-    pub fn artifact(&self, target: &Target, name: &str, profile: Profile) -> PathBuf {
-        self.out_dir(target, profile).join(name)
+        Ok((bin.to_string(), self.binary(target, package, Some(bin), &[], Profile::Release)?))
     }
 
     /// `cargo test` for host packages, for the unit tests a boot cannot reach. Returns what
@@ -328,7 +375,8 @@ mod tests {
     /// runs every test target natively.
     #[test]
     fn a_miri_case_runs_its_files_under_miri() {
-        let builder = Builder { workspace: PathBuf::from("/w"), verbose: false };
+        let builder =
+            Builder { workspace: PathBuf::from("/w"), run: PathBuf::from("/w/run"), verbose: false };
         let args = |host: &HostTests| {
             let cargo = builder.test_command(host);
             let miriflags = cargo.get_envs().find(|(k, _)| *k == "MIRIFLAGS").and_then(|(_, v)| v);
@@ -436,6 +484,65 @@ mod tests {
         let mut wrong_length = redoubt_signing::bundle_preamble(ARCHIVE.len() as u64 + 1).to_vec();
         wrong_length.extend_from_slice(ARCHIVE);
         assert!(keypair.pk.verify(&wrong_length, &signature).is_err());
+    }
+
+    /// Two runs build one package with different features in one build cache, interleaved:
+    /// A builds, B builds, then A packs, and builds A again. A packs the binary of its own
+    /// features though B's build came between, each binary is in its own run's directory and
+    /// none in the cache's shared output directory, and A's second build compiles nothing.
+    #[test]
+    fn interleaved_builds_each_pack_their_own_binary() {
+        let workspace = std::env::temp_dir().join(format!("testbench-fixture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
+        std::fs::write(
+            workspace.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n\n\
+             [features]\na = []\nb = []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("src/main.rs"),
+            "fn main() { println!(\"built with {}\", if cfg!(feature = \"a\") { \"a\" } else { \"b\" }) }\n",
+        )
+        .unwrap();
+        let rustc = Command::new("rustc").arg("-vV").output().unwrap().stdout;
+        let host = String::from_utf8(rustc)
+            .unwrap()
+            .lines()
+            .find_map(|l| Some(l.strip_prefix("host: ")?.to_string()));
+        let target = Target { name: "host", triple: host.unwrap().leak(), machine: Err("a fixture") };
+        let run =
+            |name: &str| Builder { workspace: workspace.clone(), run: workspace.join(name), verbose: false };
+        let (a, b) = (run("run-a"), run("run-b"));
+        let build = |builder: &Builder, feature: &str| {
+            builder.binary(&target, "fixture", None, &[feature.to_string()], Profile::Release).unwrap()
+        };
+        let printed =
+            |binary: &Path| String::from_utf8(Command::new(binary).output().unwrap().stdout).unwrap();
+        let cache = workspace.join("target").join(target.triple).join("release");
+        let compiled = || {
+            let mut files: Vec<_> = std::fs::read_dir(cache.join("deps"))
+                .unwrap()
+                .map(|e| {
+                    let e = e.unwrap();
+                    (e.path(), e.metadata().unwrap().modified().unwrap())
+                })
+                .collect();
+            files.sort();
+            files
+        };
+
+        let built_a = build(&a, "a");
+        let built_b = build(&b, "b");
+        assert_eq!(printed(&built_a), "built with a\n");
+        assert_eq!(printed(&built_b), "built with b\n");
+        assert!(built_a.starts_with(&a.run) && built_b.starts_with(&b.run), "{built_a:?} {built_b:?}");
+        assert!(!cache.join("fixture").exists(), "a binary was copied into the shared cache");
+        let before = compiled();
+        assert_eq!(build(&a, "a"), built_a);
+        assert_eq!(compiled(), before, "a build of features already in the cache compiled again");
+        std::fs::remove_dir_all(&workspace).unwrap();
     }
 
     const GOLDEN_SIGNATURE: &str = "c5807e8b49de09f4a03ed502f87a867aded52a6f0badeca8db993d425d3d457fbf75559b65473006d1355efc665fd79952e5c16b7a9582c5f40dccc432310a04";

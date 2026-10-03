@@ -82,7 +82,7 @@ cargo testbench               # the same bench, every case on the widths it decl
 
 The bench boots real images under QEMU and judges the console from outside, including attack
 cases whose verdict comes from the system, never from the attacker. Logs land in
-`target/testbench/`. How cases are written and judged: [the test bench](docs/testbench.md).
+`target/testbench/last/`. How cases are written and judged: [the test bench](docs/testbench.md).
 Before sending a change, run the whole bench, and check that rv32 still compiles.
 
 ## Debug
