@@ -189,6 +189,7 @@ The kinds, and the fields each takes besides `description` and `arch`:
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
 | `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`, `within`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
 | `fmt` | the formatting gate ([below](#the-formatting-gate)) | `roots`, `[[skip]]` (`path`, `reason`) |
+| `elixir` | runs scripts that check an Elixir oracle on beamlet against the Rust it shadows, each of which must exit 0, on the pinned toolchain ([below](#elixir-oracles)) | `otp`, `elixir`, `scripts` (each a path and its arguments), `must_fail` |
 
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
@@ -279,6 +280,26 @@ requeued. It recomputes each lift and each weight change from the rule, and lets
 at a weight change. It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only
 ([R23 (no test channels)](kernel/scheduling.md#r23-no-test-channels)).
+
+### Elixir oracles
+
+<details><summary>Status: built · tested (3)</summary>
+
+- bench:elixir-oracles
+- bench:bench-elixir-oracles-broken-guard
+- host:testbench::another_version_is_refused
+
+</details>
+
+An `elixir` case runs its `scripts` in order from the workspace root, each judged by its exit
+status: `elixir-oracles` runs the steward core's reference over its traces
+([the trace encoding](servers/steward.md#the-trace-encoding)) and the wire codec's vectors. The
+scripts source `userland/otp/tools/oracle.sh`, which puts the pinned toolchain on the path and
+runs a module on beamlet. Before any script the case checks the toolchain: the `erl` that
+`userland/otp/tools/env.sh` puts on the path must be of the OTP release `otp` (its
+`releases/<major>/OTP_VERSION`), and `elixir --version` must say `elixir`. A missing or other
+toolchain fails the case even with `--allow-skip`, and no `must_fail` waits for it: an oracle that
+does not run catches nothing, and the dev image carries both.
 
 ## Checked builds
 
@@ -631,7 +652,7 @@ shell, a login context or a container.
 
 ## Self-checks
 
-<details><summary>Status: built · tested (12)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - bench:bench-attack-forgery
 - bench:bench-console-after-expect
@@ -645,6 +666,7 @@ shell, a login context or a container.
 - bench:bench-net-self-unrefused
 - bench:bench-cbo-self-unrefused
 - bench:bench-qemu-early-exit
+- bench:bench-elixir-oracles-broken-guard
 
 </details>
 
@@ -657,13 +679,17 @@ must_fail = '^regex$'        # passes only if the run fails with a matching reas
 ```
 
 `must_fail` is judged against the run's verdict only (console, sessions, devices); a build error or
-the bench's own trouble is a failure regardless. Each case writes its pattern anchored and quoting
-the evidence, so it cannot pass by failing for some other reason; the bench does not enforce the
-anchoring, so a reviewer checks it. An attack case can have a self-check of its own:
-`bench-net-self-unrefused` runs `net-attacks`'s boot with `ipd` not told one of the box's addresses,
-and must fail on the SYN the capture then shows. `bench-cbo-self-unrefused` runs
-`cbo-user-fault`'s boot with a kernel that leaves `senvcfg` permissive: all four cache-block
-operations must be seen running, and the run must fail on the verdict line that never comes.
+the bench's own trouble is a failure regardless, and so is an `elixir` case's toolchain. Each case
+writes its pattern anchored and quoting the evidence, so it cannot pass by failing for some other
+reason; the bench does not enforce the anchoring, so a reviewer checks it. An attack case can have
+a self-check of its own: `bench-net-self-unrefused` runs `net-attacks`'s boot with `ipd` not told
+one of the box's addresses, and must fail on the SYN the capture then shows.
+`bench-cbo-self-unrefused` runs `cbo-user-fault`'s boot with a kernel that leaves `senvcfg`
+permissive: all four cache-block operations must be seen running, and the run must fail on the
+verdict line that never comes.
+`bench-elixir-oracles-broken-guard` runs the steward core's reference with its `not_locked` guard
+held always, and must fail on the first event where its output leaves the core's
+([the trace encoding](servers/steward.md#the-trace-encoding)).
 
 ## The unsafe budget
 

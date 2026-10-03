@@ -189,7 +189,7 @@ drift check holds the serving library, the client library and this page to it.
 
 ### Wire tables and the generator
 
-<details><summary>Status: built · partly tested: the generated Elixir codec is checked against the Rust one by `libs/wire/elixir/run-vectors`, which no bench case runs · tested (12)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - host:redoubt-wire-gen::generated_files_are_current
 - host:redoubt-wire-gen::parses_tables
@@ -203,6 +203,7 @@ drift check holds the serving library, the client library and this page to it.
 - host:redoubt-wire::layouts_are_the_tables
 - host:redoubt-wire::replies_and_error_codes_decode_through_the_trait
 - bench:wire-host-tests
+- bench:elixir-oracles
 
 </details>
 
@@ -439,8 +440,6 @@ answers the call with the malformed reply ([replies and rollback](serving.md#rep
 
 - **Handle kinds are not checked on receipt.** A server that keeps a received handle without
   using it keeps a handle of whatever kind was sent, until it first uses it.
-- **The Elixir codec's differential run is outside the bench.** `libs/wire/elixir/run-vectors`
-  needs the BEAM and a beamlet checkout; a change that breaks the Elixir codec passes the bench.
 - **JSON costs 32 times its input in heap.** A caller parsing the largest file needs 2 MiB free;
   one that cannot spare it must refuse the file before parsing.
 - **The fuzz targets run outside the bench.** No bench case runs the wire codecs' fuzz targets;

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Runs the steward core's traces through the Elixir reference on beamlet and checks its output
+# against the Rust core's, byte for byte (servers/steward.md, "Two embedders and a reference"): the
+# hand-written traces (libs/steward/trace/traces/*.trace) and the ones the model records afresh
+# from its steward families. `steward-trace check` names the first divergence of each trace, and
+# fails on any, on a trace the reference did not finish, and on a table row the hand-written traces
+# leave untaken.
+#
+#   libs/steward/elixir/run-traces [--break GUARD]
+#
+# --break GUARD makes the reference hold GUARD always: the negative run, which must fail.
+# BEAMLET is a prebuilt beamlet binary (default: built from userland/otp with the all-Rust regex
+# engine, the one that runs on Redoubt).
+set -euo pipefail
+steward="$(cd "$(dirname "$0")/.." && pwd)"
+repo="$(cd "$steward/../.." && pwd)"
+broken=""
+case "$*" in
+    "") ;;
+    "--break "*) broken="$2" ;;
+    *) echo "usage: run-traces [--break GUARD]" >&2; exit 2 ;;
+esac
+. "$repo/userland/otp/tools/oracle.sh"
+
+out="$(mktemp -d)"
+trap 'rm -rf -- "$out"' EXIT
+mkdir -p "$out/ebin" "$out/traces"
+elixirc --ignore-module-conflict -o "$out/ebin" "$steward"/elixir/*.ex "$steward"/elixir/gen/*.ex > /dev/null
+cp "$steward"/trace/traces/*.trace "$out/traces/"
+cargo run --quiet --locked --manifest-path "$repo/Cargo.toml" -p redoubt-model --example steward-traces -- "$out/traces"
+if [ -n "$broken" ]; then echo "$broken" > "$out/traces/break"; fi
+on_beamlet "$out/traces" "$out/ebin" Elixir.Redoubt.Steward.Trace > "$out/beamlet.txt"
+cargo run --quiet --locked --manifest-path "$repo/Cargo.toml" -p redoubt-steward-trace -- check "$out/beamlet.txt" "$out/traces"

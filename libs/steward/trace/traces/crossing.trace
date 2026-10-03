@@ -1,0 +1,63 @@
+# Crossings (R42): declassifications and pushes, each kind's read, copy out and write, done and
+# failed, an item too big or not printable, answers while the snapshot is read, and a session's
+# end while it is.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+# An unlabelled session (badge 102), a vault session (202), an approval channel.
+event now=1 random=[101,102] reply=1 Login principal="alice" labels=[] key=11
+event now=1 Done object=session@1/#101 ok=[budget(901),scope,connection,process(71)]
+event now=1 random=[201,202] reply=2 Login principal="alice" labels=[7] key=11
+event now=1 Done object=session@1/7#201 ok=[budget(902),scope,connection,process(72)]
+event now=2 reply=3 ApprovalOpened channel=50 principal="alice" key=21
+# Refused: a push to no label set, a declassification of an unlabelled item.
+event now=3 random=[999] reply=4 Submit badge=102 push=[] source=3 item=9 reason="r"
+event now=3 random=[999] reply=5 Submit badge=102 declassify=[] item=9 reason="r"
+# A declassification: its read through a reader budget; while the snapshot is read the request
+# is not shown and not answered.
+event now=4 random=[1001,1101] reply=6 Submit badge=202 declassify=[7] item=5 reason="share it"
+event now=5 reply=7 Pending channel=50
+event now=5 reply=8 Approve channel=50 request=1001 hash=shown
+event now=5 reply=9 Deny channel=50 request=1001
+event now=6 Done object=crossing@1/7#1101 ok=[budget(950),bytes("the item\nline two"),done]
+event now=7 reply=10 Pending channel=50
+event now=8 random=[1201] reply=11 Approve channel=50 request=1001 hash=shown
+event now=9 Done object=crossing@1/7#1201 ok=[done]
+# Too big, and not printable: dropped with the reason.
+event now=10 random=[1002,1102] reply=12 Submit badge=202 declassify=[7] item=6 reason="r"
+event now=11 Done object=crossing@1/7#1102 ok=[budget(951),bytes("01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"),done]
+event now=12 random=[1003,1103] reply=13 Submit badge=202 declassify=[7] item=7 reason="r"
+event now=13 Done object=crossing@1/7#1103 ok=[budget(952),bytes("bad\x01"),done]
+# The read fails: the request is refused, and the reader budget is destroyed.
+event now=14 random=[1004,1104] reply=14 Submit badge=202 declassify=[7] item=8 reason="r"
+event now=15 Done object=crossing@1/7#1104 failed=1,7
+event now=16 Done object=crossing@1/7#1104 ok=[done]
+# The copy out fails.
+event now=17 random=[1005,1105] reply=15 Submit badge=202 declassify=[7] item=9 reason="r"
+event now=18 Done object=crossing@1/7#1105 ok=[budget(953),bytes("ok"),done]
+event now=19 reply=16 Pending channel=50
+event now=20 random=[1205] reply=17 Approve channel=50 request=1005 hash=shown
+event now=21 Done object=crossing@1/7#1205 failed=0,2
+# A push: the steward reads the unlabelled source, and on approval writes it through a writer
+# budget with the target's labels.
+event now=22 random=[2001] reply=18 Submit badge=102 push=[7] source=3 item=9 reason="push it"
+event now=23 Done object=request@1/#2001 ok=[bytes("payload")]
+event now=24 reply=19 Pending channel=50
+event now=25 random=[2101] reply=20 Approve channel=50 request=2001 hash=shown
+event now=26 Done object=crossing@1/7#2101 ok=[budget(960),done,done]
+# The source cannot be read.
+event now=27 random=[2002] reply=21 Submit badge=102 push=[7] source=4 item=9 reason="r"
+event now=28 Done object=request@1/#2002 failed=0,4
+# The write fails, and so does the writer budget's destroy.
+event now=29 random=[2003] reply=22 Submit badge=102 push=[7] source=5 item=9 reason="r"
+event now=30 Done object=request@1/#2003 ok=[bytes("")]
+event now=31 reply=23 Pending channel=50
+event now=32 random=[2103] reply=24 Approve channel=50 request=2003 hash=shown
+event now=33 Done object=crossing@1/7#2103 failed=1,6
+event now=34 Done object=crossing@1/7#2103 failed=0,1
+# The vault session ends while a snapshot is read: the request goes, and the read's outcome,
+# arriving after, finds no request.
+event now=35 random=[1006,1106] reply=25 Submit badge=202 declassify=[7] item=10 reason="r"
+event now=36 reply=26 EndSession badge=202
+event now=37 Done object=crossing@1/7#1106 ok=[budget(954),bytes("late"),done]
+event now=38 Done object=session@1/7#201 ok=[done]

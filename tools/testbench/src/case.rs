@@ -48,6 +48,23 @@ pub enum Kind {
     /// SSH sessions against a server run on the host: Redoubt's `sshd` on its host platform, or
     /// OpenSSH's for the reference case. Not a boot.
     SshLoopback(SshLoopback),
+    /// Scripts running Elixir oracles on beamlet, each judged by its exit status, after a check
+    /// that the pinned OTP and Elixir are the ones on the path (`elixir.rs`). Not a boot.
+    Elixir(Elixir),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Elixir {
+    /// The OTP release `erl` must be (its `releases/<major>/OTP_VERSION`).
+    pub otp: String,
+    /// The version `elixir --version` must say.
+    pub elixir: String,
+    /// Scripts, relative to the workspace root, each with its arguments after it, run in order
+    /// from the workspace root. Each must exit 0.
+    pub scripts: Vec<String>,
+    /// See `Boot::must_fail`. A toolchain that is not the pinned one is never what it waits for.
+    pub must_fail: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

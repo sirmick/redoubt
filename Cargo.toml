@@ -17,6 +17,7 @@ members = [
   "libs/stride",
   "libs/steward",
   "libs/steward/gen",
+  "libs/steward/trace",
   "libs/sys",
   "libs/littlefs",
   "libs/wire",

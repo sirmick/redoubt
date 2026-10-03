@@ -1,0 +1,21 @@
+# Approval channels (R35, R38): opened only with one of its principal's approval keys, never a
+# login key, another's approval key or one keyd holds; opened once; closed.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
+keyd [31]
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+event now=1 reply=1 ApprovalOpened channel=50 principal="alice" key=11
+event now=1 reply=2 ApprovalOpened channel=50 principal="alice" key=22
+event now=1 reply=3 ApprovalOpened channel=50 principal="alice" key=31
+event now=1 reply=4 ApprovalOpened channel=50 principal="carol" key=21
+event now=2 reply=5 ApprovalOpened channel=50 principal="alice" key=21
+event now=3 reply=6 ApprovalOpened channel=50 principal="alice" key=21
+event now=3 reply=7 ApprovalOpened channel=50 principal="bob" key=22
+# An id that names a session is not a fresh channel.
+event now=3 random=[101,102] reply=1 Login principal="alice" labels=[] key=11
+event now=3 Done object=session@1/#101 ok=[budget(901),scope,connection,process(71)]
+event now=4 reply=8 ApprovalOpened channel=101 principal="bob" key=22
+event now=5 reply=9 ApprovalClosed channel=50
+event now=5 reply=10 ApprovalClosed channel=50
+event now=6 reply=11 ApprovalOpened channel=50 principal="bob" key=22

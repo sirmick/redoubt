@@ -1,0 +1,64 @@
+# Crash blame and lockout (R40), per domain: the third blame within ten minutes locks a domain
+# out, ending its sessions and leases in every state; nothing new starts in it, no grant starts a
+# lease in it, and a login after the window opens it again.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+# The vault: an unlabelled session (badge 102) asks for two agents in it, both rendered.
+event now=1 random=[101,102] reply=1 Login principal="alice" labels=[] key=11
+event now=1 Done object=session@1/#101 ok=[budget(901),scope,connection,process(71)]
+event now=1 reply=2 ApprovalOpened channel=50 principal="alice" key=21
+event now=2 random=[501] reply=3 Submit badge=102 agent=[7] lease=1000000 reason="a"
+event now=2 random=[502] reply=4 Submit badge=102 agent=[7] lease=1000000 reason="b"
+event now=3 reply=5 Pending channel=50
+# One is approved, and its lease is starting when the vault is locked out: it stays starting,
+# then is refused its start.
+event now=4 random=[601,602] reply=6 Approve channel=50 request=502 hash=shown
+event now=10 Blame account=1 labels=[7]
+event now=11 Blame account=1 labels=[7]
+event now=12 Blame account=1 labels=[7]
+event now=13 Done object=lease@1/7#601 ok=[budget(902),scope,connection,process(72)]
+event now=13 Done object=lease@1/7#601 ok=[done]
+# No grant starts a lease in a locked domain.
+event now=14 reply=7 Approve channel=50 request=501 hash=shown
+# Blamed while locked: once, then the third in the window locks it out again.
+event now=15 Blame account=1 labels=[7]
+event now=16 Blame account=1 labels=[7]
+event now=17 Blame account=1 labels=[7]
+# A login while locked is refused; one after the window opens the domain.
+event now=18 random=[701,702] reply=8 Login principal="alice" labels=[7] key=11
+event now=600000018 random=[701,702] reply=9 Login principal="alice" labels=[7] key=11
+event now=600000019 Done object=session@1/7#701 ok=[budget(903),scope,connection,process(73)]
+
+# The unlabelled domain, its sessions and leases in every state when it is locked out: a session
+# running (101), one starting (111), one ending (121); a lease starting (301), one ending (401).
+event now=700000000 random=[111,112] reply=10 Login principal="alice" labels=[] key=11
+event now=700000000 random=[121,122] reply=11 Login principal="alice" labels=[] key=11
+event now=700000000 Done object=session@1/#121 ok=[budget(904),scope,connection,process(74)]
+event now=700000000 reply=12 EndSession badge=122
+event now=700000000 random=[301,302] reply=13 StartAgent badge=102 lease=1000000
+event now=700000000 random=[401,402] reply=14 StartAgent badge=102 lease=1000000
+event now=700000000 Done object=lease@1/#401 ok=[budget(905),scope,connection,process(75)]
+event now=700000000 reply=15 EndLease badge=102 lease=401
+event now=700000001 Blame account=1 labels=[]
+event now=700000002 Blame account=1 labels=[]
+event now=700000003 Blame account=1 labels=[]
+# Their batches' outcomes: the starting session and lease are refused, the ending ones end.
+event now=700000004 Done object=session@1/#111 ok=[budget(906),scope,connection,process(76)]
+event now=700000004 Done object=lease@1/#301 ok=[budget(907),scope,connection,process(77)]
+event now=700000004 Done object=session@1/#101 ok=[done]
+event now=700000004 Done object=session@1/#111 ok=[done]
+event now=700000004 Done object=session@1/#121 ok=[done]
+event now=700000004 Done object=lease@1/#301 ok=[done]
+event now=700000004 Done object=lease@1/#401 ok=[done]
+# A crash blamed on no domain of the manifest blames nobody.
+event now=700000005 Blame account=1 labels=[8]
+event now=700000005 Blame account=3 labels=[]
+
+# StartAgent in a locked domain: a lockout ends every session and lease of the domain and none
+# starts until the window passes, so no caller is routed there while it is locked. Only time
+# going back, which the embedder's guarantee excludes and the core does not check, reaches the
+# row: a session starts after the window, then asks at an earlier time.
+event now=1300000004 random=[131,132] reply=16 Login principal="alice" labels=[] key=11
+event now=1300000004 Done object=session@1/#131 ok=[budget(908),scope,connection,process(78)]
+event now=700000006 random=[801,802] reply=17 StartAgent badge=132 lease=1000000

@@ -22,7 +22,7 @@ standing labelled reader.
 
 ### The policy core
 
-<details><summary>Status: built · tested (42)</summary>
+<details><summary>Status: built · tested (49)</summary>
 
 - host:redoubt-steward::a_manifest_with_a_key_in_two_roles_is_refused
 - host:redoubt-steward::boot_carves_a_fixed_sub_budget_per_label_set
@@ -66,6 +66,13 @@ standing labelled reader.
 - host:redoubt-steward-gen::generated_files_are_current
 - host:redoubt-model::steward_policy
 - host:redoubt-model::steward_noninterference
+- host:redoubt-steward-trace::equal_outputs_pass
+- host:redoubt-steward-trace::a_changed_output_line_is_caught
+- host:redoubt-steward-trace::the_reference_output_splits_into_traces_and_rows
+- host:redoubt-steward-trace::a_written_trace_reads_back
+- host:redoubt-steward-trace::strings_round_trip
+- bench:elixir-oracles
+- bench:bench-elixir-oracles-broken-guard
 
 </details>
 
@@ -230,6 +237,12 @@ Each rule has one keeper, and its mutation breaks that keeper: a second check of
 would hide the mutation. So the approval edge's `reaches`, a function of the policy table, keeps
 R38's screens to their owners, and no guard repeats it.
 
+`not_locked` guards every start in a domain, and its keeper is the login. A session's `StartAgent`
+in a locked domain is reached only if time goes back: a lockout ends every session of the domain,
+and none starts there again until the window has passed. The row stays, because the core takes
+`now` from its embedder and does not assume that it only goes forward. It is the same guard, not a
+second keeper, so it hides no mutation.
+
 Five of the model's mutations break a rule the types or the keepers now keep, and they cannot be
 written. Blame or a pending cap counted per account (`PolicyBlamePerAccount`,
 `PolicyCapPerAccount`) and a session carved from another label set's sub-budget
@@ -257,12 +270,59 @@ signs nothing, so the steward still holds no key.
   policy, so the property families (P1 to P16) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
   inspection API that the server does not use.
-- **The Elixir reference** (planned, its clause skeletons generated from the same tables),
-  `decide/2` as multi-clause functions over a `defstruct` state, runs on beamlet on the build host
-  in the bench's host tests, as a differential oracle. The same event traces must give equal
-  states, effects and audit records. It is a test oracle in the
-  sense [tenet 3](../TENETS.md#3-rust-and-assembly-only-where-rust-cannot-reach) allows on the
-  build host. It is never authoritative and never runs on the box.
+- **The Elixir reference** (`libs/steward/elixir/`, its clause skeletons generated from the same
+  tables into `gen/`), `decide/2` as multi-clause functions over a `defstruct` state, runs on
+  beamlet on the build host as a differential oracle, in the bench's `elixir-oracles` case
+  ([the test bench](../testbench.md#elixir-oracles)). The same event traces must give equal
+  states, effects and audit records. Its guards, effects, rendering and binding hash (SHA-256
+  through `:crypto`) are written by hand from this page and the tables; they follow the core's
+  in order and shape, so the two are not independent readings
+  ([residual risks](#residual-risks)). It is a test oracle in the sense
+  [tenet 3](../TENETS.md#3-rust-and-assembly-only-where-rust-cannot-reach)
+  allows on the build host. It is never authoritative and never runs on the box.
+
+#### The trace encoding
+
+A trace is a text file, `libs/steward/trace/traces/*.trace`, and the crate
+`redoubt-steward-trace` (host-only, outside the shipped core) reads it, runs it through the core
+and checks the reference's output against the core's. Its input is the boot manifest, then one
+event per line:
+- `principal "NAME" account=N login=[..] approval=[..] owned=[..] sets=[[..],..] top=P,N,W`,
+  `keyd [..]`, `servers N` and `sizes session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N`
+  give the manifest; `#` starts a comment.
+- `event now=N random=[..] reply=N Kind field=value...` is one event: its time, at most the core's
+  count of random words (the rest zero), the reply slot, and the event with its fields by name. An
+  object is `kind@account/labels#id` (`session@1/7#101`). A string is quoted, with the escapes
+  `\"`, `\\`, `\n` and `\xNN`. A `Done` carries `ok=[..]`, what each step made in order
+  (`budget(N)`, `scope`, `connection`, `process(N)`, `bytes("..")` or `done`), or
+  `failed=STEP,ERROR`.
+- `hash=shown` in an `Approve` stands for the hash the last screen of that request showed, as an
+  approver copies it, so a hand-written trace names no SHA-256. Both sides substitute it alike.
+
+The output is `boot`, then what boot fixed and carved, once (`principal`, `fixed`, `carve`,
+`carve-sub` lines; what is fixed never changes, so it is not repeated). Then for each event,
+`event N` and its effects in order: replies, notices, screens, audit records and forgets as
+`reply`, `notice`, `screen`, `audit` and `forget` lines, then each batch as `batch OBJECT` and its
+`step` lines, and `exit` if the event makes the steward exit. Then `store` and the store read
+through `inspect`: each domain in the manifest's order with its objects by id, the routing index
+(`route`, `id`), the approval channels, and `exited`. Each side writes its output, and the two are
+compared byte for byte, so a map is written in key order on both.
+
+The reference also writes `row MACHINE LINE` for each row it takes, the row's line in its table,
+which is not compared: coverage is the reference's claim, and the core has no row hook to
+confirm it ([residual risks](#residual-risks)). A trace's output
+follows a line `trace NAME`, and the run ends with `done`, so a run cut short is refused.
+`steward-trace check` fails on a trace whose outputs differ, naming its first differing event, the
+event's input line, the first differing line from each side (the core's, then the reference's)
+and the rest of that event's output from both, and goes on to the next trace. It also fails on a
+trace with no events, a trace the reference did not run and a row the hand-written traces leave
+untaken.
+
+The model writes the events its steward families drive (`steward_policy` at seeds 1 to 4,
+`steward_noninterference` at seed 1) as `model-*.trace`, afresh on each run, so they never drift
+from the model; `check` lists the rows they never reach. `libs/steward/elixir/run-traces` runs
+both sets; `--break GUARD` holds one of the reference's guards always, the negative run, which
+`bench-elixir-oracles-broken-guard` requires to fail.
 
 ### Principals
 
@@ -821,6 +881,13 @@ Status: planned · M1 (separation and containment)
   reordered wholesale is not detected.
 - **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's
   one named exception and see several label sets; a bug in either reaches all of them.
+- **The reference shares the core's reading.** Its guards and effects were written by hand from
+  the page and the tables, but follow the core's in order and shape. A misreading of the page
+  shared by the core and the reference passes both; the broken-guard run shows that the harness
+  catches a difference, not that the two readings are independent.
+- **Row coverage is the reference's claim.** The core takes rows with no hook to report them, so
+  a row counts as taken when the reference says it took it. Two rows whose effects and next state
+  give identical output could not be told apart.
 - **The model checks the core, not the embedder.** The model runs the core that ships, but
   with its own embedder. It leaves out SSH, the approval terminal and real randomness, and the
   server's embedder (transport, admission, running batches) is shown only by the server's own

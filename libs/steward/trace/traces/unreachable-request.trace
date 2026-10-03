@@ -1,0 +1,10 @@
+# A frozen request has no batch: a batch outcome for it is excluded.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
+keyd [31]
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+event now=1 random=[101,102] reply=1 Login principal="alice" labels=[] key=11
+event now=1 Done object=session@1/#101 ok=[budget(901),scope,connection,process(71)]
+event now=2 random=[501] reply=2 Submit badge=102 note="n" reason="r"
+event now=3 Done object=request@1/#501 ok=[]

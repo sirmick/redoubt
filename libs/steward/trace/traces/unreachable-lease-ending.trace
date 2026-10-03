@@ -1,0 +1,12 @@
+# An ending lease's process exiting: the guarantee excludes it.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
+keyd [31]
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+event now=1 random=[101,102] reply=1 Login principal="alice" labels=[] key=11
+event now=1 Done object=session@1/#101 ok=[budget(901),scope,connection,process(71)]
+event now=2 random=[301,302] reply=2 StartAgent badge=102 lease=1000000
+event now=3 Done object=lease@1/#301 ok=[budget(902),scope,connection,process(72)]
+event now=4 reply=3 EndLease badge=102 lease=301
+event now=5 Exited object=lease@1/#301
