@@ -20,6 +20,7 @@ mod size;
 mod ssh;
 mod target;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
@@ -364,6 +365,25 @@ fn compare_boots(boot: &case::Boot, first: &[Option<String>], second: &[Option<S
     Outcome::Pass
 }
 
+/// Check that every `distinct` pattern matched at least two lines of a boot's console `log`,
+/// and that no two of its captures are the same.
+fn distinct_within(patterns: &[String], log: &str) -> Result<(), String> {
+    for pattern in patterns {
+        let re = regex::Regex::new(pattern).map_err(|e| format!("/{pattern}/: {e}"))?;
+        let mut seen = HashSet::new();
+        for captures in log.lines().filter_map(|line| re.captures(line)) {
+            let got = captures.get(1).map_or("", |m| m.as_str());
+            if !seen.insert(got) {
+                return Err(format!("/{pattern}/ captured {got:?} twice"));
+            }
+        }
+        if seen.len() < 2 {
+            return Err(format!("/{pattern}/ matched {} line(s), not two", seen.len()));
+        }
+    }
+    Ok(())
+}
+
 /// Run one case on one target. A boot case yields one result per `smp` entry. `missing` turns
 /// something the host lacks into a failure or, with --allow-skip, a skip.
 fn run_case(
@@ -479,6 +499,16 @@ fn run_case(
                 }
             }
         };
+        let outcome = match outcome {
+            Outcome::Pass if !boot.distinct.is_empty() => {
+                let text = std::fs::read(&log).with_context(|| format!("reading {}", log.display()))?;
+                match distinct_within(&boot.distinct, &String::from_utf8_lossy(&text)) {
+                    Ok(()) => Outcome::Pass,
+                    Err(why) => Outcome::Fail(why),
+                }
+            }
+            other => other,
+        };
         // Cases without a `post_check` or peers are judged exactly as before.
         let peers = boot.net.as_ref().is_some_and(|net| !net.peer.is_empty());
         let outcome = match outcome {
@@ -584,4 +614,23 @@ fn ssh_loopback(workspace: &Path, case: &Case, loopback: &case::SshLoopback, log
         None => Outcome::Pass,
         Some(why) => Outcome::Fail(why),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `distinct` pattern passes only on two or more captures, all different.
+    #[test]
+    fn distinct_captures_differ_within_a_boot() {
+        let pattern = ["^init: (?:started|restarted) b, console ([0-9a-f]+)$".to_string()];
+        let log = |lines: &[&str]| lines.join("\n");
+        let two = log(&["init: started b, console 1a", "x", "init: restarted b, console 2b"]);
+        assert_eq!(distinct_within(&pattern, &two), Ok(()));
+        let same = log(&["init: started b, console 1a", "init: restarted b, console 1a"]);
+        assert!(distinct_within(&pattern, &same).unwrap_err().contains("twice"));
+        let one = log(&["init: started b, console 1a"]);
+        assert!(distinct_within(&pattern, &one).unwrap_err().contains("not two"));
+        assert!(distinct_within(&pattern, "").is_err());
+    }
 }

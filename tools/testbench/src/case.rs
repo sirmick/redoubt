@@ -267,6 +267,11 @@ pub struct Boot {
     /// each captures must differ between the two boots (for randomness, ASLR, ...).
     #[serde(default)]
     pub distinct_across_boots: Vec<String>,
+    /// Regular expressions with one capture group. Each must match at least two console lines
+    /// of the boot, and no two of what it captures may be the same (a restarted program's new
+    /// console, ...).
+    #[serde(default)]
+    pub distinct: Vec<String>,
     /// Console input to inject.
     #[serde(default)]
     pub input: Vec<Input>,
@@ -644,6 +649,10 @@ impl Case {
                 for pattern in &boot.distinct_across_boots {
                     let groups = regex::Regex::new(pattern)?.captures_len();
                     ensure!(groups >= 2, "distinct_across_boots /{pattern}/ needs a capture group");
+                }
+                for pattern in &boot.distinct {
+                    let groups = regex::Regex::new(pattern)?.captures_len();
+                    ensure!(groups >= 2, "distinct /{pattern}/ needs a capture group");
                 }
                 if !boot.session.is_empty() {
                     ensure!(
