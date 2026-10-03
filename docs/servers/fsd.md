@@ -107,7 +107,7 @@ root with quota 0 cannot create a file.
 
 ### littlefs
 
-<details><summary>Status: built · tested (12)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - fuzz:littlefs/image
 - fuzz:littlefs/mutate
@@ -121,6 +121,9 @@ root with quota 0 cannot create a file.
 - host:littlefs::bad_arguments
 - host:littlefs::path_and_handle_rules
 - host:littlefs::a_failed_write_commits_nothing
+- host:littlefs::a_create_with_attributes_is_never_seen_without_them
+- host:littlefs::a_create_refuses_attributes_set_attr_would
+- host:littlefs::a_directory_read_carries_attributes_and_pairs
 
 </details>
 
@@ -131,7 +134,9 @@ Nothing C runs on the target.
 
 - **`Filesystem`** formats and mounts a volume and provides every operation `fsd` needs: files
   (open, read, write, seek, truncate, sync, close), directories (mkdir, remove, rename, read),
-  stat, user attributes on files and directories, and a volume check.
+  stat, user attributes on files and directories, which a create can write in its own commit
+  and a directory read passes along, directory reads by a directory's pair as well as by path,
+  and a volume check.
 - **Paths** are `/`-separated names relative to the root; `.` and `..` are refused. Names read back
   from the medium are opaque bytes that need not be UTF-8 or nameable by a path (the volume check
   reports those), so `fsd` never joins one into a path it then resolves.

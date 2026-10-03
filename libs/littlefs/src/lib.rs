@@ -98,6 +98,8 @@ mod tag;
 #[cfg(test)]
 mod tests;
 
+use alloc::vec::Vec;
+
 pub use file::{FileHandle, OpenOptions};
 pub use fs::Filesystem;
 
@@ -209,4 +211,29 @@ pub struct Metadata {
 pub struct DirEntry<'a> {
     pub name: &'a [u8],
     pub meta: Metadata,
+    attrs: &'a [(u8, Vec<u8>)],
+    dir: Option<DirRef>,
+}
+
+/// A directory by its first metadata pair, as the medium names it: what
+/// [`Filesystem::read_dir_at`] reads, so a walk of the whole volume need not resolve paths.
+/// Two that share a block name the same storage, which in a sound volume only one directory
+/// owns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirRef(pub(crate) [u32; 2]);
+
+impl DirRef {
+    /// The pair's two blocks.
+    pub fn blocks(&self) -> [u32; 2] { self.0 }
+}
+
+impl DirEntry<'_> {
+    /// For a directory, its first pair.
+    pub fn dir(&self) -> Option<DirRef> { self.dir }
+
+    /// The entry's user attribute `typ`, as [`Filesystem::get_attr`] would read it, without
+    /// looking the entry up again by path.
+    pub fn attr(&self, typ: u8) -> Option<&[u8]> {
+        self.attrs.iter().find(|a| a.0 == typ).map(|a| a.1.as_slice())
+    }
 }

@@ -129,15 +129,27 @@ impl<D: BlockDevice> Filesystem<D> {
     }
 
     pub fn open(&mut self, path: &str, o: OpenOptions) -> Result<FileHandle, Error> {
+        self.open_with_attrs(path, o, &[])
+    }
+
+    /// [`Filesystem::open`], and if the open creates the file, its user attributes `attrs`
+    /// (type, value) are written in the commit that creates it: no state of the medium has the
+    /// file without them. An open that finds the file writes none of them.
+    pub fn open_with_attrs(
+        &mut self,
+        path: &str,
+        o: OpenOptions,
+        attrs: &[(u8, &[u8])],
+    ) -> Result<FileHandle, Error> {
         let needs_write = o.create || o.create_new || o.truncate;
         if !o.write && (!o.read || needs_write) {
             return Err(Error::Invalid);
         }
         let mut f = if o.write {
-            self.mutate(|fs| fs.open_file(path, o))?
+            self.mutate(|fs| fs.open_file(path, o, attrs))?
         } else {
             self.check_poison()?;
-            self.open_file(path, o)?
+            self.open_file(path, o, &[])?
         };
         let slot = match self.files.iter().position(Option::is_none) {
             Some(i) => i,
@@ -152,7 +164,7 @@ impl<D: BlockDevice> Filesystem<D> {
         Ok(FileHandle { slot: slot as u32, generation: self.file_generation })
     }
 
-    fn open_file(&mut self, path: &str, o: OpenOptions) -> Result<OpenFile, Error> {
+    fn open_file(&mut self, path: &str, o: OpenOptions, attrs: &[(u8, &[u8])]) -> Result<OpenFile, Error> {
         let (lookup, name) = self.lookup(path)?;
         let (loc, content, dirty) = match lookup {
             Lookup::Root => return Err(Error::IsDir),
@@ -164,14 +176,13 @@ impl<D: BlockDevice> Filesystem<D> {
                     return Err(Error::NotDir);
                 }
                 self.check_name(name)?;
-                self.commit(
-                    dir.pair,
-                    &[
-                        attr_create(id),
-                        attr_name(TYPE_REG, id, name)?,
-                        attr_struct(TYPE_INLINESTRUCT, id, &[])?,
-                    ],
-                )?;
+                let mut creating = vec![
+                    attr_create(id),
+                    attr_name(TYPE_REG, id, name)?,
+                    attr_struct(TYPE_INLINESTRUCT, id, &[])?,
+                ];
+                self.user_attrs(id, attrs, &mut creating)?;
+                self.commit(dir.pair, &creating)?;
                 // The commit may have split the pair; look again rather than predict.
                 let (Lookup::Found { dir, id }, _) = self.lookup(path)? else { return Err(Error::Corrupt) };
                 (Loc { pair: dir.pair, id }, Content::Inline(Vec::new()), false)

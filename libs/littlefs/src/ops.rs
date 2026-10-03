@@ -9,7 +9,7 @@ use core::cmp::Ordering;
 use crate::fs::*;
 use crate::mdir::*;
 use crate::tag::{self, *};
-use crate::{BlockDevice, DirEntry, Error, FileType, Filesystem, Health, Metadata};
+use crate::{BlockDevice, DirEntry, DirRef, Error, FileType, Filesystem, Health, Metadata};
 
 /// Where a path leads.
 pub(crate) enum Lookup {
@@ -165,25 +165,56 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Names are the medium's bytes, unchecked: a hostile image can hold names no path can
     /// name (empty, `.`, `..`, containing `/` or NUL; [`Filesystem::check`] reports them).
     /// Treat them as opaque: never join one into a path that is then resolved.
-    pub fn read_dir(&mut self, path: &str, mut f: impl FnMut(&DirEntry)) -> Result<(), Error> {
+    pub fn read_dir(&mut self, path: &str, f: impl FnMut(&DirEntry)) -> Result<(), Error> {
         self.check_poison()?;
-        let mut pair = self.dir_head(path)?;
+        let pair = self.dir_head(path)?;
+        self.read_pairs(pair, f).map(|_| ())
+    }
+
+    /// The root directory, for [`Filesystem::read_dir_at`].
+    pub fn root_dir(&self) -> DirRef { DirRef(self.root) }
+
+    /// [`Filesystem::read_dir`] of the directory whose first pair is `dir` (the root's, or one a
+    /// [`DirEntry::dir`] gave), with no path to resolve. Returns how many pairs it read, so a
+    /// caller walking a hostile volume can bound its whole walk by the volume's pairs.
+    pub fn read_dir_at(&mut self, dir: DirRef, f: impl FnMut(&DirEntry)) -> Result<u32, Error> {
+        self.check_poison()?;
+        if dir.0.iter().any(|b| *b >= self.block_count) {
+            return Err(Error::Corrupt);
+        }
+        self.read_pairs(dir.0, f)
+    }
+
+    fn read_pairs(&mut self, mut pair: Pair, mut f: impl FnMut(&DirEntry)) -> Result<u32, Error> {
         let mut walk = self.walk();
+        let mut pairs = 1;
         loop {
             let dir = self.fetch(pair)?;
             for (_, e) in self.visible(&dir) {
                 let m = self.metadata(e)?;
-                f(&DirEntry { name: &e.name, meta: m });
+                let child = match m.kind {
+                    FileType::Dir => match self.decode(e)? {
+                        Struct::Dir(p) => Some(DirRef(p)),
+                        _ => return Err(Error::Corrupt),
+                    },
+                    FileType::File => None,
+                };
+                f(&DirEntry { name: &e.name, meta: m, attrs: &e.attrs, dir: child });
             }
             if !dir.c.split {
-                return Ok(());
+                return Ok(pairs);
             }
             walk.step()?;
+            pairs += 1;
             pair = dir.c.tail;
         }
     }
 
-    pub fn mkdir(&mut self, path: &str) -> Result<(), Error> {
+    pub fn mkdir(&mut self, path: &str) -> Result<(), Error> { self.mkdir_with_attrs(path, &[]) }
+
+    /// [`Filesystem::mkdir`] with the directory's user attributes `attrs` (type, value) in the
+    /// commit that names it, so no state of the medium has the directory without them.
+    pub fn mkdir_with_attrs(&mut self, path: &str, attrs: &[(u8, &[u8])]) -> Result<(), Error> {
         self.mutate(|fs| {
             let (Lookup::Missing { dir, id }, name) = fs.lookup(path)? else { return Err(Error::Exists) };
             fs.check_name(name)?;
@@ -196,11 +227,12 @@ impl<D: BlockDevice> Filesystem<D> {
                 last = fs.fetch(last.c.tail)?;
             }
             let child = fs.new_pair(&Contents::new(last.c.tail, false))?;
-            let mut attrs = vec![
+            let mut creating = vec![
                 attr_create(id),
                 attr_name(TYPE_DIR, id, name)?,
                 attr_struct(TYPE_DIRSTRUCT, id, &pair_bytes(child))?,
             ];
+            fs.user_attrs(id, attrs, &mut creating)?;
             if dir.c.split {
                 // Linking and naming are two commits: until the second, the new directory is
                 // an orphan, and the orphan flag says so.
@@ -208,9 +240,9 @@ impl<D: BlockDevice> Filesystem<D> {
                 fs.commit(last.pair, &[attr_tail(false, child)])?;
                 fs.prep_orphans(-1);
             } else {
-                attrs.push(attr_tail(false, child));
+                creating.push(attr_tail(false, child));
             }
-            fs.commit(dir.pair, &attrs)
+            fs.commit(dir.pair, &creating)
         })
     }
 
@@ -363,6 +395,26 @@ impl<D: BlockDevice> Filesystem<D> {
             Lookup::Found { dir, id } => Ok((dir.pair, id)),
             Lookup::Missing { .. } => Err(Error::NoEntry),
         }
+    }
+
+    /// Appends user attributes `attrs` of entry `id` to a commit, each at most `attr_max` bytes and
+    /// no type twice.
+    pub(crate) fn user_attrs(
+        &self,
+        id: u16,
+        attrs: &[(u8, &[u8])],
+        out: &mut Vec<Attr>,
+    ) -> Result<(), Error> {
+        for (i, (typ, data)) in attrs.iter().enumerate() {
+            if data.len() as u32 > self.attr_max {
+                return Err(Error::NoSpace);
+            }
+            if attrs[..i].iter().any(|(t, _)| t == typ) {
+                return Err(Error::Invalid);
+            }
+            out.push(attr_struct(TYPE_USERATTR | *typ as u16, id, data)?);
+        }
+        Ok(())
     }
 
     /// Reads user attribute `typ` of a file or directory.

@@ -231,6 +231,157 @@ fn crash_during_repair() {
     }
 }
 
+/// The attributes a create-with-attributes gives `name`: one derived from the name, so a
+/// check can tell they belong to it, and one fixed.
+fn attrs_for(name: &str) -> [(u8, Vec<u8>); 2] { [(0, name.as_bytes().to_vec()), (7, b"seven".to_vec())] }
+
+/// Every entry under `dir` carries exactly the attributes it was created with.
+fn every_entry_has_its_attrs<D: BlockDevice>(fs: &mut Filesystem<D>, dir: &str, what: &str) -> usize {
+    let mut names = Vec::new();
+    fs.read_dir(dir, |e| names.push((String::from_utf8(e.name.to_vec()).unwrap(), e.meta.kind)))
+        .unwrap_or_else(|e| panic!("{what}: {dir} unreadable: {e:?}"));
+    let mut seen = 0;
+    for (name, kind) in names {
+        let path = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
+        for (typ, value) in attrs_for(&name) {
+            assert_eq!(fs.get_attr(&path, typ).ok(), Some(value), "{what}: {path} lacks attribute {typ}");
+        }
+        seen += 1;
+        if kind == littlefs::FileType::Dir {
+            seen += every_entry_has_its_attrs(fs, &path, what);
+        }
+    }
+    seen
+}
+
+/// The creates of files and directories, some in a directory long enough to split, each with
+/// its attributes.
+fn create_with_attrs<D: BlockDevice>(fs: &mut Filesystem<D>) -> Result<(), Error> {
+    let create = |fs: &mut Filesystem<D>, path: &str, dir: bool| {
+        let name = path.rsplit('/').next().unwrap();
+        let owned = attrs_for(name);
+        let attrs: Vec<(u8, &[u8])> = owned.iter().map(|(t, v)| (*t, v.as_slice())).collect();
+        if dir {
+            fs.mkdir_with_attrs(path, &attrs)
+        } else {
+            let new = littlefs::OpenOptions { write: true, create_new: true, ..Default::default() };
+            let h = fs.open_with_attrs(path, new, &attrs)?;
+            fs.close(h)
+        }
+    };
+    create(fs, "d", true)?;
+    for i in 0..24 {
+        create(fs, &format!("d/entry-with-a-longer-name-{i}"), i % 4 == 0)?;
+    }
+    create(fs, "f", false)?;
+    create(fs, "e", true)
+}
+
+/// A create with attributes writes them in its creating commit: power failing at any write
+/// leaves each entry absent or present with every attribute, never present without them (fsd
+/// relies on it: no entry is ever without its id).
+#[test]
+fn a_create_with_attributes_is_never_seen_without_them() {
+    for cfg in [
+        Config { block_size: 256, block_count: 128, prog_size: 16 },
+        Config { block_size: 4096, block_count: 32, prog_size: 512 },
+    ] {
+        let mut ram = Ram::new(cfg);
+        Filesystem::format(&mut ram, cfg).unwrap();
+        let formatted = ram.data.clone();
+        ram.writes = 0;
+        {
+            let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
+            create_with_attrs(&mut fs).unwrap();
+            assert_eq!(every_entry_has_its_attrs(&mut fs, "", "no crash"), 27);
+        }
+        let total = ram.writes;
+        for n in 1..=total {
+            let mut ram = Ram::from_image(cfg, formatted.clone()).failing_at(n, Tear::Prefix, n);
+            {
+                let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
+                assert!(create_with_attrs(&mut fs).is_err(), "write {n} of {total} failed but no create did");
+            }
+            let mut ram = Ram::from_image(cfg, ram.data);
+            let mut fs =
+                Filesystem::mount(&mut ram, cfg).unwrap_or_else(|e| panic!("crash at write {n}: {e:?}"));
+            every_entry_has_its_attrs(&mut fs, "", &format!("{cfg:?}: crash at write {n}"));
+            // The next write repairs what the crash left, and the attributes survive it.
+            fs.fsck().unwrap();
+            every_entry_has_its_attrs(&mut fs, "", &format!("{cfg:?}: crash at write {n}, repaired"));
+        }
+    }
+}
+
+/// A create's attributes are checked like `set_attr`'s, before anything is written.
+#[test]
+fn a_create_refuses_attributes_set_attr_would() {
+    let cfg = Config { block_size: 256, block_count: 64, prog_size: 16 };
+    let mut ram = Ram::new(cfg);
+    Filesystem::format(&mut ram, cfg).unwrap();
+    let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
+    let new = littlefs::OpenOptions { write: true, create_new: true, ..Default::default() };
+    assert_eq!(fs.open_with_attrs("big", new, &[(1, &[0; 1023])]).err(), Some(Error::NoSpace));
+    assert_eq!(fs.mkdir_with_attrs("twice", &[(1, b"a"), (1, b"b")]).err(), Some(Error::Invalid));
+    assert_eq!(fs.stat("big").err(), Some(Error::NoEntry));
+    assert_eq!(fs.stat("twice").err(), Some(Error::NoEntry));
+    // An open that finds the file writes none of them.
+    let h = fs.open_with_attrs("f", new, &[(1, b"first")]).unwrap();
+    fs.close(h).unwrap();
+    let again = littlefs::OpenOptions { write: true, create: true, ..Default::default() };
+    let h = fs.open_with_attrs("f", again, &[(1, b"second")]).unwrap();
+    fs.close(h).unwrap();
+    assert_eq!(fs.get_attr("f", 1).unwrap(), b"first");
+}
+
+/// A directory read carries each entry's attributes as `get_attr` reads them, changed or
+/// removed since included, and a directory's first pair, so a walk of the whole volume reads
+/// each directory by its pair (`read_dir_at`), not by a path resolved again from the root, and
+/// counts the pairs it read.
+#[test]
+fn a_directory_read_carries_attributes_and_pairs() {
+    let cfg = Config { block_size: 256, block_count: 64, prog_size: 16 };
+    let mut ram = Ram::new(cfg);
+    Filesystem::format(&mut ram, cfg).unwrap();
+    let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
+    fs.mkdir_with_attrs("d", &[(1, b"one"), (2, b"two")]).unwrap();
+    let new = littlefs::OpenOptions { write: true, create_new: true, ..Default::default() };
+    let h = fs.open_with_attrs("f", new, &[(1, b"file")]).unwrap();
+    fs.close(h).unwrap();
+    for i in 0..12 {
+        fs.mkdir(&format!("d/a-long-enough-name-to-split-{i}")).unwrap();
+    }
+    fs.set_attr("d", 1, b"changed").unwrap();
+    fs.remove_attr("d", 2).unwrap();
+    let mut seen = Vec::new();
+    let pairs = fs
+        .read_dir_at(fs.root_dir(), |e| {
+            seen.push((
+                e.name.to_vec(),
+                e.attr(1).map(<[u8]>::to_vec),
+                e.attr(2).map(<[u8]>::to_vec),
+                e.dir(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(pairs, 1);
+    seen.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(seen[0].0, b"d");
+    assert_eq!((seen[0].1.as_deref(), seen[0].2.as_deref()), (Some(&b"changed"[..]), None));
+    assert_eq!(
+        (seen[1].0.as_slice(), seen[1].1.as_deref(), seen[1].3),
+        (&b"f"[..], Some(&b"file"[..]), None)
+    );
+    let d = seen[0].3.expect("a directory has its pair");
+    let mut by_pair = Vec::new();
+    let pairs = fs.read_dir_at(d, |e| by_pair.push(e.name.to_vec())).unwrap();
+    let mut by_path = Vec::new();
+    fs.read_dir("d", |e| by_path.push(e.name.to_vec())).unwrap();
+    assert_eq!(by_pair, by_path);
+    assert_eq!(by_pair.len(), 12);
+    assert!(pairs > 1, "d split over {pairs} pairs");
+}
+
 /// Why the `BlockDevice` contract asks for prefix tearing: when a torn program may persist
 /// any subset of its units, a unit can land after an unwritten one. The forward CRC only
 /// vouches for the first unit past a commit, so the next append programs over the stray
