@@ -3,7 +3,7 @@
 //! served with the whole [`NineServer`] in hand: [`NineServer::fid_node`] finds a fid exactly as a
 //! 9P request does, and a fid of any other connection is `not_found`.
 
-use littlefs::OpenOptions;
+use littlefs::{Error as FsError, OpenOptions};
 use redoubt_rt::abi::Handle;
 use redoubt_rt::ipc::{Caller, Words};
 use redoubt_rt::path;
@@ -16,7 +16,7 @@ use redoubt_rt::wire::proto::fsd::{
     SetAttrReply,
 };
 
-use crate::server::{ATTR_ID, Fsd, Node, OWN_ATTRS, code};
+use crate::server::{ATTR_ID, Failure, Fsd, Node, OWN_ATTRS, code, parent};
 use crate::volume::Range;
 
 /// The most bytes an attribute holds: littlefs's `attr_max`.
@@ -68,8 +68,35 @@ impl<R: Range> Typed<'_, R> {
         fs.writable().map_err(code)?;
         let from = fs.found_child(&old_dir, r.old_name).map_err(code)?;
         let to = fs.found_child(&new_dir, r.new_name).map_err(code)?;
-        // littlefs refuses a directory moved into itself (`Invalid`, so `refused`).
-        fs.with(|fs| fs.rename(&from, &to)).map_err(code)
+        // A rename onto itself changes nothing, if there is anything to rename.
+        if from == to {
+            return fs.with(|fs| fs.stat(&from)).map(|_| ()).map_err(code);
+        }
+        // Moving a live root or a directory holding one, or renaming over a live root's
+        // directory, would end its connections (servers/fsd.md, "Quotas").
+        if fs.ledger.holds_live(&from) || fs.ledger.holds_live(&to) {
+            return Err(ErrorCode::Refused);
+        }
+        // What moves leaves the root holding `old_dir` for the one holding `new_dir`, which
+        // also gets back what the rename replaces.
+        let moved = fs.holds(&from).map_err(code)?;
+        let replaced = match fs.holds(&to) {
+            Ok(held) => held,
+            Err(Failure::Fs(FsError::NoEntry)) => 0,
+            Err(e) => return Err(code(e)),
+        };
+        let src = fs.ledger.holder(old_dir.path());
+        let need = if src == fs.ledger.holder(new_dir.path()) { 0 } else { moved.saturating_sub(replaced) };
+        let dst = fs.room(new_dir.path(), need).map_err(code)?;
+        // Only the destination may split: littlefs makes no pair for the source's commit.
+        fs.recounted(dst, need, [old_dir.path(), new_dir.path()], |fs| {
+            // littlefs refuses a directory moved into itself (`Invalid`, so `refused`).
+            fs.with(|fs| fs.rename(&from, &to))?;
+            fs.ledger.change(src, 0, moved);
+            fs.ledger.change(dst, moved, replaced);
+            Ok(())
+        })
+        .map_err(code)
     }
 
     fn copy_file(&mut self, caller: &Caller, c: &CopyFile<'_>) -> Result<u64, ErrorCode> {
@@ -85,14 +112,22 @@ impl<R: Range> Typed<'_, R> {
         fs.writable().map_err(code)?;
         fs.find(&src).map_err(code)?;
         let to = fs.found_child(&dst_dir, c.dst_name).map_err(code)?;
-        // The copy is a new file, created with an id of its own as every create is.
+        // The copy writes new blocks, and is charged in full.
+        let need = fs.holds(src.path()).map_err(code)?;
+        let root = fs.room(dst_dir.path(), need).map_err(code)?;
+        // The copy is a new file, created with an id of its own as every create is, so the
+        // root directory takes a commit too, before the copy has any pair room.
         let id = fs.next_id().map_err(code)?;
-        let copied = fs
-            .with(|fs| {
+        let mut made = false;
+        let copy = |fsd: &mut Fsd<R>| {
+            fsd.with(|fs| {
                 let from = fs.open(src.path(), OpenOptions { read: true, ..OpenOptions::default() })?;
                 let new = OpenOptions { write: true, create_new: true, ..OpenOptions::default() };
                 let into = match fs.open_with_attrs(&to, new, &[(ATTR_ID, &id.to_le_bytes())]) {
-                    Ok(into) => into,
+                    Ok(into) => {
+                        made = true;
+                        into
+                    }
                     Err(e) => {
                         let _ = fs.close(from);
                         return Err(e);
@@ -120,8 +155,13 @@ impl<R: Range> Typed<'_, R> {
                 }
                 copied
             })
-            .map_err(code)?;
-        Ok(copied)
+        };
+        let copied = fs.recounted(root, need, [dst_dir.path()], copy);
+        // What the copy left is charged, counted afresh: the whole file, nothing once a failed
+        // copy is removed, and what is there if that remove failed too.
+        let left = if made { fs.holds(&to).unwrap_or(0) } else { 0 };
+        fs.ledger.change(root, left, 0);
+        copied.map_err(code)
     }
 
     fn set_attr(&mut self, caller: &Caller, s: &SetAttr<'_>) -> Result<(), ErrorCode> {
@@ -135,7 +175,10 @@ impl<R: Range> Typed<'_, R> {
         let fs = &mut self.0.fs;
         fs.writable().map_err(code)?;
         fs.find(&node).map_err(code)?;
-        fs.with(|fs| fs.set_attr(node.path(), s.attr, s.value)).map_err(code)
+        // The attribute lives in the directory holding the entry, which grows.
+        let root = fs.room(parent(node.path()), 0).map_err(code)?;
+        let set = |fs: &mut Fsd<R>| fs.with(|fs| fs.set_attr(node.path(), s.attr, s.value));
+        fs.recounted(root, 0, [parent(node.path())], set).map_err(code)
     }
 
     fn get_attr(&mut self, caller: &Caller, g: &GetAttr) -> Result<&[u8], ErrorCode> {

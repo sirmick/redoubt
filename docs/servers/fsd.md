@@ -154,29 +154,67 @@ refusal.
 
 ### Quotas
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (19)</summary>
+
+- host:redoubt-fsd::a_write_past_one_roots_quota_is_refused_while_another_still_writes
+- host:redoubt-fsd::a_root_with_quota_0_cannot_create_but_can_read_and_remove
+- host:redoubt-fsd::a_mint_the_room_cannot_take_is_refused_and_disconnect_gives_it_back
+- host:redoubt-fsd::two_connections_at_one_directory_share_it
+- host:redoubt-fsd::a_connection_at_its_granters_own_root_carves_nothing
+- host:redoubt-fsd::a_root_minted_over_files_counts_them
+- host:redoubt-fsd::a_root_minted_above_a_live_root_holds_its_quota_in_reserve
+- host:redoubt-fsd::minting_over_files_frees_no_room
+- host:redoubt-fsd::minting_above_a_live_root_frees_no_room
+- host:redoubt-fsd::a_rewrite_at_the_start_needs_room_for_the_tail
+- host:redoubt-fsd::a_rename_or_remove_never_ends_a_live_root
+- host:redoubt-fsd::a_rename_between_two_roots_moves_the_bytes
+- host:redoubt-fsd::a_copy_past_the_quota_is_no_space
+- host:redoubt-fsd::the_volume_never_runs_out_while_every_root_is_within_its_quota
+- host:redoubt-fsd::a_root_at_its_quota_creates_while_its_entries_fit_one_pair
+- host:redoubt-fsd::with_room_the_directory_splits_and_the_split_is_charged
+- host:redoubt-fsd::a_mkdir_without_room_for_its_pair_changes_nothing
+- host:littlefs::file_blocks_counts_what_a_file_holds
+- host:littlefs::pair_room_bounds_splits_and_new_directories
+
+</details>
 
 Each root a connection is minted at has its own **byte quota**, set by whoever granted it in
-`new_connection`'s `quota` field and carved from the granter's own quota. `fsd` records it in the
-skeleton's `minted` hook, which refuses a quota the granter does not have (`refused`), and gives
-it back when the connection is disconnected. A write that would take a root past its quota is
-refused. So Bob filling the `data` volume cannot make Alice's saves fail
-([R48 (a quota per attach root)](#r48-a-quota-per-attach-root)). The serving library holds no byte
-counters; `fsd` is the only server that meters bytes.
+`new_connection`'s `quota` field and carved from the room of the live root above it. `fsd`
+records it in the skeleton's `minted` hook, which refuses a quota that room does not have
+(`refused`), and gives it back when the connection is disconnected. A change that would take a
+root past its quota is refused with `no space`. So Bob filling the `data` volume cannot make
+Alice's saves fail ([R48 (a quota per attach root)](#r48-a-quota-per-attach-root)). The serving
+library holds no byte counters; `fsd` is the only server that meters bytes.
 
-- **What a quota counts:** the blocks a root actually holds: whole blocks for a file stored in
-  blocks, the byte length for an inline file, and each directory's metadata pair (two blocks),
-  charged to the root that created it. littlefs shares no blocks between files, so `copy_file`
-  writes new blocks and a copy is charged in full.
+- **A root holds what lies under it:** whole blocks for a file stored in blocks, the byte length
+  of an inline file, and each directory's metadata pairs, less what lies under the live roots
+  minted below it; for each of those it holds in reserve the larger of that root's quota and what
+  that root holds, so minting a root never frees room. A change is charged to the nearest live
+  root above it, whichever connection made it. The volume root is always live, and every
+  attached connection is at it. A directory is split into another metadata pair only when the
+  root above it has room for one; otherwise littlefs keeps it in the pairs it has, so a split
+  never takes a root past its quota.
+- **Nothing is stored.** `fsd` counts a root by walking its directory when the first connection
+  is minted there, and keeps the count while one is live, so the medium holds no counter to
+  trust or to lose in a power cut. Connections minted at one directory share its count, and its
+  quota is the sum of theirs; one minted at its granter's own root is that root and carves
+  nothing. A root minted over more than its quota can read and remove only, until it is under.
+- **A rewrite counts what it writes.** littlefs rewrites a file from the first block written to
+  its end before it commits, so a write needs room for those blocks as well as any growth.
+  `copy_file` writes new blocks and is charged in full.
 - **No promise the disk cannot keep.** The volume root's quota is the usable blocks less a fixed
-  reserve for metadata compaction, and carved quotas never exceed it.
+  reserve for the blocks littlefs takes outside any root, and carved quotas never exceed it. A
+  commit splits a directory only into room its change's own root has; any other directory it
+  touches (the id counter's, a rename's source) is compacted in the pairs it already has.
 - **A quota of 0 means nothing:** the connection can read and remove, but not create or grow. A
   quota is never charged to a parent root, which would reopen a shared pool.
+- **A rename or remove never ends a live root.** Moving a live root or a directory holding one,
+  removing a live root's directory, or renaming over it is refused: it would end that root's
+  connections and carry its count away. A rename between two roots' parts of the tree moves the
+  bytes and needs room in the second.
 
 The attack tests: a write past one root's quota is refused while another root still writes; a
-root with quota 0 cannot create a file.
-
-**Open:** none.
+root with quota 0 reads and removes, but cannot create.
 
 ### littlefs
 
@@ -313,14 +351,17 @@ nothing else: no other volume, no other partition, no device.
 
 ### R48 (a quota per attach root)
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (2)</summary>
+
+- host:redoubt-fsd::a_write_past_one_roots_quota_is_refused_while_another_still_writes
+- host:redoubt-fsd::a_root_with_quota_0_cannot_create_but_can_read_and_remove
+
+</details>
 
 Every connection's root has a byte quota carved from its granter's, and no write takes a root past
 it. So one principal filling a shared volume uses up only its own quota and cannot make another's
 writes fail. (How many connections and fids a client may hold is admission's, R26, not the
 quota's.)
-
-**Open:** none.
 
 ### R49 (a hostile medium is corrupt, not a crash)
 
@@ -382,7 +423,10 @@ Status: planned · M1 (separation and containment)
   its own workspace with a C toolchain, and the fuzz targets need `cargo fuzz`, neither of which a
   host-tests case runs, so both are run by hand.
 - **A shared `fsd` is shared state.** Principals on one volume share one server's memory and
-  scheduling; where that matters, each gets its own volume and instance.
+  scheduling; where that matters, each gets its own volume and instance. A mint walks its root's
+  directory once, so minting in a loop costs `fsd` that walk each time.
+- **A refused rename or remove says a live root is there.** A connection that tries to move or
+  remove a directory learns whether some connection is rooted at or under it.
 
 ## Why
 

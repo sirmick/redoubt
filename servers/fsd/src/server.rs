@@ -11,7 +11,8 @@ use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, QTDIR, Q
 use redoubt_rt::server::{Cost, Limits};
 use redoubt_rt::wire::proto::fsd::ErrorCode;
 
-use crate::volume::{Blocks, Mounted, Range};
+use crate::quota::{Ledger, Refusal};
+use crate::volume::{BLOCK, Blocks, Mounted, Range};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N`. Nothing is parked: every request is answered as it arrives.
@@ -36,6 +37,12 @@ const ATTR_NEXT_ID: u8 = 3;
 /// The root's id. Every other id is given from 1 up and never given twice.
 const ROOT_ID: u64 = 0;
 
+/// The blocks littlefs holds for itself: the superblock pair, which is also the root
+/// directory's first pair.
+const SUPERBLOCK: u32 = 2;
+/// A metadata pair's bytes.
+const PAIR: u64 = 2 * BLOCK as u64;
+
 /// The `Rerror` texts `fsd` adds to the skeleton's fixed set.
 pub mod text {
     use redoubt_rt::server::ninep::NineError;
@@ -48,6 +55,8 @@ pub mod text {
     pub const NOT_EMPTY: NineError = NineError("directory not empty");
     pub const IS_DIR: NineError = NineError("is a directory");
     pub const NO_SPACE: NineError = NineError("no space");
+    /// A connection's quota is more than the root above it has room for.
+    pub const QUOTA_REFUSED: NineError = NineError("quota refused");
     pub const TOO_BIG: NineError = NineError("file too large");
     pub const READ_ONLY: NineError = NineError("read-only volume");
 }
@@ -129,20 +138,56 @@ pub struct Fsd<R: Range> {
     labels: Vec<u64>,
     /// The last `get_attr`'s value, which its reply borrows.
     attr: Vec<u8>,
+    /// The volume's blocks.
+    blocks: u32,
+    /// What each live root holds (servers/fsd.md, "Quotas").
+    pub(crate) ledger: Ledger,
+    /// How many times littlefs itself ran out of room: a quota that kept its promise never
+    /// lets it (servers/fsd.md, "Quotas").
+    #[cfg(test)]
+    pub(crate) out_of_room: u32,
 }
 
 impl<R: Range> Fsd<R> {
     /// The server for what [`crate::volume::mount`] found, under `labels`. A volume whose ids do
     /// not hold together ([`ids_are_sound`]) is served as corrupt.
+    ///
+    /// The volume root's quota is the volume's blocks less [`SUPERBLOCK`], and it holds what the
+    /// volume holds beyond the superblock pair.
     pub fn new(mounted: Mounted<R>, labels: Vec<u64>) -> Fsd<R> {
-        let (fs, read_only) = match mounted {
-            Mounted::Files { mut fs, read_only, blocks } => match ids_are_sound(&mut fs, blocks) {
-                Ok(()) => (Some(fs), read_only),
-                Err(_) => (None, read_only),
-            },
-            Mounted::Corrupt(_) => (None, false),
+        let (fs, read_only, blocks, held) = match mounted {
+            Mounted::Files { mut fs, read_only, blocks } => {
+                // No pair is made but in the room a change's root has ([`Fsd::recounted`]).
+                fs.set_pair_room(0);
+                let root = fs.root_dir();
+                match ids_are_sound(&mut fs, blocks).and_then(|()| tally(&mut fs, root, blocks, &[])) {
+                    Ok((held, _)) => {
+                        (Some(fs), read_only, blocks, held.saturating_sub(u64::from(SUPERBLOCK * BLOCK)))
+                    }
+                    Err(_) => (None, read_only, 0, 0),
+                }
+            }
+            Mounted::Corrupt(_) => (None, false, 0, 0),
         };
-        Fsd { fs, read_only, labels, attr: Vec::new() }
+        // No reserve beyond the superblock (servers/fsd.md, "Quotas", no promise the disk cannot
+        // keep): littlefs takes no block outside a root in one operation. Its only allocations
+        // are a file's blocks, which the room check counts (a rewrite's whole new tail, a copy in
+        // full) before they are taken, and new metadata pairs, which it makes only within the
+        // pair room the charged root has ([`Fsd::recounted`]); every other commit (the id
+        // counter's, a rename's source, an orphan repair, a removed directory's list link) gets
+        // none, and compaction keeps such a directory in the pairs it has. littlefs never grows
+        // the superblock chain or relocates a pair.
+        let room = u64::from(blocks.saturating_sub(SUPERBLOCK)) * u64::from(BLOCK);
+        Fsd {
+            fs,
+            read_only,
+            labels,
+            attr: Vec::new(),
+            blocks,
+            ledger: Ledger::new(room, held),
+            #[cfg(test)]
+            out_of_room: 0,
+        }
     }
 
     /// Refuses a change to a read-only volume, so a refused write never reaches the device and
@@ -173,6 +218,10 @@ impl<R: Range> Fsd<R> {
     ) -> Result<T, Failure> {
         let fs = self.fs.as_mut().ok_or(Failure::Fs(FsError::Corrupt))?;
         let r = op(fs);
+        #[cfg(test)]
+        if r.as_ref().is_err_and(|e| *e == FsError::NoSpace) {
+            self.out_of_room += 1;
+        }
         if r.as_ref().is_err_and(|e| *e == FsError::Io) {
             self.fs = None;
         }
@@ -220,6 +269,87 @@ impl<R: Range> Fsd<R> {
         let next = id.checked_add(1).ok_or(Failure::Fs(FsError::NoSpace))?;
         self.with(|fs| fs.set_attr("", ATTR_NEXT_ID, &next.to_le_bytes()))?;
         Ok(id)
+    }
+
+    /// The root holding the directory `dir`, if it can grow by `need`; otherwise `no space`
+    /// (servers/fsd.md, "Quotas").
+    pub(crate) fn room(&self, dir: &str, need: u64) -> Result<usize, Failure> {
+        let i = self.ledger.holder(dir);
+        if self.ledger.fits(i, need) { Ok(i) } else { Err(Failure::Fs(FsError::NoSpace)) }
+    }
+
+    /// Runs `change`, which commits to the directories `dirs`, and charges the root holding
+    /// each for the metadata pairs the directory gained or lost, whether or not the change
+    /// succeeded: littlefs splits a directory when a commit to it compacts, and drops a pair
+    /// that empties. It splits one, or makes a new directory's pair, only into the room `root`
+    /// has beyond `need`, whole pairs of it (servers/fsd.md, "Quotas"); short of a pair,
+    /// compaction keeps a directory in the pairs it has.
+    pub(crate) fn recounted<T, const N: usize>(
+        &mut self,
+        root: usize,
+        need: u64,
+        dirs: [&str; N],
+        change: impl FnOnce(&mut Self) -> Result<T, Failure>,
+    ) -> Result<T, Failure> {
+        let mut before = [0u32; N];
+        for (n, dir) in before.iter_mut().zip(dirs) {
+            *n = self.with(|fs| fs.read_dir(dir, |_| {}))?;
+        }
+        let pairs = self.ledger.spare(root).saturating_sub(need) / PAIR;
+        if let Some(fs) = self.fs.as_mut() {
+            // `u32::MAX` would be no limit at all.
+            fs.set_pair_room(u32::try_from(pairs).unwrap_or(u32::MAX).min(u32::MAX - 1));
+        }
+        let changed = change(self);
+        if let Some(fs) = self.fs.as_mut() {
+            fs.set_pair_room(0);
+        }
+        for (i, dir) in dirs.iter().enumerate() {
+            if dirs[..i].contains(dir) {
+                continue;
+            }
+            // A volume that failed meanwhile is corrupt from now on; nothing more to count.
+            let Ok(after) = self.with(|fs| fs.read_dir(dir, |_| {})) else { break };
+            let pairs = |n: u32| u64::from(n) * PAIR;
+            let root = self.ledger.holder(dir);
+            self.ledger.change(root, pairs(after), pairs(before[i]));
+        }
+        changed
+    }
+
+    /// Counts every live root afresh and checks the ledger agrees: what it holds, its reserve,
+    /// and that it is within its quota unless `over` allows it.
+    #[cfg(test)]
+    pub(crate) fn audit(&mut self, over: bool) {
+        let live = self.ledger.charges().unwrap();
+        let blocks = self.blocks;
+        for (id, path, quota, held, reserve) in self.ledger.roots() {
+            let counted = self.with(|fs| {
+                let dir = dir_ref(fs, &path)?;
+                tally(fs, dir, blocks, &live)
+            });
+            let (mut counted, counted_reserve) = counted.unwrap();
+            if id == ROOT_ID {
+                counted -= u64::from(SUPERBLOCK * BLOCK);
+            }
+            assert_eq!((held, reserve), (counted, counted_reserve), "the root at {path:?}");
+            assert!(over || held + reserve <= quota, "the root at {path:?}: {held} + {reserve} > {quota}");
+        }
+    }
+
+    /// What the entry at `path` holds: a file's bytes, or all that lies under a directory, its
+    /// own pairs included. No live root is at or under it.
+    pub(crate) fn holds(&mut self, path: &str) -> Result<u64, Failure> {
+        let meta = self.with(|fs| fs.stat(path))?;
+        if meta.kind == FileType::File {
+            return self.with(|fs| Ok(cost(fs, meta.size)));
+        }
+        let blocks = self.blocks;
+        self.with(|fs| {
+            let dir = dir_ref(fs, path)?;
+            tally(fs, dir, blocks, &[])
+        })
+        .map(|(held, _)| held)
     }
 
     /// `node`'s qid: its id, and for a file its version.
@@ -322,6 +452,94 @@ fn decode_id(bytes: &[u8]) -> Result<u64, Failure> {
         .ok()
         .filter(|id| *id != ROOT_ID)
         .ok_or(Failure::Fs(FsError::Corrupt))
+}
+
+/// The directory `path` lies in.
+pub(crate) fn parent(path: &str) -> &str { path.rsplit_once('/').map_or("", |(dir, _)| dir) }
+
+/// The bytes a file of `size` holds: its skip-list's whole blocks, or its length inline.
+fn cost<D: BlockDevice>(fs: &Filesystem<D>, size: u32) -> u64 {
+    match fs.file_blocks(size) {
+        0 => u64::from(size),
+        n => u64::from(n) * u64::from(BLOCK),
+    }
+}
+
+/// The room a write that leaves a file of `old` bytes `new` bytes long, from byte `from`,
+/// needs until it commits: littlefs rewrites the file from the block holding `from` to its
+/// end before the commit frees the old blocks (servers/fsd.md, "Quotas": a rewrite counts what
+/// it writes), and the file may grow.
+fn rewrite<D: BlockDevice>(fs: &Filesystem<D>, old: u32, from: u32, new: u32) -> u64 {
+    // The blocks before the one holding `from` are kept: as many as a file of `from + 1` bytes
+    // has, but its last. An inline file keeps none.
+    let kept = match fs.file_blocks(old) {
+        0 => 0,
+        _ => fs.file_blocks(from.saturating_add(1)).saturating_sub(1),
+    };
+    let written = u64::from(fs.file_blocks(new).saturating_sub(kept)) * u64::from(BLOCK);
+    written.max(cost(fs, new).saturating_sub(cost(fs, old)))
+}
+
+/// The directory at `path`, by its first pair.
+fn dir_ref<D: BlockDevice>(fs: &mut Filesystem<D>, path: &str) -> Result<DirRef, FsError> {
+    if path.is_empty() {
+        return Ok(fs.root_dir());
+    }
+    let name = path.rsplit('/').next().unwrap_or(path).as_bytes();
+    let mut found = None;
+    fs.read_dir(parent(path), |entry| {
+        if entry.name == name {
+            found = entry.dir();
+        }
+    })?;
+    found.ok_or(FsError::NotDir)
+}
+
+/// What the directory `top` holds, walked by its pairs and bounded by the volume's pairs as
+/// the mount walk is (servers/fsd.md, "Quotas"): its pairs and those of every directory under
+/// it, whole blocks for a file in blocks and the length of an inline one; for a live root
+/// below it (`live`: id and charge), that root's charge in reserve instead of what lies under
+/// it. Returns (held, reserve).
+fn tally<D: BlockDevice>(
+    fs: &mut Filesystem<D>,
+    top: DirRef,
+    blocks: u32,
+    live: &[(u64, u64)],
+) -> Result<(u64, u64), FsError> {
+    let (mut dirs, mut sizes): (Vec<DirRef>, Vec<u32>) = (Vec::new(), Vec::new());
+    room(&mut dirs)?;
+    dirs.push(top);
+    let (mut pairs, mut held, mut reserve) = (blocks / 2, 0u64, 0u64);
+    while let Some(dir) = dirs.pop() {
+        let mut failed = None;
+        let entry = |entry: &littlefs::DirEntry| {
+            let Some(child) = entry.dir() else {
+                match room(&mut sizes) {
+                    Ok(()) => sizes.push(entry.meta.size),
+                    Err(e) => failed = Some(e),
+                }
+                return;
+            };
+            let id = entry.attr(ATTR_ID).and_then(|id| decode_id(id).ok());
+            match live.iter().find(|(root, _)| Some(*root) == id) {
+                Some((_, charge)) => reserve = reserve.saturating_add(*charge),
+                None => match room(&mut dirs) {
+                    Ok(()) => dirs.push(child),
+                    Err(e) => failed = Some(e),
+                },
+            }
+        };
+        let read = fs.read_dir_at(dir, entry, |_| Ok(()))?;
+        if let Some(e) = failed {
+            return Err(e);
+        }
+        pairs = pairs.checked_sub(read).ok_or(FsError::Corrupt)?;
+        held = held.saturating_add(u64::from(read) * 2 * u64::from(BLOCK));
+        for size in sizes.drain(..) {
+            held = held.saturating_add(cost(fs, size));
+        }
+    }
+    Ok((held, reserve))
 }
 
 /// Room for one more in `v`, or `NoSpace`.
@@ -434,7 +652,8 @@ pub(crate) fn code(e: Failure) -> ErrorCode {
         Failure::Fs(FsError::NoEntry | FsError::NoAttr) => ErrorCode::NotFound,
         Failure::Fs(FsError::Exists) => ErrorCode::Exists,
         Failure::Fs(FsError::NotDir) => ErrorCode::NotDir,
-        Failure::Fs(FsError::NoSpace | FsError::FileTooBig) => ErrorCode::TooLarge,
+        Failure::Fs(FsError::NoSpace) => ErrorCode::NoSpace,
+        Failure::Fs(FsError::FileTooBig) => ErrorCode::TooLarge,
         Failure::Fs(FsError::IsDir | FsError::NotEmpty | FsError::Invalid | FsError::NameTooLong) => {
             ErrorCode::Refused
         }
@@ -455,6 +674,37 @@ impl<R: Range> FileServer for Fsd<R> {
         Ok((root, qid))
     }
 
+    /// Records the connection's quota, carved from the room of the live root above `root`
+    /// (servers/fsd.md, "Quotas"). A directory going live is counted here, once.
+    fn minted(
+        &mut self,
+        caller: &Caller,
+        badge: u64,
+        _: u64,
+        root: &Node,
+        quota: u64,
+    ) -> Result<(), NineError> {
+        let live = self.ledger.charges().ok_or(text::QUOTA_REFUSED)?;
+        let (blocks, fs) = (self.blocks, self.fs.as_mut().ok_or(text::CORRUPT)?);
+        let count = || {
+            let dir = dir_ref(fs, &root.path)?;
+            tally(fs, dir, blocks, &live)
+        };
+        match self.ledger.mint(caller.badge, badge, root.id, &root.path, quota, count) {
+            Ok(()) => Ok(()),
+            Err(Refusal::Refused) => Err(text::QUOTA_REFUSED),
+            Err(Refusal::Count(e)) => {
+                if e == FsError::Io {
+                    self.fs = None;
+                }
+                Err(nine(Failure::Fs(e)))
+            }
+        }
+    }
+
+    /// Gives the connection's quota back to the root it was carved from.
+    fn disconnected(&mut self, badge: u64) { self.ledger.disconnect(badge) }
+
     /// The volume's labels, for every node (servers/fsd.md: labels are per volume).
     fn labels(&self, _: &Node) -> &[u64] { &self.labels }
 
@@ -471,9 +721,17 @@ impl<R: Range> FileServer for Fsd<R> {
         }
         self.find(node).map_err(nine)?;
         if m & mode::OTRUNC != 0 && !node.dir {
-            self.bump(node).map_err(nine)?;
-            let truncate = OpenOptions { write: true, truncate: true, ..OpenOptions::default() };
-            self.on_file(node, truncate, |_, _| Ok(())).map_err(nine)?;
+            // A truncation only gives back, and needs no room.
+            let held = self.holds(&node.path).map_err(nine)?;
+            let i = self.ledger.holder(parent(&node.path));
+            self.recounted(i, 0, [parent(&node.path)], |fsd| {
+                fsd.bump(node)?;
+                let truncate = OpenOptions { write: true, truncate: true, ..OpenOptions::default() };
+                fsd.on_file(node, truncate, |_, _| Ok(()))?;
+                fsd.ledger.change(i, 0, held);
+                Ok(())
+            })
+            .map_err(nine)?;
         }
         self.qid(node).map_err(nine)
     }
@@ -497,11 +755,22 @@ impl<R: Range> FileServer for Fsd<R> {
         let offset = u32::try_from(offset).map_err(|_| text::TOO_BIG)?;
         self.writable().map_err(nine)?;
         self.find(node).map_err(nine)?;
-        self.bump(node).map_err(nine)?;
-        let write = OpenOptions { write: true, ..OpenOptions::default() };
-        self.on_file(node, write, |fs, h| {
-            fs.seek(h, offset)?;
-            fs.write(h, data)
+        let old = self.with(|fs| fs.stat(&node.path)).map_err(nine)?.size;
+        let end = u32::try_from(data.len()).ok().and_then(|n| offset.checked_add(n));
+        let new = end.ok_or(text::TOO_BIG)?.max(old);
+        let costs =
+            |fs: &Filesystem<_>| (rewrite(fs, old, offset.min(old), new), cost(fs, new), cost(fs, old));
+        let (need, more, less) = self.fs.as_ref().map_or((0, 0, 0), costs);
+        let i = self.room(parent(&node.path), need).map_err(nine)?;
+        self.recounted(i, need, [parent(&node.path)], |fsd| {
+            fsd.bump(node)?;
+            let write = OpenOptions { write: true, ..OpenOptions::default() };
+            let written = fsd.on_file(node, write, |fs, h| {
+                fs.seek(h, offset)?;
+                fs.write(h, data)
+            })?;
+            fsd.ledger.change(i, more, less);
+            Ok(written)
         })
         .map_err(nine)
     }
@@ -532,34 +801,52 @@ impl<R: Range> FileServer for Fsd<R> {
     ) -> Result<(Node, Qid), NineError> {
         self.writable().map_err(nine)?;
         let path = self.found_child(dir, name).map_err(nine)?;
+        let mkdir = perm & DMDIR != 0;
+        // A directory holds its first pair from the start; a file holds nothing until written.
+        let need = if mkdir { PAIR } else { 0 };
+        let i = self.room(&dir.path, need).map_err(nine)?;
+        // The id counter is the root's: its commit is to the root directory, before the change
+        // has any pair room, so it makes no pair.
         let id = self.next_id().map_err(nine)?;
-        let attrs: [(u8, &[u8]); 1] = [(ATTR_ID, &id.to_le_bytes())];
-        let dir = perm & DMDIR != 0;
-        if dir {
-            self.with(|fs| fs.mkdir_with_attrs(&path, &attrs)).map_err(nine)?;
-        } else {
-            let new = OpenOptions { write: true, create_new: true, ..OpenOptions::default() };
-            self.with(|fs| {
-                let h = fs.open_with_attrs(&path, new, &attrs)?;
-                fs.close(h)
-            })
-            .map_err(nine)?;
-        }
-        let node = Node { path, id, dir };
+        // A new directory's own pair comes out of the room the check found.
+        self.recounted(i, 0, [&dir.path], |fsd| {
+            let attrs: [(u8, &[u8]); 1] = [(ATTR_ID, &id.to_le_bytes())];
+            if mkdir {
+                fsd.with(|fs| fs.mkdir_with_attrs(&path, &attrs))?;
+            } else {
+                let new = OpenOptions { write: true, create_new: true, ..OpenOptions::default() };
+                fsd.with(|fs| {
+                    let h = fs.open_with_attrs(&path, new, &attrs)?;
+                    fs.close(h)
+                })?;
+            }
+            fsd.ledger.change(i, need, 0);
+            Ok(())
+        })
+        .map_err(nine)?;
+        let node = Node { path, id, dir: mkdir };
         let qid = self.qid(&node).map_err(nine)?;
         Ok((node, qid))
     }
 
     /// Removes the file or empty directory. Every other fid on it finds it gone (its id is
     /// nowhere on the volume any more) and gets `removed`; littlefs's readable-after-remove
-    /// handles are never used, since no handle outlives a request.
+    /// handles are never used, since no handle outlives a request. A live root's directory is
+    /// not removed: that would end its connections.
     fn remove(&mut self, _: &Caller, node: &Node) -> Result<(), NineError> {
-        if node.id == ROOT_ID {
+        if node.id == ROOT_ID || self.ledger.holds_live(&node.path) {
             return Err(NineError::PERMISSION);
         }
         self.writable().map_err(nine)?;
         self.find(node).map_err(nine)?;
-        self.with(|fs| fs.remove(&node.path)).map_err(nine)
+        let held = self.holds(&node.path).map_err(nine)?;
+        let i = self.ledger.holder(parent(&node.path));
+        self.recounted(i, 0, [parent(&node.path)], |fsd| {
+            fsd.with(|fs| fs.remove(&node.path))?;
+            fsd.ledger.change(i, 0, held);
+            Ok(())
+        })
+        .map_err(nine)
     }
 }
 
