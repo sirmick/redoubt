@@ -1,16 +1,21 @@
-//! What the test programs `init` starts share: their console. Each writes its lines through the
-//! `/dev/cons` connection `init` minted for it, so `consoled` starts every one of them with that
-//! connection's id (servers/consoled.md, "Started by `init`"), and the bench attributes a verdict
-//! by it (docs/testbench.md, "The servers' cases under `init`").
+//! What the test programs `init` starts share: their console, the requests their servers answer,
+//! and an empty file server. Each writes its lines through the `/dev/cons` connection `init`
+//! minted for it, so `consoled` starts every one of them with that connection's id
+//! (servers/consoled.md, "Started by `init`"), and the bench attributes a verdict by it
+//! (docs/testbench.md, "The servers' cases under `init`").
 
 #![no_std]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
 
+use alloc::string::String;
+
 use redoubt_client::console::Console;
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend};
+use redoubt_rt::ipc::Caller;
+use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, QTDIR, Qid, Read};
 use redoubt_rt::startup::Startup;
 
 /// Pages lent with each call: a console line or a read of a small entry.
@@ -20,6 +25,58 @@ pub const LEND_PAGES: usize = 1;
 pub mod code {
     pub const NO_LEND: u32 = 2;
     pub const NO_CONSOLE: u32 = 3;
+}
+
+/// The requests `restartee` serves beside 9P and `ninep_common`, by opcode, above theirs; each
+/// is a call of four words, the opcode first.
+pub mod restartee {
+    /// Answers with a copy of its own console connection.
+    pub const CONSOLE: u64 = 100;
+    /// Answers with a handle it does not hold, so the kernel rejects the reply.
+    pub const MISREPLY: u64 = 101;
+    /// Held until a [`WAIT`] is held too; then served, and it faults while it serves it.
+    pub const FAULT: u64 = 102;
+    /// Answers, and nothing more.
+    pub const PING: u64 = 103;
+    /// Held, unanswered, until the fault: the caller waits for it there.
+    pub const WAIT: u64 = 104;
+    /// The words of an answer: status 0.
+    pub const OK: [u64; 4] = [0; 4];
+}
+
+/// A file server with one empty directory: a connection needs a root, nothing more.
+pub struct Empty;
+
+const ROOT: Qid = Qid { kind: QTDIR, version: 0, path: 0 };
+
+impl FileServer for Empty {
+    type Node = ();
+
+    fn attach(&mut self, _: &Caller, _: &str) -> Result<((), Qid), NineError> { Ok(((), ROOT)) }
+
+    fn labels(&self, _: &()) -> &[u64] { &[] }
+
+    fn walk(&mut self, _: &Caller, _: &(), _: &str) -> Result<((), Qid), NineError> {
+        Err(NineError::NOT_FOUND)
+    }
+
+    fn open(&mut self, _: &Caller, _: &(), _: u8) -> Result<Qid, NineError> { Ok(ROOT) }
+
+    fn read(&mut self, _: &Caller, _: &(), _: u64, _: &mut [u8]) -> Result<Read, NineError> {
+        Ok(Read::Done(0))
+    }
+
+    fn write(&mut self, _: &Caller, _: &(), _: u64, _: &[u8]) -> Result<usize, NineError> {
+        Err(NineError::NOT_SUPPORTED)
+    }
+
+    fn stat(&mut self, _: &Caller, _: &()) -> Result<FileStat, NineError> {
+        Ok(FileStat { qid: ROOT, mode: DMDIR | 0o555, mtime: 0, length: 0, name: String::from("/") })
+    }
+
+    fn dir_entry(&mut self, _: &Caller, _: &(), _: u64) -> Result<Option<((), FileStat)>, NineError> {
+        Ok(None)
+    }
 }
 
 /// Where a program ends once it has said its lines: `init` restarts a server that exits, so a

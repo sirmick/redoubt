@@ -411,10 +411,11 @@ The bench's launcher, `stub-launch`, and the net rig (`tests/net/src/rig.rs`, wh
 
 ### Fresh connections per child
 
-<details><summary>Status: built · partly tested: no case watches a connection disconnected when its child exits · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
 - bench:init-servers
 - bench:init-console-forgery
+- bench:init-restart
 
 </details>
 

@@ -22,6 +22,21 @@ name = "quitter"
 path = "src/bin/quitter.rs"
 test = false
 
+[[bin]]
+name = "restartee"
+path = "src/bin/restartee.rs"
+test = false
+
+[[bin]]
+name = "restart-client"
+path = "src/bin/restart-client.rs"
+test = false
+
+[[bin]]
+name = "restart-faulter"
+path = "src/bin/restart-faulter.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

@@ -1,0 +1,32 @@
+description = "A server faults while it serves a labelled client, and init restarts it (servers/init.md, \"Restarts and reboots\"): init reports the fault with the client's labels, blamed on nobody while no steward runs; the client's call gets Dead and its next is served by the new instance, which refuses an id the old one minted; the dead instance's console connection, written through a copy the server handed the client, is refused (\"Fresh connections per child\"); and before the fault a reply the kernel rejected reached the client as malformed while the server went on serving (servers/serving.md, \"Replies and rollback\")"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The real init, keyd, consoled and bootfsd, restartee, restart-client and restart-faulter, each client
+# handed a badge at restartee. The faulter is labelled `secrets`, and restartee faults serving its
+# call while it holds the client's; a labelled program cannot write the console, so the verdict
+# is the unlabelled client's, judged from the kernel's, restartee's and consoled's answers, and
+# the fault line is init's, bare.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-init-programs", bin = "restartee" },
+    { package = "redoubt-init-programs", bin = "restart-client" },
+    { package = "redoubt-init-programs", bin = "restart-faulter" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started restartee, console [0-9a-f]{16}$',
+    '^init: started restart-client, console [0-9a-f]{16}$',
+    '^init: restartee \(PID [0-9]+\) faulted, code 101, serving nobody, labels secrets; blamed on nobody: no steward$',
+    '^init: restarted restartee, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] restart-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', 'init: rebooting', 'restart-client writes through a dead console']
+reporter = "restart-client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/restart.json" }
