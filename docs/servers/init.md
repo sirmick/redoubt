@@ -147,9 +147,9 @@ M5 (persist, install, share).
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
 - host:redoubt-init::confined_gives_a_labelled_domain_no_network
-- host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
+- host:redoubt-init::confined_counts_only_a_shared_servers_own_label_set
 - host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
 
 </details>
@@ -179,10 +179,12 @@ steward ([steward](steward.md)). The refusal is a boot failure, not a warning
 The domains compared are each `servers` entry, under its `labels` (`{}` if none), and each
 principal's label sets. A server's users are the servers handed one of its endpoints, or a
 volume's range at it (an `fsd` on a `blkd` disk), and, for a shared server (one that takes
-`buckets=N`), every principal domain: the same count as the bucket rule, so a server a session
-may later reach is never missed. The kinds are checked in the order listed, and the refusal names
-the kind. So in a confined boot a disk holds one label set's volumes, and its `blkd` carries that
-set.
+`buckets=N`), every principal domain with the server's own label set. Only such a domain may later
+be granted a connection there, since the steward grants within a label set by this same rule, so
+a server a session may later reach is never missed; a domain with another set is not counted, and
+the bucket rule still sizes the server for every principal domain. The kinds are checked in the
+order listed, and the refusal names the kind. So in a confined boot a disk holds one label set's
+volumes, and its `blkd` carries that set.
 
 **The one named exception** is the control plane: the steward and `sshd` may reach across label
 sets, and only by three kinds of edge: the request and owner-approval path; per-item reader and
@@ -671,9 +673,9 @@ server from a manifest that grants it a budget and expects the boot refused.
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
 - host:redoubt-init::confined_gives_a_labelled_domain_no_network
-- host:redoubt-init::confined_refuses_a_driver_serving_two_label_sets
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
+- host:redoubt-init::confined_counts_only_a_shared_servers_own_label_set
 - host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
 
 </details>

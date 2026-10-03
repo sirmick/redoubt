@@ -708,37 +708,62 @@ fn confined_refuses_two_label_sets_on_one_disk() {
     assert!(on_virt(&m).is_ok());
 }
 
-#[test]
-fn confined_refuses_a_driver_serving_two_label_sets() {
-    let mut m = confined();
-    secrets(&mut m);
-    m.principals.push(Principal {
-        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) }],
-        ..alice()
-    });
-    // Only consoled is shared: its device reaches both of alice's sets.
-    for s in &mut m.servers {
-        if s.program != "consoled" {
-            s.args.retain(|a| !a.starts_with("buckets="));
-        }
-    }
-    assert_eq!(sharing(&m), Sharing::Device);
-}
-
+/// A `blkd` with no devices serving a labelled volume shares no endpoint, volume or device with
+/// its `fsd`, yet the volume's range at it puts two sets on the one instance.
 #[test]
 fn confined_refuses_a_server_instance_serving_two_label_sets() {
-    let mut m = confined();
+    let mut m = without_volumes();
+    m.confined = true;
+    secrets(&mut m);
+    m.principals.push(alice());
+    let secret = || vec![String::from("alice-secrets")];
+    m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: secret() });
+    server(&mut m, "blkd").devices.clear();
+    let base = server(&mut image(), "fsd:data").clone();
+    m.servers.push(Server { labels: secret(), volume: Some("vault".into()), ..base });
+    let blkd = m.servers.iter().position(|s| s.program == "blkd").unwrap();
+    assert_eq!(
+        on_virt(&m).unwrap_err(),
+        Refusal::Confined { at: format!("servers[{blkd}]"), sharing: Sharing::Server }
+    );
+    m.servers[blkd].labels = secret();
+    assert!(on_virt(&m).is_ok());
+}
+
+/// A shared server's users are the principal domains with its own label set, since only those
+/// may later be granted a connection there: alice working under {alice-secrets} beside unlabelled
+/// shared keyd and consoled, with a labelled blkd, fsd and client, boots; the client unlabelled
+/// shares fsd's endpoint across two sets and is refused.
+#[test]
+fn confined_counts_only_a_shared_servers_own_label_set() {
+    let mut m = without_volumes();
+    m.confined = true;
     secrets(&mut m);
     m.principals.push(Principal {
         label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) }],
         ..alice()
     });
-    for s in &mut m.servers {
-        if s.program != "keyd" {
-            s.args.retain(|a| !a.starts_with("buckets="));
-        }
-    }
-    assert_eq!(sharing(&m), Sharing::Server);
+    let secret = || vec![String::from("alice-secrets")];
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret() });
+    server(&mut m, "blkd").labels = secret();
+    let base = server(&mut image(), "fsd:data").clone();
+    m.servers.push(Server { labels: secret(), ..base.clone() });
+    m.servers.push(Server {
+        name: "client".into(),
+        volume: None,
+        labels: secret(),
+        receives: vec!["client".into()],
+        handed: vec![Handed { endpoint: "fsd:data".into(), badge: 7 }],
+        args: vec!["endpoint=client".into(), "buckets=4".into()],
+        ..base
+    });
+    assert!(on_virt(&m).is_ok());
+    m.servers.last_mut().unwrap().labels.clear();
+    let fsd = m.servers.len() - 2;
+    assert_eq!(
+        on_virt(&m).unwrap_err(),
+        Refusal::Confined { at: format!("servers[{fsd}].receives[0]"), sharing: Sharing::Endpoint }
+    );
 }
 
 #[test]

@@ -19,9 +19,10 @@ power-loss safety by design, and a size that can be read.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · tested (30)</summary>
+<details><summary>Status: built · tested (31)</summary>
 
 - bench:fsd-boot
+- bench:fsd-confined-labelled
 - bench:fsd-corrupt-volume
 - bench:fsd-label-check
 - bench:fsd-one-volume

@@ -376,9 +376,9 @@ mod verdict {
     pub const OUTSIDER: u32 = 24;
 }
 
-/// `fsd-label-check`: a caller whose labels equal the volume's writes a file and exits; its next
-/// start reads the file back unchanged and exits again, with `ends` only once the outsider was
-/// refused.
+/// `fsd-label-check`, `fsd-confined-labelled`: a caller whose labels equal the volume's writes a
+/// file and exits; its next start reads the file back unchanged and exits again, with `ends` only
+/// once the outsider was refused.
 fn labelled_run(startup: &Startup, endpoint: &str, ends: Option<(&str, &str)>) -> u32 {
     let Ok(mut lend) = Lend::new(redoubt_init_programs::LEND_PAGES) else {
         return redoubt_init_programs::code::NO_LEND;
