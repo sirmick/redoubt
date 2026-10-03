@@ -52,6 +52,21 @@ name = "driver-client"
 path = "src/bin/driver-client.rs"
 test = false
 
+[[bin]]
+name = "orphan-server"
+path = "src/bin/orphan-server.rs"
+test = false
+
+[[bin]]
+name = "orphan-launcher"
+path = "src/bin/orphan-launcher.rs"
+test = false
+
+[[bin]]
+name = "orphan-child"
+path = "src/bin/orphan-child.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

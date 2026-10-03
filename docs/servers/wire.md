@@ -287,7 +287,7 @@ received an id may release it, and a stranger's id is answered like one that doe
 
 ### A launcher releases its child's grants
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:launcher-orphan
 
 A process that launches a child and asks servers to grant capabilities for it keeps each grant's
 id. On the child's exit notice ([processes](../kernel/processes.md#exit-notices)) the launcher
@@ -301,9 +301,9 @@ were minted through its launcher's, so when a launcher dies and its own launcher
 every descendant's connections go with it. An orphaned child keeps running in its budget, if that
 budget lives, but loses its server connections: it fails closed.
 
-The attack test: killing a launcher leaves its orphan's connections dead at every server.
-
-**Open:** none.
+The attack test: a launcher faults with its orphan still running, and once its own launcher
+has released its grants, the server it held a connection at has dropped the orphan's connection,
+minted under the launcher's, as well.
 
 ### `ninep_common`
 

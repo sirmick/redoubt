@@ -2,7 +2,8 @@
 //! and an empty file server. Each writes its lines through the `/dev/cons` connection `init`
 //! minted for it, so `consoled` starts every one of them with that connection's id
 //! (servers/consoled.md, "Started by `init`"), and the bench attributes a verdict by it
-//! (docs/testbench.md, "The servers' cases under `init`").
+//! (docs/testbench.md, "The servers' cases under `init`"). The programs a tester starts in
+//! `init`'s place share the rest.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -50,6 +51,26 @@ pub mod dma_driver {
     pub const FAULT: u64 = 1;
     /// Answers [`OK`]: the instance that answers holds its DMA run.
     pub const PING: u64 = 2;
+    /// The words of an answer: status 0.
+    pub const OK: [u64; 4] = [0; 4];
+}
+
+/// The requests `orphan-server` serves beside 9P and `ninep_common`, and what its tester and the
+/// programs it starts send each other, each four words, the opcode first.
+pub mod orphan {
+    /// To `orphan-server`: answers [`OK`] with the connections it minted and has not
+    /// disconnected in word 1.
+    pub const COUNT: u64 = 100;
+    /// From the launcher to its tester, a call: it has minted the child's connection and handed
+    /// it over. The answer tells it to fault.
+    pub const MINTED: u64 = 1;
+    /// From the child to its tester: it attached through the connection it was handed, word 1
+    /// 1 if it could.
+    pub const ATTACHED: u64 = 2;
+    /// From the tester to the child: try the connection again.
+    pub const AGAIN: u64 = 3;
+    /// From the child to its tester: what trying again gave, word 1 1 if it was refused.
+    pub const TRIED: u64 = 4;
     /// The words of an answer: status 0.
     pub const OK: [u64; 4] = [0; 4];
 }
