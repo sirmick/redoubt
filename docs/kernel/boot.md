@@ -241,6 +241,35 @@ ignores a completion for a disabled source), then masks it until the holder's ne
 source 0, and the hart timer is the kernel's, arriving as a supervisor timer trap and not
 through the PLIC ([timer](timer.md)). The loader drops an interrupt 0 that a device asks for.
 
+### Hardware bounds
+
+Status: built · partly tested: the compile-time bounds hold by the build and are not attacked by a case; the loader's device-table refusal is tested on the host, not by a boot · tested: host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept, host:loader::an_interrupt_two_devices_raise_takes_one_slot
+
+Every constant that mirrors a hardware field or a platform limit is held to it. A field the
+ISA fixes is a compile-time assert on each width, so a build that breaks it does not exist. A
+limit the platform reports is checked when the loader or kernel reads it, and a machine past it
+is refused ([R17 (fail closed)](#r17-fail-closed)), never truncated.
+
+| Constant | Field or limit | Checked |
+| --- | --- | --- |
+| `MAX_PROCESS_COUNT` | `satp`'s ASID, 9 bits in Sv32 and 16 in Sv39 ([`satp`](memory-layout.md#satp)) | compile time |
+| `MAX_THREADS` | the kernel's 8-bit last-TID field | compile time |
+| `USER_AREA_END` | Sv39's lower half (2^38 bytes); Sv32's half below the kernel's | compile time |
+| the kernel-half bases (rv64) | Sv39 canonical addresses | compile time |
+| the PTE and satp PPN | Sv32's 22 bits, Sv39's 44 | follows from the physmap's bounds |
+| the handle slot's frame index | the physmap's frames | compile time |
+| the kernel's windows (PLIC, DMA registers, process area, stacks) | each other and the physmap | compile time |
+| the physmap | the RAM the platform reports | at boot |
+| the PLIC window | the PLIC's reported size | at boot |
+| `MAX_IRQS` (1024) | the PLIC's sources, 1 to 1023 | at boot, per device |
+| the loader's device table (32 regions, 32 interrupts) | the device tree's devices | at boot |
+| the timebase | `timebase-frequency`, not 0 | at boot |
+| the kernel's tables | its 1 MiB data region | at link time |
+
+Two hold by design rather than by a check: every 64-bit value in the ABI takes two registers
+on both widths ([ABI](abi.md)), and the DMA pool lies within every device's reach because
+virtio addresses are 64 bits. The firmware programs PMP; the kernel and loader program none.
+
 ### Devices handed to the first program
 
 Status: built · partly tested: the loader's refusal of a tree with no console or no console interrupt, and the kernel's refusal of an object for a DMA device past the sixteenth, are not attacked by a case · tested: bench:device, bench:irq-attack, bench:rustsbi-boot
@@ -463,13 +492,17 @@ would be written into all of them.
 
 ### R17 (fail closed)
 
-<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals are tested on the host, not by a boot · tested (5)</summary>
+<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals and the loader's device-table refusal are tested on the host, not by a boot · tested (9)</summary>
 
 - bench:verified-boot-rejects-tamper
 - bench:verified-boot-rejects-bare-archive
 - host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused
 - host:loader::a_boot_hart_without_an_s_mode_context_is_refused
 - host:loader::booting_on_hart_1_takes_hart_1s_s_mode_context
+- host:loader::a_33rd_mmio_region_is_refused
+- host:loader::a_33rd_interrupt_is_refused
+- host:loader::thirty_two_devices_are_kept
+- host:loader::an_interrupt_two_devices_raise_takes_one_slot
 
 </details>
 
@@ -485,7 +518,8 @@ the loader's prints `loader PANIC` and one of the kernel's a kernel panic; both 
 The two boot cases require the power-off and QEMU's status 255.
 
 A device tree with a PLIC but no S-mode context for the boot hart stops the boot too
-([the `Plic` row](#the-argument-block)).
+([the `Plic` row](#the-argument-block)), and so does one with more MMIO regions or interrupts
+than the loader's 32 of each ([hardware bounds](#hardware-bounds)).
 
 The loader refuses to boot when RAM does not fit in the kernel's direct physical map
 (`PHYSMAP_SIZE` from `PHYSMAP_PHYS_BASE`, [memory layout](memory-layout.md#the-direct-physical-map)),

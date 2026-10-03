@@ -15,9 +15,12 @@ use fdt_rs::base::DevTree;
 use fdt_rs::index::{DevTreeIndex, DevTreeIndexNode};
 use fdt_rs::prelude::*;
 
+/// MMIO regions the loader reports, the interrupt controller's included. A tree with more stops
+/// the boot (kernel/boot.md, "Hardware bounds"): dropping one would boot without a device.
 pub const MAX_MMIO: usize = 32;
 /// Distinct interrupt numbers the loader reports. The PLIC's source space is 10 bits, but a
-/// machine with more wired sources than this would need a bigger argument block anyway.
+/// machine with more wired sources than this would need a bigger argument block anyway, so a tree
+/// with more stops the boot, as one with more MMIO regions does.
 pub const MAX_IRQ: usize = 32;
 const MAX_SEED: usize = 64;
 
@@ -242,25 +245,25 @@ impl Platform {
                     if is_console {
                         platform.console_irq.get_or_insert(irq);
                     }
-                    if !platform.irq[..platform.irq_len].contains(&irq) && platform.irq_len < MAX_IRQ {
+                    if !platform.irq[..platform.irq_len].contains(&irq) {
+                        assert!(platform.irq_len < MAX_IRQ, "interrupt {irq} is past the loader's {MAX_IRQ}");
                         platform.irq[platform.irq_len] = irq;
                         platform.irq_len += 1;
                     }
                 }
             }
-            if platform.mmio_len < MAX_MMIO {
-                let mut tag = *b"    ";
-                let len = name.len().min(4);
-                tag[..len].copy_from_slice(&name.as_bytes()[..len]);
-                platform.mmio[platform.mmio_len] = MmioRegion {
-                    range: base..base + size,
-                    name: tag,
-                    dma: !kernel_only && compatible_has(&node, b"virtio"),
-                    console: is_console && !kernel_only,
-                    kernel_only,
-                };
-                platform.mmio_len += 1;
-            }
+            assert!(platform.mmio_len < MAX_MMIO, "MMIO region {name} is past the loader's {MAX_MMIO}");
+            let mut tag = *b"    ";
+            let len = name.len().min(4);
+            tag[..len].copy_from_slice(&name.as_bytes()[..len]);
+            platform.mmio[platform.mmio_len] = MmioRegion {
+                range: base..base + size,
+                name: tag,
+                dma: !kernel_only && compatible_has(&node, b"virtio"),
+                console: is_console && !kernel_only,
+                kernel_only,
+            };
+            platform.mmio_len += 1;
         }
         platform.irq[..platform.irq_len].sort_unstable();
 
@@ -398,7 +401,15 @@ mod tests {
 
     /// A QEMU `virt`-like machine with two harts, whose PLIC wires the contexts in `extended`
     /// ((hart intc phandle, hart interrupt) pairs; hart 0's phandle is 1, hart 1's is 2).
-    fn machine(extended: &[u32], hart: usize) -> Platform {
+    fn machine(extended: &[u32], hart: usize) -> Platform { machine_with(extended, hart, 0, 0) }
+
+    /// [`machine`], booted on hart 0 with every context wired, and `devices` virtio devices
+    /// beside the PLIC, a page of MMIO each, every one raising interrupts `1..=irqs`.
+    fn devices(devices: usize, irqs: u32) -> Platform {
+        machine_with(&[1, M, 1, S, 2, M, 2, S], 0, devices, irqs)
+    }
+
+    fn machine_with(extended: &[u32], hart: usize, devices: usize, irqs: u32) -> Platform {
         let mut t = Fdt::default();
         t.begin("").cells("#address-cells", &[2]).cells("#size-cells", &[2]);
         t.begin("memory@80000000").prop("device_type", b"memory\0");
@@ -417,8 +428,14 @@ mod tests {
         t.end();
         t.begin("soc").begin("plic@c000000").prop("compatible", b"riscv,plic0\0");
         t.prop("interrupt-controller", &[]).cells("reg", &[0, 0xc00_0000, 0, 0x60_0000]);
-        t.cells("interrupts-extended", extended).end().end();
-        t.end();
+        t.cells("interrupts-extended", extended).end();
+        for i in 0..devices {
+            let base = 0x1000_1000 + i as u32 * 0x1000;
+            t.begin(&std::format!("virtio_mmio@{:x}", base)).prop("compatible", b"virtio,mmio\0");
+            t.cells("reg", &[0, base, 0, 0x1000]);
+            t.cells("interrupts", &(1..=irqs).collect::<Vec<u32>>()).end();
+        }
+        t.end().end();
         let mut storage = Vec::new();
         let blob = t.finish(&mut storage);
         // SAFETY: `finish` put the blob on a 4-byte boundary, and the slice is exactly its
@@ -446,4 +463,28 @@ mod tests {
     #[test]
     #[should_panic(expected = "no S-mode context for boot hart 1")]
     fn a_boot_hart_without_an_s_mode_context_is_refused() { machine(&[1, M, 1, S, 2, M], 1); }
+
+    #[test]
+    fn thirty_two_devices_are_kept() {
+        // 31 devices and the PLIC: 32 regions.
+        let platform = devices(31, 32);
+        assert_eq!(platform.mmio().len(), MAX_MMIO);
+        assert!(platform.mmio().iter().any(|region| region.kernel_only));
+        assert_eq!(platform.irq[..platform.irq_len], *(1..=32).collect::<Vec<u32>>());
+    }
+
+    #[test]
+    #[should_panic(expected = "MMIO region virtio_mmio@10020000 is past the loader's 32")]
+    fn a_33rd_mmio_region_is_refused() { devices(32, 1); }
+
+    #[test]
+    #[should_panic(expected = "interrupt 33 is past the loader's 32")]
+    fn a_33rd_interrupt_is_refused() { devices(1, 33); }
+
+    #[test]
+    fn an_interrupt_two_devices_raise_takes_one_slot() {
+        // 64 entries, 32 distinct interrupts: the table counts interrupts, not entries.
+        let platform = devices(2, 32);
+        assert_eq!(platform.irq[..platform.irq_len], *(1..=32).collect::<Vec<u32>>());
+    }
 }
