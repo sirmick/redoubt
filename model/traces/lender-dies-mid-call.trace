@@ -7,7 +7,7 @@
 # Written by tests/traces.rs (REDOUBT_MODEL_BLESS=1 rewrites it); format: README.md.
 redoubt-model-trace 2
 boot root=[1024,24,1000000] system=[256,8,250000] users=[512,12,749000]
-costs budget=1 process=1 contexts=2 thread=1 endpoint=1 handles_per_page=64 page_table=1 open_call=1
+costs budget=1 process=1 contexts=1 thread=1 endpoint=1 handles_per_page=64 page_table=1 open_call=1
 device mmio base=0x10000000 pages=1 dma=0 resets=always
 device mmio base=0x10001000 pages=1 dma=1 resets=always
 device irq n=10
@@ -35,11 +35,11 @@ do p:61415 t:3 call h:1 [1,2,3,4] [] a:0x60000000+0x0@2 forever -> blocked
 wake p:38622 t:2 -> ok message call m:1 badge=5 account=1001 labels=[] words=[1,2,3,4] handles=[] buffer=[lend,a:0x40000000,2]
 read p:38622 t:2 a:0x40000000+0x0 -> ok word 42
 write p:38622 t:2 a:0x40000000+0x0 99 -> ok
-do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
+do p:1 t:1 budget_usage h:13 -> ok usage [32,9,1,1,50,0]
 do p:1 t:1 budget_destroy h:12 -> ok
 read p:38622 t:2 a:0x40000000+0x0 -> ok word 99
-do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
+do p:1 t:1 budget_usage h:13 -> ok usage [32,9,1,1,50,0]
 do p:38622 t:2 receive h:1 0 0 -> ok abandoned m:1
 do p:38622 t:2 reply m:1 [0,0,0,0] [] -> ok reply delivery=discarded mask=0
-do p:1 t:1 budget_usage h:13 -> ok usage [32,5,1,1,50,0]
+do p:1 t:1 budget_usage h:13 -> ok usage [32,4,1,1,50,0]
 do p:38622 t:2 receive h:1 0 0 -> ok exit p:61415 cause=killed code=0 blamed=0 blamed_labels=[]

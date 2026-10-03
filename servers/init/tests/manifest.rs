@@ -830,6 +830,9 @@ fn more_servers_than_init_has_threads_to_watch_are_refused() {
     let devices = virt_devices();
     let mut machine = machine(&devices, &ENTRIES);
     machine.system.processes_limit = u32::MAX;
+    // A watcher's pages are init's: at MAX_THREADS - 1 servers they pass root's free pages, and
+    // this test is about the threads.
+    machine.root.pages_limit = u64::MAX;
     let most = MAX_THREADS - 1;
     assert_eq!(on(&m, &machine).unwrap_err(), Refusal::Watchers { servers: most + 1, most });
     m.servers.pop();

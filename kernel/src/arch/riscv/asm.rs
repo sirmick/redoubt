@@ -5,8 +5,8 @@
 //!
 //! Ported from the original `asm.S` to `global_asm!` so the build needs no C toolchain and
 //! no prebuilt blobs. The two widths differ only mechanically: a saved context is
-//! `32 x size_of::<usize>()` bytes (256 on rv64, 128 on rv32), so context N lives at
-//! `PROCESS_AREA + (N << CTX_SHIFT)`; the load/store width and the reservation-clear
+//! `32 x size_of::<usize>()` bytes (256 on rv64, 128 on rv32), at the address slot 1 of the
+//! header at `PROCESS_AREA` holds; the load/store width and the reservation-clear
 //! instruction change with the register width. All of that is confined to the small,
 //! `cfg`-gated preamble below; the entry paths are shared. Addresses come from
 //! `redoubt_layout` rather than being repeated as literals. There is no suspend/resume
@@ -15,12 +15,6 @@
 use core::arch::global_asm;
 
 use redoubt_layout::{PROCESS_AREA, TRAP_STACK_TOP};
-
-/// `log2(size of a saved context)`: contexts are indexed by `n << CTX_SHIFT`.
-const CTX_SHIFT: usize = (32 * core::mem::size_of::<usize>()).trailing_zeros() as usize;
-
-// The trap handler indexes contexts with this shift, so a `Thread` must be exactly that big.
-const _: () = assert!(core::mem::size_of::<super::process::Thread>() == 1 << CTX_SHIFT);
 
 // Width-specific macros. The register width sets the load/store and the reservation clear;
 // everything else is shared below. These persist into the following `global_asm!` block.
@@ -164,8 +158,8 @@ _start:
     j       kmain
 
 /*
-    Trap entry point. Saves the full context of the interrupted thread into its slot in
-    the per-process context area, switches to the exception stack and enters Rust.
+    Trap entry point. Saves the full context of the interrupted thread at the address the
+    header names (in the thread's IPC page), switches to the exception stack and enters Rust.
 */
 .section .trap, "ax"
 .global _start_trap
@@ -174,9 +168,7 @@ _start_trap:
     csrw    sscratch, sp
     li      sp, {context_area}
     SAVE    x1, 0                   // Stash x1 in the header's scratch field
-    RESTORE x1, 1                   // Load the current context number (header slot 1)
-    slli    x1, x1, {ctx_shift}     // Each context is 1 << ctx_shift bytes
-    add     sp, sp, x1              // sp = &contexts[current]
+    RESTORE sp, 1                   // sp = the current context's address (header slot 1)
 
     SAVE_X3_TO_X31
 
@@ -245,6 +237,5 @@ flush_mmu:
 "#,
     context_area = const PROCESS_AREA,
     exception_sp = const TRAP_STACK_TOP - 16,
-    ctx_shift = const CTX_SHIFT,
     plant_senvcfg = const cfg!(feature = "plant-senvcfg") as usize,
 );

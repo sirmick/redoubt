@@ -410,7 +410,7 @@ in `receive`, not the scheduler. Concurrency is bounded by the pool and by each 
 admission limits per (account, label set); at the limit a call waits its turn
 ([the serving library](../servers/serving.md)).
 
-A call that waits holds its thread for as long as it waits, and a process has at most 31 threads
+A call that waits holds its thread for as long as it waits, and a process has at most 255 threads
 ([processes](../kernel/processes.md)). Most calls are short, but some wait on a person or a peer
 for as long as nothing happens: the console read, the parked `resize`, a read on a TCP
 connection's data file, a `serve` loop, a job's exit notice. A read on `/dev/cons` and a read on a
@@ -422,7 +422,7 @@ So the threads are split. Two run the schedulers. Four take short calls, which n
 a waiting one, and each short call has a timeout, so a hung server costs its caller an error, not
 the session its short calls. Three are reserved for the session's own waiting calls (the console
 read, the parked `resize`, and the loop that serves the session's pipes), so no user code can take
-them. The rest, twenty-two, take user code's waiting calls, one each. A waiting call past that is
+them. The rest, 246, take user code's waiting calls, one each. A waiting call past that is
 refused (`system_limit`), not queued, so a session with too many open sockets learns it at once.
 A job's exit notice takes its thread when the job is launched, before `process_create`, and a
 launch with none free is refused, so no job ever runs with nobody waiting to reap it. Each

@@ -173,11 +173,12 @@ pub extern "C" fn _start() -> ! {
     // --- R3 and I15: abandoned calls, reported once and freed by their reply ------------------
     // A timeout alone does not establish receipt: it may cancel a still-queued call. A lend's
     // outcome distinguishes that (Returned) from a taken call's abandonment (Consumed). Count
-    // exactly 64 proven abandonments; do not mistake scheduler timing for a missing notice.
+    // exactly `MAX_OPEN_CALLS` proven abandonments; do not mistake scheduler timing for a missing
+    // notice.
     let before = ask(&mut t, op::COUNTS, 0)[2];
     let never_received = rd::endpoint_create().expect("queued-cancellation endpoint");
     let (mut abandoned, mut queued) = (0, 0);
-    for attempt in 0..256 {
+    for attempt in 0..4 * rd::MAX_OPEN_CALLS {
         let page = rd::map_anon(rd::PAGE_SIZE, rd::rw()).expect("abandonment lend");
         // The first attempt deliberately exercises the Returned cleanup branch. The remaining
         // ones target the server, whose own notice count must match the Consumed outcomes.
@@ -259,7 +260,7 @@ pub extern "C" fn _start() -> ! {
         }
     }
     // Synchronize on actual saturation, not a wall-clock delay: the server's own trusted
-    // check reports its 64th open call before it sends this acknowledgement.
+    // check reports its `MAX_OPEN_CALLS`th open call before it sends this acknowledgement.
     rd::call(E, &rd::body_with([op::SELF_FILL, 0, 0, 0], &[notify]), None, FOREVER).expect("start filling");
     let Received::Message(full) = rd::receive(Some(full_notice), FOREVER, 0).expect("capacity notice") else {
         panic!("expected capacity notice");

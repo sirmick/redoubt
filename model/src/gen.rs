@@ -166,7 +166,7 @@ impl Gen {
         // limit (a bomb hits its own limit; others keep going).
         if self.bomb.is_none() && self.rng.pct(1) {
             let (pid, _) = self.rng.pick(runnable).unwrap();
-            self.bomb = Some((pid, 40));
+            self.bomb = Some((pid, MAX_THREADS as u32 + 9));
         }
         if let Some((pid, left)) = self.bomb {
             self.bomb = if left > 1 { Some((pid, left - 1)) } else { None };

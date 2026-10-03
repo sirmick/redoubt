@@ -41,9 +41,9 @@ if the steward is busy or gone.
 | --- | --- |
 | `id` | a u64 shared with endpoints' ids, never reused (I12 (ids never reused)) |
 | `parent` | the budget it was carved from; none only for `root` |
-| `depth` | 0 for `root`; always below `MAX_DEPTH` (8: the levels a tree may have) |
+| `depth` | 0 for `root`; always below `MAX_DEPTH` (16: the levels a tree may have) |
 | `class` | `system` or `user`, its parent's; see [Class is trust, not order](#class-is-trust-not-order) |
-| `labels` | a sorted set of u64 labels, at most `MAX_LABELS` (8), fixed at creation, containing all of its parent's |
+| `labels` | a sorted set of u64 labels, at most `MAX_LABELS` (16), fixed at creation, containing all of its parent's |
 | `account` | the principal it bills to, a u64; 0 for none ([R8](#r8-accounts)) |
 | `deadline` | microseconds since boot at which the kernel destroys it; `FOREVER` (`u64::MAX`) for none |
 | `pages` | limit and usage, in pages ([R6](#r6-charging)) |
@@ -84,7 +84,7 @@ handle to it does not destroy it: its carve stays out of its parent (see Residua
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
-| `budget_create` | parent budget handle, spec record -> budget handle | Carve a child from the parent. The spec is `(pages, processes, weight, labels, account, deadline)` in `BUDGET_SPEC_SLOTS` (14) slots: three limits, a label count and `MAX_LABELS` label slots, the account and the deadline. |
+| `budget_create` | parent budget handle, spec record -> budget handle | Carve a child from the parent. The spec is `(pages, processes, weight, labels, account, deadline)` in `BUDGET_SPEC_SLOTS` (22) slots: three limits, a label count and `MAX_LABELS` label slots, the account and the deadline. |
 | `budget_destroy` | budget handle | Destroy the budget and everything below it ([R10](#r10-destruction)). If the caller runs in that subtree, or its process object is charged to a budget in it, the call never returns. |
 | `budget_usage` | budget handle, usage record | Write the budget's limits and usage ([`budget_usage`](#budget_usage)). |
 
@@ -122,9 +122,9 @@ At boot the kernel creates three budgets, all with account 0, no labels and no d
 
 | Budget | Class | Pages | Processes | Weight |
 | --- | --- | --- | --- | --- |
-| `root` | `system` | every RAM page the kernel did not keep for itself or for the DMA pool, less `root`'s own page | 63 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
-| `system` | `system` | a quarter of what `root` does not keep for `init` | 15 (a quarter) | 250,000 (a quarter) |
-| `users` | `user` | the rest, less the two budgets' own pages | 47 (the rest, less `init`'s) | 749,000 |
+| `root` | `system` | every RAM page the kernel did not keep for itself or for the DMA pool, less `root`'s own page | 510 (every PID but the kernel's) | `ROOT_WEIGHT` (1,000,000) |
+| `system` | `system` | a quarter of what `root` does not keep for `init` | 127 (a quarter) | 250,000 (a quarter) |
+| `users` | `user` | the rest, less the two budgets' own pages | 382 (the rest, less `init`'s) | 749,000 |
 
 `root` pays for the two budgets' own pages and carves the rest of its pages and processes into
 them, but what it keeps for `init`: one process, `INIT_WEIGHT` (1,000) of its weight, because a
@@ -135,7 +135,7 @@ limit is the free frames less that page. The boot checks that `root`'s limit, it
 the kernel's frames fit in RAM, and stops if they do not.
 
 `init`, the one program the loader starts, runs in `root`, charged there for everything the
-loader gave it (image, stack, page tables, saved contexts, the bundle's frames) and for its first
+loader gave it (image, stack, page tables, header page, the bundle's frames) and for its first
 thread. It gets handles to `root`, `system` and `users` in slots 1 to 3, stamped with `root`,
 then a handle to every device object ([boot](boot.md)). The machine's device objects are charged
 to `system`. A boot whose `init` and `INIT_PAGES` do not fit does not boot: the kernel stops
@@ -143,7 +143,7 @@ to `system`. A boot whose `init` and `INIT_PAGES` do not fit does not boot: the 
 
 ```mermaid
 flowchart TD
-    R["root<br/>class system, 63 processes<br/>weight 1,000,000, keeps 1,000 free"]
+    R["root<br/>class system, 510 processes<br/>weight 1,000,000, keeps 1,000 free"]
     S["system<br/>class system<br/>a quarter of the pages, 15 processes<br/>weight 250,000"]
     U["users<br/>class user<br/>the rest, 47 processes<br/>weight 749,000"]
     I[init]
@@ -381,7 +381,7 @@ labelled child's handle to a `user`-class caller is a flow R1 must check.
 
 ### R6 (charging)
 
-<details><summary>Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case · tested (20)</summary>
+<details><summary>Status: built · partly tested: an endpoint's page charge is attacked only in the model · tested (21)</summary>
 
 - bench:budget
 - bench:budget-mem-churn
@@ -392,6 +392,7 @@ labelled child's handle to a `user`-class caller is a flow R1 must check.
 - bench:redoubt-tight
 - bench:process-attack
 - bench:pid-pinning-attack
+- bench:thread-limit
 - mutation:R6ChargeAncestors
 - mutation:R6OwnPageChargedToItself
 - mutation:R6EndpointsFree
@@ -431,6 +432,8 @@ freed and for a program the loader started is while it lives. It counts there wh
 the process. If that budget is destroyed while the PID is still held, the count moves to the
 destroyed budget's parent ([R10](#r10-destruction)). A `process_create` over the limit fails
 with `OutOfProcesses` before a PID is drawn ([processes](processes.md#creating-and-starting)).
+`root` holds every PID but the kernel's, so the limits run out no later than the PIDs do: with
+every PID in use, every budget refuses with `OutOfProcesses` (`process-fill`).
 
 The page counts per object are in [objects](objects.md#what-objects-cost). A parent's usage
 counts its children's **limits** and their own pages, never their live usage, so one child
@@ -639,8 +642,9 @@ without preemption.*
      every object frame for one whose owner is dying. Its first walk of the chains destroys the
      devices, which leave them, each moved to its chain's head first so that leaving does not
      walk the endpoints ahead of it; the endpoints stay until the handle chains are closed, and a
-     second walk frees each in a link read and a free. Process objects are not scanned either: the PID index
-     (`Objects::processes`) finds them in a constant (64) lookups.
+     second walk frees each in a link read and a free. Process objects are not scanned either:
+     the PID index (`Objects::processes`) finds them in at most 510 lookups, one for each PID a
+     process can take ([R12 (scheduling)](scheduling.md#r12-scheduling)).
   3. **Handles held outside a budget are chained to it.** A handle dies when the object it names
      is destroyed or when the budget that stamped it is. A handle whose holder runs inside that
      budget's subtree dies with its holder's table, so it needs nothing more. A handle held
@@ -686,13 +690,13 @@ without preemption.*
      on a dying endpoint, reading each open call's flags alone: `abandon` owes no notice on an
      endpoint whose owner is dying, so every such notice was owed before the destruction began,
      and the walk's first pass meets each once, however many callers it fails.
-     `process::endpoints_dying` drops the exit notices in one process-object pass. Each walk is
-     `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk [R2 (fair waiting)](ipc.md#r2-fair-waiting)
-     already makes on the delivery path, repeated only while a pass fails a waiter: the cost
-     follows the subtree's own parked calls, never its endpoint count. Freeing an endpoint's frame
-     touches only the frame, once its handles are closed (item 2), not the dying budget that owns
-     it: the budget's whole object list is going with it, and its endpoints' pages come back in
-     one write.
+     `process::endpoints_dying` drops the exit notices in one process-object pass. Each walk
+     visits the threads that exist, at most `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk
+     [R2 (fair waiting)](ipc.md#r2-fair-waiting) already makes on the delivery path, repeated
+     only while a pass fails a waiter: the cost follows the subtree's own parked calls, never its
+     endpoint count. Freeing an endpoint's frame touches only the frame, once its handles are
+     closed (item 2), not the dying budget that owns it: the budget's whole object list is going
+     with it, and its endpoints' pages come back in one write.
   5. **A process's frames are found from the process.** Ending a process releases the frames it
      owns by walking its own page tables: the tables themselves, the user half's pages and the
      process area's saved registers, each freed if the ownership table still credits it to the
@@ -756,6 +760,10 @@ without preemption.*
     server's endpoint, a walk of every thread, not four;
   - the thread walks, 1.3 ms (2 ms);
   - the rest, 2.9 ms (3 ms).
+
+  Those are the gate's fill. At full occupancy, every PID in use with every thread, the walks of
+  every thread dominate and one destruction takes seconds
+  ([delivery walks every thread](../todo/delivery-walks-every-thread.md)).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).
@@ -791,8 +799,8 @@ without preemption.*
   same reason.
 - **A budget's own page is its parent's.** A child cannot use up the page it lives in, and a
   revocation scope, with zero limits, needs no special rule.
-- **A lend is charged to both sides.** A server's budget covers its open lends up front (64 open
-  9P calls of 16 pages each is 4 MiB), a server that cannot pay does not take the call
+- **A lend is charged to both sides.** A server's budget covers its open lends up front (256 open
+  9P calls of 16 pages each is 16 MiB), a server that cannot pay does not take the call
   (R4 (delivery)), and no budget is ever over its limit.
 - **Class is inherited, with no class argument.** A class check on `budget_create` alone would
   guard one of three doors (`process_create` and `budget_destroy` are the others). Inheriting it

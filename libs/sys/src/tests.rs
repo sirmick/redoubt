@@ -327,7 +327,7 @@ fn exit(pid: u32, cause: Cause, code: u32, blamed_account: u64, nlabels: u64) ->
 fn received_layout() {
     const WORD0: usize = 4 + 1 + MAX_LABELS;
     const HANDLES: usize = WORD0 + WORDS;
-    assert_eq!(RECEIVED_SLOTS, 24);
+    assert_eq!(RECEIVED_SLOTS, 32);
     let m = sample_received()[1].encode();
     assert_eq!(m[..5], [1, BIG, 1, !BIG, 3]);
     assert_eq!(m[5..8], [BIG, BIG ^ 1, BIG ^ 2]);

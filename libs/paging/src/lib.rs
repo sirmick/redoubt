@@ -35,16 +35,14 @@ use core::ptr::NonNull;
 
 use redoubt_sys::PAGE_SIZE;
 
-// Mode-specific parameters. Sv32: 2 levels of 1024 entries, 10 VPN bits, satp mode bit 31,
-// 9-bit ASID. Sv39: 3 levels of 512 entries, 9 VPN bits, satp mode 8<<60, 16-bit ASID.
+// Mode-specific parameters. Sv32: 2 levels of 1024 entries, 10 VPN bits, satp mode bit 31.
+// Sv39: 3 levels of 512 entries, 9 VPN bits, satp mode 8<<60. The ASID field is left 0.
 #[cfg(target_pointer_width = "32")]
 mod mode {
     pub const LEVELS: usize = 2;
     pub const ENTRIES: usize = 1024;
     pub const VPN_BITS: usize = 10;
     pub const SATP_MODE: usize = 1 << 31;
-    pub const SATP_ASID_SHIFT: usize = 22;
-    pub const SATP_ASID_MASK: usize = (1 << 9) - 1;
     pub const SATP_PPN_MASK: usize = (1 << 22) - 1;
 }
 #[cfg(target_pointer_width = "64")]
@@ -53,8 +51,6 @@ mod mode {
     pub const ENTRIES: usize = 512;
     pub const VPN_BITS: usize = 9;
     pub const SATP_MODE: usize = 8 << 60;
-    pub const SATP_ASID_SHIFT: usize = 44;
-    pub const SATP_ASID_MASK: usize = (1 << 16) - 1;
     pub const SATP_PPN_MASK: usize = (1 << 44) - 1;
 }
 pub use mode::*;
@@ -280,13 +276,10 @@ pub fn is_canonical(virt: usize) -> bool {
 #[cfg(target_pointer_width = "32")]
 pub fn is_canonical(_virt: usize) -> bool { true }
 
-/// Build a `satp` value for `pid` (as the ASID) and the root table at `root_phys`.
-pub fn make_satp(pid: usize, root_phys: usize) -> usize {
-    SATP_MODE | ((pid & SATP_ASID_MASK) << SATP_ASID_SHIFT) | (root_phys >> 12)
-}
-
-/// The PID (stored as the ASID) in a `satp` value.
-pub fn satp_pid(satp: usize) -> usize { (satp >> SATP_ASID_SHIFT) & SATP_ASID_MASK }
+/// Build a `satp` value for the root table at `root_phys`, with ASID 0: every switch, map and
+/// unmap flushes the whole TLB, so no address space needs an ASID of its own
+/// (kernel/memory-layout.md, "`satp`").
+pub fn make_satp(root_phys: usize) -> usize { SATP_MODE | (root_phys >> 12) }
 
 /// The root table's physical address in a `satp` value.
 pub fn satp_root(satp: usize) -> usize { (satp & SATP_PPN_MASK) << 12 }

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 356
+revision = 367
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -447,8 +447,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["GATE1", "INIT1", "K13", "K17"]
   body = "Owner's values on QA K16-limits (2026-10-02): MAX_PROCESS_COUNT 512 with 16-bit PIDs; MAX_THREADS 255 with each thread's saved registers in its own IPC page; MAX_OPEN_CALLS 256, WAIT_CAP 32, MAX_DEPTH 16, MAX_LABELS 16, MAX_START_HANDLES 128. Brief: .wash/local/K16-implementer.md. Builds docs/kernel/processes.md (PIDs, threads), objects.md#what-objects-cost, memory-layout.md (per-process kernel data, satp without the PID), boot.md (the handoff record), abi.md (constants, record slots), budgets.md (MAX_DEPTH, MAX_LABELS, residual-risks for #r10-destruction), ipc.md (#r2-fair-waiting, #r4a-open-calls, residual risks), invariants.md, timer.md (residual risks), scheduling.md (R12 fixed terms). Needs GATE1 (its numbers are the baseline), INIT1 (budget.rs boot_*, setup_loader_process, the loader's handoff and process-area mapping) and K13 (message.rs, where the walks are). Tier A (kernel and loader), size L."
-  state = "reported"
-  revision = 354
+  state = "done"
+  revision = 367
   overrides = ["2026-10-02: started by Orchestrator before GATE1 (active), INIT1 (active): Owner asked to run more in parallel (2026-10-02). K16's first two commits touch neither INIT1's files (budget.rs boot_*, setup_loader_process, the loader) nor GATE1's; GATE1's merged numbers remain the baseline, and the branch rebases onto both merges before commit 3.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); an early read of commit 1 while K16 waits for INIT1's merge.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); this commit touches none of INIT1's or GATE1's files and changes no value.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); commits 1 and 4 touch none of INIT1's or GATE1's files; the branch rebases onto both merges before commit 2."]
 
 [[node]]
@@ -622,9 +622,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "beamlet-redoubt"
   needs = ["BEAM1", "FSD3"]
-  body = "Brief (draft, ready when FSD3 merges): .wash/local/BEAM2-implementer.md. Tier A (init's manifest, the verification rule, beamlet's platform, the bench), shell Tier B. Size L.\n\nThe owner's decision (shell plan, decided 5): a read-only virtio disk (QEMU readonly) of one object per module named by its SHA-256, packed through redoubt_fsd::pack, with its own blkd and a read-only fsd (init: a volume names its disk's blkd); system.index in the signed bundle's /boot; load_module hashes what it read and loads only a match, loudly refusing otherwise; a start module that fails parks the VM rather than restart-looping. Redoubt.Shell on the UART console (console only; files BEAM3, launch BEAM4), an ordinary restartable manifest server. h/1 docs: stripped by default, a one-line switch if the owner keeps them.\n\nBooks R75 (verified userland) on boot.md and SECURITY.md, beamlet.md's load_module row and Open, shell.md, packages.md, bootfsd.md, init.md; records the confined-boot question (a labelled domain reading the shared userland disk) as an Open. Cases: userland-boot, -flipped-byte, -bad-start, -missing-object, -read-only, both widths."
-  state = "todo"
-  revision = 338
+  body = "Brief: .wash/local/BEAM2-implementer.md (architect-12, rechecked against main 75245a114; ready). Tier A, size L. Branch wp-beam2 from 75245a114, worktree .worktrees/beam2.\n\nThe userland disk: OTP, Elixir and the shell as hash-checked objects on a read-only volume (image/userland.toml packed by testbench --pack-disk, system.index in the staged /boot, named by `public`), served by an fsd handed to beamlet as the named handle fsd:system (endpoint=fsd:system); beamlet reads its modules from that fsd and sits in the image manifest with a budget_pages= at least twice the VM's measured use at the prompt (heap and ETS budget/16, BEAM1's rule); the shell on the UART console. New since FSD3: more than one disk (a volumes `disk` key, range minting at each blkd, every one-disk rule held per disk); a second bench disk on a fixed slot (disk1, bus 5, 0x10006000, irq 6), attached readonly=on; objects named by hash plus system.index, keyed by file name (<module>.beam, <app>.app); whole applications staged (seven, 577 modules). Cases merge over image/manifest.json with [[file]] servers. h/1 docs stripped by default.\n\nR34, ruled by the owner 2026-10-03: one read-only attachment of the userland image per label set (its own device, blkd, volume and fsd), R34 unchanged; one host test; beamlet.md states it as a rule."
+  state = "active"
+  revision = 360
 
 [[node]]
   id = "BEAM3"
@@ -705,3 +705,42 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Owner (2026-10-03): build it, after K16 and before SMP1. Brief: .wash/local/ASID1-implementer.md (written against K16's c5/tip; recheck on main after K16 merges). Tier A (kernel memory core), size M.\n\nThe PID is satp's ASID (511 < 2^ASID_BITS); a switch flushes nothing; every page-table write flushes what it changed in the space it changed, running or not: a leaf by (address, ASID), a table pointer by whole ASID, a kernel-half leaf by (address, x0); G exactly on the shared kernel half, never on the per-process PROCESS_AREA path. A PID given out is flushed whole before its first map (MemoryMapping::allocate); a destruction moves satp off the dying space and flushes its ASID before freeing its frames (a garbage G leaf from a freed table would survive ASID flushes). The boot probes the ASID width (ones written to satp) and refuses one narrower than ASID_BITS (R17, HW1's table). A checked build logs unflushed page-table writes and stops at a return to user mode with one pending; it audits G.\n\nAcceptance: asid-reuse-stale and two recorded negatives (asid-no-reuse-flush, asid-no-leaf-flush) on both widths; asid-cost (round trip, switch, map/unmap) before and after on both widths. QEMU's TLB is not tagged by ASID (to confirm from its source), so the saving shows on the FPGA core, not QEMU; a regression is a finding. Whole bench; K16's worst walk and the gate's targets not regressed. Pages: memory-layout.md (satp, G row, residuals), memory.md, processes.md, fpga-platform.md (two bullets), m2-usable-shell.md item 4, boot.md hardware bounds row.\n\nOut: several harts. SMP1 (amended): shootdown flushes the target's ASID on the harts running it; harts that only ran it flush lazily through a per-PID stale mask before they next install it."
   state = "todo"
   revision = 345
+
+[[node]]
+  id = "ABI1"
+  title = "The system-call ABI apart from its transport: one Transport trait the ecall, the fake and any backend implement"
+  template = "package"
+  parent = "M1"
+  body = "Owner (2026-10-03). Brief: .wash/local/ABI1-implementer.md. Tier A (libs/sys, libs/rt's seam), size S. No needs.\n\nredoubt_sys::Transport (a Call in, a Return out, records and buffers by address) beside the ABI; Ecall implements it with today's one unsafe; redoubt_sys::syscall stays for the stub and tests/programs. libs/rt selects one installed transport (HostKernel becomes Transport, install_transport), the ecall by default on the machine, feature installed-transport otherwise; a no_std installed slot is the backend's own package. init's two direct DeviceInfo calls go through the runtime. Nothing above rt changes but the two renames.\n\nAcceptance: every host test and machine case unchanged, both widths; the unsafe count and the image sizes unchanged; a host test of a second transport seeing every call. Pages: libs/sys module doc, abi.md, native.md, and the owner's no-MMU direction as one line on docs/beyond/README.md."
+  state = "active"
+  revision = 363
+
+[[node]]
+  id = "ABI2"
+  title = "Lends and transfers defined by ownership, not mapping; the fake kernel refuses given-up pages"
+  template = "package"
+  parent = "M1"
+  needs = ["ABI1"]
+  body = "Owner (2026-10-03). Brief: .wash/local/ABI2-implementer.md. Tier A (the IPC pages, the fake kernel), size S. Needs ABI1 (shared files: the fake, libs/sys docs).\n\nipc.md states lend and transfer as ownership: the caller gives a lend up for the whole call, the server may read and write it until its reply, the return says who owns it (returned / consumed); a transfer is given up at send and becomes the receiver's, owner and payer, at the take, or comes back if the send fails. One owner in every state. The MMU's remap is this kernel's enforcement (I9), stated once; a no-MMU backend may hand the buffer over. No kernel change (verified: take_buffer, give_buffer_back, move_buffer); a false rule is a stop-and-report. The fake refuses every call naming a given-up page. LendDisposition and Buffer docs say ownership; no type changes.\n\nAcceptance: the fake's new host tests; every host test and machine case unchanged, both widths."
+  state = "todo"
+  revision = 362
+
+[[node]]
+  id = "MEM1"
+  title = "Each server's stack declared in the manifest, painted by the launcher, measured by the bench"
+  template = "package"
+  parent = "M1"
+  needs = ["BEAM2"]
+  body = "Owner (2026-10-03; Redoubt-side seam for an outside no-MMU variant: keep small). Brief: .wash/local/MEM1-implementer.md. Size S+ (the bench's RAM scan is most of it). Needs BEAM2 (shared: init's manifest and checks, the bench's QEMU and case code, image/manifest.json).\n\nManifest key stack_pages (decimal string, 16 if absent, refused 0, above MAX_STACK_PAGES = 128, or at/above the budget's pages); init's own constant and Machine::stack_pages go, the INIT5 bound counts the largest declared stack's batch. The launcher paints every stack (8-byte units: magic, tag, unit index) instead of zeroing it; init tags each launch with its manifest index + 1. A case with memory = true stops QEMU after its verdict, saves RAM over QMP, scans the paint, prints each server's peak and fails a server declaring less than twice it. The image's servers declare measured numbers. No kernel change.\n\nAcceptance: init, client and testbench host tests (the scanner's verdict included); one memory = true image case, both widths. Pages: init.md (row, Stacks bullet, launch step 2), memory-layout.md, native.md, budgets.md, testbench.md \"The memory budget\"."
+  state = "todo"
+  revision = 365
+
+[[node]]
+  id = "MEM2"
+  title = "Each server's heap capped in the manifest, enforced by the runtime's allocator"
+  template = "package"
+  parent = "M1"
+  needs = ["MEM1", "ABI1"]
+  body = "Owner (2026-10-03; Redoubt-side seam for an outside no-MMU variant: keep small). Brief: .wash/local/MEM2-implementer.md. Size S+ (the startup block's version and the consumer sweep it forces). Needs MEM1 (scan, tag, manifest checks) and ABI1 (rt's seam).\n\nManifest key heap_pages (absent = no cap; refused 0, or heap + stack at/above the budget's pages). The startup block, version 2, gains heap_pages and tag; rt sets the cap before main. The cap is rt's ceiling below the kernel budget: pages the allocator holds, refused (null) before any map_anon, counted as mapped, not committed; the budget still bounds stacks, Buffers, lends, tables. Past the cap an infallible allocation panics (exit 101, init's restart rule); a fallible one sees the error. A heap record (magic, tag, cap, peak) in data, found by MEM1's scan; the bench fails a cap under twice the peak. Image servers get measured caps. beamlet's budget_pages= todo is not this package's.\n\nAcceptance: rt host tests over the fake (refusal with no map_anon), startup v2/v1, init tests; a tests/programs case capped low; heaps reported by MEM1's memory case both widths. Pages: init.md, budgets.md, native.md, testbench.md."
+  state = "todo"
+  revision = 365

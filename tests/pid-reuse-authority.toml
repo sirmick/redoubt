@@ -6,7 +6,7 @@ debug_assertions = true
 # is a kernel result: BadHandle at every index, the badge the kernel wrote on B's message, the
 # exit notices (B's fault at A's device address), and the console IRQ waking this program.
 programs = ["pid-reuse-authority"]
-timeout_secs = 60
+timeout_secs = 120
 expect = [
     '^\[pid 2\] \[pid-reuse\] A \(pid \d+\) exited holding a call, a device mapping, the irq and a budget$',
     '^\[pid 2\] \[pid-reuse\] B drew pid \d+$',

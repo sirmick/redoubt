@@ -21,6 +21,10 @@ pub struct Case {
     /// Targets to run on, by name (see `target.rs`). Empty for source-level checks.
     #[serde(default)]
     pub arch: Vec<String>,
+    /// False for a measurement too long for every merge: the case runs only when the filter is
+    /// its whole name, and `--list` marks it (`Case::chosen`).
+    #[serde(default = "default_whole_run")]
+    pub whole_run: bool,
     #[serde(flatten)]
     pub kind: Kind,
 }
@@ -639,6 +643,8 @@ fn default_smp() -> Vec<u32> { vec![1] }
 
 fn default_timeout() -> f64 { 60.0 }
 
+fn default_whole_run() -> bool { true }
+
 impl Boot {
     /// Whether the real `init` is in the first program's place: then the other programs are only
     /// bundle entries, which `init` starts as its manifest says.
@@ -679,6 +685,15 @@ impl Case {
         }
         case.check().with_context(|| format!("in {}", path.display()))?;
         Ok(case)
+    }
+
+    /// Whether `filter` (part of a case's name, or none) takes in this case: what `--list` shows.
+    pub fn matches(&self, filter: Option<&str>) -> bool { filter.is_none_or(|f| self.name.contains(f)) }
+
+    /// Whether a run with `filter` runs this case. One out of the whole run (`whole_run = false`)
+    /// runs only when the filter is its name.
+    pub fn chosen(&self, filter: Option<&str>) -> bool {
+        self.matches(filter) && (self.whole_run || filter == Some(self.name.as_str()))
     }
 
     /// Catch mistakes before booting anything, where they would otherwise show up only as a
@@ -996,5 +1011,28 @@ mod tests {
             }
         }
         assert!(beamlets >= 4, "the beamlet cases' manifests were not found ({beamlets})");
+    }
+
+    /// A case out of the whole run runs only when named in full; any other case as before.
+    #[test]
+    fn a_case_out_of_the_whole_run_runs_only_by_name() {
+        let case = |name: &str, whole_run: &str| -> Case {
+            let text = format!("description = \"d\"\nkind = \"fmt\"\nroots = []\n{whole_run}");
+            Case { name: name.into(), ..toml::from_str(&text).unwrap() }
+        };
+        let usual = case("sched-share", "");
+        assert!(usual.whole_run);
+        assert!(usual.chosen(None) && usual.chosen(Some("sched")) && usual.chosen(Some("sched-share")));
+        assert!(!usual.chosen(Some("timer")));
+        let long = case("worst-walk", "whole_run = false\n");
+        assert!(!long.chosen(None), "out of the whole run");
+        assert!(!long.chosen(Some("walk")), "a part of its name is not its name");
+        assert!(long.chosen(Some("worst-walk")));
+        assert!(long.matches(None) && long.matches(Some("walk")), "--list shows it");
+        // A misspelt key is refused, never read as the default: the keys `Case` does not take reach
+        // its kind, and every kind refuses an unknown field.
+        let text = "description = \"d\"\nkind = \"fmt\"\nroots = []\nwhole_rum = false\n";
+        let err = toml::from_str::<Case>(text).map(|_| ()).unwrap_err().to_string();
+        assert!(err.contains("whole_rum"), "{err}");
     }
 }

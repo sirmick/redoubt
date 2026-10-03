@@ -16,7 +16,8 @@ fn random_ops(seed: u64) -> Vec<Op> {
     let mut k = Kernel::boot(&Boot::testing(), None).unwrap();
     let mut g = Gen::new(seed);
     let mut ops = Vec::new();
-    for _ in 0..150 {
+    // Long enough for a thread bomb to reach `MAX_THREADS`, as in `coverage.rs`.
+    for _ in 0..450 {
         if k.halted.is_some() {
             break;
         }

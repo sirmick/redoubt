@@ -24,8 +24,8 @@ Status: built · partly tested: independence from the kernel's source and the em
 - **Independent.** The crate is `no_std` with `alloc`, `#![forbid(unsafe_code)]`, and its
   `[dependencies]` table is empty: it links no kernel crate, not `redoubt-sys`, nothing from
   crates.io. It states its constants itself, with the kernel's names and values: `WORDS` (4),
-  `MAX_MSG_HANDLES` (4), `MAX_HANDLES` (4096), `MAX_LEND_PAGES` (16), `MAX_THREADS` (31),
-  `WAIT_CAP` (16), `MAX_OPEN_CALLS` (64), `SLICE` (10,000 µs), `STRIDE` (2^20). Two crates
+  `MAX_MSG_HANDLES` (4), `MAX_HANDLES` (4096), `MAX_LEND_PAGES` (16), `MAX_THREADS` (255),
+  `WAIT_CAP` (32), `MAX_OPEN_CALLS` (256), `SLICE` (10,000 µs), `STRIDE` (2^20). Two crates
   use the model, each as a dev-dependency: `redoubt-stride`, for its differential test
   ([below](#where-the-model-meets-the-kernels-code)), and the test bench, whose scheduling
   oracle must reject traces from the model's scheduler with its tie rules broken.
@@ -73,7 +73,7 @@ Status: built · partly tested: independence from the kernel's source and the em
   the 4 MiB area from `DEFAULT_MESSAGE_BASE`, each searched as the kernel searches it
   ([memory](memory.md#where-map_anon-puts-pages)). A full area is refused as the kernel
   refuses it.
-- **Costs** come from a `costs` table: by default the rv64 table (two saved-context pages per
+- **Costs** come from a `costs` table: by default the kernel's table (one header page per
   process, one page for each other object, 64 handles per handle-table page). The property
   tests use 8 handles per page, so handle-table growth and its charge show up in short runs.
 - **Boot.** `root`, `system` and `users` get the kernel's weight split: `root` 1,000,000,
@@ -194,12 +194,14 @@ The rules themselves are on [scheduling](scheduling.md).
 
 `flood` is the endpoint-flooding attack, in the model. A system server receives on one endpoint
 with two threads. Bob's processes, with two label sets under one account (so two R2 groups),
-run up to 31 threads each, all calling with no timeout. Up to eight other accounts queue
-`WAIT_CAP` calls each. Alice makes one call in the middle of the flood. Most of Bob's calls
-must get `Busy`, no crowd process may get `Busy` within its own group's cap, and Alice's call
-must be taken within as many receives as there are groups. In half the seeds the server
-hoards: it receives without replying until the process holds `MAX_OPEN_CALLS`, spread over both
-threads, and it must still take a send. The checker runs every 512 steps and at the end.
+run up to a fixed 31 threads each (the attack's shape, not `MAX_THREADS`), all calling with no
+timeout. Enough other accounts that more than `MAX_OPEN_CALLS` calls can queue (seven to twelve)
+queue `WAIT_CAP` calls each, and the server's budget has a page for each open call. Alice makes
+one call in the middle of the flood. Most of Bob's calls must get `Busy`, no crowd process may
+get `Busy` within its own group's cap, and Alice's call must be taken within as many receives as
+there are groups. In half the seeds the server hoards: it receives without replying until the
+process holds `MAX_OPEN_CALLS`, spread over both threads, and it must still take a send. The
+checker runs every 512 steps and at the end.
 
 ## Scripted contracts
 
@@ -497,7 +499,7 @@ run on the real timer. The case passes when 100,000 model traces replay with ide
 
 Replay is what turns the model from a reference into evidence about the kernel.
 
-**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM) and the rv32 cost table (one saved-context page); `map_device`'s result (the kernel returns the address and the length, the model only the address); a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
+**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM); `map_device`'s result (the kernel returns the address and the length, the model only the address); a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
 
 ## Residual risks
 

@@ -53,11 +53,6 @@ const ROOT_PROCESS_AREA: usize = physmap::vpn(PROCESS_AREA, physmap::LEVELS - 1)
 // `for_each_owned_frame` walks the user half and then this entry: each once.
 const _: () = assert!(ROOT_PROCESS_AREA >= ROOT_KERNEL_START);
 
-/// Extract the PID (stored as the ASID) from a raw `satp` value.
-pub fn pid_from_satp(satp: usize) -> usize { physmap::satp_pid(satp) }
-
-fn make_satp(pid: Pid, root_phys: usize) -> usize { physmap::make_satp(pid.get() as usize, root_phys) }
-
 /// The root table of the address space that `satp` names.
 fn root_of(satp: usize) -> Table {
     assert!(physmap::satp_is_active(satp), "address space is not allocated");
@@ -258,13 +253,7 @@ pub struct MemoryMapping {
 
 impl core::fmt::Debug for MemoryMapping {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::result::Result<(), core::fmt::Error> {
-        write!(
-            fmt,
-            "(satp: {:#x}, ASID: {}, root: {:#x})",
-            self.satp,
-            physmap::satp_pid(self.satp),
-            physmap::satp_root(self.satp),
-        )
+        write!(fmt, "(satp: {:#x}, root: {:#x})", self.satp, physmap::satp_root(self.satp))
     }
 }
 
@@ -277,7 +266,7 @@ impl MemoryMapping {
     /// Allocate a brand-new memory mapping. The new address space contains:
     ///
     ///     1. Every shared kernel root entry (physmap and kernel), copied from the current root.
-    ///     2. `ProcessImpl` pages at `PROCESS_AREA`, so the process can be run.
+    ///     2. The header page at `PROCESS_AREA`, so the process can be run.
     ///
     /// All pages, including the page tables themselves, are owned by `pid`, so they are
     /// released along with everything else when the process is destroyed.
@@ -298,36 +287,30 @@ impl MemoryMapping {
         // From here the space names everything it takes, so a failure gives it all back by one
         // walk of its tables, and the space is whole or does not exist (`process_create`'s
         // rollback walks it, `release_owned_frames`).
-        self.satp = make_satp(pid, root_phys);
-        for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
-            if let Err(e) = Self::add_context_page(root, mm, pid, page) {
-                mm.release_owned_frames(pid, self);
-                self.satp = 0;
-                return Err(e);
-            }
+        self.satp = physmap::make_satp(root_phys);
+        if let Err(e) = Self::add_header_page(root, mm, pid) {
+            mm.release_owned_frames(pid, self);
+            self.satp = 0;
+            return Err(e);
         }
         Ok(())
     }
 
-    /// Back and map saved-context page `page` of a new space: a frame charged to the running
-    /// budget (kernel/objects.md). On failure the frame is given back, and any table the mapping
-    /// took is in the space.
-    fn add_context_page(root: Table, mm: &mut MemoryManager, pid: Pid, page: usize) -> Result<(), PageError> {
-        let context_phys = mm.alloc_context_page(pid)?;
+    /// Back and map a new space's header page at `PROCESS_AREA`: a frame charged to the running
+    /// budget (kernel/objects.md), named in the account once it is mapped. On failure the frame
+    /// is given back, and any table the mapping took is in the space.
+    fn add_header_page(root: Table, mm: &mut MemoryManager, pid: Pid) -> Result<(), PageError> {
+        let header_phys = mm.alloc_context_page(pid)?;
         // SAFETY: `alloc_context_page` returns a RAM frame that was free until now.
-        unsafe { window().zero_frame(context_phys) };
-        let virt = PROCESS_AREA + page * PAGE_SIZE;
-        map_page_in(root, mm, pid, context_phys, virt, PteFlags::R | PteFlags::W)
-            .inspect_err(|_| mm.free_frame_of(context_phys, pid).expect("the frame just taken"))
+        unsafe { window().zero_frame(header_phys) };
+        map_page_in(root, mm, pid, header_phys, PROCESS_AREA, PteFlags::R | PteFlags::W)
+            .inspect_err(|_| mm.free_frame_of(header_phys, pid).expect("the frame just taken"))?;
+        mm.set_header(pid, header_phys);
+        Ok(())
     }
 
     /// Get the currently active memory mapping.
     pub fn current() -> MemoryMapping { MemoryMapping { satp: satp::read().bits() } }
-
-    /// Get the "PID" (actually, ASID) from the current mapping
-    pub fn get_pid(&self) -> Option<Pid> { Pid::new(pid_from_satp(self.satp) as _) }
-
-    pub fn is_kernel(&self) -> bool { self.get_pid().map(|v| v.get() == 1).unwrap_or(false) }
 
     /// Set this mapping as the systemwide mapping.
     /// **Note:** This should only be called from an interrupt in the
@@ -374,7 +357,7 @@ impl MemoryMapping {
     }
 
     pub fn print_map(&self) {
-        println!("Memory Maps for PID {}:", pid_from_satp(self.satp));
+        println!("Memory Maps for satp {:#x}:", self.satp);
         self.for_each_user_leaf(|virt, pte| {
             println!("    {:016x} -> {:010x} ({:?})", virt, pte.phys(), pte.flags());
         });
@@ -480,6 +463,12 @@ pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, PageError> 
     slot.set(pte.without(PteFlags::VALID).with(PteFlags::S));
     flush_tlb();
     Ok(pte.phys())
+}
+
+/// The frame of `space`'s header page, mapped at `PROCESS_AREA` (the loader's, for `init`).
+pub fn header_phys(space: &MemoryMapping) -> Option<usize> {
+    let pte = walk(root_of(space.satp), PROCESS_AREA, None).ok()?.get();
+    pte.is_valid().then(|| pte.phys())
 }
 
 /// The frame behind a page `space` lent out, from the lender's own entry.
@@ -699,7 +688,7 @@ pub fn virt_to_phys(virt: usize) -> Result<usize, PageError> {
 /// kernel (or, with `smp`, deadlocks). The page-fault handler borrows it for this call.
 pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Result<usize, PageError> {
     // Disallow mapping memory outside of user land
-    if !MemoryMapping::current().is_kernel() && address >= USER_AREA_END {
+    if crate::arch::current_pid() != redoubt_layout::KERNEL_PID && address >= USER_AREA_END {
         return Err(PageError::Unmapped);
     }
     let virt = address & !(PAGE_SIZE - 1);

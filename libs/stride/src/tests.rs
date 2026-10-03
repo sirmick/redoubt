@@ -220,6 +220,41 @@ fn ranks_follow_all_four_clauses() {
     assert_eq!(order, [5, 4, 2, 3]);
 }
 
+/// A [`Map`] that records the budgets that left the queue, in order.
+#[derive(Default)]
+struct Leaving(Map, Vec<u64>);
+
+impl Budgets<u64> for Leaving {
+    fn state(&self, b: u64) -> State { self.0.state(b) }
+
+    fn set_state(&mut self, b: u64, s: State) { self.0.set_state(b, s) }
+
+    fn id(&self, b: u64) -> u64 { b }
+
+    fn weight(&self, b: u64) -> u64 { self.0.weight(b) }
+
+    fn left(&mut self, b: u64) { self.1.push(b) }
+}
+
+#[test]
+fn a_reconcile_takes_budgets_out_in_place() {
+    let mut bs = Leaving(map(&[1, 4, 9]), Vec::new());
+    let mut q: Queue<u64, 4> = Queue::new();
+    // One wake per reconcile, so the slots hold 1, 9, 4: not id order.
+    q.reconcile(&mut bs, None, &[1]);
+    q.reconcile(&mut bs, None, &[1, 9]);
+    q.reconcile(&mut bs, None, &[1, 9, 4]);
+    assert!(bs.1.is_empty());
+    // The running budget stays; the others leave as the walk meets them: 1, then 4, which the
+    // last slot moved into 1's, read again.
+    q.reconcile(&mut bs, Some(9), &[]);
+    assert_eq!(bs.1, [1, 4]);
+    assert!(q.contains(9) && !q.contains(1) && !q.contains(4));
+    q.reconcile(&mut bs, None, &[]);
+    assert_eq!(bs.1, [1, 4, 9]);
+    assert!(q.is_empty());
+}
+
 #[test]
 fn the_floor_survives_an_empty_queue() {
     let mut bs = map(&[1, 2]);

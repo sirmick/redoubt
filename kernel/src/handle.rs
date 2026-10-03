@@ -227,7 +227,7 @@ impl Link {
             0 => Link::None,
             w if w & HEAD_BIT != 0 => Link::Head(w as u32),
             // Only the kernel writes table pages and heads.
-            w => Link::Slot(Pid::new((w >> 32) as u8).expect("I1: corrupt chain link"), w as u32),
+            w => Link::Slot(crate::budget::pid_from(w >> 32).expect("I1: corrupt chain link"), w as u32),
         }
     }
 }
@@ -378,8 +378,8 @@ impl MemoryManager {
 
     /// Remove every handle for which `doomed` holds, from every process's table (R10).
     pub fn sweep_handles(&mut self, doomed: impl Fn(&Self, &Handle) -> bool) {
-        for pid in 1..=crate::arch::process::MAX_PROCESS_COUNT {
-            if let Some(pid) = Pid::new(pid as u8) {
+        for pid in self.live_pids() {
+            if self.account(pid).is_some() {
                 self.remove_handles_where(pid, &doomed);
             }
         }
@@ -447,7 +447,7 @@ impl MemoryManager {
     /// table page counts its entries right. A scan of every table, so never on the walk.
     #[cfg(debug_assertions)]
     pub(crate) fn check_handle_chains(&self) {
-        for pid in (1..=crate::arch::process::MAX_PROCESS_COUNT).filter_map(|i| Pid::new(i as u8)) {
+        for pid in crate::budget::pids() {
             let (Some(holder), Some(table)) = (self.budget_of(pid), self.table(pid)) else { continue };
             for (page, frame) in table.pages.iter().enumerate() {
                 let Some(frame) = *frame else { continue };

@@ -22,8 +22,9 @@
 //!
 //! Walking every thread to pick the next sender costs more than a queue would. The design asks
 //! for the walk anyway: R2 serves groups round-robin, so a receive must consider every waiting
-//! group. The walk is bounded by `MAX_PROCESS_COUNT * MAX_THREADS`, a compile-time constant no
-//! process can influence (TENETS.md: clarity beats speed).
+//! group. The walk visits only the threads that exist ([`find_thread`]), so it is bounded by the
+//! threads the budgets have paid a page for, and at most by `MAX_PROCESS_COUNT * MAX_THREADS`, a
+//! compile-time constant no process can influence (TENETS.md: clarity beats speed).
 //!
 //! # Locks
 //! Every entry point takes the scheduler (`ss`) and the memory manager (`mm`) together, borrowed
@@ -45,9 +46,9 @@ use redoubt_sys::{
     Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
 };
 
-use crate::arch::process::MAX_PROCESS_COUNT;
 use crate::arch::process::TID;
 use crate::budget::{BudgetFrame, Class};
+use crate::cell::KernelCell;
 use crate::endpoint::Group;
 use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
 use crate::kframe;
@@ -94,7 +95,8 @@ const W_NCALLS: usize = W_HANDLES + MAX_MSG_HANDLES * 4;
 const W_CURRENT: usize = W_NCALLS + 1; // open-call frame + 1
 const W_CALLS: usize = W_CURRENT + 1; // MAX_OPEN_CALLS frame numbers
 const THREAD_WORDS: usize = W_CALLS + MAX_OPEN_CALLS;
-const _: () = assert!(THREAD_WORDS * 8 <= PAGE_SIZE);
+// The thread's saved registers take the page's last bytes (`arch::process`).
+const _: () = assert!(THREAD_WORDS * 8 <= crate::arch::process::CONTEXT_OFFSET);
 
 /// What a blocked thread is waiting for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -339,7 +341,7 @@ struct OpenCall {
     nlabels: usize,
 }
 
-fn pid_of(word: u64) -> Pid { Pid::new(word as u8).expect("I1: an open call names no process") }
+fn pid_of(word: u64) -> Pid { crate::budget::pid_from(word).expect("I1: an open call names no process") }
 
 fn open_call_at(mm: &MemoryManager, frame: u32) -> OpenCall {
     let phys = mm.object_phys(frame);
@@ -428,20 +430,10 @@ fn open_call_of(mm: &MemoryManager, pid: Pid, tid: TID, rid: u64) -> Option<u32>
 
 // --- Walking the threads ---------------------------------------------------------------------------
 
-/// Call `f` for every thread that has an IPC page, until it answers `Some`.
+/// Call `f` for every thread that has an IPC page, in (pid, tid) order, until it answers `Some`.
+/// Only threads that exist are visited ([`MemoryManager::live_tids`]).
 fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, Pid, TID) -> Option<T>) -> Option<T> {
-    for index in 1..=MAX_PROCESS_COUNT {
-        let Some(pid) = Pid::new(index as u8) else { continue };
-        for tid in 1..=MAX_THREADS {
-            if mm.ipc_frame(pid, tid).is_none() {
-                continue;
-            }
-            if let Some(found) = f(mm, pid, tid) {
-                return Some(found);
-            }
-        }
-    }
-    None
+    mm.live_pids().find_map(|pid| mm.live_tids(pid).find_map(|tid| f(mm, pid, tid)))
 }
 
 /// Whether `(pid, tid)` is a sender queued on `e`.
@@ -931,6 +923,8 @@ pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointR
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
 /// delivered. Notices come before messages (kernel/ipc.md, "What `receive` returns").
 fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
+    #[cfg(feature = "walk-trace")]
+    let _walk = crate::sched::trace::walk(crate::sched::trace::PUMP);
     loop {
         if !mm.is_live_endpoint(e) {
             return;
@@ -1533,22 +1527,29 @@ fn finish_served(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
 pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
     #[cfg(feature = "sched-trace")]
     let _threads = crate::sched::trace::threads();
-    let mut served: [Option<EndpointRef>; MAX_THREADS] = [None; MAX_THREADS];
-    let mut n = 0;
-    for tid in 1..=MAX_THREADS {
-        if mm.ipc_frame(pid, tid).is_none() {
-            continue;
+    let n = SERVED.with(|served| {
+        let mut n = 0;
+        for tid in mm.live_tids(pid) {
+            match end_thread(ss, mm, pid, tid) {
+                Some(e) if !served[..n].contains(&e) => {
+                    served[n] = e;
+                    n += 1;
+                }
+                _ => {}
+            }
         }
-        let e = end_thread(ss, mm, pid, tid);
-        if e.is_some() && !served[..n].contains(&e) {
-            served[n] = e;
-            n += 1;
-        }
-    }
-    for e in served[..n].iter().flatten() {
-        pump(ss, mm, *e);
+        n
+    });
+    for i in 0..n {
+        let e = SERVED.with(|served| served[i]);
+        pump(ss, mm, e);
     }
 }
+
+/// `process_ending`'s endpoints to pump, one per thread at most: a static, not 4 KiB of the 32 KiB
+/// kernel stack. All zeros, so `.bss`.
+static SERVED: KernelCell<[EndpointRef; MAX_THREADS]> =
+    KernelCell::new([EndpointRef { frame: 0, id: 0 }; MAX_THREADS]);
 
 /// R10, the part that reaches messages: after `budget_destroy` marked a subtree dying and before
 /// its budgets are freed, destroy the devices it owns and fail every message sent through a handle
@@ -1594,11 +1595,8 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
     let mut first = true;
     loop {
         let mut failed = false;
-        for pid in (1..=MAX_PROCESS_COUNT).filter_map(|i| Pid::new(i as u8)) {
-            for tid in 1..=MAX_THREADS {
-                if mm.ipc_frame(pid, tid).is_none() {
-                    continue;
-                }
+        for pid in mm.live_pids() {
+            for tid in mm.live_tids(pid) {
                 if first {
                     drop_dying_notices(mm, pid, tid);
                 }
@@ -1719,8 +1717,7 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> Timeouts {
     let mut due: Option<(u64, Pid, TID)> = None;
     let mut next = u64::MAX;
     let mut stale = None;
-    for index in 1..=MAX_PROCESS_COUNT {
-        let Some(pid) = Pid::new(index as u8) else { continue };
+    for pid in mm.live_pids() {
         let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
         if earliest > now {
             next = next.min(earliest);
@@ -1728,10 +1725,7 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> Timeouts {
         }
         let mut exact = u64::MAX;
         let mut found = false;
-        for tid in 1..=MAX_THREADS {
-            if mm.ipc_frame(pid, tid).is_none() {
-                continue;
-            }
+        for tid in mm.live_tids(pid) {
             if Wait::from_word(tword(mm, pid, tid, W_WAIT)) == Wait::None {
                 continue;
             }
@@ -1768,7 +1762,7 @@ pub fn time_out(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TI
 /// After `reply` freed an open call, the process may be able to take calls again (R4a) and an
 /// abandoned-call notice may be waiting: try every endpoint its threads receive on.
 fn poke_receivers(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
-    for tid in 1..=MAX_THREADS {
+    for tid in mm.live_tids(pid) {
         let s = slot(mm, pid, tid);
         if s.wait == Wait::Receive {
             if let Some(e) = s.endpoint {

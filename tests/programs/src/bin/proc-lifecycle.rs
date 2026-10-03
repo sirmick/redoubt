@@ -208,9 +208,10 @@ pub extern "C" fn _start() -> ! {
     spawn::spawn(&image, budget, exit, child as *const () as usize, &[0], &[]).unwrap();
     notice(exit);
     let baseline = rd::usage(rd::ROOT).unwrap();
-    let mut seen = [false; 256];
+    // PIDs run to `MAX_PROCESS_COUNT` (511, kernel/processes.md).
+    let mut seen = [false; 512];
     let mut reused = false;
-    for _ in 0..260 {
+    for _ in 0..520 {
         spawn::spawn(&image, budget, exit, child as *const () as usize, &[0], &[]).unwrap();
         let n = notice(exit);
         assert_eq!(n.cause, Cause::Exited);
@@ -220,7 +221,7 @@ pub extern "C" fn _start() -> ! {
         assert_eq!(rd::usage(rd::ROOT).unwrap(), baseline);
     }
     assert!(reused);
-    writeln!(out, "[lifecycle] 260 exits restore exact budgets and reuse freed PIDs").ok();
+    writeln!(out, "[lifecycle] 520 exits restore exact budgets and reuse freed PIDs").ok();
     rd::system_reset(rd::RESET, ResetKind::PowerOff).unwrap();
     test_programs::park()
 }

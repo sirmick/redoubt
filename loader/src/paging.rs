@@ -63,7 +63,7 @@ impl AddressSpace {
         AddressSpace { root_phys, root, pid }
     }
 
-    pub fn satp(&self) -> usize { paging::make_satp(self.pid.get() as usize, self.root_phys) }
+    pub fn satp(&self) -> usize { paging::make_satp(self.root_phys) }
 
     fn leaf_slot(&self, alloc: &mut PageAllocator, virt: usize) -> Slot {
         assert!(paging::is_canonical(virt), "{virt:#x} is not a canonical address");

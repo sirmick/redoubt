@@ -9,13 +9,14 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use core::num::NonZeroU8;
+use core::num::NonZeroU16;
 
 use redoubt_sys::PAGE_SIZE;
 
-/// A process ID. The loader's ownership table and the kernel's frame table hold one per page,
-/// with 0 for a free page.
-pub type Pid = NonZeroU8;
+/// A process ID, 16 bits. The loader's ownership table and the kernel's frame table are one
+/// table of `Option<Pid>` handed from one to the other, two bytes a page, with 0 (`None`) for a
+/// free page.
+pub type Pid = NonZeroU16;
 
 /// The kernel's own PID: it owns the kernel image, the page tables and every kernel object.
 pub const KERNEL_PID: Pid = match Pid::new(1) {
@@ -42,10 +43,8 @@ pub mod sv32 {
     /// The last 64 KiB of root entry 1021: the kernel's window on DMA devices' registers
     /// (`docs/kernel/devices.md`), one page per device, so a PLIC must end below it.
     pub const KERNEL_DMA_REGS: usize = 0xff7f_0000;
-    /// Root entry 1022: per-process kernel data, `ProcessImpl` at its base.
+    /// Root entry 1022: per-process kernel data, the process's header page at its base.
     pub const PROCESS_AREA: usize = 0xff80_0000;
-    /// `ProcessImpl` bookkeeping: a saved context is 32 x 4 = 128 bytes, 32 contexts = 1 page.
-    pub const THREAD_CONTEXT_PAGES: usize = 1;
     /// Root entry 1023: the kernel image, stacks and arguments, shared by every address space.
     pub const KERNEL_AREA: usize = 0xffc0_0000;
     /// The kernel's code and constants, 512 KiB: `FLASH` in `kernel/link.x`, which a host test
@@ -65,10 +64,8 @@ mod sv39 {
     pub const PHYSMAP_BASE: usize = 0xffff_ffc0_0000_0000;
     pub const PHYSMAP_PHYS_BASE: usize = 0;
     pub const PHYSMAP_SIZE: usize = 128 << 30;
-    /// Root entry 510: per-process kernel data, `ProcessImpl` at its base.
+    /// Root entry 510: per-process kernel data, the process's header page at its base.
     pub const PROCESS_AREA: usize = 0xffff_ffff_8000_0000;
-    /// Pages occupied by `ProcessImpl` at `PROCESS_AREA`.
-    pub const THREAD_CONTEXT_PAGES: usize = 2;
     /// Root entry 511: the kernel, shared by every address space.
     pub const KERNEL_AREA: usize = 0xffff_ffff_c000_0000;
     /// The kernel's code and constants, 512 KiB: `FLASH` in `kernel/link64.x`, which a host

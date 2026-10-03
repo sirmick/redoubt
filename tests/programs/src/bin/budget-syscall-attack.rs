@@ -9,7 +9,7 @@
 #![no_std]
 #![no_main]
 
-use redoubt_sys::{BUDGET_SPEC_SLOTS, NUMBER_BASE};
+use redoubt_sys::{BUDGET_SPEC_SLOTS, MAX_LABELS, NUMBER_BASE};
 use test_programs::rd::{self, Error, Number};
 use test_programs::{Logger, log};
 
@@ -60,8 +60,8 @@ pub extern "C" fn _start() -> ! {
         scratch
     };
     // Slot 3 is the label count: a spec asks for no place in the queue.
-    let mut nine_labels = spec;
-    nine_labels[3] = 9;
+    let mut too_many_labels = spec;
+    too_many_labels[3] = MAX_LABELS as u64 + 1;
     let mut huge_labels = spec;
     huge_labels[3] = u64::MAX;
     let mut stray_label = spec;
@@ -78,7 +78,7 @@ pub extern "C" fn _start() -> ! {
         create(0),
         create(KERNEL),
         create(end - 8),
-        create(at(&nine_labels)),
+        create(at(&too_many_labels)),
         create(at(&huge_labels)),
         create(at(&stray_label)),
         create(at(&wide_processes)),

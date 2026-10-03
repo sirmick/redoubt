@@ -44,7 +44,8 @@ pub struct Costs {
     pub budget: u64,
     /// A process object, charged to its creator's budget; it holds the exit notice.
     pub process: u64,
-    /// Saved process register contexts, separate from the process/notice object.
+    /// The process's header page, separate from the process/notice object: one on both widths
+    /// (each thread's saved registers are in its IPC page, `thread`).
     pub contexts: u64,
     /// Per-thread IPC state.
     pub thread: u64,
@@ -59,12 +60,12 @@ pub struct Costs {
 }
 
 impl Default for Costs {
-    /// The rv64 cost table: two saved-context pages, one per other object, 64 handles per table page.
+    /// The kernel's cost table: one page per object, the header included, 64 handles per table page.
     fn default() -> Costs {
         Costs {
             budget: 1,
             process: 1,
-            contexts: 2,
+            contexts: 1,
             thread: 1,
             endpoint: 1,
             handles_per_page: 64,

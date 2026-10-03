@@ -22,7 +22,7 @@ Status: built · partly tested: that no driver, file system or policy sits in th
 | Job | What the kernel holds | Calls | Page |
 | --- | --- | --- | --- |
 | Memory | who owns every RAM frame, each process's page tables, the physmap | `map_anon`, `unmap`, `set_flags`, `map_fixed`, `process_map`, `map_device`, `dma_alloc` | [memory](memory.md), [memory layout](memory-layout.md) |
-| Threads | processes, up to `MAX_THREADS` (31) threads each, and one stride queue over every runnable budget | `process_create`, `process_start`, `thread_create`, `thread_exit`, `process_exit` | [processes](processes.md), [scheduling](scheduling.md) |
+| Threads | processes, up to `MAX_THREADS` (255) threads each, and one stride queue over every runnable budget | `process_create`, `process_start`, `thread_create`, `thread_exit`, `process_exit` | [processes](processes.md), [scheduling](scheduling.md) |
 | IPC | endpoints and the messages of blocked senders | `endpoint_create`, `mint`, `call`, `send`, `receive`, `reply`, `serve`, `handle_close` | [IPC](ipc.md), [objects](objects.md) |
 | Interrupt delivery | the interrupt controller (a PLIC), mapped for the kernel alone, and one IRQ device object per line | `receive` naming an IRQ handle | [devices](devices.md) |
 | The timer | one hardware timer, always armed for the earliest slice end, timeout or budget deadline | `time_now`, and the timeout of every blocking call | [timer](timer.md) |
@@ -88,20 +88,20 @@ and a **stamp** (the budget whose destruction closes the handle everywhere,
 | --- | --- | --- | --- | --- |
 | budget | limits on pages, processes and CPU weight; a class, a label set, an account, an optional deadline | `budget_create`; `root`, `system` and `users` at boot | one page to its parent | `budget_destroy`, its deadline, or the destruction of a budget above it |
 | endpoint | what clients call and servers receive on; it holds no queue | `endpoint_create` | one page to its owner, the creating process's budget | its owner is destroyed |
-| process | an address space, a handle table and threads; its object page holds the one exit notice | `process_create` | the object page to the creator's budget; contexts, page tables and memory to the budget it runs in | it exits, faults or is killed; the page stays until the notice is taken or dropped |
+| process | an address space, a handle table and threads; its object page holds the one exit notice | `process_create` | the object page to the creator's budget; its header, page tables and memory to the budget it runs in | it exits, faults or is killed; the page stays until the notice is taken or dropped |
 | device | an MMIO range (with a DMA flag), an IRQ line, or the Reset right | only at boot, from the loader's device list | one page to its owner (`system` at boot) | its owner is destroyed, or its DMA reset is never confirmed |
 
 Each object lives in a RAM frame of its own. Every lookup compares the id in the frame with the
 id in the handle, and a mismatch stops the kernel rather than naming a reused frame
 ([I1 (handles name live objects)](invariants.md#i1-handles-name-live-objects)). Threads,
 handle-table pages and open calls are not objects: no handle names them. A thread is named by
-its process and its TID (1 to 31). Details, costs and `mint` are in [objects](objects.md).
+its process and its TID (1 to 255). Details, costs and `mint` are in [objects](objects.md).
 
 ```mermaid
 flowchart LR
     H["handle<br/>(object, badge, stamp)"]
     P["process<br/>address space, handle table,<br/>exit slot"]
-    T["thread<br/>TID 1 to 31"]
+    T["thread<br/>TID 1 to 255"]
     E["endpoint"]
     D["device object<br/>MMIO, IRQ or Reset"]
     B["budget"]
@@ -297,7 +297,7 @@ two, where a file serves two mechanisms).
 | `arch/riscv/intc_plic.rs` | the PLIC backend | [devices](devices.md) |
 | `arch/riscv/timer_sbi.rs` | the hart timer, through SBI TIME | [timer](timer.md) |
 | `arch/riscv/mem.rs`, `physmap.rs`, `mmu_flags.rs` | page tables, the physmap, PTE flags, the kernel's W^X check | [memory](memory.md), [memory layout](memory-layout.md) |
-| `arch/riscv/process.rs` | saved thread contexts, PID slots | [processes](processes.md), [memory layout](memory-layout.md) |
+| `arch/riscv/process.rs` | the process header, threads' saved contexts, PID slots | [processes](processes.md), [memory layout](memory-layout.md) |
 | `arch/riscv/smp.rs` | the two-hart spike (feature `smp`) | [this page](#residual-risks) |
 | `arch/riscv/panic.rs` | a kernel panic prints and powers off | [boot](boot.md#failure-and-restart) |
 | `libs/sys` (`redoubt-sys`) | call numbers, registers, records, errors | [ABI](abi.md) |
@@ -341,7 +341,7 @@ two, where a file serves two mechanisms).
   first process runs ([R19 (kernel W^X)](memory.md#r19-kernel-wx)). The loader is TCB for the
   rest ([boot](boot.md)).
 - **Test builds carry more.** The kernel source has features only some bench cases turn on:
-  `sched-trace`, `dma-reset-deaf`, `sum-probe`, `panic-in-print` and `smp`, and `sched-inject-tie-fault` for a recorded negative
+  `sched-trace`, `walk-trace`, `dma-reset-deaf`, `sum-probe`, `panic-in-print` and `smp`, and `sched-inject-tie-fault` for a recorded negative
   run. A production build leaves them off
   ([R23 (no test channels)](scheduling.md#r23-no-test-channels)); a kernel built with them is
   not the kernel this page measures.

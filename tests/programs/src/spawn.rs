@@ -175,6 +175,18 @@ pub fn spawn(
     handles: &[u32],
 ) -> Result<Child, Error> {
     let process = rd::process_create(budget, exit)?;
+    start(process, image, entry, startup, handles)
+}
+
+/// [`spawn`] for a process already created: everything after `process_create`, for a case that
+/// looks at the child's budget in between.
+pub fn start(
+    process: u32,
+    image: &Image,
+    entry: usize,
+    startup: &[u8],
+    handles: &[u32],
+) -> Result<Child, Error> {
     give_image(process, image)?;
     give_stack(process)?;
     let arg = if startup.is_empty() { 0 } else { give_startup(process, startup)? };

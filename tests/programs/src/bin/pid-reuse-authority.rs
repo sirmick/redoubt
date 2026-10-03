@@ -29,9 +29,9 @@ const SURVIVED: u32 = 1;
 const PANICKED: u32 = 101;
 /// The indices B must not hold: every one but its slot 1, as far as a loader program's table goes.
 const LAST_INDEX: u32 = 64;
-/// PIDs are drawn at random from at most 63, so this many tries miss A's only with odds of
-/// about e^-16.
-const TRIES: usize = 1024;
+/// PIDs are drawn at random from at most 510 (`MAX_PROCESS_COUNT` is 511, kernel/processes.md),
+/// so this many tries miss A's only with odds of about e^-16.
+const TRIES: usize = 8192;
 
 /// A's slots, in the order `process_start` fills them.
 mod a {

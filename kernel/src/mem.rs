@@ -89,16 +89,17 @@ pub struct MemoryManager {
     ram_name: u32,
     /// Who owns each page of RAM, indexed by page number within RAM. The loader builds
     /// this table and hands it over in `init_from_memory`.
-    allocations: &'static mut [RamAllocation],
+    allocations: LoaderTable<RamAllocation>,
     /// The table's free entries, one bit each, with their summaries ([`FreeFrames`]).
     free: FreeFrames,
     /// The frames `dma_alloc`'s runs come from ([`DmaPool`]).
     dma_pool: DmaPool,
     /// The same, for the pages of every region in `extra_regions`, back to back.
-    extra_allocations: &'static mut [Option<Pid>],
+    extra_allocations: LoaderTable<Option<Pid>>,
     /// Memory outside RAM that processes may claim: memory-mapped devices. The data of the
     /// loader's `MREx` tag, `ExtraRegion::WORDS` words per region; see `extra_regions()`.
-    extra_regions: &'static [u32],
+    /// `None` until then, like the two tables.
+    extra_regions: Option<&'static [u32]>,
     /// Budgets and the per-process ledger that charges them (`budget.rs`), and the handle tables
     /// (`handle.rs`). Here, beside the ownership table, because a frame changing owner is what
     /// most charges are.
@@ -111,19 +112,19 @@ pub struct MemoryManager {
 /// Owner, in the ownership table, of frames that hold kernel objects (budgets, handle-table
 /// pages). No process has this PID (there are `MAX_PROCESS_COUNT` of them), so such a frame is
 /// never mapped into a process, and `release_owned_frames` never frees one.
-pub const OBJECT_OWNER: Pid = match Pid::new(255) {
+pub const OBJECT_OWNER: Pid = match Pid::new(0xffff) {
     Some(pid) => pid,
     None => unreachable!(),
 };
-const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 255);
+const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xffff);
 /// Owner, in the ownership table, of `dma_alloc` frames (`dma.rs`). No process has this
 /// PID either, so no generic release, move or lend path, all of which check that the caller
 /// owns the frame, can free or move one: only `dma_release` pools it, after the reset.
-pub const DMA_OWNER: Pid = match Pid::new(254) {
+pub const DMA_OWNER: Pid = match Pid::new(0xfffe) {
     Some(pid) => pid,
     None => unreachable!(),
 };
-const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 254);
+const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xfffe);
 type RamAllocation = Option<Pid>;
 
 /// Every free RAM frame, a set bit in a bitmap the kernel keeps in frames of its own (owned by
@@ -136,7 +137,7 @@ type RamAllocation = Option<Pid>;
 /// empty bitmap, so the memory manager's starting value stays all zeros.
 struct FreeFrames {
     /// Every level's words, back to back, in the bitmap's frames.
-    bits: &'static mut [u64],
+    bits: LoaderTable<u64>,
     /// The word each level starts at, level 0 (a bit a frame) first; the last entry is the total.
     level_start: [usize; LEVELS + 1],
 }
@@ -162,7 +163,7 @@ impl FreeFrames {
             level_start[level + 1] = level_start[level] + words;
         }
         assert!(words == 1, "mm: RAM is larger than the physmap reaches");
-        FreeFrames { bits: &mut [], level_start }
+        FreeFrames { bits: LoaderTable(None), level_start }
     }
 
     fn words(&self, level: usize) -> usize { self.level_start[level + 1] - self.level_start[level] }
@@ -192,6 +193,22 @@ impl DmaPool {
     }
 }
 
+/// A table given once at boot (`init_from_memory`), empty until then: the loader's ownership
+/// tables, and the free-frame bitmap's words. It is `None` rather than an empty slice, whose
+/// pointer is not 0, so that the memory manager's starting value is all zeros and its per-PID
+/// tables are `.bss`, costing RAM but not image.
+struct LoaderTable<T: 'static>(Option<&'static mut [T]>);
+
+impl<T> core::ops::Deref for LoaderTable<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] { self.0.as_deref().unwrap_or(&[]) }
+}
+
+impl<T> core::ops::DerefMut for LoaderTable<T> {
+    fn deref_mut(&mut self) -> &mut [T] { self.0.as_deref_mut().unwrap_or(&mut []) }
+}
+
 impl Default for MemoryManager {
     fn default() -> Self { Self::default_hack() }
 }
@@ -208,11 +225,11 @@ impl MemoryManager {
             ram_start: 0,
             ram_size: 0,
             ram_name: 0,
-            allocations: &mut [],
-            free: FreeFrames { bits: &mut [], level_start: [0; LEVELS + 1] },
+            allocations: LoaderTable(None),
+            free: FreeFrames { bits: LoaderTable(None), level_start: [0; LEVELS + 1] },
             dma_pool: DmaPool { first: 0, held: [0; DMA_POOL_PAGES / 64] },
-            extra_allocations: &mut [],
-            extra_regions: &[],
+            extra_allocations: LoaderTable(None),
+            extra_regions: None,
             objects: crate::budget::Objects::new(),
             dma: crate::dma::Registry::new(),
         }
@@ -241,16 +258,13 @@ impl MemoryManager {
         use core::slice;
         let mut args_iter = args.iter();
         let xarg_def = args_iter.next().expect("mm: no kernel arguments found");
-        assert!(
-            self.extra_regions.is_empty(),
-            "mm: self.extra.len() was {}, not 0",
-            self.extra_regions.len()
-        );
+        assert!(self.extra_regions.is_none(), "mm: the MREx table was already given");
         assert!(xarg_def.name == u32::from_le_bytes(*b"XArg"), "mm: first tag wasn't XArg");
         // The loader (the same binary for both widths) writes XArg v2: RAM base and size as
         // 64-bit values, low word first (`args::wide` narrows them).
         assert!(xarg_def.data[1] == 2, "mm: XArg had unexpected version");
         self.ram_start = crate::args::wide(xarg_def.data, 2);
+        crate::arch::process::set_ram_start(self.ram_start);
         self.ram_size = crate::args::wide(xarg_def.data, 4);
         self.ram_name = xarg_def.data[6];
 
@@ -258,12 +272,12 @@ impl MemoryManager {
         let mut extra_size = 0;
         for tag in args_iter {
             if tag.name == u32::from_le_bytes(*b"MREx") {
-                assert!(self.extra_regions.is_empty(), "mm: MREx tag appears twice");
+                assert!(self.extra_regions.is_none(), "mm: MREx tag appears twice");
                 assert!(
                     tag.data.len() % ExtraRegion::WORDS == 0,
                     "mm: MREx is not a whole number of entries"
                 );
-                self.extra_regions = tag.data;
+                self.extra_regions = Some(tag.data);
             }
         }
 
@@ -272,14 +286,18 @@ impl MemoryManager {
             extra_size += range.size / PAGE_SIZE;
         }
         // SAFETY: `rpt_base` is the page-aligned ownership table the loader built and filled
-        // in, one byte per page of RAM, so it holds these `mem_size` entries; every byte is a
-        // valid `Option<PID>` (zero, an unowned page, is `None`). The loader owns it for the
+        // in, one `Option<Pid>` per page of RAM (the type is `redoubt_layout`'s, the same on both
+        // sides), so it holds these `mem_size` entries; every value the loader wrote is a valid
+        // `Option<Pid>` (zero, an unowned page, is `None`). The loader owns it for the
         // kernel and hands it over here, so this is the only reference to it.
-        unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<Pid>, mem_size) };
-        // SAFETY: as above, for the table the loader built for the `MREx` regions: one byte per
+        unsafe {
+            self.allocations.0 = Some(slice::from_raw_parts_mut(rpt_base as *mut Option<Pid>, mem_size))
+        };
+        // SAFETY: as above, for the table the loader built for the `MREx` regions: one entry per
         // page of them, which is the `extra_size` just counted from the same table.
         unsafe {
-            self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<Pid>, extra_size)
+            self.extra_allocations.0 =
+                Some(slice::from_raw_parts_mut(xpt_base as *mut Option<Pid>, extra_size))
         }
         // The free-frame bitmap takes the lowest run of free frames, the kernel's, so the budget
         // tree counts them as kept (`boot_budgets`). These are the table's only writes outside
@@ -302,8 +320,8 @@ impl MemoryManager {
         // freed and never handed to `kframe`. This is the one place that makes a slice of them,
         // once, at boot, so it is the only reference. The memory manager reaches it only through
         // `&mut self`, under the kernel's one lock.
-        self.free.bits =
-            unsafe { slice::from_raw_parts_mut(virt as *mut u64, self.free.level_start[LEVELS]) };
+        self.free.bits.0 =
+            Some(unsafe { slice::from_raw_parts_mut(virt as *mut u64, self.free.level_start[LEVELS]) });
         for level in 0..LEVELS {
             for word in 0..self.free.words(level) {
                 let value = self.summary(level, word);
@@ -344,7 +362,7 @@ impl MemoryManager {
         Ok(self.ram_start + index * PAGE_SIZE)
     }
 
-    /// Allocate a page for a process's saved thread contexts (`ProcessImpl`), charged to the
+    /// Allocate a process's header page (`ProcessImpl`), charged to the
     /// budget the process runs in like any other frame it owns (kernel/objects.md: the kernel
     /// charges what a process really costs instead of holding it back from `root` at boot).
     pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> { self.alloc_page(pid) }
@@ -913,7 +931,7 @@ impl MemoryManager {
     /// `extra_allocations`. `use<>` states that, keeping `self`'s lifetime out of the
     /// returned type.
     fn extra_regions(&self) -> impl Iterator<Item = ExtraRegion> + use<> {
-        let table: &'static [u32] = self.extra_regions;
+        let table: &'static [u32] = self.extra_regions.unwrap_or(&[]);
         table.chunks_exact(ExtraRegion::WORDS).map(ExtraRegion::from_words)
     }
 
@@ -935,7 +953,7 @@ impl MemoryManager {
     /// frame given back may be handed out at once) or one's that never ran (`process_create`'s
     /// rollback). A space is whole or does not exist (`MemoryMapping::allocate` gives back what it
     /// took when it fails), so its tables name every frame the process owns: the root, the tables,
-    /// the saved contexts, and the pages `process_map` moved in.
+    /// the header page, and the pages `process_map` moved in.
     pub fn release_owned_frames(&mut self, pid: Pid, space: &MemoryMapping) {
         let kernel = Pid::new(1).unwrap();
         // One walk of the process's own tables, never of every frame of RAM (R12;

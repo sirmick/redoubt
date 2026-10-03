@@ -49,6 +49,8 @@ const RESET_READS: u32 = 100_000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
+    /// No run: the entry is free. First, so that a free entry is all zeros.
+    Free,
     /// Held by a live process: `holder` is always `Some`.
     Live,
     /// Its process died and some device in its S did not confirm: never pooled.
@@ -68,6 +70,13 @@ struct Run {
     state: State,
 }
 
+impl Run {
+    /// A free entry: all zeros, as `Option<Run>`'s `None` would not be.
+    const FREE: Run = Run { phys: 0, npages: 0, holder: None, charged: None, state: State::Free };
+
+    fn is_run(&self) -> bool { self.state != State::Free }
+}
+
 #[derive(Clone, Copy)]
 struct Slot {
     base: u64,
@@ -75,11 +84,19 @@ struct Slot {
     /// so every death that reaches it quarantines (kernel/devices.md, "Residual risks").
     virtio: bool,
     quarantined: bool,
-    runs: [Option<Run>; MAX_RUNS],
+    runs: [Run; MAX_RUNS],
+}
+
+impl Slot {
+    /// An unused slot: all zeros, as is the registry's starting value, so the memory manager it
+    /// lives in is `.bss`.
+    const EMPTY: Slot = Slot { base: 0, virtio: false, quarantined: false, runs: [Run::FREE; MAX_RUNS] };
 }
 
 pub struct Registry {
-    slots: [Option<Slot>; MAX_DMA_DEVICES],
+    /// Slot `i` is registered while bit `i` of `used` is set; an unused slot is [`Slot::EMPTY`].
+    slots: [Slot; MAX_DMA_DEVICES],
+    used: u16,
     /// A slot was quarantined and its device object not destroyed yet (`message.rs`,
     /// `destroy_quarantined_devices`).
     doomed: bool,
@@ -91,11 +108,23 @@ pub struct Registry {
 impl Registry {
     pub const fn new() -> Registry {
         Registry {
-            slots: [None; MAX_DMA_DEVICES],
+            slots: [Slot::EMPTY; MAX_DMA_DEVICES],
+            used: 0,
             doomed: false,
             #[cfg(feature = "dma-reset-deaf")]
             deaf_spent: 0,
         }
+    }
+}
+
+impl Registry {
+    /// The registered slots, in slot order.
+    fn registered(&self) -> impl Iterator<Item = &Slot> + '_ { bits(self.used).map(move |i| &self.slots[i]) }
+
+    /// Registered slot `i`.
+    fn slot(&self, i: usize) -> &Slot {
+        assert!(self.used & 1 << i != 0, "a registered slot");
+        &self.slots[i]
     }
 }
 
@@ -126,26 +155,28 @@ impl MemoryManager {
     /// classify it with one read of its magic and version (the loader flags only virtio nodes
     /// as DMA today, so that read has no side effect). `false` if the registry is full.
     pub fn dma_register(&mut self, base: u64) -> bool {
-        let Some(slot) = self.dma.slots.iter().position(Option::is_none) else { return false };
+        let Some(slot) = (0..MAX_DMA_DEVICES).find(|i| self.dma.used & 1 << i == 0) else { return false };
         crate::arch::mem::map_kernel_page(base as usize, KERNEL_DMA_REGS + slot * PAGE_SIZE);
         let virtio = read(slot, VIRTIO_MAGIC) == MAGIC_VIRT && matches!(read(slot, VIRTIO_VERSION), 1 | 2);
-        self.dma.slots[slot] = Some(Slot { base, virtio, quarantined: false, runs: [None; MAX_RUNS] });
+        self.dma.slots[slot] = Slot { base, virtio, ..Slot::EMPTY };
+        self.dma.used |= 1 << slot;
         true
     }
 
     /// The slot of DMA device `base`.
     pub fn dma_slot(&self, base: u64) -> Option<usize> {
-        self.dma.slots.iter().position(|s| s.as_ref().is_some_and(|s| s.base == base))
+        bits(self.dma.used).find(|&i| self.dma.slots[i].base == base)
     }
 
     fn slot_mut(&mut self, slot: usize) -> &mut Slot {
-        self.dma.slots[slot].as_mut().expect("a registered slot")
+        assert!(self.dma.used & 1 << slot != 0, "a registered slot");
+        &mut self.dma.slots[slot]
     }
 
     /// Whether DMA device `base` failed a reset (kernel/devices.md, "Quarantine"). Its object is
     /// gone by the time any process runs again, so a live device object never names one.
     pub fn dma_quarantined(&self, base: u64) -> bool {
-        self.dma_slot(base).is_some_and(|s| self.dma.slots[s].as_ref().is_some_and(|s| s.quarantined))
+        self.dma_slot(base).is_some_and(|s| self.dma.slot(s).quarantined)
     }
 
     /// `map_device` of DMA device `slot`: it joins `pid`'s reset set.
@@ -155,7 +186,7 @@ impl MemoryManager {
 
     /// The process holding the Live run that frame `phys` belongs to, if it is a DMA frame.
     pub fn dma_holder(&self, phys: usize) -> Option<Pid> {
-        self.dma.slots.iter().flatten().flat_map(|s| s.runs.iter().flatten()).find_map(|r| {
+        self.dma.registered().flat_map(|s| s.runs.iter()).find_map(|r| {
             let inside = phys >= r.phys && phys < r.phys + r.npages * PAGE_SIZE;
             (inside && r.state == State::Live).then_some(r.holder).flatten()
         })
@@ -167,7 +198,7 @@ impl MemoryManager {
     /// on failure.
     pub fn dma_new_run(&mut self, pid: Pid, slot: usize, npages: usize) -> Result<usize, Error> {
         let oom = Error::OutOfMemory;
-        let index = self.slot_mut(slot).runs.iter().position(Option::is_none).ok_or(oom)?;
+        let index = self.slot_mut(slot).runs.iter().position(|r| !r.is_run()).ok_or(oom)?;
         let budget = self.budget_of(pid).ok_or(oom)?;
         self.charge(budget, npages as u64)?;
         let Ok(phys) = self.dma_pool_take(npages) else {
@@ -176,7 +207,7 @@ impl MemoryManager {
         };
         let charged = Some(BudgetRef { frame: budget, id: self.budget_id(budget) });
         let run = Run { phys, npages, holder: Some(pid), charged, state: State::Live };
-        self.slot_mut(slot).runs[index] = Some(run);
+        self.slot_mut(slot).runs[index] = run;
         Ok(phys)
     }
 
@@ -184,8 +215,8 @@ impl MemoryManager {
     /// frames go straight back to the pool.
     pub fn dma_drop_run(&mut self, slot: usize, phys: usize) {
         let runs = &mut self.slot_mut(slot).runs;
-        let index = runs.iter().position(|r| r.is_some_and(|r| r.phys == phys)).expect("the run just made");
-        let run = runs[index].take().expect("the run just made");
+        let index = runs.iter().position(|r| r.is_run() && r.phys == phys).expect("the run just made");
+        let run = core::mem::replace(&mut runs[index], Run::FREE);
         self.pool(run);
     }
 
@@ -202,10 +233,10 @@ impl MemoryManager {
     /// runs pooled; otherwise all of them are quarantined, and every slot that did not confirm is
     /// quarantined too (an already-quarantined slot never counts as reset).
     pub fn dma_release(&mut self, pid: Pid) {
-        let held = |r: &Option<Run>| r.is_some_and(|r| r.state == State::Live && r.holder == Some(pid));
+        let held = |r: &Run| r.state == State::Live && r.holder == Some(pid);
         let mut s = self.account(pid).map_or(0, |a| a.dma_mapped);
-        for (i, slot) in self.dma.slots.iter().enumerate() {
-            if slot.as_ref().is_some_and(|slot| slot.runs.iter().any(held)) {
+        for i in bits(self.dma.used) {
+            if self.dma.slots[i].runs.iter().any(held) {
                 s |= 1 << i;
             }
         }
@@ -226,10 +257,9 @@ impl MemoryManager {
                         confirmed & s == s && confirmed & 1 << i != 0,
                         "I16: a run pooled before its reset"
                     );
-                    let run = run.take().expect("held");
+                    let run = core::mem::replace(run, Run::FREE);
                     self.pool(run);
                 } else {
-                    let run = run.as_mut().expect("held");
                     run.state = State::Quarantined;
                     run.holder = None;
                 }
@@ -252,7 +282,7 @@ impl MemoryManager {
     /// Reset slot `slot`'s device and wait for it to confirm, within `RESET_US`, without
     /// preemption. `false`, touching nothing, for a device that is quarantined or not virtio.
     fn dma_reset(&mut self, slot: usize) -> bool {
-        let s = self.dma.slots[slot].as_ref().expect("a registered slot");
+        let s = self.dma.slot(slot);
         if s.quarantined || !s.virtio {
             return false;
         }
@@ -288,9 +318,9 @@ impl MemoryManager {
         if parent.is_none() {
             self.check_all_dying();
         }
-        for i in 0..MAX_DMA_DEVICES {
+        for i in bits(self.dma.used) {
             for index in 0..MAX_RUNS {
-                let Some(run) = self.dma.slots[i].as_ref().and_then(|s| s.runs[index]) else { continue };
+                let run = self.dma.slots[i].runs[index];
                 if run.state != State::Quarantined {
                     continue;
                 }
@@ -305,13 +335,13 @@ impl MemoryManager {
                     // charge goes with it. The run stays quarantined, charged to nobody.
                     None => {}
                 }
-                self.slot_mut(i).runs[index].as_mut().expect("read above").charged = parent;
+                self.slot_mut(i).runs[index].charged = parent;
             }
         }
     }
 
     /// Whether `pid` holds any run (a `process_create` rollback's child never may).
     pub fn dma_holds_any(&self, pid: Pid) -> bool {
-        self.dma.slots.iter().flatten().flat_map(|s| s.runs.iter().flatten()).any(|r| r.holder == Some(pid))
+        self.dma.registered().flat_map(|s| s.runs.iter()).any(|r| r.is_run() && r.holder == Some(pid))
     }
 }

@@ -109,7 +109,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEO".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMm".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -237,6 +237,12 @@ pub struct Summary {
     pub timer_empty: Vec<u64>,
     /// When each timer interrupt that found another budget's wait ended early came, µs.
     pub timer_stale_foreign: Vec<u64>,
+    /// Each walk's span, µs (`M` to `m`, a `walk-trace` kernel's): a receive's pump, a timer
+    /// interrupt's expiry and a reconcile, in trace order.
+    pub walks: [Vec<(u64, u64)>; 3],
+    /// Each destruction's pumps: how many, and their time, µs (`M`/`m` of a pump inside its `X`
+    /// and `Y`), in trace order.
+    pub r10_pumps: Vec<(usize, u64)>,
 }
 
 /// A timer interrupt from user mode, from its `I` to its `O`.
@@ -316,8 +322,10 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     let mut open_r10: Option<(u64, u128)> = None;
     let mut open_audit: Option<(u64, u128)> = None;
     let mut open_threads: Option<u128> = None;
+    let mut open_walk: Option<(u64, u128)> = None;
     let mut open_timer: Option<TimerEntry> = None;
     let mut threads_us = 0;
+    let mut pumps = (0, 0);
     let mut requeues: i128 = 0;
     let mut sum = Summary::default();
     let mut i = 0;
@@ -347,6 +355,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 }
                 open_r10 = Some((r.id, r.pass));
                 threads_us = 0;
+                pumps = (0, 0);
             }
             'Z' => sum.r10_frames = sum.r10_frames.max(r.pass as u64),
             // An audit is off R10's walk: none runs inside a destruction, so R10 subtracts none.
@@ -376,10 +385,28 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 }
                 _ => return Err(format!("record {}: a threads span ended without beginning", r.seq)),
             },
+            'M' => {
+                if !(1..=3).contains(&r.id) || open_walk.replace((r.id, r.pass)).is_some() {
+                    return Err(format!(
+                        "record {}: walk {} began inside another, or is unknown",
+                        r.seq, r.id
+                    ));
+                }
+            }
+            'm' => match open_walk.take() {
+                Some((id, t)) if id == r.id && r.pass >= t => {
+                    sum.walks[id as usize - 1].push((t as u64, r.pass as u64));
+                    if id == 1 && open_r10.is_some() {
+                        pumps = (pumps.0 + 1, pumps.1 + (r.pass - t) as u64);
+                    }
+                }
+                _ => return Err(format!("record {}: walk {} ended without beginning", r.seq, r.id)),
+            },
             'Y' => match open_r10.take() {
                 Some((id, t)) if id == r.id => {
                     sum.r10_us.push(r.pass.saturating_sub(t) as u64);
                     sum.r10_threads_us.push(threads_us);
+                    sum.r10_pumps.push(pumps);
                 }
                 _ => {
                     return Err(format!(
@@ -726,6 +753,31 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.timer_slice_ends,
         sum.timer_empty.len()
     );
+    // Each walk net of the audits inside it, as a release kernel runs it.
+    let mut walks = Vec::new();
+    for (name, spans) in ["pump", "expiry", "reconcile"].iter().zip(&sum.walks) {
+        if spans.is_empty() {
+            continue;
+        }
+        let inside: Vec<u64> = spans.iter().map(|&(b, e)| audit_inside(&sum.audits, b, e)).collect();
+        let mut net: Vec<u64> =
+            spans.iter().zip(&inside).map(|(&(b, e), a)| (e - b).saturating_sub(*a)).collect();
+        let n = net.len();
+        let (p50, p99) = (percentile(&mut net, 50), percentile(&mut net, 99));
+        let audits: u64 = inside.iter().sum();
+        walks.push(format!(
+            "{name} {n}, {p50}/{p99}/{}, audits {audits} µs",
+            net.last().copied().unwrap_or(0)
+        ));
+    }
+    if !walks.is_empty() {
+        let inside: Vec<String> = sum.r10_pumps.iter().map(|(n, us)| format!("{n} ({us} µs)")).collect();
+        lines.push(format!(
+            "walks, net of audits, µs p50/p99/max: {}; pumps inside each destruction: {}",
+            walks.join("; "),
+            inside.join(", ")
+        ));
+    }
     let out = std::iter::once(head).chain(lines).collect::<Vec<_>>().join("\n      ");
     if missed { Err(out) } else { Ok(out) }
 }
@@ -745,6 +797,35 @@ mod tests {
     }
 
     fn verdict(records: &[(u64, char, u64, u128)]) -> Result<String, String> { run(&trace(records), "") }
+
+    #[test]
+    fn walks_are_reported_net_of_audits_and_never_nested() {
+        let ok = verdict(&[
+            (1, 'W', 5, 0x10),
+            (1, 'K', 5, 0x10),
+            (1, 'M', 1, 100),
+            (1, 'U', 7, 110),
+            (1, 'V', 7, 130),
+            (1, 'm', 1, 150),
+            (2, 'M', 2, 200),
+            (2, 'm', 2, 205),
+            (3, 'X', 9, 300),
+            (3, 'M', 1, 310),
+            (3, 'm', 1, 320),
+            (3, 'Y', 9, 400),
+        ]);
+        let want = "walks, net of audits, µs p50/p99/max: pump 2, 10/30/30, audits 20 µs; expiry 1, 5/5/5, audits 0 µs; \
+                    pumps inside each destruction: 1 (10 µs)";
+        assert!(ok.as_ref().is_ok_and(|s| s.contains(want)), "{ok:?}");
+        for bad in [
+            [(1, 'M', 1, 100), (1, 'M', 2, 110)],
+            [(1, 'M', 3, 100), (1, 'm', 1, 110)],
+            [(1, 'M', 4, 100), (1, 'm', 4, 110)],
+        ] {
+            let err = verdict(&[[(1, 'W', 5, 0x10), (1, 'K', 5, 0x10)].as_slice(), &bad].concat());
+            assert!(err.as_ref().is_err_and(|e| e.contains("walk")), "{err:?}");
+        }
+    }
 
     #[test]
     fn a_trace_that_keeps_every_clause_passes() {

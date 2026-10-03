@@ -108,7 +108,7 @@ caller, so every authority the child gets is on that one call.
 - **No signature is needed to run code within one's own authority.** A session can already run
   any Elixir it writes, so a program it launches with a subset of its own handles gains nothing.
   Signatures gate only what the steward launches with new grants ([packages](packages.md)).
-- **At most `MAX_START_HANDLES` (64) handles**, namespace entries included.
+- **At most `MAX_START_HANDLES` (128) handles**, namespace entries included.
 - **No shared text.** Each launch copies the program image; there is no demand paging and no
   code shared between processes ([init](../servers/init.md)).
 - **No dynamic linking.** Code shared at run time is a server, not a library. The dynamic part of

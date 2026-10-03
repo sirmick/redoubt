@@ -64,6 +64,7 @@ bin = [
     { name = "proc-lifecycle", test = false },
     { name = "proc-review", test = false },
     { name = "proc-test", test = false },
+    { name = "process-fill", test = false },
     { name = "process-map-untouched", test = false },
     { name = "receive-bad-record", test = false },
     { name = "redoubt-attack", test = false },
@@ -104,6 +105,7 @@ bin = [
     { name = "uaf-holder", test = false },
     { name = "uaf-victim", test = false },
     { name = "virtio-probe", test = false },
+    { name = "worst-walk", test = false },
     { name = "write-only-attack", test = false },
     { name = "wx-test", test = false },
 ]

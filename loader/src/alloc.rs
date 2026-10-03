@@ -1,8 +1,8 @@
 //! Physical page allocator and the runtime page tracker (RPT).
 //!
 //! Pages are handed out from the top of RAM downwards. Every allocation is recorded in
-//! the RPT, one byte per page holding the owning PID, which is handed to the kernel as
-//! its initial allocation table.
+//! the RPT, one `Option<Pid>` (two bytes) per page holding the owning PID, which is handed to
+//! the kernel as its initial allocation table: the same type on both sides.
 
 use core::ops::Range;
 
@@ -19,8 +19,8 @@ pub struct PageAllocator {
     /// itself, the device tree, the boot bundle).
     reserved: [Range<usize>; MAX_RESERVED],
     reserved_count: usize,
-    /// One owner PID byte per page, 0 for a free page.
-    rpt: &'static mut [u8],
+    /// One owner per page, `None` (zero) for a free page.
+    rpt: &'static mut [Option<Pid>],
 }
 
 impl PageAllocator {
@@ -78,12 +78,13 @@ impl PageAllocator {
     pub fn init_rpt(&mut self) {
         assert!(self.next == self.ram.end, "the RPT must be the first allocation");
         let pages = self.ram.len() / PAGE_SIZE;
-        let base = self.alloc_contiguous(pages.div_ceil(PAGE_SIZE), KERNEL_PID);
-        // SAFETY: `base` is a fresh, zeroed allocation of at least `pages` bytes that is
-        // never handed out again, so this is the only reference to it for the rest of the
-        // loader's life. All-zeroes is a valid `u8`.
-        self.rpt = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, pages) };
-        let rpt_range = base..base + pages.next_multiple_of(PAGE_SIZE);
+        let bytes = pages * size_of::<Option<Pid>>();
+        let base = self.alloc_contiguous(bytes.div_ceil(PAGE_SIZE), KERNEL_PID);
+        // SAFETY: `base` is a fresh, zeroed, page-aligned allocation of at least `pages`
+        // entries that is never handed out again, so this is the only reference to it for the
+        // rest of the loader's life. All-zeroes is a valid `Option<Pid>` (`None`).
+        self.rpt = unsafe { core::slice::from_raw_parts_mut(base as *mut Option<Pid>, pages) };
+        let rpt_range = base..base + bytes.next_multiple_of(PAGE_SIZE);
         self.set_owner(rpt_range, KERNEL_PID);
     }
 
@@ -97,8 +98,8 @@ impl PageAllocator {
         }
         let first = (range.start - self.ram.start) / PAGE_SIZE;
         let last = (range.end - self.ram.start).div_ceil(PAGE_SIZE);
-        self.rpt[first..last].fill(owner.get());
+        self.rpt[first..last].fill(Some(owner));
     }
 
-    pub fn free_bytes(&self) -> usize { self.rpt.iter().filter(|p| **p == 0).count() * PAGE_SIZE }
+    pub fn free_bytes(&self) -> usize { self.rpt.iter().filter(|p| p.is_none()).count() * PAGE_SIZE }
 }

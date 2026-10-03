@@ -1008,7 +1008,7 @@ const CT_FILL_ENDPOINTS: u64 = redoubt_sys::MAX_HANDLES as u64 - CT_AGENT_HANDLE
 const CT_THREAD_PAGES: u64 = ((1 + CT_SPINS + CT_CALLERS + CT_SENDERS)
     + (CT_SPINS + CT_CALLERS + CT_SENDERS) * STACK_PAGES
     + CT_CALLERS * CT_LEND_PAGES) as u64;
-/// Room for what the agent holds besides: its saved contexts, page tables and startup page.
+/// Room for what the agent holds besides: its header page, page tables and startup page.
 const CT_AGENT_SPARE: u64 = 64;
 
 /// The pages a full fill holds at its least: the image, the sub-budget's carve and its own page,

@@ -121,7 +121,7 @@ Inside the kernel area:
 | `0xffff_ffff_f000_0000` | PLIC window (`KERNEL_PLIC_BASE`), up to 64 MiB |
 | `0xffff_ffff_f400_0000` | DMA register window (`KERNEL_DMA_REGS`): `KERNEL_DMA_PAGES` (16) pages, one per DMA device |
 | `0xffff_ffff_ffd0_0000` | kernel code and constants (512 KiB) |
-| `0xffff_ffff_ffd8_0000` | kernel data (512 KiB) |
+| `0xffff_ffff_ffd8_0000` | kernel data (1 MiB) |
 | `0xffff_ffff_fff8_0000` | top of the kernel stack (`KERNEL_STACK_TOP`), 8 pages below it |
 | `0xffff_ffff_ffff_0000` | top of the trap stack (`TRAP_STACK_TOP`), 8 pages below it |
 
@@ -148,7 +148,7 @@ Root entries are 4 MiB each, 1024 of them. Every 32-bit address is canonical.
 | 1020..=1021 | `0xff00_0000` | PLIC window, up to 8 MiB less the DMA window | yes |
 | 1021, last 64 KiB | `0xff7f_0000` | DMA register window: 16 pages | yes |
 | 1022 | `0xff80_0000` | per-process kernel data (`PROCESS_AREA`) | no |
-| 1023 | `0xffc0_0000` | kernel area: code at `0xffd0_0000`, data at `0xffd8_0000`, kernel stack top `0xfff8_0000`, trap stack top `0xffff_0000` (8 pages each) | yes |
+| 1023 | `0xffc0_0000` | kernel area: code at `0xffd0_0000`, data at `0xffd8_0000` (1 MiB), kernel stack top `0xfff8_0000`, trap stack top `0xffff_0000` (8 pages each) | yes |
 
 A QEMU `virt` PLIC is 6 MiB, which is why the PLIC window takes two root entries.
 
@@ -166,12 +166,19 @@ columns root entries | sharing
 
 ### Per-process kernel data
 
-`PROCESS_AREA` holds the current process's thread contexts: context 0 is the process header and
-context N the saved registers of thread N, for `MAX_THREADS` (31) threads, 32 machine words each.
-That is `THREAD_CONTEXT_PAGES` pages: 2 on Sv39, 1 on Sv32. The pages are the process's own,
-charged to its budget, and carry no `U` bit. Because every address space maps its own pages at
-the same address, the trap handler saves the interrupted thread's registers through one fixed
-pointer, whichever process was running.
+`PROCESS_AREA` holds the current process's header: one page on both widths, the process's own,
+charged to its budget, with no `U` bit. It holds the trap handler's scratch word, the address of
+the running thread's saved context in slot 1, the process's bookkeeping and thread masks, a
+context-sized "no thread" area, and the table from TID to each thread's IPC page (`MAX_THREADS` + 1
+entries of 4 bytes). The kernel asserts that this fits in the page.
+
+A thread's saved registers, 32 machine words, are the last bytes of its IPC page, the page a
+thread costs its budget ([objects](objects.md#what-objects-cost)), which the kernel reaches through
+the physmap. So a process pays for the threads it has, not for `MAX_THREADS`. Because every
+address space maps its own header at the same address, the trap handler loads slot 1 and saves
+the interrupted thread's registers there, whichever process was running; switching thread writes
+that address. The kernel's own thread (PID 1, which has no budget and no IPC pages) saves into the
+"no thread" area.
 
 The rest of the per-process entry is never mapped. A new thread's return address is
 `EXIT_THREAD`, an address there (`0xffff_ffff_8080_3000` on Sv39, `0xff80_3000` on Sv32): a thread
@@ -296,11 +303,9 @@ same source for both. Only these differ, as `cfg(target_pointer_width)` constant
 | entry width | 4 bytes | 8 bytes |
 | leaf sizes | 4 KiB, 4 MiB | 4 KiB, 2 MiB, 1 GiB |
 | `satp` mode | bit 31 | `8 << 60` |
-| `satp` ASID | bits 22-30 (9 bits) | bits 44-59 (16 bits) |
 | `satp` root PPN | bits 0-21 | bits 0-43 |
 | canonical addresses | all | bits 63-38 all equal |
 | `USER_AREA_END` | `0x8000_0000` | `0x40_0000_0000` |
-| `PROCESS_AREA` pages | 1 | 2 |
 
 User mappings are always 4 KiB leaves; only the physmap uses superpages. On Sv39 the table below
 a level-1 entry is named by its address, not by its index, because an index recurs in every
@@ -314,11 +319,17 @@ question does not arise.
 
 Status: built · partly tested: no case attacks a translation that outlives an address-space switch or an unmap directly; one hart and a whole-TLB flush at every switch are argued from the code · tested: bench:pid-reuse-authority, bench:uaf-lent-page
 
-`satp` holds the mode, the process's PID as its ASID, and the root table's physical page number
-(`make_satp`). PIDs fit every ASID width, because a PID is a byte. The kernel is PID 1; the loader
-numbers boot processes from 2. The kernel keeps the running PID in a second record of its own
-(`current_pid`), set whenever it switches address space (`set_current_pid`); the two are written
-together, and the PID in `satp` is the ASID the hardware uses.
+`satp` holds the mode and the root table's physical page number (`make_satp`); its ASID is 0 on
+both widths. Every switch, map and unmap flushes the whole TLB (below), so no translation is
+looked up by ASID yet. The process limit is held to the ASID field so that one can be:
+`MAX_PROCESS_COUNT` is below 2 to the power of `ASID_BITS`, 9 in Sv32 and 16 in Sv39, and PID 0
+is never a process, so every PID fits the field, and once the kernel flushes by ASID a process's
+PID is its ASID with no table between them. A compile-time assert holds it on each width. The
+kernel is PID 1; the loader numbers boot processes from 2 and names each one's PID in a field of
+its own in the handoff record ([boot](boot.md)). The kernel's one record of the running PID is
+`current_pid`, set whenever it switches address space (`set_current_pid`). Several harts need no
+ASID either: a TLB shootdown goes to the harts running the process
+([several harts](../plan/m2-usable-shell.md#several-harts)).
 
 The kernel runs in whichever address space was current when it trapped, because every address
 space maps the kernel half. Switching process writes `satp` and then runs `sfence.vma` with no
@@ -416,7 +427,7 @@ user address, and the load faults as a kernel failure.
   device registers sit, as ordinary kernel read-write memory; the kernel never uses those
   addresses, but a stray write through them reaches a device.
 - **Every change flushes everything.** Each map, unmap, lend and address-space switch runs a
-  global `sfence.vma`, so ASIDs save no work, and each flush costs page-table walks afterwards.
+  global `sfence.vma`, with ASID 0 everywhere, and each flush costs page-table walks afterwards.
   It is also a flush of this hart only: with more than one hart, another hart's cached
   translations would survive an unmap (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
 - **The firmware must delegate instruction page faults to S-mode.** Kernel entry from the loader

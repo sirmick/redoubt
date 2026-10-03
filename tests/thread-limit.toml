@@ -1,14 +1,18 @@
-description = "A process holds exactly MAX_THREADS (31) threads, its initial one included, with TIDs 1..=31; the next thread_create is TooManyThreads (checked build)"
+description = "A process holds exactly MAX_THREADS (255) threads, its initial one included, with TIDs 1..=255; the next thread_create is TooManyThreads; its budget is charged the header page and its tables at creation and one page per thread, and all of it comes back (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
-# The first program, alone; the TIDs and the refusal are the kernel's answers.
+# The first program, alone, with the holder a child in a budget of its own. The TIDs, the refusal
+# and every page count are the kernel's answers.
 programs = ["thread-limit"]
 timeout_secs = 60
 expect = [
-    '^\[pid 2\] \[thread-limit\] 31 threads, the initial one included$',
-    '^\[pid 2\] \[thread-limit\] TIDs distinct and within 1\.\.=31, all used: true$',
-    '^\[pid 2\] \[thread-limit\] the next thread_create: TooManyThreads$',
+    '^\[pid 2\] \[thread-limit\] process_create charges the header page and [23] tables: true$',
+    '^\[pid 2\] \[thread-limit\] 255 threads, the initial one included$',
+    '^\[pid 2\] \[thread-limit\] TIDs distinct and within 1\.\.=255, all used: true$',
+    '^\[pid 2\] \[thread-limit\] the next thread_create: TooManyThreads: true$',
+    '^\[pid 2\] \[thread-limit\] 254 threads created, 254 pages charged$',
+    '^\[pid 2\] \[thread-limit\] the holder exited and every page came back: true$',
     '^\[pid 2\] THREAD LIMIT TEST PASSED$',
 ]
 forbid = ['\[thread-limit\] FAIL']

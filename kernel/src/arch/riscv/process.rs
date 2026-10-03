@@ -1,31 +1,77 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
+use core::convert::TryFrom;
 use core::mem;
-/// The current process's bookkeeping lives at a fixed virtual address that the loader
-/// maps, to a different physical page, in every address space. So this one pointer always
-/// refers to whichever process is currently active.
-const PROCESS: *mut ProcessImpl = redoubt_layout::PROCESS_AREA as *mut ProcessImpl;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
-/// The current process's `ProcessImpl`.
+/// The current process's header page lives at a fixed virtual address that the loader
+/// maps, to a different physical page, in every address space. So this one address always
+/// refers to whichever process is currently active.
+const PROCESS: usize = redoubt_layout::PROCESS_AREA;
+
+/// The kernel's view of a `T` at `addr`: only ever the running process's header at `PROCESS`
+/// ([`process_impl`]) or a saved context ([`context`]).
 ///
 /// # Safety of the body
-/// `PROCESS` points at a live, aligned `ProcessImpl` (mapped by the loader and by
-/// `MemoryMapping::allocate` in every address space). The kernel runs on a single hart
-/// with interrupts disabled, so these references never overlap in time and are unique
-/// while held. Callers must not hold two of them across each other.
+/// Both kinds of `addr` hold a live, aligned value of their type in every address space: the
+/// header is mapped at `PROCESS` by the loader and by `MemoryMapping::allocate`, and a context
+/// is either the header's `no_thread` area or the last `size_of::<Thread>()` bytes of a thread's
+/// IPC page, a kernel object frame that no process maps, reached through the physmap, which maps
+/// all of RAM read-write in every address space (kernel/memory-layout.md). Every bit pattern is
+/// valid for both types (integers only). The kernel runs on a single hart with interrupts
+/// disabled, so these references never overlap in time and are unique while held. Callers must
+/// not hold two of them across each other.
 #[allow(clippy::mut_from_ref)]
-fn process_impl() -> &'static mut ProcessImpl {
+fn kernel_ref<T>(addr: usize) -> &'static mut T {
     // SAFETY: see the function's doc comment.
-    unsafe { &mut *PROCESS }
+    unsafe { &mut *(addr as *mut T) }
 }
+
+/// The current process's header page.
+fn process_impl() -> &'static mut ProcessImpl { kernel_ref(PROCESS) }
+
+/// The physical address of RAM's first frame, which object frame indices count from: set once
+/// at boot (`MemoryManager::init_from_memory`), so that finding a thread's context never needs
+/// the memory manager.
+static RAM_START: AtomicUsize = AtomicUsize::new(0);
+
+pub fn set_ram_start(start: usize) { RAM_START.store(start, Ordering::Relaxed) }
+
+/// Where a thread's saved context lies in its IPC page: the page's last bytes, after every word
+/// of IPC state (`message.rs` asserts that its words end before it).
+pub const CONTEXT_OFFSET: usize = PAGE_SIZE - mem::size_of::<Thread>();
+
+/// The address of thread `tid`'s context in the current process: in its IPC page, or the
+/// header's `no_thread` area for a TID with none (the kernel's own thread).
+fn context_addr(tid: TID) -> usize {
+    match process_impl().ipc[tid] {
+        0 => PROCESS + mem::offset_of!(ProcessImpl, no_thread),
+        frame => {
+            let phys = RAM_START.load(Ordering::Relaxed) + frame as usize * PAGE_SIZE;
+            redoubt_layout::physmap_virt(phys) + CONTEXT_OFFSET
+        }
+    }
+}
+
+/// Thread `tid`'s saved context in the current process.
+fn context(tid: TID) -> &'static mut Thread { kernel_ref(context_addr(tid)) }
+
 /// A thread's number within its process, `1..=MAX_THREADS` (kernel/processes.md). Thread `tid`'s
-/// saved context is context `tid` of `ProcessImpl` (context 0 is the header), so `tid` is
-/// also the number the trap handler reads from `hardware_thread`, where 0 means no thread.
+/// saved context is at the end of its IPC page, whose frame is entry `tid` of the header's table
+/// (entry 0 names no thread).
 pub type TID = usize;
 
 /// The first thread of every process.
 pub const INITIAL_TID: TID = 1;
+
+/// Words in a [`TidMask`].
+const TID_WORDS: usize = 4;
+// Every TID, 0 included, has a bit.
+const _: () = assert!(MAX_THREADS < TID_WORDS * u64::BITS as usize);
+
+/// A set of TIDs, bit `tid` for thread `tid` (bit 0, TID 0, names no thread).
+pub type TidMask = crate::bits::Bits<TID_WORDS>;
 
 use redoubt_layout::Pid;
 use redoubt_sys::{MAX_THREADS, PAGE_SIZE};
@@ -33,7 +79,17 @@ use redoubt_sys::{MAX_THREADS, PAGE_SIZE};
 use crate::cell::KernelCell;
 use crate::ptable::ProcessInner;
 
-pub const MAX_PROCESS_COUNT: usize = 64;
+pub const MAX_PROCESS_COUNT: usize = 511;
+
+/// The width of `satp`'s ASID field: 9 bits in Sv32, 16 in Sv39 (the privileged spec).
+#[cfg(target_pointer_width = "32")]
+pub const ASID_BITS: u32 = 9;
+#[cfg(target_pointer_width = "64")]
+pub const ASID_BITS: u32 = 16;
+
+// Every PID, 1..=MAX_PROCESS_COUNT, fits the ASID field, so a PID can be its own ASID with no table
+// between them (kernel/memory-layout.md, `satp`).
+const _: () = assert!(MAX_PROCESS_COUNT < 1 << ASID_BITS);
 
 /// Base of a range of addresses that are never mapped. Jumping to one of them faults into
 /// the kernel, which uses the faulting address to tell what the program is returning from.
@@ -45,55 +101,53 @@ const MAGIC_RETURN_BASE: usize = redoubt_layout::PROCESS_AREA + 0x80_0000;
 /// This is the address a thread will return to when it exits.
 pub const EXIT_THREAD: usize = MAGIC_RETURN_BASE + 0x3000;
 
-// ProcessImpl occupies a multiple of pages mapped to virtual address `0xff80_1000`.
-// Each thread is 128 bytes (32 4-byte registers). The first "thread" does not exist,
-// and instead is any bookkeeping information related to the process.
+/// A process's header: one page at `PROCESS_AREA` on both widths (kernel/memory-layout.md,
+/// "Per-process kernel data"). The threads' saved contexts are not here but in their IPC pages,
+/// so a process pays for the threads it has, not for `MAX_THREADS`.
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 struct ProcessImpl {
-    /// Used by the interrupt handler to calculate offsets
+    /// Where the trap handler stashes `x1` while it finds the context.
     scratch: usize,
 
-    /// The currently-active thread for this process, 0 for none. This must
-    /// be the 2nd item, because the ISR directly reads this value.
+    /// The address of the running thread's context, where the trap handler saves its registers.
+    /// This must be the 2nd item, because the trap handler loads it directly.
+    context: usize,
+
+    /// The running thread, 0 for none.
     hardware_thread: usize,
 
     /// Global parameters used by the operating system
     pub inner: ProcessInner,
 
     /// Allocated contexts, independent of their untrusted program counters.
-    allocated_threads: u32,
+    allocated_threads: TidMask,
 
     /// The last thread ID that was allocated
     last_tid_allocated: u8,
 
-    /// Pad the header out to the size of one `Thread`, so that the header is
-    /// "context 0" and the ISR can find context N at `N * size_of::<Thread>()`.
-    _padding: [u8; HEADER_PADDING],
+    /// The context of a thread with no IPC page: the kernel's own (PID 1 has no budget, so no
+    /// IPC pages), and where the trap handler would save registers when no thread is running.
+    no_thread: Thread,
 
-    /// The saved contexts: thread `tid`'s is `threads[tid - 1]`.
-    threads: [Thread; MAX_THREADS],
+    /// Each thread's IPC page, by object frame index, indexed by TID; 0 for none. The memory
+    /// manager keeps it (`budget.rs`), reading another process's through the physmap.
+    ipc: [u32; MAX_THREADS + 1],
 }
 
-const HEADER_PADDING: usize =
-    mem::size_of::<Thread>() - (2 * mem::size_of::<usize>() + mem::size_of::<ProcessInner>() + 4 + 1);
-
-/// Number of pages `ProcessImpl` occupies at `PROCESS_AREA`: 1 on rv32, 2 on rv64.
-pub const PROCESS_IMPL_PAGES: usize = mem::size_of::<ProcessImpl>() / PAGE_SIZE;
-
-// The trap handler in asm indexes contexts as `PROCESS_AREA + (n << log2(size_of::<Thread>()))`.
 const _: () = assert!(mem::size_of::<Thread>() == 32 * mem::size_of::<usize>());
-const _: () = assert!(mem::size_of::<ProcessImpl>() == (MAX_THREADS + 1) * mem::size_of::<Thread>());
-const _: () = assert!(mem::size_of::<ProcessImpl>() % PAGE_SIZE == 0);
-// The loader maps this many pages for PID 1 and for every initial process.
-#[cfg(target_pointer_width = "64")]
-const _: () = assert!(PROCESS_IMPL_PAGES == redoubt_layout::THREAD_CONTEXT_PAGES);
+// The header is one page, the one the loader and `MemoryMapping::allocate` map.
+const _: () = assert!(mem::size_of::<ProcessImpl>() <= PAGE_SIZE);
+
+/// Where the header's TID -> IPC-frame table lies in its page (`budget.rs`).
+pub const IPC_TABLE_OFFSET: usize = mem::offset_of!(ProcessImpl, ipc);
 
 /// Which PIDs have an address space the hardware may switch to, and which one is current. The
 /// process table proper is `ptable::ProcessTable`; this is the arch layer's view of it.
 struct PidSlots {
-    /// The process upon which the current syscall is operating
-    current: Pid,
+    /// The process upon which the current syscall is operating; `None` is the kernel, until the
+    /// first switch, so that the starting value is all zeros and the table is `.bss`.
+    current: Option<Pid>,
 
     /// The actual table contents. `true` if a process is allocated,
     /// `false` if it is free.
@@ -101,15 +155,17 @@ struct PidSlots {
 }
 
 static PID_SLOTS: KernelCell<PidSlots> =
-    KernelCell::new(PidSlots { current: redoubt_layout::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] });
+    KernelCell::new(PidSlots { current: None, table: [false; MAX_PROCESS_COUNT] });
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 /// The loader sets up two processes, the kernel and then `init`, and reports each as one of
 /// these records (kernel/boot.md, "What the loader does").
 pub struct InitialProcess {
-    /// The RISC-V SATP value, which includes the offset of the root page
-    /// table plus the process ID.
+    /// The process's PID, in a field of its own: `satp` carries none.
+    pub pid: usize,
+
+    /// The RISC-V `satp` value: the root page table, with ASID 0.
     pub satp: usize,
 
     /// Where execution begins
@@ -125,10 +181,9 @@ pub struct InitialProcess {
 
 impl InitialProcess {
     pub fn pid(&self) -> Pid {
-        let pid = crate::arch::mem::pid_from_satp(self.satp);
-        // The loader wrote this value. Check it rather than trust it: a zero here would be
-        // undefined behaviour in a `NonZeroU8`.
-        Pid::new(pid as u8).expect("initial process has PID 0")
+        // The loader wrote this value. Check it rather than trust it: a zero or a value too wide
+        // for a PID stops the boot.
+        crate::budget::pid_from(self.pid).expect("initial process has no valid PID")
     }
 }
 
@@ -153,12 +208,7 @@ pub struct Thread {
 }
 
 impl Process {
-    pub fn current() -> Process {
-        let pid = PID_SLOTS.with(|pt| pt.current);
-        let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
-        assert_eq!((pid.get() as usize), hardware_pid);
-        Process { pid }
-    }
+    pub fn current() -> Process { Process { pid: current_pid() } }
 
     /// Calls the provided function with the current inner process state.
     pub fn with_current<F, R>(f: F) -> R
@@ -194,25 +244,28 @@ impl Process {
     pub fn current_thread(&self) -> &Thread {
         let tid = self.current_tid();
         assert!(valid_tid(tid), "no current thread");
-        &process_impl().threads[tid - 1]
+        kernel_ref(process_impl().context)
     }
 
     pub fn current_tid(&self) -> TID { process_impl().hardware_thread }
 
     pub fn thread_exists(&self, tid: TID) -> bool {
-        valid_tid(tid) && process_impl().allocated_threads & (1 << tid) != 0
+        valid_tid(tid) && process_impl().allocated_threads.contains(tid)
     }
 
-    /// Set the current thread number.
+    /// Set the current thread, and the context the trap handler saves into.
     pub fn set_tid(&mut self, tid: TID) {
         klog!("Switching to thread {}", tid);
         assert!(valid_tid(tid), "attempt to switch to an invalid thread {}", tid);
-        process_impl().hardware_thread = tid;
+        let context = context_addr(tid);
+        let process = process_impl();
+        process.hardware_thread = tid;
+        process.context = context;
     }
 
     pub fn thread_mut(&mut self, tid: TID) -> &mut Thread {
         assert!(valid_tid(tid), "attempt to retrieve an invalid thread {}", tid);
-        &mut process_impl().threads[tid - 1]
+        context(tid)
     }
 
     /// A free TID, searching round from the last one handed out; `None` once `MAX_THREADS`
@@ -222,8 +275,8 @@ impl Process {
         let start = process.last_tid_allocated as usize;
         for offset in 0..MAX_THREADS {
             let tid = (start + offset) % MAX_THREADS + 1;
-            if process.allocated_threads & (1 << tid) == 0 {
-                process.last_tid_allocated = tid as u8;
+            if !process.allocated_threads.contains(tid) {
+                process.last_tid_allocated = u8::try_from(tid).expect("a TID fits a byte");
                 return Some(tid);
             }
         }
@@ -245,9 +298,11 @@ impl Process {
     /// the loader's to reserve, and only the loader's (kernel/memory-layout.md, "Regions").
     pub fn setup_loader_process(pid: Pid, entry: usize, sp: usize, a0: usize, a1: usize) {
         Self::claim(pid);
+        // Its space is active already (`switch_to`); the PID is the kernel's to record.
+        set_current_pid(pid);
         Self::setup_empty_process(pid);
         Self::setup_first_thread(pid, entry, sp, a0);
-        process_impl().threads[INITIAL_TID - 1].registers[10] = a1;
+        context(INITIAL_TID).registers[10] = a1;
     }
 
     /// Claim `pid` in the process table, so that its address space can be activated. It is a
@@ -265,17 +320,19 @@ impl Process {
     /// yet: nothing can run in it until `process_start`.
     ///
     /// The process's own address space must be the active one, as `setup_first_thread` requires, so
-    /// that `process_impl()` names *its* saved contexts. `MemoryMapping::allocate` zeroed those
-    /// frames; this gives the header and `ProcessInner` their starting values.
+    /// that `process_impl()` names *its* header. `MemoryMapping::allocate` (or the loader) zeroed
+    /// that page; this gives the header and `ProcessInner` their starting values. The IPC-frame
+    /// table is the memory manager's and is left alone: `init`'s first thread has its page before
+    /// `init` first runs.
     pub fn setup_empty_process(pid: Pid) {
-        let process = process_impl();
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
+        let context = context_addr(INITIAL_TID);
+        let process = process_impl();
         process.hardware_thread = INITIAL_TID;
-        process.allocated_threads = 0;
-        process.last_tid_allocated = INITIAL_TID as u8;
-        for thread in process.threads.iter_mut() {
-            *thread = Default::default();
-        }
+        process.allocated_threads = TidMask::EMPTY;
+        process.last_tid_allocated = u8::try_from(INITIAL_TID).expect("a TID fits a byte");
+        process.no_thread = Default::default();
+        process.context = context;
         process.inner = Default::default();
     }
 
@@ -286,10 +343,12 @@ impl Process {
     ///
     /// The process's own address space must be the active one.
     pub fn setup_first_thread(pid: Pid, entry: usize, sp: usize, arg: usize) {
-        let process = process_impl();
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
-        process.allocated_threads |= 1 << INITIAL_TID;
-        let thread = &mut process.threads[INITIAL_TID - 1];
+        {
+            let process = process_impl();
+            process.allocated_threads = process.allocated_threads.with(INITIAL_TID);
+        }
+        let thread = context(INITIAL_TID);
         *thread = Default::default();
         thread.sepc = entry;
         thread.registers[1] = sp;
@@ -299,14 +358,14 @@ impl Process {
     /// `thread_create(entry, sp, arg)`. The caller has mapped its own stack and passes `sp`.
     pub fn setup_redoubt_thread(&mut self, new_tid: TID, entry: usize, sp: usize, arg: usize) {
         assert!(valid_tid(new_tid), "attempt to create an invalid thread {}", new_tid);
-        let process = process_impl();
-        let thread = &mut process.threads[new_tid - 1];
+        let thread = context(new_tid);
         *thread = Default::default();
         thread.sepc = entry;
         thread.registers[0] = EXIT_THREAD;
         thread.registers[1] = sp;
         thread.registers[9] = arg;
-        process.allocated_threads |= 1 << new_tid;
+        let process = process_impl();
+        process.allocated_threads = process.allocated_threads.with(new_tid);
     }
 
     /// Destroy a given thread: `false` if it did not exist.
@@ -321,7 +380,12 @@ impl Process {
             *val = 0;
         }
         thread.sepc = 0;
-        process_impl().allocated_threads &= !(1 << tid);
+        let process = process_impl();
+        process.allocated_threads = process.allocated_threads.without(tid);
+        // Its IPC page goes back next (`thread_ended`): a trap must never save into it after.
+        if process.hardware_thread == tid {
+            process.context = PROCESS + mem::offset_of!(ProcessImpl, no_thread);
+        }
         true
     }
 
@@ -394,14 +458,14 @@ impl core::fmt::Display for Thread {
 fn valid_tid(tid: TID) -> bool { (1..=MAX_THREADS).contains(&tid) }
 
 pub fn set_current_pid(pid: Pid) {
-    let pid_idx = (pid.get() - 1) as usize;
+    let pid_idx = usize::from(pid.get()) - 1;
     PID_SLOTS.with(|pt| {
         match pt.table.get(pid_idx) {
             None | Some(false) => panic!("PID {} does not exist", pid),
             _ => (),
         }
-        pt.current = pid;
+        pt.current = Some(pid);
     });
 }
 
-pub fn current_pid() -> Pid { PID_SLOTS.with(|pt| pt.current) }
+pub fn current_pid() -> Pid { PID_SLOTS.with(|pt| pt.current).unwrap_or(redoubt_layout::KERNEL_PID) }

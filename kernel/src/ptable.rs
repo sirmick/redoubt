@@ -6,9 +6,9 @@ use redoubt_layout::{KERNEL_PID, Pid};
 use crate::arch;
 use crate::arch::mem::MemoryMapping;
 pub use crate::arch::process::Process as ArchProcess;
-use crate::arch::process::TID;
 pub use crate::arch::process::Thread;
 pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
+use crate::arch::process::{TID, TidMask};
 use crate::cell::KernelCell;
 
 /// Why the process table refused a step. Kernel-internal: a system call maps it explicitly.
@@ -44,15 +44,15 @@ pub enum ProcessState {
 
     /// This process is able to be run.  The context bitmask describes contexts
     /// that are ready.
-    Ready(usize /* context bitmask */),
+    Ready(TidMask),
 
     /// This is the current active process.  The context bitmask describes
     /// contexts that are ready, excluding the currently-executing context.
-    Running(usize /* context bitmask */),
+    Running(TidMask),
 
     /// This process is waiting for an event, such as as message or an
     /// interrupt.  There are no contexts that can be run. This is
-    /// functionally equivalent to the invalid `Ready(0)` state.
+    /// functionally equivalent to the invalid `Ready` with no thread.
     Sleeping,
 }
 
@@ -65,8 +65,8 @@ impl core::fmt::Debug for ProcessState {
             Setup { entry, sp, a0, a1 } => {
                 write!(fmt, "Setup {{ entry: {:#x}, sp: {:#x}, a0: {:#x}, a1: {:#x} }}", entry, sp, a0, a1)
             }
-            Ready(rt) => write!(fmt, "Ready({:b})", rt),
-            Running(rt) => write!(fmt, "Running({:b})", rt),
+            Ready(rt) => write!(fmt, "Ready({:?})", rt),
+            Running(rt) => write!(fmt, "Running({:?})", rt),
             Sleeping => write!(fmt, "Sleeping"),
         }
     }
@@ -86,8 +86,9 @@ pub struct Process {
     /// Where this process is in terms of lifecycle
     state: ProcessState,
 
-    /// This process' PID. This should match up with the index in the process table.
-    pub pid: Pid,
+    /// This process' PID. This should match up with the index in the process table. `None` in
+    /// a slot never used, so that the table's starting value is all zeros and it is `.bss`.
+    pid: Option<Pid>,
 
     /// The current thread ID
     pub current_thread: TID,
@@ -131,19 +132,22 @@ impl Process {
     /// The threads the scheduler may run next (`sched.rs`): a bit per thread waiting for the
     /// CPU, or `None` for a process whose next thread `activate_process_thread` chooses itself
     /// (being set up). A running thread is not waiting.
-    pub fn ready_threads(&self) -> Option<usize> {
+    pub fn ready_threads(&self) -> Option<TidMask> {
         match self.state {
             ProcessState::Ready(x) | ProcessState::Running(x) => Some(x),
             ProcessState::Setup { .. } => None,
-            _ => Some(0),
+            _ => Some(TidMask::EMPTY),
         }
     }
 
     /// Whether the process is on the CPU.
     pub fn running(&self) -> bool { matches!(self.state, ProcessState::Running(_)) }
 
+    /// This process's PID; a slot is given one before it is first used.
+    pub fn pid(&self) -> Pid { self.pid.expect("a process slot in use has a PID") }
+
     pub fn activate(&self) {
-        crate::arch::process::set_current_pid(self.pid);
+        crate::arch::process::set_current_pid(self.pid());
         self.mapping.activate();
     }
 
@@ -152,22 +156,24 @@ impl Process {
             return Err(ProcessError::NotFound);
         }
 
-        println!("[!] Terminating process with PID {}", self.pid);
+        let pid = self.pid();
+        println!("[!] Terminating process with PID {}", pid);
 
         // Free all associated memory pages, and give its budget back what the process had
         // charged to it (budget.rs).
         crate::mem::MemoryManager::with_mut(|mm| {
+            mm.release_ipc_frames(pid);
             // The final teardown step: a frame given back here may be handed to another process
             // at once, so this process never runs again.
-            mm.release_owned_frames(self.pid, &self.mapping);
+            mm.release_owned_frames(pid, &self.mapping);
             // Its DMA frames are pooled only once every device that could hold their address
             // confirms a reset, or quarantined for ever (kernel/devices.md, `dma.rs`).
-            mm.dma_release(self.pid);
-            mm.process_ended(self.pid);
+            mm.dma_release(pid);
+            mm.process_ended(pid);
         });
 
         // Remove this PID from the process table
-        ArchProcess::destroy(self.pid);
+        ArchProcess::destroy(pid);
         self.state = ProcessState::Free;
         // And forget its address space. `process_create` draws PIDs from the free ones, and
         // `MemoryMapping::allocate` refuses a mapping that still names an address space, so a
@@ -181,9 +187,9 @@ impl Process {
 static PROCESS_TABLE: KernelCell<ProcessTable> = KernelCell::new(ProcessTable {
     processes: [Process {
         state: ProcessState::Free,
-        pid: KERNEL_PID,
+        pid: None,
         mapping: arch::mem::DEFAULT_MEMORY_MAPPING,
-        current_thread: INITIAL_TID,
+        current_thread: 0,
     }; MAX_PROCESS_COUNT],
 });
 
@@ -192,7 +198,7 @@ impl core::fmt::Debug for Process {
         write!(
             fmt,
             "Process {} state: {:?}  TID: {}  Memory mapping: {:?}",
-            self.pid.get(),
+            self.pid.map_or(0, |pid| pid.get()),
             self.state,
             self.current_thread,
             self.mapping
@@ -226,21 +232,19 @@ impl ProcessTable {
         let init_offsets =
             unsafe { core::slice::from_raw_parts(base as *const crate::arch::process::InitialProcess, 2) };
 
-        // Copy over the initial process list.  The pid is encoded in the SATP
-        // value from the bootloader.  For each process, translate it from a raw
-        // KernelArguments value to a ProcessTable Process value.
+        // Copy over the initial process list. Each record names its PID in a field of its own
+        // (`satp` carries none). For each process, translate it from a raw KernelArguments value
+        // to a ProcessTable Process value.
         for init in init_offsets.iter() {
-            let pid = init.pid().get();
-            let proc_idx = pid - 1;
-            let process = &mut self.processes[proc_idx as usize];
+            let pid = init.pid();
+            let process = &mut self.processes[usize::from(pid.get()) - 1];
             // SAFETY: `from_init_process` records a loader-built satp; the loader guarantees it names a root
             // table.
-            unsafe {
-                process.mapping.from_init_process(*init);
-                process.pid = Pid::new(pid as _).unwrap();
-            };
-            process.state = if pid == 1 {
-                ProcessState::Running(0)
+            unsafe { process.mapping.from_init_process(*init) };
+            process.pid = Some(pid);
+            process.current_thread = INITIAL_TID;
+            process.state = if pid == KERNEL_PID {
+                ProcessState::Running(TidMask::EMPTY)
             } else {
                 ProcessState::Setup { entry: init.entrypoint, sp: init.sp, a0: init.a0, a1: init.a1 }
             };
@@ -265,7 +269,7 @@ impl ProcessTable {
         if entry.state != ProcessState::Free {
             return Err(ProcessError::NotFound);
         }
-        entry.pid = pid;
+        entry.pid = Some(pid);
         entry.state = ProcessState::Allocated;
         entry.current_thread = INITIAL_TID as TID;
         entry.mapping.allocate(mm, pid).map_err(ProcessError::Page).inspect_err(|_| {
@@ -293,7 +297,7 @@ impl ProcessTable {
         let process = self.get_process_mut(pid)?;
         match process.state {
             ProcessState::Allocated => {
-                process.state = ProcessState::Ready(1 << INITIAL_TID);
+                process.state = ProcessState::Ready(TidMask::of(INITIAL_TID));
                 Ok(())
             }
             _ => Err(ProcessError::NotFound),
@@ -319,8 +323,8 @@ impl ProcessTable {
         arch_process.setup_redoubt_thread(new_tid, entry, sp, arg);
         let process = self.get_process_mut(pid).map_err(|_| redoubt_sys::Error::NotPermitted)?;
         process.state = match process.state {
-            ProcessState::Running(x) => ProcessState::Running(x | (1 << new_tid)),
-            ProcessState::Ready(x) => ProcessState::Ready(x | (1 << new_tid)),
+            ProcessState::Running(x) => ProcessState::Running(x.with(new_tid)),
+            ProcessState::Ready(x) => ProcessState::Ready(x.with(new_tid)),
             other => panic!("thread_create in a process that is {:?}", other),
         };
         Ok(new_tid)
@@ -332,7 +336,7 @@ impl ProcessTable {
         if pid_idx >= self.processes.len() {
             return Err(ProcessError::NotFound);
         }
-        if self.processes[pid_idx].mapping.get_pid() != Some(pid) {
+        if self.processes[pid_idx].pid != Some(pid) {
             Err(ProcessError::NotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
             Err(ProcessError::NotFound)
@@ -347,7 +351,7 @@ impl ProcessTable {
         if pid_idx >= self.processes.len() {
             return Err(ProcessError::NotFound);
         }
-        if self.processes[pid_idx].mapping.get_pid() != Some(pid) {
+        if self.processes[pid_idx].pid != Some(pid) {
             Err(ProcessError::NotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
             Err(ProcessError::NotFound)
@@ -366,59 +370,19 @@ impl ProcessTable {
             ProcessState::Free => {
                 panic!("PID {} was not running, so cannot wake thread {}", pid, tid)
             }
-            ProcessState::Running(x) if x & (1 << tid) == 0 => ProcessState::Running(x | (1 << tid)),
-            ProcessState::Ready(x) if x & (1 << tid) == 0 => ProcessState::Ready(x | (1 << tid)),
-            ProcessState::Sleeping => ProcessState::Ready(1 << tid),
+            ProcessState::Running(x) if !x.contains(tid) => ProcessState::Running(x.with(tid)),
+            ProcessState::Ready(x) if !x.contains(tid) => ProcessState::Ready(x.with(tid)),
+            ProcessState::Sleeping => ProcessState::Ready(TidMask::of(tid)),
             other => panic!("PID {} was not in a state to wake thread {}: {:?}", pid, tid, other),
         };
         klog!("Readying ({}:{}) -> {:?}", pid, tid, process.state);
         Ok(())
     }
 
-    #[cfg(target_pointer_width = "32")]
-    pub fn find_next_thread(thread_mask: usize, current_thread: usize) -> usize {
-        // From https://graphics.stanford.edu/~seander/bithacks.html#ZerosOnRightMultLookup
-        // This platform has a multiplier, so this is fast
-        fn trailing_zeros(v: usize) -> usize {
-            const MULTIPLY_DEBRUIJN_BIT_POSITION: [usize; 32] = [
-                0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8, 31, 27, 13, 23, 21, 19, 16, 7, 26,
-                12, 18, 6, 11, 5, 10, 9,
-            ];
-
-            // The multiply is a hash: it is meant to wrap, so say so, or a checked build
-            // panics here instead of scheduling (docs/testbench.md, "Checked builds").
-            MULTIPLY_DEBRUIJN_BIT_POSITION[((!v.wrapping_sub(1) & v).wrapping_mul(0x077CB531)) >> 27]
-        }
-        // If there's only one thread runnable, run that one
-        if thread_mask == 0 {
-            panic!("no threads were available to run");
-        }
-
-        if thread_mask & (thread_mask - 1) == 0 {
-            trailing_zeros(thread_mask)
-        } else {
-            // The threads above `current_thread`: none when it is the last TID (31 on rv32).
-            let upper_bits = thread_mask & usize::MAX.checked_shl(current_thread as u32 + 1).unwrap_or(0);
-            if upper_bits != 0 { trailing_zeros(upper_bits) } else { trailing_zeros(thread_mask) }
-        }
-    }
-
-    #[cfg(not(target_pointer_width = "32"))]
-    pub fn find_next_thread(thread_mask: usize, current_thread: usize) -> usize {
-        if thread_mask == 0 {
-            panic!("no threads were available to run");
-        }
-        if thread_mask.is_power_of_two() {
-            thread_mask.trailing_zeros() as usize
-        } else {
-            // The threads above `current_thread`: none when it is the last TID (31 on rv32).
-            let upper_bits = thread_mask & usize::MAX.checked_shl(current_thread as u32 + 1).unwrap_or(0);
-            if upper_bits != 0 {
-                upper_bits.trailing_zeros() as usize
-            } else {
-                thread_mask.trailing_zeros() as usize
-            }
-        }
+    /// The ready thread to run after `current_thread`: the next TID above it, or else the lowest.
+    pub fn find_next_thread(thread_mask: TidMask, current_thread: usize) -> usize {
+        let lowest = thread_mask.iter().next().expect("no threads were available to run");
+        thread_mask.iter().find(|tid| *tid > current_thread).unwrap_or(lowest)
     }
 
     /// Mark the current process as "Ready to run".
@@ -434,14 +398,14 @@ impl ProcessTable {
             ProcessState::Free => return Err(ProcessError::NotFound),
             ProcessState::Sleeping => return Err(ProcessError::NotFound),
             ProcessState::Allocated | ProcessState::Setup { .. } => return Err(ProcessError::NotFound),
-            ProcessState::Ready(0) => {
-                panic!("ProcessState was `Ready(0)`, which is invalid!");
+            ProcessState::Ready(TidMask::EMPTY) => {
+                panic!("ProcessState was `Ready` with no thread, which is invalid!");
             }
             ProcessState::Ready(ready_threads) => {
                 let new_thread =
                     tid.unwrap_or_else(|| Self::find_next_thread(ready_threads, process.current_thread));
 
-                if ready_threads & (1 << new_thread) == 0 {
+                if !ready_threads.contains(new_thread) {
                     panic!("invalid thread ID");
                 }
 
@@ -449,25 +413,25 @@ impl ProcessTable {
 
                 ArchProcess::current().set_tid(new_thread);
                 process.current_thread = new_thread as _;
-                ProcessState::Running(ready_threads & !(1 << new_thread))
+                ProcessState::Running(ready_threads.without(new_thread))
             }
             ProcessState::Running(ready_threads) => {
                 // Ensure we can switch back to this thread, if necessary
-                let ready_threads = ready_threads | (1 << process.current_thread);
+                let ready_threads = ready_threads.with(process.current_thread);
 
                 let new_thread =
                     tid.unwrap_or_else(|| Self::find_next_thread(ready_threads, process.current_thread));
 
                 // Ensure the specified context is ready to run, or is
                 // currently running.
-                if ready_threads & (1 << new_thread) == 0 {
+                if !ready_threads.contains(new_thread) {
                     return Err(ProcessError::NotReady);
                 }
 
                 // Activate this process on this CPU
                 ArchProcess::current().set_tid(new_thread);
                 process.current_thread = new_thread as _;
-                ProcessState::Running(ready_threads & !(1 << new_thread))
+                ProcessState::Running(ready_threads.without(new_thread))
             }
         };
 
@@ -485,11 +449,11 @@ impl ProcessTable {
         let process = self.get_process_mut(pid)?;
 
         process.state = match process.state {
-            ProcessState::Running(x) if x & (1 << tid) != 0 => panic!(
+            ProcessState::Running(x) if x.contains(tid) => panic!(
                 "PID {} thread {} was already queued for running when `unschedule_thread()` was called",
                 pid, tid
             ),
-            ProcessState::Running(0) => ProcessState::Sleeping,
+            ProcessState::Running(TidMask::EMPTY) => ProcessState::Sleeping,
             ProcessState::Running(x) => ProcessState::Ready(x),
             other => {
                 panic!("PID {} TID {} was not in a state to be switched from: {:?}", pid, tid, other);
@@ -570,11 +534,11 @@ impl ProcessTable {
                         // If no new context is specified, take the previous
                         // context.  If that is not runnable, do a round-robin
                         // search for the next available context.
-                        assert!(x != 0, "process was {:?} but had no runnable threads", new.state);
+                        assert!(!x.is_empty(), "process was {:?} but had no runnable threads", new.state);
                         if new_tid == 0 {
                             new_tid = Self::find_next_thread(x, new.current_thread);
                         }
-                        if x & (1 << new_tid) == 0 {
+                        if !x.contains(new_tid) {
                             println!(
                                 "process state is {:?}, but new thread {} is not runnable",
                                 new.state, new_tid
@@ -605,14 +569,14 @@ impl ProcessTable {
                 ProcessState::Setup { entry, sp, a0, a1 } => {
                     ArchProcess::setup_loader_process(new_pid, entry, sp, a0, a1);
 
-                    ProcessState::Running(0)
+                    ProcessState::Running(TidMask::EMPTY)
                 }
-                ProcessState::Allocated => ProcessState::Running(0),
+                ProcessState::Allocated => ProcessState::Running(TidMask::EMPTY),
                 ProcessState::Free => panic!("process was suddenly Free"),
                 ProcessState::Ready(x) | ProcessState::Running(x) => {
-                    ProcessState::Running(x & !(1 << new_tid))
+                    ProcessState::Running(x.without(new_tid))
                 }
-                ProcessState::Sleeping => ProcessState::Running(0),
+                ProcessState::Sleeping => ProcessState::Running(TidMask::EMPTY),
             };
             new.activate();
 
@@ -632,9 +596,9 @@ impl ProcessTable {
                 // run, then the Running thread list will be 0.  In that case,
                 // we will either need to Sleep this process, or mark it as
                 // being Ready to run.
-                ProcessState::Running(x) if x == 0 => {
+                ProcessState::Running(x) if x.is_empty() => {
                     if can_resume {
-                        ProcessState::Ready(1 << previous_tid)
+                        ProcessState::Ready(TidMask::of(previous_tid))
                     } else {
                         ProcessState::Sleeping
                     }
@@ -644,7 +608,7 @@ impl ProcessTable {
                 // current context number only if `can_resume` is `true`.
                 ProcessState::Running(x) => {
                     if can_resume {
-                        ProcessState::Ready(x | (1 << previous_tid))
+                        ProcessState::Ready(x.with(previous_tid))
                     } else {
                         ProcessState::Ready(x)
                     }
@@ -675,11 +639,11 @@ impl ProcessTable {
 
             // Transition to the new state.
             new.state = if let ProcessState::Running(x) = new.state {
-                assert!(x & (1 << new.current_thread) == 0);
+                assert!(!x.contains(new.current_thread));
 
                 // If the current process can be resumed, add it to the list
                 // of potential threads
-                let x = x | if can_resume { 1 << new.current_thread } else { 0 };
+                let x = if can_resume { x.with(new.current_thread) } else { x };
 
                 // If no new thread is specified, take the previous
                 // thread.  If that is not runnable, do a round-robin
@@ -688,14 +652,14 @@ impl ProcessTable {
                     new_tid = Self::find_next_thread(x, new.current_thread);
                 }
 
-                if x & (1 << new_tid) == 0 {
+                if !x.contains(new_tid) {
                     return Err(ProcessError::NotReady);
                 }
 
                 new.current_thread = new_tid as _;
 
                 // Remove the new TID from the list of threads that can be run.
-                ProcessState::Running(x & !(1 << new_tid))
+                ProcessState::Running(x.without(new_tid))
             } else {
                 panic!("PID {} invalid process state (not Running): {:?}", previous_pid, new.state)
             };
@@ -742,7 +706,7 @@ impl ProcessTable {
         let mut new_pid = pid;
         {
             let process = self.get_process_mut(pid)?;
-            process.state = if waiting_threads == 0 {
+            process.state = if waiting_threads.is_empty() {
                 new_pid = KERNEL_PID;
                 ProcessState::Sleeping
             } else {

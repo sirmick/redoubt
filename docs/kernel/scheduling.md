@@ -279,7 +279,11 @@ churns children pays for both.
 destroys it, over and over (blocked, spinning, by a deadline, and through fresh intermediates),
 against an equal-weight victim who keeps half; the oracle recomputes every lift from the trace.
 Its last variant, a shell that keeps giving a child half its weight and taking it back with no
-run between, leaves the victim neither more nor less than half.
+run between, leaves the victim at least half, and the recomputed lifts show that creating and
+destroying moved nothing. Its victim's share has no ceiling: the shell pays at its halved weight
+for what it runs while carved, its own calls included
+([running while carved down](#running-while-carved-down)), so how far above half the victim gets
+follows the kernel's speed.
 
 ### Running while carved down
 
@@ -424,8 +428,7 @@ stand-in spends its slice on the audit at the first `killed` notice, is requeued
 and a hostile budget run a slice each before it takes the second. A share is judged the same way:
 in `sched-budget-churn`, whose attacker destroys a budget each slice, the victim of the spinning
 parent gets 494 of 1000 net of audits on rv64 (403 gross) and 495 on rv32 (416), and the shell's
-victim 500 and 499. With the audits billed to the budget that ran them, as before, the shell
-paid for scans a release build does not run, and its victim got 650 and 643 net: more than half.
+victim 580 (391) and 497 (316).
 `sched-exit-churn` and `sched-timer-flood` are judged the same way, since a process's start and
 end and a deadline's destruction each run an audit: against processes that exit, the victim gets
 495 of 1000 net on rv64 (459 gross) and 492 on rv32 (459); against processes that fault, 497
@@ -646,7 +649,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`) · tested (40)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); a delivery's, a timer expiry's and a reconcile's walks of every thread or process are measured at full occupancy by `bench:worst-walk`, run by name, and break it there ([residual risks](#residual-risks)) · tested (40)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -710,9 +713,11 @@ dying processes' own tables and page tables, and the chains of the handles held 
 ([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by
 interrupt number it finds in an index the kernel keeps as objects are made and freed: a process
 object in one of `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's
-sources; a boot naming a higher interrupt stops). So `process_create`'s PID draw looks at most at
-63 slots, an owed exit notice is sought among at most 63 process objects, and an interrupt finds
-its object in one lookup; a checked build proves each index against a scan of every object frame.
+sources; a boot naming a higher interrupt stops). PID 1 is the kernel's, which has no process
+object, so processes take PIDs 2 to `MAX_PROCESS_COUNT` (511): `process_create`'s PID draw looks
+at most at those 510 slots, an owed exit notice is sought among at most 510 process objects, and
+an interrupt finds its object in one lookup; a checked build proves each index against a scan of
+every object frame.
 In `bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
 its exit notice and an interrupt take what they took on an empty system; with the old scans, the
 first took 1.2 s against 22 ms. So do a one-page `map_anon`, a `budget_create` and a
@@ -756,8 +761,10 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `sched-latency` and `sched-latency-tcg`, whose `sched_oracle` post-check reads the trace printed
   at `system_reset`.
 
-The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
-debug-only break of the tie rule that implies the trace; `audit-unstamped`, which leaves the audit
+The other diagnostic features are off by default in the same way: `walk-trace`, which implies
+the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
+alone; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
+`audit-unstamped`, which leaves the audit
 after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
 budget that ran it and counts it against its slice, each for one recorded negative run
 ([responsiveness](#responsiveness)); `timer-tail-billed`, which bills the rest of a timer
@@ -832,6 +839,12 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
+- **Reconcile walks every process.** The budgets with a ready thread are found at the end of
+  every kernel entry by walking every live process, and woken one at a time, each wake searching
+  them all. At full occupancy this, a delivery and a timer expiry break R12's "never depends on
+  what other processes hold"
+  ([reconcile walks every process](../todo/reconcile-walks-every-process.md),
+  [IPC](ipc.md#residual-risks), [timer](timer.md#residual-risks)).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
   decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to

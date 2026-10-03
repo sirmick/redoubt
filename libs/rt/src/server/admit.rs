@@ -561,13 +561,15 @@ mod tests {
     fn overrides_are_sized_and_checked() {
         let limits = Limits { buckets: 6, in_flight: 5, files: 8, state: 4 };
         let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
-        // The milestone manifest: sshd 23, the steward 2 (a slot of 5 at worst), four more at 5:
-        // 23 + 5 + 4 x 5 = 48.
+        let bound = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32;
+        // The milestone manifest: sshd 23, the steward 2 (a slot of 5 at worst), four more at 5.
         assert!(Admission::with_overrides(limits, &[o(1, 23), o(2, 2)]).is_ok());
-        // sshd 24 is one too many: the steward idle, a sixth default bucket takes its slot.
-        assert_eq!(Admission::with_overrides(limits, &[o(1, 24), o(2, 2)]).err(), Some(Unsized));
-        // 24 + 8 + 4 x 5 = 52 > 48.
-        assert_eq!(Admission::with_overrides(limits, &[o(1, 24), o(2, 8)]).err(), Some(Unsized));
+        // sshd at bound - 25 fills the bound: (bound - 25) + 5 + 4 x 5 = bound.
+        assert!(Admission::with_overrides(limits, &[o(1, bound - 25), o(2, 2)]).is_ok());
+        // One more is one too many: the steward idle, a sixth default bucket takes its slot.
+        assert_eq!(Admission::with_overrides(limits, &[o(1, bound - 24), o(2, 2)]).err(), Some(Unsized));
+        // (bound - 24) + 8 + 4 x 5 = bound + 4.
+        assert_eq!(Admission::with_overrides(limits, &[o(1, bound - 24), o(2, 8)]).err(), Some(Unsized));
         for bad in
             [vec![o(0, 2)], vec![o(1 << 63, 2)], vec![o(1, 2), o(1, 2)], vec![o(1, 1)], vec![o(1, 2); 7]]
         {
@@ -576,17 +578,21 @@ mod tests {
     }
 
     /// A red-team case: whatever order the badges come in, admission
-    /// never holds more open calls than `with_overrides` accepted it for. With sshd 24 and the
-    /// steward 2 it held 49 (sshd's 24, then five other badges at 5 while the steward was idle).
+    /// never holds more open calls than `with_overrides` accepted it for. With sshd one past the
+    /// bound's share and the steward 2 it held one over the bound (sshd's share, then five other
+    /// badges at 5 while the steward was idle).
     #[test]
     fn the_worst_order_never_passes_the_headroom() {
         let limits = Limits { buckets: 6, in_flight: 5, files: 8, state: 4 };
         let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
         let root = |badge| AdmitKey::of(&Caller { badge, account: 0, labels: Default::default() });
         let bound = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32;
-        for overrides in
-            [vec![o(1, 23), o(2, 2)], vec![o(1, 24), o(2, 2)], vec![o(1, 30)], vec![o(1, 2), o(2, 2)]]
-        {
+        for overrides in [
+            vec![o(1, bound - 25), o(2, 2)],
+            vec![o(1, bound - 24), o(2, 2)],
+            vec![o(1, bound - 18)],
+            vec![o(1, 2), o(2, 2)],
+        ] {
             let Ok(mut a) = Admission::with_overrides(limits, &overrides) else { continue };
             // The big override first, then every other badge, the small overrides last.
             let mut held = 0;
@@ -597,7 +603,7 @@ mod tests {
             }
             assert!(held <= bound, "{overrides:?} admitted {held} open calls, over {bound}");
         }
-        assert!(Admission::with_overrides(limits, &[o(1, 24), o(2, 2)]).is_err());
+        assert!(Admission::with_overrides(limits, &[o(1, bound - 24), o(2, 2)]).is_err());
     }
 
     #[test]

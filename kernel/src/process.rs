@@ -26,8 +26,8 @@
 //!
 //! # What a process costs (kernel/objects.md, "What objects cost")
 //! The cost table says one page for the process object. A process needs more than one page of
-//! kernel storage: its saved thread contexts take `PROCESS_IMPL_PAGES` frames and its root page
-//! table one more. Those die with the process, so they are charged **to the budget it runs in**,
+//! kernel storage: its header (`arch::process`, one page on both widths) and its root page
+//! table. Those die with the process, so they are charged **to the budget it runs in**,
 //! as ordinary frames of that process, while the object's own page -- the notice -- is the
 //! creator's, paid by someone who is still alive when the process is not.
 //!
@@ -52,7 +52,7 @@ use redoubt_sys::{
 };
 
 use crate::arch::process::TID;
-use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, Process as ArchProcess};
+use crate::arch::process::{INITIAL_TID, Process as ArchProcess};
 use crate::budget::{BudgetFrame, Class, PROCESS_PAGES, THREAD_PAGES};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object, ProcessRef};
 use crate::kframe;
@@ -146,7 +146,7 @@ impl MemoryManager {
         Proc {
             id: w(W_ID),
             creator: BudgetRef { frame: frame_of(w(W_CREATOR)).unwrap_or(0), id: w(W_CREATOR_ID) },
-            pid: Pid::new(w(W_PID) as u8).expect("I1: a process object names no PID"),
+            pid: crate::budget::pid_from(w(W_PID)).expect("I1: a process object names no PID"),
             counted_in: BudgetRef { frame: frame_of(w(W_COUNTED)).unwrap_or(0), id: w(W_COUNTED_ID) },
             endpoint: frame_of(w(W_ENDPOINT)).map(|frame| EndpointRef { frame, id: w(W_ENDPOINT_ID) }),
             flags: w(W_FLAGS),
@@ -212,16 +212,22 @@ impl MemoryManager {
         }
     }
 
-    /// The lowest process-object frame for which `f` holds: at most `MAX_PROCESS_COUNT` objects,
-    /// through the PID index, never a scan of the object frames (R12).
+    /// The lowest process-object frame for which `f` holds: the objects that exist, through the
+    /// PID index, never a scan of the object frames (R12).
     fn find_process(&self, f: impl Fn(&MemoryManager, u32) -> bool) -> Option<u32> {
-        self.objects.processes.iter().flatten().copied().filter(|frame| f(self, *frame)).min()
+        let frames = self.objects.process_pids.iter().filter_map(|i| self.objects.processes[i]);
+        frames.filter(|frame| f(self, *frame)).min()
     }
 
     /// `pid`'s process object is now `frame` (`None`: freed), in the PID index.
     fn index_process(&mut self, pid: Pid, frame: Option<u32>) {
         let i = crate::budget::account_index(pid).expect("a process object names a PID");
         self.objects.processes[i] = frame;
+        self.objects.process_pids = if frame.is_some() {
+            self.objects.process_pids.with(i)
+        } else {
+            self.objects.process_pids.without(i)
+        };
         // The audit neither moves the schedule nor counts in a latency target (`sched::audit`).
         // Inside a destruction it does nothing: the destruction audits once, after its walk.
         #[cfg(debug_assertions)]
@@ -243,8 +249,9 @@ impl MemoryManager {
             return;
         };
         let to = BudgetRef { frame: parent, id: self.budget_id(parent) };
-        let frames = self.objects.processes;
-        for frame in frames.iter().flatten().copied() {
+        // The set is read once: the walk changes the objects, never which exist.
+        for i in self.objects.process_pids.iter() {
+            let Some(frame) = self.objects.processes[i] else { continue };
             let mut p = self.process(frame);
             if !self.budget(p.counted_in.frame).dying {
                 continue;
@@ -273,6 +280,13 @@ impl MemoryManager {
             self.objects.processes.iter().flatten().count(),
             "the PID index names a frame that is no process object"
         );
+        for (i, frame) in self.objects.processes.iter().enumerate() {
+            assert_eq!(
+                self.objects.process_pids.contains(i),
+                frame.is_some(),
+                "the PID set misses the index"
+            );
+        }
     }
 
     /// The checked build's audit, run once after a destruction's walk: the PID and IRQ indexes
@@ -295,19 +309,19 @@ pub fn object_of(mm: &MemoryManager, pid: Pid) -> Option<u32> {
     crate::budget::account_index(pid).and_then(|i| mm.objects.processes[i])
 }
 
-/// A PID drawn at random from the free ASIDs (kernel/processes.md, "Processes and PIDs"): free in
+/// A PID drawn at random from the free PIDs (kernel/processes.md, "Processes and PIDs"): free in
 /// the process table, and named by no process object, so a PID is not reused while a notice
-/// still names it (R20). Random so that nothing can predict which ASID a process will get.
+/// still names it (R20). Random so that nothing can predict which PID a process will get.
 fn random_free_pid(ss: &ProcessTable, mm: &MemoryManager) -> Option<Pid> {
     let free = |pid: Pid| ss.get_process(pid).is_err() && object_of(mm, pid).is_none();
-    let count = (2..=MAX_PROCESS_COUNT).filter(|i| Pid::new(*i as u8).is_some_and(free)).count();
+    let count = crate::budget::pids().skip(1).filter(|pid| free(*pid)).count();
     if count == 0 {
         return None;
     }
     let mut bytes = [0u8; 8];
     crate::platform::rand::fill(&mut bytes);
     let nth = (u64::from_le_bytes(bytes) % count as u64) as usize;
-    (2..=MAX_PROCESS_COUNT).filter_map(|i| Pid::new(i as u8)).filter(|pid| free(*pid)).nth(nth)
+    crate::budget::pids().skip(1).filter(|pid| free(*pid)).nth(nth)
 }
 
 // --- `process_create` ---------------------------------------------------------------------------
@@ -556,15 +570,17 @@ pub fn process_start(
         return Err(Error::TooLarge);
     }
     let slots = crate::redoubt::read_slots::<MAX_START_HANDLES>(mm, handles_rec, count)?;
-    let mut decoded = [None; MAX_START_HANDLES];
-    for (i, slot) in slots.iter().enumerate().take(count) {
-        decoded[i] = Some(AbiHandle::from_raw(*slot)?);
+    // Decoding comes first in the row; it is redone below rather than kept, so that only one
+    // array sized by `MAX_START_HANDLES` beside the slots is on the kernel stack.
+    for slot in &slots[..count] {
+        AbiHandle::from_raw(*slot)?;
     }
     let r = mm.process_handle(pid, process_h)?;
     let p = mm.process_at(r);
     let mut handles = [None; MAX_START_HANDLES];
-    for (i, handle) in decoded.iter().enumerate().take(count) {
-        handles[i] = Some(mm.handle(pid, handle.expect("decoded above").index())?);
+    for (i, slot) in slots.iter().enumerate().take(count) {
+        let handle = AbiHandle::from_raw(*slot).expect("decoded above");
+        handles[i] = Some(mm.handle(pid, handle.index())?);
     }
     if p.started() || !p.alive() {
         return Err(Error::NotPermitted);
