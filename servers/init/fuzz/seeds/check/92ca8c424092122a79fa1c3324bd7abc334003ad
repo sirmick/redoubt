@@ -1,0 +1,1 @@
+{"devices": [{"name": "ua", "base": "264128", "irq": 7, "dma": true}], "labe": [{"namn": 1, "labels": ["alice-secs"]}], "principals":[{"name": "alice", "account": "1001", "budget": {"pages": "4096", "processes": 4, "weight": 100}, "ssys": ["sshICQoLDA0ODxAxwdHcrets"], "lahome": "data:/home/alice", "net": [{"prefix": "0.0.0.0/0", "ports": [22] },434]}], "cfined": true}

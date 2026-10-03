@@ -1,0 +1,7 @@
+{
+  "devices": [
+ { "name": "u0", "base": "9", "irq": 7, "dma": true , "m": "soled",
+    "bubget": { "pas": "512", "prt": 1000 },
+  "deve": "d", "e":["bue4"] }  ],
+ "": []
+}

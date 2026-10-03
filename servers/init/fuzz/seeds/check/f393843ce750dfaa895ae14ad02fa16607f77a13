@@ -1,0 +1,9 @@
+{
+  "dev": [
+  ],
+  "servers": [   { "name": "", "program": "key",
+  "budget": { "pages": "56", "processes": 1, "weight": 100 },
+      
+"handed": [ { "endpoint": "netd","badge": "2" } ,{}] }
+],  "peblic": []
+}

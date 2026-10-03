@@ -1,0 +1,1 @@
+{"devices": [{"name": "", "irq": 7, "dma":true}], "servers": [{"name": "keyd", "program": "key", "budget": {"pages": "128", "processes": 1, "weight": 100}, "receives": ["ke="]}, {"name": ""}], "fined": true}

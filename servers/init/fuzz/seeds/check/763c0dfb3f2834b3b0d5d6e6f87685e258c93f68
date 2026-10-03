@@ -1,0 +1,12 @@
+{
+  "devices": [
+     { "name": "net0", "base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+     "budget": { "pages": "256", "processes": 2, "weight": 100 },
+      "receives": [],  "args": ["buckets=",
+ "a11z11111",
+         "audit,audi44444474",
+           "butsets=4"] }  ]
+}

@@ -1,0 +1,5 @@
+{
+  "devices": [   { "name":  "d", "base": "268468224", "irq": 8, "dma": true },
+    { "name": "net0", "base": "268464128", "irq": 8, "dma": true }
+  ]
+}

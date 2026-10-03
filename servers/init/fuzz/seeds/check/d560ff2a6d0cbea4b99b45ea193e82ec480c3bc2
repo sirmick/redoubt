@@ -1,0 +1,6 @@
+{ "servers": [
+ { "name": "ked", "program": "keyd",
+     "budget": { "pages": "111111111111111111112", "processes": 10 },
+     "receivus": ["24"] }
+  ]
+}

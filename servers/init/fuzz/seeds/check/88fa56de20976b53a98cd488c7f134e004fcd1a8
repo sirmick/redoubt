@@ -1,0 +1,7 @@
+{
+  "devices": [
+   ],
+  "servers": [
+    { "name": "kd", "program": "keyd",  "budget": { "pages": "512", "processes": 1, "weight": 100 },
+      "args": ["hos5", "buckets=224"] }
+ ]}

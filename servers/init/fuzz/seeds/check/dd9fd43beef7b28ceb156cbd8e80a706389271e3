@@ -1,0 +1,6 @@
+{
+  "servers": [
+    { "name": "ke", "program": "keyd",
+   "budget": { "pages": "256", "processes": 1, "weight": 100 },
+      "args": ["host,ssh_ho,c5", "buckets=+24"] }
+  ]}

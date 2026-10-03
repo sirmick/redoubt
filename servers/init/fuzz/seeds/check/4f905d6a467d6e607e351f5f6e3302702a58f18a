@@ -1,0 +1,1 @@
+{"devirs": [{"nags": []}], "principals": [{"name": "alice", "account": "10", "budget": {"pages": "4096", "processes": 4, "weight": 100}, "sskeye": "+e", "net": [{"prefix": ""}]}], "cod": true}

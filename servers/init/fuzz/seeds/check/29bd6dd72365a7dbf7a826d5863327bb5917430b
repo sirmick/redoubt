@@ -1,0 +1,6 @@
+{
+ "servers": [
+ { "name": "ke", "program": "keyd",
+  "budget": { "pages": "255", "processes": 1, "weight":10 },
+  "args": ["ho536", "buckets=+0000065672"] }
+  ]}

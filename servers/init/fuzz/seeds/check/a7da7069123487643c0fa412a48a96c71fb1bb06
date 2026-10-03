@@ -1,0 +1,1 @@
+{"de": [{"titiels": ["s"]}], "principals": [{"name": "alice", "account": "22", "budget": {"pages": "408", "processes": 4, "weight":1},"net": [{"prefix": "0n0.00", "ports": []}, {"namacct": {},  "hos": [22, 443]}]}], "confined": true}

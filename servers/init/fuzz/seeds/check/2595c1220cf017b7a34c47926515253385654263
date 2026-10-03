@@ -1,0 +1,9 @@
+{
+  "servers": [
+ { "name": "", "program": "blkd",
+   "budget": { "pages": "951", "processes": 1, "weight": 0},
+      "devices": [ {} ],
+      "rgs": ["dr=&=4"] }
+  ],
+  "public": []
+}

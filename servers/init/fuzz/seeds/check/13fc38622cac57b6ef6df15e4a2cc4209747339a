@@ -1,0 +1,47 @@
+{
+ "devices": [
+  {
+   "name": "uar0",
+   "base": "5456",
+   "irq": 10,
+ "dma": false
+  },
+  {
+   "name": "d",
+   "base": "68468224",
+   "irq": 8,
+   "dma": true
+  },
+  {
+   "name": "2854049",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq":8,
+   "dma":true  },
+  {
+   "name": "net0",
+ "irq": 8,
+   "dma": true
+  },
+  {
+   "name": "285405149",
+ "irq": 7,
+   "dma": false
+  },
+  {
+   "name": "24",
+   "irq": 8,
+   "dma":true  },
+  {   "name": "net",
+   "base": "28464128",
+   "dma": true
+  }
+ ],
+ "servers": [
+  {
+ }
+ ]
+}

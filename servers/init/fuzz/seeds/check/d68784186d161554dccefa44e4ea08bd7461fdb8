@@ -1,0 +1,48 @@
+{
+ "devices": [
+  {
+   "name": "uart0",
+   "irq": 7,
+   "dma": true
+  }
+ ],
+ "servers": [
+  {
+   "name": "keyd",
+   "program": "keyd",
+   "budget": {
+    "pages": "256",
+    "processes": 1,
+    "weight": 100
+   },
+   "receives": [
+    "t,11111111111111111"
+   ]
+  }
+ ],
+ "principals": [
+  {
+   "name": "`alice",
+   "account": "1001",
+   "budget": {
+    "pages": "4096",
+    "processes": 4,
+    "weight": 100
+   },
+   "ssh_keys": [
+    "ssh-eh8g"
+
+   ],
+   "home": "data:/home/alice",
+   "net": [
+    {
+     "prefix": "0.0",
+     "ports": [
+      22,
+      443
+     ]
+    }
+   ]
+  }
+ ]
+}

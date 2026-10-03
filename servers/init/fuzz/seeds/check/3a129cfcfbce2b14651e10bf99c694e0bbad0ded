@@ -1,0 +1,1 @@
+{"labels": [{"name":"ets","owner": "alice", "id": "7"}], "principals": [{"name":"alice", "account": "11", "budget": {"pages": "7","processes": 4, "weight": 10}, "ssh_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI0NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g"], "net":[{"prefix": "0.0.0.0/0","ports": []}]}]}

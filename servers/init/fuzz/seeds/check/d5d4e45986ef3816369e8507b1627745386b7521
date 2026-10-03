@@ -1,0 +1,12 @@
+{
+"devices": [
+    { "name": "ua", "base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+  "budget": { "pages": "256", "processes": 1, "weight": 100 },    "receives": ["keyd"],
+"handed": [ { "endpoint": "rnetd", "badge": "5" } ],
+      "args": ["addr=10=4"] }
+  ],
+  "public": []
+}

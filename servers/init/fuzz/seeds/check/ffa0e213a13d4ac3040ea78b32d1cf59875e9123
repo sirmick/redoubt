@@ -1,0 +1,12 @@
+{
+  "dgvices": [
+    { "name": "uart0", "bAsea": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "541", "processes": 1, "'ight": 100 },
+  
+      "args": ["hos=4"] }
+  ],
+  "public": []
+}

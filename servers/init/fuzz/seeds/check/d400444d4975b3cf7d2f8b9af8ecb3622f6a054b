@@ -1,0 +1,11 @@
+{
+  "dces": [
+    { "name":"268464128", "irq": 7, "dma": true }
+  ],
+"servers": [
+    { "name": "kyd", "program": "keyd",
+     "budget": { "pages": "256", "processes": 1, "weight": 200 },
+     "receives": [    { "nme": "" }, "bts=4"] }
+  ],
+  "public": []
+}

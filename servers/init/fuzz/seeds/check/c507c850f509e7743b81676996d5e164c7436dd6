@@ -1,0 +1,1 @@
+{"devers": [{"name": "keyd", "program": "keyd", "budget": {"pages": "256","procht": 100}, "receives": ["ke"]}], "principals": [{"name": "alice", "account": "1000", "budget": {"pages": "6", "processes": 4, "weight": 100}, "home": ["sFB0OD"], "labeirq": 8, "badgedma": true },{ "net": [{"prifex": "0.0.0.0/0", "ports": [22, 443]}]}], "con_ed": true}

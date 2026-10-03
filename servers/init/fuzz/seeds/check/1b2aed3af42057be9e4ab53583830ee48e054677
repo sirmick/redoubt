@@ -1,0 +1,6 @@
+{ "devices": [
+    { "name": "uart1", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "disk0",  "base": "268435456", "irq": 10, "dma": false },   { "name": "di624", "irq": 8, "dma": true },{ "name": "ne64128", "irq": 7, "dma": true }
+  ],
+  "servers": []
+}

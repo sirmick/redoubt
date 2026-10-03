@@ -1,0 +1,1 @@
+{"?": [{"dma": true}], "servers": [{"name": "ke","program": "ntd", "budget": {"pages":"102", "processes": 1, "weight": 1000}, "devices": [{"device": "", "as": "net"}]}]}

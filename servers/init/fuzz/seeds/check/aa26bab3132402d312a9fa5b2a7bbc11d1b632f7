@@ -1,0 +1,13 @@
+{
+  "tevices": [
+    { "name": "uar24", "irq": 8,  "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },
+      "receives": ["keyd"],
+    "handed": [ { "endpoint": "ipd", "ba;ge": "3" } ],
+      "args": ["/2ets=4"] }
+  ],
+  "public": []
+}

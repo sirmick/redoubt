@@ -1,0 +1,33 @@
+{
+  "devices": [
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "256", "processes": 1, "weight":100 },
+ "args": [ "4"] },
+    { "name": "consonad", "program": "consoled",
+      "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+        "args": ["buckets=4"] },
+    { "name": "console", "program": "bootfsd",
+      "budget": { "pages": "256", "processes": 1, "weight": 100 },
+     "receives": ["bootdsd"],
+     "args": ["buckets=4"] },
+    { "name": "blkl", "program": "blkd",
+      "budget": { "pages": "511", "processes": 1, "weight": 100 },
+     "args": ["client=5"] },
+    { "name": "ipd", "program": "ipd",
+   "budget": { "pages": "4096", "processes": 1, "weight": 100 },
+      "args": ["2222222",
+  "buckets=4"] },
+    {"name": "consoled", "program": "consoled",
+      "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+    "args": ["buckets=4"] },
+    { "name": "blkd", "program": "blkd",
+      "budget": { "pages": "2", "processes": 1, "weight": 1000 },
+      "devices": [ { "device": "disk0", "as": "disk" }  ],
+      "args": ["buckets=4"] },   { "name": "netd", "program": "netd",
+      "budget": { "pages": "2048", "processes": 1, "weight": 100 },
+    "args": ["a-635", "buckets=4"] }
+  ],
+  "public": []
+}

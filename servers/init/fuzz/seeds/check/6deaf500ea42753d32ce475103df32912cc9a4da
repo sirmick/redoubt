@@ -1,0 +1,8 @@
+{
+"devices": [{ "name": "di", "base": "268468224", "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },
+ "args": ["hosts535", "buckets=0680009,"] }
+  ]}

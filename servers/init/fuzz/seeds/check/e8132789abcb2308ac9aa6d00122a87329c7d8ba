@@ -1,0 +1,11 @@
+{
+  "devices": [
+   { "name": "u4128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "ke{d", "program": "keyd",
+      "budget": { "pages": "255","processes": 0, "weight": 100 },
+      "receives": ["k11"] }
+  ],
+  "public": []
+}

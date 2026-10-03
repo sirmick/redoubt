@@ -1,0 +1,1 @@
+{"dces": [{"name": "68128", "irq": 7, "dma": true}], "servers": [{"name": "klk", "program": "netd", "budget": {"pages": "24", "processes": 1, "weight": 1000}, "devices": [{"device":"", "es": [{"ices": [{}]}], "as": "net"}]}], "fi": true}

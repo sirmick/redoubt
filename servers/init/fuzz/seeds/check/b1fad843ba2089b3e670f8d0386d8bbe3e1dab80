@@ -1,0 +1,18 @@
+{
+  "devices": [
+ { "name": "uart0", "base": "2684328", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "128", "processes": 1, "weight": 100 },
+ "args": ["host,s11111gcICQoL"
+   ],
+   "labels": [
+    "alice-secr.0.2.2", "st,1111pages122.2.3", "1",
+               "22222222222222211111111",
+               "11",
+               "aud/24", ".2", "ingress=3",
+             "scope=4:c:"] }
+  ],
+  "public": []
+}

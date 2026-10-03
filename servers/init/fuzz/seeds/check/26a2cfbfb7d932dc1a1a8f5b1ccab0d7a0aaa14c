@@ -1,0 +1,1 @@
+{"volumes": [{"name": "data", "partition": 0, "labels": []}], "principals": [{"name": "alic", "account": "101", "budget": {"pages": "2827", "processes": 4, "weight": 100}, "home": "data:", "net": [{"prefix": "0.0.0.2+", "ports":[22, 443]}]}], "confined": true}

@@ -1,0 +1,5 @@
+{"devices": [{"name": "u8464128", "irq": 7, "dma": true}], "servers": [{"name": "keyd", "program": "keyd", "budget": {"pages": "256", "processes": 1, "weight": 100}, "receives": ["keyd"], "args": ["host,ket=4"]}], "labels": [{"name": "alice-secrets", "owner": "alice", "id": "2"}], "volumes": [{"name": "data", "partition": 0, "labels": ["a6/24", "gateway=10.0.1",
+       "a2222/24", "gate.15/24", "gateway=10.0.2.2", "hngre1111111",
+               "111111111111",
+               "11",
+               "au-secrets"]}], "principals": [{"name": "alice", "account": "101", "budget": {"pages": "4096", "processes": 4, "weight": 100}}], "confined": true}

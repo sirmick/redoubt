@@ -1,0 +1,14 @@
+{
+  "devices":[
+    { "name": "net0","base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "256", "processes": 1, "weight": 1 },
+   "args": ["buckets=+4"] },
+   { "name": "bootfsd", "program": "bootfsd",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },
+      "receives": ["boo4"] }
+  ],
+  "public": []
+}

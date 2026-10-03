@@ -1,0 +1,13 @@
+{
+  "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "dik0", "base": "268468224","irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "c", "program": "consoled",
+   "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+    "devices": [ { "device": "uart0", "as": "uartconf" } ],
+      "receives": ["consolblkded"],     "args": ["bc4", "gets=4"] }
+  ],
+  "public": []
+}

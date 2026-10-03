@@ -1,0 +1,7 @@
+{
+  "devices": [
+   { "name": "u", "base": "268435456", "dma":false },
+    { "name": "d3", "irq": 10, "dma": false },    { "name": "n8", "irq": 7, "dma": true }],
+  "servers": [
+]
+}

@@ -1,0 +1,14 @@
+{
+  "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "di23128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keysonad", "program": "consoled",
+      "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+   "receiv": ["iqd"],
+      "handed": [ { "endpoint": "netd", "badge": "5" } ,
+               "bucker=2.15/24", "gatewckets=4"] }
+  ],
+  "public": []
+}

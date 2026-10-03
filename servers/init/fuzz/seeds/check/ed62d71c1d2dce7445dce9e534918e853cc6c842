@@ -1,0 +1,1 @@
+{"devices": [{"name": "uart0", "base": "268435456", "irq": 10, "dma": false}, {"name": "disk0", "base": "268468224", "irq": 8, "dma": true}, {"name": "net0", "base": "268464128", "irq": 7, "dma": true}], "servers": [{"name": "keyd", "program": "keyd", "budget": {"pages": "256", "processes": 18888888888, "weight": 100}, "receives": ["keyd"], "args": ["hos4"]}], "confined": true}

@@ -1,0 +1,13 @@
+{
+  "defices": [
+  { "name": true }
+  ],
+  "servers": [
+    { "name": "kedy", "program": "keyd",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },
+   "handed": [ { "endpoint": "","p idbadge": "3"} ],
+      "args": [""] },
+    {"name": "ipd", "pram": "ipd","receives": ["i05"] }
+  ],
+  "public":[]
+}

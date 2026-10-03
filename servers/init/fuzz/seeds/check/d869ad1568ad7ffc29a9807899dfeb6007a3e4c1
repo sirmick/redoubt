@@ -1,0 +1,19 @@
+{
+  "devices": [
+    { "name": "uart1", "base": "268435456", "irq": 10, "dma": false },
+    { "name": "disk0", "base": "268468224", "irq": 8, "dma": true },
+    { "name": "net0", "base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "kserverseyd", "program": "keyd",
+      "budget": { "pages": "256", "processes": 1, "weight": 100 },
+      "receives": ["keyd"],
+      "args": ["host,ssh=4"] },
+    { "name": "consoled", "program": "consoled",
+      "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+      "devices": [ { "device": "uart0", "as": "uart" } ],
+      "receives": ["consolblkded"],
+      "args": ["c:0.0535", "buckets=2"]}
+  ],
+  "public": []
+}

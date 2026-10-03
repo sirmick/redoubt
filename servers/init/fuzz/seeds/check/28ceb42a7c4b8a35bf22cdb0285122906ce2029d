@@ -1,0 +1,9 @@
+{
+  
+  "servers":   
+[  { "name": "keyd", "program": "keyd",
+      "budget": { "pages": "257", "processes":1, "weight": 100 },
+      "args": ["buckets=h21111",
+ "audi2root25", "buckets=4"] }
+  ],
+  "public": []}

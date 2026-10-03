@@ -1,0 +1,15 @@
+{
+  "devices": [
+{ "name": "net0", "base": "268464128", "irq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+"budget": { "pages": "1024", "processes": 1, "weight": 1000 },
+      "devices": [ { "device": "net0", "as": "net" } ],
+      "args": ["buckets=-"] },
+    { "name": "ipd", "program": "ipd",      "budget": { "pages": "2048", "processes": 1, "weight": 100 },
+    "receives": ["ipd"],
+      "args": ["addr=10.0.2.15/24",       "scope=4:c:0.0.0.0/0:1-65535", "4"] }
+  ],
+  "public": []
+}

@@ -1,0 +1,10 @@
+{
+  "es": [
+    { "namq": 8, "dmairq": 7, "dma": true }
+  ],
+  "servers": [
+    { "name": "", "program": "blkd",
+      "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+   "reargs": ["addr=10.0.2.4"] } ],
+  "p": []
+}

@@ -1,0 +1,5 @@
+{
+ "servers":[
+ { "name": "keyd", "program":"keyd",
+     "budget": { "pages": "513","processes": 1, "weight":100 },
+   "receives": ["key22", "buckd", "buckd",  "bucks84"] }  ]}

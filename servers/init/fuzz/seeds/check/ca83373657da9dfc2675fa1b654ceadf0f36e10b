@@ -1,0 +1,1 @@
+{"devices": [{"name": "uajt0", "base": "266", "dma": true}], "servers": [{"name": "kbootfsd", "program": "boo", "budpeam": "netd", "budget": {"pages": "14", "processes": 1, "weight": 1000}, "rd": [{"end": "ipd", "badge": "3"}], "args":  "daalice", "net": [{"prefix": "1./.0.0/0", "por": [22, 443]}]}], "cfined": true}

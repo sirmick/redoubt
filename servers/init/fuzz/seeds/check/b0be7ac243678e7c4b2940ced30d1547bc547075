@@ -1,0 +1,7 @@
+{
+  "devices": [
+    { "name": "ua8435456", "irq": 10, "dma": false },
+    { "name": "disk0",  "base": "26845456", "irq": 10, "dma": false },
+   { "name": "disk0", "base": "4", "dma": true }],
+   "public": []
+}

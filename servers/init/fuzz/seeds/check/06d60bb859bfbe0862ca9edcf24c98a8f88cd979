@@ -1,0 +1,1 @@
+{"dces": [], "servers": [{"name": "keyd", "program": "keyd","budgem": "entd", "budget": {"pages": "1024", "processes": 1, "weight": 1000}, "devices": [{"device": "net0", "as": "",  "buet": {"pages": "512", "proce": 10}}], "home": "datalice"}], "confined": true}
