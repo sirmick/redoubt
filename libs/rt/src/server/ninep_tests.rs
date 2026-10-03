@@ -21,6 +21,8 @@ struct MemFs {
     /// (badge, root, quota) of every minted connection the skeleton told us about and has not
     /// disconnected.
     grants: Vec<(u64, usize, u64)>,
+    /// (badge, id) of the same connections: the id each one's requester was given.
+    ids: Vec<(u64, u64)>,
     /// When set, every file read asks the skeleton to hold the call (`Read::Wait`).
     wait_for_input: bool,
     /// When set, every file write asks the skeleton to hold the call (`Write::Wait`).
@@ -46,6 +48,7 @@ impl MemFs {
             attaches: 0,
             walks: 0,
             grants: Vec::new(),
+            ids: Vec::new(),
             wait_for_input: false,
             wait_for_room: false,
         };
@@ -192,15 +195,19 @@ impl FileServer for MemFs {
     fn clunk(&mut self, node: &usize) { self.clunked.push(*node); }
 
     /// Every grant reaches the server, which may refuse one; every disconnect too.
-    fn minted(&mut self, _: &Caller, badge: u64, root: &usize, quota: u64) -> Result<(), NineError> {
+    fn minted(&mut self, _: &Caller, badge: u64, id: u64, root: &usize, quota: u64) -> Result<(), NineError> {
         if quota == REFUSED_QUOTA {
             return Err(NineError("quota refused"));
         }
         self.grants.push((badge, *root, quota));
+        self.ids.push((badge, id));
         Ok(())
     }
 
-    fn disconnected(&mut self, badge: u64) { self.grants.retain(|(b, _, _)| *b != badge); }
+    fn disconnected(&mut self, badge: u64) {
+        self.grants.retain(|(b, _, _)| *b != badge);
+        self.ids.retain(|(b, _)| *b != badge);
+    }
 }
 
 /// A quota the test server refuses.

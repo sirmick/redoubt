@@ -179,7 +179,7 @@ impl FileServer for Files {
 
     fn attach(&mut self, _: &Caller, _: &str) -> Result<(usize, Qid), NineError> { Ok((0, self.qid(0))) }
 
-    fn minted(&mut self, _: &Caller, _: u64, _: &usize, quota: u64) -> Result<(), NineError> {
+    fn minted(&mut self, _: &Caller, _: u64, _: u64, _: &usize, quota: u64) -> Result<(), NineError> {
         if quota > QUOTA { Err(NineError::PERMISSION) } else { Ok(()) }
     }
 
