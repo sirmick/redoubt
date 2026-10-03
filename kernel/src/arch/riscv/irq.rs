@@ -141,28 +141,43 @@ pub extern "C" fn trap_handler(
 
     // The user time since the last return is the running budget's (`sched.rs`).
     let from_user = sstatus::read().spp() == sstatus::SPP::User;
+    let timer = matches!(ex, RiscvException::SupervisorTimerInterrupt(_));
     if from_user {
         crate::sched::from_user();
+        #[cfg(feature = "sched-trace")]
+        if timer {
+            crate::sched::trace::timer_entry();
+        }
     }
     // Every entry but `kmain`'s switch answers the deadlines that have passed first
     // (`time.rs`), so a deadline beats anything that enters after it. If that ended the entering
     // process (a budget deadline), there is nothing of it left to handle: run what is current.
     // A budget deadline is a preemption point (R12): the entering thread yields the CPU before
     // anything else, and its trap is taken again when it next runs.
+    let mut expired_last = None;
     if !matches!(ex, RiscvException::CallFromSMode(..)) {
-        let destroyed = crate::time::expire_at_entry();
+        let expired = crate::time::expire_at_entry();
+        expired_last = expired.last;
+        // The rest of a timer interrupt that found something (an expired item, or a wait that
+        // ended before its timeout) is the budget's billed last, the return included: the budget
+        // it interrupted pays for none of it (kernel/scheduling.md, "Charging").
+        if from_user && timer {
+            crate::sched::bill_from_now(expired.last);
+        }
         if from_user
             && (current_pid() != pid
                 || ProcessTable::with(|ss| ss.get_process(pid).map_or(true, |p| p.free())))
         {
             resume_current();
         }
-        if from_user && destroyed {
+        if from_user && expired.destroyed {
             preempt();
         }
     }
-    // From here, kernel time is the running budget's: a system call's is its caller's.
-    if from_user {
+    // From here, kernel time is the running budget's: a system call's is its caller's. A timer
+    // interrupt's is not (below). Debug only, never in a bench build but one recorded negative run
+    // (feature `timer-tail-billed`): it is, as it was before the fix.
+    if from_user && (!timer || cfg!(feature = "timer-tail-billed")) {
         crate::sched::begin_billing();
     }
     #[cfg(any(feature = "debug-print"))] // , feature = "debug-swap-verbose"
@@ -182,9 +197,14 @@ pub extern "C" fn trap_handler(
         RiscvException::CallFromUMode(..) => system_call(pid, [a0, a1, a2, a3, a4, a5, a6, a7]),
         // The kernel's timer: what was due was answered at this entry; arm for what is next.
         RiscvException::SupervisorTimerInterrupt(_) => {
+            // The running thread's slice is over: preempt it (R12). An entry that found nothing is
+            // the running budget's when it ends its slice, and nobody's otherwise.
+            let slice_over = from_user && crate::sched::slice_over();
+            if slice_over && expired_last.is_none() && !cfg!(feature = "timer-tail-billed") {
+                crate::sched::begin_billing();
+            }
             crate::time::on_interrupt();
-            // The running thread's slice is over: preempt it (R12).
-            if from_user && crate::sched::slice_over() {
+            if slice_over {
                 preempt();
             }
             resume_current();

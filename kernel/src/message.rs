@@ -30,9 +30,9 @@
 //! once by the dispatcher (`redoubt.rs`) in that order; nothing here borrows either again.
 //!
 //! # Timeouts
-//! A blocking call records its deadline (`mark`, which also makes sure the kernel's timer comes by
-//! then), and [`expire_due`] answers every thread whose deadline has passed, earliest first. The
-//! timer and when expiry runs are `time.rs`'s.
+//! A blocking call records its deadline (`mark`); a thread that blocks makes sure the kernel's
+//! timer comes by then (`settle`), and [`expire_due`] answers every thread whose deadline has
+//! passed, earliest first. The timer and when expiry runs are `time.rs`'s.
 
 use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
@@ -497,23 +497,21 @@ fn answer_record<const N: usize>(
 }
 
 /// Say what a thread is waiting for, and until when. It does not block yet: the delivery attempt
-/// that follows may answer it at once, and `settle` then never takes it off the ready list.
+/// that follows may answer it at once, and `settle` then never takes it off the ready list. Nor
+/// does it arm the timer: only a thread that blocks does (`settle`).
 fn mark(mm: &mut MemoryManager, pid: Pid, tid: TID, wait: Wait, timeout: u64) {
     // Timeouts are relative microseconds, added with saturation, so `FOREVER` never expires.
     let deadline = crate::time::now_us().saturating_add(timeout);
     set_tword(mm, pid, tid, W_WAIT, wait as u64);
     set_tword(mm, pid, tid, W_DEADLINE, deadline);
-    if deadline != u64::MAX {
-        if let Some(a) = mm.account_mut(pid) {
-            a.earliest_timeout = a.earliest_timeout.min(deadline);
-        }
-        crate::time::note_timeout(deadline);
-    }
 }
 
 /// What a blocking call does once delivery has had its chance: resume with the answer it already
 /// has, time out without ever blocking, or block. `Ok(None)` tells the trap handler to resume
-/// whatever is current now, which is this thread when it was answered (`redoubt.rs`).
+/// whatever is current now, which is this thread when it was answered (`redoubt.rs`). Every
+/// blocking call ends here, and this is the one place a thread blocks: so the timer is armed for a
+/// timeout only here, when its thread blocks, and a call answered at once or already past its
+/// deadline arms nothing (kernel/timer.md, "R12 (scheduling) for timer work").
 fn settle(
     ss: &mut ProcessTable,
     mm: &mut MemoryManager,
@@ -530,6 +528,12 @@ fn settle(
         fail_wait(ss, mm, pid, tid, Error::Timeout);
         // fail_wait published the full outcome, including a lend consumed after receipt.
         return Ok(None);
+    }
+    if s.deadline != u64::MAX {
+        if let Some(a) = mm.account_mut(pid) {
+            a.earliest_timeout = a.earliest_timeout.min(s.deadline);
+        }
+        crate::time::note_timeout(s.deadline);
     }
     // `can_resume: false` is what takes this thread off the ready list (ptable.rs).
     ss.activate_process_thread(tid, KERNEL_PID, 0, false).expect("the kernel can always run");
@@ -1696,13 +1700,25 @@ fn fail_all(
     }
 }
 
-/// I13: the timeout due first at `now`: the earliest deadline at or before `now` (at an equal
-/// deadline, the first in (pid, tid) order), and the earliest deadline still to come (`u64::MAX`
-/// for none). Only the threads of processes whose cached earliest timeout has come are read; each
-/// such cache is recomputed on the way.
-pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, Pid, TID)>, u64) {
+/// What a walk for timeouts found.
+pub struct Timeouts {
+    /// The timeout due first at `now`: the earliest deadline at or before `now` (at an equal
+    /// deadline, the first in (pid, tid) order).
+    pub due: Option<(u64, Pid, TID)>,
+    /// The earliest deadline still to come (`u64::MAX` for none).
+    pub next: u64,
+    /// The last process whose cached earliest timeout had come with none of its threads due: a
+    /// wait that ended before its timeout left the timer early, and this walk is its
+    /// (kernel/timer.md, "R12 (scheduling) for timer work").
+    pub stale: Option<Pid>,
+}
+
+/// I13: walk for timeouts at `now` ([`Timeouts`]). Only the threads of processes whose cached
+/// earliest timeout has come are read; each such cache is recomputed on the way.
+pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> Timeouts {
     let mut due: Option<(u64, Pid, TID)> = None;
     let mut next = u64::MAX;
+    let mut stale = None;
     for index in 1..=MAX_PROCESS_COUNT {
         let Some(pid) = Pid::new(index as u8) else { continue };
         let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
@@ -1711,6 +1727,7 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, Pid, TID)
             continue;
         }
         let mut exact = u64::MAX;
+        let mut found = false;
         for tid in 1..=MAX_THREADS {
             if mm.ipc_frame(pid, tid).is_none() {
                 continue;
@@ -1724,6 +1741,7 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, Pid, TID)
             }
             exact = exact.min(deadline);
             if deadline <= now {
+                found = true;
                 if due.is_none_or(|(d, _, _)| deadline < d) {
                     due = Some((deadline, pid, tid));
                 }
@@ -1731,11 +1749,14 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, Pid, TID)
                 next = next.min(deadline);
             }
         }
+        if !found {
+            stale = Some(pid);
+        }
         if let Some(a) = mm.account_mut(pid) {
             a.earliest_timeout = exact;
         }
     }
-    (due, next)
+    Timeouts { due, next, stale }
 }
 
 /// The blocking call of `(pid, tid)` reached its timeout: it returns `Timeout` (I13), with what

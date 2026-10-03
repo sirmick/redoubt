@@ -54,7 +54,10 @@ pub enum Role {
     /// parent's slice, 3 fresh intermediates); p1 = child weight. Report the total.
     BudgetChurn = 8,
     /// p2 threads each sleeping p0 µs (staggered by p1 µs per thread), re-arming, for the window;
-    /// with p3 = 1, also create budgets with staggered deadlines under slot 3. Report 0.
+    /// with p3 = 1, also create budgets with staggered deadlines under slot 3. With p3 = 2, the
+    /// waits end early instead: p2 - 1 threads each wait on an endpoint of their own with a
+    /// timeout of p0 µs (staggered by p1 µs per thread), and a sibling sends to each at once;
+    /// report the waits answered. Report 0 otherwise.
     TimerFlood = 9,
     /// Report the time (µs) it first runs after the window's start, then exit.
     Probe = 10,
@@ -267,6 +270,43 @@ extern "C" fn flood_sleeper(i: usize) -> ! {
     crate::park()
 }
 
+/// Each [`flood_waiter`]'s endpoint, and the handle [`flood_answerer`] sends to it through.
+static FLOOD_ENDPOINTS: [AtomicUsize; 32] = [const { AtomicUsize::new(0) }; 32];
+static FLOOD_HANDLES: [AtomicUsize; 32] = [const { AtomicUsize::new(0) }; 32];
+
+/// Wait on its own endpoint for the window, each wait's timeout well ahead: the answerer sends at
+/// once, so the wait ends before its timeout, and the timer armed for it comes early. Counts the
+/// waits answered.
+extern "C" fn flood_waiter(i: usize) -> ! {
+    let (ahead, stagger) = (param(0), param(1));
+    let end = end_ticks();
+    let ep = FLOOD_ENDPOINTS[i].load(SeqCst) as u32;
+    let mut answered = 0;
+    while ticks() < end {
+        if let Ok(Received::Message(_)) = rd::receive(Some(ep), ahead + stagger * i as u64, 0) {
+            answered += 1;
+        }
+    }
+    TOTAL.fetch_add(answered, SeqCst);
+    DONE.fetch_add(1, SeqCst);
+    rd::thread_exit().ok();
+    crate::park()
+}
+
+/// Send to every waiter, over and over for the window, never blocking (a timeout of 0): each send
+/// a waiter is waiting for ends its wait at once.
+extern "C" fn flood_answerer(waiters: usize) -> ! {
+    let end = end_ticks();
+    while ticks() < end {
+        for h in FLOOD_HANDLES.iter().take(waiters) {
+            let _ = rd::send(h.load(SeqCst) as u32, &rd::body([1, 0, 0, 0]), None, 0);
+        }
+    }
+    DONE.fetch_add(1, SeqCst);
+    rd::thread_exit().ok();
+    crate::park()
+}
+
 /// Wait (sleeping) until `n` threads are done.
 fn await_done(n: usize) {
     while DONE.load(SeqCst) < n {
@@ -435,6 +475,20 @@ pub extern "C" fn child(arg: usize) -> ! {
             let n = spin_until(end);
             report(returned);
             n
+        }
+        Some(Role::TimerFlood) if param(3) == 2 => {
+            let threads = param(2).max(2) as usize;
+            for i in 0..threads - 1 {
+                let ep = rd::endpoint_create().expect("endpoint");
+                FLOOD_ENDPOINTS[i].store(ep as usize, SeqCst);
+                FLOOD_HANDLES[i].store(rd::mint_from_handle(ep, 1, None).expect("handle") as usize, SeqCst);
+            }
+            for i in 0..threads - 1 {
+                thread(flood_waiter, i);
+            }
+            thread(flood_answerer, threads - 1);
+            await_done(threads);
+            TOTAL.load(SeqCst) as u64
         }
         Some(Role::TimerFlood) => {
             let threads = param(2).max(1) as usize;

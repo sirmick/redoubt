@@ -44,6 +44,10 @@ audit-unstamped = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: an audit's time stays billed
 # to the budget that ran it and counts against its slice, so the deadline notice must miss.
 audit-billed = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run: the rest of a timer interrupt
+# after its expiry, and the return's own walk, are billed as before the fix to the budget it
+# interrupted, so the oracle's timer-entry check must fail.
+timer-tail-billed = ["sched-trace"]
 # Test builds only: each DMA device's first reset reports "not confirmed" after the
 # real write, so the quarantine path runs. It only ever adds quarantine.
 dma-reset-deaf = ["test-only"]

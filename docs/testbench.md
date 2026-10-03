@@ -355,7 +355,10 @@ in its program has no audit inside its window. An audit that never ends, ends wi
 or runs inside a destruction fails the check. The oracle subtracts only what the trace shows it: a
 kernel built with `audit-unstamped`, which leaves the audit after a destruction unstamped, misses
 the containment gate's deadline notice, in a recorded negative run. The audits themselves stay
-full.
+full. The same trace records each timer interrupt from user mode with every charge inside it, and
+`sched_oracle` checks that the budget it interrupted pays only for its own items or its slice's end
+([charging](kernel/scheduling.md#charging)); a kernel built with `timer-tail-billed`, which keeps
+the old billing, fails that check in a recorded negative run.
 
 Many cases use the profile: every case file with `debug_assertions = true`, most of them over
 both widths (`budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc` and `smp-spike` among

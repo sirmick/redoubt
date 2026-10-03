@@ -52,9 +52,10 @@ The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for th
 - the **earliest timeout** of any blocked thread;
 - the **earliest deadline** of any budget.
 
-The last two are hints, and a hint is only ever early. A blocking call or a new deadline lowers
-it at once. A wait that ends another way, or a budget destroyed by hand, leaves it where it was.
-A stale hint costs one early interrupt and one walk, which recomputes it; nothing is missed. The
+The last two are hints, and a hint is only ever early. A thread that blocks with a timeout, or a
+new deadline, lowers it at once; a call that does not block lowers nothing. A wait that ends
+before its timeout, or a budget destroyed by hand, leaves it where it was. A stale hint costs one
+early interrupt and one walk, which recomputes it; nothing is missed. The
 kernel re-arms only when the earliest time changes, through the SBI TIME extension
 (`kernel/src/arch/riscv/timer_sbi.rs`): one `ecall` to the firmware per arming. With nothing
 due at all (the kernel idle, no timeouts, no deadlines) the timer is set to never.
@@ -67,7 +68,7 @@ once.
 
 ```mermaid
 flowchart TD
-    blk["call, send or receive<br/>with a finite timeout"] --> hto["earliest timeout: lowered"]
+    blk["a thread blocks in call, send<br/>or receive with a finite timeout"] --> hto["earliest timeout: lowered"]
     mk["budget_create<br/>with a deadline"] --> hdl["earliest deadline: lowered"]
     pick[kmain picks a thread] --> hsl["slice end: pick + SLICE"]
     leave[the kernel leaves for kmain] --> hnv["slice end: never"]
@@ -241,10 +242,14 @@ R12 is owned by [scheduling](scheduling.md#r12-scheduling); this is how its char
 the timer's work. Each expired item's work is billed under it: a timeout to its thread's budget, a deadline's
 whole destruction to the dying budget's parent, after its carve returns, or to the nearest
 ancestor with free weight above 0 ([scheduling](scheduling.md#charging)). So is the walk that
-found the item. A budget with many timeouts due at once pays one walk for each. The one walk per
-entry that finds nothing more is the kernel's. So a process that arms many timers a microsecond
-apart, or creates many budgets with staggered deadlines, spends its own CPU share, not a
-neighbour's.
+found the item, and a budget with many timeouts due at once pays one walk for each. The timer is
+armed for a timeout only when its thread blocks, so a call whose timeout has passed, or that is
+answered at once, arms nothing. A wait that ends before its timeout leaves the timer early; the
+walk that finds it gone is billed to the waiting thread's budget. The rest of the entry, its last
+walk and the timer's own handling, goes to the budget whose item or wait it found last, so the
+budget the timer interrupted pays for none of it. So a process that arms many timers a
+microsecond apart, or creates many budgets with staggered deadlines, spends its own CPU share, not
+a neighbour's.
 
 ## Failure and restart
 
@@ -286,7 +291,9 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   is TCB ([boot](boot.md)).
 - **Expiry walks threads.** A walk is bounded by `MAX_PROCESS_COUNT` x `MAX_THREADS` (64 x 31,
   compile-time constants no process can change) plus the deadline list. Each walk that finds an
-  item is billed to the item's budget; the last walk of each entry is paid by nobody.
+  item, or a wait that ended early, is billed to its budget. A budget destroyed before its
+  deadline leaves the timer early: one walk of the deadline list, nobody's, for each such
+  destruction, which its destroyer pays for in full.
 - **Equal-instant order is argued, not attacked.** Timeouts before deadlines at one instant is
   checked by the model's mutation only; no bench case lands a timeout and a deadline on the same
   microsecond.
