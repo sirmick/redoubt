@@ -118,8 +118,11 @@ The tie key encodes this. Each wake takes `front - 1`, and one entry's wakes are
 descending id, so the lowest id ends frontmost. Each requeue of a still-runnable budget takes
 `back + 1`. Both counters reset when the queue empties. Wakes are reconciled once per kernel
 entry: as the kernel leaves, budgets that lost their last runnable thread leave the queue and
-budgets that gained one wake. Ranking later wakers first starves nobody: a waker that has run is
-charged, its pass rises above the floor, and it no longer ties.
+budgets that gained one wake. The reconcile visits only the budgets whose runnable state changed
+in the entry, with the same wakes and leaves, the wakes in the same order: each budget counts its
+ready threads, and a change of a process's ready threads marks the process, whose count then moves
+to its budget. Leaves have no order a pick can see. Ranking later wakers first starves nobody: a
+waker that has run is charged, its pass rises above the floor, and it no longer ties.
 
 `bench:sched-ties` runs a kernel built with the scheduling trace ([R23](#r23-no-test-channels)).
 The bench's own oracle (`tools/testbench/src/sched_oracle.rs`) rebuilds the order from the trace's
@@ -391,14 +394,20 @@ milliseconds are for reading. Host load does not change a result.
 
 **Targets exclude the checked build's audits.** The case is a checked build, since the trace needs
 one ([R23](#r23-no-test-channels)). A checked build runs full audit scans after each destruction
-and at each process-object free, and a release build compiles none of them. Each target counts the
-kernel a release build runs, a share as well as a window, so an audit neither fills a window nor
-moves the schedule. The audit time inside each window, a share's included, is subtracted, from the
-trace's audit records, and reported beside it ([checked builds](../testbench.md#checked-builds)).
-The scheduler does not see an audit either: its time is charged to no budget, and the running
-slice's end and the start of the kernel time being billed both move forward by its length, so the
-thread that ran it is picked and preempted as in a release build (`sched::audit`). With two full
-handle tables live, the audits are about 24 ms after a destruction and 8 ms at a free.
+and at each process-object free, and a release build compiles none of them. It also checks the
+reconcile's marks. Each reconcile asserts that every budget it visited is queued exactly when it
+has a ready thread. At most once a slice, and whenever the hart is about to idle, a full walk of
+every live process must find the runnable budgets the marks hold. So a mark missed in one entry is
+found within a slice of the next reconcile that visits a budget, or at the next idle. A miss that a
+later change undoes before then is not seen, and costs a budget a turn late or lost, never a wrong
+thread run. Each target counts the kernel a release build runs, a share as well as a window, so an
+audit neither fills a window nor moves the schedule. The audit time inside each window, a share's
+included, is subtracted, from the trace's audit records, and reported beside it
+([checked builds](../testbench.md#checked-builds)). The scheduler does not see an audit either: its
+time is charged to no budget, and the running slice's end and the start of the kernel time being
+billed both move forward by its length, so the thread that ran it is picked and preempted as in a
+release build (`sched::audit`). With two full handle tables live, the audits are about 24 ms after
+a destruction and 8 ms at a free.
 
 Measured at seed 3, p99 in µs, net / gross (audit time inside the windows): the audits hold the
 deadline notice, which waits out the audit after its own destruction, and little else. The
@@ -649,7 +658,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); a delivery's, a timer expiry's and a reconcile's walks of every thread or process are measured at full occupancy by `bench:worst-walk`, run by name, and break it there ([residual risks](#residual-risks)) · tested (40)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); a delivery's and a timer expiry's walks of every thread are measured at full occupancy by `bench:worst-walk`, run by name, and break it there ([residual risks](#residual-risks)); `worst-walk` also measures a reconcile with 250 budgets waking at once, on rv64 only (on rv32 the deadline's waits end one per entry) · tested (40)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -839,12 +848,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
-- **Reconcile walks every process.** The budgets with a ready thread are found at the end of
-  every kernel entry by walking every live process, and woken one at a time, each wake searching
-  them all. At full occupancy this, a delivery and a timer expiry break R12's "never depends on
-  what other processes hold"
-  ([reconcile walks every process](../todo/reconcile-walks-every-process.md),
-  [IPC](ipc.md#residual-risks), [timer](timer.md#residual-risks)).
+- **A delivery and a timer expiry walk every thread.** At full occupancy they break R12's "never
+  depends on what other processes hold" ([IPC](ipc.md#residual-risks),
+  [timer](timer.md#residual-risks)). A reconcile does not: it visits only the budgets whose
+  runnable state changed in the entry
+  ([the current minimum and ties](#the-current-minimum-and-ties)).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
   decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to

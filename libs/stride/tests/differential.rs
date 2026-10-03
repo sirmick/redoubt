@@ -2,7 +2,8 @@
 //! creations and destructions, thread wakes and blocks, runs, slice ends and preemptions, driven
 //! through `redoubt_model::sched::Scheduler` and through this crate's [`Cpu`], the wiring the
 //! kernel's `sched.rs` calls (a deschedule, a pick, a creation, a weight change, a destruction; the
-//! budgets' state in a store). Only the thread bookkeeping and the clock are this harness's own.
+//! budgets' state in a store). Only the thread bookkeeping and the clock are this harness's own; a
+//! reconcile visits only the budgets whose threads changed since the last, as the kernel's does.
 //! Every pass, entry, remainder, tie, queue membership, the floor, the tie counters and the running
 //! thread must agree after every step.
 //!
@@ -53,6 +54,9 @@ struct Kernel {
     slice_left: u64,
     /// Destructions begun: their carves are back with their parents.
     returned: BTreeSet<u64>,
+    /// The budgets whose threads changed since the last reconcile, as the kernel marks them: the
+    /// only ones a reconcile visits.
+    marked: Vec<u64>,
 }
 
 impl Kernel {
@@ -66,13 +70,10 @@ impl Kernel {
         self.thread = None;
     }
 
-    fn runnable(&self) -> Vec<u64> {
-        self.bs.0.iter().filter(|(_, b)| !b.threads.is_empty()).map(|(id, _)| *id).collect()
-    }
-
     fn reconcile(&mut self) {
-        let runnable = self.runnable();
-        self.cpu.reconcile(&mut self.bs, &runnable);
+        let mut marked = std::mem::take(&mut self.marked);
+        let lost = marked.clone();
+        self.cpu.reconcile(&mut self.bs, &lost, &mut marked, |bs, b| !bs.0[&b].threads.is_empty());
     }
 
     fn add_budget(&mut self, id: u64, parent: Option<u64>, limit: u64) {
@@ -126,16 +127,21 @@ impl Kernel {
         self.return_carve(top);
         for b in bottom_up {
             self.bs.0.get_mut(b).unwrap().threads.clear();
+            self.marked.push(*b);
         }
         for &b in bottom_up {
             self.destroy_budget(b);
         }
     }
 
-    fn thread_runnable(&mut self, b: u64, t: Thread) { self.bs.0.get_mut(&b).unwrap().threads.insert(t); }
+    fn thread_runnable(&mut self, b: u64, t: Thread) {
+        self.bs.0.get_mut(&b).unwrap().threads.insert(t);
+        self.marked.push(b);
+    }
 
     fn thread_blocked(&mut self, b: u64, t: Thread) {
         self.bs.0.get_mut(&b).unwrap().threads.remove(&t);
+        self.marked.push(b);
         if self.cpu.cur == Some(b) && self.thread == Some(t) {
             self.deschedule();
         }

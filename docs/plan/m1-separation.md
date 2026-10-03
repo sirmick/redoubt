@@ -90,8 +90,6 @@ page.
    - **kernel:**
      - [delivery that follows the endpoint](../todo/delivery-walks-every-thread.md), not every
        thread;
-     - [a reconcile that follows the budgets that changed](../todo/reconcile-walks-every-process.md),
-       not every process;
      - [an expiry that walks once](../todo/expiry-walks-once-per-wait.md) for all the waits a
        deadline ends, not once for each.
 - **The client library.** `redoubt-client`: the namespace, files over 9P, the file server's

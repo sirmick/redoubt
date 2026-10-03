@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 397
+revision = 399
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -693,8 +693,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16"]
   body = "Brief: .wash/local/K22-implementer.md. Tier A (scheduler), size S-M. Needs K16 (its worst-walk case measured reconcile at 0.32 s with 250 wakers: Runnable::fill walks every live process each entry, and Queue::reconcile's wake loop is O(R^2 x N)).\n\nA budget is marked when a thread of its becomes or stops being ready (ptable.rs transitions); reconcile visits only marked budgets, wakes sorted by descending id once; Runnable::fill goes; a checked build audits the marks. The same events in the same order; the model, the oracle, the stride differential and every R12 mutation unchanged.\n\nAcceptance: reconcile at 250 wakers far below 0.32 s, both widths, the gate's targets not regressed. Builds docs/kernel/scheduling.md (reconcile), budgets.md (measured list). Runs beside IPC3 (message.rs); ahead of SMP1 (sched.rs's pick)."
-  state = "active"
-  revision = 371
+  state = "done"
+  revision = 399
 
 [[node]]
   id = "ASID1"

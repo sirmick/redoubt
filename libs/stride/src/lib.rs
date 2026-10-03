@@ -3,8 +3,9 @@
 //!
 //! This crate holds only the rules, so they can be host-tested and checked against the executable
 //! model (`tests/differential.rs`). The kernel keeps each budget's [`State`] in the budget's own
-//! frame and supplies it through [`Budgets`]; it decides which budgets have runnable threads and
-//! which thread of a budget runs.
+//! frame and supplies it through [`Budgets`]; it decides which threads are ready and which thread
+//! of a budget runs, and marks the processes whose ready threads change ([`Marks`]), so that a
+//! reconcile visits only the budgets whose runnable state changed.
 //!
 //! - **Charging** ([`charge`]): `t = rem + runtime·STRIDE; pass += t / w; rem = t % w`, an exact remainder,
 //!   with `w` the budget's stride weight (its free weight: limit less carve). Runtime is capped at
@@ -30,6 +31,10 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+
+mod marks;
+
+pub use marks::{Marks, Missed, Ready};
 
 /// Stride scheduling numerator (`kernel/scheduling.md`).
 pub const STRIDE: u64 = 1 << 20;
@@ -201,10 +206,11 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     /// Whether `b` is queued now. A queued budget has a runnable thread, so there are never more
     /// than there are processes, and `N` is the process count: a full queue is a broken invariant,
     /// and `b` is then left out rather than anything stopping.
-    fn insert(&mut self, b: B) -> bool {
-        if self.contains(b) {
-            return true;
-        }
+    fn insert(&mut self, b: B) -> bool { self.contains(b) || self.push(b) }
+
+    /// Queue `b`, known not to be queued (its state says so: a reconcile's wakes, with no search).
+    /// False for a full queue, as [`Queue::insert`].
+    fn push(&mut self, b: B) -> bool {
         if self.len == N {
             debug_assert!(false, "stride queue full");
             return false;
@@ -273,40 +279,61 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         self.reset_if_empty();
     }
 
-    /// The end of a kernel entry. `runnable` is every budget that has a runnable thread now (in
-    /// any order, each once); `running` the budget on the CPU, if any. Budgets that lost their
-    /// last runnable thread leave the queue; budgets that gained one wake at `max(own, floor)`,
-    /// in descending id so the lowest id ranks first.
-    pub fn reconcile(&mut self, bs: &mut impl Budgets<B>, running: Option<B>, runnable: &[B]) {
-        // In place, with no copy of the slots: `N` is the process count, and a copy would be that
-        // big on the kernel stack at every entry. Taking a budget out moves the last into its slot,
-        // which is then read again.
-        let mut i = 0;
-        while i < self.len {
-            let Some(b) = self.slots[i].filter(|b| !runnable.contains(b) && running != Some(*b)) else {
-                i += 1;
+    /// The end of a kernel entry. It visits only the budgets whose runnable state may have changed
+    /// since the last reconcile ([`Marks`]): `lost` those that may have lost their last runnable
+    /// thread, `gained` those that may have gained one (each in any order, repeats allowed);
+    /// `runnable` says whether a budget has a runnable thread now, and `running` is the budget on
+    /// the CPU, if any. Of those, budgets that lost their last runnable thread leave the queue;
+    /// budgets that gained one wake at `max(own, floor)`, in descending id so the lowest id ranks
+    /// first (`gained` is sorted so).
+    pub fn reconcile<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        running: Option<B>,
+        lost: &[B],
+        gained: &mut [B],
+        runnable: impl Fn(&S, B) -> bool,
+    ) {
+        let mut left = false;
+        for &b in lost {
+            if running == Some(b) || !bs.live(b) {
                 continue;
-            };
+            }
             let mut s = bs.state(b);
+            if !s.queued || runnable(bs, b) {
+                continue;
+            }
             s.queued = false;
             bs.set_state(b, s);
-            self.remove_at(i);
             bs.left(b);
+            left = true;
+        }
+        // Out of the slots in one pass, in place: `N` is the process count, and a copy would be
+        // that big on the kernel stack. Taking a budget out moves the last into its slot, which is
+        // then read again.
+        let mut i = 0;
+        while left && i < self.len {
+            match self.slots[i] {
+                Some(b) if !bs.state(b).queued => self.remove_at(i),
+                _ => i += 1,
+            }
         }
         self.raise_floor(bs);
         self.reset_if_empty();
-        loop {
-            // The highest id among runnable budgets not yet queued.
-            let Some(b) = runnable.iter().copied().filter(|b| !self.contains(*b)).max_by_key(|b| bs.id(*b))
-            else {
-                break;
-            };
-            // Each pass queues one more, so this ends; a full queue (never expected) ends it too.
-            if !self.insert(b) {
+        gained.sort_unstable_by_key(|b| core::cmp::Reverse(bs.id(*b)));
+        for &b in gained.iter() {
+            if !bs.live(b) || !runnable(bs, b) {
+                continue;
+            }
+            let mut s = bs.state(b);
+            if s.queued {
+                continue;
+            }
+            // A full queue (never expected) ends it.
+            if !self.push(b) {
                 break;
             }
             self.front = self.front.saturating_sub(1);
-            let mut s = bs.state(b);
             s.pass = s.pass.max(self.floor);
             s.tie = self.front;
             s.queued = true;
@@ -448,9 +475,15 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
     }
 
     /// The end of a kernel entry: [`Queue::reconcile`] with `cur` running.
-    pub fn reconcile(&mut self, bs: &mut impl Budgets<B>, runnable: &[B]) {
+    pub fn reconcile<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        lost: &[B],
+        gained: &mut [B],
+        runnable: impl Fn(&S, B) -> bool,
+    ) {
         let running = self.cur.filter(|c| bs.live(*c));
-        self.q.reconcile(bs, running, runnable);
+        self.q.reconcile(bs, running, lost, gained, runnable);
     }
 
     /// The lowest-ranked queued budget and what `next` chooses to run of it. A queued budget with
