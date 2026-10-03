@@ -5,13 +5,18 @@
 //! the kernel pages own the calls, this crate their encoding). What a call *does* is the kernel's
 //! business.
 //!
+//! How a call travels is a [`Transport`]: a call in, its [`Return`] out, records and buffers by
+//! address. On the machine it is [`Ecall`], the registers below; a host's fake kernel, or any other
+//! backend, implements the same trait and reads and writes the same records.
+//!
 //! # Registers
 //!
-//! A call is an `ecall` with `a0` = the call's [`Number`] (from [`NUMBER_BASE`] + 1) and its arguments in
-//! `a1..=a7`, in the order listed on each [`Call`] variant. The kernel answers in the same eight registers:
-//! `a0` = 0 and the result in `a1..=a7` (see [`Return`]), or `a0` = an [`Error`] code and
-//! `a1..=a7` = 0, except `call`: its ownership and reply-validity payload is defined on every
-//! error too ([`CallOutcome`]). The kernel preserves every other register across the `ecall`.
+//! On the machine a call travels by [`Ecall`]: an `ecall` with `a0` = the call's [`Number`] (from
+//! [`NUMBER_BASE`] + 1) and its arguments in `a1..=a7`, in the order listed on each [`Call`]
+//! variant. The kernel answers in the same eight registers: `a0` = 0 and the result in `a1..=a7`
+//! (see [`Return`]), or `a0` = an [`Error`] code and `a1..=a7` = 0, except `call`: its ownership
+//! and reply-validity payload is defined on every error too ([`CallOutcome`]). The kernel preserves
+//! every other register across the `ecall`.
 //!
 //! The layout is the same on both widths: in this crate a register is a `u64` holding the
 //! register's value, and no register ever holds more than 32 bits or one `usize`, so rv32 carries
@@ -113,7 +118,7 @@ mod tests;
 
 pub use call::{Call, Handle, MemFlags, MintSource, NUMBER_BASE, Number, Pages, ResetKind};
 #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
-pub use ecall::syscall;
+pub use ecall::{Ecall, syscall};
 pub use error::Error;
 pub use record::{
     BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BodyOf, BudgetSpec, Cause, ExitNotice, Handles, Labels, List,
@@ -121,6 +126,20 @@ pub use record::{
 };
 pub use regs::REGS;
 pub use ret::{CallOutcome, DeviceInfo, LendDisposition, ReplyOutcome, Return, decode_result, encode_result};
+
+/// Carries one call to a kernel and its result back. Records and buffers named by address in
+/// `call` stay valid (and, for results, writable) for the duration; the transport reads and
+/// writes them in place, as the kernel does. Never discard the result (R13).
+///
+/// # Safety
+///
+/// An implementation answers only as the kernel could (kernel/abi.md): every address and length
+/// in a `Return` names memory the calling process may use as the ABI says, and it writes only the
+/// records and buffers `call` names. The runtime's unsafe code rests on this.
+#[allow(unsafe_code)]
+pub unsafe trait Transport: Sync {
+    fn call(&self, call: &Call) -> Result<Return, Error>;
+}
 
 /// Machine words in a message.
 pub const WORDS: usize = 4;

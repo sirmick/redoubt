@@ -7,8 +7,8 @@
 //! copies, and an implicit close would be an easy use-after-close. Close them with `close`.
 
 use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE, ResetKind,
-    Return, USAGE_SLOTS, Usage,
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE,
+    ResetKind, Return, USAGE_SLOTS, Usage,
 };
 
 use crate::ipc::Buffer;
@@ -222,6 +222,15 @@ impl Process {
     }
 }
 
+/// Which device `device` names, an MMIO range, an interrupt or the Reset right
+/// (kernel/devices.md, `device_info`): any device handle, whichever typed handle holds it.
+pub fn device_info(device: Handle) -> Result<DeviceInfo, Error> {
+    match syscall(&Call::DeviceInfo { device })? {
+        Return::Device(info) => Ok(info),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
 impl Mmio {
     /// Maps the device's registers: their address and how many bytes of them
     /// (kernel/devices.md, `map_device`). Which device this is comes from the boot manifest, not
@@ -310,10 +319,10 @@ impl Registers {
         }
         // SAFETY: `base + offset` is a byte of a device mapping that stays mapped while this value
         // lives, and that no other thread reaches through it; a `u8` needs no alignment. Who
-        // guarantees it: the kernel made `base..base + len` for this process in `map_device` (a
-        // mapping of its own each time, outliving its handle, kernel/devices.md); `Registers`
-        // ends it only in `unmap`, which consumes the value, and is not `Sync`; `offset < len` is
-        // checked just above.
+        // guarantees it: the installed transport (the kernel, on the machine) made
+        // `base..base + len` for this process in `map_device` (a mapping of its own each time,
+        // outliving its handle, kernel/devices.md); `Registers` ends it only in `unmap`, which
+        // consumes the value, and is not `Sync`; `offset < len` is checked just above.
         Some(unsafe { ((self.base + offset) as *const u8).read_volatile() })
     }
 

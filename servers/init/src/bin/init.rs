@@ -42,8 +42,8 @@ mod machine {
     use redoubt_init::restarts::{self, Restarts};
     use redoubt_init::{ARENA_PAGES, check, read};
     use redoubt_rt::abi::{
-        BudgetSpec, Call, Cause, Error, FOREVER, Handle, Labels, MAX_LABELS, MAX_THREADS, PAGE_SIZE,
-        ResetKind, Return, Usage,
+        BudgetSpec, Cause, Error, FOREVER, Handle, Labels, MAX_LABELS, MAX_THREADS, PAGE_SIZE, ResetKind,
+        Usage,
     };
     use redoubt_rt::client::Lend;
     use redoubt_rt::handle::{Budget, Endpoint, Mmio, Registers, Reset};
@@ -142,9 +142,9 @@ mod machine {
         let mut out = Vec::new();
         for index in RESET.. {
             let Some(handle) = Handle::new(index) else { break };
-            match redoubt_sys::syscall(&Call::DeviceInfo { device: handle }) {
-                Ok(Return::Device(info)) => out.push((handle, info)),
-                _ => break,
+            match redoubt_rt::handle::device_info(handle) {
+                Ok(info) => out.push((handle, info)),
+                Err(_) => break,
             }
         }
         out
@@ -612,10 +612,7 @@ mod machine {
             // A device whose reset was never confirmed was destroyed at the driver's end, and
             // `init`'s copy with it: only a hardware reset makes it safe to hand out again.
             for (placed, handle) in &self.plan.placements[i] {
-                if !matches!(
-                    redoubt_sys::syscall(&Call::DeviceInfo { device: *handle }),
-                    Ok(Return::Device(_))
-                ) {
+                if redoubt_rt::handle::device_info(*handle).is_err() {
                     // The manifest's name for it: its registers and its interrupt were placed
                     // under the server's name for it, the interrupt's with `-irq` added.
                     let named = |d: &&DeviceUse| {

@@ -17,9 +17,9 @@
 //! `src/bin/echo-client.rs` a program that uses its namespace; the [`server::typed`] docs show a
 //! typed-message server.
 //!
-//! Every system call goes through one function in `sys.rs`. On the machine (`target_os =
-//! "none"`) that is the `ecall`; on the host it is a `HostKernel` a test installs, so the whole
-//! crate, and programs built on it, run in host tests against a fake kernel.
+//! Every system call goes through one function in `sys.rs`, to one [`Transport`]. On the machine
+//! (`target_os = "none"`) that is the `ecall`; on the host it is the fake kernel a test installs,
+//! so the whole crate, and programs built on it, run in host tests against a fake kernel.
 //!
 //! Handles are `u32` indices and 64-bit values (ids, badges, accounts, time) are `u64` on both
 //! widths; nothing here depends on the machine's word size.
@@ -65,8 +65,9 @@ pub use redoubt_wire as wire;
 pub use start::exit;
 #[cfg(target_os = "none")]
 pub use start::start;
+pub use sys::Transport;
 #[cfg(not(target_os = "none"))]
-pub use sys::{HostKernel, install_host_kernel};
+pub use sys::install_transport;
 
 /// On the machine, the heap is every program's global allocator.
 #[cfg(target_os = "none")]

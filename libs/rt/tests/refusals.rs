@@ -15,17 +15,20 @@ const CARRIED: Handle = Handle::new(5).unwrap();
 
 /// The next call, carrying [`CARRIED`].
 fn receive(kernel: &seam::Kernel) -> Request {
-    kernel.0.lock().unwrap().request = Some(Received::Message(Message {
-        kind: MessageKind::Call { lend: None },
-        msg_id: NonZeroU64::new(1).unwrap(),
-        badge: 1,
-        account: 1001,
-        labels: Labels::new(),
-        body: ReceivedBody {
-            words: [0; WORDS],
-            handles: ReceivedHandles::from_slice(&[Some(CARRIED)]).unwrap(),
-        },
-    }));
+    // SAFETY: the call names no address.
+    unsafe {
+        kernel.script(Received::Message(Message {
+            kind: MessageKind::Call { lend: None },
+            msg_id: NonZeroU64::new(1).unwrap(),
+            badge: 1,
+            account: 1001,
+            labels: Labels::new(),
+            body: ReceivedBody {
+                words: [0; WORDS],
+                handles: ReceivedHandles::from_slice(&[Some(CARRIED)]).unwrap(),
+            },
+        }))
+    };
     let Event::Call(request) = Endpoint::from_handle(Handle::new(1).unwrap()).receive(FOREVER, 0).unwrap()
     else {
         panic!("not a call")

@@ -93,7 +93,9 @@ max_undocumented = 0
 [[budget]]
 name = "redoubt-sys (system call ABI): the ecall stub"
 paths = ["libs/sys/src"]
-max_unsafe = 1
+# With the stub: the unsafe trait Transport, whose contract the runtime's unsafe code rests on, and
+# Ecall's unsafe impl of it.
+max_unsafe = 3
 max_undocumented = 0
 
 [[budget]]

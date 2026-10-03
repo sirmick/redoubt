@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 367
+revision = 385
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -673,8 +673,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16"]
   body = "Brief: .wash/local/IPC3-implementer.md. Tier A (kernel IPC core), size L. Needs K16 (its worst-walk case is the acceptance).\n\nPer endpoint, intrusive lists: receivers in arrival order (the model's VecDeque), R2 groups ordered by (due, group) with sends and calls in separate chains (R4a), owed abandoned-call notices, and open calls for destruction; per device object, its IRQ waiters. pump, next_sender, irq_ready, R10 step 4's message reach and endpoint destruction walk those lists, never every thread. The model, the oracle, every R2/R3/R4 mutation and the ABI are unchanged; a checked build audits each list. Design checkpoint (layout in .wash/local/IPC3-layout.md) before code.\n\nAlso K16's third residual (todo page 'expiry walks once per wait'): time::expire_due calls next_timeout once per expired wait, each a walk of every live thread of every process whose earliest timeout has come (~16M visits at 250 wakes, est.); the due waits come off the ordered lists, one walk per expiry. The Architect confirms the placement at the layout checkpoint.\n\nAcceptance: K16's worst-walk case back in the whole run with its must_fail removed: one delivery's time at full occupancy equals its time at the smallest fill (within noise), R10 within 30 ms net and the 250-wake expiry far under 28.9 s at full occupancy, on both widths; R12's 'never depends on what other processes hold' holds in fact. Builds docs/kernel/ipc.md, timer.md, scheduling.md (R12), budgets.md (measured list); deletes the two todo pages.\n\nAhead of SMP1 (M2), which does not own message.rs."
-  state = "todo"
-  revision = 352
+  state = "active"
+  revision = 371
 
 [[node]]
   id = "HW1"
@@ -683,8 +683,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16"]
   body = "Brief: .wash/local/HW1-implementer.md; sweep: .wash/local/hardware-bounds.md. Tier A (kernel constants, libs/layout, loader), size S. Needs K16 (the ASID assert, same lines).\n\nOwner (2026-10-03): be within hardware limits, and say where else. Adds: MAX_THREADS <= u8::MAX; USER_AREA_END within Sv39's 2^38 lower half and below rv32's kernel half; the rv64 kernel-half bases canonical; the loader refuses a 33rd MMIO region or interrupt instead of dropping it (three host tests). No value changes.\n\nBuilds docs/kernel/boot.md: a new 'Hardware bounds' section (the rule: an ISA-fixed field is a compile-time assert on each width; a platform-reported limit is checked at boot and a machine past it is refused, never truncated; and the table), and R17's test list. The hart bounds are SMP1's (its brief, item 1)."
-  state = "todo"
-  revision = 331
+  state = "reported"
+  revision = 381
 
 [[node]]
   id = "K22"
@@ -693,8 +693,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16"]
   body = "Brief: .wash/local/K22-implementer.md. Tier A (scheduler), size S-M. Needs K16 (its worst-walk case measured reconcile at 0.32 s with 250 wakers: Runnable::fill walks every live process each entry, and Queue::reconcile's wake loop is O(R^2 x N)).\n\nA budget is marked when a thread of its becomes or stops being ready (ptable.rs transitions); reconcile visits only marked budgets, wakes sorted by descending id once; Runnable::fill goes; a checked build audits the marks. The same events in the same order; the model, the oracle, the stride differential and every R12 mutation unchanged.\n\nAcceptance: reconcile at 250 wakers far below 0.32 s, both widths, the gate's targets not regressed. Builds docs/kernel/scheduling.md (reconcile), budgets.md (measured list). Runs beside IPC3 (message.rs); ahead of SMP1 (sched.rs's pick)."
-  state = "todo"
-  revision = 335
+  state = "active"
+  revision = 371
 
 [[node]]
   id = "ASID1"
@@ -712,8 +712,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Owner (2026-10-03). Brief: .wash/local/ABI1-implementer.md. Tier A (libs/sys, libs/rt's seam), size S. No needs.\n\nredoubt_sys::Transport (a Call in, a Return out, records and buffers by address) beside the ABI; Ecall implements it with today's one unsafe; redoubt_sys::syscall stays for the stub and tests/programs. libs/rt selects one installed transport (HostKernel becomes Transport, install_transport), the ecall by default on the machine, feature installed-transport otherwise; a no_std installed slot is the backend's own package. init's two direct DeviceInfo calls go through the runtime. Nothing above rt changes but the two renames.\n\nAcceptance: every host test and machine case unchanged, both widths; the unsafe count and the image sizes unchanged; a host test of a second transport seeing every call. Pages: libs/sys module doc, abi.md, native.md, and the owner's no-MMU direction as one line on docs/beyond/README.md."
-  state = "active"
-  revision = 363
+  state = "done"
+  revision = 385
 
 [[node]]
   id = "ABI2"
@@ -744,3 +744,32 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Owner (2026-10-03; Redoubt-side seam for an outside no-MMU variant: keep small). Brief: .wash/local/MEM2-implementer.md. Size S+ (the startup block's version and the consumer sweep it forces). Needs MEM1 (scan, tag, manifest checks) and ABI1 (rt's seam).\n\nManifest key heap_pages (absent = no cap; refused 0, or heap + stack at/above the budget's pages). The startup block, version 2, gains heap_pages and tag; rt sets the cap before main. The cap is rt's ceiling below the kernel budget: pages the allocator holds, refused (null) before any map_anon, counted as mapped, not committed; the budget still bounds stacks, Buffers, lends, tables. Past the cap an infallible allocation panics (exit 101, init's restart rule); a fallible one sees the error. A heap record (magic, tag, cap, peak) in data, found by MEM1's scan; the bench fails a cap under twice the peak. Image servers get measured caps. beamlet's budget_pages= todo is not this package's.\n\nAcceptance: rt host tests over the fake (refusal with no map_anon), startup v2/v1, init tests; a tests/programs case capped low; heaps reported by MEM1's memory case both widths. Pages: init.md, budgets.md, native.md, testbench.md."
   state = "todo"
   revision = 365
+
+[[node]]
+  id = "VOL1"
+  title = "Verified volumes: verityd checks every block of a read-only volume against a hash tree whose root the signed manifest pins"
+  template = "package"
+  parent = "M1"
+  needs = ["BEAM2"]
+  body = "Brief: .wash/local/VOL1-implementer.md (architect-14). Tier A, size M+ (pinned root M, signed-root step +S). RULED by the owner 2026-10-03: verifier server; BEAM2 lands as built, then VOL1 deletes system.index and beamlet's check; decision 5 reversed (readers trust their verifying servers). Start from main after BEAM2 merges. QA: VOL1-verified-volumes.\n\nStep 1, pinned root: libs/verity (no_std, forbid(unsafe_code), sha2; dm-verity tree after the fs blocks; root = SHA-256(0x02||N||top)) pinned in the volume's manifest entry, signed with the bundle (R15). servers/verityd between blkd and fsd: serves blkd's protocol read-only to the volume's fsd, verifies each block first; mismatch = failed (fsd: corrupt); bad root/truncated: info answers, reads fail, stays up. fsd, littlefs, blkd untouched. init: volumes `verity`, fsd's badge at the verifier, confinement users gain it. Re-aims BEAM2 (plain files, R75 over new R76).\n\nStep 2, signed root: a root block at the range's end (N, version, root, Ed25519 under new domain redoubt.volume.v1 in libs/signing, ed25519-compact); manifest key (hex or \"bundle\") + floor instead of root; verityd refuses a bad signature or version < floor; the packer signs when the recipe names a key (build host only, R35). Image's userland volume stays pinned. SHA-256 tree already detects every bit error (CRC stays under it); no correction.\n\nAcceptance, both widths: verity-flipped-block, -flipped-tree, -wrong-root, userland-boot via verityd; verity-signed, -bad-signature, -rollback; host tests of verity, verityd, init, signing domain, packer determinism. Measured: extra calls, cache hits, boot-to-prompt with/without. Pages: verityd.md (R76), init.md, fsd.md, blkd.md, boot.md (R75, volume domain), beamlet.md, packages.md, testbench.md, SECURITY.md, image/README.md. Hotspot: MEM1."
+  state = "todo"
+  revision = 376
+
+[[node]]
+  id = "BEAM6"
+  title = "The shell's VM on a diet: its idle footprint measured, then cut until the image fits 512 MiB"
+  template = "package"
+  parent = "M2"
+  needs = ["BEAM2", "MEM2"]
+  body = "Owner (2026-10-03): \"1gb for now then we'll need to send beam on diet.\" No code now; brief later (Architect). Size guess M: about half measurement, the rest one or two levers.\n\nToday: the shell's VM at an idle prompt is 11,877 pages (46 MiB) on rv64 and 7,554 (30 MiB) on rv32 (BEAM2 report). BEAM1's rule gives it a 24,576-page budget, so the image needs 1 GiB (BEAM2 ruling 5).\n\n1. Measure: break the idle VM into loaded code, the loader's copies of module bytes, atoms and literals, process heaps, ETS, and the allocator's free-but-held pages, on both widths. This rides on MEM2's heap accounting.\n2. Levers, each measured before and after:\n- load modules lazily from the disk, not the prompt's closure at start;\n- drop the loader's copy of a module's bytes once it is loaded;\n- smaller initial heaps and a GC that returns pages;\n- Docs and debug chunks are already stripped: confirm.\n- Later, once sessions exist (not here): share the stdlib's code pages between VMs.\n3. Target the owner can see, at the quarter split, with the image's other servers at today's 9,984 pages:\n- the image boots at 512 MiB, its budget rule met: the VM at or under about 10,000 pages (39 MiB) on rv64, a cut of about 16%;\n- stretch: QEMU's default 256 MiB, the VM at or under about 2,700 pages (10.5 MiB), a cut of about 4x.\nMEM1/MEM2's per-server stack and heap caps also shrink the other servers' 9,984, which loosens both targets. Report which target was met.\n\nAcceptance: the breakdown table in the report and on beamlet.md; the image's memory_mib lowered to the target met; budgets.md's and image/README.md's RAM lines updated."
+  state = "todo"
+  revision = 380
+
+[[node]]
+  id = "FSD4"
+  title = "A directory listing reads the directory once per window, not once per entry"
+  template = "package"
+  parent = "M1"
+  body = "Brief: .wash/local/FSD4-implementer.md (architect-14). Tier A (servers/fsd), size S, needs nothing. Found by BEAM2 (2026-10-03): listing the userland root (587 files) was unfinished after 400 s, and fsd answered no one else meanwhile. Cause: entry_name (server.rs:426) walks the whole directory for each entry, and each entry is then looked up again by path (node_at, stat_of, qid).\n\nDesign: one listing window per fsd, up to 64 entries with their stats (name, id, kind, size, qid version from the DirEntry's metadata and attributes), filled by one pass and keyed by the directory and a change generation that every volume change moves. dir_entry answers from it and refills on a miss, finding the directory once (its id check stays). Memory bounded (try_reserve). Listing n entries costs about n/64 passes with no per-entry lookup; one request costs at most a bounded number of passes, fixed by msize. The skeleton and littlefs are unchanged.\n\nAcceptance: host tests (pass count for 600 entries, a change between reads refills, one reply's bound); machine case fsd-large-directory, both widths: 600 files packed, listed in under 2 s, a second client's read answered during the listing. Page: fsd.md, a bullet \"A directory is listed a window at a time\" and the residual \"a listing is linear in the directory\"."
+  state = "active"
+  revision = 384

@@ -77,11 +77,12 @@ impl Mapping {
 
     fn bytes_mut(&mut self) -> &mut [u8] {
         // SAFETY: the `len` bytes at `addr` are initialized, contiguous RAM, writable and this
-        // process's alone, while the `Mapping` is used. Who guarantees it: the kernel, for pages
-        // just mapped by map_anon, received exclusively in a transfer or lend (R3/R4), or
-        // returned by call/send/reply completion; and `Mapping`, which is private, adopts only
-        // those, bounds the length in `adopt`, and is not used past a syscall that can unmap or
-        // transfer the pages. The view lives only as long as this borrow of `self`.
+        // process's alone, while the `Mapping` is used. Who guarantees it: the installed transport
+        // (the kernel, on the machine), for pages just mapped by map_anon, received exclusively in
+        // a transfer or lend (R3/R4), or returned by call/send/reply completion; and `Mapping`,
+        // which is private, adopts only those, bounds the length in `adopt`, and is not used past
+        // a syscall that can unmap or transfer the pages. The view lives only as long as this
+        // borrow of `self`.
         unsafe { core::slice::from_raw_parts_mut(self.pages.addr as *mut u8, self.len) }
     }
 }

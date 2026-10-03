@@ -28,7 +28,7 @@ fn serving_grant_rolls_back_discard_missing_capability_and_error() {
                 state.reply = result;
                 state.replies.len()
             };
-            kernel.request(Message::Grant(Grant {}).encode(&mut []).unwrap(), None);
+            kernel.request(Message::Grant(Grant {}).encode(&mut []).unwrap());
             let Event::Call(request) = ep.receive(FOREVER, 0).unwrap() else { panic!("request") };
             assert_eq!(server.serve(request), result.map(|_| ()));
             let kept = result.is_ok_and(|outcome| outcome.accepted(1));
@@ -63,7 +63,7 @@ fn serving_grant_rolls_back_discard_missing_capability_and_error() {
         s.reply = Err(Error::BadHandle);
         s.fallback = Err(Error::InvalidArgument);
     }
-    kernel.request(Message::Grant(Grant {}).encode(&mut []).unwrap(), None);
+    kernel.request(Message::Grant(Grant {}).encode(&mut []).unwrap());
     let Event::Call(request) = ep.receive(FOREVER, 0).unwrap() else { panic!("request") };
     let exited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.serve(request)));
     assert_eq!(exited.unwrap_err().downcast_ref::<u32>(), Some(&redoubt_rt::start::exit::PANIC));
