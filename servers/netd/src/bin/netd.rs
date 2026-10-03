@@ -35,7 +35,7 @@ use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::proto::ipd::{Frame as FrameMsg, Message as IpdMessage};
 
-redoubt_rt::entry!(serve);
+redoubt_rt::entry!(serve, panic_hook = redoubt_netd::kernel::panic_reset);
 
 /// The startup block named no endpoint `netd` for it to receive on.
 pub const NO_ENDPOINT: u32 = 2;

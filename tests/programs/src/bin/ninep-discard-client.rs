@@ -13,6 +13,8 @@ use redoubt_rt::handle::Endpoint;
 use test_programs::rd;
 use test_programs::{Logger, log};
 
+redoubt_rt::panic_handler!();
+
 /// Twice the server's connections per bucket: without the rollback the bucket fills halfway.
 const DISCARDED: usize = 8;
 

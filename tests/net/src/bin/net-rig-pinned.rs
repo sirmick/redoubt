@@ -9,5 +9,7 @@ pub extern "C" fn _start(_arg: usize) -> ! {
     redoubt_rt::start(|_| redoubt_net_tests::rig::run(redoubt_net_tests::rig::Mode::Pinned), 0)
 }
 
+redoubt_rt::panic_handler!();
+
 #[cfg(not(target_os = "none"))]
 fn main() {}

@@ -229,8 +229,10 @@ the loader stub.
 - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
   parses the block, and calls `run`; its return value is the exit code. A block that does not
   parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program
-  has one, and exits with `PANIC`; if the program held open calls, the kernel blames the sender
-  of the call it was serving ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
+  has one, and exits with `PANIC`; a program that names a panic hook in `entry!` has it run
+  first, once per process, before the report (`netd` stops its device there). If the program held
+  open calls, the kernel blames the sender of the call it was serving
+  ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
   `init`, which the loader starts with no startup block, declares `first_entry!(run)` instead:
   `run` receives the bundle the loader mapped read-only, as a `&'static [u8]`
   ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)).

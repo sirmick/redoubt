@@ -527,9 +527,9 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
   malformed reply; a reply the kernel rejects is replaced by it; if that too is rejected the
   server exits rather than strand the caller (R4b).
 - **The server panics.** The runtime's panic handler runs the program's panic hook first, if it
-  set one (`netd` resets its device there), then prints once on the console, and exits through
-  `process_exit` with code 101. Holding open calls, that is a fault that blames the current
-  call's sender (R21).
+  names one in `entry!` (`netd` resets its device there), then prints once on the console, and
+  exits through `process_exit` with code 101. Holding open calls, that is a fault that blames the
+  current call's sender (R21).
 - **A client dies** holding connections or parked calls: its parked calls come back as
   abandoned-call notices and are freed. Its connections stay until its launcher disconnects them
   ([servers](README.md#cleaning-up-after-a-child)).

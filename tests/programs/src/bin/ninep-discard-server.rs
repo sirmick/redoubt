@@ -23,6 +23,8 @@ use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, NineServ
 use redoubt_rt::server::{Limits, Resource};
 use test_programs::{Logger, checker, log};
 
+redoubt_rt::panic_handler!();
+
 /// Few connections per bucket, so that the client's discarded replies outnumber them.
 const LIMITS: Limits = Limits { buckets: 2, in_flight: 0, files: 2, state: 4 };
 

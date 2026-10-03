@@ -91,8 +91,8 @@ impl Regs {
         Ok(())
     }
 
-    /// Makes these registers the ones the panic hook resets, and installs the hook
-    /// (`redoubt_rt::start::set_panic_hook`). Once per process; `false` if it was done already.
+    /// Makes these registers the ones the panic hook ([`panic_reset`], named in `netd`'s
+    /// `entry!`) resets. Once per process; `false` if it was done already.
     ///
     /// Only the first call stores anything: a flag is claimed first, then the length, then the
     /// base, which the hook reads first. So the hook sees either nothing or one mapping's base and
@@ -103,7 +103,7 @@ impl Regs {
         }
         PANIC_LEN.store(self.len, Ordering::Release);
         PANIC_BASE.store(self.base, Ordering::Release);
-        redoubt_rt::start::set_panic_hook(panic_reset)
+        true
     }
 }
 
@@ -115,8 +115,9 @@ static PANIC_LEN: AtomicUsize = AtomicUsize::new(0);
 static PANIC_ARMED: AtomicBool = AtomicBool::new(false);
 
 /// The panic hook: stop the device (status 0, read back, bounded), so it writes nothing more into
-/// pages the panic is about to free. Bounded, no allocation, only atomics and two registers.
-fn panic_reset() {
+/// pages the panic is about to free. Bounded, no allocation, only atomics and two registers. It
+/// does nothing until [`Regs::arm_panic_reset`] has stored the registers.
+pub fn panic_reset() {
     let (base, len) = (PANIC_BASE.load(Ordering::Acquire), PANIC_LEN.load(Ordering::Acquire));
     if base == 0 {
         return;
