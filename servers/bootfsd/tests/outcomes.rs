@@ -36,7 +36,8 @@ fn serving_connection_rolls_back_discard_missing_capability_and_error() {
                 state.reply = result;
                 state.replies.len()
             };
-            kernel.request(words, Some(given_up(buf)));
+            // SAFETY: `given_up` unmapped the Buffer, and the seam keeps the page alive.
+            unsafe { kernel.script(seam::call(words, Some(given_up(buf)))) };
             let Event::Call(request) = ep.receive(FOREVER, 0).unwrap() else { panic!("request") };
             assert_eq!(server.serve(request), result.map(|_| ()));
             let kept = result.is_ok_and(|outcome| outcome.accepted(1));
@@ -68,7 +69,8 @@ fn serving_connection_rolls_back_discard_missing_capability_and_error() {
         s.reply = Err(Error::BadHandle);
         s.fallback = Err(Error::InvalidArgument);
     }
-    kernel.request(words, Some(given_up(buf)));
+    // SAFETY: as above.
+    unsafe { kernel.script(seam::call(words, Some(given_up(buf)))) };
     let Event::Call(request) = ep.receive(FOREVER, 0).unwrap() else { panic!("request") };
     {
         let s = kernel.0.lock().unwrap();

@@ -259,9 +259,10 @@ the loader stub.
   refused rather than split; a reply must decode, carry the request's tag and be the matching
   reply, and every count is checked against what was asked. A 9P reply carries no handles, so any
   that arrive are closed. For launchers it also has `new_connection` and `disconnect`.
-- **Tested on the host against a fake kernel.** Every system call goes through one function; on
-  the machine it is the `ecall`, on the host a `HostKernel` a test installs, so the runtime and
-  programs built on it (the echo client and server) run in host tests.
+- **Tested on the host against a fake kernel.** Every system call goes through one function, to
+  a `Transport`: on the machine the `ecall`, on the host the fake kernel a test installs, and any
+  other backend the same way, so the runtime and programs built on it (the echo client and
+  server) run in host tests.
 - **No safe call pulls memory from under its owner.** The runtime's calls that could invalidate
   memory a safe owner holds are its owners' alone: `unmap` is private to the heap, `Buffer`, `Dma`
   and `Registers`, each unmapping only what it mapped itself, `set_flags` is not offered at all,

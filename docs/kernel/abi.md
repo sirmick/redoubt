@@ -67,11 +67,12 @@ deadline** is absolute, in microseconds since boot, and `FOREVER` means none.
 | `a7` | 0, unused | 0 |
 *Table: register use for `call` and its return. The 64-bit timeout takes two registers on both widths.*
 
-On the process's side, `redoubt_sys::syscall` is the `ecall` itself (the crate's only `unsafe`),
-and `redoubt_sys::decode_result` reads the result. It refuses any result the kernel could not
-have produced: an unknown code, a non-zero register the result does not use, a value too wide
-for its field, and for `call` and `reply` a disposition that contradicts the status
-([IPC](ipc.md#how-a-call-completes)).
+On the process's side a call travels through a transport (`redoubt_sys::Transport`): on the
+machine `Ecall`, the `ecall` itself (the crate's only `unsafe` code), whose result
+`redoubt_sys::decode_result` reads; the runtime takes whichever transport is installed, the
+`ecall` by default. `decode_result` refuses any result the kernel could not have produced: an
+unknown code, a non-zero register the result does not use, a value too wide for its field, and for
+`call` and `reply` a disposition that contradicts the status ([IPC](ipc.md#how-a-call-completes)).
 
 ## Call numbers and arguments
 

@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use redoubt_rt::abi::*;
-use redoubt_rt::{HostKernel, install_host_kernel};
+use redoubt_rt::{Transport, install_transport};
 
 #[repr(align(4096))]
 struct Page([u8; PAGE_SIZE]);
@@ -22,7 +22,7 @@ pub struct State {
     pub lent_pages: usize,
     pub exited: bool,
     pub body: ReceivedBody,
-    pub request: Option<Received>,
+    request: Option<Received>,
     pub replies: Vec<Body>,
 }
 
@@ -43,25 +43,40 @@ impl Kernel {
             request: None,
             replies: vec![],
         }))));
-        install_host_kernel(kernel);
+        install_transport(kernel);
         kernel
     }
 
-    pub fn request(&self, words: [u64; WORDS], lend: Option<Pages>) {
-        let mut state = self.0.lock().unwrap();
-        state.request = Some(Received::Message(Message {
-            kind: MessageKind::Call { lend },
-            msg_id: std::num::NonZeroU64::new(1).unwrap(),
-            badge: 1,
-            account: 1001,
-            labels: Labels::new(),
-            body: ReceivedBody { words: words.map(|x| x as usize), handles: ReceivedHandles::new() },
-        }));
+    /// The next call `receive` returns, carrying `words` and no lend.
+    pub fn request(&self, words: [u64; WORDS]) {
+        // SAFETY: the call names no address.
+        unsafe { self.script(call(words, None)) }
     }
+
+    /// What the next `receive` returns.
+    ///
+    /// # Safety
+    ///
+    /// Every address a scripted result names is pages no safe owner holds, alive for the call.
+    pub unsafe fn script(&self, request: Received) { self.0.lock().unwrap().request = Some(request); }
 }
 
-impl HostKernel for Kernel {
-    fn syscall(&self, call: &Call) -> Result<Return, Error> {
+/// A call carrying `words` and `lend`, as [`Kernel::script`] takes it.
+pub fn call(words: [u64; WORDS], lend: Option<Pages>) -> Received {
+    Received::Message(Message {
+        kind: MessageKind::Call { lend },
+        msg_id: std::num::NonZeroU64::new(1).unwrap(),
+        badge: 1,
+        account: 1001,
+        labels: Labels::new(),
+        body: ReceivedBody { words: words.map(|x| x as usize), handles: ReceivedHandles::new() },
+    })
+}
+
+// SAFETY: the page it maps is its own and lives as long as the seam; every other address it
+// returns came through `Kernel::script`, whose callers promise it is pages no safe owner holds.
+unsafe impl Transport for Kernel {
+    fn call(&self, call: &Call) -> Result<Return, Error> {
         let mut s = self.0.lock().unwrap();
         match *call {
             Call::MapAnon { len, .. } => {

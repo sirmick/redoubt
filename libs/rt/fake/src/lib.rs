@@ -1,4 +1,4 @@
-//! A minimal fake kernel for host tests, installed behind `redoubt_rt::HostKernel`.
+//! A minimal fake kernel for host tests, installed as `redoubt_rt`'s `Transport`.
 //!
 //! Each fake process is a host thread with its own handle table, account and labels; they
 //! share the host's address space, so a lend is "mapped" into the server by passing its
@@ -209,7 +209,7 @@ pub fn fake() -> &'static Fake {
             boot: Instant::now(),
             patient: std::sync::atomic::AtomicBool::new(false),
         }));
-        redoubt_rt::install_host_kernel(fake);
+        redoubt_rt::install_transport(fake);
         fake
     })
 }
@@ -531,8 +531,10 @@ fn write_body(addr: usize, body: &Body) {
     unsafe { (addr as *mut [u64; BODY_SLOTS]).write(body.encode()) }
 }
 
-impl redoubt_rt::HostKernel for Fake {
-    fn syscall(&self, call: &Call) -> Result<Return, Error> {
+// SAFETY: it returns only memory it allocated and keeps alive for the process, or pages a caller
+// lent or transferred, which that caller's runtime gave up for the call.
+unsafe impl redoubt_rt::Transport for Fake {
+    fn call(&self, call: &Call) -> Result<Return, Error> {
         let pid = current();
         {
             let name = call.number().name();

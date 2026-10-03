@@ -172,8 +172,9 @@ impl Heap {
         // SAFETY: `addr` starts a block in no live allocation (fresh, freed, or on a list), at
         // least the smallest class, 16 bytes, aligned to its size (a run is page-aligned), so two
         // words are in bounds and aligned on both widths (asserted beside `MIN_SMALL`). Who
-        // guarantees it: the kernel mapped the page read-write (`map_anon`), this heap does not
-        // unmap it while the block is free, and `Locked` keeps every other thread off it.
+        // guarantees it: the installed transport (the kernel, on the machine) mapped the page
+        // read-write (`map_anon`), this heap does not unmap it while the block is free, and
+        // `Locked` keeps every other thread off it.
         unsafe { (addr as *mut [usize; 2]).write(words) };
     }
 
@@ -201,8 +202,9 @@ impl Heap {
 // `layout.align()` (see the module docs) that no other live allocation overlaps: small blocks are
 // on exactly one free list until taken, and large ones are fresh mappings, or a fixed arena's
 // pages on no run list and below its tail. Who guarantees it: the heap's own lists, changed only
-// under `Locked`, over pages the kernel mapped (`map_anon`); and the caller, by GlobalAlloc's
-// contract, for `dealloc`'s `layout`, from which it gets back the class or page count.
+// under `Locked`, over pages the installed transport (the kernel, on the machine) mapped
+// (`map_anon`); and the caller, by GlobalAlloc's contract, for `dealloc`'s `layout`, from which it
+// gets back the class or page count.
 unsafe impl GlobalAlloc for Heap {
     // SAFETY: GlobalAlloc's contract (a non-zero size); see the impl's comment for what it returns.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {

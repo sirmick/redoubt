@@ -3,7 +3,7 @@
 use std::num::NonZeroUsize;
 
 use redoubt_fake_kernel::scripted as seam;
-use redoubt_rt::HostKernel;
+use redoubt_rt::Transport;
 use redoubt_rt::abi::*;
 use redoubt_rt::handle::{Endpoint, map_anon};
 use redoubt_rt::ipc::{Buffer, Event};
@@ -28,7 +28,9 @@ fn mapping_reborrows_and_failed_reply_recovery() {
 
     // Map raw pages for the synthetic server receive: no caller-side Buffer remains aliased.
     let addr = map_anon(PAGE_SIZE, MemFlags::READ | MemFlags::WRITE).unwrap();
-    kernel.request([0; WORDS], Some(Pages { addr, npages: NonZeroUsize::new(1).unwrap() }));
+    let lend = Pages { addr, npages: NonZeroUsize::new(1).unwrap() };
+    // SAFETY: `addr` is the seam's page, mapped raw just above: no Buffer or other owner holds it.
+    unsafe { kernel.script(seam::call([0; WORDS], Some(lend))) };
     let Event::Call(mut request) = endpoint.receive(FOREVER, 0).unwrap() else { panic!("not a call") };
     request.lend()[0] = 91;
     assert_eq!(request.lend()[0], 91);
@@ -46,5 +48,5 @@ fn mapping_reborrows_and_failed_reply_recovery() {
     }
     // The seam does not perform the real kernel's lend unmap; release its backing page now, as
     // the kernel would (the runtime's own unmap is its owners' alone).
-    kernel.syscall(&Call::Unmap { addr, len: PAGE_SIZE }).unwrap();
+    kernel.call(&Call::Unmap { addr, len: PAGE_SIZE }).unwrap();
 }

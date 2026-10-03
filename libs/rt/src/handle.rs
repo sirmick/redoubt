@@ -310,10 +310,10 @@ impl Registers {
         }
         // SAFETY: `base + offset` is a byte of a device mapping that stays mapped while this value
         // lives, and that no other thread reaches through it; a `u8` needs no alignment. Who
-        // guarantees it: the kernel made `base..base + len` for this process in `map_device` (a
-        // mapping of its own each time, outliving its handle, kernel/devices.md); `Registers`
-        // ends it only in `unmap`, which consumes the value, and is not `Sync`; `offset < len` is
-        // checked just above.
+        // guarantees it: the installed transport (the kernel, on the machine) made
+        // `base..base + len` for this process in `map_device` (a mapping of its own each time,
+        // outliving its handle, kernel/devices.md); `Registers` ends it only in `unmap`, which
+        // consumes the value, and is not `Sync`; `offset < len` is checked just above.
         Some(unsafe { ((self.base + offset) as *const u8).read_volatile() })
     }
 
