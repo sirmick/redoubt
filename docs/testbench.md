@@ -146,6 +146,7 @@ programs = [                 # the first in init's place, the rest started by it
     { path = "prebuilt/thing.elf" },               # or a prebuilt ELF
     { erlang = "path/to/module.erl" },             # an Erlang module, compiled by the pinned erlc (a bundle file's)
     { otp = "io" },                                # an OTP module's .beam from the pinned toolchain (a bundle file's)
+    { zeros = 6291456 },                           # that many zero bytes, an entry only its length matters for (a bundle file's)
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
 memory_mib = 32              # guest RAM (default 256)

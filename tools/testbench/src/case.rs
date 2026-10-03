@@ -482,6 +482,9 @@ pub enum Program {
     Erlang { erlang: PathBuf },
     /// The `.beam` of a module of the pinned toolchain's OTP, by module name (`io`).
     Otp { otp: String },
+    /// This many zero bytes, made in the run: an entry whose length is all that matters, such as
+    /// a program `init` must refuse on its size before it reads a byte (init-refuses-bound).
+    Zeros { zeros: u64 },
     /// A `test-programs` binary, corrupted before injection, for testing how the loader
     /// and kernel cope with hostile images.
     Corrupted { corrupt: String, with: Corruption },
@@ -835,7 +838,7 @@ mod tests {
     }
 
     /// A package's program may name a workspace of its own, none unless named; an Erlang
-    /// module's source and an OTP module are forms of their own.
+    /// module's source, an OTP module and a run of zeros are forms of their own.
     #[test]
     fn a_program_may_come_from_another_workspace_or_from_erlang() {
         #[derive(Deserialize)]
@@ -844,7 +847,7 @@ mod tests {
         }
         let text = "programs = [\n  { package = \"p\", bin = \"b\" },\n  \
                     { package = \"p\", bin = \"b\", workspace = \"userland/otp\" },\n  \
-                    { erlang = \"m.erl\" },\n  { otp = \"io\" },\n]\n";
+                    { erlang = \"m.erl\" },\n  { otp = \"io\" },\n  { zeros = 4096 },\n]\n";
         let programs: Programs = toml::from_str(text).unwrap();
         let workspaces: Vec<Option<&Path>> = programs.programs[..2]
             .iter()
@@ -856,5 +859,6 @@ mod tests {
         assert_eq!(workspaces, [None, Some(Path::new("userland/otp"))]);
         assert!(matches!(&programs.programs[2], Program::Erlang { erlang } if erlang == Path::new("m.erl")));
         assert!(matches!(&programs.programs[3], Program::Otp { otp } if otp == "io"));
+        assert!(matches!(&programs.programs[4], Program::Zeros { zeros: 4096 }));
     }
 }

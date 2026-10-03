@@ -176,6 +176,7 @@ impl Builder {
             }
             Program::Erlang { erlang } => return self.erlc(erlang),
             Program::Otp { otp } => return self.otp_module(otp),
+            Program::Zeros { zeros } => return self.zeros(*zeros),
             Program::TestProgram(bin) | Program::Bin { bin, .. } => {
                 ("test-programs", bin.as_str(), &[], None)
             }
@@ -187,6 +188,15 @@ impl Builder {
             .cargo(target, workspace, package, Some(bin), features, Profile::Release)?
             .with_context(|| format!("cargo reported no binary for {package}:{bin} on {}", target.name))?;
         Ok((bin.to_string(), built))
+    }
+
+    /// A file of `len` zero bytes in this run, named for its length.
+    fn zeros(&self, len: u64) -> Result<(String, PathBuf)> {
+        let name = format!("zeros-{len}");
+        let path = self.run.join(&name);
+        let file = std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+        file.set_len(len).with_context(|| format!("sizing {}", path.display()))?;
+        Ok((name, path))
     }
 
     /// Runs `command` with the pinned Erlang toolchain on the path (`userland/otp/tools/env.sh`),
@@ -462,6 +472,21 @@ mod tests {
         );
         let native = HostTests { packages: vec!["p".into()], tests: Vec::new(), miri: false };
         assert_eq!(args(&native), ("test -p p".into(), None));
+    }
+
+    /// A run of zeros is a file of exactly that many zero bytes, in the run's own directory.
+    #[test]
+    fn zeros_are_a_file_of_that_length_in_the_run() {
+        let run = std::env::temp_dir().join(format!("testbench-zeros-{}", std::process::id()));
+        std::fs::create_dir_all(&run).unwrap();
+        let builder = Builder { workspace: PathBuf::from("/w"), run: run.clone(), verbose: false };
+        let (name, path) = builder.zeros(5000).unwrap();
+        assert_eq!(name, "zeros-5000");
+        assert!(path.starts_with(&run));
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), 5000);
+        assert!(bytes.iter().all(|&b| b == 0));
+        std::fs::remove_dir_all(&run).unwrap();
     }
 
     /// The test programs embed a stub their build script builds; the script must rerun when

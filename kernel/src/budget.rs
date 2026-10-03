@@ -56,7 +56,7 @@ const INIT_WEIGHT: u32 = 1000;
 /// The pages `root` keeps for `init` to work in, beyond what the loader gave it and its first
 /// thread: its stack's demand-paged pages, its own `map_anon` and the endpoints it owns
 /// (kernel/budgets.md, "The tree from the boot manifest").
-const INIT_PAGES: u64 = 1024;
+const INIT_PAGES: u64 = 2048;
 /// `init`, the one process the loader starts (kernel/boot.md).
 const INIT_PID: Pid = match Pid::new(2) {
     Some(pid) => pid,
