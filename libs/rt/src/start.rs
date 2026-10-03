@@ -94,12 +94,7 @@ macro_rules! first_entry {
 /// Views the bundle at `bundle`, `len` bytes, runs `main` on it, and exits with its code.
 #[cfg(target_os = "none")]
 pub fn start_first(main: fn(&'static [u8]) -> u32, bundle: usize, len: usize) -> ! {
-    // SAFETY: only the loader starts a program through `first_entry!`: it maps the whole verified
-    // bundle at `bundle`, `len` bytes, read-only for the life of the process, and nothing writes
-    // it (kernel/boot.md, "The loader loads only the kernel and `init`"). The same invariant as
-    // the startup page's: pages mapped read-only for this process before it ran, never unmapped.
-    let bundle: &'static [u8] = unsafe { core::slice::from_raw_parts(bundle as *const u8, len) };
-    crate::handle::process_exit(main(bundle))
+    crate::handle::process_exit(main(premapped(bundle, len)))
 }
 
 /// Parses the startup block at `block` (0 = none), runs `main`, and exits with its code.
@@ -122,12 +117,24 @@ fn startup_block(addr: usize) -> Result<Startup<'static>, crate::startup::Startu
     if !addr.is_multiple_of(redoubt_sys::PAGE_SIZE) {
         return Err(StartupError::BadLength);
     }
-    // SAFETY: the loader stub passes the address of the startup page the parent mapped into
-    // this process (servers/init.md); it is one whole page (checked aligned above), stays
-    // mapped for the life of the process, and nothing in this process writes it. A parent that
-    // passes a bad address can only fault its own child, which it controls anyway.
-    let bytes = unsafe { core::slice::from_raw_parts(addr as *const u8, MAX_BLOCK) };
-    Startup::parse(bytes)
+    Startup::parse(premapped(addr, MAX_BLOCK))
+}
+
+/// The `len` bytes at `addr`, pages mapped into this process before its first instruction.
+/// Private, and called only by `start_first` (the bundle, at the address and length the loader
+/// passed) and `startup_block` (the startup page, at the page-aligned address the loader stub
+/// passed), which is what makes the view sound.
+#[cfg(target_os = "none")]
+fn premapped(addr: usize, len: usize) -> &'static [u8] {
+    // SAFETY: both callers pass pages mapped into this process before it ran, which nothing in it
+    // writes and nothing unmaps (the runtime's `unmap` is crate-private, and its callers, the
+    // heap, `Buffer`, `Dma` and `Registers`, unmap only what they mapped themselves). Who
+    // guarantees the mapping: for the bundle, the loader, which maps the whole verified bundle at
+    // `addr`, `len` bytes (kernel/boot.md, "The loader loads only the kernel and `init`"); for the
+    // startup page, the parent, which maps one whole page at the address the loader stub passes
+    // (servers/init.md). A parent that passes a bad address can only fault its own child, which
+    // it controls anyway.
+    unsafe { core::slice::from_raw_parts(addr as *const u8, len) }
 }
 
 /// Records what the runtime needs from the startup block: the console, for panic reports.

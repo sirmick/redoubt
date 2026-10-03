@@ -109,7 +109,7 @@ paths = ["libs/rt/src"]
 # Includes start.rs turning the panic hook's stored address back into its `fn()`,
 # the one way a program (netd) can stop its device before the panic handler exits, and a page
 # buffer's two views, shared and mutable, each made for one borrow (ipc.rs, `Mapping`).
-max_unsafe = 12
+max_unsafe = 11
 max_undocumented = 0
 
 [[budget]]
