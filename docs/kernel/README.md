@@ -125,7 +125,7 @@ the reference to the one it names.*
 
 ## Containment
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:kernel-containment
 
 One boot, `bench:kernel-containment`, shows that the kernel's primitives alone contain hostile
 code before `init`, the steward or any server is built on them. Hostile code in a lease is
@@ -157,9 +157,11 @@ handle table and one sub-agent. It does all of these at once:
   so the destruction walks as much as a lease of its size can make it walk.
 
 The bystander also holds a message queued at the victim server that carries a handle stamped with
-a live lease. Two hostile leases are live at any time. One ends at its deadline. The steward
-stand-in ends the other with `budget_destroy` after a timeout, which is its decision. Each lease is
-replaced when it ends, until eight of each kind have ended.
+a live lease. The hostile leases come in pairs, one of each kind. One ends at its deadline while
+the other lives, so two hostile leases are live at every deadline's end. The steward stand-in then
+ends the other with `budget_destroy` after a timeout, which is its decision; that lease is the only
+one live at its end. Each pair is replaced when both have ended, until nine of each kind have
+ended.
 
 **Verdicts.** None of them comes from a hostile agent:
 
@@ -167,7 +169,7 @@ replaced when it ends, until eight of each kind have ended.
 | --- | --- | --- |
 | Every process in a lease, its sub-agent's included, is killed at the lease's deadline or at the decision, and each gets a `killed` notice that blames nobody. The tight loop does not put the deadline off | [R10 (destruction)](budgets.md#r10-destruction), [deadlines](budgets.md#deadlines), [R21 (crash blame)](processes.md#r21-crash-blame) | the kernel's exit notices, taken by the steward stand-in |
 | Each call the victim server took from a lease is abandoned, with one notice. Its lend stays mapped in the server with the bytes the agent wrote, while the next lease reuses freed frames. The server's reply is discarded with mask 0, and its usage returns to where it started | [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls), [I15 (abandoned calls reported once)](invariants.md#i15-abandoned-calls-reported-once), [I9 (pages W^X, zeroed, lends unmapped)](invariants.md#i9-pages-wx-zeroed-lends-unmapped) | the victim server |
-| Every blocked send fails, and nothing sent through a lease's handles is received after the lease ends. The bystander's queued message arrives with the stamped handle as 0 | R10, [R9 (stamps)](objects.md#r9-stamps), [I2 (revocation is complete)](invariants.md#i2-revocation-is-complete) | the victim server |
+| Nothing sent through a lease's handles, its blocked sends' included, is received after the lease ends: the victim finds the lease's send endpoint empty. That each blocked send returns failed is seen only by the agent, so no verdict rests on it. The bystander's queued message arrives with the stamped handle as 0 | R10, [R9 (stamps)](objects.md#r9-stamps), [I2 (revocation is complete)](invariants.md#i2-revocation-is-complete) | the victim server |
 | Every handle the steward stand-in holds to a lease is closed. Once the lease's notices are taken, the sessions budget's usage is what it was before the lease was made. The sub-agent's later deadline never fires | R10, I2, [I10 (create-destroy leaves the parent unchanged)](invariants.md#i10-create-destroy-leaves-the-parent-unchanged) | the steward stand-in, from `budget_usage` and the results of its calls |
 | The victims stay responsive: the driver wake, the steward's timer and decision wakes, the deadline notice, R10's kernel time and a lease's end are all within the targets in [responsiveness](scheduling.md#responsiveness) | [R12 (scheduling)](scheduling.md#r12-scheduling), R10 | the RTC (driver), `time_now` (steward), the kernel's trace (R10) and the bench's post-check |
 | Every pick is in rank order, and the bystander keeps its weight's share | R12 | the scheduler oracle over the kernel's trace; the program, from the bystander's count |
@@ -185,12 +187,42 @@ the gate runs, and this page records the sweep. The targets are the ones in
 [responsiveness](scheduling.md#responsiveness), and the gate adds none. If the gate misses one of
 them, that is a finding against the kernel, not a reason to set a new target.
 
+The sweep ran all 16 seeds on both widths, and every run passed. The table gives each run's net
+p99 of the deadline notice, R10's p99 and a lease's end (the decision wake's net p99 plus R10's),
+in µs, against targets of 40000, 30000 and 125000:
+
+| Seed | rv32 notice | rv32 R10 | rv32 lease end | rv64 notice | rv64 R10 | rv64 lease end |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 25924 | 22379 | 30708 | 25505 | 22251 | 30194 |
+| 2 | 25590 | 21780 | 30138 | 25019 | 21713 | 29571 |
+| 3 | 25343 | 21767 | 30147 | 24716 | 21613 | 29471 |
+| 4 | 25939 | 22260 | 30530 | 25258 | 22029 | 29887 |
+| 5 | 25502 | 22052 | 30428 | 24923 | 21742 | 29600 |
+| 6 | 25346 | 21956 | 30334 | 24932 | 21552 | 29410 |
+| 7 | 25349 | 22025 | 30382 | 24924 | 21884 | 29742 |
+| 8 | 25938 | 22400 | 30745 | 25328 | 22076 | 29935 |
+| 9 | 25735 | 22048 | 30416 | 25347 | 21898 | 29757 |
+| 10 | 25905 | 22142 | 30414 | 25466 | 22002 | 29860 |
+| 11 | 25574 | 22236 | 30506 | 25136 | 22082 | 29954 |
+| 12 | 25838 | 22044 | 30396 | 25315 | 21893 | 29751 |
+| 13 | 26197 | 22517 | 30889 | 25794 | 22380 | 30251 |
+| 14 | 25947 | 22361 | 30737 | 25597 | 22217 | 30075 |
+| 15 | 25750 | 22063 | 30407 | 25297 | 21907 | 29766 |
+| 16 | 26167 | 22473 | 30743 | 25723 | 22385 | 30243 |
+
+The deadline notice is the target closest to its limit, at 65% in the worst run, and every seed
+lands within 1.5 ms of the others. An earlier version of the gate showed a second group about
+10 ms higher on some seeds. The steward stand-in then polled for its notices in 200 ms waits, and
+when one ran out just before a deadline, the stand-in was runnable rather than waiting when the
+notice came, so another party ran a slice first. It now waits in one receive bounded by the
+deadline. The case file pins one seed for both widths: the gate runs seed 13, the worst on both
+widths for the deadline notice (26197 µs on rv32, 25794 µs on rv64) and a lease's end, and on rv32
+for R10; rv64's worst R10 is seed 16, at 22385 µs.
+
 The gate replaces none of the focused cases. `budget-deadline`, `redoubt-revoke`,
 `uaf-lent-page`, `endpoint-destroy-open-calls` and `sched-latency` each attack one clause alone,
 and each fails with a narrower message. The gate shows that all of those clauses hold together,
 under load, against one party that tries them all at once.
-
-**Open:** none.
 
 ## The TCB and its size
 

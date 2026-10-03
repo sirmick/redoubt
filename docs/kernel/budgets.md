@@ -712,22 +712,23 @@ without preemption.*
 
   Before items 3 and 5 were built, one sweep read every live slot of every table, and ending a
   process scanned the ownership array over all of RAM. The containment gate's lease fills its
-  handle table ([containment](README.md#containment)): 4,091 endpoints. At that fill, its
-  destruction took 102 ms alone and 251 ms while the other lease's full table was live (rv64; rv32
-  7% more), against 30 ms. The difference was the sweep, about 36 µs for each live handle in the
-  other table. The rest was the lease's own objects: about 8 µs to close each of its handles and
-  10 µs to release each of its endpoints, 18 µs an endpoint in all. There were also fixed walks of
-  about 17 ms: the RAM scan once per process, and a walk of every thread for the abandoned-call
-  notices. Under 30 ms leaves a few microseconds per object in the checked build. The chains therefore come with those costs
-  cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and the
-  notice walk joined to a thread walk the destruction already makes. The budget was 25 ms at the
-  full fill on rv32, the slower width. Built, the gate's full fill measures 21.0 ms with the other
-  lease's full table live and 18.9 ms alone on rv32, and 20.8 and 19.0 ms on rv64 (the medians of
-  nine destructions each, seed 3). An ending process pumps each endpoint once, after its threads;
-  pumping after each thread instead, the same kernel measures 24.5 and 21.2 ms on rv32. A traced
-  build brackets each process's end with `T` and `t` records, and the bench reports the time
-  inside each destruction beside R10's. On rv32, with the other lease live (the threads'
-  teardown measured with those records, the other lines by the bisect that set the budget):
+  handle table ([containment](README.md#containment)): 4,091 endpoints. At that fill, the
+  destruction ran several times over the 30 ms target, and more while the other lease's full table
+  was live. The difference was the sweep, about 36 µs for each live handle in the other table. The
+  rest was the lease's own objects: about 8 µs to close each of its handles and 10 µs to release
+  each of its endpoints, 18 µs an endpoint in all. There were also fixed walks of about 17 ms: the
+  RAM scan once per process, and a walk of every thread for the abandoned-call notices. Under 30 ms
+  leaves a few microseconds per object in the checked build. The chains therefore come with those
+  costs cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and
+  the notice walk joined to a thread walk the destruction already makes. The budget was 25 ms at
+  the full fill on rv32, the slower width. Built, the gate's full fill measures an R10 p50 of
+  18.7 ms and a p99 of 22.5 ms on rv32, and 18.6 and 22.4 ms on rv64, over its 18 destructions with
+  both leases live at each deadline's end (its pinned seed 13; the sweep is on
+  [containment](README.md#containment)). An ending process pumps each endpoint once, after its
+  threads; pumping after each thread instead, the same kernel measures 24.5 and 21.2 ms on rv32. A
+  traced build brackets each process's end with `T` and `t` records, and the bench reports the time
+  inside each destruction beside R10's. On rv32, with the other lease live (the threads' teardown
+  measured with those records, the other lines by the bisect that set the budget):
   - the chain walk, 0.2 ms (budgeted under 1 ms);
   - the dying tables, 0.3 ms (2 ms);
   - the processes' frames, 2.0 ms (1.5 ms; most of it is reading the Sv32 page tables of two

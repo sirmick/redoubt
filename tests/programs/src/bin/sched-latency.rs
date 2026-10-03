@@ -38,17 +38,7 @@
 #![no_main]
 
 use test_programs::rd;
-use test_programs::sched::{Bench, Role, SLICE_US, Stats, join, rtc};
-
-/// Share tolerance, in thousandths.
-const TOL: u64 = 30;
-/// Driver alarms and steward timeouts per run (p99 is then the second largest).
-const K: u64 = 200;
-/// Leases per run the steward destroys by hand, and as many by deadline.
-const LEASES: u64 = 50;
-const WINDOW_US: u64 = 16_000_000;
-/// R10's kernel time target, µs, for `budget_destroy`'s recorded bound (the post-check judges R10).
-const R10_P99: usize = 30_000;
+use test_programs::sched::{Bench, K, LEASES, R10_P99, Role, SLICE_US, Stats, TOL, WINDOW_US, join, rtc};
 
 fn verdict(b: bool) -> &'static str { if b { "met" } else { "missed" } }
 
