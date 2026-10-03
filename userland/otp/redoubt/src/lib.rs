@@ -2,13 +2,13 @@
 //! one boundary, answered by the client library (`redoubt-client`) and the runtime's kernel calls.
 //!
 //! This first part serves the console, the clock and randomness; the module source is the
-//! embedder's ([`Modules`]), until modules come from `/boot`; there are no files and no programs
-//! yet. What it proves is the shape the rest will take: a call that waits, here a console read,
-//! is made by a thread of its own, never by the thread the VM runs on, and its result reaches the
-//! VM as a message, which [`Platform::idle`] waits for (beamlet.md, "Asynchronous underneath,
-//! synchronous on top"). The VM's thread never waits for input. It does write to the console and
-//! ask its size itself, calls a live console answers at once; a console that stops answering them
-//! stops the VM until those calls move to the I/O threads.
+//! embedder's ([`Modules`]): `/boot` on the machine, directories on a host; there are no files and
+//! no programs yet. What it proves is the shape the rest will take: a call that waits, here a
+//! console read, is made by a thread of its own, never by the thread the VM runs on, and its
+//! result reaches the VM as a message, which [`Platform::idle`] waits for (beamlet.md,
+//! "Asynchronous underneath, synchronous on top"). The VM's thread never waits for input. It does
+//! write to the console and ask its size itself, calls a live console answers at once; a console
+//! that stops answering them stops the VM until those calls move to the I/O threads.
 //!
 //! - **The console** is `/dev/cons` in the process's namespace, opened once. The VM's thread writes to it and
 //!   asks its size; a reader thread, with its own lend, reads it, and sends what it read to the VM's thread,
@@ -18,7 +18,8 @@
 //!   until M5 (persist, install, share) brings one. **Randomness** is the kernel's.
 //!
 //! The same code runs on the machine and, on a host, on the fake kernel: only how a thread is
-//! started differs ([`Threads`]).
+//! started and where modules come from differ ([`Threads`], [`Modules`]). [`run`] is the program
+//! both run: the machine's `beamlet` and the host's `fake-redoubt`.
 
 #![cfg_attr(not(feature = "fake"), no_std)]
 #![forbid(unsafe_code)]
@@ -35,7 +36,10 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
+use beamlet_vm::bif::NativeSpec;
 use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError};
+use beamlet_vm::vm::Config;
+use beamlet_vm::{Class, Vm};
 use redoubt_client::console::Console;
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend};
@@ -44,11 +48,12 @@ use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Delivery, Event};
 use redoubt_rt::startup::Startup;
 
-/// Starting a thread that runs as this process: on the machine, the runtime's `thread_create`;
+/// Starting a thread that runs as this process: on the machine, the runtime's `thread::spawn`;
 /// on a host, a host thread the fake kernel counts as this process. `Send`, as the platform is:
 /// the VM's schedulers may share it.
 pub trait Threads: Send {
-    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>);
+    /// Runs `body` on a new thread; if none can be started, `body` is dropped unrun.
+    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>) -> Result<(), Error>;
 }
 
 /// Where the VM's modules and applications come from, by file name (`lists.beam`, `kernel.app`).
@@ -116,7 +121,10 @@ impl Redoubt {
             self.ended = true;
             return;
         };
-        self.threads.spawn(Box::new(move || read_console(&console, &to)));
+        // With no thread to read it, there is no input either.
+        if self.threads.spawn(Box::new(move || read_console(&console, &to))).is_err() {
+            self.ended = true;
+        }
     }
 
     /// Takes every message the reader has sent, without waiting.
@@ -146,6 +154,26 @@ impl Redoubt {
             END => self.ended = true,
             _ => {}
         }
+    }
+}
+
+/// Writes `bytes` to `console`, as many requests as it takes.
+fn write_all(console: &Console, lend: &mut Lend, bytes: &[u8]) {
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match console.write(lend, rest) {
+            Ok(n) if n > 0 => rest = &rest[n.min(rest.len())..],
+            // A console that takes nothing, or has gone, gets no more.
+            _ => return,
+        }
+    }
+}
+
+/// Writes `line` and a newline to `console`, as best it can: a console that does not answer
+/// leaves nobody to tell. `beamlet` says with it why it exits, and `run` how the VM ended.
+pub fn say(console: &Console, line: &str) {
+    if let Ok(mut lend) = Lend::new(1) {
+        write_all(console, &mut lend, format!("{line}\n").as_bytes());
     }
 }
 
@@ -196,16 +224,7 @@ impl Platform for Redoubt {
         }
     }
 
-    fn console_write(&mut self, bytes: &[u8]) {
-        let mut rest = bytes;
-        while !rest.is_empty() {
-            match self.console.write(&mut self.lend, rest) {
-                Ok(n) if n > 0 => rest = &rest[n..],
-                // A console that takes nothing, or has gone, gets no more.
-                _ => return,
-            }
-        }
-    }
+    fn console_write(&mut self, bytes: &[u8]) { write_all(&self.console, &mut self.lend, bytes) }
 
     /// Asked afresh each time, never cached: the console's size can change.
     fn console_size(&mut self) -> Option<(u16, u16)> { self.console.size(&mut self.lend).ok().flatten() }
@@ -230,4 +249,49 @@ impl Platform for Redoubt {
     }
 
     fn load_app(&mut self, app: &str) -> Option<Vec<u8>> { self.modules.load(&format!("{app}.app")) }
+}
+
+/// Runs `module:function()` in a new VM on the platform of the process started with `startup`,
+/// with the natives the shell's modules need, and writes how it ended to the console: the value
+/// it returned, or the exception that ended it. The result is the process's exit code: 0 once the
+/// function ran, however it ended; 1 if the VM could not start it or failed.
+pub fn run(
+    startup: &Startup,
+    threads: Box<dyn Threads>,
+    modules: Box<dyn Modules>,
+    module: &str,
+    function: &str,
+) -> u32 {
+    // Without a console there is nowhere to say why.
+    let Ok(platform) = Redoubt::new(startup, threads, modules) else { return 1 };
+    let console = Arc::clone(&platform.console);
+    let natives: &'static [NativeSpec] =
+        Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
+    let mut vm = Vm::with_config(Box::new(platform), Config { natives, ..Default::default() });
+    let first = match vm.spawn(module, function, |_| Vec::new()) {
+        Ok(pid) => pid,
+        Err(e) => {
+            say(&console, &format!("beamlet: {module}:{function} did not start: {:?} {}", e.class, e.reason));
+            return 1;
+        }
+    };
+    match vm.run(first) {
+        Ok(Ok(value)) => {
+            say(&console, &format!("{value}"));
+            0
+        }
+        Ok(Err(e)) => {
+            let class = match e.class {
+                Class::Error => "error",
+                Class::Exit => "exit",
+                Class::Throw => "throw",
+            };
+            say(&console, &format!("{{'EXCEPTION',{class},{}}}", e.reason));
+            0
+        }
+        Err(e) => {
+            say(&console, &format!("beamlet: {e:?}"));
+            1
+        }
+    }
 }

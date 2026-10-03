@@ -258,7 +258,7 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
 
 ### beamlet on Redoubt
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: files, programs, `/net` and the natives are not built, and the modules are read from `/boot` unchecked · tested: bench:beamlet-boot
 
 On Redoubt, beamlet is a native program whose `Platform` is written against the system: thin
 adapters over the client library ([native programs](native.md#the-client-library)) for the
@@ -282,9 +282,13 @@ whose size changes is an SSH channel, and a cached size would answer a redraw wi
 before the change; a caller that wants to be told of a change uses the parked `resize` call
 ([the shell](shell.md)).
 
-**Open:** whether beamlet needs the timer's counter frequency beyond `time_now`'s microseconds;
-if it does, it is a new field of the startup block, owned by [init](../servers/init.md), and not
-a new call.
+On the machine, beamlet is the program `beamlet`, started like any other with a console, a
+budget and a connection to `bootfsd`. It runs one scheduler thread until several harts
+([several harts](../plan/m2-usable-shell.md#several-harts)), and starts its threads with the
+runtime's `thread::spawn`.
+
+The timer's counter frequency is not needed: `time_now`'s microseconds serve the clock and
+`idle`'s deadlines.
 
 ### Natives
 

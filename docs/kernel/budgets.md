@@ -191,9 +191,11 @@ keeps free. What `init` launches counts in the budgets it launches into.
   - the image of each program it starts, copied whole from the bundle through its pages on the
     way to the child: the largest image counts.
 
-  `INIT_PAGES` is a fixed count, not a share of RAM, because `init`'s needs grow with the largest
-  program it starts, not with the machine, and a share of a large machine would sit idle in
-  `root`. The manifest cannot change it, because the kernel reads no manifest. `init`
+  With `beamlet`, whose image is the largest, the bound is 1,059 pages on rv64 and 1,286 on
+  rv32 (`beamlet-boot` prints it), and 2,048 leaves 989 and 762 to spare. It is a fixed count,
+  not a share of RAM, because `init`'s needs grow with the largest program it starts, not with
+  the machine, and a share of a large machine would sit idle in `root`. The manifest cannot
+  change it, because the kernel reads no manifest. `init`
   works in a fixed arena, and before it creates anything it bounds what the manifest will cost it
   in `root`: the endpoints it makes, a process object, a startup block and a thread watching its
   exit endpoint (the thread's IPC page and stack) for each server, the handles it keeps and mints,
