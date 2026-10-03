@@ -209,7 +209,7 @@ fn huge_counts_and_tags() {
         "count u32::MAX"
     );
     let reset = Number::SystemReset as u64;
-    for tag in [u64::MAX, 1 << 32, 1 << 63, 3] {
+    for tag in [u64::MAX, 1 << 32, 1 << 63, 4] {
         assert_eq!(
             Call::decode(&[reset, 1, tag, 0, 0, 0, 0, 0]),
             Err(Error::InvalidArgument),

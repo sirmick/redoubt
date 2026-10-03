@@ -150,7 +150,7 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             println!("system_reset: {:?} asked for by PID {}", kind, pid.get());
             #[cfg(feature = "sched-trace")]
             crate::sched::trace::dump();
-            crate::platform::reset(kind == redoubt_sys::ResetKind::Reboot)
+            crate::platform::reset(kind)
         }
         Call::MapFixed { addr, len, flags } => {
             MemoryManager::with_mut(|mm| mm.map_fixed(pid, addr, len, flags)).map(done)

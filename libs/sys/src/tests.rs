@@ -76,6 +76,7 @@ fn sample_calls() -> Vec<Call> {
         Call::Random,
         Call::SystemReset { device: h(12), kind: ResetKind::PowerOff },
         Call::SystemReset { device: h(12), kind: ResetKind::Reboot },
+        Call::SystemReset { device: h(12), kind: ResetKind::PowerOffFailure },
         Call::MapFixed { addr: 0x2000_0000, len: 0x1000, flags: rw },
         Call::DeviceInfo { device: h(5) },
     ]
@@ -514,7 +515,7 @@ fn malformed_calls_are_refused() {
         "arg is not checked"
     );
     let reset = Number::SystemReset as u64;
-    assert_eq!(decode([reset, 1, 3, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown reset kind");
+    assert_eq!(decode([reset, 1, 4, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown reset kind");
     assert_eq!(decode([reset, 1, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reset kind 0");
 }
 

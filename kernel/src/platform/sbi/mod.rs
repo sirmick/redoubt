@@ -30,13 +30,15 @@ pub fn early_init() {
 
 pub fn init() { rand::init(); }
 
-/// `system_reset` through the SBI SRST extension. The firmware does not return from either;
+/// `system_reset` through the SBI SRST extension. Only `PowerOffFailure` gives a reason,
+/// `SystemFailure`, which QEMU reports as exit status 255. The firmware does not return;
 /// this returns only when it refused (a machine with no SRST implementation), and the caller
 /// then fails closed.
-pub fn reset(reboot: bool) {
-    if reboot {
-        sbi_rt::system_reset(sbi_rt::ColdReboot, sbi_rt::NoReason);
-    } else {
-        sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::NoReason);
-    }
+pub fn reset(kind: redoubt_sys::ResetKind) {
+    use redoubt_sys::ResetKind;
+    match kind {
+        ResetKind::PowerOff => sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::NoReason),
+        ResetKind::Reboot => sbi_rt::system_reset(sbi_rt::ColdReboot, sbi_rt::NoReason),
+        ResetKind::PowerOffFailure => sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::SystemFailure),
+    };
 }

@@ -226,13 +226,15 @@ the kernel prints `DMA: device <base> did not confirm its reset; quarantined unt
 
 ### `system_reset`
 
-Status: built · partly tested: a reboot (`kind` 2) is not attacked by a case; the cases power off, and ask for a reboot only through a handle not held · tested: bench:device, bench:irq-attack
+Status: built · partly tested: a reboot (`kind` 2) is not attacked by a case, nor yet `kind` 3 (`init`'s refusal cases); the cases power off, and ask for a reboot only through a handle not held · tested: bench:device, bench:irq-attack
 
-`system_reset(h(Reset), kind)` powers the machine off (`kind` 1) or reboots it (`kind` 2)
-through the firmware's system reset call. On success it does not return. Errors:
-`InvalidArgument` (an unknown kind, refused as the call is decoded), `BadHandle`, `WrongObject`
-(not the Reset right). The kernel lets go of its memory lock before it calls the firmware,
-because that call never returns.
+`system_reset(h(Reset), kind)` powers the machine off (`kind` 1), reboots it (`kind` 2), or
+powers it off reporting a system failure (`kind` 3), through the firmware's system reset call;
+only `kind` 3 gives the firmware a reason, `SystemFailure`. `init` refuses a boot with `kind` 3,
+as the loader and the kernel refuse one ([R17 (fail closed)](boot.md#r17-fail-closed)). On
+success it does not return. Errors: `InvalidArgument` (an unknown kind, refused as the call is
+decoded), `BadHandle`, `WrongObject` (not the Reset right). The kernel lets go of its memory lock
+before it calls the firmware, because that call never returns.
 
 ### Devices handed to the first program
 
