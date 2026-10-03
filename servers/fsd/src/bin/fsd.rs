@@ -82,8 +82,7 @@ pub fn serve(startup: &Startup) -> u32 {
         say(startup, CORRUPT);
     }
     let Ok(mut server) = NineServer::new(fsd, limits, random) else { return BAD_ARGS };
-    // 9P and `ninep_common` in the skeleton; the four typed operations are ours.
-    redoubt_rt::server::serve(&endpoint, |request| {
-        server.serve_with(request, |s, request| serve_call::<Fsds, _>(&mut Typed(s), request))
-    })
+    // 9P, multiplexed 9P and `ninep_common` in the skeleton's loop; the four typed operations
+    // are ours.
+    server.run(&endpoint, |s, request| serve_call::<Fsds, _>(&mut Typed(s), request))
 }

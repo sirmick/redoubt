@@ -286,12 +286,12 @@ connection. (`libs/rt/src/server/ninep_mux.rs`.)
   ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
 
 **Who runs it.** A 9P server runs `NineServer::run`: calls, sends, transfers of up to
-`MAX_LEND_PAGES`, abandoned-call notices and deadlines. One that keeps state beside its files runs
-`run_around` with its `Around`, which is given the calls, the abandoned-call notices that are no
-completion call's, and a turn before each receive, after what the deadlines made due, for whatever
-moved since: `consoled` parks its own reads, and at each turn reads its UART and serves again the
-reads that wait for input. `ipd` keeps a loop of its own: it polls its network stack only after a
-`receive` that returned no call, so never with a call current
+`MAX_LEND_PAGES`, abandoned-call notices and deadlines (`fsd`, `bootfsd`). One that keeps state
+beside its files runs `run_around` with its `Around`, which is given the calls, the abandoned-call
+notices that are no completion call's, and a turn before each receive, after what the deadlines made
+due, for whatever moved since: `consoled` parks its own reads, and at each turn reads its UART and
+serves again the reads that wait for input. `ipd` keeps a loop of its own: it polls its network
+stack only after a `receive` that returned no call, so never with a call current
 ([R21](../kernel/processes.md#r21-crash-blame)), receives without waiting after each call, takes
 frames from `netd`, and bounds each wait by its stack's timers and its link's retry, so hooks for
 all of that would be its loop again. It hands each send to `deliver` and each abandoned-call notice
