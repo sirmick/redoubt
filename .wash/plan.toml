@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 298
+revision = 299
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -525,8 +525,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Bench bug. A fault-feature case sometimes boots another case's kernel when two bench processes share a worktree's target/: handle-chain-fault, endpoint-destroy-open-calls rv32 and process-chain-fault were each seen.\n\nCause, to confirm by reproduction first: prepare() packs target/<triple>/<profile>/redoubt-kernel, the same path for every feature set, and bundles and logs go to fixed paths under target/testbench/.\n\nFix by isolation, not a lock:\n- pack the executable cargo's JSON reports for this build, copied into the run's own directory;\n- every file a run writes goes under target/testbench/run-<pid>/, with a 'last' symlink.\n\nKeepers: host tests with interleaved feature builds, and two runs that share no file. A deterministic self-check if one can be written.\n\nPage lines: testbench.md 'How to use it' and GETTING-STARTED.md. Brief: .wash/local/B7-implementer.md. Tier B, size S, no needs. B6, if cut, builds on it."
-  state = "reported"
-  revision = 289
+  state = "done"
+  revision = 299
 
 [[node]]
   id = "K21"

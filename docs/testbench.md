@@ -17,8 +17,11 @@ cargo testbench --list          # names and descriptions
 ./test                          # the same, from the repository root
 ```
 
-The exit status is non-zero if anything fails. Each boot's console log, SSH transcripts, disk
-images and captures are kept in `target/testbench/`. A case the host cannot run (no RustSBI
+The exit status is non-zero if anything fails. Each run keeps its boots' console logs, SSH
+transcripts, disk images and captures in a directory of its own,
+`target/testbench/run-<pid>-<time>/`, and `target/testbench/last` names the latest. Runs may
+overlap in one worktree: each packs the kernel cargo reports for its own features, never the
+shared `target/` path another run may have rebuilt. A case the host cannot run (no RustSBI
 firmware, no OpenSSH) fails and says what is missing; `--allow-skip` reports it as skipped
 instead. Every run boots the vendored RustSBI prototyper: `scripts/build-bios.sh` builds it for
 both widths, or `RUSTSBI_PROTOTYPER` and `RUSTSBI_PROTOTYPER_RV32` name the images. There is no

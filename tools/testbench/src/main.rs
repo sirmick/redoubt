@@ -2,7 +2,8 @@
 //! on what appears on the console.
 //!
 //! Test cases are TOML files in `tests/` (format: `case.rs`). Run with
-//! `cargo testbench [FILTER]`. Console logs are kept in `target/testbench/`.
+//! `cargo testbench [FILTER]`. Each run keeps its console logs in a directory of its own,
+//! `target/testbench/run-<pid>-<time>/`, and `target/testbench/last` names the latest (`run.rs`).
 
 mod budget;
 mod build;
@@ -13,6 +14,7 @@ mod fmt;
 mod peer;
 mod pty;
 mod qemu;
+mod run;
 mod sched_oracle;
 mod size;
 mod ssh;
@@ -85,9 +87,9 @@ fn main() -> Result<()> {
     }
     let args = Args::parse();
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
-    let logs = workspace.join("target/testbench");
-    std::fs::create_dir_all(&logs)?;
-    let builder = Builder { workspace: workspace.clone(), verbose: args.verbose };
+    let run = run::Run::start(&workspace.join("target/testbench"))?;
+    let logs = run.dir.clone();
+    let builder = Builder { workspace: workspace.clone(), run: run.dir.clone(), verbose: args.verbose };
 
     if args.run {
         let target = target::find(args.arch.as_deref().unwrap_or("rv64")).context("unknown arch")?;
@@ -110,7 +112,7 @@ fn main() -> Result<()> {
                 (programs, Vec::new())
             }
         };
-        let bundle = prepare(
+        let (bundle, loader) = prepare(
             &builder,
             target,
             machine,
@@ -122,7 +124,6 @@ fn main() -> Result<()> {
             Profile::Release,
             &logs.join("interactive.tar"),
         )?;
-        let loader = builder.artifact(target, machine.loader_package, Profile::Release);
         let firmware = rustsbi_prototyper(target).map_err(|why| anyhow::anyhow!(why))?;
         let image = Image {
             machine,
@@ -314,8 +315,9 @@ fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
     }
 }
 
-/// Build the kernel, the loader, `programs` and `files` for `target`, and pack them into `bundle`.
-/// `profile` applies to the kernel and the loader (the trusted base); programs are always release.
+/// Build the kernel, the loader, `programs` and `files` for `target`, pack them into `bundle`, and
+/// return the bundle and the loader. `profile` applies to the kernel and the loader (the trusted
+/// base); programs are always release.
 #[allow(clippy::too_many_arguments)]
 fn prepare(
     builder: &Builder,
@@ -328,11 +330,11 @@ fn prepare(
     bare_archive: bool,
     profile: Profile,
     bundle: &Path,
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, PathBuf)> {
     let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
     features.extend(extra_kernel_features.iter().cloned());
-    builder.cargo_build(target, "redoubt-kernel", &features, profile)?;
-    builder.cargo_build(target, machine.loader_package, &[], profile)?;
+    let kernel = builder.binary(target, "redoubt-kernel", None, &features, profile)?;
+    let loader = builder.binary(target, machine.loader_package, None, &[], profile)?;
     let budgets: Vec<&[String]> = programs.iter().map(Program::budgets).collect();
     let under_init = programs.first().is_some_and(Program::is_init);
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
@@ -345,16 +347,8 @@ fn prepare(
     let listing = build::programs_entry(&programs, &budgets);
     let listing =
         (!files.iter().any(|(name, _)| name == "programs") && !under_init).then_some(listing.as_slice());
-    build::bundle(
-        bundle,
-        &builder.artifact(target, "redoubt-kernel", profile),
-        &programs,
-        listing,
-        &files,
-        tamper,
-        bare_archive,
-    )?;
-    Ok(bundle.to_path_buf())
+    build::bundle(bundle, &kernel, &programs, listing, &files, tamper, bare_archive)?;
+    Ok((bundle.to_path_buf(), loader))
 }
 
 /// Check that every `distinct_across_boots` pattern captured something on both boots,
@@ -423,7 +417,7 @@ fn run_case(
     // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
     let profile = if boot.debug_assertions { Profile::Checked } else { Profile::Release };
-    let bundle = match prepare(
+    let (bundle, loader) = match prepare(
         builder,
         target,
         machine,
@@ -435,11 +429,10 @@ fn run_case(
         profile,
         &bundle,
     ) {
-        Ok(bundle) => bundle,
+        Ok(built) => built,
         Err(e) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
     };
 
-    let loader = builder.artifact(target, machine.loader_package, profile);
     let seed = qemu_seed(boot)?;
     if let Some(seed) = seed {
         println!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)");
