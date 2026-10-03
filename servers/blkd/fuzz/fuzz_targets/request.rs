@@ -65,7 +65,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let entries = roots.len();
-    let mut server = BlockServer::new(disk, roots);
+    let mut server = BlockServer::new(disk, roots, Vec::new());
 
     let mut buf = vec![0u8; LEND];
     // At most 32 requests, so one input is bounded work.

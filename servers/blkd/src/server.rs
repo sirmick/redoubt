@@ -26,7 +26,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use redoubt_rt::abi::{Error, Handle, ReceivedHandles};
+use redoubt_rt::abi::{Error, Handle, Labels, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Request, Words};
 use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, answer, finish};
 use redoubt_rt::server::{Access, check};
@@ -46,6 +46,9 @@ pub struct BlockServer<T: Transport> {
     /// The root ranges, **one slot per GPT entry**: slot *i* is badge *i* + 1, and `None` is an
     /// entry the table does not use.
     roots: Vec<Option<Range>>,
+    /// Each slot's label set, as `init` passed it ([`crate::args`]): empty for a range named by
+    /// no argument.
+    labels: Vec<Labels>,
     /// Where a read's bytes live while the reply borrows them. **`blkd`'s own memory, not the DMA
     /// region**: the device's bytes are copied here once, with a length `blkd` chose, so nothing
     /// the reply is built from can change underneath it (servers/blkd.md, "The DMA region").
@@ -53,10 +56,11 @@ pub struct BlockServer<T: Transport> {
 }
 
 impl<T: Transport> BlockServer<T> {
-    /// Serves `roots` on `disk`. `roots` is one slot per GPT entry, in entry order, as
-    /// [`crate::read_partitions`] returns it.
-    pub fn new(disk: Disk<T>, roots: Vec<Option<Range>>) -> BlockServer<T> {
-        BlockServer { disk, roots, scratch: vec![0; DATA_LEN] }
+    /// Serves `roots` on `disk`, each under its label set in `labels`. `roots` is one slot per GPT
+    /// entry, in entry order, as [`crate::read_partitions`] returns it, and `labels` one per slot,
+    /// as [`crate::args::range_labels`] returns it; a slot past its end has no labels.
+    pub fn new(disk: Disk<T>, roots: Vec<Option<Range>>, labels: Vec<Labels>) -> BlockServer<T> {
+        BlockServer { disk, roots, labels, scratch: vec![0; DATA_LEN] }
     }
 
     pub fn disk(&self) -> &Disk<T> { &self.disk }
@@ -74,17 +78,16 @@ impl<T: Transport> BlockServer<T> {
     /// The range the caller's badge names, or `not_permitted`: a badge past the end of the array
     /// and one naming an entry the table does not use are the same answer, which tells a caller
     /// only that this badge is not good here.
-    fn resolve(&self, caller: &Caller) -> Result<Range, ErrorCode> {
+    fn resolve(&self, caller: &Caller) -> Result<(Range, Labels), ErrorCode> {
         // Badge 0 is the receive right and never arrives as a caller's badge; badge *i* + 1 is
         // GPT entry *i*.
-        caller
+        let i = caller
             .badge
             .checked_sub(1)
             .and_then(|i| usize::try_from(i).ok())
-            .and_then(|i| self.roots.get(i))
-            .copied()
-            .flatten()
-            .ok_or(ErrorCode::NotPermitted)
+            .ok_or(ErrorCode::NotPermitted)?;
+        let range = self.roots.get(i).copied().flatten().ok_or(ErrorCode::NotPermitted)?;
+        Ok((range, self.labels.get(i).copied().unwrap_or_default()))
     }
 
     /// Answers one decoded request. `buf_len` is the caller's lend, which the reply is written
@@ -95,16 +98,15 @@ impl<T: Transport> BlockServer<T> {
         request: Message<'_>,
         buf_len: usize,
     ) -> Result<Answer<Reply<'s>>, ErrorCode> {
-        let range = self.resolve(caller)?;
-        // The label check on every request (servers/serving.md R25). A range carries no labels
-        // in milestone 1, so a read is allowed to anyone holding the badge and a write only to an
-        // unlabelled caller; when volumes' labels reach `blkd` this is the one line that
-        // changes. `flush` is a write: it is how a write becomes durable.
+        let (range, labels) = self.resolve(caller)?;
+        // The label check on every request (servers/serving.md R25), against the range's own
+        // set: a read needs it within the caller's, a write needs it equal. `flush` is a write:
+        // it is how a write becomes durable.
         let access = match request {
             Message::Info(_) | Message::Read(_) => Access::Read,
             Message::Write(_) | Message::Flush(_) => Access::Write,
         };
-        check(caller.labels.as_slice(), NO_LABELS, access).map_err(|_| ErrorCode::NotPermitted)?;
+        check(caller.labels.as_slice(), labels.as_slice(), access).map_err(|_| ErrorCode::NotPermitted)?;
         match request {
             Message::Info(Info {}) => Ok(Answer::new(Reply::Info(InfoReply {
                 // The range's sectors, never the disk's: the number a client is told is the
@@ -161,10 +163,6 @@ impl<T: Transport> BlockServer<T> {
         self.disk.write(lba, data).map_err(device_error)
     }
 }
-
-/// A range's labels in milestone 1: none. Named, so the one place this changes is obvious when
-/// volumes' labels reach `blkd`.
-const NO_LABELS: &[u64] = &[];
 
 /// `count` sectors as bytes, refusing more than one request may carry.
 fn sectors_to_bytes(count: u32) -> Result<usize, ErrorCode> {

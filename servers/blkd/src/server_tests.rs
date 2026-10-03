@@ -33,10 +33,14 @@ fn device() -> FakeDevice {
     device
 }
 
-fn server(device: &FakeDevice) -> BlockServer<&FakeDevice> {
+fn server(device: &FakeDevice) -> BlockServer<&FakeDevice> { labelled_server(device, &[]) }
+
+/// A server given `args` as `init` would give them (`labels.P=...`).
+fn labelled_server<'d>(device: &'d FakeDevice, args: &[&str]) -> BlockServer<&'d FakeDevice> {
     let mut disk = Disk::new(device).expect("bring-up");
     let roots = crate::read_partitions(&mut disk).expect("a partition table");
-    BlockServer::new(disk, roots)
+    let labels = crate::args::range_labels(args.iter().copied(), &roots).expect("good arguments");
+    BlockServer::new(disk, roots, labels)
 }
 
 fn caller(badge: u64, account: u64, labels: &[u64]) -> Caller {
@@ -281,7 +285,7 @@ fn a_read_whose_reply_would_not_fit_the_lend_is_refused_before_the_disk_is_touch
 
 // ---------------------------------------------------------------- labels
 
-/// A range carries no labels in milestone 1, so `check` lets any caller read one and only an
+/// A range no argument names carries no labels, so `check` lets any caller read it and only an
 /// unlabelled caller write to it (servers/serving.md R25).
 #[test]
 fn a_labelled_caller_may_read_but_not_write() {
@@ -296,6 +300,37 @@ fn a_labelled_caller_may_read_but_not_write() {
         Answered::Err(ErrorCode::NotPermitted)
     );
     assert_eq!(ask(&mut server, &vault, &Message::Flush(Flush {})), Answered::Err(ErrorCode::NotPermitted));
+}
+
+/// A range carries the labels its `labels.P=` argument names, and the check takes that set: a
+/// caller with exactly it reads and writes, one with more reads only, and one without it is
+/// refused even a read; the other range, named by no argument, keeps none.
+#[test]
+fn a_ranges_labels_come_from_its_argument() {
+    let device = device();
+    let mut server = labelled_server(&device, &["labels.0=7,9"]);
+    let data = vec![0; SECTOR];
+    let write = Message::Write(Write { sector: 0, data: &data });
+    let owner = caller(FIRST_BADGE, 0, &[9, 7]);
+    assert_eq!(ask(&mut server, &owner, &write), Answered::Written);
+    assert!(matches!(ask(&mut server, &owner, &read(0, 1)), Answered::Data(_)));
+    let higher = caller(FIRST_BADGE, 0, &[7, 9, 11]);
+    assert!(matches!(ask(&mut server, &higher, &read(0, 1)), Answered::Data(_)));
+    assert_eq!(ask(&mut server, &higher, &write), Answered::Err(ErrorCode::NotPermitted));
+    for lower in [&[][..], &[7], &[9, 11]] {
+        let lower = caller(FIRST_BADGE, 0, lower);
+        assert_eq!(ask(&mut server, &lower, &read(0, 1)), Answered::Err(ErrorCode::NotPermitted));
+        assert_eq!(
+            ask(&mut server, &lower, &Message::Flush(Flush {})),
+            Answered::Err(ErrorCode::NotPermitted)
+        );
+    }
+    let other = caller(SECOND_BADGE, 0, &[]);
+    assert_eq!(ask(&mut server, &other, &write), Answered::Written);
+    assert_eq!(
+        ask(&mut server, &caller(SECOND_BADGE, 0, &[7, 9]), &write),
+        Answered::Err(ErrorCode::NotPermitted)
+    );
 }
 
 // ---------------------------------------------------------------- malformed requests

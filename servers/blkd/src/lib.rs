@@ -32,6 +32,7 @@
 //! - [`disk`]: bring-up, and read, write and flush over the whole disk.
 //! - [`gpt`]: the partition table, the one on-disk structure `blkd` parses.
 //! - [`range`]: a block range, which is what a badge names.
+//! - [`args`]: each range's label set, from the arguments `init` passes.
 //! - [`server`]: the typed protocol, with `admit` and `check` on every request.
 //!
 //! # Why the queue is ours
@@ -54,6 +55,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+pub mod args;
 pub mod disk;
 pub mod gpt;
 #[allow(unsafe_code)]
