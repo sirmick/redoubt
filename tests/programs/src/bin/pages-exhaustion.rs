@@ -4,12 +4,12 @@
 //! (`map_fixed`) must then always find them, and the last one past every limit is refused with
 //! `OutOfMemory` instead of stopping the kernel.
 //!
-//! The loader's trusted first program, in `system`, holding the three boot budgets (`root` keeps
-//! no free pages; its limit is `system`'s and `users`' limits and pages). A child in `users` fills
-//! `users`, then calls; this program then fills `system`. Each fill ends with single pages into a
-//! page table that already exists, each costing exactly one page, so the budget ends at exactly
-//! its limit. The verdicts are the kernel's: the budgets' usage, the last `map_fixed`'s error,
-//! and a reply the kernel still carries afterwards.
+//! The loader's trusted first program, in `init`'s place, so in `root`, holding the three boot
+//! budgets. A child in `users` fills `users`, then calls; a child in `system` fills `system`, then
+//! calls; this program then fills `root`. Each fill ends with single pages into a page table that
+//! already exists, each costing exactly one page, so the budget ends at exactly its limit. The
+//! verdicts are the kernel's: the budgets' usage, the last `map_fixed`'s error, and the replies
+//! the kernel still carries afterwards.
 #![no_std]
 #![no_main]
 
@@ -22,8 +22,6 @@ use uart_16550::MmioSerialPort;
 
 static CONSOLE: AtomicUsize = AtomicUsize::new(0);
 
-/// `users`, in this program's table (the boot order: root, system, users).
-const USERS: u32 = 3;
 /// Where each process opens the page table its last single pages go into: nothing else of a
 /// test program or a spawned child is there.
 const TABLE_AT: usize = 0x5000_0000;
@@ -33,6 +31,18 @@ const SLOTS: usize = if cfg!(target_pointer_width = "64") { 511 } else { 1023 };
 fn check(out: &mut MmioSerialPort, ok: bool, label: &str) {
     writeln!(out, "[exhaust] {}: {}", if ok { "ok" } else { "FAIL" }, label).ok();
     assert!(ok, "{}", label);
+}
+
+/// A child's fill, reported as `check` does.
+fn log_check(out: &mut MmioSerialPort, ok: bool, budget: &str) {
+    writeln!(
+        out,
+        "[exhaust] {}: {} filled to its limit; its last map_fixed is OutOfMemory",
+        if ok { "ok" } else { "FAIL" },
+        budget
+    )
+    .ok();
+    assert!(ok, "{} not filled", budget);
 }
 
 /// Fill `budget`, the one this process runs in, to its limit. Big `map_anon` runs first, each
@@ -57,9 +67,10 @@ fn fill(budget: u32) -> Error {
     panic!("the last table's slots outlasted the budget");
 }
 
-/// The child, in `users`: it fills `users` and calls, and waits there for good.
+/// A child, in `users` or `system`: it fills the budget it runs in and calls, and waits there for
+/// good.
 extern "C" fn child(_arg: usize) -> ! {
-    // Slot 1: the parent's endpoint; slot 2: `users`.
+    // Slot 1: the parent's endpoint, badged with the budget's index; slot 2: that budget.
     let e = fill(2);
     let ok = usize::from(e == Error::OutOfMemory);
     rd::call(1, &rd::body([ok, 0, 0, 0]), None, FOREVER).ok();
@@ -81,23 +92,27 @@ pub extern "C" fn _start(_: usize) -> ! {
     let endpoint = rd::endpoint_create().expect("endpoint");
     let exit = rd::endpoint_create().expect("exit endpoint");
     let image = spawn::image();
-    spawn::spawn(&image, USERS, exit, child as *const () as usize, &[], &[endpoint, USERS]).expect("child");
-    let Ok(Received::Message(m)) = rd::receive(Some(endpoint), FOREVER, 0) else {
-        panic!("expected the child's call")
-    };
-    check(
-        out,
-        m.body.words[0] == 1 && rd::free(USERS) == 0,
-        "users filled to its limit; its last map_fixed is OutOfMemory",
-    );
+    let mut calls = [0u64; 2];
+    for (call, (budget, name)) in calls.iter_mut().zip([(rd::USERS, "users"), (rd::SYSTEM, "system")]) {
+        let to_parent = rd::mint_from_handle(endpoint, budget as u64, None).expect("a send handle");
+        spawn::spawn(&image, budget, exit, child as *const () as usize, &[], &[to_parent, budget])
+            .expect("child");
+        let Ok(Received::Message(m)) = rd::receive(Some(endpoint), FOREVER, 0) else {
+            panic!("expected the child's call")
+        };
+        let ok = m.badge == budget as u64 && m.body.words[0] == 1 && rd::free(budget) == 0;
+        log_check(out, ok, name);
+        *call = m.msg_id.get();
+    }
 
-    let e = fill(rd::SYSTEM);
+    let e = fill(rd::ROOT);
     check(
         out,
-        e == Error::OutOfMemory && rd::free(rd::SYSTEM) == 0,
-        "system filled to its limit; its last map_fixed is OutOfMemory",
+        e == Error::OutOfMemory && rd::free(rd::ROOT) == 0,
+        "root filled to its limit; its last map_fixed is OutOfMemory",
     );
-    check(out, rd::reply(m.msg_id.get(), &rd::body([0; 4])).is_ok(), "the kernel still carries a reply");
+    let replied = calls.iter().all(|&id| rd::reply(id, &rd::body([0; 4])).is_ok());
+    check(out, replied, "the kernel still carries both replies");
 
     writeln!(out, "[exhaust] PAGES EXHAUSTION PASSED").ok();
     rd::system_reset(rd::RESET, ResetKind::PowerOff).unwrap();

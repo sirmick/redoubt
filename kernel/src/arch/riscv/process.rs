@@ -105,9 +105,8 @@ static PID_SLOTS: KernelCell<PidSlots> =
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-/// The stage1 bootloader sets up some initial processes.  These are reported
-/// to us as (satp, entrypoint, sp) tuples, which can be turned into a structure.
-/// The first element is always the kernel.
+/// The loader sets up two processes, the kernel and then `init`, and reports each as one of
+/// these records (kernel/boot.md, "What the loader does").
 pub struct InitialProcess {
     /// The RISC-V SATP value, which includes the offset of the root page
     /// table plus the process ID.
@@ -118,6 +117,10 @@ pub struct InitialProcess {
 
     /// Address of the top of the stack
     pub sp: usize,
+
+    /// The first thread's `a0` and `a1`: for `init`, the bundle's address and length.
+    pub a0: usize,
+    pub a1: usize,
 }
 
 impl InitialProcess {
@@ -236,14 +239,15 @@ impl Process {
         }
     }
 
-    /// The first run of a loader-bundle program (until `init` launches them,
-    /// plan/m1-separation.md), in its own address space: claim its slot, reset its contexts,
-    /// and start its first thread at `entry` with stack pointer `sp`. Its stack is the loader's to
-    /// reserve, and only the loader's (kernel/memory-layout.md, "Regions").
-    pub fn setup_loader_process(pid: Pid, entry: usize, sp: usize) {
+    /// The first run of `init`, the one process the loader starts, in its own address space:
+    /// claim its slot, reset its contexts, and start its first thread at `entry` with stack
+    /// pointer `sp` and `a0`/`a1` (the bundle's address and length, kernel/boot.md). Its stack is
+    /// the loader's to reserve, and only the loader's (kernel/memory-layout.md, "Regions").
+    pub fn setup_loader_process(pid: Pid, entry: usize, sp: usize, a0: usize, a1: usize) {
         Self::claim(pid);
         Self::setup_empty_process(pid);
-        Self::setup_first_thread(pid, entry, sp, 0);
+        Self::setup_first_thread(pid, entry, sp, a0);
+        process_impl().threads[INITIAL_TID - 1].registers[10] = a1;
     }
 
     /// Claim `pid` in the process table, so that its address space can be activated. It is a

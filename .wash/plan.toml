@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 232
+revision = 248
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -121,10 +121,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The file server"
   template = "step"
   parent = "M1"
-  needs = ["init"]
-  body = "docs/servers/fsd.md; docs/userland/files.md#files-over-9p"
+  needs = ["init", "FSD3"]
+  body = "docs/servers/fsd.md (packages FSD1, FSD2, FSD3); docs/userland/files.md#files-over-9p (its beamlet half is beamlet-redoubt's)"
   state = "todo"
-  revision = 2
+  revision = 245
 
 [[node]]
   id = "gate"
@@ -133,8 +133,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K7", "K8", "S3", "BL1", "GATE1"]
   body = "docs/plan/m1-separation.md#remaining-work: A kernel containment gate."
-  state = "todo"
-  revision = 2
+  state = "done"
+  revision = 234
 
 [[node]]
   id = "host-shell-scripts"
@@ -270,8 +270,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["GATE1", "API1"]
   body = "Builds docs/kernel/boot.md#the-loader-loads-only-the-kernel-and-init (the bundle mapped into init at 0x2000_0000, a0/a1), docs/kernel/devices.md#device_info (the 27th call), docs/kernel/budgets.md#the-tree-from-the-boot-manifest (root keeps init's charges plus INIT_PAGES), docs/testbench.md#starting-a-cases-programs (the tester in init's place; each program its own budget in slot 3, named budgets from 4) and #data-entries-for-init. Brief: .wash/local/INIT1-implementer.md. Design: QA INIT1-design, INIT1-root-pages (8074ecf59, 4ace1722d), INIT1-own-budget (908fb83c4). PARKED 2026-10-01: wp-init1 tip d0e385529; D1 done (device_info, device-info-attack, the model's check as a WIP commit to land last), D2 built (bundle-mapped passes both widths; IniE, grants, the boot and log endpoints gone), D3 nearly done (the tester starts programs from `programs`; TAKE_GIFTS gone; the 17 single-program cases moved behind the tester or kept in init's place with reasons, passing per case on both widths), D4 drafted, not run. Left: D4, the whole bench on the tip, the fold into clean commits (no commit leaving the bench red if possible, the model commit last), rebase onto GATE1's merge, review by the full panel. Three implementers; handoffs in .wash/local/INIT1-progress.md ('Handoff from init1-implementer-2' and '-3'). Tier A (loader, kernel ABI, bench builder), size L."
-  state = "reported"
-  revision = 217
+  state = "done"
+  revision = 248
   overrides = ["2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, confirming run), and only K15's bookkeeping is left; INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program. wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, resolved, dd862a390); only K15 is left before it is accepted. INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the audits excluded (QA GATE1-notice-late resolved, dd862a390); K15 is in review. INIT1 touches the loader, kernel ABI and bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance.", "2026-10-01: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01). GATE1 passes on rv64 with every net target met and is sweeping; INIT1 touches the loader, the kernel's boot functions and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02: continue the plan). GATE1 passes on rv64 seeds 1-12 net of audits and is finishing rv32 and the sweep; INIT1 touches the loader, the kernel's boot functions and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more in parallel (2026-10-02); this step only rebases the accepted branch onto main and reruns its gates, and the merge still follows GATE1's.", "2026-10-03: started by Orchestrator before GATE1 (reported): Owner asked to run more in parallel (2026-10-02); this rebases the accepted branch onto GATE1's final tip and reruns its gates; the merge still follows GATE1's."]
 
 [[node]]
@@ -291,9 +291,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["INIT2"]
-  body = "Builds:\n- docs/servers/init.md#restarts-and-reboots: fresh budget, same endpoint, reboot rule (blame is the steward step's);\n- docs/servers/wire.md#a-launcher-releases-its-childs-grants;\n- docs/servers/serving.md#replies-and-rollback, in a boot;\n- docs/servers/netd.md#started-by-init: a driver restart case;\n- docs/kernel/devices.md: a quarantined driver reboots.\n\nAlso, from INIT2's review:\n- a case that watches a child's console connection disconnected when the child exits (init.md 'Fresh connections per child', partly tested);\n- a server that exits while the boot is starting falls under the reboot rule. That includes consoled refusing a buckets=N its budget cannot hold, which today is caught only by the next console mint.\n\nDesign: QA INIT1-design. Tier A, size M."
+  body = "Brief: .wash/local/INIT3-implementer.md (rules, exact page lines, cases, owned paths, context rules).\n\nBuilds:\n- docs/servers/init.md#restarts-and-reboots: a fresh budget, the same endpoint, the boot's own steps repeated, exits during the boot counted, the reboot rule (more than 5 restarts in 60 s), a fault reported and blamed on nobody (blame itself waits for the steward step);\n- docs/servers/wire.md#a-launcher-releases-its-childs-grants: init releases through Grants; the launcher-orphan case;\n- docs/servers/serving.md#replies-and-rollback, in a boot: rollback against consoled, and the malformed fallback;\n- docs/kernel/devices.md: a driver restart, and a quarantined driver reboots (test driver, dma-reset-deaf).\n\nAlso, from INIT2's review:\n- a case that watches a child's console connection disconnected when the child exits;\n- a server that exits while the boot is starting falls under the reboot rule, consoled refusing a buckets=N among them.\n\nnetd's restart case moved to INIT4. Design: QA INIT1-design. Tier A, size M."
   state = "todo"
-  revision = 206
+  revision = 235
 
 [[node]]
   id = "INIT4"
@@ -301,9 +301,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["INIT3"]
-  body = "docs/plan/m1-separation.md#remaining-work (netd, ipd and the rest move from the bench's rigs to init): the net-* and bench-net-* cases boot init with a case manifest, their in-guest checks become test programs judged through consoled's attribution; tests/net/src/rig.rs deleted. docs/testbench.md#starting-a-cases-programs, #devices-and-the-network. Design: QA INIT1-design. Tier A (the bench), size M."
+  body = "Brief: .wash/local/INIT4-implementer.md (order, manifests, owned paths, context rules, the init step's close).\n\nThe net rig's cases boot the real init with a case manifest, keeping their names and claims: net-tcp, bench-net-peer and its self-checks, net-pinned, net-attacks with bench-net-self-unrefused. bench-virtio-legacy-off moves to the tester (virtio-probe), and net-host-tests reads the manifests. The bench places the card and the disk on the fixed slots image/manifest.json names. Clients get their ipd scopes from scope= and handed badges; a judge program is the reporter; clients park. tests/net/src/rig.rs is deleted.\n\nMoved from INIT3: docs/servers/netd.md#started-by-init, netd-restart. A test-only netd feature (off in every default build, as dma-reset-deaf is) faults netd once, on an outside trigger; init restarts it, and ipd and a client are served again.\n\nkeyd, bootfsd and consoled are already under init (INIT2). blkd's use on target is the fsd step's. sshd's loopback stays on the host until the sshd step.\n\nDesign: QA INIT1-design. Tier A (the bench, and a test feature in netd), size L."
   state = "todo"
-  revision = 2
+  revision = 241
 
 [[node]]
   id = "K9"
@@ -533,5 +533,54 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Kernel finding from QA GATE1-trace-ring, against R12 (scheduling.md: 'A term linear in RAM frames ... is not [a constant]. Billing it to the caller does not excuse it').\n\nmem.rs scans RAM on call paths in three places:\n- alloc_frame is first fit from frame 0, for every page, page table and object frame;\n- alloc_contiguous (dma_alloc) runs a first-fit search;\n- release_owned_frames (process_create's rollback) scans all of RAM.\n\nGATE1 exposed the first: the trace ring's frames below everything moved sched-budget-churn's victim from 499 to 559.\n\nThe fix:\n- an O(1) free list (intrusive, through the physmap);\n- the rollback walks what the creation built;\n- dma_alloc gets a fixed-size boot pool, or a run allocator, whichever is decided.\n\nscan-bounds is extended, with a recorded negative (alloc-first-fit), and a checked-build audit proves the free list equals the table's free entries.\n\nPage lines: scheduling.md R12's paragraph and memory.md. Brief: .wash/local/K21-implementer.md. Tier A, size M, no needs."
+  state = "reported"
+  revision = 244
+
+[[node]]
+  id = "FSD1"
+  title = "fsd: one volume served over 9P, on the host"
+  template = "package"
+  parent = "M1"
+  body = "Brief: .wash/local/FSD1-implementer.md.\n\nBuilds docs/servers/fsd.md 'Volumes, connections and labels' (labels per volume, remove ends other fids with `removed`, mounting: blank formatted, unmountable served as corrupt) and 'Typed operations' (rename, copy_file, get_attr, set_attr, and the new `corrupt` error). Also one public fid resolver in the 9P skeleton.\n\nHost tests only (fsd-host-tests), with the client library unchanged against the real fsd. No init, no blkd change, no quotas.\n\nTier A, size M, no needs."
   state = "active"
-  revision = 229
+  revision = 246
+
+[[node]]
+  id = "FSD2"
+  title = "fsd: a byte quota per attach root"
+  template = "package"
+  parent = "M1"
+  needs = ["FSD1"]
+  body = "Builds docs/servers/fsd.md 'Quotas' and R48 (a quota per attach root): the skeleton's minted/disconnected hooks, what a quota counts, the volume root's reserve, quota 0. Host attack tests: a write past one root's quota is refused while another root still writes; a root with quota 0 cannot create. Brief to come. Tier A, size S-M."
+  state = "todo"
+  revision = 245
+
+[[node]]
+  id = "FSD3"
+  title = "fsd under init: the volume's range, its labels at blkd, the image's disk, restart"
+  template = "package"
+  parent = "M1"
+  needs = ["FSD2", "INIT4"]
+  body = "Builds:\n- docs/servers/init.md step 5's 'fsd, one per volume': init mints each fsd's range badge from `volumes` and re-mints it at a restart;\n- docs/servers/blkd.md 'Started by init': a range's labels from init (the one NO_LABELS line), so a labelled fsd can write;\n- fsd.md Authority, R47 and 'Failure and restart', with its Open item (the volume check before serving);\n- image/disk.toml packed by mkimage with libs/littlefs.\n\nBench cases under init with [disk] partitions, including files surviving a second boot on the same disk. Brief to come. Tier A, size M."
+  state = "todo"
+  revision = 245
+
+[[node]]
+  id = "SMP1"
+  title = "The kernel runs on every hart, under one big lock"
+  template = "package"
+  parent = "M2"
+  needs = ["K16", "K21", "SMP1-design"]
+  body = "Brief: .wash/local/SMP1-implementer.md (written on the Architect's recommendations; the owner's answers on QA SMP1-design come first).\n\nBuilds docs/plan/m2-usable-shell.md#several-harts steps 1-3, and of step 4 what they need:\n- any boot hart, up to MAX_HARTS (8), started through SBI HSM; one build (the smp feature and the spike go);\n- per-hart state through sscratch;\n- a FIFO ticket lock at trap entry;\n- device interrupts on the boot hart;\n- a budget runs on at most one hart at a time;\n- reschedule IPIs;\n- residency instead of TLB shootdowns: a process's translations live only on its budget's hart, and a destruction evicts a running budget (lock-free acknowledgement) before any frame is freed;\n- the trace ring with a hart field;\n- `cargo testbench --smp N`.\n\nCases: smp-boot (2 and 4 harts); smp-evict, with a recorded negative; the whole bench at --smp 2. Started ahead of M2 on the owner's word (2026-10-03). Tier A, size L."
+  state = "todo"
+  revision = 247
+
+[[node]]
+  id = "SMP2"
+  title = "Several harts: R12's shares and the targets across harts"
+  template = "package"
+  parent = "M2"
+  needs = ["SMP1"]
+  body = "docs/kernel/scheduling.md R12 on several harts: no budget gains share by being spread across harts; the oracle judges multi-hart traces; a lock-contention latency case; the measured cases unpinned at the hart counts the owner sets on QA SMP1-design; every case at 2 and 4 harts. Brief to come. Tier A, size M."
+  state = "todo"
+  revision = 247

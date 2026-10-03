@@ -48,7 +48,7 @@ fn handle(m: &rd::Message, i: usize) -> u32 {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let devices = rd::OTHER_DEVICES..rd::log_rx();
+    let devices = rd::OTHER_DEVICES..rd::first_free();
     let mut b = Bench::new("containment");
     b.set_entry(containment_child);
     let Some((rtc_mmio, rtc_base, rtc_irq)) = rtc::find(devices) else {

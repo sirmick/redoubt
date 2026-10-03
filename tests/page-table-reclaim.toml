@@ -2,19 +2,24 @@ description = "A page table that maps nothing is freed and uncharged by the call
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
-# The first program, alone: every verdict is system's usage as the kernel reports it
-# (docs/testbench.md, "Rule F"). 256 MiB, so system's free pages fit the map_anon area.
-programs = ["page-table-reclaim"]
+# PID 2 log-server; PID 3 page-table-reclaim, the one program it starts, in its own budget (an
+# equal share of system: all it has free, one page apart; 15 processes; weight 1,000). Before the
+# tester it ran in init's place, in system; in init's place now it would run in root, which on
+# Sv32 has fewer free pages than one round's leaf span. Every verdict is its own budget's usage
+# as the kernel reports it, printed under the place only the tester gives it, and nothing else
+# runs beside it (docs/testbench.md, "Rule F"). 256 MiB, so its free pages fit the map_anon area.
+programs = ["log-server", "page-table-reclaim"]
 memory_mib = 256
 timeout_secs = 60
 expect = [
-    '^\[pt-reclaim\] ok: each map_anon charged a page table, and its unmap gave it back$',
-    '^\[pt-reclaim\] ok: a map_anon refused at the budget.s edge leaves usage where it was$',
-    '^\[pt-reclaim\] ok: a transfer and its unmap leave no page table behind$',
-    '^\[pt-reclaim\] ok: a lend and its reply leave the server.s usage where it was$',
-    '^\[pt-reclaim\] ok: an abandoned lend, once replied to, leaves no page table behind$',
-    '^\[pt-reclaim\] ok: a process_map into another budget leaves no page table behind in the source$',
-    '^\[pt-reclaim\] PAGE TABLE RECLAIM PASSED$',
+    '^\[pid 3\] \[pt-reclaim\] ok: each map_anon charged a page table, and its unmap gave it back$',
+    '^\[pid 3\] \[pt-reclaim\] ok: a map_anon refused at the budget.s edge leaves usage where it was$',
+    '^\[pid 3\] \[pt-reclaim\] ok: a transfer and its unmap leave no page table behind$',
+    '^\[pid 3\] \[pt-reclaim\] ok: a lend and its reply leave the server.s usage where it was$',
+    '^\[pid 3\] \[pt-reclaim\] ok: an abandoned lend, once replied to, leaves no page table behind$',
+    '^\[pid 3\] \[pt-reclaim\] ok: a process_map into another budget leaves no page table behind in the source$',
+    '^\[pid 3\] \[pt-reclaim\] PAGE TABLE RECLAIM PASSED$',
 ]
 forbid = ['\[pt-reclaim\] FAIL', 'PANIC']
 poweroff = true
+reporter = "page-table-reclaim"

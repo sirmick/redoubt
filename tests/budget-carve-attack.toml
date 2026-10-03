@@ -1,32 +1,38 @@
-description = "Carving beyond a parent is refused for every limit, the largest values and sums that would wrap, and system keeps the pages its other process needs (R7)"
+description = "Carving beyond a parent is refused for every limit, the largest values and sums that would wrap, and every parent stays within its limits, which a program beside the attacker reads (R7)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# PID 2 log-server; PID 3 budget-victim, second, in system beside the attacker and holding the
-# boot endpoint's receive right; PID 4 the attacker, whose first act is to take root, system
-# and users from log-server (TAKE_GIFTS; never a device).
-programs = ["log-server", "budget-victim", "budget-carve-attack"]
+# PID 2 log-server; PID 3 budget-victim, the first program started, holding the boot endpoint's
+# receive right, `system` and `users`; PID 4 the attacker, holding root, system and users (slots 4-6),
+# never a device. Each runs in a budget of its own, an equal share of `system`.
+programs = [
+    "log-server",
+    { bin = "budget-victim", budgets = ["system", "users"] },
+    { bin = "budget-carve-attack", budgets = ["root", "system", "users"] },
+]
 timeout_secs = 30
-# The attacker first carves all but about 100 of system's free pages into a child, so any carve
-# the kernel wrongly allowed past system's limits would leave the victim, which lives in system,
-# without its 64 pages: its first touch beyond them would end it, and it would never report.
-# The verdict is the victim's line under its own PID, log-server's DONE line naming it, and the
-# power-off; the attacker's lines are progress, pinning each refusal's error.
+# The attacker tries to carve more pages than `system` has free (the tester carved them all), then
+# more than `users` has of each limit, and more than `root` has; a carve the kernel wrongly
+# allowed would leave `system` or `users` past a limit, and the victim, reading both afterwards,
+# would say so. Then it fills a child of its own
+# budget and tries the same one level down. The verdict is the victim's line under its own
+# place, log-server's DONE line naming it, and the power-off; the attacker's lines are
+# progress, pinning each refusal's error (the page counts are what each budget had free).
 expect = [
-    '^\[server\] gifts given to pid 4$',
-    '^\[pid 4\] \[carve\] 101 pages 0 processes 0 weight under 4 -> Err\(OutOfMemory\)$',
-    '^\[pid 4\] \[carve\] 18446744073709551615 pages 0 processes 0 weight under 4 -> Err\(OutOfMemory\)$',
-    '^\[pid 4\] \[carve\] 1 pages 13 processes 0 weight under 4 -> Err\(OutOfProcesses\)$',
-    '^\[pid 4\] \[carve\] 1 pages 4294967295 processes 0 weight under 4 -> Err\(OutOfProcesses\)$',
-    '^\[pid 4\] \[carve\] 1 pages 0 processes \d+ weight under 4 -> Err\(InvalidArgument\)$',
-    '^\[pid 4\] \[carve\] 1 pages 0 processes 4294967295 weight under 4 -> Err\(InvalidArgument\)$',
-    '^\[pid 4\] \[carve\] 1 pages 0 processes 0 weight under 3 -> Err\(OutOfMemory\)$',
-    '^\[pid 4\] \[carve\] 18446744073709551615 pages 0 processes 0 weight under \d+ -> Err\(OutOfMemory\)$',
-    '^\[pid 4\] \[carve\] 18446744073709551614 pages 4294967295 processes 4294967295 weight under \d+ -> Err\(OutOfMemory\)$',
-    '^\[pid 4\] \[carve\] 9223372036854775808 pages 0 processes 0 weight under 5 -> Err\(OutOfMemory\)$',
+    '^\[server\] started budget-carve-attack as pid 4$',
+    '^\[pid 4\] \[carve\] \d+ pages 0 processes 0 weight under 5 -> Err\(OutOfMemory\)$',
+    '^\[pid 4\] \[carve\] 18446744073709551615 pages 0 processes 0 weight under 5 -> Err\(OutOfMemory\)$',
+    '^\[pid 4\] \[carve\] 1 pages \d+ processes 0 weight under 6 -> Err\(OutOfProcesses\)$',
+    '^\[pid 4\] \[carve\] 1 pages 4294967295 processes 0 weight under 6 -> Err\(OutOfProcesses\)$',
+    '^\[pid 4\] \[carve\] 1 pages 0 processes \d+ weight under 6 -> Err\(InvalidArgument\)$',
+    '^\[pid 4\] \[carve\] 1 pages 0 processes 4294967295 weight under 6 -> Err\(InvalidArgument\)$',
+    '^\[pid 4\] \[carve\] \d+ pages 0 processes 0 weight under 4 -> Err\(OutOfMemory\)$',
+    '^\[pid 4\] \[carve\] 18446744073709551615 pages 0 processes 0 weight under 7 -> Err\(OutOfMemory\)$',
+    '^\[pid 4\] \[carve\] 18446744073709551614 pages 4294967295 processes 4294967295 weight under 7 -> Err\(OutOfMemory\)$',
+    '^\[pid 4\] \[carve\] 9223372036854775808 pages 0 processes 0 weight under 6 -> Err\(OutOfMemory\)$',
     '^\[pid 4\] \[carve\] fill the child -> Ok\(\(\)\), then u64::MAX more -> Err\(OutOfMemory\)$',
     '^\[pid 4\] \[carve\] a scope in the full child -> Err\(OutOfMemory\)$',
     '^\[pid 4\] \[carve\] attempts done \(all refused\)$',
-    '^\[pid 3\] \[victim\] mapped and touched 64 pages in system after the attack$',
+    '^\[pid 3\] \[victim\] mapped and touched 64 pages after the attack; every budget it holds within its limits: true$',
     '^\[server\] done: reported by pid 3; still serving$',
 ]
 forbid = ['BREACH']

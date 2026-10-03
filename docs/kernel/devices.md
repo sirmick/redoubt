@@ -62,8 +62,9 @@ the device calls are in the [ABI reference](abi.md#errors-and-the-order-of-check
 `map_device(h(MMIO)) -> addr, len` maps the whole range readable and writable, not executable,
 at an address the kernel chooses ([R11 (memory)](memory.md#r11-memory)), and returns the address
 and the length in bytes. The length is what the driver may touch; which device the handle names
-is the launcher's to say, and the kernel says nothing about it. Errors, in order: `BadHandle`,
-`WrongObject` (an IRQ, the Reset right or any other object), `OutOfMemory` (page tables).
+is [`device_info`](#device_info)'s answer, and which handles a driver gets is its launcher's
+choice. Errors, in order: `BadHandle`, `WrongObject` (an IRQ, the Reset right or any other
+object), `OutOfMemory` (page tables).
 
 The device's pages are not RAM and cost nothing; the page tables that map them are charged to
 the caller's budget. Each call makes a new mapping, so two calls give two addresses. The kernel
@@ -77,7 +78,17 @@ process with the registers mapped could have programmed the device with any addr
 
 ### `device_info`
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: that its kernel time is constant is argued from the code (one handle lookup, one read of the object's frame), not measured · tested (7)</summary>
+
+- bench:device-info-attack
+- host:redoubt-sys::every_result_and_error_round_trips
+- host:redoubt-sys::malformed_results_are_refused
+- host:redoubt-model::every_device_handle_answers_its_devs_entry
+- host:redoubt-model::what_is_not_a_device_is_refused_in_order
+- host:redoubt-model::device_info_changes_nothing
+- mutation:DeviceInfoWrongKind
+
+</details>
 
 `device_info(h(device)) -> kind, a, b, flags` says which device a handle names, in the form of
 the `Devs` entry the object was made from ([boot](boot.md#the-argument-block)). For MMIO it gives
@@ -90,11 +101,16 @@ It is how `init` matches the manifest's devices to the handles the kernel gave i
 ([which process gets which device](#which-process-gets-which-device)). It shows a holder where
 the device's registers are, which a holder that maps them could find out anyway. The address is
 not RAM and grants nothing, and no call takes a physical address
-([R11 (memory)](memory.md#r11-memory)). Once it is built, `map_device`'s "the kernel says nothing
-about it" no longer holds: the kernel says which device a handle names, and the launcher still
-decides which handles a driver gets.
+([R11 (memory)](memory.md#r11-memory)). The kernel says which device a handle names; the
+launcher still decides which handles a driver gets.
 
-**Open:** none.
+The result travels as the `Devs` entry does: the kind in `a1` (1 MMIO, 2 IRQ, 3 Reset), `a` and
+`b` in two registers each, the flags in `a6`, and a field the kind does not use 0
+([ABI](abi.md#call-numbers-and-arguments)). `redoubt-sys` decodes it as `DeviceInfo` and refuses
+any other shape. The kernel's time is one handle lookup and one read of the object's frame,
+whatever the device. The [executable model](model.md) checks every answer it gives against the
+`Devs` entry of the device the caller's handle names, after every step (`device_info_answer` in
+`model/src/invariants.rs`).
 
 ### `dma_alloc`
 
@@ -222,12 +238,12 @@ because that call never returns.
 
 Status: built · partly tested: the loader's refusal of a device tree that names no console, or a console with no interrupt, is not attacked by a case · tested: bench:device, bench:irq-attack
 
-The kernel gives every device object to the bundle's first program, which is where `init`
-receives them to place ([below](#which-process-gets-which-device)), in the handle order
-[boot](boot.md#devices-handed-to-the-first-program) gives. The objects are charged to `system`, and the handles are stamped with
-`root`, so they are revoked only with the whole tree ([stamps](objects.md#r9-stamps)). A program
-finds its DMA devices by asking: `dma_alloc` is `NotPermitted` without the flag and
-`WrongObject` on an IRQ or the Reset right.
+The kernel gives every device object to `init`, the one program the loader starts, to place
+([below](#which-process-gets-which-device)), in the handle order
+[boot](boot.md#devices-handed-to-the-first-program) gives. The objects are charged to `system`,
+and the handles are stamped with `root`, so they are revoked only with the whole tree
+([stamps](objects.md#r9-stamps)). A program finds its DMA devices by asking: `dma_alloc` is
+`NotPermitted` without the flag and `WrongObject` on an IRQ or the Reset right.
 
 ### Which process gets which device
 
@@ -355,7 +371,7 @@ sequenceDiagram
 
 ### R18 (device authority)
 
-Status: built · partly tested: the kernel's refusal of a malformed `Devs` entry (one overlapping RAM or an interrupt controller among them) and of a `Grnt` boot argument is not attacked by a case · tested: bench:irq-attack, bench:loader-rejects-grants, bench:legacy-gone
+Status: built · partly tested: the kernel's refusal of a malformed `Devs` entry (one overlapping RAM or an interrupt controller among them) and of a `Grnt` boot argument is not attacked by a case · tested: bench:irq-attack, bench:legacy-gone, bench:device-info-attack
 
 Device objects are the only device authority. A process reaches an MMIO range, an interrupt or
 the Reset right only through a handle to its device object; a process that holds none gets
@@ -363,8 +379,9 @@ the Reset right only through a handle to its device object; a process that holds
 physical address, so neither a device's registers nor RAM can be reached by address
 ([R11](memory.md#r11-memory)). No call number outside the call table does anything: each is
 `InvalidArgument`, so no number claims an interrupt or maps a physical address. The bundle
-carries no list of device claims: the loader refuses a bundle with a `grants` entry, and the
-kernel refuses a `Grnt` boot argument.
+carries no list of device claims: the loader reads no entry it does not load
+([boot](boot.md#the-loader-loads-only-the-kernel-and-init)), and the kernel refuses a `Grnt`
+boot argument.
 
 Two ranges never become device objects, because either would give away everything else: an
 **interrupt controller** (a holder of the PLIC could mask and raise every source; one of the
@@ -422,9 +439,9 @@ the PLIC for itself alone.
 - **A co-holder keeps its mapping of a quarantined device**, and of any device whose handle was
   revoked: the kernel does not unmap device ranges. It can go on programming a quarantined
   device until it ends, when its own runs are quarantined in turn.
-- **One early process holds all device authority**: the bundle's first program holds every
-  device object, the Reset right and every DMA device, and nothing narrows that until `init`
-  places them ([below](#which-process-gets-which-device)).
+- **One early process holds all device authority**: `init` holds every device object, the
+  Reset right and every DMA device, and nothing narrows that until it places them
+  ([below](#which-process-gets-which-device)).
 - **A device tree that hides a controller** from the loader's controller search as well as from
   its device list defeats the kernel's `Ctrl` check: the kernel's own list of controllers comes
   from the same tree ([boot](boot.md)).

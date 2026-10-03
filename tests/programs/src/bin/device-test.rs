@@ -49,7 +49,7 @@ pub extern "C" fn _start() -> ! {
     let mut out = Console;
     say!(out, "[device] mapped the console");
 
-    let devices = rd::OTHER_DEVICES..rd::log_rx();
+    let devices = rd::OTHER_DEVICES..rd::first_free();
     let free = rd::first_free();
 
     // --- map_device ----------------------------------------------------------------------
@@ -121,10 +121,11 @@ pub extern "C" fn _start() -> ! {
     // Unmapping gives the pages back; the next `map_anon` is zero again whatever lands there.
     check!(out, rd::unmap(anon, 3 * rd::PAGE_SIZE) == Ok(()), "unmap: the three pages go back");
     // Measured with the page tables of that region already in place, so what this compares is
-    // the pages themselves: three charged by `map_anon`, three returned by `unmap`.
-    let before = rd::usage(rd::SYSTEM).expect("system usage");
+    // the pages themselves: three charged by `map_anon`, three returned by `unmap`. The caller's
+    // budget is `root`, where `init`'s place runs.
+    let before = rd::usage(rd::ROOT).expect("root usage");
     let reused = rd::map_anon(3 * rd::PAGE_SIZE, rd::rw()).expect("map_anon again");
-    let charged = rd::usage(rd::SYSTEM).expect("system usage").pages_usage;
+    let charged = rd::usage(rd::ROOT).expect("root usage").pages_usage;
     // R11's sharp half: a page a process gets never holds what the last one left there.
     check!(
         out,
@@ -133,7 +134,7 @@ pub extern "C" fn _start() -> ! {
     );
     check!(out, charged == before.pages_usage + 3, "map_anon charges its pages to the caller's budget");
     check!(out, rd::unmap(reused, 3 * rd::PAGE_SIZE) == Ok(()), "and go back again");
-    let after = rd::usage(rd::SYSTEM).expect("system usage");
+    let after = rd::usage(rd::ROOT).expect("root usage");
     check!(out, after.pages_usage == before.pages_usage, "unmap returns every page it took");
 
     // --- dma_alloc -------------------------------------------------------------------------

@@ -98,8 +98,8 @@ fn irq_waiter(_: usize) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = logsrv::start();
-    // Before this program creates any handle, while `rd::log_rx` still ends the devices.
-    let device = (rd::OTHER_DEVICES..rd::log_rx())
+    // Before this program creates any handle, while `rd::first_free` still ends the devices.
+    let device = (rd::OTHER_DEVICES..rd::first_free())
         .find(|d| rd::map_device(*d).is_ok())
         .expect("a device that is not the console");
     let image = spawn::image();

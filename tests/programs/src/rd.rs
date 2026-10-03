@@ -4,10 +4,10 @@
 use core::num::{NonZeroU64, NonZeroUsize};
 
 pub use redoubt_sys::{
-    Body, BudgetSpec, Call, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels, MAX_HANDLES,
-    MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message, MessageKind,
-    MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return, USER_AREA_END, Usage,
-    WAIT_CAP, WORDS,
+    Body, BudgetSpec, Call, Cause, DeviceInfo, Error, ExitNotice, FOREVER, Handle, Handles, Labels,
+    MAX_HANDLES, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message,
+    MessageKind, MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return,
+    USER_AREA_END, Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
 
@@ -21,8 +21,8 @@ pub const USERS: u32 = 3;
 /// until `init` places them from the boot manifest (kernel/devices.md, "Which process gets which
 /// device"): the Reset right first, then the console `/chosen/stdout-path` names
 /// and its interrupt, so a program can name those three without a manifest. Everything after
-/// them depends on the machine, so nothing may assume how many there are: the devices end at
-/// [`log_rx`], and [`first_free`] finds where a program's own handles start.
+/// them depends on the machine, so nothing may assume how many there are: the kernel installs nothing
+/// after them, so they end at [`first_free`], read at startup, before the program makes a handle.
 pub const RESET: u32 = 4;
 pub const CONSOLE_MMIO: u32 = 5;
 pub const CONSOLE_IRQ: u32 = 6;
@@ -62,6 +62,14 @@ pub fn map_device(device: u32) -> Result<(usize, usize), Error> {
 pub fn dma_alloc(device: u32, npages: usize) -> Result<(usize, u64), Error> {
     match redoubt_sys::syscall(&Call::DmaAlloc { device: h(device), npages })? {
         Return::Dma { addr, phys } => Ok((addr, phys)),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// `device_info(h(device)) -> kind, a, b, flags` (kernel/devices.md).
+pub fn device_info(device: u32) -> Result<DeviceInfo, Error> {
+    match redoubt_sys::syscall(&Call::DeviceInfo { device: h(device) })? {
+        Return::Device(info) => Ok(info),
         _ => Err(Error::InvalidArgument),
     }
 }
@@ -179,43 +187,23 @@ pub fn raw_error(a0: usize) -> Option<Error> { Error::from_code(a0 as u64) }
 
 // --- Endpoints and messages -----------------------------------------------------------------
 
-/// Handle 1 of every bundle program but the first: the boot endpoint (kernel `budget.rs`,
-/// `boot_endpoint`; kernel/boot.md, "Devices handed to the first program"). The second program
-/// holds it with badge 0, the receive right; every later one with its own PID as the badge.
+/// Handle 1 of every program the tester starts: the boot endpoint (docs/testbench.md, "Starting
+/// a case's programs"). The first one started holds it with badge 0, the receive right; every
+/// later one with its place in the case as the badge.
 pub const BOOT_ENDPOINT: u32 = 1;
 
-/// Handle 2 of every bundle program but the first: a send on the log endpoint, badged with the
-/// program's PID (kernel `budget.rs`, `boot_log_endpoint`), until `init` owns the console
-/// (docs/plan/m1-separation.md). The badge only names whose line it is.
+/// Handle 2 of every program the tester starts: a send on the log endpoint, badged with the
+/// program's place. The badge only names whose line it is.
 pub const LOG: u32 = 2;
 
-/// The first program's receive right on the log endpoint: the kernel installs it last, after the
-/// budgets and the devices, so the devices are `OTHER_DEVICES..log_rx()`. It is `first_free() - 1`
-/// only until the program creates a handle, so a program reads it once, at startup.
-pub fn log_rx() -> u32 { first_free() - 1 }
+/// Handle 3 of every program the tester starts: its own budget, the one the tester carved for
+/// it from `system` (docs/testbench.md, "Starting a case's programs"). Its usage is the
+/// program's own charges.
+pub const OWN: u32 = 3;
 
-/// The budgets `log-server` gives its first `TAKE_GIFTS` caller, at the indices its reply
-/// installed here. Never a device (docs/testbench.md, "Rule F (trusted verdicts)").
-pub struct Gifts {
-    pub root: u32,
-    pub system: u32,
-    pub users: u32,
-}
-
-/// Ask `log-server` for the first program's budgets (`op::TAKE_GIFTS`): only the first caller
-/// gets them; any later one gets `Refused`.
-pub fn take_gifts() -> Result<Gifts, Error> {
-    let reply = call_waiting(LOG, &body([crate::op::TAKE_GIFTS, 0, 0, 0]), None, FOREVER)?;
-    if let Some(error) = Error::from_code(reply.words[0] as u64) {
-        return Err(error);
-    }
-    match reply.handles.as_slice() {
-        [Some(root), Some(system), Some(users)] => {
-            Ok(Gifts { root: root.index(), system: system.index(), users: users.index() })
-        }
-        _ => Err(Error::InvalidArgument),
-    }
-}
+/// Handle 4 on of a program the tester starts: the budgets its case names for it
+/// (`budgets = [...]`), in that order.
+pub const GIVEN: u32 = 4;
 
 pub fn endpoint_create() -> Result<u32, Error> {
     match redoubt_sys::syscall(&Call::EndpointCreate)? {

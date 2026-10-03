@@ -35,7 +35,7 @@ extern "C" fn driver(_: usize) -> ! {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let devices = rd::OTHER_DEVICES..rd::log_rx();
+    let devices = rd::OTHER_DEVICES..rd::first_free();
     let mut b = Bench::new("irq-first-receive");
     let Some((_, base, irq)) = rtc::find(devices) else {
         b.check(false, format_args!("no goldfish RTC among the device handles"));

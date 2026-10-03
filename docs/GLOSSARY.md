@@ -83,7 +83,8 @@ a revocation list and a security label in one object. Defined in [budgets](kerne
 
 ### bundle
 
-The signed archive the loader boots: the kernel, the first programs and the boot manifest.
+The signed archive the loader boots: the kernel, `init`, the boot manifest, every other server's
+program and any data entries.
 Defined in [boot](kernel/boot.md).
 
 ### call

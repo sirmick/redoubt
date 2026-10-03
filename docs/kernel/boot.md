@@ -1,10 +1,11 @@
 # Boot and verified boot
 
-A Redoubt machine starts in four links: the RustSBI firmware, the loader, the kernel, and the
-bundle's programs. The loader is the link that matters for what runs: it checks the Ed25519
-signature on the **bundle** (a ustar archive of the kernel and the first programs) before it
-reads a byte of it, loads the kernel and each program into an address space of its own,
-describes the machine to the kernel in a tagged argument block, and jumps into the kernel.
+A Redoubt machine starts in four links: the RustSBI firmware, the loader, the kernel, and
+`init`. The loader is the link that matters for what runs: it checks the Ed25519 signature on
+the **bundle** (a ustar archive of the kernel, `init` and everything `init` starts) before it
+reads a byte of it, loads the kernel and `init` into an address space each, maps the bundle into
+`init`, describes the machine to the kernel in a tagged argument block, and jumps into the
+kernel.
 Every refusal on the way powers the machine off. The kernel parses no device tree: what it
 knows of the hardware is what the loader wrote.
 
@@ -14,7 +15,7 @@ Every guarantee the kernel makes is void if an attacker can choose the kernel. S
 to do three things well: run nothing it has not authenticated, keep each program image inside
 the address range meant for it, and stop rather than boot a machine it cannot describe
 truthfully (no entropy, no clock, a signature that does not check). It also has to hand the
-first programs their authority, and nothing else, in a form the kernel can check.
+first program, `init`, its authority, and nothing else, in a form the kernel can check.
 
 ## Interface
 
@@ -27,19 +28,17 @@ sequenceDiagram
     participant F as RustSBI (M-mode)
     participant L as Loader (S-mode, MMU off)
     participant K as Kernel (S-mode)
-    participant P as First program (PID 2)
-    participant Q as Later programs (PID 3 on)
+    participant P as init (PID 2)
     F->>L: enter _start: a0 = hart id, a1 = device tree
     Note over L: read the device tree<br/>reserve firmware, loader, tree, bundle
     Note over L: write MREx, Ctrl, Devs, Plic, Seed, Time
     Note over L: verify the bundle signature (R15)<br/>a bad one powers off (R17)
-    Note over L: load the kernel, then each program (R16)<br/>one IniE tag per program
+    Note over L: load the kernel, then init (R16)<br/>map the bundle into init, read-only
     L->>K: satp on, trap into the entry<br/>a0 args, a1 process table, a2 RAM owners, a3 MMIO owners
-    Note over K: memory, process table, budgets,<br/>device objects, boot endpoints<br/>PLIC, timer, RNG
-    K->>P: first run: three budgets, every device, log receive right
-    K->>Q: first run: boot endpoint, log endpoint
+    Note over K: memory, process table, budgets,<br/>device objects, PLIC, timer, RNG
+    K->>P: first run: three budgets, every device<br/>a0, a1 = the bundle's address and length
 ```
-*Figure: one boot, from the firmware to the first programs.*
+*Figure: one boot, from the firmware to `init`.*
 
 The firmware runs in M-mode and enters the loader in S-mode on one boot hart, with the MMU
 off, `a0` = the hart id and `a1` = the physical address of the flattened device tree. The
@@ -47,12 +46,12 @@ signed bundle is the initrd: the device tree's `/chosen` node names its range. T
 stay parked in the firmware until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)).
 
 The loader ([`loader/src/main.rs`](../../loader/src/main.rs)) builds the kernel's address
-space and one per program, then turns paging on and enters the kernel at `init`
+space and `init`'s, then turns paging on and enters the kernel at its `init` function
 ([`kernel/src/main.rs`](../../kernel/src/main.rs)) with four physmap pointers: the argument
 block, the initial-process table, the RAM ownership table and the MMIO ownership table. The
-kernel is PID 1. Each later bundle entry is one program, PID 2, 3 and on, in bundle order. When
-the kernel has set itself up it prints `KMAIN (clean boot)` and schedules the programs. One
-loader, built for each width, serves rv32 (Sv32) and rv64 (Sv39); both widths boot.
+kernel is PID 1 and `init`, the bundle's second entry, PID 2. When the kernel has set itself up
+it prints `KMAIN (clean boot)` and schedules `init`, which starts everything else. One loader,
+built for each width, serves rv32 (Sv32) and rv64 (Sv39); both widths boot.
 
 ### Firmware
 
@@ -78,21 +77,16 @@ does not compile.
 
 ### The boot bundle
 
-Status: built · tested: bench:rustsbi-boot, bench:bench-bundle-file, bench:loader-rejects-grants
+Status: built · tested: bench:rustsbi-boot, bench:bundle-mapped
 
 The initrd is `signature (64 bytes) || tar`. The tar is a plain ustar archive:
 - the **first entry is the kernel**, whatever its name;
-- **every later entry is a program**, an ELF executable, started as PID 2, 3 and on, in archive
-  order; a bundle of more than 63 programs is refused, because the kernel has room for
-  `MAX_PROCESS_COUNT` (64) processes, its own included;
-- an entry named `grants` is refused: a process reaches a device only through a handle to a
-  device object ([R18 (device authority)](devices.md#r18-device-authority)).
+- the **second entry is `init`**, or the program in its place, whatever its name: an ELF
+  executable, started as PID 2, the one program the loader starts;
+- **every later entry is data** to the loader, which reads no entry it does not load
+  ([the handoff](#the-loader-loads-only-the-kernel-and-init)).
 
-Because every later entry is started as a program, a data entry after the programs is refused
-as an invalid ELF: the loader reports its first four bytes and powers off. That is what
-`bench-bundle-file` checks. The bytes arrive as they were signed, after the programs, but no
-program can read them ([the planned handoff](#the-loader-loads-only-the-kernel-and-init)).
-The loader prints each entry's name with its PID; the kernel is not told the names.
+The loader prints the two names it loads with their PIDs; the kernel is not told the names.
 
 The bench's builder (`tools/testbench/src/build.rs`) packs the bundle: the kernel as
 `kernel`, then the programs in PID order, then a case's `[[file]]` entries. It refuses two
@@ -104,10 +98,10 @@ runs the same builder and writes `target/image/redoubt.bundle`.
 <details><summary>Status: built · tested (5)</summary>
 
 - bench:rustsbi-boot
+- bench:bundle-mapped
 - bench:loader-rejects-kernel-address
 - bench:loader-rejects-kernel-entry
 - bench:loader-rejects-truncated-elf
-- bench:loader-rejects-grants
 
 </details>
 
@@ -121,7 +115,8 @@ runs the same builder and writes `target/image/redoubt.bundle`.
    loader), the loader, the device tree or the bundle. Its first allocation is the **RAM
    ownership table**: one byte per page of RAM, the owning PID or 0, which becomes the kernel's
    allocation table. The firmware and the device tree are owned by PID 1, so no budget is ever
-   given them. The loader's own pages and the bundle's are left unowned: the kernel reuses them.
+   given them. The bundle's pages are `init`'s (step 5). The loader's own pages are left
+   unowned: the kernel reuses them.
    A second table, one byte per MMIO page, follows.
 3. **Describes the machine**: the `MREx`, `Ctrl`, `Devs`, `Plic`, `Seed` and `Time` tags of
    the [argument block](#the-argument-block), all from the device tree. A seed under 16 bytes,
@@ -134,15 +129,21 @@ runs the same builder and writes `target/image/redoubt.bundle`.
    ([R19 (kernel W^X)](memory.md#r19-kernel-wx)), its stack and trap stack, its per-process
    pages, and the page tables the kernel later maps its PLIC and its DMA register window into.
    Those tables are made before any program's address space copies the kernel's root entries,
-   so every address space shares them. Then one per program: the kernel's root entries copied,
-   the ELF inside the user area ([R16](#r16-image-confinement)), a stack under `0x8000_0000`
-   of which the top page is backed and 31 more are reserved for the kernel to back on first
-   touch ([memory](memory.md)), and its per-process pages. Each program adds one `IniE` tag.
-6. **Enters the kernel.** It writes the initial-process table (one page; one `satp`, entry
-   point and stack pointer per process, kernel first), completes `XArg`, and points `stvec` at
-   the kernel's entry before writing `satp`. The next fetch faults, because the loader is not
-   mapped in the kernel's address space, and the hart traps straight into the kernel with
-   `a0`-`a3` and the stack pointer intact. Nothing of the loader runs again.
+   so every address space shares them. Then `init`'s, from the bundle's second entry: the
+   kernel's root entries copied, the ELF inside the user area
+   ([R16](#r16-image-confinement)), a stack under `0x8000_0000` of which the top page is backed
+   and 31 more are reserved for the kernel to back on first touch ([memory](memory.md)), its
+   per-process pages, and the whole initrd, signature and archive, mapped read-only at
+   `BUNDLE_AT` (`0x2000_0000`, both widths), its pages owned by PID 2. A bundle that does not
+   start on a page, is larger than the 512 MiB between `BUNDLE_AT` and the message area, or
+   shares a page with the device tree is refused, and so is an `init` whose image overlaps the
+   mapping. The loader parses no entry after the second.
+6. **Enters the kernel.** It writes the initial-process table (one page; two records, the
+   kernel's and then `init`'s, each a `satp`, an entry point, a stack pointer and the first
+   thread's `a0` and `a1`: for `init`, the bundle's address and length), completes `XArg`, and
+   points `stvec` at the kernel's entry before writing `satp`. The next fetch faults, because
+   the loader is not mapped in the kernel's address space, and the hart traps straight into the
+   kernel with `a0`-`a3` and the stack pointer intact. Nothing of the loader runs again.
 
 ### The argument block
 
@@ -169,7 +170,7 @@ title one tag: a header of two words, then its data
 
 ```mermaid
 flowchart LR
-    XArg --> MREx --> Ctrl --> Devs --> Plic --> Seed --> Time --> first[IniE] --> more["..."] --> last[IniE]
+    XArg --> MREx --> Ctrl --> Devs --> Plic --> Seed --> Time
 ```
 
 ```mermaid
@@ -193,7 +194,6 @@ title one Devs entry, six words
 | `Plic` | PLIC base (2), size (2), the PLIC's S-mode context of the boot hart (the hart ID the firmware passes in `a0`), matched to the cpu node whose `reg` is that ID, 0; a device tree with a PLIC but no S-mode context for the boot hart stops the boot (R17). | `arch/riscv/intc_plic.rs` | no external interrupts |
 | `Seed` | `/chosen/rng-seed`: 16 to 64 bytes, zero-padded to words | `platform/sbi/rand.rs` | the boot stops ([R17](#r17-fail-closed)) |
 | `Time` | the timebase: ticks of the `time` counter per second (2) | `arch/riscv/timer_sbi.rs` | the boot stops (R17) |
-| `IniE` | nothing; one per program, counted to size the process table | `ptable.rs` | only the kernel runs |
 
 | `Devs` kind | a | b | flags |
 | --- | --- | --- | --- |
@@ -244,21 +244,17 @@ through the PLIC ([timer](timer.md)). The loader drops an interrupt 0 that a dev
 
 Status: built · partly tested: the loader's refusal of a tree with no console or no console interrupt, and the kernel's refusal of an object for a DMA device past the sixteenth, are not attacked by a case · tested: bench:device, bench:irq-attack, bench:rustsbi-boot
 
-The kernel hands every device object to the bundle's first program, in `Devs` order, and
-gives the others none. This is the built handoff, positional, and not the placement policy
-([the planned handoff](#the-loader-loads-only-the-kernel-and-init)). Every loader program runs
-in the `system` budget, which is charged for its pages ([budgets](budgets.md)).
+The kernel hands every device object to `init`, the one process the loader starts, in `Devs`
+order. The order is positional; `init` learns which device each handle names from
+[`device_info`](devices.md#device_info). `init` runs in `root`
+([budgets](budgets.md#the-tree-from-the-boot-manifest)).
 
-| Program | Handle | What |
-| --- | --- | --- |
-| first (PID 2) | 1, 2, 3 | the `root`, `system` and `users` budgets |
-| first | 4 | the Reset right |
-| first | 5, 6 | the console's MMIO, then its interrupt |
-| first | 7 on | every other MMIO region in device-tree order, then every other interrupt ascending |
-| first | last | the receive right of the log endpoint |
-| second (PID 3) | 1 | the receive right of the boot endpoint |
-| each later one | 1 | the boot endpoint, badged with its own PID |
-| every one but the first | 2 | the log endpoint, badged with its own PID |
+| Handle | What |
+| --- | --- |
+| 1, 2, 3 | the `root`, `system` and `users` budgets |
+| 4 | the Reset right |
+| 5, 6 | the console's MMIO, then its interrupt |
+| 7 on | every other MMIO region in device-tree order, then every other interrupt ascending |
 
 The three positions after the budgets are fixed, so a tree that names no console, or a console
 with no interrupt, is refused by the loader rather than booted with the indices shifted under a
@@ -269,40 +265,46 @@ objects are charged to `system` and die with it.
 
 ### The loader loads only the kernel and `init`
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:bundle-mapped, bench:device-info-attack
 
 ```mermaid
 flowchart LR
     F[firmware] --> L[loader:<br/>verify the bundle]
-    L -.-> K[kernel]
-    L -.-> I[init]
-    K -.-> I
+    L --> K[kernel]
+    L --> I[init]
+    K --> I
     I -.-> S[servers, launched<br/>through the loader stub]
 ```
-*Figure: the planned handoff. Dashed: planned.*
+*Figure: the handoff. Dashed: planned ([what `init` does with the bundle](#what-init-does-with-the-bundle)).*
 
 The bundle holds the kernel, `init`, the [boot manifest](../servers/init.md), every other
 server's program and any data entries. The first entry is the kernel and the second is `init`,
 whatever their names. Every later entry is data to the loader. The loader verifies the bundle as
 it verifies every bundle, then loads exactly two images, the kernel and `init`. There is one
-initial process, so `IniE` goes.
+initial process.
 
-The kernel gives `init` the handles the first program gets today, in the same slots: the
-`root`, `system` and `users` budgets, the Reset right and every device object
+The kernel gives `init` the `root`, `system` and `users` budgets, the Reset right and every
+device object, in fixed slots
 ([devices handed to the first program](#devices-handed-to-the-first-program)). `init` runs in
-`root`, on the process and the weight `root` keeps free for it
+`root`, on the process, the weight and the pages `root` keeps for it
 ([budgets](budgets.md#the-tree-from-the-boot-manifest)). The loader also maps the whole
-verified bundle into `init`, read-only: signature and archive, at an address the loader chooses
-outside `init`'s link range. Its frames are charged to `root` as part of what the loader gave
-`init`, and they are never freed, because `init` launches from them again when it restarts a
-server. `init`'s first thread starts with the bundle's address in `a0` and its length in `a1`.
-The archive was verified before the loader parsed it, and `init` reads it only within that
-length.
+verified bundle into `init`, read-only: signature and archive, at `BUNDLE_AT` (`0x2000_0000`),
+outside `init`'s link range ([memory layout](memory-layout.md#regions)). `init`, which is
+trusted, keeps it read-only; a program it starts never holds a bundle frame, only copies of
+what it reads. Its frames are charged to `root` as part of what the loader gave `init`, and
+they stay for as long as `init` runs, because `init` launches from them again when it restarts
+a server. `init`'s first thread starts with the bundle's address in `a0` and its length in
+`a1`. The archive was verified before the loader parsed it, and `init` reads it only within
+that length.
 
 No later entry's name means anything to the loader. An entry named `grants` is data like any
 other and grants nothing. The loader reads no entry it does not load, and the kernel refuses a
 `Grnt` tag, so no file in the bundle grants a device to either of them. What a server holds is
 `init`'s to place, from the manifest ([devices](devices.md#which-process-gets-which-device)).
+
+### What `init` does with the bundle
+
+Status: planned · M1 (separation and containment)
 
 `init` learns which device each handle names from the kernel, with
 [`device_info`](devices.md#device_info), and matches that to the manifest, which names each
@@ -315,9 +317,8 @@ verifies the bundle with, since `keyd` cannot see that itself ([keyd](../servers
 
 Data entries, the bench's `[[file]]` entries among them, are then data. `init` reads the
 manifest from the bundle's pages, and a program reads a public entry through `bootfsd`
-([bootfsd](../servers/bootfsd.md)). `bench-bundle-file` changes from a refusal to a read-back.
-The program in `init`'s place reads the injected entry from the bundle's pages and compares its
-bytes, and a case under `init` reads it again through `/boot`
+([bootfsd](../servers/bootfsd.md)). `bench-bundle-file` already reads its injected entry back
+from the bundle's pages in `init`'s place, and a case under `init` reads it again through `/boot`
 ([test bench](../testbench.md#data-entries-for-init)). The bundle's contents come from one
 recipe, `image/boot.toml`: the kernel, `init`, the manifest and the servers. The bench's
 builder is the one tool that packs a bundle. It reads a case for the bench, and `image/boot.toml`
@@ -402,7 +403,7 @@ clock is not entropy. The kernel draws from it the PID of each process it create
 
 ## Authority
 
-Status: built · tested: bench:loader-rejects-grants, bench:irq-attack, bench:device
+Status: built · tested: bench:irq-attack, bench:device, bench:device-info-attack
 
 - **The firmware** keeps M-mode and its memory, which the ownership table gives to PID 1, so no
   budget ever receives it. It is in the TCB.
@@ -410,15 +411,15 @@ Status: built · tested: bench:loader-rejects-grants, bench:irq-attack, bench:de
   and the argument block to the kernel, the images to their address spaces. It keeps nothing
   and leaves nothing running.
 - **The bundle chooses code, not authority.** Its signature decides what runs; what each
-  program holds is decided by the kernel's boot code alone (the table above). A `grants` entry
-  is refused by the loader and a `Grnt` tag by the kernel, so no file in the bundle can grant a
-  device.
+  program holds is decided by the kernel's boot code alone (the table above). The loader reads
+  no entry it does not load, and the kernel refuses a `Grnt` tag, so no file in the bundle can
+  grant a device.
 - **The device tree chooses what exists,** not who holds it: it is the only source of device
   objects, and the kernel still refuses one that names RAM or an interrupt controller. The tree
   is the firmware's and the host's, and is not signed (Residual risks).
-- **The first program holds every device and every budget** at boot. Every other program starts
-  with two endpoint handles and nothing else, and the kernel refuses its attempts at the
-  devices ([R18](devices.md#r18-device-authority)).
+- **`init` holds every device and every budget** at boot, and is the only process the kernel
+  starts. Every other process holds what `init` hands it, and the kernel refuses its attempts at
+  any device it was not given ([R18 (device authority)](devices.md#r18-device-authority)).
 
 ## Security properties
 
@@ -438,7 +439,7 @@ no second acceptance path.
 
 ### R16 (image confinement)
 
-Status: built · partly tested: an image cut short inside its segment data, a writable and executable segment and a bundle of more than 63 programs are not attacked by a case; the truncated-image case runs on rv64 only · tested: bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, bench:loader-rejects-truncated-elf
+Status: built · partly tested: an image cut short inside its segment data and a writable and executable segment are not attacked by a case; the truncated-image case runs on rv64 only · tested: bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, bench:loader-rejects-truncated-elf
 
 The loader confines every image to its area (`loader/src/image.rs`). Every loadable segment,
 from its address to address plus memory size, and the entry point must lie in the area: for a
@@ -469,8 +470,9 @@ The boot never runs degraded. Each of these powers the machine off through SBI S
 `/chosen/rng-seed` under 16 bytes, or a kernel given no `Seed` tag (PIDs and `random` would
 be guessable); no timebase, which the loader reports by leaving out `Time` and
 the kernel refuses (no timeout, slice or deadline would mean anything); no console or console
-interrupt; a bundle that is not a tar, is empty, holds `grants` or too many programs; an image
-R16 refuses; a full argument block; any argument-block refusal of the kernel's. A refusal of
+interrupt; a bundle that is not a tar or has no second entry; a bundle that does not start on a
+page, is larger than 512 MiB or shares a page with the device tree; an image R16 refuses; a full
+argument block; any argument-block refusal of the kernel's. A refusal of
 the loader's prints `loader PANIC` and one of the kernel's a kernel panic; both then power off.
 The two boot cases require the power-off and QEMU's status 255.
 
@@ -486,9 +488,9 @@ naming both ranges.
 <details><summary>Status: built · partly tested: a reboot through `system_reset` is not attacked by a case · tested (4)</summary>
 
 - bench:verified-boot-rejects-tamper
-- bench:loader-rejects-grants
 - bench:device
 - bench:panic-in-print
+- bench:bundle-mapped
 
 </details>
 
@@ -499,9 +501,9 @@ naming both ranges.
   state, and marks its line `(while printing)`.
 - **A reboot** (`system_reset` with the Reset right, [devices](devices.md)) starts the chain
   again from the firmware, so the bundle is verified on every boot.
-- **After the handoff the loader is gone.** Its pages and the bundle's are unowned in the
-  ownership table and the kernel hands them out as free memory. The bundle cannot be re-read
-  after boot.
+- **After the handoff the loader is gone.** Its pages are unowned in the ownership table and
+  the kernel hands them out as free memory. The bundle's pages are `init`'s, charged to `root`,
+  and stay mapped in `init` for as long as it runs, so it can read the bundle again at any time.
 
 ## Residual risks
 
@@ -533,6 +535,10 @@ naming both ranges.
   a point of small order, so a valid signature can be turned into another valid one for the same
   bundle. That forges no bundle without the key; nothing here takes a signature as a bundle's
   identity.
+- **The bundle stays read-only because `init` keeps it so.** `init` owns the bundle's frames,
+  so it could `set_flags` them writable, unmap them or `process_map` them into a child; the
+  kernel does not stop it. The verified bytes are only as safe after boot as `init` is (R15
+  holds up to the loader's mapping).
 - **The kernel trusts the loader.** It checks the argument block's shape and its device
   entries, but takes the RAM range, the ownership tables and the process table as true, and does
   not check the tags' CRC. On QEMU the loader is not verified (above).

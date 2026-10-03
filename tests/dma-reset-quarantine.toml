@@ -3,7 +3,7 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 kernel_features = ["dma-reset-deaf"]
-# The first program, so it holds every device object (kernel/devices.md).
+# In init's place, so it holds every device object (kernel/devices.md), and runs in root.
 programs = ["dma-reset-quarantine"]
 # Beyond the program's 60 s wait for the checker's search, so a stuck check reports itself.
 timeout_secs = 90

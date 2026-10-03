@@ -157,11 +157,11 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(rd::peek(loan.addr), MAGIC);
     assert_eq!(rd::receive(Some(work), WAIT, 0), Ok(Received::Abandoned(m.msg_id)));
     let rec = rd::body([0; 4]).encode();
-    let before = rd::usage(rd::SYSTEM).unwrap();
+    let before = rd::usage(rd::ROOT).unwrap();
     let result =
         redoubt_sys::syscall(&Call::Reply { msg_id: m.msg_id, body_rec: rec.as_ptr() as usize }).unwrap();
     assert_eq!(result, Return::Reply(redoubt_sys::ReplyOutcome { delivered: false, installed: 0 }));
-    let after = rd::usage(rd::SYSTEM).unwrap();
+    let after = rd::usage(rd::ROOT).unwrap();
     // One open call, one consumed lend, and the page table that mapped it, now empty.
     assert_eq!(before.pages_usage - after.pages_usage, 3);
     assert_eq!(rd::unmap(loan.addr, rd::PAGE_SIZE), Err(Error::InvalidArgument));
@@ -187,14 +187,14 @@ pub extern "C" fn _start() -> ! {
 
     // A sibling's native thread_exit closes its call while the caller thread survives.
     let stack = rd::map_anon(4 * rd::PAGE_SIZE, rd::rw()).expect("stack");
-    let before = rd::usage(rd::SYSTEM).unwrap();
+    let before = rd::usage(rd::ROOT).unwrap();
     rd::thread_create(exiting_server as *const () as usize, stack + 4 * rd::PAGE_SIZE - 16, work as usize)
         .unwrap();
     let (result, _) = rd::call_outcome(work, &rd::body([0; 4]), rd::pages(page, 1), WAIT).unwrap();
     assert_returned(result);
     assert_eq!(THREAD_DONE.load(Ordering::SeqCst), 1);
     assert_eq!(rd::peek(page), MAGIC);
-    assert_eq!(rd::usage(rd::SYSTEM).unwrap(), before);
+    assert_eq!(rd::usage(rd::ROOT).unwrap(), before);
     writeln!(out, "[lifecycle] thread exit preserves siblings and returns same-process lend exactly").ok();
 
     spawn::spawn(&image, budget, exit, child as *const () as usize, &[3], &[work]).expect("self-lend child");
@@ -207,7 +207,7 @@ pub extern "C" fn _start() -> ! {
     // children than the PID space guarantees a reused PID, without predicting random allocation.
     spawn::spawn(&image, budget, exit, child as *const () as usize, &[0], &[]).unwrap();
     notice(exit);
-    let baseline = rd::usage(rd::SYSTEM).unwrap();
+    let baseline = rd::usage(rd::ROOT).unwrap();
     let mut seen = [false; 256];
     let mut reused = false;
     for _ in 0..260 {
@@ -217,7 +217,7 @@ pub extern "C" fn _start() -> ! {
         reused |= seen[n.pid as usize];
         seen[n.pid as usize] = true;
         assert_eq!(rd::usage(budget).unwrap(), empty);
-        assert_eq!(rd::usage(rd::SYSTEM).unwrap(), baseline);
+        assert_eq!(rd::usage(rd::ROOT).unwrap(), baseline);
     }
     assert!(reused);
     writeln!(out, "[lifecycle] 260 exits restore exact budgets and reuse freed PIDs").ok();

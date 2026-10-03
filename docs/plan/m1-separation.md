@@ -107,11 +107,9 @@ page.
    ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)). A shared server's
    terminal fallback and rollback are exercised in a boot, not only in host tests
    ([serving](../servers/serving.md#replies-and-rollback)), and restarting a driver is a case of
-   its own ([netd](../servers/netd.md#started-by-init)). Until `init` exists the loader's bundle
-   programs run at `system`'s free weight, so one that busy-yields dominates the machine; the
-   measured cases keep them blocked, and a budget per program ends this. The kernel's cases then
-   start their programs from a tester in `init`'s place, with the budgets each case names, so the
-   log server's interim `TAKE_GIFTS` fixture goes; the servers' cases boot `init` itself with a
+   its own ([netd](../servers/netd.md#started-by-init)). The loader already starts only `init`,
+   and the kernel's cases start their programs from a tester in `init`'s place, each in a budget
+   of its own with the budgets the case names; the servers' cases boot `init` itself with a
    manifest of their own, and `consoled` says who wrote each line
    ([starting a case's programs](../testbench.md#starting-a-cases-programs)).
 - **beamlet on Redoubt, and the shell on the console.** The VM runs on the kernel with its natives and

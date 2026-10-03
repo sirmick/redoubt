@@ -5,9 +5,10 @@
 //! `a0` = hart ID and `a1` = physical address of the flattened device tree. All other
 //! harts stay parked in the firmware until started through the SBI HSM extension.
 //!
-//! The loader unpacks the boot bundle (see `image.rs`), builds an address space for the
-//! kernel and for each initial process, describes the machine to the kernel in a tagged
-//! argument block, and enters the kernel. Design notes: `docs/kernel/boot.md`.
+//! The loader verifies the boot bundle, builds an address space for the kernel and one for
+//! `init` (the bundle's second entry, with the whole bundle mapped read-only), describes the
+//! machine to the kernel in a tagged argument block, and enters the kernel. Design notes:
+//! `docs/kernel/boot.md`.
 
 #![no_std]
 #![no_main]
@@ -41,10 +42,17 @@ const USER_STACK_PAGES: usize = 32;
 /// The ABI wants 16-byte stack alignment; leave one slot free at the very top.
 const STACK_PADDING: usize = 16;
 const ARGS_PAGES: usize = 4;
-/// Processes the kernel has room for, its own included (`MAX_PROCESS_COUNT` in
-/// `kernel/src/arch/riscv/process.rs`). A `Pid` is a byte, so this also keeps `count + 1`
-/// from wrapping.
-const MAX_PROCESSES: usize = 64;
+/// The one process the loader starts: `init`, or the program in its place.
+const INIT_PID: Pid = match Pid::new(2) {
+    Some(pid) => pid,
+    None => unreachable!(),
+};
+/// Where `init` finds the verified bundle, signature and archive, read-only: above the loader
+/// stub's region and below the message area, so outside every program's link range
+/// (kernel/memory-layout.md, "Regions"). The same on both widths.
+const BUNDLE_AT: usize = 0x2000_0000;
+/// The most bundle that fits between `BUNDLE_AT` and the message area.
+const BUNDLE_MAX: usize = 0x4000_0000 - BUNDLE_AT;
 
 // The `.bss`-zeroing loop is the only width-specific part: store one XLEN word per step.
 #[cfg(target_arch = "riscv64")]
@@ -80,13 +88,17 @@ extern "C" {
     static _loader_end: u8;
 }
 
-/// What the kernel expects at `init_offset`: one entry per process, kernel first.
+/// What the kernel expects at `init_offset`: the kernel, then `init`.
 /// Must match `InitialProcess` in `kernel/src/arch/riscv/process.rs`.
 #[repr(C)]
 struct InitialProcess {
     satp: usize,
     entrypoint: usize,
     sp: usize,
+    /// The first thread's `a0` and `a1`: the bundle's address and length for `init`, 0 for the
+    /// kernel.
+    a0: usize,
+    a1: usize,
 }
 
 #[no_mangle]
@@ -124,9 +136,10 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     alloc.reserve(bundle.clone());
     alloc.init_rpt();
     // The firmware stays resident, and a userspace device manager will want the device
-    // tree. The loader and the bundle are left unowned, so the kernel reuses them.
+    // tree. The loader is left unowned, so the kernel reuses it; the bundle goes to `init`
+    // (`map_bundle`).
     alloc.set_owner(firmware, KERNEL_PID);
-    alloc.set_owner(dtb, KERNEL_PID);
+    alloc.set_owner(dtb.clone(), KERNEL_PID);
 
     let extra_pages: usize = platform.mmio().iter().map(|r| r.range.len().div_ceil(PAGE_SIZE)).sum();
     let xpt = alloc.alloc_contiguous(extra_pages.div_ceil(PAGE_SIZE).max(1), KERNEL_PID);
@@ -180,16 +193,17 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         args.end();
     }
 
-    // The table of initial processes, kernel first. One page bounds how many there can be.
+    // The table of initial processes: the kernel, then `init`.
     // SAFETY: a fresh, zeroed, page-aligned allocation referenced from nowhere else.
-    // `InitialProcess` is four `usize`s, for which all-zeroes is valid.
+    // `InitialProcess` is five `usize`s, for which all-zeroes is valid, and two fit in a page.
     let processes: &mut [InitialProcess] = unsafe {
         let page = alloc.alloc(KERNEL_PID) as *mut InitialProcess;
-        core::slice::from_raw_parts_mut(page, PAGE_SIZE / core::mem::size_of::<InitialProcess>())
+        core::slice::from_raw_parts_mut(page, 2)
     };
+    let initrd_range = bundle;
     // SAFETY: the firmware placed the initrd at this range (from the device tree), it is
     // reserved in the allocator so nothing overwrites it, and it is only read.
-    let initrd = unsafe { core::slice::from_raw_parts(bundle.start as *const u8, bundle.len()) };
+    let initrd = unsafe { core::slice::from_raw_parts(initrd_range.start as *const u8, initrd_range.len()) };
     let bundle = verify::authenticated_bundle(initrd);
     println!("  bundle signature ok ({} bytes)", bundle.len());
     let archive = TarArchiveRef::new(bundle).expect("boot bundle is not a tar archive");
@@ -216,46 +230,36 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         satp: kernel.satp(),
         entrypoint: kernel_entry,
         sp: KERNEL_STACK_TOP - STACK_PADDING,
+        a0: 0,
+        a1: 0,
     };
     println!("  PID 1: {} -> {:#x}", kernel_image.filename().as_str().unwrap_or("?"), kernel_entry);
 
-    let mut count = 1;
-    for entry in entries {
-        let name = entry.filename();
-        let name = name.as_str().unwrap_or("?");
-        // A process reaches a device only through its device handle, so a bundle carrying a
-        // `grants` manifest is refused rather than booted as if it granted something.
-        assert!(
-            name != "grants",
-            "the boot bundle holds a `grants` entry: devices are reached only through handles"
-        );
-        assert!(
-            count < MAX_PROCESSES,
-            "the boot bundle has more than the {} processes the kernel has room for",
-            MAX_PROCESSES
-        );
-        let pid = Pid::new(count as u8 + 1).expect("count < MAX_PROCESSES");
-
-        let space = AddressSpace::new_user(&mut alloc, pid, &kernel);
-        let entrypoint =
-            image::load_elf(&mut alloc, &space, pid, entry.data(), PAGE_SIZE..USER_AREA_END, true);
-        let stack_flags = PteFlags::R | PteFlags::W | PteFlags::USER;
-        space.map_stack(&mut alloc, USER_STACK_TOP, 1, stack_flags);
-        for page in 2..=USER_STACK_PAGES {
-            space.reserve(&mut alloc, USER_STACK_TOP - page * PAGE_SIZE, stack_flags);
-        }
-        map_context(&mut alloc, &space, pid);
-        println!("  PID {}: {} -> {:#x}", pid, name, entrypoint);
-
-        let process = InitialProcess { satp: space.satp(), entrypoint, sp: USER_STACK_TOP - STACK_PADDING };
-        *processes.get_mut(count).expect("too many initial processes") = process;
-        count += 1;
-
-        // The kernel counts these tags to size its process table (kernel/boot.md); they carry
-        // no data.
-        args.begin(b"IniE");
-        args.end();
+    // The second entry is `init`, or the program in its place, whatever its name: PID 2, the
+    // one process the loader starts. Every later entry is data to the loader, and it parses
+    // none of them (kernel/boot.md, "The loader loads only the kernel and `init`").
+    let entry = entries.next().expect("boot bundle has no second entry to start");
+    let name = entry.filename();
+    let name = name.as_str().unwrap_or("?");
+    let space = AddressSpace::new_user(&mut alloc, INIT_PID, &kernel);
+    let entrypoint =
+        image::load_elf(&mut alloc, &space, INIT_PID, entry.data(), PAGE_SIZE..USER_AREA_END, true);
+    let stack_flags = PteFlags::R | PteFlags::W | PteFlags::USER;
+    space.map_stack(&mut alloc, USER_STACK_TOP, 1, stack_flags);
+    for page in 2..=USER_STACK_PAGES {
+        space.reserve(&mut alloc, USER_STACK_TOP - page * PAGE_SIZE, stack_flags);
     }
+    map_context(&mut alloc, &space, INIT_PID);
+    map_bundle(&mut alloc, &space, &initrd_range, dtb);
+    println!("  PID {}: {} -> {:#x}", INIT_PID, name, entrypoint);
+    println!("  bundle mapped read-only at {:#x} ({} bytes)", BUNDLE_AT, initrd_range.len());
+    processes[1] = InitialProcess {
+        satp: space.satp(),
+        entrypoint,
+        sp: USER_STACK_TOP - STACK_PADDING,
+        a0: BUNDLE_AT,
+        a1: initrd_range.len(),
+    };
     processes[0] = kernel_process;
     args.finish(ram.start, ram.len(), b"sram");
 
@@ -293,12 +297,12 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 /// exclusion that keeps them out of the device list: a tree that defeated that exclusion would
 /// otherwise hand the kernel an empty list along with the controller it just offered.
 ///
-/// **The order is temporary**: `init` will be told which handle is which by the boot manifest
-/// (kernel/boot.md, "The loader loads only the kernel and `init`"; plan/m1-separation.md), but
-/// there is no `init` yet: the kernel hands every device object to the bundle's first program,
-/// in this order, so that a test program can name one without a manifest. Reset first, then
-/// the console named by `/chosen/stdout-path` and its interrupt, then every other region in
-/// device-tree order and every other interrupt ascending. Because those three positions are
+/// **The order is temporary**: `init` will match handles to the boot manifest's devices by
+/// asking `device_info` (kernel/devices.md, "Which process gets which device"); until it does,
+/// the kernel hands every device object to `init` in this order, so that a test program in its
+/// place can name one without a manifest. Reset first, then the console named by
+/// `/chosen/stdout-path` and its interrupt, then every other region in device-tree order and
+/// every other interrupt ascending. Because those three positions are
 /// fixed, a machine whose device tree does not name a console, or names it without an
 /// interrupt, is refused here rather than booted with the indices shifted under a program that
 /// pinned them (as a missing RNG seed is refused).
@@ -351,6 +355,41 @@ fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
         platform.irq_len,
         console.range.start,
     );
+}
+
+/// Map the verified initrd, signature and archive, read-only into `init` at `BUNDLE_AT`, and
+/// give its frames to `init`, so the kernel charges them to `root` with the rest of what the
+/// loader gave it and never reuses them (kernel/boot.md, "The loader loads only the kernel and
+/// `init`"). The pages are mapped whole: the tail of the last one past the initrd is not the
+/// bundle's, and `init` reads only within the length it is given.
+fn map_bundle(
+    alloc: &mut PageAllocator,
+    space: &AddressSpace,
+    initrd: &core::ops::Range<usize>,
+    dtb: core::ops::Range<usize>,
+) {
+    // Fail closed: a bundle that does not start on a page would share its first page with
+    // whatever is below it, and one past `BUNDLE_MAX` would run into the message area.
+    assert!(initrd.start % PAGE_SIZE == 0, "the boot bundle at {:#x} does not start on a page", initrd.start);
+    assert!(
+        initrd.len() <= BUNDLE_MAX,
+        "the boot bundle is {} bytes, over the {} that can be mapped",
+        initrd.len(),
+        BUNDLE_MAX
+    );
+    let pages = initrd.start..initrd.end.next_multiple_of(PAGE_SIZE);
+    // The device tree stays the kernel's (PID 1); a page it shared with the bundle would be
+    // handed to `init` too.
+    let dtb_pages = (dtb.start & !(PAGE_SIZE - 1))..dtb.end.next_multiple_of(PAGE_SIZE);
+    assert!(
+        pages.end <= dtb_pages.start || dtb_pages.end <= pages.start,
+        "the boot bundle shares a page with the device tree"
+    );
+    let base = pages.start;
+    alloc.set_owner(pages.clone(), INIT_PID);
+    for phys in pages.step_by(PAGE_SIZE) {
+        space.map(alloc, phys, BUNDLE_AT + (phys - base), PteFlags::R | PteFlags::USER);
+    }
 }
 
 /// Map the zeroed pages the kernel keeps its per-process state in.

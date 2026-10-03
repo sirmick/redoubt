@@ -1,16 +1,10 @@
-//! The log server's code, as a library (docs/testbench.md, rule F). The bundle's first program
-//! owns the console and serves the log endpoint, whose receive right the kernel installed last in
-//! its table (`rd::log_rx`); every later program holds a send on it in slot 2, badged with its
-//! PID (`rd::LOG`).
+//! The log server's code, as a library (docs/testbench.md, rule F). The program in `init`'s
+//! place owns the console and serves the log endpoint, which it creates; every program it starts
+//! holds a send on it in slot 2 (`rd::LOG`), badged with the program's place in the case.
 //!
-//! By default that first program is `log-server`. A case whose trusted tester needs the first
-//! program's own gifts runs the tester first instead, and it calls [`start`]: its own lines go
-//! straight to the console as `[pid 2]`, since the loader numbers bundle programs from 2. With
-//! siblings to serve it also calls [`start_serving`].
-//!
-//! `log-server` also hands the first program's budgets to the first caller of `TAKE_GIFTS`, and
-//! to no one after it: first caller wins, so a case that uses it runs its attacker as the only
-//! program that asks.
+//! By default that program is `log-server`, which starts the case's other programs. A case
+//! whose trusted tester needs `init`'s own handles runs it alone in that place instead, and it
+//! calls [`start`]: its own lines go straight to the console as `[pid 2]`, the tester's place.
 //!
 //! The badge only says whose line it is; it never authorizes anything here.
 
@@ -20,15 +14,17 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use crate::rd::{self, FOREVER, Message, MessageKind, Received};
 use crate::{Logger, console, op};
 
-/// The first program's PID: the loader numbers bundle programs from 2.
+/// The tester's place in the case, which is also its PID: the one program the loader starts.
+/// The programs it starts are places 3 on.
 pub const FIRST_PID: u64 = 2;
 
-/// The lowest badge [`mint_child`] makes (R1). The loader's PIDs are at most 64, so a minted
-/// badge can never read as a PID: `console::relay` prints it as `[badge N]`.
+/// The lowest badge [`mint_child`] makes (R1). A case has at most 16 places, so a minted badge
+/// can never read as a place: `console::relay` prints it as `[badge N]`.
 pub const CHILD_BADGES: u64 = 0x100;
 
-/// A message's sender as its badge names it: `pid N` below [`CHILD_BADGES`], which only the
-/// kernel writes (the loader's PIDs), and `badge N` for any other, which only [`mint_child`] makes.
+/// A message's sender as its badge names it: `pid N` below [`CHILD_BADGES`], a place in the
+/// case, which only the tester gives out (`log-server`), and `badge N` for any other, which only
+/// [`mint_child`] makes.
 pub struct Sender(pub u64);
 
 impl fmt::Display for Sender {
@@ -49,9 +45,33 @@ pub enum Line {
     Unexpected(usize),
     /// A byte that arrived on the UART (input from the bench), printed escaped.
     Received(char),
-    GiftsGiven(Sender),
+    /// The tester started the program with this entry name at this place.
+    Started(u64, &'static [u8]),
+    /// The tester refused the boot: a line of the `programs` entry it cannot use.
+    Refused(Refusal),
+    /// The tester could not start a program it read: the call that refused.
+    StartFailed(rd::Error),
+    /// The exit notice of the program with this entry name the tester started at this place,
+    /// from the endpoint the tester gave that program alone.
+    Ended(&'static [u8], u64, rd::ExitNotice),
     /// Anchored by the bench (`reporter`): no relayed line can start this way.
     Done(Sender),
+}
+
+/// Why the tester refuses the boot, before it starts anything (docs/testbench.md, "Starting a
+/// case's programs"). The numbers are the `programs` entry's lines, 1 on.
+#[derive(Clone, Copy, Debug)]
+pub enum Refusal {
+    /// The bundle has no `programs` entry.
+    NoProgramsEntry,
+    /// A line that is not a name and up to three distinct budgets, in printable ASCII.
+    Unreadable(usize),
+    /// A line naming an entry the bundle does not have.
+    UnknownProgram(usize),
+    /// A line naming a budget other than `root`, `system` and `users`.
+    UnknownBudget(usize),
+    /// More programs than `system` has processes for.
+    TooMany,
 }
 
 pub fn say(line: Line) {
@@ -64,25 +84,39 @@ pub fn say(line: Line) {
         }
         Line::Unexpected(id) => console::line(format_args!("[server] unexpected message, id {id}")),
         Line::Received(byte) => console::line(format_args!("[server] irq: received {byte:?}")),
-        Line::GiftsGiven(to) => console::line(format_args!("[server] gifts given to {to}")),
+        Line::Started(place, name) => {
+            let name = core::str::from_utf8(name).unwrap_or("?");
+            console::line(format_args!("[server] started {name} as pid {place}"))
+        }
+        Line::Refused(why) => console::line(format_args!("[server] boot refused: {why:?}")),
+        Line::StartFailed(e) => console::line(format_args!("[server] FAIL: a program did not start: {e:?}")),
+        Line::Ended(name, place, n) => {
+            let name = core::str::from_utf8(name).unwrap_or("?");
+            console::line(format_args!(
+                "[server] {name} (pid {place}) ended: {:?} {}, kernel PID {}",
+                n.cause, n.code, n.pid
+            ))
+        }
         Line::Done(by) => console::line(format_args!("[server] done: reported by {by}; still serving")),
     }
 }
 
-/// Map the console and take the log endpoint's receive right: the first program's start. Call it
-/// before creating any handle (`rd::log_rx`). Returns this program's own logger, which prints
-/// straight to the console as `[pid 2]`.
+/// Map the console and create the log endpoint: the tester's start. Returns this program's own
+/// logger, which prints straight to the console as `[pid 2]`.
 pub fn start() -> Logger {
     let (uart, _) = rd::map_device(rd::CONSOLE_MMIO).expect("the console's mmio handle");
     console::init(uart);
-    LOG_RX.store(rd::log_rx(), Ordering::Relaxed);
+    LOG_RX.store(rd::endpoint_create().expect("the log endpoint"), Ordering::Relaxed);
     Logger::connect()
 }
+
+/// The log endpoint's receive right, after [`start`]: badge 0, so it also takes exit notices.
+pub fn receive_right() -> u32 { LOG_RX.load(Ordering::Relaxed) }
 
 /// Whether this program called [`start`]: it owns the console, and its own loggers print there.
 pub(crate) fn started() -> bool { LOG_RX.load(Ordering::Relaxed) != 0 }
 
-/// Serve the loader's siblings on a thread of its own, after [`start`].
+/// Serve the log endpoint on a thread of its own, after [`start`].
 pub fn start_serving() {
     fn server(_: usize) { serve(|_| false) }
     rd::thread(server, 0).expect("the log server's thread");

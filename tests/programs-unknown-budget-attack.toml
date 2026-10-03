@@ -1,0 +1,17 @@
+description = "The tester refuses a programs entry naming a budget other than root, system and users, before it starts anything"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = ["log-server", "rng-test"]
+timeout_secs = 20
+# The case brings its own `programs` entry (the file below), so the bench writes none: line 1 is
+# good, line 2 names a budget no tester has. The tester reads every line before it starts
+# anything (docs/testbench.md, "Starting a case's programs"). The verdict is the tester's own
+# line, which no relayed line can start with, and its power-off; a started program, line 1's
+# included, is forbidden.
+expect = ['^\[server\] boot refused: UnknownBudget\(2\)$']
+forbid = ['^\[server\] started', '^\[pid \d+\]']
+poweroff = true
+
+[[file]]
+name = "programs"
+from = { path = "tests/data/programs-unknown-budget.txt" }

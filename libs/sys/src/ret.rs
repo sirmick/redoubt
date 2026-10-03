@@ -56,9 +56,8 @@ pub enum Return {
     /// `map_anon`.
     Addr(usize),
     /// `map_device`: where the device's registers are, and how many bytes of them. A driver
-    /// needs the length to know what it may touch; which device the handle names comes from
-    /// the boot manifest, so the kernel says nothing about it.
-    /// See kernel/devices.md, `map_device`.
+    /// needs the length to know what it may touch; which device the handle names is
+    /// `device_info`'s answer. See kernel/devices.md, `map_device`.
     Mapping {
         addr: usize,
         len: usize,
@@ -77,6 +76,57 @@ pub enum Return {
     Time(u64),
     /// `random`: one value from the kernel's CSPRNG.
     Random(u64),
+    /// `device_info`.
+    Device(DeviceInfo),
+}
+
+/// Which device a handle names: `device_info`'s result, in the form of the `Devs` entry the
+/// object was made from (kernel/boot.md, "The argument block"). Registers from `a1`: the kind
+/// (a tag: 1 MMIO, 2 IRQ, 3 Reset), `a` (2), `b` (2), the flags; a field the kind does not use
+/// is 0.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeviceInfo {
+    /// `a` the physical base, `b` the size in bytes; flag bit 0 the DMA flag. Both are `u64`
+    /// on both widths because Sv32 physical addresses are 34 bits.
+    Mmio {
+        base: u64,
+        size: u64,
+        dma: bool,
+    },
+    /// `a` the interrupt number.
+    Irq(u32),
+    Reset,
+}
+
+/// `DeviceInfo::Mmio`'s flag bit: the device is a bus master (the `Devs` entry's).
+const DEVICE_DMA: u32 = 1;
+
+impl DeviceInfo {
+    fn write(self, w: &mut Writer) {
+        let (kind, a, b, flags) = match self {
+            DeviceInfo::Mmio { base, size, dma } => (1, base, size, if dma { DEVICE_DMA } else { 0 }),
+            DeviceInfo::Irq(irq) => (2, u64::from(irq), 0, 0),
+            DeviceInfo::Reset => (3, 0, 0, 0),
+        };
+        w.u32(kind);
+        w.u64(a);
+        w.u64(b);
+        w.u32(flags);
+    }
+
+    /// The kind first, then every field; a value the kind does not use must be 0, and an IRQ
+    /// number must fit in 32 bits.
+    fn read(r: &mut Reader) -> Result<DeviceInfo, Error> {
+        let kind: u32 = r.tag(&[1, 2, 3])?;
+        match (kind, r.u64()?, r.u64()?, r.u32()?) {
+            (1, base, size, flags @ (0 | DEVICE_DMA)) => {
+                Ok(DeviceInfo::Mmio { base, size, dma: flags == DEVICE_DMA })
+            }
+            (2, irq, 0, 0) => Ok(DeviceInfo::Irq(u32::try_from(irq).map_err(|_| Error::InvalidArgument)?)),
+            (3, 0, 0, 0) => Ok(DeviceInfo::Reset),
+            _ => Err(Error::InvalidArgument),
+        }
+    }
 }
 
 /// The registers `a0..=a7` for a call's outcome (kernel side).
@@ -116,6 +166,7 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
                 Return::Handle(h) => w.u32(h.index()),
                 Return::Time(time) => w.u64(time),
                 Return::Random(value) => w.u64(value),
+                Return::Device(info) => info.write(w),
             }
         }
     }
@@ -176,6 +227,7 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         }
         Number::TimeNow => Return::Time(r.u64()?),
         Number::Random => Return::Random(r.u64()?),
+        Number::DeviceInfo => Return::Device(DeviceInfo::read(&mut r)?),
         Number::Unmap
         | Number::SetFlags
         | Number::ThreadExit

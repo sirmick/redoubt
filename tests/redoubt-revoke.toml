@@ -3,14 +3,16 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
-# PID 2 redoubt-revoke: it must be the loader's first program, the one holding root, system and
-# users, since only a budget handle revokes anything.
-programs = ["redoubt-revoke"]
+# PID 2 log-server; PID 3 redoubt-revoke, holding the budget it runs in (slot 3), root and users,
+# since only a budget handle revokes anything. Before the tester it ran in init's place, in
+# system, so its handles were stamped with system; now they are stamped with its own budget, an
+# equal share of system for one program, and root is still above it and users beside it.
+programs = ["log-server", { bin = "redoubt-revoke", budgets = ["root", "users"] }]
 timeout_secs = 30
 expect = [
-    '^\[pid 2\] \[revoke\] server took call \d+ badge 6$',
-    '^\[pid 2\] \[revoke\] server: call \d+ abandoned, reply Ok\(\(\)\)$',
-    '^\[pid 2\] \[revoke\] the carried handle arrived as \[None\]$',
-    '^\[pid 2\] REDOUBT-REVOKE TEST PASSED$',
+    '^\[pid 3\] \[revoke\] server took call \d+ badge 6$',
+    '^\[pid 3\] \[revoke\] server: call \d+ abandoned, reply Ok\(\(\)\)$',
+    '^\[pid 3\] \[revoke\] the carried handle arrived as \[None\]$',
+    '^\[pid 3\] REDOUBT-REVOKE TEST PASSED$',
 ]
 forbid = ['\[revoke\] FAIL', 'REDOUBT-REVOKE TEST FAILED']

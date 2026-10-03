@@ -69,7 +69,7 @@ fn measure(b: &Bench, kids: u32, base: usize, irq: u32) -> (u64, u64) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let devices = rd::OTHER_DEVICES..rd::log_rx();
+    let devices = rd::OTHER_DEVICES..rd::first_free();
     let mut b = Bench::new("scan-bounds");
     let Some((_, base, irq)) = rtc::find(devices) else {
         b.check(false, format_args!("no goldfish RTC among the device handles"));

@@ -1,6 +1,6 @@
-//! R4b and R4's `Refused`. Must run as the loader's first program, the one holding
-//! `root`, `system` and `users`: the `Refused` step needs a budget handle to take `system`'s
-//! free pages away and give them back.
+//! R4b and R4's `Refused`. Runs as a program the tester starts, which holds the budget it runs
+//! in (slot 3): the `Refused` step needs that handle to take its free pages away and give them
+//! back.
 //!
 //! What it shows:
 //! - a server thread that exits holding an open call gives its caller `Dead` and its lend back, intact, while
@@ -96,7 +96,7 @@ macro_rules! expect {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let logger = test_programs::logsrv::start();
+    let logger = Logger::connect();
     let mut t = T { logger, failed: false };
     log!(t.logger, "[dead] starting");
     let endpoint = rd::endpoint_create().expect("an endpoint");
@@ -123,11 +123,11 @@ pub extern "C" fn _start() -> ! {
     // A lend of `MAX_LEND_PAGES`, which the receiver must pay for while the call is open (R3),
     // with the budget it shares with this thread carved down below that.
     let big = rd::many_pages(rd::MAX_LEND_PAGES);
-    let free = rd::free(rd::SYSTEM);
+    let free = rd::free(rd::OWN);
     let margin = 8;
-    t.check(free > margin, format_args!("system has {} free pages", free));
-    let hog = rd::create(rd::SYSTEM, &rd::spec(free - margin - 1, 0, 0)).expect("a hog budget");
-    log!(t.logger, "[dead] system down to {} free pages", rd::free(rd::SYSTEM));
+    t.check(free > margin, format_args!("its own budget has {} free pages", free));
+    let hog = rd::create(rd::OWN, &rd::spec(free - margin - 1, 0, 0)).expect("a hog budget");
+    log!(t.logger, "[dead] its own budget down to {} free pages", rd::free(rd::OWN));
     let refused = rd::call(endpoint, &rd::body([2, 0, 0, 0]), rd::pages(big, rd::MAX_LEND_PAGES), FOREVER);
     let _ = expect!(t, refused.err(), Some(Error::Refused));
     // The refused lend is this thread's again, and the receiver never saw it.

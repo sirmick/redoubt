@@ -1,27 +1,31 @@
-description = "Hostile arguments to every budget, IPC and memory call (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
+description = "Hostile arguments to every budget, IPC and memory call (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
-# PID 2 log-server; PID 3 budget-victim, second, in system beside the attacker and holding the
-# boot endpoint's receive right; PID 4 the attacker, whose first act is to take root, system
-# and users from log-server (TAKE_GIFTS). It holds no device: `system_reset` is offered only
+# PID 2 log-server; PID 3 budget-victim, the first program started, holding the boot endpoint's
+# receive right and `system`; PID 4 the attacker, holding `system` (slot 4). Each runs in a
+# budget of its own under `system`. The attacker holds no device: `system_reset` is offered only
 # handles of other kinds. The 4000 random calls cannot reach a Reset right either.
-programs = ["log-server", "budget-victim", "budget-syscall-attack"]
+programs = [
+    "log-server",
+    { bin = "budget-victim", budgets = ["system"] },
+    { bin = "budget-syscall-attack", budgets = ["system"] },
+]
 timeout_secs = 30
 # Each targeted attempt's error is pinned as progress, so a refusal for the wrong reason (or in
 # the wrong order) fails. The verdict is the kernel surviving (PANIC is always forbidden), the
 # victim's pages and its DONE and the power-off.
 expect = [
-    '^\[server\] gifts given to pid 4$',
+    '^\[server\] started budget-syscall-attack as pid 4$',
     '^\[pid 4\] \[i14\] budget_create records -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(TooLarge\), Some\(TooLarge\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(OutOfMemory\), Some\(InvalidArgument\)\]$',
     '^\[pid 4\] \[i14\] budget_create order -> \[Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\)\]$',
-    '^\[pid 4\] \[i14\] budget_usage -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\)\]$',
+    '^\[pid 4\] \[i14\] budget_usage -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\)\]$',
     '^\[pid 4\] \[i14\] random -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), None\]$',
     '^\[pid 4\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(WrongObject\), Some\(BadHandle\), Some\(WrongObject\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(WrongObject\), Some\(Timeout\)\]$',
     '^\[pid 4\] \[i14\] \d+ random calls: \d+ refused, 0 with an unknown result code$',
     '^\[pid 4\] \[i14\] attempts done$',
-    '^\[pid 3\] \[victim\] mapped and touched 64 pages in system after the attack$',
+    '^\[pid 3\] \[victim\] mapped and touched 64 pages after the attack; every budget it holds within its limits: true$',
     '^\[server\] done: reported by pid 3; still serving$',
 ]
 forbid = ['BREACH']

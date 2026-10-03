@@ -120,7 +120,7 @@ pub use record::{
     Message, MessageKind, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Slot, USAGE_SLOTS, Usage,
 };
 pub use regs::REGS;
-pub use ret::{CallOutcome, LendDisposition, ReplyOutcome, Return, decode_result, encode_result};
+pub use ret::{CallOutcome, DeviceInfo, LendDisposition, ReplyOutcome, Return, decode_result, encode_result};
 
 /// Machine words in a message.
 pub const WORDS: usize = 4;

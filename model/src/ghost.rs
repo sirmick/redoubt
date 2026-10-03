@@ -127,6 +127,9 @@ pub enum Flow {
     /// `map_device` or `dma_alloc` by process `pid` succeeded on device `device`, which its device
     /// object said was `quarantined` when the call began (kernel/devices.md, "Quarantine").
     DeviceUsed { pid: u64, device: u64, quarantined: bool },
+    /// `device_info` by process `pid` on handle `h` (the raw argument) answered `got`
+    /// (kernel/devices.md, `device_info`).
+    DeviceInfo { pid: u64, h: u64, got: Result<Ret, Error> },
 }
 
 /// I11: while a key's oldest message waits on an endpoint, how often each other key has been

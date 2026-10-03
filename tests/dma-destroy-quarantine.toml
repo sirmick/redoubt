@@ -3,7 +3,7 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 kernel_features = ["dma-reset-deaf"]
-# The first program, so it holds every device object (kernel/devices.md).
+# In init's place, so it holds every device object (kernel/devices.md).
 programs = ["dma-destroy-quarantine"]
 # Beyond the program's 60 s wait for the drivers' reports, so a stuck check reports itself.
 timeout_secs = 120
@@ -13,7 +13,7 @@ expect = [
     '^DMA: device [0-9a-f]+ did not confirm its reset; quarantined until reboot',
     '^\[dma-destroy-quarantine\] ok: the drivers. budget is destroyed, not faulted',
     '^\[dma-destroy-quarantine\] ok: every handle to either quarantined slot is gone ',
-    '^\[dma-destroy-quarantine\] ok: the carve came back ',
+    '^\[dma-destroy-quarantine\] ok: the carve came back, both runs. 8 pages are charged to system and both device objects freed ',
     '^\[dma-destroy-quarantine\] DMA DESTROY QUARANTINE PASSED$',
 ]
 forbid = ['\[dma-destroy-quarantine\] FAIL', 'PROGRAM HALT', 'PANIC']

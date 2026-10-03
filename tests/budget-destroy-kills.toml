@@ -1,16 +1,22 @@
-description = "Destroying a budget kills every process in it, the caller last when it is one of them (R10); here system, which holds every loader-started process"
+description = "Destroying a budget kills every process in it and under it, the caller's own included (R10); here system, under which the tester starts every program"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# PID 2 budget-destroy-system (holds system's handle; it owns the console and serves the log
-# endpoint for its sibling); PID 3 budget-victim, a bystander blocked in `receive` on the boot
-# endpoint.
-programs = ["budget-destroy-system", "budget-victim"]
+# PID 2 log-server; PID 3 budget-victim, a bystander blocked in `receive` on the boot endpoint;
+# PID 4 budget-destroy-system, holding `system` (slot 4). Each runs in a budget of its own under
+# `system`, so destroying `system` reaches both.
+programs = ["log-server", "budget-victim", { bin = "budget-destroy-system", budgets = ["system"] }]
 timeout_secs = 30
-# The kills are the kernel's own lines (no `[pid` prefix, so no process can print them), in the
-# order R10 takes them: every other process in the budget, then the caller.
+# The kills are the kernel's own lines (no `[pid` prefix, so no process can print them), and each
+# program's exit notice is the tester's own line, from an endpoint it gave that program alone,
+# naming the program and its place. Only the kernel's lines come in kill order, and they carry
+# the PIDs the kernel draws; the tester's lines come in no defined order, and the bench has no
+# check across lines, so the order R10 takes (the caller last) is not pinned: kernel/budgets.md,
+# R10's status, says so. One pattern matches each notice in turn.
 expect = [
-    '^\[pid 2\] \[destroyer\] destroying system$',
-    '^\[!\] Terminating process with PID 3$',
-    '^\[!\] Terminating process with PID 2$',
+    '^\[pid 4\] \[destroyer\] destroying system$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[server\] (budget-victim \(pid 3\)|budget-destroy-system \(pid 4\)) ended: Killed 0, kernel PID \d+$',
+    '^\[server\] (budget-victim \(pid 3\)|budget-destroy-system \(pid 4\)) ended: Killed 0, kernel PID \d+$',
 ]
 forbid = ['BREACH']

@@ -321,12 +321,8 @@ fn show(out: &mut Console, what: &str, notice: &Option<ExitNotice>) {
 }
 
 #[no_mangle]
-pub extern "C" fn _start(arg: usize) -> ! {
-    // A child is this same image started with a startup page; the loader's copy gets no `arg`.
-    if arg != 0 {
-        child(arg)
-    }
-
+pub extern "C" fn _start(_: usize) -> ! {
+    // Its children start at `child_entry`, never here.
     let (uart, _) = rd::map_device(rd::CONSOLE_MMIO).expect("the console's mmio handle");
     console::init(uart);
     let mut out = Console;
