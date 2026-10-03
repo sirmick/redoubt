@@ -9,6 +9,8 @@
 //!   reads both back, with the same qid paths.
 //! - `read ENDPOINT PATH TEXT...`: each path holds exactly the text after it.
 //! - `corrupt ENDPOINT`: every attach is refused, and `fsd` still answers the next.
+//! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends an `fsd` built with its test-only
+//!   feature `restart-probe`, and reads the file back through a fresh connection.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -52,6 +54,7 @@ fn run(startup: &Startup) -> u32 {
         (Some("reboot"), Some(at)) => reboot(startup, &mut out, at),
         (Some("read"), Some(at)) => read(startup, &mut out, at, args).map(|()| Ends::Passed),
         (Some("corrupt"), Some(at)) => corrupt(startup, &mut out, at).map(|()| Ends::Passed),
+        (Some("restart"), Some(at)) => restart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (check, _) => Err(format!("no such check, or no endpoint: {check:?}")),
     };
     let line = match checked {
@@ -220,4 +223,25 @@ fn corrupt(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), Strin
         }
     }
     out.say("fsd-client was refused at each of 3 attaches\n").map_err(|e| format!("say: {e:?}"))
+}
+
+/// `fsd-restart`: a file written, then a walk to `probe` ends `fsd` with the call held, so the
+/// call gets `Dead`; a fresh connection, to the instance `init` restarts on the same endpoint,
+/// reads the file back.
+fn restart(startup: &Startup, out: &mut Out, endpoint: &str, probe: Option<&str>) -> Result<(), String> {
+    let probe = probe.ok_or("no probe name")?;
+    let text = b"written before fsd's restart\n";
+    let old = attach(startup, out, endpoint)?;
+    write_file(&old, out, "/", "kept", text)?;
+    match old.stat(&mut out.lend, &format!("/{probe}")) {
+        Err(Error::Disconnected) => {}
+        other => return Err(format!("the probe's walk got {other:?}, not Dead")),
+    }
+    let fresh = attach(startup, out, endpoint)?;
+    if read_file(&fresh, out, "/kept")? != text {
+        return Err("kept does not read back after the restart".into());
+    }
+    // One line, after the new instance answered: init's lines on the exit come before it.
+    out.say("fsd-client's call got Dead, and a fresh connection read kept back\n")
+        .map_err(|e| format!("say: {e:?}"))
 }

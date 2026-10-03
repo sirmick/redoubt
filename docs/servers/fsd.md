@@ -402,7 +402,7 @@ metadata change either done or not done, and the next mount reads a consistent v
 
 ## Failure and restart
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:fsd-restart, bench:fsd-corrupt-volume
 
 - **`fsd` crashes:** its clients' calls get `Dead`, `init` restarts it on the same endpoint
   ([init](init.md#restarts-and-reboots)), and littlefs's copy-on-write keeps the volume
@@ -410,7 +410,10 @@ Status: planned · M1 (separation and containment)
 - **The medium is corrupt:** requests that reach the corruption fail; the volume check reports it.
 - **An I/O error from `blkd`** poisons the filesystem until it is mounted again.
 
-**Open:** whether a restarted `fsd` runs the volume check before serving.
+A restarted `fsd` mounts as it does at boot, with the same checks over every metadata pair, then
+serves; it reads no file's blocks first. A power cut leaves the volume consistent
+([R50](#r50-power-loss-leaves-before-or-after)), and damage in a file's blocks is `corrupt`
+wherever a request meets it ([R49](#r49-a-hostile-medium-is-corrupt-not-a-crash)).
 
 ## Residual risks
 

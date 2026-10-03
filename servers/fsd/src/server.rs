@@ -23,6 +23,15 @@ pub const COST: Cost = Cost { in_flight: 0, file: 2048, state: 512 };
 /// The bytes of this server's budget its clients may use between them.
 pub const BUDGET: u64 = 2 * 1024 * 1024;
 
+/// Test-only, for the bench's `fsd-restart` (feature `restart-probe`, off in every default build,
+/// as netd's is): a walk to this name ends the instance with [`PROBE_EXIT`] while it holds the
+/// call, so its caller gets `Dead` and `init` restarts `fsd`. Only the client that walks there
+/// triggers it, and it walks there once.
+#[cfg(feature = "restart-probe")]
+pub const PROBE: &str = "fsd-restart-probe";
+#[cfg(feature = "restart-probe")]
+pub const PROBE_EXIT: u32 = 9;
+
 /// `fsd`'s own attribute types, 0 to 15 (servers/fsd.md, "Attributes"): a client's `set_attr`
 /// cannot touch them.
 pub const OWN_ATTRS: u8 = 16;
@@ -730,6 +739,10 @@ impl<R: Range> FileServer for Fsd<R> {
     fn labels(&self, _: &Node) -> &[u64] { &self.labels }
 
     fn walk(&mut self, _: &Caller, dir: &Node, name: &str) -> Result<(Node, Qid), NineError> {
+        #[cfg(feature = "restart-probe")]
+        if name == PROBE {
+            redoubt_rt::handle::process_exit(PROBE_EXIT);
+        }
         self.find(dir).map_err(nine)?;
         let node = self.node_at(join(&dir.path, name)?).map_err(nine)?;
         let qid = self.qid(&node).map_err(nine)?;
