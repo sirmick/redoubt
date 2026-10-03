@@ -59,7 +59,7 @@ pub enum Why {
     Budget,
     /// More labels than a budget holds.
     TooManyLabels,
-    /// An argument with a NUL.
+    /// An argument with a NUL, or one a `bootfsd` entry may not carry.
     Argument,
     /// A `buckets=` argument the serving library would refuse.
     BucketsArgument,
@@ -101,7 +101,7 @@ impl fmt::Display for Why {
             Why::Badge => "not a root badge given once at its endpoint",
             Why::Budget => "no process could run in this budget",
             Why::TooManyLabels => "more labels than a budget holds",
-            Why::Argument => "an argument holds a NUL",
+            Why::Argument => "an argument with a NUL, or on bootfsd one that is not buckets=N",
             Why::BucketsArgument => "not one buckets=N of 1 to 32",
             Why::Block => "the handles and arguments do not fit a startup block",
             Why::Key => "not one ssh-ed25519 key",

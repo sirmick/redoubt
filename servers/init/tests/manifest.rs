@@ -29,6 +29,10 @@ fn refused_at(m: &Manifest, path: &str, why: Why) {
     assert_eq!(on_virt(m).unwrap_err(), Refusal::At { at: path.into(), why });
 }
 
+fn refused_at_on(m: &Manifest, machine: &Machine, path: &str, why: Why) {
+    assert_eq!(on(m, machine).unwrap_err(), Refusal::At { at: path.into(), why });
+}
+
 fn server<'a>(m: &'a mut Manifest, name: &str) -> &'a mut Server {
     m.servers.iter_mut().find(|s| s.name == name).unwrap()
 }
@@ -363,6 +367,28 @@ fn public_names_entries_the_bundle_holds_never_the_manifest() {
     m.public = vec!["trace".into()];
     m.servers.retain(|s| s.program != "bootfsd");
     refused_at(&m, "public", Why::NoBootfsd);
+}
+
+#[test]
+fn bootfsd_is_given_the_public_list_after_its_buckets() {
+    let mut m = image();
+    m.public = vec!["trace".into()];
+    let bootfsd = &m.servers[2];
+    assert_eq!(redoubt_init::check::args(&m, bootfsd).collect::<Vec<_>>(), ["buckets=4", "trace"]);
+    assert_eq!(redoubt_init::check::args(&m, &m.servers[0]).count(), 3, "only bootfsd gets it");
+    // The names bootfsd serves come from public alone.
+    server(&mut m, "bootfsd").args.push("trace".into());
+    refused_at(&m, "servers[2].args[1]", Why::Argument);
+    // A public list too long for bootfsd's startup block is refused before the boot.
+    let names: Vec<String> = (0..80).map(|n| format!("{n:0>60}")).collect();
+    let mut entries = ENTRIES.to_vec();
+    entries.extend(names.iter().map(|n| (n.as_str(), 1)));
+    let devices = virt_devices();
+    let mut m = image();
+    m.public = names.clone();
+    refused_at_on(&m, &machine(&devices, &entries), "servers[2]", Why::Block);
+    m.public.truncate(40);
+    assert!(on(&m, &machine(&devices, &entries)).is_ok());
 }
 
 // ---- startup blocks ----

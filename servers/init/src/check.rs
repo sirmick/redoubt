@@ -413,8 +413,16 @@ fn fit(m: &Manifest, system: &Usage) -> Result<(), Refusal> {
     }
 }
 
+/// The arguments `init` gives server `s`: its entry's own, then, for `bootfsd`, the `public` list,
+/// which `bootfsd` builds its table from (servers/bootfsd.md, "Started by `init`").
+pub fn args<'a>(m: &'a Manifest, s: &'a Server) -> impl Iterator<Item = &'a str> {
+    let public = if s.program == BOOTFSD { &m.public[..] } else { &[] };
+    s.args.iter().chain(public).map(String::as_str)
+}
+
 /// `public` names bundle entries, each once, never the manifest, and a `bootfsd` serves them
-/// (servers/bootfsd.md, "Started by `init`").
+/// (servers/bootfsd.md, "Started by `init`"). A `bootfsd` entry's own arguments are only its
+/// `buckets=N`: the names it serves come from `public` alone.
 fn public(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
     for (i, name) in m.public.iter().enumerate() {
         let path = || format!("public[{i}]");
@@ -430,6 +438,11 @@ fn public(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
     }
     if !m.public.is_empty() && !m.servers.iter().any(|s| s.program == BOOTFSD) {
         return Err(at(String::from("public"), Why::NoBootfsd));
+    }
+    for (i, s) in m.servers.iter().enumerate().filter(|(_, s)| s.program == BOOTFSD) {
+        if let Some(k) = s.args.iter().position(|a| !a.starts_with(BUCKETS_ARG)) {
+            return Err(at(format!("servers[{i}].args[{k}]"), Why::Argument));
+        }
     }
     Ok(())
 }
@@ -456,7 +469,7 @@ fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
             block.handle(name, handle(n + 1)?);
         }
         block.namespace("/dev/cons", handle(count)?);
-        for a in &s.args {
+        for a in args(m, s) {
             block.arg(a);
         }
         let len = machine.entries.iter().find(|(e, _)| *e == s.program).map_or(0, |(_, len)| *len);
