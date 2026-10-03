@@ -130,7 +130,7 @@ At boot the kernel creates three budgets, all with account 0, no labels and no d
 them, but what it keeps for `init`: one process, `INIT_WEIGHT` (1,000) of its weight, because a
 budget that holds a process needs free weight, and `init`'s pages
 ([below](#the-tree-from-the-boot-manifest)): everything the loader gave `init`, its first
-thread and `INIT_PAGES` (1,024). By R6 (charging) `root`'s own page is charged to `root`, so its
+thread and `INIT_PAGES` (2,048). By R6 (charging) `root`'s own page is charged to `root`, so its
 limit is the free frames less that page. The boot checks that `root`'s limit, its own page and
 the kernel's frames fit in RAM, and stops if they do not.
 
@@ -187,11 +187,15 @@ keeps free. What `init` launches counts in the budgets it launches into.
   - a handle table of up to 64 pages;
   - a page for each server endpoint it owns;
   - a thread for each server, watching its exit endpoint: the thread's stack and IPC page;
-  - a process object for each process it starts (at most `system`'s process limit).
+  - a process object for each process it starts (at most `system`'s process limit);
+  - the image of each program it starts, copied whole from the bundle through its pages on the
+    way to the child: the largest image counts.
 
-  For the image's six servers the bound is under 500 pages (`init-boot` prints it), and 1,024
-  doubles that. It is a fixed count, not a share of RAM, because `init`'s needs do not grow with
-  the machine, and a share of a large machine would sit idle in `root`. The manifest cannot change it, because the kernel reads no manifest. `init`
+  With `beamlet`, whose image is the largest, the bound is 1,059 pages on rv64 and 1,286 on
+  rv32 (`beamlet-boot` prints it), and 2,048 leaves 989 and 762 to spare. It is a fixed count,
+  not a share of RAM, because `init`'s needs grow with the largest program it starts, not with
+  the machine, and a share of a large machine would sit idle in `root`. The manifest cannot
+  change it, because the kernel reads no manifest. `init`
   works in a fixed arena, and before it creates anything it bounds what the manifest will cost it
   in `root`: the endpoints it makes, a process object, a startup block and a thread watching its
   exit endpoint (the thread's IPC page and stack) for each server, the handles it keeps and mints,

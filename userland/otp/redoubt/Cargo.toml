@@ -9,14 +9,20 @@ version.workspace = true
 beamlet-vm = { path = "../vm" }
 redoubt-client = { path = "../../../libs/client" }
 redoubt-rt = { path = "../../../libs/rt" }
-# The host launcher, `fake-redoubt`: the platform run on the fake kernel, with the natives the
-# shell's modules need. Host only; nothing that runs on the machine has this feature.
-beamlet-crypto = { path = "../crypto", optional = true }
-beamlet-re = { path = "../re", optional = true }
+# The natives the shell's modules need, which `run` gives every VM.
+beamlet-crypto = { path = "../crypto" }
+beamlet-re = { path = "../re" }
+# The host launcher, `fake-redoubt`: the platform run on the fake kernel. Host only; nothing that
+# runs on the machine has this feature.
 redoubt-fake-kernel = { path = "../../../libs/rt/fake", optional = true }
 
 [features]
-fake = ["dep:beamlet-crypto", "dep:beamlet-re", "dep:redoubt-fake-kernel"]
+fake = ["dep:redoubt-fake-kernel"]
+
+# beamlet on the machine, started by init (docs/userland/beamlet.md, "beamlet on Redoubt").
+[[bin]]
+name = "beamlet"
+test = false
 
 [[bin]]
 name = "fake-redoubt"
@@ -24,4 +30,8 @@ required-features = ["fake"]
 
 [[test]]
 name = "console"
+required-features = ["fake"]
+
+[[test]]
+name = "limits"
 required-features = ["fake"]

@@ -70,7 +70,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: runs on the host only · tested (12)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (14)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::full_own_mailbox_kills_the_sender
@@ -84,6 +84,8 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::jump_loops_are_preempted
 - host:beamlet-vm::garbage_is_collected_and_live_data_survives
 - host:beamlet-vm::unreferenced_binaries_are_freed
+- bench:beamlet-heap-flood
+- bench:beamlet-budget-flood
 
 </details>
 
@@ -105,10 +107,20 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
 - **Fixed limits**, each `system_limit`: 2^20 atoms of at most 255 characters, 2^16 processes, a
   stack of 2^24 slots, bignums of 2^24 bits, binaries of 2^30 bits.
 
-These limits are measurements, not an allocator: one native that allocates a lot at once is
-caught afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session
-budget's page limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). CPU between VMs is the
-kernel's to share, by budget weight ([scheduling](../kernel/scheduling.md)).
+These limits are measurements, not an allocator: one native that allocates a lot at once is caught
+afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session budget's page
+limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). On Redoubt the platform lowers
+`max_heap_words` and `max_ets_words` to a sixteenth of the VM's budget each, which it takes from its
+required argument `budget_pages=N`, the budget's pages
+([todo](../todo/beamlet-budget-from-startup.md)). A flooding process peaks at about four times its
+heap limit, the old heap, the collector's copy and its growth, so the budget must be at least twice
+what the VM uses with no Erlang process running; then one flooding process, or the tables, meets its
+limit while the VM still has pages. Several flooding at once, or a native's single large allocation,
+reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
+under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
+manifest without `budget_pages`) is restarted until the limit, and then the machine reboots
+([init](../servers/init.md#restarts-and-reboots)). CPU between VMs is the kernel's to share, by
+budget weight ([scheduling](../kernel/scheduling.md)).
 
 ### The `Platform` boundary
 
@@ -231,7 +243,7 @@ interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
-<details><summary>Status: built · partly tested: on the host only, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in no boot · tested (7)</summary>
+<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (7)</summary>
 
 - host:beamlet-redoubt::writes_reach_the_screen
 - host:beamlet-redoubt::typing_reaches_the_vm_then_its_end
@@ -254,11 +266,11 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
   stops the VM, until those calls move to the I/O threads
   ([asynchronous underneath](#asynchronous-underneath-synchronous-on-top)).
 - **Randomness is the kernel's.** On the fake kernel it is seeded from the host for a person's
-  run, and fixed for a test's, so a test repeats.
+  run, and fixed for a test's, so a test repeats. On the machine it is the kernel's own.
 
 ### beamlet on Redoubt
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: files, programs, `/net` and the natives are not built, and the modules are read from `/boot` unchecked · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood
 
 On Redoubt, beamlet is a native program whose `Platform` is written against the system: thin
 adapters over the client library ([native programs](native.md#the-client-library)) for the
@@ -282,9 +294,13 @@ whose size changes is an SSH channel, and a cached size would answer a redraw wi
 before the change; a caller that wants to be told of a change uses the parked `resize` call
 ([the shell](shell.md)).
 
-**Open:** whether beamlet needs the timer's counter frequency beyond `time_now`'s microseconds;
-if it does, it is a new field of the startup block, owned by [init](../servers/init.md), and not
-a new call.
+On the machine, beamlet is the program `beamlet`, started like any other with a console, a
+budget and a connection to `bootfsd`. It runs one scheduler thread until several harts
+([several harts](../plan/m2-usable-shell.md#several-harts)), and starts its threads with the
+runtime's `thread::spawn`.
+
+The timer's counter frequency is not needed: `time_now`'s microseconds serve the clock and
+`idle`'s deadlines (bench:beamlet-console).
 
 ### Natives
 

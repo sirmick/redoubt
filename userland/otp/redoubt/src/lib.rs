@@ -2,23 +2,24 @@
 //! one boundary, answered by the client library (`redoubt-client`) and the runtime's kernel calls.
 //!
 //! This first part serves the console, the clock and randomness; the module source is the
-//! embedder's ([`Modules`]), until modules come from `/boot`; there are no files and no programs
-//! yet. What it proves is the shape the rest will take: a call that waits, here a console read,
-//! is made by a thread of its own, never by the thread the VM runs on, and its result reaches the
-//! VM as a message, which [`Platform::idle`] waits for (beamlet.md, "Asynchronous underneath,
-//! synchronous on top"). The VM's thread never waits for input. It does write to the console and
-//! ask its size itself, calls a live console answers at once; a console that stops answering them
-//! stops the VM until those calls move to the I/O threads.
+//! embedder's ([`Modules`]): `/boot` on the machine, directories on a host; there are no files and
+//! no programs yet. What it proves is the shape the rest will take: a call that waits, here a
+//! console read, is made by a thread of its own, never by the thread the VM runs on, and its
+//! result reaches the VM as a message, which [`Platform::idle`] waits for (beamlet.md,
+//! "Asynchronous underneath, synchronous on top"). The VM's thread never waits for input. It does
+//! write to the console and ask its size itself, calls a live console answers at once; a console
+//! that stops answering them stops the VM until those calls move to the I/O threads.
 //!
 //! - **The console** is `/dev/cons` in the process's namespace, opened once. The VM's thread writes to it and
 //!   asks its size; a reader thread, with its own lend, reads it, and sends what it read to the VM's thread,
-//!   sixteen bytes to a message, on an endpoint of the VM's own, then its end. The two threads share the open
+//!   eight bytes to a message, on an endpoint of the VM's own, then its end. The two threads share the open
 //!   file and nothing else: a second open would take more fids than `consoled` allows one session.
 //! - **Time** is the kernel's microseconds since boot, and `system_time_us` is `None`: there is no wall clock
 //!   until M5 (persist, install, share) brings one. **Randomness** is the kernel's.
 //!
 //! The same code runs on the machine and, on a host, on the fake kernel: only how a thread is
-//! started differs ([`Threads`]).
+//! started and where modules come from differ ([`Threads`], [`Modules`]). [`run`] is the program
+//! both run: the machine's `beamlet` and the host's `fake-redoubt`.
 
 #![cfg_attr(not(feature = "fake"), no_std)]
 #![forbid(unsafe_code)]
@@ -35,20 +36,24 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
+use beamlet_vm::bif::NativeSpec;
 use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError};
+use beamlet_vm::vm::{Config, Limits};
+use beamlet_vm::{Class, Vm};
 use redoubt_client::console::Console;
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend};
-use redoubt_rt::abi::FOREVER;
+use redoubt_rt::abi::{FOREVER, PAGE_SIZE};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Delivery, Event};
 use redoubt_rt::startup::Startup;
 
-/// Starting a thread that runs as this process: on the machine, the runtime's `thread_create`;
+/// Starting a thread that runs as this process: on the machine, the runtime's `thread::spawn`;
 /// on a host, a host thread the fake kernel counts as this process. `Send`, as the platform is:
 /// the VM's schedulers may share it.
 pub trait Threads: Send {
-    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>);
+    /// Runs `body` on a new thread; if none can be started, `body` is dropped unrun.
+    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>) -> Result<(), Error>;
 }
 
 /// Where the VM's modules and applications come from, by file name (`lists.beam`, `kernel.app`).
@@ -59,12 +64,13 @@ pub trait Modules: Send {
 
 /// The badge the reader thread's messages come with: the VM thread's own mint off its endpoint.
 const READER: u64 = 1;
-/// Word 0 of a message from the reader: bytes follow (word 1 their count, words 2 and 3 them).
+/// Word 0 of a message from the reader: bytes follow (word 1 their count, words 2 and 3 them, four
+/// each: a word is 32 bits on rv32, and the kernel refuses a wider one).
 const BYTES: u64 = 1;
 /// Word 0 of a message from the reader: the console has no more input.
 const END: u64 = 2;
 /// The most bytes one message holds.
-const CHUNK: usize = 16;
+const CHUNK: usize = 8;
 
 /// The platform of one VM, on Redoubt.
 pub struct Redoubt {
@@ -116,7 +122,10 @@ impl Redoubt {
             self.ended = true;
             return;
         };
-        self.threads.spawn(Box::new(move || read_console(&console, &to)));
+        // With no thread to read it, there is no input either.
+        if self.threads.spawn(Box::new(move || read_console(&console, &to))).is_err() {
+            self.ended = true;
+        }
     }
 
     /// Takes every message the reader has sent, without waiting.
@@ -139,13 +148,33 @@ impl Redoubt {
             BYTES => {
                 let n = (words[1] as usize).min(CHUNK);
                 let mut bytes = [0u8; CHUNK];
-                bytes[..8].copy_from_slice(&words[2].to_le_bytes());
-                bytes[8..].copy_from_slice(&words[3].to_le_bytes());
+                bytes[..4].copy_from_slice(&(words[2] as u32).to_le_bytes());
+                bytes[4..].copy_from_slice(&(words[3] as u32).to_le_bytes());
                 self.input.extend(&bytes[..n]);
             }
             END => self.ended = true,
             _ => {}
         }
+    }
+}
+
+/// Writes `bytes` to `console`, as many requests as it takes.
+fn write_all(console: &Console, lend: &mut Lend, bytes: &[u8]) {
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match console.write(lend, rest) {
+            Ok(n) if n > 0 => rest = &rest[n.min(rest.len())..],
+            // A console that takes nothing, or has gone, gets no more.
+            _ => return,
+        }
+    }
+}
+
+/// Writes `line` and a newline to `console`, as best it can: a console that does not answer
+/// leaves nobody to tell. `beamlet` says with it why it exits, and `run` how the VM ended.
+pub fn say(console: &Console, line: &str) {
+    if let Ok(mut lend) = Lend::new(1) {
+        write_all(console, &mut lend, format!("{line}\n").as_bytes());
     }
 }
 
@@ -161,10 +190,11 @@ fn read_console(console: &Console, to: &Endpoint) {
             }
             let mut chunk = [0u8; CHUNK];
             chunk[..n].copy_from_slice(&buf[..n]);
-            let low = u64::from_le_bytes(chunk[..8].try_into().expect("8 bytes"));
-            let high = u64::from_le_bytes(chunk[8..].try_into().expect("8 bytes"));
+            let low = u32::from_le_bytes(chunk[..4].try_into().expect("4 bytes"));
+            let high = u32::from_le_bytes(chunk[4..].try_into().expect("4 bytes"));
             // Waits until the VM's thread takes it: a VM that is busy slows the reader down.
-            to.send(&[BYTES, n as u64, low, high], &[], None, FOREVER).map_err(|(e, _)| Error::from(e))?;
+            to.send(&[BYTES, n as u64, u64::from(low), u64::from(high)], &[], None, FOREVER)
+                .map_err(|(e, _)| Error::from(e))?;
         }
     };
     // Whatever ended the reading, the VM is told there is no more.
@@ -196,16 +226,7 @@ impl Platform for Redoubt {
         }
     }
 
-    fn console_write(&mut self, bytes: &[u8]) {
-        let mut rest = bytes;
-        while !rest.is_empty() {
-            match self.console.write(&mut self.lend, rest) {
-                Ok(n) if n > 0 => rest = &rest[n..],
-                // A console that takes nothing, or has gone, gets no more.
-                _ => return,
-            }
-        }
-    }
+    fn console_write(&mut self, bytes: &[u8]) { write_all(&self.console, &mut self.lend, bytes) }
 
     /// Asked afresh each time, never cached: the console's size can change.
     fn console_size(&mut self) -> Option<(u16, u16)> { self.console.size(&mut self.lend).ok().flatten() }
@@ -230,4 +251,88 @@ impl Platform for Redoubt {
     }
 
     fn load_app(&mut self, app: &str) -> Option<Vec<u8>> { self.modules.load(&format!("{app}.app")) }
+}
+
+/// The argument that gives the VM its budget's pages, required on the machine: a program cannot
+/// read its own budget (it holds no budget handle), so the manifest that sets the budget says it
+/// again here.
+pub const BUDGET_PAGES: &str = "budget_pages=";
+
+/// The share of the budget each of the heap and ETS limits gets: one part in this many
+/// (docs/userland/beamlet.md, "Limits inside one VM").
+pub const LIMIT_SHARE: u64 = 16;
+
+/// The pages of `budget_pages=N` among `args`: exactly one, with N a decimal number above zero;
+/// otherwise `None`.
+pub fn budget_pages<'a>(args: impl Iterator<Item = &'a str>) -> Option<u64> {
+    let mut given = args.filter_map(|arg| arg.strip_prefix(BUDGET_PAGES));
+    let (Some(n), None) = (given.next(), given.next()) else { return None };
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    n.parse().ok().filter(|&pages| pages > 0)
+}
+
+/// The VM's limits for a budget of `budget_pages` pages: one process's heap (`max_heap_words`) and
+/// all ETS tables together (`max_ets_words`) each get a sixteenth of it ([`LIMIT_SHARE`]), in
+/// machine words: the same bytes at either width. A flooding process peaks at about four times its
+/// heap limit (the old heap, the collector's copy and its growth), so with a budget at least twice
+/// what the VM uses on its own, one flooding process or table meets its limit, and is killed or
+/// refused in Erlang, while the VM still has pages. Without a budget, the VM's defaults.
+pub fn limits(budget_pages: Option<u64>) -> Limits {
+    let mut limits = Limits::default();
+    if let Some(pages) = budget_pages {
+        let share =
+            pages.saturating_mul(PAGE_SIZE as u64) / LIMIT_SHARE / core::mem::size_of::<usize>() as u64;
+        limits.max_heap_words = share;
+        limits.max_ets_words = share;
+    }
+    limits
+}
+
+/// Runs `module:function()` in a new VM on the platform of the process started with `startup`,
+/// with the natives the shell's modules need, and writes how it ended to the console: the value
+/// it returned, or the exception that ended it. The result is the process's exit code: 0 once the
+/// function ran, however it ended; 1 if the VM could not start it or failed. The VM's limits
+/// are sized to its budget, `budget_pages`, if the embedder knows it ([`limits`]).
+pub fn run(
+    startup: &Startup,
+    threads: Box<dyn Threads>,
+    modules: Box<dyn Modules>,
+    module: &str,
+    function: &str,
+    budget_pages: Option<u64>,
+) -> u32 {
+    // Without a console there is nowhere to say why.
+    let Ok(platform) = Redoubt::new(startup, threads, modules) else { return 1 };
+    let console = Arc::clone(&platform.console);
+    let natives: &'static [NativeSpec] =
+        Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
+    let mut vm = Vm::with_config(Box::new(platform), Config { natives, limits: limits(budget_pages) });
+    let first = match vm.spawn(module, function, |_| Vec::new()) {
+        Ok(pid) => pid,
+        Err(e) => {
+            say(&console, &format!("beamlet: {module}:{function} did not start: {:?} {}", e.class, e.reason));
+            return 1;
+        }
+    };
+    match vm.run(first) {
+        Ok(Ok(value)) => {
+            say(&console, &format!("{value}"));
+            0
+        }
+        Ok(Err(e)) => {
+            let class = match e.class {
+                Class::Error => "error",
+                Class::Exit => "exit",
+                Class::Throw => "throw",
+            };
+            say(&console, &format!("{{'EXCEPTION',{class},{}}}", e.reason));
+            0
+        }
+        Err(e) => {
+            say(&console, &format!("beamlet: {e:?}"));
+            1
+        }
+    }
 }

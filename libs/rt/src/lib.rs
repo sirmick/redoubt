@@ -44,6 +44,7 @@ pub mod server;
 pub mod start;
 pub mod startup;
 mod sys;
+pub mod thread;
 
 /// The kernel's ABI: its types and limits, without the raw call. Every call goes through the
 /// runtime, whose owning types (the heap, a [`ipc::Buffer`], a lend, a [`handle::Dma`]) promise

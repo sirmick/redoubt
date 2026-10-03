@@ -189,7 +189,7 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 
 ### `redoubt-rt`, the native runtime
 
-<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (16)</summary>
+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (18)</summary>
 
 - bench:rt-build
 - bench:net-tcp
@@ -207,6 +207,8 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 - host:redoubt-rt::the_9p_client_closes_handles_a_hostile_server_sends
 - host:redoubt-rt::threads_share_one_connection_with_their_own_lends
 - host:redoubt-rt::a_consumed_lend_is_replaced_by_fresh_pages
+- host:redoubt-rt::a_spawned_thread_runs_its_closure_as_this_process
+- host:redoubt-rt::a_refused_thread_drops_its_closure_unrun
 
 </details>
 
@@ -225,6 +227,7 @@ the loader stub.
 | `path` | lexical path cleaning, so `..` never climbs above a root |
 | `client` | a small synchronous 9P client |
 | `server` | the shared server library ([the serving library](../servers/serving.md)) |
+| `thread` | `spawn`: a closure on a thread of this process, with a stack from `map_anon` that outlives it |
 
 - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
   parses the block, and calls `run`; its return value is the exit code. A block that does not

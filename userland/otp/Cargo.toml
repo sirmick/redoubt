@@ -7,13 +7,18 @@ edition = "2021"
 license = "Apache-2.0"
 version = "0.1.0"
 
+# As the root's, and stripped: `beamlet` is packed into a boot bundle whole and its symbols
+# are never loaded. Profiling on the host: --config profile.release.debug=true.
 [profile.release]
-debug = true
+debug = false
+strip = true
 
 # Every crate compiled into the VM is built from the root's vendor/, the published bytes
 # tools/vendor-check proves: those beamlet shares with the servers, so both sides run the same
-# code, and beamlet's own (vendor/README.md). Only what builds or tests on the host comes from
-# crates.io, pinned by Cargo.lock, as the root's host tools do.
+# code, and beamlet's own (vendor/README.md). The one exception is `cfg-if` (1.0.5, through
+# chacha20, keccak, md-5, sha1 and sha2): macros only, left to Cargo.lock as the root leaves its
+# own copy ("Left to Cargo.lock, not vendored"). Only that and what builds or tests on the host
+# come from crates.io, pinned by Cargo.lock, as the root's host tools do.
 [patch.crates-io]
 adler2 = { path = "../../vendor/adler2" }
 aead = { path = "../../vendor/aead" }

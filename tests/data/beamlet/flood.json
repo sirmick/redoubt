@@ -1,0 +1,37 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "audit,audit,2222222222222222222222222222222222222222222222222222222222222222", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "bootfsd",
+      "program": "bootfsd",
+      "budget": {"pages": "512", "processes": 1, "weight": 100},
+      "receives": ["bootfsd"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "beamlet",
+      "program": "beamlet",
+      "budget": {"pages": "4096", "processes": 1, "weight": 100},
+      "handed": [{"endpoint": "bootfsd", "badge": "7"}],
+      "args": ["budget_pages=4096", "beamlet_flood"]
+    }
+  ],
+  "public": ["beamlet_flood.beam", "io.beam", "io_lib.beam", "io_lib_format.beam", "unicode.beam", "lists.beam"]
+}

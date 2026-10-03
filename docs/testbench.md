@@ -142,7 +142,11 @@ programs = [                 # the first in init's place, the rest started by it
     "log-server",                                  # a binary of the test programs
     { package = "my-crate", bin = "my-server" },   # any workspace binary, built for the target
     { package = "my-crate", bin = "my-probe", features = ["probe"] },  # built with these features, in a target directory of its own
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },  # a binary of a workspace of its own, built there
     { path = "prebuilt/thing.elf" },               # or a prebuilt ELF
+    { erlang = "path/to/module.erl" },             # an Erlang module, compiled by the pinned erlc (a bundle file's)
+    { otp = "io" },                                # an OTP module's .beam from the pinned toolchain (a bundle file's)
+    { zeros = 6291456 },                           # that many zero bytes, an entry only its length matters for (a bundle file's)
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
 memory_mib = 32              # guest RAM (default 256)
@@ -162,8 +166,8 @@ after = "claimed irq 10"
 send = "xyz"
 ```
 
-A `boot` case also takes `allow_panic`, `tamper_bundle`, `sign_bare_archive` and
-`distinct_across_boots` ([hostile inputs](#hostile-inputs)), `[[file]]`
+A `boot` case also takes `allow_panic`, `tamper_bundle`, `sign_bare_archive`,
+`distinct_across_boots` and `distinct` ([hostile inputs](#hostile-inputs)), `[[file]]`
 ([bundle files](#bundle-files)), `[disk]` and `[net]` ([devices](#devices-and-the-network)),
 `[[session]]` ([SSH sessions](#ssh-sessions)), `must_fail` ([self-checks](#self-checks)), and
 `poweroff_status`: the QEMU exit status a `poweroff` case requires (0 by default; 255 for an SBI
@@ -440,8 +444,10 @@ archive without its domain and length; the loader must refuse both
 ([R15 (verified boot)](kernel/boot.md#r15-verified-boot)). A case that expects a deliberate panic
 sets `allow_panic = true`, which drops only `PANIC` from the always-forbidden list, and forbids what
 must not happen instead. `distinct_across_boots = ['id: (.*)']` boots twice and requires the captured
-text to differ. A hostile program is an ordinary `programs` entry; hostile data for a program to
-use, such as a malformed ELF for a parent to launch, is a bundle file.
+text to differ; `distinct = ['console (.*)']` requires, within one boot, two or more lines it
+matches and no capture twice, such as a restarted program's new console. A hostile program is an
+ordinary `programs` entry; hostile data for a program to use, such as a malformed ELF for a parent
+to launch, is a bundle file.
 
 ## Files in the bundle
 

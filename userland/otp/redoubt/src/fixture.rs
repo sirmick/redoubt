@@ -71,9 +71,10 @@ pub struct HostThreads {
 }
 
 impl Threads for HostThreads {
-    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>) {
+    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>) -> Result<(), redoubt_client::Error> {
         let pid = self.pid;
         std::thread::spawn(move || fake().as_process(pid, body));
+        Ok(())
     }
 }
 

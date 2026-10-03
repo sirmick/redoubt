@@ -1,0 +1,34 @@
+description = "beamlet runs on the machine under init (docs/userland/beamlet.md, \"beamlet on Redoubt\"): init starts the program beamlet with its own console from consoled and a connection to bootfsd; the VM reads its modules from /boot, runs one that writes a line to the console and returns ok, and beamlet exits with code 0"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, keyd, consoled, bootfsd and beamlet, built from userland/otp's own workspace;
+# the test module and the one OTP module it needs (io) are public entries.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+]
+timeout_secs = 60
+expect = [
+    # init's bound, which budgets.md quotes ("the tree from the boot manifest"): rv64's, then
+    # rv32's. A beamlet that grows changes it, and the page with it.
+    '^init: the manifest is checked: 4 servers, bound (1059|1286) pages$',
+    '^init: started beamlet, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] beamlet-boot: hello from the VM$',
+    '^init: beamlet \(PID [0-9]+\) exited, code 0$',
+]
+forbid = ['init: refused the boot', '^init: (keyd|consoled|bootfsd) .*(exited|faulted|was killed)', 'init: rebooting', 'panicked']
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/boot.json" }
+
+[[file]]
+name = "beamlet_boot.beam"
+from = { erlang = "userland/otp/redoubt/tests/erlang/beamlet_boot.erl" }
+
+[[file]]
+name = "io.beam"
+from = { otp = "io" }

@@ -1,0 +1,53 @@
+description = "The backstop: a native of beamlet's VM makes one allocation larger than the VM's whole budget (docs/userland/beamlet.md, \"Limits inside one VM\"), which no limit checked between slices sees. The kernel's budget refuses the pages, which ends the VM: init's line that beamlet ended is the system's verdict, and init restarts it with a new console, where the module starts again; nothing else ends, and within the case the machine does not reboot (rule F): one restart is below init's limit, while a VM that ended every time would reboot the machine past it (docs/servers/init.md, \"Restarts and reboots\")"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-heap-flood, with the allocating module.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started beamlet, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] beamlet-budget-flood: one allocation past the budget$',
+    # A failed allocation panics (101); a fault would be the kernel's ending.
+    '^init: beamlet \(PID [0-9]+\) (exited, code 101|faulted, code [0-9]+, .*)$',
+    '^init: restarted beamlet, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] beamlet-budget-flood: one allocation past the budget$',
+]
+# The restarted beamlet's console is a new one: nothing of the old instance is left.
+distinct = ['^init: (?:started|restarted) beamlet, console ([0-9a-f]{16})$']
+forbid = [
+    'init: refused the boot',
+    'beamlet-budget-flood: the VM survived',
+    '^init: (keyd|consoled|bootfsd) .*(exited|faulted|was killed)',
+    '^init: restarted (keyd|consoled|bootfsd)\b',
+    'init: rebooting',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/budget-flood.json" }
+
+[[file]]
+name = "beamlet_budget_flood.beam"
+from = { erlang = "userland/otp/redoubt/tests/erlang/beamlet_budget_flood.erl" }
+
+[[file]]
+name = "io.beam"
+from = { otp = "io" }
+
+[[file]]
+name = "io_lib.beam"
+from = { otp = "io_lib" }
+
+[[file]]
+name = "io_lib_format.beam"
+from = { otp = "io_lib_format" }
+
+[[file]]
+name = "unicode.beam"
+from = { otp = "unicode" }

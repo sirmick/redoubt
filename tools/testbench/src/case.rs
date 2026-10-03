@@ -267,6 +267,11 @@ pub struct Boot {
     /// each captures must differ between the two boots (for randomness, ASLR, ...).
     #[serde(default)]
     pub distinct_across_boots: Vec<String>,
+    /// Regular expressions with one capture group. Each must match at least two console lines
+    /// of the boot, and no two of what it captures may be the same (a restarted program's new
+    /// console, ...).
+    #[serde(default)]
+    pub distinct: Vec<String>,
     /// Console input to inject.
     #[serde(default)]
     pub input: Vec<Input>,
@@ -459,12 +464,15 @@ pub enum Program {
     /// A binary of the `test-programs` package.
     TestProgram(String),
     /// A binary of any workspace package, built for the case's target, with `features` if any
-    /// (`build.rs` keeps that build apart from the one without).
+    /// (`build.rs` keeps that build apart from the one without). With `workspace`, the package
+    /// is in that workspace of its own, a directory relative to the root (`userland/otp`), and is
+    /// built there.
     Package {
         package: String,
         bin: String,
         #[serde(default)]
         features: Vec<String>,
+        workspace: Option<PathBuf>,
     },
     /// A binary of the `test-programs` package, with budgets.
     Bin {
@@ -474,6 +482,14 @@ pub enum Program {
     },
     /// A prebuilt ELF, relative to the workspace root.
     Path { path: PathBuf },
+    /// An Erlang module's source, relative to the workspace root, compiled to its `.beam` by the
+    /// pinned toolchain's `erlc` (`userland/otp/tools/env.sh`).
+    Erlang { erlang: PathBuf },
+    /// The `.beam` of a module of the pinned toolchain's OTP, by module name (`io`).
+    Otp { otp: String },
+    /// This many zero bytes, made in the run: an entry whose length is all that matters, such as
+    /// a program `init` must refuse on its size before it reads a byte (init-refuses-bound).
+    Zeros { zeros: u64 },
     /// A `test-programs` binary, corrupted before injection, for testing how the loader
     /// and kernel cope with hostile images.
     Corrupted { corrupt: String, with: Corruption },
@@ -520,6 +536,7 @@ impl Recipe {
                     package: package.clone(),
                     bin: entry.name.clone(),
                     features: Vec::new(),
+                    workspace: None,
                 }),
                 (None, Some(path)) => files.push(BundleFile {
                     name: entry.name.clone(),
@@ -632,6 +649,10 @@ impl Case {
                 for pattern in &boot.distinct_across_boots {
                     let groups = regex::Regex::new(pattern)?.captures_len();
                     ensure!(groups >= 2, "distinct_across_boots /{pattern}/ needs a capture group");
+                }
+                for pattern in &boot.distinct {
+                    let groups = regex::Regex::new(pattern)?.captures_len();
+                    ensure!(groups >= 2, "distinct /{pattern}/ needs a capture group");
                 }
                 if !boot.session.is_empty() {
                     ensure!(
@@ -823,5 +844,69 @@ mod tests {
             })
             .collect();
         assert_eq!(features, [&[][..], &["f".to_string()][..]]);
+    }
+
+    /// A package's program may name a workspace of its own, none unless named; an Erlang
+    /// module's source, an OTP module and a run of zeros are forms of their own.
+    #[test]
+    fn a_program_may_come_from_another_workspace_or_from_erlang() {
+        #[derive(Deserialize)]
+        struct Programs {
+            programs: Vec<Program>,
+        }
+        let text = "programs = [\n  { package = \"p\", bin = \"b\" },\n  \
+                    { package = \"p\", bin = \"b\", workspace = \"userland/otp\" },\n  \
+                    { erlang = \"m.erl\" },\n  { otp = \"io\" },\n  { zeros = 4096 },\n]\n";
+        let programs: Programs = toml::from_str(text).unwrap();
+        let workspaces: Vec<Option<&Path>> = programs.programs[..2]
+            .iter()
+            .map(|p| match p {
+                Program::Package { workspace, .. } => workspace.as_deref(),
+                other => panic!("not a package's program: {other:?}"),
+            })
+            .collect();
+        assert_eq!(workspaces, [None, Some(Path::new("userland/otp"))]);
+        assert!(matches!(&programs.programs[2], Program::Erlang { erlang } if erlang == Path::new("m.erl")));
+        assert!(matches!(&programs.programs[3], Program::Otp { otp } if otp == "io"));
+        assert!(matches!(&programs.programs[4], Program::Zeros { zeros: 4096 }));
+    }
+
+    /// Every manifest that starts `beamlet`, the image's and the cases', gives it
+    /// `budget_pages=N` with N its budget's pages: the argument sizes the VM's limits, and
+    /// nothing else keeps it equal to the budget. The stopgap until the startup block carries
+    /// the budget (docs/todo/beamlet-budget-from-startup.md).
+    #[test]
+    fn every_beamlet_is_told_its_own_budget() {
+        fn manifests(dir: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    manifests(&path, found);
+                } else if path.extension().is_some_and(|e| e == "json") {
+                    found.push(path);
+                }
+            }
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = vec![root.join("image/manifest.json")];
+        manifests(&root.join("tests/data"), &mut found);
+        let mut beamlets = 0;
+        for path in found {
+            // Not every file is a manifest, nor a well-formed one: refusal cases' are not.
+            let Ok(json) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()) else {
+                continue;
+            };
+            let Some(servers) = json.get("servers").and_then(|s| s.as_array()) else { continue };
+            for server in servers.iter().filter(|s| s["program"] == "beamlet") {
+                let pages =
+                    server["budget"]["pages"].as_str().unwrap_or_else(|| panic!("{path:?}: no budget"));
+                let args: Vec<&str> =
+                    server["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str()).collect();
+                let given: Vec<&str> = args.iter().filter_map(|a| a.strip_prefix("budget_pages=")).collect();
+                assert_eq!(given, [pages], "{path:?}: beamlet's budget_pages, against its budget");
+                beamlets += 1;
+            }
+        }
+        assert!(beamlets >= 4, "the beamlet cases' manifests were not found ({beamlets})");
     }
 }
