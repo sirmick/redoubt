@@ -719,14 +719,19 @@ platform's interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant
 RAM frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
 every wake waits for it. R10 (destruction) walks only the dying subtree, its owner lists, the
 dying processes' own tables and page tables, and the chains of the handles held outside it
-([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by
+([budgets](budgets.md#residual-risks)), so it is no exception. Delivery visits only the endpoint's
+own receivers, groups and notices, so it is no exception either. What a call looks up by PID or by
 interrupt number it finds in an index the kernel keeps as objects are made and freed: a process
 object in one of `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's
 sources; a boot naming a higher interrupt stops). PID 1 is the kernel's, which has no process
 object, so processes take PIDs 2 to `MAX_PROCESS_COUNT` (511): `process_create`'s PID draw looks
 at most at those 510 slots, an owed exit notice is sought among at most 510 process objects, and
 an interrupt finds its object in one lookup; a checked build proves each index against a scan of
-every object frame.
+every object frame. A checked build checks the delivery lists. At each kernel exit that changed
+one, it starts from every thread and its open calls, checking each list it meets whole and the
+totals by kind. After each destruction, at each process-object free and before the hart idles, it
+starts from every budget and endpoint instead, so a list no waiting thread belongs to is checked
+there.
 In `bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
 its exit notice and an interrupt take what they took on an empty system; with the old scans, the
 first took 1.2 s against 22 ms. So do a one-page `map_anon`, a `budget_create` and a

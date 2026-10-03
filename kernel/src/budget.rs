@@ -145,6 +145,11 @@ pub(crate) const OWNED_WORD: usize = 103;
 /// The budget's ready threads, as the scheduler counts them (`sched.rs`), above its own words so
 /// storing a budget never touches it. 0 for a new budget; a new frame is zeroed.
 const READY_WORD: usize = 104;
+/// The heads of the chains of what was sent through a handle stamped with this budget
+/// (`message.rs`, R10 step 4): the queued messages, and the taken calls whose callers wait. Above
+/// every object's own words too; 0 for an empty chain, as a new frame is.
+pub(crate) const QUEUED_WORD: usize = 105;
+pub(crate) const TAKEN_WORD: usize = 106;
 
 /// The frame index a `frame + 1` word names, or `None` for 0.
 pub(crate) fn frame_of(word: u64) -> Option<u32> { (word as u32).checked_sub(1) }
@@ -1334,7 +1339,10 @@ pub fn destroy_subtree(
     // neither moves the schedule nor counts in a latency target (`sched::audit`).
     #[cfg(debug_assertions)]
     crate::sched::audit(crate::sched::AUDIT_DESTRUCTION, || {
-        MemoryManager::with(|mm| mm.check_object_indexes())
+        MemoryManager::with(|mm| {
+            mm.check_object_indexes();
+            crate::message::check_all(mm);
+        })
     });
     caller_doomed
 }

@@ -84,6 +84,10 @@ const W_COUNTED_ID: usize = 13;
 const W_BLAMED_LABELS: usize = 14; // MAX_LABELS words
 const WORDS: usize = W_BLAMED_LABELS + MAX_LABELS;
 const _: () = assert!(WORDS * 8 <= redoubt_sys::PAGE_SIZE);
+/// The object's links on its exit endpoint's reporters or exits (`redoubt-ipclist`), above its own
+/// words so that storing it never touches them; 0 in a new frame, as an unlinked member's are.
+pub const LIST_WORD: usize = WORDS;
+const _: () = assert!(LIST_WORD + redoubt_ipclist::PROCESS_WORDS <= crate::budget::DEFER_WORD);
 
 /// `process_start` has run.
 const F_STARTED: u64 = 1;
@@ -91,6 +95,9 @@ const F_STARTED: u64 = 1;
 const F_ALIVE: u64 = 2;
 /// The process is gone and its notice is still owed to the exit endpoint.
 const F_NOTICE: u64 = 4;
+/// The notice is on its exit endpoint's exits, to be received (`settle_notice`); until then the
+/// object is on its reporters.
+const F_QUEUED: u64 = 8;
 
 /// A process as the kernel works with it; it lives in its frame as words.
 #[derive(Clone, Copy)]
@@ -118,6 +125,9 @@ impl Proc {
     pub fn alive(&self) -> bool { self.flags & F_ALIVE != 0 }
 
     fn notice_owed(&self) -> bool { self.flags & F_NOTICE != 0 }
+
+    /// Its notice is on its exit endpoint's exits, not its reporters.
+    pub fn notice_queued(&self) -> bool { self.flags & F_QUEUED != 0 }
 }
 
 /// R1's sender side for an exit notice, read before the budget it names can go: the class and
@@ -215,8 +225,12 @@ impl MemoryManager {
     /// The lowest process-object frame for which `f` holds: the objects that exist, through the
     /// PID index, never a scan of the object frames (R12).
     fn find_process(&self, f: impl Fn(&MemoryManager, u32) -> bool) -> Option<u32> {
-        let frames = self.objects.process_pids.iter().filter_map(|i| self.objects.processes[i]);
-        frames.filter(|frame| f(self, *frame)).min()
+        self.process_frames().filter(|frame| f(self, *frame)).min()
+    }
+
+    /// Every process object's frame, from the PID index.
+    pub fn process_frames(&self) -> impl Iterator<Item = u32> + '_ {
+        self.objects.process_pids.iter().filter_map(move |i| self.objects.processes[i])
     }
 
     /// `pid`'s process object is now `frame` (`None`: freed), in the PID index.
@@ -232,7 +246,13 @@ impl MemoryManager {
         // Inside a destruction it does nothing: the destruction audits once, after its walk.
         #[cfg(debug_assertions)]
         if !self.objects.deferring {
-            crate::sched::audit(crate::sched::AUDIT_PROCESS_INDEX, || self.check_process_index());
+            crate::sched::audit(crate::sched::AUDIT_PROCESS_INDEX, || {
+                self.check_process_index();
+                // A process object's free is a full-audit point for the IPC lists too.
+                if frame.is_none() {
+                    crate::message::check_all(self);
+                }
+            });
         }
     }
 
@@ -392,11 +412,17 @@ pub fn process_create(
         mm.index_process(child, Some(frame));
         // R9: the new handle is stamped with the caller's budget.
         let object = Object::Process(ProcessRef { frame, id });
-        mm.install_handle(pid, Handle { object, badge: 0, stamp: creator }).inspect_err(|_| {
-            mm.free_object_frame(frame);
-            mm.index_process(child, None);
-            mm.uncharge(caller_budget, PROCESS_PAGES);
-        })
+        let installed = mm.install_handle(pid, Handle { object, badge: 0, stamp: creator });
+        match installed {
+            // It reports to its exit endpoint until its notice is received or dropped.
+            Ok(_) => crate::message::reporting(mm, endpoint.frame, frame),
+            Err(_) => {
+                mm.free_object_frame(frame);
+                mm.index_process(child, None);
+                mm.uncharge(caller_budget, PROCESS_PAGES);
+            }
+        }
+        installed
     });
     // With no object left, ending the child gives its PID's count back (`process_ended`).
     made.inspect_err(|_| drop_unstarted(ss, mm, child))
@@ -739,7 +765,13 @@ fn settle_notice(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32, flow
         return;
     }
     match p.endpoint.filter(|e| mm.is_live_endpoint(*e) && allowed(mm, *e, flow)) {
-        Some(e) => crate::message::pump_endpoint(ss, mm, e),
+        Some(e) => {
+            let mut p = p;
+            p.flags |= F_QUEUED;
+            mm.store_process(frame, &p);
+            crate::message::exit_owed(mm, e.frame, frame);
+            crate::message::pump_endpoint(ss, mm, e)
+        }
         None => free_object(mm, frame),
     }
 }
@@ -765,6 +797,9 @@ fn allowed(mm: &MemoryManager, e: EndpointRef, flow: Option<Flow>) -> bool {
 pub fn free_object(mm: &mut MemoryManager, frame: u32) {
     let p = mm.process(frame);
     assert!(!p.alive(), "a live process's object was freed");
+    if let Some(e) = p.endpoint {
+        crate::message::unreport(mm, e.frame, frame, p.notice_queued());
+    }
     mm.close_handles_to(frame);
     if mm.is_live_budget(p.creator) {
         mm.uncharge(p.creator.frame, PROCESS_PAGES);
@@ -776,14 +811,13 @@ pub fn free_object(mm: &mut MemoryManager, frame: u32) {
     mm.index_process(p.pid, None);
 }
 
-/// The notice a process object owes on `e`, with its frame (`message.rs` calls this while it is
-/// matching receivers with what is pending on an endpoint).
+/// The notice a process object owes on `e`, the first to come of those owed there, with its frame:
+/// the head of `e`'s exits, never a pass over the process objects (`message.rs` calls this while it
+/// is matching receivers with what is pending on an endpoint).
 pub fn pending_notice(mm: &MemoryManager, e: EndpointRef) -> Option<(u32, ExitNotice)> {
-    let frame = mm.find_process(|mm, frame| {
-        let p = mm.process(frame);
-        p.notice_owed() && p.endpoint == Some(e)
-    })?;
+    let frame = crate::message::first_exit(mm, e.frame)?;
     let p = mm.process(frame);
+    debug_assert!(p.notice_owed() && p.endpoint == Some(e), "I1: an exit queued is not owed here");
     let mut labels = Labels::new();
     for label in &p.blamed_labels[..p.blamed_nlabels] {
         labels.push(*label).expect("MAX_LABELS");
@@ -830,16 +864,17 @@ pub fn budgets_dying(ss: &mut ProcessTable) {
     }
 }
 
-/// Endpoints owned by a dying budget are being destroyed (R10): every exit notice owed to one is
+/// Endpoint `e`, owned by a dying budget, is being destroyed (R10): every exit notice owed on it is
 /// dropped and its process object freed, and a process still running loses the ear it was to
-/// report to. One pass over the process objects, keyed on the endpoint's owner dying, never one
-/// per endpoint.
-pub fn endpoints_dying(mm: &mut MemoryManager) {
-    while let Some(frame) = mm.find_process(|mm, frame| {
-        mm.process(frame).endpoint.is_some_and(|e| mm.budget_at(mm.endpoint_at(e).owner).dying)
-    }) {
+/// report to. Its own two lists, never a pass over the process objects.
+pub fn endpoint_dying(mm: &mut MemoryManager, e: u32) {
+    while let Some(frame) = crate::message::pop_naming(mm, e) {
         let mut p = mm.process(frame);
         p.endpoint = None;
-        if p.alive() { mm.store_process(frame, &p) } else { free_object(mm, frame) }
+        p.flags &= !F_QUEUED;
+        mm.store_process(frame, &p);
+        if !p.alive() {
+            free_object(mm, frame);
+        }
     }
 }
