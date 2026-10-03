@@ -130,7 +130,7 @@ At boot the kernel creates three budgets, all with account 0, no labels and no d
 them, but what it keeps for `init`: one process, `INIT_WEIGHT` (1,000) of its weight, because a
 budget that holds a process needs free weight, and `init`'s pages
 ([below](#the-tree-from-the-boot-manifest)): everything the loader gave `init`, its first
-thread and `INIT_PAGES` (2,048). By R6 (charging) `root`'s own page is charged to `root`, so its
+thread and `INIT_PAGES` (1,024). By R6 (charging) `root`'s own page is charged to `root`, so its
 limit is the free frames less that page. The boot checks that `root`'s limit, its own page and
 the kernel's frames fit in RAM, and stops if they do not.
 
@@ -193,20 +193,19 @@ keeps free. What `init` launches counts in the budgets it launches into.
     stack at a time, copied through its pages and moved to the child
     ([the loader stub](../userland/native.md#the-loader-stub)).
 
-  With `beamlet`, the bound is 416 pages on both widths (`beamlet-boot` prints it), and 2,048
-  leaves 1,632 to spare. It is a fixed count, not a share of RAM, because `init`'s
-  needs do not grow with the machine, nor with the size of a program it starts, and a share of
-  a large machine would sit idle in `root`. The manifest cannot
-  change it, because the kernel reads no manifest. `init`
+  With `beamlet`, the bound is 416 pages on both widths (`beamlet-boot` prints it), and 1,024 at
+  least doubles it. It is a fixed count, not a share of RAM, because `init`'s needs do not grow
+  with the machine, nor with the size of a program it starts, and a share of a large machine would
+  sit idle in `root`. The manifest cannot change it, because the kernel reads no manifest. `init`
   works in a fixed arena, and before it creates anything it bounds what the manifest will cost it
   in `root`: the endpoints it makes, a process object, a startup block and a thread watching its
   exit endpoint (the thread's IPC page and stack) for each server, the handles it keeps and mints,
-  and the arena. It reads `root`'s free pages with
-  [`budget_usage`](#budget_usage) and refuses the boot if the bound is larger; a charge that fails
-  later is a bug in the bound, and refuses the boot too, so no boot runs half started. The number
-  changes only in the kernel, with a stated reason. A tester in `init`'s place
-  ([test bench](../testbench.md#starting-a-cases-programs)) works within the same allowance. A
-  kernel case whose first program needs more works in a budget it carves from `system`.
+  and the arena. It reads `root`'s free pages with [`budget_usage`](#budget_usage) and refuses the
+  boot if the bound is larger; a charge that fails later is a bug in the bound, and refuses the
+  boot too, so no boot runs half started. The number changes only in the kernel, with a stated
+  reason. A tester in `init`'s place ([test bench](../testbench.md#starting-a-cases-programs))
+  works within the same allowance. A kernel case whose first program needs more works in a budget
+  it carves from `system`.
 - **The weights stay.** `ROOT_WEIGHT` is 1,000,000 and `INIT_WEIGHT` is 1,000. `init`'s free
   weight in `root` is a driver's, and the rest is split between `system` (250,000) and `users`
   (749,000). Only the budgets that hold processes compete, so what matters is how their weights
