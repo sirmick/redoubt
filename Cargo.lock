@@ -647,8 +647,10 @@ dependencies = [
 name = "redoubt-init"
 version = "0.1.0"
 dependencies = [
+ "redoubt-client",
  "redoubt-init",
  "redoubt-rt",
+ "redoubt-signing",
  "redoubt-sys",
  "stub",
 ]

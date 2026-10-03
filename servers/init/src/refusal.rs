@@ -38,6 +38,11 @@ pub enum Refusal {
     Failed { at: String, step: &'static str },
 }
 
+impl Refusal {
+    /// A step of the boot that failed after the checks passed ([`Refusal::Failed`]).
+    pub fn failed(at: &str, step: &'static str) -> Refusal { Refusal::Failed { at: String::from(at), step } }
+}
+
 /// What is wrong with one value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Why {

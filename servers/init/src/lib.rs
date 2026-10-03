@@ -12,6 +12,7 @@
 extern crate alloc;
 
 pub mod bound;
+pub mod bundle;
 pub mod check;
 pub mod confine;
 pub mod manifest;

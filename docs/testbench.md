@@ -451,10 +451,11 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
+- bench:init-boot
 - host:testbench::every_network_is_restricted
 - host:testbench::virtio_devices_are_modern
 
