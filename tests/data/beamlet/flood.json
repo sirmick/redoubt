@@ -34,7 +34,7 @@
       "program": "blkd",
       "budget": {"pages": "512", "processes": 1, "weight": 1000},
       "devices": [{"device": "disk1", "as": "disk"}],
-      "receives": ["blkd"]
+      "receives": ["blkd"], "args": ["endpoint=blkd"]
     },
     {
       "name": "fsd:system",

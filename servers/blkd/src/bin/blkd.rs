@@ -1,6 +1,6 @@
 //! `blkd`, the program: take the device out of the startup block, bring the disk up, read its
-//! partition table once, then answer calls on the endpoint named `blkd` until that endpoint is
-//! destroyed.
+//! partition table once, then answer calls on the endpoint its argument `endpoint=NAME` names
+//! until that endpoint is destroyed.
 //!
 //! Everything it can do is in `redoubt-blkd`'s library, so host tests drive the same code against
 //! a hostile fake device and the runtime's fake kernel (`tests/`).
@@ -11,15 +11,16 @@
 //! no device tree and hardcodes no address; without both handles it does not start, which is the
 //! honest thing for a driver that has no device.
 //!
-//! **Its ranges' labels are handed in too:** one argument per labelled volume, `labels.P=ID,...`
-//! for GPT entry P ([`redoubt_blkd::args`]), parsed against the table before anything is served;
-//! an argument it cannot take stops it with [`BAD_ARGS`].
+//! **Its endpoint and its ranges' labels are handed in too:** `endpoint=NAME`, required, since
+//! one `blkd` runs per disk, and one argument per labelled volume, `labels.P=ID,...` for GPT entry
+//! P ([`redoubt_blkd::args`]), parsed against the table before anything is served; an argument it
+//! cannot take stops it with [`BAD_ARGS`].
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
 extern crate alloc;
 
-use redoubt_blkd::args::range_labels;
+use redoubt_blkd::args::parse_args;
 use redoubt_blkd::kernel::Device;
 use redoubt_blkd::server::BlockServer;
 use redoubt_blkd::{Disk, read_partitions};
@@ -28,7 +29,7 @@ use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(serve);
 
-/// The startup block named no endpoint for `blkd` to receive on.
+/// The startup block holds no handle by the name `endpoint=` gives.
 pub const NO_ENDPOINT: u32 = 2;
 /// The startup block named no [`DISK`] handle, or no [`DISK_IRQ`] handle, so there is no disk to
 /// serve.
@@ -47,13 +48,15 @@ pub const NO_DISK: u32 = 6;
 /// and exits again, so an unreadable disk is a reboot loop rather than a degraded boot
 /// (servers/blkd.md, "Failure and restart"; servers/init.md, "Restarts and reboots").
 pub const NO_PARTITIONS: u32 = 7;
-/// An argument that is not `labels.P=ID[,ID...]`, names P twice, or names no partition
-/// (`redoubt_blkd::args`): `blkd` never serves a range under labels it misread.
+/// No `endpoint=NAME`, or more than one, or an argument that is not `labels.P=ID[,ID...]`, names
+/// P twice, or names no partition (`redoubt_blkd::args`): `blkd` never serves on an endpoint it
+/// guessed, or a range under labels it misread.
 pub const BAD_ARGS: u32 = 4;
 
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
-    let Some(handle) = startup.handle("blkd") else { return NO_ENDPOINT };
+    let Ok(args) = parse_args(startup.args()) else { return BAD_ARGS };
+    let Some(handle) = startup.handle(args.endpoint) else { return NO_ENDPOINT };
     let (Some(mmio), Some(irq)) = (startup.handle(DISK), startup.handle(DISK_IRQ)) else {
         return NO_DEVICE;
     };
@@ -62,7 +65,7 @@ pub fn serve(startup: &Startup) -> u32 {
     };
     let Ok(mut disk) = Disk::new(device) else { return NO_DISK };
     let Ok(roots) = read_partitions(&mut disk) else { return NO_PARTITIONS };
-    let Ok(labels) = range_labels(startup.args(), &roots) else { return BAD_ARGS };
+    let Ok(labels) = args.range_labels(&roots) else { return BAD_ARGS };
     let mut server = BlockServer::new(disk, roots, labels);
     let endpoint = Endpoint::from_handle(handle);
     // The handler answers every call; what it returns is dropped.

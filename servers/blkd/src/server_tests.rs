@@ -35,11 +35,13 @@ fn device() -> FakeDevice {
 
 fn server(device: &FakeDevice) -> BlockServer<&FakeDevice> { labelled_server(device, &[]) }
 
-/// A server given `args` as `init` would give them (`labels.P=...`).
+/// A server given `args` as `init` would give them (`labels.P=...`), after its endpoint.
 fn labelled_server<'d>(device: &'d FakeDevice, args: &[&str]) -> BlockServer<&'d FakeDevice> {
     let mut disk = Disk::new(device).expect("bring-up");
     let roots = crate::read_partitions(&mut disk).expect("a partition table");
-    let labels = crate::args::range_labels(args.iter().copied(), &roots).expect("good arguments");
+    let args =
+        crate::args::parse_args(["endpoint=blkd"].iter().chain(args).copied()).expect("good arguments");
+    let labels = args.range_labels(&roots).expect("good arguments");
     BlockServer::new(disk, roots, labels)
 }
 

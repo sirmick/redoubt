@@ -18,7 +18,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-<details><summary>Status: built · tested (17)</summary>
+<details><summary>Status: built · tested (18)</summary>
 
 - bench:init-boot
 - bench:init-refuses-public-manifest
@@ -37,6 +37,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 - host:redoubt-init::handles_and_arguments_must_fit_one_startup_block
 - host:redoubt-init::the_fuzz_corpus_still_passes
 - host:redoubt-init::each_volume_s_range_is_minted_at_its_own_disk_s_blkd
+- host:redoubt-init::a_blkd_receives_where_init_mints_its_ranges
 
 </details>
 
@@ -85,7 +86,10 @@ and `init`'s only input. Its entries:
   (`keyd`, `consoled` and `bootfsd`, at the first endpoint each receives on), its own handle
   carries the smallest badge from 1 that no `handed` item there uses. A manifest names each of
   these programs at most once, `keyd` exactly once: a second would run beside the one `init`
-  calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35).
+  calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35). A program
+  that may run more than once (`blkd`, one per disk; `fsd`, one per volume) is told the endpoint
+  it receives on by its argument `endpoint=NAME`, which the manifest gives it; a `blkd`'s must
+  name the endpoint it receives on first, where `init` mints its volumes' ranges.
 - **Volumes.** A `volumes` entry is one GPT entry of its disk, which no other entry names on
   that disk, and at most one server attaches it, and no entry is handed a badge at the endpoint
   any `blkd` receives on ([R47 (one volume per instance)](fsd.md#r47-one-volume-per-instance)).

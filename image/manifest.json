@@ -26,7 +26,7 @@
     { "name": "blkd", "program": "blkd",
       "budget": { "pages": "512", "processes": 1, "weight": 1000 },
       "devices": [ { "device": "disk0", "as": "disk" } ],
-      "receives": ["blkd"] },
+      "receives": ["blkd"], "args": ["endpoint=blkd"] },
     { "name": "netd", "program": "netd",
       "budget": { "pages": "1024", "processes": 1, "weight": 1000 },
       "devices": [ { "device": "net0", "as": "net" } ],

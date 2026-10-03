@@ -452,7 +452,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
     assert_eq!(args(&m, "bootfsd"), ["buckets=4", "system.index"]);
-    assert_eq!(args(&m, "blkd"), ["labels.2=7"]);
+    assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 
 /// R47 (one volume per instance): a volume is one GPT entry, attached by one server, whose range
@@ -489,7 +489,7 @@ fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
     refused_at(&m, "servers[0].args[3]", Why::Argument);
     let mut m = without_volumes();
     server(&mut m, "blkd").args.push("labels.0=1".into());
-    refused_at(&m, "servers[3].args[0]", Why::Argument);
+    refused_at(&m, "servers[3].args[1]", Why::Argument);
 }
 
 /// R47 (one volume per instance): `blkd` resolves a badge at its endpoint to a volume's range, so
@@ -533,8 +533,9 @@ fn second_disk(m: &mut Manifest, device: &str, suffix: &str, labels: Vec<String>
     m.servers.push(Server {
         name: blkd.clone(),
         labels: labels.clone(),
-        receives: vec![blkd],
+        receives: vec![blkd.clone()],
         devices: vec![DeviceUse { device: device.into(), name: "disk".into() }],
+        args: vec![format!("endpoint={blkd}")],
         ..base
     });
     let base = server(&mut image(), "fsd:data").clone();
@@ -570,8 +571,8 @@ fn each_volume_s_range_is_minted_at_its_own_disk_s_blkd() {
     let args = |m: &Manifest, name: &str| {
         redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap())
     };
-    assert!(args(&m, "blkd").is_empty());
-    assert_eq!(args(&m, "blkd:system"), ["labels.0=7"]);
+    assert_eq!(args(&m, "blkd"), ["endpoint=blkd"]);
+    assert_eq!(args(&m, "blkd:system"), ["endpoint=blkd:system", "labels.0=7"]);
     // A volume without its disk, and a disk naming a server that is not a blkd.
     let mut missing = m.clone();
     missing.volumes[0].disk = None;
@@ -588,6 +589,24 @@ fn each_volume_s_range_is_minted_at_its_own_disk_s_blkd() {
     let netd = m.servers.iter().position(|s| s.program == "netd").unwrap();
     let k = m.servers[netd].handed.len() - 1;
     refused_at(&m, &format!("servers[{netd}].handed[{k}].endpoint"), Why::BlkdHanded);
+}
+
+/// A `blkd` receives on the endpoint its one `endpoint=` names, and `init` mints its volumes'
+/// ranges at its first: the two must be one, or a range would be minted where no `blkd` serves.
+#[test]
+fn a_blkd_receives_where_init_mints_its_ranges() {
+    let mut m = image();
+    server(&mut m, "blkd").args = vec!["endpoint=blkd:system".into()];
+    refused_at(&m, "servers[3].args[0]", Why::BlkdEndpoint);
+    server(&mut m, "blkd").args.clear();
+    refused_at(&m, "servers[3].args", Why::BlkdEndpoint);
+    server(&mut m, "blkd").args = vec!["endpoint=blkd".into(), "endpoint=blkd".into()];
+    refused_at(&m, "servers[3].args[1]", Why::BlkdEndpoint);
+    server(&mut m, "blkd").receives.push("blkd2".into());
+    server(&mut m, "blkd").args = vec!["endpoint=blkd2".into()];
+    refused_at(&m, "servers[3].args[0]", Why::BlkdEndpoint);
+    server(&mut m, "blkd").args = vec!["endpoint=blkd".into()];
+    assert!(on_virt(&m).is_ok());
 }
 
 #[test]

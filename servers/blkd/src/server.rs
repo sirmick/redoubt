@@ -58,7 +58,7 @@ pub struct BlockServer<T: Transport> {
 impl<T: Transport> BlockServer<T> {
     /// Serves `roots` on `disk`, each under its label set in `labels`. `roots` is one slot per GPT
     /// entry, in entry order, as [`crate::read_partitions`] returns it, and `labels` one per slot,
-    /// as [`crate::args::range_labels`] returns it; a slot past its end has no labels.
+    /// as [`crate::args::Args::range_labels`] returns it; a slot past its end has no labels.
     pub fn new(disk: Disk<T>, roots: Vec<Option<Range>>, labels: Vec<Labels>) -> BlockServer<T> {
         BlockServer { disk, roots, labels, scratch: vec![0; DATA_LEN] }
     }

@@ -1,4 +1,8 @@
-//! `blkd`'s arguments: each labelled range's label set (servers/blkd.md, "Ranges and badges").
+//! `blkd`'s arguments: the endpoint it receives on, and each labelled range's label set
+//! (servers/blkd.md, "Its endpoint" and "Ranges and badges").
+//!
+//! `endpoint=NAME` names the endpoint, the manifest's name for it (`blkd`, `blkd:system`): one
+//! `blkd` runs per disk, so it is told which is its own, never defaulted.
 //!
 //! `init` passes one argument per labelled volume on the disk, `labels.P=ID[,ID...]`, P the
 //! volume's GPT entry number, so the range badge P + 1 names carries that set. A range named by
@@ -11,6 +15,7 @@
 use alloc::vec::Vec;
 
 use redoubt_rt::abi::{Labels, MAX_LABELS};
+use redoubt_rt::startup::valid_name;
 
 use crate::range::Range;
 
@@ -19,6 +24,17 @@ use crate::range::Range;
 pub struct BadArgs;
 
 const PREFIX: &str = "labels.";
+const ENDPOINT: &str = "endpoint=";
+
+/// `blkd`'s arguments, read once.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Args<'a> {
+    /// The manifest's name of the endpoint it receives on (`blkd:system`): its startup block
+    /// holds that endpoint under this name.
+    pub endpoint: &'a str,
+    /// Each labelled entry P and its set, as `labels.P=` gave them.
+    labels: Vec<(usize, Labels)>,
+}
 
 /// A decimal number without leading zeros, the form `init` writes.
 fn number(s: &str) -> Result<u64, BadArgs> {
@@ -27,20 +43,22 @@ fn number(s: &str) -> Result<u64, BadArgs> {
     s.parse().ok().filter(|_| canonical).ok_or(BadArgs)
 }
 
-/// Each slot's label set, one per GPT entry as `roots` has them, from `args`: every argument
-/// must be `labels.P=ID[,ID...]` with P a used entry, named once, and its IDs distinct, at most
-/// [`MAX_LABELS`].
-pub fn range_labels<'a>(
-    args: impl Iterator<Item = &'a str>,
-    roots: &[Option<Range>],
-) -> Result<Vec<Labels>, BadArgs> {
-    let mut labels: Vec<Option<Labels>> = Vec::new();
-    labels.try_reserve(roots.len()).map_err(|_| BadArgs)?;
-    labels.resize(roots.len(), None);
+/// The arguments: `endpoint=NAME` exactly once, a name under the manifest's rule, never
+/// defaulted; and `labels.P=ID[,ID...]` per labelled entry, each P named once, its IDs distinct,
+/// at most [`MAX_LABELS`]. Anything else is refused.
+pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, BadArgs> {
+    let (mut endpoint, mut labels) = (None, Vec::new());
     for arg in args {
+        if let Some(name) = arg.strip_prefix(ENDPOINT) {
+            if endpoint.is_some() || !valid_name(name) {
+                return Err(BadArgs);
+            }
+            endpoint = Some(name);
+            continue;
+        }
         let (entry, list) = arg.strip_prefix(PREFIX).and_then(|rest| rest.split_once('=')).ok_or(BadArgs)?;
         let entry = usize::try_from(number(entry)?).map_err(|_| BadArgs)?;
-        if !matches!(roots.get(entry), Some(Some(_))) {
+        if labels.iter().any(|(e, _)| *e == entry) {
             return Err(BadArgs);
         }
         let mut set: Vec<u64> = Vec::new();
@@ -52,19 +70,36 @@ pub fn range_labels<'a>(
             set.try_reserve(1).map_err(|_| BadArgs)?;
             set.push(id);
         }
-        let slot = labels.get_mut(entry).ok_or(BadArgs)?;
-        if slot.is_some() {
-            return Err(BadArgs);
-        }
-        *slot = Some(Labels::from_slice(&set).map_err(|_| BadArgs)?);
+        labels.try_reserve(1).map_err(|_| BadArgs)?;
+        labels.push((entry, Labels::from_slice(&set).map_err(|_| BadArgs)?));
     }
-    Ok(labels.into_iter().map(Option::unwrap_or_default).collect())
+    Ok(Args { endpoint: endpoint.ok_or(BadArgs)?, labels })
+}
+
+impl Args<'_> {
+    /// Each slot's label set, one per GPT entry as `roots` has them: every P named must be a used
+    /// entry, and a range named by none has no labels.
+    pub fn range_labels(&self, roots: &[Option<Range>]) -> Result<Vec<Labels>, BadArgs> {
+        let mut labels: Vec<Labels> = Vec::new();
+        labels.try_reserve(roots.len()).map_err(|_| BadArgs)?;
+        labels.resize(roots.len(), Labels::default());
+        for (entry, set) in &self.labels {
+            if !matches!(roots.get(*entry), Some(Some(_))) {
+                return Err(BadArgs);
+            }
+            labels[*entry] = *set;
+        }
+        Ok(labels)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::string::String;
     use alloc::vec;
+
+    use redoubt_rt::abi::Handle;
+    use redoubt_rt::startup::{Startup, StartupBuilder};
 
     use super::*;
 
@@ -73,9 +108,10 @@ mod tests {
         vec![range(64), None, range(1000)]
     }
 
-    fn parse(args: &[&str]) -> Result<Vec<Vec<u64>>, BadArgs> {
-        range_labels(args.iter().copied(), &roots())
-            .map(|l| l.iter().map(|l| l.as_slice().to_vec()).collect())
+    /// The label sets `labels` give, after the endpoint argument every `blkd` has.
+    fn parse(labels: &[&str]) -> Result<Vec<Vec<u64>>, BadArgs> {
+        let args = ["endpoint=blkd"].iter().chain(labels).copied();
+        parse_args(args)?.range_labels(&roots()).map(|l| l.iter().map(|l| l.as_slice().to_vec()).collect())
     }
 
     #[test]
@@ -108,5 +144,34 @@ mod tests {
         let too_many: Vec<String> = (0..=MAX_LABELS as u64).map(|i| alloc::format!("{i}")).collect();
         let arg = alloc::format!("labels.0={}", too_many.join(","));
         assert_eq!(parse(&[&arg]), Err(BadArgs));
+    }
+
+    fn h(i: u32) -> Handle { Handle::new(i).unwrap() }
+
+    /// A second `blkd` receives on the endpoint its `endpoint=` names, here `blkd:system`, found
+    /// in its startup block; with none, two, or a name the manifest could not give, its arguments
+    /// are refused and it does not start.
+    #[test]
+    fn blkd_receives_on_the_endpoint_its_argument_names_and_never_guesses() {
+        let mut builder = StartupBuilder::new(2);
+        builder
+            .handle("disk", h(1))
+            .handle("blkd:system", h(2))
+            .arg("labels.0=7")
+            .arg("endpoint=blkd:system");
+        let block = builder.finish().unwrap();
+        let startup = Startup::parse(&block).unwrap();
+        let args = parse_args(startup.args()).unwrap();
+        assert_eq!(args.endpoint, "blkd:system");
+        assert_eq!(startup.handle(args.endpoint), Some(h(2)));
+        for bad in [
+            &[][..],
+            &["labels.0=7"],
+            &["endpoint="],
+            &["endpoint=Blkd"],
+            &["endpoint=blkd:system", "endpoint=blkd:system"],
+        ] {
+            assert_eq!(parse_args(bad.iter().copied()), Err(BadArgs), "{bad:?}");
+        }
     }
 }

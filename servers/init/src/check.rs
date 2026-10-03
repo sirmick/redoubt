@@ -48,6 +48,8 @@ pub const LABELS_ARG: &str = "labels=";
 /// The prefix of the arguments giving `blkd` each labelled range's ids, `labels.P=ID,...` for
 /// GPT entry P (servers/blkd.md, "Ranges and badges").
 pub const RANGE_LABELS_ARG: &str = "labels.";
+/// The argument naming the endpoint a `blkd` receives on (servers/blkd.md, "Its endpoint").
+pub const ENDPOINT_ARG: &str = "endpoint=";
 /// Where [`Plan::keys`] says the bundle's verifying key comes from.
 pub const BUNDLE_KEY: &str = "bundle key";
 
@@ -306,6 +308,19 @@ fn volumes(m: &Manifest) -> Result<(), Refusal> {
         };
         if let Some(k) = s.args.iter().position(|a| a.starts_with(own)) {
             return Err(at(format!("servers[{i}].args[{k}]"), Why::Argument));
+        }
+    }
+    // A blkd receives where its `endpoint=` says, and `init` mints its ranges at its first
+    // endpoint: the two are one, or a range would be minted where nobody serves it.
+    for (i, s) in m.servers.iter().enumerate().filter(|(_, s)| s.program == BLKD) {
+        let mut named = s.args.iter().enumerate().filter(|(_, a)| a.starts_with(ENDPOINT_ARG));
+        let first = s.receives.first().map(|r| format!("{ENDPOINT_ARG}{r}"));
+        match (named.next(), named.next()) {
+            (Some((_, a)), None) if Some(a) == first.as_ref() => {}
+            (Some(_), Some((k, _))) | (Some((k, _)), None) => {
+                return Err(at(format!("servers[{i}].args[{k}]"), Why::BlkdEndpoint));
+            }
+            (None, _) => return Err(at(format!("servers[{i}].args"), Why::BlkdEndpoint)),
         }
     }
     Ok(())

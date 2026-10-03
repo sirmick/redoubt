@@ -100,6 +100,9 @@ pub enum Why {
     /// An endpoint a `blkd` receives on, handed to a server: each badge there is a volume's
     /// range, which only `init` mints, for the one server attaching it (R47).
     BlkdHanded,
+    /// A `blkd` whose `endpoint=` argument, exactly one, does not name the endpoint it receives
+    /// on first, where `init` mints its volumes' ranges.
+    BlkdEndpoint,
     /// A second entry for a program `init` calls itself (`keyd`, `consoled`, `bootfsd`): `init`
     /// starts and calls one of each.
     Second(&'static str),
@@ -144,6 +147,7 @@ impl fmt::Display for Why {
             Why::NoBlkd => "a volume's range needs its disk's blkd, receiving on an endpoint",
             Why::NoDisk => "with more than one blkd, a volume names its disk",
             Why::BlkdHanded => "only init mints a badge at blkd, a volume's range (R47)",
+            Why::BlkdEndpoint => "a blkd's one endpoint= names the endpoint it receives on first",
             Why::NoKeyd => "no keyd to ask about the keys the box is authenticated by (R35)",
             Why::ConsoledRoot => "only init holds a root badge at consoled",
         })
