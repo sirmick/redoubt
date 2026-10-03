@@ -105,6 +105,10 @@ const _: () = {
     assert!(end <= KERNEL_STACK_TOP - KERNEL_STACK_PAGES * PAGE_SIZE);
 };
 
+/// RAM pages the kernel keeps at boot for `dma_alloc`'s runs, on both widths: the DMA pool
+/// (`docs/kernel/devices.md`).
+pub const DMA_POOL_PAGES: usize = 1024;
+
 /// The virtual address at which the kernel's physmap sees physical frame `phys`:
 /// `PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE)`. rv64 maps from physical 0
 /// (`PHYSMAP_PHYS_BASE == 0`), so the subtraction matters only on rv32.

@@ -637,10 +637,10 @@ resets the device again. The four listed mutations each pool a frame that is sti
 frames to another process, proves the reuse by physical address and checks each was handed out
 only after the disk's status read 0. `dma-reset-quarantine` makes a device's first reset fail:
 the faulted driver's run is quarantined and every handle to the device is gone, the co-holder's
-runs are quarantined when it dies, the charges move to the parents, and a search of every free
-page in the tree finds none overlapping a quarantined run. `dma-rules` checks DMA pages cannot be
-lent, transferred or moved and that `unmap` keeps them. The model tests script the co-holder
-cases.
+runs are quarantined when it dies, the charges move to the parents, and a search of the DMA pool
+takes all of it but the quarantined runs, none of it overlapping them. `dma-rules` checks DMA
+pages cannot be lent, transferred or moved and that `unmap` keeps them. The model tests script the
+co-holder cases.
 
 ## Residual risks
 

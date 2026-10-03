@@ -591,13 +591,14 @@ impl MemoryManager {
     ///
     /// If `init`'s pages do not fit, the kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
-        // Every RAM page the kernel did not keep for itself, less `root`'s own page, which no
-        // budget pays for (R6): `root`'s limit bounds every charge in the tree, so the charges and
-        // `root`'s page together never exceed the free frames. Nothing else is held back: a
-        // process's saved contexts and its root page table are charged to the budget it runs in
-        // as they are allocated, like any other frame it owns, so every charged page has a real
-        // frame behind it without a reservation.
-        let kept = self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) as u64;
+        // Every RAM page the kernel did not keep for itself or for the DMA pool, less `root`'s
+        // own page, which no budget pays for (R6): `root`'s limit bounds every charge in the tree,
+        // so the charges and `root`'s page together never exceed the free frames. Nothing else is
+        // held back: a process's saved contexts and its root page table are charged to the budget
+        // it runs in as they are allocated, like any other frame it owns, so every charged page
+        // has a real frame behind it without a reservation.
+        let kept =
+            (self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) + redoubt_layout::DMA_POOL_PAGES) as u64;
         let pages = self.ram_frames() - kept - BUDGET_PAGES;
         // Everything the loader gave `init`, all owned by its PID in the ownership table.
         let init_frames = self.ram_frames_owned_by(INIT_PID) as u64;
@@ -629,7 +630,7 @@ impl MemoryManager {
         let users = boot(self, Some(root), Class::User, users_pages, users_processes, users_weight);
         assert!(
             self.budget(root).pages_limit + BUDGET_PAGES + kept <= self.ram_frames(),
-            "R6: root's limit, its own page and the kernel's frames exceed RAM"
+            "R6: root's limit, its own page, the kernel's frames and the DMA pool exceed RAM"
         );
         self.count_process(root).expect("boot: root keeps no process for init");
         self.process_created(INIT_PID, root).expect("boot: root keeps no weight for init");

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use redoubt_layout::Pid;
+use redoubt_layout::{DMA_POOL_PAGES, Pid};
 use redoubt_sys::{MemFlags, PAGE_SIZE, USER_AREA_END};
 
 pub use crate::arch::mem::MemoryMapping;
@@ -92,6 +92,8 @@ pub struct MemoryManager {
     allocations: &'static mut [RamAllocation],
     /// The table's free entries, one bit each, with their summaries ([`FreeFrames`]).
     free: FreeFrames,
+    /// The frames `dma_alloc`'s runs come from ([`DmaPool`]).
+    dma_pool: DmaPool,
     /// The same, for the pages of every region in `extra_regions`, back to back.
     extra_allocations: &'static mut [Option<Pid>],
     /// Memory outside RAM that processes may claim: memory-mapped devices. The data of the
@@ -166,6 +168,30 @@ impl FreeFrames {
     fn words(&self, level: usize) -> usize { self.level_start[level + 1] - self.level_start[level] }
 }
 
+/// The DMA pool (kernel/devices.md, `dma_alloc`): `DMA_POOL_PAGES` contiguous frames the kernel
+/// takes from the top of RAM at boot, outside every budget. They are `DMA_OWNER`'s in the
+/// ownership table for life, held or free, so every owner check refuses them and they are never
+/// free in the free-frame bitmap; a bit per frame tells held from free. A run is the first free
+/// stretch, found by a search linear in the pool, a constant (R12).
+struct DmaPool {
+    /// The pool's first frame's index in the ownership table.
+    first: usize,
+    /// Bit `i` set: pool frame `i` is in a run (held, or quarantined for ever).
+    held: [u64; DMA_POOL_PAGES / 64],
+}
+
+impl DmaPool {
+    fn is_held(&self, i: usize) -> bool { self.held[i / 64] & (1 << (i % 64)) != 0 }
+
+    fn set_held(&mut self, i: usize, held: bool) {
+        if held {
+            self.held[i / 64] |= 1 << (i % 64);
+        } else {
+            self.held[i / 64] &= !(1 << (i % 64));
+        }
+    }
+}
+
 impl Default for MemoryManager {
     fn default() -> Self { Self::default_hack() }
 }
@@ -184,6 +210,7 @@ impl MemoryManager {
             ram_name: 0,
             allocations: &mut [],
             free: FreeFrames { bits: &mut [], level_start: [0; LEVELS + 1] },
+            dma_pool: DmaPool { first: 0, held: [0; DMA_POOL_PAGES / 64] },
             extra_allocations: &mut [],
             extra_regions: &[],
             objects: crate::budget::Objects::new(),
@@ -283,7 +310,26 @@ impl MemoryManager {
                 self.free.bits[self.free.level_start[level] + word] = value;
             }
         }
+        self.take_dma_pool();
         Ok(())
+    }
+
+    /// Take the DMA pool at boot: the highest stretch of `DMA_POOL_PAGES` free frames, before
+    /// anything else is taken, so the top of RAM unless the loader used it. A boot scan of the
+    /// table, once.
+    fn take_dma_pool(&mut self) {
+        let mut run = 0;
+        let first = (0..self.allocations.len())
+            .rev()
+            .find(|index| {
+                run = if self.allocations[*index].is_none() { run + 1 } else { 0 };
+                run == DMA_POOL_PAGES
+            })
+            .expect("mm: no room in RAM for the DMA pool");
+        for index in first..first + DMA_POOL_PAGES {
+            self.set_owner(index, Some(DMA_OWNER));
+        }
+        self.dma_pool.first = first;
     }
 
     /// Allocate a single page to the given process, charged to its budget (R6): `OutOfMemory` if
@@ -322,8 +368,8 @@ impl MemoryManager {
 
     /// A frame for the kernel itself (the test-only trace ring), taken at boot before the budget
     /// tree counts what the kernel keeps: the highest free frame. It comes from the top of RAM,
-    /// so that the frames below it, every object's and process's, sit where a release kernel's
-    /// do.
+    /// under the DMA pool, so that the frames below it, every object's and process's, sit where a
+    /// release kernel's do.
     #[cfg(feature = "sched-trace")]
     pub fn kernel_frame(&mut self) -> Result<usize, PageError> {
         let index = self.find_free(true).ok_or(PageError::NoFrame)?;
@@ -394,8 +440,9 @@ impl MemoryManager {
     }
 
     /// The checked build's proof that the free-frame bitmap is exactly the table's `None`
-    /// entries and every summary is exact. A scan of all of RAM, so it runs once after a
-    /// destruction, in its stamped audit (`check_object_indexes`), never on a call path.
+    /// entries, every summary is exact, and every DMA pool frame, held or free, is `DMA_OWNER`'s.
+    /// A scan of all of RAM, so it runs once after a destruction, in its stamped audit
+    /// (`check_object_indexes`), never on a call path.
     #[cfg(debug_assertions)]
     pub(crate) fn check_free_frames(&self) {
         for level in 0..LEVELS {
@@ -408,6 +455,11 @@ impl MemoryManager {
                 );
             }
         }
+        let pool = self.dma_pool.first..self.dma_pool.first + DMA_POOL_PAGES;
+        assert!(
+            self.allocations[pool].iter().all(|owner| *owner == Some(DMA_OWNER)),
+            "I1: a DMA pool frame left the pool"
+        );
     }
 
     /// A zeroed frame for a kernel object, owned by `OBJECT_OWNER`. The caller charges it to the
@@ -474,41 +526,39 @@ impl MemoryManager {
         base < ram_end && ram_start < end
     }
 
-    /// `npages` contiguous free RAM frames, claimed for `owner` and zeroed through the physmap
-    /// (R11: before any process can see them); the physical address of the first. Not charged:
-    /// `dma_new_run`, the only caller, charges the run's budget itself (`dma.rs`).
-    pub fn alloc_contiguous(&mut self, owner: Pid, npages: usize) -> Result<usize, redoubt_sys::Error> {
-        // First fit over the ownership table, as `alloc_frame` is, with a run to fill.
+    /// A run of `npages` contiguous frames from the DMA pool, the first free stretch, zeroed
+    /// through the physmap (R11: before any process can see them); the physical address of the
+    /// first. `OutOfMemory` if no free stretch is that long. Not charged: `dma_new_run`, the only
+    /// caller, charges the run's budget itself (`dma.rs`).
+    pub fn dma_pool_take(&mut self, npages: usize) -> Result<usize, redoubt_sys::Error> {
         let mut run = 0;
-        let start = self
-            .allocations
-            .iter()
-            .position(|o| {
-                run = if o.is_none() { run + 1 } else { 0 };
+        let start = (0..DMA_POOL_PAGES)
+            .position(|i| {
+                run = if self.dma_pool.is_held(i) { 0 } else { run + 1 };
                 run == npages
             })
             .map(|last| last + 1 - npages)
             .ok_or(redoubt_sys::Error::OutOfMemory)?;
-        for index in start..start + npages {
-            self.set_owner(index, Some(owner));
+        for i in start..start + npages {
+            self.dma_pool.set_held(i, true);
         }
-        let phys = self.ram_start + start * PAGE_SIZE;
+        let phys = self.ram_start + (self.dma_pool.first + start) * PAGE_SIZE;
         for page in 0..npages {
             crate::kframe::zero(phys + page * PAGE_SIZE);
         }
         Ok(phys)
     }
 
-    /// Give back `npages` frames from `phys` that `alloc_contiguous` claimed for `owner`.
-    pub fn free_contiguous(&mut self, owner: Pid, phys: usize, npages: usize) {
-        let start = (phys - self.ram_start) / PAGE_SIZE;
-        for index in start..start + npages {
-            assert!(self.allocations[index] == Some(owner), "I1: a contiguous run changed owner");
-            self.set_owner(index, None);
+    /// Give back to the DMA pool the run of `npages` from `phys` that `dma_pool_take` took.
+    pub fn dma_pool_give(&mut self, phys: usize, npages: usize) {
+        let start = (phys - self.ram_start) / PAGE_SIZE - self.dma_pool.first;
+        for i in start..start + npages {
+            assert!(self.dma_pool.is_held(i), "I1: a DMA run gave back a pool frame it did not hold");
+            self.dma_pool.set_held(i, false);
         }
     }
 
-    /// Whether RAM frame `phys` is a `dma_alloc` frame (`DMA_OWNER`'s).
+    /// Whether RAM frame `phys` is a DMA pool frame (`DMA_OWNER`'s), in a run or free.
     pub fn is_dma_frame(&self, phys: usize) -> bool {
         self.is_main_memory(phys as *mut u8)
             && self.allocations[(phys - self.ram_start) / PAGE_SIZE] == Some(DMA_OWNER)

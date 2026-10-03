@@ -846,8 +846,8 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   sweep holds for the seeds swept, not for every seed. The queue and its accounting drive one hart
   until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases
   that read the trace run a kernel built with it, which has a record at every queue event and 64
-  MiB less RAM for the budget tree, taken from the top of RAM so the frames below sit where a
-  release kernel's do.
+  MiB less RAM for the budget tree, taken from the top of RAM below the DMA pool so the frames
+  below sit where a release kernel's do.
 
 ## Why
 

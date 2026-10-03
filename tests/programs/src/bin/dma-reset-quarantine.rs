@@ -9,13 +9,12 @@
 //! its run is quarantined too, although a retry would now confirm (a quarantined device never
 //! counts as reset).
 //!
-//! Then every free page in the tree is searched: `users` is destroyed, which gives `root` its
-//! pages, a checker child takes all of `system`'s free pages, and it and this program, which runs
-//! in `root`, each `dma_alloc` through the other empty slots
-//! with halving chunk sizes until a single page is refused. The pages allocated plus the page
-//! tables charged must equal the free pages recorded before, bar at most `TABLES` in a budget
-//! whose last mapping could not pay for its tables, and no run may overlap a quarantined one. The
-//! verdicts come from the kernel's answers.
+//! Then the DMA pool is searched: `users` is destroyed, which gives `root`, this program's budget,
+//! room for all of the pool and its page tables, and this program `dma_alloc`s through the other empty slots
+//! with halving chunk sizes until a single page is refused. The pages allocated plus the two quarantined runs
+//! must be the whole pool (`DMA_POOL_PAGES`), no run may overlap a quarantined one, and the last
+//! `dma_alloc(1)` must be refused `OutOfMemory` while the budget still has room, so the refusal is the
+//! pool's. The verdicts come from the kernel's answers.
 //!
 //! It runs in `init`'s place, so it holds every device object, prints on the console it maps
 //! itself, as `device-test` does, and ends with `system_reset`. The children are copies
@@ -26,26 +25,24 @@
 
 use core::fmt::Write;
 
+use redoubt_layout::DMA_POOL_PAGES;
 use test_programs::rd::{self, Cause, Error, Received, ResetKind};
 use test_programs::spawn;
 use uart_16550::MmioSerialPort;
 
 /// Pages of each driver's run.
 const RUN_PAGES: usize = 4;
-/// How long a check waits for anything, in microseconds of guest time, which follows the host's
-/// clock. The longest wait is the checker's search of every free page, which on a loaded host
-/// took up to about 10 s. 60 s bounds that search, inside the case's 90 s timeout, so a check that
-/// runs out says which.
-const WAIT: u64 = 60_000_000;
+/// How long a check waits for a driver's report or exit, in microseconds of guest time, which
+/// follows the host's clock: well inside the case's timeout, so a check that runs out says which.
+const WAIT: u64 = 10_000_000;
 /// Empty virtio-mmio slots this program can use: QEMU `virt` has 8.
 const MAX_SLOTS: usize = 8;
 /// Badges on the report endpoint.
 const D1: u64 = 1;
 const D2: u64 = 2;
-const CHECKER: u64 = 3;
 /// The page tables a one-page mapping can need below the root table on rv64 (Sv39). A budget with
-/// fewer free pages than that can be refused the last `dma_alloc(1)`: the frame is charged, and
-/// the mapping then fails for want of a table, so those pages stay free.
+/// no more free pages than that could refuse the last `dma_alloc(1)` for want of a table, not of
+/// the pool.
 const TABLES: u64 = 2;
 
 struct Out(MmioSerialPort);
@@ -78,56 +75,43 @@ extern "C" fn driver(arg: usize) -> ! {
     test_programs::park()
 }
 
-/// What one search found, in pages.
-#[derive(Clone, Copy, Default)]
+/// What the search of the pool found.
 struct Search {
-    /// The budget's free pages before it.
-    free: u64,
+    /// Pages allocated.
     allocated: u64,
-    /// Page tables charged along the way: the rest of the budget's growth.
-    tables: u64,
     /// Runs overlapping a quarantined one.
     overlaps: u64,
+    /// The last refusal, of a single page.
+    last: Result<(), Error>,
 }
 
-/// Allocate every free page of `budget` through `slots`, halving the chunk size down to one page
-/// until the kernel refuses it on every slot.
-fn search(budget: u32, slots: &[u32], quarantined: &[u64]) -> Search {
-    let before = rd::usage(budget).expect("budget_usage");
-    let free = before.pages_limit - before.pages_usage;
-    let (mut allocated, mut overlaps) = (0, 0);
-    let mut chunk = if free == 0 { 0 } else { 1 << free.ilog2() };
+/// Allocate every free page of the DMA pool through `slots`, halving the chunk size from the pool's
+/// down to one page until the kernel refuses it on every slot.
+fn search(slots: &[u32], quarantined: &[u64]) -> Search {
+    let (mut allocated, mut overlaps, mut last) = (0, 0, Ok(()));
+    let mut chunk = 1 << DMA_POOL_PAGES.ilog2();
     while chunk > 0 {
         for &slot in slots {
-            while let Ok((_, phys)) = rd::dma_alloc(slot, chunk as usize) {
-                allocated += chunk;
-                let end = phys + chunk * rd::PAGE_SIZE as u64;
-                overlaps += quarantined
-                    .iter()
-                    .filter(|&&q| q < end && phys < q + (RUN_PAGES * rd::PAGE_SIZE) as u64)
-                    .count() as u64;
+            loop {
+                match rd::dma_alloc(slot, chunk) {
+                    Ok((_, phys)) => {
+                        allocated += chunk as u64;
+                        let end = phys + (chunk * rd::PAGE_SIZE) as u64;
+                        overlaps += quarantined
+                            .iter()
+                            .filter(|&&q| q < end && phys < q + (RUN_PAGES * rd::PAGE_SIZE) as u64)
+                            .count() as u64;
+                    }
+                    Err(e) => {
+                        last = Err(e);
+                        break;
+                    }
+                }
             }
         }
         chunk /= 2;
     }
-    let grown = rd::usage(budget).expect("budget_usage").pages_usage - before.pages_usage;
-    Search { free, allocated, tables: grown - allocated, overlaps }
-}
-
-/// The checker: a send handle in slot 1, its own budget in slot 2, then `startup_byte(arg, 0)`
-/// slots; the quarantined runs' addresses follow at bytes 8 and 16. It reports its search as
-/// `[free, allocated, tables, overlaps]` and waits.
-extern "C" fn checker(arg: usize) -> ! {
-    let count = spawn::startup_byte(arg, 0) as usize;
-    let mut slots = [0u32; MAX_SLOTS];
-    for (i, slot) in slots[..count].iter_mut().enumerate() {
-        *slot = 3 + i as u32;
-    }
-    let word = |at: usize| (0..8).fold(0u64, |w, i| w | (spawn::startup_byte(arg, at + i) as u64) << (8 * i));
-    let s = search(2, &slots[..count], &[word(8), word(16)]);
-    let report = [s.free, s.allocated, s.tables, s.overlaps].map(|w| w as usize);
-    rd::send(1, &rd::body(report), None, WAIT).ok();
-    test_programs::park()
+    Search { allocated, overlaps, last }
 }
 
 /// The next message from `badge` on `ep`, skipping exit notices.
@@ -238,54 +222,31 @@ pub extern "C" fn _start() -> ! {
         );
     }
 
-    // --- Every free page in the tree: none of them is a quarantined frame ----------------------
+    // --- The whole pool: none of it is a quarantined frame ----------------------------------------
     let users = rd::destroy(rd::USERS);
-    // A budget's own pages are its carve less its limit, the same for every budget.
-    let own = carve[0] - limit;
-    let system_free = rd::free(rd::SYSTEM);
-    let checker_budget =
-        rd::create(rd::SYSTEM, &rd::spec(system_free - own, 1, 1)).expect("the checker's budget");
-    let mut startup = [0u8; 24];
-    startup[0] = others.len() as u8;
-    startup[8..16].copy_from_slice(&run1.to_le_bytes());
-    startup[16..].copy_from_slice(&run2.to_le_bytes());
-    let mut handles = [0u32; 2 + MAX_SLOTS];
-    handles[..2].copy_from_slice(&[send(CHECKER), checker_budget]);
-    handles[2..2 + others.len()].copy_from_slice(others);
-    let entry = checker as *const () as usize;
-    let started =
-        spawn::spawn(&spawn::image(), checker_budget, ep, entry, &startup, &handles[..2 + others.len()]);
-    let theirs = started.ok().and_then(|_| report(ep, CHECKER)).map(|w| Search {
-        free: w[0] as u64,
-        allocated: w[1] as u64,
-        tables: w[2] as u64,
-        overlaps: w[3] as u64,
-    });
-    let Some(theirs) = theirs else {
-        say!(out, "[dma-reset-quarantine] FAIL: the checker did not report");
-        test_programs::park()
-    };
-    let mine = search(rd::ROOT, others, &[run1, run2]);
-    let left = [rd::ROOT, rd::SYSTEM, checker_budget].map(rd::free);
-    let free = theirs.free + mine.free;
-    let taken = theirs.allocated + theirs.tables + mine.allocated + mine.tables;
+    let room = rd::free(rd::ROOT);
+    let s = search(others, &[run1, run2]);
+    let left = rd::free(rd::ROOT);
+    check!(
+        out,
+        s.allocated + 2 * RUN_PAGES as u64 == DMA_POOL_PAGES as u64,
+        "the search took the whole pool but the quarantined runs: {} allocated plus 2 runs of {} of {}",
+        s.allocated,
+        RUN_PAGES,
+        DMA_POOL_PAGES
+    );
+    check!(out, s.overlaps == 0, "no page handed out overlaps a quarantined run ({} overlaps)", s.overlaps);
     check!(
         out,
         users.is_ok()
-            && free > 0
-            && taken + left.iter().sum::<u64>() == free
-            && left.iter().all(|&l| l <= TABLES),
-        "the search took every free page a mapping could pay for: {} allocated plus {} of tables of {} free; left in root, system, the checker: {:?}",
-        theirs.allocated + mine.allocated,
-        theirs.tables + mine.tables,
-        free,
-        left
-    );
-    check!(
-        out,
-        theirs.overlaps + mine.overlaps == 0,
-        "no page handed out overlaps a quarantined run ({} overlaps)",
-        theirs.overlaps + mine.overlaps
+            && room > DMA_POOL_PAGES as u64 + TABLES
+            && s.last == Err(Error::OutOfMemory)
+            && left > TABLES,
+        "the pool, not the budget, refused the last page: {:?} with {} of {} pages left (users destroyed: {:?})",
+        s.last,
+        left,
+        room,
+        users
     );
 
     say!(out, "[dma-reset-quarantine] DMA RESET QUARANTINE PASSED");

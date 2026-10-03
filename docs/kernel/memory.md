@@ -240,6 +240,10 @@ markers and the frame before changing either.
 
 </details>
 
+A RAM frame is taken from the free-frame bitmap and given back to it, so backing a page, a page
+table or an object searches nothing, however much of RAM is in use; a `dma_alloc` run comes from the
+DMA pool instead, a fixed 1024 pages ([devices](devices.md#dma_alloc)).
+
 ```mermaid
 stateDiagram-v2
     state "DMA-held" as DMA
@@ -252,11 +256,14 @@ stateDiagram-v2
     Lent --> Mapped: call abandoned<br/>(the server's own)
     Mapped --> Transferred: send with a transfer<br/>(unmapped from the sender)
     Transferred --> Mapped: taken (the receiver's), or<br/>the send fails (the sender's)
-    Free --> DMA: dma_alloc (zeroed first)
-    DMA --> Free: its process ended and every<br/>device that could hold it was reset
+    state "DMA pool" as Pool
+    [*] --> Pool: taken at boot
+    Pool --> DMA: dma_alloc (zeroed first)
+    DMA --> Pool: its process ended and every<br/>device that could hold it was reset
 ```
-*Figure: the states of a RAM frame. A frame is mapped by at most one process at a time, and is
-zeroed whenever it leaves Free.*
+*Figure: the states of a RAM frame. A frame is mapped by at most one process at a time, and
+is zeroed whenever it leaves Free or the DMA pool. A pool frame is never Free, and a Free
+frame is never DMA-held.*
 
 ## Authority
 
