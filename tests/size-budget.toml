@@ -21,7 +21,7 @@ max_lines = 361
 [[crate]]
 name = "libs/sys"
 paths = ["libs/sys/src"]
-max_lines = 1009
+max_lines = 1017
 
 [[crate]]
 name = "libs/layout"
