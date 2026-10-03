@@ -683,16 +683,25 @@ fn confined_refuses_two_label_sets_on_one_disk() {
     for s in &mut m.servers {
         s.args.retain(|a| !a.starts_with("buckets="));
     }
-    m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: vec!["alice-secrets".into()] });
-    m.volumes.push(Volume { name: "other".into(), partition: 1, labels: vec!["alice-other".into()] });
-    server(&mut m, "keyd").volume = Some("vault".into());
-    server(&mut m, "keyd").labels = vec!["alice-secrets".into()];
-    server(&mut m, "bootfsd").volume = Some("other".into());
-    server(&mut m, "bootfsd").labels = vec!["alice-other".into()];
+    // An fsd for each volume, each carrying its volume's set.
+    for (name, partition, label) in [("vault", 0, "alice-secrets"), ("other", 1, "alice-other")] {
+        m.volumes.push(Volume { name: name.into(), partition, labels: vec![label.into()] });
+        let endpoint = format!("fsd:{name}");
+        m.servers.push(Server {
+            name: endpoint.clone(),
+            program: "fsd".into(),
+            volume: Some(name.into()),
+            labels: vec![label.into()],
+            receives: vec![endpoint.clone()],
+            handed: vec![],
+            devices: vec![],
+            args: vec![format!("endpoint={endpoint}")],
+            ..server(&mut image(), "fsd:data").clone()
+        });
+    }
     assert_eq!(sharing(&m), Sharing::Device);
     // One label set on the disk, and blkd carrying it.
-    server(&mut m, "bootfsd").volume = None;
-    server(&mut m, "bootfsd").labels = vec![];
+    m.servers.pop();
     m.volumes.pop();
     assert_eq!(sharing(&m), Sharing::Device, "an unlabelled blkd serving a labelled volume");
     server(&mut m, "blkd").labels = vec!["alice-secrets".into()];
