@@ -334,62 +334,66 @@ fn repeats<T: Ord>(v: &mut [T]) -> bool {
 }
 
 /// Whether the volume is one `fsd` wrote, checked without writing: every file and directory
-/// has a name a client could have created and an id, no two ids are the same, no two
-/// directories share a block of their first pair, and the root's counter is above every id,
-/// so no create gives an id already in use. An image that breaks any of these (another
-/// implementation's, or a forged one, which could otherwise let a fid on one file reach
-/// another) is corrupt.
+/// has a name a client could have created and an id, no two ids are the same, no metadata pair
+/// is named twice, within one directory's chain or across two, and the root's counter is above
+/// every id, so no create gives an id already in use. An image that breaks any of these
+/// (another implementation's, or a forged one, which could otherwise let a fid on one file
+/// reach another, or put one root's file under another root) is corrupt.
 ///
-/// The walk reads each directory by its pair, never by a path resolved again from the root,
-/// and the pairs it reads, all directories together, may not outnumber the volume's
-/// (`blocks / 2`), each pair belonging to one directory in a sound volume. So the check is
-/// linear in the volume whatever the image: a directory pointing back at an ancestor, or two
-/// sharing a pair, spends the budget or repeats a block and is refused. Depth is no criterion:
-/// renames can honestly build a tree deeper than any walk from one root reaches.
+/// The walk reads each directory by its pairs, never by a path resolved again from the root,
+/// and marks every block of every pair before it reads it: a block marked already is refused
+/// before it is read again. So no pair is read twice and the check is linear in the volume
+/// whatever the image: a directory pointing back at an ancestor, two sharing a pair, a chain
+/// running into another's or looping back on itself, all repeat a block. Depth is no
+/// criterion: renames can honestly build a tree deeper than any walk from one root reaches.
 fn ids_are_sound<D: BlockDevice>(fs: &mut Filesystem<D>, blocks: u32) -> Result<(), FsError> {
-    let (mut ids, mut heads, mut dirs): (Vec<u64>, Vec<u32>, Vec<DirRef>) =
-        (Vec::new(), Vec::new(), Vec::new());
-    let root = fs.root_dir();
-    room(&mut heads)?;
-    heads.extend_from_slice(&root.blocks());
+    let (mut ids, mut dirs): (Vec<u64>, Vec<DirRef>) = (Vec::new(), Vec::new());
+    let mut named: Vec<u64> = Vec::new();
+    let words = blocks.div_ceil(64) as usize;
+    named.try_reserve_exact(words).map_err(|_| FsError::NoSpace)?;
+    named.resize(words, 0);
     room(&mut dirs)?;
-    dirs.push(root);
-    let mut pairs = blocks / 2;
+    dirs.push(fs.root_dir());
     while let Some(dir) = dirs.pop() {
         let mut failed = None;
-        let read = fs.read_dir_at(
-            dir,
-            |entry| {
-                if failed.is_some() {
-                    return;
+        let entry = |entry: &littlefs::DirEntry| {
+            if failed.is_some() {
+                return;
+            }
+            let named = core::str::from_utf8(entry.name).is_ok_and(path::valid_name);
+            let Some(Ok(id)) = entry.attr(ATTR_ID).map(decode_id).filter(|_| named) else {
+                failed = Some(FsError::Corrupt);
+                return;
+            };
+            if room(&mut ids).is_err() {
+                failed = Some(FsError::NoSpace);
+                return;
+            }
+            ids.push(id);
+            if let Some(child) = entry.dir() {
+                match room(&mut dirs) {
+                    Ok(()) => dirs.push(child),
+                    Err(e) => failed = Some(e),
                 }
-                let named = core::str::from_utf8(entry.name).is_ok_and(path::valid_name);
-                let Some(Ok(id)) = entry.attr(ATTR_ID).map(decode_id).filter(|_| named) else {
-                    failed = Some(FsError::Corrupt);
-                    return;
-                };
-                if room(&mut ids).is_err() {
-                    failed = Some(FsError::NoSpace);
-                    return;
+            }
+        };
+        // `read_dir_at` hands over only pairs inside the volume.
+        let mark = |pair: DirRef| {
+            for b in pair.blocks() {
+                let (word, bit) = ((b / 64) as usize, 1u64 << (b % 64));
+                if named[word] & bit != 0 {
+                    return Err(FsError::Corrupt);
                 }
-                ids.push(id);
-                if let Some(child) = entry.dir() {
-                    if heads.try_reserve(2).is_err() || room(&mut dirs).is_err() {
-                        failed = Some(FsError::NoSpace);
-                        return;
-                    }
-                    heads.extend_from_slice(&child.blocks());
-                    dirs.push(child);
-                }
-            },
-            |_| Ok(()),
-        )?;
+                named[word] |= bit;
+            }
+            Ok(())
+        };
+        fs.read_dir_at(dir, entry, mark)?;
         if let Some(e) = failed {
             return Err(e);
         }
-        pairs = pairs.checked_sub(read).ok_or(FsError::Corrupt)?;
     }
-    if repeats(&mut ids) || repeats(&mut heads) {
+    if repeats(&mut ids) {
         return Err(FsError::Corrupt);
     }
     let highest = ids.last().copied().unwrap_or(ROOT_ID);

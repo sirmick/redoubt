@@ -19,7 +19,7 @@ power-loss safety by design, and a size that can be read.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · partly tested: one instance per volume under `init`, and the line a volume served as corrupt prints there, are not built until `fsd` runs under `init` · tested (22)</summary>
+<details><summary>Status: built · partly tested: one instance per volume under `init`, and the line a volume served as corrupt prints there, are not built until `fsd` runs under `init` · tested (26)</summary>
 
 - host:redoubt-fsd::attach_walk_open_read_write
 - host:redoubt-fsd::files_and_directories_survive_a_remount
@@ -35,6 +35,10 @@ power-loss safety by design, and a size that can be read.
 - host:redoubt-fsd::a_rename_cut_short_still_mounts
 - host:redoubt-fsd::a_directory_aliasing_the_root_is_refused_in_linear_time
 - host:redoubt-fsd::two_directories_sharing_a_pair_are_corrupt
+- host:redoubt-fsd::a_tail_that_is_another_directorys_pair_is_corrupt
+- host:redoubt-fsd::two_chains_joining_at_one_pair_are_corrupt
+- host:redoubt-fsd::a_chain_looping_back_to_its_head_is_corrupt
+- host:redoubt-fsd::split_directories_still_mount
 - host:redoubt-fsd::a_tree_renames_made_deep_still_mounts
 - host:redoubt-fsd::a_device_that_fails_makes_the_volume_corrupt_until_it_is_mounted_again
 - host:redoubt-fsd::writes_and_truncations_move_the_qid_version
@@ -58,8 +62,9 @@ power-loss safety by design, and a size that can be read.
   as corrupt: every attach is refused with `corrupt`, and `fsd` stays up, so a damaged or
   hostile medium never becomes a restart loop. `fsd` never formats a range that holds anything.
   A range that mounts is then checked, without writing: every file and directory carries its id,
-  no two the same, and the id counter is above the highest; a volume that fails is served as
-  corrupt too. So `fsd` serves only volumes it wrote.
+  no two the same, and the id counter is above the highest, and no metadata pair is named
+  twice, within one directory's chain or across two; a volume that fails is served as corrupt
+  too. So `fsd` serves only volumes it wrote.
 - **Read-only ranges.** A range `blkd` reports read-only is served read-only: every change is
   refused before it reaches `blkd`, so a refused write never makes the volume corrupt, and a
   blank read-only range is not formatted.

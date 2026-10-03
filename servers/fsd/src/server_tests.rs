@@ -14,7 +14,7 @@ use redoubt_rt::wire::MSIZE;
 use redoubt_rt::wire::ninep::{Body, Message, NOFID, Names};
 
 use super::*;
-use crate::volume::{Fault, Geometry, SECTOR, mount};
+use crate::volume::{Fault, Geometry, SECTOR, SECTORS_PER_BLOCK, mount};
 
 extern crate std;
 use std::string::String as StdString;
@@ -654,11 +654,16 @@ fn crc32(mut crc: u32, data: &[u8]) -> u32 {
     crc
 }
 
-/// Rewrites every directory entry's pair in a metadata block to `pair`, and re-signs each
-/// commit, so the forgery is a well-formed image (littlefs SPEC.md: tags XORed with the one
-/// before, big-endian; each commit closed by a CRC tag over it). Returns how many entries it
-/// rewrote.
-fn point_directories_at(block: &mut [u8], pair: [u32; 2]) -> usize {
+/// A directory entry's struct, naming its first pair (littlefs SPEC.md, `LFS_TYPE_DIRSTRUCT`).
+const DIR_STRUCT: u32 = 0x200;
+/// A hard tail, naming the next pair of the same directory (`LFS_TYPE_HARDTAIL`).
+const HARD_TAIL: u32 = 0x601;
+
+/// Rewrites every tag of type `typ` naming a pair in a metadata block to name `pair`, and
+/// re-signs each commit, so the forgery is a well-formed image (littlefs SPEC.md: tags XORed
+/// with the one before, big-endian; each commit closed by a CRC tag over it). Returns how many
+/// tags it rewrote.
+fn repoint(block: &mut [u8], typ_to_rewrite: u32, pair: [u32; 2]) -> usize {
     let mut crc = crc32(0xffff_ffff, &block[..4]);
     let (mut off, mut ptag, mut rewrote) = (4usize, 0xffff_ffffu32, 0);
     while off + 4 <= block.len() {
@@ -679,7 +684,7 @@ fn point_directories_at(block: &mut [u8], pair: [u32; 2]) -> usize {
             ptag = tag ^ ((typ & 1) << 31);
             crc = 0xffff_ffff;
         } else {
-            if typ == 0x200 {
+            if typ == typ_to_rewrite {
                 block[off + 4..off + 8].copy_from_slice(&pair[0].to_le_bytes());
                 block[off + 8..off + 12].copy_from_slice(&pair[1].to_le_bytes());
                 rewrote += 1;
@@ -695,7 +700,7 @@ fn point_directories_at(block: &mut [u8], pair: [u32; 2]) -> usize {
 /// Forges `disk`'s root so every directory entry in it names `pair`; returns how many.
 fn forge_root(disk: &Memory, pair: [u32; 2]) -> usize {
     let mut root = disk.get(0, 2 * 4096);
-    let rewrote = root.chunks_mut(4096).map(|b| point_directories_at(b, pair)).sum();
+    let rewrote = root.chunks_mut(4096).map(|b| repoint(b, DIR_STRUCT, pair)).sum();
     disk.put(0, &root);
     rewrote
 }
@@ -757,4 +762,112 @@ fn two_directories_sharing_a_pair_are_corrupt() {
     assert_eq!(forge_root(&disk, a), 2);
     let mut t = T::on(&disk, &[]);
     assert_eq!(t.attach(&who, 0).unwrap_err(), "corrupt");
+}
+
+/// Makes the directory `name` under the root with `files` empty files, enough of them, with
+/// long names, to split it over several pairs.
+fn split_dir(disk: &Memory, name: &str, files: usize) {
+    let who = caller(1, &[]);
+    let mut t = T::on(disk, &[]);
+    t.attach(&who, 0).unwrap();
+    t.walk(&who, 0, 1, &[]).unwrap();
+    t.create(&who, 1, name, DMDIR | 0o755, mode::OREAD).unwrap();
+    for i in 0..files {
+        t.walk(&who, 0, 2, &[name]).unwrap();
+        t.create(&who, 2, &alloc::format!("a-name-long-enough-to-fill-a-pair-{i}"), 0o644, mode::OREAD)
+            .unwrap();
+        t.clunk(&who, 2).unwrap();
+    }
+}
+
+/// The pairs of the root's directory `name`, as littlefs reads its chain.
+fn chain(disk: &Memory, name: &str) -> Vec<[u32; 2]> {
+    let mut fs = match mount(disk.clone()) {
+        Ok(Mounted::Files { fs, .. }) => fs,
+        Ok(Mounted::Corrupt(e)) => panic!("{e:?}"),
+        Err(e) => panic!("{e:?}"),
+    };
+    let mut dir = None;
+    let root = fs.root_dir();
+    fs.read_dir_at(root, |e| dir = dir.or(e.dir().filter(|_| e.name == name.as_bytes())), |_| Ok(()))
+        .unwrap();
+    let mut pairs = Vec::new();
+    fs.read_dir_at(dir.unwrap(), |_| {}, |p| Ok(pairs.push(p.blocks()))).unwrap();
+    pairs
+}
+
+/// Forges the pair `pair` so its hard tail names `to`; returns how many tags it rewrote.
+fn forge_tail(disk: &Memory, pair: [u32; 2], to: [u32; 2]) -> usize {
+    let sectors = SECTORS_PER_BLOCK;
+    let mut rewrote = 0;
+    for block in pair {
+        let mut data = disk.get(u64::from(block) * sectors, 4096);
+        rewrote += repoint(&mut data, HARD_TAIL, to);
+        disk.put(u64::from(block) * sectors, &data);
+    }
+    rewrote
+}
+
+/// A split directory whose tail is forged to be an empty directory's pair: no entry shows
+/// twice and no two directories start at one pair, yet a create in the empty one would show in
+/// both, and on a shared volume under another root. A pair named twice is corrupt.
+#[test]
+fn a_tail_that_is_another_directorys_pair_is_corrupt() {
+    let disk = Memory::blank(SECTORS);
+    // littlefs lists each new directory's pairs right after the root's, so `b`, made first,
+    // follows `a` on the volume's list of pairs, and the forgery makes that list no loop.
+    split_dir(&disk, "b", 0);
+    split_dir(&disk, "a", 80);
+    let (a, b) = (chain(&disk, "a"), chain(&disk, "b"));
+    assert!(a.len() >= 2, "a spans {a:?}");
+    assert!(forge_tail(&disk, a[0], b[0]) >= 1);
+    assert_eq!(chain(&disk, "a"), [a[0], b[0]], "the forgery reads b's pair as a's tail");
+    let mut t = T::on(&disk, &[]);
+    assert_eq!(t.attach(&caller(1, &[]), 0).unwrap_err(), "corrupt");
+}
+
+/// Two split directories whose chains are forged to join at one pair are corrupt.
+#[test]
+fn two_chains_joining_at_one_pair_are_corrupt() {
+    let disk = Memory::blank(SECTORS);
+    split_dir(&disk, "b", 80);
+    split_dir(&disk, "a", 80);
+    let (a, b) = (chain(&disk, "a"), chain(&disk, "b"));
+    assert!(a.len() >= 2 && b.len() >= 2, "a spans {a:?}, b {b:?}");
+    assert!(forge_tail(&disk, a[0], b[1]) >= 1);
+    assert_eq!(chain(&disk, "a")[..2], [a[0], b[1]], "the forgery mounts, and joins a to b");
+    let mut t = T::on(&disk, &[]);
+    assert_eq!(t.attach(&caller(1, &[]), 0).unwrap_err(), "corrupt");
+}
+
+/// A split directory whose tail is forged back to its own first pair is corrupt. A directory's
+/// tails are links in the volume's one list of pairs, so littlefs's own mount finds the loop,
+/// within its bound of the volume's pairs.
+#[test]
+fn a_chain_looping_back_to_its_head_is_corrupt() {
+    let disk = Memory::blank(SECTORS);
+    split_dir(&disk, "a", 80);
+    let a = chain(&disk, "a");
+    assert!(forge_tail(&disk, a[0], a[0]) >= 1);
+    disk.0.borrow_mut().reads = 0;
+    let mut t = T::on(&disk, &[]);
+    assert_eq!(t.attach(&caller(1, &[]), 0).unwrap_err(), "corrupt");
+    let reads = disk.0.borrow().reads;
+    assert!(reads < 8 * SECTORS, "the mount took {reads} reads");
+}
+
+/// A volume whose directories really are split over several pairs mounts, and its files are
+/// all there.
+#[test]
+fn split_directories_still_mount() {
+    let disk = Memory::blank(SECTORS);
+    split_dir(&disk, "a", 80);
+    split_dir(&disk, "b", 80);
+    assert!(chain(&disk, "a").len() >= 2 && chain(&disk, "b").len() >= 2);
+    let who = caller(1, &[]);
+    let mut t = T::on(&disk, &[]);
+    t.attach(&who, 0).unwrap();
+    t.walk(&who, 0, 1, &["b"]).unwrap();
+    t.open(&who, 1, mode::OREAD).unwrap();
+    assert_eq!(t.list(&who, 1).unwrap().len(), 80);
 }
