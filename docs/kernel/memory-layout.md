@@ -303,7 +303,6 @@ same source for both. Only these differ, as `cfg(target_pointer_width)` constant
 | entry width | 4 bytes | 8 bytes |
 | leaf sizes | 4 KiB, 4 MiB | 4 KiB, 2 MiB, 1 GiB |
 | `satp` mode | bit 31 | `8 << 60` |
-| `satp` ASID | bits 22-30 (9 bits) | bits 44-59 (16 bits) |
 | `satp` root PPN | bits 0-21 | bits 0-43 |
 | canonical addresses | all | bits 63-38 all equal |
 | `USER_AREA_END` | `0x8000_0000` | `0x40_0000_0000` |
@@ -320,11 +319,14 @@ question does not arise.
 
 Status: built · partly tested: no case attacks a translation that outlives an address-space switch or an unmap directly; one hart and a whole-TLB flush at every switch are argued from the code · tested: bench:pid-reuse-authority, bench:uaf-lent-page
 
-`satp` holds the mode, the process's PID as its ASID, and the root table's physical page number
-(`make_satp`). PIDs fit every ASID width, because a PID is a byte. The kernel is PID 1; the loader
-numbers boot processes from 2. The kernel keeps the running PID in a second record of its own
-(`current_pid`), set whenever it switches address space (`set_current_pid`); the two are written
-together, and the PID in `satp` is the ASID the hardware uses.
+`satp` holds the mode and the root table's physical page number (`make_satp`); its ASID is 0 on
+both widths. A PID is 16 bits, wider than Sv32's 9-bit ASID, and nothing needs it there: every
+switch, map and unmap flushes the whole TLB (below), so no translation is ever looked up by
+ASID. The kernel is PID 1; the loader numbers boot processes from 2 and names each one's PID in a
+field of its own in the handoff record ([boot](boot.md)). The kernel's one record of the running
+PID is `current_pid`, set whenever it switches address space (`set_current_pid`). Several harts
+need no ASID either: a TLB shootdown goes to the harts running the process
+([several harts](../plan/m2-usable-shell.md#several-harts)).
 
 The kernel runs in whichever address space was current when it trapped, because every address
 space maps the kernel half. Switching process writes `satp` and then runs `sfence.vma` with no
@@ -422,7 +424,7 @@ user address, and the load faults as a kernel failure.
   device registers sit, as ordinary kernel read-write memory; the kernel never uses those
   addresses, but a stray write through them reaches a device.
 - **Every change flushes everything.** Each map, unmap, lend and address-space switch runs a
-  global `sfence.vma`, so ASIDs save no work, and each flush costs page-table walks afterwards.
+  global `sfence.vma`, with ASID 0 everywhere, and each flush costs page-table walks afterwards.
   It is also a flush of this hart only: with more than one hart, another hart's cached
   translations would survive an unmap (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
 - **The firmware must delegate instruction page faults to S-mode.** Kernel entry from the loader

@@ -165,10 +165,11 @@ machines.
 
 Standard extensions that make Redoubt faster without weakening it, each testable on QEMU first:
 - **Early:**
-  - **ASIDs, used properly.** The kernel already puts the process ID in `satp`, but flushes the
-    whole TLB on every switch and after every page-table change, the kernel's global entries
-    with it. Flushing by address and ASID, and a whole ASID when its process ID is reused, is the
-    biggest saving on the IPC path.
+  - **ASIDs, used properly.** The kernel writes ASID 0 in `satp` and flushes the whole TLB on
+    every switch and after every page-table change, the kernel's global entries with it. Its
+    process IDs are 16 bits, so on this core each can be its own ASID
+    ([the core](#the-system-on-chip)): flushing by address and ASID, and a whole ASID when its
+    process ID is reused, is the biggest saving on the IPC path.
   - **Sstc,** so setting the timer is a CSR write, not a trap into the firmware on almost every
     dispatch.
   - **Zicboz,** for the zeroing [R11 (memory)](../kernel/memory.md#r11-memory) does on every

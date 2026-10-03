@@ -9,13 +9,14 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use core::num::NonZeroU8;
+use core::num::NonZeroU16;
 
 use redoubt_sys::PAGE_SIZE;
 
-/// A process ID. The loader's ownership table and the kernel's frame table hold one per page,
-/// with 0 for a free page.
-pub type Pid = NonZeroU8;
+/// A process ID, 16 bits. The loader's ownership table and the kernel's frame table are one
+/// table of `Option<Pid>` handed from one to the other, two bytes a page, with 0 (`None`) for a
+/// free page.
+pub type Pid = NonZeroU16;
 
 /// The kernel's own PID: it owns the kernel image, the page tables and every kernel object.
 pub const KERNEL_PID: Pid = match Pid::new(1) {

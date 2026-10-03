@@ -53,11 +53,6 @@ const ROOT_PROCESS_AREA: usize = physmap::vpn(PROCESS_AREA, physmap::LEVELS - 1)
 // `for_each_owned_frame` walks the user half and then this entry: each once.
 const _: () = assert!(ROOT_PROCESS_AREA >= ROOT_KERNEL_START);
 
-/// Extract the PID (stored as the ASID) from a raw `satp` value.
-pub fn pid_from_satp(satp: usize) -> usize { physmap::satp_pid(satp) }
-
-fn make_satp(pid: Pid, root_phys: usize) -> usize { physmap::make_satp(pid.get() as usize, root_phys) }
-
 /// The root table of the address space that `satp` names.
 fn root_of(satp: usize) -> Table {
     assert!(physmap::satp_is_active(satp), "address space is not allocated");
@@ -258,13 +253,7 @@ pub struct MemoryMapping {
 
 impl core::fmt::Debug for MemoryMapping {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::result::Result<(), core::fmt::Error> {
-        write!(
-            fmt,
-            "(satp: {:#x}, ASID: {}, root: {:#x})",
-            self.satp,
-            physmap::satp_pid(self.satp),
-            physmap::satp_root(self.satp),
-        )
+        write!(fmt, "(satp: {:#x}, root: {:#x})", self.satp, physmap::satp_root(self.satp))
     }
 }
 
@@ -298,7 +287,7 @@ impl MemoryMapping {
         // From here the space names everything it takes, so a failure gives it all back by one
         // walk of its tables, and the space is whole or does not exist (`process_create`'s
         // rollback walks it, `release_owned_frames`).
-        self.satp = make_satp(pid, root_phys);
+        self.satp = physmap::make_satp(root_phys);
         if let Err(e) = Self::add_header_page(root, mm, pid) {
             mm.release_owned_frames(pid, self);
             self.satp = 0;
@@ -322,11 +311,6 @@ impl MemoryMapping {
 
     /// Get the currently active memory mapping.
     pub fn current() -> MemoryMapping { MemoryMapping { satp: satp::read().bits() } }
-
-    /// Get the "PID" (actually, ASID) from the current mapping
-    pub fn get_pid(&self) -> Option<Pid> { Pid::new(pid_from_satp(self.satp) as _) }
-
-    pub fn is_kernel(&self) -> bool { self.get_pid().map(|v| v.get() == 1).unwrap_or(false) }
 
     /// Set this mapping as the systemwide mapping.
     /// **Note:** This should only be called from an interrupt in the
@@ -373,7 +357,7 @@ impl MemoryMapping {
     }
 
     pub fn print_map(&self) {
-        println!("Memory Maps for PID {}:", pid_from_satp(self.satp));
+        println!("Memory Maps for satp {:#x}:", self.satp);
         self.for_each_user_leaf(|virt, pte| {
             println!("    {:016x} -> {:010x} ({:?})", virt, pte.phys(), pte.flags());
         });
@@ -704,7 +688,7 @@ pub fn virt_to_phys(virt: usize) -> Result<usize, PageError> {
 /// kernel (or, with `smp`, deadlocks). The page-fault handler borrows it for this call.
 pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Result<usize, PageError> {
     // Disallow mapping memory outside of user land
-    if !MemoryMapping::current().is_kernel() && address >= USER_AREA_END {
+    if crate::arch::current_pid() != redoubt_layout::KERNEL_PID && address >= USER_AREA_END {
         return Err(PageError::Unmapped);
     }
     let virt = address & !(PAGE_SIZE - 1);

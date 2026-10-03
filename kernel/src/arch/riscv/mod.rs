@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use redoubt_layout::Pid;
-use riscv::register::{satp, senvcfg, sie, sstatus};
+use riscv::register::{senvcfg, sie, sstatus};
 
 mod asm;
 pub mod exception;
@@ -16,7 +15,9 @@ pub mod process;
 pub mod smp;
 pub mod syscall;
 
-pub fn current_pid() -> Pid { Pid::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
+/// The running PID: the kernel's own record of it, which `satp` no longer carries
+/// (kernel/memory-layout.md, "`satp`").
+pub use process::current_pid;
 
 pub fn init() {
     // R24: `_start` cleared both, and nothing sets them again.

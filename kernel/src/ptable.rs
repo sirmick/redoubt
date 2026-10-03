@@ -232,21 +232,18 @@ impl ProcessTable {
         let init_offsets =
             unsafe { core::slice::from_raw_parts(base as *const crate::arch::process::InitialProcess, 2) };
 
-        // Copy over the initial process list.  The pid is encoded in the SATP
-        // value from the bootloader.  For each process, translate it from a raw
-        // KernelArguments value to a ProcessTable Process value.
+        // Copy over the initial process list. Each record names its PID in a field of its own
+        // (`satp` carries none). For each process, translate it from a raw KernelArguments value
+        // to a ProcessTable Process value.
         for init in init_offsets.iter() {
-            let pid = init.pid().get();
-            let proc_idx = pid - 1;
-            let process = &mut self.processes[proc_idx as usize];
+            let pid = init.pid();
+            let process = &mut self.processes[usize::from(pid.get()) - 1];
             // SAFETY: `from_init_process` records a loader-built satp; the loader guarantees it names a root
             // table.
-            unsafe {
-                process.mapping.from_init_process(*init);
-                process.pid = Pid::new(pid as _);
-            };
+            unsafe { process.mapping.from_init_process(*init) };
+            process.pid = Some(pid);
             process.current_thread = INITIAL_TID;
-            process.state = if pid == 1 {
+            process.state = if pid == KERNEL_PID {
                 ProcessState::Running(0)
             } else {
                 ProcessState::Setup { entry: init.entrypoint, sp: init.sp, a0: init.a0, a1: init.a1 }
@@ -339,7 +336,7 @@ impl ProcessTable {
         if pid_idx >= self.processes.len() {
             return Err(ProcessError::NotFound);
         }
-        if self.processes[pid_idx].mapping.get_pid() != Some(pid) {
+        if self.processes[pid_idx].pid != Some(pid) {
             Err(ProcessError::NotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
             Err(ProcessError::NotFound)
@@ -354,7 +351,7 @@ impl ProcessTable {
         if pid_idx >= self.processes.len() {
             return Err(ProcessError::NotFound);
         }
-        if self.processes[pid_idx].mapping.get_pid() != Some(pid) {
+        if self.processes[pid_idx].pid != Some(pid) {
             Err(ProcessError::NotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
             Err(ProcessError::NotFound)

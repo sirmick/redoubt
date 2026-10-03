@@ -112,19 +112,19 @@ pub struct MemoryManager {
 /// Owner, in the ownership table, of frames that hold kernel objects (budgets, handle-table
 /// pages). No process has this PID (there are `MAX_PROCESS_COUNT` of them), so such a frame is
 /// never mapped into a process, and `release_owned_frames` never frees one.
-pub const OBJECT_OWNER: Pid = match Pid::new(255) {
+pub const OBJECT_OWNER: Pid = match Pid::new(0xffff) {
     Some(pid) => pid,
     None => unreachable!(),
 };
-const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 255);
+const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xffff);
 /// Owner, in the ownership table, of `dma_alloc` frames (`dma.rs`). No process has this
 /// PID either, so no generic release, move or lend path, all of which check that the caller
 /// owns the frame, can free or move one: only `dma_release` pools it, after the reset.
-pub const DMA_OWNER: Pid = match Pid::new(254) {
+pub const DMA_OWNER: Pid = match Pid::new(0xfffe) {
     Some(pid) => pid,
     None => unreachable!(),
 };
-const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 254);
+const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xfffe);
 type RamAllocation = Option<Pid>;
 
 /// Every free RAM frame, a set bit in a bitmap the kernel keeps in frames of its own (owned by
@@ -286,13 +286,14 @@ impl MemoryManager {
             extra_size += range.size / PAGE_SIZE;
         }
         // SAFETY: `rpt_base` is the page-aligned ownership table the loader built and filled
-        // in, one byte per page of RAM, so it holds these `mem_size` entries; every byte is a
-        // valid `Option<PID>` (zero, an unowned page, is `None`). The loader owns it for the
+        // in, one `Option<Pid>` per page of RAM (the type is `redoubt_layout`'s, the same on both
+        // sides), so it holds these `mem_size` entries; every value the loader wrote is a valid
+        // `Option<Pid>` (zero, an unowned page, is `None`). The loader owns it for the
         // kernel and hands it over here, so this is the only reference to it.
         unsafe {
             self.allocations.0 = Some(slice::from_raw_parts_mut(rpt_base as *mut Option<Pid>, mem_size))
         };
-        // SAFETY: as above, for the table the loader built for the `MREx` regions: one byte per
+        // SAFETY: as above, for the table the loader built for the `MREx` regions: one entry per
         // page of them, which is the `extra_size` just counted from the same table.
         unsafe {
             self.extra_allocations.0 =

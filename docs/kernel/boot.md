@@ -113,11 +113,12 @@ runs the same builder and writes `target/image/redoubt.bundle`.
 2. **Keeps memory it must not hand out.** The allocator (`loader/src/alloc.rs`) gives out
    zeroed pages from the top of RAM down and never from the firmware (all RAM below the
    loader), the loader, the device tree or the bundle. Its first allocation is the **RAM
-   ownership table**: one byte per page of RAM, the owning PID or 0, which becomes the kernel's
+   ownership table**: two bytes per page of RAM, the owning PID or 0, which becomes the kernel's
    allocation table. The firmware and the device tree are owned by PID 1, so no budget is ever
    given them. The bundle's pages are `init`'s (step 5). The loader's own pages are left
    unowned: the kernel reuses them.
-   A second table, one byte per MMIO page, follows.
+   A second table, two bytes per MMIO page, follows. Both are `redoubt_layout`'s `Option<Pid>`,
+   the same type on both sides of the handoff.
 3. **Describes the machine**: the `MREx`, `Ctrl`, `Devs`, `Plic`, `Seed` and `Time` tags of
    the [argument block](#the-argument-block), all from the device tree. A seed under 16 bytes,
    or a tree with no console or no console interrupt, stops the boot here.
@@ -139,7 +140,7 @@ runs the same builder and writes `target/image/redoubt.bundle`.
    shares a page with the device tree is refused, and so is an `init` whose image overlaps the
    mapping. The loader parses no entry after the second.
 6. **Enters the kernel.** It writes the initial-process table (one page; two records, the
-   kernel's and then `init`'s, each a `satp`, an entry point, a stack pointer and the first
+   kernel's and then `init`'s, each a PID, a `satp`, an entry point, a stack pointer and the first
    thread's `a0` and `a1`: for `init`, the bundle's address and length), completes `XArg`, and
    points `stvec` at the kernel's entry before writing `satp`. The next fetch faults, because
    the loader is not mapped in the kernel's address space, and the hart traps straight into the

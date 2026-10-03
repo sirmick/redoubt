@@ -227,7 +227,7 @@ impl Link {
             0 => Link::None,
             w if w & HEAD_BIT != 0 => Link::Head(w as u32),
             // Only the kernel writes table pages and heads.
-            w => Link::Slot(Pid::new((w >> 32) as u8).expect("I1: corrupt chain link"), w as u32),
+            w => Link::Slot(crate::budget::pid_from(w >> 32).expect("I1: corrupt chain link"), w as u32),
         }
     }
 }

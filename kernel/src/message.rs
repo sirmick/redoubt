@@ -340,7 +340,7 @@ struct OpenCall {
     nlabels: usize,
 }
 
-fn pid_of(word: u64) -> Pid { Pid::new(word as u8).expect("I1: an open call names no process") }
+fn pid_of(word: u64) -> Pid { crate::budget::pid_from(word).expect("I1: an open call names no process") }
 
 fn open_call_at(mm: &MemoryManager, frame: u32) -> OpenCall {
     let phys = mm.object_phys(frame);

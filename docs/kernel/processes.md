@@ -30,7 +30,8 @@ process that draws a PID used before inherits nothing.
 </details>
 
 A process has:
-- a **PID**, which is also its hardware address-space id (the ASID in `satp`);
+- a **PID**, 16 bits, which the kernel keeps as its own record of the running process (`satp`
+  carries none; [memory layout](memory-layout.md#satp));
 - the **budget it runs in**, which pays for everything it holds, counts its PID against its
   process limit and sets its CPU share ([scheduling](scheduling.md));
 - an address space, a handle table ([objects](objects.md)) and up to `MAX_THREADS` (31) threads;

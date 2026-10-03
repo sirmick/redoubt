@@ -92,6 +92,8 @@ extern "C" {
 /// Must match `InitialProcess` in `kernel/src/arch/riscv/process.rs`.
 #[repr(C)]
 struct InitialProcess {
+    /// The process's PID: `satp` carries none (kernel/memory-layout.md, "`satp`").
+    pid: usize,
     satp: usize,
     entrypoint: usize,
     sp: usize,
@@ -142,7 +144,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     alloc.set_owner(dtb.clone(), KERNEL_PID);
 
     let extra_pages: usize = platform.mmio().iter().map(|r| r.range.len().div_ceil(PAGE_SIZE)).sum();
-    let xpt = alloc.alloc_contiguous(extra_pages.div_ceil(PAGE_SIZE).max(1), KERNEL_PID);
+    let xpt = alloc
+        .alloc_contiguous((extra_pages * size_of::<Option<Pid>>()).div_ceil(PAGE_SIZE).max(1), KERNEL_PID);
 
     let args_base = alloc.alloc_contiguous(ARGS_PAGES, KERNEL_PID);
     // SAFETY: a fresh, zeroed, page-aligned allocation of exactly this size, referenced
@@ -195,7 +198,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 
     // The table of initial processes: the kernel, then `init`.
     // SAFETY: a fresh, zeroed, page-aligned allocation referenced from nowhere else.
-    // `InitialProcess` is five `usize`s, for which all-zeroes is valid, and two fit in a page.
+    // `InitialProcess` is six `usize`s, for which all-zeroes is valid, and two fit in a page.
     let processes: &mut [InitialProcess] = unsafe {
         let page = alloc.alloc(KERNEL_PID) as *mut InitialProcess;
         core::slice::from_raw_parts_mut(page, 2)
@@ -227,6 +230,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     }
     kernel.reserve_tables(&mut alloc, KERNEL_DMA_REGS, KERNEL_DMA_PAGES * PAGE_SIZE);
     let kernel_process = InitialProcess {
+        pid: KERNEL_PID.get().into(),
         satp: kernel.satp(),
         entrypoint: kernel_entry,
         sp: KERNEL_STACK_TOP - STACK_PADDING,
@@ -254,6 +258,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     println!("  PID {}: {} -> {:#x}", INIT_PID, name, entrypoint);
     println!("  bundle mapped read-only at {:#x} ({} bytes)", BUNDLE_AT, initrd_range.len());
     processes[1] = InitialProcess {
+        pid: INIT_PID.get().into(),
         satp: space.satp(),
         entrypoint,
         sp: USER_STACK_TOP - STACK_PADDING,

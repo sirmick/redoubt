@@ -52,7 +52,7 @@ use redoubt_sys::{
 };
 
 use crate::arch::process::TID;
-use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, Process as ArchProcess};
+use crate::arch::process::{INITIAL_TID, Process as ArchProcess};
 use crate::budget::{BudgetFrame, Class, PROCESS_PAGES, THREAD_PAGES};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object, ProcessRef};
 use crate::kframe;
@@ -146,7 +146,7 @@ impl MemoryManager {
         Proc {
             id: w(W_ID),
             creator: BudgetRef { frame: frame_of(w(W_CREATOR)).unwrap_or(0), id: w(W_CREATOR_ID) },
-            pid: Pid::new(w(W_PID) as u8).expect("I1: a process object names no PID"),
+            pid: crate::budget::pid_from(w(W_PID)).expect("I1: a process object names no PID"),
             counted_in: BudgetRef { frame: frame_of(w(W_COUNTED)).unwrap_or(0), id: w(W_COUNTED_ID) },
             endpoint: frame_of(w(W_ENDPOINT)).map(|frame| EndpointRef { frame, id: w(W_ENDPOINT_ID) }),
             flags: w(W_FLAGS),
@@ -295,19 +295,19 @@ pub fn object_of(mm: &MemoryManager, pid: Pid) -> Option<u32> {
     crate::budget::account_index(pid).and_then(|i| mm.objects.processes[i])
 }
 
-/// A PID drawn at random from the free ASIDs (kernel/processes.md, "Processes and PIDs"): free in
+/// A PID drawn at random from the free PIDs (kernel/processes.md, "Processes and PIDs"): free in
 /// the process table, and named by no process object, so a PID is not reused while a notice
-/// still names it (R20). Random so that nothing can predict which ASID a process will get.
+/// still names it (R20). Random so that nothing can predict which PID a process will get.
 fn random_free_pid(ss: &ProcessTable, mm: &MemoryManager) -> Option<Pid> {
     let free = |pid: Pid| ss.get_process(pid).is_err() && object_of(mm, pid).is_none();
-    let count = (2..=MAX_PROCESS_COUNT).filter(|i| Pid::new(*i as u8).is_some_and(free)).count();
+    let count = crate::budget::pids().skip(1).filter(|pid| free(*pid)).count();
     if count == 0 {
         return None;
     }
     let mut bytes = [0u8; 8];
     crate::platform::rand::fill(&mut bytes);
     let nth = (u64::from_le_bytes(bytes) % count as u64) as usize;
-    (2..=MAX_PROCESS_COUNT).filter_map(|i| Pid::new(i as u8)).filter(|pid| free(*pid)).nth(nth)
+    crate::budget::pids().skip(1).filter(|pid| free(*pid)).nth(nth)
 }
 
 // --- `process_create` ---------------------------------------------------------------------------

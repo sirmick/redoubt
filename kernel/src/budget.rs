@@ -105,7 +105,7 @@ pub struct Budget {
     /// Its place in the stride queue (`sched.rs`).
     pub sched: redoubt_stride::State,
     /// The (pid, tid) it ran last, for round-robin among its threads.
-    pub cursor: Option<(u8, u8)>,
+    pub cursor: Option<(Pid, usize)>,
 }
 
 impl Budget {
@@ -255,14 +255,19 @@ fn ipc_entry(tid: usize) -> (usize, u32) {
     (byte & !7, (byte & 7) as u32 * 8)
 }
 
+/// The PID `n` names, if it is one: never truncated, so a word too wide for a PID is none.
+pub(crate) fn pid_from(n: impl core::convert::TryInto<u16>) -> Option<Pid> {
+    n.try_into().ok().and_then(Pid::new)
+}
+
 /// Every PID, lowest first. A walk of the threads asks each for its [`MemoryManager::live_tids`],
 /// so a PID with no process costs it one lookup.
-pub(crate) fn pids() -> impl Iterator<Item = Pid> {
-    (1..=MAX_PROCESS_COUNT).filter_map(|i| Pid::new(i as u8))
-}
+pub(crate) fn pids() -> impl Iterator<Item = Pid> { (1..=MAX_PROCESS_COUNT).filter_map(pid_from) }
 
 // `Account::live` has a bit for every TID.
 const _: () = assert!(MAX_THREADS < u64::BITS as usize);
+// A PID is 16 bits, and the scheduler's cursor keeps a TID plus one in the 16 bits below it.
+const _: () = assert!(MAX_PROCESS_COUNT <= u16::MAX as usize && MAX_THREADS < u16::MAX as usize);
 
 /// `a ⊇ b`, both sorted.
 fn superset(a: &[u64], b: &[u64]) -> bool { b.iter().all(|x| a.binary_search(x).is_ok()) }
@@ -308,11 +313,8 @@ impl MemoryManager {
                 tie: w(W_SCHED + 5) as i64,
                 queued: w(W_SCHED + 6) != 0,
             },
-            // The cursor: (pid, tid) plus one in the low bytes, 0 for none.
-            cursor: match w(W_SCHED + 7) {
-                0 => None,
-                c => Some(((c >> 8) as u8, (c as u8).wrapping_sub(1))),
-            },
+            // The cursor: the PID above the TID plus one in the low 16 bits, 0 for none.
+            cursor: pid_from(w(W_SCHED + 7) >> 16).map(|pid| (pid, (w(W_SCHED + 7) & 0xffff) as usize - 1)),
             pages_limit: w(9),
             pages_used: w(10),
             processes_limit: w(11) as u32,
@@ -348,7 +350,7 @@ impl MemoryManager {
         words[W_SCHED + 4] = b.sched.rem;
         words[W_SCHED + 5] = b.sched.tie as u64;
         words[W_SCHED + 6] = u64::from(b.sched.queued);
-        words[W_SCHED + 7] = b.cursor.map_or(0, |(p, t)| u64::from(p) << 8 | u64::from(t.wrapping_add(1)));
+        words[W_SCHED + 7] = b.cursor.map_or(0, |(p, t)| u64::from(p.get()) << 16 | (t as u64 + 1));
         words[W_FIRST_CHILD] = frame_word(b.first_child);
         words[W_NEXT_SIBLING] = frame_word(b.next_sibling);
         words[W_FIRST_OWNED] = frame_word(b.first_owned);

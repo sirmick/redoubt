@@ -42,8 +42,6 @@
 //! ([`switch`]). It is not a system call: its tag is outside the call table, and a user-mode
 //! `ecall` with it is an unknown number (`InvalidArgument`) like any other.
 
-use core::convert::TryFrom;
-
 use redoubt_layout::{KERNEL_PID, Pid};
 use redoubt_stride::{Budgets, Cpu, State};
 use redoubt_sys::MAX_THREADS;
@@ -373,7 +371,7 @@ pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
     #[cfg(feature = "sched-trace")]
     trace::record(trace::PICK, b.id, mm.sched_state(b.frame).pass);
     let mut x = mm.budget(b.frame);
-    x.cursor = Some((pid.get(), tid as u8));
+    x.cursor = Some((pid, tid));
     mm.store(b.frame, &x);
     crate::time::set_slice_end(crate::time::now_us().saturating_add(SLICE_US));
     Some((pid, tid))
@@ -383,7 +381,7 @@ pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
 /// of 0 leaves the choice to `activate_process_thread` (a process being set up or handling an
 /// exception).
 fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(Pid, TID)> {
-    let cursor = mm.budget(b.frame).cursor.map(|(p, t)| (p, t as usize));
+    let cursor = mm.budget(b.frame).cursor;
     let mut first: Option<(Pid, TID)> = None;
     let mut after: Option<(Pid, TID)> = None;
     for p in ss.processes.iter() {
@@ -395,7 +393,7 @@ fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(P
             None => core::array::from_fn(|t| t == 0),
         };
         for (tid, _) in tids.iter().enumerate().filter(|(_, r)| **r) {
-            let key = (p.pid().get(), tid);
+            let key = (p.pid(), tid);
             first.get_or_insert((p.pid(), tid));
             if after.is_none() && cursor.is_some_and(|c| key > c) {
                 after = Some((p.pid(), tid));
@@ -499,7 +497,7 @@ pub fn switch(ss: &mut ProcessTable, tag: usize, pid: usize, tid: TID) {
         ss.current_pid(),
         tag
     );
-    let pid = u8::try_from(pid).ok().and_then(Pid::new).expect("kmain switches to a process's PID");
+    let pid = crate::budget::pid_from(pid).expect("kmain switches to a process's PID");
     let kmain = ArchProcess::with_current(|p| p.current_tid());
     // `kmain` reads `a0` when it next runs: once the CPU comes back to it.
     ss.set_redoubt_result(KERNEL_PID, kmain, &[RAN, 0, 0, 0, 0, 0, 0, 0]).expect("kmain exists");

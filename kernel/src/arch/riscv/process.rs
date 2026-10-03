@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
+use core::convert::TryFrom;
 use core::mem;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -143,8 +144,10 @@ static PID_SLOTS: KernelCell<PidSlots> =
 /// The loader sets up two processes, the kernel and then `init`, and reports each as one of
 /// these records (kernel/boot.md, "What the loader does").
 pub struct InitialProcess {
-    /// The RISC-V SATP value, which includes the offset of the root page
-    /// table plus the process ID.
+    /// The process's PID, in a field of its own: `satp` carries none.
+    pub pid: usize,
+
+    /// The RISC-V `satp` value: the root page table, with ASID 0.
     pub satp: usize,
 
     /// Where execution begins
@@ -160,10 +163,9 @@ pub struct InitialProcess {
 
 impl InitialProcess {
     pub fn pid(&self) -> Pid {
-        let pid = crate::arch::mem::pid_from_satp(self.satp);
-        // The loader wrote this value. Check it rather than trust it: a zero here would be
-        // undefined behaviour in a `NonZeroU8`.
-        Pid::new(pid as u8).expect("initial process has PID 0")
+        // The loader wrote this value. Check it rather than trust it: a zero or a value too wide
+        // for a PID stops the boot.
+        crate::budget::pid_from(self.pid).expect("initial process has no valid PID")
     }
 }
 
@@ -188,12 +190,7 @@ pub struct Thread {
 }
 
 impl Process {
-    pub fn current() -> Process {
-        let pid = current_pid();
-        let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
-        assert_eq!((pid.get() as usize), hardware_pid);
-        Process { pid }
-    }
+    pub fn current() -> Process { Process { pid: current_pid() } }
 
     /// Calls the provided function with the current inner process state.
     pub fn with_current<F, R>(f: F) -> R
@@ -261,7 +258,7 @@ impl Process {
         for offset in 0..MAX_THREADS {
             let tid = (start + offset) % MAX_THREADS + 1;
             if process.allocated_threads & (1 << tid) == 0 {
-                process.last_tid_allocated = tid as u8;
+                process.last_tid_allocated = u8::try_from(tid).expect("a TID fits a byte");
                 return Some(tid);
             }
         }
@@ -283,6 +280,8 @@ impl Process {
     /// the loader's to reserve, and only the loader's (kernel/memory-layout.md, "Regions").
     pub fn setup_loader_process(pid: Pid, entry: usize, sp: usize, a0: usize, a1: usize) {
         Self::claim(pid);
+        // Its space is active already (`switch_to`); the PID is the kernel's to record.
+        set_current_pid(pid);
         Self::setup_empty_process(pid);
         Self::setup_first_thread(pid, entry, sp, a0);
         context(INITIAL_TID).registers[10] = a1;
@@ -313,7 +312,7 @@ impl Process {
         let process = process_impl();
         process.hardware_thread = INITIAL_TID;
         process.allocated_threads = 0;
-        process.last_tid_allocated = INITIAL_TID as u8;
+        process.last_tid_allocated = u8::try_from(INITIAL_TID).expect("a TID fits a byte");
         process.no_thread = Default::default();
         process.context = context;
         process.inner = Default::default();
@@ -437,7 +436,7 @@ impl core::fmt::Display for Thread {
 fn valid_tid(tid: TID) -> bool { (1..=MAX_THREADS).contains(&tid) }
 
 pub fn set_current_pid(pid: Pid) {
-    let pid_idx = (pid.get() - 1) as usize;
+    let pid_idx = usize::from(pid.get()) - 1;
     PID_SLOTS.with(|pt| {
         match pt.table.get(pid_idx) {
             None | Some(false) => panic!("PID {} does not exist", pid),
