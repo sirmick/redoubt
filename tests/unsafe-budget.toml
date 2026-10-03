@@ -152,6 +152,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# fsd forbids unsafe code: littlefs and the runtime do all it needs.
+name = "fsd (the file server; parses one volume's medium)"
+paths = ["servers/fsd/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # Both crates forbid unsafe code. consoled uses the runtime's Registers for MMIO.
 name = "bootfsd and consoled (the first two 9P servers)"
 paths = ["servers/bootfsd/src", "servers/consoled/src"]

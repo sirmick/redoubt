@@ -112,3 +112,8 @@ max_lines = 2890
 name = "servers/init"
 paths = ["servers/init/src"]
 max_lines = 1606
+
+[[crate]]
+name = "servers/fsd"
+paths = ["servers/fsd/src"]
+max_lines = 799

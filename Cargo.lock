@@ -644,6 +644,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-fsd"
+version = "0.1.0"
+dependencies = [
+ "littlefs",
+ "redoubt-client",
+ "redoubt-fake-kernel",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-init"
 version = "0.1.0"
 dependencies = [
