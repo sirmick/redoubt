@@ -304,8 +304,18 @@ impl MemoryManager {
     pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> { self.alloc_page(pid) }
 
     /// Take a free frame for `owner`, the lowest; its index in the ownership table.
+    #[cfg(not(feature = "alloc-first-fit"))]
     fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
         let index = self.find_free(false).ok_or(PageError::NoFrame)?;
+        self.set_owner(index, Some(owner));
+        Ok(index)
+    }
+
+    /// Debug only, one recorded negative run (`scan-bounds`): the first-fit scan of the ownership
+    /// table from frame 0 that the bitmap replaced, so the case's bound must fail.
+    #[cfg(feature = "alloc-first-fit")]
+    fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
+        let index = self.allocations.iter().position(Option::is_none).ok_or(PageError::NoFrame)?;
         self.set_owner(index, Some(owner));
         Ok(index)
     }

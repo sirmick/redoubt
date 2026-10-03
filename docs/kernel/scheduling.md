@@ -646,7 +646,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range and `process_create` · tested (40)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`) · tested (40)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -715,7 +715,11 @@ sources; a boot naming a higher interrupt stops). So `process_create`'s PID draw
 its object in one lookup; a checked build proves each index against a scan of every object frame.
 In `bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
 its exit notice and an interrupt take what they took on an empty system; with the old scans, the
-first took 1.2 s against 22 ms.
+first took 1.2 s against 22 ms. So do a one-page `map_anon`, a `budget_create` and a
+`process_create` rolled back for want of pages, on both widths; a kernel built with
+`alloc-first-fit`, which takes each frame by the first-fit scan of RAM the bitmap replaced,
+fails the case on both widths in a recorded negative run (a one-page `map_anon`: 1174 µs against
+374 µs on rv64, 1274 against 474 on rv32).
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
@@ -758,7 +762,8 @@ after a destruction out of the trace, and `audit-billed`, which bills each audit
 budget that ran it and counts it against its slice, each for one recorded negative run
 ([responsiveness](#responsiveness)); `timer-tail-billed`, which bills the rest of a timer
 interrupt after its expiry, and its return, to the budget it interrupted, for one recorded
-negative run ([charging](#charging)); and `debug-print`, which prints every
+negative run ([charging](#charging)); `alloc-first-fit`, the first-fit frame scan, for one
+recorded negative run ([R12](#r12-scheduling)); and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
 ([devices](devices.md)), and so are `handle-chain-fault` and `process-chain-fault`, a handle
 installed without its stamp entry or its process object entry for the chain audit to catch
