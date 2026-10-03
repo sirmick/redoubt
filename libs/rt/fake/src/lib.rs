@@ -31,6 +31,7 @@ use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU64;
+use std::sync::atomic::AtomicPtr;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -150,6 +151,10 @@ struct State {
     devices: Vec<Device>,
     /// Budgets, by the index their handles carry: true once destroyed.
     budgets: Vec<bool>,
+    /// The pointer `MapAnon` allocated at each address, so pages a process never unmaps (its
+    /// heap's) stay reachable from here and Miri does not report them leaked. An entry is
+    /// replaced when its address is mapped again.
+    anon: HashMap<usize, AtomicPtr<u8>>,
     /// Launched processes, by the index their handles carry.
     launched: Vec<Launched>,
     /// Exit notices not yet received: (endpoint, notice).
@@ -506,11 +511,14 @@ impl redoubt_rt::HostKernel for Fake {
                 }
                 let layout = Layout::from_size_align(len, PAGE_SIZE).map_err(|_| Error::OutOfMemory)?;
                 // SAFETY: the layout has a non-zero size.
-                let addr = unsafe { alloc_zeroed(layout) } as usize;
+                let pages = unsafe { alloc_zeroed(layout) };
+                let addr = pages as usize;
                 if addr == 0 {
                     return Err(Error::OutOfMemory);
                 }
-                self.lock().processes[pid].mappings.insert(addr, len);
+                let mut s = self.lock();
+                s.processes[pid].mappings.insert(addr, len);
+                s.anon.insert(addr, AtomicPtr::new(pages));
                 Ok(Return::Addr(addr))
             }
             Call::Unmap { addr, len } => {
