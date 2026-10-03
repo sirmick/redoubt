@@ -1,4 +1,4 @@
-description = "Timer interrupts an attacker arms cost the attacker (billing): 1 us-staggered sleepers, and staggered budget deadlines, leave an equal-weight victim half; the victim's share judged by the post-check net of the checked build's audits inside its window (virtual time, checked build)"
+description = "Timer interrupts an attacker arms cost the attacker (billing): 1 us-staggered sleepers, staggered budget deadlines, and waits ended early so the timer comes in the victim's slice, leave an equal-weight victim half; every timer interrupt from user mode billed only to the budgets of what it found (the oracle's direct check); the victim's share judged by the post-check net of the checked build's audits inside its window (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -6,13 +6,16 @@ icount = "shift=3,sleep=off"
 programs = ["sched-timer-flood"]
 # Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
 # judges the victim's share, which the program prints with its window (`SHARE`), net of the audit
-# time inside it (kernel/scheduling.md, "Responsiveness").
+# time inside it (kernel/scheduling.md, "Responsiveness"). It checks every timer interrupt's
+# billing, and requires the cancelled waits to have left some in the victim's slice, so that
+# check cannot pass for want of them (kernel/scheduling.md, "Charging").
 kernel_features = ["sched-trace"]
-post_check = "sched_oracle"
+post_check = "sched_oracle stale_waits_in=cancelled-waits"
 timeout_secs = 600
 expect = [
     '^SHARE sleepers \d+ \d+ \d+ 450 1000$',
     '^SHARE sleepers-and-deadlines \d+ \d+ \d+ 450 1000$',
+    '^SHARE cancelled-waits \d+ \d+ \d+ 450 1000$',
     '^SCHED-TIMER-FLOOD TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]

@@ -50,6 +50,20 @@
 //! becomes floor + W / new weight, remainder W mod new weight; a weight of 0 on either side is
 //! stated as 1, so what a budget owes is carried through 0. That is the one place a pass may fall.
 //!
+//! **A timer interrupt costs the budgets whose items it expired** (kernel/scheduling.md,
+//! "Charging"). Each one from user mode is bracketed by `I` (the budget it interrupted, and the
+//! time in µs) and `O` (its return, to user mode or to `kmain`), with every charge inside it (`B`:
+//! the payer and the ticks) and the end of its expiry (`E`: the budget billed last, for an expired
+//! item or for a wait that ended before its timeout and left the timer early). After an expiry
+//! that billed someone, every charge after it goes to the budget billed last; after one that found
+//! a wait ended early, every charge goes to that wait's budget; with neither, the only charge
+//! allowed is to the interrupted budget, and only if the entry ends its slice (it returns to
+//! `kmain`). So the budget it interrupted pays for its own items or its slice's end, never for
+//! another budget's timer. The check counts the interrupts that found neither and ended no slice,
+//! nobody's, inside each share's window, and those that found another budget's wait ended early;
+//! a case can require some of the latter in a share's window (`stale_waits_in=<share>`), so the
+//! check it runs cannot pass for want of the interrupts it is about.
+//!
 //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
 //! saw nothing proves nothing.
 
@@ -95,7 +109,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTt".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEO".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -210,6 +224,87 @@ pub struct Summary {
     /// Each destruction's time in its threads' ending, µs (`T` to `t` inside its `X` and `Y`), in
     /// trace order.
     pub r10_threads_us: Vec<u64>,
+    /// Timer interrupts from user mode checked, those whose expiry billed someone, those that
+    /// found a wait ended before its timeout, and those that found neither and ended the
+    /// interrupted budget's slice.
+    pub timer_entries: usize,
+    pub timer_expiring: usize,
+    pub timer_stale: usize,
+    pub timer_slice_ends: usize,
+    /// Ticks charged after expiry to the budget billed last, over every timer interrupt.
+    pub timer_tail_ticks: u64,
+    /// When each timer interrupt that found neither and ended no slice came, µs, in trace order.
+    pub timer_empty: Vec<u64>,
+    /// When each timer interrupt that found another budget's wait ended early came, µs.
+    pub timer_stale_foreign: Vec<u64>,
+}
+
+/// A timer interrupt from user mode, from its `I` to its `O`.
+struct TimerEntry {
+    seq: u64,
+    /// The budget it interrupted.
+    interrupted: Option<u64>,
+    /// When it came, µs.
+    at: u64,
+    /// Its expiry's end (`E`): the budget billed last (0 for none), and what for (1 an expired
+    /// item, 2 a wait that ended before its timeout, 0 nothing).
+    expired: Option<(u64, u128)>,
+    /// Each charge: the payer, the ticks, and whether it came after the expiry's end.
+    charges: Vec<(u64, u64, bool)>,
+}
+
+/// Judge a timer interrupt at its return (to user mode or not): after an expiry that billed
+/// someone, every charge after it is that budget's; after one that found a wait ended early,
+/// every charge is that wait's budget's; otherwise, the interrupted budget's, and only if the entry
+/// ends its slice (it returns to `kmain`).
+fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result<(), String> {
+    sum.timer_entries += 1;
+    let charged = e.charges.iter().filter(|c| c.1 > 0);
+    match e.expired {
+        Some((last, what @ (1 | 2))) => {
+            if what == 1 {
+                sum.timer_expiring += 1;
+            } else {
+                sum.timer_stale += 1;
+                if e.interrupted != Some(last) {
+                    sum.timer_stale_foreign.push(e.at);
+                }
+            }
+            for &(payer, ticks, after) in charged.filter(|c| what == 2 || c.2) {
+                if payer != last {
+                    return Err(format!(
+                        "record {}: a timer interrupt whose expiry billed budget {last} last (for {}) charged \
+                         {ticks} ticks {} to budget {payer} (it interrupted {:?})",
+                        e.seq,
+                        if what == 1 { "an expired item" } else { "a wait that ended early" },
+                        if after { "after it" } else { "before it" },
+                        e.interrupted
+                    ));
+                }
+                sum.timer_tail_ticks += ticks;
+            }
+        }
+        _ => {
+            let mut ended_slice = false;
+            for &(payer, ticks, _) in charged {
+                if Some(payer) != e.interrupted || to_user {
+                    return Err(format!(
+                        "record {}: a timer interrupt that found nothing charged {ticks} ticks to budget {payer} \
+                         (it interrupted {:?}, and {})",
+                        e.seq,
+                        e.interrupted,
+                        if to_user { "returned to user mode" } else { "ended its slice" }
+                    ));
+                }
+                ended_slice = true;
+            }
+            sum.timer_slice_ends += usize::from(ended_slice);
+            if to_user {
+                sum.timer_empty.push(e.at);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Check every pick in `records` against the four clauses, the floor and every pass's
@@ -221,6 +316,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     let mut open_r10: Option<(u64, u128)> = None;
     let mut open_audit: Option<(u64, u128)> = None;
     let mut open_threads: Option<u128> = None;
+    let mut open_timer: Option<TimerEntry> = None;
     let mut threads_us = 0;
     let mut requeues: i128 = 0;
     let mut sum = Summary::default();
@@ -292,6 +388,36 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     ));
                 }
             },
+            'I' => {
+                if open_timer.is_some() {
+                    return Err(format!("record {}: a timer interrupt began inside another", r.seq));
+                }
+                let interrupted = (r.id != 0).then_some(r.id);
+                open_timer = Some(TimerEntry {
+                    seq: r.seq,
+                    interrupted,
+                    at: r.pass as u64,
+                    expired: None,
+                    charges: Vec::new(),
+                });
+            }
+            'B' | 'E' | 'O' if open_timer.is_none() => {
+                return Err(format!("record {}: a timer interrupt's record outside one", r.seq));
+            }
+            'B' => {
+                let e = open_timer.as_mut().expect("checked above");
+                e.charges.push((r.id, r.pass as u64, e.expired.is_some()));
+            }
+            'E' => {
+                let e = open_timer.as_mut().expect("checked above");
+                if r.pass > 2 || e.expired.replace((r.id, r.pass)).is_some() {
+                    return Err(format!("record {}: a timer interrupt's second or malformed expiry", r.seq));
+                }
+            }
+            'O' => {
+                let e = open_timer.take().expect("checked above");
+                check_timer_entry(&e, r.pass != 0, &mut sum)?;
+            }
             'L' => {
                 let (used, tells) = check_lift(&records[i - 1..])?;
                 i += used - 1;
@@ -366,6 +492,9 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     }
     if open_threads.is_some() {
         return Err("a threads span began and never ended".into());
+    }
+    if let Some(e) = open_timer {
+        return Err(format!("record {}: a timer interrupt began and never returned", e.seq));
     }
     if sum.picks == 0 {
         return Err("the trace holds no pick: nothing was checked".into());
@@ -463,8 +592,10 @@ fn shares(log: &str) -> Result<Vec<Share<'_>>, String> {
 /// `<measure>_p50_us=N` and `<measure>_p99_us=N`, in each group the program printed; and a
 /// lease's end from the steward's decision, `lease_end_p99_us=N`: the worst net decision-wake p99
 /// (over every group) plus R10's p99 (kernel/scheduling.md, "Responsiveness"). Each share the
-/// program printed is judged against its own bounds. Every window a target or a share judges has
-/// the checked build's audit time inside it subtracted; R10's has none.
+/// program printed is judged against its own bounds, and `stale_waits_in=<share>` requires a timer
+/// interrupt that found another budget's wait ended early inside that share's window. Every window
+/// a target or a share judges has the checked build's audit time inside it subtracted; R10's has
+/// none.
 pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
@@ -480,7 +611,12 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         (percentile(threads, 50), percentile(threads, 99), threads.last().copied().unwrap_or(0));
     // Each bound, by its argument's name.
     let mut bounds = BTreeMap::new();
+    let mut stale_in = Vec::new();
     for arg in args.split_whitespace() {
+        if let Some(share) = arg.strip_prefix("stale_waits_in=") {
+            stale_in.push(share);
+            continue;
+        }
         let (name, bound) = arg
             .split_once('=')
             .and_then(|(name, v)| Some((name, v.parse::<u64>().ok()?)))
@@ -540,16 +676,25 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         }
     }
     // Each share, of its window net of the audits inside it.
-    for s in shares(log)? {
+    let shares = shares(log)?;
+    if let Some(name) = stale_in.iter().find(|n| !shares.iter().any(|s| s.name == **n)) {
+        return Err(format!("stale_waits_in names {name}, but the log holds no such share"));
+    }
+    for s in shares {
         let (start, end) = s.window;
+        let stale = sum.timer_stale_foreign.iter().filter(|t| (start..end).contains(*t)).count();
+        let stale_missed = stale_in.contains(&s.name) && stale == 0;
+        missed |= stale_missed;
         let inside = audit_inside(&sum.audits, start, end);
         let (gross, net) = (s.cpu * 1000 / (end - start), s.cpu * 1000 / (end - start - inside).max(1));
         let (min, max) = s.bounds;
         let met = (min..=max).contains(&net);
         missed |= !met;
         lines.push(format!(
-            "share {}: net {net}, gross {gross} of 1000, audits {inside} µs: target {} ({min} <= share <= {max})",
+            "share {}: net {net}, gross {gross} of 1000, audits {inside} µs, {} timer interrupts nobody's, {stale} finding another budget's wait ended early{}: target {} ({min} <= share <= {max})",
             s.name,
+            sum.timer_empty.iter().filter(|t| (start..end).contains(*t)).count(),
+            if stale_missed { " (none, but the case requires some)" } else { "" },
             if met { "met" } else { "missed" }
         ));
     }
@@ -566,14 +711,20 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     }
     let audit_total: u64 = sum.audits.iter().map(|(b, e)| e - b).sum();
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's){lease_end}",
         records.len(),
         sum.picks,
         sum.lifts,
         sum.telling,
         sum.reweighs,
         sum.r10_frames,
-        sum.audits.len()
+        sum.audits.len(),
+        sum.timer_entries,
+        sum.timer_expiring,
+        sum.timer_stale,
+        sum.timer_tail_ticks,
+        sum.timer_slice_ends,
+        sum.timer_empty.len()
     );
     let out = std::iter::once(head).chain(lines).collect::<Vec<_>>().join("\n      ");
     if missed { Err(out) } else { Ok(out) }
@@ -915,13 +1066,13 @@ mod tests {
         let ok = run(&log, "");
         assert!(
             ok.as_ref().is_ok_and(|s| s.contains(
-                "share victim: net 500, gross 440 of 1000, audits 24 µs: target met (450 <= share <= 1000)"
+                "share victim: net 500, gross 440 of 1000, audits 24 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)"
             )),
             "{ok:?}"
         );
         // An upper bound too, and a share out of its bounds.
         assert!(run(&audited("SHARE shell 100 300 88 450 499\n"), "").is_err_and(|e| {
-            e.contains("share shell: net 500, gross 440 of 1000, audits 24 µs: target missed")
+            e.contains("share shell: net 500, gross 440 of 1000, audits 24 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target missed")
         }));
         // Unsubtracted, the same share misses: a stamp the kernel left out is time the oracle
         // never saw.
@@ -955,6 +1106,84 @@ mod tests {
             assert!(v.as_ref().is_err_and(|e| e.contains("audit")), "{what}: {v:?}");
         }
         assert!(verdict(&[vec![(1, 'U', 1, 130), (1, 'V', 1, 154)], pick.to_vec()].concat()).is_ok());
+    }
+
+    #[test]
+    fn a_timer_interrupt_bills_the_budgets_whose_items_it_expired() {
+        let pick = [(2, 'W', 1, 5), (2, 'K', 1, 5)];
+        // Budget 1 is interrupted at 100 µs; budget 2's timeout expires, or its wait ended early.
+        let good = [
+            // Expired 2's item: its walk and handling, then the rest, all 2's.
+            vec![
+                (1, 'I', 1, 100),
+                (1, 'B', 2, 40),
+                (1, 'E', 2, 1),
+                (1, 'B', 2, 9),
+                (1, 'B', 2, 30),
+                (1, 'O', 0, 1),
+            ],
+            // Expired 1's own item: 1 pays.
+            vec![(1, 'I', 1, 100), (1, 'B', 1, 40), (1, 'E', 1, 1), (1, 'B', 1, 30), (1, 'O', 0, 1)],
+            // Found 2's wait ended before its timeout: 2 pays for the walk and the rest.
+            vec![(1, 'I', 1, 100), (1, 'E', 2, 2), (1, 'B', 2, 9), (1, 'B', 2, 30), (1, 'O', 0, 1)],
+            // Found nothing and ended 1's slice: 1 pays, and the CPU goes to `kmain`.
+            vec![(1, 'I', 1, 100), (1, 'E', 0, 0), (1, 'B', 1, 30), (1, 'O', 0, 0)],
+            // Found nothing, ended no slice: nobody pays.
+            vec![(1, 'I', 1, 100), (1, 'E', 0, 0), (1, 'O', 0, 1)],
+            vec![(1, 'I', 1, 100), (1, 'B', 1, 0), (1, 'O', 0, 1)],
+        ];
+        for head in good {
+            let v = verdict(&[head.clone(), pick.to_vec()].concat());
+            assert!(
+                v.as_ref().is_ok_and(|s| s.contains("1 timer interrupts billed by the rule")),
+                "{head:?}: {v:?}"
+            );
+        }
+        for (what, head) in [
+            // The defect: the rest after 2's item billed to the interrupted 1.
+            (
+                "the tail to the interrupted budget",
+                vec![(1, 'I', 1, 100), (1, 'B', 2, 40), (1, 'E', 2, 1), (1, 'B', 1, 30), (1, 'O', 0, 1)],
+            ),
+            (
+                "a wait ended early, billed to another",
+                vec![(1, 'I', 1, 100), (1, 'E', 2, 2), (1, 'B', 1, 30), (1, 'O', 0, 1)],
+            ),
+            ("found nothing, no slice end", vec![(1, 'I', 1, 100), (1, 'B', 1, 30), (1, 'O', 0, 1)]),
+            ("found nothing, another budget", vec![(1, 'I', 1, 100), (1, 'B', 3, 30), (1, 'O', 0, 0)]),
+        ] {
+            let v = verdict(&[head, pick.to_vec()].concat());
+            assert!(v.as_ref().is_err_and(|e| e.contains("a timer interrupt")), "{what}: {v:?}");
+        }
+        for (what, head) in [
+            ("a charge outside one", vec![(1, 'B', 1, 30)]),
+            ("never returned", vec![(1, 'I', 1, 100)]),
+            ("nested", vec![(1, 'I', 1, 100), (1, 'I', 1, 100), (1, 'O', 0, 1), (1, 'O', 0, 1)]),
+            ("two expiries", vec![(1, 'I', 1, 100), (1, 'E', 0, 0), (1, 'E', 0, 0), (1, 'O', 0, 1)]),
+            ("an unknown expiry", vec![(1, 'I', 1, 100), (1, 'E', 2, 3), (1, 'O', 0, 1)]),
+        ] {
+            let v = verdict(&[head, pick.to_vec()].concat());
+            assert!(v.as_ref().is_err_and(|e| e.contains("timer interrupt")), "{what}: {v:?}");
+        }
+        // The ones nobody pays for are counted inside each share's window.
+        let empty = [(1, 'I', 1, 100), (1, 'O', 0, 1), (1, 'I', 1, 300), (1, 'O', 0, 1)];
+        let log = trace(&[empty.to_vec(), pick.to_vec()].concat()) + "SHARE victim 50 200 75 450 1000\n";
+        let v = run(&log, "");
+        assert!(v.as_ref().is_ok_and(|s| s.contains("1 timer interrupts nobody's, 0 finding")), "{v:?}");
+        // A case can require interrupts that found another budget's wait ended early in a share's
+        // window: one inside (at 100 µs, budget 1 interrupted, 2's wait) meets it; none fails it.
+        let stale = [(1, 'I', 1, 100), (1, 'E', 2, 2), (1, 'B', 2, 9), (1, 'O', 0, 1)];
+        let log = trace(&[stale.to_vec(), pick.to_vec()].concat()) + "SHARE victim 50 200 75 450 1000\n";
+        let v = run(&log, "stale_waits_in=victim");
+        assert!(
+            v.as_ref().is_ok_and(|s| s.contains("1 finding another budget's wait ended early: target met")),
+            "{v:?}"
+        );
+        let own = [(1, 'I', 2, 100), (1, 'E', 2, 2), (1, 'B', 2, 9), (1, 'O', 0, 1)];
+        let log = trace(&[own.to_vec(), pick.to_vec()].concat()) + "SHARE victim 50 200 75 450 1000\n";
+        let v = run(&log, "stale_waits_in=victim");
+        assert!(v.as_ref().is_err_and(|e| e.contains("none, but the case requires some")), "{v:?}");
+        assert!(run(&log, "stale_waits_in=nobody").is_err_and(|e| e.contains("no such share")));
     }
 
     #[test]

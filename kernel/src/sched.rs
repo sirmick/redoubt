@@ -13,14 +13,18 @@
 //! unaccounted, whatever ends it (a block, an exit, a fault or a kill):
 //! - [`from_user`] (first thing on a trap from user mode) adds the user time since the last return to the
 //!   pending runtime of the budget that ran, `cur`.
+//! - Expiry work comes first: each expired item is billed to its own budget as it is handled, a walk that
+//!   finds only a wait ended before its timeout to that wait's budget, and the last walk, which finds nothing
+//!   more, to the budget billed last (`time.rs`).
 //! - [`begin_billing`] (after the entry's expiry) starts billing kernel time to `cur`: a system call's time
-//!   is its caller's. Expiry work is not: each expired item is billed to its own budget as it is handled
-//!   (`time.rs`), and the shared walk to nobody (the kernel).
+//!   is its caller's. A timer interrupt's is not: the rest of an entry that found something is the budget's
+//!   billed last ([`bill_from_now`]), and of one that found nothing, `cur`'s if it ends its slice and
+//!   nobody's otherwise (`arch::irq`).
 //! - [`leave`] (on every return, to user mode or to `kmain`) closes the billing and, if the budget that runs
 //!   next is not `cur`, deschedules `cur`: its pending runtime is folded into its pass (at least one tick)
 //!   and it is requeued behind its equals if it still has a runnable thread. It then reconciles the queue
 //!   (one reconcile per kernel entry: budgets that gained a runnable thread wake, those that lost their last
-//!   one leave).
+//!   one leave). The entry's payer pays for all of that, up to the return; user time starts there.
 //!
 //! A pass changes only at a fold: a deschedule, a weight change (a carve, or a carve returned,
 //! folds first so earlier runtime is charged at the weight it ran at), a budget's destruction,
@@ -123,8 +127,15 @@ impl Sched {
     /// else's is charged at once.
     fn close_billing(&mut self, mm: &mut MemoryManager, now: u64) {
         if let Some((since, b)) = self.billing.take() {
-            self.cpu.bill(mm, b, now.saturating_sub(since));
+            self.bill(mm, b, now.saturating_sub(since));
         }
+    }
+
+    /// Charge `ticks` of kernel time to `b` (`Cpu::bill`), and say so in the trace.
+    fn bill(&mut self, mm: &mut MemoryManager, b: BudgetRef, ticks: u64) {
+        #[cfg(feature = "sched-trace")]
+        trace::charge(b.id, ticks);
+        self.cpu.bill(mm, b, ticks);
     }
 
     /// If kernel time is being billed to `b`, close the interval and reopen it: what `b` is
@@ -178,9 +189,13 @@ pub fn from_user() {
 
 /// The entry's expiry is done: from here, kernel time is `cur`'s (a system call's is its
 /// caller's).
-pub fn begin_billing() {
+pub fn begin_billing() { bill_from_now(SCHED.with(|s| s.cpu.cur)); }
+
+/// From here, kernel time is `payer`'s (nobody's for `None`): the rest of an entry whose expiry
+/// billed `payer` last (`time::Expired`).
+pub fn bill_from_now(payer: Option<BudgetRef>) {
     let now = ticks();
-    SCHED.with(|s| s.billing = s.cpu.cur.map(|b| (now, b)));
+    SCHED.with(|s| s.billing = payer.map(|b| (now, b)));
 }
 
 /// Kernel time since billing began goes to nobody: it was spent for someone else (an interrupt
@@ -219,7 +234,7 @@ pub fn stop_billing() {
 
 /// Charge `ticks` of kernel work done for `b` (an expired timeout of one of its threads, its
 /// destruction, an interrupt of its device) to it.
-pub fn bill(mm: &mut MemoryManager, b: BudgetRef, ticks: u64) { SCHED.with(|s| s.cpu.bill(mm, b, ticks)); }
+pub fn bill(mm: &mut MemoryManager, b: BudgetRef, ticks: u64) { SCHED.with(|s| s.bill(mm, b, ticks)); }
 
 /// An interrupt was handled from tick `started`: bill that to the owner of its device object
 /// (R5), if it has one, and restart billing the interrupted budget from now.
@@ -275,12 +290,14 @@ pub fn audit(which: u64, check: impl FnOnce()) {
 }
 
 /// Leaving the kernel for `pid` (the kernel itself for PID 1): close the billing, deschedule the
-/// budget that ran if another runs now, reconcile, and start counting user time.
+/// budget that ran if another runs now, reconcile, and start counting user time. Leaving for user
+/// mode, the entry's payer pays for this too, up to the return.
 pub fn leave(pid: Pid) {
     let now = ticks();
-    ProcessTable::with(|ss| {
+    let to_user = ProcessTable::with(|ss| {
         MemoryManager::with_mut(|mm| {
             SCHED.with(|s| {
+                let payer = s.billing.map(|(_, b)| b);
                 s.close_billing(mm, now);
                 let next = if pid.get() == 1 { None } else { mm.budget_of(pid).map(|f| budget_ref(mm, f)) };
                 let (list, n) = Sched::runnable(ss, mm);
@@ -295,8 +312,20 @@ pub fn leave(pid: Pid) {
                         s.billing = left.filter(|b| mm.is_live_budget(*b)).map(|b| (now, b));
                     }
                 }
+                // Debug only, never in a bench build but one recorded negative run (feature
+                // `timer-tail-billed`): user time starts here, so the rest is the next budget's.
+                if cfg!(feature = "timer-tail-billed") {
+                    s.user_since = next.map(|_| now);
+                } else {
+                    s.user_since = None;
+                    // Billing closed above, so the deschedule folds what `cur` ran; it reopens for
+                    // the entry's payer, who pays for the rest, and closes again at the return.
+                    if next.is_some() {
+                        s.billing = payer.map(|b| (now, b));
+                    }
+                }
                 s.reconcile(mm, runnable);
-                s.user_since = next.map(|_| now);
+                next.is_some()
             })
         })
     });
@@ -304,6 +333,17 @@ pub fn leave(pid: Pid) {
         crate::time::set_slice_end(crate::time::NEVER);
     }
     crate::time::rearm();
+    if to_user && !cfg!(feature = "timer-tail-billed") {
+        let back = ticks();
+        MemoryManager::with_mut(|mm| {
+            SCHED.with(|s| {
+                s.close_billing(mm, back);
+                s.user_since = Some(back);
+            })
+        });
+    }
+    #[cfg(feature = "sched-trace")]
+    trace::returned(to_user);
 }
 
 /// What `kmain` runs next: the lowest-ranked queued budget's next thread after its cursor. Starts
@@ -487,9 +527,12 @@ pub mod trace {
         n: usize,
         dropped: u64,
         entry: u64,
+        /// Inside a timer interrupt from user mode, until it returns: its charges are recorded.
+        timer: bool,
     }
 
-    static RING: KernelCell<Ring> = KernelCell::new(Ring { pages: [0; PAGES], n: 0, dropped: 0, entry: 0 });
+    static RING: KernelCell<Ring> =
+        KernelCell::new(Ring { pages: [0; PAGES], n: 0, dropped: 0, entry: 0, timer: false });
 
     /// Take the ring's frames, zeroed (at boot, before `boot_budgets` counts what the kernel
     /// keeps).
@@ -517,6 +560,52 @@ pub mod trace {
                 r.dropped += 1;
             }
         });
+    }
+
+    /// A timer interrupt from user mode began (`I`): the budget it interrupted (id 0 for none; no
+    /// object has id 0), and the time in µs in the pass field. Until it returns (`O`: 1 in the pass
+    /// field to user mode, 0 to `kmain`), each charge is recorded (`B`: the payer and the ticks),
+    /// and the end of its expiry (`E`: the budget billed last, and in the pass field 1 for an
+    /// expired item's, 2 for a wait's that ended before its timeout, 0 for none). The oracle
+    /// checks that the budget it interrupted pays only for its own items, or for its slice's end
+    /// (kernel/scheduling.md, "Charging").
+    pub const TIMER_ENTRY: u8 = b'I';
+    pub const CHARGE: u8 = b'B';
+    pub const EXPIRED: u8 = b'E';
+    pub const RETURN: u8 = b'O';
+
+    /// A timer interrupt from user mode began (after its user time was accrued).
+    pub fn timer_entry() {
+        let cur = super::SCHED.with(|s| s.cpu.cur);
+        RING.with(|r| r.timer = true);
+        record(TIMER_ENTRY, cur.map_or(0, |b| b.id), u128::from(crate::time::now_us()));
+    }
+
+    /// `ticks` of kernel time were charged to budget `id`.
+    pub fn charge(id: u64, ticks: u64) {
+        if RING.with(|r| r.timer) {
+            record(CHARGE, id, u128::from(ticks));
+        }
+    }
+
+    /// The entry's expiry is done; `last` was billed last, for a wait that ended before its
+    /// timeout if `stale`.
+    pub fn expired(last: Option<crate::handle::BudgetRef>, stale: bool) {
+        if RING.with(|r| r.timer) {
+            let what = match (last, stale) {
+                (None, _) => 0,
+                (Some(_), false) => 1,
+                (Some(_), true) => 2,
+            };
+            record(EXPIRED, last.map_or(0, |b| b.id), what);
+        }
+    }
+
+    /// The kernel returns, to user mode or to `kmain`.
+    pub fn returned(to_user: bool) {
+        if RING.with(|r| core::mem::take(&mut r.timer)) {
+            record(RETURN, 0, u128::from(to_user));
+        }
     }
 
     /// A destruction begins or ends (`budget::destroy_subtree`).

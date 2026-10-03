@@ -146,7 +146,7 @@ flowchart TD
 
 ### Charging
 
-<details><summary>Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested (15)</summary>
+<details><summary>Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested (16)</summary>
 
 - bench:sched-sleep-gaming
 - bench:sched-exit-churn
@@ -157,6 +157,7 @@ flowchart TD
 - host:redoubt-stride::a_split_charge_equals_the_whole
 - host:redoubt-stride::every_charge_counts_at_any_weight
 - host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran
+- host:testbench::a_timer_interrupt_bills_the_budgets_whose_items_it_expired
 - mutation:R12ShortRunsFree
 - mutation:R12DropRemainder
 - mutation:R12ExitRunsFree
@@ -190,9 +191,13 @@ t = rem + ticks x STRIDE;   pass += t / w;   rem = t mod w      (w: the free wei
 
 Kernel time is billed as well:
 - a system call's time is its caller's;
-- an expired timeout is billed to its thread's budget, and a deadline's destruction as below;
-  each walk that finds an expired item is billed with it, and the last walk, which finds
-  nothing, is nobody's, so one entry does at most one walk nobody pays for;
+- an expired timeout is billed to its thread's budget, and a deadline's destruction as below,
+  each with the walk that found it. The timer is armed for a timeout only when its thread
+  blocks; a wait that ends before its timeout leaves it early, and the walk that finds the wait
+  gone is billed to that thread's budget. The rest of an entry that found either, its last walk
+  and the timer's own handling included, is billed to the budget it found last: the budget it
+  interrupted pays for none of it. A timer interrupt that found neither is the running budget's
+  when it ends that budget's slice, and nobody's otherwise;
 - an interrupt's handling is billed to the owner of its device object
   ([R5 (interrupts)](devices.md#r5-interrupts)); one with no device object, to nobody;
 - `kmain`'s pick and switch after a deschedule are the descheduled budget's;
@@ -214,6 +219,19 @@ gone for everything from the walk that found the deadline. In `bench:deadline-fl
 creator floods its own budget with empty weight-0 budgets on short deadlines: its count falls as
 the flood grows from 16 to 64 a round, and an equal-weight victim keeps its half. With the bill
 planted out, the victim fell to 137 of 1000.
+
+The trace checks every timer interrupt from user mode (`bench:sched-timer-flood`): after its
+expiry it charges only the budget it found last, an expired item's or a wait's that ended before
+its timeout, and with neither, only the budget it interrupted, when it ends that budget's slice.
+Against 30 sleepers a microsecond apart, the same with 64 staggered budget deadlines, and two
+waits answered at once 15 ms before their timeouts, the victim gets 494, 492 and 493 of 1000 net
+on rv64 and 491, 490 and 492 on rv32, and no timer interrupt is nobody's. The last case requires
+interrupts that found the attacker's waits ended early inside the victim's window, so the check
+cannot pass for want of them: 55 on rv64 and 48 on rv32. A sleep of a microsecond
+has passed before its call would block, so it arms nothing; when every call armed the timer,
+each such sleep made an interrupt that found nothing. With the rest of each timer interrupt
+billed to the budget it interrupted (`timer-tail-billed`, the recorded negative run), the check
+fails on both widths: the victim pays for the attacker's waits that ended early.
 
 A server that works for a caller spends its own budget's CPU: no time is donated
 ([Residual risks](#residual-risks)). CPU charging is separate from page charging
@@ -411,7 +429,8 @@ paid for scans a release build does not run, and its victim got 650 and 643 net:
 `sched-exit-churn` and `sched-timer-flood` are judged the same way, since a process's start and
 end and a deadline's destruction each run an audit: against processes that exit, the victim gets
 495 of 1000 net on rv64 (459 gross) and 492 on rv32 (459); against processes that fault, 497
-(464) and 498 (468); against sleepers and staggered budget deadlines, 472 (464) and 471 (468). So
+(464) and 498 (468); against sleepers, 494 (494) and 491 (491); against sleepers and staggered
+budget deadlines, 492 (484) and 490 (487); against waits ended early, 493 (493) and 492 (492). So
 is `sched-carve-return`'s, from its carve's return, whose destruction and audit come before it: 496
 and 497, net and gross. The other shares stay in their programs, with no audit inside their
 windows: no process or budget is created or destroyed there, or (`deadline-flood-billed`) the
@@ -700,9 +719,9 @@ It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
   its weight's share, within 50 per thousand: spinners at 100, 100 and 300; near-slice, 20 µs
   and long-sleep bursts; a sleeper waking into an idle gap; threads and processes that exit or
-  fault just before their slice ends; budget churn; carving; 30 sleepers a microsecond apart and
-  64 staggered deadlines; a system server flooded by one user; a weight-1000 server among eight
-  users of 100.
+  fault just before their slice ends; budget churn; carving; 30 sleepers a microsecond apart,
+  64 staggered deadlines, and waits ended before their timeouts; a system server flooded by one
+  user; a weight-1000 server among eight users of 100.
 - **The differential** drives `libs/stride`, wired as the kernel wires it, and the model's
   scheduler through 3,000 random sequences of creations, destructions (leaf, on the CPU, and
   whole subtrees), wakes, blocks, runs and preemptions, and requires every pass, entry,
@@ -722,7 +741,8 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 `sched-trace`, and no default build enables it:
 - the kernel's default features are `print-panics` alone, and `./build` adds only the board
   (`qemu-virt`);
-- every trace site in `kernel/src/{sched,budget,mem,main,process,redoubt}.rs` sits under
+- every trace site in `kernel/src/{sched,budget,mem,main,message,process,redoubt,time}.rs` and
+  `kernel/src/arch/riscv/irq.rs` sits under
   `#[cfg(feature = "sched-trace")]`, so with the feature off the ring, its records and its
   `SCHED-TRACE` console lines are not compiled;
 - the bench turns it on per case (`kernel_features`), only for `sched-ties`,
@@ -734,7 +754,9 @@ The other diagnostic features are off by default in the same way: `sched-inject-
 debug-only break of the tie rule that implies the trace; `audit-unstamped`, which leaves the audit
 after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
 budget that ran it and counts it against its slice, each for one recorded negative run
-([responsiveness](#responsiveness)); and `debug-print`, which prints every
+([responsiveness](#responsiveness)); `timer-tail-billed`, which bills the rest of a timer
+interrupt after its expiry, and its return, to the budget it interrupted, for one recorded
+negative run ([charging](#charging)); and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
 ([devices](devices.md)), and so are `handle-chain-fault` and `process-chain-fault`, a handle
 installed without its stamp entry or its process object entry for the chain audit to catch

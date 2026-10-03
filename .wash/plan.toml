@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 183
+revision = 201
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -260,7 +260,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K8", "K9", "K10", "K18"]
   body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-10-02 on a kernel finding: wp-gate1 e9ecc5ea5 (a WIP on the two-commit fold 555aeb6a5; the review's BLOCK findings applied: per-lease badges for held calls and progress, strict counts, fail bits, nine leases of each kind, two leases live at a deadline end as the page requires). With two full leases live, the deadline notice misses: net p99 57.1 ms rv64, 48.1 ms rv32 against 40 (every protocol row ok). The earlier green sweep (32/32, seed 4 pinned) was with one lease live at a deadline end. QA GATE1-notice-two-leases (Architect) decides the kernel package; GATE1 resumes on its merge: the sweep again, The run's per-width seed sentence, the whole bench, the fold, the red team's re-review. Detail: .wash/local/GATE1-miss.md, GATE1-progress.md, GATE1-sweep.md. INIT1 (accepted) waits on GATE1's merge. Tier A, size M."
   state = "active"
-  revision = 157
+  revision = 189
   overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
 
 [[node]]
@@ -282,8 +282,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["INIT1"]
   body = "Builds docs/servers/init.md (the boot manifest, devices by register base and interrupt, confinement, starting the servers, key separation, fresh connections, authority, R33-R35), docs/kernel/devices.md#which-process-gets-which-device (placement matched with device_info), docs/servers/consoled.md#started-by-init (lines attributed by connection), docs/todo/server-bucket-counts.md (closed), docs/testbench.md#starting-a-cases-programs (the under-init half), image/boot.toml read by the builder for ./mkimage. Design: QA INIT1-design. Tier A, size L."
   state = "active"
-  revision = 174
-  overrides = ["2026-10-02: started by Orchestrator before INIT1 (active): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1 within hours; INIT2 starts on INIT1's rebased tip d974e247c, touches none of K16's or GATE1's files, and rebases onto INIT1's merge before its first page commit and again before acceptance.", "2026-10-02: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 continues on INIT1's rebased tip d974e247c and rebases onto INIT1's merge before its first page commit and before acceptance."]
+  revision = 194
+  overrides = ["2026-10-02: started by Orchestrator before INIT1 (active): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1 within hours; INIT2 starts on INIT1's rebased tip d974e247c, touches none of K16's or GATE1's files, and rebases onto INIT1's merge before its first page commit and again before acceptance.", "2026-10-02: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 continues on INIT1's rebased tip d974e247c and rebases onto INIT1's merge before its first page commit and before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 continues on INIT1's rebased tip and rebases onto INIT1's merge before acceptance; the one kernel change (system_reset kind 3) is ruled and whoever merges second rebases.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 continues on INIT1's rebased tip and rebases onto INIT1's merge before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 reports on INIT1's rebased tip and rebases onto INIT1's merge before acceptance."]
 
 [[node]]
   id = "INIT3"
@@ -446,9 +446,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["GATE1", "INIT1", "K13", "K17"]
   body = "Owner's values on QA K16-limits (2026-10-02): MAX_PROCESS_COUNT 512 with 16-bit PIDs; MAX_THREADS 255 with each thread's saved registers in its own IPC page; MAX_OPEN_CALLS 256, WAIT_CAP 32, MAX_DEPTH 16, MAX_LABELS 16, MAX_START_HANDLES 128. Brief: .wash/local/K16-implementer.md. Builds docs/kernel/processes.md (PIDs, threads), objects.md#what-objects-cost, memory-layout.md (per-process kernel data, satp without the PID), boot.md (the handoff record), abi.md (constants, record slots), budgets.md (MAX_DEPTH, MAX_LABELS, residual-risks for #r10-destruction), ipc.md (#r2-fair-waiting, #r4a-open-calls, residual risks), invariants.md, timer.md (residual risks), scheduling.md (R12 fixed terms). Needs GATE1 (its numbers are the baseline), INIT1 (budget.rs boot_*, setup_loader_process, the loader's handoff and process-area mapping) and K13 (message.rs, where the walks are). Tier A (kernel and loader), size L."
-  state = "active"
-  revision = 182
-  overrides = ["2026-10-02: started by Orchestrator before GATE1 (active), INIT1 (active): Owner asked to run more in parallel (2026-10-02). K16's first two commits touch neither INIT1's files (budget.rs boot_*, setup_loader_process, the loader) nor GATE1's; GATE1's merged numbers remain the baseline, and the branch rebases onto both merges before commit 3.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); an early read of commit 1 while K16 waits for INIT1's merge.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); this commit touches none of INIT1's or GATE1's files and changes no value."]
+  state = "reported"
+  revision = 191
+  overrides = ["2026-10-02: started by Orchestrator before GATE1 (active), INIT1 (active): Owner asked to run more in parallel (2026-10-02). K16's first two commits touch neither INIT1's files (budget.rs boot_*, setup_loader_process, the loader) nor GATE1's; GATE1's merged numbers remain the baseline, and the branch rebases onto both merges before commit 3.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); an early read of commit 1 while K16 waits for INIT1's merge.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); this commit touches none of INIT1's or GATE1's files and changes no value.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); commits 1 and 4 touch none of INIT1's or GATE1's files; the branch rebases onto both merges before commit 2."]
 
 [[node]]
   id = "K17"
@@ -498,3 +498,22 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Closes docs/todo/shares-judged-gross.md (added by K18's trim). Builds docs/kernel/scheduling.md#responsiveness and docs/testbench.md#checked-builds: every scheduler share is printed as a SHARE line and judged by sched_oracle net of audits, as K18 did for sched-budget-churn. Order: sched-exit-churn (margin ~40 over 450), sched-destroy-billing, deadline-flood-billed, then any other share judged in a program. No kernel change, no bound moves, no attacker weakened. Design: QA GATE1-notice-two-leases (K18's review). Brief: .wash/local/B5-implementer.md. Tier B (bench), size S."
   state = "done"
   revision = 173
+
+[[node]]
+  id = "K20"
+  title = "A timer entry is billed to the budget whose timeout it expired, not the one it interrupted"
+  template = "package"
+  parent = "M1"
+  body = "Kernel finding from QA K16-timer-flood-share. The trap handler bills a timer-interrupt entry's tail after expiry (on_interrupt, rearm, leave's runnable walk and reconcile) to the interrupted budget. That contradicts docs/kernel/timer.md 'R12 (scheduling) for timer work' and docs/kernel/scheduling.md#charging: a flooder spends its own share, not a neighbour's. The fix bills the rest of an entry that expired something to the last expired item's budget. Nothing expired: the running budget's at its slice end, otherwise nobody's. A self-check pads reconcile and requires sched-timer-flood's share to stay put. Brief and page lines: .wash/local/K20-timer-entry-billing.md. Tier A, size S. Goes before K16's commit 4."
+  state = "done"
+  revision = 201
+
+[[node]]
+  id = "RT1"
+  title = "libs/rt's unsafe down to its floor, and what stays attacked"
+  template = "package"
+  parent = "M1"
+  needs = ["INIT2"]
+  body = "The owner's request. This is TCB hygiene, not a hole: a process is memory-safe from other processes whatever its runtime does. Tier A, size S. It needs INIT2, which adds the bundle view and the fixed arena's run words.\n\nThe ratchet goes from 14 (after INIT2) to a target of 10:\n- The panic hook is named in entry!, so the stored-address transmute goes. If no sound form exists, it stays with its reason.\n- The heap's four raw word accesses fold onto one private read/write pair.\n- The startup-page and bundle views fold onto one private premapped().\n\nThe floor: GlobalAlloc's three, the MMIO pair, and Mapping's two views.\n\nEvery remaining site gets a keeper. The heap's tests move out of tests/ipc.rs into rt-miri's list: today they are not under Miri in the bench. Registers gets a Miri test if the fake can map it.\n\nNo bitmap free lists, and no unsafe-fn slice_at (it counts more, not less).\n\nPages: native.md's runtime section and testbench.md's unsafe budget. Brief and exact lines: .wash/local/RT1-implementer.md."
+  state = "todo"
+  revision = 192
