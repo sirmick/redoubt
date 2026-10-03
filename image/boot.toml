@@ -6,7 +6,8 @@
 # `kernel`, which must be first, and `init`. Every later entry is data to the loader. `init` reads
 # the manifest and starts the servers whose images it names (docs/servers/init.md).
 #
-# An entry is a program, the binary of `package` named as the entry and built for the target, data
+# An entry is a program, the binary of `package` named as the entry and built for the target (in
+# `workspace`, a directory of the root, if the package is in a workspace of its own), data
 # read from `path`, relative to the workspace root, or the `system.index` of the userland disk a
 # `userland_index` recipe packs.
 
@@ -45,6 +46,12 @@ package = "redoubt-ipd"
 [[entry]]
 name = "fsd"
 package = "redoubt-fsd"
+
+[[entry]]
+name = "beamlet"
+# The Erlang VM, the shell's, in a workspace of its own.
+package = "beamlet-redoubt"
+workspace = "userland/otp"
 
 [[entry]]
 name = "system.index"

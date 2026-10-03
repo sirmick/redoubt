@@ -522,13 +522,15 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
 - bench:image-disk
 - bench:init-boot
 - bench:net-tcp
+- bench:userland-boot
+- bench:userland-read-only
 - host:testbench::a_recipe_can_generate_a_directory_of_files
 - host:testbench::a_recipe_packs_a_table_and_a_volume_per_partition
 - host:testbench::a_stage_is_walked_parents_first_in_name_order
@@ -575,12 +577,12 @@ stripped, as one file named by the SHA-256 of its bytes, with `system.index`, th
 each by its hash; then its one partition is packed as a littlefs volume of those files. A case
 puts the index in its bundle with a `[[file]]` `from = { userland_index = "image/userland.toml" }`,
 and attaches the disk with `[userland]`; both come from one staging per run. `--pack-disk` writes
-an index only for a recipe whose `[objects]` declares one, so `image/disk.toml` packs as before. A `flip` or a
-`remove` names a file and damages a copy of the objects for that boot, after the index was
-written: it changes only the disk, and the bundle's index is the unchanged pack's, so the bundle
-names an object the disk no longer holds whole
-([R75 (verified userland)](kernel/boot.md#r75-verified-userland)). Nothing is generated beside the
-objects.
+an index only for a recipe whose `[objects]` declares one, so `image/disk.toml` packs as before. A
+`flip` or a `remove` names a file and damages a copy of the objects for that boot, after the index
+was written, and one disk may carry both, one object flipped and another removed: it changes only
+the disk, and the bundle's index is the unchanged pack's, so the bundle names an object the disk no
+longer holds whole ([R75 (verified userland)](kernel/boot.md#r75-verified-userland)). Nothing is
+generated beside the objects.
 
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
 virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,

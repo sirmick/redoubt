@@ -476,7 +476,7 @@ no second acceptance path.
 
 ### R75 (verified userland)
 
-Status: built · partly tested: built for modules; a program launched from the userland disk is checked by launching, which is BEAM4's and not built · tested: host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is
+Status: built · partly tested: built for modules; a program launched from the userland disk is checked by launching, which is BEAM4's and not built · tested: bench:userland-bad-start, bench:userland-boot, host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is
 
 A module or application resource the system resolves by name, and a program it launches from the
 userland disk, is used only if its bytes hash to the entry `system.index` in the signed bundle gives

@@ -51,22 +51,22 @@ file with `ed("notes.txt")`; browse and copy files in two panes with `fm("projec
 
 ### The shell in a session
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: built for the UART console only; files and launching are BEAM3's and BEAM4's, and sessions are the steward's · tested: bench:userland-boot
 
 Every session starts `Redoubt.Shell` over the session's console connection, `/dev/cons`
 ([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH channel).
 In M1 (separation and containment) the shell is what the attack suite needs and no more: the
 console, reading and writing files through OTP's `File`, and launching a native program through
-the launch natives ([beamlet](beamlet.md#natives)). The shell's modules come from the boot bundle
-like the rest of the system's ([beamlet](beamlet.md#the-platform-boundary)).
+the launch natives ([beamlet](beamlet.md#natives)). The shell's modules come from the userland
+disk, checked against the signed bundle
+([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)).
 
 Everything the prompt evaluates runs with the session's authority, in the session's VM. There is
 nothing the shell can do that the session's handles do not allow, and nothing a command adds to
 them.
 
-**Open:** whether the documentation chunks `h/1` reads ship in the boot bundle's `.beam` files
-(the recommendation: strip them from the bundle and ship them as an optional documentation
-package that `h/1` reads when present).
+The userland disk's modules carry no `Docs` chunk, so `h/1` says no documentation is available;
+an optional documentation package `h/1` reads when present is not built.
 
 ### The loop
 

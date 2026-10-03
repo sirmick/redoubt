@@ -703,9 +703,10 @@ mod tests {
     }
 
     /// Each device sits on its fixed slot, alone or with the other: the card on bus 6
-    /// (`0x10007000`, interrupt 7), the disk on bus 7 (`0x10008000`, interrupt 8), as
-    /// `image/manifest.json` names them. A boot proves QEMU puts them there: `init` refuses a
-    /// device that is not where its manifest says (`net-tcp` has no disk, `init-boot` both).
+    /// (`0x10007000`, interrupt 7), the disk on bus 7 (`0x10008000`, interrupt 8), and the
+    /// userland disk on bus 5 (`0x10006000`, interrupt 6), as `image/manifest.json` names them. A
+    /// boot proves QEMU puts them there: `init` refuses a device that is not where its manifest
+    /// says (`net-tcp` has no disk, `init-boot` all three).
     #[test]
     fn devices_sit_on_fixed_slots() {
         let net = format!("virtio-net-device,netdev=net0,bus={NET_BUS}");
@@ -718,7 +719,7 @@ mod tests {
         assert_eq!(devices("[net]\n[disk]\nsize_kib = 64\n"), [disk, net]);
         // The image's manifest names each device on one line.
         let manifest = include_str!("../../../image/manifest.json");
-        for (name, bus) in [("net0", NET_BUS), ("disk0", DISK_BUS)] {
+        for (name, bus) in [("net0", NET_BUS), ("disk0", DISK_BUS), ("disk1", USERLAND_BUS)] {
             let i: u64 = bus.strip_prefix("virtio-mmio-bus.").unwrap().parse().unwrap();
             let line = format!(
                 "{{ \"name\": \"{name}\", \"base\": \"{}\", \"irq\": {}, \"dma\": true }}",

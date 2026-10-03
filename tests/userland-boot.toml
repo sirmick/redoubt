@@ -1,0 +1,43 @@
+description = "The image boots its shell on the UART from the userland disk (docs/userland/shell.md, \"The shell in a session\"; docs/kernel/boot.md, R75 (verified userland)): beamlet reads system.index from /boot, attaches fsd:system on the read-only userland disk and says how many objects the index names, and Redoubt.Shell, checked against its entry, prints its banner. The attack: the disk has one byte flipped in the object for Elixir.Version and lacks the object for Elixir.OptionParser, both loaded only when called, while the index in the signed bundle is the unchanged pack's. A call to each at the prompt: beamlet's console line names the module and why (a mismatch, a missing object), the call fails as undefined, and nothing loads in its place; then a typed Enum.sum(1..10) prints 55, the VM still up. The verdict is the system's: beamlet hashes each object against the bundle's entry, and init's lines show no exit and no reboot (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
+# the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 450
+expect = [
+    '^init: started beamlet, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] beamlet: [0-9]+ objects in /boot/system.index, read from fsd:system$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    'beamlet: Elixir.Version not loaded: its object does not match system.index$',
+    'UndefinedFunctionError\) function Version.parse/1 is undefined',
+    'beamlet: Elixir.OptionParser not loaded: its object is missing$',
+    'UndefinedFunctionError\) function OptionParser.split/1 is undefined',
+    '^\[con [0-9a-f]{16}\] / \([0-9]+\)> 55$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'exited',
+    'faulted',
+    'was killed',
+    'init: restarted',
+    'EXCEPTION',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "Version.parse(\"1.2.3\")\nOptionParser.split(\"a b\")\nEnum.sum(1..10)\n"
+
+[userland]
+recipe = "image/userland.toml"
+flip = "Elixir.Version.beam"
+remove = "Elixir.OptionParser.beam"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/fsd/stage"
+
+[net]
+

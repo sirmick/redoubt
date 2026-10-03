@@ -272,7 +272,7 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: files, programs, `/net` and the natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood, host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is
+Status: built · partly tested: files, programs, `/net` and the natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is
 
 On Redoubt, beamlet is a native program whose `Platform` is written against the system: thin
 adapters over the client library ([native programs](native.md#the-client-library)) for the

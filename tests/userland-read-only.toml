@@ -1,0 +1,63 @@
+description = "The attack: a program handed the userland fsd's endpoint tries to create a file on the userland disk and to write the object system.index names for Elixir.Version (servers/fsd.md, \"Read-only ranges\"; docs/kernel/boot.md, R75). Its blkd reports the disk read-only, so fsd serves the volume read-only and refuses the create and the writes itself, before they reach blkd or the host, which attaches the disk read-only too; the object reads back the same length. The verdict that no object changed is the system's: the shell then calls Version, whose object the program attacked, and beamlet loads it only because its bytes still hash to the signed bundle's entry (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs and fsd-client; the manifest is the image's with the client added.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-fsd", bin = "fsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-fsd-programs", bin = "fsd-client" },
+]
+# The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
+# the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 330
+# The client's lines come long before the shell's banner; they are expected first, so the call
+# to Version follows the attack.
+expect = [
+    '^\[con [0-9a-f]{16}\] fsd-client: a create and a write to the object of Elixir.Version.beam refused$',
+    '^\[con [0-9a-f]{16}\] fsd-client TEST PASSED$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] / \(1\)> "1\.2\.3"$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'not loaded',
+    'fsd-client TEST FAILED',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "Version.parse!(\"1.2.3\") |> to_string()\n"
+
+[[file]]
+name = "system.index"
+from = { userland_index = "image/userland.toml" }
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+
+[[file.servers]]
+name = "client"
+program = "fsd-client"
+budget = { pages = "256", processes = 1, weight = 100 }
+handed = [{ endpoint = "bootfsd", badge = "8" }, { endpoint = "fsd:system", badge = "8" }]
+args = ["readonly", "fsd:system", "Elixir.Version.beam"]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/fsd/stage"
+
+[net]

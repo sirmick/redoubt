@@ -194,8 +194,11 @@ keeps free. What `init` launches counts in the budgets it launches into.
     ([the loader stub](../userland/native.md#the-loader-stub)).
 
   With `beamlet` and the userland disk's `blkd` and `fsd`, the bound is 446 pages on both widths
-  (`beamlet-boot` prints it), and 1,024 at least doubles it. It is a fixed count, not a share of
-  RAM, because `init`'s needs do not grow with the machine, nor with the size of a program it
+  (`beamlet-boot` prints it), and 1,024 at least doubles it. The image's `beamlet` is budgeted
+  24,576 pages, twice its measured use at the prompt (11,877 pages on rv64, 7,554 on rv32), so the
+  image's servers need about 34,600 of `system`'s pages: the image needs more than 512 MiB of RAM,
+  and the bench and `mkimage`'s instructions give it 1 GiB. The bound is a fixed count, not a share
+  of RAM, because `init`'s needs do not grow with the machine, nor with the size of a program it
   starts, and a share of a large machine would sit idle in `root`. The manifest cannot change it,
   because the kernel reads no manifest. `init` works in a fixed arena, and before it creates
   anything it bounds what the manifest will cost it in `root`: the endpoints it makes, a process
