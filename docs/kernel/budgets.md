@@ -135,7 +135,7 @@ limit is the free frames less that page. The boot checks that `root`'s limit, it
 the kernel's frames fit in RAM, and stops if they do not.
 
 `init`, the one program the loader starts, runs in `root`, charged there for everything the
-loader gave it (image, stack, page tables, saved contexts, the bundle's frames) and for its first
+loader gave it (image, stack, page tables, header page, the bundle's frames) and for its first
 thread. It gets handles to `root`, `system` and `users` in slots 1 to 3, stamped with `root`,
 then a handle to every device object ([boot](boot.md)). The machine's device objects are charged
 to `system`. A boot whose `init` and `INIT_PAGES` do not fit does not boot: the kernel stops
@@ -381,7 +381,7 @@ labelled child's handle to a `user`-class caller is a flow R1 must check.
 
 ### R6 (charging)
 
-<details><summary>Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case · tested (20)</summary>
+<details><summary>Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the header page is pinned by no case · tested (20)</summary>
 
 - bench:budget
 - bench:budget-mem-churn

@@ -143,9 +143,9 @@ What a process costs ([objects](objects.md)):
 - the process object: one page, charged to the **creator's** budget (the caller of
   `process_create`), because it holds the notice and the notice must outlive the budget the
   process ran in;
-- its saved thread contexts, `PROCESS_IMPL_PAGES` (1 page on rv32, 2 on rv64), its root page
-  table and every other page-table page, its handle-table pages, one IPC page per thread and the
-  pages mapped in it: all charged to **the budget it runs in**, and all given back when it ends.
+- its header page (one on both widths), its root page table and every other page-table page, its
+  handle-table pages, one IPC page per thread (which holds the thread's saved registers too) and
+  the pages mapped in it: all charged to **the budget it runs in**, and all given back when it ends.
 
 A process limit counts PIDs, and every held PID counts once, against the budget the process
 runs in, for as long as the PID is held ([R6 (charging)](budgets.md#r6-charging)). For a created

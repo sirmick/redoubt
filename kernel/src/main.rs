@@ -70,8 +70,12 @@ pub unsafe extern "C" fn init(
     #[cfg(feature = "sched-trace")]
     crate::mem::MemoryManager::with_mut(crate::sched::trace::init);
 
-    // The budget tree, with `init` in `root` (budget.rs, `boot_budgets`).
-    crate::mem::MemoryManager::with_mut(|mm| mm.boot_budgets());
+    // The budget tree, with `init` in `root` (budget.rs, `boot_budgets`). `init`'s header page
+    // names its threads' IPC pages, so the tree records it with `init`'s account.
+    let init_header = ProcessTable::with(|pt| pt.mapping_of(crate::budget::INIT_PID))
+        .and_then(|space| arch::mem::header_phys(&space))
+        .expect("boot: init has no header page");
+    crate::mem::MemoryManager::with_mut(|mm| mm.boot_budgets(init_header));
 
     // Now that the memory manager is set up, perform any architecture and
     // platform specific initializations.

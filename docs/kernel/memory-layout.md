@@ -166,12 +166,19 @@ columns root entries | sharing
 
 ### Per-process kernel data
 
-`PROCESS_AREA` holds the current process's thread contexts: context 0 is the process header and
-context N the saved registers of thread N, for `MAX_THREADS` (31) threads, 32 machine words each.
-That is `THREAD_CONTEXT_PAGES` pages: 2 on Sv39, 1 on Sv32. The pages are the process's own,
-charged to its budget, and carry no `U` bit. Because every address space maps its own pages at
-the same address, the trap handler saves the interrupted thread's registers through one fixed
-pointer, whichever process was running.
+`PROCESS_AREA` holds the current process's header: one page on both widths, the process's own,
+charged to its budget, with no `U` bit. It holds the trap handler's scratch word, the address of
+the running thread's saved context in slot 1, the process's bookkeeping and thread masks, a
+context-sized "no thread" area, and the table from TID to each thread's IPC page (`MAX_THREADS` + 1
+entries of 4 bytes). The kernel asserts that this fits in the page.
+
+A thread's saved registers, 32 machine words, are the last bytes of its IPC page, the page a
+thread costs its budget ([objects](objects.md#what-objects-cost)), which the kernel reaches through
+the physmap. So a process pays for the threads it has, not for `MAX_THREADS`. Because every
+address space maps its own header at the same address, the trap handler loads slot 1 and saves
+the interrupted thread's registers there, whichever process was running; switching thread writes
+that address. The kernel's own thread (PID 1, which has no budget and no IPC pages) saves into the
+"no thread" area.
 
 The rest of the per-process entry is never mapped. A new thread's return address is
 `EXIT_THREAD`, an address there (`0xffff_ffff_8080_3000` on Sv39, `0xff80_3000` on Sv32): a thread
@@ -300,7 +307,6 @@ same source for both. Only these differ, as `cfg(target_pointer_width)` constant
 | `satp` root PPN | bits 0-21 | bits 0-43 |
 | canonical addresses | all | bits 63-38 all equal |
 | `USER_AREA_END` | `0x8000_0000` | `0x40_0000_0000` |
-| `PROCESS_AREA` pages | 1 | 2 |
 
 User mappings are always 4 KiB leaves; only the physmap uses superpages. On Sv39 the table below
 a level-1 entry is named by its address, not by its index, because an index recurs in every

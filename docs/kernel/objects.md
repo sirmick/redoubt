@@ -210,7 +210,7 @@ handle to it closes, in every table.
 
 ### What objects cost
 
-<details><summary>Status: built · partly tested: an endpoint's page is attacked only in the model, a device's page by no case, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from R6 (charging) for `root`'s own page · tested (10)</summary>
+<details><summary>Status: built · partly tested: an endpoint's page is attacked only in the model, a device's page by no case, and the header page is pinned by no case; the boot code departs from R6 (charging) for `root`'s own page · tested (10)</summary>
 
 - bench:budget
 - bench:budget-table-attack
@@ -233,23 +233,24 @@ Everything the kernel stores is charged in whole pages to one budget (R6 (chargi
 | endpoint | 1 | its owner, the budget of the process that created it |
 | device | 1 | its owner: `system`, charged at boot |
 | process object (it holds the exit notice) | 1 | the creator's budget, the budget of `process_create`'s caller |
-| saved thread contexts | `PROCESS_IMPL_PAGES`: 1 on rv32, 2 on rv64 | the budget the process runs in |
+| process header | 1 | the budget the process runs in |
 | thread IPC page | 1 per thread | the budget the process runs in |
 | page tables | 1 per page-table page, the root table included | the budget the process runs in |
 | handle table | 1 per table page holding a handle | the budget the process runs in |
 | open call | 1 while open | the receiving process's budget ([R4a (open calls)](ipc.md#r4a-open-calls)) |
 
 Pages a process maps, lends or is given are charged as [memory](memory.md) and [IPC](ipc.md)
-say. `PROCESS_IMPL_PAGES` holds 32 slots of 32 registers: a header, and one saved register set
-for each of `MAX_THREADS` (31) threads. Each saved-context frame and each IPC page is counted
-once, and neither is the process object's page.
+say. The header is the page at `PROCESS_AREA`
+([memory layout](memory-layout.md#per-process-kernel-data)), one on both widths; a thread's saved
+registers are the last bytes of its IPC page, so a thread costs one page on both widths too. The
+header and each IPC page are counted once, and neither is the process object's page.
 
 A budget's own page is its parent's, so the whole of a budget's page limit is usable and a
 **revocation scope** (a budget with zero limits, made only to be destroyed) is no special case.
 The process object is charged to its creator, not to the budget the process runs in, because it
 holds the exit notice, and that notice must outlive the budget it ran in; the page was paid at
 `process_create`, so delivering a notice never allocates. Everything the running process needs
-(contexts, page tables, thread pages, handle table) is charged where it runs, and comes back when
+(header, page tables, thread pages, handle table) is charged where it runs, and comes back when
 it ends.
 
 Every charge comes back exactly, with one exception. Closing a handle, unmapping, replying,
@@ -461,11 +462,6 @@ is being destroyed.
   device still closes its handles in one pass over every table of every process (up to
   `MAX_PROCESS_COUNT` (64) processes of 64 table pages), bounded by compile-time constants.
   Installing a handle searches for the lowest free slot of one table.
-- **Accounting on both widths.** One row of the cost table depends on the width: saved contexts
-  take 1 page on rv32 and 2 on rv64. Most accounting cases run on both widths and check that each
-  charge comes back exactly, but `map-fixed-tables`, `map-fixed-attack` and `dma-reset-quarantine`
-  run on rv64 only, no case pins the per-width figure, and the model's cost table is the rv64
-  one.
 
 ## Why
 

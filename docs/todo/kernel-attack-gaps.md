@@ -23,12 +23,12 @@ gap: the page's section, the claim, and what no case attacks.
 ### objects.md
 - What objects cost: an endpoint's one page to its owner is attacked only in the model (`R6EndpointsFree`).
 - What objects cost: a device object's one page to `system` is attacked by nothing.
-- What objects cost: the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the model's cost table is rv64's.
+- What objects cost: the header page is pinned by no case.
 - `mint`: `Dead` from a message source whose call's stamp was destroyed has no case and no mutation.
 - R9 (stamps): a handle minted from a call taking the call's handle's stamp (not the caller's budget) is attacked only in the model (`R9MsgStampIsSenderBudget`).
 
 ### budgets.md
-- R6 (charging): an endpoint's page charge is attacked only in the model; the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case.
+- R6 (charging): an endpoint's page charge is attacked only in the model; the header page is pinned by no case.
 - R10 (destruction): timeouts before deadlines at an equal instant is attacked only in the model (`ExpireBudgetsFirst`).
 - Class is trust, not order: that the scheduler never reads class is argued from the code.
 - Deadlines: a process entering the kernel in a tight loop to put its deadline off is not attacked.

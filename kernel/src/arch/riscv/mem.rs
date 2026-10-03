@@ -277,7 +277,7 @@ impl MemoryMapping {
     /// Allocate a brand-new memory mapping. The new address space contains:
     ///
     ///     1. Every shared kernel root entry (physmap and kernel), copied from the current root.
-    ///     2. `ProcessImpl` pages at `PROCESS_AREA`, so the process can be run.
+    ///     2. The header page at `PROCESS_AREA`, so the process can be run.
     ///
     /// All pages, including the page tables themselves, are owned by `pid`, so they are
     /// released along with everything else when the process is destroyed.
@@ -299,26 +299,25 @@ impl MemoryMapping {
         // walk of its tables, and the space is whole or does not exist (`process_create`'s
         // rollback walks it, `release_owned_frames`).
         self.satp = make_satp(pid, root_phys);
-        for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
-            if let Err(e) = Self::add_context_page(root, mm, pid, page) {
-                mm.release_owned_frames(pid, self);
-                self.satp = 0;
-                return Err(e);
-            }
+        if let Err(e) = Self::add_header_page(root, mm, pid) {
+            mm.release_owned_frames(pid, self);
+            self.satp = 0;
+            return Err(e);
         }
         Ok(())
     }
 
-    /// Back and map saved-context page `page` of a new space: a frame charged to the running
-    /// budget (kernel/objects.md). On failure the frame is given back, and any table the mapping
-    /// took is in the space.
-    fn add_context_page(root: Table, mm: &mut MemoryManager, pid: Pid, page: usize) -> Result<(), PageError> {
-        let context_phys = mm.alloc_context_page(pid)?;
+    /// Back and map a new space's header page at `PROCESS_AREA`: a frame charged to the running
+    /// budget (kernel/objects.md), named in the account once it is mapped. On failure the frame
+    /// is given back, and any table the mapping took is in the space.
+    fn add_header_page(root: Table, mm: &mut MemoryManager, pid: Pid) -> Result<(), PageError> {
+        let header_phys = mm.alloc_context_page(pid)?;
         // SAFETY: `alloc_context_page` returns a RAM frame that was free until now.
-        unsafe { window().zero_frame(context_phys) };
-        let virt = PROCESS_AREA + page * PAGE_SIZE;
-        map_page_in(root, mm, pid, context_phys, virt, PteFlags::R | PteFlags::W)
-            .inspect_err(|_| mm.free_frame_of(context_phys, pid).expect("the frame just taken"))
+        unsafe { window().zero_frame(header_phys) };
+        map_page_in(root, mm, pid, header_phys, PROCESS_AREA, PteFlags::R | PteFlags::W)
+            .inspect_err(|_| mm.free_frame_of(header_phys, pid).expect("the frame just taken"))?;
+        mm.set_header(pid, header_phys);
+        Ok(())
     }
 
     /// Get the currently active memory mapping.
@@ -480,6 +479,12 @@ pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, PageError> 
     slot.set(pte.without(PteFlags::VALID).with(PteFlags::S));
     flush_tlb();
     Ok(pte.phys())
+}
+
+/// The frame of `space`'s header page, mapped at `PROCESS_AREA` (the loader's, for `init`).
+pub fn header_phys(space: &MemoryMapping) -> Option<usize> {
+    let pte = walk(root_of(space.satp), PROCESS_AREA, None).ok()?.get();
+    pte.is_valid().then(|| pte.phys())
 }
 
 /// The frame behind a page `space` lent out, from the lender's own entry.

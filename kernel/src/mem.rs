@@ -264,6 +264,7 @@ impl MemoryManager {
         // 64-bit values, low word first (`args::wide` narrows them).
         assert!(xarg_def.data[1] == 2, "mm: XArg had unexpected version");
         self.ram_start = crate::args::wide(xarg_def.data, 2);
+        crate::arch::process::set_ram_start(self.ram_start);
         self.ram_size = crate::args::wide(xarg_def.data, 4);
         self.ram_name = xarg_def.data[6];
 
@@ -360,7 +361,7 @@ impl MemoryManager {
         Ok(self.ram_start + index * PAGE_SIZE)
     }
 
-    /// Allocate a page for a process's saved thread contexts (`ProcessImpl`), charged to the
+    /// Allocate a process's header page (`ProcessImpl`), charged to the
     /// budget the process runs in like any other frame it owns (kernel/objects.md: the kernel
     /// charges what a process really costs instead of holding it back from `root` at boot).
     pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> { self.alloc_page(pid) }
@@ -951,7 +952,7 @@ impl MemoryManager {
     /// frame given back may be handed out at once) or one's that never ran (`process_create`'s
     /// rollback). A space is whole or does not exist (`MemoryMapping::allocate` gives back what it
     /// took when it fails), so its tables name every frame the process owns: the root, the tables,
-    /// the saved contexts, and the pages `process_map` moved in.
+    /// the header page, and the pages `process_map` moved in.
     pub fn release_owned_frames(&mut self, pid: Pid, space: &MemoryMapping) {
         let kernel = Pid::new(1).unwrap();
         // One walk of the process's own tables, never of every frame of RAM (R12;

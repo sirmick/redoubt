@@ -162,6 +162,7 @@ impl Process {
         // Free all associated memory pages, and give its budget back what the process had
         // charged to it (budget.rs).
         crate::mem::MemoryManager::with_mut(|mm| {
+            mm.release_ipc_frames(pid);
             // The final teardown step: a frame given back here may be handed to another process
             // at once, so this process never runs again.
             mm.release_owned_frames(pid, &self.mapping);

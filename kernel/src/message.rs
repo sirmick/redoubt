@@ -94,7 +94,8 @@ const W_NCALLS: usize = W_HANDLES + MAX_MSG_HANDLES * 4;
 const W_CURRENT: usize = W_NCALLS + 1; // open-call frame + 1
 const W_CALLS: usize = W_CURRENT + 1; // MAX_OPEN_CALLS frame numbers
 const THREAD_WORDS: usize = W_CALLS + MAX_OPEN_CALLS;
-const _: () = assert!(THREAD_WORDS * 8 <= PAGE_SIZE);
+// The thread's saved registers take the page's last bytes (`arch::process`).
+const _: () = assert!(THREAD_WORDS * 8 <= crate::arch::process::CONTEXT_OFFSET);
 
 /// What a blocked thread is waiting for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -42,10 +42,8 @@ pub mod sv32 {
     /// The last 64 KiB of root entry 1021: the kernel's window on DMA devices' registers
     /// (`docs/kernel/devices.md`), one page per device, so a PLIC must end below it.
     pub const KERNEL_DMA_REGS: usize = 0xff7f_0000;
-    /// Root entry 1022: per-process kernel data, `ProcessImpl` at its base.
+    /// Root entry 1022: per-process kernel data, the process's header page at its base.
     pub const PROCESS_AREA: usize = 0xff80_0000;
-    /// `ProcessImpl` bookkeeping: a saved context is 32 x 4 = 128 bytes, 32 contexts = 1 page.
-    pub const THREAD_CONTEXT_PAGES: usize = 1;
     /// Root entry 1023: the kernel image, stacks and arguments, shared by every address space.
     pub const KERNEL_AREA: usize = 0xffc0_0000;
     /// The kernel's code and constants, 512 KiB: `FLASH` in `kernel/link.x`, which a host test
@@ -65,10 +63,8 @@ mod sv39 {
     pub const PHYSMAP_BASE: usize = 0xffff_ffc0_0000_0000;
     pub const PHYSMAP_PHYS_BASE: usize = 0;
     pub const PHYSMAP_SIZE: usize = 128 << 30;
-    /// Root entry 510: per-process kernel data, `ProcessImpl` at its base.
+    /// Root entry 510: per-process kernel data, the process's header page at its base.
     pub const PROCESS_AREA: usize = 0xffff_ffff_8000_0000;
-    /// Pages occupied by `ProcessImpl` at `PROCESS_AREA`.
-    pub const THREAD_CONTEXT_PAGES: usize = 2;
     /// Root entry 511: the kernel, shared by every address space.
     pub const KERNEL_AREA: usize = 0xffff_ffff_c000_0000;
     /// The kernel's code and constants, 512 KiB: `FLASH` in `kernel/link64.x`, which a host

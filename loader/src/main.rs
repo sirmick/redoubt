@@ -26,7 +26,7 @@ use loader::dt::{self, Platform};
 use loader::println;
 use redoubt_layout::{
     KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PID, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
-    KERNEL_STACK_TOP, PROCESS_AREA, Pid, THREAD_CONTEXT_PAGES, TRAP_STACK_PAGES, TRAP_STACK_TOP,
+    KERNEL_STACK_TOP, PROCESS_AREA, Pid, TRAP_STACK_PAGES, TRAP_STACK_TOP,
 };
 use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
 use tar_no_std::TarArchiveRef;
@@ -392,12 +392,11 @@ fn map_bundle(
     }
 }
 
-/// Map the zeroed pages the kernel keeps its per-process state in.
+/// Map the zeroed page the kernel keeps its per-process state in: the process's header, one page
+/// on both widths (kernel/memory-layout.md, "Per-process kernel data").
 fn map_context(alloc: &mut PageAllocator, space: &AddressSpace, pid: Pid) {
-    for page in 0..THREAD_CONTEXT_PAGES {
-        let phys = alloc.alloc(pid);
-        space.map(alloc, phys, PROCESS_AREA + page * PAGE_SIZE, PteFlags::R | PteFlags::W);
-    }
+    let phys = alloc.alloc(pid);
+    space.map(alloc, phys, PROCESS_AREA, PteFlags::R | PteFlags::W);
 }
 
 /// Turn on the kernel's address space and jump to its entry point.

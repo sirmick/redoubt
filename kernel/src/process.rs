@@ -26,8 +26,8 @@
 //!
 //! # What a process costs (kernel/objects.md, "What objects cost")
 //! The cost table says one page for the process object. A process needs more than one page of
-//! kernel storage: its saved thread contexts take `PROCESS_IMPL_PAGES` frames and its root page
-//! table one more. Those die with the process, so they are charged **to the budget it runs in**,
+//! kernel storage: its header (`arch::process`, one page on both widths) and its root page
+//! table. Those die with the process, so they are charged **to the budget it runs in**,
 //! as ordinary frames of that process, while the object's own page -- the notice -- is the
 //! creator's, paid by someone who is still alive when the process is not.
 //!

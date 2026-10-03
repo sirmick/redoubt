@@ -73,7 +73,7 @@ Status: built · partly tested: independence from the kernel's source and the em
   the 4 MiB area from `DEFAULT_MESSAGE_BASE`, each searched as the kernel searches it
   ([memory](memory.md#where-map_anon-puts-pages)). A full area is refused as the kernel
   refuses it.
-- **Costs** come from a `costs` table: by default the rv64 table (two saved-context pages per
+- **Costs** come from a `costs` table: by default the kernel's table (one header page per
   process, one page for each other object, 64 handles per handle-table page). The property
   tests use 8 handles per page, so handle-table growth and its charge show up in short runs.
 - **Boot.** `root`, `system` and `users` get the kernel's weight split: `root` 1,000,000,
@@ -497,7 +497,7 @@ run on the real timer. The case passes when 100,000 model traces replay with ide
 
 Replay is what turns the model from a reference into evidence about the kernel.
 
-**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM) and the rv32 cost table (one saved-context page); `map_device`'s result (the kernel returns the address and the length, the model only the address); a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
+**Open:** how the replayer gets `init`'s boot handles and devices without an interface that exists only for testing; how `tick`, `irq`, `fault` and `record` lines are produced on the real machine; the boot sizes (the model's fixed limits against the kernel's, which follow RAM); `map_device`'s result (the kernel returns the address and the length, the model only the address); a `receive` record that passes decoding but faults when written (`Record::CopyFault`), which has no kernel counterpart and stays out of traces; completion races between harts, which a sequential trace cannot express; scheduling and IRQ masking, which results do not show.
 
 ## Residual risks
 

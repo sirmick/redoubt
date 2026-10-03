@@ -21,10 +21,9 @@
 //!
 //! # What is charged (the cost table)
 //! A budget's own object costs its parent one page (R6). A process object's notice page
-//! costs its creator one page; every thread's IPC page costs the execution budget one page.
-//! Separately allocated saved contexts cost the execution budget their actual physical frames
-//! (one on rv32, two on rv64), in addition to its page tables and mapped RAM
-//! (kernel/objects.md).
+//! costs its creator one page; every thread's IPC page, which holds its saved registers too, costs
+//! the execution budget one page. The process's header page costs the execution budget its one
+//! frame on both widths, in addition to its page tables and mapped RAM (kernel/objects.md).
 //! Frame charges follow ownership in `mem.rs`; handle-table pages are charged in `handle.rs`.
 
 use redoubt_layout::Pid;
@@ -58,7 +57,7 @@ const INIT_WEIGHT: u32 = 1000;
 /// (kernel/budgets.md, "The tree from the boot manifest").
 const INIT_PAGES: u64 = 1024;
 /// `init`, the one process the loader starts (kernel/boot.md).
-const INIT_PID: Pid = match Pid::new(2) {
+pub(crate) const INIT_PID: Pid = match Pid::new(2) {
     Some(pid) => pid,
     None => unreachable!(),
 };
@@ -158,14 +157,16 @@ pub struct Account {
     /// RAM frames owned by the process and charged to its budget (page tables and mapped pages).
     pub frames: u64,
     pub handles: HandleTable,
-    /// Each thread's IPC page (`message.rs`), by frame index, indexed by TID (`1..=MAX_THREADS`;
-    /// slot 0, like `ProcessImpl`'s context 0, names no thread); 0 for a thread that has none.
-    /// This *is* the page the cost table charges for a thread: the saved registers live in
-    /// `ProcessImpl`, and everything IPC needs (what the thread waits for, the message it is
-    /// sending, the calls it holds open) lives here, so `call` and `send` never allocate.
-    pub ipc: [u32; MAX_THREADS + 1],
-    /// The TIDs whose `ipc` slot holds a page, bit `tid` for thread `tid`: what every walk of the
-    /// threads iterates, so its cost follows the threads that exist ([`MemoryManager::live_tids`]).
+    /// The physical address of the process's header page (`arch::process`), 0 until its address
+    /// space has one. The header's table names each thread's IPC page (`message.rs`) by frame
+    /// index, indexed by TID (`1..=MAX_THREADS`; entry 0 names no thread), 0 for a thread that
+    /// has none. That page *is* the one the cost table charges for a thread: everything IPC
+    /// needs (what the thread waits for, the message it is sending, the calls it holds open) and
+    /// the thread's saved registers live there, so `call` and `send` never allocate.
+    pub header: usize,
+    /// The TIDs whose IPC page is in the header's table, bit `tid` for thread `tid`: what every
+    /// walk of the threads iterates, so its cost follows the threads that exist
+    /// ([`MemoryManager::live_tids`]).
     pub live: u64,
     /// Open calls this process's threads hold (R4a): at `MAX_OPEN_CALLS` it takes no more.
     pub open_calls: u32,
@@ -187,7 +188,7 @@ impl Account {
         threads: 0,
         frames: 0,
         handles: HandleTable::EMPTY,
-        ipc: [0; MAX_THREADS + 1],
+        header: 0,
         live: 0,
         open_calls: 0,
         last_msg_id: 0,
@@ -245,6 +246,13 @@ impl Objects {
 pub(crate) fn account_index(pid: Pid) -> Option<usize> {
     let index = usize::from(pid.get()) - 1;
     (index < MAX_PROCESS_COUNT).then_some(index)
+}
+
+/// Where entry `tid` of a header's IPC-frame table lies: the byte offset of its 64-bit word in the
+/// header page, and the entry's shift within that word (RISC-V is little-endian).
+fn ipc_entry(tid: usize) -> (usize, u32) {
+    let byte = crate::arch::process::IPC_TABLE_OFFSET + tid * 4;
+    (byte & !7, (byte & 7) as u32 * 8)
 }
 
 /// Every PID, lowest first. A walk of the threads asks each for its [`MemoryManager::live_tids`],
@@ -413,7 +421,26 @@ impl MemoryManager {
 
     /// The frame of thread `tid`'s IPC page, if it has one.
     pub fn ipc_frame(&self, pid: Pid, tid: usize) -> Option<u32> {
-        self.account(pid).and_then(|a| a.ipc.get(tid).copied()).filter(|f| *f != 0)
+        let header = self.account(pid).map(|a| a.header).filter(|h| *h != 0)?;
+        if !(1..=MAX_THREADS).contains(&tid) {
+            return None;
+        }
+        let (offset, shift) = ipc_entry(tid);
+        Some((kframe::read(header, offset) >> shift) as u32).filter(|f| *f != 0)
+    }
+
+    /// Record process `pid`'s header page, at `phys`, once its address space has one
+    /// (`MemoryMapping::allocate`; the loader's for `init`). Its IPC-frame table is empty.
+    pub fn set_header(&mut self, pid: Pid, phys: usize) {
+        self.account_mut(pid).expect("account").header = phys;
+    }
+
+    /// Write entry `tid` of `pid`'s IPC-frame table.
+    fn set_ipc_entry(&mut self, pid: Pid, tid: usize, frame: u32) {
+        let header = self.account(pid).map(|a| a.header).filter(|h| *h != 0).expect("a header page");
+        let (offset, shift) = ipc_entry(tid);
+        let word = kframe::read(header, offset) & !(u64::from(u32::MAX) << shift);
+        kframe::write(header, offset, word | u64::from(frame) << shift);
     }
 
     /// Give thread `tid` its IPC page. Its cost is [`THREAD_PAGES`], charged when the thread was
@@ -427,18 +454,16 @@ impl MemoryManager {
             return;
         }
         let frame = self.alloc_object_frame().expect("R6: a thread's page was charged but has no frame");
-        let account = self.account_mut(pid).expect("account");
-        account.ipc[tid] = frame;
-        account.live |= 1 << tid;
+        self.set_ipc_entry(pid, tid, frame);
+        self.account_mut(pid).expect("account").live |= 1 << tid;
     }
 
     /// Take thread `tid`'s IPC page back. Its contents are dead by now: `message.rs` unwinds
     /// what the thread waited for and the calls it held before the thread goes.
     fn take_ipc_frame(&mut self, pid: Pid, tid: usize) {
         if let Some(frame) = self.ipc_frame(pid, tid) {
-            let account = self.account_mut(pid).expect("account");
-            account.ipc[tid] = 0;
-            account.live &= !(1 << tid);
+            self.set_ipc_entry(pid, tid, 0);
+            self.account_mut(pid).expect("account").live &= !(1 << tid);
             self.free_object_frame(frame);
         }
     }
@@ -575,10 +600,8 @@ impl MemoryManager {
     pub fn process_ended(&mut self, pid: Pid) {
         let Some(budget) = self.budget_of(pid) else { return };
         self.close_all_handles(pid);
-        for tid in self.live_tids(pid) {
-            self.take_ipc_frame(pid, tid);
-        }
         let account = self.account_mut(pid).expect("account");
+        debug_assert!(account.live == 0, "process {} ended with IPC pages", pid);
         let pages = account.threads * THREAD_PAGES + account.frames;
         *account = Account::NONE;
         self.uncharge(budget, pages);
@@ -587,6 +610,15 @@ impl MemoryManager {
         }
         #[cfg(debug_assertions)]
         self.check_frame_owners();
+    }
+
+    /// A process is ending: its threads' IPC pages go back, while its header page, which names
+    /// them, still exists (before `release_all_memory_for_process`). Their charge goes back with
+    /// the account, in [`MemoryManager::process_ended`].
+    pub fn release_ipc_frames(&mut self, pid: Pid) {
+        for tid in self.live_tids(pid) {
+            self.take_ipc_frame(pid, tid);
+        }
     }
 
     pub fn thread_created(&mut self, pid: Pid, tid: usize) -> Result<(), Error> {
@@ -615,17 +647,17 @@ impl MemoryManager {
     /// The split is fixed here, not read from the argument block. `root` gets every RAM page the
     /// kernel did not keep at boot, every PID but the kernel's, and all the weight. It keeps for
     /// `init` one process, `INIT_WEIGHT`, and `init`'s pages: everything the loader gave it (its
-    /// image, stack, page tables, saved contexts and the bundle's frames), its first thread and
+    /// image, stack, page tables, header page and the bundle's frames), its first thread and
     /// `INIT_PAGES` to work in. `system` gets a quarter of the rest of the pages, 15 processes
     /// and a quarter of the weight; `users` what is left. `init` gets handles to the three
     /// budgets in slots 1-3, stamped with `root`, then the devices.
     ///
     /// If `init`'s pages do not fit, the kernel refuses to boot (fail closed).
-    pub fn boot_budgets(&mut self) {
+    pub fn boot_budgets(&mut self, init_header: usize) {
         // Every RAM page the kernel did not keep for itself or for the DMA pool, less `root`'s
         // own page, which no budget pays for (R6): `root`'s limit bounds every charge in the tree,
         // so the charges and `root`'s page together never exceed the free frames. Nothing else is
-        // held back: a process's saved contexts and its root page table are charged to the budget
+        // held back: a process's header page and its root page table are charged to the budget
         // it runs in as they are allocated, like any other frame it owns, so every charged page
         // has a real frame behind it without a reservation.
         let kept =
@@ -665,6 +697,7 @@ impl MemoryManager {
         );
         self.count_process(root).expect("boot: root keeps no process for init");
         self.process_created(INIT_PID, root).expect("boot: root keeps no weight for init");
+        self.set_header(INIT_PID, init_header);
         self.charge(root, init_frames).expect("boot: init's pages do not fit in root");
         self.account_mut(INIT_PID).expect("account").frames = init_frames;
         self.thread_created(INIT_PID, INITIAL_TID).expect("boot: no page for init's first thread");

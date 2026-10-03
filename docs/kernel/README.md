@@ -88,7 +88,7 @@ and a **stamp** (the budget whose destruction closes the handle everywhere,
 | --- | --- | --- | --- | --- |
 | budget | limits on pages, processes and CPU weight; a class, a label set, an account, an optional deadline | `budget_create`; `root`, `system` and `users` at boot | one page to its parent | `budget_destroy`, its deadline, or the destruction of a budget above it |
 | endpoint | what clients call and servers receive on; it holds no queue | `endpoint_create` | one page to its owner, the creating process's budget | its owner is destroyed |
-| process | an address space, a handle table and threads; its object page holds the one exit notice | `process_create` | the object page to the creator's budget; contexts, page tables and memory to the budget it runs in | it exits, faults or is killed; the page stays until the notice is taken or dropped |
+| process | an address space, a handle table and threads; its object page holds the one exit notice | `process_create` | the object page to the creator's budget; its header, page tables and memory to the budget it runs in | it exits, faults or is killed; the page stays until the notice is taken or dropped |
 | device | an MMIO range (with a DMA flag), an IRQ line, or the Reset right | only at boot, from the loader's device list | one page to its owner (`system` at boot) | its owner is destroyed, or its DMA reset is never confirmed |
 
 Each object lives in a RAM frame of its own. Every lookup compares the id in the frame with the
@@ -297,7 +297,7 @@ two, where a file serves two mechanisms).
 | `arch/riscv/intc_plic.rs` | the PLIC backend | [devices](devices.md) |
 | `arch/riscv/timer_sbi.rs` | the hart timer, through SBI TIME | [timer](timer.md) |
 | `arch/riscv/mem.rs`, `physmap.rs`, `mmu_flags.rs` | page tables, the physmap, PTE flags, the kernel's W^X check | [memory](memory.md), [memory layout](memory-layout.md) |
-| `arch/riscv/process.rs` | saved thread contexts, PID slots | [processes](processes.md), [memory layout](memory-layout.md) |
+| `arch/riscv/process.rs` | the process header, threads' saved contexts, PID slots | [processes](processes.md), [memory layout](memory-layout.md) |
 | `arch/riscv/smp.rs` | the two-hart spike (feature `smp`) | [this page](#residual-risks) |
 | `arch/riscv/panic.rs` | a kernel panic prints and powers off | [boot](boot.md#failure-and-restart) |
 | `libs/sys` (`redoubt-sys`) | call numbers, registers, records, errors | [ABI](abi.md) |
