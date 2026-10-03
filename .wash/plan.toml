@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 306
+revision = 309
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -152,8 +152,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["gate", "API1", "INIT4"]
   body = "docs/plan/m1-separation.md#remaining-work; docs/servers/init.md"
-  state = "todo"
-  revision = 2
+  state = "done"
+  revision = 309
 
 [[node]]
   id = "model-replay"
@@ -563,8 +563,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FSD2", "INIT4"]
   body = "fsd under init. Brief: .wash/local/FSD3-implementer.md. init mints each fsd's range badge from `volumes` and passes the volume's labels (re-minted at a restart); blkd takes each range's labels as `labels.P=` arguments (NO_LABELS goes); a confined labelled volume starts and writes; mkimage packs image/disk.toml through fsd's own code (Rust-writes-C-reads oracle case, run by hand); a restarted fsd mounts and serves with no whole-volume check (fsd.md's Open item); files survive a reboot. Cases: fsd-boot, fsd-reboot, fsd-confined-labelled, fsd-one-volume (R47), fsd-quota (R48), fsd-restart, fsd-corrupt-volume, image-disk. Tier A, size L."
-  state = "todo"
-  revision = 265
+  state = "active"
+  revision = 307
 
 [[node]]
   id = "SMP1"
@@ -593,8 +593,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FSD1"]
   body = "Simplification, not a hole. Tier B, size S. The receive loop is copied in seven servers (bootfsd, keyd, blkd, fsd, consoled, netd, ipd, and libs/rt's echo-server), each with its own RECEIVE_FAILED = 3.\n\nBuild in libs/rt/src/server:\n- serve(endpoint, f) -> u32, for a server that takes only calls: each call to f (its result dropped, as now: the shared finish path answers a rejected reply); a send dropped and its handles closed; Interrupt, Exit and Abandoned ignored; Dead -> exit::OK; any other error -> exit::RECEIVE_FAILED.\n- close_delivery(&delivery), the handle-closing, for the loops that keep their own shape;\n- RECEIVE_FAILED moves to redoubt_rt::exit, still 3.\n\nbootfsd, keyd, blkd, fsd and echo-server call serve. consoled (abandoned parked reads), netd (meaningful sends, break_device on exit) and ipd (timeouts, two-word receive) keep their loops and use close_delivery and exit::RECEIVE_FAILED. No helper with hooks for their cases.\n\nKeepers: a host test of serve over the fake endpoint: a send's handles are closed, Dead exits OK, another error exits RECEIVE_FAILED. Every server's bench cases unchanged.\n\nPage line, serving.md, a bullet at the top of Interface: 'A server that takes only calls runs redoubt_rt::server::serve, the one receive loop: a send is dropped and what it brought closed, and the endpoint's death ends the server with OK.' Needs FSD1 (fsd's loop); start after INIT4 merges if INIT4 is still in netd's and ipd's bins."
-  state = "todo"
-  revision = 257
+  state = "active"
+  revision = 308
 
 [[node]]
   id = "SMP3"
