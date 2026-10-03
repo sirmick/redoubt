@@ -1,5 +1,5 @@
-description = "The native runtime's host tests under Miri, which checks the unsafe in its heap, page buffers and lends that a native run only executes: the files that finish in seconds (ipc and echo take minutes and run by hand)"
+description = "The native runtime's host tests under Miri, which checks the unsafe in its heap, page buffers, lends and device registers that a native run only executes: the files that finish in seconds (ipc and echo take minutes and run by hand)"
 kind = "host-tests"
 packages = ["redoubt-rt"]
-tests = ["connection", "mapping_views", "ninep_status", "outcomes", "panic", "parked", "parked_write", "refusals", "regressions", "vectors"]
+tests = ["connection", "heap", "mapping_views", "ninep_status", "outcomes", "panic", "parked", "parked_write", "refusals", "registers", "regressions", "vectors"]
 miri = true

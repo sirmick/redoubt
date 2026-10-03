@@ -104,12 +104,12 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page, the bundle's view"
+name = "redoubt-rt (native runtime): the allocator's trait, the heap's two words of a free block, a page buffer's two views, the device registers' read and write, the pages mapped before the first instruction"
 paths = ["libs/rt/src"]
-# Includes start.rs turning the panic hook's stored address back into its `fn()`,
-# the one way a program (netd) can stop its device before the panic handler exits, and a page
-# buffer's two views, shared and mutable, each made for one borrow (ipc.rs, `Mapping`).
-max_unsafe = 14
+# A page buffer's two views stay two, shared and mutable, each made for one borrow (ipc.rs,
+# `Mapping`): one unsafe fn behind both would count three, and a safe one cannot make a mutable
+# view from a shared borrow.
+max_unsafe = 10
 max_undocumented = 0
 
 [[budget]]

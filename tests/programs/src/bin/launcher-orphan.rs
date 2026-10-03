@@ -36,6 +36,8 @@ use test_programs::bundle::Bundle;
 use test_programs::console::{self, Console};
 use test_programs::rd;
 
+redoubt_rt::panic_handler!();
+
 static STUB_BIN: &[u8] = include_bytes!(env!("STUB_BIN"));
 
 macro_rules! say {

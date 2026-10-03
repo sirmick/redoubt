@@ -229,8 +229,10 @@ the loader stub.
 - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
   parses the block, and calls `run`; its return value is the exit code. A block that does not
   parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program
-  has one, and exits with `PANIC`; if the program held open calls, the kernel blames the sender
-  of the call it was serving ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
+  has one, and exits with `PANIC`; a program that names a panic hook in `entry!` has it run
+  first, once per process, before the report (`netd` stops its device there). If the program held
+  open calls, the kernel blames the sender of the call it was serving
+  ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
   `init`, which the loader starts with no startup block, declares `first_entry!(run)` instead:
   `run` receives the bundle the loader mapped read-only, as a `&'static [u8]`
   ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)).
@@ -257,14 +259,15 @@ the loader stub.
   the machine it is the `ecall`, on the host a `HostKernel` a test installs, so the runtime and
   programs built on it (the echo client and server) run in host tests.
 - **No safe call pulls memory from under its owner.** The runtime's calls that could invalidate
-  memory a safe owner holds are its owners' alone: `unmap` is private to the heap and `Buffer`,
-  `set_flags` is not offered at all, and `Process::map` moves pages only by taking the `Buffer`
-  that owns them, so the raw address it once took is no longer a way round. `map_anon` only makes
-  memory, and hands back an address that takes `unsafe` to use. A public `unmap` does not compile
-  (a `compile_fail` test in `handle.rs`). A `dma_alloc` run is held by a `Dma`, which unmaps
-  it on drop and not before; the frames stay the kernel's until the process ends. A device's
-  `Registers` are unmapped only by `Registers::unmap`, which takes the value, so no access is left
-  to reach them (how `init` gives the UART up to `consoled`).
+  memory a safe owner holds are its owners' alone: `unmap` is private to the heap, `Buffer`, `Dma`
+  and `Registers`, each unmapping only what it mapped itself, `set_flags` is not offered at all,
+  and `Process::map` moves pages only by taking the `Buffer` that owns them, so the raw address it
+  once took is no longer a way round. `map_anon` only makes memory, and hands back an address that
+  takes `unsafe` to use. A public `unmap` does not compile (a `compile_fail` test in `handle.rs`).
+  A `dma_alloc` run is held by a `Dma`, which unmaps it on drop and not before; the frames stay
+  the kernel's until the process ends. A device's `Registers` are unmapped only by
+  `Registers::unmap`, which takes the value, so no access is left to reach them (how `init` gives
+  the UART up to `consoled`).
 - **No raw call from safe code.** `redoubt_rt::abi` is the kernel's types and limits without
   `redoubt-sys`'s `syscall`, so a program built on the runtime makes every call through it. The
   no-cruft case refuses a wholesale re-export and a single-line re-export or `pub` item naming
@@ -275,6 +278,11 @@ the loader stub.
   `Buffer`, and keeps the `Buffer`'s pages mapped for good, even after the thread exits, so no
   owner holds a thread's stack and no entry is an arbitrary address. A raw form does not compile
   (a `compile_fail` test in `handle.rs`).
+- **Its `unsafe` is few and attacked.** The runtime holds 10 uses (`unsafe-budget.toml`): the
+  allocator's trait, the heap's two words of a free block, a page buffer's two views, the device
+  registers' read and write, and the pages mapped before the first instruction (the startup page
+  and `init`'s bundle). Each states what it rests on and who guarantees it; the heap, the views
+  and the registers run under Miri in the bench (`rt-miri`).
 
 ### Libraries for native programs
 

@@ -37,6 +37,8 @@ use test_programs::logsrv::{self, Line, Refusal};
 use test_programs::rd::{self, Error, MemFlags, MessageKind, ResetKind};
 use test_programs::{console, op};
 
+redoubt_rt::panic_handler!();
+
 /// The stub's own flat binary (objcopied by `build.rs`).
 static STUB_BIN: &[u8] = include_bytes!(env!("STUB_BIN"));
 

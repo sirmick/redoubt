@@ -2,12 +2,13 @@
 //! runtime's panic handler runs the hook first (`redoubt_rt::start`), and `netd`'s hook writes
 //! status 0 to the registers it was armed with and reads it back.
 //!
-//! On the machine `redoubt-rt`'s `#[panic_handler]` calls `run_panic_hook` before anything else.
-//! A host test runs under `std`'s panic machinery instead, so a `std` panic hook stands in for
-//! that handler here, calling the same `run_panic_hook`. This is its own test binary because the
-//! hook may be set, and runs, once per process.
+//! On the machine the `#[panic_handler]` that `netd`'s `entry!(serve, panic_hook = panic_reset)`
+//! emits calls `run_panic_hook(panic_reset)` before anything else. A host test runs under `std`'s
+//! panic machinery instead, so a `std` panic hook stands in for that handler here, making the same
+//! call. This is its own test binary because the registers are armed, and the hook runs, once per
+//! process.
 
-use redoubt_netd::kernel::{REGS_NEEDED, Regs};
+use redoubt_netd::kernel::{REGS_NEEDED, Regs, panic_reset};
 use redoubt_netd::virtio::{reg, status};
 
 #[test]
@@ -25,7 +26,7 @@ fn a_panic_resets_the_device() {
     assert!(!other.arm_panic_reset());
     assert_ne!(regs.read_register(reg::STATUS), Ok(0), "arming alone touches nothing");
 
-    std::panic::set_hook(Box::new(|_| redoubt_rt::start::run_panic_hook()));
+    std::panic::set_hook(Box::new(|_| redoubt_rt::start::run_panic_hook(panic_reset)));
     let panicked = std::panic::catch_unwind(|| panic!("a bug in netd"));
     let _ = std::panic::take_hook();
 

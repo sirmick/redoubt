@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 282
+revision = 298
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -303,8 +303,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["INIT3"]
   body = "Brief: .wash/local/INIT4-implementer.md (order, manifests, owned paths, context rules, the init step's close).\n\nThe net rig's cases boot the real init with a case manifest, keeping their names and claims: net-tcp, bench-net-peer and its self-checks, net-pinned, net-attacks with bench-net-self-unrefused. bench-virtio-legacy-off moves to the tester (virtio-probe), and net-host-tests reads the manifests. The bench places the card and the disk on the fixed slots image/manifest.json names. Clients get their ipd scopes from scope= and handed badges; a judge program is the reporter; clients park. tests/net/src/rig.rs is deleted.\n\nMoved from INIT3: docs/servers/netd.md#started-by-init, netd-restart. A test-only netd feature (off in every default build, as dma-reset-deaf is) faults netd once, on an outside trigger; init restarts it, and ipd and a client are served again.\n\nkeyd, bootfsd and consoled are already under init (INIT2). blkd's use on target is the fsd step's. sshd's loopback stays on the host until the sshd step.\n\nDesign: QA INIT1-design. Tier A (the bench, and a test feature in netd), size L."
-  state = "todo"
-  revision = 241
+  state = "reported"
+  revision = 297
 
 [[node]]
   id = "K9"
@@ -516,8 +516,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["INIT2"]
   body = "The owner's request. This is TCB hygiene, not a hole: a process is memory-safe from other processes whatever its runtime does. Tier A, size S. It needs INIT2, which adds the bundle view and the fixed arena's run words.\n\nThe ratchet goes from 14 (after INIT2) to a target of 10:\n- The panic hook is named in entry!, so the stored-address transmute goes. If no sound form exists, it stays with its reason.\n- The heap's four raw word accesses fold onto one private read/write pair.\n- The startup-page and bundle views fold onto one private premapped().\n\nThe floor: GlobalAlloc's three, the MMIO pair, and Mapping's two views.\n\nEvery remaining site gets a keeper. The heap's tests move out of tests/ipc.rs into rt-miri's list: today they are not under Miri in the bench. Registers gets a Miri test if the fake can map it.\n\nNo bitmap free lists, and no unsafe-fn slice_at (it counts more, not less).\n\nPages: native.md's runtime section and testbench.md's unsafe budget. Brief and exact lines: .wash/local/RT1-implementer.md."
-  state = "reported"
-  revision = 280
+  state = "done"
+  revision = 298
 
 [[node]]
   id = "B7"
@@ -526,7 +526,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Bench bug. A fault-feature case sometimes boots another case's kernel when two bench processes share a worktree's target/: handle-chain-fault, endpoint-destroy-open-calls rv32 and process-chain-fault were each seen.\n\nCause, to confirm by reproduction first: prepare() packs target/<triple>/<profile>/redoubt-kernel, the same path for every feature set, and bundles and logs go to fixed paths under target/testbench/.\n\nFix by isolation, not a lock:\n- pack the executable cargo's JSON reports for this build, copied into the run's own directory;\n- every file a run writes goes under target/testbench/run-<pid>/, with a 'last' symlink.\n\nKeepers: host tests with interleaved feature builds, and two runs that share no file. A deterministic self-check if one can be written.\n\nPage lines: testbench.md 'How to use it' and GETTING-STARTED.md. Brief: .wash/local/B7-implementer.md. Tier B, size S, no needs. B6, if cut, builds on it."
   state = "reported"
-  revision = 230
+  revision = 289
 
 [[node]]
   id = "K21"
@@ -535,7 +535,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Kernel finding from QA GATE1-trace-ring, against R12 (scheduling.md: 'A term linear in RAM frames ... is not [a constant]. Billing it to the caller does not excuse it').\n\nmem.rs scans RAM on call paths in three places:\n- alloc_frame is first fit from frame 0, for every page, page table and object frame;\n- alloc_contiguous (dma_alloc) runs a first-fit search;\n- release_owned_frames (process_create's rollback) scans all of RAM.\n\nGATE1 exposed the first: the trace ring's frames below everything moved sched-budget-churn's victim from 499 to 559.\n\nThe fix:\n- an O(1) free list (intrusive, through the physmap);\n- the rollback walks what the creation built;\n- dma_alloc gets a fixed-size boot pool, or a run allocator, whichever is decided.\n\nscan-bounds is extended, with a recorded negative (alloc-first-fit), and a checked-build audit proves the free list equals the table's free entries.\n\nPage lines: scheduling.md R12's paragraph and memory.md. Brief: .wash/local/K21-implementer.md. Tier A, size M, no needs."
   state = "reported"
-  revision = 268
+  revision = 286
 
 [[node]]
   id = "FSD1"
@@ -553,8 +553,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["FSD1"]
   body = "Builds docs/servers/fsd.md 'Quotas' and R48 (a quota per attach root). Brief: .wash/local/FSD2-implementer.md. A live root holds what lies under it less the live roots below (their quotas in reserve), counted by a walk at the first mint and kept in memory, nothing stored; carving from the nearest live root above; rewrites count littlefs's tail copy; renames never move a live root; the volume root's reserve derived from littlefs; typed no_space (row 9); and FSD1's hostile-image residual closed (a metadata pair named by two directories is corrupt at mount). Host tests only, R48's two attack tests among them. Tier A, size M."
-  state = "active"
-  revision = 278
+  state = "reported"
+  revision = 294
 
 [[node]]
   id = "FSD3"

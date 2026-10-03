@@ -13,7 +13,7 @@
 //! `serve`), so a crash on hostile input is blamed however the process died.
 
 use core::fmt::{self, Write};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use redoubt_sys::Handle;
 
@@ -35,9 +35,6 @@ pub mod exit {
 static CONSOLE: AtomicU32 = AtomicU32::new(0);
 /// Set by the first panic, so a panic while reporting one exits at once.
 static PANICKING: AtomicBool = AtomicBool::new(false);
-/// The program's panic hook ([`set_panic_hook`]), as a function pointer's address; 0 for none.
-/// Only ever 0 or a `fn()` stored by `set_panic_hook`.
-static PANIC_HOOK: AtomicUsize = AtomicUsize::new(0);
 /// Set when the hook is first run, so a panic inside the hook does not run it again.
 static HOOK_RAN: AtomicBool = AtomicBool::new(false);
 /// Set when the first run of the hook has returned, so a later panicker (another thread) waits for
@@ -55,19 +52,44 @@ const PANIC_FID: u32 = 0xffff_fff0;
 const PANIC_TIMEOUT: u64 = 1_000_000;
 
 /// Declares `main` (any name but `main`) as the program's entry: `fn(&Startup) -> u32`, whose
-/// result is the exit code. On the host it declares an empty `main`: host tests call the
-/// program's function directly, against a fake kernel.
+/// result is the exit code, and the program's panic handler ([`panic_handler!`]).
+/// `entry!(main, panic_hook = hook)` names a `fn()` the panic handler runs first. On the host it
+/// declares an empty `main`: host tests call the program's function directly, against a fake
+/// kernel.
 #[macro_export]
 macro_rules! entry {
-    ($main:path) => {
+    ($main:path $(, panic_hook = $hook:path)?) => {
         /// The entry point: the loader stub jumps here with the startup page's address in `a0`.
         #[cfg(target_os = "none")]
         #[no_mangle]
         pub extern "C" fn _start(startup: usize) -> ! { $crate::start($main, startup) }
 
+        $crate::panic_handler!($($hook)?);
+
         #[cfg(not(target_os = "none"))]
         #[allow(dead_code)]
         fn main() {}
+    };
+}
+
+/// Declares the program's `#[panic_handler]` on the machine, which runs `hook`, if named, then
+/// reports the panic and exits with [`exit::PANIC`] ([`panic`](fn@panic)). [`entry!`] and
+/// [`first_entry!`] declare it; a program built on the runtime without either declares it itself.
+///
+/// The hook is for a program that must put something right before it dies: `netd` resets its
+/// device so it stops writing into pages that are about to be freed (servers/netd.md R57). It
+/// must be short and bounded, must not allocate (the panic may be the heap's) and must not rely
+/// on anything but its own atomics: it runs on a thread that has just panicked. It runs once per
+/// process; a panic inside it skips it and exits.
+#[macro_export]
+macro_rules! panic_handler {
+    ($($hook:path)?) => {
+        #[cfg(target_os = "none")]
+        #[panic_handler]
+        fn redoubt_rt_panic(info: &::core::panic::PanicInfo) -> ! {
+            // `None`, or `Some(hook)` when one is named.
+            $crate::start::panic(info, None $(.or(Some($hook as fn())))?)
+        }
     };
 }
 
@@ -85,6 +107,8 @@ macro_rules! first_entry {
             $crate::start::start_first($main, bundle, len)
         }
 
+        $crate::panic_handler!();
+
         #[cfg(not(target_os = "none"))]
         #[allow(dead_code)]
         fn main() {}
@@ -94,12 +118,7 @@ macro_rules! first_entry {
 /// Views the bundle at `bundle`, `len` bytes, runs `main` on it, and exits with its code.
 #[cfg(target_os = "none")]
 pub fn start_first(main: fn(&'static [u8]) -> u32, bundle: usize, len: usize) -> ! {
-    // SAFETY: only the loader starts a program through `first_entry!`: it maps the whole verified
-    // bundle at `bundle`, `len` bytes, read-only for the life of the process, and nothing writes
-    // it (kernel/boot.md, "The loader loads only the kernel and `init`"). The same invariant as
-    // the startup page's: pages mapped read-only for this process before it ran, never unmapped.
-    let bundle: &'static [u8] = unsafe { core::slice::from_raw_parts(bundle as *const u8, len) };
-    crate::handle::process_exit(main(bundle))
+    crate::handle::process_exit(main(premapped(bundle, len)))
 }
 
 /// Parses the startup block at `block` (0 = none), runs `main`, and exits with its code.
@@ -122,12 +141,25 @@ fn startup_block(addr: usize) -> Result<Startup<'static>, crate::startup::Startu
     if !addr.is_multiple_of(redoubt_sys::PAGE_SIZE) {
         return Err(StartupError::BadLength);
     }
-    // SAFETY: the loader stub passes the address of the startup page the parent mapped into
-    // this process (servers/init.md); it is one whole page (checked aligned above), stays
-    // mapped for the life of the process, and nothing in this process writes it. A parent that
-    // passes a bad address can only fault its own child, which it controls anyway.
-    let bytes = unsafe { core::slice::from_raw_parts(addr as *const u8, MAX_BLOCK) };
-    Startup::parse(bytes)
+    Startup::parse(premapped(addr, MAX_BLOCK))
+}
+
+/// The `len` bytes at `addr`, pages mapped into this process before its first instruction.
+/// Private, and called only by `start_first` (the bundle, at the address and length the loader
+/// passed) and `startup_block` (the startup page, at the page-aligned address the loader stub
+/// passed), which is what makes the view sound.
+#[cfg(target_os = "none")]
+fn premapped(addr: usize, len: usize) -> &'static [u8] {
+    // SAFETY: both callers pass pages mapped into this process before it ran, which nothing in it
+    // writes and nothing unmaps (the runtime's `unmap` is crate-private, and its callers, the
+    // heap, `Buffer`, `Dma` and `Registers`, unmap only what they mapped themselves). Who
+    // guarantees the mapping: for the bundle, the loader, which maps the whole verified bundle at
+    // `addr`, `len` bytes (kernel/boot.md, "The loader loads only the kernel and `init`"); for the
+    // startup page, the parent, which maps one whole page at the address the loader stub passes
+    // (servers/init.md). A parent that passes a bad address can only fault its own child, which
+    // it controls anyway. Target only, so its keepers are the boot cases: `bundle-mapped` and
+    // `init-boot` for the bundle, every server `init-servers` starts for the startup page.
+    unsafe { core::slice::from_raw_parts(addr as *const u8, len) }
 }
 
 /// Records what the runtime needs from the startup block: the console, for panic reports.
@@ -138,41 +170,29 @@ pub fn note_console(startup: &Startup) {
     }
 }
 
+/// The panic handler's body ([`panic_handler!`]): runs `hook`, if any, reports the panic, and
+/// exits with [`exit::PANIC`].
 #[cfg(target_os = "none")]
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
+pub fn panic(info: &core::panic::PanicInfo, hook: Option<fn()>) -> ! {
     // The hook first: reporting can wait up to `PANIC_TIMEOUT` on the console, and the hook is
     // what makes the process safe to leave (a driver stopping its device).
-    run_panic_hook();
+    if let Some(hook) = hook {
+        run_panic_hook(hook);
+    }
     report_panic(format_args!("{info}"));
     crate::handle::process_exit(exit::PANIC)
 }
 
-/// Sets the one function the panic handler runs before anything else, for a program that must
-/// put something right before it dies: `netd` resets its device so it stops writing into pages
-/// that are about to be freed (servers/netd.md R57). It may be set once; `false` if one was
-/// already set. The hook must be short and bounded, must not allocate (the panic may be the
-/// heap's) and must not rely on anything but its own atomics: it runs on a thread that has just
-/// panicked. A panic inside it skips it and exits.
-pub fn set_panic_hook(hook: fn()) -> bool {
-    PANIC_HOOK.compare_exchange(0, hook as usize, Ordering::AcqRel, Ordering::Acquire).is_ok()
-}
-
-/// Runs the panic hook, once per process. A later panic on another thread finds it already
+/// Runs the panic hook `hook`, once per process. A later panic on another thread finds it already
 /// running and waits, bounded, for it to finish, so no thread reaches `process_exit` while the
-/// first is still stopping the device. A panic inside the hook itself
-/// finds it running too; its wait is the same bounded one, and then it exits.
+/// first is still stopping the device. A panic inside the hook itself finds it running too; its
+/// wait is the same bounded one, and then it exits.
 ///
-/// Crate-private on the machine: only the panic handler runs it, and any other call would spend
-/// the one run. Host tests run it as the handler would (there is no handler on the host).
-#[cfg(target_os = "none")]
-pub(crate) fn run_panic_hook() { run_hook_once() }
-
-/// Host only: runs the panic hook as the machine's panic handler would (see the target version).
-#[cfg(not(target_os = "none"))]
-pub fn run_panic_hook() { run_hook_once() }
-
-fn run_hook_once() {
+/// Only the panic handler runs it on the machine; any other call would spend the one run. It is
+/// public, and hidden, for host tests, which run it as the handler would (there is no handler on
+/// the host).
+#[doc(hidden)]
+pub fn run_panic_hook(hook: fn()) {
     if HOOK_RAN.swap(true, Ordering::AcqRel) {
         for _ in 0..HOOK_WAIT_SPINS {
             if HOOK_DONE.load(Ordering::Acquire) {
@@ -182,15 +202,6 @@ fn run_hook_once() {
         }
         return;
     }
-    let hook = PANIC_HOOK.load(Ordering::Acquire);
-    if hook == 0 {
-        HOOK_DONE.store(true, Ordering::Release);
-        return;
-    }
-    // SAFETY: `PANIC_HOOK` only ever holds 0 or the address of a `fn()` stored by
-    // `set_panic_hook` (`hook as usize`), and 0 was ruled out just above, so this is that same
-    // function pointer back, with its own type.
-    let hook: fn() = unsafe { core::mem::transmute::<usize, fn()>(hook) };
     hook();
     HOOK_DONE.store(true, Ordering::Release);
 }
@@ -266,26 +277,26 @@ mod tests {
         }
     }
 
-    fn other() {}
+    /// Counts too, so a second run with another hook would show.
+    fn other() { CALLS.fetch_add(1, Ordering::Relaxed); }
 
-    /// The hook is set once and runs once, however often the handler asks; and a second
-    /// panicking thread waits for the first run to finish rather than going on to exit.
+    /// The hook runs once, however often the handler asks; and a second panicking thread waits
+    /// for the first run to finish rather than going on to exit.
     #[test]
-    fn the_panic_hook_is_set_once_runs_once_and_is_waited_for() {
+    fn the_panic_hook_runs_once_and_is_waited_for() {
         extern crate std;
-        assert!(set_panic_hook(slow));
-        assert!(!set_panic_hook(other), "a second hook is refused");
-        let first = std::thread::spawn(run_panic_hook);
+        let first = std::thread::spawn(|| run_panic_hook(slow));
         while !STARTED.load(Ordering::Acquire) {
             core::hint::spin_loop();
         }
-        let second = std::thread::spawn(run_panic_hook);
+        let second = std::thread::spawn(|| run_panic_hook(slow));
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(!second.is_finished(), "a second panicker went on while the hook was running");
         RELEASE.store(true, Ordering::Release);
         first.join().unwrap();
         second.join().unwrap();
-        run_panic_hook();
+        run_panic_hook(slow);
+        run_panic_hook(other);
         assert_eq!(CALLS.load(Ordering::Relaxed), 1);
     }
 

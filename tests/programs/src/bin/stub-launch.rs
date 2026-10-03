@@ -17,6 +17,8 @@ use stub::{IMAGE_AT, MAX_IMAGE_LEN, STACK_TOP, STARTUP_AT, STUB_ENTRY};
 use test_programs::rd::{self, Cause, ExitNotice, Received, Usage};
 use uart_16550::MmioSerialPort;
 
+redoubt_rt::panic_handler!();
+
 /// The stub's own flat binary (objcopied by `build.rs`).
 static STUB_BIN: &[u8] = include_bytes!(env!("STUB_BIN"));
 /// A well-formed ELF the stub should map and jump to.
