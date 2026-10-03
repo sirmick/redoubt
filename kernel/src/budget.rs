@@ -142,6 +142,9 @@ pub(crate) const STAMPED_WORD: usize = 102;
 /// The next endpoint or device in its owner's chain (`Budget::first_owned`), at one place in
 /// both kinds' frames, so a destruction's owner walk reads it alone. 0 for the last.
 pub(crate) const OWNED_WORD: usize = 103;
+/// The budget's ready threads, as the scheduler counts them (`sched.rs`), above its own words so
+/// storing a budget never touches it. 0 for a new budget; a new frame is zeroed.
+const READY_WORD: usize = 104;
 
 /// The frame index a `frame + 1` word names, or `None` for 0.
 pub(crate) fn frame_of(word: u64) -> Option<u32> { (word as u32).checked_sub(1) }
@@ -400,6 +403,15 @@ impl MemoryManager {
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, (W_SCHED + i) * 8, *word);
         }
+    }
+
+    /// The ready threads the scheduler counts in `frame`.
+    pub fn sched_ready(&self, frame: BudgetFrame) -> u32 {
+        kframe::read(self.object_phys(frame), READY_WORD * 8) as u32
+    }
+
+    pub fn set_sched_ready(&mut self, frame: BudgetFrame, n: u32) {
+        kframe::write(self.object_phys(frame), READY_WORD * 8, u64::from(n))
     }
 
     /// `frame`'s id.

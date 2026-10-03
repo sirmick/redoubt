@@ -118,8 +118,11 @@ The tie key encodes this. Each wake takes `front - 1`, and one entry's wakes are
 descending id, so the lowest id ends frontmost. Each requeue of a still-runnable budget takes
 `back + 1`. Both counters reset when the queue empties. Wakes are reconciled once per kernel
 entry: as the kernel leaves, budgets that lost their last runnable thread leave the queue and
-budgets that gained one wake. Ranking later wakers first starves nobody: a waker that has run is
-charged, its pass rises above the floor, and it no longer ties.
+budgets that gained one wake. The reconcile visits only the budgets whose runnable state changed
+in the entry, with the same wakes and leaves, the wakes in the same order: each budget counts its
+ready threads, and a change of a process's ready threads marks the process, whose count then moves
+to its budget. Leaves have no order a pick can see. Ranking later wakers first starves nobody: a
+waker that has run is charged, its pass rises above the floor, and it no longer ties.
 
 `bench:sched-ties` runs a kernel built with the scheduling trace ([R23](#r23-no-test-channels)).
 The bench's own oracle (`tools/testbench/src/sched_oracle.rs`) rebuilds the order from the trace's
@@ -391,14 +394,20 @@ milliseconds are for reading. Host load does not change a result.
 
 **Targets exclude the checked build's audits.** The case is a checked build, since the trace needs
 one ([R23](#r23-no-test-channels)). A checked build runs full audit scans after each destruction
-and at each process-object free, and a release build compiles none of them. Each target counts the
-kernel a release build runs, a share as well as a window, so an audit neither fills a window nor
-moves the schedule. The audit time inside each window, a share's included, is subtracted, from the
-trace's audit records, and reported beside it ([checked builds](../testbench.md#checked-builds)).
-The scheduler does not see an audit either: its time is charged to no budget, and the running
-slice's end and the start of the kernel time being billed both move forward by its length, so the
-thread that ran it is picked and preempted as in a release build (`sched::audit`). With two full
-handle tables live, the audits are about 24 ms after a destruction and 8 ms at a free.
+and at each process-object free, and a release build compiles none of them. It also checks the
+reconcile's marks. Each reconcile asserts that every budget it visited is queued exactly when it
+has a ready thread. At most once a slice, and whenever the hart is about to idle, a full walk of
+every live process must find the runnable budgets the marks hold. So a mark missed in one entry is
+found within a slice of the next reconcile that visits a budget, or at the next idle. A miss that a
+later change undoes before then is not seen, and costs a budget a turn late or lost, never a wrong
+thread run. Each target counts the kernel a release build runs, a share as well as a window, so an
+audit neither fills a window nor moves the schedule. The audit time inside each window, a share's
+included, is subtracted, from the trace's audit records, and reported beside it
+([checked builds](../testbench.md#checked-builds)). The scheduler does not see an audit either: its
+time is charged to no budget, and the running slice's end and the start of the kernel time being
+billed both move forward by its length, so the thread that ran it is picked and preempted as in a
+release build (`sched::audit`). With two full handle tables live, the audits are about 24 ms after
+a destruction and 8 ms at a free.
 
 Measured at seed 3, p99 in µs, net / gross (audit time inside the windows): the audits hold the
 deadline notice, which waits out the audit after its own destruction, and little else. The

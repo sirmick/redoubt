@@ -26,6 +26,10 @@
 //!   (one reconcile per kernel entry: budgets that gained a runnable thread wake, those that lost their last
 //!   one leave). The entry's payer pays for all of that, up to the return; user time starts there.
 //!
+//! A reconcile visits only the budgets whose runnable state changed: every change of a process's
+//! state that changes how many of its threads are ready marks it (`ptable.rs`), and the marks move
+//! its count to its budget, so whether a budget has a runnable thread is one read ([`Marks`]).
+//!
 //! A pass changes only at a fold: a deschedule, a weight change (a carve, or a carve returned,
 //! folds first so earlier runtime is charged at the weight it ran at), a budget's destruction,
 //! and a bill for expiry work.
@@ -43,7 +47,7 @@
 //! `ecall` with it is an unknown number (`InvalidArgument`) like any other.
 
 use redoubt_layout::{KERNEL_PID, Pid};
-use redoubt_stride::{Budgets, Cpu, State};
+use redoubt_stride::{Budgets, Cpu, Marks, Ready, State};
 
 use crate::arch::process::MAX_PROCESS_COUNT;
 use crate::arch::process::{TID, TidMask};
@@ -66,8 +70,9 @@ struct Sched {
     billing: Option<(u64, BudgetRef)>,
     /// Billing paused while `kmain` expires deadlines (the walk is nobody's), to resume after.
     paused: Option<BudgetRef>,
-    /// Rebuilt at every kernel entry's end and every pick.
-    runnable: Runnable,
+    /// The processes whose ready threads changed since the last reconcile, and what each was
+    /// counted as: a reconcile visits only the budgets they moved.
+    marks: Marks<BudgetRef, MAX_PROCESS_COUNT>,
 }
 
 static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
@@ -75,7 +80,7 @@ static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
     user_since: None,
     billing: None,
     paused: None,
-    runnable: Runnable { list: [BudgetRef { frame: 0, id: 0 }; MAX_PROCESS_COUNT], n: 0 },
+    marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
 });
 
 fn ticks() -> u64 { crate::arch::irq::timer::now_ticks() }
@@ -122,6 +127,12 @@ impl Budgets<BudgetRef> for MemoryManager {
     fn reweighed(&mut self, b: BudgetRef, r: &redoubt_stride::Reweigh) { trace::reweigh(b.id, r) }
 }
 
+impl Ready<BudgetRef> for MemoryManager {
+    fn ready(&self, b: BudgetRef) -> u32 { self.sched_ready(b.frame) }
+
+    fn set_ready(&mut self, b: BudgetRef, n: u32) { self.set_sched_ready(b.frame, n) }
+}
+
 fn budget_ref(mm: &MemoryManager, frame: BudgetFrame) -> BudgetRef {
     BudgetRef { frame, id: mm.budget_id(frame) }
 }
@@ -151,43 +162,59 @@ impl Sched {
             self.billing = Some((now, b));
         }
     }
-}
 
-/// The budgets with a thread waiting for the CPU, each once: the first `n` of `list`. Kept in
-/// [`SCHED`] rather than built on the kernel stack, because it is sized by `MAX_PROCESS_COUNT`.
-struct Runnable {
-    list: [BudgetRef; MAX_PROCESS_COUNT],
-    n: usize,
-}
+    /// The marked processes' counts move to their budgets, so whether a budget has a ready thread
+    /// is one read ([`Ready`]); before a deschedule asks it, and before the reconcile.
+    fn settle(&mut self, ss: &ProcessTable, mm: &mut MemoryManager) {
+        self.marks.settle(mm, |mm, i| ready_now(ss, mm, i));
+    }
 
-impl Runnable {
-    /// Fill the list from the process table and return it.
-    fn fill(&mut self, ss: &ProcessTable, mm: &MemoryManager) -> &[BudgetRef] {
-        self.n = 0;
-        for pid in mm.live_pids() {
-            let p = &ss.processes[usize::from(pid.get()) - 1];
-            let ready = p.ready_threads().is_none_or(|x| !x.is_empty());
-            if !ready {
-                continue;
-            }
-            let Some(frame) = mm.budget_of(p.pid()) else { continue };
-            let b = budget_ref(mm, frame);
-            if !self.list[..self.n].contains(&b) {
-                self.list[self.n] = b;
-                self.n += 1;
+    /// The end of a kernel entry: the queue takes in the budgets the settle moved.
+    fn reconcile(&mut self, mm: &mut MemoryManager) {
+        #[cfg(feature = "sched-trace")]
+        trace::entry();
+        let (lost, gained) = self.marks.changed();
+        self.cpu.reconcile(mm, lost, gained, |mm, b| mm.ready(b) > 0);
+        #[cfg(debug_assertions)]
+        {
+            let running = self.cpu.cur.filter(|c| mm.is_live_budget(*c));
+            if let Err(e) = self.marks.check_visited(mm, running) {
+                panic!("the scheduler's marks: {:?}", e);
             }
         }
-        &self.list[..self.n]
+        self.marks.clear();
     }
 }
 
-/// The end of a kernel entry: the queue takes in `runnable`.
-fn reconcile(cpu: &mut Cpu<BudgetRef, MAX_PROCESS_COUNT>, mm: &mut MemoryManager, runnable: &[BudgetRef]) {
-    #[cfg(feature = "sched-trace")]
-    trace::entry();
-    #[cfg(feature = "walk-trace")]
-    let _walk = trace::walk(trace::RECONCILE);
-    cpu.reconcile(mm, runnable);
+/// Process `pid`'s ready threads changed (`ptable.rs`, at every change of its state that changes
+/// them): its budget is visited at the next reconcile.
+pub fn mark(pid: Pid) { SCHED.with(|s| s.marks.mark(usize::from(pid.get()) - 1)) }
+
+/// Process slot `i`'s ready threads and its budget now: what the marks keep each slot counted as.
+fn ready_now(ss: &ProcessTable, mm: &MemoryManager, i: usize) -> (u32, Option<BudgetRef>) {
+    let p = &ss.processes[i];
+    if p.free() {
+        return (0, None);
+    }
+    (p.ready_count(), mm.budget_of(p.pid()).map(|f| budget_ref(mm, f)))
+}
+
+/// The checked build's full walk, at most once a slice after a reconcile that visited a budget,
+/// and before the hart idles ([`Marks::audit_due`]): every process's ready threads are counted as a walk of
+/// the process table finds them, each budget's count is the sum of its processes', and the queue holds
+/// exactly the budgets with a ready thread, and the running one if it is queued.
+#[cfg(debug_assertions)]
+fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
+    audit(AUDIT_MARKS, || {
+        SCHED.with(|s| {
+            let running = s.cpu.cur.filter(|c| mm.is_live_budget(*c));
+            // A process with no account is in no budget, so has nothing counted.
+            let live = mm.live_pids().map(|pid| usize::from(pid.get()) - 1);
+            if let Err(e) = s.marks.audit(mm, &s.cpu.q, running, live, |mm, i| ready_now(ss, mm, i)) {
+                panic!("the scheduler's marks: {:?}", e);
+            }
+        })
+    });
 }
 
 /// A trap from user mode: the user time since the last return is `cur`'s.
@@ -271,6 +298,9 @@ pub const AUDIT_DESTRUCTION: u64 = 1;
 /// The PID index's audit at a process object's change (`MemoryManager::index_process`).
 #[cfg(debug_assertions)]
 pub const AUDIT_PROCESS_INDEX: u64 = 2;
+/// The scheduler's marks' audit after a reconcile ([`audit_marks`]).
+#[cfg(debug_assertions)]
+pub const AUDIT_MARKS: u64 = 4;
 
 /// A checked build runs the audit `which`: `check`, which a release build does not have. Its time
 /// is charged to no budget, and the running slice's end and the start of the kernel time being
@@ -313,9 +343,11 @@ pub fn leave(pid: Pid) {
                 let payer = s.billing.map(|(_, b)| b);
                 s.close_billing(mm, now);
                 let next = if pid.get() == 1 { None } else { mm.budget_of(pid).map(|f| budget_ref(mm, f)) };
-                let runnable = s.runnable.fill(ss, mm);
+                #[cfg(feature = "walk-trace")]
+                let _walk = trace::walk(trace::RECONCILE);
+                s.settle(ss, mm);
                 if next != s.cpu.cur {
-                    let left = s.cpu.switch(mm, next, |_, b| runnable.contains(&b));
+                    let left = s.cpu.switch(mm, next, |mm, b| mm.ready(b) > 0);
                     s.user_since = None;
                     // `kmain`'s pick and switch after a deschedule are the descheduled budget's
                     // work (it blocked, exited or was preempted): billed to it, as a deschedule's
@@ -336,11 +368,15 @@ pub fn leave(pid: Pid) {
                         s.billing = payer.map(|b| (now, b));
                     }
                 }
-                reconcile(&mut s.cpu, mm, runnable);
+                s.reconcile(mm);
                 next.is_some()
             })
         })
     });
+    #[cfg(debug_assertions)]
+    if SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, false)) {
+        ProcessTable::with(|ss| MemoryManager::with(|mm| audit_marks(ss, mm)));
+    }
     if pid.get() == 1 {
         crate::time::set_slice_end(crate::time::NEVER);
     }
@@ -361,11 +397,17 @@ pub fn leave(pid: Pid) {
 /// What `kmain` runs next: the lowest-ranked queued budget's next thread after its cursor. Starts
 /// a slice. `None` when nothing is runnable.
 pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
-    let chosen = SCHED.with(|s| {
-        let runnable = s.runnable.fill(ss, mm);
-        reconcile(&mut s.cpu, mm, runnable);
-        s.cpu.pick(mm, |mm, b| next_thread(ss, mm, b))
+    SCHED.with(|s| {
+        #[cfg(feature = "walk-trace")]
+        let _walk = trace::walk(trace::RECONCILE);
+        s.settle(ss, mm);
+        s.reconcile(mm);
     });
+    let chosen = SCHED.with(|s| s.cpu.pick(mm, |mm, b| next_thread(ss, mm, b)));
+    #[cfg(debug_assertions)]
+    if SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, chosen.is_none())) {
+        audit_marks(ss, mm);
+    }
     let (b, (pid, tid)) = chosen?;
     #[cfg(feature = "sched-trace")]
     trace::record(trace::PICK, b.id, mm.sched_state(b.frame).pass);
