@@ -92,9 +92,11 @@ pub enum Why {
     /// An endpoint a `consoled` receives on, handed to a server: only `init` holds a root badge
     /// there, so only `init`'s lines are bare.
     ConsoledRoot,
-    /// A volume a server attaches, but not exactly one `blkd`, receiving on an endpoint, to mint
+    /// A volume a server attaches, but no `blkd` of its disk, receiving on an endpoint, to mint
     /// its range at.
     NoBlkd,
+    /// A volume that does not name its disk, in a manifest with more than one `blkd`.
+    NoDisk,
     /// An endpoint a `blkd` receives on, handed to a server: each badge there is a volume's
     /// range, which only `init` mints, for the one server attaching it (R47).
     BlkdHanded,
@@ -139,7 +141,8 @@ impl fmt::Display for Why {
             Why::Value => "not a value this member takes",
             Why::PublicManifest => "the manifest is never public",
             Why::NoBootfsd => "public entries but no bootfsd",
-            Why::NoBlkd => "a volume's range needs exactly one blkd, receiving on an endpoint",
+            Why::NoBlkd => "a volume's range needs its disk's blkd, receiving on an endpoint",
+            Why::NoDisk => "with more than one blkd, a volume names its disk",
             Why::BlkdHanded => "only init mints a badge at blkd, a volume's range (R47)",
             Why::NoKeyd => "no keyd to ask about the keys the box is authenticated by (R35)",
             Why::ConsoledRoot => "only init holds a root badge at consoled",

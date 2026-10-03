@@ -16,7 +16,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::check::{BLKD, BUCKETS_ARG};
+use crate::check::{BLKD, BUCKETS_ARG, on_disk};
 use crate::manifest::{Manifest, Server};
 use crate::refusal::{Refusal, Sharing};
 
@@ -50,13 +50,15 @@ fn exempt(s: &Server) -> bool { EXEMPT.contains(&s.program.as_str()) }
 fn shared(s: &Server) -> bool { s.args.iter().any(|a| a.starts_with(BUCKETS_ARG)) }
 
 /// The label sets that use server `i`: its own, every server handed one of its endpoints or a
-/// volume's range at it (an `fsd` on `blkd`'s disk), and, if it is shared, every principal
+/// volume's range at it (an `fsd` on that `blkd`'s disk), and, if it is shared, every principal
 /// domain with its own set.
 fn users<'a>(m: &'a Manifest, i: usize) -> Vec<Set<'a>> {
     let s = &m.servers[i];
     let mut sets = alloc::vec![set(&s.labels)];
+    let attaches =
+        |t: &Server| m.volumes.iter().any(|v| t.volume.as_ref() == Some(&v.name) && on_disk(m, v, s));
     for t in &m.servers {
-        let range = s.program == BLKD && t.volume.is_some();
+        let range = s.program == BLKD && attaches(t);
         if range || t.handed.iter().any(|h| s.receives.contains(&h.endpoint)) {
             sets.push(set(&t.labels));
         }

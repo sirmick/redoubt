@@ -17,7 +17,7 @@ use redoubt_sys::DeviceInfo;
 
 use crate::bound::{self, Counts};
 use crate::confine;
-use crate::manifest::{Budget, Manifest, Server};
+use crate::manifest::{Budget, Manifest, Server, Volume};
 use crate::refusal::{Refusal, Why};
 use crate::sshkey::{self, KEY_LEN};
 
@@ -38,7 +38,7 @@ pub const BOOTFSD: &str = "bootfsd";
 /// The programs `init` calls itself, each through a root badge of its own there: `keyd` for
 /// `holds`, `consoled` for its own lines, `bootfsd` for the public entries.
 pub const INIT_CALLS: [&str; 3] = ["keyd", "consoled", BOOTFSD];
-/// The program that serves the disk's ranges: `init` mints each volume's range at it.
+/// The program that serves a disk's ranges: `init` mints each volume's range at its disk's.
 pub const BLKD: &str = "blkd";
 /// The startup-block name of a volume's range, handed to the server attaching it.
 pub const VOLUME: &str = "volume";
@@ -250,20 +250,33 @@ fn init_calls(m: &Manifest) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// The `blkd` a volume's range is minted at, when there is exactly one.
-pub fn blkd(m: &Manifest) -> Option<&Server> {
+/// The `blkd` serving volume `v`'s disk, whose endpoint its range is minted at: the one its
+/// `disk` names, or, when it names none, the manifest's only `blkd`.
+pub fn blkd<'m>(m: &'m Manifest, v: &Volume) -> Option<&'m Server> {
     let mut found = m.servers.iter().filter(|s| s.program == BLKD);
-    found.next().filter(|_| found.next().is_none())
+    match &v.disk {
+        Some(disk) => found.find(|s| &s.name == disk),
+        None => found.next().filter(|_| found.next().is_none()),
+    }
 }
 
-/// Each volume is one GPT entry served by at most one server (R47 (one volume per instance)),
-/// and a volume a server attaches has one `blkd`, receiving on an endpoint, to mint its range at.
-/// No entry is handed a badge where a `blkd` receives, since `blkd` resolves each badge there to
-/// a volume's range, and no entry carries an argument `init` passes itself: `labels=` on a
-/// volume's server, `labels.` on `blkd`.
+/// Whether volume `v` is on the disk the `blkd` `s` serves.
+pub fn on_disk(m: &Manifest, v: &Volume, s: &Server) -> bool { blkd(m, v).is_some_and(|b| b.name == s.name) }
+
+/// Each volume is one GPT entry of its disk, served by at most one server (R47 (one volume per
+/// instance)), and a volume a server attaches has its disk's `blkd`, receiving on an endpoint, to
+/// mint its range at. With more than one `blkd`, every volume names its disk. No entry is handed a
+/// badge where any `blkd` receives, since `blkd` resolves each badge there to a volume's range,
+/// and no entry carries an argument `init` passes itself: `labels=` on a volume's server,
+/// `labels.` on `blkd`.
 fn volumes(m: &Manifest) -> Result<(), Refusal> {
+    let disks = m.servers.iter().filter(|s| s.program == BLKD).count();
     for (i, v) in m.volumes.iter().enumerate() {
-        if m.volumes[..i].iter().any(|w| w.partition == v.partition) {
+        if disks > 1 && v.disk.is_none() {
+            return Err(at(format!("volumes[{i}].disk"), Why::NoDisk));
+        }
+        let disk = |w: &Volume| blkd(m, w).map(|b| &b.name);
+        if m.volumes[..i].iter().any(|w| w.partition == v.partition && disk(w) == disk(v)) {
             return Err(at(format!("volumes[{i}].partition"), Why::Twice));
         }
     }
@@ -272,7 +285,8 @@ fn volumes(m: &Manifest) -> Result<(), Refusal> {
         if m.servers[..i].iter().any(|t| t.volume.as_ref() == Some(volume)) {
             return Err(at(format!("servers[{i}].volume"), Why::Twice));
         }
-        if blkd(m).is_none_or(|b| b.receives.is_empty()) {
+        let served = |v: &Volume| blkd(m, v).is_some_and(|b| !b.receives.is_empty());
+        if !m.volumes.iter().any(|v| &v.name == volume && served(v)) {
             return Err(at(format!("servers[{i}].volume"), Why::NoBlkd));
         }
     }
@@ -321,6 +335,9 @@ fn references(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
         labels(&v.labels, &|k| format!("volumes[{i}].labels[{k}]"))?;
         if !(0..=i64::from(u8::MAX)).contains(&v.partition) {
             return Err(at(format!("volumes[{i}].partition"), Why::Value));
+        }
+        if v.disk.is_some() && blkd(m, v).is_none() {
+            return Err(at(format!("volumes[{i}].disk"), Why::Unknown));
         }
     }
     let volume = |n: &str| m.volumes.iter().any(|v| v.name == n);
@@ -512,9 +529,10 @@ fn fit(m: &Manifest, system: &Usage) -> Result<(), Refusal> {
 
 /// The arguments `init` gives server `s`: its entry's own, then, for `bootfsd`, the `public` list,
 /// which `bootfsd` builds its table from (servers/bootfsd.md, "Started by `init`"); for a
-/// volume's server, `labels=` its volume's label ids, absent when the set is empty; and for
-/// `blkd`, `labels.P=` each labelled volume's ids, P its GPT entry (servers/blkd.md, "Ranges and
-/// badges"). A label the manifest does not define is left out: the check refused it before.
+/// volume's server, `labels=` its volume's label ids, absent when the set is empty; and for a
+/// `blkd`, `labels.P=` the ids of each labelled volume on its disk, P its GPT entry
+/// (servers/blkd.md, "Ranges and badges"). A label the manifest does not define is left out: the
+/// check refused it before.
 pub fn args(m: &Manifest, s: &Server) -> Vec<String> {
     let ids = |names: &[String]| {
         let ids: Vec<String> = names
@@ -534,7 +552,7 @@ pub fn args(m: &Manifest, s: &Server) -> Vec<String> {
         }
     }
     if s.program == BLKD {
-        for v in m.volumes.iter().filter(|v| !v.labels.is_empty()) {
+        for v in m.volumes.iter().filter(|v| !v.labels.is_empty() && on_disk(m, v, s)) {
             args.push(format!("{RANGE_LABELS_ARG}{}={}", v.partition, ids(&v.labels)));
         }
     }

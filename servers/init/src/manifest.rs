@@ -11,7 +11,7 @@
 //! | `confined` | a boolean, optional |
 //! | `devices[]` | `name`; `base` (string), `irq` (number), either may be absent, not both; `dma` (boolean) |
 //! | `labels[]` | `name`, `owner` (a principal), `id` (string) |
-//! | `volumes[]` | `name`, `partition` (number), `labels` (label names, optional) |
+//! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`) |
 //! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
 //! | `public` | bundle entry names |
 //! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`, `budget`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
@@ -57,6 +57,9 @@ pub struct Volume {
     pub name: String,
     pub partition: i64,
     pub labels: Vec<String>,
+    /// The name of the `servers` entry of the `blkd` serving the volume's disk; required when
+    /// the manifest has more than one `blkd`.
+    pub disk: Option<String>,
 }
 
 /// The limits of a budget `init` creates.
@@ -189,6 +192,7 @@ fn volume(v: &Value) -> Result<Volume, SchemaError> {
             name: m.required("name", string)?,
             partition: m.required("partition", Value::int)?,
             labels: list(m, "labels", string)?,
+            disk: m.optional("disk", string)?,
         })
     })
 }
