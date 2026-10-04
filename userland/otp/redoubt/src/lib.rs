@@ -39,7 +39,7 @@ use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
 use beamlet_vm::bif::NativeSpec;
-use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError};
+use beamlet_vm::platform::{ConsoleInput, Lookup, Platform, PlatformError};
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
 use redoubt_client::console::Console;
@@ -141,14 +141,14 @@ impl Redoubt {
     }
 
     /// `file` from the module source, for `name`: one the source refuses is said on the console,
-    /// naming it and why, and is not found.
-    fn load(&mut self, name: &str, file: &str) -> Option<Vec<u8>> {
+    /// naming it and why, and ends this lookup.
+    fn load(&mut self, name: &str, file: &str) -> Lookup {
         match self.modules.load(file) {
-            Ok(bytes) => Some(bytes),
-            Err(Unloaded::Absent) => None,
+            Ok(bytes) => Lookup::Found(bytes),
+            Err(Unloaded::Absent) => Lookup::Absent,
             Err(Unloaded::Refused(why)) => {
                 say(&self.console, &format!("beamlet: {name} not loaded: {why}"));
-                None
+                Lookup::Refused
             }
         }
     }
@@ -271,11 +271,9 @@ impl Platform for Redoubt {
         redoubt_rt::handle::random(buf).map_err(|_| PlatformError::Unavailable)
     }
 
-    fn load_module(&mut self, module: &str) -> Option<Vec<u8>> {
-        self.load(module, &format!("{module}.beam"))
-    }
+    fn load_module(&mut self, module: &str) -> Lookup { self.load(module, &format!("{module}.beam")) }
 
-    fn load_app(&mut self, app: &str) -> Option<Vec<u8>> { self.load(app, &format!("{app}.app")) }
+    fn load_app(&mut self, app: &str) -> Lookup { self.load(app, &format!("{app}.app")) }
 }
 
 /// The argument that gives the VM its budget's pages, required on the machine: a program cannot

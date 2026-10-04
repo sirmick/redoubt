@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use beamlet_vm::Vm;
-use beamlet_vm::platform::{Platform, PlatformError};
+use beamlet_vm::platform::{Lookup, Platform, PlatformError};
 use beamlet_vm::vm::Limits;
 
 struct TestPlatform {
@@ -30,10 +30,10 @@ impl Platform for TestPlatform {
 
     fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
 
-    fn load_module(&mut self, module: &str) -> Option<Vec<u8>> {
+    fn load_module(&mut self, module: &str) -> Lookup {
         let modules: BTreeMap<&str, &[u8]> =
             [("limits", include_bytes!("fixtures/limits.beam").as_slice())].into_iter().collect();
-        modules.get(module).map(|b| b.to_vec())
+        modules.get(module).map_or(Lookup::Absent, |b| Lookup::Found(b.to_vec()))
     }
 }
 
