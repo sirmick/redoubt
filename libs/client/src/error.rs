@@ -37,6 +37,8 @@ pub enum Refusal {
     BadPath,
     /// The connection's fids are all in use (at most the skeleton's `MAX_FIDS` per connection).
     NoFid,
+    /// A multiplexed connection's tags are all in use (at most the skeleton's `MAX_TAGS`).
+    NoTag,
     /// Two open files on different connections, in one `fsd` operation: their fids name files on
     /// different servers, or other files entirely.
     OtherConnection,

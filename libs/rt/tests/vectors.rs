@@ -60,7 +60,7 @@ impl FileServer for OneFile {
 
 #[test]
 fn the_9p_conformance_vectors_hold_for_a_minimal_server() {
-    let limits = Limits { buckets: 8, in_flight: 0, files: 64, state: 8 };
+    let limits = Limits { buckets: 8, in_flight: 0, files: 64, state: 8, requests: 0, pages: 0 };
     let mut server = NineServer::new(OneFile, limits, 0).expect("a server");
     let who = Caller { badge: 1, account: 1001, labels: redoubt_rt::abi::Labels::from_slice(&[]).unwrap() };
     let counts = vectors::run(&mut server, &who);

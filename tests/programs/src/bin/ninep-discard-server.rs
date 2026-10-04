@@ -26,7 +26,7 @@ use test_programs::{Logger, checker, log};
 redoubt_rt::panic_handler!();
 
 /// Few connections per bucket, so that the client's discarded replies outnumber them.
-const LIMITS: Limits = Limits { buckets: 2, in_flight: 0, files: 2, state: 4 };
+const LIMITS: Limits = Limits { buckets: 2, in_flight: 0, files: 2, state: 4, requests: 0, pages: 0 };
 
 /// A server with one empty directory: a connection needs a root, nothing more.
 struct Empty;

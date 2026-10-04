@@ -64,11 +64,13 @@ pub const ALL_GRANTS: u64 = 0;
 /// - `in_flight` is 0: no call is ever parked here; every request is answered as it is taken.
 /// - `files` is 0: `keyd` has no files.
 /// - `state`: capabilities `grant` has made and `release` has not freed.
-pub const fn limits(buckets: u32) -> Limits { Limits { buckets, in_flight: 0, files: 0, state: 8 } }
+pub const fn limits(buckets: u32) -> Limits {
+    Limits { buckets, in_flight: 0, files: 0, state: 8, requests: 0, pages: 0 }
+}
 
 /// What one of those costs `keyd`, in bytes: a granted capability is its record here and a
 /// badged handle in the kernel, rounded up generously.
-pub const COST: Cost = Cost { in_flight: 0, file: 0, state: 512 };
+pub const COST: Cost = Cost { in_flight: 0, file: 0, state: 512, request: 0, page: 0 };
 
 /// The bytes of `keyd`'s budget its clients may use between them; its manifest entry gives it
 /// the budget, and [`KeyServer::new`] refuses limits that would not fit

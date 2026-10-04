@@ -51,8 +51,10 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
   LF-terminated, and nothing else ([image/README.md](../../image/README.md)); beamlet checks each
   object against it ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)).
 - **Admission** ([R26 (admission fairness)](serving.md#r26-admission-fairness)): at most 32 open
-  fids and 8 minted connections per (account, label set), and per badge for account 0, across at
-  most `buckets=N` of those at once, sized to fit its 256 KiB budget; a block with no
+  fids, 8 minted connections, 2 multiplexed connections' completion calls, 64 of their requests
+  and 2 pages they brought ([serving](serving.md#multiplexed-connections)) per (account, label
+  set), and per badge for account 0, across at most `buckets=N` of those at once, sized to fit its
+  768 KiB budget; a block with no
   `buckets=N`, or one the budget cannot hold, and `bootfsd` does not start
   ([init](init.md#the-boot-manifest)).
 

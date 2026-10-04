@@ -47,8 +47,6 @@ pub fn serve(startup: &Startup) -> u32 {
     }
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
     let Ok(mut server) = NineServer::new(fs, limits, random) else { return BAD_LIMITS };
-    // 9P and `ninep_common` in the skeleton; `add` and `seal` are ours.
-    redoubt_rt::server::serve(&endpoint, |request| {
-        server.serve_with(request, |s, request| serve_call::<Bootfs, _>(&mut s.fs, request))
-    })
+    // 9P, multiplexed 9P and `ninep_common` in the skeleton's loop; `add` and `seal` are ours.
+    server.run(&endpoint, |s, request| serve_call::<Bootfs, _>(&mut s.fs, request))
 }

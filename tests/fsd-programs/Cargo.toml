@@ -12,6 +12,11 @@ name = "fsd-client"
 path = "src/bin/fsd-client.rs"
 test = false
 
+[[bin]]
+name = "aio-reader"
+path = "src/bin/aio-reader.rs"
+test = false
+
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-client = { path = "../../libs/client" }

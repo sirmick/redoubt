@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 410
+revision = 414
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -789,9 +789,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["IPC3"]
-  body = "Owner (2026-10-03): \"pumps at the boundary\", the recommended option of .wash/local/destroy-simplify.md, goes after IPC3. Tier A (the kernel's destroy path: budget.rs destroy_subtree, message.rs budgets_dying/pump/end_thread/abandon/fail_all, process.rs died/settle_notice), size M. No brief yet: the Architect re-cuts it against IPC3's per-endpoint lists once IPC3 merges. The brief must cover the rescan loop's removal (fail_all's quadratic rescan), the five checks it replaces, the to-pump list collected at the mark and pumped at the boundary, and R10 step 4 tightened to \"from the mark on, no message stamped with a dying budget is delivered\" (budgets.md), with the one mutation retired as unwritable and its reason. The destruction does the same work, so it stays inside R10's 30 ms; the gate's R10 p99 is the check."
+  body = "Owner (2026-10-03): \"pumps at the boundary\", the recommended option of .wash/local/destroy-simplify.md, goes after IPC3. Tier A (the kernel's destroy path: budget.rs destroy_subtree, message.rs budgets_dying/pump/end_thread/abandon/fail_all, process.rs died/settle_notice), size M (M+ with the chains below). No brief yet: the Architect re-cuts it against IPC3's per-endpoint lists once IPC3 merges. The brief must cover the rescan loop's removal (fail_all's quadratic rescan), the five checks it replaces, the to-pump list collected at the mark and pumped at the boundary, and R10 step 4 tightened to \"from the mark on, no message stamped with a dying budget is delivered\" (budgets.md), with the one mutation retired as unwritable and its reason. The gate's R10 p99 is the check.\n\nAdded (IPC3's finding, 2026-10-03; docs/todo/destruction-walks-every-process.md): at full occupancy a destruction walks every process object three times (process::budgets_dying, destroy_marked's PID pass, destroy_subtree's live PIDs; ~12 us each at 510), so worst-walk's R10 is over 30 ms (IPC3 measures it after its exit-notice list). K19 adds per-budget chains so each follows the dying subtree; done when worst-walk's R10 at full fill is within 30 ms, its must_fail flips back to must-pass, and the todo page and R10's residual bullet are deleted."
   state = "todo"
-  revision = 388
+  revision = 413
 
 [[node]]
   id = "AIO1"
@@ -799,5 +799,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "beamlet-redoubt"
   body = "Owner (2026-10-03): one thread on the non-kernel side holds the buffers; AIO goes through it. Brief: .wash/local/AIO1-implementer.md (architect-14). Tier A (the serving library and the 9P skeleton; the client library), size M+, needs nothing. BEAM3 builds on it. Background: .wash/local/async-ipc-assessment.md.\n\nRuled: the completion side is one hub thread plus one thin waiter per server connection (a long-poll completion call each). Completions by send to a client endpoint are refused: the authority would match a reply's (R1), but the server's send blocks on the client's one thread, which can deadlock with that thread's own send, and any timeout drops a result and breaks R26. Exactly one thread needs a kernel notification object (AIO2, the owner's later choice, S-M, after IPC3); an endpoint set does not do it.\n\nDesign: the hub owns every buffer (by value in, by value out), sends tagged 9P requests (transfers for data; a short send timeout, retried, never lost), and dispatches completions. The serving library parks requests under the connection's admission share; undelivered completions count against it; over the share a request is answered busy; tags at most 256 per connection; Tflush answered once; the completion call's abandonment ends the connection.\n\nAcceptance: host attack tests (a never-polling client, death with requests parked, death between polls found at deadlines, a flush racing a completion, a send flood at WAIT_CAP, tag misuse); the machine case aio-many-reads (64 outstanding reads, 1 hub + 1 waiter, another client served meanwhile); today's one-call 9P unchanged. Pages: serving.md (Multiplexed connections, a new rule R7x, R26/R28 sentences), files.md, SECURITY.md."
-  state = "reported"
-  revision = 408
+  state = "done"
+  revision = 414

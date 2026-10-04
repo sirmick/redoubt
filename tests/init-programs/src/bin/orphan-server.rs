@@ -26,7 +26,7 @@ const NO_RANDOM: u32 = 3;
 const BAD_LIMITS: u32 = 4;
 
 /// A few connections per bucket: the tester's, the launcher's and the child's.
-const LIMITS: Limits = Limits { buckets: 2, in_flight: 0, files: 4, state: 4 };
+const LIMITS: Limits = Limits { buckets: 2, in_flight: 0, files: 4, state: 4, requests: 0, pages: 0 };
 
 fn serve(startup: &Startup) -> u32 {
     let Some(endpoint) = startup.handle("orphan-server") else { return NO_ENDPOINT };

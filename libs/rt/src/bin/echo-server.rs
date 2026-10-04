@@ -31,10 +31,10 @@ pub const NO_RANDOM: u32 = 5;
 
 /// What admission lets clients hold: sized so that every bucket at its cap fits [`BUDGET`]
 /// (servers/serving.md, `admit`). The skeleton holds no calls open, so none are admitted in flight.
-pub const LIMITS: Limits = Limits { buckets: 16, in_flight: 0, files: 32, state: 8 };
+pub const LIMITS: Limits = Limits { buckets: 16, in_flight: 0, files: 32, state: 8, requests: 0, pages: 0 };
 /// What one of each costs, in bytes: a fid is its table entry and a few steps; a connection its
 /// record and a quota.
-pub const COST: Cost = Cost { in_flight: 0, file: 256, state: 256 };
+pub const COST: Cost = Cost { in_flight: 0, file: 256, state: 256, request: 0, page: 0 };
 /// The bytes of this server's budget clients may use (its manifest gives the budget).
 pub const BUDGET: u64 = 256 * 1024;
 

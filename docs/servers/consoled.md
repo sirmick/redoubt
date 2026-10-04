@@ -17,7 +17,7 @@ channel by [`sshd`](sshd.md), not here.
 
 ### `/dev/cons`
 
-<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested (11)</summary>
+<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested (12)</summary>
 
 - bench:r4-host-tests
 - bench:consoled-build
@@ -26,6 +26,7 @@ channel by [`sshd`](sshd.md), not here.
 - host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
 - host:redoubt-consoled::typing_on_the_uart_reaches_a_ninep_reader
 - host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up
+- host:redoubt-consoled::a_multiplexed_read_waits_for_input
 - host:redoubt-consoled::writes_go_out_of_the_uart_in_order
 - host:redoubt-consoled::a_flood_of_input_keeps_what_was_typed_first
 - host:redoubt-consoled::the_console_refuses_what_it_is_not
@@ -41,7 +42,9 @@ with nothing below it.
 - **A read** returns the input held, from the start of the queue; the offset is ignored, since a
   console is a stream. With no input it **parks** its call with no deadline, because it waits on a
   person, and is served again, unchanged, when a key arrives; a caller that gives up abandons it
-  and it is freed at once ([parked calls](serving.md#parked-calls)).
+  and it is freed at once ([parked calls](serving.md#parked-calls)). A multiplexed connection's
+  read waits the same way, as a request in the skeleton, and is answered into its completion call
+  when a key arrives ([multiplexed connections](serving.md#multiplexed-connections)).
 - **One line, one queue.** Input goes to whichever waiting read has waited longest. At most
   `MAX_INPUT` (1024) bytes are held; a byte beyond that is dropped and counted, so a flood keeps
   what was typed first.
@@ -53,10 +56,12 @@ with nothing below it.
   opcodes, and any other typed opcode, are answered `malformed` ([below](#the-consol-protocol)).
   That reply does not close the handles the request carried, a departure from the serving
   library's rule that unasked handles are closed (Residual risks).
-- **Admission:** at most 2 parked reads, `MAX_THREADS` consoles' fids and `MAX_THREADS`
-  connections per (account, label set), across at most `buckets=N` of those, sized to fit its
-  2 MiB budget; a block with no `buckets=N`, or one the budget cannot hold, and `consoled` does
-  not start ([init](init.md#the-boot-manifest)). The connections, and their fids, scale with
+- **Admission:** at most 2 parked calls, `MAX_THREADS` consoles' fids, `MAX_THREADS` connections,
+  and 80 multiplexed requests and 2 pages they brought
+  ([serving](serving.md#multiplexed-connections)) per (account, label set), across at most
+  `buckets=N` of those, sized to fit its 2 MiB budget; a block with no `buckets=N`, or one the
+  budget cannot hold, and `consoled` does not start ([init](init.md#the-boot-manifest)). The
+  connections, and their fids, scale with
   `MAX_THREADS` because `init` mints every server's console through its one root badge, and
   starts at most `MAX_THREADS - 1` servers ([started by `init`](#started-by-init)): each console,
   and `init`'s own, holds 2 fids, the root it attaches and the `cons` file it opens.

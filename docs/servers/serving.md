@@ -3,7 +3,8 @@
 Every Redoubt server links one serving library, `redoubt_rt::server` in `libs/rt/src/server/`.
 It holds the rules a shared server must never get wrong, written once: admission (how much one
 client may hold in the server), the label check, the connections and grants a server mints for
-its clients, calls parked for later, typed-message dispatch, and a 9P2000 server skeleton. It
+its clients, calls parked for later, connections with many requests outstanding, typed-message
+dispatch, and a 9P2000 server skeleton. It
 also finishes every call, so that a reply that never reached its caller undoes what the request
 made.
 
@@ -61,6 +62,11 @@ per kind of resource:
 | `InFlight` | calls the server has taken and holds open (parked calls) |
 | `Files` | open files, or 9P fids |
 | `State` | any other per-client state: connections and grants minted for the client |
+| `Requests` | a multiplexed connection's requests, each held until its answer is delivered ([multiplexed connections](#multiplexed-connections)) |
+| `Pages` | the pages their transfers brought, one per page however many requests it carries, held until the last of them is answered |
+
+`Requests` and `Pages` are both outside the open-call headroom, since a request is a send, not an
+open call, and each has its own share ([R26](#r26-admission-fairness)).
 
 - **Buckets.** Limits are kept per **bucket**, keyed by the caller's account and label set
   (`AdmitKey::of`, the one place the key is made). Accounts, not badges or budgets, because both
@@ -206,6 +212,97 @@ stateDiagram-v2
 ```
 *Figure: the life of a parked call. Admission is held exactly while the call is parked.*
 
+### Multiplexed connections
+
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (13)</summary>
+
+- bench:aio-many-reads
+- bench:aio-many-reads-two
+- host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
+- host:redoubt-rt::a_completion_call_is_held_at_most_its_hold_and_the_servers_bound
+- host:redoubt-rt::a_never_polling_client_holds_only_its_share
+- host:redoubt-rt::death_with_requests_parked_frees_the_connection
+- host:redoubt-rt::a_death_between_completion_calls_is_found_at_the_session_bound
+- host:redoubt-rt::a_request_late_in_a_hold_leaves_the_session_its_whole_bound
+- host:redoubt-rt::a_flush_racing_a_completion_answers_once
+- host:redoubt-rt::a_flood_of_sends_at_wait_cap_never_blocks_the_server
+- host:redoubt-rt::a_reused_or_out_of_range_tag_ends_the_connection
+- host:redoubt-rt::a_second_completion_call_is_refused
+- fuzz:redoubt-rt/ninep_server
+
+</details>
+
+A call holds its caller's thread until the reply, so a client with one call per request needs a
+thread per outstanding request. The 9P skeleton also serves a connection **multiplexed**: many
+requests outstanding on its one badge, sent without waiting, and answered together through one
+long-poll call. Both ways are served on one endpoint, and a client may use both on one
+connection; the client half is the client library's hub
+([native programs](../userland/native.md#many-requests-at-once)).
+(`libs/rt/src/server/ninep_mux.rs`.)
+
+- **A request** is a `send` on the connection's badge with word 0 = 0: one T-message, packed into
+  words 1 to 3 (three machine words: 24 bytes on rv64, 12 on rv32), or one or more T-messages end
+  to end at the start of a transfer, word 1 their length, so 64 reads cost one page on either
+  width. A send is never an open call, so the server takes requests even while it holds
+  `MAX_OPEN_CALLS` ([R4a (open calls)](../kernel/ipc.md#r4a-open-calls)), and it never waits on
+  the client: everything it says goes back as a reply.
+- **The completion call** is a 9P call with words `[0, COLLECT, hold, 0]` (`COLLECT` is 1) and a
+  lend: the server holds it at most `hold` µs or the **session bound**, whichever is shorter (the
+  server's longest wait or `COLLECT_WAIT`, 10 s, whichever is shorter), and `hold` 0 answers at
+  once. The first opens the connection's **session**, answered at once with 1
+  in word 2; the server holds nothing for a connection before it, and drops a request that comes
+  with no session open. Later ones are parked, one at a time (a second is malformed), and answered
+  `[0, bytes, 0, 0]` with R-messages end to end at the front of the lend, or empty when the hold
+  runs out. The client's own timeout on the call is its hold and a margin (`COLLECT_MARGIN_US`,
+  1 s), so a client waits until its next deadline and abandons nothing, and a completion call
+  that times out means the server broke its promise.
+- **Served only into a parked completion call's lend.** Requests are answered when a completion
+  call is parked, straight into its lend, in the order they came: nothing is copied out or held
+  in the server, and a request waiting for a call holds its admission. A read is served only where
+  its whole count fits what is left of the lend, so packing never shortens a read; the rest wait
+  for the next call. A
+  request the file server asks to hold (`Read::Wait`) stays where it is, served again at the next
+  completion call, the next request, or the server's wake-up, and is answered `Rerror` "timeout"
+  at the server's deadline for it (none for `consoled`, whose reads wait on a person).
+- **Tags.** At most `MAX_TAGS` (256) are outstanding on a connection: a request's tag from its
+  arrival until its answer is delivered. A tag in use or out of range, a message that does not
+  frame, or a `Tversion` (whose tag is `NOTAG`) is a protocol error, which ends the session.
+- **Flush.** `Tflush(oldtag)` drops oldtag's request when it arrives, and is answered `Rflush` in
+  its turn. Whatever was delivered for oldtag was delivered before, so a client sees an answer
+  then `Rflush`, or `Rflush` alone, and never an answer after it (intro(5), flush).
+- **Admission** ([R77 (multiplexed requests)](#r77-multiplexed-requests)). The session holds one
+  `InFlight` of the connection's bucket and share for its completion call, its one open call. Each
+  request holds one `Requests`, and the pages a send brought one `Pages` each, counted once for the
+  send and held until the last of its requests is answered or dropped; each resource has its own
+  share. A request that would take its badge past either share is not served: its tag joins the
+  session's refused set, a 256-bit map, answered `Rerror` "busy" first in the next completion
+  call. Pages the share cannot pay for refuse every request they came with, and go at once; a
+  batched page whose requests are partly refused is held only by those admitted.
+- **The end.** The session ends when its completion call is abandoned (its client died or gave up:
+  [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls)), when a reply
+  to it reaches nobody, at a protocol error, at the connection's `disconnect`, and when no
+  completion call has been parked for the session bound since the last returned. Every request
+  goes with it, its admission released, and a parked completion call is answered status 4. So a
+  client that dies between two completion calls is found at the session bound, and a live client
+  keeps a completion call parked whenever it has requests outstanding.
+- **Crash blame.** Requests are served with the completion call as the thread's current call, so
+  a crash while serving them blames their client
+  ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
+
+**Who runs it.** A 9P server runs `NineServer::run`: calls, sends, transfers of up to
+`MAX_LEND_PAGES`, abandoned-call notices and deadlines (`fsd`, `bootfsd`). One that keeps state
+beside its files runs `run_around` with its `Around`, which is given the calls, the abandoned-call
+notices that are no completion call's, and a turn before each receive, after what the deadlines made
+due, for whatever moved since: `consoled` parks its own reads, and at each turn reads its UART and
+serves again the reads that wait for input. `ipd` keeps a loop of its own: it polls its network
+stack only after a `receive` that returned no call, so never with a call current
+([R21](../kernel/processes.md#r21-crash-blame)), receives without waiting after each call, takes
+frames from `netd`, and bounds each wait by its stack's timers and its link's retry, so hooks for
+all of that would be its loop again. It hands each send to `deliver` and each abandoned-call notice
+to `abandoned` first, calls `expire` and bounds its `receive` by `next_deadline`, and calls `wake`
+after each poll. A file server that pays for what a request makes around it does so in the `serving`
+and `served` hooks (`ipd`'s sockets, [ipd](ipd.md)).
+
 ### Typed dispatch
 
 <details><summary>Status: built · tested (5)</summary>
@@ -263,8 +360,9 @@ what the files are. A `FileServer` supplies the files: `attach`, `walk`, `open`,
 T-message at the start of its lend; the R-message is written over it ([wire](wire.md)). Any other
 word 0 is a typed opcode: 1 to 15 belong to `ninep_common`, which the skeleton serves itself, and
 higher ones go to the server's own protocol (`serve_with`). A 9P call with a non-zero word or no
-lend, or an unknown opcode in 1 to 15, is malformed. Handles sent with a 9P call are closed
-unread.
+lend, or an unknown opcode in 1 to 15, is malformed, except a multiplexed connection's completion
+call, words `[0, 1, hold, 0]` ([multiplexed connections](#multiplexed-connections)). Handles sent
+with a 9P call are closed unread.
 
 **What the skeleton guarantees a `FileServer`,** whatever a client sends:
 - At most `MAX_FIDS` (64) fids per connection, each admitted as a `Files` of its client; both
@@ -285,10 +383,11 @@ unread.
   `Tremove`, and on the directory for `Tcreate`.
 
 **Protocol corners.** `Tversion` is accepted at any time and clunks every fid of the connection;
-the `msize` is fixed. `Tauth` and `Twstat` are refused: access is by capability. `Tflush` is
-answered at once, since requests are handled one at a time. An `Rerror` carries one of a fixed set
-of texts, so a hostile request cannot choose it. Every allocation a request makes fails cleanly
-with an `Rerror`, never by killing the server.
+the `msize` is fixed. `Tauth` and `Twstat` are refused: access is by capability. `Tflush` on a
+call is answered at once, since a call's request is handled whole; on a multiplexed connection it
+drops the request it names ([multiplexed connections](#multiplexed-connections)). An `Rerror`
+carries one of a fixed set of texts, so a hostile request cannot choose it. Every allocation a
+request makes fails cleanly with an `Rerror`, never by killing the server.
 
 **`ninep_common`** (the table is on [wire](wire.md)): `new_connection(root, quota)` mints a
 connection rooted at `root`, a path relative to the caller's own root, cleaned so it never climbs
@@ -491,7 +590,9 @@ non-zero account is keyed by that account. The kernel's
 this rule shares what the server holds afterwards. `Minted::key` is the one fold every charge
 goes through: an account-0 caller's key names the root badge its chain was minted through, so the
 skeleton's fids and connections, a server's parked calls and `ipd`'s sockets all land in that
-root's bucket. How many buckets a shared server has is `buckets=N` in its startup block, parsed
+root's bucket. A multiplexed request is admitted in the same bucket and share as a call, under
+its own resource, `Requests`, until its answer is delivered ([R77](#r77-multiplexed-requests)).
+How many buckets a shared server has is `buckets=N` in its startup block, parsed
 once by the serving library with no default: a server not told, or told a count outside 1 to 32
 or its budget, does not start, so no count is fixed in code where the manifest cannot follow it.
 
@@ -528,8 +629,36 @@ moment it is resumed, expires or is abandoned; the caps keep every bucket's park
 `MAX_OPEN_CALLS` with the headroom free; every parked call has a server-side deadline unless it
 waits on a person; and an abandoned one is answered at once. So a client that parks calls and
 walks away cannot pin a server's open calls ([R4a (open calls)](../kernel/ipc.md#r4a-open-calls)).
+A multiplexed request is never an open call: only its connection's completion call is, and that call
+is held as any parked call is; the requests count under `Requests`
+([R77](#r77-multiplexed-requests)).
 In `net-pinned` a client abandons 64 parked reads at `ipd`, which answers and frees each one;
 a read with nothing coming ends at `ipd`'s deadline, and the connection still works after.
+
+### R77 (multiplexed requests)
+
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; no boot floods a real server with requests · tested (9)</summary>
+
+- host:redoubt-rt::a_never_polling_client_holds_only_its_share
+- host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
+- host:redoubt-rt::death_with_requests_parked_frees_the_connection
+- host:redoubt-rt::a_death_between_completion_calls_is_found_at_the_session_bound
+- host:redoubt-rt::a_request_late_in_a_hold_leaves_the_session_its_whole_bound
+- host:redoubt-rt::a_flush_racing_a_completion_answers_once
+- host:redoubt-rt::a_flood_of_sends_at_wait_cap_never_blocks_the_server
+- host:redoubt-rt::a_reused_or_out_of_range_tag_ends_the_connection
+- host:redoubt-rt::a_second_completion_call_is_refused
+
+</details>
+
+A multiplexed connection's requests, and the pages they brought, are bounded by its admission
+shares of `Requests` and `Pages`, and a request whose answer is not yet delivered still counts. So a
+client that floods requests, or never collects their answers, holds no more of a server than one
+share, and its excess is answered `busy`, never queued without bound. A session ends, freeing
+every request it held, when its completion call is abandoned (the client died or gave up), or
+when no completion call has been parked for the session bound: the server's longest wait or
+`COLLECT_WAIT` (10 s), whichever is shorter. A flushed request is answered at most once, before
+its `Rflush`, never after.
 
 ## Failure and restart
 
@@ -550,7 +679,8 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
   exits through `process_exit` with code 101. Holding open calls, that is a fault that blames the
   current call's sender (R21).
 - **A client dies** holding connections or parked calls: its parked calls come back as
-  abandoned-call notices and are freed. Its connections stay until its launcher disconnects them
+  abandoned-call notices and are freed, and so does a session's completion call, which ends the
+  session and frees its requests. Its connections stay until its launcher disconnects them
   ([servers](README.md#cleaning-up-after-a-child)).
 - **The server restarts.** It keeps nothing: its tables start empty and its first badge is drawn
   again (R27). A client's old handle names no connection until it asks for a new one.
@@ -567,7 +697,9 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
   bucket can fill, and a further badge is refused until one gives something back.
 - **A parked call costs its caller and the server.** Each holds one of the caller's
   `MAX_OPEN_CALLS` and one of the server's admission slots for as long as it waits. A console read
-  has no deadline and is reclaimed only by its caller giving up.
+  has no deadline and is reclaimed only by its caller giving up; a multiplexed one is reclaimed with
+  its session, which ends a session bound (at most `COLLECT_WAIT`) after its last completion call
+  returned if none is parked.
 - **A dead launcher leaks its children's connections** until its own connection is freed; the leak
   counts against its own account and label set, never another's.
 - **Rollback ends at provisional state.** A client that abandons a request after the server

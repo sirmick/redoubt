@@ -58,7 +58,9 @@ A message is four machine words, up to four handles (`MAX_MSG_HANDLES`) and at m
   what it sent and names it when decoding.
 - **9P in a lend.** A 9P request is a `call` whose four words are all zero, with the T-message at
   the front of its lend; the server writes the R-message over it and replies with four zero
-  words. A 9P call with a non-zero word or no lend is malformed (status 1).
+  words. A 9P call with a non-zero word or no lend is malformed (status 1), except a
+  multiplexed connection's completion call, `[0, 1, hold, 0]` with a lend
+  ([serving](serving.md#multiplexed-connections)).
 - **Typed operations on a 9P endpoint.** Word 0 non-zero on a 9P endpoint is a typed opcode.
   Opcodes 1 to 15 belong to `ninep_common` ([below](#ninep_common)); a protocol served on a 9P
   endpoint starts at 16, and the generator refuses a lower opcode in its table.

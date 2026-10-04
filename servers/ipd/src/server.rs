@@ -8,7 +8,9 @@
 //!
 //! **Parked calls** wait on the network: a `ctl` read for at most [`CTL_WAIT_US`], a `data` read
 //! or write for at most [`DATA_WAIT_US`], then `timeout`. They are served again once the stack
-//! says they would not wait, and an abandoned one is answered at once.
+//! says they would not wait, and an abandoned one is answered at once. A multiplexed connection's
+//! requests (servers/serving.md, "Multiplexed connections") wait in the skeleton instead, every
+//! one for at most [`DATA_WAIT_US`], and are served again after every poll.
 //!
 //! **Sockets are paid for in the shared admission** (servers/ipd.md, "Sizing"): around each 9P
 //! request the caller's bucket and share reserve up to [`SOCKETS_PER_REQUEST`] `State` units
@@ -34,7 +36,7 @@ use redoubt_rt::wire::typed::error_reply;
 use crate::fs::{At, NetFs, Node};
 use crate::link::Netif;
 use crate::scope::Scope;
-use crate::stack::{Entropy, MAX_BACKLOG, Owner, Room, WaitFor};
+use crate::stack::{Entropy, MAX_BACKLOG, Owner, WaitFor};
 
 /// How long a `ctl` read waits for a connect or an accept (µs).
 pub const CTL_WAIT_US: u64 = 60_000_000;
@@ -57,26 +59,18 @@ pub fn open_sockets<N: Netif, E: Entropy>(
     caller: &Caller,
     words: &Words,
 ) {
-    let (key, share) = nine.charge_of(caller);
-    nine.fs.charge = Some(key);
-    if *words != WORDS_9P {
-        return;
+    let charge = nine.charge_of(caller);
+    nine.fs.charge = Some(charge.0);
+    if *words == WORDS_9P {
+        let (fs, admission) = nine.fs_and_admission();
+        fs.reserve(charge, admission);
     }
-    let mut left = 0;
-    while left < SOCKETS_PER_REQUEST && nine.admission_mut().admit(key, share, Resource::State).is_ok() {
-        left += 1;
-    }
-    nine.fs.stack.open_room(Room { key, share, left });
 }
 
 /// After a request: gives back what its reservation did not spend.
 pub fn close_sockets<N: Netif, E: Entropy>(nine: &mut NineServer<NetFs<N, E>>) {
-    nine.fs.charge = None;
-    if let Some(room) = nine.fs.stack.close_room() {
-        for _ in 0..room.left {
-            nine.admission_mut().release(room.key, room.share, Resource::State);
-        }
-    }
+    let (fs, admission) = nine.fs_and_admission();
+    fs.unreserve(admission);
 }
 
 /// After a poll: gives back the unit of every socket the stack removed.
@@ -123,7 +117,8 @@ fn close_all(handles: &Handles) {
 }
 
 impl<N: Netif, E: Entropy> Ipd<N, E> {
-    pub fn new(nine: NineServer<NetFs<N, E>>, ingress: u64) -> Ipd<N, E> {
+    pub fn new(mut nine: NineServer<NetFs<N, E>>, ingress: u64) -> Ipd<N, E> {
+        nine.requests_wait(DATA_WAIT_US);
         Ipd {
             nine,
             ctl_parked: Parked::new(CTL_WAIT_US),
@@ -142,12 +137,12 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
 
     pub fn current(&self) -> Option<NonZeroU64> { self.current }
 
-    /// When the next parked call's deadline falls, if any.
+    /// When the next parked call's or multiplexed request's deadline falls, if any.
     pub fn next_deadline(&self) -> Option<u64> {
-        match (self.ctl_parked.next_deadline(), self.data_parked.next_deadline()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [self.ctl_parked.next_deadline(), self.data_parked.next_deadline(), self.nine.next_deadline()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// `receive` returned something other than a call: no call is current now.
@@ -200,24 +195,37 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
         }
     }
 
-    /// A `send` arrived: a frame from `netd` on the ingress badge goes to the stack; anything else
-    /// is dropped, its handles closed and its pages unmapped. Returns whether a socket may have
-    /// changed.
+    /// A `send` arrived: a multiplexed request goes to the skeleton; a frame from `netd` on the
+    /// ingress badge goes to the stack; anything else is dropped, its handles closed and its pages
+    /// unmapped. Returns whether it was a multiplexed request: serving it makes its completion
+    /// call this thread's current call, so the stack is not polled before the next `receive`.
     pub fn on_send(&mut self, delivery: Delivery, now: u64) -> bool {
         self.current = None;
+        if delivery.words[0] == 0 {
+            // A labelled caller never has a session (its completion call is refused), so its
+            // requests are dropped there.
+            self.nine.fs.now = now;
+            let _ = self.nine.fs.take_wait();
+            return self.nine.deliver(delivery, now).is_none();
+        }
         close_delivery(&delivery);
         let from_netd = delivery.caller.badge == self.ingress && delivery.caller.labels.as_slice().is_empty();
-        let (Some(page), true) = (delivery.transfer.as_ref(), from_netd) else { return false };
-        match Message::decode(&delivery.words, page, 0) {
-            Ok(Message::Frame(frame)) => self.nine.fs.stack.ingress(frame.frame, now),
-            _ => false,
+        if let (Some(page), true) = (delivery.transfer.as_ref(), from_netd) {
+            if let Ok(Message::Frame(frame)) = Message::decode(&delivery.words, page, 0) {
+                self.nine.fs.stack.ingress(frame.frame, now);
+            }
         }
+        false
     }
 
     /// An abandoned-call notice: if the call is parked here, it is answered at once (the reply
     /// reaches nobody) and its admission given back.
     pub fn on_abandoned(&mut self, id: NonZeroU64) {
         self.current = None;
+        // A completion call's: its session ends.
+        if self.nine.abandoned(id) {
+            return;
+        }
         let admission = self.nine.admission_mut();
         if self.ctl_parked.abandoned(admission, id, &MALFORMED).is_none() {
             let _ = self.data_parked.abandoned(self.nine.admission_mut(), id, &MALFORMED);
@@ -233,6 +241,9 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
                 }
             }
         }
+        self.nine.fs.now = now;
+        self.nine.expire(now);
+        let _ = self.nine.fs.take_wait();
         self.current = None;
     }
 
@@ -272,6 +283,10 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
                 }
             }
         }
+        // Multiplexed requests: each served again once, its completion call then current until
+        // the next `receive`, which follows.
+        self.nine.wake(now);
+        let _ = self.nine.fs.take_wait();
     }
 
     /// Every (socket, wait) that would still wait now: a parked call on anything else is served

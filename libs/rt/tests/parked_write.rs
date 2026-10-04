@@ -64,7 +64,7 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
 
     let server_thread = f.run(server, move || {
         let ep = Endpoint::from_handle(receive);
-        let limits = Limits { buckets: 2, in_flight: 4, files: 4, state: 0 };
+        let limits = Limits { buckets: 2, in_flight: 4, files: 4, state: 0, requests: 0, pages: 0 };
         let mut nine = NineServer::new(Full, limits, 5).unwrap();
         let mut parked: Parked<()> = Parked::new(LONGEST);
         let own = |_: &mut NineServer<Full>, r: redoubt_rt::ipc::Request| refuse_malformed(r);

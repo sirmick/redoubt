@@ -57,8 +57,12 @@ fn a_panic_is_reported_on_the_console_once() {
     let console = Console(written.clone());
     let server = f.run(consoled, move || {
         let ep = Endpoint::from_handle(receive);
-        let mut server =
-            NineServer::new(console, Limits { buckets: 4, in_flight: 0, files: 4, state: 0 }, 0).unwrap();
+        let mut server = NineServer::new(
+            console,
+            Limits { buckets: 4, in_flight: 0, files: 4, state: 0, requests: 0, pages: 0 },
+            0,
+        )
+        .unwrap();
         while let Ok(Event::Call(request)) = ep.receive(FOREVER, 0) {
             server.serve(request).unwrap();
         }

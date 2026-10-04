@@ -35,7 +35,7 @@ fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread:
 /// `public` list.
 fn block(receive: Handle, public: &[&str]) -> Vec<u8> {
     let mut builder = StartupBuilder::new(receive.index());
-    builder.handle("bootfsd", receive).arg("buckets=16");
+    builder.handle("bootfsd", receive).arg("buckets=4");
     for name in public {
         builder.arg(name);
     }
