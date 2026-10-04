@@ -254,6 +254,76 @@ impl T {
             names.extend(redoubt_rt::wire::ninep::stats(&chunk).map(|s| StdString::from(s.unwrap().name)));
         }
     }
+
+    /// The entries one directory read of `fid` (opened) returns, and the bytes it took.
+    pub fn entries(
+        &mut self,
+        who: &Caller,
+        fid: u32,
+        offset: u64,
+        count: u32,
+    ) -> Result<(Vec<Entry>, u64), StdString> {
+        let chunk = self.read(who, fid, offset, count)?;
+        Ok((redoubt_rt::wire::ninep::stats(&chunk).map(|s| entry(&s.unwrap())).collect(), chunk.len() as u64))
+    }
+
+    /// Every entry a directory read of `fid` (opened) lists, from offset 0.
+    pub fn listing(&mut self, who: &Caller, fid: u32) -> Result<Vec<Entry>, StdString> {
+        let (mut all, mut offset) = (Vec::new(), 0);
+        loop {
+            let (entries, n) = self.entries(who, fid, offset, 4096)?;
+            if n == 0 {
+                return Ok(all);
+            }
+            offset += n;
+            all.extend(entries);
+        }
+    }
+
+    /// What `Tstat` says of `fid`, as a directory read would list it.
+    pub fn entry(&mut self, who: &Caller, fid: u32) -> Entry {
+        match self.rpc(who, Body::Tstat { fid }) {
+            Body::Rstat { stat } => entry(&stat),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+/// A stat as owned values: name, qid type, version and path, mode, length.
+pub(crate) type Entry = (StdString, u8, u32, u64, u32, u64);
+
+fn entry(s: &redoubt_rt::wire::ninep::Stat<'_>) -> Entry {
+    (s.name.into(), s.qid.kind, s.qid.version, s.qid.path, s.mode, s.length)
+}
+
+/// Makes the root's directory `dir` holding `n` files named by `name`, as `who` on fid 0: file
+/// `i` holds `i % 7` bytes, written `i % 3` times, and every hundredth entry is a directory.
+pub(crate) fn many(t: &mut T, who: &Caller, dir: &str, n: usize, name: impl Fn(usize) -> StdString) {
+    t.walk(who, 0, 1, &[]).unwrap();
+    t.create(who, 1, dir, DMDIR | 0o755, mode::OREAD).unwrap();
+    t.clunk(who, 1).unwrap();
+    for i in 0..n {
+        t.walk(who, 0, 1, &[dir]).unwrap();
+        if i % 100 == 99 {
+            t.create(who, 1, &name(i), DMDIR | 0o755, mode::OREAD).unwrap();
+        } else {
+            t.create(who, 1, &name(i), 0o644, mode::OWRITE).unwrap();
+            for _ in 0..i % 3 {
+                t.write(who, 1, 0, &[b'x'; 7][..i % 7]).unwrap();
+            }
+        }
+        t.clunk(who, 1).unwrap();
+    }
+}
+
+/// The names littlefs holds in the directory `dir`, in its order.
+pub(crate) fn names_in(t: &mut T, dir: &str) -> Vec<StdString> {
+    let mut names = Vec::new();
+    t.server
+        .fs
+        .with(|fs| fs.read_dir(dir, |e| names.push(StdString::from_utf8(e.name.to_vec()).unwrap())))
+        .unwrap();
+    names
 }
 
 /// A fresh volume with `notes` holding `data`, written over 9P; fid 0 is the root, and the file
@@ -875,4 +945,56 @@ fn split_directories_still_mount() {
     t.walk(&who, 0, 1, &["b"]).unwrap();
     t.open(&who, 1, mode::OREAD).unwrap();
     assert_eq!(t.list(&who, 1).unwrap().len(), 80);
+}
+
+/// A listing of 600 entries makes about one pass over the directory per window and no lookup
+/// per entry, and lists every entry once, in littlefs's order, as `Tstat` reports it.
+#[test]
+fn listing_a_directory_reads_it_once_per_window() {
+    let disk = Memory::blank(1024 * 8);
+    let mut t = T::on(&disk, &[]);
+    let who = caller(1, &[]);
+    t.attach(&who, 0).unwrap();
+    many(&mut t, &who, "d", 600, |i| alloc::format!("file-{i}"));
+    t.walk(&who, 0, 1, &["d"]).unwrap();
+    t.open(&who, 1, mode::OREAD).unwrap();
+    let (passes, reads) = (t.server.fs.passes, disk.0.borrow().reads);
+    let listed = t.listing(&who, 1).unwrap();
+    let (passes, reads) = (t.server.fs.passes - passes, disk.0.borrow().reads - reads);
+    assert!(passes as usize <= 600usize.div_ceil(WINDOW) + 1, "{passes} passes");
+    let names: Vec<_> = listed.iter().map(|e| e.0.clone()).collect();
+    assert_eq!(names, names_in(&mut t, "d"));
+    // The block reads are those of the passes and of finding the directory again for each: no
+    // entry is looked up.
+    let before = disk.0.borrow().reads;
+    t.server.fs.with(|fs| fs.read_dir("d", |_| {})).unwrap();
+    let one = disk.0.borrow().reads - before;
+    assert!(reads <= (passes as usize + 1) * one, "{reads} block reads for {passes} passes of {one}");
+    for e in &listed {
+        t.walk(&who, 0, 2, &["d", &e.0]).unwrap();
+        assert_eq!(&t.entry(&who, 2), e);
+        t.clunk(&who, 2).unwrap();
+    }
+}
+
+/// One `read` at the largest msize, of a directory longer than a reply holds, makes no more
+/// passes than the bound on [`WINDOW`] states.
+#[test]
+fn one_reply_costs_a_bounded_number_of_passes() {
+    let disk = Memory::blank(2048 * 8);
+    let mut t = T::on(&disk, &[]);
+    let who = caller(1, &[]);
+    t.attach(&who, 0).unwrap();
+    many(&mut t, &who, "d", 1400, |i| alloc::format!("f{i:04}"));
+    t.walk(&who, 0, 1, &["d"]).unwrap();
+    t.open(&who, 1, mode::OREAD).unwrap();
+    let passes = t.server.fs.passes;
+    let (entries, _) = t.entries(&who, 1, 0, MSIZE as u32).unwrap();
+    let passes = t.server.fs.passes - passes;
+    // A five-byte name's stat is 54 bytes; the shortest, a one-byte name's, is 50.
+    let data = MSIZE - redoubt_rt::wire::ninep::IOHDRSZ;
+    assert_eq!(entries.len(), data / 54);
+    let most = data / 50;
+    assert_eq!(most, 1310);
+    assert!(passes as usize <= most.div_ceil(WINDOW) + 1, "{passes} passes");
 }

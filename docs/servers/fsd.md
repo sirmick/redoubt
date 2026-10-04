@@ -19,12 +19,13 @@ power-loss safety by design, and a size that can be read.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · tested (31)</summary>
+<details><summary>Status: built · tested (35)</summary>
 
 - bench:fsd-boot
 - bench:fsd-confined-labelled
 - bench:fsd-corrupt-volume
 - bench:fsd-label-check
+- bench:fsd-large-directory
 - bench:fsd-one-volume
 - host:redoubt-fsd::attach_walk_open_read_write
 - host:redoubt-fsd::files_and_directories_survive_a_remount
@@ -52,6 +53,9 @@ power-loss safety by design, and a size that can be read.
 - host:redoubt-fsd::arguments_it_does_not_understand_stop_it_before_serving
 - host:redoubt-fsd::a_range_too_small_is_no_volume
 - host:redoubt-fsd::fids_are_bounded_and_disconnect_frees_them
+- host:redoubt-fsd::listing_a_directory_reads_it_once_per_window
+- host:redoubt-fsd::a_change_between_reads_refills_the_window
+- host:redoubt-fsd::one_reply_costs_a_bounded_number_of_passes
 
 </details>
 
@@ -86,6 +90,10 @@ power-loss safety by design, and a size that can be read.
   rename over a file ends every other fid on it, and a fid on a renamed file, or on anything
   below a renamed directory (a connection's root included), is `removed` as well: fids do not
   follow renames.
+- **A directory is listed a window at a time.** `fsd` serves a directory read from a window of up
+  to 64 entries with their stats, filled by one pass over the directory and dropped by any change
+  to the volume. Listing n entries costs about n / 64 passes and no lookup per entry, and one
+  request costs at most 22 passes over the directory it reads, 22 fixed by the largest message.
 - **Labels are per volume.** Each volume has one label set, from the boot manifest or the steward,
   and `fsd` reports it as every node's labels, so the skeleton's label check runs on every request:
   a read (a qid and a `stat` included) needs the volume's labels to be a subset of the caller's, a
@@ -430,7 +438,14 @@ wherever a request meets it ([R49](#r49-a-hostile-medium-is-corrupt-not-a-crash)
   it out; a virtio disk levels its own.
 - **Attributes and data are two commits.** A power cut between them leaves a file's new data with
   its old attributes, or the reverse.
-- **Large directories and files scale poorly** in littlefs's format.
+- **Large directories and files scale poorly** in littlefs's format; a listing is linear in the
+  directory.
+- **A listing across a change may skip or repeat an entry.** A directory read goes on by entry
+  index, and a change between two reads refills the window from the directory as it is then, so
+  an entry created or removed before that index shifts the rest by one (9P allows it). And a
+  window is filled whole: an entry `fsd` cannot read, up to 63 places past the one asked for,
+  fails the earlier read as `corrupt`, as it would within one reply
+  ([R49](#r49-a-hostile-medium-is-corrupt-not-a-crash)).
 - **littlefs's fuzz targets and C oracle run outside the bench.** Its host tests run in
   `littlefs-host-tests`; the differential run against the C library (`libs/littlefs/diff/`) is
   its own workspace with a C toolchain, and the fuzz targets need `cargo fuzz`, neither of which a

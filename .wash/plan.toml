@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 400
+revision = 405
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -632,9 +632,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "beamlet-redoubt"
   needs = ["BEAM2", "AIO1"]
-  body = "docs/userland/beamlet.md#asynchronous-underneath-synchronous-on-top: the thread split (short calls with timeouts, the session's reserved waiting calls, user code's waiting calls, system_limit past them), writes and size queries off the VM thread; the split's scheduler line reworded for one scheduler until several harts. Files: the platform's `files` over the client library's `file` (docs/userland/files.md#files-over-9p), on /boot and on an fsd volume. Brief to come."
+  body = "docs/userland/beamlet.md#asynchronous-underneath-synchronous-on-top: the thread split (short calls with timeouts, the session's reserved waiting calls, user code's waiting calls, system_limit past them), writes and size queries off the VM thread; the split's scheduler line reworded for one scheduler until several harts. Builds on AIO1's hub (BEAM3 needs AIO1). Files: the platform's `files` over the client library's `file` (docs/userland/files.md#files-over-9p), on /boot and on an fsd volume. Brief to come.\n\nAcceptance gains (BEAM2's todo docs/todo/beamlet-refused-module-falls-through.md, before files reach the platform): the platform's lookup answers three ways (found, absent, refused); locate_module stops at a refusal; a beamlet-vm host test shows a refused module is not loaded from a code-path directory holding it; the todo page is deleted."
   state = "todo"
-  revision = 394
+  revision = 403
 
 [[node]]
   id = "BEAM4"
@@ -703,8 +703,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16"]
   body = "Owner (2026-10-03): build it, after K16 and before SMP1. Brief: .wash/local/ASID1-implementer.md (written against K16's c5/tip; recheck on main after K16 merges). Tier A (kernel memory core), size M.\n\nThe PID is satp's ASID (511 < 2^ASID_BITS); a switch flushes nothing; every page-table write flushes what it changed in the space it changed, running or not: a leaf by (address, ASID), a table pointer by whole ASID, a kernel-half leaf by (address, x0); G exactly on the shared kernel half, never on the per-process PROCESS_AREA path. A PID given out is flushed whole before its first map (MemoryMapping::allocate); a destruction moves satp off the dying space and flushes its ASID before freeing its frames (a garbage G leaf from a freed table would survive ASID flushes). The boot probes the ASID width (ones written to satp) and refuses one narrower than ASID_BITS (R17, HW1's table). A checked build logs unflushed page-table writes and stops at a return to user mode with one pending; it audits G.\n\nAcceptance: asid-reuse-stale and two recorded negatives (asid-no-reuse-flush, asid-no-leaf-flush) on both widths; asid-cost (round trip, switch, map/unmap) before and after on both widths. QEMU's TLB is not tagged by ASID (to confirm from its source), so the saving shows on the FPGA core, not QEMU; a regression is a finding. Whole bench; K16's worst walk and the gate's targets not regressed. Pages: memory-layout.md (satp, G row, residuals), memory.md, processes.md, fpga-platform.md (two bullets), m2-usable-shell.md item 4, boot.md hardware bounds row.\n\nOut: several harts. SMP1 (amended): shootdown flushes the target's ASID on the harts running it; harts that only ran it flush lazily through a per-PID stale mask before they next install it."
-  state = "todo"
-  revision = 345
+  state = "active"
+  revision = 402
 
 [[node]]
   id = "ABI1"
@@ -771,8 +771,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Brief: .wash/local/FSD4-implementer.md (architect-14). Tier A (servers/fsd), size S, needs nothing. Found by BEAM2 (2026-10-03): listing the userland root (587 files) was unfinished after 400 s, and fsd answered no one else meanwhile. Cause: entry_name (server.rs:426) walks the whole directory for each entry, and each entry is then looked up again by path (node_at, stat_of, qid).\n\nDesign: one listing window per fsd, up to 64 entries with their stats (name, id, kind, size, qid version from the DirEntry's metadata and attributes), filled by one pass and keyed by the directory and a change generation that every volume change moves. dir_entry answers from it and refills on a miss, finding the directory once (its id check stays). Memory bounded (try_reserve). Listing n entries costs about n/64 passes with no per-entry lookup; one request costs at most a bounded number of passes, fixed by msize. The skeleton and littlefs are unchanged.\n\nAcceptance: host tests (pass count for 600 entries, a change between reads refills, one reply's bound); machine case fsd-large-directory, both widths: 600 files packed, listed in under 2 s, a second client's read answered during the listing. Page: fsd.md, a bullet \"A directory is listed a window at a time\" and the residual \"a listing is linear in the directory\"."
-  state = "active"
-  revision = 384
+  state = "done"
+  revision = 405
 
 [[node]]
   id = "B6"

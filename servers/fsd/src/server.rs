@@ -156,6 +156,80 @@ fn join(dir: &str, name: &str) -> Result<String, NineError> {
     Ok(path)
 }
 
+/// The most entries a listing window holds (servers/fsd.md, "A directory is listed a window at a
+/// time"). One `read` reply holds at most E = 1310 entries: the most a reply carries at the
+/// largest msize, `MSIZE - IOHDRSZ` = 65512 bytes, over the shortest stat, 50 bytes (41 fixed,
+/// a one-byte name and three empty strings). So one request costs at most
+/// ceil(E / `WINDOW`) + 1 = 22 passes over the directory it reads.
+const WINDOW: usize = 64;
+
+/// A listing window: up to [`WINDOW`] entries of directory `dir` from index `start`, with all
+/// a directory read returns of them, read in one pass at the change generation `changes`.
+#[derive(Default)]
+struct Window {
+    /// `None`: nothing is held.
+    dir: Option<Node>,
+    changes: u64,
+    start: u64,
+    /// Fewer than [`WINDOW`]: the directory ends after them.
+    entries: Vec<Listed>,
+    /// The entries' names, end to end; at most [`WINDOW`] of [`path::MAX_NAME`] bytes.
+    names: String,
+}
+
+/// One entry of a [`Window`].
+struct Listed {
+    /// Where its name ends in [`Window::names`]; it starts where the last one's ended.
+    end: usize,
+    id: u64,
+    dir: bool,
+    size: u32,
+    version: u32,
+}
+
+impl Window {
+    /// Whether the window answers for entry `index` of `dir` at the generation `changes`: the
+    /// entry is in it, or the directory ends within it.
+    fn holds(&self, dir: &Node, changes: u64, index: u64) -> bool {
+        let inside = index
+            .checked_sub(self.start)
+            .is_some_and(|i| i < self.entries.len() as u64 || self.entries.len() < WINDOW);
+        self.dir.as_ref() == Some(dir) && self.changes == changes && inside
+    }
+
+    /// Keeps the entry `name`, with what a directory read returns of it.
+    fn keep(&mut self, name: &str, entry: &littlefs::DirEntry) -> Result<(), Failure> {
+        let id = entry.attr(ATTR_ID).map_or(Err(Failure::Fs(FsError::Corrupt)), decode_id)?;
+        let dir = entry.meta.kind == FileType::Dir;
+        let version = match entry.attr(ATTR_VERSION) {
+            Some(v) if !dir => {
+                v.try_into().map(u32::from_le_bytes).map_err(|_| Failure::Fs(FsError::Corrupt))?
+            }
+            _ => 0,
+        };
+        self.names.try_reserve(name.len()).map_err(|_| Failure::NoMemory)?;
+        self.names.push_str(name);
+        self.entries.push(Listed { end: self.names.len(), id, dir, size: entry.meta.size, version });
+        Ok(())
+    }
+
+    /// Entry `index`'s node in `dir` and its stat, or `None` past the directory's end. The
+    /// window holds it ([`Window::holds`]).
+    fn entry(&self, dir: &Node, index: u64) -> Result<Option<(Node, FileStat)>, NineError> {
+        let i = usize::try_from(index - self.start).unwrap_or(usize::MAX);
+        let Some(e) = self.entries.get(i) else { return Ok(None) };
+        let begin = i.checked_sub(1).map_or(0, |b| self.entries[b].end);
+        let name = &self.names[begin..e.end];
+        let mut owned = String::new();
+        owned.try_reserve(name.len()).map_err(|_| NineError::NO_MEMORY)?;
+        owned.push_str(name);
+        let node = Node { path: join(&dir.path, name)?, id: e.id, dir: e.dir };
+        let (mode, kind) = if e.dir { (DMDIR | 0o755, QTDIR) } else { (0o644, 0) };
+        let qid = Qid { kind, version: e.version, path: e.id };
+        Ok(Some((node, FileStat { qid, mode, mtime: 0, length: u64::from(e.size), name: owned })))
+    }
+}
+
 /// One volume's files.
 pub struct Fsd<R: Range> {
     /// `None`: the volume did not mount, or its device failed since; every request is corrupt.
@@ -169,10 +243,18 @@ pub struct Fsd<R: Range> {
     blocks: u32,
     /// What each live root holds (servers/fsd.md, "Quotas").
     pub(crate) ledger: Ledger,
+    /// The change generation: moved by every change to the volume, so a window filled before
+    /// it is never served after it.
+    changes: u64,
+    /// The one listing window, whoever lists.
+    window: Window,
     /// How many times littlefs itself ran out of room: a quota that kept its promise never
     /// lets it (servers/fsd.md, "Quotas").
     #[cfg(test)]
     pub(crate) out_of_room: u32,
+    /// How many passes over a directory listings made.
+    #[cfg(test)]
+    pub(crate) passes: u32,
 }
 
 impl<R: Range> Fsd<R> {
@@ -212,8 +294,12 @@ impl<R: Range> Fsd<R> {
             attr: Vec::new(),
             blocks,
             ledger: Ledger::new(room, held),
+            changes: 0,
+            window: Window::default(),
             #[cfg(test)]
             out_of_room: 0,
+            #[cfg(test)]
+            passes: 0,
         }
     }
 
@@ -321,6 +407,8 @@ impl<R: Range> Fsd<R> {
         dirs: [&str; N],
         change: impl FnOnce(&mut Self) -> Result<T, Failure>,
     ) -> Result<T, Failure> {
+        // Every change to the volume runs here, whether or not it succeeds.
+        self.changes = self.changes.wrapping_add(1);
         let mut before = [0u32; N];
         for (n, dir) in before.iter_mut().zip(dirs) {
             *n = self.with(|fs| fs.read_dir(dir, |_| {}))?;
@@ -421,32 +509,37 @@ impl<R: Range> Fsd<R> {
         })
     }
 
-    /// The entry `index` of directory `dir` whose name is one a client could walk to; entries
-    /// with names no path can name are not listed, so no such name is ever joined into a path.
-    fn entry_name(&mut self, dir: &Node, index: u64) -> Result<Option<String>, Failure> {
+    /// Fills the window with directory `dir`'s entries from `index`, in one pass, once `dir` is
+    /// found again. Only entries whose names a client could walk to count; those no path can
+    /// name are not listed, so no such name is ever joined into a path.
+    fn fill(&mut self, dir: &Node, index: u64) -> Result<(), Failure> {
         self.find(dir)?;
-        let mut seen = 0u64;
-        let mut found: Result<Option<String>, Failure> = Ok(None);
+        let mut w = core::mem::take(&mut self.window);
+        w.entries.clear();
+        w.names.clear();
+        w.entries.try_reserve(WINDOW).map_err(|_| Failure::NoMemory)?;
+        let path = join("", &dir.path).map_err(|_| Failure::NoMemory)?;
+        let (mut seen, mut kept) = (0u64, Ok(()));
+        #[cfg(test)]
+        {
+            self.passes += 1;
+        }
         self.with(|fs| {
             fs.read_dir(&dir.path, |entry| {
                 let Ok(name) = core::str::from_utf8(entry.name) else { return };
-                if !path::valid_name(name) || found.as_ref().map_or(true, Option::is_some) {
+                if !path::valid_name(name) || kept.is_err() || w.entries.len() == WINDOW {
                     return;
                 }
-                if seen == index {
-                    let mut owned = String::new();
-                    found = match owned.try_reserve(name.len()) {
-                        Ok(()) => {
-                            owned.push_str(name);
-                            Ok(Some(owned))
-                        }
-                        Err(_) => Err(Failure::NoMemory),
-                    };
+                if seen >= index {
+                    kept = w.keep(name, entry);
                 }
                 seen += 1;
             })
         })?;
-        found
+        kept?;
+        (w.dir, w.changes, w.start) = (Some(Node { path, id: dir.id, dir: dir.dir }), self.changes, index);
+        self.window = w;
+        Ok(())
     }
 
     fn stat_of(&mut self, node: &Node) -> Result<FileStat, Failure> {
@@ -819,10 +912,13 @@ impl<R: Range> FileServer for Fsd<R> {
         dir: &Node,
         index: u64,
     ) -> Result<Option<(Node, FileStat)>, NineError> {
-        let Some(name) = self.entry_name(dir, index).map_err(nine)? else { return Ok(None) };
-        let node = self.node_at(join(&dir.path, &name)?).map_err(nine)?;
-        let stat = self.stat_of(&node).map_err(nine)?;
-        Ok(Some((node, stat)))
+        if self.window.holds(dir, self.changes, index) {
+            // Nothing changed since the fill found `dir`, unless the volume failed meanwhile.
+            self.with(|_| Ok(())).map_err(nine)?;
+        } else {
+            self.fill(dir, index).map_err(nine)?;
+        }
+        self.window.entry(dir, index)
     }
 
     fn create(

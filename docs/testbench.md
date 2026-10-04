@@ -518,13 +518,14 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (11)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
 - bench:image-disk
 - bench:init-boot
 - bench:net-tcp
+- host:testbench::a_recipe_can_generate_a_directory_of_files
 - host:testbench::a_recipe_packs_a_table_and_a_volume_per_partition
 - host:testbench::a_stage_is_walked_parents_first_in_name_order
 - host:testbench::devices_sit_on_fixed_slots
@@ -550,6 +551,11 @@ A disk `recipe` (`image/disk.toml`) is packed by the code `./mkimage` runs (`tes
 --pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as a littlefs
 volume holding its stage's tree, written through `fsd`'s own code, so a case boots the disk the
 image ships.
+
+A recipe's littlefs partition may also generate files, for a case that needs many and not their
+contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in the volume's root
+(as many digits as the last needs), all empty except `read`, which holds its own name and a
+newline. They sit beside the stage's tree, if there is one, and a name in both is refused.
 
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
 virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,

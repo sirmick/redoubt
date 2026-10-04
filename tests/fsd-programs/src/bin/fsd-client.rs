@@ -18,6 +18,10 @@
 //!   `PEER`, the endpoints each receives on and is handed at the other's, the next start sends on `PEER` and
 //!   reads back only once the outsider, which waits for that send, was refused and sent back. `labelled` runs
 //!   labelled, so it cannot write the console: it exits with its verdict ([`verdict`]), which `init` reports.
+//! - `list ENDPOINT COUNT OWN PEER`: lists the root, which holds `COUNT` entries, each once, and prints how
+//!   long it took. After its first read it sends on `PEER`, and goes on once the reader sends back on `OWN`.
+//! - `reader ENDPOINT PATH TEXT OWN PEER`: once the lister sends on `OWN`, reads `PATH`, which holds `TEXT`,
+//!   then sends on `PEER`. Its verdict is the lister's: it says no PASSED line of its own.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -34,17 +38,19 @@ use redoubt_client::fsd::rename;
 use redoubt_client::{Error, Lend};
 use redoubt_init_programs::Out;
 use redoubt_rt::abi::FOREVER;
-use redoubt_rt::handle::Endpoint;
+use redoubt_rt::handle::{Endpoint, time_now};
 use redoubt_rt::ipc::Event;
 use redoubt_rt::server::ninep::{DMDIR, mode};
 use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(run);
 
-/// What a check ends in: a verdict, or an exit its case expects `init` to report.
+/// What a check ends in: a verdict, an exit its case expects `init` to report, or only its own
+/// lines, for a client whose case's verdict is another's.
 enum Ends {
     Passed,
     Exit(u32),
+    Said,
 }
 
 /// The code `reboot` exits with before the reboot.
@@ -74,10 +80,13 @@ fn run(startup: &Startup) -> u32 {
             outsider(startup, &mut out, at, args.next().zip(args.next())).map(|()| Ends::Passed)
         }
         (Some("restart"), Some(at)) => restart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
+        (Some("list"), Some(at)) => list(startup, &mut out, at, args).map(|()| Ends::Passed),
+        (Some("reader"), Some(at)) => reader(startup, &mut out, at, args).map(|()| Ends::Said),
         (check, _) => Err(format!("no such check, or no endpoint: {check:?}")),
     };
     let line = match checked {
         Ok(Ends::Exit(code)) => return code,
+        Ok(Ends::Said) => redoubt_init_programs::park(),
         Ok(Ends::Passed) => String::from("fsd-client TEST PASSED\n"),
         Err(why) => format!("fsd-client TEST FAILED: {why}\n"),
     };
@@ -348,8 +357,7 @@ fn outsider(
     ends: Option<(&str, &str)>,
 ) -> Result<(), String> {
     let (own, peer) = ends.ok_or("no endpoints to wait and answer on")?;
-    let own = Endpoint::from_handle(startup.handle(own).ok_or_else(|| format!("no {own} handle"))?);
-    let peer = Endpoint::from_handle(startup.handle(peer).ok_or_else(|| format!("no {peer} handle"))?);
+    let (own, peer) = (handed(startup, Some(own))?, handed(startup, Some(peer))?);
     while !matches!(own.receive(FOREVER, 0), Ok(Event::Send(_))) {}
     let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
     match Connection::attach(Endpoint::from_handle(handle), &mut out.lend) {
@@ -358,6 +366,76 @@ fn outsider(
         Ok(_) => return Err("attached without the volume's labels".into()),
     }
     out.say("fsd-client without the labels was refused at attach\n").map_err(|e| format!("say: {e:?}"))?;
+    peer.send(&[0; 4], &[], None, FOREVER).map_err(|(e, _)| format!("send: {e:?}"))
+}
+
+/// The endpoint the entry is handed, or receives on, under `name`.
+fn handed(startup: &Startup, name: Option<&str>) -> Result<Endpoint, String> {
+    let name = name.ok_or("an endpoint missing")?;
+    startup.handle(name).map(Endpoint::from_handle).ok_or_else(|| format!("no {name} handle"))
+}
+
+/// Microseconds since boot.
+fn now() -> Result<u64, String> { time_now().map_err(|e| format!("time: {e:?}")) }
+
+/// `fsd-large-directory`: the root, holding `count` entries, lists each once, in one listing
+/// timed from its first read to its last; between its first and second reads the reader's read is
+/// answered.
+fn list<'a>(
+    startup: &Startup,
+    out: &mut Out,
+    at: &str,
+    mut args: impl Iterator<Item = &'a str>,
+) -> Result<(), String> {
+    let count: usize = args.next().and_then(|n| n.parse().ok()).ok_or("no count")?;
+    let (own, peer) = (handed(startup, args.next())?, handed(startup, args.next())?);
+    let conn = attach(startup, out, at)?;
+    let root = dir(&conn, out, "/")?;
+    let (mut names, mut offset, mut reads) = (Vec::new(), 0, 0);
+    let start = now()?;
+    loop {
+        let (entries, next) = root.read_dir(&mut out.lend, offset).map_err(|e| format!("list /: {e:?}"))?;
+        if entries.is_empty() {
+            break;
+        }
+        names.extend(entries.into_iter().map(|e| e.name));
+        (offset, reads) = (next, reads + 1);
+        if reads == 1 {
+            peer.send(&[0; 4], &[], None, FOREVER).map_err(|(e, _)| format!("send: {e:?}"))?;
+            while !matches!(own.receive(FOREVER, 0), Ok(Event::Send(_))) {}
+        }
+    }
+    let took = now()? - start;
+    let listed = names.len();
+    names.sort_unstable();
+    names.dedup();
+    if listed != count || names.len() != count {
+        return Err(format!("listed {listed} entries, {} apart, of {count}", names.len()));
+    }
+    out.say(&format!("fsd-client listed {listed} in {took} us, in {reads} reads\n"))
+        .map_err(|e| format!("say: {e:?}"))
+}
+
+/// `fsd-large-directory`: once the lister has begun, `path` reads back as the text after it, and
+/// the lister is told.
+fn reader<'a>(
+    startup: &Startup,
+    out: &mut Out,
+    at: &str,
+    mut args: impl Iterator<Item = &'a str>,
+) -> Result<(), String> {
+    let (path, text) = args.next().zip(args.next()).ok_or("no path and text")?;
+    let (own, peer) = (handed(startup, args.next())?, handed(startup, args.next())?);
+    let conn = attach(startup, out, at)?;
+    while !matches!(own.receive(FOREVER, 0), Ok(Event::Send(_))) {}
+    let start = now()?;
+    let got = read_file(&conn, &mut out.lend, path)?;
+    let took = now()? - start;
+    if got != text.as_bytes() {
+        return Err(format!("{path} holds {:?}, not {text:?}", String::from_utf8_lossy(&got)));
+    }
+    out.say(&format!("fsd-client read {path} during the listing in {took} us\n"))
+        .map_err(|e| format!("say: {e:?}"))?;
     peer.send(&[0; 4], &[], None, FOREVER).map_err(|(e, _)| format!("send: {e:?}"))
 }
 

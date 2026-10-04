@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use redoubt_rt::server::ninep::{DMDIR, mode};
 
 use super::*;
-use crate::server::tests::{Memory, SECTORS, T, caller, with_notes};
+use crate::server::tests::{Memory, SECTORS, T, caller, many, with_notes};
 
 /// One typed request as `who`; the reply as owned values, or the error.
 fn call(t: &mut T, who: &Caller, request: Message<'_>) -> Result<Option<Vec<u8>>, ErrorCode> {
@@ -278,4 +278,63 @@ fn a_tree_renames_made_deep_still_mounts() {
     let mut t = T::on(&disk, &[]);
     t.attach(&who, 0).unwrap();
     assert_eq!(t.walk(&who, 0, 1, &["chain", "chain", "chain"]).map(|q| q.len()), Ok(3));
+}
+
+/// A create, a remove, a rename and a write between two reads of one listing: the second read
+/// goes on from the entry where the first stopped, in the directory as it is now, with the
+/// stats it has now. A directory removed between two reads is `removed`.
+#[test]
+fn a_change_between_reads_refills_the_window() {
+    let who = caller(1, &[]);
+    let mut t = volume_on(&Memory::blank(SECTORS * 4), &who);
+    many(&mut t, &who, "e", 100, |i| alloc::format!("{i:03}"));
+    t.walk(&who, 0, 2, &["e"]).unwrap();
+    t.open(&who, 2, mode::OREAD).unwrap();
+    let (first, offset) = t.entries(&who, 2, 0, 1000).unwrap();
+    assert!(!first.is_empty() && first.len() < 64);
+    t.walk(&who, 0, 3, &["e"]).unwrap();
+    t.create(&who, 3, "new", 0o644, mode::OWRITE).unwrap();
+    t.clunk(&who, 3).unwrap();
+    t.walk(&who, 0, 3, &["e", "050"]).unwrap();
+    t.remove(&who, 3).unwrap();
+    t.walk(&who, 0, 3, &["e"]).unwrap();
+    rename(&mut t, &who, 3, "005", 3, "renamed").unwrap();
+    t.walk(&who, 0, 4, &["e", "070"]).unwrap();
+    t.open(&who, 4, mode::OWRITE).unwrap();
+    t.write(&who, 4, 0, b"longer now").unwrap();
+    t.clunk(&who, 4).unwrap();
+    let mut rest = Vec::new();
+    let mut at = offset;
+    loop {
+        let (entries, n) = t.entries(&who, 2, at, 4096).unwrap();
+        if n == 0 {
+            break;
+        }
+        at += n;
+        rest.extend(entries);
+    }
+    t.walk(&who, 0, 4, &["e"]).unwrap();
+    t.open(&who, 4, mode::OREAD).unwrap();
+    let now = t.listing(&who, 4).unwrap();
+    assert_eq!(rest, now[first.len()..]);
+    assert!(rest.iter().any(|e| e.0 == "070" && e.5 == 10));
+
+    // A directory removed between two reads of its listing.
+    t.walk(&who, 0, 5, &[]).unwrap();
+    t.create(&who, 5, "gone", DMDIR | 0o755, mode::OREAD).unwrap();
+    t.clunk(&who, 5).unwrap();
+    for name in ["a", "b"] {
+        t.walk(&who, 0, 6, &["gone"]).unwrap();
+        t.create(&who, 6, name, 0o644, mode::OREAD).unwrap();
+        t.clunk(&who, 6).unwrap();
+    }
+    t.walk(&who, 0, 5, &["gone"]).unwrap();
+    t.open(&who, 5, mode::OREAD).unwrap();
+    let (first, offset) = t.entries(&who, 5, 0, 60).unwrap();
+    assert_eq!(first.len(), 1);
+    for path in [&["gone", "a"][..], &["gone", "b"], &["gone"]] {
+        t.walk(&who, 0, 6, path).unwrap();
+        t.remove(&who, 6).unwrap();
+    }
+    assert_eq!(t.entries(&who, 5, offset, 4096).unwrap_err(), "removed");
 }
