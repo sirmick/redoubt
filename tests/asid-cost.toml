@@ -1,0 +1,18 @@
+description = "What an address-space switch and a page-table change cost, in guest instructions: 10,000 empty IPC round trips within a process and between two, their difference per switch, and 10,000 maps, touches and unmaps of a page; a record, judged only for being printed (kernel/memory-layout.md, \"`satp`\"; release build, virtual time)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Under `icount` with shift 3 a guest instruction takes 8 ns of virtual time, so each microsecond
+# printed is 125 instructions. QEMU's TLB is not tagged by ASID and is emptied on every sfence.vma
+# and every satp change, so the saving of ASIDs does not show here; a regression would.
+# `asid-cost-host` prints the same in host time.
+icount = "shift=3,sleep=off"
+programs = ["asid-cost"]
+timeout_secs = 600
+expect = [
+    '^\[pid 2\] \[asid-cost\] 10000 ipc round trips within a process: \d+ us$',
+    '^\[pid 2\] \[asid-cost\] 10000 ipc round trips between processes: \d+ us$',
+    '^\[pid 2\] \[asid-cost\] an address-space switch, from the difference: \d+ ns$',
+    '^\[pid 2\] \[asid-cost\] 10000 maps, touches and unmaps of a page: \d+ us$',
+    '^\[pid 2\] ASID COST RECORDED$',
+]
+poweroff = true

@@ -1,0 +1,15 @@
+description = "What an address-space switch and a page-table change cost, in host time: `asid-cost`'s program without `icount` (kernel/memory-layout.md, \"`satp`\"; release build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The host's time, so the numbers vary with the host and its load: a record, judged only for being
+# printed.
+programs = ["asid-cost"]
+timeout_secs = 600
+expect = [
+    '^\[pid 2\] \[asid-cost\] 10000 ipc round trips within a process: \d+ us$',
+    '^\[pid 2\] \[asid-cost\] 10000 ipc round trips between processes: \d+ us$',
+    '^\[pid 2\] \[asid-cost\] an address-space switch, from the difference: \d+ ns$',
+    '^\[pid 2\] \[asid-cost\] 10000 maps, touches and unmaps of a page: \d+ us$',
+    '^\[pid 2\] ASID COST RECORDED$',
+]
+poweroff = true
