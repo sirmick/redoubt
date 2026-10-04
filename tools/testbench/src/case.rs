@@ -312,6 +312,9 @@ pub struct Boot {
     pub file: Vec<BundleFile>,
     /// A virtio-blk disk, created afresh for every boot.
     pub disk: Option<Disk>,
+    /// The userland disk, a second virtio-blk disk the host attaches read-only, packed from its
+    /// recipe for every boot.
+    pub userland: Option<Userland>,
     /// A virtio-net device on QEMU's user-mode network.
     pub net: Option<Net>,
     /// SSH sessions to the guest's port 22, run once every `expect` has matched, while the
@@ -384,6 +387,20 @@ pub struct Disk {
     pub recipe: Option<PathBuf>,
     /// With a `recipe`, the directory every partition holds instead of the recipe's own stage.
     pub stage: Option<PathBuf>,
+}
+
+/// The userland disk (image/userland.toml): its objects as the bundle's `system.index` names
+/// them, but for one a case damages.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Userland {
+    /// The recipe, relative to the workspace root, the one a `userland_index` file names.
+    pub recipe: PathBuf,
+    /// A file (`Elixir.Enum.beam`) whose object has one byte flipped on the disk; the bundle's
+    /// index is the unchanged pack's.
+    pub flip: Option<String>,
+    /// A file whose object the disk lacks, though the bundle's index names it.
+    pub remove: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -530,6 +547,8 @@ pub enum Program {
     Erlang { erlang: PathBuf },
     /// The `.beam` of a module of the pinned toolchain's OTP, by module name (`io`).
     Otp { otp: String },
+    /// The `system.index` of the userland disk this recipe packs (`userland.rs`).
+    UserlandIndex { userland_index: PathBuf },
     /// This many zero bytes, made in the run: an entry whose length is all that matters, such as
     /// a program `init` must refuse on its size before it reads a byte (init-refuses-bound).
     Zeros { zeros: u64 },
@@ -553,7 +572,11 @@ pub struct Recipe {
 pub struct RecipeEntry {
     pub name: String,
     pub package: Option<String>,
+    /// The workspace of its own a `package` is in, relative to the root (`userland/otp`).
+    pub workspace: Option<PathBuf>,
     pub path: Option<PathBuf>,
+    /// The `system.index` of the userland disk this recipe packs.
+    pub userland_index: Option<PathBuf>,
 }
 
 impl Recipe {
@@ -574,20 +597,28 @@ impl Recipe {
         );
         let (mut programs, mut files) = (Vec::new(), Vec::new());
         for entry in rest {
-            match (&entry.package, &entry.path) {
-                (Some(package), None) => programs.push(Program::Package {
-                    package: package.clone(),
-                    bin: entry.name.clone(),
-                    features: Vec::new(),
-                    workspace: None,
-                }),
-                (None, Some(path)) => files.push(BundleFile {
-                    name: entry.name.clone(),
-                    from: Program::Path { path: path.clone() },
-                    servers: Vec::new(),
-                }),
-                _ => bail!("recipe entry {:?} needs a package or a path, not both", entry.name),
-            }
+            ensure!(
+                entry.workspace.is_none() || entry.package.is_some(),
+                "recipe entry {:?} names a workspace but no package",
+                entry.name
+            );
+            let from = match (&entry.package, &entry.path, &entry.userland_index) {
+                (Some(package), None, None) => {
+                    programs.push(Program::Package {
+                        package: package.clone(),
+                        bin: entry.name.clone(),
+                        features: Vec::new(),
+                        workspace: entry.workspace.clone(),
+                    });
+                    continue;
+                }
+                (None, Some(path), None) => Program::Path { path: path.clone() },
+                (None, None, Some(recipe)) => Program::UserlandIndex { userland_index: recipe.clone() },
+                _ => {
+                    bail!("recipe entry {:?} needs one of a package, a path or a userland index", entry.name)
+                }
+            };
+            files.push(BundleFile { name: entry.name.clone(), from, servers: Vec::new() });
         }
         ensure!(programs.first().is_some_and(Program::is_init), "a recipe's second entry is init");
         Ok((programs, files))
@@ -863,9 +894,10 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// The image's recipe is the kernel, `init`, the six servers and the manifest; a recipe that
-    /// does not start with the kernel and `init`, or an entry that is neither a program nor data,
-    /// is refused before anything is built.
+    /// The image's recipe is the kernel, `init`, the servers, beamlet from its own workspace,
+    /// `system.index` and the manifest; a recipe that does not start with the kernel and `init`, an
+    /// entry that is neither a program nor data, or a workspace with no package, is refused before
+    /// anything is built.
     #[test]
     fn the_image_recipe_packs_init_the_servers_and_the_manifest() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -877,11 +909,19 @@ mod tests {
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(bins, ["init", "keyd", "consoled", "bootfsd", "blkd", "netd", "ipd", "fsd"]);
+        assert_eq!(bins, ["init", "keyd", "consoled", "bootfsd", "blkd", "netd", "ipd", "fsd", "beamlet"]);
         assert!(programs[0].is_init());
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].name, "manifest");
-        assert!(matches!(&files[0].from, Program::Path { path } if path == Path::new("image/manifest.json")));
+        let otp = Path::new("userland/otp");
+        assert!(matches!(&programs[8], Program::Package { workspace: Some(w), .. } if w == otp));
+        assert!(matches!(&programs[7], Program::Package { workspace: None, .. }));
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].name, "system.index");
+        let userland = Path::new("image/userland.toml");
+        assert!(
+            matches!(&files[0].from, Program::UserlandIndex { userland_index } if userland_index == userland)
+        );
+        assert_eq!(files[1].name, "manifest");
+        assert!(matches!(&files[1].from, Program::Path { path } if path == Path::new("image/manifest.json")));
 
         let recipe = |text: &str| -> Result<(Vec<Program>, Vec<BundleFile>)> {
             toml::from_str::<Recipe>(text).unwrap().contents()
@@ -896,6 +936,8 @@ mod tests {
         assert!(recipe(&format!("{kernel}{init}{both}")).is_err(), "a program and data at once");
         let neither = "[[entry]]\nname = \"x\"\n";
         assert!(recipe(&format!("{kernel}{init}{neither}")).is_err());
+        let data = "[[entry]]\nname = \"x\"\npath = \"x\"\nworkspace = \"w\"\n";
+        assert!(recipe(&format!("{kernel}{init}{data}")).is_err(), "a workspace with no package");
     }
 
     /// A manifest file's `servers` entries merge by name: one replaces the members it gives in the

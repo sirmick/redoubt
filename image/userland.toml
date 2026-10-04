@@ -1,0 +1,33 @@
+# The userland disk: OTP, Elixir and Redoubt's own Elixir, one object per module, read-only.
+#
+# `./mkimage` packs it into target/image/userland.img with the bench's packer (`testbench
+# --pack-disk`), the one `disk.toml` goes through. First it stages the objects: each module of the
+# applications below, compiled by the pinned toolchain and stripped, as one file named by the
+# SHA-256 of its bytes, and each application's resource the same way; and it writes
+# target/image/system.index, one line per object, `<file> <sha256 hex> <bytes>`, sorted, which
+# `boot.toml` puts in the signed bundle. Then it packs the one partition as a littlefs volume
+# holding those files. beamlet checks each object against the index before it loads it
+# (docs/kernel/boot.md, R75).
+
+# Whole disk, in KiB (a whole number of 512-byte sectors).
+size_kib = 16384
+
+[objects]
+# Each application the shell's idle prompt loads a module of or starts, whole: the shell's own,
+# Elixir's and the OTP applications they name, with Elixir's logger, and erts, whose `prim_file`
+# the file server calls for the prompt's working directory.
+applications = ["erts", "kernel", "stdlib", "compiler", "crypto", "elixir", "logger", "redoubt_shell"]
+# Built here, with MIX_ENV=prod, apart from the development build `./shell` runs.
+mix = ["userland/shell"]
+# The modules beamlet embeds in place of kernel's own (userland/otp/vm/src/vm.rs, EMBEDDED): it
+# loads them before it can read this disk.
+exclude = ["application.beam", "gen_tcp.beam", "ram_file.beam"]
+# The `Docs` chunk goes with the rest, so `h/1` says no documentation is available.
+docs = false
+index = "target/image/system.index"
+
+[[partition]]
+name = "system"
+fs = "littlefs"
+# Emptied and filled with the objects before every pack.
+stage = "target/image/userland"

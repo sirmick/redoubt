@@ -448,11 +448,11 @@ mod machine {
                 };
                 handed.push((item.endpoint.as_str(), minted.handle()));
             }
-            // A volume's range: the badge of its GPT entry + 1 at `blkd`'s endpoint
-            // (servers/blkd.md, "Ranges and badges"), minted again at every start, stamped as
-            // the handed badges are.
+            // A volume's range: the badge of its GPT entry + 1 at the endpoint of its disk's
+            // `blkd` (servers/blkd.md, "Ranges and badges"), minted again at every start, stamped
+            // as the handed badges are.
             if let Some(v) = s.volume.as_ref().and_then(|n| m.volumes.iter().find(|v| &v.name == n)) {
-                let blkd = blkd(m).expect("the check found one blkd");
+                let blkd = blkd(m, v).expect("the check found the volume's blkd");
                 let badge =
                     NonZeroU64::new(v.partition as u64 + 1).expect("the check kept the entry in 0..=255");
                 let Ok(minted) =

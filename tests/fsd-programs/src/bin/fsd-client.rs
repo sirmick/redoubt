@@ -13,6 +13,10 @@
 //! - `quota ENDPOINT`: mints two roots with a quota each; one fills its quota, and the other still writes.
 //! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends an `fsd` built with its test-only
 //!   feature `restart-probe`, and reads the file back through a fresh connection.
+//! - `readonly ENDPOINT FILE`: on a volume `fsd` serves read-only (the userland disk), a create, and a write
+//!   to the object `/boot/system.index` names for `FILE` (read through its `bootfsd` badge), are each
+//!   refused. Its case takes the system's word that the object did not change from beamlet, which loads it
+//!   only if its bytes still hash to the signed bundle's entry.
 //! - `labelled ENDPOINT [OWN PEER]`, `outsider ENDPOINT OWN PEER`: under the volume's labels a file is
 //!   written, and read back unchanged by the next start; without them the attach is refused. With `OWN` and
 //!   `PEER`, the endpoints each receives on and is handed at the other's, the next start sends on `PEER` and
@@ -38,7 +42,7 @@ use redoubt_client::fsd::rename;
 use redoubt_client::{Error, Lend};
 use redoubt_init_programs::Out;
 use redoubt_rt::abi::FOREVER;
-use redoubt_rt::handle::{Endpoint, time_now};
+use redoubt_rt::handle::{Endpoint, sleep, time_now};
 use redoubt_rt::ipc::Event;
 use redoubt_rt::server::ninep::{DMDIR, mode};
 use redoubt_rt::startup::Startup;
@@ -79,6 +83,7 @@ fn run(startup: &Startup) -> u32 {
         (Some("outsider"), Some(at)) => {
             outsider(startup, &mut out, at, args.next().zip(args.next())).map(|()| Ends::Passed)
         }
+        (Some("readonly"), Some(at)) => readonly(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (Some("restart"), Some(at)) => restart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (Some("list"), Some(at)) => list(startup, &mut out, at, args).map(|()| Ends::Passed),
         (Some("reader"), Some(at)) => reader(startup, &mut out, at, args).map(|()| Ends::Said),
@@ -175,6 +180,53 @@ fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> 
         return Err("d is still there after its remove".into());
     }
     out.say("fsd-client wrote, read, renamed and removed\n").map_err(|e| format!("say: {e:?}"))
+}
+
+/// The object `system.index` in `/boot` names for `file`: the line's hash, a file on the userland
+/// disk. `init` pushes the index after it starts the servers, so it waits, for a bounded time.
+fn object_of(startup: &Startup, out: &mut Out, file: &str) -> Result<String, String> {
+    let boot = attach(startup, out, "bootfsd")?;
+    let mut tries = 0;
+    while boot.stat(&mut out.lend, "/system.index").is_err() {
+        if tries == 200 {
+            return Err("no /boot/system.index".into());
+        }
+        tries += 1;
+        sleep(10_000).map_err(|e| format!("sleep: {e:?}"))?;
+    }
+    let index = read_file(&boot, &mut out.lend, "/system.index")?;
+    let index = core::str::from_utf8(&index).map_err(|_| String::from("the index is not UTF-8"))?;
+    let line = index.lines().find(|l| l.split(' ').next() == Some(file));
+    let hash = line.and_then(|l| l.split(' ').nth(1)).ok_or_else(|| format!("the index names no {file}"))?;
+    Ok(format!("/{hash}"))
+}
+
+/// `userland-read-only`: on a read-only volume a create is refused, and so is a write to the
+/// object the index names for `file`, whether at its open or at the write; the object reads back
+/// the same length after.
+fn readonly(startup: &Startup, out: &mut Out, endpoint: &str, file: Option<&str>) -> Result<(), String> {
+    let file = file.ok_or_else(|| String::from("no file named"))?;
+    let object = object_of(startup, out, file)?;
+    let conn = attach(startup, out, endpoint)?;
+    let before = read_file(&conn, &mut out.lend, &object)?;
+    if conn.create(&mut out.lend, "/", "planted", 0o644, mode::OWRITE).is_ok() {
+        return Err("a file was created".into());
+    }
+    for open in [mode::OWRITE, mode::OWRITE | mode::OTRUNC] {
+        let Ok(f) = conn.open(&mut out.lend, &object, open) else { continue };
+        if f.write_at(&mut out.lend, 0, b"!").is_ok() {
+            return Err(format!("a write to {object} was taken"));
+        }
+        f.close(&mut out.lend).map_err(|e| format!("clunk {object}: {e:?}"))?;
+    }
+    if conn.stat(&mut out.lend, "/planted").is_ok() {
+        return Err("planted is there".into());
+    }
+    if read_file(&conn, &mut out.lend, &object)?.len() != before.len() {
+        return Err(format!("{object} reads back another length"));
+    }
+    out.say(&format!("fsd-client: a create and a write to the object of {file} refused\n"))
+        .map_err(|e| format!("say: {e:?}"))
 }
 
 /// `fsd-reboot`: what the first boot writes is there after the reboot, with the same qid paths.

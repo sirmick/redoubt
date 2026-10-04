@@ -92,6 +92,14 @@ It is a steward record, not a file the principal can write.
 - **A project has its own package directory** and profile, so a shared toolchain is installed once
   for its members ([the steward](../servers/steward.md)).
 
+System code is not a package. OTP, Elixir and Redoubt's own Elixir live on the userland disk,
+whole applications, every module of each one the shell's prompt uses, one object per module,
+read-only and immutable, bound to the signed bundle by `system.index` and
+checked object by object before use
+([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)): changing it is a new bundle
+and disk, never an install. Packages live apart from it, on the data disk, and a profile's modules
+resolve only after the system's.
+
 **Open:** none.
 
 ### Trust lists

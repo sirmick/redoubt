@@ -45,6 +45,11 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
 - **Unlabelled.** Every entry carries no labels, so every caller, labelled or not, may read it.
 - **Every byte is already there.** A read never waits; an offset past the end reads nothing. Entries
   never change, so every qid version is 0.
+- **The userland disk's table.** The image's `/boot` carries `system.index`, the userland disk's
+  table, signed with the rest of the bundle: one line per object, `<file> <sha256 hex> <bytes>`, the
+  file the name the VM asks for (`Elixir.Enum.beam`, `elixir.app`), sorted byte-wise, each
+  LF-terminated, and nothing else ([image/README.md](../../image/README.md)); beamlet checks each
+  object against it ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)).
 - **Admission** ([R26 (admission fairness)](serving.md#r26-admission-fairness)): at most 32 open
   fids and 8 minted connections per (account, label set), and per badge for account 0, across at
   most `buckets=N` of those at once, sized to fit its 256 KiB budget; a block with no

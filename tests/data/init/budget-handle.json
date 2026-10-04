@@ -33,7 +33,7 @@
       "program": "blkd",
       "budget": {"pages": "512", "processes": 1, "weight": 1000},
       "devices": [{"device": "disk0", "as": "disk"}],
-      "receives": ["blkd"]
+      "receives": ["blkd"], "args": ["endpoint=blkd"]
     },
     {
       "name": "netd",

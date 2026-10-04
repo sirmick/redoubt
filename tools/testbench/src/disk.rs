@@ -18,6 +18,9 @@ pub const SECTOR: u64 = 512;
 pub struct Recipe {
     /// The whole disk, in KiB (a whole number of sectors).
     pub size_kib: u64,
+    /// For the userland disk, the objects its one partition's stage holds, staged before the
+    /// pack (`userland.rs`).
+    pub objects: Option<crate::userland::Objects>,
     pub partition: Vec<Partition>,
 }
 
@@ -30,6 +33,8 @@ pub struct Partition {
     /// `noise`: the same pseudo-random bytes every time, which no filesystem mounts.
     pub fs: String,
     /// For `littlefs`, the directory whose tree the volume holds, relative to the workspace root.
+    /// A userland disk's (a recipe with `objects`) is where `--pack-disk` stages them, and is left
+    /// out where only the bench packs it, from its own staging.
     pub stage: Option<PathBuf>,
     /// For `littlefs`, files made for the pack in the volume's root, beside the stage's tree.
     pub generated: Option<Generated>,
@@ -63,12 +68,19 @@ impl Recipe {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let recipe: Recipe = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         ensure!(!recipe.partition.is_empty(), "{}: no partition", path.display());
+        // The objects are the partition's stage, staged whole before the pack: nothing beside them.
+        ensure!(
+            recipe.objects.is_none()
+                || matches!(&recipe.partition[..], [p] if p.fs == "littlefs" && p.generated.is_none()),
+            "{}: objects are one littlefs partition's stage, with nothing generated",
+            path.display()
+        );
         for p in &recipe.partition {
             match p.fs.as_str() {
                 "littlefs" => {
                     let (stage, generated) = (p.stage.is_some(), p.generated.as_ref());
                     ensure!(
-                        stage || generated.is_some(),
+                        stage || generated.is_some() || recipe.objects.is_some(),
                         "{}: partition {}: no stage and nothing generated",
                         path.display(),
                         p.name
@@ -169,7 +181,13 @@ pub fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<V
             noise(&mut disk[start..end]);
             continue;
         }
-        let mut staged = match stage.or(p.stage.as_deref()) {
+        let own = stage.or(p.stage.as_deref());
+        ensure!(
+            own.is_some() || p.generated.is_some(),
+            "partition {}: no stage and nothing generated",
+            p.name
+        );
+        let mut staged = match own {
             Some(dir) => tree(&root.join(dir))?,
             None => Vec::new(),
         };
@@ -218,7 +236,7 @@ mod tests {
     }
 
     /// The recipe's disk holds a GPT whose one partition starts with a littlefs superblock, and
-    /// is the recipe's size.
+    /// is the recipe's size; with no stage of its own, only one given.
     #[test]
     fn a_recipe_packs_a_table_and_a_volume_per_partition() {
         let dir = stage("pack");
@@ -231,11 +249,17 @@ mod tests {
         let at = (FIRST_USABLE * SECTOR) as usize;
         assert!(disk[at..at + 4096].windows(8).any(|w| w == b"littlefs"));
         assert!(disk[at + 4096..].iter().any(|b| *b != 0), "the files are past the superblock pair");
+        // A userland disk's recipe may leave its stage out: the bench packs it from its own.
+        let bare: Recipe =
+            toml::from_str("size_kib = 1024\n[[partition]]\nname = \"system\"\nfs = \"littlefs\"\n").unwrap();
+        assert_eq!(pack_disk(&bare, Path::new("/"), Some(&dir)).unwrap().len(), 1024 * 1024);
+        assert!(pack_disk(&bare, Path::new("/"), None).is_err(), "nothing to pack");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A generated directory is its files in the volume's root, beside the stage's tree: all
-    /// empty but the one to read, and none in the stage's place.
+    /// empty but the one to read, and none in the stage's place; never beside the userland
+    /// disk's objects.
     #[test]
     fn a_recipe_can_generate_a_directory_of_files() {
         let recipe = |extra: &str| {
@@ -254,6 +278,18 @@ mod tests {
         );
         assert!(recipe("generated = { files = 10, read = \"f10\" }\n").is_err(), "f10 is not made");
         assert!(recipe("").is_err(), "a littlefs partition holds something");
+        let objects = "[objects]\napplications = []\nindex = \"i\"\n";
+        assert!(recipe(&format!("stage = \"s\"\n{objects}")).is_ok(), "objects are the stage");
+        assert!(recipe(objects).is_ok(), "or the bench stages them, for its own pack");
+        assert!(
+            recipe(&format!("generated = {{ files = 10, read = \"f9\" }}\n{objects}")).is_err(),
+            "nothing generated for the objects"
+        );
+        assert!(
+            recipe(&format!("stage = \"s\"\ngenerated = {{ files = 10, read = \"f9\" }}\n{objects}"))
+                .is_err(),
+            "nor beside their stage"
+        );
         let only = recipe("generated = { files = 10, read = \"f9\" }\n").unwrap();
         let disk = pack_disk(&only, Path::new("/"), None).unwrap();
         assert!(disk.windows(3).any(|w| w == b"f9\n"), "f9 holds its line");

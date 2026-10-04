@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 405
+revision = 410
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -623,8 +623,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "beamlet-redoubt"
   needs = ["BEAM1", "FSD3"]
   body = "Brief: .wash/local/BEAM2-implementer.md (architect-12, rechecked against main 75245a114; ready). Tier A, size L. Branch wp-beam2 from 75245a114, worktree .worktrees/beam2.\n\nThe userland disk: OTP, Elixir and the shell as hash-checked objects on a read-only volume (image/userland.toml packed by testbench --pack-disk, system.index in the staged /boot, named by `public`), served by an fsd handed to beamlet as the named handle fsd:system (endpoint=fsd:system); beamlet reads its modules from that fsd and sits in the image manifest with a budget_pages= at least twice the VM's measured use at the prompt (heap and ETS budget/16, BEAM1's rule); the shell on the UART console. New since FSD3: more than one disk (a volumes `disk` key, range minting at each blkd, every one-disk rule held per disk); a second bench disk on a fixed slot (disk1, bus 5, 0x10006000, irq 6), attached readonly=on; objects named by hash plus system.index, keyed by file name (<module>.beam, <app>.app); whole applications staged (seven, 577 modules). Cases merge over image/manifest.json with [[file]] servers. h/1 docs stripped by default.\n\nR34, ruled by the owner 2026-10-03: one read-only attachment of the userland image per label set (its own device, blkd, volume and fsd), R34 unchanged; one host test; beamlet.md states it as a rule."
-  state = "active"
-  revision = 360
+  state = "done"
+  revision = 410
 
 [[node]]
   id = "BEAM3"
@@ -799,5 +799,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "beamlet-redoubt"
   body = "Owner (2026-10-03): one thread on the non-kernel side holds the buffers; AIO goes through it. Brief: .wash/local/AIO1-implementer.md (architect-14). Tier A (the serving library and the 9P skeleton; the client library), size M+, needs nothing. BEAM3 builds on it. Background: .wash/local/async-ipc-assessment.md.\n\nRuled: the completion side is one hub thread plus one thin waiter per server connection (a long-poll completion call each). Completions by send to a client endpoint are refused: the authority would match a reply's (R1), but the server's send blocks on the client's one thread, which can deadlock with that thread's own send, and any timeout drops a result and breaks R26. Exactly one thread needs a kernel notification object (AIO2, the owner's later choice, S-M, after IPC3); an endpoint set does not do it.\n\nDesign: the hub owns every buffer (by value in, by value out), sends tagged 9P requests (transfers for data; a short send timeout, retried, never lost), and dispatches completions. The serving library parks requests under the connection's admission share; undelivered completions count against it; over the share a request is answered busy; tags at most 256 per connection; Tflush answered once; the completion call's abandonment ends the connection.\n\nAcceptance: host attack tests (a never-polling client, death with requests parked, death between polls found at deadlines, a flush racing a completion, a send flood at WAIT_CAP, tag misuse); the machine case aio-many-reads (64 outstanding reads, 1 hub + 1 waiter, another client served meanwhile); today's one-call 9P unchanged. Pages: serving.md (Multiplexed connections, a new rule R7x, R26/R28 sentences), files.md, SECURITY.md."
-  state = "active"
-  revision = 396
+  state = "reported"
+  revision = 408

@@ -16,6 +16,7 @@ use crate::case::{ALWAYS_FORBIDDEN, Boot, PASSED};
 use crate::peer;
 use crate::ssh;
 use crate::target::Machine;
+use crate::userland::Staged;
 
 /// How long the bench keeps reading the console after the last `expect` (and the sessions),
 /// so that a panic right after the last expected line still fails the case. Cases that end
@@ -178,18 +179,26 @@ fn free_ports(count: usize) -> Result<Vec<u16>> {
 pub const MODERN_VIRTIO: [&str; 2] = ["-global", "virtio-mmio.force-legacy=false"];
 
 /// The virtio-mmio slots the devices sit on, the ones `image/manifest.json` names, whether or not
-/// the case has the other device (docs/testbench.md, "Disks and network cards"). QEMU's `virt`
-/// machine names its eight transports `virtio-mmio-bus.0` to `.7`, bus `i` at `0x10001000 + i *
-/// 0x1000` with interrupt `1 + i`; left to itself it fills them from the top, so a card's slot
-/// would depend on whether a disk came first.
+/// the case has the others (docs/testbench.md, "Disks and network cards"). QEMU's `virt` machine
+/// names its eight transports `virtio-mmio-bus.0` to `.7`, bus `i` at `0x10001000 + i * 0x1000`
+/// with interrupt `1 + i`; left to itself it fills them from the top, so a card's slot would
+/// depend on whether a disk came first.
 pub const NET_BUS: &str = "virtio-mmio-bus.6";
 pub const DISK_BUS: &str = "virtio-mmio-bus.7";
+/// The userland disk's slot: `0x10006000`, interrupt 6.
+pub const USERLAND_BUS: &str = "virtio-mmio-bus.5";
 
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at
-/// `disk`, so no boot sees another's writes, and picks free host ports for the forwards.
-pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forward>)> {
+/// `disk`, so no boot sees another's writes, and picks free host ports for the forwards. The
+/// userland disk is packed beside it from `userland`, its staged objects and what their index
+/// names ([`crate::build::Builder::userland`]), and attached read-only.
+pub fn virtio_devices(
+    boot: &Boot,
+    disk: &Path,
+    userland: Option<&Staged>,
+) -> Result<(Vec<String>, Vec<Forward>)> {
     let mut args = Vec::new();
-    if boot.disk.is_some() || boot.net.is_some() {
+    if boot.disk.is_some() || boot.net.is_some() || boot.userland.is_some() {
         args.extend(MODERN_VIRTIO.iter().map(|a| a.to_string()));
     }
     if let Some(spec) = &boot.disk {
@@ -212,6 +221,26 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
         let file = disk.display().to_string().replace(',', ",,");
         args.extend(["-drive".into(), format!("if=none,format=raw,id=disk0,file={file}")]);
         args.extend(["-device".into(), format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}")]);
+    }
+    if let Some(spec) = &boot.userland {
+        let staged = userland.context("a userland disk with nothing staged")?;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let recipe = crate::disk::Recipe::load(&root.join(&spec.recipe))?;
+        let image = disk.with_extension("userland.img");
+        // The case's damage goes on a copy of the objects, after the index was written.
+        let damaged = disk.with_extension("userland");
+        let stage = if spec.flip.is_some() || spec.remove.is_some() {
+            let (flip, remove) = (spec.flip.as_deref(), spec.remove.as_deref());
+            crate::userland::damaged(&staged.objects, &staged.names, flip, remove, &damaged)?;
+            damaged.as_path()
+        } else {
+            staged.objects.as_path()
+        };
+        std::fs::write(&image, crate::disk::pack_disk(&recipe, &root, Some(stage))?)?;
+        let file = image.display().to_string().replace(',', ",,");
+        // readonly=on: the host refuses every write, so nothing on the box can change the disk.
+        args.extend(["-drive".into(), format!("if=none,format=raw,id=disk1,readonly=on,file={file}")]);
+        args.extend(["-device".into(), format!("virtio-blk-device,drive=disk1,bus={USERLAND_BUS}")]);
     }
     let mut forwards = Vec::new();
     if let Some(net) = &boot.net {
@@ -577,7 +606,7 @@ mod tests {
         let call = CALLS.fetch_add(1, Ordering::Relaxed);
         let disk =
             std::env::temp_dir().join(format!("testbench-qemu-test-{}-{call}.img", std::process::id()));
-        let (args, _) = virtio_devices(&boot(devices), &disk).expect("device arguments");
+        let (args, _) = virtio_devices(&boot(devices), &disk, None).expect("device arguments");
         std::fs::remove_file(&disk).ok();
         std::fs::remove_dir_all(disk.with_extension("peers")).ok();
         args
@@ -674,9 +703,10 @@ mod tests {
     }
 
     /// Each device sits on its fixed slot, alone or with the other: the card on bus 6
-    /// (`0x10007000`, interrupt 7), the disk on bus 7 (`0x10008000`, interrupt 8), as
-    /// `image/manifest.json` names them. A boot proves QEMU puts them there: `init` refuses a
-    /// device that is not where its manifest says (`net-tcp` has no disk, `init-boot` both).
+    /// (`0x10007000`, interrupt 7), the disk on bus 7 (`0x10008000`, interrupt 8), and the
+    /// userland disk on bus 5 (`0x10006000`, interrupt 6), as `image/manifest.json` names them. A
+    /// boot proves QEMU puts them there: `init` refuses a device that is not where its manifest
+    /// says (`net-tcp` has no disk, `init-boot` all three).
     #[test]
     fn devices_sit_on_fixed_slots() {
         let net = format!("virtio-net-device,netdev=net0,bus={NET_BUS}");
@@ -689,7 +719,7 @@ mod tests {
         assert_eq!(devices("[net]\n[disk]\nsize_kib = 64\n"), [disk, net]);
         // The image's manifest names each device on one line.
         let manifest = include_str!("../../../image/manifest.json");
-        for (name, bus) in [("net0", NET_BUS), ("disk0", DISK_BUS)] {
+        for (name, bus) in [("net0", NET_BUS), ("disk0", DISK_BUS), ("disk1", USERLAND_BUS)] {
             let i: u64 = bus.strip_prefix("virtio-mmio-bus.").unwrap().parse().unwrap();
             let line = format!(
                 "{{ \"name\": \"{name}\", \"base\": \"{}\", \"irq\": {}, \"dma\": true }}",
@@ -700,13 +730,47 @@ mod tests {
         }
     }
 
+    /// The userland disk sits on its own slot, bus 5 (`0x10006000`, interrupt 6), beside the
+    /// data disk, attached read-only, and packed from the staged objects with a case's damage on
+    /// a copy: the staged objects stay as the index names them.
+    #[test]
+    fn the_userland_disk_sits_on_its_slot_read_only() {
+        let dir = std::env::temp_dir().join(format!("testbench-qemu-userland-{}", std::process::id()));
+        let (stage, index) = (dir.join("objects"), dir.join("system.index"));
+        let objects = vec![(String::from("lists.beam"), b"FOR1 lists".to_vec())];
+        let names = crate::userland::write(&objects, &stage, &index).unwrap();
+        let staged = Staged { objects: stage.clone(), index, names };
+        let disk = dir.join("boot.img");
+        let case =
+            "[disk]\nsize_kib = 64\n[userland]\nrecipe = \"image/userland.toml\"\nflip = \"lists.beam\"\n";
+        let (args, _) = virtio_devices(&boot(case), &disk, Some(&staged)).unwrap();
+        let drive = format!(
+            "if=none,format=raw,id=disk1,readonly=on,file={}",
+            disk.with_extension("userland.img").display()
+        );
+        assert!(args.windows(2).any(|w| w[0] == "-drive" && w[1] == drive), "{args:?}");
+        let devices: Vec<&String> = args.windows(2).filter(|w| w[0] == "-device").map(|w| &w[1]).collect();
+        assert_eq!(
+            devices,
+            [
+                &format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}"),
+                &format!("virtio-blk-device,drive=disk1,bus={USERLAND_BUS}")
+            ]
+        );
+        assert_eq!(USERLAND_BUS, "virtio-mmio-bus.5");
+        let name = crate::userland::name(b"FOR1 lists");
+        assert_eq!(std::fs::read(stage.join(&name)).unwrap(), b"FOR1 lists");
+        assert_ne!(std::fs::read(disk.with_extension("userland").join(&name)).unwrap(), b"FOR1 lists");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A poke gets a UDP forward from a host port of its own to its guest port, listed with the
     /// TCP forwards; a case without one gets none.
     #[test]
     fn a_poke_gets_a_udp_forward() {
         let case = "[net]\nforward = [8000]\n[net.poke]\nport = 47000\npayload = 'x'\nafter = 'go'\n";
         let disk = std::env::temp_dir().join(format!("testbench-qemu-poke-{}.img", std::process::id()));
-        let (args, forwards) = virtio_devices(&boot(case), &disk).expect("device arguments");
+        let (args, forwards) = virtio_devices(&boot(case), &disk, None).expect("device arguments");
         let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
         let (guest, host) = forwards[1];
         assert_eq!((forwards.len(), forwards[0].0, guest), (2, 8000, 47000));

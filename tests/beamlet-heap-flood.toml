@@ -1,13 +1,15 @@
 description = "The attack: a process of beamlet's VM floods its heap (docs/userland/beamlet.md, \"Limits inside one VM\"). The platform sets the process heap limit to a sixteenth of the VM's budget, so the process is killed in Erlang while the VM still has pages: the module sees it go, the same VM still reads and echoes a typed line, and init's line that beamlet exited with code 0 is the system's verdict that the flood did not end the VM (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# As beamlet-boot, with the flooding module and the OTP modules it needs as public entries, and
+# As beamlet-boot, with the flooding module and the OTP modules it needs on the userland disk, and
 # the budget's pages given to beamlet again as an argument (a program cannot read its budget).
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
     { package = "redoubt-consoled", bin = "consoled" },
     { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-fsd", bin = "fsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
 ]
 timeout_secs = 60
@@ -32,29 +34,12 @@ after = '^\[con [0-9a-f]{16}\] beamlet-heap-flood: type a line$'
 send = "still served after the flood\n"
 
 [[file]]
+name = "system.index"
+from = { userland_index = "tests/data/beamlet/userland.toml" }
+
+[[file]]
 name = "manifest"
 from = { path = "tests/data/beamlet/flood.json" }
 
-[[file]]
-name = "beamlet_flood.beam"
-from = { erlang = "userland/otp/redoubt/tests/erlang/beamlet_flood.erl" }
-
-[[file]]
-name = "io.beam"
-from = { otp = "io" }
-
-[[file]]
-name = "io_lib.beam"
-from = { otp = "io_lib" }
-
-[[file]]
-name = "io_lib_format.beam"
-from = { otp = "io_lib_format" }
-
-[[file]]
-name = "unicode.beam"
-from = { otp = "unicode" }
-
-[[file]]
-name = "lists.beam"
-from = { otp = "lists" }
+[userland]
+recipe = "tests/data/beamlet/userland.toml"

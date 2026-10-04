@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail, ensure};
 use ed25519_compact::{KeyPair, Seed};
@@ -9,6 +10,7 @@ use serde::Deserialize;
 
 use crate::case::{Corruption, HostTests, Program};
 use crate::target::Target;
+use crate::userland::Staged;
 
 pub struct Builder {
     pub workspace: PathBuf,
@@ -16,6 +18,28 @@ pub struct Builder {
     /// makes from them, are copied or written here and nowhere another run writes.
     pub run: PathBuf,
     pub verbose: bool,
+    /// Each userland disk staged in this run, by its recipe ([`Builder::userland`]).
+    pub staged: Mutex<Vec<(PathBuf, Staged)>>,
+}
+
+/// Runs `command` with the pinned Erlang toolchain on the path (`userland/otp/tools/env.sh`),
+/// from `workspace`, and returns what it printed. A VM that crashes writes no `erl_crash.dump`
+/// into the tree.
+pub fn erlang(workspace: &Path, command: &[&str]) -> Result<String> {
+    let output = Command::new("bash")
+        .current_dir(workspace)
+        .env("ERL_CRASH_DUMP", "/dev/null")
+        .args(["-c", ". userland/otp/tools/env.sh && exec \"$@\"", "_"])
+        .args(command)
+        .output()
+        .with_context(|| format!("running {}", command[0]))?;
+    ensure!(
+        output.status.success(),
+        "{} failed: {}",
+        command.join(" "),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Which cargo profile builds a package: the workspace's `release`, or `checked` (Cargo.toml):
@@ -176,6 +200,9 @@ impl Builder {
             }
             Program::Erlang { erlang } => return self.erlc(erlang),
             Program::Otp { otp } => return self.otp_module(otp),
+            Program::UserlandIndex { userland_index } => {
+                return Ok((String::from("system.index"), self.userland(userland_index)?.index));
+            }
             Program::Zeros { zeros } => return self.zeros(*zeros),
             Program::TestProgram(bin) | Program::Bin { bin, .. } => {
                 ("test-programs", bin.as_str(), &[], None)
@@ -190,6 +217,24 @@ impl Builder {
         Ok((bin.to_string(), built))
     }
 
+    /// The userland disk `recipe` packs, staged once in this run: its objects' directory, its
+    /// `system.index` and what the index names (`userland.rs`).
+    pub fn userland(&self, recipe: &Path) -> Result<Staged> {
+        let mut staged = self.staged.lock().unwrap();
+        if let Some((_, done)) = staged.iter().find(|(r, _)| r == recipe) {
+            return Ok(done.clone());
+        }
+        let stem = recipe.file_stem().context("a recipe with no name")?.to_string_lossy();
+        let dir = self.run.join("userland").join(&*stem);
+        let (objects, index) = (dir.join("objects"), dir.join("system.index"));
+        let loaded = crate::disk::Recipe::load(&self.workspace.join(recipe))?;
+        let wanted = loaded.objects.as_ref().with_context(|| format!("{}: no objects", recipe.display()))?;
+        let (names, _) = crate::userland::stage(&self.workspace, wanted, &objects, &index)?;
+        let done = Staged { objects, index, names };
+        staged.push((recipe.to_path_buf(), done.clone()));
+        Ok(done)
+    }
+
     /// A file of `len` zero bytes in this run, named for its length.
     fn zeros(&self, len: u64) -> Result<(String, PathBuf)> {
         let name = format!("zeros-{len}");
@@ -199,25 +244,7 @@ impl Builder {
         Ok((name, path))
     }
 
-    /// Runs `command` with the pinned Erlang toolchain on the path (`userland/otp/tools/env.sh`),
-    /// from the workspace root, and returns what it printed. A VM that crashes writes no
-    /// `erl_crash.dump` into the tree.
-    fn erlang(&self, command: &[&str]) -> Result<String> {
-        let output = Command::new("bash")
-            .current_dir(&self.workspace)
-            .env("ERL_CRASH_DUMP", "/dev/null")
-            .args(["-c", ". userland/otp/tools/env.sh && exec \"$@\"", "_"])
-            .args(command)
-            .output()
-            .with_context(|| format!("running {}", command[0]))?;
-        ensure!(
-            output.status.success(),
-            "{} failed: {}",
-            command.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
+    fn erlang(&self, command: &[&str]) -> Result<String> { erlang(&self.workspace, command) }
 
     /// Compiles the Erlang module at `source` into this run's `erlang/`, and returns the
     /// module's file name and its `.beam`.
@@ -457,8 +484,12 @@ mod tests {
     /// runs every test target natively.
     #[test]
     fn a_miri_case_runs_its_files_under_miri() {
-        let builder =
-            Builder { workspace: PathBuf::from("/w"), run: PathBuf::from("/w/run"), verbose: false };
+        let builder = Builder {
+            workspace: PathBuf::from("/w"),
+            run: PathBuf::from("/w/run"),
+            verbose: false,
+            staged: Default::default(),
+        };
         let args = |host: &HostTests| {
             let cargo = builder.test_command(host);
             let miriflags = cargo.get_envs().find(|(k, _)| *k == "MIRIFLAGS").and_then(|(_, v)| v);
@@ -479,7 +510,12 @@ mod tests {
     fn zeros_are_a_file_of_that_length_in_the_run() {
         let run = std::env::temp_dir().join(format!("testbench-zeros-{}", std::process::id()));
         std::fs::create_dir_all(&run).unwrap();
-        let builder = Builder { workspace: PathBuf::from("/w"), run: run.clone(), verbose: false };
+        let builder = Builder {
+            workspace: PathBuf::from("/w"),
+            run: run.clone(),
+            verbose: false,
+            staged: Default::default(),
+        };
         let (name, path) = builder.zeros(5000).unwrap();
         assert_eq!(name, "zeros-5000");
         assert!(path.starts_with(&run));
@@ -609,8 +645,12 @@ mod tests {
             .lines()
             .find_map(|l| Some(l.strip_prefix("host: ")?.to_string()));
         let target = Target { name: "host", triple: host.unwrap().leak(), machine: Err("a fixture") };
-        let run =
-            |name: &str| Builder { workspace: workspace.clone(), run: workspace.join(name), verbose: false };
+        let run = |name: &str| Builder {
+            workspace: workspace.clone(),
+            run: workspace.join(name),
+            verbose: false,
+            staged: Default::default(),
+        };
         let (a, b) = (run("run-a"), run("run-b"));
         let build = |builder: &Builder, feature: &str| {
             builder.binary(&target, "fixture", None, &[feature.to_string()], Profile::Release).unwrap()

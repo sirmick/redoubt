@@ -1,6 +1,10 @@
 {
   "devices": [
-    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false}
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "disk1", "base": "268460032", "irq": 6, "dma": true}
+  ],
+  "volumes": [
+    {"name": "system", "partition": 0}
   ],
   "servers": [
     {
@@ -26,12 +30,27 @@
       "args": ["buckets=4"]
     },
     {
+      "name": "blkd",
+      "program": "blkd",
+      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "devices": [{"device": "disk1", "as": "disk"}],
+      "receives": ["blkd"], "args": ["endpoint=blkd"]
+    },
+    {
+      "name": "fsd:system",
+      "program": "fsd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "volume": "system",
+      "receives": ["fsd:system"],
+      "args": ["endpoint=fsd:system", "buckets=4"]
+    },
+    {
       "name": "beamlet",
       "program": "beamlet",
       "budget": {"pages": "4096", "processes": 1, "weight": 100},
-      "handed": [{"endpoint": "bootfsd", "badge": "7"}],
+      "handed": [{"endpoint": "bootfsd", "badge": "7"}, {"endpoint": "fsd:system", "badge": "7"}],
       "args": ["budget_pages=4096", "beamlet_boot"]
     }
   ],
-  "public": ["beamlet_boot.beam", "io.beam"]
+  "public": ["system.index"]
 }

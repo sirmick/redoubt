@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 #
-# mkimage -- build the signed boot bundle from image/boot.toml and the disk image from
-# image/disk.toml into target/image/.
+# mkimage -- build the signed boot bundle from image/boot.toml, the userland disk from
+# image/userland.toml and the data disk from image/disk.toml into target/image/.
 #
 # Usage: ./mkimage [--arch rv32|rv64]
 #
 #   target/image/redoubt.bundle   signed "signature || ustar" archive the loader verifies: the
-#                                 kernel, init, the servers and the boot manifest
+#                                 kernel, init, the servers, beamlet, system.index and the
+#                                 boot manifest
+#   target/image/userland.img     raw virtio-blk disk, attached read-only: a GPT, then one littlefs
+#                                 volume of OTP, Elixir and the shell, one object per module named
+#                                 by its SHA-256 (target/image/userland/)
+#   target/image/system.index     the userland disk's table, `<file> <sha256> <bytes>` per line,
+#                                 the bytes the bundle carries
 #   target/image/stage/           the tree the disk's data volume holds; put files here first
 #   target/image/disk.img         raw virtio-blk disk: a GPT, then the data partition as a
 #                                 littlefs volume written by fsd's own code
+#
+# The image needs 1 GiB of RAM (QEMU -m 1G): the shell's beamlet is budgeted twice what its VM
+# uses at the prompt, which a smaller machine's system budget does not hold.
 #
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -19,7 +28,7 @@ while (($#)); do
     case "$1" in
         -a|--arch)   arch="${2:?--arch needs rv32 or rv64}"; shift 2 ;;
         --arch=*)    arch="${1#*=}"; shift ;;
-        -h|--help)   sed -n '2,12p' "$0"; exit 0 ;;
+        -h|--help)   sed -n '2,22p' "$0"; exit 0 ;;
         *) echo "mkimage: unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -33,6 +42,11 @@ cargo run --quiet -p testbench -- --arch "$arch" --run --print-only --recipe ima
 
 cp -f target/testbench/last/interactive.tar target/image/redoubt.bundle
 echo "==> boot bundle: target/image/redoubt.bundle"
+
+# The userland disk, its objects staged and system.index written first; the bundle above staged
+# the same objects, deterministically, for the system.index it signed.
+cargo run --quiet -p testbench -- --pack-disk image/userland.toml target/image/userland.img
+echo "==> userland disk: target/image/userland.img (index target/image/system.index)"
 
 # The same packer a case's `[disk] recipe` boots: the table by blkd's builder, each volume by fsd's.
 cargo run --quiet -p testbench -- --pack-disk image/disk.toml target/image/disk.img

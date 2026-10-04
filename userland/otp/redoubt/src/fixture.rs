@@ -28,7 +28,7 @@ use redoubt_rt::server::ninep::{
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::startup::{Startup, StartupBuilder};
 
-use crate::{Modules, Threads};
+use crate::{Modules, Threads, Unloaded};
 
 /// The badge the input thread's messages come with, as `consoled`'s interrupt thread's do.
 const INPUT: u64 = 1;
@@ -82,11 +82,12 @@ impl Threads for HostThreads {
 pub struct Dirs(pub Vec<PathBuf>);
 
 impl Modules for Dirs {
-    fn load(&mut self, file: &str) -> Option<Vec<u8>> {
+    fn load(&mut self, file: &str) -> Result<Vec<u8>, Unloaded> {
         if file.is_empty() || file.contains(['/', '\\', '\0']) || file.starts_with('.') {
-            return None;
+            return Err(Unloaded::Absent);
         }
-        self.0.iter().map(|dir| dir.join(file)).find(|p| p.is_file()).and_then(|p| std::fs::read(p).ok())
+        let found = self.0.iter().map(|dir| dir.join(file)).find(|p| p.is_file());
+        found.and_then(|p| std::fs::read(p).ok()).ok_or(Unloaded::Absent)
     }
 }
 

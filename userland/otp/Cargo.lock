@@ -113,6 +113,7 @@ dependencies = [
  "redoubt-client",
  "redoubt-fake-kernel",
  "redoubt-rt",
+ "sha2",
 ]
 
 [[package]]

@@ -153,7 +153,9 @@ Everything the VM gets from outside comes through the `Platform` trait
   looked for through `load_module` (the system bundle) first, whatever the code path holds, and
   only then in the code path's directories in order, those added with `code:add_patha/1` too
   ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). Unlike BEAM,
-  no directory shadows a system module ([packages](packages.md#profiles-and-upgrades)). Residual:
+  no directory shadows a system module ([packages](packages.md#profiles-and-upgrades)). On
+  Redoubt a system module found by name is the one the signed bundle names, byte for byte
+  ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). Residual:
   the bundle's protocols are not consolidated when it is built, so a protocol consolidated in a
   session's own directory is not used and protocol dispatch stays the slower, unconsolidated kind;
   behaviour is the same. Code in the VM can also load any bytes it holds with
@@ -270,7 +272,7 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: files, programs, `/net` and the natives are not built, and the modules are read from `/boot` unchecked · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood
+Status: built · partly tested: files, programs, `/net` and the natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is
 
 On Redoubt, beamlet is a native program whose `Platform` is written against the system: thin
 adapters over the client library ([native programs](native.md#the-client-library)) for the
@@ -283,7 +285,7 @@ namespace, files, the console and launching, and the kernel's calls for the rest
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
-| `load_module`, `load_app` | looks names up in the boot bundle (`/boot`, served by `bootfsd`) and, from M5 (persist, install, share), the principal's profile ([packages](packages.md)), never in the session's writable namespace; this decides which module a name finds, not what code may run |
+| `load_module`, `load_app` | looks the file the name asks for (`Elixir.Enum.beam`, `elixir.app`) up in `system.index`, read from `/boot` (served by `bootfsd`) and parsed strictly at start; reads the object it names, `/<sha256 hex>`, whole from the userland disk's `fsd` (`fsd:system`), hashes it, and gives the loader only bytes that match ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)); from M5 (persist, install, share), the principal's profile too ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
 | `files` | the client library's `file`: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
 | `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)) |
 
@@ -295,9 +297,17 @@ before the change; a caller that wants to be told of a change uses the parked `r
 ([the shell](shell.md)).
 
 On the machine, beamlet is the program `beamlet`, started like any other with a console, a
-budget and a connection to `bootfsd`. It runs one scheduler thread until several harts
+budget, a connection to `bootfsd` and one to the userland disk's `fsd`, each a named handle
+(`bootfsd`, `fsd:system`). It runs one scheduler thread until several harts
 ([several harts](../plan/m2-usable-shell.md#several-harts)), and starts its threads with the
 runtime's `thread::spawn`.
+
+If the module it is told to start cannot load, it says why on its console and waits without
+exiting: a tampered disk must not become a restart loop that reboots the machine.
+
+A confined boot runs no labelled beamlet: beamlet reads `system.index` through `bootfsd`, one
+instance a labelled domain may not share with the unlabelled ones
+([R34 (confined placement)](../servers/init.md#r34-confined-placement)).
 
 The timer's counter frequency is not needed: `time_now`'s microseconds serve the clock and
 `idle`'s deadlines (bench:beamlet-console).
@@ -352,9 +362,14 @@ binding cannot drift from the server. Above the natives and the generated calls,
 hand-written module gives what is idiomatic and adds no authority: `Redoubt.Namespace`,
 `Redoubt.Budget` and `Redoubt.Process` over the natives, `Redoubt.Keys` over `keyd`'s calls.
 
-**Open:** where the Elixir modules live: a Mix package versioned with the system and loaded from
-the boot bundle, with only what the VM needs at boot embedded in it (recommended), or all embedded
-in the VM.
+The Elixir modules live on the userland disk, one object per module, bound to the bundle by
+`system.index` ([R75](../kernel/boot.md#r75-verified-userland)); only what the VM needs before it
+can read the disk is embedded in it: its own console server, code and kernel modules
+(`beamlet_io`, `beamlet_code`, `beamlet_kernel`, `beamlet_port`, `beamlet_tcp`) and its
+stand-ins for `application`, `gen_tcp` and `ram_file`
+([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `EMBEDDED`).
+
+**Open:** none.
 
 ### Screen natives
 

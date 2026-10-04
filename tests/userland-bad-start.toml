@@ -1,0 +1,32 @@
+description = "The attack: one byte flipped in the userland disk's object for the start module, Elixir.Redoubt.Shell (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/kernel/boot.md, R75). beamlet checks it before the VM runs anything, says why on its console and parks: it does not exit, so init neither restarts it nor reboots the machine, and the rest of the boot goes on. The verdict is beamlet's check against the signed bundle's index and init's lines (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
+# the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 400
+# beamlet reads the index once init has pushed it and sealed bootfsd; init's last line may come
+# before or after its check, so only the parked line is ordered after the push.
+expect = [
+    '^init: 1 public entries pushed to bootfsd, and sealed$',
+    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell not loaded: its object does not match system.index; parked$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted beamlet',
+    'init: rebooting',
+    'Redoubt shell, on Elixir',
+]
+
+[userland]
+recipe = "image/userland.toml"
+flip = "Elixir.Redoubt.Shell.beam"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/fsd/stage"
+
+[net]
+
