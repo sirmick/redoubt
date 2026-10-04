@@ -15,6 +15,9 @@ govern the session; the tenets govern the pages. Read them fresh: merged does no
 
 ## Set up
 
+0. On a fresh clone, or a checkout that may be behind, run `.wash/restore.sh` first: it brings
+   `main`, `.wash/local/` and the package worktrees to the saved state
+   ([saving and resuming](SWARM.md#saving-and-resuming)).
 1. `workspace_get({"view":"about"})`, then `workspace_get({})`. Require API 4 (the plan graph and
    QA thread files). Reuse a Redoubt workspace that is already open; do not dismantle another
    workspace or duplicate the Architect.
@@ -70,7 +73,7 @@ Heavy tests and output limits are in [SWARM](SWARM.md#cost).
 ## Package residents
 
 Before launching a package, check that its node's needs are done, and create its worktree under
-`.worktrees/<package>` (listed in `.git/info/exclude`) on `wp-<package>`. Launch its members in
+`.worktrees/<package>` (ignored by `.gitignore`) on `wp-<package>`. Launch its members in
 one `workspace_configure` patch, each with `node:"<package>"`, `lifetime:"resident"`,
 `can_spawn:false`, `subagents:"deny"`, the worktree as `cwd`, and role `implementer` or
 `reviewer`; member names are just the role ("Implementer", "Red team", "Simplifier", "Editor").
@@ -120,6 +123,8 @@ work, use blanket git staging in a shared worktree, restart Wash or replace live
   the orchestrator and any working member, then a `workspace_configure` patch sets it active.
 - After a backend restart, recovered members are paused: resume them deliberately. Reconcile
   uncertain deliveries before `message_retry`, because their effects may already exist.
-- Only on a requested teardown, call `workspace_end` (with `confirm:true` while nodes are open),
-  then commit `.wash/plan.toml` and `.wash/qa/` in one commit. Teardown is not permission to
-  restart Wash or discard worktrees.
+- Before any pause the owner announces, and at the end of a working day, save the work
+  ([saving and resuming](SWARM.md#saving-and-resuming)): handoffs, WIP commits on the package
+  branches, then `.wash/save.sh`.
+- Only on a requested teardown, save the work, then call `workspace_end` (with `confirm:true`
+  while nodes are open). Teardown is not permission to restart Wash or discard worktrees.

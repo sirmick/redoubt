@@ -22,7 +22,7 @@ only what exists nowhere else, and links to the book for the rest.
 | the order of the work, and its state | the plan graph, `.wash/plan.toml` | Wash, through `plan_set` and `plan_accept` |
 | the discussion behind a decision | `.wash/qa/<thread>.md`, one file per thread, kept for good | Wash |
 | a package's acceptance evidence | the trailers on its merge commit, from `plan_accept` | Wash, committed by the orchestrator |
-| handoffs, plans, scratch | `.wash/local/`, never committed | members |
+| handoffs, briefs, reports, scratch | `.wash/local/`, never on `main`; saved to the `wash-local` branch ([saving and resuming](#saving-and-resuming)) | members |
 
 A plan node's body is a link to its plan step or its `docs/todo/` pages, never a restatement of
 them, and a resolved thread ends with a link to the page where its rule was written.
@@ -336,9 +336,21 @@ paragraph, stages those files in the merge, and ends the package's members.
   package's merge commit carries the trailers `plan_accept` returns (`Plan-Node`, `QA`, `Gates`
   and `Reviewed-by`), the one place process names appear; and the orchestrator adds the owner's
   sign-off at merge (`git rebase --signoff` on the branch, `git commit -s` on the merge).
-- `.wash/plan.toml` and `.wash/qa/` are committed only with a package's merge, or in one commit
-  when the owner parks or ends the workspace. Nothing else commits them.
-- Nobody pushes without the owner's word.
+- `.wash/plan.toml` and `.wash/qa/` are committed only with a package's merge, or in one `plan:`
+  commit when the work is saved ([saving and resuming](#saving-and-resuming)), parked or ended.
+  Nothing else commits them.
+- **Pushing finished work.** The owner has given standing permission: the orchestrator pushes
+  `main` after every merge, and after a `plan:` commit. Only fast-forward: fetch first, and push
+  only when `origin/main` is an ancestor of `main`. Never force-push `main`; a history rewrite
+  needs the owner's word each time ([history-rewrite.md](history-rewrite.md)). Never push a WIP
+  commit, a fix-up or a half-done package to `main`: unfinished work lives on its `wp-` branch.
+  After a merge, delete the package's branch locally and on origin
+  (`git push origin --delete wp-<package>`); its commits stay in `main` as the merge's second
+  parent.
+- **Pushing work in progress.** A package's `wp-` branch is pushed whenever the work is saved,
+  with WIP commits if it is mid-step; they are folded into the owning commits before review. A
+  rebased branch is pushed with `--force-with-lease` and only by the orchestrator, after checking
+  that nobody else's work is on it. Members never push.
 - **Handoff** at about 700K tokens of context (Wash warns the orchestrator at `context_warn`): the
   member finishes and commits its current step, writes its handoff with `member_update {handoff}`
   (state, next steps, traps, open questions; Wash keeps it in `.wash/local/`, out of git), reports
@@ -346,6 +358,36 @@ paragraph, stages those files in the merge, and ends the package's members.
   reading list of one example of the work and the entries for its next step: never the whole plan.
   A reviewer hands off between rounds, never during one.
 - A member never ends a turn without a report or a waiting status, and never polls.
+
+## Saving and resuming
+
+The work is saved so it can stop at any moment and continue from another clone. Everything that
+must survive is on origin: `main` (the merged work, the plan and the QA threads), one `wp-`
+branch per package in progress, and the `wash-local` branch (`.wash/local/`: briefs, reports,
+rulings, handoffs and the bench's helper scripts). Two things are not in git and do not travel:
+the live Wash workspace (members, assignments, the inbox), which is rebuilt from the plan and the
+handoffs, and the orchestrator's own memory, which lives with the agent.
+
+**Saving** (when the owner asks, before a pause, and at the end of every working day):
+1. Every working member writes and registers its handoff (`member_update {handoff}`), as at the
+   handoff mark; a member waiting with nothing in flight says so in one line instead.
+2. Each package worktree's uncommitted work becomes a WIP commit on its branch. Nothing is
+   stashed.
+3. `.wash/save.sh` commits `.wash/plan.toml` and `.wash/qa/` on `main` as one `plan:` commit if
+   they changed, pushes `main` and every `wp-` branch (fast-forward only; it refuses a dirty
+   worktree or a diverged branch), and snapshots `.wash/local/`'s working files onto
+   `wash-local` (files under a megabyte; console captures and logs stay behind). Run it with
+   `--dry-run` first to see what it will do.
+4. The orchestrator reports the commits pushed and anything `save.sh` refused.
+
+**Resuming from a clone** (or a stale checkout):
+1. `.wash/restore.sh` fast-forwards `main`, restores `.wash/local/` from `wash-local` (never
+   over a newer file), and makes a worktree at `.worktrees/<package>` for every unmerged
+   `wp-` branch on origin.
+2. The machine is prepared as [PROJECT.md](PROJECT.md#environment-preflight) says, and the
+   orchestrator sets up the workspace ([PROJECT.md](PROJECT.md#set-up)).
+3. Each package in progress gets a fresh implementer launched with `handoff_from` its last
+   member, whose handoff is in `.wash/local/handoffs/`; its WIP commits are folded first.
 
 ## Cost
 

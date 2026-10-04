@@ -33,6 +33,11 @@ libs/*/fuzz/corpus/
 libs/*/fuzz/artifacts/
 libs/*/fuzz/target/
 
+# Wash: package worktrees, and the workspace's local state (saved to the wash-local branch by
+# .wash/save.sh, never committed on main)
+/.worktrees/
+/.wash/local/
+
 # Editors / misc
 *~
 .vs

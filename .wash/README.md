@@ -10,7 +10,8 @@ This directory is the project's process: how Redoubt is built, by whom, and the 
 | `workspace.toml` | the workspace definition Wash loads | the owner |
 | `plan.toml` | the plan graph: packages, their order and state | Wash only |
 | `qa/<thread>.md` | one file per question: the discussion behind each decision | Wash only |
-| `local/` | handoffs, plans, scratch; never committed | members |
+| `local/` | handoffs, briefs, reports, scratch; never on `main`, saved to the `wash-local` branch | members |
+| `save.sh`, `restore.sh` | push the whole state of the work, and bring a clone back to it ([saving and resuming](SWARM.md#saving-and-resuming)) | the owner |
 | [history-rewrite.md](history-rewrite.md), `history-rewrite.tsv` | the one rewrite of the history, and how to check it | the owner |
 
 ## Where to start
