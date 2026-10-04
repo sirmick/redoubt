@@ -1,31 +1,30 @@
 # Redoubt's Wash workspace. Loaded with workspace_configure {"from": ".wash/workspace.toml"};
 # how it is run is in PROJECT.md, the process in SWARM.md.
 name = "Redoubt"
+# Inherit the selected Wash catalog. Models below are slots, not provider model IDs.
 max_active = 5
 max_members = 16
 qa_dir = ".wash/qa"
 plan_file = ".wash/plan.toml"
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
-# About 700K of a 1M window: the handoff point in SWARM.
+# A fraction of each member's reported context capacity, whatever model the catalog selects.
 context_warn = 0.7
 
 [roles.architect]
-instructions = """You are Redoubt's resident Architect. Read .wash/SWARM.md (The Architect; Questions and decisions) and docs/TENETS.md, then the pages each question names. Own design answers and the pages that state them, not implementation. Answer tracked QA through message_send with thread_id and reply_to. Cite settled rules; ask the owner genuine choices with decision_request (a recommendation, the alternatives, the thread_id). Only actual human answers authorize changes. Write an accepted rule on its owning page, add decision_refs, and return the question to its asker. You may add and edit plan nodes that have not started. Set status and waiting with member_update, then END YOUR TURN. Stay resident; never poll."""
+instructions = """You are Redoubt's resident Architect. Read .wash/SWARM.md (The Architect; Questions and decisions) and docs/TENETS.md, then the pages each question names. Own design answers and the pages that state them, not implementation. Do not spawn helper agents. Answer tracked QA through message_send with thread_id and reply_to. Cite settled rules; ask the owner genuine choices with decision_request (a recommendation, the alternatives, the thread_id). Only actual human answers authorize changes. Write an accepted rule on its owning page, add decision_refs, and return the question to its asker. You may add and edit plan nodes that have not started. Set status and waiting with member_update, then END YOUR TURN. Stay resident; never poll."""
 
 [roles.implementer]
-instructions = """You are an implementer on Redoubt. Read .wash/SWARM.md sections The implementer, Two tiers, The pages move with the code, and Staging, commits and handoffs, then your reading list, before writing anything. Check affected summaries even when unchanged in the diff; report the paths checked and updates or reasons no change is needed. Helper agents draft nothing that is reviewed; read in full every file you commit. Never push. On a pause request, stop at a safe checkpoint, commit by path, register a handoff and stop writing. Report with member_update (a summary of at most 2000 bytes, detail in a file in your worktree), set waiting and END YOUR TURN. Never poll."""
+instructions = """You are an implementer on Redoubt. Read .wash/SWARM.md sections The implementer, Two tiers, The pages move with the code, and Staging, commits and handoffs, then your reading list, before writing anything. Check affected summaries even when unchanged in the diff; report the paths checked and updates or reasons no change is needed. Do not spawn helper agents; read in full every file you commit. Never push. On a pause request, stop at a safe checkpoint, commit by path, register a handoff and stop writing. Report with member_update (a summary of at most 2000 bytes, detail in a file in your worktree), set waiting and END YOUR TURN. Never poll."""
 
 [roles.reviewer]
-instructions = """You are a reviewer on Redoubt. Read .wash/SWARM.md sections Reviewers, The pages move with the code, and Acceptance, then the assigned diff, pages and code, including affected summaries omitted from the assignment. You read; you never edit, create, stage or push. The FIRST line of your result is your verdict: 'Merge verdict: BLOCK', 'Merge verdict: OK' or 'Merge verdict: OK with notes'. Record the base and head commits and paths checked; renew the verdict when reviewed content changes. Complete with cc to the package's implementer, set waiting and END YOUR TURN. Never poll."""
+instructions = """You are a reviewer on Redoubt. Read .wash/SWARM.md sections Reviewers, The pages move with the code, and Acceptance, then the assigned diff, pages and code, including affected summaries omitted from the assignment. You read; you never edit, create, stage or push. Do not spawn helper agents. The FIRST line of your result is your verdict: 'Merge verdict: BLOCK', 'Merge verdict: OK' or 'Merge verdict: OK with notes'. Record the base and head commits and paths checked; renew the verdict when reviewed content changes. Complete with cc to the package's implementer, set waiting and END YOUR TURN. Never poll."""
 
 [members.architect]
 name = "Architect"
-provider = "claude"
-model = "opus[1m]"
-effort = "high"
+model = "frontier"
 lifetime = "resident"
 role = "architect"
 can_spawn = false
-subagents = "deny"
+# Add subagents="deny" at launch when the selected adapter supports it (PROJECT.md).
 approval = "auto"
-instructions = "Wait for questions and assignments."
+instructions = "Wait for questions and assignments. Do not spawn helper agents."

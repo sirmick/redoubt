@@ -38,14 +38,20 @@ them, and a resolved thread ends with a link to the page where its rule was writ
 | Simplifier | light | reviews for what can be deleted or made simpler without losing a rule, and for any growth of the trusted computing base the pages did not require |
 | Editor | light | checks that the code and the pages it cites agree, that every `SAFETY:` justification is true of the code, that names and paths are spelled the same everywhere, and that comments and pages keep the book's voice, vocabulary and links with no process leftovers |
 
-**Tiers** name what a member is for, not a model. Cost matters: every call re-sends a member's whole
-context, so the cheapest capable tier is used.
+**Tiers** name what a member is for. They map to Wash catalog slots; the owner chooses the
+catalog in Wash, where providers, model IDs, connections and effort settings live. Redoubt does
+not pin those choices. Use the least expensive slot capable of the assignment.
 
-| Tier | Model and thinking |
-| --- | --- |
-| `frontier` | the strongest model the owner pays for (Claude Opus), high thinking |
-| `workhorse` | the same model (Claude Opus), low thinking; medium for kernel commits and merge-gate reviews |
-| `light` | an efficient everyday model (Claude Sonnet), low thinking |
+| Tier | Catalog slot | Work |
+| --- | --- | --- |
+| `frontier` | `frontier` | architecture, difficult design decisions and orchestration |
+| `workhorse` | `coding` | implementation and red-team review |
+| `light` | `small` | bounded editing and simplification review |
+
+Kernel changes and merge reviews need careful reasoning: use the coding slot's configured
+effort, or an offered higher setting when the task needs it. Escalate to `frontier` when the
+work exceeds that slot's capability. The launch report names the resolved settings;
+[PROJECT.md](PROJECT.md#models-and-catalogs) covers selection and switching.
 
 ### The orchestrator
 
@@ -88,6 +94,7 @@ context, so the cheapest capable tier is used.
 
 Builds exactly one package and nothing else, and does not break these rules:
 1. **One package, one worktree, one branch.** No other package's files.
+   Do not spawn helper agents; the orchestrator assigns the work and review panel.
 2. **Stage only the paths the package delivers,** and commit them on the package branch in small
    groups: never more than about 50K tokens of uncommitted work, never `git add -A` or
    `git commit -a`, never git against the shared checkout. Reviewers read the branch's commits.
@@ -121,6 +128,7 @@ the documentation check; design problems found; open risks; the branch and state
 ### Reviewers
 
 One angle each, read-only: a reviewer reports findings and edits, creates and stages nothing.
+Do not spawn helper agents; report the assigned review yourself.
 
 - **Scoped to the diff.** Only concrete, current issues the diff causes or makes reachable, each
   backed by the source, a test or reproduction, or a contradiction with a page. The diff includes
@@ -182,7 +190,7 @@ capabilities are Elixir or Rust and Tier A, because they answer yes above.
 | | Tier A | Tier B |
 | --- | --- | --- |
 | Design questions | the Architect, before code | the page's Open list; the Architect only if the package decides one |
-| Panel | red team, simplifier, editor; red at medium for the merge gate | one reviewer: the red team at low if the diff touches any question above, else the editor |
+| Panel | red team, simplifier, editor; red uses the coding slot with careful reasoning | one reviewer: the red team if the diff touches any question above, else the editor |
 | Tests | attack cases with system verdicts, mutations where the model covers it | host tests under beamlet, plus one end-to-end bench case |
 | Rounds | its own rounds until OK | batched with other Tier B packages; merged on green with one OK |
 | Gates | the full bench, rv32, the unsafe ratchet, the size budget, the docs checker | the package's cases, the docs checker |
@@ -260,9 +268,9 @@ flowchart TB
     subgraph PKG["package worktree"]
         IMPL["implementer builds exactly one package:\ncode, attack cases with system verdicts,\npages in the same commit as their tests"]
         GATES{"gates: whole bench both widths,\nrv32 compiles, unsafe ratchet,\nsize budget, docs checker"}
-        RED["red team (Opus): a rule or invariant\nviolated, a label boundary crossed,\na verdict the attacker could forge"]
-        SIMP["simplifier (Sonnet): what can be deleted,\nwhat duplicates, the one obvious way"]
-        ED["editor (Sonnet): pages say what the code\ndoes, SAFETY comments true, names agree,\nno process leftovers"]
+        RED["red team: a rule or invariant\nviolated, a label boundary crossed,\na verdict the attacker could forge"]
+        SIMP["simplifier: what can be deleted,\nwhat duplicates, the one obvious way"]
+        ED["editor: pages say what the code\ndoes, SAFETY comments true, names agree,\nno process leftovers"]
         FOLD["logical commits, rebase with sign-off;\nrecord final base and head"]
     end
     OWNER -- "asks for development" --> CUT
@@ -403,7 +411,9 @@ checking nobody else's work is on it. Never use that exception for `main`.
 - **Push after a merge or a saved `plan:` commit** only after the [publishing](#publishing) check.
   Save unfinished work on its `wp-` branch, with WIP commits if mid-step; fold them before final
   review. Follow the same publishing rules for branch cleanup and rebased branches.
-- **Handoff** at about 700K tokens of context (Wash warns the orchestrator at `context_warn`): the
+- **Handoff** at `context_warn` of the member's reported context capacity (currently 70%; never
+  assume a fixed token count from its model name). If capacity is unavailable, use bounded
+  assignments and hand off at task checkpoints before context becomes a problem. The
   member finishes and commits its current step, writes its handoff with `member_update {handoff}`
   (state, next steps, traps, open questions; Wash keeps it in `.wash/local/`, out of git), reports
   and stops. The orchestrator ends it and launches a fresh member with `handoff_from`, and a

@@ -26,11 +26,19 @@ govern the session; the tenets govern the pages. Read them fresh: merged does no
    ([saving and resuming](SWARM.md#saving-and-resuming)); reconcile any refusal without discarding
    local work. Verify each existing worktree's branch against its saved remote head too: the
    script creates missing worktrees, but does not advance existing package branches.
-2. `workspace_configure({"from":".wash/workspace.toml","workspace":{"name":"Redoubt","project_root":"<absolute project root>"}})`.
+2. On a **new workspace**, use
+   `workspace_configure({"from":".wash/workspace.toml","workspace":{"name":"Redoubt","project_root":"<absolute project root>"}})`.
    The file holds the limits, `qa_dir`, `plan_file`, the legend, `context_warn`, the role
-   instructions and the Architect. On a new workspace, `qa_dir` resumes the threads in
-   `.wash/qa/` and `plan_file` resumes the plan in `.wash/plan.toml`. Inspect every `launches`
-   outcome.
+   instructions and the Architect. `qa_dir` resumes the threads in `.wash/qa/` and `plan_file`
+   resumes the plan in `.wash/plan.toml`.
+   On an **existing workspace**, compare its settings with the file and patch the workspace
+   fields and role definitions that need updating, without `from` or resubmitting its existing
+   members. Wash rejects a live member's changed definition; preserve that Architect and its
+   settings. If there is no Architect, add one from the file; a failed launch with no session
+   may take a corrected definition under its old key. Replacing an existing session requires
+   its handoff and a new key as described below. Updated role definitions apply to new members.
+   Preview each patch first, using the selected catalog and supported launch settings
+   ([models and catalogs](#models-and-catalogs)). Inspect every `launches` outcome.
 3. `plan_get`, and reconcile it with the plan page and git: a node the page or the history
    contradicts is fixed before anything starts. Read the orchestrator and active packages'
    handoffs; verify which commits have review and test evidence and which decisions remain open.
@@ -42,23 +50,47 @@ The owner runs Redoubt with `approval:"auto"` on every member that can write. Wa
 only from an orchestrator that is itself auto-approved; if setup reports otherwise, ask the owner
 rather than dropping it.
 
-## Models
+## Models and catalogs
 
-Each member's launch carries its tier's provider, model and effort ([SWARM](SWARM.md#roles)). The
-workspace's catalog is `anthropic-budget`, and every launch names `provider: "claude"` and the
-model ID from `about.caller.config_options`:
+The repository specifies roles and Wash slots ([SWARM](SWARM.md#roles)), not vendors or model
+IDs. `workspace.toml` deliberately omits a catalog and provider; the Architect requests
+`model: "frontier"`. Implementers and red-team reviewers request `coding`; editors and
+simplifiers request `small`. A curated catalog in Wash maps those slots to providers, models,
+connections (including OpenRouter) and effort. Keep those mappings in Wash's catalog settings.
 
-| Tier | `model` | `effort` |
-| --- | --- | --- |
-| `frontier` | `opus[1m]` | `high` |
-| `workhorse` | `opus[1m]` | `low`; `medium` for kernel commits and merge gates |
-| `light` | `sonnet` | `low` |
+On a new workspace, inherit the orchestrator's catalog unless the owner selects another. On a
+resumed workspace, retain its selected catalog; omitting `catalog` does not change an existing
+workspace. Use `workspace_configure.catalog` to switch when the owner chooses one, or a member's
+`catalog` for an intentional mixed team. A catalog must have slots to use this file unchanged.
+An adapter's own model list has none: choose a curated catalog, or supply the owner's explicit
+model choices as launch overrides rather than writing them into this project.
 
-A tier names what a member is for, not a vendor: another catalog can serve the same tiers, and
-the owner chooses which. If a model or an effort is not offered, ask the owner; do not guess or
-silently substitute. Preserve the models the owner has chosen for running members. A `light`
-member's window is 200K, so Wash's `context_warn` reaches it early; a reviewer hands off between
-rounds, never during one.
+Normally omit `provider`, `effort` and `configs`, so the catalog's settings apply. For a task
+that needs more reasoning, use an effort the selected adapter actually offers. Model and effort
+options from `about.caller.config_options` describe the orchestrator, not every provider; a live
+member's options are in `workspace_get(view="state").sessions[member_id].config_options`.
+Inspect only that session's settings, not the whole state. Never invent IDs or assume one
+provider's effort names work on another. Preview validates the catalog and launch flags; the
+actual launch also validates model and effort. Inspect every launch outcome and report the
+resolved catalog, slot, provider, model, effort and permission limits. If a catalog mapping is
+stale, fix it in Wash with the owner's choice; do not pin a workaround in this repository.
+
+Changing the catalog affects future launches only. Running and paused members retain their
+resolved settings. To move existing work, take a handoff, end the old member and launch a new
+key from that handoff under the selected catalog; use the checkpoint and save rules. Do not
+rewrite a live member's definition or restart Wash. Context capacity comes from the member's
+reported usage, and `context_warn` is a fraction of that capacity; there is no assumed window
+size for a tier. Reviewers hand off between rounds, never during one.
+
+Launch restrictions belong to the adapter, not to the model name. Read
+`about.permissions.launch_setting_support` before setting them. Every member has
+`can_spawn:false` and instructions forbidding helper agents; add `subagents:"deny"` when the
+adapter supports it. The former removes Wash spawning authority; instructions alone do not
+remove a provider's own subagent tool. Require `capability:"reviewer"` for enforced read-only
+review, without `approval:"auto"`. If the selected adapter cannot provide that capability,
+report the mismatch and use an owner-approved compatible catalog for that reviewer, or obtain
+an explicit exception for instruction-only review. Never claim a mode name or role instruction
+is enforced read-only access. Preview these settings before launching the panel.
 
 ## Environment preflight
 
@@ -84,13 +116,13 @@ Heavy tests and output limits are in [SWARM](SWARM.md#cost).
 Before launching a package, check that its node's needs are done, and create its worktree under
 `.worktrees/<package>` (ignored by `.gitignore`) on `wp-<package>`. Launch its members in
 one `workspace_configure` patch, each with `node:"<package>"`, `lifetime:"resident"`,
-`can_spawn:false`, `subagents:"deny"`, the worktree as `cwd`, and role `implementer` or
+`can_spawn:false`, the supported restrictions above, the worktree as `cwd`, and role `implementer` or
 `reviewer`; member names are just the role ("Implementer", "Red team", "Simplifier", "Editor").
 Size the panel to the risk ([SWARM](SWARM.md#two-tiers)):
 
 - Tier A: `<package>-implementer` plus `<package>-red` (`workhorse`), `<package>-simplifier` and
   `<package>-editor` (`light`, `capability:"reviewer"`).
-- Tier B: `<package>-implementer` plus one reviewer, `<package>-red` at low if the diff touches a
+- Tier B: `<package>-implementer` plus one reviewer, `<package>-red` if the diff touches a
   capability, a label boundary, an approval or another budget, else `<package>-editor`. Several
   Tier B packages share one review round.
 - Tests, docs, comments or tooling configuration only: `<package>-implementer` plus one reviewer.
