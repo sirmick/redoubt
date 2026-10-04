@@ -437,8 +437,9 @@ kernel, running the call to its end with interrupts off, would stall every other
 - **A freed frame may still be mapped on another hart.** A free writes nothing into the
   frame, so a stale mapping could reach only its next owner's data, never the kernel. Every
   path that frees a mapped frame unmaps it and flushes the TLB first, or frees an ended
-  process's frames or a refused `process_create`'s, which no user code reaches before the
-  global `sfence.vma` of the next address-space switch; on one hart that leaves no stale mapping.
+  process's frames or a refused `process_create`'s, whose cached translations carry that
+  process's ASID, which nothing runs under again until the PID is given out, and that flushes it
+  first ([`satp`](memory-layout.md#satp)); on one hart that leaves no stale mapping.
   Several harts need the TLB shootdown before the free
   (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
 

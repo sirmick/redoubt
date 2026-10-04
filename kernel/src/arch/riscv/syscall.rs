@@ -20,6 +20,8 @@ fn set_supervisor(supervisor: bool) {
 pub fn resume(supervisor: bool, thread: &Thread) -> ! {
     // Leaving the kernel: the scheduler's exit hook (`sched.rs`, accounting at the trap boundary).
     crate::sched::leave(crate::arch::current_pid());
+    #[cfg(debug_assertions)]
+    crate::arch::mem::audit::returning();
     // SAFETY: sets sepc, the address `sret` will resume at. Harmless until the `sret` in
     // `_redoubt_resume_context`.
     unsafe { core::arch::asm!("csrw sepc, {}", in(reg) thread.sepc, options(nomem, nostack)) };

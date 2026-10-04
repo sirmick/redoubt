@@ -88,9 +88,24 @@ pub const ASID_BITS: u32 = 9;
 #[cfg(target_pointer_width = "64")]
 pub const ASID_BITS: u32 = 16;
 
-// Every PID, 1..=MAX_PROCESS_COUNT, fits the ASID field, so a PID can be its own ASID with no table
+// Every PID, 1..=MAX_PROCESS_COUNT, fits the ASID field, so a PID is its own ASID with no table
 // between them (kernel/memory-layout.md, `satp`).
 const _: () = assert!(MAX_PROCESS_COUNT < 1 << ASID_BITS);
+const _: () = assert!(ASID_BITS == paging::SATP.asid_bits);
+
+/// The boot's first step on `satp` (kernel/boot.md, "Hardware bounds"): a hart may implement
+/// fewer ASID bits than the field has, so the kernel writes ones to the field and counts the bits
+/// that stuck. One narrower than `ASID_BITS` is refused (R17); otherwise the kernel takes its own
+/// ASID, PID 1.
+pub fn check_asid_field() {
+    match paging::SATP.asid_width(crate::arch::mem::read_back_asid_ones(), ASID_BITS) {
+        Ok(width) => println!("asid: {} bits", width),
+        Err(width) => {
+            panic!("R17: the hart's satp ASID field holds {} bits; every PID needs {}", width, ASID_BITS)
+        }
+    }
+    crate::arch::mem::enter_kernel_asid();
+}
 
 /// Base of a range of addresses that are never mapped. Jumping to one of them faults into
 /// the kernel, which uses the faulting address to tell what the program is returning from.

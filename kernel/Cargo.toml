@@ -55,6 +55,11 @@ timer-tail-billed = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: a frame is taken by the
 # first-fit scan of the ownership table the bitmap replaced, so `scan-bounds` must fail.
 alloc-first-fit = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run each: a PID given out keeps its
+# last holder's ASID unflushed (`MemoryMapping::allocate`), or an unmap skips its flush, so the
+# checked build's flush audit must stop `asid-reuse-stale`.
+asid-no-reuse-flush = ["test-only"]
+asid-no-leaf-flush = ["test-only"]
 # Test builds only: each DMA device's first reset reports "not confirmed" after the
 # real write, so the quarantine path runs. It only ever adds quarantine.
 dma-reset-deaf = ["test-only"]

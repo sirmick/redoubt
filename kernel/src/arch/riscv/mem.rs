@@ -13,26 +13,214 @@
 //! All page-table memory is accessed through that typed layer; this file contains policy,
 //! not pointer arithmetic. Functions that take a bare virtual address operate on the
 //! currently active address space.
+//!
+//! A process's ASID is its PID, and a switch flushes nothing. So every page-table write flushes
+//! what it changed, in the space it changed, whether that space is running or not: a leaf, its
+//! address in that space's ASID; a table pointer, the whole ASID; a leaf of the kernel half that
+//! every space shares (global, `G`), its address in every ASID (kernel/memory-layout.md, "`satp`").
+//! The checked build logs each write and each flush, and stops if a write is unflushed when the
+//! kernel returns to user mode (`audit`).
+
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use redoubt_layout::{KERNEL_AREA, PROCESS_AREA, Pid, physmap_virt};
 use redoubt_sys::{MemFlags, PAGE_SIZE, USER_AREA_END};
 use riscv::register::satp;
 
 use super::mmu_flags::translate_flags;
+use super::physmap::tlb::{Flush, Stale};
 use super::physmap::{self, Pte, PteFlags, Slot, Table, window};
 use crate::arch::process::InitialProcess;
 use crate::mem::{MemoryManager, PageError};
 
 extern "C" {
-    #[link_name = "flush_mmu"]
-    fn sfence_vma();
+    fn flush_mmu();
+    fn flush_asid(asid: usize);
+    fn flush_page(virt: usize, asid: usize);
+    fn flush_page_global(virt: usize);
 }
 
-/// Flush every cached translation on this hart.
-fn flush_tlb() {
-    // SAFETY: `flush_mmu` (asm.rs) is a bare `sfence.vma; ret`. Dropping cached
-    // translations is always sound; at worst it costs page-table walks.
-    unsafe { sfence_vma() };
+/// Drop what `flush` covers from this hart's cached translations.
+fn flush(flush: Flush) {
+    #[cfg(debug_assertions)]
+    audit::flushed(flush);
+    // SAFETY: each routine (asm.rs) is one `sfence.vma` and a `ret`. Dropping cached translations
+    // is always sound; at worst it costs page-table walks.
+    unsafe {
+        match flush {
+            Flush::All => flush_mmu(),
+            Flush::Asid(asid) => flush_asid(asid),
+            Flush::Page { page, asid } => flush_page(page, asid),
+            Flush::Global(page) => flush_page_global(page),
+        }
+    }
+}
+
+/// Note a page-table write for the checked build's audit; a release build notes nothing.
+fn wrote(_stale: Stale) {
+    #[cfg(debug_assertions)]
+    audit::wrote(_stale);
+}
+
+/// Point this hart's `satp` at `value`, which names an allocated address space.
+fn write_satp(value: usize) {
+    let _ = root_of(value); // refuses an unallocated mapping
+    // SAFETY: every address space shares the kernel's root entries (see `allocate`), so the
+    // code, stack and data in use right now stay mapped across the switch.
+    unsafe { satp::write(satp::Satp::from_bits(value)) };
+}
+
+/// Whether `virt` is in the kernel half that every address space shares, the per-process entry
+/// aside: its leaves are global (`G`), and a change to one is flushed in every ASID.
+fn shared(virt: usize) -> bool {
+    let index = physmap::vpn(virt, physmap::LEVELS - 1);
+    index >= ROOT_KERNEL_START && index != ROOT_PROCESS_AREA
+}
+
+/// An address space as its flushes see it: its root, and its ASID, read from its `satp`.
+#[derive(Copy, Clone)]
+struct Space {
+    root: Table,
+    asid: usize,
+}
+
+impl Space {
+    fn of(satp: usize) -> Space { Space { root: root_of(satp), asid: physmap::SATP.asid(satp) } }
+
+    fn current() -> Space { Space::of(satp::read().bits()) }
+
+    /// What a change to the leaf for `virt` may leave stale.
+    fn leaf(self, virt: usize) -> Stale {
+        Stale { asid: (!shared(virt)).then_some(self.asid), page: Some(virt & !(PAGE_SIZE - 1)) }
+    }
+
+    /// What a change to a table pointer on `virt`'s path may leave stale.
+    fn tables(self, virt: usize) -> Stale { Stale { asid: (!shared(virt)).then_some(self.asid), page: None } }
+
+    /// Flush a change to the leaf for `virt`: that address, in this ASID or, for a shared kernel
+    /// leaf, in every one.
+    fn flush_leaf(self, virt: usize) { flush(self.leaf(virt).flush()) }
+
+    /// Flush a change to a table pointer on `virt`'s path: this whole ASID, or everything for a
+    /// table of the shared kernel half (which never changes after boot).
+    fn flush_tables(self, virt: usize) { flush(self.tables(virt).flush()) }
+
+    /// Flush this whole ASID: a PID given out, or a space that is ending.
+    fn flush_asid(self) { flush(Flush::Asid(self.asid)) }
+
+    /// Write `pte` at `slot`, the leaf for `virt`, without its flush.
+    fn write_leaf(self, slot: Slot, virt: usize, pte: Pte) {
+        slot.set(pte);
+        wrote(self.leaf(virt));
+    }
+
+    /// Write `pte` at `slot`, the leaf for `virt`, and flush it.
+    fn set_leaf(self, slot: Slot, virt: usize, pte: Pte) {
+        self.write_leaf(slot, virt, pte);
+        self.flush_leaf(virt);
+    }
+}
+
+/// The kernel's own `satp` (PID 1, ASID 1), from the boot's switch to it on: the space a
+/// destruction moves to before it frees the dying one's frames.
+static KERNEL_SATP: AtomicUsize = AtomicUsize::new(0);
+
+/// The boot's ASID step, before anything else writes `satp`: write the kernel's `satp` with its
+/// ASID field all ones, read it back and restore it, and return what was read, for the decision
+/// (`process::check_asid_field`).
+pub fn read_back_asid_ones() -> usize {
+    let loader = satp::read().bits();
+    write_satp(physmap::SATP.with_asid_ones(loader));
+    let read_back = satp::read().bits();
+    write_satp(loader);
+    read_back
+}
+
+/// The boot's switch to the kernel's own ASID, PID 1, and its one whole flush, which also drops
+/// the loader's ASID 0 entries and any the probe left.
+pub fn enter_kernel_asid() {
+    let kernel =
+        physmap::SATP.make(physmap::SATP.root(satp::read().bits()), redoubt_layout::KERNEL_PID.get().into());
+    write_satp(kernel);
+    KERNEL_SATP.store(kernel, Ordering::Relaxed);
+    flush(Flush::All);
+    #[cfg(debug_assertions)]
+    audit::check_globals();
+}
+
+/// Before a dying address space's frames are freed (`release_owned_frames`): leave it if it is
+/// this hart's, for the kernel's own, and then flush its ASID. A walker reading a freed table
+/// through a live `satp` could cache a garbage leaf, and a garbage global leaf survives every ASID
+/// flush.
+pub fn leave(space: &MemoryMapping) {
+    let current = satp::read().bits();
+    if physmap::SATP.root(current) == physmap::SATP.root(space.satp) {
+        write_satp(KERNEL_SATP.load(Ordering::Relaxed));
+    }
+    Space::of(space.satp).flush_asid();
+}
+
+/// The checked build's audit of flushes (kernel/memory-layout.md, "`satp`"): a log of the page-
+/// table writes this hart has not flushed, which must be empty whenever the kernel returns to
+/// user mode, and a walk of the current root that checks `G` is exactly on the shared kernel
+/// half. It is the checked build's only, and outside the latency targets. One hart: with
+/// several, each needs its own log (SMP1).
+#[cfg(debug_assertions)]
+pub mod audit {
+    use super::super::physmap::tlb::{Flush, Stale, Unflushed};
+    use super::super::physmap::{self, PteFlags};
+    use super::{ROOT_KERNEL_START, ROOT_PROCESS_AREA, current_root, for_each_entry};
+    use crate::cell::KernelCell;
+
+    static LOG: KernelCell<Unflushed<16>> = KernelCell::new(Unflushed::new());
+
+    pub(super) fn wrote(stale: Stale) {
+        if let Err(first) = LOG.with(|log| log.wrote(stale)) {
+            panic!("ASID audit: more page-table writes unflushed than the log holds, the first: {}", first);
+        }
+    }
+
+    pub(super) fn flushed(flush: Flush) { LOG.with(|log| log.flushed(flush)) }
+
+    /// At every return from the trap handler, to user mode or to `kmain`: every write is
+    /// flushed, or the kernel stops naming one.
+    pub fn returning() {
+        if let Some(stale) = LOG.with(|log| log.first()) {
+            panic!("ASID audit: a page-table write is unflushed at a return from the kernel: {}", stale);
+        }
+    }
+
+    /// `G` over the current root (kernel/memory-layout.md, "Entry bits"): every 4 KiB and
+    /// root-level leaf of the shared kernel half is global, and nothing in the user half or on
+    /// the per-process entry is, table pointers included. At boot and after each kernel-half
+    /// mapping.
+    pub(super) fn check_globals() {
+        let root = current_root();
+        for index in 0..physmap::ENTRIES {
+            let pte = root.get(index);
+            let base = index * physmap::leaf_size(physmap::LEVELS - 1);
+            let shared = index >= ROOT_KERNEL_START && index != ROOT_PROCESS_AREA;
+            let check = |virt: usize, global: bool, leaf: bool| {
+                if shared && leaf {
+                    assert!(global, "ASID audit: the shared kernel leaf at {:#x} is not global", virt);
+                } else if !shared {
+                    assert!(
+                        !global,
+                        "ASID audit: the entry at {:#x} is global outside the shared kernel half",
+                        virt
+                    );
+                }
+            };
+            if pte.is_leaf() {
+                check(base, pte.has(PteFlags::GLOBAL), true);
+            } else if let Some(child) = root.child(index) {
+                check(base, pte.has(PteFlags::GLOBAL), false);
+                for_each_entry(child, physmap::LEVELS - 2, base, true, &mut |virt, pte| {
+                    check(virt, pte.has(PteFlags::GLOBAL), pte.is_leaf())
+                });
+            }
+        }
+    }
 }
 
 /// Make this hart's instruction fetches see every store it made before (RISC-V `fence.i`,
@@ -55,60 +243,100 @@ const _: () = assert!(ROOT_PROCESS_AREA >= ROOT_KERNEL_START);
 
 /// The root table of the address space that `satp` names.
 fn root_of(satp: usize) -> Table {
-    assert!(physmap::satp_is_active(satp), "address space is not allocated");
+    assert!(physmap::SATP.is_active(satp), "address space is not allocated");
     // SAFETY: a `satp` value with the mode bits set comes from the loader or from
     // `MemoryMapping::allocate()`, both of which store the address of a root page table.
-    unsafe { Table::at(window(), physmap::satp_root(satp)) }
+    unsafe { Table::at(window(), physmap::SATP.root(satp)) }
 }
 
 fn current_root() -> Table { root_of(satp::read().bits()) }
 
-/// Find the leaf (4 KiB) entry for `virt` under `root`.
-///
-/// If `alloc` is given, missing intermediate tables are allocated on behalf of that PID.
-/// Otherwise a missing table is reported as `Unmapped`.
-fn walk(root: Table, virt: usize, mut alloc: Option<(&mut MemoryManager, Pid)>) -> Result<Slot, PageError> {
+/// Find the leaf (4 KiB) entry for `virt` under `root`. A missing table is `Unmapped`.
+fn walk(root: Table, virt: usize) -> Result<Slot, PageError> {
     if !physmap::is_canonical(virt) {
         return Err(PageError::NonCanonical);
     }
     let mut table = root;
     for level in (1..physmap::LEVELS).rev() {
-        let index = physmap::vpn(virt, level);
-        table = match table.child(index) {
+        // A missing table, or a superpage (the physmap), which is never edited at 4 KiB
+        // granularity. A `match`, not `ok_or(..)?`: every system call's record copy walks here
+        // twice a word, and the `Result` costs the release build two copies of the `Table` a
+        // level (asid-cost).
+        table = match table.child(physmap::vpn(virt, level)) {
             Some(child) => child,
-            // A superpage (the physmap). These are never edited at 4 KiB granularity.
-            None if table.get(index).is_leaf() => return Err(PageError::Unmapped),
-            None => {
-                let Some((mm, pid)) = alloc.as_mut() else {
-                    return Err(PageError::Unmapped);
-                };
-                let frame = mm.alloc_page(*pid)?;
-                // SAFETY: `alloc_page` returns a RAM frame that was free until now.
-                unsafe { table.slot(index).install_table(frame) }
-            }
+            None => return Err(PageError::Unmapped),
         };
     }
     Ok(table.slot(physmap::vpn(virt, 0)))
 }
 
+/// [`walk`] in `space`, allocating each missing table on behalf of `pid`, and whether it linked
+/// one: the caller's flush must then cover the whole ASID. If it fails after linking one, it
+/// flushes that itself.
+fn walk_making(
+    space: Space,
+    virt: usize,
+    mm: &mut MemoryManager,
+    pid: Pid,
+) -> Result<(Slot, bool), PageError> {
+    if !physmap::is_canonical(virt) {
+        return Err(PageError::NonCanonical);
+    }
+    let mut linked = false;
+    let mut table = space.root;
+    for level in (1..physmap::LEVELS).rev() {
+        let index = physmap::vpn(virt, level);
+        table = match table.child(index) {
+            Some(child) => child,
+            None => {
+                // A superpage (the physmap). These are never edited at 4 KiB granularity.
+                let frame =
+                    if table.get(index).is_leaf() { Err(PageError::Unmapped) } else { mm.alloc_page(pid) };
+                let frame = frame.inspect_err(|_| {
+                    if linked {
+                        space.flush_tables(virt);
+                    }
+                })?;
+                // SAFETY: `alloc_page` returns a RAM frame that was free until now.
+                let child = unsafe { table.slot(index).install_table(frame) };
+                wrote(space.tables(virt));
+                linked = true;
+                child
+            }
+        };
+    }
+    Ok((table.slot(physmap::vpn(virt, 0)), linked))
+}
+
+/// Map `phys` at `virt` in `space`, allocating tables on behalf of `pid`, and return whether a
+/// table was linked. The caller flushes (`flush_map`); a failure has flushed what it linked.
 fn map_page_in(
-    root: Table,
+    space: Space,
     mm: &mut MemoryManager,
     pid: Pid,
     phys: usize,
     virt: usize,
     flags: PteFlags,
-) -> Result<(), PageError> {
+) -> Result<bool, PageError> {
     assert!(virt & (PAGE_SIZE - 1) == 0);
     assert!(phys & (PAGE_SIZE - 1) == 0);
     check_permissions(flags)?;
-    let slot = walk(root, virt, Some((mm, pid)))?;
+    let (slot, linked) = walk_making(space, virt, mm, pid)?;
     if is_occupied(slot.get()) {
         klog!("Page {:08x} already allocated!", virt);
+        if linked {
+            space.flush_tables(virt);
+        }
         return Err(PageError::InUse);
     }
-    slot.set(Pte::leaf(phys, flags));
-    Ok(())
+    space.write_leaf(slot, virt, Pte::leaf(phys, flags));
+    Ok(linked)
+}
+
+/// The flush after a new mapping at `virt` in `space`: the leaf, or the whole ASID if a table
+/// was linked on the way.
+fn flush_map(space: Space, virt: usize, linked: bool) {
+    if linked { space.flush_tables(virt) } else { space.flush_leaf(virt) }
 }
 
 /// A page that is mapped, or lent out (the `S` bit, with `VALID` cleared). A lent page's entry
@@ -147,14 +375,19 @@ pub fn tables_needed(space: &MemoryMapping, virt: usize, pages: usize) -> usize 
 
 /// Get `virt` in `space` ready for a mapping on behalf of `pid`: allocate the page tables it
 /// needs and check that nothing occupies it. A `map_page_in` there with valid flags then cannot
-/// fail, so a transfer of many pages can prepare them all before it changes anything.
+/// fail, so a transfer of many pages can prepare them all before it changes anything. A table it
+/// links is flushed here, since the mapping that follows links none.
 pub fn prepare_map(
     mm: &mut MemoryManager,
     space: &MemoryMapping,
     pid: Pid,
     virt: usize,
 ) -> Result<(), PageError> {
-    let slot = walk(root_of(space.satp), virt, Some((mm, pid)))?;
+    let space = Space::of(space.satp);
+    let (slot, linked) = walk_making(space, virt, mm, pid)?;
+    if linked {
+        space.flush_tables(virt);
+    }
     if is_occupied(slot.get()) {
         return Err(PageError::InUse);
     }
@@ -253,15 +486,20 @@ pub struct MemoryMapping {
 
 impl core::fmt::Debug for MemoryMapping {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::result::Result<(), core::fmt::Error> {
-        write!(fmt, "(satp: {:#x}, root: {:#x})", self.satp, physmap::satp_root(self.satp))
+        write!(fmt, "(satp: {:#x}, root: {:#x})", self.satp, physmap::SATP.root(self.satp))
     }
 }
 
 /// Controls MMU configurations.
 impl MemoryMapping {
+    /// A boot process's space, with its PID as its ASID: the loader built it with ASID 0, and the
+    /// boot's whole flush (`enter_kernel_asid`) came after every table it wrote.
+    ///
     /// # Safety
     /// `init` must be a process description produced by the loader.
-    pub unsafe fn from_init_process(&mut self, init: InitialProcess) { self.satp = init.satp; }
+    pub unsafe fn from_init_process(&mut self, init: InitialProcess) {
+        self.satp = physmap::SATP.make(physmap::SATP.root(init.satp), init.pid().get().into());
+    }
 
     /// Allocate a brand-new memory mapping. The new address space contains:
     ///
@@ -270,6 +508,10 @@ impl MemoryMapping {
     ///
     /// All pages, including the page tables themselves, are owned by `pid`, so they are
     /// released along with everything else when the process is destroyed.
+    ///
+    /// Its ASID is `pid`, which an earlier process may have held and left translations under:
+    /// the kernel does not track which PIDs have run, so every allocation flushes the whole ASID,
+    /// after the last table write and before the space can first run.
     pub fn allocate(&mut self, mm: &mut MemoryManager, pid: Pid) -> Result<(), PageError> {
         if self.satp != 0 {
             return Err(PageError::InUse);
@@ -287,23 +529,29 @@ impl MemoryMapping {
         // From here the space names everything it takes, so a failure gives it all back by one
         // walk of its tables, and the space is whole or does not exist (`process_create`'s
         // rollback walks it, `release_owned_frames`).
-        self.satp = physmap::make_satp(root_phys);
-        if let Err(e) = Self::add_header_page(root, mm, pid) {
+        self.satp = physmap::SATP.make(root_phys, pid.get().into());
+        let space = Space::of(self.satp);
+        // Whatever the PID's last holder left, and the root entries just copied.
+        wrote(Stale { asid: Some(space.asid), page: None });
+        // A failure's release leaves the space and flushes its ASID (`leave`).
+        if let Err(e) = Self::add_header_page(space, mm, pid) {
             mm.release_owned_frames(pid, self);
             self.satp = 0;
             return Err(e);
         }
+        #[cfg(not(feature = "asid-no-reuse-flush"))]
+        space.flush_asid();
         Ok(())
     }
 
     /// Back and map a new space's header page at `PROCESS_AREA`: a frame charged to the running
     /// budget (kernel/objects.md), named in the account once it is mapped. On failure the frame
-    /// is given back, and any table the mapping took is in the space.
-    fn add_header_page(root: Table, mm: &mut MemoryManager, pid: Pid) -> Result<(), PageError> {
+    /// is given back, and any table the mapping took is in the space. Its flush is `allocate`'s.
+    fn add_header_page(space: Space, mm: &mut MemoryManager, pid: Pid) -> Result<(), PageError> {
         let header_phys = mm.alloc_context_page(pid)?;
         // SAFETY: `alloc_context_page` returns a RAM frame that was free until now.
         unsafe { window().zero_frame(header_phys) };
-        map_page_in(root, mm, pid, header_phys, PROCESS_AREA, PteFlags::R | PteFlags::W)
+        map_page_in(space, mm, pid, header_phys, PROCESS_AREA, PteFlags::R | PteFlags::W)
             .inspect_err(|_| mm.free_frame_of(header_phys, pid).expect("the frame just taken"))?;
         mm.set_header(pid, header_phys);
         Ok(())
@@ -317,13 +565,10 @@ impl MemoryMapping {
     /// kernel, which should be mapped into every possible address space.
     /// As such, this will only have an observable effect once code returns
     /// to userspace.
-    pub fn activate(self) {
-        let _ = root_of(self.satp); // refuses an unallocated mapping
-        // SAFETY: every address space shares the kernel's root entries (see `allocate`), so
-        // the code, stack and data in use right now stay mapped across the switch.
-        unsafe { satp::write(satp::Satp::from_bits(self.satp)) };
-        flush_tlb();
-    }
+    ///
+    /// It flushes nothing: the space's cached translations carry its ASID, and every change to
+    /// its tables was flushed when it was made.
+    pub fn activate(self) { write_satp(self.satp); }
 
     /// Call `f(virt, pte)` for every valid or shared 4 KiB leaf in the user half.
     fn for_each_user_leaf(&self, mut f: impl FnMut(usize, Pte)) {
@@ -353,7 +598,7 @@ impl MemoryMapping {
             });
             f(root.get(index).phys(), false);
         }
-        f(physmap::satp_root(self.satp), false);
+        f(physmap::SATP.root(self.satp), false);
     }
 
     pub fn print_map(&self) {
@@ -381,21 +626,32 @@ pub fn map_page_inner(
     req_flags: MemFlags,
     map_user: bool,
 ) -> Result<(), PageError> {
-    let flags = translate_flags(req_flags) | if map_user { PteFlags::USER } else { PteFlags::NONE };
-    map_page_in(current_root(), mm, pid, phys, virt, flags)?;
-    flush_tlb();
+    // A page of the shared kernel half (the PLIC, which the kernel maps at boot into tables the
+    // loader shared) is global, like every leaf there.
+    let flags = translate_flags(req_flags)
+        | if map_user { PteFlags::USER } else { PteFlags::NONE }
+        | if shared(virt) { PteFlags::GLOBAL } else { PteFlags::NONE };
+    let space = Space::current();
+    let linked = map_page_in(space, mm, pid, phys, virt, flags)?;
+    flush_map(space, virt, linked);
+    #[cfg(debug_assertions)]
+    if shared(virt) {
+        audit::check_globals();
+    }
     Ok(())
 }
 
 /// Map device registers `phys` at kernel address `virt`, read-write and for the kernel alone (no
-/// U bit): the DMA register window. The loader created and shared the tables above it
-/// (`reserve_tables`), so nothing is allocated and every address space sees the page; a missing
-/// table is a boot bug, and the kernel stops.
+/// U bit), global like every shared kernel leaf: the DMA register window. The loader created and
+/// shared the tables above it (`reserve_tables`), so nothing is allocated and every address space
+/// sees the page; a missing table is a boot bug, and the kernel stops.
 pub fn map_kernel_page(phys: usize, virt: usize) {
-    let slot = walk(current_root(), virt, None).expect("the loader shares the window's page tables");
+    let slot = walk(current_root(), virt).expect("the loader shares the window's page tables");
     assert!(!is_occupied(slot.get()), "kernel window page {:x} is already mapped", virt);
-    slot.set(Pte::leaf(phys, translate_flags(MemFlags::READ | MemFlags::WRITE)));
-    flush_tlb();
+    let flags = translate_flags(MemFlags::READ | MemFlags::WRITE) | PteFlags::GLOBAL;
+    Space::current().set_leaf(slot, virt, Pte::leaf(phys, flags));
+    #[cfg(debug_assertions)]
+    audit::check_globals();
 }
 
 /// Ummap the given page from the current address space.  Never allocate a new
@@ -413,13 +669,19 @@ pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, P
     if virt & 3 != 0 {
         return Err(PageError::Unaligned);
     }
-    let slot = walk(current_root(), virt, None)?;
+    let space = Space::current();
+    let slot = walk(space.root, virt)?;
     if slot.get().has(PteFlags::S) {
         return Err(PageError::Lent);
     }
     let phys = slot.get().phys();
-    slot.set(Pte::EMPTY);
-    flush_tlb();
+    // Test builds only, one recorded negative run: the unmap skips its flush, for the audit to
+    // catch (`asid-reuse-stale`).
+    if cfg!(feature = "asid-no-leaf-flush") {
+        space.write_leaf(slot, virt, Pte::EMPTY);
+    } else {
+        space.set_leaf(slot, virt, Pte::EMPTY);
+    }
     Ok(phys)
 }
 
@@ -432,20 +694,21 @@ pub fn return_page_inner(
     dest_space: &MemoryMapping,
     dest_addr: *mut u8,
 ) -> Result<usize, PageError> {
-    let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
+    let (src_space, dest_space) = (Space::of(src_space.satp), Space::of(dest_space.satp));
+    let (src_addr, dest_addr) = (src_addr as usize, dest_addr as usize);
+    let src = walk(src_space.root, src_addr)?;
     let phys = src.get().phys();
     // Check both protected aliases and their frame identity before changing either. The
     // borrower's entry is `VALID | S`; the lender's is `S` without `VALID`.
     if !src.get().is_valid() || !src.get().has(PteFlags::S) {
         return Err(PageError::Lent);
     }
-    let dest = walk(root_of(dest_space.satp), dest_addr as usize, None).or(Err(PageError::Lent))?;
+    let dest = walk(dest_space.root, dest_addr).or(Err(PageError::Lent))?;
     if dest.get().is_valid() || !dest.get().has(PteFlags::S) || dest.get().phys() != phys {
         return Err(PageError::Lent);
     }
-    src.set(Pte::EMPTY);
-    dest.set(dest.get().without(PteFlags::S | PteFlags::P).with(PteFlags::VALID));
-    flush_tlb();
+    src_space.set_leaf(src, src_addr, Pte::EMPTY);
+    dest_space.set_leaf(dest, dest_addr, dest.get().without(PteFlags::S | PteFlags::P).with(PteFlags::VALID));
     Ok(phys)
 }
 
@@ -455,51 +718,51 @@ pub fn return_page_inner(
 /// sent and mapped into its receiver only when someone takes it, which may be much later or
 /// never (`message.rs`).
 pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, PageError> {
-    let slot = walk(root_of(space.satp), virt, None)?;
+    let space = Space::of(space.satp);
+    let slot = walk(space.root, virt)?;
     let pte = slot.get();
     if !pte.is_valid() || pte.has(PteFlags::S) {
         return Err(PageError::Lent);
     }
-    slot.set(pte.without(PteFlags::VALID).with(PteFlags::S));
-    flush_tlb();
+    space.set_leaf(slot, virt, pte.without(PteFlags::VALID).with(PteFlags::S));
     Ok(pte.phys())
 }
 
 /// The frame of `space`'s header page, mapped at `PROCESS_AREA` (the loader's, for `init`).
 pub fn header_phys(space: &MemoryMapping) -> Option<usize> {
-    let pte = walk(root_of(space.satp), PROCESS_AREA, None).ok()?.get();
+    let pte = walk(root_of(space.satp), PROCESS_AREA).ok()?.get();
     pte.is_valid().then(|| pte.phys())
 }
 
 /// The frame behind a page `space` lent out, from the lender's own entry.
 pub fn lent_frame(space: &MemoryMapping, virt: usize) -> Option<usize> {
-    let pte = walk(root_of(space.satp), virt, None).ok()?.get();
+    let pte = walk(root_of(space.satp), virt).ok()?.get();
     (pte.has(PteFlags::S) && !pte.is_valid()).then(|| pte.phys())
 }
 
 /// Give a lent page back to its lender: `VALID` again, `S` cleared (`reply`, or a message that
 /// never went through).
 pub fn lend_back(space: &MemoryMapping, virt: usize) -> Result<(), PageError> {
-    let slot = walk(root_of(space.satp), virt, None)?;
+    let space = Space::of(space.satp);
+    let slot = walk(space.root, virt)?;
     let pte = slot.get();
     if pte.is_valid() || !pte.has(PteFlags::S) {
         return Err(PageError::Lent);
     }
-    slot.set(pte.without(PteFlags::S).with(PteFlags::VALID));
-    flush_tlb();
+    space.set_leaf(slot, virt, pte.without(PteFlags::S).with(PteFlags::VALID));
     Ok(())
 }
 
 /// The lender never gets this page back: a transfer (R4), or a lend whose call was abandoned
 /// (R3). Its entry goes; the frame is the receiver's. Returns the frame.
 pub fn drop_lent(space: &MemoryMapping, virt: usize) -> Result<usize, PageError> {
-    let slot = walk(root_of(space.satp), virt, None)?;
+    let space = Space::of(space.satp);
+    let slot = walk(space.root, virt)?;
     let pte = slot.get();
     if pte.is_valid() || !pte.has(PteFlags::S) {
         return Err(PageError::Lent);
     }
-    slot.set(Pte::EMPTY);
-    flush_tlb();
+    space.set_leaf(slot, virt, Pte::EMPTY);
     Ok(pte.phys())
 }
 
@@ -519,8 +782,9 @@ pub fn map_into(
         // ownership-changing mapping API recognizes it as a protected loan alias.
         flags |= PteFlags::S;
     }
-    map_page_in(root_of(space.satp), mm, pid, phys, virt, flags)?;
-    flush_tlb();
+    let space = Space::of(space.satp);
+    let linked = map_page_in(space, mm, pid, phys, virt, flags)?;
+    flush_map(space, virt, linked);
     Ok(())
 }
 
@@ -535,8 +799,9 @@ pub fn map_into_with(
     flags: MemFlags,
 ) -> Result<(), PageError> {
     let flags = translate_flags(flags) | user_flag(pid);
-    map_page_in(root_of(space.satp), mm, pid, phys, virt, flags)?;
-    flush_tlb();
+    let space = Space::of(space.satp);
+    let linked = map_page_in(space, mm, pid, phys, virt, flags)?;
+    flush_map(space, virt, linked);
     Ok(())
 }
 
@@ -544,7 +809,7 @@ pub fn map_into_with(
 /// (`process_map` looks into a child that has never run): its entry is empty.
 pub fn address_available_in(space: &MemoryMapping, virt: usize) -> bool {
     debug_assert!(virt < redoubt_sys::USER_AREA_END, "process_map checks its range first");
-    match walk(root_of(space.satp), virt, None) {
+    match walk(root_of(space.satp), virt) {
         // No leaf table yet, so nothing is mapped there. Inside user space the only other way
         // `walk` fails is a non-canonical address, which the caller has already ruled out.
         Err(_) => true,
@@ -623,7 +888,8 @@ fn first_occupied(table: Table, level: usize, start: usize, end: usize) -> Optio
 /// unmapped (R22). The root is never freed, nor anything in the kernel half.
 pub fn free_empty_tables(mm: &mut MemoryManager, space: &MemoryMapping, start: usize, end: usize) {
     debug_assert!(end <= USER_AREA_END, "only the user half's tables are ever freed");
-    let root = root_of(space.satp);
+    let space = Space::of(space.satp);
+    let root = space.root;
     let leaf_span = physmap::leaf_size(1);
     let mut virt = start & !(leaf_span - 1);
     while virt < end {
@@ -644,9 +910,10 @@ pub fn free_empty_tables(mm: &mut MemoryManager, space: &MemoryMapping, start: u
             // as the ownership table records it. A table with no owner there is not one
             // `walk` made, and is left where it is.
             let Some(owner) = mm.ram_owner(frame) else { break };
-            // Unlinked first, so no walk reaches a table that is free.
+            // Unlinked and its ASID flushed first, so no walk reaches a table that is free.
             slot.set(Pte::EMPTY);
-            flush_tlb();
+            wrote(space.tables(virt));
+            space.flush_tables(virt);
             mm.free_frame_of(frame, owner).expect("the owner just read releases its frame");
         }
         virt += leaf_span;
@@ -655,13 +922,13 @@ pub fn free_empty_tables(mm: &mut MemoryManager, space: &MemoryMapping, start: u
 
 /// Unmap only the protected borrower alias when a lend leaves the server.
 pub fn unmap_from(space: &MemoryMapping, virt: usize) -> Result<usize, PageError> {
-    let slot = walk(root_of(space.satp), virt, None)?;
+    let space = Space::of(space.satp);
+    let slot = walk(space.root, virt)?;
     let pte = slot.get();
     if !pte.is_valid() || !pte.has(PteFlags::S) {
         return Err(PageError::Lent);
     }
-    slot.set(Pte::EMPTY);
-    flush_tlb();
+    space.set_leaf(slot, virt, Pte::EMPTY);
     Ok(pte.phys())
 }
 
@@ -678,7 +945,7 @@ fn checked_phys(pte: Pte) -> Result<usize, PageError> {
 }
 
 pub fn virt_to_phys(virt: usize) -> Result<usize, PageError> {
-    checked_phys(walk(current_root(), virt, None)?.get())
+    checked_phys(walk(current_root(), virt)?.get())
 }
 
 /// Back a reserved (demand-paged) address with a real, zeroed page.
@@ -692,7 +959,8 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
         return Err(PageError::Unmapped);
     }
     let virt = address & !(PAGE_SIZE - 1);
-    let slot = walk(current_root(), virt, None).or(Err(PageError::Unmapped))?;
+    let space = Space::current();
+    let slot = walk(space.root, virt).or(Err(PageError::Unmapped))?;
     let reservation = slot.get();
 
     if reservation.is_valid() {
@@ -709,8 +977,15 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
     // Zero through the physmap before the page becomes visible to the process.
     // SAFETY: `alloc_page` returns a RAM frame that was free until now.
     unsafe { window().zero_frame(new_page) };
-    slot.set(Pte::leaf(new_page, reservation.flags() | PteFlags::USER));
-    flush_tlb();
+    // The leaf is the current space's own, flushed in its ASID. For the kernel PID above
+    // `USER_AREA_END` it would be in a table every space shares: global, flushed in every ASID,
+    // and checked by the `G` walk. No caller reaches that today: the loader reserves no page there.
+    let global = if shared(virt) { PteFlags::GLOBAL } else { PteFlags::NONE };
+    space.set_leaf(slot, virt, Pte::leaf(new_page, reservation.flags() | PteFlags::USER | global));
+    #[cfg(debug_assertions)]
+    if shared(virt) {
+        audit::check_globals();
+    }
 
     Ok(new_page)
 }
@@ -727,7 +1002,7 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
         return Err(Error::InvalidArgument);
     }
     let page = virt & !(PAGE_SIZE - 1);
-    let pte = walk(current_root(), page, None).map_err(|_| Error::InvalidArgument)?.get();
+    let pte = walk(current_root(), page).map_err(|_| Error::InvalidArgument)?.get();
     // A writable record must be readable too (R11), so a write-only entry is never one.
     let wanted =
         PteFlags::VALID | PteFlags::USER | PteFlags::R | if write { PteFlags::W } else { PteFlags::NONE };
@@ -749,14 +1024,14 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
 pub fn set_user_page_flags(virt: usize, flags: MemFlags) -> Result<(), PageError> {
     let wanted = translate_flags(flags);
     check_permissions(wanted)?;
-    let slot = walk(current_root(), virt, None)?;
+    let space = Space::current();
+    let slot = walk(space.root, virt)?;
     let pte = slot.get();
     if !pte.is_valid() || pte.has(PteFlags::S) || !pte.has(PteFlags::USER) {
         return Err(PageError::Unmapped);
     }
     let keep = pte.flags() - (PteFlags::R | PteFlags::W | PteFlags::X);
-    slot.set(Pte::leaf(pte.phys(), keep | wanted));
-    flush_tlb();
+    space.set_leaf(slot, virt, Pte::leaf(pte.phys(), keep | wanted));
     Ok(())
 }
 
@@ -765,7 +1040,7 @@ pub fn set_user_page_flags(virt: usize, flags: MemFlags) -> Result<(), PageError
 /// (kernel/memory.md: check the whole range first). The frame it maps, for the caller to check
 /// who owns it.
 pub fn user_mapping(virt: usize) -> Option<usize> {
-    let pte = walk(current_root(), virt, None).ok()?.get();
+    let pte = walk(current_root(), virt).ok()?.get();
     (pte.is_valid() && pte.has(PteFlags::USER) && !pte.has(PteFlags::S)).then(|| pte.phys())
 }
 
@@ -777,14 +1052,12 @@ pub fn user_mapping(virt: usize) -> Option<usize> {
 /// answers `Ok` for a page that is already valid, so treating a permission fault as a missing
 /// page would resume the faulting instruction, fault again, and spin for ever with the process
 /// making no progress and the kernel printing nothing.
-pub fn is_mapped(virt: usize) -> bool {
-    walk(current_root(), virt, None).is_ok_and(|slot| slot.get().is_valid())
-}
+pub fn is_mapped(virt: usize) -> bool { walk(current_root(), virt).is_ok_and(|slot| slot.get().is_valid()) }
 
 /// The permissions of the page at `virt`, a page-aligned address: `None` if it has none or is
 /// either alias of a loan.
 pub fn page_flags(virt: usize) -> Option<MemFlags> {
-    let pte = walk(current_root(), virt, None).ok()?.get();
+    let pte = walk(current_root(), virt).ok()?.get();
     if pte.has(PteFlags::S) {
         return None;
     }

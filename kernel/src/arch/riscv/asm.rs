@@ -230,9 +230,29 @@ _redoubt_syscall_return_result:
     RESTORE x2, 1
     sret
 
+/*
+    The flushes (arch/riscv/mem.rs, `flush`; kernel/memory-layout.md, "`satp`"). An ASID in a
+    register is that ASID, 0 included; only `x0` stands for every ASID, so the global form has
+    its own name.
+*/
 .global flush_mmu
 flush_mmu:
     sfence.vma
+    ret
+
+.global flush_asid
+flush_asid:
+    sfence.vma zero, a0
+    ret
+
+.global flush_page
+flush_page:
+    sfence.vma a0, a1
+    ret
+
+.global flush_page_global
+flush_page_global:
+    sfence.vma a0, zero
     ret
 "#,
     context_area = const PROCESS_AREA,

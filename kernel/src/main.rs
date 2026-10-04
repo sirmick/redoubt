@@ -57,6 +57,8 @@ pub unsafe extern "C" fn init(
 ) {
     args::KernelArguments::init(arg_offset);
     platform::early_init();
+    // Before anything else writes `satp` (kernel/boot.md, "Hardware bounds").
+    arch::process::check_asid_field();
     let args = args::KernelArguments::get();
     // A process reaches a device only through its device handle: a boot whose arguments still
     // carry a device grant (`Grnt`) is refused rather than run as if it granted something.

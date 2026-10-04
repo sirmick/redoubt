@@ -15,8 +15,7 @@ pub mod process;
 pub mod smp;
 pub mod syscall;
 
-/// The running PID: the kernel's own record of it, which `satp` no longer carries
-/// (kernel/memory-layout.md, "`satp`").
+/// The running PID: the kernel's own record of it (kernel/memory-layout.md, "`satp`").
 pub use process::current_pid;
 
 pub fn init() {
