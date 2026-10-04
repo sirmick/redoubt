@@ -1,0 +1,7 @@
+2026-10-03T00:56:05Z k20: checkpoint done (7 runs, no kernel change); finding does not reproduce on main 31dfad3f0 (469/472 rv64, 468/469 rv32; pad 800 moves <=2, upward); question to orchestrator; waiting. Detail .worktrees/k20/.k20/checkpoint.md
+2026-10-03T00:57:22Z k20: read billing paths (irq/time/sched/stride bill); drafted direct check .worktrees/k20/.k20/direct-check-draft.md; no kernel change; waiting for re-rule
+2026-10-03T01:13:57Z k20: re-ruled; fix written (time.rs Expired, irq.rs timer arm, sched.rs bill_from_now/leave order/trace I B E O), oracle check + unit test, page lines; running host tests, then cases
+2026-10-03T01:17:44Z k20: fix as ruled drops flood share to 418/395 (empty timer interrupts on the attacker now nobody's); blocking question sent; detail .worktrees/k20/.k20/question-empty-timer.md; nothing committed
+2026-10-03T01:19:27Z k20: stale timer cause found (settle's immediate timeout after mark's note_timeout); scratch move of note_timeout into settle's block branch: empty walks 5236->0, timer entries 5697->461, share 494/493 net rv64; scratch reverted; answer sent
+2026-10-03T01:40:28Z k20: second ruling implemented (message.rs arm-on-block, stale-wait billing, oracle, third case 'cancelled-waits' 2 waiters 15 ms); flood 494/494/490 rv64, 492/492/491 rv32; negative fails both widths; doccheck ok; whole bench running; nothing committed
+2026-10-03T02:01:23Z k20: committed 2de60cc58; whole bench 280 PASS/1 SKIP + size-budget PASS after raise; flood 494/494/493 rv64, 492/492/492 rv32; negative fails both widths; reported

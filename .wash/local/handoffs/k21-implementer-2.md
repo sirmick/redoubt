@@ -1,0 +1,1 @@
+See /home/mcloonan/redoubt/.wash/local/K21-handoff-2.md. Tip wp-k21 4333cdea2 (slice commit 2dc04ae37; checker fix 4333cdea2, unsafe-budget PASS). Round-4 table complete, slice stands, no page edit. Remaining: rebase onto main ccf648bad, focused cases + gate on rebased tip, whole bench on orchestrator's word after RT1's.

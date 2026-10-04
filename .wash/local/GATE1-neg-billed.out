@@ -1,0 +1,13 @@
+      qemu seed 13 (TESTBENCH_QEMU_SEED=13 replays it)
+FAIL  kernel-containment [rv64, smp=1] 163.4s  sched_oracle: sched_oracle: 530845 records, 105730 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (15 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 17533 object frames, µs p50/p99/max 18647/22373/22373, their threads' ending 2902/3540/3540, no audit inside one; 230 audits, 2563532 µs; lease end p99, net decision wake 7932 + R10 22373 = 30305 µs: target met (<= 125000)
+      gate driver_wake (200): net p50/p99/max 8824/10808/19906 µs, gross 8824/10808/23325, audits 3419 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate timer_wake (64): net p50/p99/max 8054/9772/9772 µs, gross 8054/9772/9772, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate decision_wake (9): net p50/p99/max 7857/7932/7932 µs, gross 7857/7932/7932, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      gate deadline_notice (18): net p50/p99/max 23192/44761/44761 µs, gross 82060/114541/114541, audits 1158065 µs: target missed (p99 <= 40000)
+      qemu seed 13 (TESTBENCH_QEMU_SEED=13 replays it)
+FAIL  kernel-containment [rv32, smp=1] 130.9s  sched_oracle: sched_oracle: 570487 records, 113661 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (16 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 17501 object frames, µs p50/p99/max 18715/22357/22357, their threads' ending 3004/3672/3672, no audit inside one; 230 audits, 2488980 µs; lease end p99, net decision wake 8272 + R10 22357 = 30629 µs: target met (<= 125000)
+      gate driver_wake (200): net p50/p99/max 9111/11333/20450 µs, gross 9111/11333/23587, audits 3137 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate timer_wake (64): net p50/p99/max 8420/9908/9908 µs, gross 8420/9908/9908, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate decision_wake (9): net p50/p99/max 8268/8272/8272 µs, gross 8268/8272/8272, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      gate deadline_notice (18): net p50/p99/max 23349/45577/45577 µs, gross 84249/117066/117066, audits 1191401 µs: target missed (p99 <= 40000)
+Error: 2 test(s) failed; console logs are in /work/.worktrees/gate1/target/testbench

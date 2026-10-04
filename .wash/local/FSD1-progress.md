@@ -1,0 +1,12 @@
+- 2026-10-02: read brief + list; asked orchestrator node identity across rename (A path+id recommended); building servers/fsd toward checkpoint on (A).
+- 2026-10-02: CHECKPOINT: attach/walk/open/read/write/stat through 9P on in-memory range pass (2 tests). Uncommitted. Reported; waiting.
+- 2026-10-02: committed wire corrupt (49edc410d), rt fid_node (ccde70ba2). qid version attr 2 done. 9 server tests pass. Mutations: labels->[] fails labels test; id check skipped fails remove test; blank() always true fails 4 mount tests. Next: typed tests, integration (fake blkd + client lib + admission), pages, toml, budgets.
+- 2026-10-02: 3 commits (wire 839f5698b, rt 94e3a1349, fsd 0baabbb4f); gates pass: fsd/littlefs/client/rt/wire/r4 host tests, fsd-build both widths, formatting, docs, size, unsafe. Whole bench not run (needs orchestrator's word).
+- 2026-10-02: fix round 1 in (943309106, 432fd5d11); gates 0; P1a held.
+- 2026-10-02: ruling applied; tip 970f7ddfd (wire, rt, littlefs, fsd); gates 0.
+- 2026-10-03: red round 2 fixed; tip e617d004e; gates 0; C oracle run once OK.
+- 2026-10-03: red round 3 fixed; tip d863f2d93; gates 0.
+- 2026-10-03: red round 4 fixed; tip 836c4f545; gates 0.
+- 2026-10-03: red round 5 OK; dir case added to a_rename_cut_short_still_mounts; tip f8e2e9bdb, clean tree; waiting for bench word.
+- 2026-10-03: rebased onto main 2ab6dc81c, tip 9e17379a8; focused gates 0; whole bench running (bg).
+- 2026-10-03: whole bench (--allow-skip, both widths, alone): exit 0, 325 PASS, 0 FAIL, 1 SKIP (bench-ssh-loopback-openssh: podman not installed). Tip 9e17379a8, clean.

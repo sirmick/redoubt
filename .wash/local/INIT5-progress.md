@@ -1,0 +1,8 @@
+- 2026-10-03T15:53:07Z place batched (PLACE_PAGES=64), bound counts one batch; client-host-tests 0; init host bound test updated (ipd 147->64); 4-move test passes; asked orchestrator A/B for fake refuse-after (3rd-batch failure test). Next: init-boot/beamlet-boot bound on both widths when no whole bench runs.
+- 2026-10-03T15:56:59Z committed f7eb33a7b (place batched, bound, pages). init-boot bound 447 both widths, beamlet-boot 416 both widths (was 1059/1286), both PASS. client/init host tests, docs, unsafe 0; size-budget raised (client 632, init 1828). Waiting on orchestrator A/B for the 3rd-batch failure test.
+- 2026-10-03T15:59:05Z fake commit b0611ae6f + client commit ebac4ebf7; both failure and peak tests pass; first report sent.
+- 2026-10-03T16:10:18Z 929719bdd INIT_PAGES 1024; all focused cases + host gates 0; awaiting whole-bench word.
+- 2026-10-03T16:12:42Z red notes taken; tip 2a60f1ad2; gates 0.
+- 2026-10-03T16:13:22Z simplifier note 2 taken; tip 4bc7648a5
+- 2026-10-03T16:14:08Z editor notes taken; tip b7d73c4f8
+- 2026-10-03T16:16:08Z red r2 comment taken

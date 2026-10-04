@@ -1,0 +1,13 @@
+- 2026-10-02: rules 1-5 coded in servers/init (restarts.rs + init.rs); init-build both widths PASS; all existing init cases PASS after test programs park. Next: case 3 init-reboot.
+- case 1 init-restart PASS both widths, committed. Finding: consoled files cap shared by init+all children (account-0 fold). Next: case 2 init-rollback.
+- cases 2,4,5 PASS both widths, committed (ec3bf7c89, latest). Next: case 6 launcher-orphan.
+- case 6 launcher-orphan PASS both widths (tester launches C; L mints+hands C's conn). Next: pages, size budget, rebuild commits, gates.
+- branch rebuilt: 5 commits d1cace744..a4f303f80 on 7135c5fed; each stage validated; fmt/doccheck/budgets/host tests PASS. Report draft in INIT3-report.md. Waiting: rebase word + whole-bench word.
+- consoled fids fix committed 26b5140d3; report+handoff updated.
+- rebased on main 2ab6dc81c, tip 1ce772734; focused gates all 0. Whole bench held.
+- page edit folded into 99da3c455; tip 10a9155df; doccheck 0.
+- simplifier round folded; tip 5c49e6973; init 1819; focused gates 0.
+- red fixes folded; new case init-handed-revoked; tip 309881828; gates 0; report rewritten.
+- red fixes folded; init-handed-revoked; tip 309881828; gates 0; report rewritten.
+- red re-review notes folded; tip d45b6e5d7.
+- netd/keyd/blkd lines folded into e230bc025; tip 444644996.

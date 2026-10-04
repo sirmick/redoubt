@@ -1,0 +1,135 @@
+amend! kernel: 511 processes of 255 threads, and every walk follows what exists
+
+kernel: 511 processes of 255 threads, and every walk follows what exists
+
+The limits grow to the values the system is meant to run with:
+
+  MAX_PROCESS_COUNT   64 -> 511
+  MAX_THREADS         31 -> 255
+  MAX_OPEN_CALLS      64 -> 256
+  MAX_START_HANDLES   64 -> 128
+  WAIT_CAP            16 -> 32
+  MAX_DEPTH            8 -> 16
+  MAX_LABELS           8 -> 16
+
+in redoubt-sys, the kernel and the model's spec alike.
+
+The process limit is held below the ASID field, 2^9 in Sv32 and 2^16 in
+Sv39, and PID 0 is never a process, so every PID fits it: once the
+kernel flushes by ASID, a process's PID is its ASID with no table or
+offset between them. ASID_BITS sits beside MAX_PROCESS_COUNT with a
+compile-time assert on each width; 512, ten bits, would not fit Sv32.
+
+A set of TIDs no longer fits a word. bits.rs holds one fixed set,
+Bits<W>, walked by set bit. TidMask is Bits<4> and is a process's
+allocated threads, its ready threads (ProcessState::Ready and Running)
+and its account's live threads. find_next_thread is one function on
+both widths, the next ready TID above the current one or else the
+lowest, where it had a de Bruijn lookup on rv32.
+
+Every walk of the processes now follows the processes that exist, not
+the limit. Before this, a walk read every slot and skipped the empty
+ones. At 512 PIDs that failed the containment gate: the bystander's
+share fell to 752 of a floor of 783, and budget_destroy took 63 ms.
+- The accounts keep live_pids, a PidMask (Bits<8>) of the PIDs with
+  an account, set at process_created and cleared at process_ended.
+  find_thread, next_timeout, both of budgets_dying's walks,
+  sweep_handles, destroy_subtree's victims and holds_process iterate
+  it. So do the scheduler's Runnable::fill and next_thread, which
+  read the process table by PID; PID 1 has no account, so they no
+  longer test for it.
+- The PID index of process objects keeps process_pids beside it, set
+  and cleared in index_process. find_process (process::budgets_dying
+  and endpoints_dying) and migrate_held_pids iterate it. Before,
+  migrate_held_pids also copied the whole 4 KiB index onto the stack.
+- A checked build audits both sets against a scan of their tables:
+  live_pids at every create and end, process_pids with the PID index.
+- pids() is left for drawing a free PID and for the checked build's
+  handle-chain audit.
+
+The stride queue's scans already visit only queued budgets (the commit
+before this one).
+
+On the gate (rv64, qemu seed 13), per destruction, live slots visited
+against slots visited, measured at 512 PIDs: find_process 42 of 2,816
+before, 42 of 42 now; migrate_held_pids 512 before, 8 now. At 511 the
+gate passes: share 829, R10 p50/p99 20,740/25,253 us (18,648/22,383 at
+64 PIDs before the values), budget_destroy call to return 55.3 ms.
+Most of the rest of that call is the checked build's audit after the
+walk (37.9 ms p50, measured before the rebase onto K21), which R10
+does not count. decision_wake p50 is 7.7 ms and deadline_notice net p99 28.7 ms.
+
+The kernel's data region grows from 512 KiB to 1 MiB on both widths.
+At these values the release kernel's .data and .bss were 464,368 B on
+rv64 and left under 64 KiB of the old region. MEMORY_MANAGER alone is
+410,312 B on rv64 and 406,144 B on rv32, about 800 B a PID: the
+accounts with their handle tables, and the object indexes. link.x and
+link64.x give RAM 1024K at the same origin, and assert that the region
+ends below the kernel stack's lowest page. The region costs no RAM
+until it is used: the loader backs each segment's p_memsz
+(loader/src/image.rs), the kernel's allowed range is KERNEL_AREA to the
+top of the address space (loader/src/main.rs), and nothing in
+libs/layout bounds the region. Now .data + .bss are 468,808 B on rv64
+(579,768 B of headroom) and 460,480 B on rv32 (588,096 B).
+
+process_ending's endpoints to pump, one per thread, are a static
+(SERVED, .bss). A stack array was 4 KiB of the 32 KiB kernel stack at
+255 threads.
+
+The cases follow the values:
+- thread-limit counts 255 threads in a set of words.
+- process-lifecycle makes 520 exits over PIDs to 511.
+- redoubt-ipc abandons 256 calls and counts 256 notices, in up to four
+  attempts per open call, as at 64. redoubt-filler offers half the
+  bound, which leaves the server room to take the client's abandoned
+  calls first.
+- budget-test's depth ladder is MAX_DEPTH - 4 levels.
+- budget-syscall-attack's over-long label count is MAX_LABELS + 1.
+- pid-reuse-authority draws from 510 PIDs: 8,192 tries keep its odds of
+  missing A's PID at about e^-16, where 1,024 left them at e^-2, and
+  its timeout is 120 s.
+- redoubt-sys's own tests: the receive record is 32 slots, and the
+  hostile per-kind test fills every label slot and tries a label count
+  of MAX_LABELS.
+- fsd's argument test gives MAX_LABELS + 1 labels, where it gave a
+  fixed nine, which 16 admits.
+- init's watcher test lifts root's page limit as it lifts system's
+  process limit: at MAX_THREADS - 1 servers their watchers' pages pass
+  init's 1,024, and the test is about the threads.
+- bundle-mapped checks the boot split from the boot table: root has
+  MAX_PROCESS_COUNT - 1 processes, 510, system a quarter, 127, and
+  users the rest less init's one, 382, where it pinned 15 and 47.
+
+Two host tests pinned 48, which is MAX_OPEN_CALLS less the headroom at
+64. libs/rt's admit.rs tests and servers/ipd's sizing tests now derive
+the bound from the two constants. At 256, ipd's budget binds before the
+bound does, and the sizing test says so.
+
+The model: a thread bomb lasts MAX_THREADS + 9 steps, and coverage's
+and the traces test's random sequences are 450 steps, long enough for
+it. Before, a 150-step trace with a bomb never got past it, and
+R2NoWaitCap and R4OverdrawOnDelivery replayed unnoticed. The flood's
+server budget has a page for each open call, and its crowd is large
+enough that more than MAX_OPEN_CALLS calls can queue. With 200 pages
+and 3 to 8 accounts, the three R4a mutations went uncaught. The suite
+takes 428 s (526 s before).
+
+The pages give the new values: the kernel README, abi (the receive and
+budget-spec records and the exit notice at 16 labels), budgets (the
+boot table), invariants, ipc (and its walk line), memory-layout (kernel
+data 1 MiB), model (the constants and the flood), objects, processes,
+scheduling, timer, servers/init and serving, todo/kernel-attack-gaps,
+and userland/beamlet, native and sessions. libs/rt's label.rs comment
+names MAX_LABELS as 16.
+
+bits.rs has no unsafe and is listed in the kernel's core budget; the
+count stays 18.
+
+Size budget: kernel: 8,029 -> 8,081 for the bit sets (bits.rs), the
+live-PID and process-object sets with their checked audits, and SERVED,
+less the shift masks and rv32's de Bruijn lookup they replace.
+Size budget: model: 10,239 -> 10,240 for FLOOD_THREADS, the flood's
+fixed 31 threads a process, now apart from MAX_THREADS.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+

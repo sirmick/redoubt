@@ -1,0 +1,59 @@
+      sched_oracle: 54476 records, 8531 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (46 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9444 object frames, µs p50/p99/max 571/978/2024, their threads' ending 7/13/73, no audit inside one; 837 audits, 712573 µs
+      N=1 driver_wake (200): net p50/p99/max 7818/9269/22953 µs, gross 7818/9269/23311, audits 358 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 8087/28434/162617 µs, gross 8087/28434/162617, audits 430 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 7838/8462/22581 µs, gross 7838/8462/22963, audits 1327 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 6811/7411/8326 µs, gross 6811/7411/8326, audits 0 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 7061/37194/150653 µs, gross 7061/37194/150653, audits 0 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 6831/7378/7452 µs, gross 6831/7378/7452, audits 0 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 5274/7490/7490 µs, gross 5274/7490/7490, audits 0 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 5424/138111/138111 µs, gross 5424/138111/138111, audits 0 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 5312/25889/25889 µs, gross 5312/25889/25889, audits 0 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 732/896/896 µs, gross 1975/2137/2137, audits 61681 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1169/1293/1293 µs, gross 3426/3540/3540, audits 103970 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 842/1007/1007 µs, gross 2297/2461/2461, audits 70966 µs: no target
+PASS  sched-latency-tcg [rv64, smp=1]   60.5s
+      sched_oracle: 54458 records, 8526 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (55 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9409 object frames, µs p50/p99/max 547/937/2535, their threads' ending 7/10/93, no audit inside one; 837 audits, 672621 µs
+      N=1 driver_wake (200): net p50/p99/max 7812/8366/23556 µs, gross 7812/8366/23906, audits 350 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 8127/39301/142103 µs, gross 8127/39301/142103, audits 0 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 7848/8609/23714 µs, gross 7848/8609/24090, audits 376 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 6803/7357/7445 µs, gross 6803/7357/7445, audits 0 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 7101/38113/140354 µs, gross 7101/38113/140354, audits 0 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 6858/7438/7572 µs, gross 6858/7438/7572, audits 0 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 5266/8324/8324 µs, gross 5266/8324/8324, audits 0 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 5443/148797/148797 µs, gross 5443/148797/148797, audits 0 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 5325/25652/25652 µs, gross 5325/25652/25652, audits 0 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 767/1005/1005 µs, gross 1941/2189/2189, audits 59265 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1145/1271/1271 µs, gross 3227/3383/3383, audits 97147 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 791/971/971 µs, gross 2155/2318/2318, audits 66879 µs: no target
+PASS  sched-latency-tcg [rv32, smp=1]   60.6s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 61306 records, 9947 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (46 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9444 object frames, µs p50/p99/max 3627/5580/5581, their threads' ending 31/32/32, no audit inside one; 837 audits, 7447266 µs; lease end p99, net decision wake 17919 + R10 5580 = 23499 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 9138/9631/17559 µs, gross 9138/9631/20911, audits 3352 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 11314/32410/33145 µs, gross 11314/32410/33145, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 9536/10828/21192 µs, gross 9540/12295/21192, audits 3438 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 8048/8542/8550 µs, gross 8048/8542/8550, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 10068/31343/42352 µs, gross 10068/31343/42352, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 8047/9678/18935 µs, gross 8047/9678/18935, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 5931/5931/5931 µs, gross 5931/5931/5931, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 7155/17919/17919 µs, gross 7155/17919/17919, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 6668/6669/6669 µs, gross 6668/6669/6669, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 4231/4232/4232 µs, gross 19752/19753/19753, audits 770315 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 5351/5352/5352 µs, gross 22450/22450/22450, audits 854935 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 4883/12529/12529 µs, gross 21825/28518/28518, audits 815640 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv64, smp=1]       16.0s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 61291 records, 9974 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (36 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9409 object frames, µs p50/p99/max 3662/5863/5865, their threads' ending 35/36/36, no audit inside one; 837 audits, 7171559 µs; lease end p99, net decision wake 29493 + R10 5863 = 35356 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 9556/10046/25861 µs, gross 9556/10046/28935, audits 3074 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 12154/34045/34244 µs, gross 12154/34045/34244, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 10506/11480/30008 µs, gross 10506/11480/30008, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 8425/8917/8928 µs, gross 8425/8917/8928, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 10990/32947/34708 µs, gross 10990/32947/34708, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 8368/10269/30850 µs, gross 8368/10269/30850, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 6718/17119/17119 µs, gross 6718/17119/17119, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 7612/29493/29493 µs, gross 7612/29493/29493, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 6407/6409/6409 µs, gross 6407/6409/6409, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 4429/4435/4435 µs, gross 19514/19520/19520, audits 747922 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 5608/5615/5615 µs, gross 22316/22323/22323, audits 835359 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 4508/5144/5144 µs, gross 19744/21713/21713, audits 795133 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv32, smp=1]       12.9s
+exit 0

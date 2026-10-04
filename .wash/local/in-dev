@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# in-dev -- run one command inside the dev container, in the caller's current directory.
+#
+# This host has no RISC-V toolchain or QEMU of its own: every cargo, bench and mdbook command
+# runs in the image dev.sh builds. The project is mounted at /work; a worktree's .git file
+# names the host path of the main checkout, so the same path is made to exist inside the
+# container (a symlink to /work) before the command runs, and git works from any worktree.
+# The firmware is the main checkout's, which a worktree does not build.
+#
+#   .wash/local/in-dev cargo testbench --arch rv64 redoubt-ipc
+#   .wash/local/in-dev cargo +nightly fmt --all --check
+set -euo pipefail
+ROOT=/home/mcloonan/redoubt
+exec "$ROOT/dev.sh" bash -c '
+    sudo mkdir -p "$(dirname "$1")" && sudo ln -sfn /work "$1"
+    export RUSTSBI_PROTOTYPER="$1/bios/target/riscv64gc-unknown-none-elf/release/rustsbi-prototyper"
+    export RUSTSBI_PROTOTYPER_RV32="$1/bios/target/riscv32imac-unknown-none-elf/release/rustsbi-prototyper"
+    cd "$2" && shift 2 && exec "$@"
+' _ "$ROOT" "$PWD" "$@"

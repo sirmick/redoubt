@@ -1,0 +1,12 @@
+diff --git a/kernel/src/arch/riscv/mem.rs b/kernel/src/arch/riscv/mem.rs
+index 125b5a0fc..fd8ff3f8d 100644
+--- a/kernel/src/arch/riscv/mem.rs
++++ b/kernel/src/arch/riscv/mem.rs
+@@ -42,6 +42,7 @@ extern "C" {
+ 
+ /// Drop what `flush` covers from this hart's cached translations.
+ fn flush(flush: Flush) {
++    crate::kcount::sfence();
+     #[cfg(debug_assertions)]
+     audit::flushed(flush);
+     // SAFETY: each routine (asm.rs) is one `sfence.vma` and a `ret`. Dropping cached translations

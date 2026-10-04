@@ -1,0 +1,144 @@
+diff --git a/kernel/src/arch/riscv/irq.rs b/kernel/src/arch/riscv/irq.rs
+index 57be452ac..b18aded9d 100644
+--- a/kernel/src/arch/riscv/irq.rs
++++ b/kernel/src/arch/riscv/irq.rs
+@@ -18,6 +18,7 @@ extern "Rust" {
+ fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
+     // Leaving the kernel: the scheduler's exit hook (`sched.rs`, accounting at the trap boundary).
+     crate::sched::leave(current_pid());
++    crate::kcount::exit(sstatus::read().spp() == sstatus::SPP::User);
+     #[cfg(debug_assertions)]
+     crate::arch::mem::audit::returning();
+     // SAFETY: `_redoubt_syscall_return_result` (asm) writes `args` into the return registers
+@@ -122,6 +123,7 @@ pub extern "C" fn trap_handler(
+     a6: usize,
+     a7: usize,
+ ) -> ! {
++    crate::kcount::entry();
+     let sc = scause::read();
+ 
+     // If we were previously in Supervisor mode and we've just tried to write to
+diff --git a/kernel/src/arch/riscv/mod.rs b/kernel/src/arch/riscv/mod.rs
+index a1afbc374..48899eef4 100644
+--- a/kernel/src/arch/riscv/mod.rs
++++ b/kernel/src/arch/riscv/mod.rs
+@@ -45,7 +45,9 @@ pub fn init() {
+ pub fn idle() -> bool {
+     // Park the hart until an interrupt is pending.
+     // SAFETY: `wfi` has no memory effect.
++    crate::kcount::idle_begin();
+     unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
++    crate::kcount::idle_end();
+ 
+     // Briefly enable interrupts in Supervisor mode so any pending one drains into its
+     // userspace handler; otherwise interrupts stay disabled while in Supervisor mode.
+diff --git a/kernel/src/arch/riscv/syscall.rs b/kernel/src/arch/riscv/syscall.rs
+index 4bb78b81a..79e3c1db7 100644
+--- a/kernel/src/arch/riscv/syscall.rs
++++ b/kernel/src/arch/riscv/syscall.rs
+@@ -20,6 +20,7 @@ fn set_supervisor(supervisor: bool) {
+ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
+     // Leaving the kernel: the scheduler's exit hook (`sched.rs`, accounting at the trap boundary).
+     crate::sched::leave(crate::arch::current_pid());
++    crate::kcount::exit(!supervisor);
+     #[cfg(debug_assertions)]
+     crate::arch::mem::audit::returning();
+     // SAFETY: sets sepc, the address `sret` will resume at. Harmless until the `sret` in
+diff --git a/kernel/src/kcount.rs b/kernel/src/kcount.rs
+new file mode 100644
+index 000000000..fb57519b3
+--- /dev/null
++++ b/kernel/src/kcount.rs
+@@ -0,0 +1,64 @@
++//! LOCAL INSTRUMENT, never committed (ASID1's cost trace): time in user mode, in the kernel and
++//! idle in `wfi`, in `time` ticks, and the `sfence.vma`s run, printed at every `time_now`.
++
++use crate::cell::KernelCell;
++
++#[derive(Default)]
++struct Counts {
++    since: usize,
++    in_user: bool,
++    user: u64,
++    kernel: u64,
++    idle: u64,
++    sfence: u64,
++    entries: u64,
++}
++
++static C: KernelCell<Counts> =
++    KernelCell::new(Counts { since: 0, in_user: false, user: 0, kernel: 0, idle: 0, sfence: 0, entries: 0 });
++
++fn now() -> usize { riscv::register::time::read() }
++
++/// The ticks since the open interval began; a new one starts now.
++fn close(c: &mut Counts) -> u64 {
++    let t = now();
++    let d = t.wrapping_sub(c.since) as u64;
++    c.since = t;
++    d
++}
++
++/// A trap entered the kernel.
++pub fn entry() {
++    C.with(|c| {
++        if c.in_user {
++            c.in_user = false;
++            c.user += close(c);
++            c.entries += 1;
++        }
++    })
++}
++
++/// The kernel returns, to user mode if `to_user` (else to `kmain`, which is kernel time).
++pub fn exit(to_user: bool) {
++    C.with(|c| {
++        if to_user && !c.in_user {
++            c.kernel += close(c);
++            c.in_user = true;
++        }
++    })
++}
++
++pub fn idle_begin() { C.with(|c| c.kernel += close(c)) }
++pub fn idle_end() { C.with(|c| c.idle += close(c)) }
++pub fn sfence() { C.with(|c| c.sfence += 1) }
++
++/// Print the totals so far (the caller is in the kernel).
++pub fn snapshot() {
++    let (user, kernel, idle, sfence, entries) = C.with(|c| {
++        c.kernel += close(c);
++        (c.user, c.kernel, c.idle, c.sfence, c.entries)
++    });
++    println!("[kcount] user {} kernel {} idle {} sfence {} entries {}", user, kernel, idle, sfence, entries);
++    // The print itself is not the measured window's.
++    C.with(|c| c.since = now());
++}
+diff --git a/kernel/src/main.rs b/kernel/src/main.rs
+index fafb82a77..54f0555d3 100644
+--- a/kernel/src/main.rs
++++ b/kernel/src/main.rs
+@@ -30,6 +30,7 @@ mod dma;
+ mod endpoint;
+ mod handle;
+ mod io;
++mod kcount;
+ mod kframe;
+ mod mem;
+ mod message;
+diff --git a/kernel/src/redoubt.rs b/kernel/src/redoubt.rs
+index 283a9734c..de1051817 100644
+--- a/kernel/src/redoubt.rs
++++ b/kernel/src/redoubt.rs
+@@ -157,7 +157,10 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
+         }
+         Call::DeviceInfo { device } => MemoryManager::with(|mm| mm.device_info(pid, device.index()))
+             .map(|info| Some(Return::Device(info))),
+-        Call::TimeNow => Ok(Some(Return::Time(crate::time::now_us()))),
++        Call::TimeNow => {
++            crate::kcount::snapshot();
++            Ok(Some(Return::Time(crate::time::now_us())))
++        }
+         Call::Random => {
+             let mut bytes = [0u8; 8];
+             crate::platform::rand::fill(&mut bytes);

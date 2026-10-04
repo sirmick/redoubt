@@ -1,0 +1,7 @@
+- 12:06 BEAM1: brief and reading list read; probing OTP module set on fake-redoubt
+- 12:11 thread::spawn + host tests done; beamlet bin builds rv64 (5.1MB); asked orchestrator re otp debug profile (going with A); next: case.rs workspace field + erlang compile step
+- 12:13 BLOCKED-ish: init INIT_PAGES bound refuses beamlet image (asked orchestrator, A/B/C); going on locally with strip+opt-s
+- 12:31 rulings applied (profile, INIT_PAGES 2048); beamlet-boot PASS; blocked on init-refuses-bound design
+- 12:38 beamlet-console PASS rv64+rv32 (rv32 word-width fix); next heap-flood
+- 12:39 heap-flood drafted; waiting on 2 rulings (bound case, flood design)
+- 12:55 heap-flood ruling: half-budget limit fails (101) at 1/2,1/4,1/6; 1/8 passes rv64 only; asked Architect

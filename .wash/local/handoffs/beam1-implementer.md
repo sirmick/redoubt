@@ -1,0 +1,1 @@
+BEAM1 handoff: /home/mcloonan/redoubt/.wash/local/BEAM1-handoff.md. Next step 0 is the heap-limit ruling (7c220e3e, BEAM1-heap-limit-ruling.md): both limits at budget/16; beamlet's budget 4,096 pages; budget_pages required (BAD_ARGS otherwise); add the docs/todo file. I was past 30%, so none of it is committed. Tip e533f695c is a WIP (the tree is at 1/2).

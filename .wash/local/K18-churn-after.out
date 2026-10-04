@@ -1,0 +1,14 @@
+      sched_oracle: 8374 records, 902 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 99 lifts by the rule (8 with a leading parent and work to move); 297 weight changes by the rule; R10 97 destructions over up to 8848 object frames, µs p50/p99/max 975/2864/2864, their threads' ending 0/32/32, no audit inside one; 160 audits, 1692679 µs
+      share blocking: net 948, gross 936 of 1000, audits 25207 µs: target met (450 <= share <= 1000)
+      share spinning-parent: net 494, gross 403 of 1000, audits 369563 µs: target met (450 <= share <= 1000)
+      share deadline: net 982, gross 973 of 1000, audits 18615 µs: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 947, gross 935 of 1000, audits 25374 µs: target met (450 <= share <= 1000)
+      share shell: net 500, gross 264 of 1000, audits 942450 µs: target met (450 <= share <= 550)
+PASS  sched-budget-churn [rv64, smp=1]   2.6s
+      sched_oracle: 8065 records, 928 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 88 lifts by the rule (8 with a leading parent and work to move); 264 weight changes by the rule; R10 86 destructions over up to 8843 object frames, µs p50/p99/max 1067/2978/2978, their threads' ending 0/35/35, no audit inside one; 147 audits, 1462938 µs
+      share blocking: net 946, gross 935 of 1000, audits 23952 µs: target met (450 <= share <= 1000)
+      share spinning-parent: net 495, gross 416 of 1000, audits 317049 µs: target met (450 <= share <= 1000)
+      share deadline: net 981, gross 972 of 1000, audits 17908 µs: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 945, gross 934 of 1000, audits 24134 µs: target met (450 <= share <= 1000)
+      share shell: net 499, gross 293 of 1000, audits 826107 µs: target met (450 <= share <= 550)
+PASS  sched-budget-churn [rv32, smp=1]   2.3s

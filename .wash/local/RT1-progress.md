@@ -1,0 +1,5 @@
+- 2026-10-03T07:35:07Z count 14 confirmed; heap words/set_words (80ee9be68, 12) and premapped (11) committed; deliverable 1 asked (panic_handler in non-entry! test bins); next: heap tests into own miri file
+- 2026-10-03T07:48:16Z premapped committed 745939099 (11). heap tests moved to tests/heap.rs (uncommitted; miri 1k rounds ~1m, no UB, 29 leaks from fake map_anon usize keys). Asked orchestrator: fake keeps ptr (K16) vs ignore-leaks. Waiting on both questions.
+- 2026-10-03T07:59:15Z all three removals + heap-under-miri committed (5 commits, HEAD 5b5a6bfe2), count 10, gates green; first report sent; next keepers + SAFETY rewrite
+- 2026-10-03T08:04:33Z keepers + SAFETY + pages committed (HEAD b7f22cd53); gates green; second report sent; next: Red findings, rebase over FSD1 on word
+- 2026-10-03T08:15:28Z review edits folded per owning commit; tip 869314122; size 2920 (+1 assert, +2 premapped), per-commit size/unsafe gates pass; skipped simplifier 4,5 with reasons

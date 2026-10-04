@@ -1,0 +1,1 @@
+See /home/mcloonan/redoubt/.wash/local/FSD2-handoff.md. The Q2 re-ruling (pair_room, no allowance) is already applied and committed: wp-fsd2 tip 28bf55ec6, six final commits. RESERVE = 0 follows the ruling's gate section and is with the Architect for confirmation. Still to do: run the focused gates on the tip and report. Open deviation: quota-0 create stays refused.

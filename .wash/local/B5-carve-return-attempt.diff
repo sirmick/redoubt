@@ -1,0 +1,48 @@
+diff --git a/tests/programs/src/bin/sched-carve-return.rs b/tests/programs/src/bin/sched-carve-return.rs
+index d3f6b03d8..a1f92f983 100644
+--- a/tests/programs/src/bin/sched-carve-return.rs
++++ b/tests/programs/src/bin/sched-carve-return.rs
+@@ -25,10 +25,14 @@ pub extern "C" fn _start() -> ! {
+     let vi = b.start(v, Role::Spin, &[], &[]);
+     let (start, end) = b.go(50_000, WINDOW);
+     let counts = b.collect(2);
+-    let us = b.share(counts[ui], end - start - CARVED);
++    // U's share from its carve's return; the post-check judges it net of the checked build's
++    // audits (the carve's destruction runs one), which a release build does not run.
++    let us = b.judged_share("u-after-return", counts[ui], (start + CARVED, end), (500 - TOL, 1000));
+     let vs = b.share(counts[vi], end - start);
+-    b.note(format_args!("after its carve returned, U got {} of 1000; V {} over the window", us, vs));
+-    b.check(us + TOL >= 500, format_args!("U got its half back after its carve returned: {} of 1000", us));
++    b.note(format_args!(
++        "after its carve returned, U got {} of 1000; V {} over the window: gross, audits included; net in the post-check",
++        us, vs
++    ));
+     b.finish("SCHED-CARVE-RETURN")
+ }
+ 
+diff --git a/tests/sched-carve-return.toml b/tests/sched-carve-return.toml
+index a0a9b736b..80a32a156 100644
+--- a/tests/sched-carve-return.toml
++++ b/tests/sched-carve-return.toml
+@@ -1,13 +1,19 @@
+-description = "The lead follows the weight: a budget that carves most of its weight away while it runs, then returns it, gets its half back against an equal victim (virtual time, checked build)"
++description = "The lead follows the weight: a budget that carves most of its weight away while it runs, then returns it, gets its half back against an equal victim; its share judged by the post-check net of the checked build's audits inside its window (virtual time, checked build)"
+ arch = ["rv64", "rv32"]
+ kind = "boot"
+ debug_assertions = true
+ icount = "shift=3,sleep=off"
+ programs = ["sched-carve-return"]
++# Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
++# judges U's share, which the program prints with its window (`SHARE`), net of the audit time
++# inside it (kernel/scheduling.md, "Responsiveness").
++kernel_features = ["sched-trace"]
++post_check = "sched_oracle"
+ timeout_secs = 600
+ expect = [
+-    '^\[carve-return\] ok: U got its half back',
++    '^SHARE u-after-return \d+ \d+ \d+ 450 1000$',
+     '^SCHED-CARVE-RETURN TEST PASSED$',
++    '^SCHED-TRACE-END \d+ dropped 0$',
+ ]
+ forbid = ['\[carve-return\] FAIL']
+ poweroff = true

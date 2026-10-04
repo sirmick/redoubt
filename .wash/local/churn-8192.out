@@ -1,0 +1,7 @@
+      sched_oracle: 11047 records, 930 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 88 lifts by the rule (6 with a leading parent and work to move); 264 weight changes by the rule; R10 86 destructions over up to 8846 object frames, µs p50/p99/max 1066/2979/2979, their threads' ending 0/35/35, no audit inside one; 147 audits, 1462973 µs; 879 timer interrupts billed by the rule (12 expiring, 0 finding a wait ended early, 14917 ticks after expiry to the budget billed last; 867 ending a slice, 0 nobody's)
+      share blocking: net 946, gross 934 of 1000, audits 23962 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share spinning-parent: net 490, gross 412 of 1000, audits 317177 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share deadline: net 980, gross 971 of 1000, audits 17911 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 944, gross 933 of 1000, audits 24144 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share shell: net 499, gross 292 of 1000, audits 826219 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 550)
+PASS  sched-budget-churn [rv32, smp=1]   2.4s

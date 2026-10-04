@@ -1,0 +1,1 @@
+architect-9 handoff: /home/mcloonan/redoubt/.wash/local/architect-9-handoff.md (rulings with files; merge checks done and owed: FSD2 rule-5 commit, B7, INIT4, K16, M1 edit after INIT4; open: K19 with owner, RT2 at merge, SMP2 checkpoint). Watch lists in architect-9-notes.md.

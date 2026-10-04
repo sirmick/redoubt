@@ -1,0 +1,15 @@
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 537125 records, 106986 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (15 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 17533 object frames, µs p50/p99/max 18344/21786/21786, their threads' ending 2625/3043/3043, no audit inside one; 231 audits, 2565851 µs; lease end p99, net decision wake 7943 + R10 21786 = 29729 µs: target met (<= 125000)
+      gate driver_wake (200): net p50/p99/max 8746/11017/29783 µs, gross 8746/11017/33205, audits 3422 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate timer_wake (64): net p50/p99/max 8054/9772/9772 µs, gross 8054/9772/9772, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate decision_wake (9): net p50/p99/max 7858/7943/7943 µs, gross 7858/7943/7943, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      gate deadline_notice (18): net p50/p99/max 24171/33928/33928 µs, gross 93957/114626/114626, audits 1179940 µs: target met (p99 <= 40000)
+PASS  kernel-containment [rv64, smp=1] 217.1s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 578463 records, 115254 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (16 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 17501 object frames, µs p50/p99/max 18409/21738/21738, their threads' ending 2729/3166/3166, no audit inside one; 230 audits, 2482561 µs; lease end p99, net decision wake 8383 + R10 21738 = 30121 µs: target met (<= 125000)
+      gate driver_wake (200): net p50/p99/max 9119/11037/30854 µs, gross 9119/11037/34002, audits 3148 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate timer_wake (64): net p50/p99/max 8420/9907/9907 µs, gross 8420/9907/9907, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate decision_wake (9): net p50/p99/max 8268/8383/8383 µs, gross 8268/8383/8383, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      gate deadline_notice (18): net p50/p99/max 22673/25347/25347 µs, gross 83565/96852/96852, audits 1191612 µs: target met (p99 <= 40000)
+PASS  kernel-containment [rv32, smp=1] 150.3s
+exit 0

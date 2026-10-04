@@ -1,0 +1,1 @@
+architect-8 handoff: /home/mcloonan/redoubt/.wash/local/architect-8-handoff.md (rulings with files; open: SMP3/SMP2 briefs, M1 edit at init close, K19 with owner; merge checks for FSD1, INIT3, K21, K16, RT1 in architect-8-notes.md). K16 data-region ruling (1 MiB, no shrink) already sent.

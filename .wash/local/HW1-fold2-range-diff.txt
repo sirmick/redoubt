@@ -1,0 +1,97 @@
+1:  a0fa4d527 = 1:  a0fa4d527 kernel: a TID always fits the byte that records the last one
+2:  add73f8f2 = 2:  add73f8f2 layout: user space and the kernel half held to the page-table formats
+3:  1fdd112f0 ! 3:  585de34d9 loader, docs: a device past the loader's table stops the boot
+    @@ Commit message
+         a larger machine booted without some of its devices. A 33rd of either
+         now stops the boot, naming the region or the interrupt and the limit,
+         and powers off under R17 as the loader's other refusals do. Host tests
+    -    build a tree with 31 devices and the PLIC, one with 32 devices, and
+    -    one whose device raises 33 interrupts.
+    +    build a tree with 31 devices and the PLIC, one with 32 devices, one
+    +    whose device raises 33 interrupts, and one whose two devices raise
+    +    the same 32, which take 32 slots, not 64.
+     
+         boot.md gains "Hardware bounds": the rule that every constant
+         mirroring a hardware field or platform limit is held to it, and a
+         table of each one and how it is checked. R17 lists the loader's
+    -    device-table refusal and its three tests, and so does SECURITY.md.
+    +    device-table refusal and its four tests, and so does SECURITY.md.
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+    @@ docs/SECURITY.md: lines planned. Side channels cross every box and are listed be
+      | No byte of the bundle is parsed or run before its signature checks | [R15 (verified boot)](kernel/boot.md#r15-verified-boot) | `loader/src/verify.rs`, `libs/signing/src/lib.rs` | bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:testbench::golden_signature_over_a_known_archive | built, partly tested | The loader itself is unverified on QEMU; the development key is public; no rollback protection ([more](kernel/boot.md#residual-risks)) |
+      | The loader confines every image to its own area and refuses a truncated one | [R16 (image confinement)](kernel/boot.md#r16-image-confinement) | `loader/src/image.rs` | bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, bench:loader-rejects-truncated-elf | built, partly tested | The kernel trusts the loader's handoff ([more](kernel/boot.md#residual-risks)) |
+     -| A bad signature, a short random seed or a missing timebase powers the machine off | [R17 (fail closed)](kernel/boot.md#r17-fail-closed) | `loader/src/main.rs`, `loader/src/dt.rs`, `kernel/src/arch/riscv/timer_sbi.rs`, `kernel/src/platform/sbi/rand.rs` | bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused, host:loader::a_boot_hart_without_an_s_mode_context_is_refused, host:loader::booting_on_hart_1_takes_hart_1s_s_mode_context | built, partly tested | A short seed and a missing timebase are not attacked; the device tree is not signed ([more](kernel/boot.md#residual-risks)) |
+    -+| A bad signature, a short random seed or a missing timebase powers the machine off | [R17 (fail closed)](kernel/boot.md#r17-fail-closed) | `loader/src/main.rs`, `loader/src/dt.rs`, `kernel/src/arch/riscv/timer_sbi.rs`, `kernel/src/platform/sbi/rand.rs` | bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused, host:loader::a_boot_hart_without_an_s_mode_context_is_refused, host:loader::booting_on_hart_1_takes_hart_1s_s_mode_context, host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept | built, partly tested | A short seed and a missing timebase are not attacked; the device tree is not signed ([more](kernel/boot.md#residual-risks)) |
+    ++| A bad signature, a short random seed or a missing timebase powers the machine off | [R17 (fail closed)](kernel/boot.md#r17-fail-closed) | `loader/src/main.rs`, `loader/src/dt.rs`, `kernel/src/arch/riscv/timer_sbi.rs`, `kernel/src/platform/sbi/rand.rs` | bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused, host:loader::a_boot_hart_without_an_s_mode_context_is_refused, host:loader::booting_on_hart_1_takes_hart_1s_s_mode_context, host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept, host:loader::an_interrupt_two_devices_raise_takes_one_slot | built, partly tested | A short seed and a missing timebase are not attacked; the device tree is not signed ([more](kernel/boot.md#residual-risks)) |
+      | A program runs only with a startup block that passed every rule | [R31 (startup block checked whole)](servers/init.md#r31-startup-block-checked-whole) | `libs/rt/src/startup.rs` | bench:rt-host-tests, host:redoubt-rt::hostile_blocks_are_refused, host:redoubt-rt::fields_hold_whole_entries, host:redoubt-rt::handle_names_follow_the_manifest_rule, host:redoubt-rt::image_round_trips_and_is_validated, host:redoubt-rt::handle_counts_are_what_process_start_can_install, host:redoubt-rt::random_bytes_never_panic, fuzz:redoubt-rt/startup | built | The startup block's fuzz target runs outside the bench ([more](servers/init.md#residual-risks)) |
+      | No launcher parses an ELF; a hostile image hurts only its own process | [R32 (a hostile image hurts only its process)](servers/init.md#r32-a-hostile-image-hurts-only-its-process) | `stub/src/main.rs`, `stub/src/lib.rs` | bench:stub-launch, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::read_image_refuses_an_image_len_over_the_cap, host:stub::plan_refuses_a_segment_over_its_own_image, host:stub::the_fuzz_corpus_still_passes | built, partly tested | On target, the kernel's refusal hides the stub's overlap checks ([more](servers/init.md#residual-risks)) |
+      | Only `init` and the steward ever hold a `system`-class budget | [R33 (no server holds a system budget)](servers/init.md#r33-no-server-holds-a-system-budget) | `servers/init/src/check.rs`; the policy is modelled in `model/src/steward.rs` | bench:init-refuses-budget-handle, host:redoubt-init::a_server_handed_a_budget_is_refused | built, partly tested | A system server that hands one across is at fault, not the kernel ([more](servers/init.md#residual-risks)) |
+    @@ docs/kernel/boot.md: ignores a completion for a disabled source), then masks it
+      
+     +### Hardware bounds
+     +
+    -+Status: built · partly tested: the compile-time bounds hold by the build and are not attacked by a case; the loader's device-table refusal is tested on the host, not by a boot · tested: host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept
+    ++Status: built · partly tested: the compile-time bounds hold by the build and are not attacked by a case; the loader's device-table refusal is tested on the host, not by a boot · tested: host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept, host:loader::an_interrupt_two_devices_raise_takes_one_slot
+     +
+     +Every constant that mirrors a hardware field or a platform limit is held to it. A field the
+     +ISA fixes is a compile-time assert on each width, so a build that breaks it does not exist. A
+    @@ docs/kernel/boot.md: ignores a completion for a disabled source), then masks it
+     +| `MAX_THREADS` | the kernel's 8-bit last-TID field | compile time |
+     +| `USER_AREA_END` | Sv39's lower half (2^38 bytes); Sv32's half below the kernel's | compile time |
+     +| the kernel-half bases (rv64) | Sv39 canonical addresses | compile time |
+    ++| the PTE and satp PPN | Sv32's 22 bits, Sv39's 44 | follows from the physmap's bounds |
+     +| the handle slot's frame index | the physmap's frames | compile time |
+     +| the kernel's windows (PLIC, DMA registers, process area, stacks) | each other and the physmap | compile time |
+     +| the physmap | the RAM the platform reports | at boot |
+    @@ docs/kernel/boot.md: would be written into all of them.
+      ### R17 (fail closed)
+      
+     -<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals are tested on the host, not by a boot · tested (5)</summary>
+    -+<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals and the loader's device-table refusal are tested on the host, not by a boot · tested (8)</summary>
+    ++<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals and the loader's device-table refusal are tested on the host, not by a boot · tested (9)</summary>
+      
+      - bench:verified-boot-rejects-tamper
+      - bench:verified-boot-rejects-bare-archive
+    @@ docs/kernel/boot.md: would be written into all of them.
+     +- host:loader::a_33rd_mmio_region_is_refused
+     +- host:loader::a_33rd_interrupt_is_refused
+     +- host:loader::thirty_two_devices_are_kept
+    ++- host:loader::an_interrupt_two_devices_raise_takes_one_slot
+      
+      </details>
+      
+    @@ loader/src/dt.rs: mod tests {
+     +    fn machine(extended: &[u32], hart: usize) -> Platform { machine_with(extended, hart, 0, 0) }
+     +
+     +    /// [`machine`], booted on hart 0 with every context wired, and `devices` virtio devices
+    -+    /// beside the PLIC, a page of MMIO each: the first raises interrupts `1..=irqs`.
+    ++    /// beside the PLIC, a page of MMIO each, every one raising interrupts `1..=irqs`.
+     +    fn devices(devices: usize, irqs: u32) -> Platform {
+     +        machine_with(&[1, M, 1, S, 2, M, 2, S], 0, devices, irqs)
+     +    }
+    @@ loader/src/dt.rs: mod tests {
+     +            let base = 0x1000_1000 + i as u32 * 0x1000;
+     +            t.begin(&std::format!("virtio_mmio@{:x}", base)).prop("compatible", b"virtio,mmio\0");
+     +            t.cells("reg", &[0, base, 0, 0x1000]);
+    -+            if i == 0 {
+    -+                t.cells("interrupts", &(1..=irqs).collect::<Vec<u32>>());
+    -+            }
+    -+            t.end();
+    ++            t.cells("interrupts", &(1..=irqs).collect::<Vec<u32>>()).end();
+     +        }
+     +        t.end().end();
+              let mut storage = Vec::new();
+    @@ loader/src/dt.rs: mod tests {
+     +    #[test]
+     +    #[should_panic(expected = "interrupt 33 is past the loader's 32")]
+     +    fn a_33rd_interrupt_is_refused() { devices(1, 33); }
+    ++
+    ++    #[test]
+    ++    fn an_interrupt_two_devices_raise_takes_one_slot() {
+    ++        // 64 entries, 32 distinct interrupts: the table counts interrupts, not entries.
+    ++        let platform = devices(2, 32);
+    ++        assert_eq!(platform.irq[..platform.irq_len], *(1..=32).collect::<Vec<u32>>());
+    ++    }
+      }
