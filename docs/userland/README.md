@@ -113,8 +113,8 @@ flowchart TB
     NAT -.->|"launch in a carved budget"| N["native programs on redoubt-rt"]
     N -.->|"9P"| SRV
 ```
-*Figure: the userland layers of one session. Every arrow is planned (dashed);
-beamlet itself is built and runs on the host ([beamlet](beamlet.md)).*
+*Figure: the userland layers of one session. The arrows show planned session wiring (dashed);
+beamlet already boots the shell on Redoubt's UART with verified modules ([beamlet](beamlet.md)).*
 
 Three layers, each with one job:
 - **A beamlet VM per session.** beamlet is a BEAM interpreter in safe Rust. One VM is one trust
