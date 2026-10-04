@@ -25,7 +25,7 @@ use crate::spawn::{self, Image};
 /// Iterations between clock checks in the counting loop.
 const CHUNK: u64 = 256;
 /// The slice (kernel/scheduling.md, "Preemption points"), in microseconds.
-pub const SLICE_US: u64 = 10_000;
+pub const SLICE_US: u64 = 1_000;
 
 // The latency workload (kernel/scheduling.md, "Responsiveness"), one definition used by both
 // `sched-latency` and `kernel-containment`. The targets are the case files' post-check bounds.

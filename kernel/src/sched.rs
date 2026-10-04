@@ -58,7 +58,7 @@ use crate::mem::MemoryManager;
 use crate::ptable::{ArchProcess, ProcessTable};
 
 /// Time slice, in microseconds (kernel/timer.md, "The hart timer").
-pub const SLICE_US: u64 = 10_000;
+pub const SLICE_US: u64 = 1_000;
 
 struct Sched {
     /// The queue, the budget whose runtime is accruing (on the CPU, or in the kernel on its

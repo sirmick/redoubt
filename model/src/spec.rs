@@ -22,8 +22,8 @@ pub const MAX_DEPTH: u64 = 16;
 pub const WAIT_CAP: u64 = 32;
 /// Stride scheduling numerator.
 pub const STRIDE: u64 = 1 << 20;
-/// Time slice, in microseconds (10 ms).
-pub const SLICE: u64 = 10_000;
+/// Time slice, in microseconds (1 ms).
+pub const SLICE: u64 = 1_000;
 /// A timeout that never expires.
 pub const FOREVER: u64 = u64::MAX;
 /// Live `dma_alloc` runs per device (kernel/devices.md, "`dma_alloc`").
