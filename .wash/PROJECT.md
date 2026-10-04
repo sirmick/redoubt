@@ -86,11 +86,12 @@ Launch restrictions belong to the adapter, not to the model name. Read
 `about.permissions.launch_setting_support` before setting them. Every member has
 `can_spawn:false` and instructions forbidding helper agents; add `subagents:"deny"` when the
 adapter supports it. The former removes Wash spawning authority; instructions alone do not
-remove a provider's own subagent tool. Require `capability:"reviewer"` for enforced read-only
-review, without `approval:"auto"`. If the selected adapter cannot provide that capability,
-report the mismatch and use an owner-approved compatible catalog for that reviewer, or obtain
-an explicit exception for instruction-only review. Never claim a mode name or role instruction
-is enforced read-only access. Preview these settings before launching the panel.
+remove a provider's own subagent tool. Reviewers use the selected catalog and are explicitly
+instructed not to modify source or any other files, create artifacts, stage, commit or push.
+Adapter-enforced read-only access is optional; its absence does not require a provider switch
+or owner exception. Omit `capability:"reviewer"` when the adapter does not support it. If used,
+do not combine it with `approval:"auto"`. Describe instruction-only restrictions accurately;
+do not claim they are adapter enforcement. Preview settings before launching the panel.
 
 ## Environment preflight
 
@@ -121,7 +122,7 @@ one `workspace_configure` patch, each with `node:"<package>"`, `lifetime:"reside
 Size the panel to the risk ([SWARM](SWARM.md#two-tiers)):
 
 - Tier A: `<package>-implementer` plus `<package>-red` (`workhorse`), `<package>-simplifier` and
-  `<package>-editor` (`light`, `capability:"reviewer"`).
+  `<package>-editor` (`light`); all three receive the reviewer restrictions above.
 - Tier B: `<package>-implementer` plus one reviewer, `<package>-red` if the diff touches a
   capability, a label boundary, an approval or another budget, else `<package>-editor`. Several
   Tier B packages share one review round.
