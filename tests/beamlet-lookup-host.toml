@@ -1,0 +1,5 @@
+description = "A refused verified module or application stays refused at the VM boundary; absent names can use an authorized code path"
+kind = "host-tests"
+workspace = "userland/otp"
+packages = ["beamlet-vm", "beamlet-redoubt"]
+features = ["beamlet-redoubt/fake"]

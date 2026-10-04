@@ -1,0 +1,4 @@
+description = "The host beamlet lookup keeps its existing search and root confinement"
+kind = "host-tests"
+workspace = "userland/otp"
+packages = ["beamlet"]
