@@ -1,8 +1,9 @@
 # beamlet
 
 A small BEAM (Erlang/Elixir) interpreter in safe Rust, for the redoubt64 microkernel. Security,
-auditability and simplicity come first. It currently runs on the host; the Redoubt platform is
-planned. See [its page](../../docs/userland/beamlet.md).
+auditability and simplicity come first. It runs on the host and on Redoubt, where it boots the
+Elixir shell on the UART console and loads verified modules from the userland disk. File
+operations and native launching on Redoubt remain planned. See [its page](../../docs/userland/beamlet.md).
 
 Differential/Elixir tests require OTP 28.5.0.6 and Elixir 1.20.4. The dev container provides
 both under `/opt/toolchains` and sets `BEAMLET_TOOLCHAINS` to it; on your own machine they live in

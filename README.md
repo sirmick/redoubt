@@ -13,9 +13,11 @@ runs on the machine is Rust, with no C, so the trusted computing base can be rea
 Every security claim names the rule that makes it, the code that enforces it and the attack case
 that tests it.
 
-**Today** the kernel runs and is attack-tested on QEMU, on rv64 and rv32, with the network driver
-and the TCP/IP server above it; the boot file, key and console servers are built and host-tested;
-the steward, SSH sessions and agents come next ([the plan](docs/plan/m1-separation.md)).
+**Today** the kernel runs and is attack-tested on QEMU, on rv64 and rv32. `init` boots the
+drivers, file, network, key and console servers, and the Elixir shell runs on the UART console
+with verified modules from a userland disk. The VM's file operations and native launching, the
+steward server, SSH sessions and agents remain to be integrated
+([the plan](docs/plan/m1-separation.md)).
 
 ## Goals
 
@@ -23,9 +25,9 @@ the steward, SSH sessions and agents come next ([the plan](docs/plan/m1-separati
   in over SSH into Elixir sessions and are kept apart; Alice's agent runs contained under a lease;
   the attack suite passes.
   How far along: the kernel, the serving library, the drivers and the network server, the file
-  system's core, `bootfsd`, `consoled`, `keyd`, the loader stub and beamlet are built and
-  attack-tested; `init`'s manifest handling, the `fsd` server, the steward, `sshd`, sessions and
-  the agent are not built yet.
+  system, `bootfsd`, `consoled`, `keyd`, the loader stub and `init` are built and attack-tested.
+  beamlet boots the shell on the UART; the steward's policy core and `sshd`'s core are tested on
+  the host. The running steward, SSH sessions and leased agents are still planned.
 - [M2 (usable shell)](docs/plan/m2-usable-shell.md), **planned**: the Elixir shell is a working
   environment, with a command mode, file operations, native programs and pipes, jobs, line editing
   and the editor.

@@ -107,7 +107,8 @@ sources are in it with `readelf --debug-dump=info` (a `kernel/src/main.rs` compi
 
 ## beamlet
 
-beamlet, the Elixir VM, runs on the host. Its differential and Elixir suites also need
+beamlet, the Elixir VM, runs on the host and boots the shell on Redoubt's UART console
+(`cargo testbench userland-boot`). Its differential and Elixir suites also need
 OTP 28.5.0.6 and Elixir 1.20.4. `tools/env.sh` puts `otp-28.5.0.6/bin` and `elixir-1.20.4/bin`
 under `BEAMLET_TOOLCHAINS` on the path, and with that unset, the same directories under the
 repository's untracked `toolchains/`. The container provides both under `/opt/toolchains`, OTP
@@ -126,9 +127,9 @@ tools/elixir-tests            # Elixir's own suite on beamlet
 ## The shell
 
 Redoubt's shell, `Redoubt.Shell` in `userland/shell`, is a read-eval-print loop over Elixir of
-Redoubt's own, not IEx ([the shell](docs/userland/shell.md)). Until beamlet runs on Redoubt it is
-developed on the host, on beamlet, with the same pinned OTP and Elixir as above; `./shell` puts
-them on the path itself.
+Redoubt's own, not IEx ([the shell](docs/userland/shell.md)). It boots on Redoubt's UART console;
+file operations and native launching on the machine remain planned. Host development uses
+beamlet with the same pinned OTP and Elixir as above; `./shell` puts them on the path itself.
 
 ```sh
 ./shell                       # the shell, the VM's / at userland/shell/_build/sandbox
