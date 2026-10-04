@@ -3,6 +3,8 @@
 # out is not built, so the case that names it fails rather than the host test build.
 lib = { test = false, doctest = false }
 bin = [
+    { name = "asid-cost", test = false },
+    { name = "asid-reuse-stale", test = false },
     { name = "boot-stack-reservation", test = false },
     { name = "budget-carve-attack", test = false },
     { name = "budget-deadline", test = false },

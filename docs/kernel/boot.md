@@ -243,7 +243,7 @@ through the PLIC ([timer](timer.md)). The loader drops an interrupt 0 that a dev
 
 ### Hardware bounds
 
-Status: built · partly tested: the compile-time bounds hold by the build and are not attacked by a case; the loader's device-table refusal is tested on the host, not by a boot · tested: host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept, host:loader::an_interrupt_two_devices_raise_takes_one_slot
+Status: built · partly tested: the compile-time bounds hold by the build and are not attacked by a case; the loader's device-table refusal and the kernel's ASID-width refusal are tested on the host, not by a boot (every QEMU hart has the whole field) · tested: host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept, host:loader::an_interrupt_two_devices_raise_takes_one_slot, host:paging::the_asid_width_decision
 
 Every constant that mirrors a hardware field or a platform limit is held to it. A field the
 ISA fixes is a compile-time assert on each width, so a build that breaks it does not exist. A
@@ -253,6 +253,7 @@ is refused ([R17 (fail closed)](#r17-fail-closed)), never truncated.
 | Constant | Field or limit | Checked |
 | --- | --- | --- |
 | `MAX_PROCESS_COUNT` | `satp`'s ASID, 9 bits in Sv32 and 16 in Sv39 ([`satp`](memory-layout.md#satp)) | compile time |
+| `ASID_BITS` | the hart's satp ASID field, found by writing ones to it | at boot |
 | `MAX_THREADS` | the kernel's 8-bit last-TID field | compile time |
 | `USER_AREA_END` | Sv39's lower half (2^38 bytes); Sv32's half below the kernel's | compile time |
 | the kernel-half bases (rv64) | Sv39 canonical addresses | compile time |
@@ -514,7 +515,7 @@ would be written into all of them.
 
 ### R17 (fail closed)
 
-<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals and the loader's device-table refusal are tested on the host, not by a boot · tested (9)</summary>
+<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals, the loader's device-table refusal and the kernel's ASID-width refusal are tested on the host, not by a boot · tested (10)</summary>
 
 - bench:verified-boot-rejects-tamper
 - bench:verified-boot-rejects-bare-archive
@@ -525,6 +526,7 @@ would be written into all of them.
 - host:loader::a_33rd_interrupt_is_refused
 - host:loader::thirty_two_devices_are_kept
 - host:loader::an_interrupt_two_devices_raise_takes_one_slot
+- host:paging::the_asid_width_decision
 
 </details>
 
@@ -542,6 +544,10 @@ The two boot cases require the power-off and QEMU's status 255.
 A device tree with a PLIC but no S-mode context for the boot hart stops the boot too
 ([the `Plic` row](#the-argument-block)), and so does one with more MMIO regions or interrupts
 than the loader's 32 of each ([hardware bounds](#hardware-bounds)).
+
+The kernel refuses a hart whose `satp` ASID field is narrower than `ASID_BITS`, naming both
+widths: it writes ones to the field, reads it back and counts the bits that stuck, before
+anything else writes `satp` ([hardware bounds](#hardware-bounds)).
 
 The loader refuses to boot when RAM does not fit in the kernel's direct physical map
 (`PHYSMAP_SIZE` from `PHYSMAP_PHYS_BASE`, [memory layout](memory-layout.md#the-direct-physical-map)),

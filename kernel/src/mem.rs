@@ -955,6 +955,9 @@ impl MemoryManager {
     /// took when it fails), so its tables name every frame the process owns: the root, the tables,
     /// the header page, and the pages `process_map` moved in.
     pub fn release_owned_frames(&mut self, pid: Pid, space: &MemoryMapping) {
+        // Off the dying space, and its ASID flushed, before any of its frames is free
+        // (kernel/memory-layout.md, "`satp`").
+        crate::arch::mem::leave(space);
         let kernel = Pid::new(1).unwrap();
         // One walk of the process's own tables, never of every frame of RAM (R12;
         // kernel/budgets.md, "Residual risks"). A frame it has lent out is still mapped in the

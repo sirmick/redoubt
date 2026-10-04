@@ -323,12 +323,13 @@ A reused PID inherits nothing. A process that draws a PID another process held g
 process's handles, mappings, badges, open calls, messages, notices, interrupts or device
 access. Everything the kernel keeps per PID is emptied when a process ends (its handle table, its
 frames, its threads' IPC pages and open calls, its message-id counter, the DMA devices its death
-must reset) and made afresh by `process_create`. The hardware address-space id is reused with
-the PID, and every address-space switch flushes the whole TLB, so no cached translation of the
-earlier process survives. No authority is keyed by PID: a handle is an entry in a table, an
-interrupt reaches whoever receives on its device's handle, and message ids are per receiving
-process ([R14 (unforgeable sender)](ipc.md#r14-unforgeable-sender)). And a PID is not reused
-while a notice still names it, so every notice names exactly one ended process.
+must reset) and made afresh by `process_create`. The PID is also the hardware address-space id,
+flushed whole when the PID is given out again, before it first runs, so no cached translation of
+the earlier process survives ([`satp`](memory-layout.md#satp)). No authority is keyed by PID: a
+handle is an entry in a table, an interrupt reaches whoever receives on its device's handle, and
+message ids are per receiving process
+([R14 (unforgeable sender)](ipc.md#r14-unforgeable-sender)). And a PID is not reused while a
+notice still names it, so every notice names exactly one ended process.
 
 The attack case gives a first child a badged send handle, an endpoint, the console's interrupt,
 a device mapping and a budget, lets it exit holding a call, and then spawns children until one

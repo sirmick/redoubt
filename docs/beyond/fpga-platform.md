@@ -41,9 +41,9 @@ are stated today as residual risks.
   first-level caches (TileLink), an optional shared second-level cache, 16-bit ASIDs (Sv39's
   whole field; the width is a generation parameter), PMP, the debug module and performance
   counters. Its interrupt controller, timer and I/O region are remapped to `virt`'s addresses.
-  The ASID is that wide so that every process ID the kernel can make fits it: once the kernel
-  flushes by ASID ([ISA features](#isa-features)), the process ID is the tag, with no table
-  between the two.
+  Every process ID the kernel can make fits it, and the process ID is the tag, with no table
+  between the two ([`satp`](../kernel/memory-layout.md#satp)); the kernel refuses a core
+  generated with a narrower field.
 - **Two harts per core.** VexiiRiscv carries a hart ID down its pipeline and indexes its
   register file by it, but about 25 assertions still force one hart. The barrel removes the
   cross-hart bypass and hazard logic; what is duplicated per hart is the PC, the CSRs, the MMU
@@ -165,11 +165,11 @@ machines.
 
 Standard extensions that make Redoubt faster without weakening it, each testable on QEMU first:
 - **Early:**
-  - **ASIDs, used properly.** The kernel writes ASID 0 in `satp` and flushes the whole TLB on
-    every switch and after every page-table change, the kernel's global entries with it. Its
-    process IDs are 16 bits, so on this core each can be its own ASID
-    ([the core](#the-system-on-chip)): flushing by address and ASID, and a whole ASID when its
-    process ID is reused, is the biggest saving on the IPC path.
+  - **ASIDs, used properly** (built). Each process's ID is its ASID: a switch flushes nothing,
+    and a page-table change flushes by address and ASID with the kernel's global entries
+    standing, a whole ASID when its process ID is given out again
+    ([`satp`](../kernel/memory-layout.md#satp)). QEMU cannot show the saving, since its TLB is
+    not tagged by ASID; this core's is, and the IPC path is where it pays.
   - **Sstc,** so setting the timer is a CSR write, not a trap into the firmware on almost every
     dispatch.
   - **Zicboz,** for the zeroing [R11 (memory)](../kernel/memory.md#r11-memory) does on every

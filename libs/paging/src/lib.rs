@@ -35,25 +35,81 @@ use core::ptr::NonNull;
 
 use redoubt_sys::PAGE_SIZE;
 
-// Mode-specific parameters. Sv32: 2 levels of 1024 entries, 10 VPN bits, satp mode bit 31.
-// Sv39: 3 levels of 512 entries, 9 VPN bits, satp mode 8<<60. The ASID field is left 0.
+pub mod tlb;
+
+// Mode-specific parameters. Sv32: 2 levels of 1024 entries, 10 VPN bits. Sv39: 3 levels of 512
+// entries, 9 VPN bits. Each width's `satp` is laid out as `SV32_SATP` or `SV39_SATP` says.
 #[cfg(target_pointer_width = "32")]
 mod mode {
     pub const LEVELS: usize = 2;
     pub const ENTRIES: usize = 1024;
     pub const VPN_BITS: usize = 10;
-    pub const SATP_MODE: usize = 1 << 31;
-    pub const SATP_PPN_MASK: usize = (1 << 22) - 1;
+    pub const SATP: super::SatpLayout = super::SV32_SATP;
 }
 #[cfg(target_pointer_width = "64")]
 mod mode {
     pub const LEVELS: usize = 3;
     pub const ENTRIES: usize = 512;
     pub const VPN_BITS: usize = 9;
-    pub const SATP_MODE: usize = 8 << 60;
-    pub const SATP_PPN_MASK: usize = (1 << 44) - 1;
+    pub const SATP: super::SatpLayout = super::SV39_SATP;
 }
 pub use mode::*;
+
+/// Where one width's `satp` fields lie (the privileged spec's `satp`): the mode, the address-space
+/// id (ASID) and the root table's physical page number. A 64-bit build has both layouts, so the
+/// host tests check each; a 32-bit build has Sv32's alone.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SatpLayout {
+    /// The mode field holding this width's paging mode, in place.
+    pub mode: usize,
+    /// The ASID field's lowest bit.
+    pub asid_shift: u32,
+    /// The ASID field's width: 9 bits in Sv32, 16 in Sv39.
+    pub asid_bits: u32,
+    /// The root's physical page number, in the low bits.
+    pub ppn_mask: usize,
+}
+
+/// Sv32: mode bit 31, ASID bits 22 to 30, PPN bits 0 to 21.
+pub const SV32_SATP: SatpLayout =
+    SatpLayout { mode: 1 << 31, asid_shift: 22, asid_bits: 9, ppn_mask: (1 << 22) - 1 };
+/// Sv39: mode 8 in bits 60 to 63, ASID bits 44 to 59, PPN bits 0 to 43.
+#[cfg(target_pointer_width = "64")]
+pub const SV39_SATP: SatpLayout =
+    SatpLayout { mode: 8 << 60, asid_shift: 44, asid_bits: 16, ppn_mask: (1 << 44) - 1 };
+
+impl SatpLayout {
+    const fn asid_mask(self) -> usize { ((1 << self.asid_bits) - 1) << self.asid_shift }
+
+    /// Paging on, the root table at `root_phys`, and `asid`, which must fit the field: the kernel
+    /// gives each process its PID, and the loader 0 for what it builds (kernel/memory-layout.md,
+    /// "`satp`").
+    pub fn make(self, root_phys: usize, asid: usize) -> usize {
+        assert!(asid < 1 << self.asid_bits, "ASID {asid} is wider than satp's field");
+        self.mode | (asid << self.asid_shift) | (root_phys >> 12)
+    }
+
+    /// The root table's physical address.
+    pub fn root(self, satp: usize) -> usize { (satp & self.ppn_mask) << 12 }
+
+    /// The address space's ASID.
+    pub fn asid(self, satp: usize) -> usize { (satp & self.asid_mask()) >> self.asid_shift }
+
+    /// Whether `satp` names an allocated (paging-enabled) address space.
+    pub fn is_active(self, satp: usize) -> bool { satp & self.mode != 0 }
+
+    /// `satp` with its ASID field all ones: what the boot writes to find the hart's field.
+    pub fn with_asid_ones(self, satp: usize) -> usize { satp | self.asid_mask() }
+
+    /// The boot's decision on the ASID field (kernel/boot.md, R17), from the `satp` the hart
+    /// read back after a write of `with_asid_ones`. A hart implements the field's low bits and
+    /// holds the rest at zero, so its width is the run of ones from the lowest bit. `Ok(width)`
+    /// if that holds `needed` bits, or else `Err(width)`: the boot is refused.
+    pub fn asid_width(self, readback: usize, needed: u32) -> Result<u32, u32> {
+        let width = self.asid(readback).trailing_ones();
+        if width >= needed { Ok(width) } else { Err(width) }
+    }
+}
 
 pub const ENTRIES: usize = mode::ENTRIES;
 pub const LEVELS: usize = mode::LEVELS;
@@ -276,13 +332,60 @@ pub fn is_canonical(virt: usize) -> bool {
 #[cfg(target_pointer_width = "32")]
 pub fn is_canonical(_virt: usize) -> bool { true }
 
-/// Build a `satp` value for the root table at `root_phys`, with ASID 0: every switch, map and
-/// unmap flushes the whole TLB, so no address space needs an ASID of its own
-/// (kernel/memory-layout.md, "`satp`").
-pub fn make_satp(root_phys: usize) -> usize { SATP_MODE | (root_phys >> 12) }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// The root table's physical address in a `satp` value.
-pub fn satp_root(satp: usize) -> usize { (satp & SATP_PPN_MASK) << 12 }
+    const LAYOUTS: [SatpLayout; 2] = [SV32_SATP, SV39_SATP];
 
-/// Whether `satp` names an allocated (paging-enabled) address space.
-pub fn satp_is_active(satp: usize) -> bool { satp & SATP_MODE != 0 }
+    #[test]
+    fn satp_round_trips_on_both_layouts() {
+        for layout in LAYOUTS {
+            let top_asid = (1 << layout.asid_bits) - 1;
+            let top_root = layout.ppn_mask << 12;
+            for (root, asid) in [(0x8020_0000, 0), (0x8020_0000, 1), (0x8020_0000, 511), (top_root, top_asid)]
+            {
+                let satp = layout.make(root, asid);
+                assert!(layout.is_active(satp), "{layout:?}");
+                assert_eq!(layout.root(satp), root, "{layout:?}");
+                assert_eq!(layout.asid(satp), asid, "{layout:?}");
+            }
+            assert!(!layout.is_active(0));
+        }
+    }
+
+    #[test]
+    fn a_full_asid_leaves_the_root_and_mode_alone() {
+        for layout in LAYOUTS {
+            let satp = layout.make(0x8020_0000, 0);
+            let ones = layout.with_asid_ones(satp);
+            assert_eq!(layout.root(ones), 0x8020_0000);
+            assert!(layout.is_active(ones));
+            assert_eq!(layout.asid(ones), (1 << layout.asid_bits) - 1);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "wider than satp's field")]
+    fn an_asid_past_the_field_is_refused() { SV32_SATP.make(0x8020_0000, 512); }
+
+    #[test]
+    fn the_asid_width_decision() {
+        for layout in LAYOUTS {
+            let full = layout.asid_bits;
+            let satp = layout.make(0x8020_0000, 0);
+            let read_back = |width: u32| satp | (((1 << width) - 1) << layout.asid_shift);
+            // Every bit stuck.
+            assert_eq!(layout.asid_width(layout.with_asid_ones(satp), full), Ok(full), "{layout:?}");
+            // Exactly the width needed.
+            assert_eq!(layout.asid_width(read_back(9), 9), Ok(9), "{layout:?}");
+            // One bit short: refused, naming what the hart has.
+            assert_eq!(layout.asid_width(read_back(full - 1), full), Err(full - 1), "{layout:?}");
+            // None: a hart without ASIDs.
+            assert_eq!(layout.asid_width(satp, full), Err(0), "{layout:?}");
+            // A bit that sticks above a gap does not widen the field.
+            let gapped = satp | (0b101 << layout.asid_shift);
+            assert_eq!(layout.asid_width(gapped, 2), Err(1), "{layout:?}");
+        }
+    }
+}

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 414
+revision = 418
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -674,7 +674,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K16"]
   body = "Brief: .wash/local/IPC3-implementer.md. Tier A (kernel IPC core), size L. Needs K16 (its worst-walk case is the acceptance).\n\nPer endpoint, intrusive lists: receivers in arrival order (the model's VecDeque), R2 groups ordered by (due, group) with sends and calls in separate chains (R4a), owed abandoned-call notices, and open calls for destruction; per device object, its IRQ waiters. pump, next_sender, irq_ready, R10 step 4's message reach and endpoint destruction walk those lists, never every thread. The model, the oracle, every R2/R3/R4 mutation and the ABI are unchanged; a checked build audits each list. Design checkpoint (layout in .wash/local/IPC3-layout.md) before code.\n\nAlso K16's third residual (todo page 'expiry walks once per wait'): time::expire_due calls next_timeout once per expired wait, each a walk of every live thread of every process whose earliest timeout has come (~16M visits at 250 wakes, est.); the due waits come off the ordered lists, one walk per expiry. The Architect confirms the placement at the layout checkpoint.\n\nAcceptance: K16's worst-walk case back in the whole run with its must_fail removed: one delivery's time at full occupancy equals its time at the smallest fill (within noise), R10 within 30 ms net and the 250-wake expiry far under 28.9 s at full occupancy, on both widths; R12's 'never depends on what other processes hold' holds in fact. Builds docs/kernel/ipc.md, timer.md, scheduling.md (R12), budgets.md (measured list); deletes the two todo pages.\n\nAhead of SMP1 (M2), which does not own message.rs."
   state = "active"
-  revision = 371
+  revision = 416
 
 [[node]]
   id = "HW1"
@@ -703,8 +703,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16"]
   body = "Owner (2026-10-03): build it, after K16 and before SMP1. Brief: .wash/local/ASID1-implementer.md (written against K16's c5/tip; recheck on main after K16 merges). Tier A (kernel memory core), size M.\n\nThe PID is satp's ASID (511 < 2^ASID_BITS); a switch flushes nothing; every page-table write flushes what it changed in the space it changed, running or not: a leaf by (address, ASID), a table pointer by whole ASID, a kernel-half leaf by (address, x0); G exactly on the shared kernel half, never on the per-process PROCESS_AREA path. A PID given out is flushed whole before its first map (MemoryMapping::allocate); a destruction moves satp off the dying space and flushes its ASID before freeing its frames (a garbage G leaf from a freed table would survive ASID flushes). The boot probes the ASID width (ones written to satp) and refuses one narrower than ASID_BITS (R17, HW1's table). A checked build logs unflushed page-table writes and stops at a return to user mode with one pending; it audits G.\n\nAcceptance: asid-reuse-stale and two recorded negatives (asid-no-reuse-flush, asid-no-leaf-flush) on both widths; asid-cost (round trip, switch, map/unmap) before and after on both widths. QEMU's TLB is not tagged by ASID (to confirm from its source), so the saving shows on the FPGA core, not QEMU; a regression is a finding. Whole bench; K16's worst walk and the gate's targets not regressed. Pages: memory-layout.md (satp, G row, residuals), memory.md, processes.md, fpga-platform.md (two bullets), m2-usable-shell.md item 4, boot.md hardware bounds row.\n\nOut: several harts. SMP1 (amended): shootdown flushes the target's ASID on the harts running it; harts that only ran it flush lazily through a per-PID stale mask before they next install it."
-  state = "active"
-  revision = 402
+  state = "done"
+  revision = 418
 
 [[node]]
   id = "ABI1"

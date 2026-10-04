@@ -18,6 +18,8 @@ extern "Rust" {
 fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
     // Leaving the kernel: the scheduler's exit hook (`sched.rs`, accounting at the trap boundary).
     crate::sched::leave(current_pid());
+    #[cfg(debug_assertions)]
+    crate::arch::mem::audit::returning();
     // SAFETY: `_redoubt_syscall_return_result` (asm) writes `args` into the return registers
     // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
     // does not return.

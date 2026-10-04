@@ -317,26 +317,33 @@ question does not arise.
 
 ### `satp`
 
-Status: built · partly tested: no case attacks a translation that outlives an address-space switch or an unmap directly; one hart and a whole-TLB flush at every switch are argued from the code · tested: bench:pid-reuse-authority, bench:uaf-lent-page
+Status: built · partly tested: QEMU's TLB is not tagged by ASID, so a missing flush shows only through the checked build's audit; one hart is argued from the code · tested: bench:asid-reuse-stale, bench:pid-reuse-authority, bench:uaf-lent-page, host:paging::satp_round_trips_on_both_layouts, host:paging::each_flush_covers_what_the_spec_says
 
-`satp` holds the mode and the root table's physical page number (`make_satp`); its ASID is 0 on
-both widths. Every switch, map and unmap flushes the whole TLB (below), so no translation is
-looked up by ASID yet. The process limit is held to the ASID field so that one can be:
-`MAX_PROCESS_COUNT` is below 2 to the power of `ASID_BITS`, 9 in Sv32 and 16 in Sv39, and PID 0
-is never a process, so every PID fits the field, and once the kernel flushes by ASID a process's
-PID is its ASID with no table between them. A compile-time assert holds it on each width. The
-kernel is PID 1; the loader numbers boot processes from 2 and names each one's PID in a field of
-its own in the handoff record ([boot](boot.md)). The kernel's one record of the running PID is
-`current_pid`, set whenever it switches address space (`set_current_pid`). Several harts need no
-ASID either: a TLB shootdown goes to the harts running the process
-([several harts](../plan/m2-usable-shell.md#several-harts)).
+`satp` holds the mode, the root table's physical page number and the ASID (`SatpLayout::make`), and
+a process's ASID is its PID. `MAX_PROCESS_COUNT` is below 2 to the power of `ASID_BITS`, 9 in
+Sv32 and 16 in Sv39, and PID 0 is never a process, so every PID fits the field with no table
+between them. A compile-time assert holds it on each width, and the boot refuses a hart whose
+field is narrower, found by writing ones to it. The kernel is PID 1; the loader numbers boot
+processes from 2 and names each one's PID in a field of its own in the handoff record
+([boot](boot.md)), and the kernel writes each one's ASID when it takes them over. The kernel's
+one record of the running PID is `current_pid`, set whenever it switches address space
+(`set_current_pid`).
 
 The kernel runs in whichever address space was current when it trapped, because every address
-space maps the kernel half. Switching process writes `satp` and then runs `sfence.vma` with no
-arguments, which drops every cached translation on the hart. Every map, unmap, lend, return and
-permission change does the same. The loader enters the kernel through `satp` too: it points
-`stvec` at the kernel's entry and writes `satp`; the next fetch, from the loader's own unmapped
-address, faults, and the trap lands in the kernel with the arguments still in registers.
+space maps the kernel half. The kernel half's shared leaves are global (`G`), so no ASID flush
+drops them. Switching process writes `satp` and flushes nothing: a process's cached translations
+carry its ASID and wait for its next turn. A change to a leaf flushes that address in that
+process's ASID, running or not; a change to a table pointer flushes the process's whole ASID; a
+change to a kernel-half leaf flushes that address in every ASID. A PID's ASID is flushed whole
+when the PID is given out, before it first runs, and a dying process's space is left before any
+of its frames is freed. A checked build logs every page-table write and stops if one is
+unflushed when it returns to user mode. On QEMU every `sfence.vma` and every `satp` change
+empties the whole TLB, so the cases check the kernel's flushes through the checked build's log,
+not through a stale translation; the TLB's reuse across switches shows only on hardware
+([the FPGA platform](../beyond/fpga-platform.md)). The loader enters the kernel through `satp`
+too: it points `stvec` at the kernel's entry and writes `satp`; the next fetch, from the loader's
+own unmapped address, faults, and the trap lands in the kernel with the arguments still in
+registers.
 
 ### Entry bits
 
@@ -364,7 +371,7 @@ title a page-table entry, Sv32's 32 bits. Sv39 carries the PPN on to bit 53 and 
 | 0 | `V` valid | set on every live mapping and every pointer to a next-level table |
 | 1-3 | `R`, `W`, `X` | a leaf has at least one. Never `W` with `X`, never `W` without `R` ([R11](memory.md#r11-memory)): `Pte::leaf` refuses both, and a mapping call's flags are checked before that |
 | 4 | `U` user | on every user-half leaf of a process; on no kernel-half entry |
-| 5 | `G` global | on the kernel's shared leaves: the physmap, the kernel image and stacks |
+| 5 | `G` global | on the kernel's shared leaves: the physmap, the kernel image, the stacks, the PLIC and the DMA register window; never in the user half or on the per-process entry |
 | 6-7 | `A`, `D` | set when the entry is made, because not every hart updates them in hardware; Redoubt never reads them |
 | 8 | `S` lent | software bit: see below |
 | 9 | `P` | software bit, never set |
@@ -426,10 +433,12 @@ user address, and the load faults as a kernel failure.
   the current process maps. On Sv39 the physmap also covers the physical range below RAM, where
   device registers sit, as ordinary kernel read-write memory; the kernel never uses those
   addresses, but a stray write through them reaches a device.
-- **Every change flushes everything.** Each map, unmap, lend and address-space switch runs a
-  global `sfence.vma`, with ASID 0 everywhere, and each flush costs page-table walks afterwards.
-  It is also a flush of this hart only: with more than one hart, another hart's cached
-  translations would survive an unmap (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
+- **A flush acts on this hart only.** Each change flushes its address or its ASID on the hart
+  that makes it; with more than one hart, another hart's cached translations would survive an
+  unmap (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
+- **QEMU cannot show a missing flush.** Its TLB is not tagged by ASID, and it empties it on every
+  `sfence.vma`, whatever its operands, and every `satp` change, so the bench finds a missing
+  flush only through the checked build's audit.
 - **The firmware must delegate instruction page faults to S-mode.** Kernel entry from the loader
   and a thread's return to `EXIT_THREAD` are both instruction page faults the kernel must take.
   The vendored RustSBI delegates them; with a firmware that did not, the boot would never reach
