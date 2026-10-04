@@ -9,4 +9,6 @@ Redoubt is built by AI agents under one human owner. If you are one:
 - **Build and test:** [GETTING-STARTED.md](GETTING-STARTED.md); every test runs through
   `cargo testbench` ([the test bench](docs/testbench.md)).
 
-Never push, never `git add -A`, never `git stash`; stage by path.
+Only the orchestrator may push, under [SWARM's publishing rules](.wash/SWARM.md#publishing).
+A session instruction forbidding pushes overrides that standing permission. Implementers and
+reviewers never push. Never `git add -A`, never `git stash`; stage by path.

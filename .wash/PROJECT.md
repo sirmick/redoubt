@@ -1,7 +1,8 @@
 # Redoubt workspace for Wash
 
-You are Redoubt's orchestrator. Loading this file means: set up the workspace, resume the plan
-and the QA threads, launch the resident Architect, report readiness and wait. Start or continue
+When the owner asks you to start or resume the project, you are Redoubt's orchestrator: set up
+the workspace, restore the plan and QA threads, ensure one resident Architect, report readiness
+and wait. Reading or editing this guide alone does not start a workspace. Start or continue
 packages only when the owner asks for development. Coordinate and integrate; package implementers
 write code. Preserve running Wash.
 
@@ -15,19 +16,27 @@ govern the session; the tenets govern the pages. Read them fresh: merged does no
 
 ## Set up
 
-0. On a fresh clone, or a checkout that may be behind, run `.wash/restore.sh` first: it brings
-   `main`, `.wash/local/` and the package worktrees to the saved state
-   ([saving and resuming](SWARM.md#saving-and-resuming)).
+0. Inspect Git status, branches and worktrees, and the saved orchestrator handoff if present.
+   Preserve local changes and note any incomplete save.
 1. `workspace_get({"view":"about"})`, then `workspace_get({})`. Require API 4 (the plan graph and
    QA thread files). Reuse a Redoubt workspace that is already open; do not dismantle another
-   workspace or duplicate the Architect.
+   workspace or duplicate the Architect. Before restoring a stale checkout, confirm no member
+   is writing the files it would update. On a fresh or stale checkout, `.wash/restore.sh` brings
+   `main`, `.wash/local/` and package worktrees to the saved state
+   ([saving and resuming](SWARM.md#saving-and-resuming)); reconcile any refusal without discarding
+   local work. Verify each existing worktree's branch against its saved remote head too: the
+   script creates missing worktrees, but does not advance existing package branches.
 2. `workspace_configure({"from":".wash/workspace.toml","workspace":{"name":"Redoubt","project_root":"<absolute project root>"}})`.
    The file holds the limits, `qa_dir`, `plan_file`, the legend, `context_warn`, the role
    instructions and the Architect. On a new workspace, `qa_dir` resumes the threads in
    `.wash/qa/` and `plan_file` resumes the plan in `.wash/plan.toml`. Inspect every `launches`
    outcome.
 3. `plan_get`, and reconcile it with the plan page and git: a node the page or the history
-   contradicts is fixed before anything starts.
+   contradicts is fixed before anything starts. Read the orchestrator and active packages'
+   handoffs; verify which commits have review and test evidence and which decisions remain open.
+4. Report the milestone, active and pending packages, local or remote divergence, incomplete
+   saves, review debt and the next available work. Report missing prerequisites from preflight
+   before launching packages. Keep paused implementers paused until development is requested.
 
 The owner runs Redoubt with `approval:"auto"` on every member that can write. Wash grants `auto`
 only from an orchestrator that is itself auto-approved; if setup reports otherwise, ask the owner
@@ -88,14 +97,16 @@ Size the panel to the risk ([SWARM](SWARM.md#two-tiers)):
 
 Each member's own instructions carry its **reading list** (one example of the work, the pages and
 code for its first step), its owned paths, the governing pages and rule IDs, the exact
-deliverables, the test commands and an early reporting checkpoint; the role instructions in
-`workspace.toml` carry the rest. A member's `task` can arrive before it rereads its instructions,
+deliverables, the tier and its reason, the test commands, the affected-summary reading list
+([documentation check](SWARM.md#the-pages-move-with-the-code)) and an early reporting checkpoint.
+The role instructions in `workspace.toml` carry the rest. A member's `task` can arrive before it rereads its instructions,
 so every gate and limit goes in the instructions, not only in the task.
 
 Keep a package's reviewers through review and fix cycles. Create a round's review assignments with
 `assignment_update {updates, wait}` in one call; the results arrive in one turn. Then send one fix
 assignment that cites the findings by reviewer and number. Reviewers complete with
-`cc:["<package>-implementer"]`.
+`cc:["<package>-implementer"]`. Each assignment names the base and head commits; the final verdict
+and test evidence must cover the content that is merged, including affected summaries.
 
 When Wash reports a member past `context_warn`, have it hand off
 ([SWARM](SWARM.md#staging-commits-and-handoffs)), end it, and launch a fresh member under a new
@@ -115,16 +126,23 @@ the orchestrator or a reviewer on the thread's node resolves, with evidence.
 Start a package only when its needs are done. Keep one writer per worktree and one on each
 hotspot. Enforce [SWARM's acceptance](SWARM.md#acceptance) with
 [the test bench](../docs/testbench.md)'s commands, and accept with `plan_accept` as SWARM says.
-Rebase, retest and integrate one package at a time. Keep worktrees, builds, caches and logs on the
-project root's filesystem, and check space before large builds. Never stage another session's
+Rebase, retest, obtain final review and integrate one package at a time. Apply
+[SWARM's publishing check](SWARM.md#publishing) to the entire outgoing range before every push
+of `main`, including a save. A session restriction on pushing overrides standing permission.
+Keep worktrees, builds, caches and logs on the project root's filesystem, and check space before
+large builds. Never stage another session's
 work, use blanket git staging in a shared worktree, restart Wash or replace live assets.
 
-- The whole workspace pauses when the owner's session ends. On return, `member_control resume`
-  the orchestrator and any working member, then a `workspace_configure` patch sets it active.
-- After a backend restart, recovered members are paused: resume them deliberately. Reconcile
+- The whole workspace pauses when the owner's session ends. On return, resume the orchestrator
+  first, reconcile saved state, and report readiness. When the owner asks to continue development,
+  use `member_control resume` for the needed members and set the workspace active through
+  `workspace_configure`.
+- After a backend restart, recovered members are paused: reconcile before resuming them. Reconcile
   uncertain deliveries before `message_retry`, because their effects may already exist.
-- Before any pause the owner announces, and at the end of a working day, save the work
-  ([saving and resuming](SWARM.md#saving-and-resuming)): handoffs, WIP commits on the package
-  branches, then `.wash/save.sh`.
+- Before any pause the owner announces, and at the end of a working day, follow
+  [saving and resuming](SWARM.md#saving-and-resuming): stop new assignments, checkpoint writers,
+  verify members are paused, write member and orchestrator handoffs, review publication, save
+  and verify the remote heads. If pushing is forbidden, preserve local checkpoints and report
+  the missing remote backup. Do not call a partial save complete.
 - Only on a requested teardown, save the work, then call `workspace_end` (with `confirm:true`
   while nodes are open). Teardown is not permission to restart Wash or discard worktrees.

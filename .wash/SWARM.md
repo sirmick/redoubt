@@ -52,7 +52,8 @@ context, so the cheapest capable tier is used.
 - Owns the plan graph: the packages, their order (`needs`) and their state, cut from the
   milestone's remaining work on its plan page, starting with
   [M1 (separation and containment)](../docs/plan/m1-separation.md#remaining-work).
-- Starts a package the moment every node it needs is done, in its own worktree
+- Once the owner has asked for development, starts a package when every node it needs is done,
+  in its own worktree
   (`.worktrees/<package>`) and branch (`wp-<package>`). Wash refuses an earlier start unless the
   call gives an override, which it records on the node.
 - Sizes the review panel to the risk ([running a package](#running-a-package)) and keeps the same
@@ -113,9 +114,9 @@ Builds exactly one package and nothing else, and does not break these rules:
     WIP, fix-round or review-label commits reach the main history.
 
 It reports: what was delivered and the paths changed; the tests run, with exit codes, and each new
-attack case with why its verdict comes from the system; the `unsafe` count before and after, the
-rv32 build and the whole bench; design problems found; open risks; the branch and state; the next
-step.
+attack case with why its verdict comes from the system; the tier-required gates (including the
+`unsafe` count, rv32 build and whole bench for Tier A), explicitly identifying checks not run;
+the documentation check; design problems found; open risks; the branch and state; the next step.
 
 ### Reviewers
 
@@ -124,9 +125,15 @@ One angle each, read-only: a reviewer reports findings and edits, creates and st
 - **Scoped to the diff.** Only concrete, current issues the diff causes or makes reachable, each
   backed by the source, a test or reproduction, or a contradiction with a page. The diff includes
   its untracked files: a reviewer lists them as well as the staged and unstaged changes.
+  Documentation review includes unchanged summaries whose claims the diff affects
+  ([the pages move with the code](#the-pages-move-with-the-code)).
+- **Name the evidence.** Each review records the base and head commit IDs and the paths checked.
+  Uncommitted work may be reviewed during development; acceptance requires a clean, committed
+  branch and verdicts covering its final content ([acceptance](#acceptance)).
 - **Bounded.** The first finding within about 15 tool calls, the verdict within about 30. Read the
   diff or range given, the pages it cites and, for the red team, the rules it claims to keep; not
-  the whole book, other branches or history. One question and a few named files per task: a
+  the whole book, other branches or unrelated history. Include the affected summaries even when
+  the assignment omitted them. One question and a few named files per task: a
   compound question gets its first part answered and the rest named out of scope.
 - **A finding** is exactly: the file and line, the concrete input, sequence or contradiction that
   triggers it, and what breaks. A claim without a mechanism is not a finding. Say **delete**
@@ -184,11 +191,24 @@ A Tier B package that turns out to touch a question above is re-tiered, not wave
 
 ### The pages move with the code
 
-There is no documentation package. Every package delivers its page delta, and the bench enforces
-it: the docs checker refuses a status line naming a test that does not exist, a rule cited that no
-page owns, and a security register that disagrees with a page. The editor reviews the pages the
-package names and nothing else; the red team's checklist includes "the page says what the code now
-does". At acceptance the orchestrator updates the plan page's progress.
+Every behaviour change delivers its documentation in the same package. The docs checker refuses
+a status line naming a test that does not exist, a rule cited that no page owns, and a security
+register that disagrees with a page. It does not establish that prose matches the implementation.
+
+Before review, the implementer checks the affected claims in `README.md`, `GETTING-STARTED.md`,
+the current milestone's progress and remaining work, the relevant subsystem overviews and crate
+READMEs, as well as the owning pages. Search for the changed feature's names and old status
+claims; inspect the matching passages, not the whole book. A feature described as absent or
+host-only must be reconciled when it boots on the machine. Keep built, host-tested and integrated
+claims distinct.
+
+The report names each summary checked, with either its update or why no change is needed. The
+editor verifies those claims against code and test evidence, including summaries unchanged in
+the diff; with a single reviewer, that reviewer owns this check. Missing affected summaries are
+findings, not out of scope. The red team's checklist includes "the page says what the code now
+does". The orchestrator verifies the documentation check before acceptance; any correction to
+the milestone's progress is part of the reviewed content. Documentation-only repairs use the
+review path below.
 
 **Hotspots** get one writer at a time: the kernel's page tables, memory, messages, call dispatch and
 architecture mapping code, the loader's verification, the bench's bundle builder, and `docs/`.
@@ -202,7 +222,11 @@ changes only through its tables and the generator.
    reviewers see the writer's diff.
 2. **Design first.** If the package raises an open design question, the Architect settles it (or
    the owner decides) before any code is written.
-3. **Implement,** gated on the package's acceptance command, by default the full bench.
+3. **Implement,** gated on the package's acceptance commands from its tier. Tier A runs the full
+   bench; Tier B runs its cases and the docs checker. A documentation-only change runs the docs
+   checker through `cargo testbench docs` and `git diff --check`, and renders the book if its
+   pages changed. Test or tooling changes also run the cases that exercise them. A narrower
+   gate does not waive a security-sensitive change's Tier A requirements.
 4. **Review** in rounds. The panel is the package's tier ([two tiers](#two-tiers)); tests, docs,
    comments or tooling configuration alone take one reviewer, the red team for tests or the editor
    for documentation, adding the others only if the findings show more risk.
@@ -227,7 +251,7 @@ flowchart TB
         ROUND["review round: three assignments,\nresults in one turn"]
         FIX["one fix assignment, findings\ncited by reviewer and number"]
         ACCEPT["plan_accept: gates and verdicts\nbecome the merge's trailers"]
-        MERGE["rebase with sign-off, rerun the bench,\nmerge --no-ff, stage plan and threads,\nend the members"]
+        MERGE["merge --no-ff, stage plan and threads,\nverify reviewed content, end members;\ncheck outgoing range before publishing"]
     end
     subgraph ARCH["Architect (resident)"]
         DESIGN["design question on a QA thread:\npage, rule, contradiction, options"]
@@ -239,7 +263,7 @@ flowchart TB
         RED["red team (Opus): a rule or invariant\nviolated, a label boundary crossed,\na verdict the attacker could forge"]
         SIMP["simplifier (Sonnet): what can be deleted,\nwhat duplicates, the one obvious way"]
         ED["editor (Sonnet): pages say what the code\ndoes, SAFETY comments true, names agree,\nno process leftovers"]
-        FOLD["clean branch: logical commits,\nno WIP or fix-round commits"]
+        FOLD["logical commits, rebase with sign-off;\nrecord final base and head"]
     end
     OWNER -- "asks for development" --> CUT
     CUT --> WT --> IMPL
@@ -248,15 +272,15 @@ flowchart TB
     RULE -- "a genuine owner choice:\ndecision_request, a recommendation,\nthe alternatives" --> OWNER
     OWNER -- "answer, recorded on the thread" --> RULE
     RULE -- "back to the asker" --> IMPL
-    IMPL --> GATES
+    IMPL --> FOLD --> GATES
     GATES -- "red" --> IMPL
     GATES -- "green: report" --> ROUND
     ROUND --> RED & SIMP & ED
     RED & SIMP & ED -- "verdict first line:\nBLOCK, OK, OK with notes" --> FIX
     FIX -- "findings applied, or declined\nwith a reason on the thread" --> IMPL
-    FIX -- "every verdict OK" --> FOLD
-    FOLD --> ACCEPT --> MERGE
-    MERGE -- "a miss on rebase or rerun" --> IMPL
+    FIX -- "every verdict OK for the final head" --> ACCEPT
+    ACCEPT --> MERGE
+    MERGE -- "main moved or content differs" --> IMPL
     MERGE --> OWNER
 ```
 
@@ -266,9 +290,9 @@ code can reach, not by its size. Second, the loops are the point: a gate that go
 a design gap and a miss on the rerun each send the work back to the implementer, and a package
 leaves the loop only when every one of them is clear.
 
-Review may be batched for small changes; trusted-code work gets its own round with the red team. A
-package merged before its review keeps its node in the state `review-due`, not done, and that debt
-is cleared before the next package starts.
+Review may be batched for small changes; trusted-code work gets its own round with the red team.
+Review is required before merge. If recovery finds a package merged without it, keep its node
+`review-due`, stop publication of that merge and further integration, and clear the debt first.
 
 ## Questions and decisions
 
@@ -314,18 +338,55 @@ Simplicity is a gate, not a suggestion. The measures:
 ## Acceptance
 
 A package is done only when:
-- its acceptance tests and attack cases pass in `cargo testbench`, each verdict from the system;
-- the whole bench is green, and the docs checker finds nothing;
-- rv32 still compiles;
+- its tier's acceptance tests and attack cases pass in `cargo testbench`, each attack verdict
+  from the system; the scope for documentation-only changes is in [running a package](#running-a-package);
+- the docs checker finds nothing; Tier A also passes the whole bench and rv32 still compiles;
 - no `unsafe` is undocumented and no ratchet rose without a stated reason;
 - every reviewer's finding is fixed or recorded as a follow-up;
-- the pages it changes say what the code now does, with status lines naming the new tests;
+- the owning pages and affected summaries say what the code now does, with status lines naming
+  the new tests and the documentation check recorded;
 - no blocking question is open.
 
-The orchestrator then rebases the branch, reruns the bench, and calls `plan_accept` with each
-gate's command and exit code. Wash sets the node done and returns the trailer block and the
-`.wash/` files to stage; the orchestrator merges with the trailers as the message's last
-paragraph, stages those files in the merge, and ends the package's members.
+Before acceptance, fold the branch into logical commits and rebase it onto the current `main`,
+including sign-off. Record that base and the final head. Run the tier's gates on this head and
+obtain final review verdicts for it. If a reviewed branch changes, reviewers inspect the delta
+and renew their verdicts; conflict resolutions, new base changes that affect the package, and
+documentation edits all count. A rewrite changing only commit metadata may retain review and
+test evidence only after the orchestrator records that the base and resulting trees are
+unchanged, with the old and new commit IDs.
+
+The orchestrator calls `plan_accept` with the reviewed head and each gate's command and exit code
+in its evidence. Wash sets the node done and returns the trailer block and the `.wash/` files to
+stage; the orchestrator merges with the trailers as the message's last paragraph and stages those
+files in the merge. If `main` moved, rebase and repeat the affected gates and reviews first.
+Verify that the merge contains the reviewed content, with only the returned plan and QA records
+added; any other edit returns to review. End the package's members after this check.
+
+## Publishing
+
+Only the orchestrator has standing permission to push. A session instruction restricting pushes
+overrides it; saving then leaves local commits and handoffs and reports what is not backed up.
+Implementers and reviewers never push.
+
+Before pushing `main`, fetch and inspect the complete outgoing range `origin/main..main`:
+- every package merge has acceptance evidence and review covering its final content;
+- every other outgoing change, including process instructions and scripts, has an appropriate
+  reviewer and checks; a `plan:` snapshot alone needs the orchestrator's check against Wash and
+  Git, and contains only the plan and QA records;
+- the affected-summary checks are complete, commits follow the contribution rules, no WIP or
+  fix-round commits enter `main`, and no unrelated files entered a merge;
+- `origin/main` is an ancestor of `main`. If it is not, reconcile, retest and review the resulting
+  changes before publishing; never force-push `main` without the owner's explicit rewrite approval.
+
+Push the checked commit and verify the remote branch names it. Report the commit IDs published
+and anything withheld. A push command succeeding is not review evidence. The same check applies
+when `save.sh` publishes `main`; the script checks Git state, not review or documentation.
+
+After a verified publication, remove a merged package's worktree and local and remote branch
+only after checking it has no uncommitted work or commits outside `main`; preserve its handoff
+and reports before removal. Saving unfinished work on `wp-` branches is a backup, not acceptance.
+A rebased `wp-` branch may be pushed with `--force-with-lease` only by the orchestrator after
+checking nobody else's work is on it. Never use that exception for `main`.
 
 ## Staging, commits and handoffs
 
@@ -339,18 +400,9 @@ paragraph, stages those files in the merge, and ends the package's members.
 - `.wash/plan.toml` and `.wash/qa/` are committed only with a package's merge, or in one `plan:`
   commit when the work is saved ([saving and resuming](#saving-and-resuming)), parked or ended.
   Nothing else commits them.
-- **Pushing finished work.** The owner has given standing permission: the orchestrator pushes
-  `main` after every merge, and after a `plan:` commit. Only fast-forward: fetch first, and push
-  only when `origin/main` is an ancestor of `main`. Never force-push `main`; a history rewrite
-  needs the owner's word each time ([history-rewrite.md](history-rewrite.md)). Never push a WIP
-  commit, a fix-up or a half-done package to `main`: unfinished work lives on its `wp-` branch.
-  After a merge, delete the package's branch locally and on origin
-  (`git push origin --delete wp-<package>`); its commits stay in `main` as the merge's second
-  parent.
-- **Pushing work in progress.** A package's `wp-` branch is pushed whenever the work is saved,
-  with WIP commits if it is mid-step; they are folded into the owning commits before review. A
-  rebased branch is pushed with `--force-with-lease` and only by the orchestrator, after checking
-  that nobody else's work is on it. Members never push.
+- **Push after a merge or a saved `plan:` commit** only after the [publishing](#publishing) check.
+  Save unfinished work on its `wp-` branch, with WIP commits if mid-step; fold them before final
+  review. Follow the same publishing rules for branch cleanup and rebased branches.
 - **Handoff** at about 700K tokens of context (Wash warns the orchestrator at `context_warn`): the
   member finishes and commits its current step, writes its handoff with `member_update {handoff}`
   (state, next steps, traps, open questions; Wash keeps it in `.wash/local/`, out of git), reports
@@ -366,28 +418,43 @@ must survive is on origin: `main` (the merged work, the plan and the QA threads)
 branch per package in progress, and the `wash-local` branch (`.wash/local/`: briefs, reports,
 rulings, handoffs and the bench's helper scripts). Two things are not in git and do not travel:
 the live Wash workspace (members, assignments, the inbox), which is rebuilt from the plan and the
-handoffs, and the orchestrator's own memory, which lives with the agent.
+handoffs, and conversational memory. The orchestrator writes everything needed to resume into
+its own handoff in `.wash/local/`; another agent must be able to continue without the conversation.
 
 **Saving** (when the owner asks, before a pause, and at the end of every working day):
-1. Every working member writes and registers its handoff (`member_update {handoff}`), as at the
-   handoff mark; a member waiting with nothing in flight says so in one line instead.
-2. Each package worktree's uncommitted work becomes a WIP commit on its branch. Nothing is
-   stashed.
-3. `.wash/save.sh` commits `.wash/plan.toml` and `.wash/qa/` on `main` as one `plan:` commit if
-   they changed, pushes `main` and every `wp-` branch (fast-forward only; it refuses a dirty
+1. Stop issuing assignments, launching packages and merging. Ask working members to stop at a
+   safe checkpoint, commit their work by path on their package branches (WIP is allowed), and
+   register handoffs with state, exact commits, tests, unresolved findings and next steps.
+   A waiting member confirms nothing is in flight. An interrupted test is recorded as incomplete.
+2. Confirm every member has stopped writing, then pause the members and check their status.
+   Reconcile the plan and QA records with the branches. The orchestrator writes its own handoff:
+   active packages and worktrees, member handoff paths, reviewed and tested commits, pending
+   decisions, uncertain deliveries, next actions, and any work not saved. Verify worktrees are
+   clean or report explicitly what could not be committed; nothing is stashed. Do not snapshot
+   while a writer can still change the files. If the owner requires an immediate stop, pause
+   first and record unfinished checkpoints rather than continuing development.
+3. Apply the [publishing](#publishing) check. `.wash/save.sh` commits `.wash/plan.toml` and
+   `.wash/qa/` on `main` as one `plan:` commit if they changed, pushes `main` and every `wp-`
+   branch (fast-forward only; it refuses a dirty
    worktree or a diverged branch), and snapshots `.wash/local/`'s working files onto
    `wash-local` (files under a megabyte; console captures and logs stay behind). Run it with
    `--dry-run` first to see what it will do.
-4. The orchestrator reports the commits pushed and anything `save.sh` refused.
+4. Verify the saved remote heads for `main`, each unfinished package and `wash-local`. The
+   orchestrator reports the commits saved locally and remotely, members' paused state, and any
+   refused, excluded or unsaved work. A partial save is reported as partial. For a project pause,
+   leave the workspace paused; end it only when the owner requests teardown.
 
 **Resuming from a clone** (or a stale checkout):
-1. `.wash/restore.sh` fast-forwards `main`, restores `.wash/local/` from `wash-local` (never
+1. Inspect local work and any live writers as [startup](PROJECT.md#set-up) requires before
+   restoring. `.wash/restore.sh` fast-forwards `main`, restores `.wash/local/` from `wash-local` (never
    over a newer file), and makes a worktree at `.worktrees/<package>` for every unmerged
    `wp-` branch on origin.
 2. The machine is prepared as [PROJECT.md](PROJECT.md#environment-preflight) says, and the
    orchestrator sets up the workspace ([PROJECT.md](PROJECT.md#set-up)).
-3. Each package in progress gets a fresh implementer launched with `handoff_from` its last
-   member, whose handoff is in `.wash/local/handoffs/`; its WIP commits are folded first.
+3. Read the orchestrator's handoff and reconcile each package's branch, handoff, reviews and
+   tests before resuming. Reuse paused members where possible; otherwise launch fresh members
+   with their saved handoffs. Resume development only when the owner asks. WIP commits are
+   preserved until the implementer folds them before final review.
 
 ## Cost
 

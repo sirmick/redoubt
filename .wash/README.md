@@ -26,4 +26,10 @@ This directory is the project's process: how Redoubt is built, by whom, and the 
 - **Anyone asking why a rule is what it is:** the rule's page first; the thread named in the
   `QA:` trailer of the merge commit that brought it, second.
 
+The five workflows are [startup](PROJECT.md#set-up),
+[TCB and userland development](SWARM.md#two-tiers),
+[review and acceptance](SWARM.md#acceptance), [publishing](SWARM.md#publishing), and
+[pause and resume](SWARM.md#saving-and-resuming). Reading these guides for an audit does not
+start a workspace.
+
 Never edit `plan.toml` or `qa/` by hand, and never read `qa/` whole: read one thread.
