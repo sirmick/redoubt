@@ -1,7 +1,7 @@
 # Scheduling
 
 The kernel runs threads from one stride queue over every budget with a runnable thread. Each
-budget has a **pass**; the lowest pass runs next, for a slice of at most 10 ms, and running
+budget has a **pass**; the lowest pass runs next, for a slice of at most 1 ms, and running
 raises the pass in inverse proportion to the budget's free weight. There is no priority: `init`,
 the steward and the drivers are scheduled by weight like everyone else. A waking budget joins at
 no less than the queue's current minimum, a wake never preempts, and every run is charged,
@@ -67,7 +67,7 @@ no dependencies.
 </details>
 
 The running thread keeps the CPU until one of these:
-- its slice ends: `SLICE_US` (10,000 µs) from the pick;
+- its slice ends: `SLICE_US` (1,000 µs) from the pick;
 - it blocks, exits, faults or is killed;
 - a budget deadline fires.
 
@@ -128,7 +128,10 @@ waker that has run is charged, its pass rises above the floor, and it no longer 
 The bench's own oracle (`tools/testbench/src/sched_oracle.rs`) rebuilds the order from the trace's
 events with its own reading of the four clauses and checks every pick, keeps its own floor, and
 requires every pass never to fall but at a weight change, which it recomputes
-([the lead follows the weight](#the-lead-follows-the-weight)).
+([the lead follows the weight](#the-lead-follows-the-weight)). In the guest, two groups of three
+each wake in one entry, by one destruction each, and each group runs lowest id first. The oracle
+alone judges which group runs first: a slice end between the waker's two destructions may run the
+earlier group before the later one wakes.
 
 ```mermaid
 flowchart TD
@@ -143,7 +146,7 @@ flowchart TD
     REC["reconcile: each budget that gained a<br/>runnable thread wakes, highest id first,<br/>pass = max(own, floor), tie = front - 1"] --> FL["floor = max(floor, lowest queued pass)"]
     FL --> R{"is the CPU<br/>with kmain?"}
     R -- no --> RUN[the running thread resumes]
-    R -- yes --> P["kmain picks the lowest (pass, tie, id)<br/>and runs that budget's next thread<br/>after its cursor, for up to 10 ms"]
+    R -- yes --> P["kmain picks the lowest (pass, tie, id)<br/>and runs that budget's next thread<br/>after its cursor, for up to 1 ms"]
 ```
 *Figure: the pass and wake rule at one kernel entry. `w` is the budget's free weight.*
 
@@ -206,6 +209,13 @@ Kernel time is billed as well:
 - `kmain`'s pick and switch after a deschedule are the descheduled budget's;
 - idle time is nobody's.
 
+A slice end costs about 0.36 ms of kernel time on rv64 and 0.45 ms on rv32 in the release build
+under QEMU (about 45,000 and 56,000 instructions), most of it the reconcile that follows the entry;
+at a 1 ms slice under nine runnable budgets that is about a quarter of the CPU, billed to the
+budgets whose slices end, so relative shares hold while useful work falls to about three quarters
+of the 10 ms build's (0.762 on rv64 and 0.718 on rv32, both in the release build). The reconcile's
+cost is above its loop bounds. This is today's cost; a later measurement replaces it.
+
 The top of a destruction returns its carve to its parent before any of the destruction's work is
 billed. So the parent, often the caller of `budget_destroy`, pays for the destruction at the
 weight it has once the child is gone, not at the sliver it kept while the child held the rest.
@@ -244,7 +254,7 @@ the kernel's alone, and the boot cases are its only check.
 
 ### Inheritance
 
-<details><summary>Status: built · tested (11)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - bench:sched-budget-churn
 - bench:sched-debt-lift
@@ -252,6 +262,8 @@ the kernel's alone, and the boot cases are its only check.
 - host:redoubt-stride::create_then_destroy_without_a_run_moves_nothing
 - host:redoubt-stride::a_churned_child_adds_to_a_leading_parent
 - host:redoubt-stride::the_inherited_wait_is_not_counted_again
+- host:testbench::a_marked_wake_picked_within_one_round_passes
+- host:testbench::a_budget_picked_twice_before_the_marked_one_fails
 - mutation:R12DestroyDropsDebt
 - mutation:R12CreateAtFloorOnly
 - mutation:R12LiftByMax
@@ -354,14 +366,17 @@ the one carve from the old weight to the new.
 recomputes every weight change a traced kernel records, the one place it lets a pass fall. A host
 test checks that a carve and its return leave pass and remainder unchanged. In
 `bench:sched-carve-return` a budget of weight 1000 carves 999 away at the start of a slice, runs on
-the 1 it kept until 9 ms into it, and takes the weight back: from then on it gets 496 to 499 of
-1000 against an equal victim. With the remainder alone rescaled, as before, it got 0.
+the 1 it kept until nine tenths of the slice into it, and takes the weight back: from then on it
+gets 496 to 499 of 1000 against an equal victim. With the remainder alone rescaled, as before, it
+got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - bench:sched-latency
+- bench:sched-cluster
+- bench:sched-cluster-old-control
 - bench:budget-destroy-growth
 - bench:sched-budget-churn
 - bench:sched-exit-churn
@@ -371,6 +386,9 @@ the 1 it kept until 9 ms into it, and takes the weight back: from then on it get
 - host:testbench::audits_are_subtracted_inside_each_window
 - host:testbench::shares_are_judged_net_of_audits
 - host:testbench::an_unmatched_audit_fails
+- host:testbench::cluster_envelope_qualifies_where_the_old_rtc_interval_did_not
+- host:testbench::the_old_control_must_fail_on_its_lower_witness
+- host:testbench::a_control_that_misses_its_slot_is_classified_net_of_audits
 
 </details>
 
@@ -409,23 +427,23 @@ billed both move forward by its length, so the thread that ran it is picked and 
 release build (`sched::audit`). With two full handle tables live, the audits are about 24 ms after
 a destruction and 8 ms at a free.
 
-Measured at seed 3, p99 in µs, net / gross (audit time inside the windows): the audits hold the
-deadline notice, which waits out the audit after its own destruction, and little else. The
-trace's audit stamps shift the phases, so these seed-3 numbers differ from the sweeps', whose
-figures stay as measured.
+Measured at seed 3 with the 1 ms slice in the checked, traced build, p99 in µs, net / gross
+(audit time inside the windows): the audits hold the deadline notice, which waits out the audit
+after its own destruction, and little else. They are the sixth sweep's seed 3, the seed the gate
+pins; the earlier sweeps' figures stay as measured.
 
 | Measure (p99, N = 1 / 4 / 16) | rv64 | rv32 |
 | --- | --- | --- |
-| deadline notice | 4233 / 5052 / 13896 net, 19754 / 21994 / 33535 gross | 4435 / 5143 / 13055 net, 19526 / 21718 / 31435 gross |
-| driver wake | 9632 / 10815 / 32350, net = gross | 10045 / 11482 / 33939, net = gross |
-| steward timer wake | 8543 / 9674 / 31740, net = gross | 8917 / 10274 / 32964, net = gross |
-| steward decision wake | 5931 / 6143 / 39449, net = gross | 6169 / 6409 / 29490, net = gross |
-| a lease's end (worst decision wake + R10) | 39449 + 6366 = 45815 | 29490 + 6577 = 36067 |
+| deadline notice | 3465 / 3985 / 9798 net, 25754 / 28370 / 42262 gross | 3736 / 4046 / 11353 net, 30296 / 32854 / 46806 gross |
+| driver wake | 1701 / 2410 / 17871 net, 1944 / 2788 / 21328 gross | 1834 / 2670 / 17229 net, 2137 / 3152 / 20328 gross |
+| steward timer wake | 2557 / 2322 / 21075 net, 2998 / 3039 / 24791 gross | 2464 / 3033 / 24001 net, 3000 / 3626 / 28949 gross |
+| steward decision wake | 644 / 1024 / 6463 net, 672 / 1078 / 7119 gross | 837 / 2754 / 16897 net, 890 / 2913 / 19259 gross |
+| a lease's end (worst decision wake + R10) | 6463 + 4132 = 10595 | 16897 + 4221 = 21118 |
 
-The run's 837 audits total 7.52 s (rv64) and 7.25 s (rv32) of the hart; R10 itself has none inside
-it, which the oracle asserts. Beside each destruction's R10 time the oracle reports its threads'
-time: the processes' threads ending inside it, their pumps included (the trace's `T` and `t`
-records), at seed 3 a p99 of 32 µs on rv64 and 36 µs on rv32. In the containment gate, with two
+The run's 49,535 audits total 12.7 s (rv64), and its 50,037 total 15.3 s (rv32), of the hart; R10
+itself has none inside it, which the oracle asserts. Beside each destruction's R10 time the oracle
+reports its threads' time: the processes' threads ending inside it, their pumps included (the
+trace's `T` and `t` records), at seed 3 a p99 of 54 µs on rv64 and 60 µs on rv32. In the containment gate, with two
 full leases live at a deadline's end (its pinned seed 13), the deadline notice's p99 is 25,794 µs
 net and 95,579 µs gross on rv64, with 1,158,114 µs of audit inside its windows, and 26,197 µs net
 and 97,703 µs gross on rv32; the sweep is on [containment](README.md#containment). With the audit
@@ -444,9 +462,22 @@ end and a deadline's destruction each run an audit: against processes that exit,
 (464) and 498 (468); against sleepers, 494 (494) and 491 (491); against sleepers and staggered
 budget deadlines, 492 (484) and 490 (487); against waits ended early, 493 (493) and 492 (492). So
 is `sched-carve-return`'s, from its carve's return, whose destruction and audit come before it: 496
-and 497, net and gross. The other shares stay in their programs, with no audit inside their
-windows: no process or budget is created or destroyed there, or (`deadline-flood-billed`) the
-build is a release one.
+and 497, net and gross. The other shares stay in their programs. `sched-large-weight`,
+`sched-server-busy` and `sched-carve-inflation` judge a ratio of counts: what each budget ran,
+against the others. Audits and slice ends' kernel time take from every budget in proportion, so
+they leave the ratio as it is. Each program prints its counts against what the window would give
+one loop alone beside it, as the useful work left after the kernel's time. At 1 ms in the checked
+build, rv64 then rv32:
+- `sched-large-weight`'s server: 560 and 560 of 1000 by counts, within 50 of 1000/1800 (555) either
+  way; useful work 411 and 397. Its least user gets 992 and 988 per 1000 of the users' mean, against
+  a floor of 900;
+- `sched-carve-inflation`'s victim: one deep, 502 and 502 by counts, 459 and 452 useful; four deep,
+  502 and 503 by counts, 409 and 398 useful;
+- `sched-server-busy`: the server's work for A is 351 and 363 per 1000 of the users' mean, and
+  each user has 195 and 187 useful.
+
+The rest have no audit inside their windows: no process or budget is created or destroyed there,
+or (`deadline-flood-billed`) the build is a release one.
 
 **The gate runs one pinned seed.** The guest's boot RNG seed decides the PIDs the kernel draws,
 which shift instruction counts and so the phase of every later event; with it pinned, a run
@@ -467,7 +498,14 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | the 1000-weight server's share of the spinning CPU at N = 16 | at least 384 less 30 per thousand |
 
 In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 30 ms is 3,750,000, 40 ms is 5,000,000,
-50 ms is 6,250,000, 95 ms is 11,875,000, 125 ms is 15,625,000, and one 10 ms slice is 1,250,000.
+50 ms is 6,250,000, 95 ms is 11,875,000, 125 ms is 15,625,000, and one 1 ms slice is 125,000.
+
+A slice end adds its own kernel time ([charging](#charging)). In the release build that is about
+45,000 instructions on rv64 and 56,000 on rv32, so a 1 ms slice takes about 1.36 ms and 1.45 ms
+on the hart under nine runnable budgets. The checked, traced build takes longer, and its slice end
+grows with the queued budgets: the median gap between slice ends is about 1.26 ms under three,
+1.45 ms under nine and 1.68 ms under seventeen (rv64). A round of N budgets' slices is N such
+periods, not N ms.
 
 The decision wake is measured by the stand-in itself (`time_now` against its own deadline), and
 the post-check reads its sample windows, net of audits, while R10's time comes from the kernel's
@@ -632,6 +670,97 @@ The worst are p50 18,541 µs (rv32, seed 11) and p99 82,497 µs (rv64, seed 6); 
 22,812 µs (rv64, seed 6) and the deadline notice's is 37,450 µs (rv32, seed 15), both inside 30 and
 40 ms. The lease end's worst is 104,318 µs, inside 125 ms.
 
+**The sixth sweep** (2026-10-05, seeds 1 to 20, on rv64 and rv32) followed the 1 ms slice. Every
+seed passes on both widths. The N = 16 decision wake, p50 / p99 in µs, and a lease's end (the
+worst decision-wake p99 plus R10's p99); at N = 1 and N = 4 the decision wake stays under 1 ms and
+under 3 ms on every seed:
+
+| Seed | rv64 N=16 | rv64 lease end | rv32 N=16 | rv32 lease end |
+| --- | --- | --- | --- | --- |
+| 1 | 3217 / 11328 | 15460 | 9998 / 15165 | 19386 |
+| 2 | 3220 / 8083 | 12215 | 11677 / 15170 | 19393 |
+| 3 | 1600 / 6463 | 10595 | 11679 / 16897 | 21118 |
+| 4 | 1601 / 6461 | 10591 | 11657 / 15149 | 19370 |
+| 5 | 3218 / 9706 | 13838 | 11657 / 15112 | 19332 |
+| 6 | 3217 / 9702 | 13832 | 8241 / 15148 | 19369 |
+| 7 | 3216 / 8081 | 12213 | 8262 / 15148 | 19369 |
+| 8 | 3217 / 8086 | 12216 | 8229 / 15139 | 19361 |
+| 9 | 3218 / 8083 | 12213 | 8218 / 15121 | 19341 |
+| 10 | 1600 / 8084 | 12215 | 9954 / 16870 | 21092 |
+| 11 | 3216 / 9703 | 13835 | 11688 / 13445 | 17667 |
+| 12 | 3218 / 6463 | 10594 | 8220 / 11670 | 15890 |
+| 13 | 1599 / 11325 | 15457 | 8234 / 15154 | 19375 |
+| 14 | 1600 / 8083 | 12215 | 8225 / 15128 | 19348 |
+| 15 | 1601 / 11328 | 15460 | 8258 / 15150 | 19372 |
+| 16 | 1601 / 14568 | 18698 | 9975 / 18591 | 22812 |
+| 17 | 1600 / 6461 | 10593 | 11670 / 18588 | 22810 |
+| 18 | 1599 / 6464 | 10594 | 11667 / 18581 | 22801 |
+| 19 | 1600 / 6464 | 10596 | 11661 / 16853 | 21073 |
+| 20 | 3217 / 8082 | 12214 | 9974 / 16861 | 21080 |
+
+The worst are p50 11,688 µs (rv32, seed 11) and p99 18,591 µs (rv32, seed 16). R10's p99 is at
+most 4,223 µs (rv32), the deadline notice's at most 12,738 µs (rv32, seed 18), the driver wake's
+23,924 µs (rv64, seed 2) and the timer wake's 26,937 µs (rv32, seed 12). The lease end's worst is
+22,812 µs. The targets stay where the fourth sweep set them; every measure is well inside them.
+
+**The cluster workload** (`tests/programs/src/bin/sched-cluster.rs`) measures the same driver and
+timer wakes where retained stride debt bites: sixteen weight-100 spinners released by one common
+timeout, a busy weight-1000 server, and 200 attempts each from the two weight-1000 stand-ins, at
+fixed 80 ms slots and programmed offsets of 100, 300, 600 and 850 µs. Its whole window is on the
+kernel clock (`time_now`, µs): one reading T gives start H = T + 200 ms, release R = H + 50 ms and
+end F = R + 16 s, sent to every child and printed from the same values. H only anchors R: nothing
+waits for it, so the server counts from its go to F and the spinners from R to F, each span as
+printed. The spinners, the server and a stand-in's spin to a slot run in fixed chunks and read
+`time_now` between them; that work is billed alike in a candidate and its control. Each attempt
+reads B before arming,
+fixes L = B + delay before it arms, and reads P after the wake (the driver also reads E and the
+RTC's service time s between them); its **envelope** is `[L, U)` with U = P + 1, which holds all of
+P's floored microsecond. The clocks run at one rate and a timeout never ends before its deadline
+([time](timer.md#time), [timeouts](timer.md#timeouts-and-forever)), so the physical span from the
+deadline to the service lies inside the envelope, and the envelope's length, net of the audit time
+the trace certifies inside it ([checked builds](../testbench.md#checked-builds)), is an upper bound
+on the wake's non-audit latency. The bench requires R <= L <= P and U <= F for every attempt, and
+judges the same p50 <= 15 ms and p99 <= 50 ms on all 200 envelopes of each stand-in. Before
+that, the trace must show at least 25 wakes per stand-in in each category, five at each offset:
+zero lead, a zero-intent attempt whose wake's pass is at the floor the oracle replays, and
+positive lead, a positive-intent attempt whose wake's pass is above it. A wake that is neither
+joins no category but still counts in the percentiles, and how many spinners ranked before each
+wake is reported beside the categories. A met target proves the bound; a missed one alone does
+not prove the latency is over it. So the known-bad control (the
+10 ms slice) must miss an envelope target **and** have a driver **lower witness**, the RTC's
+service lateness less the union of every audit's outer bin `[u, v + 1)` inside the envelope, above
+the matching target, on each width. A control that misses only on the envelope demonstrates
+nothing, and so does one whose positive-lead wakes are not behind the cluster: it needs at least
+25 per stand-in with eight or more spinners ranked before them, which under a 1 ms slice a
+weight-1000 waker never has, since it is picked within one of its own slices of the lowest
+spinner. A control can also fail to take its samples: a stand-in that comes back after a
+zero-intent attempt's target has passed cannot arm it, and the construction stops there. That
+counts as the demonstrated miss only when the oracle classifies it from the console and the
+trace: the attempt is zero-intent and not the first, the stand-in's earlier attempts joined the
+trace as blocked waits, and B less the target, less the certified audit time between them, is
+over the p99 target. Any other construction failure, a smaller miss, or a run without its trace
+is no control. The control is `sched-cluster-old-control`: the same program and gates with the
+oracle's `cluster_old_control`, run by name only, on the kernel built with its test-only
+`slice-10ms`, which keeps the old 10 ms slice. It expects the trace rather than the program's
+pass, so a failure the guest reports still reaches the oracle. The RTC lateness is reported beside
+each envelope, not as its length.
+
+Measured at seed 3 in the checked, traced build, envelope net p50 / p99 in µs, the targets
+15,000 / 50,000:
+
+| Stand-in | rv64 | rv32 |
+| --- | --- | --- |
+| driver wake | 3962 / 11610 (98 positive, 100 zero lead) | 4200 / 17727 (97 positive, 100 zero) |
+| timer wake | 5887 / 15629 (100 positive, 100 zero) | 5311 / 16364 (99 positive, 100 zero) |
+
+The certified audit credit inside the envelopes was 288 ms and 320 ms on rv64, 384 ms and 376 ms
+on rv32; the driver's lower witness p99 was 10,902 and 17,195 µs. At most ten spinners ranked
+before a positive-lead wake. The control fails as
+required on both widths, by the classified miss: on rv64 both stand-ins could not take attempt 1,
+B exceeding its target by 104,188 and 109,853 µs (102,676 and 106,472 µs net of audits); on rv32
+the timer could not take attempt 1, by 71,624 µs (69,515 net), and the driver missed attempt 2
+by a net 29,843 µs, under the target.
+
 The case fails on any `missed`. `bench:sched-latency-tcg` runs the same workload in host time and
 only reports, with the oracle still checking every pick.
 
@@ -795,8 +924,9 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `SCHED-TRACE` console lines are not compiled;
 - the bench turns it on per case (`kernel_features`), only for `sched-ties`,
   `sched-budget-churn`, `sched-exit-churn`, `sched-timer-flood`, `sched-carve-return`,
-  `sched-latency` and `sched-latency-tcg`, whose `sched_oracle` post-check reads the trace printed
-  at `system_reset`.
+  `sched-debt-lift`, `sched-wake-no-preempt`, `sched-cluster`, `sched-cluster-old-control`,
+  `sched-latency`, `sched-latency-tcg`, `kernel-containment` and `endpoint-destroy-full`, whose
+  `sched_oracle` post-check reads the trace printed at `system_reset`.
 
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
@@ -809,8 +939,9 @@ budget that ran it and counts it against its slice, each for one recorded negati
 ([responsiveness](#responsiveness)); `timer-tail-billed`, which bills the rest of a timer
 interrupt after its expiry, and its return, to the budget it interrupted, for one recorded
 negative run ([charging](#charging)); `alloc-first-fit`, the first-fit frame scan, for one
-recorded negative run ([R12](#r12-scheduling)); and `debug-print`, which prints every
-pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
+recorded negative run ([R12](#r12-scheduling)); `slice-10ms`, the old 10 ms slice, for the
+cluster's known-bad control ([responsiveness](#responsiveness)); and `debug-print`, which prints
+every pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
 ([devices](devices.md)), and so are `handle-chain-fault` and `process-chain-fault`, a handle
 installed without its stamp entry or its process object entry for the chain audit to catch
 ([budgets](budgets.md#residual-risks)), `sum-probe`, a stray
@@ -855,8 +986,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 - **Server work is paid by the server's weight.** Work a server does for a user is paid by the
   server's weight, not the requester's; the steward's work, by the steward. No time is donated, so
   a user who floods a server takes that server's share away from the server's other callers,
-  never more: in `bench:sched-server-busy` the server's work for one user stays within its
-  weight's share and the other users keep theirs. Servers therefore bound the work of one
+  never more. In `bench:sched-server-busy`, by ratio of counts, the server's work for one user is
+  at most what each other user runs, and the other users run alike. The flooding user's calls are
+  kernel time that no count measures, so the case does not check that it takes no more than its
+  own share. Its trace did show that: the flooding user charged 229 of 1000, against 257 for
+  each other user and 258 for the server. Servers therefore bound the work of one
   request, and the steward, whose weight is large, bounds its per-request work and relies on its
   per-(account, label set) caps ([steward](../servers/steward.md)).
 - **Wakeup is prompt but not bounded.** A wake waits out the running slice, may keep a larger
@@ -864,14 +998,15 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   proven bound, until something needs a real-time rule ([TENETS](../TENETS.md#guarantees)).
 - **The steward decision wake is late by whole slices.** A wake never preempts: at N = 16 the
   steward stand-in waits out the running slice, then the slices of any budgets that rank ahead of
-  it. Its p50 is one or two slices late, depending on where its timeout lands against the running
-  slice: about 7 ms or about 18 ms, and any seed on either width can show the 18 ms mode (the
-  third sweep above). Its p99 is a wake that lands behind several of the sixteen budgets, so it
-  falls in steps of one slice (about 10.8 ms), from about 39 ms to about 82 ms, about 8 slices
-  (rv64, seed 6). The exact chain from a seed to its mode was not traced. The targets (25 and 95 ms) are set from the sweep, and
-  a lease's end from the steward's decision is 125 ms, not 80. A pinned seed repeats one run; a
-  change that moves the phase can land on a worse one than the sweep saw, which the margin covers
-  and a new sweep re-measures.
+  it. With the 1 ms slice (the sixth sweep above) its p50 falls in a few modes, depending on where
+  its timeout lands against the running slices: about 1.6 ms or 3.2 ms on rv64, and about 8.2,
+  10.0 or 11.7 ms on rv32. Its p99 is a wake that lands behind several of the sixteen budgets, so
+  it falls in steps of about 1.6 ms (rv64) and 1.7 ms (rv32), one slice and what runs between
+  them: from 6.5 to 14.6 ms on rv64 and from 11.7 to 18.6 ms on rv32 (seed 16). The exact chain
+  from a seed to its mode was not traced. The targets (25 and 95 ms) were set from the sweeps
+  under the 10 ms slice and stay; a lease's end from the steward's decision is at most 22.8 ms in
+  the sweep against its 125 ms. A pinned seed repeats one run; a change that moves the phase can
+  land on a worse one than the sweep saw, which the margin covers and a new sweep re-measures.
 - **Fair kernel entry is bounded by count, not time.** On several harts, R78 bounds the wait
   for the kernel lock by `MAX_HARTS` - 1 kernel sections, each as long as the call or
   destruction holding it: a long section delays every waiting hart by its length, which is one
@@ -886,12 +1021,16 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30, and breaks R12's "never depends on what
   other processes hold": three of its steps walk every process object
   ([destruction walks every process](../todo/destruction-walks-every-process.md)).
-- **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
-  as `users`) can delay one sibling created under it in the same round by at most one round,
-  decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to
-  spinners still at the floor and waits out the round; `bench:sched-debt-lift` bounds a sibling's
-  first run at (runnable budgets + 2) slices. Rounding loses under one pass unit per destroyed
-  budget, and the loss falls on the budget that churns.
+- **A destroyed lineage's debt is carried onto its siblings as the parent's lead.** Debt lifted onto
+  a shared parent is normalized to the parent's weight, and a sibling created under it enters at the
+  parent's pass; the oracle recomputes every lift. How long that lead delays the sibling is the
+  parent's lead over the floor against the sibling's weight: about a round when the parent is small
+  and the lift fresh, a few thousandths of a slice under a parent as wide as `users`. No boot case
+  yet puts a fresh lift on a small parent, so the delay's bound rests on the lift's arithmetic, not
+  on a measurement; `bench:sched-debt-lift` checks that a sibling created after a weight-1 lineage's
+  destruction runs before any other budget is picked twice, which its raw debt, unlifted, would have
+  cost about six rounds. Rounding loses under one pass unit per destroyed budget, and the loss falls
+  on the budget that churns.
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).

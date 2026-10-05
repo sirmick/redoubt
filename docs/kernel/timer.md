@@ -47,7 +47,7 @@ a time never fires before `time_now` reaches it.
 </details>
 
 The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for the earliest:
-- the **slice end** of the running thread: set to the pick time plus `SLICE` (10,000 µs) when
+- the **slice end** of the running thread: set to the pick time plus `SLICE_US` (1,000 µs) when
   `kmain` picks a thread, and to never while `kmain` itself runs;
 - the **earliest timeout** of any blocked thread;
 - the **earliest deadline** of any budget.
@@ -70,7 +70,7 @@ once.
 flowchart TD
     blk["a thread blocks in call, send<br/>or receive with a finite timeout"] --> hto["earliest timeout: lowered"]
     mk["budget_create<br/>with a deadline"] --> hdl["earliest deadline: lowered"]
-    pick[kmain picks a thread] --> hsl["slice end: pick + SLICE"]
+    pick[kmain picks a thread] --> hsl["slice end: pick + SLICE_US"]
     leave[the kernel leaves for kmain] --> hnv["slice end: never"]
     hto --> M{earliest of the three<br/>changed?}
     hdl --> M
@@ -319,7 +319,7 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   server could be starved or killed and take every promise with it. So there is no timer server,
   no timer interrupt for user space and no call that programs the hardware.
 - **Always armed for the earliest.** One target, the minimum of three, is the whole design. The
-  slice end alone guarantees the kernel back within 10 ms of any user code, so expiry never
+  slice end alone guarantees the kernel back within 1 ms of any user code, so expiry never
   depends on a thread choosing to enter.
 - **Expire first, at every entry.** A deadline that passed must win over whatever the entering
   thread asks for; checking first makes that true at every entry without a special case per call.
@@ -336,7 +336,7 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   `time_now` is the clock with a unit, so the kernel keeps no second way to learn one.
 - **SBI TIME, not Sstc.** It works under every SBI firmware on both widths with no firmware
   configuration (Sstc needs `menvcfg.STCE`), and one `ecall` per arming is nothing against a
-  10 ms slice.
+  1 ms slice.
 - **Timeouts first at an equal instant**, so a caller whose server's lease ends at its own timeout
   sees the timeout it asked for, with the lend accounting that goes with it.
 - **No date in the kernel.** Wall-clock time comes from outside the box and can be wrong or
