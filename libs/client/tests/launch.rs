@@ -47,7 +47,7 @@ fn a_child_gets_the_stub_its_image_a_stack_and_its_block() {
     let job = f.as_process(launcher, || {
         let mut launch = Launch::new(STUB, IMAGE, Budget::from_handle(budget), Endpoint::from_handle(exit));
         launch.namespace("/", cons).namespace("/dev/cons", cons).handle("keys", keys).arg("-v").arg("");
-        launch.stack_tag(7);
+        launch.stack_tag(7).heap_pages(48);
         launch.start().ok().unwrap()
     });
     let child = f.launched(launcher, job.process().handle());
@@ -68,6 +68,7 @@ fn a_child_gets_the_stub_its_image_a_stack_and_its_block() {
     assert_eq!(startup.handle("keys"), Some(h(2)));
     assert_eq!(startup.args().collect::<Vec<_>>(), ["-v", ""]);
     assert_eq!(startup.image(), Some((IMAGE_AT, IMAGE.len())));
+    assert_eq!((startup.heap_pages(), startup.tag()), (Some(48), 7));
     assert!(f.installed(launcher, job.process().handle(), 0, cons));
     assert!(f.installed(launcher, job.process().handle(), 1, keys));
 }

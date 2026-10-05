@@ -45,6 +45,7 @@ pub struct Launch<'a> {
     exit: Endpoint,
     stack_pages: usize,
     stack_tag: Option<u16>,
+    heap_pages: u32,
     namespace: Vec<(&'a str, Handle)>,
     handles: Vec<(&'a str, Handle)>,
     args: Vec<&'a str>,
@@ -71,6 +72,7 @@ impl<'a> Launch<'a> {
             exit,
             stack_pages: STACK_PAGES,
             stack_tag: None,
+            heap_pages: 0,
             namespace: Vec::new(),
             handles: Vec::new(),
             args: Vec::new(),
@@ -101,9 +103,16 @@ impl<'a> Launch<'a> {
     }
 
     /// Paints this child's first-thread stack with `tag` for the bench's RAM measurement; an
-    /// untagged stack is zeroed.
+    /// untagged stack is zeroed. The startup block carries the tag, which the child's runtime marks
+    /// its heap record with.
     pub fn stack_tag(&mut self, tag: u16) -> &mut Self {
         self.stack_tag = Some(tag);
+        self
+    }
+
+    /// Caps the child's heap at `pages` pages (servers/init.md, "Heaps"); 0, the default, is no cap.
+    pub fn heap_pages(&mut self, pages: u32) -> &mut Self {
+        self.heap_pages = pages;
         self
     }
 
@@ -166,7 +175,7 @@ impl<'a> Launch<'a> {
         // The child's handle for slot i is i + 1 (`process_start`).
         let child = |i: usize| Handle::new(i as u32 + 1).expect("a slot is at least 1");
         let mut block = StartupBuilder::new(slots.len() as u32);
-        block.image(IMAGE_AT, self.image.len());
+        block.image(IMAGE_AT, self.image.len()).heap_pages(self.heap_pages).tag(self.stack_tag.unwrap_or(0));
         for (path, i) in namespace {
             block.namespace(path, child(i));
         }
