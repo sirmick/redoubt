@@ -185,13 +185,29 @@ run then repeats exactly. The bench prints the seed before the result, and
 to sweep. `--sweep SEEDS` runs one case once per seed (`1..20`, or `3,5,9`), from one build, and
 prints each seed's result in seed order and a summary line; each boot keeps its files in
 `seed-<N>-<arch>/` inside the run's directory. `--jobs J` boots up to J seeds at once. It is
-never the default, and a result under `--jobs` above 1 is a sweep datum, not a verdict: guest
-times under `icount` do not move with the host's load, but the bench's timeouts do. A merge
-runs the whole bench serially, and a seed that failed only by timing out under `--jobs` is rerun
-alone. A residual: the bench picks a `[net]` case's host ports by binding and releasing them, so
-two such boots under `--jobs` may race for one port; no seeded case has a `[net]` today. A timing
+never the default; what a result under it is worth is the shared-host rule below. A timing
 gate runs one pinned seed and states its target from a sweep of seeds
 ([responsiveness](kernel/scheduling.md#responsiveness)).
+
+**On a shared host.** `cargo testbench` runs its cases one after another; what may run beside
+the invocation, another invocation in its own run directory, a seed under `--jobs`, a build, is
+decided by the clock each case measures with. A boot case with `icount` and no `[net]` table
+measures in guest time: the host's load does not move a guest time, so its pass, and a failure
+the guest itself reports, are verdicts whatever ran beside it (a pinned seed adds only that the
+run repeats exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's
+deadline for the boot: a case that only ran out of that deadline beside other work has no
+verdict, and is rerun alone. A boot case without `icount` (most of them) keeps the host's clock
+in the guest, so load lengthens every wait it makes: its pass is a verdict unless what it
+expects is a timeout or a bound on a time, and a failure beside other work has no verdict until
+it fails alone. A case that measures with the host's clock is a verdict only alone: the rule
+asks that no other invocation and no build run beside it. Those are every `host-tests` case,
+because its `cargo test` runs with cargo's own parallelism and tests in `libs/client`,
+`libs/rt`, `keyd` and `consoled` assert wall-clock bounds, which no tolerance would make
+load-proof; every `ssh-loopback` case and every case with a `[net]` table, `icount`
+or not, because its peers are host sockets in wall time, and the bench picks its host ports by
+binding and releasing them, so two such boots at once may race for one port. The kinds that boot
+nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
+oracles) have no clock, and are verdicts anywhere.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
