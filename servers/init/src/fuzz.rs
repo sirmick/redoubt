@@ -46,7 +46,7 @@ pub fn usage(free: u64) -> Usage {
 
 /// The bundle's entries the fuzz machine has: every program `image/boot.toml` packs, and one
 /// data entry.
-pub const ENTRIES: [(&str, usize); 12] = [
+pub const ENTRIES: [(&str, usize); 11] = [
     ("manifest", 4096),
     ("keyd", 200_000),
     ("consoled", 150_000),
@@ -58,7 +58,6 @@ pub const ENTRIES: [(&str, usize); 12] = [
     ("fsd", 300_000),
     ("beamlet", 4_000_000),
     ("trace", 100),
-    ("system.index", 50_000),
 ];
 
 /// The machine `init` would see on QEMU `virt` with the 1 GiB the image needs, with `devices`

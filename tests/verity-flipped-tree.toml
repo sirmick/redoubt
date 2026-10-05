@@ -1,0 +1,32 @@
+description = "The attack: one bit flipped, after the pack, in the userland volume's first level-1 tree block, the one over the blocks fsd's mount reads first, while the signed manifest pins the pack's root (docs/servers/verityd.md, R76 (verified volumes)). verityd checks the top block against the root at start and passes; at fsd's first read it fetches the level-1 block, finds it does not hash to its slot in the top, and says so naming the tree block; the read fails, fsd's mount fails, and fsd serves the volume as corrupt; beamlet's attach is refused and it parks. Nobody exits, restarts or reboots. The verdict is the system's: verityd's line, fsd's and init's (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
+# the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 120
+# No prompt to wait for: the volume fails at fsd's mount.
+expect = [
+    '^\[con [0-9a-f]{16}\] verityd: tree block [0-9]+ does not match the tree$',
+    '^\[con [0-9a-f]{16}\] fsd: the volume does not mount, and is served as corrupt$',
+    '^\[con [0-9a-f]{16}\] beamlet: fsd:system did not attach: .*; parked$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'init: rebooting',
+    'Redoubt shell, on Elixir',
+    'verityd: the volume is refused',
+]
+
+[userland]
+recipe = "image/userland.toml"
+flip_tree = true
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/fsd/stage"
+
+[net]

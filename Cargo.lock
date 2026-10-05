@@ -1187,6 +1187,7 @@ dependencies = [
  "redoubt-rt",
  "redoubt-signing",
  "redoubt-sys",
+ "redoubt-verity",
  "regex",
  "serde",
  "serde_json",

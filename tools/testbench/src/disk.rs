@@ -1,12 +1,16 @@
 //! Disks: a GPT of equal partitions for a case's `[disk]`, and a disk recipe (`image/disk.toml`)
 //! packed whole, its partition table by `blkd`'s builder and each littlefs partition by `fsd`'s
-//! own packer (docs/testbench.md, "Disks and network cards"; image/README.md).
+//! own packer (docs/testbench.md, "Disks and network cards"; image/README.md). A partition the
+//! recipe marks `verity` holds the largest volume that fits beside its hash tree, and the tree
+//! after it (docs/servers/verityd.md, "The tree"); its root and block count are what a manifest
+//! pins.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use redoubt_blkd::image::{Entry, FIRST_USABLE, Image};
 use redoubt_fsd::pack;
+use redoubt_verity::{BLOCK, Geometry, Hash, SECTORS_PER_BLOCK};
 use serde::Deserialize;
 
 /// A disk sector, in bytes.
@@ -38,6 +42,32 @@ pub struct Partition {
     pub stage: Option<PathBuf>,
     /// For `littlefs`, files made for the pack in the volume's root, beside the stage's tree.
     pub generated: Option<Generated>,
+    /// For `littlefs`, a verified volume: the volume is followed by its hash tree, and the pack
+    /// says its root and block count, which the manifest pins.
+    #[serde(default)]
+    pub verity: bool,
+}
+
+/// A verified partition as packed: the root and data blocks its manifest entry pins, and where
+/// its volume and tree lie on the disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Verified {
+    /// The volume's name, as the manifest's `volumes` entry names it.
+    pub name: String,
+    pub root: Hash,
+    pub geometry: Geometry,
+    /// The partition's first byte on the disk.
+    pub start: usize,
+}
+
+impl Verified {
+    /// The root as the manifest takes it: 64 lowercase hex digits.
+    pub fn root_hex(&self) -> String { self.root.iter().map(|b| format!("{b:02x}")).collect() }
+
+    /// The bytes of the volume's data blocks on `disk`.
+    pub fn data<'d>(&self, disk: &'d [u8]) -> &'d [u8] {
+        &disk[self.start..self.start + self.geometry.data_blocks() as usize * BLOCK]
+    }
 }
 
 /// `files` files in a volume's root, `f000` and on, as many digits as the last needs: empty, but
@@ -96,7 +126,7 @@ impl Recipe {
                     }
                 }
                 "noise" => ensure!(
-                    p.stage.is_none() && p.generated.is_none(),
+                    p.stage.is_none() && p.generated.is_none() && !p.verity,
                     "{}: partition {}: noise is neither staged nor generated",
                     path.display(),
                     p.name
@@ -171,10 +201,16 @@ fn noise(bytes: &mut [u8]) {
 /// The disk `recipe` describes, its stages read under `root`; `stage`, if given, stands in for
 /// every littlefs partition's own.
 pub fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<Vec<u8>> {
+    pack(recipe, root, stage).map(|(disk, _)| disk)
+}
+
+/// [`pack_disk`], and each verified partition's root and geometry, in table order.
+pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u8>, Vec<Verified>)> {
     ensure!(recipe.size_kib > 0, "a disk of no size");
     let sectors = recipe.size_kib * 1024 / SECTOR;
     let parts = shares(sectors, recipe.partition.len() as u64);
     let mut disk = Image::new(sectors, &parts).bytes;
+    let mut verified = Vec::new();
     for (p, at) in recipe.partition.iter().zip(&parts) {
         let (start, end) = ((at.first_lba * SECTOR) as usize, ((at.last_lba + 1) * SECTOR) as usize);
         if p.fs == "noise" {
@@ -206,11 +242,54 @@ pub fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<V
                 None => pack::Entry::Dir(path),
             })
             .collect();
-        let volume = pack::pack(at.last_lba - at.first_lba + 1, &entries)
+        let sectors = at.last_lba - at.first_lba + 1;
+        // A verified volume is the largest whose data and tree fit the partition.
+        let geometry = match p.verity {
+            true => Some(
+                Geometry::largest(sectors / SECTORS_PER_BLOCK)
+                    .with_context(|| format!("{}: no room for a verified volume", p.name))?,
+            ),
+            false => None,
+        };
+        let data = geometry.map_or(sectors, |g| g.data_blocks() * SECTORS_PER_BLOCK);
+        let volume = pack::pack(data, &entries)
             .map_err(|e| anyhow::anyhow!("packing {}: {}: {}", p.name, e.path, e.why))?;
         disk[start..start + volume.len()].copy_from_slice(&volume);
+        if let Some(geometry) = geometry {
+            let mut tree = vec![0u8; geometry.tree_blocks() as usize * BLOCK];
+            let root = redoubt_verity::build(&geometry, &volume, &mut tree)
+                .map_err(|_| anyhow::anyhow!("{}: the volume is not its geometry's size", p.name))?;
+            let at = start + volume.len();
+            disk[at..at + tree.len()].copy_from_slice(&tree);
+            verified.push(Verified { name: p.name.clone(), root, geometry, start });
+        }
     }
-    Ok(disk)
+    Ok((disk, verified))
+}
+
+/// Flips one bit of `file`'s bytes where the verified volume `v` holds them on `disk`, after the
+/// pack, so the volume no longer hashes to its root: a 64-byte run of the file from its middle,
+/// found exactly once in the volume's data blocks.
+pub fn flip_file(disk: &mut [u8], v: &Verified, file: &[u8]) -> Result<usize> {
+    let data = v.data(disk);
+    for from in (file.len() / 2..file.len().saturating_sub(64)).step_by(97) {
+        let run = &file[from..from + 64];
+        let mut found = data.windows(64).enumerate().filter(|(_, w)| *w == run).map(|(i, _)| i);
+        if let (Some(at), None) = (found.next(), found.next()) {
+            let at = v.start + at + 32;
+            disk[at] ^= 0x10;
+            return Ok(at);
+        }
+    }
+    bail!("{}: no run of the file is on the volume once", v.name)
+}
+
+/// Flips one bit of the first level-1 tree block of the verified volume `v` on `disk`: the block
+/// that covers the volume's first data blocks, which `fsd`'s mount reads.
+pub fn flip_tree(disk: &mut [u8], v: &Verified) -> usize {
+    let at = v.start + v.geometry.data_blocks() as usize * BLOCK + 7;
+    disk[at] ^= 0x10;
+    at
 }
 
 #[cfg(test)]
@@ -278,7 +357,7 @@ mod tests {
         );
         assert!(recipe("generated = { files = 10, read = \"f10\" }\n").is_err(), "f10 is not made");
         assert!(recipe("").is_err(), "a littlefs partition holds something");
-        let objects = "[objects]\napplications = []\nindex = \"i\"\n";
+        let objects = "[objects]\napplications = []\n";
         assert!(recipe(&format!("stage = \"s\"\n{objects}")).is_ok(), "objects are the stage");
         assert!(recipe(objects).is_ok(), "or the bench stages them, for its own pack");
         assert!(
@@ -314,5 +393,62 @@ mod tests {
         let at = (FIRST_USABLE * SECTOR) as usize;
         assert!(!disk[at..at + 8192].windows(8).any(|w| w == b"littlefs"));
         assert!(disk[at..at + 512].iter().any(|b| *b != 0));
+    }
+
+    /// A verified partition is the largest volume that fits beside its tree, then the tree; two
+    /// packs of the same inputs are byte-identical; and the root the pack gives is the one
+    /// `redoubt-verity` computes over the volume on the disk, as `verityd` will.
+    #[test]
+    fn a_verified_partition_is_its_volume_then_its_tree() {
+        let dir = stage("verity");
+        let mut module = vec![0u8; 10_000];
+        noise(&mut module);
+        std::fs::write(dir.join("Elixir.Version.beam"), &module).unwrap();
+        let recipe: Recipe = toml::from_str(
+            "size_kib = 2048\n[[partition]]\nname = \"system\"\nfs = \"littlefs\"\nverity = true\n",
+        )
+        .unwrap();
+        let (disk, verified) = pack(&recipe, Path::new("/"), Some(&dir)).unwrap();
+        assert_eq!((disk.clone(), verified.clone()), pack(&recipe, Path::new("/"), Some(&dir)).unwrap());
+        let [v] = &verified[..] else { panic!("one verified partition") };
+        assert_eq!(v.name, "system");
+        assert_eq!(v.start, (FIRST_USABLE * SECTOR) as usize);
+        let g = v.geometry;
+        let partition = (disk.len() - 2 * (FIRST_USABLE * SECTOR) as usize) / BLOCK;
+        assert!(
+            (g.total_sectors() / SECTORS_PER_BLOCK) as usize <= partition
+                && g.data_blocks() > 400
+                && g.levels() == 2
+        );
+        assert!(v.data(&disk)[..BLOCK].windows(8).any(|w| w == b"littlefs"));
+        let mut tree = vec![0u8; g.tree_blocks() as usize * BLOCK];
+        let root = redoubt_verity::build(&g, v.data(&disk), &mut tree).unwrap();
+        assert_eq!(root, v.root);
+        let at = v.start + g.data_blocks() as usize * BLOCK;
+        assert_eq!(&disk[at..at + tree.len()], &tree[..], "the tree follows the volume");
+        assert_eq!(v.root_hex().len(), 64);
+        // An unverified pack of the same partition is a littlefs volume the whole partition long.
+        let plain: Recipe =
+            toml::from_str("size_kib = 2048\n[[partition]]\nname = \"system\"\nfs = \"littlefs\"\n").unwrap();
+        assert!(pack(&plain, Path::new("/"), Some(&dir)).unwrap().1.is_empty());
+        // A case's damage changes the disk and never the root: the volume no longer hashes to it.
+        let mut flipped = disk.clone();
+        let at_file = flip_file(&mut flipped, v, &module).unwrap();
+        assert_eq!(flipped.iter().zip(&disk).filter(|(a, b)| a != b).count(), 1);
+        assert!(at_file >= v.start && at_file < at, "in the data blocks");
+        let mut again = vec![0u8; tree.len()];
+        assert_ne!(redoubt_verity::build(&g, v.data(&flipped), &mut again).unwrap(), v.root);
+        let mut flipped = disk.clone();
+        assert_eq!(flip_tree(&mut flipped, v), at + 7);
+        assert!(
+            flip_file(&mut flipped, v, b"not on the volume, nowhere near long enough to be found once")
+                .is_err()
+        );
+        let noisy = "size_kib = 1024\n[[partition]]\nname = \"a\"\nfs = \"noise\"\nverity = true\n";
+        let path = std::env::temp_dir().join(format!("testbench-verity-noise-{}.toml", std::process::id()));
+        std::fs::write(&path, noisy).unwrap();
+        assert!(Recipe::load(&path).is_err(), "noise is never verified");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

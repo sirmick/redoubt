@@ -47,6 +47,8 @@ it asks the device to touch can be checked.
   comes through a badge its launcher minted, and a client can make `blkd` hold nothing beyond its
   request, so there is no admission to keep. A flood of requests is bounded by the kernel's fair
   waiting ([R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting)) and by `MAX_SECTORS` per request.
+- **A verified volume's range is held by its [`verityd`](verityd.md),** which serves the same
+  protocol to the volume's `fsd`, checking every block against the root the manifest pins.
 - **Its endpoint.** `blkd` receives on the endpoint its argument `endpoint=NAME` names, the
   manifest's name for it (`blkd`, `blkd:system`). Without one it does not start: one `blkd` runs
   per disk, and it does not guess which is its own.

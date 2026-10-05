@@ -63,7 +63,8 @@ power-loss safety by design, and a size that can be read.
   [`blkd`](blkd.md), and no MMIO, interrupt or DMA. An untrusted medium gets its own server
   holding only that medium, so a parser exploit reaches that medium and nothing else
   ([R47 (one volume per instance)](#r47-one-volume-per-instance)).
-- **Arguments.** `fsd` gets one named handle, `volume`, its range at `blkd`, and the arguments
+- **Arguments.** `fsd` gets one named handle, `volume`, its range at `blkd`, or at a
+  [`verityd`](verityd.md) for a verified volume, and the arguments
   `endpoint=NAME`, the manifest name of the endpoint it receives on (`fsd:data`),
   `labels=ID[,ID...]`, the volume's label set, and `buckets=N`. littlefs blocks are 4096 bytes,
   eight of `blkd`'s sectors, so the volume's block count is its range's sectors divided by 8.
@@ -434,8 +435,9 @@ wherever a request meets it ([R49](#r49-a-hostile-medium-is-corrupt-not-a-crash)
 
 ## Residual risks
 
-- **littlefs does not checksum data.** A block device that returns wrong data undetected, beyond
-  `blkd`'s contract, corrupts file contents silently; only metadata is checksummed.
+- **littlefs does not checksum data,** except on a verified volume
+  ([R76 (verified volumes)](verityd.md#r76-verified-volumes)). A block device that returns wrong data undetected,
+  beyond `blkd`'s contract, corrupts file contents silently; only metadata is checksummed.
 - **No wear levelling.** On a medium that does not level its own wear (raw flash), littlefs wears
   it out; a virtio disk levels its own.
 - **Attributes and data are two commits.** A power cut between them leaves a file's new data with

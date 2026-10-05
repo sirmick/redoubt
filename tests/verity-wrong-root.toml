@@ -1,0 +1,31 @@
+description = "The attack: the signed manifest pins a root one digit off the userland volume's, the disk untouched (docs/servers/verityd.md, R76 (verified volumes), \"Starting\"). verityd reads the top tree block at start, finds it does not hash to the root, and says so; it stays up, answers info and fails every read, so fsd's mount fails and fsd serves the volume as corrupt, and beamlet's attach is refused and it parks. Nobody exits, restarts or reboots. The verdict is the system's: verityd's line, fsd's and init's (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
+# the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 120
+expect = [
+    '^\[con [0-9a-f]{16}\] verityd: the volume is refused: its top tree block does not match the root$',
+    '^\[con [0-9a-f]{16}\] fsd: the volume does not mount, and is served as corrupt$',
+    '^\[con [0-9a-f]{16}\] beamlet: fsd:system did not attach: .*; parked$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'init: rebooting',
+    'Redoubt shell, on Elixir',
+    'does not match the tree',
+]
+
+[userland]
+recipe = "image/userland.toml"
+wrong_root = true
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/fsd/stage"
+
+[net]

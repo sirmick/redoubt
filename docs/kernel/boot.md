@@ -477,29 +477,26 @@ no second acceptance path.
 
 ### R75 (verified userland)
 
-Status: built · partly tested: built for modules and application resources; launching a program from the userland disk is BEAM4's and is not built · tested: bench:userland-bad-start, bench:userland-boot, bench:userland-read-only, host:beamlet-vm::a_refused_system_module_never_touches_the_code_path, host:beamlet-vm::app_spec_uses_one_source_attempt_and_keeps_its_erlang_result, host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
+Status: built · partly tested: built for modules and application resources; a program launched from the userland disk comes from the same volume by launching, which is BEAM4's and not built · tested: bench:userland-bad-start, bench:userland-boot, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-vm::a_refused_system_module_never_touches_the_code_path, host:beamlet-vm::app_spec_uses_one_source_attempt_and_keeps_its_erlang_result, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
 
 A module or application resource the system resolves by name, and a program it launches from the
-userland disk, is used only if its bytes hash to the entry `system.index` in the signed bundle gives
-it; a mismatch, a missing object or a short read loads nothing and says so. The index is a bundle
-entry, so [R15](#r15-verified-boot) covers it, and `/boot` serves it
-([bootfsd](../servers/bootfsd.md)). beamlet reads it before the VM runs anything and parses it
-strictly: one line per object, `<file> <sha256 hex> <bytes>`, the file being the name the VM asks
-for (`Elixir.Enum.beam`, `elixir.app`), sorted byte-wise, each LF-terminated, and a malformed line
-refuses the whole index and stops the VM. For a file the index has, beamlet reads the object
-`/<sha256 hex>` whole from the userland disk's `fsd`, hashes it with SHA-256, and gives the loader
-the bytes only if their length and hash are the entry's. A name absent from the index needs no
-object read; for a module, that absence permits the VM to search its authorized code path. A
-missing object, short or long read, or hash mismatch for an indexed name is a refusal: beamlet
-writes one line on its console naming the module or application and the reason, retries nothing,
-and never searches the code path for the refused name. An application specification likewise
-makes one source attempt; absence and refusal both reach Erlang as `error`
-([beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)).
-The disk is attached read-only by the host and served read-only by its `fsd`, but the rule rests on
-the hash alone: the file system in between is not trusted. It does not stop code from running:
-`code:load_binary/3` still loads bytes a session holds, within the session's own authority
-([a lookup, not a gate](../userland/beamlet.md#the-platform-boundary)), so the rule extends verified
-boot to the userland's integrity, not to a code-signing gate.
+userland disk, comes only from a verified volume
+([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)). The userland disk is one:
+its manifest entry pins the root of its hash tree, the manifest is a bundle entry, so
+[R15](#r15-verified-boot) covers the root, and the volume's `fsd` reads it only through its
+`verityd`. beamlet reads each module and resource as the plain file of its name
+(`Elixir.Enum.beam`, `elixir.app`) at the volume's root and checks nothing itself: a reader of a
+verified volume trusts the servers that verify it, as it trusts `consoled` for its console. A file
+the volume does not hold is absent: the lookup goes on as for any name the system lacks, and for a
+module that absence permits the VM to search its authorized code path. A file that opens but does
+not read whole, because `verityd` failed a block or `fsd` serves the volume as corrupt, is a
+refusal: beamlet writes one line on its console naming the module or application and the reason,
+retries nothing, and never searches the code path for the refused name. An application
+specification likewise makes one source attempt; absence and refusal both reach Erlang as `error`
+([beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)). It does not stop code from
+running: `code:load_binary/3` still loads bytes a session holds, within the session's own
+authority ([a lookup, not a gate](../userland/beamlet.md#the-platform-boundary)), so the rule
+extends verified boot to the userland's integrity, not to a code-signing gate.
 
 ### R16 (image confinement)
 

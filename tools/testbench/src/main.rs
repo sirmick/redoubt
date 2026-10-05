@@ -61,7 +61,8 @@ struct Args {
     recipe: Option<PathBuf>,
     /// Instead of running tests, pack the disk recipe RECIPE (`image/disk.toml` or
     /// `image/userland.toml`, which `./mkimage` uses) into the raw disk image OUT, and exit. The
-    /// userland disk's objects are staged first, and its `system.index` written for the bundle.
+    /// userland disk's objects are staged first, and each verified volume's root and data blocks
+    /// are printed: the ones the bundle's manifest pins.
     #[arg(long, num_args = 2, value_names = ["RECIPE", "OUT"])]
     pack_disk: Option<Vec<PathBuf>>,
     /// Hart count for --run.
@@ -177,18 +178,21 @@ fn main() -> Result<()> {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
     if let Some([recipe, out]) = args.pack_disk.as_deref() {
         let recipe = disk::Recipe::load(recipe)?;
-        // The userland disk: its objects staged first, and its index written for the bundle.
+        // The userland disk: its objects staged first.
         if let Some(objects) = &recipe.objects {
             let stage = recipe.partition[0]
                 .stage
                 .as_ref()
                 .context("a userland recipe --pack-disk packs needs a stage")?;
-            let index = workspace.join(objects.index.as_ref().context("a userland recipe with no index")?);
-            let (names, bytes) = userland::stage(&workspace, objects, &workspace.join(stage), &index)?;
-            println!("{} objects, {bytes} bytes; index {}", names.len(), index.display());
+            let (count, bytes) = userland::stage(&workspace, objects, &workspace.join(stage))?;
+            println!("{count} objects, {bytes} bytes");
         }
-        let disk = disk::pack_disk(&recipe, &workspace, None)?;
+        let (disk, verified) = disk::pack(&recipe, &workspace, None)?;
         std::fs::write(out, disk).with_context(|| format!("writing {}", out.display()))?;
+        for v in &verified {
+            let blocks = v.geometry.data_blocks();
+            println!("verified volume {}: root {}, {blocks} blocks", v.name, v.root_hex());
+        }
         return Ok(());
     }
     let run = run::Run::start(&workspace.join("target/testbench"))?;
@@ -227,6 +231,7 @@ fn main() -> Result<()> {
             machine,
             &programs,
             &files,
+            None,
             &[],
             false,
             false,
@@ -562,8 +567,9 @@ fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
 }
 
 /// Build the kernel, the loader, `programs` and `files` for `target`, pack them into `bundle`, and
-/// return the bundle and the loader. `profile` applies to the kernel and the loader (the trusted
-/// base); programs are always release.
+/// return the bundle and the loader. A manifest file pins its userland disk's roots, one digit
+/// off if the case's `userland` asks for a wrong root. `profile` applies to the kernel and the
+/// loader (the trusted base); programs are always release.
 #[allow(clippy::too_many_arguments)]
 fn prepare(
     builder: &Builder,
@@ -571,6 +577,7 @@ fn prepare(
     machine: &Machine,
     programs: &[Program],
     files: &[case::BundleFile],
+    userland: Option<&case::Userland>,
     extra_kernel_features: &[String],
     tamper: bool,
     bare_archive: bool,
@@ -588,11 +595,17 @@ fn prepare(
         .iter()
         .map(|file| {
             let path = builder.program(target, &file.from)?.1;
-            if file.servers.is_empty() {
+            if file.servers.is_empty() && file.verity.is_none() {
                 return Ok((file.name.clone(), path));
             }
-            let merged = builder.run.join(format!("{}-{}.json", file.name, target.name));
-            std::fs::write(&merged, file.merged(&std::fs::read(&path)?)?)?;
+            let mut bytes = file.merged(&std::fs::read(&path)?)?;
+            if let Some(recipe) = &file.verity {
+                let wrong = userland.is_some_and(|u| u.wrong_root && &u.recipe == recipe);
+                bytes = build::pin_roots(&bytes, &builder.userland(recipe)?.verified, wrong)?;
+            }
+            // Beside this case's bundle: two cases may give one file name different bytes.
+            let merged = bundle.with_extension(format!("{}.json", file.name));
+            std::fs::write(&merged, bytes)?;
             Ok((file.name.clone(), merged))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -726,6 +739,7 @@ fn build_case<'a>(
         machine,
         &boot.programs,
         &boot.file,
+        boot.userland.as_ref(),
         &boot.kernel_features,
         boot.tamper_bundle,
         boot.sign_bare_archive,

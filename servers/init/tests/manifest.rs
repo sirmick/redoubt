@@ -22,11 +22,12 @@ const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0
 fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
 
 /// The image's manifest with one disk: without the userland disk (`disk1`, its `blkd`, its
-/// volume and `fsd`, and `beamlet`, which reads it).
+/// volume, its verifier and `fsd`, and `beamlet`, which reads it).
 fn without_userland() -> Manifest {
     let mut m = image();
     m.volumes.retain(|v| v.name != "system");
-    m.servers.retain(|s| !["beamlet", "blkd:system", "fsd:system"].contains(&s.name.as_str()));
+    m.servers
+        .retain(|s| !["beamlet", "blkd:system", "verity:system", "fsd:system"].contains(&s.name.as_str()));
     m.devices.retain(|d| d.name != "disk1");
     m
 }
@@ -92,10 +93,9 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert!(plan.placements[0].is_empty());
     // No principals: only the bundle key is asked about.
     assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
-    // keyd and consoled: init alone calls them; bootfsd: init and beamlet; ipd: netd's badge;
-    // fsd:data: nobody's yet, a principal's connection being the steward's to grant; fsd:system:
-    // beamlet's.
-    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 2), (5, 1), (6, 0), (8, 1)]);
+    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; fsd:data: nobody's
+    // yet, a principal's connection being the steward's to grant; fsd:system: beamlet's.
+    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0), (9, 1)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
 }
@@ -177,16 +177,17 @@ fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
 #[test]
 fn the_image_manifest_s_bound() {
     let plan = on_virt(&image()).unwrap();
-    // The arena (256 + 3 tables), 9 receive and 10 exit endpoints and init's reports endpoint
-    // (beamlet receives on none), 10 process objects, 10 blocks with 3 tables each, 10 watching
+    // The arena (256 + 3 tables), 10 receive and 11 exit endpoints and init's reports endpoint
+    // (beamlet receives on none), 11 process objects, 11 blocks with 3 tables each, 11 watching
     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
     // batch of beamlet's image + 3, stack 17 + 3), the lend (2 + 3), and one handle-table page:
-    // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 9 + 6 + 40 + 3 + 1 = 59
-    // added (the two volumes' ranges among the 6 badges) pass page 0's 64.
+    // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 6 + 44 + 3 + 1 =
+    // 64 added (the three volume ranges, fsd:data's, fsd:system's at verity:system and
+    // verity:system's at blkd:system, among the 6 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 17 + 3) + 1 + 5);
+    assert_eq!(plan.bound, 259 + 22 + 11 + 44 + 88 + (4 + 3 + 64 + 3 + 17 + 3) + 1 + 5);
 }
 
 /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
@@ -446,9 +447,10 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let devices = virt_devices();
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
-    // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, netd 1024, ipd 4096, fsd:data
-    // and fsd:system 1024 each, beamlet 24,576 pages, and a page each for the budgets.
-    let pages = 256 + 1024 + 640 + 512 * 2 + 1024 + 4096 + 1024 * 2 + 24_576 + 10;
+    // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
+    // ipd 4096, fsd:data and fsd:system 1024 each, beamlet 24,576 pages, and a page each for the
+    // budgets.
+    let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 24_576 + 11;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),
@@ -456,11 +458,11 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     );
     machine.system.pages_limit += 1;
     assert!(on(&m, &machine).is_ok());
-    machine.system.processes_usage = machine.system.processes_limit - 9;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 10, free: 9 });
+    machine.system.processes_usage = machine.system.processes_limit - 10;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 11, free: 10 });
     machine.system.processes_usage = 0;
-    machine.system.weight_carved = machine.system.weight_limit - 4599;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 4600, free: 4599 });
+    machine.system.weight_carved = machine.system.weight_limit - 4699;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 4700, free: 4699 });
 }
 
 // ---- public ----
@@ -529,7 +531,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
         redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap())
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=4", "system.index"]);
+    assert_eq!(args(&m, "bootfsd"), ["buckets=4"]);
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 
@@ -1116,18 +1118,12 @@ fn verified_volume(m: &mut Manifest, name: &str, partition: i64, labels: Vec<Str
         disk: disk.map(Into::into),
         verity: Some(Verity { server: verifier.clone(), root: ROOT.into(), blocks: 100 }),
     });
+    let declared = server(&mut image(), "verity:system").clone();
     m.servers.push(Server {
         name: verifier.clone(),
-        program: "verityd".into(),
-        budget: budget(256),
-        stack_pages: 16,
-        heap_pages: None,
         labels: labels.clone(),
-        devices: vec![],
-        volume: None,
         receives: vec![verifier],
-        handed: vec![],
-        args: vec![],
+        ..declared
     });
     let base = server(&mut image(), "fsd:data").clone();
     let fsd = format!("fsd:{name}");

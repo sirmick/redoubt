@@ -34,10 +34,6 @@ after = '^\[con [0-9a-f]{16}\] beamlet-heap-flood: type a line$'
 send = "still served after the flood\n"
 
 [[file]]
-name = "system.index"
-from = { userland_index = "tests/data/beamlet/userland.toml" }
-
-[[file]]
 name = "manifest"
 from = { path = "tests/data/beamlet/flood.json" }
 

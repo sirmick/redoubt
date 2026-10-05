@@ -7,11 +7,11 @@
 //! ([`beamlet_redoubt::limits`]), and name the function it runs, `start` by default; it runs
 //! it as `fake-redoubt` does on a host (`beamlet_redoubt::run`), and exits with the code that
 //! returns. Its console is `/dev/cons` in its namespace; its threads are the runtime's. Its
-//! modules are the userland disk's objects, read whole through its handle `fsd:system`, each
-//! checked against `/boot/system.index`, which it reads through its handle `bootfsd` and parses
-//! strictly before the VM starts ([`beamlet_redoubt::userland`]). A start module that fails the
-//! check parks it: it says why and waits, never exiting, so a tampered disk is not a restart loop
-//! that reboots the machine.
+//! modules are the userland volume's files, each read whole by its name through its handle
+//! `fsd:system`, an `fsd` that reads the volume through its `verityd`
+//! ([`beamlet_redoubt::userland`]). A volume that does not attach, or a start module that cannot
+//! be read, parks it: it says why and waits, never exiting, so a tampered disk is not a restart
+//! loop that reboots the machine.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -22,10 +22,9 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::format;
-use alloc::string::String;
 use alloc::vec::Vec;
 
-use beamlet_redoubt::userland::{Checked, Index, Objects};
+use beamlet_redoubt::userland::{Disk, Files, Unread};
 use beamlet_redoubt::{Modules, Threads, Unloaded};
 use redoubt_client::console::Console;
 use redoubt_client::file::Connection;
@@ -39,11 +38,8 @@ use redoubt_rt::startup::Startup;
 redoubt_rt::entry!(start);
 
 /// The exit code for a startup block without a module to run or without `fsd:system`, or for a
-/// start module `system.index` does not name.
+/// start module the userland volume does not hold.
 const USAGE: u32 = 2;
-/// The exit code for a `system.index` that could not be read (no `bootfsd`, or it never showed)
-/// or is malformed, before the VM starts.
-const BAD_INDEX: u32 = 3;
 /// The exit code for a missing or malformed `budget_pages=N`, before the VM starts: without it
 /// the VM's limits would be its defaults, far above any budget.
 const BAD_ARGS: u32 = 4;
@@ -55,12 +51,6 @@ const BAD_ARGS: u32 = 4;
 const STACK_PAGES: usize = 4;
 /// The pages of each lend a file is read through: what one read asks for.
 const LEND_PAGES: usize = 4;
-/// The bundle's table of the userland disk, in `/boot`.
-const INDEX: &str = "system.index";
-/// How often, and how far apart in microseconds, `/boot/system.index` is asked for before giving
-/// up: `init` starts programs before it pushes `/boot`'s public entries, which show only then.
-const TRIES: u32 = 200;
-const APART: u64 = 10_000;
 
 fn start(startup: &Startup) -> u32 {
     // `budget_pages=N`, anywhere, sizes the VM's limits. The rest are MODULE [FUNCTION].
@@ -78,52 +68,32 @@ fn start(startup: &Startup) -> u32 {
         say(startup, "beamlet: no fsd:system handle");
         return USAGE;
     };
-    let index = match index_bytes(startup) {
-        Ok(bytes) => bytes,
-        Err(why) => {
-            say(startup, &format!("beamlet: no /boot/{INDEX}: {why}"));
-            return BAD_INDEX;
-        }
+    // A volume served as corrupt refuses every attach: it parks, as a start module that does
+    // not load does.
+    let files = match System::attach(Endpoint::from_handle(system)) {
+        Ok(files) => files,
+        Err(e) => park(startup, &format!("beamlet: fsd:system did not attach: {e:?}; parked")),
     };
-    let index = match Index::parse(&index) {
-        Ok(index) => index,
-        Err(e) => {
-            say(startup, &format!("beamlet: /boot/{INDEX} is malformed, line {}: {}", e.line, e.why));
-            return BAD_INDEX;
-        }
-    };
-    let objects = match System::attach(Endpoint::from_handle(system)) {
-        Ok(objects) => objects,
-        Err(e) => {
-            say(startup, &format!("beamlet: fsd:system did not attach: {e:?}"));
-            return USAGE;
-        }
-    };
-    let mut modules = Checked::new(index, objects);
-    // The start module, checked before the VM runs anything: if it cannot load, the VM parks.
+    let mut modules = Disk::new(files);
+    // The start module, read before the VM runs anything: if it cannot load, the VM parks.
     match modules.load(&format!("{module}.beam")) {
         Ok(_) => {}
         Err(Unloaded::Absent) => {
-            say(startup, &format!("beamlet: {module} is not in /boot/{INDEX}"));
+            say(startup, &format!("beamlet: {module} is not on the userland volume"));
             return USAGE;
         }
-        Err(Unloaded::Refused(why)) => {
-            say(startup, &format!("beamlet: {module} not loaded: {why}; parked"));
-            loop {
-                let _ = sleep(FOREVER);
-            }
-        }
+        Err(Unloaded::Refused(why)) => park(startup, &format!("beamlet: {module} not loaded: {why}; parked")),
     }
-    say(startup, &format!("beamlet: {} objects in /boot/{INDEX}, read from fsd:system", modules.named()));
+    say(startup, &format!("beamlet: {module} read from fsd:system"));
     beamlet_redoubt::run(startup, Box::new(Machine), Box::new(modules), module, function, Some(budget_pages))
 }
 
-/// The bytes of `system.index`, the signed bundle's table of the userland disk: `/boot`'s, read
-/// through the handle `bootfsd` once `init` has pushed it. Its one source.
-fn index_bytes(startup: &Startup) -> Result<Vec<u8>, String> {
-    let boot = startup.handle("bootfsd").ok_or_else(|| String::from("no bootfsd handle"))?;
-    let read = Boot::attach(Endpoint::from_handle(boot), INDEX).and_then(|mut boot| boot.read(INDEX));
-    read.map_err(|e| format!("{e:?}"))
+/// Says `line` and waits for good: a disk that would only fail again is never a restart loop.
+fn park(startup: &Startup, line: &str) -> ! {
+    say(startup, line);
+    loop {
+        let _ = sleep(FOREVER);
+    }
 }
 
 /// Says why it is exiting on its console, before there is a VM to: as best it can, since a
@@ -148,34 +118,7 @@ impl Threads for Machine {
     }
 }
 
-/// `/boot`, on a connection to `bootfsd`.
-struct Boot {
-    boot: Connection,
-    lend: Lend,
-}
-
-impl Boot {
-    /// Attaches to `bootfsd` at `endpoint`, and waits, for a bounded time, until `first` shows.
-    fn attach(endpoint: Endpoint, first: &str) -> Result<Boot, Error> {
-        let mut lend = Lend::new(LEND_PAGES)?;
-        let boot = Connection::attach(endpoint, &mut lend)?;
-        let mut tries = 0;
-        while let Err(e) = boot.stat(&mut lend, first) {
-            if tries == TRIES {
-                return Err(e);
-            }
-            tries += 1;
-            sleep(APART)?;
-        }
-        Ok(Boot { boot, lend })
-    }
-
-    fn read(&mut self, file: &str) -> Result<Vec<u8>, Error> {
-        read(&self.boot, &mut self.lend, file, u64::MAX)
-    }
-}
-
-/// The userland disk's objects, at the root of its `fsd`'s volume.
+/// The userland volume's files, at the root of its `fsd`'s volume.
 struct System {
     fsd: Connection,
     lend: Lend,
@@ -189,29 +132,22 @@ impl System {
     }
 }
 
-impl Objects for System {
-    fn read(&mut self, name: &str, max: u64) -> Result<Vec<u8>, Error> {
-        read(&self.fsd, &mut self.lend, name, max)
+impl Files for System {
+    /// A file that does not open is absent; one that opens but does not read whole failed.
+    fn read(&mut self, name: &str) -> Result<Vec<u8>, Unread> {
+        let lend = &mut self.lend;
+        let open = self.fsd.open(lend, name, mode::OREAD).map_err(|_| Unread::Absent)?;
+        let mut bytes = Vec::new();
+        let mut chunk = alloc::vec![0u8; lend.iounit()];
+        let read = loop {
+            match open.read_at(lend, bytes.len() as u64, &mut chunk) {
+                Ok(0) => break Ok(()),
+                Ok(n) => bytes.extend_from_slice(&chunk[..n]),
+                Err(e) => break Err(e),
+            }
+        };
+        // The fid goes back to the connection whether or not the read finished.
+        let closed = open.close(lend);
+        read.and(closed).map(|()| bytes).map_err(|_: Error| Unread::Failed)
     }
-}
-
-/// The file `file` on `connection`, read whole from its start, but no more than `max` bytes.
-fn read(connection: &Connection, lend: &mut Lend, file: &str, max: u64) -> Result<Vec<u8>, Error> {
-    let open = connection.open(lend, file, mode::OREAD)?;
-    let mut bytes = Vec::new();
-    let mut chunk = alloc::vec![0u8; lend.iounit()];
-    let read = loop {
-        if bytes.len() as u64 >= max {
-            break Ok(());
-        }
-        match open.read_at(lend, bytes.len() as u64, &mut chunk) {
-            Ok(0) => break Ok(()),
-            Ok(n) => bytes.extend_from_slice(&chunk[..n]),
-            Err(e) => break Err(e),
-        }
-    };
-    bytes.truncate(usize::try_from(max).unwrap_or(usize::MAX));
-    // The fid goes back to the connection whether or not the read finished.
-    let closed = open.close(lend);
-    read.and(closed).map(|()| bytes)
 }

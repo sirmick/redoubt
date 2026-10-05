@@ -526,9 +526,10 @@ name = "manifest"
 from = { path = "tests/data/fsd/boot.json" }
 servers = [{ name = "client", args = ["reboot", "fsd:data"] }]
 
-[[file]]                     # the system.index of the userland disk a recipe packs
-name = "system.index"
-from = { userland_index = "image/userland.toml" }
+[[file]]                     # a manifest pinning the userland disk's root, from the run's pack
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
 ```
 
 A file read from a path may be a manifest with `servers` entries merged in by name: each replaces
@@ -562,7 +563,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (16)</summary>
+<details><summary>Status: built · tested (19)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -571,6 +572,8 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - bench:net-tcp
 - bench:userland-boot
 - bench:userland-read-only
+- bench:verity-flipped-tree
+- bench:verity-wrong-root
 - host:testbench::a_recipe_can_generate_a_directory_of_files
 - host:testbench::a_recipe_packs_a_table_and_a_volume_per_partition
 - host:testbench::a_stage_is_walked_parents_first_in_name_order
@@ -578,8 +581,9 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::every_network_is_restricted
 - host:testbench::virtio_devices_are_modern
 - host:testbench::the_userland_disk_sits_on_its_slot_read_only
-- host:testbench::the_userland_pack_is_deterministic_and_names_each_object_by_its_hash
-- host:testbench::a_case_flips_one_object_and_removes_another
+- host:testbench::the_userland_pack_is_deterministic_and_stages_each_object_by_name
+- host:testbench::a_verified_partition_is_its_volume_then_its_tree
+- host:testbench::the_manifest_pins_the_packs_root
 
 </details>
 
@@ -591,10 +595,11 @@ partitions = 1               # optional: a GPT of this many equal partitions, by
 # recipe = "image/disk.toml"
 # stage = "tests/data/fsd/stage"   # optional: what every partition holds instead of its stage
 
-[userland]                   # the userland disk, attached read-only, packed for every boot
+[userland]                   # the userland disk, attached read-only, packed once per run
 recipe = "image/userland.toml"
-# flip = "Elixir.Enum.beam"  # optional: this file's object has one byte flipped on the disk
-# remove = "Elixir.Enum.beam"  # optional: this file's object is not on the disk
+# flip = "Elixir.Enum.beam"  # optional: one bit of this file's data flipped on the disk
+# flip_tree = true           # optional: one bit flipped in the first level-1 tree block
+# wrong_root = true          # optional: the manifest pins a root one digit off the pack's
 
 [net]                        # a virtio-net card on QEMU's user-mode network
 forward = [22]               # guest TCP ports reachable from the host (default: none)
@@ -611,18 +616,21 @@ contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in
 (as many digits as the last needs), all empty except `read`, which holds its own name and a
 newline. They sit beside the stage's tree, if there is one, and a name in both is refused.
 
+A littlefs partition may be verified, `verity = true`: it holds the largest volume that fits
+beside its hash tree, then the tree ([verityd](servers/verityd.md#the-tree)), and the pack says
+its root and data blocks.
+
 The userland disk (`image/userland.toml`) is packed by the same code: first its objects are
 staged, each module of the applications the recipe names, compiled by the pinned toolchain and
-stripped, as one file named by the SHA-256 of its bytes, with `system.index`, the table naming
-each by its hash; then its one partition is packed as a littlefs volume of those files. A case
-puts the index in its bundle with a `[[file]]` `from = { userland_index = "image/userland.toml" }`,
-and attaches the disk with `[userland]`; both come from one staging per run. `--pack-disk` writes
-an index only for a recipe whose `[objects]` declares one, so `image/disk.toml` packs as before. A
-`flip` or a `remove` names a file and damages a copy of the objects for that boot, after the index
-was written, and one disk may carry both, one object flipped and another removed: it changes only
-the disk, and the bundle's index is the unchanged pack's, so the bundle names an object the disk no
-longer holds whole ([R75 (verified userland)](kernel/boot.md#r75-verified-userland)). Nothing is
-generated beside the objects.
+stripped, as a plain file under its own name, then its one partition is packed as a verified
+volume of those files. The bench stages and packs it once per run: a bundle file read from a path
+with `verity = "image/userland.toml"` is a manifest, and the builder writes the pack's root and
+data blocks into the `verity` of the `volumes` entry of the partition's name, so the signed
+manifest pins the disk; `[userland]` attaches the same pack. A case's damage goes on its own copy
+of the disk after the pack, never on the root: `flip` flips one bit of a file's data where the
+volume holds it, and `flip_tree` one bit of the first level-1 tree block. `wrong_root` changes the
+manifest's root by one digit instead, never the disk
+([R76 (verified volumes)](servers/verityd.md#r76-verified-volumes)). Nothing is generated beside the objects.
 
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
 virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,
@@ -1034,7 +1042,8 @@ rounded up to pages, from the runs that sized the stacks, before the heap caps e
 heap cap in pages, from six later runs with the stacks as declared. The stack columns below are
 the first runs' and the heap columns the later runs'. `beamlet`'s heap peak moves by a page between
 runs, so its cap is instead the most its budget holds beside its stack, 24,558 pages. The
-read-only case also scans its additional client from the merged manifest.
+read-only case also scans its additional client from the merged manifest. `verity:system`'s row and
+`fsd:system`'s heap are from six runs with the userland volume read through `verity:system`.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1046,7 +1055,8 @@ read-only case also scans its additional client from the merged manifest.
 | `ipd` | 8,040 | 4 | 4 | 8 |
 | `fsd:data` | 7,176 | 4 | 9 | 18 |
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
-| `fsd:system` | 12,680 | 7 | 16 | 32 |
+| `verity:system` | 7,864 | 4 | 47 | 94 |
+| `fsd:system` | 12,680 | 7 | 19 | 38 |
 | `beamlet` | 33,240 | 17 | 11,814 | 24,558 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses

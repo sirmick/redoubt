@@ -65,8 +65,10 @@ corrects one.
 
 ### Starting
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (4)</summary>
 
+- bench:verity-wrong-root
+- bench:verity-flipped-tree
 - host:redoubt-verityd::a_truncated_range_is_refused_and_still_sized
 - host:redoubt-verityd::a_wrong_root_or_top_is_refused
 
@@ -82,8 +84,10 @@ matters: an `fsd` that cannot size its range exits, and would be restarted.
 
 ### Messages
 
-<details><summary>Status: built · tested (6)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
+- bench:userland-boot
+- bench:userland-read-only
 - host:redoubt-verityd::sub_block_and_multi_block_reads_return_the_volume
 - host:redoubt-verityd::a_mismatch_is_failed_and_said_naming_the_block
 - host:redoubt-verityd::a_failed_block_is_never_kept
@@ -123,9 +127,25 @@ matters: an `fsd` that cannot size its range exits, and would be restarted.
 - **Per block `fsd` reads:** one more call and a copy of at most 4 KiB. The tree's reads are about
   1/128 more, mostly cached. Its weight is ordinary, like `fsd`'s: each request is a bounded
   amount of work, at most 8 blocks.
-- **Read-ahead is not done.** One inside `verityd` (8 blocks per `blkd` call, hashed and cached)
-  would cut its calls at `blkd` eightfold on sequential reads with no protocol change, and can come
-  if the timing asks for it.
+- **Measured** on rv64 under QEMU, the image booted to its prompt and `Enum.sum(1..10)`: 172.9 s
+  through `verity:system`, 102.9 s with the same volume attached to `fsd` directly. By then `fsd`
+  had made 65,536 reads, for which `verityd` checked 51,312 data blocks; level-1 blocks were held
+  for 99.96 % of them. littlefs reads a block in pieces and alternates between blocks, so the
+  last-block buffer saved 22 % of the reads, and each of the ~1,950 blocks the boot loads was
+  fetched and hashed about 26 times. The tree is not the cost; the repeated data blocks are.
+- **Read-ahead is not done** ([below](#a-cache-of-checked-data-blocks)).
+
+### A cache of checked data blocks
+
+Status: planned · M1 (separation and containment)
+
+A few checked data blocks, least recently used out first, beside the tree cache, would hash a
+block `fsd` reads in pieces once, and read-ahead (8 blocks per `blkd` call, hashed and cached)
+would cut the calls at `blkd` on sequential reads. Both are local to `verityd` and change no
+protocol; the measurement above says the timing asks for one.
+
+**Open:** a few-block LRU of checked data blocks, read-ahead, or both, and how many blocks of fixed
+memory: a follow-up, with the signed root or on its own.
 
 ## Authority
 
@@ -140,8 +160,12 @@ Status: built · tested: host:redoubt-verityd::only_the_volumes_badge_is_served,
 
 ### R76 (verified volumes)
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (9)</summary>
 
+- bench:userland-boot
+- bench:userland-bad-start
+- bench:verity-flipped-tree
+- bench:verity-wrong-root
 - host:redoubt-verity::a_flipped_bit_at_each_level_is_refused
 - host:redoubt-verityd::a_wrong_root_or_top_is_refused
 - host:redoubt-verityd::a_mismatch_is_failed_and_said_naming_the_block

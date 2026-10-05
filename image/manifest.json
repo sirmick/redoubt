@@ -7,7 +7,10 @@
   ],
   "volumes": [
     { "name": "data", "partition": 0, "disk": "blkd" },
-    { "name": "system", "partition": 0, "disk": "blkd:system" }
+    { "name": "system", "partition": 0, "disk": "blkd:system",
+      "verity": { "server": "verity:system",
+                  "root": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "blocks": "1" } }
   ],
   "servers": [
     { "name": "keyd", "program": "keyd",
@@ -58,8 +61,12 @@
       "budget": { "pages": "512", "processes": 1, "weight": 1000 },
       "devices": [ { "device": "disk1", "as": "disk" } ],
       "receives": ["blkd:system"], "args": ["endpoint=blkd:system"] },
+    { "name": "verity:system", "program": "verityd",
+      "stack_pages": "4", "heap_pages": "94",
+      "budget": { "pages": "256", "processes": 1, "weight": 100 },
+      "receives": ["verity:system"] },
     { "name": "fsd:system", "program": "fsd",
-      "stack_pages": "7", "heap_pages": "32",
+      "stack_pages": "7", "heap_pages": "38",
       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
       "volume": "system",
       "receives": ["fsd:system"],
@@ -67,8 +74,7 @@
     { "name": "beamlet", "program": "beamlet",
       "stack_pages": "17", "heap_pages": "24558",
       "budget": { "pages": "24576", "processes": 1, "weight": 100 },
-      "handed": [ { "endpoint": "bootfsd", "badge": "7" }, { "endpoint": "fsd:system", "badge": "7" } ],
+      "handed": [ { "endpoint": "fsd:system", "badge": "7" } ],
       "args": ["budget_pages=24576", "Elixir.Redoubt.Shell"] }
-  ],
-  "public": ["system.index"]
+  ]
 }

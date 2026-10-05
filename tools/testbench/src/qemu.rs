@@ -220,8 +220,8 @@ pub const USERLAND_BUS: &str = "virtio-mmio-bus.5";
 
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at
 /// `disk`, so no boot sees another's writes, and picks free host ports for the forwards. The
-/// userland disk is packed beside it from `userland`, its staged objects and what their index
-/// names ([`crate::build::Builder::userland`]), and attached read-only.
+/// userland disk is copied beside it from `userland`, the run's one pack
+/// ([`crate::build::Builder::userland`]), with the case's damage, and attached read-only.
 pub fn virtio_devices(
     boot: &Boot,
     disk: &Path,
@@ -254,19 +254,23 @@ pub fn virtio_devices(
     }
     if let Some(spec) = &boot.userland {
         let staged = userland.context("a userland disk with nothing staged")?;
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let recipe = crate::disk::Recipe::load(&root.join(&spec.recipe))?;
         let image = disk.with_extension("userland.img");
-        // The case's damage goes on a copy of the objects, after the index was written.
-        let damaged = disk.with_extension("userland");
-        let stage = if spec.flip.is_some() || spec.remove.is_some() {
-            let (flip, remove) = (spec.flip.as_deref(), spec.remove.as_deref());
-            crate::userland::damaged(&staged.objects, &staged.names, flip, remove, &damaged)?;
-            damaged.as_path()
-        } else {
-            staged.objects.as_path()
-        };
-        std::fs::write(&image, crate::disk::pack_disk(&recipe, &root, Some(stage))?)?;
+        // The run's one pack, whose root the bundle's manifest pins; the case's damage goes on
+        // this boot's copy, after the pack, and never on the root.
+        let mut bytes =
+            std::fs::read(&staged.image).with_context(|| format!("reading {}", staged.image.display()))?;
+        if spec.flip.is_some() || spec.flip_tree {
+            let verified = staged.verified.first().context("damage needs a verified volume")?;
+            if let Some(file) = &spec.flip {
+                let module = std::fs::read(staged.objects.join(file))
+                    .with_context(|| format!("the userland disk has no {file}"))?;
+                crate::disk::flip_file(&mut bytes, verified, &module)?;
+            }
+            if spec.flip_tree {
+                crate::disk::flip_tree(&mut bytes, verified);
+            }
+        }
+        std::fs::write(&image, bytes)?;
         let file = image.display().to_string().replace(',', ",,");
         // readonly=on: the host refuses every write, so nothing on the box can change the disk.
         args.extend(["-drive".into(), format!("if=none,format=raw,id=disk1,readonly=on,file={file}")]);
@@ -881,18 +885,25 @@ mod tests {
     }
 
     /// The userland disk sits on its own slot, bus 5 (`0x10006000`, interrupt 6), beside the
-    /// data disk, attached read-only, and packed from the staged objects with a case's damage on
-    /// a copy: the staged objects stay as the index names them.
+    /// data disk, attached read-only: the run's one pack, with a case's damage on this boot's copy
+    /// of it, one bit, and the run's pack untouched.
     #[test]
     fn the_userland_disk_sits_on_its_slot_read_only() {
         let dir = std::env::temp_dir().join(format!("testbench-qemu-userland-{}", std::process::id()));
-        let (stage, index) = (dir.join("objects"), dir.join("system.index"));
-        let objects = vec![(String::from("lists.beam"), b"FOR1 lists".to_vec())];
-        let names = crate::userland::write(&objects, &stage, &index).unwrap();
-        let staged = Staged { objects: stage.clone(), index, names };
+        let stage = dir.join("objects");
+        let module: Vec<u8> = (0..20_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        let objects = vec![(String::from("Elixir.Version.beam"), module)];
+        crate::userland::write(&objects, &stage).unwrap();
+        let recipe: crate::disk::Recipe = toml::from_str(
+            "size_kib = 1024\n[[partition]]\nname = \"system\"\nfs = \"littlefs\"\nverity = true\n",
+        )
+        .unwrap();
+        let (packed, verified) = crate::disk::pack(&recipe, Path::new("/"), Some(&stage)).unwrap();
+        let image = dir.join("userland-pack.img");
+        std::fs::write(&image, &packed).unwrap();
+        let staged = Staged { objects: stage, image: image.clone(), verified };
         let disk = dir.join("boot.img");
-        let case =
-            "[disk]\nsize_kib = 64\n[userland]\nrecipe = \"image/userland.toml\"\nflip = \"lists.beam\"\n";
+        let case = "[disk]\nsize_kib = 64\n[userland]\nrecipe = \"image/userland.toml\"\nflip = \"Elixir.Version.beam\"\n";
         let (args, _) = virtio_devices(&boot(case), &disk, Some(&staged)).unwrap();
         let drive = format!(
             "if=none,format=raw,id=disk1,readonly=on,file={}",
@@ -908,9 +919,9 @@ mod tests {
             ]
         );
         assert_eq!(USERLAND_BUS, "virtio-mmio-bus.5");
-        let name = crate::userland::name(b"FOR1 lists");
-        assert_eq!(std::fs::read(stage.join(&name)).unwrap(), b"FOR1 lists");
-        assert_ne!(std::fs::read(disk.with_extension("userland").join(&name)).unwrap(), b"FOR1 lists");
+        let booted = std::fs::read(disk.with_extension("userland.img")).unwrap();
+        assert_eq!(booted.iter().zip(&packed).filter(|(a, b)| a != b).count(), 1);
+        assert_eq!(std::fs::read(&image).unwrap(), packed, "the run's pack is untouched");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
