@@ -1017,6 +1017,7 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
             name: format!("s{n}"),
             program: "fsd".into(),
             budget: budget(17),
+            heap_pages: None,
             receives,
             ..m.servers[3].clone()
         });
@@ -1050,6 +1051,7 @@ fn more_servers_than_init_has_threads_to_watch_are_refused() {
             program: "fsd".into(),
             receives,
             budget: budget(17),
+            heap_pages: None,
             ..m.servers[3].clone()
         });
         m.servers.last_mut().unwrap().devices.clear();
