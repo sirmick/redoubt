@@ -620,7 +620,7 @@ fn measure_stacks(
     log: &Path,
     qmp_path: &Path,
 ) -> Result<memory::Measurement> {
-    let stacks = memory::stacks(boot, workspace)?;
+    let servers = memory::servers(boot, workspace)?;
     let stream =
         UnixStream::connect(qmp_path).with_context(|| format!("connecting to {}", qmp_path.display()))?;
     stream.set_read_timeout(Some(Duration::from_secs(60)))?;
@@ -645,7 +645,7 @@ fn measure_stacks(
             }}),
         )?;
         let file = std::fs::File::open(&dump).with_context(|| format!("opening {}", dump.display()))?;
-        memory::scan(BufReader::new(file), bytes, &stacks)
+        memory::scan(BufReader::new(file), bytes, &servers)
     })();
     if result.is_ok() {
         std::fs::remove_file(&dump).ok();
