@@ -22,6 +22,9 @@ Your own machine instead needs:
   `riscv32imac-unknown-none-elf` and `riscv64gc-unknown-none-elf`;
 - `qemu-system-riscv64` and `qemu-system-riscv32`;
 - OpenSSH, for the bench's SSH sessions;
+- `curl`, `dpkg-deb` and `xz`, and the network once: the guest that runs OpenSSH's reference
+  server is built from Debian's packages the first time a bench needs it, then kept in
+  `target/ssh-reference/` ([the loopback server](docs/testbench.md#sessions-and-the-loopback-server));
 - `mdbook` and `mdbook-mermaid`, to render the book (`cargo install mdbook mdbook-mermaid`); the
   book's own preprocessor for address maps builds with `cargo`.
 
