@@ -661,7 +661,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (11)</summary>
+<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (15)</summary>
 
 - bench:bench-ssh-loopback
 - bench:bench-ssh-loopback-openssh
@@ -672,6 +672,10 @@ The guest's own claims about the network are never trusted.
 - bench:bench-ssh-loopback-aborted-text
 - bench:bench-ssh-guest
 - host:testbench::the_reference_proxy_quotes_only_what_the_bench_chose
+- host:testbench::the_cpio_writer_writes_newc
+- host:testbench::the_guest_recipe_parses_and_hashes
+- host:testbench::a_bad_package_is_broken_and_no_network_is_the_hosts
+- host:testbench::the_keeper_finds_what_names_the_case
 - host:testbench::resize_needs_a_pty
 - host:testbench::no_other_child_inherits_a_sessions_terminal
 
@@ -708,47 +712,55 @@ pipes. `resize` sets that terminal's size and signals `ssh` (`SIGWINCH`), which 
 must never ship. The `ssh-loopback` kind runs sessions against a server that `ssh` starts itself
 for each session as its `ProxyCommand`, so nothing listens on a port: Redoubt's `sshd` on its host
 platform ([against Redoubt's sshd](#against-redoubts-sshd)), or with `server = "openssh"`
-OpenSSH's server in inetd mode, inside a container. Its log goes to a file beside the transcripts,
+OpenSSH's server in inetd mode, in a QEMU guest. Its log goes to a file beside the transcripts,
 never to `ssh`'s output, so a late line of the server's cannot stand in for the session's last
 output; a case's `server_log` asks what the server saw (a refused key, say), not only what the
 client printed, and its `server_log_forbid` what the server must not have done (a console
 started, say).
 
-**OpenSSH's server runs in a container.** On a host that enforces SELinux, `sshd` moves every
+**OpenSSH's server runs in a QEMU guest.** On a host that enforces SELinux, `sshd` moves every
 login shell into the user's default context, and a bench running in a service's context may not
-enter it, so the host's own `sshd` cannot serve the reference case. Inside a container `sshd`
-finds SELinux disabled and makes no such move; the client, the session runner and the case are
-unchanged, so the case is still a witness independent of Redoubt's server.
-- **The image** is built from `tests/ssh-reference/Containerfile`: a Debian base pinned by
-  digest and the distribution's `openssh-server` pinned by version, nothing else. The bench tags
-  it with a hash of that file and builds it only when no image has that tag, so only the first
-  run after a change to the file needs the network.
-- **Each session** starts its own server: `ssh`'s `ProxyCommand` is `podman run -i --rm
-  --network=none --pull=never` of that image running `sshd -i`, with the case's configuration,
-  keys and log from a directory the bench makes for the case. Each file is mounted on its own
-  with a shared SELinux label, so that concurrent sessions can all append to the one log; the
-  configuration and keys are read-only, and only the log is writable. The server logs in only root, inside
-  the container (root there is the bench's user outside), runs `/bin/sh` for every login and
-  allows nothing else. The container has no network, so nothing but its `ssh` can reach it.
-- **Rootless `podman` needs the user's own group.** A service may run the bench with another
-  primary group, and `newuidmap` then refuses to map the container's users; the runner starts
-  `podman` under `sg` and the user's primary group from the password database. A service also has
-  no systemd user session to hold a container's cgroup, so `podman` runs with
-  `--cgroup-manager=cgroupfs`; without it the image's build fails there.
+enter it, so the host's own `sshd` cannot serve the reference case. A container needs a runtime
+and user namespaces that the bench's host may refuse. A guest under the bench's own
+`qemu-system-riscv64` needs neither; the client, the session runner and the case are unchanged,
+so the case is still a witness independent of Redoubt's server. The guest is not Redoubt, and it
+boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
+- **The image** is a Linux kernel and an initramfs built from `tests/ssh-reference/guest.toml`:
+  Debian's riscv64 kernel, `openssh-server`, the libraries it links and `busybox-static`, each
+  pinned by version and sha256 in one timestamp of `snapshot.debian.org`, which keeps every
+  version it has published; with them the guest's `/init`, its logins (root and `sshd`'s
+  privilege-separation user), the kernel module it loads (`virtio_mmio`) and what it leaves out,
+  each with its reason. The bench fetches each package with `curl`, checks its sha256, unpacks it
+  with `dpkg-deb`, and writes the initramfs's `newc` archive itself. It keeps the image in
+  `target/ssh-reference/` under the first 16 hex digits of the recipe's sha256, and builds it only
+  when that is missing, so only the first run after a change to the recipe needs the network.
+- **Each session** boots its own guest: `ssh`'s `ProxyCommand` is QEMU with no network and no host
+  filesystem. The case's configuration and keys reach the guest in its initramfs: the bench writes,
+  for each case, the image's archive followed by an archive of the case's files. The session's stdio
+  is a virtio-serial port; the guest's `/init` runs `sshd -i` on it, reading and writing one open of
+  the port, and powers off when `sshd` is done. Every `sshd` process opens its log anew and a port
+  takes one open at a time, so they share a FIFO that one reader carries, a line per write, to a
+  second port, which QEMU appends to the case's log: a line of up to 4 KiB, the most a FIFO takes in
+  one write, reaches the log whole among other sessions' lines. The guest's console goes to
+  `guest.log` beside it, for people reading a failed run, and is never a verdict; a failed boot
+  powers off rather than reboots. The server logs in only root, inside the guest, runs `/bin/sh` for
+  every login and allows nothing else.
+- **ssh ends each guest.** Once the session ends, `ssh` exits without waiting for the server, hangs
+  up on its proxy, and QEMU exits with its parent besides. What `sshd` logs after that is lost; the
+  lines the cases ask for come earlier. **The keeper:** once a case's sessions have all exited, any
+  `qemu-system-riscv64` whose command line names the case's directory (the run's own) has five
+  seconds to go; one still running then is killed, and the case fails, naming it.
 - **Before the first OpenSSH loopback case** the bench logs in once and runs `exit 0`, and the
-  server's log must name OpenSSH's version, so that no other server can pass for it. Without
-  `podman`, or with no image and no network to build one, every OpenSSH loopback case fails with
-  that reason, as on a host without OpenSSH, and `--allow-skip` skips them. The bench tells the
-  network's absence from a broken recipe after a failed build: if the base image's registry or
-  Debian's archive does not accept a connection, the host lacks the network; if both do, the
-  recipe is at fault, and that, like any other probe failure, fails every OpenSSH loopback case.
-  The residual: Debian drops a superseded package version from its archive, so once
-  `openssh-server`'s pin is superseded a host without the image cannot build it, and every
-  OpenSSH loopback case fails there until the pin moves; a host that has the image runs on. The
-  check also runs from the bench's network, not the build's: a host whose `podman` alone is cut
-  off fails the case rather than skipping it, and a host whose only way out is an HTTP(S) proxy
-  that `podman` uses and the check does not finds neither source answering, so a bad pin there is
-  a host lack that `--allow-skip` skips.
+  server's log must name OpenSSH's version, so that no other server can pass for it. Its `ssh` waits
+  at most 30 seconds for the server's banner, so a guest that never boots fails the probe rather
+  than hanging the bench. Without a `qemu-system-riscv64` the bench can use, without `curl`,
+  `dpkg-deb` or `xz` to build the image, or with no image and `snapshot.debian.org` not answering,
+  every OpenSSH loopback case fails with that reason, as on a host without OpenSSH, and
+  `--allow-skip` skips them. A package whose sha256 is not the recipe's, a fetch that fails while
+  the snapshot answers, a build that fails and a probe that fails all fail every OpenSSH loopback
+  case. The check connects directly: on a host whose only way out is an HTTP(S) proxy that `curl`
+  uses, a fetch that fails there finds the snapshot silent, and is a host lack that `--allow-skip`
+  skips.
 
 ### Against Redoubt's sshd
 
@@ -772,7 +784,7 @@ unchanged, so the case is still a witness independent of Redoubt's server.
 platform, `redoubt-sshd-host` ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)),
 which the bench builds and `ssh` starts as its `ProxyCommand`. Its host key is `loopback-host`,
 and each of the case's `authorized` keys is a principal of the same name. Nothing there needs a
-shell, a login context or a container.
+shell, a login context or a guest.
 
 - **The self-checks run on it,** their steps written for its scripted console, and their
   `server_log` patterns for its log.
@@ -791,7 +803,7 @@ shell, a login context or a container.
 - **One reference case stays on OpenSSH's own `sshd`,** with `server = "openssh"`: concurrent
   sessions, marks, exit statuses, a pty and a refused key. It is the session runner's independent
   witness, so a bug the runner shares with Redoubt's server cannot pass every self-check
-  (`bench-ssh-loopback-openssh`). Its server runs in a container
+  (`bench-ssh-loopback-openssh`). Its server runs in a QEMU guest
   ([sessions and the loopback server](#sessions-and-the-loopback-server)).
 - `ssh` gets `WarnWeakCrypto=no-pq-kex` against Redoubt's server, whose exchange is not
   post-quantum: OpenSSH's warning would otherwise be session output. The option is OpenSSH 10.1's,
