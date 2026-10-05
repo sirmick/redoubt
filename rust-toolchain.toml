@@ -1,0 +1,9 @@
+# The one Rust that everything outside bios/ builds with, on your machine and in the dev image:
+# the size budget measures this compiler's output, so a newer one moves it. scripts/setup.sh
+# installs it, and rustup selects it in this checkout. bios/ pins its own nightly. Keep each
+# array on one line: setup.sh reads them.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy", "llvm-tools"]
+targets = ["riscv64imac-unknown-none-elf", "riscv32imac-unknown-none-elf", "riscv64gc-unknown-none-elf"]
