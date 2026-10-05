@@ -36,7 +36,7 @@ mod machine {
     use redoubt_client::typed;
     use redoubt_init::bound::{LEND_PAGES, WATCH_STACK_PAGES};
     use redoubt_init::bundle::{Bundle, Entry};
-    use redoubt_init::check::{BOOTFSD, MANIFEST, Machine, Plan, VOLUME, args, blkd};
+    use redoubt_init::check::{BOOTFSD, MANIFEST, Machine, Plan, VOLUME, args, range};
     use redoubt_init::manifest::{DeviceUse, Manifest};
     use redoubt_init::refusal::Refusal;
     use redoubt_init::restarts::{self, Restarts};
@@ -445,15 +445,12 @@ mod machine {
                 };
                 handed.push((item.endpoint.as_str(), minted.handle()));
             }
-            // A volume's range: the badge of its GPT entry + 1 at the endpoint of its disk's
-            // `blkd` (servers/blkd.md, "Ranges and badges"), minted again at every start, stamped
-            // as the handed badges are.
-            if let Some(v) = s.volume.as_ref().and_then(|n| m.volumes.iter().find(|v| &v.name == n)) {
-                let blkd = blkd(m, v).expect("the check found the volume's blkd");
-                let badge =
-                    NonZeroU64::new(v.partition as u64 + 1).expect("the check kept the entry in 0..=255");
-                let Ok(minted) =
-                    Endpoint::from_handle(self.endpoint(&blkd.receives[0])).mint(badge, Some(&budget))
+            // A volume's range ([`range`]): at its disk's `blkd`, or at its verifier's endpoint
+            // for a verified volume's server, minted again at every start, stamped as the handed
+            // badges are.
+            if let Some((endpoint, badge)) = range(m, s) {
+                let badge = NonZeroU64::new(badge).expect("a range's badge is at least 1");
+                let Ok(minted) = Endpoint::from_handle(self.endpoint(endpoint)).mint(badge, Some(&budget))
                 else {
                     self.failed(&s.name, "mint the volume's range for")
                 };

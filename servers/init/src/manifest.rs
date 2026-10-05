@@ -11,7 +11,7 @@
 //! | `confined` | a boolean, optional |
 //! | `devices[]` | `name`; `base` (string), `irq` (number), either may be absent, not both; `dma` (boolean) |
 //! | `labels[]` | `name`, `owner` (a principal), `id` (string) |
-//! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`) |
+//! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`), `verity` (`server`, the `servers` entry of its `verityd`; `root`, 64 lowercase hex digits; `blocks` (string)) |
 //! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `stack_pages` (string), `heap_pages` (string), `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
 //! | `public` | bundle entry names |
 //! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`, `budget`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
@@ -61,6 +61,18 @@ pub struct Volume {
     /// The name of the `servers` entry of the `blkd` serving the volume's disk; required when
     /// the manifest has more than one `blkd`.
     pub disk: Option<String>,
+    /// For a verified volume (servers/verityd.md), its verifier and the tree's root.
+    pub verity: Option<Verity>,
+}
+
+/// A verified volume's `verity` key: the `servers` entry of the `verityd` that checks it, and
+/// the root and data blocks it checks against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Verity {
+    pub server: String,
+    /// As the manifest gives it; [`crate::check`] holds it to 64 lowercase hex digits.
+    pub root: String,
+    pub blocks: u64,
 }
 
 /// The limits of a budget `init` creates.
@@ -199,6 +211,17 @@ fn volume(v: &Value) -> Result<Volume, SchemaError> {
             partition: m.required("partition", Value::int)?,
             labels: list(m, "labels", string)?,
             disk: m.optional("disk", string)?,
+            verity: m.optional("verity", verity)?,
+        })
+    })
+}
+
+fn verity(v: &Value) -> Result<Verity, SchemaError> {
+    v.object(|m| {
+        Ok(Verity {
+            server: m.required("server", string)?,
+            root: m.required("root", string)?,
+            blocks: m.required("blocks", Value::u64_string)?,
         })
     })
 }
