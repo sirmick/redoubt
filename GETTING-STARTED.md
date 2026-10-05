@@ -33,6 +33,24 @@ the same code: the rv32 image has to fit its memory layout, and a new compiler c
 `bios/` pins its own nightly. Only `rustfmt` (`cargo +nightly fmt`, for the options
 `rustfmt.toml` uses) and the bench's Miri cases run on nightly.
 
+**On a machine without `apt`**, install the same by hand. The script's last two checks,
+`./build --arch rv64` and `cargo testbench --list`, then tell you whether the build works, and
+the bench names a QEMU too old when it first boots one.
+
+- From your package manager: a C compiler and linker (host binaries, and the few crates that
+  build C; none links a system library), `git`, `curl`, `xz`, CA certificates,
+  `qemu-system-riscv64` and `qemu-system-riscv32` (QEMU 8.2 or later), OpenSSH's client (9.6 or
+  later; no server), and `dpkg-deb`, which unpacks the Debian packages the reference server's
+  guest is built from. A GDB that knows RISC-V (`gdb-multiarch`) is for [debugging](#debug) only.
+- With `rustup`: `rustup toolchain install` of the version
+  [`rust-toolchain.toml`](rust-toolchain.toml) names, with the targets and components it lists;
+  nightly with `rustfmt`, `miri` and `rust-src`; and `cargo install --locked` of
+  `cargo-binutils`, `mdbook`, `mdbook-mermaid` and `mdbook-svgbob` at the versions
+  `scripts/setup.sh` pins.
+- Then [the firmware](#firmware). For beamlet's suites, the OTP and Elixir
+  [the beamlet section](#beamlet) names; OTP's build also wants `make`, `pkg-config`
+  and the development files of OpenSSL, ncurses and zlib, and Elixir's zip `unzip`.
+
 The container mounts only this directory, at `/work` and at its own path; nothing else from
 your home ([`dev.sh`](dev.sh)).
 
