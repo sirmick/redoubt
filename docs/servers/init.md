@@ -51,7 +51,7 @@ and `init`'s only input. Its entries:
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it) |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128) |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -59,8 +59,9 @@ and `init`'s only input. Its entries:
 
 - **Types.** Each field has one JSON type. A 64-bit quantity (a label id, an account, a size in
   pages or bytes, a deadline) is a decimal string; a small count (processes, a weight, a depth, a
-  restart limit, a port) is a number. A wrong type, an unknown member or a repeated one is an
-  error, and an error refuses the boot.
+  restart limit, a port) is a number. `heap_pages` is a decimal string of at most 4294967295, the
+  startup block's `u32`; a larger one is the wrong type. A wrong type, an unknown member or a
+  repeated one is an error, and an error refuses the boot.
 - **Names.** Every name (device, label, volume, server, endpoint, principal) is 1 to 64 bytes of
   `[a-z0-9_:+-]`, starting with a letter (`fsd:data`, `alice+secrets`), compared byte for byte.
   Names become endpoint names, volume names and 9P paths, so no empty name, NUL, U+FEFF or control
@@ -72,6 +73,11 @@ and `init`'s only input. Its entries:
   ([restarts and reboots](#restarts-and-reboots)). The bench measures each server's peak across
   the required boot and userland paths and requires the declaration to hold at least twice the
   largest peak ([the memory budget](../testbench.md#the-memory-budget)).
+- **Heaps.** A server's heap cap is the most pages its runtime's allocator holds; past it an
+  allocation fails in the runtime before the kernel is asked. The budget stays the bound on
+  everything else. `init` refuses 0, or a cap and stack the budget cannot hold. The bench requires
+  each image server's cap to hold at least twice its largest heap peak
+  ([the memory budget](../testbench.md#the-memory-budget)).
 - **One entry per device.** A `devices` entry names one device, by its register region and its
   interrupt, and `init` hands that device's objects together to the one server that holds the
   entry. They go under the name the server's entry gives the device: `NAME` for the register region and `NAME-irq` for the
@@ -325,12 +331,13 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 
 ### The startup block
 
-<details><summary>Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks `init` and `stub-launch` write are parsed · tested (13)</summary>
+<details><summary>Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks `init` and `stub-launch` write are parsed · tested (15)</summary>
 
 - bench:rt-host-tests
 - host:redoubt-rt::round_trip
 - host:redoubt-rt::the_page_is_the_wire_message
 - host:redoubt-rt::image_round_trips_and_is_validated
+- host:redoubt-rt::heap_pages_and_tag_round_trip
 - host:redoubt-rt::resolve_takes_the_longest_prefix
 - host:redoubt-rt::handle_names_follow_the_manifest_rule
 - host:redoubt-rt::hostile_blocks_are_refused
@@ -340,6 +347,7 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 - fuzz:redoubt-rt/startup
 - bench:stub-launch
 - bench:net-tcp
+- bench:heap-cap
 
 </details>
 
@@ -356,12 +364,14 @@ encoding of its fields ([wire](wire.md#the-message-convention)). The rest of the
 
 | Field | Holds |
 | --- | --- |
-| `version` | 1 |
+| `version` | 2; a block of any other version is refused |
 | `handle_count` | n, the handles `process_start` installed, at most `MAX_START_HANDLES` (128) |
 | `namespace` | entries `handle: u32`, `path: string`: where a handle is bound, a clean absolute path (`/`, `/dev/cons`) |
 | `handles` | entries `handle: u32`, `name: string`: a named handle, the name under the manifest's rule |
 | `argv` | `string`s, the arguments in order (each may be empty) |
 | `image_addr`, `image_len` | where the program's ELF image sits in the child and its exact length, for the loader stub; both 0 for none |
+| `heap_pages` | the child's heap cap in pages ([Heaps](#the-boot-manifest)), 0 for none |
+| `tag` | the launch tag the bench measures the child's stack and heap by, 0 for none: `init` gives each server its place in the manifest, from 1 |
 
 **Checked whole.** The parent may be hostile, so the parser bounds everything and checks
 everything before handing the block to the program: every handle is in 1 to n, paths are unique
@@ -372,7 +382,8 @@ exits with code 102 before `main` runs ([R31 (startup block checked whole)](#r31
 
 **Using it.** `resolve(path)` finds the namespace entry with the longest matching prefix and the
 rest of the path; `handle(name)` finds a named handle; `args` gives the arguments. The runtime
-notes the handle bound at `/dev/cons` for its panic report. `StartupBuilder` writes a block for a
+notes the handle bound at `/dev/cons` for its panic report, caps its heap at `heap_pages`, and
+marks its heap record with `tag`, all before `main`. `StartupBuilder` writes a block for a
 launcher, and its `finish` runs the parser on the result, so a launcher can only write blocks a
 child accepts.
 

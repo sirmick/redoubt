@@ -1019,6 +1019,15 @@ umask, so it is private to the bench's user only under umask 077 or on a single-
 `stack_pages` defaults to 16 and cannot exceed 128
 ([the boot manifest](servers/init.md#the-boot-manifest)).
 
+Each server's runtime also keeps a heap record, 32 bytes in its data: a magic word, the server's
+launch tag, its heap cap and the most pages its heap has held at once
+([the native runtime](userland/native.md#redoubt-rt-the-native-runtime)). The runtime writes the
+magic word and the tag before `main`, so the program's file and the launcher's copies of it hold
+none. The same scan finds each server's record by its magic word and tag and prints
+`heap NAME PEAK of CAP pages`, or `heap NAME PEAK pages uncapped`. It fails a missing or
+duplicated record, a record whose cap is not the manifest's `heap_pages`, and a capped server
+whose cap is less than twice its peak; an uncapped server is reported only.
+
 The standard image is scanned after `init-boot`, `userland-boot` and `userland-read-only` on both
 widths. Its server declarations use twice the largest peak across those six runs, rounded up to
 pages. The read-only case also scans its additional client from the merged manifest.

@@ -190,7 +190,7 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 
 ### `redoubt-rt`, the native runtime
 
-<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (18)</summary>
+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (21)</summary>
 
 - bench:rt-build
 - bench:net-tcp
@@ -200,6 +200,9 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 - host:redoubt-rt::a_panic_is_reported_on_the_console_once
 - host:redoubt-rt::heap_over_map_anon
 - host:redoubt-rt::heap_in_a_fixed_arena
+- host:redoubt-rt::capped_heap_refuses_before_the_kernel
+- host:redoubt-rt::a_fixed_heap_is_never_capped
+- host:redoubt-rt::the_record_is_zero_until_marked
 - host:redoubt-rt::call_lend_and_reply
 - host:redoubt-rt::send_transfers_pages_for_good
 - host:redoubt-rt::timeouts_dead_endpoints_and_refusals
@@ -224,7 +227,7 @@ the loader stub.
 | `startup` | the startup block, parsed defensively ([sessions](sessions.md#how-a-program-reads-its-namespace)) |
 | `handle` | typed handles and the system calls that are not IPC |
 | `ipc` | lends and transfers, `call`, `send`, `receive`, `reply`, `serve` |
-| `heap` | the global allocator, over `map_anon`, or over one arena mapped once (`fix_heap`, for `init`'s [bound](../kernel/budgets.md#the-tree-from-the-boot-manifest)) |
+| `heap` | the global allocator, over `map_anon`, or over one arena mapped once (`fix_heap`, for `init`'s [bound](../kernel/budgets.md#the-tree-from-the-boot-manifest)); capped at the startup block's `heap_pages` ([init](../servers/init.md#the-startup-block)), past which it refuses before `map_anon` is asked (an infallible allocation then panics, and the runtime exits with its panic code, 101: `heap-cap`); and a record of its cap and peak for the bench ([the memory budget](../testbench.md#the-memory-budget)) |
 | `path` | lexical path cleaning, so `..` never climbs above a root |
 | `client` | a small synchronous 9P client |
 | `server` | the shared server library ([the serving library](../servers/serving.md)) |
