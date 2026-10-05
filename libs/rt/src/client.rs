@@ -13,7 +13,9 @@
 //! - The server is not trusted: a reply must decode, carry the request's tag and be the matching R-message,
 //!   and every count it returns is checked against what was asked. A 9P reply carries no handles, so any that
 //!   arrive are closed.
-//! - An `Rerror`'s text is not kept (`Remote` says only that the server refused).
+//! - An `Rerror`'s text is not kept. A missing name, `file does not exist` or a walk that stopped short, is
+//!   `NotFound`; every other text is `Remote`, which says only that the server refused (servers/wire.md,
+//!   "Error names").
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
@@ -24,7 +26,7 @@ use redoubt_wire::proto::ninep_common;
 use crate::handle::Endpoint;
 use crate::ipc::{Buffer, CallOutcome, Words};
 use crate::path;
-use crate::server::ninep::WORDS_9P;
+use crate::server::ninep::{NineError, WORDS_9P};
 
 /// Why a 9P request failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +39,10 @@ pub enum ClientError {
     Encode(redoubt_wire::Error),
     /// The lend's pages could not be mapped: nothing was sent.
     Pages(Error),
-    /// The server answered `Rerror`, or walked only part of the path.
+    /// The server answered `Rerror` with `file does not exist` ([`NineError::NOT_FOUND`]), or
+    /// walked only part of the path: the name is not there.
+    NotFound,
+    /// The server answered `Rerror` with any other text.
     Remote,
     /// The server's reply does not answer the request (wrong words, handles, tag, type or count).
     Unexpected,
@@ -150,6 +155,7 @@ impl Connection {
             return Err(ClientError::Unexpected);
         }
         match reply.body {
+            Body::Rerror { ename } if ename == NineError::NOT_FOUND.0 => Err(ClientError::NotFound),
             Body::Rerror { .. } => Err(ClientError::Remote),
             body if body.kind() == want => Ok(body),
             _ => Err(ClientError::Unexpected),
@@ -182,7 +188,7 @@ impl Connection {
             Body::Rwalk { qids } if qids.as_slice().len() == names.len() => {
                 Ok(qids.as_slice().last().copied().unwrap_or_default())
             }
-            Body::Rwalk { .. } => Err(ClientError::Remote),
+            Body::Rwalk { .. } => Err(ClientError::NotFound),
             _ => Err(ClientError::Unexpected),
         }
     }

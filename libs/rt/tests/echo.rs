@@ -161,6 +161,12 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
     let (fresh, id) = f.as_process(launcher, || {
         let client = Connection::new(Endpoint::from_handle(connection));
         let mut lend = Lend::new(1).unwrap();
+        // A name that is not there is NotFound, whether the first name misses (the server's
+        // `file does not exist`) or a later one (a walk that stops short).
+        client.attach(&mut lend, 90, "").unwrap();
+        assert_eq!(client.walk(&mut lend, 90, 91, "nope"), Err(ClientError::NotFound));
+        assert_eq!(client.walk(&mut lend, 90, 91, "echo/nope"), Err(ClientError::NotFound));
+        client.clunk(&mut lend, 90).unwrap();
         let (fresh, id) = client.new_connection(&mut lend, "", 0).unwrap();
         // Rooted below the launcher's root; a file that is not there is refused.
         assert_eq!(client.new_connection(&mut lend, "nope", 0).err(), Some(ClientError::Remote));

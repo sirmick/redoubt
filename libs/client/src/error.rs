@@ -58,7 +58,7 @@ impl From<ClientError> for Error {
             ClientError::Sys(e) => e.into(),
             ClientError::Wire(e) | ClientError::Encode(e) => Error::Wire(e),
             ClientError::Pages(e) => e.into(),
-            ClientError::Remote => Error::Rerror,
+            ClientError::NotFound | ClientError::Remote => Error::Rerror,
             ClientError::Unexpected => Error::Unexpected,
             ClientError::BadPath => Error::Refused(Refusal::BadPath),
         }
