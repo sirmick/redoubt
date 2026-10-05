@@ -191,23 +191,33 @@ gate runs one pinned seed and states its target from a sweep of seeds
 
 **On a shared host.** `cargo testbench` runs its cases one after another; what may run beside
 the invocation, another invocation in its own run directory, a seed under `--jobs`, a build, is
-decided by the clock each case measures with. A boot case with `icount` and no `[net]` table
-measures in guest time: the host's load does not move a guest time, so its pass, and a failure
-the guest itself reports, are verdicts whatever ran beside it (a pinned seed adds only that the
-run repeats exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's
-deadline for the boot: a case that only ran out of that deadline beside other work has no
-verdict, and is rerun alone. A boot case without `icount` (most of them) keeps the host's clock
-in the guest, so load lengthens every wait it makes: its pass is a verdict unless what it
-expects is a timeout or a bound on a time, and a failure beside other work has no verdict until
-it fails alone. A case that measures with the host's clock is a verdict only alone: the rule
-asks that no other invocation and no build run beside it. Those are every `host-tests` case,
-because its `cargo test` runs with cargo's own parallelism and tests in `libs/client`,
-`libs/rt`, `keyd` and `consoled` assert wall-clock bounds, which no tolerance would make
-load-proof; every `ssh-loopback` case and every case with a `[net]` table, `icount`
-or not, because its peers are host sockets in wall time, and the bench picks its host ports by
-binding and releasing them, so two such boots at once may race for one port. The kinds that boot
-nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
-oracles) have no clock, and are verdicts anywhere.
+decided by the clock each case measures with. A boot case with `icount` measures in guest time:
+the host's load does not move a guest time, so its pass, and a failure the guest itself
+reports, are verdicts whatever ran beside it (a pinned seed adds only that the run repeats
+exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's deadline for the
+boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
+alone. A boot case without `icount` (most of them) keeps the host's clock in the guest, so load
+lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
+bound on a time, and a failure beside other work has no verdict until it fails alone. A `[net]`
+table by itself changes neither class: an empty one gives the guest a card that reaches
+nothing, and binds no host port. A table with a `forward`, a `poke`, a peer or a dial puts host
+sockets beside the boot, in wall time: its dials retry until the case's deadline, so a pass
+stands and a failure is rerun alone, as for any host-clock wait; and because the bench picks a
+forwarded host port by binding and releasing it before QEMU takes it, two such boots at once
+may race for one port, so the rule asks that two such boots not run at once. A case that measures with
+the host's clock is a verdict only alone: the rule asks that no other invocation and no build
+run beside it. Those are a `host-tests` case whose crates' tests assert a wall-clock bound
+(`redoubt-rt`, `redoubt-client`, `redoubt-keyd`, `redoubt-consoled` and `redoubt-model` do;
+`redoubt-ipd` and `testbench` only read the clock), which no tolerance would make load-proof;
+every `ssh-loopback` case; and a case whose expectation is a timeout (`bench-ssh-guest`). A
+`host-tests` case whose crates assert no bound measures nothing with the host's clock; it may
+run beside other work, and the rule asks that its test threads be bounded then
+(`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The model's property
+runs spawn a thread per host core inside
+each test (`model/tests/common/mod.rs`), on top of cargo's own parallelism: that case runs
+alone, and oversubscribes the host alone, until its runs take their thread count from the same
+bound. The kinds that boot nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets,
+the docs checker, the Elixir oracles) have no clock, and are verdicts anywhere.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
