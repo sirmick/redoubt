@@ -35,6 +35,8 @@ bin = [
     { name = "endpoint-destroy-open-calls", test = false },
     { name = "forger", test = false },
     { name = "handle-chain-attack", test = false },
+    { name = "heap-cap", test = false },
+    { name = "heap-capped", test = false },
     { name = "ipc-client", test = false },
     { name = "ipc-fair-label-sets", test = false },
     { name = "ipc-outcomes", test = false },
@@ -126,8 +128,9 @@ redoubt-sys = { path = "../../libs/sys" }
 # The kernel-half addresses the attack cases aim at, from their one definition.
 redoubt-layout = { path = "../../libs/layout" }
 # Only for the launchers: the startup-block builder, and the stub's own fixed address/bounds-
-# checking constants; `launcher-orphan` launches through the client library's `Launch`. Every
-# other test program stays on the raw `rd` wrapper.
+# checking constants; `launcher-orphan` and `heap-cap` launch through the client library's
+# `Launch`, and `heap-capped` runs on the runtime. Every other test program stays on the raw `rd`
+# wrapper.
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-client = { path = "../../libs/client" }
 # The requests `launcher-orphan` and the programs it starts send each other.
