@@ -1,0 +1,244 @@
+# OpenSSH's server for the bench's reference case, as a minimal Linux guest that the bench boots
+# under its own QEMU for each session (docs/testbench.md, "Sessions and the loopback server").
+# The bench tags the image with this file's hash and builds it only when that tag is missing:
+# pin everything, so that one hash always names one server. Every package comes from one
+# snapshot of Debian's archive (trixie, riscv64) and is checked against its sha256 there.
+snapshot = "https://snapshot.debian.org/archive/debian/20261001T000000Z/"
+
+# The package whose `boot/vmlinux-*` is the guest's kernel; its modules are not installed, only
+# these, relative to its module directory, decompressed into /usr/lib/modules.
+kernel = "linux-image-6.12.107+deb13-riscv64"
+modules = [
+    "kernel/drivers/virtio/virtio_mmio.ko.xz", # the bus QEMU's virt machine puts virtio-serial on
+]
+
+# What the other packages unpack that the guest leaves out, each for the reason given.
+omit = [
+    "usr/share",                       # documentation, manuals, locales: nothing reads them
+    "usr/lib/riscv64-linux-gnu/gconv", # glibc's charset converters (6 MB): nothing converts
+    "usr/lib/systemd",                 # units: no service manager runs
+    "usr/lib/sysusers.d",              # systemd's user list: /etc/passwd below is the whole of it
+    "usr/lib/tmpfiles.d",              # systemd's directory list: /run/sshd below is made here
+    "etc/default",                     # the init scripts' settings
+    "etc/init.d",                      # init scripts: no service manager runs
+    "etc/logrotate.d",                 # no log is rotated: the log leaves on a port
+    "etc/pam.d",                       # sshd_config says UsePAM no
+    "etc/runit",                       # runit's service files
+    "etc/sv",                          # runit's service files
+    "etc/ufw",                         # a firewall profile: the guest has no network
+    "var/log/runit",                   # runit's log directory
+]
+
+# What the guest adds to the packages' files. Trixie's packages install under /usr and leave the
+# root's links to base-files, which the guest does not have.
+dirs = ["case", "dev", "proc", "root", "run/sshd", "sys", "tmp", "usr/lib/modules"]
+links = [
+    ["bin", "usr/bin"],
+    ["lib", "usr/lib"],
+    ["sbin", "usr/sbin"],
+    ["usr/bin/sh", "busybox"],
+]
+
+# The only logins: root, which the sessions use, and sshd's privilege-separation user.
+[[file]]
+path = "etc/passwd"
+mode = 0o644
+text = """
+root:x:0:0:root:/root:/bin/sh
+sshd:x:100:65534::/run/sshd:/usr/sbin/nologin
+"""
+
+[[file]]
+path = "etc/group"
+mode = 0o644
+text = """
+root:x:0:
+nogroup:x:65534:
+"""
+
+# One inetd-mode session on the port named "io", the case's files in /case, the log carried to
+# the port named "log"; then the guest powers off, and QEMU exits.
+[[file]]
+path = "init"
+mode = 0o755
+text = '''
+#!/bin/sh
+/usr/bin/busybox --install -s /usr/bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /dev/virtio-ports
+mount -t devpts -o ptmxmode=0666 devpts /dev/pts
+insmod /lib/modules/virtio_mmio.ko
+# udev would name the ports. The name each port's host side gives arrives a little after the
+# port itself: wait for both, for at most 500 tries 10 ms apart.
+tries=500
+until [ -c /dev/virtio-ports/io ] && [ -c /dev/virtio-ports/log ]; do
+    if [ $((tries -= 1)) -lt 0 ]; then
+        echo "init: no virtio ports named io and log; powering off"
+        poweroff -f
+    fi
+    for port in /sys/class/virtio-ports/*; do
+        name=$(cat "$port/name" 2>/dev/null) && [ -n "$name" ] &&
+            ln -sfn "/dev/${port##*/}" "/dev/virtio-ports/$name"
+    done
+    sleep 0.01
+done
+# A port takes one open at a time. sshd's input and output share one, and each of its processes
+# opens its log file anew: they share a FIFO, which one reader carries to the port a whole line
+# per write, so that QEMU appends whole lines among other sessions'. The writer held on fd 3 keeps
+# the reader going until sshd and all its processes are done.
+mkfifo /run/sshd.log
+while IFS= read -r line; do printf '%s\n' "$line"; done </run/sshd.log >/dev/virtio-ports/log &
+exec 3>/run/sshd.log
+/usr/sbin/sshd -i -f /case/sshd_config -E /run/sshd.log <>/dev/virtio-ports/io >&0
+exec 3>&-
+wait
+poweroff -f
+'''
+
+# The kernel, the server, and /init's and the logins' shell.
+[[package]]
+name = "openssh-server"
+version = "1:10.0p1-7+deb13u4"
+path = "pool/main/o/openssh/openssh-server_10.0p1-7+deb13u4_riscv64.deb"
+sha256 = "06f57163981c90431762a3e69277134855b3df41479b54478e061559f44c8dee"
+
+[[package]]
+name = "linux-image-6.12.107+deb13-riscv64"
+version = "6.12.107-1"
+path = "pool/main/l/linux/linux-image-6.12.107+deb13-riscv64_6.12.107-1_riscv64.deb"
+sha256 = "abe9f65d74b434692149482b031db7a2aaf832921e09f69f775293c0e0c5799c"
+
+[[package]]
+name = "busybox-static"
+version = "1:1.37.0-6+b9"
+path = "pool/main/b/busybox/busybox-static_1.37.0-6+b9_riscv64.deb"
+sha256 = "4add476d2b185c5b487c285b38d790f0881a7e4a8e2ddde835f917e770eb8633"
+
+# The libraries sshd, sshd-session and sshd-auth link, and the ones those link.
+[[package]]
+name = "libaudit1"
+version = "1:4.0.2-2+deb13u1"
+path = "pool/main/a/audit/libaudit1_4.0.2-2+deb13u1_riscv64.deb"
+sha256 = "69b65713b787512eef20c407ce9d02926e60af3c43bd2464a54ac7bea7b8c3fb"
+
+[[package]]
+name = "libc6"
+version = "2.41-12+deb13u4"
+path = "pool/main/g/glibc/libc6_2.41-12+deb13u4_riscv64.deb"
+sha256 = "77f0da760da3eab6318917857669ec23556b4e1ee489218cb966884a11b0d967"
+
+[[package]]
+name = "libcom-err2"
+version = "1.47.2-3+b12"
+path = "pool/main/e/e2fsprogs/libcom-err2_1.47.2-3+b12_riscv64.deb"
+sha256 = "3a922c714a2eab2fd5860cbb7dc9a619dd2d4b60f8111b49c7b9583c74f469c4"
+
+[[package]]
+name = "libcrypt1"
+version = "1:4.4.38-1"
+path = "pool/main/libx/libxcrypt/libcrypt1_4.4.38-1_riscv64.deb"
+sha256 = "85ae0d868b2a27043249ca332dac782a1a67e3171139b0f57d63414eaf4ec887"
+
+[[package]]
+name = "libgssapi-krb5-2"
+version = "1.21.3-5+deb13u1"
+path = "pool/main/k/krb5/libgssapi-krb5-2_1.21.3-5+deb13u1_riscv64.deb"
+sha256 = "5c6548bd80842cc7b96b50a926606ca2cdc3510508f1a598f92730ef5dce7e28"
+
+[[package]]
+name = "libkrb5-3"
+version = "1.21.3-5+deb13u1"
+path = "pool/main/k/krb5/libkrb5-3_1.21.3-5+deb13u1_riscv64.deb"
+sha256 = "d54f89626dc5ad82402da1d3d311941c91e26e82cbb2409e070b6308fa8ae51e"
+
+[[package]]
+name = "libpam0g"
+version = "1.7.0-5"
+path = "pool/main/p/pam/libpam0g_1.7.0-5_riscv64.deb"
+sha256 = "3d3174e530e5c95819ed68ef62d7f1cb51a9a16f512595c70e9443f93962ba4b"
+
+[[package]]
+name = "libselinux1"
+version = "3.8.1-1"
+path = "pool/main/libs/libselinux/libselinux1_3.8.1-1_riscv64.deb"
+sha256 = "2d52c10ffed1597ec5a3dee58167f1f482fcb1b36aa9f9a79a1b0fe23a4bf470"
+
+[[package]]
+name = "libssl3t64"
+version = "3.5.7-1~deb13u2"
+path = "pool/main/o/openssl/libssl3t64_3.5.7-1~deb13u2_riscv64.deb"
+sha256 = "af87d01b79d4ff71e7d46a53341cbb480a4a72b58679d50bc8dff392ceaef154"
+
+[[package]]
+name = "libwrap0"
+version = "7.6.q-36"
+path = "pool/main/t/tcp-wrappers/libwrap0_7.6.q-36_riscv64.deb"
+sha256 = "06a0a674f3cc98a25aa9f68409bb5fbad1d6ac6bbadc1cc8919d4cf28dd149bc"
+
+[[package]]
+name = "libwtmpdb0"
+version = "0.73.0-3+deb13u1"
+path = "pool/main/w/wtmpdb/libwtmpdb0_0.73.0-3+deb13u1_riscv64.deb"
+sha256 = "05b9964dfe8bd3ab260ad2aedde938142ec8ba6fe9142cd9e3e0a971b5ea1259"
+
+[[package]]
+name = "zlib1g"
+version = "1:1.3.dfsg+really1.3.1-1+b1"
+path = "pool/main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+b1_riscv64.deb"
+sha256 = "38c52eef58e5fc9b13d93f8a7d0a0549c32b4f00402a778d39a135254f554314"
+
+[[package]]
+name = "libaudit-common"
+version = "1:4.0.2-2+deb13u1"
+path = "pool/main/a/audit/libaudit-common_4.0.2-2+deb13u1_all.deb"
+sha256 = "b9d32e5ff04fd747aacb7d6b3ebbbbf734ddefb2f1695f0b1b2a4b5e51b1052e"
+
+[[package]]
+name = "libcap-ng0"
+version = "0.8.5-4+b1"
+path = "pool/main/libc/libcap-ng/libcap-ng0_0.8.5-4+b1_riscv64.deb"
+sha256 = "2d3a19435ca2479b992f47d7db0b8c598ce05cf88cb0103d91b3d76a1524681b"
+
+[[package]]
+name = "libgcc-s1"
+version = "14.2.0-19"
+path = "pool/main/g/gcc-14/libgcc-s1_14.2.0-19_riscv64.deb"
+sha256 = "16d3f9f534028615413d23f649e5d246baef48fe7db739ad564ef8b9a6e5587c"
+
+[[package]]
+name = "libk5crypto3"
+version = "1.21.3-5+deb13u1"
+path = "pool/main/k/krb5/libk5crypto3_1.21.3-5+deb13u1_riscv64.deb"
+sha256 = "68a070fafe6c866ed5f720516cc3e9c7d4e31b3ca1c5474eafd54889cd3b9120"
+
+[[package]]
+name = "libkrb5support0"
+version = "1.21.3-5+deb13u1"
+path = "pool/main/k/krb5/libkrb5support0_1.21.3-5+deb13u1_riscv64.deb"
+sha256 = "e257753081d457c92146f48e7c149a4785eb23045d7635da97eb4bc3e6182a4a"
+
+[[package]]
+name = "libkeyutils1"
+version = "1.6.3-6"
+path = "pool/main/k/keyutils/libkeyutils1_1.6.3-6_riscv64.deb"
+sha256 = "7ecada902f4f5ca27d3bbf97d3f3bd3974d284fae231257d30c09f92942e702e"
+
+[[package]]
+name = "libpcre2-8-0"
+version = "10.46-1~deb13u2"
+path = "pool/main/p/pcre2/libpcre2-8-0_10.46-1~deb13u2_riscv64.deb"
+sha256 = "4c88d7f0b71ca696779681536e55b13761f3860e9add9b274c6f1329b2e28f10"
+
+[[package]]
+name = "libzstd1"
+version = "1.5.7+dfsg-1"
+path = "pool/main/libz/libzstd/libzstd1_1.5.7+dfsg-1_riscv64.deb"
+sha256 = "5967f5f97bfb6e7a8036d4e615c0ecd6861a9bb686bd60ee0c81422581faf0ad"
+
+[[package]]
+name = "libsqlite3-0"
+version = "3.46.1-7+deb13u2"
+path = "pool/main/s/sqlite3/libsqlite3-0_3.46.1-7+deb13u2_riscv64.deb"
+sha256 = "a878475db5df8361879060e65bfc7bc7ac7fa0e44635ac2107cf5bd7e497e330"

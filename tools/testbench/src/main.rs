@@ -19,6 +19,7 @@ mod run;
 mod sched_oracle;
 mod size;
 mod ssh;
+mod ssh_guest;
 mod target;
 mod userland;
 
@@ -339,7 +340,7 @@ fn main() -> Result<()> {
         }
         if let Kind::SshLoopback(loopback) = &case.kind {
             let started = Instant::now();
-            // Only OpenSSH's server needs a container; Redoubt's, an `ssh` that takes its options.
+            // Only OpenSSH's server needs a guest; Redoubt's, an `ssh` that takes its options.
             let usable = match loopback.server {
                 LoopbackServer::Openssh => loopback_usable
                     .get_or_insert_with(|| {
