@@ -55,15 +55,14 @@ pattern ever matches, and the boot ends as the case says. Three patterns are alw
 `PANIC`, `TEST FAILED` and `WARNING: INSECURE`. After the last `expect`, and any sessions, the bench
 keeps reading for 50 ms (1 s in a checked build), so a forbidden line right after the last expected
 one still fails the case. With `poweroff = true` it reads instead until QEMU exits, and requires the
-exit status the case names (0 by default; 255 for an SBI system failure). QEMU runs with
-`-run-with exit-with-parent=on`, so a bench killed at its timeout, even outright, leaves no guest
-running to skew the next run.
+exit status the case names (0 by default; 255 for an SBI system failure). The bench starts QEMU
+with Linux's parent-death signal asked for between fork and exec, so a bench killed at its
+timeout, even outright, takes its QEMU with it and leaves no guest running to skew the next run.
 
-That option is QEMU 10.1's, and the bench checks for it: before a width's first boot it runs that
-width's QEMU with the option and `-version`, and a QEMU that refuses it fails every boot case at
-once with the version found, the version needed and QEMU's complaint (skips them, with
-`--allow-skip`, as a missing firmware does). A guest that ends before it prints a line, or whose
-QEMU exits with a failing status, fails with QEMU's exit status and the last lines of its stderr,
+Before a width's first boot the bench runs that width's QEMU with `-version`, and a QEMU that
+cannot run fails every boot case at once with its complaint (skips them, with `--allow-skip`, as a
+missing firmware does). A guest that ends before it prints a line, or whose QEMU exits with a
+failing status, fails with QEMU's exit status and the last lines of its stderr,
 which go to the console log too; one that printed and then died fails as it did, with QEMU's exit
 status.
 
@@ -745,10 +744,11 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
   `guest.log` beside it, for people reading a failed run, and is never a verdict; a failed boot
   powers off rather than reboots. The server logs in only root, inside the guest, runs `/bin/sh` for
   every login and allows nothing else.
-- **ssh ends each guest.** Once the session ends, `ssh` exits without waiting for the server, hangs
-  up on its proxy, and QEMU exits with its parent besides. What `sshd` logs after that is lost; the
-  lines the cases ask for come earlier. **The keeper:** once a case's sessions have all exited, any
-  `qemu-system-riscv64` whose command line names the case's directory (the run's own) has five
+- **ssh ends each guest.** Once the session ends, `ssh` exits without waiting for the server and
+  hangs up on its proxy. What `sshd` logs after that is lost; the lines the cases ask for come
+  earlier. `ssh` has no parent-death signal, so a bench killed outright leaves it running until
+  its session ends, and its guest with it. **The keeper:** once a case's sessions have all exited,
+  any `qemu-system-riscv64` whose command line names the case's directory (the run's own) has five
   seconds to go; one still running then is killed, and the case fails, naming it.
 - **Before the first OpenSSH loopback case** the bench logs in once and runs `exit 0`, and the
   server's log must name OpenSSH's version, so that no other server can pass for it. Its `ssh` waits
@@ -806,10 +806,11 @@ shell, a login context or a guest.
   (`bench-ssh-loopback-openssh`). Its server runs in a QEMU guest
   ([sessions and the loopback server](#sessions-and-the-loopback-server)).
 - `ssh` gets `WarnWeakCrypto=no-pq-kex` against Redoubt's server, whose exchange is not
-  post-quantum: OpenSSH's warning would otherwise be session output. The option is OpenSSH 10.1's,
-  and before such a case the bench has `ssh -G` parse it: an older `ssh` fails the case with the
-  version found and the version needed (skips it, with `--allow-skip`), rather than with the
-  server's log that was never written.
+  post-quantum: OpenSSH's warning would otherwise be session output. OpenSSH 10.1 introduced the
+  warning and the option together, so the bench has `ssh -G` parse the option once per run, with
+  no configuration file as the sessions run it, and passes it only to an `ssh` that takes it: an
+  older one has no warning to quiet, and none to filter from its output (OpenSSH 9.6 prints
+  nothing over such an exchange). When it drops the option, the run's output says why.
 
 ## Self-checks
 
