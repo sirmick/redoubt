@@ -4,8 +4,9 @@ beamlet is a BEAM interpreter in safe Rust: it runs Erlang and Elixir code compi
 standard compiler, OTP 28 with Elixir 1.20. Every session and every agent on Redoubt is one
 beamlet VM. The VM gets from its embedder, through one Rust trait (`Platform`), exactly the
 services it is granted (a clock, a console, random bytes, code, files, programs) and nothing
-else, and it treats every `.beam` file, literal and message as hostile input. beamlet is built
-and runs on the host, where its tests run; running it on Redoubt, over 9P, is planned.
+else, and it treats every `.beam` file, literal and message as hostile input. beamlet runs on
+the host and boots the shell on Redoubt with verified modules from the userland disk. File
+operations and native launching on Redoubt remain planned.
 
 ## Purpose
 
@@ -41,7 +42,7 @@ in the VM sees is ordinary Elixir: `File.read!/1`, `IO.puts/1`, `:gen_tcp.connec
 
 ### Loading hostile code
 
-<details><summary>Status: built · partly tested: runs on the host only; the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested (9)</summary>
+<details><summary>Status: built · partly tested: hostile loader tests run on the host; checked modules boot on Redoubt, but the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested (10)</summary>
 
 - host:beamlet-vm::fixtures_load
 - host:beamlet-vm::every_truncation_is_rejected
@@ -52,6 +53,7 @@ in the VM sees is ordinary Elixir: `File.read!/1`, `IO.puts/1`, `:gen_tcp.connec
 - host:beamlet-vm::safe_mode_creates_no_atoms
 - host:beamlet-vm::nesting_is_bounded
 - host:beamlet-vm::deep_terms_are_handled_iteratively
+- bench:userland-boot
 
 </details>
 
@@ -124,11 +126,13 @@ budget weight ([scheduling](../kernel/scheduling.md)).
 
 ### The `Platform` boundary
 
-<details><summary>Status: built · partly tested: runs on the host only; only the host embedding exists · tested (7)</summary>
+<details><summary>Status: built · partly tested: file and program grants run on the host only; Redoubt's verified lookup is tested below · tested (9)</summary>
 
 - host:beamlet-vm::programs_need_the_platform_to_grant_them
 - host:beamlet-vm::the_bundle_wins_over_a_front_directory
 - host:beamlet-vm::a_name_the_bundle_lacks_is_found_on_the_path
+- host:beamlet-vm::a_refused_system_module_never_touches_the_code_path
+- host:beamlet-vm::app_spec_uses_one_source_attempt_and_keeps_its_erlang_result
 - host:beamlet-vm::names_resolve_inside_the_root
 - host:beamlet::symlinks_cannot_leave_the_root
 - host:beamlet::mounts_are_separate_and_may_be_read_only
@@ -145,17 +149,20 @@ Everything the VM gets from outside comes through the `Platform` trait
 | `system_time_us` | wall-clock time | required; may answer `None` |
 | `console_write`, `console_read`, `console_size` | the `user` I/O device; input never blocks | no input; size unknown |
 | `random` | random bytes from a cryptographic source; on failure the VM raises rather than use a weaker source | required |
-| `load_module`, `load_app`, `module_file` | the bytes of a `.beam` or `.app` this VM may load | no applications |
+| `load_module`, `load_app`, `module_file` | a system `.beam` or `.app` lookup answers found bytes, an absent name or a refused object; `module_file` names a loaded module | applications absent |
 | `files` | a file system, as `prim_file` sees it | none: `file` calls fail with `enotsup` |
 | `programs` | starting programs behind ports | none: `open_port` fails with `eacces` |
 
-- **`load_module` is a lookup, not a gate.** It is the first step of the lookup: a module name is
-  looked for through `load_module` (the system bundle) first, whatever the code path holds, and
-  only then in the code path's directories in order, those added with `code:add_patha/1` too
-  ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). Unlike BEAM,
-  no directory shadows a system module ([packages](packages.md#profiles-and-upgrades)). On
-  Redoubt a system module found by name is the one the signed bundle names, byte for byte
-  ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). Residual:
+- **`load_module` is a lookup, not a gate.** It asks the platform for a module before examining
+  the code path. `Found` uses those bytes, so no directory shadows a system module
+  ([packages](packages.md#profiles-and-upgrades)); `Absent`
+  searches the code path's directories in order, including those added with `code:add_patha/1`;
+  `Refused` stops without touching the code path
+  ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). On Redoubt
+  a name missing from `system.index` is absent, while an indexed object that fails verification
+  is refused ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). `load_app`
+  carries the same three outcomes: `beamlet:app_spec/1` makes one platform attempt and returns
+  the bytes on `Found`, or `error` on `Absent` and `Refused`. Residual:
   the bundle's protocols are not consolidated when it is built, so a protocol consolidated in a
   session's own directory is not used and protocol dispatch stays the slower, unconsolidated kind;
   behaviour is the same. Code in the VM can also load any bytes it holds with
@@ -180,7 +187,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 
 ### What runs on it
 
-<details><summary>Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness, the cofactored Ed25519 check and the bound on a zlib stream are not attacked by a named test · tested (14)</summary>
+<details><summary>Status: built · partly tested: beamlet boots the shell on Redoubt; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness, the cofactored Ed25519 check and the bound on a zlib stream are not attacked by a named test · tested (15)</summary>
 
 - host:beamlet-vm::decodes_otp_output
 - host:beamlet-vm::encodes_like_otp
@@ -196,6 +203,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 - host:beamlet-crypto::the_all_zero_seed_is_refused_not_a_panic
 - host:beamlet-crypto::x25519_refuses_a_low_order_point
 - host:beamlet-vm::compressed_terms_round_trip
+- bench:userland-boot
 
 </details>
 
@@ -272,11 +280,12 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: files, programs, `/net` and the natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is
+Status: built · partly tested: files, programs, `/net` and the system natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, host:beamlet-redoubt::the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole, host:beamlet-redoubt::a_module_loads_only_if_its_object_hashes_to_its_entry, host:beamlet-redoubt::an_application_resource_is_checked_as_a_module_is, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
 
-On Redoubt, beamlet is a native program whose `Platform` is written against the system: thin
-adapters over the client library ([native programs](native.md#the-client-library)) for the
-namespace, files, the console and launching, and the kernel's calls for the rest.
+On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
+([native programs](native.md#the-client-library)) for the console and verified code lookup,
+and the kernel's calls for the clock and randomness. The file, network and program adapters
+remain planned.
 
 | Method | On Redoubt |
 | --- | --- |
@@ -285,7 +294,7 @@ namespace, files, the console and launching, and the kernel's calls for the rest
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
-| `load_module`, `load_app` | looks the file the name asks for (`Elixir.Enum.beam`, `elixir.app`) up in `system.index`, read from `/boot` (served by `bootfsd`) and parsed strictly at start; reads the object it names, `/<sha256 hex>`, whole from the userland disk's `fsd` (`fsd:system`), hashes it, and gives the loader only bytes that match ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)); from M5 (persist, install, share), the principal's profile too ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
+| `load_module`, `load_app` | looks the requested file (`Elixir.Enum.beam`, `elixir.app`) up in `system.index`, read from `/boot` (served by `bootfsd`) and parsed strictly at start. A missing name is `Absent` without an object read. For an indexed name, it reads `/<sha256 hex>` whole from the userland disk's `fsd` (`fsd:system`): matching bytes are `Found`; a missing, short, long or hash-mismatched object is `Refused`, with one console diagnostic and no other source tried ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
 | `files` | the client library's `file`: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
 | `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)) |
 

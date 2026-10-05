@@ -71,7 +71,6 @@
   - [beamlet is told its budget by an argument the manifest keeps equal by hand](todo/beamlet-budget-from-startup.md)
   - [Delivery walks every thread](todo/delivery-walks-every-thread.md)
   - [Expiry walks once per wait](todo/expiry-walks-once-per-wait.md)
-  - [A module the userland check refuses would be looked for on the code path](todo/beamlet-refused-module-falls-through.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [rv32](beyond/rv32.md)

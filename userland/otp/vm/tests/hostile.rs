@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use beamlet_vm::loader::{self, LoadError};
-use beamlet_vm::platform::{Platform, PlatformError};
+use beamlet_vm::platform::{Lookup, Platform, PlatformError};
 use beamlet_vm::vm::Limits;
 use beamlet_vm::{Vm, atom::AtomTable};
 
@@ -41,7 +41,9 @@ impl Platform for TestPlatform {
 
     fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
 
-    fn load_module(&mut self, module: &str) -> Option<Vec<u8>> { self.modules.get(module).cloned() }
+    fn load_module(&mut self, module: &str) -> Lookup {
+        self.modules.get(module).cloned().map_or(Lookup::Absent, Lookup::Found)
+    }
 }
 
 /// xorshift64*: a small deterministic PRNG, so failures reproduce exactly.

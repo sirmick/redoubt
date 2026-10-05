@@ -29,7 +29,9 @@ use std::process::ExitCode;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError, ProgramEvent, Programs, Spawn, Spawned};
+use beamlet_vm::platform::{
+    ConsoleInput, Lookup, Platform, PlatformError, ProgramEvent, Programs, Spawn, Spawned,
+};
 use beamlet_vm::term::OwnedTerm;
 use beamlet_vm::{Class, Term, Vm};
 use programs::Event;
@@ -180,9 +182,13 @@ impl Platform for Posix {
             .map_err(|_| PlatformError::Unavailable)
     }
 
-    fn load_module(&mut self, module: &str) -> Option<Vec<u8>> { self.find(&format!("{module}.beam")) }
+    fn load_module(&mut self, module: &str) -> Lookup {
+        self.find(&format!("{module}.beam")).map_or(Lookup::Absent, Lookup::Found)
+    }
 
-    fn load_app(&mut self, app: &str) -> Option<Vec<u8>> { self.find(&format!("{app}.app")) }
+    fn load_app(&mut self, app: &str) -> Lookup {
+        self.find(&format!("{app}.app")).map_or(Lookup::Absent, Lookup::Found)
+    }
 
     fn module_file(&mut self, module: &str) -> Option<String> {
         let host = self.locate(&format!("{module}.beam"))?;

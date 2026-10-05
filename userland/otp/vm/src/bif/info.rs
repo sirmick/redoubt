@@ -539,8 +539,8 @@ pub fn app_spec(c: &mut Ctx, a: &[Term]) -> R {
     let name = String::from(app.as_str());
     let app = c.platform().load_app(&name);
     Ok(match app {
-        Some(b) => c.binary(&b),
-        None => Term::Atom(c.atoms.error),
+        crate::platform::Lookup::Found(b) => c.binary(&b),
+        crate::platform::Lookup::Absent | crate::platform::Lookup::Refused => Term::Atom(c.atoms.error),
     })
 }
 

@@ -274,11 +274,39 @@ impl Builder {
         Ok((format!("{module}.beam"), path))
     }
 
+    /// Resolve a host-tests workspace within the repository. A requested workspace must be a
+    /// Cargo workspace directory; a bad request is an error, never a reason to run at the root.
+    fn host_test_workspace(&self, requested: Option<&Path>) -> Result<PathBuf> {
+        let root = self.workspace.canonicalize().context("resolving the testbench workspace")?;
+        let Some(requested) = requested else { return Ok(root) };
+        let parts = requested.to_str().context("host-tests workspace is not UTF-8")?;
+        ensure!(
+            !requested.is_absolute()
+                && parts.split('/').all(|part| !part.is_empty() && part != "." && part != ".."),
+            "host-tests workspace must be a relative directory below the repository root"
+        );
+        let workspace = root
+            .join(requested)
+            .canonicalize()
+            .with_context(|| format!("resolving host-tests workspace {}", requested.display()))?;
+        ensure!(
+            workspace.starts_with(&root) && workspace != root,
+            "host-tests workspace {} leaves the repository root",
+            requested.display()
+        );
+        ensure!(
+            workspace.join("Cargo.toml").is_file(),
+            "host-tests workspace {} has no Cargo.toml",
+            requested.display()
+        );
+        Ok(workspace)
+    }
+
     /// `cargo test` for host packages, for the unit tests a boot cannot reach. Returns what
     /// failed, or `None` if every test passed.
     /// The `cargo test` a host-tests case runs. Under Miri it goes through rustup's `cargo`,
     /// which alone takes `+nightly`, with isolation off: some tests read files or the clock.
-    fn test_command(&self, host: &HostTests) -> Command {
+    fn test_command(&self, host: &HostTests, workspace: &Path) -> Command {
         let mut cargo = if host.miri {
             let mut cargo = Command::new("cargo");
             cargo.args(["+nightly", "miri"]).env("MIRIFLAGS", "-Zmiri-disable-isolation");
@@ -286,7 +314,7 @@ impl Builder {
         } else {
             Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         };
-        cargo.current_dir(&self.workspace);
+        cargo.current_dir(workspace);
         cargo.arg("test");
         for package in &host.packages {
             cargo.args(["-p", package]);
@@ -294,15 +322,22 @@ impl Builder {
         for test in &host.tests {
             cargo.args(["--test", test]);
         }
+        if !host.features.is_empty() {
+            cargo.args(["--features", &host.features.join(",")]);
+        }
         cargo
     }
 
     pub fn cargo_test(&self, host: &HostTests) -> Result<Option<String>> {
-        let mut cargo = self.test_command(host);
+        let workspace = self.host_test_workspace(host.workspace.as_deref())?;
+        let mut cargo = self.test_command(host, &workspace);
         if !self.verbose {
             cargo.arg("--quiet").stdout(Stdio::piped()).stderr(Stdio::piped());
         }
         let output = cargo.output().context("running cargo test")?;
+        if self.verbose {
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+        }
         if output.status.success() {
             return Ok(None);
         }
@@ -491,18 +526,52 @@ mod tests {
             staged: Default::default(),
         };
         let args = |host: &HostTests| {
-            let cargo = builder.test_command(host);
+            let cargo = builder.test_command(host, &builder.workspace);
             let miriflags = cargo.get_envs().find(|(k, _)| *k == "MIRIFLAGS").and_then(|(_, v)| v);
             let args: Vec<_> = cargo.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
             (args.join(" "), miriflags.map(|v| v.to_string_lossy().into_owned()))
         };
-        let miri = HostTests { packages: vec!["p".into()], tests: vec!["a".into(), "b".into()], miri: true };
+        let miri: HostTests = toml::from_str("packages = ['p']\ntests = ['a', 'b']\nmiri = true").unwrap();
         assert_eq!(
             args(&miri),
             ("+nightly miri test -p p --test a --test b".into(), Some("-Zmiri-disable-isolation".into()))
         );
-        let native = HostTests { packages: vec!["p".into()], tests: Vec::new(), miri: false };
+        let native: HostTests = toml::from_str("packages = ['p']").unwrap();
         assert_eq!(args(&native), ("test -p p".into(), None));
+    }
+
+    /// A host case may name the beamlet workspace and its fake-kernel feature. Invalid
+    /// workspace requests fail before a Cargo command can run at the repository root.
+    #[test]
+    fn host_tests_route_only_to_a_requested_workspace_and_forward_features() {
+        let builder = Builder {
+            workspace: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+            run: PathBuf::new(),
+            verbose: false,
+            staged: Default::default(),
+        };
+        let root = builder.host_test_workspace(None).unwrap();
+        assert_eq!(root, builder.workspace.canonicalize().unwrap());
+        let otp = builder.host_test_workspace(Some(Path::new("userland/otp"))).unwrap();
+        assert_eq!(otp, root.join("userland/otp"));
+        let host: HostTests = toml::from_str(
+            "packages = ['beamlet-vm', 'beamlet-redoubt']\nworkspace = 'userland/otp'\nfeatures = ['beamlet-redoubt/fake']",
+        )
+        .unwrap();
+        let workspace = builder.host_test_workspace(host.workspace.as_deref()).unwrap();
+        let cargo = builder.test_command(&host, &workspace);
+        assert_eq!(cargo.get_current_dir(), Some(otp.as_path()));
+        let args: Vec<_> = cargo.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            args,
+            ["test", "-p", "beamlet-vm", "-p", "beamlet-redoubt", "--features", "beamlet-redoubt/fake"]
+        );
+        assert!(builder.host_test_workspace(Some(Path::new("userland/missing"))).is_err());
+        assert!(builder.host_test_workspace(Some(Path::new("docs"))).is_err());
+        assert!(builder.host_test_workspace(Some(Path::new("../userland/otp"))).is_err());
+        assert!(builder.host_test_workspace(Some(Path::new("userland/./otp"))).is_err());
+        assert!(builder.host_test_workspace(Some(Path::new("userland//otp"))).is_err());
+        assert!(builder.host_test_workspace(Some(Path::new("/tmp"))).is_err());
     }
 
     /// A run of zeros is a file of exactly that many zero bytes, in the run's own directory.

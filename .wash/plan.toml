@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 30
+revision = 20
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -742,8 +742,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["MEM1", "ABI1"]
   body = "Owner (2026-10-03; Redoubt-side seam for an outside no-MMU variant: keep small). Brief: .wash/local/MEM2-implementer.md. Size S+ (the startup block's version and the consumer sweep it forces). Needs MEM1 (scan, tag, manifest checks) and ABI1 (rt's seam).\n\nManifest key heap_pages (absent = no cap; refused 0, or heap + stack at/above the budget's pages). The startup block, version 2, gains heap_pages and tag; rt sets the cap before main. The cap is rt's ceiling below the kernel budget: pages the allocator holds, refused (null) before any map_anon, counted as mapped, not committed; the budget still bounds stacks, Buffers, lends, tables. Past the cap an infallible allocation panics (exit 101, init's restart rule); a fallible one sees the error. A heap record (magic, tag, cap, peak) in data, found by MEM1's scan; the bench fails a cap under twice the peak. Image servers get measured caps. beamlet's budget_pages= todo is not this package's.\n\nAcceptance: rt host tests over the fake (refusal with no map_anon), startup v2/v1, init tests; a tests/programs case capped low; heaps reported by MEM1's memory case both widths. Pages: init.md, budgets.md, native.md, testbench.md."
-  state = "todo"
-  revision = 2
+  state = "reported"
+  revision = 10
+  overrides = ["2026-10-05: started by Orchestrator before MEM1 (reported): MEM1 is reported and final (cd73175b5, six scans PASS, awaiting its whole bench and panel); MEM2 branches from MEM1's head and rebases onto main once MEM1 merges"]
 
 [[node]]
   id = "VOL1"
@@ -752,8 +753,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["BEAM2"]
   body = "Brief: .wash/local/VOL1-implementer.md (architect-14). Tier A, size M+ (pinned root M, signed-root step +S). RULED by the owner 2026-10-03: verifier server; BEAM2 lands as built, then VOL1 deletes system.index and beamlet's check; decision 5 reversed (readers trust their verifying servers). Start from main after BEAM2 merges. QA: VOL1-verified-volumes.\n\nStep 1, pinned root: libs/verity (no_std, forbid(unsafe_code), sha2; dm-verity tree after the fs blocks; root = SHA-256(0x02||N||top)) pinned in the volume's manifest entry, signed with the bundle (R15). servers/verityd between blkd and fsd: serves blkd's protocol read-only to the volume's fsd, verifies each block first; mismatch = failed (fsd: corrupt); bad root/truncated: info answers, reads fail, stays up. fsd, littlefs, blkd untouched. init: volumes `verity`, fsd's badge at the verifier, confinement users gain it. Re-aims BEAM2 (plain files, R75 over new R76).\n\nStep 2, signed root: a root block at the range's end (N, version, root, Ed25519 under new domain redoubt.volume.v1 in libs/signing, ed25519-compact); manifest key (hex or \"bundle\") + floor instead of root; verityd refuses a bad signature or version < floor; the packer signs when the recipe names a key (build host only, R35). Image's userland volume stays pinned. SHA-256 tree already detects every bit error (CRC stays under it); no correction.\n\nAcceptance, both widths: verity-flipped-block, -flipped-tree, -wrong-root, userland-boot via verityd; verity-signed, -bad-signature, -rollback; host tests of verity, verityd, init, signing domain, packer determinism. Measured: extra calls, cache hits, boot-to-prompt with/without. Pages: verityd.md (R76), init.md, fsd.md, blkd.md, boot.md (R75, volume domain), beamlet.md, packages.md, testbench.md, SECURITY.md, image/README.md. Hotspot: MEM1."
-  state = "todo"
-  revision = 2
+  state = "reported"
+  revision = 15
 
 [[node]]
   id = "BEAM6"
@@ -810,7 +811,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K22", "ASID1"]
   body = "Go-boundary host fix fe3ae211 at HEAD7b23f5283 passed red dd2a73b1, guest unchanged. Corrected archived replay stops sample0: conservative L920616<release920644; clock bracket cannot prove real deadline early/inside. Independently E-gross audit interval starts27us before release, so timestamp witness alone cannot qualify archive. .wash/local/SCHED1-sample0-clock-ruling.md. Architect3382d196 preparing complete prospective time/window/measurement construction, including raw-counter go vs reported time_now mismatch; no clamp, dropped samples, margin tuning or silent gate changes. Source/machine held. All200 exact waits/fences/category/debt/latency gates, same candidate/control, old10ms qualification/failure, both widths and final costs/sweeps/fullTierA/docs/scheduler-only replay/review/merge remain. QA IPC3-wake-latency blocking; IPC3 follows accepted scheduler."
   state = "active"
-  revision = 2
+  revision = 17
 
 [[node]]
   id = "BEAM7"
@@ -819,8 +820,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "beamlet-redoubt"
   needs = ["BEAM2"]
   body = "Clean head6a79d0e1356493f5307b2af19934b4f3d8515c79 on base9212f6f600591abb3ea78ef450e0d6f4d517ab92. Wholebench399PASS/1FAIL only missing-podman OpenSSH reference; all product/model/miri/both-width cases pass. Final panel completed: red95840c93 and simplifierd1527691 OK with notes; editor9fefa255 BLOCK solely known environment acceptance gate. NO source/docs findings; earlier routing/app_spec findings closed. Full rv32 builds and other gates PASS. Stable evidence .wash/local/evidence/BEAM7,427 verified checksums; source/report root .wash/local/BEAM7-report.md. Hold head unchanged, no redundant tests pending BENCHENV1. Supported reference environment and unfiltered final acceptance PASS required before merge; integration delta review if head changes. MEM1 currently owns QEMU; no async/files integration."
-  state = "active"
-  revision = 2
+  state = "done"
+  revision = 20
 
 [[node]]
   id = "BENCHENV1"
@@ -829,7 +830,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Owner decision 2026-10-04 (orchestrator's session), superseding 'Keep rootless; supply runner': the reference sshd runs in a minimal Linux guest under the bench's own qemu-system-riscv64, one guest per SSH session as ssh's ProxyCommand. No container runtime, root or user namespaces; no port, no network, no host filesystem in the guest (the case's files ride in an appended initramfs cpio); the log is appended on the host by QEMU's file chardev; the recipe tests/ssh-reference/guest.toml pins Debian trixie riscv64 packages by snapshot.debian.org URL and sha256, replacing the Containerfile. Brief: .wash/local/BENCHENV1-implementer.md (design, checkpoint 1, deliverables, page lines in docs/testbench.md 'Sessions and the loopback server', gates). Unblocks BEAM7, MEM1 and SCHED1/IPC3's whole benches: the reference case must PASS, not skip. Tier A (the bench), size M, no needs. wp-BENCHENV1 from main 9212f6f60; implementer launched; panel at review time. QA BENCHENV1-container-permissions stays open until the case passes in a whole bench."
   state = "done"
-  revision = 17
+  revision = 2
 
 [[node]]
   id = "TOOL1"
@@ -839,7 +840,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["BENCHENV1"]
   body = "Owner 2026-10-04: minimal tooling, easy to install with scripts that work on Ubuntu; Debian stays the image's base; all agent tooling (Node, pi, Claude Code, Codex, sudo, git identity, SSH-key and host-key seeding, /config mount, scripts/pi-ensure.sh, scripts/ssh-key-ensure.sh) leaves the tree; the bench drops its QEMU 10.1 (-run-with exit-with-parent, replaced by PR_SET_PDEATHSIG from the bench) and OpenSSH 10.1 (WarnWeakCrypto, passed only when ssh takes it) requirements so stock Ubuntu 24.04 packages run it. Deliverables: scripts/setup.sh (Debian/Ubuntu, idempotent, --with-beam optional), Dockerfile = debian:trixie + user + that script, dev.sh = mount and run, pages (GETTING-STARTED prerequisites, testbench.md's two paragraphs). Brief: .wash/local/TOOL1-implementer.md. Tier B (tooling: implementer + editor), size S-M. Needs BENCHENV1 (ssh.rs, the guest's QEMU line). Launches after BENCHENV1 merges."
   state = "done"
-  revision = 25
+  revision = 2
   overrides = ["2026-10-05: started by Orchestrator before BENCHENV1 (active): Owner 2026-10-04: 'move TOOL1 forward, get that done and i'll do it immediately'. BENCHENV1 is in its merge-gate bench; TOOL1's script, Dockerfile, dev.sh and pages touch none of its files, and the two bench-flag edits (ssh.rs, ssh_guest.rs, qemu.rs) wait for BENCHENV1's merge and a rebase onto it."]
 
 [[node]]
@@ -849,7 +850,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Found by BENCHENV1's merge-gate bench 2026-10-04 and shown to predate it: on main 9212f6f60 the case fails 1 of 10 runs alone; on wp-BENCHENV1 f7a0cb1eb (no AIO, kernel or boot change) 4 of 15. rv32 only. First failing line: 'forbidden output /aio-reader TEST FAILED/: ... aio-reader TEST FAILED: receive: Timeout' at ~21 s. AIO1's case (tests/aio-many-reads-two, the hub keeping 64 reads outstanding on one thread). Find whether the case's timeout is too tight for rv32 under TCG or the hub drops a completion; the case must order on events or the bug is the hub's. Memory: AIO1's timeout tests also failed under host load before. Tier A if the hub changes (libs/client), Tier B if the case alone. Size S."
   state = "todo"
-  revision = 10
+  revision = 2
 
 [[node]]
   id = "B9"
@@ -858,7 +859,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Found by TOOL1's gates 2026-10-05: tools/testbench ssh::tests::the_keeper_finds_what_names_the_case (BENCHENV1's keeper: a qemu-system-riscv64 naming the case directory after the sessions) failed once in a whole bench's host-tests case and once in cargo test -p testbench under load, 0 of 30 alone. Likely a /proc/*/cmdline scan racing a process that is starting or exiting. Make the test deterministic (spawn and wait for the stand-in to be visible before scanning; or order on an event) without weakening the keeper. Tier B (a host test), size S, no needs."
   state = "todo"
-  revision = 23
+  revision = 2
 
 [[node]]
   id = "DOC1"
@@ -867,4 +868,4 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Owner 2026-10-05: the page should list the dependencies too, for an OS that is not Debian-family. Docs only: one block under the script's paragraph in GETTING-STARTED.md naming the system tools (C toolchain, git, curl, xz, CA certificates, qemu-system-riscv64/32 >= 8.2, OpenSSH client >= 9.6, dpkg-deb, GDB with RISC-V optional), the rustup lines (1.99.0 from rust-toolchain.toml with its targets and components; nightly rustfmt/miri/rust-src; the four pinned cargo tools), and --with-beam's OTP/Elixir, pointing at the files that pin them. Written by the orchestrator, reviewed by an editor, doccheck. Tier: docs only, size XS."
   state = "done"
-  revision = 30
+  revision = 2

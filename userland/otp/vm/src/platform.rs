@@ -1,9 +1,9 @@
 //! Everything the VM needs from the operating system, and nothing more.
 //!
 //! The VM is `no_std` and has no other way to reach the outside world. A [`Platform`] is chosen
-//! by whoever embeds the VM: `beamlet-posix` for development and differential testing on a host,
-//! and later a Redoubt one whose methods are IPC calls to servers. Keeping this surface small is
-//! what makes the VM auditable: to know what BEAM code can do to the system, read this trait.
+//! by whoever embeds the VM: `beamlet` for development and differential testing on a host,
+//! and `beamlet-redoubt`, whose methods use kernel calls and IPC to servers. Keeping this surface
+//! small makes the VM auditable: to know what BEAM code can do to the system, read this trait.
 //!
 //! Capability discipline: the platform decides what a VM instance may reach. The VM itself holds
 //! no ambient authority (no filesystem, no network, no clock it did not get from here).
@@ -45,16 +45,16 @@ pub trait Platform: crate::sync::Sendable {
     /// using a weaker source.
     fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError>;
 
-    /// The bytes of the `.beam` file for `module` among the system's modules, if any. This is
-    /// the first step of the VM's lookup of a module name, before the code path; it is not a
-    /// gate, since code in the VM can load any bytes it holds with `code:load_binary/3`.
-    fn load_module(&mut self, module: &str) -> Option<Vec<u8>>;
+    /// The system's `.beam` file for `module`, before the VM searches its code path. Only
+    /// [`Lookup::Absent`] permits that search; a refused system object ends this lookup. This
+    /// does not prevent code already held by the VM from using `code:load_binary/3`.
+    fn load_module(&mut self, module: &str) -> Lookup;
 
     /// The `.app` specification of application `app` (the text of `app.app`), if this VM may
-    /// start it. The default is none: applications are then unavailable.
-    fn load_app(&mut self, app: &str) -> Option<Vec<u8>> {
+    /// start it. The default is absent: applications are then unavailable.
+    fn load_app(&mut self, app: &str) -> Lookup {
         let _ = app;
-        None
+        Lookup::Absent
     }
 
     /// Where the `.beam` file [`Platform::load_module`] gives for `module` appears in the VM's
@@ -72,6 +72,15 @@ pub trait Platform: crate::sync::Sendable {
     /// default is none: opening such a port then fails with `eacces`. Output from programs is
     /// an external event: [`Platform::idle`] should return when some arrives.
     fn programs(&mut self) -> Option<&mut dyn Programs> { None }
+}
+
+/// The result of a system module or application lookup. Refusal is terminal for this lookup;
+/// absence alone permits a caller to look on another authorized path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lookup {
+    Found(Vec<u8>),
+    Absent,
+    Refused,
 }
 
 /// Running other programs. A program is outside the VM altogether (an OS process with rights
@@ -331,7 +340,7 @@ mod tests {
 
         fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
 
-        fn load_module(&mut self, _module: &str) -> Option<Vec<u8>> { None }
+        fn load_module(&mut self, _module: &str) -> Lookup { Lookup::Absent }
     }
 
     #[test]

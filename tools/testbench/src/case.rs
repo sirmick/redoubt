@@ -203,6 +203,12 @@ pub struct Allow {
 pub struct HostTests {
     /// Workspace packages whose `cargo test` must pass, on the host.
     pub packages: Vec<String>,
+    /// Cargo workspace below the repository root; the root itself when absent.
+    #[serde(default)]
+    pub workspace: Option<PathBuf>,
+    /// Features passed to `cargo test`; none when absent.
+    #[serde(default)]
+    pub features: Vec<String>,
     /// The integration test files to run (`--test NAME`); every test target when empty.
     #[serde(default)]
     pub tests: Vec<String>,
@@ -893,6 +899,20 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_tests_default_to_root_and_accept_a_workspace_and_features() {
+        let root: HostTests = toml::from_str("packages = ['p']").unwrap();
+        assert!(root.workspace.is_none());
+        assert!(root.features.is_empty());
+        let otp: HostTests = toml::from_str(
+            "packages = ['beamlet-vm']\nworkspace = 'userland/otp'\nfeatures = ['beamlet-redoubt/fake']",
+        )
+        .unwrap();
+        assert_eq!(otp.workspace.as_deref(), Some(Path::new("userland/otp")));
+        assert_eq!(otp.features, ["beamlet-redoubt/fake"]);
+        assert!(toml::from_str::<HostTests>("packages = ['p']\nworkspcae = 'userland/otp'").is_err());
+    }
 
     /// The image's recipe is the kernel, `init`, the servers, beamlet from its own workspace,
     /// `system.index` and the manifest; a recipe that does not start with the kernel and `init`, an

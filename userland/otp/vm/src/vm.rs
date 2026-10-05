@@ -14,7 +14,7 @@ use crate::bif::{self, Native};
 use crate::interp::{self, Stop};
 use crate::loader::{self, LoadError};
 use crate::module::Module;
-use crate::platform::{ConsoleInput, Platform};
+use crate::platform::{ConsoleInput, Lookup, Platform};
 use crate::process::{Class, Cp, Exception, Process, State};
 use crate::sched::Sched;
 use crate::sync::{Lock, Sendable, Wakeup};
@@ -567,7 +567,8 @@ impl Vm {
         }
         let real_logger = {
             let mut platform = self.sys.get_mut().platform.lock();
-            platform.load_module("logger").is_some() && platform.load_module("logger_sup").is_some()
+            matches!(platform.load_module("logger"), Lookup::Found(_))
+                && matches!(platform.load_module("logger_sup"), Lookup::Found(_))
         };
         if !real_logger {
             for module in LOGGER_FALLBACK {
@@ -865,10 +866,13 @@ impl System {
     }
 
     /// Where `module`'s code is: the platform's modules (the system bundle) first, whatever the
-    /// code path holds, so no directory shadows a system module; then the code path, in order.
+    /// code path holds, so no directory shadows a system module; on absence, the code path in
+    /// order. A refused platform lookup ends here.
     pub(crate) fn locate_module(&mut self, module: &str) -> Option<Found> {
-        if let Some(bytes) = self.platform.lock().load_module(module) {
-            return Some(Found::Platform(bytes));
+        match self.platform.lock().load_module(module) {
+            Lookup::Found(bytes) => return Some(Found::Platform(bytes)),
+            Lookup::Refused => return None,
+            Lookup::Absent => {}
         }
         self.find_in_code_path(module).map(|(path, bytes)| Found::Path(path, bytes))
     }
@@ -1522,6 +1526,7 @@ pub enum Target {
 #[cfg(test)]
 mod tests {
     use alloc::boxed::Box;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::platform::{FileError, FileInfo, FileKind, Files, OpenMode, PlatformError, SeekFrom};
@@ -1530,10 +1535,12 @@ mod tests {
     /// `/home/p/own.beam`, as a session's own directory would.
     struct Bundle {
         files: Home,
+        app_attempts: Arc<AtomicUsize>,
     }
 
     struct Home {
         reading: Option<(Vec<u8>, bool)>,
+        operations: Arc<AtomicUsize>,
     }
 
     impl Home {
@@ -1541,6 +1548,7 @@ mod tests {
             match path {
                 "/home/p/m.beam" => Ok(b"planted".to_vec()),
                 "/home/p/own.beam" => Ok(b"own".to_vec()),
+                "/home/p/refused.beam" => Ok(b"planted refusal".to_vec()),
                 _ => Err(FileError::Enoent),
             }
         }
@@ -1548,18 +1556,24 @@ mod tests {
 
     impl Files for Home {
         fn open(&mut self, path: &str, _mode: OpenMode) -> Result<u64, FileError> {
+            self.operations.fetch_add(1, Ordering::Relaxed);
             self.reading = Some((Home::file(path)?, false));
             Ok(0)
         }
 
-        fn close(&mut self, _handle: u64) { self.reading = None; }
+        fn close(&mut self, _handle: u64) {
+            self.operations.fetch_add(1, Ordering::Relaxed);
+            self.reading = None;
+        }
 
         fn read(&mut self, _handle: u64, _len: usize) -> Result<Vec<u8>, FileError> {
+            self.operations.fetch_add(1, Ordering::Relaxed);
             let (bytes, done) = self.reading.as_mut().ok_or(FileError::Ebadf)?;
             Ok(if core::mem::replace(done, true) { Vec::new() } else { bytes.clone() })
         }
 
         fn info(&mut self, path: &str, _follow: bool) -> Result<FileInfo, FileError> {
+            self.operations.fetch_add(1, Ordering::Relaxed);
             let size = Home::file(path)?.len() as u64;
             Ok(FileInfo {
                 size,
@@ -1615,34 +1629,112 @@ mod tests {
 
         fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
 
-        fn load_module(&mut self, module: &str) -> Option<Vec<u8>> {
-            (module == "m").then(|| b"bundle".to_vec())
+        fn load_module(&mut self, module: &str) -> Lookup {
+            match module {
+                "m" => Lookup::Found(b"bundle".to_vec()),
+                "refused" => Lookup::Refused,
+                _ => Lookup::Absent,
+            }
         }
 
-        fn files(&mut self) -> Option<&mut dyn Files> { Some(&mut self.files) }
+        fn load_app(&mut self, app: &str) -> Lookup {
+            self.app_attempts.fetch_add(1, Ordering::Relaxed);
+            match app {
+                "found" => Lookup::Found(b"not an application spec".to_vec()),
+                "refused" => Lookup::Refused,
+                _ => Lookup::Absent,
+            }
+        }
+
+        fn files(&mut self) -> Option<&mut dyn Files> {
+            self.files.operations.fetch_add(1, Ordering::Relaxed);
+            Some(&mut self.files)
+        }
     }
 
     /// A VM whose code path has the session's directory in front, put there by what
     /// `code:add_patha/1` calls, behind a directory already on the path.
-    fn vm() -> Vm {
-        let mut vm = Vm::new(Box::new(Bundle { files: Home { reading: None } }));
+    fn vm_with_operations() -> (Vm, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let operations = Arc::new(AtomicUsize::new(0));
+        let app_attempts = Arc::new(AtomicUsize::new(0));
+        let mut vm = Vm::new(Box::new(Bundle {
+            files: Home { reading: None, operations: Arc::clone(&operations) },
+            app_attempts: Arc::clone(&app_attempts),
+        }));
         let sys = vm.sys.get_mut();
         assert!(sys.add_code_path("/lib".into(), false));
         assert!(sys.add_code_path("/home/p".into(), true));
-        vm
+        (vm, operations, app_attempts)
     }
 
     #[test]
     fn the_bundle_wins_over_a_front_directory() {
-        let mut vm = vm();
+        let (mut vm, operations, _) = vm_with_operations();
         let found = vm.sys.get_mut().locate_module("m");
         assert!(matches!(found, Some(Found::Platform(b)) if b == b"bundle"));
+        assert_eq!(operations.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn a_name_the_bundle_lacks_is_found_on_the_path() {
-        let mut vm = vm();
+        let (mut vm, operations, _) = vm_with_operations();
         let found = vm.sys.get_mut().locate_module("own");
         assert!(matches!(found, Some(Found::Path(p, b)) if p == "/home/p/own.beam" && b == b"own"));
+        assert!(operations.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn a_refused_system_module_never_touches_the_code_path() {
+        let (mut vm, operations, _) = vm_with_operations();
+        let found = vm.sys.get_mut().locate_module("refused");
+        assert_eq!(operations.load(Ordering::Relaxed), 0);
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn app_spec_uses_one_source_attempt_and_keeps_its_erlang_result() {
+        let (mut vm, operations, attempts) = vm_with_operations();
+        for app in ["absent", "refused", "found"] {
+            let name = vm.atom(app);
+            let pid = vm.spawn("application", "load", |_| alloc::vec![name]).unwrap();
+            let path_operations = operations.load(Ordering::Relaxed);
+            let result = vm.run(pid).unwrap().unwrap();
+            let outer = result.heap().as_tuple(result.term()).unwrap();
+            assert!(matches!(outer[0], Term::Atom(a) if a.as_str() == "error"));
+            if app == "found" {
+                // Invalid bytes were returned to application:load/1 and parsed as a bad spec.
+                assert!(result.to_string().contains("bad_application"), "{app}: {result}");
+            } else {
+                let detail = result.heap().as_tuple(outer[1]).unwrap();
+                let chars = |term| {
+                    result
+                        .heap()
+                        .to_vec(term)
+                        .unwrap()
+                        .into_iter()
+                        .map(|t| match t {
+                            Term::Int(n) => n as u8,
+                            other => panic!("{other:?}"),
+                        })
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(chars(detail[0]), b"no such file or directory");
+                assert_eq!(chars(detail[1]), alloc::format!("{app}.app").as_bytes());
+                assert_eq!(
+                    operations.load(Ordering::Relaxed),
+                    path_operations,
+                    "{app}: app lookup never searched the code path"
+                );
+            }
+            assert_eq!(
+                attempts.load(Ordering::Relaxed),
+                match app {
+                    "absent" => 1,
+                    "refused" => 2,
+                    "found" => 3,
+                    _ => unreachable!(),
+                }
+            );
+        }
     }
 }
