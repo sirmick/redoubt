@@ -832,6 +832,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-verity"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "redoubt-wire"
 version = "0.1.0"
 

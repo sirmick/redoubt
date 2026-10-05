@@ -1,0 +1,11 @@
+[package]
+name = "redoubt-verity"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A verified volume's hash tree (docs/servers/verityd.md, R76): one definition shared by the packer and verityd"
+
+# SHA-256 and nothing else: verityd links this, so every byte a verified volume's reader sees was
+# checked by it.
+[dependencies]
+sha2 = { version = "0.11", default-features = false }

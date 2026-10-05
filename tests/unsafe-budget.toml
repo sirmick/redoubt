@@ -27,6 +27,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# A verified volume's hash tree, linked into verityd. `#![forbid(unsafe_code)]`.
+name = "redoubt-verity (the hash tree)"
+paths = ["libs/verity/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 name = "loader"
 paths = ["loader/src"]
 max_unsafe = 18 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer, and Platform::read;
