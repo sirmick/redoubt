@@ -32,6 +32,7 @@ members = [
   "servers/ipd",
   "servers/init",
   "servers/fsd",
+  "servers/verityd",
   "stub",
   "tests/programs",
   "tests/init-programs",

@@ -124,3 +124,8 @@ max_lines = 1970
 name = "servers/fsd"
 paths = ["servers/fsd/src"]
 max_lines = 1405
+
+[[crate]]
+name = "servers/verityd"
+paths = ["servers/verityd/src"]
+max_lines = 505

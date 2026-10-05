@@ -1,0 +1,3 @@
+description = "The verified volume's hash tree and verityd against hostile ranges: the geometry at every level boundary, a flipped bit at each level refused, the start check, whole-block reads, the label check and noise that never panics"
+kind = "host-tests"
+packages = ["redoubt-verity", "redoubt-verityd"]

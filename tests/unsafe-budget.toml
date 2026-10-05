@@ -171,6 +171,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# verityd forbids unsafe code: the runtime and the tree's crate do all it needs.
+name = "verityd (checks one verified volume's blocks)"
+paths = ["servers/verityd/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # Both crates forbid unsafe code. consoled uses the runtime's Registers for MMIO.
 name = "bootfsd and consoled (the first two 9P servers)"
 paths = ["servers/bootfsd/src", "servers/consoled/src"]

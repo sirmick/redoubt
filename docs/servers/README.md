@@ -33,6 +33,7 @@ flowchart TD
     I -.-> CO[consoled<br/>the console]
     I -.-> BF[bootfsd<br/>/boot]
     I -.-> BL[blkd<br/>the disk]
+    I -.-> VD[verityd<br/>one per verified volume]
     I -.-> FS[fsd:volume<br/>one per volume]
     I -.-> ND[netd<br/>the network card]
     I -.-> IP[ipd:network<br/>TCP/IP]
@@ -46,9 +47,9 @@ flowchart TD
 M1 (separation and containment).*
 
 `init` starts the drivers and the servers that need no principal first (`consoled`, `bootfsd`,
-`blkd`, each `fsd`, `netd`, each `ipd`, `keyd`), then the steward and `sshd`. It keeps each
-server's receive right, so a restarted server receives on the same endpoint (Restarts and crash
-blame, below). The servers planned for later milestones join the same graph:
+`blkd`, each `verityd`, each `fsd`, `netd`, each `ipd`, `keyd`), then the steward and `sshd`. It
+keeps each server's receive right, so a restarted server receives on the same endpoint (Restarts
+and crash blame, below). The servers planned for later milestones join the same graph:
 the [resolver](resolver.md) and [`gatewayd`](gatewayd.md) in M4 (self-hosted development), and
 the [package server](pkg.md) and the [supervisor](supervisor.md) in
 M5 (persist, install, share).
@@ -230,7 +231,8 @@ Status: planned · M1 (separation and containment)
 | `consoled` | its own endpoint | the UART's MMIO and IRQ handles | anything else |
 | `bootfsd` | its own endpoint | the public bundle entries, pushed by `init` | the bundle itself |
 | `blkd` | its own endpoint | the disk's MMIO (DMA) and IRQ handles | anything else |
-| `fsd:volume` | its own endpoint | a `blkd` range for its volume | another volume |
+| `verityd` | its own endpoint | a `blkd` range for its verified volume | a device; a write to the range |
+| `fsd:volume` | its own endpoint | a `blkd` range for its volume, or a [`verityd`](verityd.md) range for a verified one | another volume |
 | `netd` | its own endpoint | the network card's MMIO (DMA) and IRQ handles | anything else |
 | `ipd:network` | its own endpoint | a `netd` connection | a budget; a labelled caller's request |
 
