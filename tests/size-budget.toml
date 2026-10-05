@@ -56,7 +56,7 @@ max_lines = 999
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 3506
+max_lines = 3516
 
 [[crate]]
 name = "libs/wire"
@@ -123,9 +123,9 @@ max_lines = 2097
 [[crate]]
 name = "servers/fsd"
 paths = ["servers/fsd/src"]
-max_lines = 1405
+max_lines = 1395
 
 [[crate]]
 name = "servers/verityd"
 paths = ["servers/verityd/src"]
-max_lines = 505
+max_lines = 488

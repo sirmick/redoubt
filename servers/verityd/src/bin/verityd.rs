@@ -11,9 +11,8 @@
 
 extern crate alloc;
 
-use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::server::ninep::mode;
+use redoubt_rt::start::say;
 use redoubt_rt::startup::Startup;
 use redoubt_verityd::blkd::Blkd;
 use redoubt_verityd::server::Said;
@@ -28,19 +27,6 @@ pub const NO_VOLUME: u32 = 5;
 
 /// The startup-block name of the range at `blkd`.
 const VOLUME: &str = "volume";
-
-/// Says `line` on the console `init` gave this instance, if it has one; a console that fails is
-/// not retried, since serving the volume matters more than the line.
-fn say(startup: &Startup, line: &str) {
-    let Some((_, console)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") else { return };
-    let Ok(mut lend) = Lend::new(1) else { return };
-    let console = Connection::new(Endpoint::from_handle(console));
-    let _ = console
-        .attach(&mut lend, 0, "")
-        .and_then(|_| console.open(&mut lend, 0, mode::OWRITE))
-        .and_then(|_| console.write(&mut lend, 0, 0, line.as_bytes()));
-    let _ = console.clunk(&mut lend, 0);
-}
 
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
