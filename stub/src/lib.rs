@@ -336,7 +336,7 @@ const FRAME_HEADER: usize = 4;
 const MAX_BLOCK: usize = PAGE_SIZE;
 /// The only `startup` block version this stub understands (servers/init.md, "The startup
 /// block").
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// Why the startup page's image fields could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

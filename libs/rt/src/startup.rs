@@ -11,11 +11,14 @@
 //!
 //! | Field | Holds |
 //! | --- | --- |
-//! | `version` | 1 |
+//! | `version` | 2; a block of any other version is refused |
 //! | `handle_count` | n, the handles `process_start` installed (slots 1..=n), at most `MAX_START_HANDLES` |
 //! | `namespace` | entries `handle: u32`, `path: string`: a clean absolute path (`/`, `/dev/cons`) |
 //! | `handles` | entries `handle: u32`, `name: string`: a named handle, the name under the manifest's rule ([`valid_name`]) |
 //! | `argv` | `string`s, the arguments in order (each may be empty) |
+//! | `image_addr`, `image_len` | the image the loader stub loads, both 0 for none |
+//! | `heap_pages` | the heap's cap in pages ([`crate::heap::Heap::start`]), 0 for none |
+//! | `tag` | the launch tag the bench measures the child by, 0 for none |
 //!
 //! Handles are 1..=n. Paths are unique among `namespace` entries and names among `handles`
 //! entries; each `bytes` field holds whole entries and nothing else. A block breaking any rule is
@@ -31,7 +34,7 @@ use crate::path;
 
 /// The largest block: one page.
 pub const MAX_BLOCK: usize = PAGE_SIZE;
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 /// The longest handle name (servers/init.md, Names).
 pub const MAX_NAME: usize = 64;
 
@@ -112,11 +115,13 @@ pub struct Startup<'a> {
     entries: Vec<Entry<'a>>,
     /// `(image_addr, image_len)`, `None` when the block named no image (servers/init.md).
     image: Option<(usize, usize)>,
+    heap_pages: u32,
+    tag: u16,
 }
 
 impl<'a> Startup<'a> {
     /// A process started with no block.
-    pub const EMPTY: Startup<'static> = Startup { entries: Vec::new(), image: None };
+    pub const EMPTY: Startup<'static> = Startup { entries: Vec::new(), image: None, heap_pages: 0, tag: 0 };
 
     /// Parses the block at the front of `page` (at most [`MAX_BLOCK`] bytes of it are looked at).
     pub fn parse(page: &'a [u8]) -> Result<Startup<'a>, StartupError> {
@@ -161,7 +166,7 @@ impl<'a> Startup<'a> {
             push(&mut entries, Entry::Arg(r.string().map_err(StartupError::Malformed)?))?;
         }
         let image = parse_image(fields.image_addr, fields.image_len)?;
-        Ok(Startup { entries, image })
+        Ok(Startup { entries, image, heap_pages: fields.heap_pages, tag: fields.tag })
     }
 
     fn entries(&self) -> impl Iterator<Item = Entry<'a>> + '_ { self.entries.iter().copied() }
@@ -171,6 +176,12 @@ impl<'a> Startup<'a> {
     /// byte and its exact byte length, both already checked non-overflowing and page-aligned.
     /// `None` for a process started at its own entry rather than through the stub.
     pub fn image(&self) -> Option<(usize, usize)> { self.image }
+
+    /// The heap's cap in pages (servers/init.md, "Heaps"), `None` for an uncapped heap.
+    pub fn heap_pages(&self) -> Option<usize> { (self.heap_pages != 0).then_some(self.heap_pages as usize) }
+
+    /// The launch tag (servers/init.md, "The startup block"), 0 for none.
+    pub fn tag(&self) -> u16 { self.tag }
 
     /// The namespace table: (path, handle), in block order.
     pub fn namespace(&self) -> impl Iterator<Item = (&'a str, Handle)> + '_ {
@@ -255,6 +266,8 @@ pub struct StartupBuilder {
     argv: Vec<u8>,
     image_addr: u64,
     image_len: u64,
+    heap_pages: u32,
+    tag: u16,
     /// A string too long for its `u16` length, remembered for `finish`.
     too_long: bool,
 }
@@ -269,6 +282,8 @@ impl StartupBuilder {
             argv: Vec::new(),
             image_addr: 0,
             image_len: 0,
+            heap_pages: 0,
+            tag: 0,
             too_long: false,
         }
     }
@@ -278,6 +293,18 @@ impl StartupBuilder {
     pub fn image(&mut self, addr: usize, len: usize) -> &mut Self {
         self.image_addr = addr as u64;
         self.image_len = len as u64;
+        self
+    }
+
+    /// Caps the child's heap at `pages` pages; 0, the default, is no cap.
+    pub fn heap_pages(&mut self, pages: u32) -> &mut Self {
+        self.heap_pages = pages;
+        self
+    }
+
+    /// Tags the child for the bench's measurement; 0, the default, is none.
+    pub fn tag(&mut self, tag: u16) -> &mut Self {
+        self.tag = tag;
         self
     }
 
@@ -321,6 +348,8 @@ impl StartupBuilder {
             argv: &self.argv,
             image_addr: self.image_addr,
             image_len: self.image_len,
+            heap_pages: self.heap_pages,
+            tag: self.tag,
         });
         let mut page = alloc::vec![0; MAX_BLOCK];
         let body = page.get_mut(frame::HEADER..).ok_or(StartupError::TooLarge)?;
@@ -364,6 +393,7 @@ mod tests {
         assert_eq!(s.handle("nope"), None);
         assert_eq!(s.args().collect::<Vec<_>>(), vec!["--verbose", "", "naïve"]);
         assert_eq!(s.image(), None);
+        assert_eq!((s.heap_pages(), s.tag()), (None, 0));
         // The rest of the page is not read.
         let mut page = bytes.clone();
         page.resize(MAX_BLOCK, 0xaa);
@@ -377,7 +407,7 @@ mod tests {
         let bytes = StartupBuilder::new(1).namespace("/", h(1)).arg("a").finish().unwrap();
         let mut want = vec![];
         want.extend_from_slice(&1u32.to_le_bytes()); // opcode
-        want.extend_from_slice(&1u32.to_le_bytes()); // version
+        want.extend_from_slice(&2u32.to_le_bytes()); // version
         want.extend_from_slice(&1u32.to_le_bytes()); // handle_count
         want.extend_from_slice(&7u32.to_le_bytes()); // namespace: 7 bytes
         want.extend_from_slice(&[1, 0, 0, 0, 1, 0, b'/']);
@@ -386,6 +416,8 @@ mod tests {
         want.extend_from_slice(&[1, 0, b'a']);
         want.extend_from_slice(&0u64.to_le_bytes()); // image_addr: none
         want.extend_from_slice(&0u64.to_le_bytes()); // image_len: none
+        want.extend_from_slice(&0u32.to_le_bytes()); // heap_pages: none
+        want.extend_from_slice(&0u16.to_le_bytes()); // tag: none
         assert_eq!(bytes[..4], (want.len() as u32).to_le_bytes());
         assert_eq!(bytes[4..], want[..]);
     }
@@ -405,6 +437,16 @@ mod tests {
             StartupBuilder::new(0).image(usize::MAX & !(PAGE_SIZE - 1), PAGE_SIZE).finish().err(),
             Some(StartupError::BadImage)
         );
+    }
+
+    #[test]
+    fn heap_pages_and_tag_round_trip() {
+        let bytes = StartupBuilder::new(0).heap_pages(48).tag(3).finish().unwrap();
+        let s = Startup::parse(&bytes).unwrap();
+        assert_eq!((s.heap_pages(), s.tag()), (Some(48), 3));
+        let bytes = StartupBuilder::new(0).heap_pages(u32::MAX).tag(u16::MAX).finish().unwrap();
+        let s = Startup::parse(&bytes).unwrap();
+        assert_eq!((s.heap_pages(), s.tag()), (Some(u32::MAX as usize), u16::MAX));
     }
 
     #[test]
@@ -447,13 +489,21 @@ mod tests {
         let len = u32::from_le_bytes(cut[..4].try_into().unwrap());
         cut[..4].copy_from_slice(&(len - 1).to_le_bytes());
         assert!(matches!(reject(&cut), Some(StartupError::Malformed(_))));
-        // A wrong opcode or version.
+        // A wrong opcode or version: version 1, which had neither the cap nor the tag, too.
         let mut bad = good.clone();
         bad[4] = 2;
         assert!(matches!(reject(&bad), Some(StartupError::Malformed(_))));
-        let mut bad = good.clone();
-        bad[8] = 2;
-        assert_eq!(reject(&bad), Some(StartupError::BadVersion));
+        for version in [0, 1, 3] {
+            let mut bad = good.clone();
+            bad[8] = version;
+            assert_eq!(reject(&bad), Some(StartupError::BadVersion));
+        }
+        // A version 1 block as a version 1 parent wrote it, without the two fields, is short.
+        let mut v1 = good[..good.len() - 6].to_vec();
+        let len = v1.len() as u32 - 4;
+        v1[..4].copy_from_slice(&len.to_le_bytes());
+        v1[8] = 1;
+        assert!(matches!(reject(&v1), Some(StartupError::Malformed(_))));
         // Each builder step the parser must refuse, and why.
         type Case<'a> = (&'a dyn Fn(&mut StartupBuilder), Option<StartupError>);
         let cases: [Case; 11] = [
@@ -488,6 +538,8 @@ mod tests {
             argv,
             image_addr: 0,
             image_len: 0,
+            heap_pages: 0,
+            tag: 0,
         };
         let ok = fields(&[1, 0, 0, 0, 1, 0, b'/'], &[1, 0, 0, 0, 1, 0, b'k'], &[0, 0]);
         assert!(Startup::from_fields(&ok).is_ok());
