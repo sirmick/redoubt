@@ -1,11 +1,12 @@
 //! The heap against the fake kernel's `map_anon`: its free lists and its fixed arena's runs,
-//! which keep their links in the free blocks themselves. Fast enough for Miri (`rt-miri`).
+//! which keep their links in the free blocks themselves; its cap, which refuses before the kernel
+//! is asked; and the record the bench reads. Fast enough for Miri (`rt-miri`).
 
 use std::alloc::{GlobalAlloc, Layout};
 
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, PAGE_SIZE};
-use redoubt_rt::heap::Heap;
+use redoubt_rt::heap::{Heap, RECORD_MAGIC, Record};
 
 #[test]
 fn heap_over_map_anon() {
@@ -96,5 +97,85 @@ fn heap_in_a_fixed_arena() {
             assert_eq!(heap.alloc(Layout::from_size_align(64, 64).unwrap()), b, "a class page from a run");
         }
         assert_eq!(f.held(pid).1, before + 8);
+    });
+}
+
+#[test]
+fn capped_heap_refuses_before_the_kernel() {
+    let f = fake();
+    let pid = f.process(0, &[]);
+    f.as_process(pid, || {
+        let heap = Heap::new();
+        assert_eq!(heap.start(Some(0), 1), Err(Error::InvalidArgument), "no cap of 0");
+        heap.start(Some(4), 1).unwrap();
+        assert_eq!(heap.start(Some(8), 1), Err(Error::InvalidArgument), "once only");
+        assert_eq!(heap.fix(8), Err(Error::InvalidArgument), "a capped heap is never fixed");
+        let before = f.held(pid).1;
+        let pages = |n| Layout::from_size_align(n * PAGE_SIZE, 8).unwrap();
+        let small = Layout::from_size_align(16, 8).unwrap();
+        // SAFETY: every layout has a non-zero size, and each block is freed with its layout.
+        unsafe {
+            let s = heap.alloc(small);
+            let a = heap.alloc(pages(2));
+            assert!(!s.is_null() && !a.is_null());
+            assert_eq!(f.held(pid).1, before + 3);
+            // Two more pages would hold five: refused, and the kernel was not asked.
+            assert!(heap.alloc(pages(2)).is_null());
+            assert_eq!(f.held(pid).1, before + 3);
+            // A freed large block's pages count no longer.
+            heap.dealloc(a, pages(2));
+            let b = heap.alloc(pages(3));
+            assert!(!b.is_null());
+            assert_eq!(f.held(pid).1, before + 4);
+            // Full: even a small class's page is refused.
+            assert!(heap.alloc(Layout::from_size_align(64, 8).unwrap()).is_null());
+            heap.dealloc(b, pages(3));
+        }
+        let record = heap.record();
+        assert_eq!((record.get(Record::CAP), record.get(Record::PEAK)), (4, 4));
+    });
+}
+
+#[test]
+fn a_fixed_heap_is_never_capped() {
+    let f = fake();
+    let pid = f.process(0, &[]);
+    f.as_process(pid, || {
+        let heap = Heap::new();
+        heap.fix(2).unwrap();
+        assert_eq!(heap.start(Some(8), 1), Err(Error::InvalidArgument));
+        assert_eq!(heap.record().get(Record::MAGIC), 0, "a refused start marks nothing");
+        heap.start(None, 1).unwrap();
+    });
+}
+
+#[test]
+fn the_record_is_zero_until_marked() {
+    let f = fake();
+    let pid = f.process(0, &[]);
+    f.as_process(pid, || {
+        let heap = Heap::new();
+        let words = |heap: &Heap| {
+            [Record::MAGIC, Record::TAG, Record::CAP, Record::PEAK].map(|i| heap.record().get(i))
+        };
+        assert_eq!(words(&heap), [0; 4]);
+        assert_eq!(size_of::<Record>(), 32);
+        assert_eq!(align_of::<Record>(), 32);
+        heap.start(None, 7).unwrap();
+        // SAFETY: the layout has a non-zero size; freed with it.
+        unsafe {
+            let big = Layout::from_size_align(3 * PAGE_SIZE, 8).unwrap();
+            let p = heap.alloc(big);
+            heap.dealloc(p, big);
+            let q = heap.alloc(Layout::from_size_align(PAGE_SIZE, 8).unwrap());
+            heap.dealloc(q, Layout::from_size_align(PAGE_SIZE, 8).unwrap());
+        }
+        // Uncapped: the peak is the most held at once, not the sum.
+        assert_eq!(words(&heap), [RECORD_MAGIC, 7, 0, 3]);
+        // The bench reads the bytes: little-endian words.
+        // SAFETY: a Record is 32 bytes of plain integers.
+        let bytes = unsafe { std::slice::from_raw_parts(heap.record() as *const Record as *const u8, 32) };
+        assert_eq!(bytes[..8], RECORD_MAGIC.to_le_bytes());
+        assert_eq!(bytes[8..16], 7u64.to_le_bytes());
     });
 }
