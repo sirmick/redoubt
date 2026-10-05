@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 17
+revision = 25
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -838,8 +838,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["BENCHENV1"]
   body = "Owner 2026-10-04: minimal tooling, easy to install with scripts that work on Ubuntu; Debian stays the image's base; all agent tooling (Node, pi, Claude Code, Codex, sudo, git identity, SSH-key and host-key seeding, /config mount, scripts/pi-ensure.sh, scripts/ssh-key-ensure.sh) leaves the tree; the bench drops its QEMU 10.1 (-run-with exit-with-parent, replaced by PR_SET_PDEATHSIG from the bench) and OpenSSH 10.1 (WarnWeakCrypto, passed only when ssh takes it) requirements so stock Ubuntu 24.04 packages run it. Deliverables: scripts/setup.sh (Debian/Ubuntu, idempotent, --with-beam optional), Dockerfile = debian:trixie + user + that script, dev.sh = mount and run, pages (GETTING-STARTED prerequisites, testbench.md's two paragraphs). Brief: .wash/local/TOOL1-implementer.md. Tier B (tooling: implementer + editor), size S-M. Needs BENCHENV1 (ssh.rs, the guest's QEMU line). Launches after BENCHENV1 merges."
-  state = "reported"
-  revision = 8
+  state = "done"
+  revision = 25
   overrides = ["2026-10-05: started by Orchestrator before BENCHENV1 (active): Owner 2026-10-04: 'move TOOL1 forward, get that done and i'll do it immediately'. BENCHENV1 is in its merge-gate bench; TOOL1's script, Dockerfile, dev.sh and pages touch none of its files, and the two bench-flag edits (ssh.rs, ssh_guest.rs, qemu.rs) wait for BENCHENV1's merge and a rebase onto it."]
 
 [[node]]
@@ -850,3 +850,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by BENCHENV1's merge-gate bench 2026-10-04 and shown to predate it: on main 9212f6f60 the case fails 1 of 10 runs alone; on wp-BENCHENV1 f7a0cb1eb (no AIO, kernel or boot change) 4 of 15. rv32 only. First failing line: 'forbidden output /aio-reader TEST FAILED/: ... aio-reader TEST FAILED: receive: Timeout' at ~21 s. AIO1's case (tests/aio-many-reads-two, the hub keeping 64 reads outstanding on one thread). Find whether the case's timeout is too tight for rv32 under TCG or the hub drops a completion; the case must order on events or the bug is the hub's. Memory: AIO1's timeout tests also failed under host load before. Tier A if the hub changes (libs/client), Tier B if the case alone. Size S."
   state = "todo"
   revision = 10
+
+[[node]]
+  id = "B9"
+  title = "The keeper's host test races /proc under load"
+  template = "package"
+  parent = "M1"
+  body = "Found by TOOL1's gates 2026-10-05: tools/testbench ssh::tests::the_keeper_finds_what_names_the_case (BENCHENV1's keeper: a qemu-system-riscv64 naming the case directory after the sessions) failed once in a whole bench's host-tests case and once in cargo test -p testbench under load, 0 of 30 alone. Likely a /proc/*/cmdline scan racing a process that is starting or exiting. Make the test deterministic (spawn and wait for the stand-in to be visible before scanning; or order on an event) without weakening the keeper. Tier B (a host test), size S, no needs."
+  state = "todo"
+  revision = 23

@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,30 +33,46 @@ pub enum Verdict {
     Fail(String),
 }
 
-/// QEMU ends when the bench does, even when the bench is killed and nothing is dropped
-/// (Linux's parent-death signal): a run killed at its timeout leaves no guest running.
-const EXIT_WITH_PARENT: [&str; 2] = ["-run-with", "exit-with-parent=on"];
+/// QEMU ends when the bench does, even when the bench is killed and nothing is dropped: Linux
+/// sends it SIGKILL when the thread that started it ends (the parent-death signal, asked for
+/// between fork and exec, so before QEMU runs at all). A run killed at its timeout leaves no
+/// guest running.
+fn exit_with_parent(qemu: &mut Command) -> &mut Command {
+    let parent = std::process::id() as libc::pid_t;
+    // SAFETY: the hook runs in the child between fork and exec, where only async-signal-safe
+    // calls may be made: it makes two system calls, reads errno, and allocates nothing.
+    unsafe {
+        qemu.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // The bench died before the call, so no signal will come: the child is already
+            // another process's.
+            if libc::getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            Ok(())
+        })
+    }
+}
 
-/// The oldest QEMU that knows `EXIT_WITH_PARENT`.
-const EXIT_WITH_PARENT_SINCE: &str = "QEMU 10.1";
-
-/// Whether `qemu` takes every option the bench passes it that an older QEMU lacks; probed once
-/// per binary and run. Without this, a QEMU too old fails every boot case at once, each for
-/// the same reason.
+/// Whether `qemu` runs; probed once per binary and run. Without this, a missing or broken QEMU
+/// fails every boot case at once, each for the same reason. The bench passes no option that an
+/// older QEMU lacks; one it did would be probed here, with the oldest QEMU that takes it.
 pub fn usable(qemu: &'static str) -> Result<(), String> {
     static PROBED: Mutex<Vec<(&str, Result<(), String>)>> = Mutex::new(Vec::new());
     let mut probed = PROBED.lock().unwrap();
     if let Some((_, usable)) = probed.iter().find(|(binary, _)| *binary == qemu) {
         return usable.clone();
     }
-    let usable = probe(qemu, &EXIT_WITH_PARENT);
+    let usable = probe(qemu, &[], "");
     probed.push((qemu, usable.clone()));
     usable
 }
 
-/// Run `qemu <options> -version`: QEMU rejects an option it does not know, or a `-run-with`
-/// parameter, before it gets to `-version`.
-fn probe(qemu: &str, options: &[&str]) -> Result<(), String> {
+/// Run `qemu <options> -version`: QEMU rejects an option it does not know, or a parameter of
+/// one, before it gets to `-version`. `since` is the oldest QEMU that takes `options`.
+fn probe(qemu: &str, options: &[&str], since: &str) -> Result<(), String> {
     let run = |args: &[&str]| Command::new(qemu).args(args).stdin(Stdio::null()).output();
     let probe = match run(&[options, &["-version"]].concat()) {
         Ok(probe) => probe,
@@ -65,9 +82,12 @@ fn probe(qemu: &str, options: &[&str]) -> Result<(), String> {
         return Ok(());
     }
     let first = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().next().unwrap_or("").trim().to_string();
+    if options.is_empty() {
+        return Err(format!("`{qemu} -version` failed with {}: {}", probe.status, first(&probe.stderr)));
+    }
     let version = run(&["-version"]).map(|v| first(&v.stdout)).unwrap_or_default();
     Err(format!(
-        "`{qemu}` does not take `{}`; the bench needs {EXIT_WITH_PARENT_SINCE} or later, this is {:?}: {}",
+        "`{qemu}` does not take `{}`; the bench needs {since} or later, this is {:?}: {}",
         options.join(" "),
         version,
         first(&probe.stderr),
@@ -101,8 +121,8 @@ pub struct Image<'a> {
 impl Image<'_> {
     fn qemu(&self) -> Command {
         let mut qemu = Command::new(self.machine.qemu);
-        qemu.args(self.machine.qemu_args)
-            .args(EXIT_WITH_PARENT)
+        exit_with_parent(&mut qemu)
+            .args(self.machine.qemu_args)
             .args(["-bios", self.firmware])
             .args(["-smp", &self.smp.to_string()])
             .args(["-m", &format!("{}M", self.memory_mib)])
@@ -612,32 +632,48 @@ mod tests {
         args
     }
 
-    /// A bench killed outright (SIGKILL, nothing dropped) takes its QEMU with it: here a shell
-    /// stands in for the bench, starts QEMU the way `Image::qemu` does, and is killed.
+    /// Set in the stand-in bench that `a_killed_bench_leaves_no_qemu` starts: QEMU's QMP socket.
+    const STAND_IN_QMP: &str = "TESTBENCH_STAND_IN_QMP";
+
+    /// A bench killed outright (SIGKILL, nothing dropped) takes its QEMU with it: here this test
+    /// binary, run again, stands in for the bench, starts QEMU the way `Image::qemu` does, and is
+    /// killed.
     #[test]
     fn a_killed_bench_leaves_no_qemu() {
         let qemu = "qemu-system-riscv64";
-        // QEMU greets a QMP client only from its main loop, so after it has read its options and
-        // asked for the parent-death signal: killing the stand-in earlier would test only a race.
+        if let Some(qmp) = std::env::var_os(STAND_IN_QMP) {
+            // The stand-in: print QEMU's pid, then wait to be killed.
+            let mut command = Command::new(qemu);
+            exit_with_parent(&mut command)
+                .args(["-machine", "virt", "-bios", "none", "-display", "none", "-monitor", "none"])
+                .args(["-serial", "none", "-S", "-qmp"])
+                .arg(format!("unix:{},server=on,wait=off", qmp.to_string_lossy()))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let child = command.spawn().expect("starting QEMU");
+            println!("qemu-pid {}", child.id());
+            std::thread::sleep(Duration::from_secs(600));
+            return;
+        }
+        // QEMU greets a QMP client only from its main loop, so after it is running: killing the
+        // stand-in earlier would test only a race.
         let qmp = std::env::temp_dir().join(format!("testbench-exit-with-parent-{}.qmp", std::process::id()));
         std::fs::remove_file(&qmp).ok();
-        let script = format!(
-            "{qemu} {} -machine virt -bios none -display none -monitor none -serial none -S -qmp unix:{},server=on,wait=off </dev/null >/dev/null 2>&1 & echo $!; exec sleep 600",
-            EXIT_WITH_PARENT.join(" "),
-            qmp.display()
-        );
-        let mut bench = std::process::Command::new("sh")
-            .args(["-c", &script])
-            .stdout(std::process::Stdio::piped())
+        let name = module_path!().split_once("::").map_or("", |(_, path)| path).to_string()
+            + "::a_killed_bench_leaves_no_qemu";
+        let mut bench = Command::new(std::env::current_exe().expect("this test binary"))
+            .args([name.as_str(), "--exact", "--nocapture", "--test-threads=1"])
+            .env(STAND_IN_QMP, &qmp)
+            .stdout(Stdio::piped())
             .spawn()
-            .expect("starting sh");
-        let mut line = String::new();
-        std::io::BufRead::read_line(
-            &mut std::io::BufReader::new(bench.stdout.take().expect("sh's stdout")),
-            &mut line,
-        )
-        .expect("QEMU's pid");
-        let pid: u32 = line.trim().parse().expect("a pid");
+            .expect("starting the stand-in");
+        let pid: u32 = BufReader::new(bench.stdout.take().expect("the stand-in's stdout"))
+            .lines()
+            .map_while(Result::ok)
+            // The test harness prints the test's name first, on the same line.
+            .find_map(|line| line.rsplit_once("qemu-pid ").and_then(|(_, pid)| pid.parse().ok()))
+            .expect("QEMU's pid");
         let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
         let kill = || {
             std::process::Command::new("kill").args(["-9", &pid.to_string()]).status().ok();
@@ -659,7 +695,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         std::fs::remove_file(&qmp).ok();
-        bench.kill().expect("killing sh");
+        bench.kill().expect("killing the stand-in");
         bench.wait().ok();
         // Gone, or a zombie waiting for init to reap it.
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -676,17 +712,17 @@ mod tests {
         }
     }
 
-    /// The QEMU the bench runs takes every option it passes; a QEMU refusing one is reported
-    /// with the version needed and QEMU's own complaint.
+    /// The QEMU the bench runs is usable; a QEMU refusing an option is reported with the
+    /// version needed and QEMU's own complaint, and one that cannot run says why.
     #[test]
     fn a_qemu_lacking_an_option_is_named() {
         for qemu in ["qemu-system-riscv64", "qemu-system-riscv32"] {
-            assert_eq!(probe(qemu, &EXIT_WITH_PARENT), Ok(()));
-            let why = probe(qemu, &["-run-with", "no-such-parameter=on"]).expect_err("an unknown parameter");
-            assert!(why.contains("needs QEMU 10.1 or later, this is \"QEMU emulator version "), "{why}");
-            assert!(why.ends_with("Invalid parameter 'no-such-parameter'"), "{why}");
+            assert_eq!(probe(qemu, &[], ""), Ok(()));
+            let why = probe(qemu, &["-no-such-option"], "QEMU 99.0").expect_err("an unknown option");
+            assert!(why.contains("needs QEMU 99.0 or later, this is \"QEMU emulator version "), "{why}");
+            assert!(why.ends_with("-no-such-option: invalid option"), "{why}");
         }
-        let why = probe("qemu-system-no-such-width", &EXIT_WITH_PARENT).expect_err("a missing binary");
+        let why = probe("qemu-system-no-such-width", &[], "").expect_err("a missing binary");
         assert!(why.starts_with("`qemu-system-no-such-width` could not be run: "), "{why}");
     }
 

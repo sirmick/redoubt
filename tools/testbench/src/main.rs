@@ -340,7 +340,7 @@ fn main() -> Result<()> {
         }
         if let Kind::SshLoopback(loopback) = &case.kind {
             let started = Instant::now();
-            // Only OpenSSH's server needs a guest; Redoubt's, an `ssh` that takes its options.
+            // Only OpenSSH's server needs a guest.
             let usable = match loopback.server {
                 LoopbackServer::Openssh => loopback_usable
                     .get_or_insert_with(|| {
@@ -349,9 +349,7 @@ fn main() -> Result<()> {
                             .and_then(|()| ssh::loopback_usable(&workspace, &logs.join("ssh")))
                     })
                     .clone(),
-                LoopbackServer::Redoubt => {
-                    ssh_available().and_then(|()| ssh::redoubt_usable()).map_err(ssh::Unusable::Host)
-                }
+                LoopbackServer::Redoubt => ssh_available().map_err(ssh::Unusable::Host),
             };
             let outcome = match usable {
                 Err(ssh::Unusable::Host(why)) => missing(why),

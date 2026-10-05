@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, mpsc};
+use std::sync::{Condvar, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -24,30 +24,41 @@ use crate::ssh_guest;
 pub const SSH: &str = "ssh";
 
 /// What `ssh` gets against Redoubt's server, whose exchange is not post-quantum: OpenSSH's
-/// warning would otherwise be session output. OpenSSH 10.1 introduced the option.
+/// warning would otherwise be session output. OpenSSH 10.1 introduced the warning and this
+/// option together, so an older `ssh`, which would refuse the option, has no warning to quiet
+/// and none to filter from its output: OpenSSH 9.6 prints nothing over such an exchange.
 const REDOUBT_OPTIONS: [&str; 2] = ["-o", "WarnWeakCrypto=no-pq-kex"];
-const REDOUBT_OPTIONS_SINCE: &str = "OpenSSH 10.1";
 
-/// Whether the host's `ssh` takes the options it gets against Redoubt's server. An older one
-/// refuses them before it runs the server, so every such case would fail on a server log that
-/// was never written.
-pub fn redoubt_usable() -> Result<(), String> { takes(&REDOUBT_OPTIONS, REDOUBT_OPTIONS_SINCE) }
+/// The options against Redoubt's server that the host's `ssh` takes: all of them, or none on an
+/// `ssh` older than they are. Probed once per run; the run's output says why when they are
+/// dropped, since a session that then fails on the warning would not.
+fn redoubt_options() -> &'static [&'static str] {
+    static TAKEN: OnceLock<bool> = OnceLock::new();
+    let taken = *TAKEN.get_or_init(|| match takes(&REDOUBT_OPTIONS) {
+        Ok(()) => true,
+        Err(why) => {
+            println!("note  ssh gets no `{}` against Redoubt's server: {why}", REDOUBT_OPTIONS.join(" "));
+            false
+        }
+    });
+    if taken { &REDOUBT_OPTIONS } else { &[] }
+}
 
-/// Whether `ssh` takes `options`: `-G` parses them and prints the configuration, connecting to
-/// nothing. If not, the error names the version needed, the one found and ssh's complaint.
-fn takes(options: &[&str], since: &str) -> Result<(), String> {
-    let probe = Command::new(SSH).arg("-G").args(options).arg("redoubt").stdin(Stdio::null()).output();
+/// Whether `ssh` takes `options`, as the sessions run it: with no configuration file, `-G`
+/// parses them and prints the configuration, connecting to nothing. If not, the error is ssh's
+/// complaint.
+fn takes(options: &[&str]) -> Result<(), String> {
+    let probe = Command::new(SSH)
+        .args(["-F", "/dev/null", "-G"])
+        .args(options)
+        .arg("redoubt")
+        .stdin(Stdio::null())
+        .output();
     let probe = probe.map_err(|e| format!("`{SSH}` could not be run: {e}"))?;
     if probe.status.success() {
         return Ok(());
     }
-    let first = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().next().unwrap_or("").trim().to_string();
-    let version = Command::new(SSH).arg("-V").output().map(|v| first(&v.stderr)).unwrap_or_default();
-    Err(format!(
-        "`{SSH}` does not take `{}`; the bench needs {since} or later, this is {version:?}: {}",
-        options.join(" "),
-        first(&probe.stderr)
-    ))
+    Err(String::from_utf8_lossy(&probe.stderr).lines().next().unwrap_or("").trim().to_string())
 }
 /// The reference server's only login: root in its guest.
 const REFERENCE_USER: &str = "root";
@@ -192,7 +203,7 @@ fn proxy(image: &ssh_guest::Image, case_dir: &Path) -> Result<String> {
     };
     // QEMU's stderr is ssh's: a last line of QEMU's would stand in for the session's own output.
     Ok(format!(
-        "{} -M virt -m 256M -smp 1 -run-with exit-with-parent=on -no-reboot \
+        "{} -M virt -m 256M -smp 1 -no-reboot \
          -display none -monitor none -nic none \
          -kernel {kernel} -initrd {case_dir}/initrd.img -append 'console=ttyS0 quiet panic=-1' \
          -chardev file,id=con,path={case_dir}/guest.log,append=on -serial chardev:con \
@@ -411,7 +422,7 @@ pub fn run(
             ssh.args(["-o", option]);
         }
         if let Server::Redoubt { .. } = server {
-            ssh.args(REDOUBT_OPTIONS);
+            ssh.args(redoubt_options());
         }
         ssh.args(&session.ssh_args);
         match server {
@@ -475,7 +486,7 @@ pub fn run(
 }
 
 /// How long a case's guests have to go once their sessions' ssh have exited: ssh hangs up on its
-/// proxy as it exits, and QEMU exits with its parent besides.
+/// proxy as it exits.
 const GUESTS_GO: Duration = Duration::from_secs(5);
 
 /// The keeper: a guest of the case's still running once its sessions are done is named, and
@@ -785,13 +796,12 @@ fn describe(status: ExitStatus) -> String {
 mod tests {
     use super::*;
 
-    /// An `ssh` that refuses an option the bench gives it is named with the version needed and
-    /// ssh's own complaint; one it takes passes.
+    /// An `ssh` that refuses an option the bench gives it says why, in ssh's own words; one it
+    /// takes passes.
     #[test]
     fn an_ssh_lacking_an_option_is_named() {
-        assert_eq!(takes(&["-o", "BatchMode=yes"], "OpenSSH 1.0"), Ok(()));
-        let why = takes(&["-o", "NoSuchOption=yes"], "OpenSSH 99.0").expect_err("an unknown option");
-        assert!(why.starts_with("`ssh` does not take `-o NoSuchOption=yes`; the bench needs OpenSSH 99.0 or later, this is \"OpenSSH_"), "{why}");
+        assert_eq!(takes(&["-o", "BatchMode=yes"]), Ok(()));
+        let why = takes(&["-o", "NoSuchOption=yes"]).expect_err("an unknown option");
         assert!(why.ends_with("Bad configuration option: nosuchoption"), "{why}");
     }
 
@@ -807,7 +817,7 @@ mod tests {
         assert_eq!(
             proxy(&image, Path::new("/w/c")).unwrap(),
             format!(
-                "qemu-system-riscv64 -M virt -m 256M -smp 1 -run-with exit-with-parent=on -no-reboot \
+                "qemu-system-riscv64 -M virt -m 256M -smp 1 -no-reboot \
                  -display none -monitor none -nic none \
                  -kernel {kernel} -initrd /w/c/initrd.img -append 'console=ttyS0 quiet panic=-1' \
                  -chardev file,id=con,path=/w/c/guest.log,append=on -serial chardev:con \

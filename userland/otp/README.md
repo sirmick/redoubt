@@ -6,9 +6,10 @@ Elixir shell on the UART console and loads verified modules from the userland di
 operations and native launching on Redoubt remain planned. See [its page](../../docs/userland/beamlet.md).
 
 Differential/Elixir tests require OTP 28.5.0.6 and Elixir 1.20.4. The dev container provides
-both under `/opt/toolchains` and sets `BEAMLET_TOOLCHAINS` to it; on your own machine they live in
-the repository's untracked `toolchains/`. `tools/env.sh` only adjusts PATH; see
-[Getting started](../../GETTING-STARTED.md#beamlet) for the layout.
+both under `/opt/toolchains` and sets `BEAMLET_TOOLCHAINS` to it; on your own machine
+`scripts/setup.sh --with-beam` builds them into the repository's untracked `toolchains/`.
+`tools/env.sh` only adjusts PATH; see [Getting started](../../GETTING-STARTED.md#beamlet) for the
+layout.
 
     . tools/env.sh                  # the pinned OTP 28 / Elixir 1.20 toolchain
     cargo test                      # unit tests and hostile-input tests
