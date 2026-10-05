@@ -1,0 +1,1715 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 1f844ed79..8ef4f80c4 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1173,6 +1173,7 @@ dependencies = [
+  "redoubt-fsd",
+  "redoubt-model",
+  "redoubt-signing",
++ "redoubt-stride",
+  "regex",
+  "serde",
+  "serde_json",
+diff --git a/model/tests/common/contracts.rs b/model/tests/common/contracts.rs
+index 2975628f6..9fca1ef5d 100644
+--- a/model/tests/common/contracts.rs
++++ b/model/tests/common/contracts.rs
+@@ -453,23 +453,23 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
+         w.op(Op::Sys {
+             pid: pb,
+             tid: tb,
+-            call: Syscall::Receive { h: None, timeout: 5_000, max_transfer: 0 },
++            call: Syscall::Receive { h: None, timeout: 500, max_transfer: 0 },
+         })?;
+         w.sys(1, Syscall::Receive { h: None, timeout: FOREVER, max_transfer: 0 })?;
+-        w.op(Op::Tick { dt: 1_000 })?;
++        w.op(Op::Tick { dt: 100 })?;
+         expect(w.k.sched.current.is_some_and(|c| c.thread == (pa, ta)), "the spinner runs")?;
+-        let s = w.op(Op::Tick { dt: 4_500 })?;
++        let s = w.op(Op::Tick { dt: 450 })?;
+         expect(
+             s.wakes.iter().any(|x| x.tid == tb && x.result == Err(Error::Timeout)),
+             "the sleeper timed out",
+         )?;
+-        expect(w.k.now == now + 5_500, "time")?;
++        expect(w.k.now == now + 550, "time")?;
+         expect(
+             w.k.sched.current.is_some_and(|c| c.thread == (pa, ta)),
+             "a timeout wake preempted the running thread",
+         )?;
+         // At its slice end the woken sleeper, ranked ahead of the spinner (wake-first), runs.
+-        w.op(Op::Tick { dt: 4_500 })?;
++        w.op(Op::Tick { dt: 450 })?;
+         w.op(Op::Tick { dt: 1 })?;
+         expect(w.k.sched.current.is_some_and(|c| c.thread == (pb, tb)), "the woken sleeper runs next")?;
+     }
+diff --git a/tests/programs/Cargo.toml b/tests/programs/Cargo.toml
+index 4504ad084..c8cbe9649 100644
+--- a/tests/programs/Cargo.toml
++++ b/tests/programs/Cargo.toml
+@@ -85,6 +85,7 @@ bin = [
+     { name = "sched-budget-churn", test = false },
+     { name = "sched-carve-inflation", test = false },
+     { name = "sched-carve-return", test = false },
++    { name = "sched-cluster", test = false },
+     { name = "sched-debt-lift", test = false },
+     { name = "sched-destroy-billing", test = false },
+     { name = "sched-exit-churn", test = false },
+diff --git a/tests/programs/src/bin/sched-carve-return.rs b/tests/programs/src/bin/sched-carve-return.rs
+index 6d897809c..ee13987ac 100644
+--- a/tests/programs/src/bin/sched-carve-return.rs
++++ b/tests/programs/src/bin/sched-carve-return.rs
+@@ -1,5 +1,5 @@
+ //! The lead follows the weight (kernel/scheduling.md, "The lead follows the weight"): U (weight
+-//! 1000) carves 999 away to an empty child, runs on the 1 it kept until 9 ms into its slice, and
++//! 1000) carves 999 away to an empty child, runs on the 1 it kept until 9/10 into its slice, and
+ //! destroys the child, so its weight comes back. What it ran is restated at the restored weight,
+ //! so from then on it gets its half against an equal victim V. Kept at weight 1, its lead would
+ //! hold it off the CPU for seconds. U sleeps first, so that the carve begins a slice and the
+@@ -9,6 +9,8 @@
+ #![no_std]
+ #![no_main]
+ 
++use core::fmt::Write;
++
+ use test_programs::rd;
+ use test_programs::sched::{Bench, Role, join};
+ 
+@@ -24,10 +26,13 @@ pub extern "C" fn _start() -> ! {
+     let ui = b.start(u, Role::CarveSpin, &[999], &[u]);
+     let vi = b.start(v, Role::Spin, &[], &[]);
+     let (start, end) = b.go(50_000, WINDOW);
+-    // U reports when its carve returned, then its count; V its count.
+-    let w = b.collect_words(3);
+-    let returned = join(w[ui][0][0], w[ui][0][1]);
+-    let (uc, vc) = (join(w[ui][1][0], w[ui][1][1]), join(w[vi][0][0], w[vi][0][1]));
++    // U reports create and return offsets (µs from its wake), absolute return, then count.
++    let w = b.collect_words(5);
++    let (create_us, return_us) = (join(w[ui][0][0], w[ui][0][1]), join(w[ui][1][0], w[ui][1][1]));
++    let returned = join(w[ui][2][0], w[ui][2][1]);
++    let (uc, vc) = (join(w[ui][3][0], w[ui][3][1]), join(w[vi][0][0], w[vi][0][1]));
++    b.check(create_us > 0 && return_us >= create_us, format_args!("the create and return were measured"));
++    let _ = writeln!(test_programs::console::Console, "CARVE-OBS {create_us} {return_us} {returned}");
+     // U's share from its carve's return; the post-check judges it net of the checked build's
+     // audits inside that window, which a release build does not run.
+     let us = b.judged_share("u-after-return", uc, (returned, end), (500 - TOL, 1000));
+diff --git a/tests/programs/src/bin/sched-wake-no-preempt.rs b/tests/programs/src/bin/sched-wake-no-preempt.rs
+index 12b451418..0f8d41175 100644
+--- a/tests/programs/src/bin/sched-wake-no-preempt.rs
++++ b/tests/programs/src/bin/sched-wake-no-preempt.rs
+@@ -1,11 +1,10 @@
+ //! A timeout only wakes (kernel/scheduling.md, "Preemption points"): it never takes the CPU from
+ //! the thread running.
+ //!
+-//! A sleeper and a spinner, in budgets of equal weight. The sleeper sleeps 3 ms, twenty times;
+-//! each time it blocks, the spinner is picked and starts a 10 ms slice, so the sleeper's timeout
+-//! falls about 3 ms into that slice. The sleeper then runs only when the slice ends, about 7 ms
+-//! after its timeout. A kernel whose timeout preempted would run it within microseconds. Asserted:
+-//! even the shortest of the twenty delays is over 4 ms.
++//! A sleeper and a spinner, in budgets of equal weight. The sleeper sleeps 300 µs, twenty times;
++//! each time it blocks, the spinner is picked and starts a 1 ms slice. The timeout should fall
++//! inside that slice, so the sleeper runs only after its end. The trace post-check establishes
++//! that event order; the shortest measured delay must also exceed 400 µs.
+ 
+ #![no_std]
+ #![no_main]
+@@ -14,8 +13,8 @@ use test_programs::rd;
+ use test_programs::sched::{Bench, Role};
+ 
+ /// The sleeper's nap, and the least delay after it that shows no preemption.
+-const NAP_US: u64 = 3_000;
+-const LEAST_US: u64 = 4_000;
++const NAP_US: u64 = 300;
++const LEAST_US: u64 = 400;
+ 
+ #[no_mangle]
+ pub extern "C" fn _start() -> ! {
+diff --git a/tests/programs/src/sched.rs b/tests/programs/src/sched.rs
+index 352655d63..6d52326bb 100644
+--- a/tests/programs/src/sched.rs
++++ b/tests/programs/src/sched.rs
+@@ -107,9 +107,9 @@ pub enum Role {
+     /// ahead, each round then counting for 1 ms; report the count.
+     DeadlineFlood = 19,
+     /// Sleep, so that what follows begins a slice; carve p0 of this budget's weight (slot 3) to an
+-    /// empty child, count until 9 ms after the wake, destroy the child so the weight comes back,
+-    /// then count until the window ends; report, first, the `time_now` (µs) the destruction
+-    /// returned at, then that last count.
++    /// empty child, count until nine tenths of a slice after the wake, then destroy it so the
++    /// weight comes back. Count until the window ends; report create and return offsets (µs),
++    /// `time_now` of the return, then that last count.
+     CarveSpin = 20,
+     /// The containment gate's hostile agent, run by the steward in a lease (kernel/README.md,
+     /// "Containment").
+@@ -124,6 +124,14 @@ pub enum Role {
+     Containment = 25,
+     /// The endpoint maker, run once in `users`.
+     EndpointMaker = 26,
++    /// Cluster fixture: one absolute release timeout, then ordinary spinning.
++    ClusterSpinner = 27,
++    /// Cluster fixture: spin across the spinners' common release.
++    ClusterServer = 28,
++    /// Cluster fixture: 200 goldfish RTC interrupt waits with fixed programmed offsets.
++    ClusterDriver = 29,
++    /// Cluster fixture: 200 timeout waits with the same programmed offsets.
++    ClusterTimer = 30,
+ }
+ 
+ impl Role {
+@@ -156,6 +164,10 @@ impl Role {
+             Bystander,
+             Containment,
+             EndpointMaker,
++            ClusterSpinner,
++            ClusterServer,
++            ClusterDriver,
++            ClusterTimer,
+         ]
+         .into_iter()
+         .find(|r| *r as u8 == x)
+@@ -353,6 +365,206 @@ fn await_done(n: usize) {
+ /// A child's entry: its role from the startup block.
+ pub extern "C" fn child(arg: usize) -> ! { run_child(arg, None) }
+ 
++/// The cluster fixture's one-thread-per-budget children. Each reports readiness before the next
++/// child is created, making its first W an isolated setup wake in the fixed start order.
++pub extern "C" fn cluster_child(arg: usize) -> ! {
++    IS_CHILD.store(true, SeqCst);
++    let role = Role::from_u8(spawn::startup_byte(arg, 0));
++    for (i, p) in PARAMS.iter().enumerate() {
++        p.store(word(arg, i) as usize, SeqCst);
++    }
++    report(0); // setup acknowledgement; consumed before the parent starts the next child
++    let (start, end) = window();
++    let tpu = tpu();
++    let release = start + 50_000 * tpu;
++    match role {
++        Some(Role::ClusterServer) => report(spin_until(end)),
++        Some(Role::ClusterSpinner) => {
++            let delay = release.saturating_sub(ticks()).div_ceil(tpu);
++            if delay == 0 || rd::receive(None, delay, 0) != Err(Error::Timeout) {
++                report(u64::MAX);
++            } else {
++                report(spin_until(end));
++            }
++        }
++        Some(Role::ClusterDriver | Role::ClusterTimer) => cluster_wakes(role.unwrap(), release, tpu),
++        _ => report(u64::MAX),
++    }
++    rd::process_exit(0)
++}
++
++/// One blocking wait per reported wake. Zero intent waits toward its nominal slot and phase;
++/// positive intent spins to the nominal slot, then arms a fresh relative wait for the phase.
++/// Neither path makes an extra preparatory wait, so W/sample order remains joinable.
++fn cluster_wakes(role: Role, release: u64, tpu: u64) {
++    const N: usize = 200;
++    const PHASES: [u64; 4] = [100, 300, 600, 850];
++    let base = if role == Role::ClusterDriver {
++        match rd::map_device(3) {
++            Ok((base, _)) => base,
++            Err(e) => {
++                cluster_failure(role, 0, 1, e as usize, release, ticks(), release, tpu, &[], &[]);
++                return;
++            }
++        }
++    } else {
++        0
++    };
++    let mut windows = [Window::default(); MAX_SAMPLES];
++    let mut metadata = [ClusterMeta::default(); MAX_SAMPLES];
++    let mut n = 0;
++    for i in 0..N {
++        let slot = release + i as u64 * 80_000 * tpu;
++        let target = slot + PHASES[i % 4] * tpu;
++        // Each phase has 25 zero and 25 positive intent rounds. The trace, not this intent,
++        // decides which samples qualify in either category.
++        let positive = i / 4 % 2 == 1;
++        if positive {
++            spin_until(slot);
++        }
++        let arming_ticks = ticks();
++        let delay = if positive { PHASES[i % 4] } else { target.saturating_sub(arming_ticks).div_ceil(tpu) };
++        if delay == 0 {
++            cluster_failure(role, i, 2, 0, target, ticks(), release, tpu, &windows[..n], &metadata[..n]);
++            return;
++        }
++        let prep_us = if arming_ticks >= slot {
++            ((arming_ticks - slot) / tpu) as i32
++        } else {
++            -(((slot - arming_ticks) / tpu) as i32)
++        };
++        let (sample_end, gross, arm, deadline, service, service_now_us) = if role == Role::ClusterDriver {
++            let arm = rtc::now_ns(base);
++            let deadline = arm + delay * 1_000;
++            rtc::alarm(base, deadline);
++            let received = rd::receive(Some(4), delay + 100_000, 0);
++            let end = rd::time_now().unwrap_or(0);
++            let service = rtc::now_ns(base);
++            // Bracket the RTC service on the kernel clock without assuming equal clock epochs.
++            let service_now_us = match rd::time_now() {
++                Ok(now) => now,
++                Err(e) => {
++                    cluster_failure(
++                        role,
++                        i,
++                        6,
++                        e as usize,
++                        target,
++                        ticks(),
++                        release,
++                        tpu,
++                        &windows[..n],
++                        &metadata[..n],
++                    );
++                    return;
++                }
++            };
++            let late = service.saturating_sub(deadline) / 1_000;
++            rtc::clear(base);
++            if !matches!(received, Ok(Received::Interrupt)) {
++                cluster_failure(
++                    role,
++                    i,
++                    3,
++                    cluster_result(received),
++                    target,
++                    ticks(),
++                    release,
++                    tpu,
++                    &windows[..n],
++                    &metadata[..n],
++                );
++                return;
++            }
++            (end, late, arm, deadline, service, service_now_us)
++        } else {
++            let arm = rd::time_now().unwrap_or(0);
++            let deadline = arm + delay;
++            let received = rd::receive(None, delay, 0);
++            let service = rd::time_now().unwrap_or(0);
++            if received != Err(Error::Timeout) {
++                cluster_failure(
++                    role,
++                    i,
++                    4,
++                    cluster_result(received),
++                    target,
++                    ticks(),
++                    release,
++                    tpu,
++                    &windows[..n],
++                    &metadata[..n],
++                );
++                return;
++            }
++            (service, service.saturating_sub(deadline), arm, deadline, service, service)
++        };
++        windows[n] = Window { end: sample_end, gross };
++        metadata[n] = ClusterMeta { prep_us, delay_us: delay, arm, deadline, service, service_now_us };
++        n += 1;
++    }
++    let tag = if role == Role::ClusterDriver { Stats::DRIVER_WAKE } else { Stats::TIMER_WAKE };
++    // Only these two empty zero-weight scopes are destroyed by the stand-ins. Their existing
++    // R10 X/Y records fence all 200 waits before any reporting send can block and wake again.
++    let marker = if role == Role::ClusterDriver { 5 } else { 3 };
++    if let Err(e) = rd::destroy(marker) {
++        cluster_failure(
++            role,
++            N,
++            5,
++            e as usize,
++            release + (199 * 80_000 + 850) * tpu,
++            ticks(),
++            release,
++            tpu,
++            &windows[..n],
++            &metadata[..n],
++        );
++        return;
++    }
++    report_windows(&windows[..n], tag);
++    hand_over_cluster(tag, &windows[..n], &metadata[..n]);
++}
++
++/// A failure report occupies the usual one-report slot. Its times are signed microseconds from
++/// the common release; the high bit in word 2 marks it as diagnostic, not a latency statistic.
++/// Branches are map error (1), zero delay (2), driver receive (3), timer receive (4),
++/// marker destruction (5), post-RTC-service clock read (6).
++/// Results are map errors' ABI codes, zero for delay, or receive variants 1..4 and errors
++/// 0x80 | ABI code. This path runs only after a failed attempt, outside valid sample windows.
++fn cluster_failure(
++    role: Role,
++    index: usize,
++    branch: usize,
++    result: usize,
++    target: u64,
++    now: u64,
++    release: u64,
++    tpu: u64,
++    windows: &[Window],
++    metadata: &[ClusterMeta],
++) {
++    let relative = |at: u64| -> usize {
++        let us = if at >= release { ((at - release) / tpu) as i32 } else { -(((release - at) / tpu) as i32) };
++        us as u32 as usize
++    };
++    let tag = if role == Role::ClusterDriver { Stats::DRIVER_WAKE } else { Stats::TIMER_WAKE };
++    let code = 0x8000_0000usize | (index << 16) | (branch << 8) | result;
++    let _ =
++        rd::send(1, &rd::body([relative(target), relative(now), code, tag | index << 8]), None, rd::FOREVER);
++    hand_over_cluster(tag, windows, metadata);
++}
++
++fn cluster_result(received: Result<Received, Error>) -> usize {
++    match received {
++        Ok(Received::Message(_)) => 1,
++        Ok(Received::Interrupt) => 2,
++        Ok(Received::Exit(_)) => 3,
++        Ok(Received::Abandoned(_)) => 4,
++        Err(e) => 0x80 | e as usize,
++    }
++}
++
+ /// The containment gate's children's entry: [`child`], with the gate's roles. Only the gate's
+ /// program names it, so no other case's image carries the gate's code (an image's size is in
+ /// every spawn a case measures).
+@@ -529,17 +741,21 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
+         }
+         Some(Role::BudgetChurn) => budget_churn(end, tpu),
+         Some(Role::CarveSpin) => {
+-            // The carve must begin a slice, and the count end 9 ms into it, the carve's own time
+-            // (about a millisecond) included, so that the destruction falls inside it: requeued at
++            // The carve must begin a slice, and the count end nine tenths into it, the carve's own
++            // time (about a millisecond) included, so that the destruction falls inside it: requeued at
+             // weight 1, this budget's pass would defer the destruction by seconds. A wake is picked
+-            // with a fresh slice; a sleep of a microsecond is over before it blocks.
++            // with a fresh slice; the one-millisecond timeout lets it block before that wake.
+             let _ = rd::receive(None, 1_000, 0);
+             let woke = ticks();
+             let child = rd::create(3, &rd::spec(0, 0, param(0) as u32)).expect("the carve");
+-            spin_until(woke + 9_000 * tpu);
++            let created = ticks();
++            spin_until(woke + (9 * SLICE_US / 10) * tpu);
+             rd::destroy(child).expect("the carve's return");
++            let returned_ticks = ticks();
+             let returned = rd::time_now().unwrap_or(0);
+             let n = spin_until(end);
++            report(created.saturating_sub(woke) / tpu);
++            report(returned_ticks.saturating_sub(woke) / tpu);
+             report(returned);
+             n
+         }
+@@ -738,6 +954,20 @@ struct Window {
+     gross: u64,
+ }
+ 
++/// Ordered cluster metadata, held until both stand-ins finish their measurements. Driver clock
++/// fields are goldfish RTC nanoseconds; timer clock fields are `time_now` microseconds.
++#[derive(Clone, Copy, Default)]
++struct ClusterMeta {
++    /// Arming preparation relative to the nominal slot, in signed microseconds.
++    prep_us: i32,
++    delay_us: u64,
++    arm: u64,
++    deadline: u64,
++    service: u64,
++    /// `time_now` at or after service; bounds RTC service on the measurement clock.
++    service_now_us: u64,
++}
++
+ /// After a stand-in's reports, once the launcher asks on slot 2 (when every measurement is over,
+ /// so the windows' messages perturb none): send each window, `[end, end, gross, tag]` (the end in
+ /// halves), then `[0; 4]`.
+@@ -752,6 +982,29 @@ fn hand_over(sets: &[(usize, &[Window])]) {
+     let _ = rd::send(1, &rd::body([0; 4]), None, rd::FOREVER);
+ }
+ 
++/// Cluster-only metadata and windows, after measurement and after the parent's explicit request.
++/// Four metadata messages then one trusted latency window per attempt, in original order.
++fn hand_over_cluster(tag: usize, windows: &[Window], metadata: &[ClusterMeta]) {
++    let _ = rd::receive(Some(2), rd::FOREVER, 0);
++    for (i, (w, meta)) in windows.iter().zip(metadata).enumerate() {
++        let [arm_lo, arm_hi] = halves(meta.arm);
++        let [deadline_lo, deadline_hi] = halves(meta.deadline);
++        let [service_lo, service_hi] = halves(meta.service);
++        let [service_now_lo, service_now_hi] = halves(meta.service_now_us);
++        let [end_lo, end_hi] = halves(w.end);
++        for words in [
++            [i, usize::from(i / 4 % 2 == 1), meta.prep_us as u32 as usize, 0xc1],
++            [arm_lo, arm_hi, deadline_lo, deadline_hi],
++            [service_lo, service_hi, meta.delay_us as usize, 0xc3],
++            [service_now_lo, service_now_hi, i, 0xc4],
++            [end_lo, end_hi, w.gross as usize, tag],
++        ] {
++            let _ = rd::send(1, &rd::body(words), None, rd::FOREVER);
++        }
++    }
++    let _ = rd::send(1, &rd::body([0; 4]), None, rd::FOREVER);
++}
++
+ /// Report the windows' lengths as the stats `tag`.
+ fn report_windows(windows: &[Window], tag: usize) {
+     let mut gross = [0u64; MAX_SAMPLES];
+@@ -1885,6 +2138,39 @@ impl Bench {
+         out
+     }
+ 
++    /// Cluster children each send one report. Wait for all distinct children, preserving counts
++    /// so a duplicate cannot hide a missing child's report or start diagnostics mid-window.
++    pub fn collect_cluster_words(&mut self, n: usize) -> ([[[usize; 4]; 4]; 64], [usize; 64]) {
++        let mut out = [[[0usize; 4]; 4]; 64];
++        let mut seen = [0usize; 64];
++        let mut distinct = 0;
++        while distinct < n {
++            let Ok(Received::Message(m)) = rd::receive(Some(self.rep), 60_000_000, 0) else { break };
++            let i = (m.badge as usize).saturating_sub(1);
++            if i < n {
++                if seen[i] == 0 {
++                    distinct += 1;
++                }
++                if seen[i] < 4 {
++                    out[i][seen[i]] = m.body.words;
++                }
++                seen[i] += 1;
++            }
++        }
++        // No sample handover has begun. Count any already queued extras as duplicate reports.
++        while let Ok(Received::Message(m)) = rd::receive(Some(self.rep), 0, 0) {
++            let i = (m.badge as usize).saturating_sub(1);
++            if i < n {
++                if seen[i] < 4 {
++                    out[i][seen[i]] = m.body.words;
++                }
++                seen[i] += 1;
++            }
++        }
++        while rd::receive(Some(self.exit), 0, 0).is_ok() {}
++        (out, seen)
++    }
++
+     /// Ask child `i`, a stand-in holding its samples, for them, once every report is collected,
+     /// and print each as `LATENCY-SAMPLE <group> <measure> <end> <gross>` (µs) for the bench's
+     /// post-check (`sched_oracle`), which judges the targets net of the checked build's audits.
+@@ -1920,6 +2206,67 @@ impl Bench {
+         }
+     }
+ 
++    /// Receive the cluster's ordered per-attempt metadata and trusted latency windows after all
++    /// measurement reports. The explicit index and intent make a shifted handover fail closed.
++    pub fn cluster_samples(&mut self, i: usize, count: usize, tag: usize) {
++        let Some(measure) = Stats::measure(tag) else {
++            self.check(false, format_args!("cluster child {i}: unknown sample tag {tag}"));
++            return;
++        };
++        if count > 200 {
++            self.check(false, format_args!("cluster child {i}: {count} samples exceed 200"));
++            return;
++        }
++        let _ = writeln!(Console, "LATENCY-COUNT cluster {measure} {count}");
++        let _ = rd::send(self.ask[i], &rd::body([0; 4]), None, rd::FOREVER);
++        for index in 0..count {
++            let Some(header) = self.cluster_word(i) else { return };
++            let Some(times) = self.cluster_word(i) else { return };
++            let Some(last) = self.cluster_word(i) else { return };
++            let Some(service_now) = self.cluster_word(i) else { return };
++            let Some(window) = self.cluster_word(i) else { return };
++            let intent = usize::from(index / 4 % 2 == 1);
++            let (arm, deadline, service) =
++                (join(times[0], times[1]), join(times[2], times[3]), join(last[0], last[1]));
++            let end = join(window[0], window[1]);
++            let service_now_us = join(service_now[0], service_now[1]);
++            if header[0] != index
++                || header[1] != intent
++                || header[3] != 0xc1
++                || last[3] != 0xc3
++                || service_now[2..] != [index, 0xc4]
++                || window[3] != tag
++                || deadline <= arm
++                || service < arm
++            {
++                self.check(false, format_args!("cluster {measure} sample {index}: malformed metadata"));
++                return;
++            }
++            let _ = writeln!(
++                Console,
++                "CLUSTER-SAMPLE {measure} {index} {intent} {} {} {arm} {deadline} {service} {} {} {service_now_us}",
++                index * 80_000,
++                header[2] as u32 as i32,
++                last[2],
++                if tag == Stats::DRIVER_WAKE { "rtc_ns" } else { "timer_us" },
++            );
++            let _ = writeln!(Console, "LATENCY-SAMPLE cluster {measure} {end} {}", window[2]);
++        }
++        if self.cluster_word(i) != Some([0; 4]) {
++            self.check(false, format_args!("cluster {measure}: missing handover terminator"));
++        }
++    }
++
++    fn cluster_word(&mut self, i: usize) -> Option<[usize; 4]> {
++        match rd::receive(Some(self.rep), 60_000_000, 0) {
++            Ok(Received::Message(m)) if m.badge as usize == i + 1 => Some(m.body.words),
++            _ => {
++                self.check(false, format_args!("cluster child {i}: a metadata word stopped or moved"));
++                None
++            }
++        }
++    }
++
+     /// Start children at `entry` rather than [`child`]: a case with roles of its own.
+     pub fn set_entry(&mut self, entry: extern "C" fn(usize) -> !) {
+         self.entry = entry as *const () as usize;
+diff --git a/tests/sched-carve-return.toml b/tests/sched-carve-return.toml
+index 435f1baf0..3ae919b6a 100644
+--- a/tests/sched-carve-return.toml
++++ b/tests/sched-carve-return.toml
+@@ -7,13 +7,14 @@ programs = ["sched-carve-return"]
+ # Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
+ # judges U's share from its carve's return, which the program prints with that window (`SHARE`),
+ # net of the audit time inside it (kernel/scheduling.md, "Responsiveness"). U sleeps before it
+-# carves, so the carve begins a slice, and runs until 9 ms into it, so the destruction falls inside
++# carves, so the carve begins a slice, and runs until 9/10 of it, so the destruction falls inside
+ # it: a slice ending first would requeue U at weight 1, whose pass defers the destruction past the
+ # window.
+ kernel_features = ["sched-trace"]
+-post_check = "sched_oracle"
++post_check = "sched_oracle carve_return"
+ timeout_secs = 600
+ expect = [
++    '^CARVE-OBS \d+ \d+ \d+$',
+     '^SHARE u-after-return \d+ \d+ \d+ 450 1000$',
+     '^SCHED-CARVE-RETURN TEST PASSED$',
+     '^SCHED-TRACE-END \d+ dropped 0$',
+diff --git a/tests/sched-wake-no-preempt.toml b/tests/sched-wake-no-preempt.toml
+index 41af02b3e..0ef020a0e 100644
+--- a/tests/sched-wake-no-preempt.toml
++++ b/tests/sched-wake-no-preempt.toml
+@@ -4,10 +4,13 @@ kind = "boot"
+ debug_assertions = true
+ icount = "shift=3,sleep=off"
+ programs = ["sched-wake-no-preempt"]
++kernel_features = ["sched-trace"]
++post_check = "sched_oracle wake_no_preempt=20"
+ timeout_secs = 120
+ expect = [
+     '^\[wake\] ok: a timeout mid-slice waited for the slice.s end',
+     '^SCHED-WAKE-NO-PREEMPT TEST PASSED$',
++    '^SCHED-TRACE-END \d+ dropped 0$',
+ ]
+ forbid = ['\[wake\] FAIL', 'PROGRAM HALT']
+ poweroff = true
+diff --git a/tools/testbench/Cargo.toml b/tools/testbench/Cargo.toml
+index 27eb5318a..d5cc4066d 100644
+--- a/tools/testbench/Cargo.toml
++++ b/tools/testbench/Cargo.toml
+@@ -18,6 +18,7 @@ libc = "0.2"                                                             # openp
+ redoubt-signing = { path = "../../libs/signing" }                        # the bundle signature's preimage
+ redoubt-blkd = { path = "../../servers/blkd" }                           # a case disk's GPT, written by blkd's own builder
+ redoubt-fsd = { path = "../../servers/fsd" }                             # a disk recipe's volumes, packed by fsd's own code
++redoubt-stride = { path = "../../libs/stride" }                         # cluster pass spread from the scheduler's stride unit
+ sha2 = { version = "0.11", default-features = false }                    # the userland disk's object names (userland.rs)
+ 
+ [dev-dependencies]
+diff --git a/tools/testbench/src/sched_oracle.rs b/tools/testbench/src/sched_oracle.rs
+index c668347a2..5d824ad43 100644
+--- a/tools/testbench/src/sched_oracle.rs
++++ b/tools/testbench/src/sched_oracle.rs
+@@ -67,7 +67,7 @@
+ //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
+ //! saw nothing proves nothing.
+ 
+-use std::collections::BTreeMap;
++use std::collections::{BTreeMap, BTreeSet};
+ 
+ /// One trace record.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -536,6 +536,682 @@ fn percentile(v: &mut [u64], q: usize) -> u64 {
+     v.get((v.len() * q).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0)
+ }
+ 
++/// Prove the timeout wake happened while the spinner's slice was still running. Timer `I` and
++/// `O` bracket the wake by record sequence, even when reconcile advances the entry number after
++/// `I`. A wake from a device IRQ has no timer `I`, so it cannot satisfy this check.
++fn check_wake_no_preempt(records: &[Record], expected: usize) -> Result<String, String> {
++    let mut intervals = Vec::new();
++    let mut begin = None;
++    for (i, r) in records.iter().enumerate() {
++        match r.kind {
++            'I' => {
++                if begin.replace(i).is_some() {
++                    return Err(format!("record {}: nested timer interval", r.seq));
++                }
++            }
++            'O' => {
++                let b = begin.take().ok_or_else(|| format!("record {}: unmatched timer return", r.seq))?;
++                intervals.push((b, i));
++            }
++            _ => {}
++        }
++    }
++    if begin.is_some() {
++        return Err("unended timer interval".into());
++    }
++    let mut proof = BTreeMap::<(u64, u64), usize>::new();
++    for (n, &(b, e)) in intervals.iter().enumerate() {
++        let interval = &records[b..=e];
++        let spinner = records[b].id;
++        if spinner == 0
++            || records[e].pass != 1
++            || !records[..b].iter().rposition(|r| r.kind == 'K').is_some_and(|k| records[k].id == spinner)
++            || interval.iter().any(|r| "KDXY".contains(r.kind))
++        {
++            continue;
++        }
++        let wakes: Vec<_> = interval.iter().filter(|r| r.kind == 'W').collect();
++        if wakes.len() != 1 || wakes[0].id == spinner {
++            continue;
++        }
++        let sleeper = wakes[0].id;
++        if !interval.iter().any(|r| r.kind == 'E' && r.id == sleeper && r.pass == 1) {
++            continue;
++        }
++        let Some(&(next_b, next_e)) = intervals.get(n + 1) else { continue };
++        if records[next_b].id != spinner || records[next_e].pass != 0 {
++            continue;
++        }
++        let ending = &records[next_b..=next_e];
++        if !ending.iter().any(|r| r.kind == 'R' && r.id == spinner)
++            || ending.iter().any(|r| "WDXY".contains(r.kind))
++            || !records[e + 1..next_b].iter().all(|r| r.kind != 'K' && r.kind != 'X')
++            || !records[next_e + 1..]
++                .iter()
++                .find(|r| r.kind == 'K' || r.kind == 'I')
++                .is_some_and(|r| r.kind == 'K')
++        {
++            continue;
++        }
++        *proof.entry((spinner, sleeper)).or_default() += 1;
++    }
++    let matches: Vec<_> = proof.iter().filter(|(_, count)| **count == expected).collect();
++    if matches.len() != 1 {
++        return Err(format!(
++            "wake-no-preempt: wanted one spinner/sleeper pair with {expected} I...W...O=1, later I...R...O=0 proofs; found {proof:?}"
++        ));
++    }
++    let (&(spinner, sleeper), &count) = matches[0];
++    Ok(format!(
++        "wake-no-preempt: {count} timeout wakes of budget {sleeper} continued spinner {spinner} to its slice end"
++    ))
++}
++
++/// The fixture fixes both the start order and the sample plan. This parser rejects missing or
++/// repeated setup acknowledgements and altered plans before any W is classified.
++fn cluster_plan(log: &str) -> Result<(u64, u64, u64), String> {
++    let mut ready = Vec::new();
++    let mut plan = 0;
++    let mut window = None;
++    let mut tpu = None;
++    for line in log.lines().map(|x| x.trim_end_matches('\r')) {
++        if let Some(n) = line.strip_prefix("CLUSTER-READY ") {
++            ready.push(n.parse::<usize>().map_err(|_| format!("bad {line:?}"))?);
++        } else if line == "CLUSTER-PLAN v2-relative 100 300 600 850 200 80000 50000" {
++            plan += 1;
++        } else if line.starts_with("CLUSTER-PLAN ") {
++            return Err(format!("unknown cluster plan version: {line:?}"));
++        } else if let Some(rest) = line.strip_prefix("CLUSTER-WINDOW ") {
++            let fields: Vec<_> = rest.split_whitespace().collect();
++            if fields.len() != 2 || window.is_some() {
++                return Err(format!("bad {line:?}"));
++            }
++            let parse = |s: &str| s.parse::<u64>().map_err(|_| format!("bad {line:?}"));
++            window = Some((parse(fields[0])?, parse(fields[1])?));
++        } else if let Some(rest) = line.strip_prefix("[cluster] calibrated: ") {
++            let Some(ticks) = rest.split_whitespace().next() else { return Err(format!("bad {line:?}")) };
++            if tpu.replace(ticks.parse::<u64>().map_err(|_| format!("bad {line:?}"))?).is_some() {
++                return Err("two cluster calibrations".into());
++            }
++        }
++    }
++    if ready != (0..19).collect::<Vec<_>>() || plan != 1 {
++        return Err(format!(
++            "cluster setup: ready {ready:?}, plans {plan}; expected 0..18 and one fixed plan"
++        ));
++    }
++    let (release, end) = window.ok_or("cluster window missing")?;
++    let tpu = tpu.ok_or("cluster timebase missing")?;
++    if tpu == 0 || release.checked_add(16_000_000) != Some(end) {
++        return Err(format!("cluster window {release}..{end} or timebase {tpu} invalid"));
++    }
++    Ok((release, end, tpu))
++}
++
++#[derive(Clone, Copy)]
++struct ClusterSample {
++    intent_positive: bool,
++    prep_us: i64,
++    arm: u64,
++    deadline: u64,
++    service: u64,
++    delay_us: u64,
++    service_now_us: u64,
++}
++
++/// Metadata is sent in original attempt order after measurement. The clock unit is explicit:
++/// goldfish RTC nanoseconds for the driver, `time_now` microseconds for the timer.
++fn cluster_metadata(log: &str) -> Result<[Vec<ClusterSample>; 2], String> {
++    let mut out = [Vec::new(), Vec::new()];
++    for line in log.lines().map(|x| x.trim_end_matches('\r')) {
++        let Some(rest) = line.strip_prefix("CLUSTER-SAMPLE ") else { continue };
++        let f: Vec<_> = rest.split_whitespace().collect();
++        let bad = || format!("malformed cluster metadata {line:?}");
++        if f.len() != 11 {
++            return Err(bad());
++        }
++        let (standin, unit) = match (f[0], f[9]) {
++            ("driver_wake", "rtc_ns") => (0, 1_000u64),
++            ("timer_wake", "timer_us") => (1, 1u64),
++            _ => return Err(bad()),
++        };
++        let num = |i: usize| f[i].parse::<u64>().map_err(|_| bad());
++        let index = num(1)? as usize;
++        let intent = num(2)?;
++        let slot = num(3)?;
++        let prep_us = f[4].parse::<i64>().map_err(|_| bad())?;
++        let (arm, deadline, service, delay_us, service_now_us) =
++            (num(5)?, num(6)?, num(7)?, num(8)?, num(10)?);
++        let expected_phase = [100, 300, 600, 850][index % 4];
++        if index != out[standin].len()
++            || index >= 200
++            || intent > 1
++            || (intent == 1) != (index / 4 % 2 == 1)
++            || slot != index as u64 * 80_000
++            || (intent == 1 && prep_us < 0)
++            || delay_us == 0
++            || (intent == 1 && delay_us != expected_phase)
++            || deadline != arm.checked_add(delay_us.checked_mul(unit).ok_or_else(bad)?).ok_or_else(bad)?
++            || service < deadline
++            || (standin == 1 && service_now_us != service)
++        {
++            return Err(format!("cluster metadata order/construction failure at {line:?}"));
++        }
++        out[standin].push(ClusterSample {
++            intent_positive: intent == 1,
++            prep_us,
++            arm,
++            deadline,
++            service,
++            delay_us,
++            service_now_us,
++        });
++    }
++    if out.iter().any(|samples| samples.len() != 200) {
++        return Err(format!("cluster metadata counts {:?}, expected 200 per stand-in", out.map(|v| v.len())));
++    }
++    Ok(out)
++}
++
++/// Prove both ends of each sample on the fixed `time_now` measurement clock. The RTC has a
++/// separate epoch: its service-deadline difference is a duration, never an absolute timestamp.
++/// The existing `sample_end` precedes the RTC service read, so subtracting the rounded-up RTC
++/// duration gives a conservative lower bound on the deadline. A later `time_now` brackets service.
++fn cluster_window_bounds(
++    standin: usize,
++    release: u64,
++    end: u64,
++    sample_end: u64,
++    gross: u64,
++    meta: ClusterSample,
++) -> Result<u64, &'static str> {
++    let bad = || "window outside measurement";
++    let sample_start = sample_end.checked_sub(gross).ok_or_else(bad)?;
++    if sample_end > end {
++        return Err(bad());
++    }
++    let deadline_lower = if standin == 0 {
++        if meta.service < meta.deadline || meta.service_now_us < sample_end || meta.service_now_us > end {
++            return Err(bad());
++        }
++        let rtc_duration_ns = meta.service.checked_sub(meta.deadline).ok_or_else(bad)?;
++        sample_end.checked_sub(rtc_duration_ns.div_ceil(1_000)).ok_or_else(bad)?
++    } else {
++        if meta.service_now_us != meta.service || sample_end != meta.service || meta.service > end {
++            return Err(bad());
++        }
++        meta.deadline
++    };
++    if deadline_lower < release || sample_start < release {
++        return Err(bad());
++    }
++    Ok(sample_start)
++}
++
++/// A report boundary must be identified independently of the wake count. Inside it, each one-
++/// thread stand-in has one D, then one W and a service K for every reported attempt. A report
++/// wake after the boundary therefore cannot replace a missing or immediate measurement wake.
++fn cluster_waits_before(
++    records: &[Record],
++    id: u64,
++    after_go: usize,
++    before_report: usize,
++) -> Result<Vec<usize>, String> {
++    let events: Vec<_> = records[after_go + 1..before_report]
++        .iter()
++        .enumerate()
++        .filter_map(|(offset, r)| {
++            (r.id == id && (r.kind == 'D' || r.kind == 'W')).then_some((after_go + 1 + offset, r.kind))
++        })
++        .collect();
++    if events.len() != 400 {
++        return Err(format!(
++            "cluster budget {id}: {} D/W events before report boundary, expected 400",
++            events.len()
++        ));
++    }
++    let mut wakes = Vec::with_capacity(200);
++    for (index, pair) in events.chunks_exact(2).enumerate() {
++        if pair[0].1 != 'D' || pair[1].1 != 'W' {
++            return Err(format!("cluster budget {id} sample {index}: no single D...W blocked wait"));
++        }
++        let after_w = events.get(index * 2 + 2).map_or(before_report, |next| next.0);
++        if !records[pair[1].0 + 1..after_w].iter().any(|r| r.kind == 'K' && r.id == id) {
++            return Err(format!("cluster budget {id} sample {index}: no service K before next wait"));
++        }
++        wakes.push(pair[1].0);
++    }
++    Ok(wakes)
++}
++
++#[derive(Clone, Copy)]
++struct ClusterFence {
++    x: usize,
++    y: usize,
++    marker_id: u64,
++}
++
++/// Only the stand-ins destroy a budget after go. An empty marker has no W, so its handle and
++/// budget ID cannot be equated: the most recent K at X identifies the running one-thread caller.
++/// Require exactly one distinct, paired X/Y per caller and no deschedule after that K.
++fn cluster_fences(
++    records: &[Record],
++    standins: [u64; 2],
++    go_w: [usize; 2],
++) -> Result<[ClusterFence; 2], String> {
++    let after_go = go_w[0].max(go_w[1]);
++    let mut last_k = records[..=after_go].iter().rposition(|r| r.kind == 'K');
++    let mut fences = [None, None];
++    let mut n = 0;
++    for (i, r) in records.iter().enumerate().skip(after_go + 1) {
++        if r.kind == 'K' {
++            last_k = Some(i);
++        }
++        if r.kind != 'X' {
++            continue;
++        }
++        n += 1;
++        let k = last_k.ok_or_else(|| format!("cluster marker X {} has no caller K", r.seq))?;
++        let caller = records[k].id;
++        let standin = standins.iter().position(|id| *id == caller).ok_or_else(|| {
++            format!("cluster marker X {} was called by budget {caller}, not a stand-in", r.seq)
++        })?;
++        if fences[standin].is_some()
++            || records[k + 1..i]
++                .iter()
++                .any(|event| event.id == caller && (event.kind == 'R' || event.kind == 'D'))
++        {
++            return Err(format!("cluster marker X {} has duplicate or descheduled caller {caller}", r.seq));
++        }
++        let y = records[i + 1..]
++            .iter()
++            .position(|event| event.kind == 'Y')
++            .map(|at| i + 1 + at)
++            .ok_or_else(|| format!("cluster marker X {} has no Y", r.seq))?;
++        if records[y].id != r.id
++            || records[y].pass < r.pass
++            || records[i + 1..y].iter().any(|event| event.kind == 'X')
++        {
++            return Err(format!("cluster marker X {} has no unique matching Y", r.seq));
++        }
++        fences[standin] = Some(ClusterFence { x: i, y, marker_id: r.id });
++    }
++    let [Some(driver), Some(timer)] = fences else {
++        return Err(format!("cluster marker fences: found {n} X, expected one per stand-in"));
++    };
++    if n != 2 || driver.marker_id == timer.marker_id {
++        return Err(format!("cluster marker fences: found {n} X or repeated marker ID"));
++    }
++    Ok([driver, timer])
++}
++
++/// Check the actual common release and classify all stand-in wakes using independently replayed
++/// ranks. The last 19 *first* budget wakes must belong to the 19 serially started, acknowledged
++/// one-thread children; no numeric budget-id assumption enters the mapping. A child must first
++/// be picked before the next child's first W, matching the readiness handshake.
++fn check_cluster(
++    log: &str,
++    records: &[Record],
++    samples: &BTreeMap<(usize, &str), Vec<(u64, u64)>>,
++    audits: &[(u64, u64)],
++) -> Result<String, String> {
++    let (release, end, tpu) = cluster_plan(log)?;
++    let metadata = cluster_metadata(log)?;
++    let mut first = Vec::new();
++    let mut seen = BTreeSet::new();
++    for (i, r) in records.iter().enumerate() {
++        if r.kind == 'W' && seen.insert(r.id) {
++            first.push((i, r.id));
++        }
++    }
++    let map_start = first.len().checked_sub(19).ok_or("fewer than 19 first budget wakes")?;
++    let mapped = &first[map_start..];
++    let mut go_w = [0usize; 2];
++    for pair in mapped.windows(2) {
++        let ((at, id), (next, _)) = (pair[0], pair[1]);
++        if !records[at + 1..next].iter().any(|r| r.kind == 'K' && r.id == id) {
++            return Err(format!(
++                "cluster budget {id} first W at {} lacked an isolated pick",
++                records[at].seq
++            ));
++        }
++    }
++    for (child, &(first_w, id)) in mapped.iter().enumerate() {
++        let second_w = records[first_w + 1..]
++            .iter()
++            .position(|r| r.kind == 'W' && r.id == id)
++            .map(|n| first_w + 1 + n)
++            .ok_or_else(|| format!("cluster budget {id} had no go wake"))?;
++        if !records[first_w + 1..second_w].iter().any(|r| r.kind == 'D' && r.id == id) {
++            return Err(format!("cluster budget {id} did not block between spawn and go W"));
++        }
++        if child >= 17 {
++            go_w[child - 17] = second_w;
++        }
++    }
++    let server = mapped[0].1;
++    let spinners: BTreeSet<u64> = mapped[1..=16].iter().map(|(_, id)| *id).collect();
++    let standins = [mapped[17].1, mapped[18].1];
++    if spinners.len() != 16 || standins[0] == standins[1] {
++        return Err("cluster setup budget mapping is ambiguous".into());
++    }
++    let fences = cluster_fences(records, standins, go_w)?;
++    let measurement_wakes = [
++        cluster_waits_before(records, standins[0], go_w[0], fences[0].x)?,
++        cluster_waits_before(records, standins[1], go_w[1], fences[1].x)?,
++    ];
++    let mut queues: BTreeMap<u64, (u128, Key)> = BTreeMap::new();
++    let mut floor = 0u128;
++    let mut requeues = 0i128;
++    let mut released = None;
++    let mut clustered = BTreeSet::new();
++    let mut first_cluster_w = None;
++    let mut wake_counts = BTreeMap::<u64, usize>::new();
++    let mut wakes = [Vec::new(), Vec::new()];
++    let mut witnesses: [Vec<(u128, u128, usize, Option<bool>)>; 2] = [Vec::new(), Vec::new()];
++    let mut categories = [[0usize; 4]; 4]; // driver zero/positive, timer zero/positive
++    let mut pick_positions: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
++    let spread_limit = (u128::from(100 * tpu) * u128::from(redoubt_stride::STRIDE)).div_ceil(100);
++    let mut spread = 0u128;
++    for (i, r) in records.iter().enumerate() {
++        if r.kind == 'W' {
++            let ordinal = wake_counts.entry(r.id).and_modify(|n| *n += 1).or_insert(1);
++            // First W: spawn; second W: the parent's one go message; third W: the common
++            // timeout release. Later reporting can itself block and wake after measurement.
++            if spinners.contains(&r.id) {
++                if *ordinal == 3 {
++                    first_cluster_w.get_or_insert(i);
++                    clustered.insert(r.id);
++                } else if *ordinal > 3 && released.is_none() {
++                    return Err(format!(
++                        "cluster spinner {} woke again before the release pick at record {}",
++                        r.id, r.seq
++                    ));
++                }
++            }
++            if let Some(standin) = standins.iter().position(|id| *id == r.id) {
++                if i > go_w[standin] && i < fences[standin].x {
++                    let sample_index = wakes[standin].len();
++                    if measurement_wakes[standin].get(sample_index) != Some(&i) {
++                        return Err(format!(
++                            "cluster stand-in {} W {} did not join a bounded sample before marker X",
++                            r.id, r.seq
++                        ));
++                    }
++                    let phase = sample_index % 4;
++                    let intended_positive = metadata[standin][sample_index].intent_positive;
++                    let lead = r.pass.saturating_sub(floor);
++                    let key = (0, -i128::from(r.entry));
++                    let ahead = spinners
++                        .iter()
++                        .filter(|id| {
++                            queues
++                                .get(id)
++                                .is_some_and(|&(pass, rank)| (pass, rank, **id) < (r.pass, key, r.id))
++                        })
++                        .count();
++                    let qualified = if intended_positive && lead > 0 && ahead >= 8 {
++                        Some(true)
++                    } else if !intended_positive && lead == 0 {
++                        Some(false)
++                    } else {
++                        None
++                    };
++                    if let Some(positive) = qualified {
++                        categories[standin * 2 + usize::from(positive)][phase] += 1;
++                    }
++                    witnesses[standin].push((floor, lead, ahead, qualified));
++                    wakes[standin].push(i);
++                }
++            }
++        }
++        match r.kind {
++            'W' => {
++                queues.insert(r.id, (r.pass, (0, -i128::from(r.entry))));
++            }
++            'R' => {
++                requeues += 1;
++                queues.insert(r.id, (r.pass, (1, requeues)));
++            }
++            'D' => {
++                queues.remove(&r.id);
++            }
++            'P' => {
++                if let Some(q) = queues.get_mut(&r.id) {
++                    q.0 = r.pass;
++                }
++            }
++            'K' => {
++                pick_positions.entry(r.id).or_default().push(i);
++                if released.is_none() && !clustered.is_empty() {
++                    if clustered.len() != 16 || !spinners.iter().all(|id| queues.contains_key(id)) {
++                        return Err(format!(
++                            "cluster release: only {} spinner W before next K {}",
++                            clustered.len(),
++                            r.seq
++                        ));
++                    }
++                    let low = spinners.iter().map(|id| queues[id].0).min().unwrap();
++                    let high = spinners.iter().map(|id| queues[id].0).max().unwrap();
++                    spread = high - low;
++                    if spread > spread_limit {
++                        return Err(format!(
++                            "cluster pass spread {spread:#x} exceeds 100 us equivalent {spread_limit:#x}"
++                        ));
++                    }
++                    released = Some(i);
++                }
++            }
++            _ => {}
++        }
++        let waking = r.kind == 'W' || (r.kind == 'P' && !queues.contains_key(&r.id));
++        if !waking {
++            if let Some(min) = queues.values().map(|(pass, _)| *pass).min() {
++                floor = floor.max(min);
++            }
++        }
++    }
++    let release_at = released.ok_or("cluster release had no qualifying sixteen-W interval")?;
++    if wake_counts.get(&server).is_none_or(|n| *n < 2)
++        || !spinners.iter().all(|id| wake_counts.get(id).is_some_and(|n| *n >= 3))
++        || standins.iter().any(|id| wake_counts.get(id).is_none_or(|n| *n < 202))
++    {
++        return Err(format!(
++            "cluster setup/sample W counts lack one spawn, one go and 200 bounded waits: server {:?}, spinners {:?}, stand-ins {:?}",
++            wake_counts.get(&server),
++            spinners.iter().map(|id| wake_counts.get(id)).collect::<Vec<_>>(),
++            standins.map(|id| wake_counts.get(&id))
++        ));
++    }
++    let first_release = first_cluster_w.ok_or("cluster release lacked a spinner W")?;
++    let last_release = records[..release_at]
++        .iter()
++        .rposition(|r| r.kind == 'W' && spinners.contains(&r.id))
++        .ok_or("cluster release lacked its last spinner W")?;
++    let last_pick =
++        records[..first_release].iter().rposition(|r| r.kind == 'K').ok_or("no pick before release")?;
++    if records[last_pick].id != server {
++        return Err(format!(
++            "busy server {} was not running across release; last pick was {}",
++            server, records[last_pick].id
++        ));
++    }
++    let mut lines = Vec::new();
++    for (standin, measure) in ["driver_wake", "timer_wake"].iter().enumerate() {
++        let windows =
++            samples.get(&(standin, "cluster")).ok_or(format!("cluster {measure} windows missing"))?;
++        if windows.len() != 200 || wakes[standin].len() != 200 {
++            return Err(format!(
++                "cluster {measure}: {} windows and {} bounded measurement W, expected exactly 200 each",
++                windows.len(),
++                wakes[standin].len()
++            ));
++        }
++        let mut picks = 0usize;
++        let mut peer_r10_overlap_us = 0u64;
++        let mut net = Vec::new();
++        let mut category_net = [Vec::new(), Vec::new()];
++        let mut details = Vec::new();
++        for (sample_index, (&w, &(sample_end, gross))) in
++            wakes[standin][..200].iter().zip(windows).enumerate()
++        {
++            let meta = metadata[standin][sample_index];
++            let unit = if standin == 0 { 1_000 } else { 1 };
++            if meta.service.checked_sub(meta.deadline).is_none_or(|duration| gross != duration / unit)
++                || (standin == 1 && sample_end != meta.service)
++            {
++                return Err(format!(
++                    "cluster {measure} sample {sample_index}: trusted window and metadata disagree"
++                ));
++            }
++            let next = wakes[standin].get(sample_index + 1).copied().unwrap_or(fences[standin].x);
++            let service =
++                pick_positions[&standins[standin]].iter().copied().find(|&k| k > w && k < next).ok_or_else(
++                    || {
++                        format!(
++                            "cluster {measure} sample {sample_index}: no unique service K after W {}",
++                            records[w].seq
++                        )
++                    },
++                )?;
++            let earlier = records[w + 1..service].iter().filter(|r| r.kind == 'K').count();
++            picks += earlier;
++            let sample_start = cluster_window_bounds(standin, release, end, sample_end, gross, meta)
++                .map_err(|e| format!("cluster {measure} sample {sample_index}: {e}"))?;
++            let peer = fences[1 - standin];
++            let peer_begin = records[peer.x].pass as u64;
++            let peer_end = records[peer.y].pass as u64;
++            let overlap = sample_end.min(peer_end).saturating_sub(sample_start.max(peer_begin));
++            peer_r10_overlap_us += overlap;
++            let elapsed = gross.saturating_sub(audit_inside(audits, sample_start, sample_end));
++            net.push(elapsed);
++            let (floor, lead, ahead, qualified) = witnesses[standin][sample_index];
++            if let Some(positive) = qualified {
++                category_net[usize::from(positive)].push(elapsed);
++                details.push(format!(
++                    "{measure} #{sample_index} programmed-offset {} {} prep-slip {} µs armed {}/deadline {}/service {} delay {} {} W {} floor {floor:#x} lead {lead:#x} ahead {ahead} earlier-picks {earlier} peer-R10-overlap {overlap} gross/net {gross}/{elapsed} µs",
++                    [100, 300, 600, 850][sample_index % 4],
++                    if positive { "positive" } else { "zero" },
++                    meta.prep_us,
++                    meta.arm,
++                    meta.deadline,
++                    meta.service,
++                    meta.delay_us,
++                    if standin == 0 { "rtc_ns" } else { "timer_us" },
++                    records[w].seq
++                ));
++            }
++        }
++        for category in 0..2 {
++            let counts = categories[standin * 2 + category];
++            let total: usize = counts.iter().sum();
++            if total < 25 || counts.iter().any(|n| *n < 5) {
++                return Err(format!(
++                    "cluster {measure} {}-lead coverage {counts:?}, total {total}, needs >=25 and >=5 per offset",
++                    if category == 0 { "zero" } else { "positive" }
++                ));
++            }
++        }
++        let (p50, p99) = (percentile(&mut net.clone(), 50), percentile(&mut net, 99));
++        let zero = category_net[0].len();
++        let positive = category_net[1].len();
++        let (z50, z99) = (percentile(&mut category_net[0].clone(), 50), percentile(&mut category_net[0], 99));
++        let (p50_cat, p99_cat) =
++            (percentile(&mut category_net[1].clone(), 50), percentile(&mut category_net[1], 99));
++        lines.push(format!(
++            "{measure}: 200 fenced D-W-service/sample windows, {} later report wakes, marker {} X {} Y {} duration {} µs, peer R10 overlap {peer_r10_overlap_us} µs retained; {zero} zero and {positive} positive, {picks} earlier picks before service; all net p50/p99 {p50}/{p99} µs; zero {z50}/{z99}; positive {p50_cat}/{p99_cat}\n      {}",
++            wake_counts[&standins[standin]] - 202,
++            fences[standin].marker_id,
++            records[fences[standin].x].seq,
++            records[fences[standin].y].seq,
++            records[fences[standin].y].pass - records[fences[standin].x].pass,
++            details.join("\n      ")
++        ));
++    }
++    Ok(format!(
++        "cluster: 16 queued spinner W before K {}, W entries {}..{}, sequences {}..{}, spread {spread:#x} <= {spread_limit:#x}; {}",
++        records[release_at].seq,
++        records[first_release].entry,
++        records[last_release].entry,
++        records[first_release].seq,
++        records[last_release].seq,
++        lines.join("; ")
++    ))
++}
++
++/// The 999/1000 carve must return while the same parent is still in the turn picked before the
++/// down-weight. `G` carries both weights and the parent's low-weight lead before the up-weight;
++/// the ordinary oracle independently checks both reweigh calculations and the later share.
++fn check_carve_return(log: &str, records: &[Record]) -> Result<String, String> {
++    let observations: Vec<_> = log.lines().filter_map(|line| line.strip_prefix("CARVE-OBS ")).collect();
++    let [observation] = observations.as_slice() else {
++        return Err(format!("carve-return: expected one observation, found {}", observations.len()));
++    };
++    let fields: Vec<_> = observation.split_whitespace().collect();
++    if fields.len() != 3 {
++        return Err(format!("carve-return: malformed observation {observation:?}"));
++    }
++    let mut numbers = fields.iter().map(|s| s.parse::<u64>());
++    let (create, returned, absolute) = (
++        numbers.next().unwrap().map_err(|_| "bad carve create duration")?,
++        numbers.next().unwrap().map_err(|_| "bad carve return duration")?,
++        numbers.next().unwrap().map_err(|_| "bad carve return time")?,
++    );
++    if create == 0 || returned < create || absolute == 0 {
++        return Err(format!("carve-return: invalid create {create} or return {returned} µs"));
++    }
++    let changes: Vec<_> = records
++        .iter()
++        .enumerate()
++        .filter_map(|(i, r)| {
++            if r.kind != 'G' {
++                return None;
++            }
++            let packed = records.get(i + 2)?.pass;
++            Some((i, r.id, packed >> 32, packed & 0xffff_ffff, records.get(i + 3)?.pass, r.pass))
++        })
++        .collect();
++    let downs: Vec<_> = changes.iter().filter(|(_, _, old, new, _, _)| (*old, *new) == (1000, 1)).collect();
++    let ups: Vec<_> = changes.iter().filter(|(_, _, old, new, _, _)| (*old, *new) == (1, 1000)).collect();
++    let ([down], [up]) = (downs.as_slice(), ups.as_slice()) else {
++        return Err(format!(
++            "carve-return: expected one 1000->1 and one 1->1000 change, found {}/{}",
++            downs.len(),
++            ups.len()
++        ));
++    };
++    let (start, parent) = (down.0, down.1);
++    let (finish, low_pass, floor) = (up.0, up.5, up.4);
++    if up.1 != parent || finish <= start || low_pass <= floor {
++        return Err(format!(
++            "carve-return: parent {parent} lacked positive low-weight lead ({low_pass:#x} vs floor {floor:#x})"
++        ));
++    }
++    let pick = records[..start]
++        .iter()
++        .rposition(|r| r.kind == 'K')
++        .ok_or("carve-return: no pick before the down-weight")?;
++    if records[pick].id != parent {
++        return Err(format!(
++            "carve-return: last pick before carve was budget {}, not parent {parent}",
++            records[pick].id
++        ));
++    }
++    if let Some(r) = records[pick + 1..finish].iter().find(|r| {
++        r.kind == 'K' || (r.id == parent && "RD".contains(r.kind)) || (r.kind == 'O' && r.pass == 0)
++    }) {
++        return Err(format!(
++            "carve-return: parent {parent} lost its running turn at record {} ({})",
++            r.seq, r.kind
++        ));
++    }
++    Ok(format!(
++        "carve-return: parent {parent} K {} through 1000->1 and 1->1000 with low-weight lead {:#x}; create {create} µs, return {returned} µs after wake at time_now {absolute}",
++        records[pick].seq,
++        low_pass - floor
++    ))
++}
++
+ /// The audit time inside `[from, to]`, µs: the part of each audit's span that falls in it, so an
+ /// audit straddling an edge counts only its inside. `audits` is in trace order, so by time.
+ pub fn audit_inside(audits: &[(u64, u64)], from: u64, to: u64) -> u64 {
+@@ -644,11 +1320,32 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
+     // Each bound, by its argument's name.
+     let mut bounds = BTreeMap::new();
+     let mut stale_in = Vec::new();
++    let mut wake_no_preempt = None;
++    let mut cluster = false;
++    let mut carve_return = false;
+     for arg in args.split_whitespace() {
++        if arg == "cluster" {
++            if cluster {
++                return Err("duplicate cluster check".into());
++            }
++            cluster = true;
++            continue;
++        }
++        if arg == "carve_return" {
++            if carve_return {
++                return Err("duplicate carve-return check".into());
++            }
++            carve_return = true;
++            continue;
++        }
+         if let Some(share) = arg.strip_prefix("stale_waits_in=") {
+             stale_in.push(share);
+             continue;
+         }
++        if let Some(count) = arg.strip_prefix("wake_no_preempt=") {
++            wake_no_preempt = Some(count.parse::<usize>().map_err(|_| format!("bad wake count {arg:?}"))?);
++            continue;
++        }
+         let (name, bound) = arg
+             .split_once('=')
+             .and_then(|(name, v)| Some((name, v.parse::<u64>().ok()?)))
+@@ -663,6 +1360,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
+         }
+         bounds.insert(name, bound);
+     }
++    let wake_proof = wake_no_preempt.map(|count| check_wake_no_preempt(&records, count)).transpose()?;
++    let cluster_proof = cluster.then(|| check_cluster(log, &records, &samples, &sum.audits)).transpose()?;
++    let carve_proof = carve_return.then(|| check_carve_return(log, &records)).transpose()?;
+     // Each walk net of the audits inside it, as a release kernel runs it; a walk's bound is
+     // judged before R10's, so a case whose R10 must fail still holds its walks.
+     let walks: Vec<(Vec<u64>, u64)> = sum
+@@ -780,6 +1480,15 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
+         sum.timer_empty.len()
+     );
+     let mut report = Vec::new();
++    if let Some(proof) = wake_proof {
++        report.push(proof);
++    }
++    if let Some(proof) = cluster_proof {
++        report.push(proof);
++    }
++    if let Some(proof) = carve_proof {
++        report.push(proof);
++    }
+     for (name, (net, audits)) in WALKS.iter().zip(walks) {
+         let mut net = net;
+         if net.is_empty() {
+@@ -808,6 +1517,347 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn cluster_plan_rejects_the_old_construction() {
++        let mut setup = String::from("[cluster] calibrated: 10 ticks/us, 1 iterations/ms\n");
++        for i in 0..19 {
++            setup.push_str(&format!("CLUSTER-READY {i}\n"));
++        }
++        setup.push_str("CLUSTER-WINDOW 1000000 17000000\n");
++        let new = format!("{setup}CLUSTER-PLAN v2-relative 100 300 600 850 200 80000 50000\n");
++        assert!(cluster_plan(&new).is_ok());
++        let old = format!("{setup}CLUSTER-PLAN 100 300 600 850 200 80000 50000\n");
++        assert!(cluster_plan(&old).is_err());
++        assert!(
++            cluster_plan(&(new.clone() + "CLUSTER-PLAN v2-relative 100 300 600 850 200 80000 50000\n"))
++                .is_err()
++        );
++    }
++
++    #[test]
++    fn cluster_metadata_rejects_missing_reordered_and_immediate_attempts() {
++        let mut lines = Vec::new();
++        for (measure, unit, clock) in [("driver_wake", 1_000u64, "rtc_ns"), ("timer_wake", 1, "timer_us")] {
++            for i in 0..200 {
++                let phase = [100, 300, 600, 850][i % 4];
++                let intent = usize::from(i / 4 % 2 == 1);
++                let arm = 100_000_000 + i as u64 * 80_000 * unit;
++                let deadline = arm + phase * unit;
++                lines.push(format!(
++                    "CLUSTER-SAMPLE {measure} {i} {intent} {} 0 {arm} {deadline} {} {phase} {clock} {}",
++                    i * 80_000,
++                    deadline + 10 * unit,
++                    if unit == 1 { deadline + 10 * unit } else { 100_000 + i as u64 * 80_000 + phase + 10 }
++                ));
++            }
++        }
++        let joined = |v: &[String]| v.join("\n");
++        assert!(cluster_metadata(&joined(&lines)).is_ok());
++        let mut equal_rtc_service = lines.clone();
++        let mut fields: Vec<String> = equal_rtc_service[0].split_whitespace().map(str::to_owned).collect();
++        fields[8] = fields[7].clone();
++        equal_rtc_service[0] = fields.join(" ");
++        assert!(cluster_metadata(&joined(&equal_rtc_service)).is_ok());
++        let mut early_rtc_service = equal_rtc_service.clone();
++        fields[8] = (fields[7].parse::<u64>().unwrap() - 1).to_string();
++        early_rtc_service[0] = fields.join(" ");
++        assert!(cluster_metadata(&joined(&early_rtc_service)).is_err());
++        let mut missing = lines.clone();
++        missing.remove(4);
++        assert!(cluster_metadata(&joined(&missing)).is_err());
++        let mut reordered = lines.clone();
++        reordered.swap(4, 5);
++        assert!(cluster_metadata(&joined(&reordered)).is_err());
++        let mut immediate = lines.clone();
++        immediate[4] = immediate[4].replace(" 100 ", " 0 ");
++        assert!(cluster_metadata(&joined(&immediate)).is_err());
++        let mut no_service_clock = lines.clone();
++        no_service_clock[0] = no_service_clock[0].rsplit_once(' ').unwrap().0.to_string();
++        assert!(cluster_metadata(&joined(&no_service_clock)).is_err());
++        let mut duplicate = lines.clone();
++        duplicate.insert(1, duplicate[0].clone());
++        assert!(cluster_metadata(&joined(&duplicate)).is_err());
++        let mut mismatched_timer_clock = lines.clone();
++        mismatched_timer_clock[200].push('1');
++        assert!(cluster_metadata(&joined(&mismatched_timer_clock)).is_err());
++    }
++
++    #[test]
++    fn cluster_window_rejects_pre_release_and_late_service_on_both_clocks() {
++        let release = 1_000_000;
++        let end = 17_000_000;
++        let rtc = ClusterSample {
++            intent_positive: false,
++            prep_us: 0,
++            arm: 50_000_000_000,
++            deadline: 50_000_010_000,
++            service: 50_000_020_000,
++            delay_us: 10,
++            service_now_us: release + 21,
++        };
++        assert!(cluster_window_bounds(0, release, end, release + 20, 10, rtc).is_ok());
++        // RTC timestamps are deliberately far from the time_now epoch. The rounded duration,
++        // not an absolute RTC timestamp, establishes the conservative deadline lower bound.
++        assert_eq!(
++            cluster_window_bounds(
++                0,
++                release,
++                end,
++                release + 5,
++                10,
++                ClusterSample { service_now_us: release + 6, ..rtc }
++            ),
++            Err("window outside measurement")
++        );
++        // A floored gross of zero would admit this at release; ceiling preserves the one-ns
++        // uncertainty and rejects the unproved deadline.
++        assert_eq!(
++            cluster_window_bounds(
++                0,
++                release,
++                end,
++                release,
++                0,
++                ClusterSample { service: rtc.deadline + 1, service_now_us: release + 1, ..rtc }
++            ),
++            Err("window outside measurement")
++        );
++        // Integer-microsecond equality is valid at both the service bracket and fixed end.
++        assert!(
++            cluster_window_bounds(
++                0,
++                release,
++                end,
++                release + 20,
++                10,
++                ClusterSample { service_now_us: release + 20, ..rtc }
++            )
++            .is_ok()
++        );
++        assert!(
++            cluster_window_bounds(
++                0,
++                release,
++                end,
++                release + 20,
++                10,
++                ClusterSample { service_now_us: end, ..rtc }
++            )
++            .is_ok()
++        );
++        assert!(
++            cluster_window_bounds(
++                0,
++                release,
++                end,
++                release + 20,
++                0,
++                ClusterSample { service: rtc.deadline, ..rtc }
++            )
++            .is_ok()
++        );
++        assert_eq!(
++            cluster_window_bounds(
++                0,
++                release,
++                end,
++                release + 20,
++                10,
++                ClusterSample { service_now_us: release + 19, ..rtc }
++            ),
++            Err("window outside measurement")
++        );
++        assert_eq!(
++            cluster_window_bounds(
++                0,
++                release,
++                end,
++                release + 20,
++                0,
++                ClusterSample { service: rtc.deadline - 1, ..rtc }
++            ),
++            Err("window outside measurement")
++        );
++        assert_eq!(
++            cluster_window_bounds(
++                0,
++                release,
++                end,
++                end - 5,
++                10,
++                ClusterSample { service_now_us: end + 1, ..rtc }
++            ),
++            Err("window outside measurement")
++        );
++        let timer = ClusterSample {
++            arm: release,
++            deadline: release + 10,
++            service: release + 20,
++            service_now_us: release + 20,
++            ..rtc
++        };
++        assert!(cluster_window_bounds(1, release, end, release + 20, 10, timer).is_ok());
++        assert!(
++            cluster_window_bounds(
++                1,
++                release,
++                end,
++                end,
++                10,
++                ClusterSample { deadline: end - 10, service: end, service_now_us: end, ..timer }
++            )
++            .is_ok()
++        );
++        assert_eq!(
++            cluster_window_bounds(
++                1,
++                release,
++                end,
++                release + 9,
++                10,
++                ClusterSample {
++                    deadline: release - 1,
++                    service: release + 9,
++                    service_now_us: release + 9,
++                    ..timer
++                }
++            ),
++            Err("window outside measurement")
++        );
++        assert_eq!(
++            cluster_window_bounds(
++                1,
++                release,
++                end,
++                end + 1,
++                10,
++                ClusterSample { deadline: end - 9, service: end + 1, service_now_us: end + 1, ..timer }
++            ),
++            Err("window outside measurement")
++        );
++    }
++
++    #[test]
++    fn cluster_wait_boundary_rejects_report_substitution_and_extra_wakes() {
++        let mut records = Vec::new();
++        let mut push = |kind: char, records: &mut Vec<Record>| {
++            records.push(Record {
++                seq: records.len() as u64,
++                entry: records.len() as u64,
++                kind,
++                id: 17,
++                pass: 1,
++            });
++        };
++        push('W', &mut records); // The already validated go wake.
++        for _ in 0..200 {
++            for kind in ['D', 'W', 'K'] {
++                push(kind, &mut records);
++            }
++        }
++        let boundary = records.len();
++        push('X', &mut records);
++        for kind in ['D', 'W', 'K'] {
++            push(kind, &mut records); // A later handover wake cannot fill a missing sample.
++        }
++        assert_eq!(cluster_waits_before(&records, 17, 0, boundary).unwrap().len(), 200);
++        let mut immediate = records.clone();
++        immediate.remove(1 + 4 * 3 + 1); // No W for sample 4; later report W remains.
++        assert!(cluster_waits_before(&immediate, 17, 0, boundary - 1).is_err());
++        let mut extra = records.clone();
++        extra.insert(4, Record { seq: 0, entry: 0, kind: 'W', id: 17, pass: 1 });
++        assert!(cluster_waits_before(&extra, 17, 0, boundary + 1).is_err());
++        let mut reordered = records;
++        reordered.swap(1, 2);
++        assert!(cluster_waits_before(&reordered, 17, 0, boundary).is_err());
++    }
++
++    #[test]
++    fn cluster_fences_reject_missing_duplicate_and_wrong_callers() {
++        let rec = |kind, id, time| Record { seq: 0, entry: 0, kind, id, pass: time };
++        let good = vec![
++            rec('W', 17, 0),
++            rec('K', 17, 0),
++            rec('X', 101, 100),
++            rec('Y', 101, 105),
++            rec('K', 18, 0),
++            rec('X', 102, 110),
++            rec('Y', 102, 115),
++        ];
++        assert_eq!(cluster_fences(&good, [17, 18], [0, 0]).unwrap().map(|f| f.marker_id), [101, 102]);
++        let mut missing = good.clone();
++        missing.truncate(5);
++        assert!(cluster_fences(&missing, [17, 18], [0, 0]).is_err());
++        let mut duplicate = good.clone();
++        duplicate.extend([rec('K', 17, 0), rec('X', 103, 120), rec('Y', 103, 125)]);
++        assert!(cluster_fences(&duplicate, [17, 18], [0, 0]).is_err());
++        let mut wrong_caller = good.clone();
++        wrong_caller[4].id = 42;
++        assert!(cluster_fences(&wrong_caller, [17, 18], [0, 0]).is_err());
++        let mut descheduled = good.clone();
++        descheduled.insert(2, rec('R', 17, 0));
++        assert!(cluster_fences(&descheduled, [17, 18], [0, 0]).is_err());
++        let mut repeated_marker = good;
++        repeated_marker[5].id = 101;
++        repeated_marker[6].id = 101;
++        assert!(cluster_fences(&repeated_marker, [17, 18], [0, 0]).is_err());
++    }
++
++    #[test]
++    fn timeout_wake_proof_rejects_preemption_and_an_unframed_wake() {
++        let events = [
++            ('K', 7, 0),
++            ('I', 7, 100),
++            ('E', 8, 1),
++            ('W', 8, 10),
++            ('O', 0, 1),
++            ('I', 7, 900),
++            ('E', 0, 0),
++            ('R', 7, 20),
++            ('O', 0, 0),
++            ('K', 8, 10),
++        ];
++        let records = |events: &[(char, u64, u128)]| {
++            events
++                .iter()
++                .enumerate()
++                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
++                .collect::<Vec<_>>()
++        };
++        assert!(check_wake_no_preempt(&records(&events), 1).is_ok());
++        let mut preempted = events.to_vec();
++        preempted.insert(4, ('K', 8, 10));
++        assert!(check_wake_no_preempt(&records(&preempted), 1).is_err());
++        let mut unframed = events;
++        unframed[3] = ('B', 8, 10);
++        assert!(check_wake_no_preempt(&records(&unframed), 1).is_err());
++    }
++
++    #[test]
++    fn carve_return_proof_requires_the_same_running_turn() {
++        let mut events = vec![('K', 9, 110)];
++        for (before, old, new, floor) in [(110, 1000, 1, 100), (210, 1, 1000, 100)] {
++            events.extend([
++                ('G', 9, before),
++                ('g', 9, 0),
++                ('v', 9, (old << 32) | new),
++                ('f', 9, floor),
++                ('N', 9, before),
++                ('n', 9, 0),
++            ]);
++        }
++        let records = |events: &[(char, u64, u128)]| {
++            events
++                .iter()
++                .enumerate()
++                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
++                .collect::<Vec<_>>()
++        };
++        assert!(check_carve_return("CARVE-OBS 900 950 12345\n", &records(&events)).is_ok());
++        events.insert(7, ('K', 5, 150));
++        assert!(check_carve_return("CARVE-OBS 900 950 12345\n", &records(&events)).is_err());
++    }
++
+     /// A trace from `(entry, kind, id, pass)` records, with its end line.
+     fn trace(records: &[(u64, char, u64, u128)]) -> String {
+         let mut s = String::from("boot noise\n");

@@ -1,0 +1,10 @@
+{
+  "head": "e9f2fcb958f4229ba90a009999b95fd03897c058",
+  "status": " M Cargo.lock\n M docs/kernel/budgets.md\n M docs/kernel/memory-layout.md\n M docs/servers/init.md\n M docs/testbench.md\n M docs/userland/native.md\n M image/manifest.json\n M libs/client/src/launch.rs\n M libs/client/tests/launch.rs\n M servers/init/src/bin/init.rs\n M servers/init/src/check.rs\n M servers/init/src/fuzz.rs\n M servers/init/src/manifest.rs\n M servers/init/src/refusal.rs\n M servers/init/tests/manifest.rs\n M stub/src/lib.rs\n M tests/data/init/bound.json\n M tests/init-boot.toml\n M tools/testbench/Cargo.toml\n M tools/testbench/src/case.rs\n M tools/testbench/src/main.rs\n M tools/testbench/src/qemu.rs\n?? tests/init-refuses-stack.toml\n?? tests/memory-host-tests.toml\n?? tools/testbench/src/memory.rs\n",
+  "untracked": [
+    "tests/init-refuses-stack.toml",
+    "tests/memory-host-tests.toml",
+    "tools/testbench/src/memory.rs"
+  ],
+  "tracked_patch_sha256": "b58559dd15955c82800b8224bfa64565f3c8c0bc0b8568c2b80a199a5a8d494a"
+}

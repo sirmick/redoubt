@@ -1,0 +1,953 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index a84443386..8ed0ad72f 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1165,13 +1165,16 @@ dependencies = [
+  "ed25519-compact",
+  "libc",
+  "redoubt-blkd",
++ "redoubt-client",
+  "redoubt-fsd",
+  "redoubt-model",
+  "redoubt-signing",
++ "redoubt-sys",
+  "regex",
+  "serde",
+  "serde_json",
+  "sha2",
++ "stub",
+  "tar",
+  "toml",
+ ]
+diff --git a/docs/kernel/budgets.md b/docs/kernel/budgets.md
+index 1fdf46d28..d1e142f44 100644
+--- a/docs/kernel/budgets.md
++++ b/docs/kernel/budgets.md
+@@ -193,8 +193,11 @@ keeps free. What `init` launches counts in the budgets it launches into.
+     stack at a time, copied through its pages and moved to the child
+     ([the loader stub](../userland/native.md#the-loader-stub)).
+ 
+-  With `beamlet` and the userland disk's `blkd` and `fsd`, the bound is 446 pages on both widths
+-  (`beamlet-boot` prints it), and 1,024 at least doubles it. The image's `beamlet` is budgeted
++  Each child's first-thread stack is charged to that server's own budget, at the manifest's
++  `stack_pages` size ([the boot manifest](../servers/init.md#the-boot-manifest)).
++
++  With `beamlet` and the userland disk's `blkd` and `fsd`, the image manifest's bound is 496 pages
++  on both widths (`init-boot` prints it), and 1,024 at least doubles it. The image's `beamlet` is budgeted
+   24,576 pages, twice its measured use at the prompt (11,877 pages on rv64, 7,554 on rv32), so the
+   image's servers need about 34,600 of `system`'s pages: the image needs more than 512 MiB of RAM,
+   and the bench and `mkimage`'s instructions give it 1 GiB. The bound is a fixed count, not a share
+diff --git a/docs/kernel/memory-layout.md b/docs/kernel/memory-layout.md
+index 9b1c10eaa..ed52ef9b7 100644
+--- a/docs/kernel/memory-layout.md
++++ b/docs/kernel/memory-layout.md
+@@ -212,7 +212,7 @@ User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the
+ | `0x4000_0000`..`0x4040_0000` | the message area (4 MiB): where the kernel maps a lend or transfer the process receives, every one inside it | the kernel |
+ | `0x6000_0000`..`0x7000_0000` | the `map_anon` area (256 MiB): where `map_anon`, `map_device` and `dma_alloc` place pages, every run inside it | the kernel |
+ | `0x7FF0_0000` | the startup block, in a launched process | the launcher |
+-| `0x7FFE_0000`..`0x8000_0000` | the first thread's stack: 32 pages (128 KiB) reserved, only the top one backed; the rest are backed on first touch | the loader for a boot process; a launcher places its own |
++| `0x7FF8_0000`..`0x8000_0000` | the first thread's stack: the loader reserves 32 pages (`0x7FFE_0000`..`0x8000_0000`) for a boot process, backing only the top one before first touch; a launcher maps 1 to 128 pages here for a child | the loader for a boot process; a launcher places its own |
+ 
+ The kernel searches its two areas for the first free run of pages, starting at its last
+ choice; `map_anon`'s choice is [memory](memory.md)'s. A process started by the loader gets its
+@@ -224,7 +224,7 @@ end of user space.
+ ```memmap
+ top 0x7fff_ffff
+ columns widths
+-0x7ffe_0000 | first thread's stack (128 KiB reserved) | Sv32: the end of user space; Sv39: user space goes on to 0x40_0000_0000
++0x7ff8_0000 | first thread's stack (up to 128 pages launched; boot reserves top 32 pages) | Sv32: the end of user space; Sv39: user space goes on to 0x40_0000_0000
+ 0x7ff0_0000 | startup block (launched)
+ 0x7000_0000 hole | free
+ 0x6000_0000 | map_anon area, 256 MiB
+@@ -273,7 +273,9 @@ A launcher places the startup block and the child's stack outside the link range
+ takes the placement from one definition beside `STUB_ENTRY` in the stub crate
+ ([`stub/src/lib.rs`](../../stub/src/lib.rs)): the stack top at `STACK_TOP` (`0x8000_0000`), the
+ startup block at `STARTUP_AT` (`0x7FF0_0000`) and the copy of the ELF image at `IMAGE_AT`
+-(`0x4000_0000`). The stub cannot see the stack. With
++(`0x4000_0000`). The client launcher accepts at most `MAX_STACK_PAGES` (128) stack pages, so even
++its lowest stack page is above the startup block with unmapped pages between them. The stub cannot
++see the stack. With
+ the stack outside the link range, no segment of an honest image can meet it; a hostile segment
+ that names the stack's pages is still refused, by `map_fixed`, which never replaces a mapping
+ ([R11](memory.md#r11-memory)). The stub does not check for a gap between a segment and the
+diff --git a/docs/servers/init.md b/docs/servers/init.md
+index 431920b44..ea33ea1d1 100644
+--- a/docs/servers/init.md
++++ b/docs/servers/init.md
+@@ -49,7 +49,7 @@ and `init`'s only input. Its entries:
+ | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
+ | `labels` | each label's name, owner principal and 64-bit id |
+ | `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it) |
+-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), and arguments |
++| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128) |
+ | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
+ | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
+ | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
+@@ -62,6 +62,10 @@ and `init`'s only input. Its entries:
+   `[a-z0-9_:+-]`, starting with a letter (`fsd:data`, `alice+secrets`), compared byte for byte.
+   Names become endpoint names, volume names and 9P paths, so no empty name, NUL, U+FEFF or control
+   character may reach them. The startup block applies the same rule (`valid_name`).
++- **Stacks.** A server's `stack_pages` is the size of its first thread's stack, charged to its
++  budget. `init` refuses zero, more than 128 pages, or a stack its budget cannot hold. The bench
++  measures each server's peak on the driven boot path and requires the declaration to hold at least
++  twice that peak ([the memory budget](../testbench.md#the-memory-budget)).
+ - **One entry per device.** A `devices` entry names one device, by its register region and its
+   interrupt, and `init` hands that device's objects together to the one server that holds the
+   entry. They go under the name the server's entry gives the device: `NAME` for the register region and `NAME-irq` for the
+@@ -405,7 +409,8 @@ image can hurt only the process it was going to become.
+ 1. The launcher creates the child's budget and process (`process_create`) with an exit endpoint.
+ 2. It maps into the child, with `process_map`: the stub, read-only and executable, at
+    `STUB_ENTRY` (`0x1FF0_0000`); a copy of the program's ELF image, read-write, placed 64 pages
+-   at a time; the stack; and the startup block, read-only, naming the image with `image_addr`
++   at a time; the stack, painted with a pattern the bench reads
++   ([the memory budget](../testbench.md#the-memory-budget)); and the startup block, read-only, naming the image with `image_addr`
+    and `image_len`. Where each goes is on
+    [memory layout](../kernel/memory-layout.md#launcher-placement).
+ 3. It starts the child's first thread at `STUB_ENTRY`, with the startup block's address as the
+diff --git a/docs/testbench.md b/docs/testbench.md
+index fdb2378cd..f926b609e 100644
+--- a/docs/testbench.md
++++ b/docs/testbench.md
+@@ -152,6 +152,7 @@ programs = [                 # the first in init's place, the rest started by it
+ ]
+ smp = [1, 4]                 # one boot per hart count (default [1])
+ memory_mib = 32              # guest RAM (default 256)
++memory = false               # true: stop an init guest and measure its servers' painted stacks
+ timeout_secs = 60            # default 60; fractions allowed
+ icount = "shift=3,sleep=off" # virtual time: 2^3 ns per guest instruction, the RTC on it too
+ qemu_seed = 1                # pin the guest's randomness (QEMU -seed)
+@@ -944,6 +945,25 @@ trusted crate's dependencies are known to, and adding one is a `Cargo.toml` chan
+ part of the trusted computing base
+ ([tenet 5](TENETS.md#5-dependencies-are-part-of-the-trusted-computing-base)).
+ 
++## The memory budget
++
++Status: built · tested: bench:init-boot, bench:memory-host-tests
++
++A boot case under `init` can set `memory = true`. After its console verdict, the bench stops
++QEMU over QMP and dumps the guest's physical RAM. The launcher has painted each server's
++first-thread stack with a tag for that server and an index for every eight-byte unit. The bench
++scans the RAM for those tags at their encoded offsets within physical pages. That ignores paint
++words copied into ordinary stack slots, while refusing a missing server or a duplicate unit at
++an encoded offset. The lowest missing unit marks the stack's deepest touched point. The bench
++prints `stack NAME PEAK of PAGES pages`
++for each server and fails when the declared pages are less than twice the measured peak rounded
++up to a page. The manifest's `stack_pages` defaults to 16 and cannot exceed 128
++([the boot manifest](servers/init.md#the-boot-manifest)).
++
++This is a measurement of the paths the case drove. Other requests or deeper call paths may
++need more stack, and a guest can forge the public paint pattern. The result is evidence for
++the image's declarations, not a proof against hostile guest code.
++
+ ## Vendored dependencies
+ 
+ ### Crates as published
+diff --git a/docs/userland/native.md b/docs/userland/native.md
+index b3a7a2312..889eebaf9 100644
+--- a/docs/userland/native.md
++++ b/docs/userland/native.md
+@@ -323,10 +323,11 @@ Every one is also to build for rv32, where the vendored crates are checked too,
+ 
+ ### The client library
+ 
+-<details><summary>Status: built · partly tested: only on the host (no program on the machine links it yet); `fsd`'s operations and `consol`'s `size` and `resize` against in-test servers until `fsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested (28)</summary>
++<details><summary>Status: built · partly tested: `init-boot` exercises launching on the machine; `fsd`'s operations and `consol`'s `size` and `resize` remain tested against in-test servers until `fsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested (28)</summary>
+ 
+ - bench:client-host-tests
+ - bench:client-build
++- bench:init-boot
+ - host:redoubt-client::each_operation_names_its_files_fids
+ - host:redoubt-client::files_on_two_connections_are_refused_before_any_call
+ - host:redoubt-client::a_child_gets_the_stub_its_image_a_stack_and_its_block
+@@ -377,6 +378,11 @@ from its pool of I/O threads
+ | `grants` | the launcher's ledger of what servers granted a child, released and disconnected when the child's exit notice arrives ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)) |
+ | `typed` | one call for any typed protocol, over the module the generator wrote from its table ([wire](../servers/wire.md#wire-tables-and-the-generator)) |
+ 
++The `launch` builder's `stack_pages` chooses the first thread's mapped stack (16 pages by
++default, at most 128). Its `stack_tag` identifies a server's stack to the bench. Every launch
++paints the stack before the child starts, so a stopped-guest memory scan can measure the deepest
++page it touched ([the memory budget](../testbench.md#the-memory-budget)).
++
+ Time and randomness are the runtime's kernel calls, and raw `call`, `send` and `serve` are the
+ runtime's `ipc`, which beamlet's natives use directly. `/net` is files, so `file` covers it. There
+ is no module per typed server beyond `fsd`, whose operations name fids that live in Rust: for
+diff --git a/image/manifest.json b/image/manifest.json
+index e28d8ce37..ee454bec8 100644
+--- a/image/manifest.json
++++ b/image/manifest.json
+@@ -11,51 +11,61 @@
+   ],
+   "servers": [
+     { "name": "keyd", "program": "keyd",
++      "stack_pages": "3",
+       "budget": { "pages": "256", "processes": 1, "weight": 100 },
+       "receives": ["keyd"],
+       "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111",
+                "audit,audit,2222222222222222222222222222222222222222222222222222222222222222",
+                "buckets=4"] },
+     { "name": "consoled", "program": "consoled",
++      "stack_pages": "5",
+       "budget": { "pages": "1024", "processes": 1, "weight": 1000 },
+       "devices": [ { "device": "uart0", "as": "uart" } ],
+       "receives": ["consoled"],
+       "args": ["buckets=4"] },
+     { "name": "bootfsd", "program": "bootfsd",
++      "stack_pages": "4",
+       "budget": { "pages": "640", "processes": 1, "weight": 100 },
+       "receives": ["bootfsd"],
+       "args": ["buckets=4"] },
+     { "name": "blkd", "program": "blkd",
++      "stack_pages": "3",
+       "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+       "devices": [ { "device": "disk0", "as": "disk" } ],
+       "receives": ["blkd"], "args": ["endpoint=blkd"] },
+     { "name": "netd", "program": "netd",
++      "stack_pages": "3",
+       "budget": { "pages": "1024", "processes": 1, "weight": 1000 },
+       "devices": [ { "device": "net0", "as": "net" } ],
+       "receives": ["netd"],
+       "handed": [ { "endpoint": "ipd", "badge": "3" } ],
+       "args": ["client=5"] },
+     { "name": "ipd", "program": "ipd",
++      "stack_pages": "4",
+       "budget": { "pages": "4096", "processes": 1, "weight": 100 },
+       "receives": ["ipd"],
+       "handed": [ { "endpoint": "netd", "badge": "5" } ],
+       "args": ["addr=10.0.2.15/24", "gateway=10.0.2.2", "ingress=3",
+                "scope=4:c:0.0.0.0/0:1-65535", "buckets=4"] },
+     { "name": "fsd:data", "program": "fsd",
++      "stack_pages": "4",
+       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
+       "volume": "data",
+       "receives": ["fsd:data"],
+       "args": ["endpoint=fsd:data", "buckets=4"] },
+     { "name": "blkd:system", "program": "blkd",
++      "stack_pages": "3",
+       "budget": { "pages": "512", "processes": 1, "weight": 1000 },
+       "devices": [ { "device": "disk1", "as": "disk" } ],
+       "receives": ["blkd:system"], "args": ["endpoint=blkd:system"] },
+     { "name": "fsd:system", "program": "fsd",
++      "stack_pages": "3",
+       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
+       "volume": "system",
+       "receives": ["fsd:system"],
+       "args": ["endpoint=fsd:system", "buckets=4"] },
+     { "name": "beamlet", "program": "beamlet",
++      "stack_pages": "3",
+       "budget": { "pages": "24576", "processes": 1, "weight": 100 },
+       "handed": [ { "endpoint": "bootfsd", "badge": "7" }, { "endpoint": "fsd:system", "badge": "7" } ],
+       "args": ["budget_pages=24576", "Elixir.Redoubt.Shell"] }
+diff --git a/libs/client/src/launch.rs b/libs/client/src/launch.rs
+index 3fdcf7958..7c885bfaa 100644
+--- a/libs/client/src/launch.rs
++++ b/libs/client/src/launch.rs
+@@ -4,7 +4,7 @@
+ //! writes the startup block with the runtime's `StartupBuilder`.
+ //!
+ //! What it refuses is refused before `process_create`, so no half-made process is left: more than
+-//! `MAX_START_HANDLES` handles, an empty image, a stack larger than the space below `STACK_TOP`,
++//! `MAX_START_HANDLES` handles, an empty image, a stack outside 1..=MAX_STACK_PAGES,
+ //! or a block the parser refuses (a bad name or path, one given twice). A kernel refusal after
+ //! `process_create` leaves a process that never started in the caller's budget, which comes back
+ //! with the error for the caller to destroy.
+@@ -16,13 +16,13 @@ use redoubt_rt::handle::{Budget, Endpoint, Process};
+ use redoubt_rt::ipc::{Buffer, Event};
+ use redoubt_rt::server::close_delivery;
+ use redoubt_rt::startup::StartupBuilder;
+-use stub::{IMAGE_AT, STACK_TOP, STARTUP_AT, STUB_ENTRY};
++use stub::{IMAGE_AT, MAX_STACK_PAGES, STACK_TOP, STARTUP_AT, STUB_ENTRY, stack_paint};
+ 
+ use crate::error::{Error, Refusal};
+ use crate::grants::Grants;
+ 
+ /// The child's stack unless the launcher says otherwise.
+-const STACK_PAGES: usize = 16;
++pub const STACK_PAGES: usize = 16;
+ 
+ /// The most pages a launch holds at once: it copies the image and the stack into the child this
+ /// many pages at a time (servers/init.md, "Launching through the loader stub"), and `init`'s
+@@ -36,6 +36,7 @@ pub struct Launch<'a> {
+     budget: Budget,
+     exit: Endpoint,
+     stack_pages: usize,
++    stack_tag: u16,
+     namespace: Vec<(&'a str, Handle)>,
+     handles: Vec<(&'a str, Handle)>,
+     args: Vec<&'a str>,
+@@ -61,6 +62,7 @@ impl<'a> Launch<'a> {
+             budget,
+             exit,
+             stack_pages: STACK_PAGES,
++            stack_tag: 0,
+             namespace: Vec::new(),
+             handles: Vec::new(),
+             args: Vec::new(),
+@@ -90,6 +92,12 @@ impl<'a> Launch<'a> {
+         self
+     }
+ 
++    /// Tags this child's first-thread stack for the bench's RAM measurement.
++    pub fn stack_tag(&mut self, tag: u16) -> &mut Self {
++        self.stack_tag = tag;
++        self
++    }
++
+     /// What servers granted the child, released when its exit notice arrives.
+     pub fn grants(&mut self, grants: Grants) -> &mut Self {
+         self.grants = grants;
+@@ -109,10 +117,10 @@ impl<'a> Launch<'a> {
+         };
+         let rw = MemFlags::READ | MemFlags::WRITE;
+         let rx = MemFlags::READ | MemFlags::EXECUTE;
+-        let started = place(&process, self.stub, pages_of(self.stub), STUB_ENTRY, rx)
+-            .and_then(|()| place(&process, self.image, pages_of(self.image), IMAGE_AT, rw))
+-            .and_then(|()| place(&process, &[], self.stack_pages, stack_at, rw))
+-            .and_then(|()| place(&process, &block, pages_of(&block), STARTUP_AT, MemFlags::READ))
++        let started = place(&process, self.stub, pages_of(self.stub), STUB_ENTRY, rx, None)
++            .and_then(|()| place(&process, self.image, pages_of(self.image), IMAGE_AT, rw, None))
++            .and_then(|()| place(&process, &[], self.stack_pages, stack_at, rw, Some(self.stack_tag)))
++            .and_then(|()| place(&process, &block, pages_of(&block), STARTUP_AT, MemFlags::READ, None))
+             .and_then(|()| process.start(STUB_ENTRY, STACK_TOP - 16, STARTUP_AT, &slots));
+         match started {
+             Ok(()) => Ok(Job { process, budget: self.budget, exit: self.exit, grants: self.grants }),
+@@ -129,6 +137,9 @@ impl<'a> Launch<'a> {
+         if self.image.is_empty() {
+             return Err(Refusal::EmptyImage.into());
+         }
++        if self.stack_pages == 0 || self.stack_pages > MAX_STACK_PAGES {
++            return Err(Refusal::StackTooLarge.into());
++        }
+         let stack_at = self
+             .stack_pages
+             .checked_mul(PAGE_SIZE)
+@@ -172,11 +183,18 @@ impl<'a> Launch<'a> {
+ /// The pages of `bytes`, at least one.
+ fn pages_of(bytes: &[u8]) -> usize { bytes.len().max(1).div_ceil(PAGE_SIZE) }
+ 
+-/// Fills `pages` pages at `dst` in the child with `bytes`, zeroes after them, `PLACE_PAGES` at a
+-/// time: each batch is copied into fresh pages and moved in before the next is made, so the
++/// Fills `pages` pages at `dst` in the child with `bytes`, zeroes after them, or paints the stack.
++/// It copies `PLACE_PAGES` at a time into fresh pages and moves them in before the next batch, so the
+ /// caller never holds more than one batch. A refusal leaves the batches already moved in the
+ /// child, which has not started, and returns the refused batch's pages to the caller.
+-fn place(process: &Process, bytes: &[u8], pages: usize, dst: usize, flags: MemFlags) -> Result<(), SysError> {
++fn place(
++    process: &Process,
++    bytes: &[u8],
++    pages: usize,
++    dst: usize,
++    flags: MemFlags,
++    stack_tag: Option<u16>,
++) -> Result<(), SysError> {
+     // At least one batch: one of no pages is refused, as a whole one was.
+     for done in (0..pages.max(1)).step_by(PLACE_PAGES) {
+         let n = (pages - done).min(PLACE_PAGES);
+@@ -184,6 +202,12 @@ fn place(process: &Process, bytes: &[u8], pages: usize, dst: usize, flags: MemFl
+         let from = bytes.get(done * PAGE_SIZE..).unwrap_or_default();
+         let len = from.len().min(n * PAGE_SIZE);
+         batch[..len].copy_from_slice(&from[..len]);
++        if let Some(tag) = stack_tag {
++            for (i, unit) in batch.chunks_exact_mut(8).enumerate() {
++                let index = (done * PAGE_SIZE / 8 + i) as u16;
++                unit.copy_from_slice(&stack_paint(tag, index).to_le_bytes());
++            }
++        }
+         process.map(batch, dst + done * PAGE_SIZE, flags)?;
+     }
+     Ok(())
+diff --git a/libs/client/tests/launch.rs b/libs/client/tests/launch.rs
+index 488b7ece4..afc4be7d3 100644
+--- a/libs/client/tests/launch.rs
++++ b/libs/client/tests/launch.rs
+@@ -9,7 +9,7 @@ mod common;
+ use common::{AUDIT_BADGE, Boot, Keyd};
+ use redoubt_client::file::Connection;
+ use redoubt_client::grants::{Grants, RELEASE_TIMEOUT};
+-use redoubt_client::launch::{Job, Launch, PLACE_PAGES};
++use redoubt_client::launch::{Job, Launch, PLACE_PAGES, STACK_PAGES};
+ use redoubt_client::{Error, Lend, Refusal, typed};
+ use redoubt_fake_kernel::fake;
+ use redoubt_rt::abi::{Cause, Error as SysError, FOREVER, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE};
+@@ -18,7 +18,7 @@ use redoubt_rt::ipc::Event;
+ use redoubt_rt::server::ninep::mode;
+ use redoubt_rt::startup::Startup;
+ use redoubt_rt::wire::proto::keyd::{self, ErrorCode, Grant, Message, Release, Reply, SignRecord};
+-use stub::{IMAGE_AT, STACK_TOP, STARTUP_AT, STUB_ENTRY};
++use stub::{IMAGE_AT, MAX_STACK_PAGES, STACK_TOP, STARTUP_AT, STUB_ENTRY, stack_paint};
+ 
+ const STUB: &[u8] = b"the stub, flat";
+ const IMAGE: &[u8] = b"\x7fELF the program";
+@@ -47,6 +47,7 @@ fn a_child_gets_the_stub_its_image_a_stack_and_its_block() {
+     let job = f.as_process(launcher, || {
+         let mut launch = Launch::new(STUB, IMAGE, Budget::from_handle(budget), Endpoint::from_handle(exit));
+         launch.namespace("/", cons).namespace("/dev/cons", cons).handle("keys", keys).arg("-v").arg("");
++        launch.stack_tag(7);
+         launch.start().ok().unwrap()
+     });
+     let child = f.launched(launcher, job.process().handle());
+@@ -54,7 +55,9 @@ fn a_child_gets_the_stub_its_image_a_stack_and_its_block() {
+     let block = &child.maps[3].2;
+     assert_eq!(child.maps[0], (STUB_ENTRY, MemFlags::READ | MemFlags::EXECUTE, padded(STUB, 1)));
+     assert_eq!(child.maps[1], (IMAGE_AT, rw, padded(IMAGE, 1)));
+-    assert_eq!(child.maps[2], (STACK_TOP - 16 * PAGE_SIZE, rw, padded(b"", 16)));
++    let paint: Vec<u8> =
++        (0..STACK_PAGES * PAGE_SIZE / 8).flat_map(|i| stack_paint(7, i as u16).to_le_bytes()).collect();
++    assert_eq!(child.maps[2], (STACK_TOP - STACK_PAGES * PAGE_SIZE, rw, paint));
+     assert_eq!((child.maps[3].0, child.maps[3].1), (STARTUP_AT, MemFlags::READ));
+     assert_eq!(child.maps.len(), 4);
+     assert_eq!(child.start, Some((STUB_ENTRY, STACK_TOP - 16, STARTUP_AT)));
+@@ -69,9 +72,31 @@ fn a_child_gets_the_stub_its_image_a_stack_and_its_block() {
+     assert!(f.installed(launcher, job.process().handle(), 1, keys));
+ }
+ 
++#[test]
++fn the_largest_stack_paints_through_its_last_unit_without_wrapping() {
++    let f = fake();
++    let (launcher, budget, exit) = launcher();
++    let job = f.as_process(launcher, || {
++        let mut launch = Launch::new(STUB, IMAGE, Budget::from_handle(budget), Endpoint::from_handle(exit));
++        launch.stack_pages(MAX_STACK_PAGES).stack_tag(7);
++        launch.start().ok().unwrap()
++    });
++    let child = f.launched(launcher, job.process().handle());
++    let mut index = 0;
++    for (at, _, bytes) in &child.maps[2..4] {
++        assert_eq!(*at, STACK_TOP - MAX_STACK_PAGES * PAGE_SIZE + index * 8);
++        for unit in bytes.chunks_exact(8) {
++            assert_eq!(u64::from_le_bytes(unit.try_into().unwrap()), stack_paint(7, index as u16));
++            index += 1;
++        }
++    }
++    assert_eq!(index, 1 << 16);
++    assert_eq!(child.maps[4].0, STARTUP_AT);
++}
++
+ /// The attack: what `launch` refuses it refuses before any kernel call, so no half-made process
+-/// is left, and the budget comes back untouched. A stack larger than the address space below
+-/// `STACK_TOP` is one: its base would wrap.
++/// is left, and the budget comes back untouched. Empty, over-cap, and wrapping stacks are among
++/// those refused.
+ #[test]
+ fn a_bad_launch_is_refused_before_any_kernel_call() {
+     let f = fake();
+@@ -79,11 +104,13 @@ fn a_bad_launch_is_refused_before_any_kernel_call() {
+     let many: Vec<Handle> = (0..=MAX_START_HANDLES).map(|_| f.endpoint(launcher)).collect();
+     // Leaked, so a step's names outlive every launch it builds.
+     let names: &'static [String] = Vec::leak((0..many.len()).map(|i| format!("h{i}")).collect());
+-    let refusals: [(&dyn Fn(&mut Launch), &[u8], Refusal); 6] = [
++    let refusals: [(&dyn Fn(&mut Launch), &[u8], Refusal); 8] = [
+         (&|l| many.iter().zip(names).for_each(|(h, n)| _ = l.handle(n, *h)), IMAGE, Refusal::TooManyHandles),
+         (&|_| {}, b"", Refusal::EmptyImage),
+         (&|l| _ = l.stack_pages(STACK_TOP / PAGE_SIZE + 1), IMAGE, Refusal::StackTooLarge),
+         (&|l| _ = l.stack_pages(usize::MAX), IMAGE, Refusal::StackTooLarge),
++        (&|l| _ = l.stack_pages(0), IMAGE, Refusal::StackTooLarge),
++        (&|l| _ = l.stack_pages(MAX_STACK_PAGES + 1), IMAGE, Refusal::StackTooLarge),
+         (
+             &|l| _ = l.handle("Not A Name", many[0]),
+             IMAGE,
+diff --git a/servers/init/src/bin/init.rs b/servers/init/src/bin/init.rs
+index 37fc3a53c..f50da2573 100644
+--- a/servers/init/src/bin/init.rs
++++ b/servers/init/src/bin/init.rs
+@@ -63,8 +63,6 @@ mod machine {
+     const SYSTEM: u32 = 2;
+     const RESET: u32 = 4;
+     const CONSOLE_MMIO: u32 = 5;
+-    /// The stack each child starts on, in pages (`redoubt_client::launch`'s default).
+-    const STACK_PAGES: usize = 16;
+     /// The bytes of a public entry each `add` carries: a page, inside the lend with its name.
+     const CHUNK: usize = PAGE_SIZE;
+ 
+@@ -162,7 +160,6 @@ mod machine {
+             root,
+             entries,
+             stub_bytes: STUB_BIN.len(),
+-            stack_pages: STACK_PAGES,
+             arena_pages: ARENA_PAGES,
+             // The budgets, then the devices from the Reset right on.
+             handles_at_start: RESET as usize - 1 + devices.len(),
+@@ -464,6 +461,7 @@ mod machine {
+             }
+             let args = args(m, s);
+             let mut launch = Launch::new(STUB_BIN, image, budget, exit);
++            launch.stack_pages(s.stack_pages as usize).stack_tag((i + 1) as u16);
+             for name in &s.receives {
+                 launch.handle(name, self.endpoint(name));
+             }
+diff --git a/servers/init/src/check.rs b/servers/init/src/check.rs
+index c5bb9428b..241c6b0a3 100644
+--- a/servers/init/src/check.rs
++++ b/servers/init/src/check.rs
+@@ -14,6 +14,7 @@ use redoubt_rt::abi::{Handle, MAX_LABELS, MAX_START_HANDLES, MAX_THREADS, Usage}
+ use redoubt_rt::server::minted::FIRST_MINTED_BADGE;
+ use redoubt_rt::startup::{StartupBuilder, valid_name};
+ use redoubt_sys::DeviceInfo;
++use stub::MAX_STACK_PAGES;
+ 
+ use crate::bound::{self, Counts};
+ use crate::confine;
+@@ -65,9 +66,8 @@ pub struct Machine<'a> {
+     pub root: Usage,
+     /// The bundle's entries after `init`: each name and its length in bytes.
+     pub entries: &'a [(&'a str, usize)],
+-    /// The stub's length in bytes, and the stack each launch gives, in pages.
++    /// The stub's length in bytes.
+     pub stub_bytes: usize,
+-    pub stack_pages: usize,
+     /// The arena `init` parses and checks in, in pages.
+     pub arena_pages: usize,
+     /// The handles in `init`'s table at its start.
+@@ -513,6 +513,11 @@ fn budgets(m: &Manifest) -> Result<(), Refusal> {
+     if let Some(i) = m.servers.iter().position(|s| !fine(&s.budget)) {
+         return Err(at(format!("servers[{i}].budget"), Why::Budget));
+     }
++    if let Some(i) = m.servers.iter().position(|s| {
++        s.stack_pages == 0 || s.stack_pages > MAX_STACK_PAGES as u64 || s.stack_pages >= s.budget.pages
++    }) {
++        return Err(at(format!("servers[{i}].stack_pages"), Why::Stack));
++    }
+     for (i, p) in m.principals.iter().enumerate() {
+         if !fine(&p.budget) {
+             return Err(at(format!("principals[{i}].budget"), Why::Budget));
+@@ -726,7 +731,7 @@ fn counts(m: &Manifest, machine: &Machine) -> Counts {
+         handed: m.servers.iter().map(|s| s.handed.len() as u64 + u64::from(s.volume.is_some())).sum(),
+         stub_bytes: machine.stub_bytes as u64,
+         largest_image_bytes: m.servers.iter().map(image).max().unwrap_or(0) as u64,
+-        stack_pages: machine.stack_pages as u64,
++        stack_pages: m.servers.iter().map(|s| s.stack_pages).max().unwrap_or(0),
+         handles_at_start: machine.handles_at_start as u64,
+         arena_pages: machine.arena_pages as u64,
+     }
+diff --git a/servers/init/src/fuzz.rs b/servers/init/src/fuzz.rs
+index 631d958fb..2b28c6eb5 100644
+--- a/servers/init/src/fuzz.rs
++++ b/servers/init/src/fuzz.rs
+@@ -69,7 +69,6 @@ pub fn machine<'a>(devices: &'a [(Handle, DeviceInfo)], entries: &'a [(&'a str,
+         root: usage(1000),
+         entries,
+         stub_bytes: 16 * 1024,
+-        stack_pages: 16,
+         arena_pages: crate::ARENA_PAGES,
+         handles_at_start: 3 + devices.len(),
+     }
+diff --git a/servers/init/src/manifest.rs b/servers/init/src/manifest.rs
+index d2e3d4b8f..20c30d17a 100644
+--- a/servers/init/src/manifest.rs
++++ b/servers/init/src/manifest.rs
+@@ -12,7 +12,7 @@
+ //! | `devices[]` | `name`; `base` (string), `irq` (number), either may be absent, not both; `dma` (boolean) |
+ //! | `labels[]` | `name`, `owner` (a principal), `id` (string) |
+ //! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`) |
+-//! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
++//! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `stack_pages` (string), `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
+ //! | `public` | bundle entry names |
+ //! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`, `budget`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
+ //!
+@@ -22,6 +22,7 @@
+ use alloc::string::{String, ToString};
+ use alloc::vec::Vec;
+ 
++use redoubt_client::launch::STACK_PAGES;
+ use redoubt_rt::wire::json::{self, Members, SchemaError, SchemaKind, Value};
+ 
+ /// The decoded manifest.
+@@ -89,6 +90,8 @@ pub struct Server {
+     pub name: String,
+     pub program: String,
+     pub budget: Budget,
++    /// First-thread stack, in pages; absent in an older manifest means the launcher default.
++    pub stack_pages: u64,
+     pub labels: Vec<String>,
+     pub devices: Vec<DeviceUse>,
+     pub volume: Option<String>,
+@@ -226,6 +229,7 @@ fn server(v: &Value) -> Result<Server, SchemaError> {
+             name: m.required("name", string)?,
+             program: m.required("program", string)?,
+             budget: m.required("budget", budget)?,
++            stack_pages: m.optional("stack_pages", Value::u64_string)?.unwrap_or(STACK_PAGES as u64),
+             labels: list(m, "labels", string)?,
+             devices: list(m, "devices", device_use)?,
+             volume: m.optional("volume", string)?,
+diff --git a/servers/init/src/refusal.rs b/servers/init/src/refusal.rs
+index 87c893950..ee3aa4b83 100644
+--- a/servers/init/src/refusal.rs
++++ b/servers/init/src/refusal.rs
+@@ -70,6 +70,8 @@ pub enum Why {
+     Badge,
+     /// Limits no process could run in, or beyond what the kernel takes.
+     Budget,
++    /// A first-thread stack is empty, over the cap, or does not fit its own budget.
++    Stack,
+     /// More labels than a budget holds.
+     TooManyLabels,
+     /// An argument with a NUL, one a `bootfsd` entry may not carry, or one `init` passes itself
+@@ -134,6 +136,7 @@ impl fmt::Display for Why {
+             Why::BudgetHandle => "a server may not hold a budget handle (R33)",
+             Why::Badge => "not a root badge given once at its endpoint",
+             Why::Budget => "no process could run in this budget",
++            Why::Stack => "a stack is 1 to 128 pages and smaller than its budget",
+             Why::TooManyLabels => "more labels than a budget holds",
+             Why::Argument => {
+                 "an argument with a NUL, on bootfsd one that is not buckets=N, or one init passes itself"
+diff --git a/servers/init/tests/manifest.rs b/servers/init/tests/manifest.rs
+index 8d7efd6c2..c64b4ee8e 100644
+--- a/servers/init/tests/manifest.rs
++++ b/servers/init/tests/manifest.rs
+@@ -12,6 +12,7 @@ use redoubt_init::refusal::{Refusal, Sharing, Why};
+ use redoubt_init::{ARENA_PAGES, Manifest, check, read};
+ use redoubt_rt::abi::MAX_START_HANDLES;
+ use redoubt_rt::wire::json::SchemaKind;
++use stub::MAX_STACK_PAGES;
+ 
+ const IMAGE: &str = include_str!("../../../image/manifest.json");
+ 
+@@ -99,6 +100,36 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
+     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
+ }
+ 
++#[test]
++fn a_server_stack_defaults_and_is_checked_against_its_budget() {
++    let absent =
++        br#"{"servers":[{"name":"x","program":"x","budget":{"pages":"32","processes":1,"weight":1}}]}"#;
++    assert_eq!(read(absent, ARENA_PAGES).unwrap().servers[0].stack_pages, 16);
++    let mut m = image();
++    assert_eq!(m.servers[0].stack_pages, redoubt_client::launch::STACK_PAGES as u64);
++    for pages in [0, MAX_STACK_PAGES as u64 + 1, m.servers[0].budget.pages] {
++        m.servers[0].stack_pages = pages;
++        refused_at(&m, "servers[0].stack_pages", Why::Stack);
++    }
++    m.servers[0].stack_pages = MAX_STACK_PAGES as u64;
++    assert!(on_virt(&m).is_ok());
++    m.servers[0].budget.pages = 32;
++    m.servers[0].stack_pages = 32;
++    refused_at(&m, "servers[0].stack_pages", Why::Stack);
++}
++
++#[test]
++fn the_bound_uses_the_largest_declared_stack_batch() {
++    let mut m = image();
++    let base = on_virt(&m).unwrap().bound;
++    server(&mut m, "keyd").stack_pages = 32;
++    assert_eq!(on_virt(&m).unwrap().bound, base + 16);
++    server(&mut m, "consoled").stack_pages = 48;
++    assert_eq!(on_virt(&m).unwrap().bound, base + 32);
++    server(&mut m, "keyd").stack_pages = MAX_STACK_PAGES as u64;
++    assert_eq!(on_virt(&m).unwrap().bound, base + 48);
++}
++
+ #[test]
+ fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
+     let mut m = without_volumes();
+@@ -116,13 +147,13 @@ fn the_image_manifest_s_bound() {
+     // The arena (256 + 3 tables), 9 receive and 10 exit endpoints and init's reports endpoint
+     // (beamlet receives on none), 10 process objects, 10 blocks with 3 tables each, 10 watching
+     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
+-    // batch of beamlet's image + 3, stack 16 + 3), the lend (2 + 3), and one handle-table page:
++    // batch of beamlet's image + 3, stack 5 + 3), the lend (2 + 3), and one handle-table page:
+     // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 9 + 6 + 40 + 3 + 1 = 59
+     // added (the two volumes' ranges among the 6 badges) pass page 0's 64.
+     let devices = virt_devices();
+     let m = machine(&devices, &ENTRIES);
+     assert_eq!(m.handles_at_start, 22);
+-    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 16 + 3) + 1 + 5);
++    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 5 + 3) + 1 + 5);
+ }
+ 
+ /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
+@@ -849,6 +880,7 @@ fn confined_gives_each_label_set_its_own_userland_disk() {
+         name: name.into(),
+         program: "beamlet".into(),
+         budget: budget(256),
++        stack_pages: 16,
+         labels,
+         devices: vec![],
+         volume: None,
+@@ -950,7 +982,7 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
+         m.servers.push(Server {
+             name: format!("s{n}"),
+             program: "fsd".into(),
+-            budget: budget(16),
++            budget: budget(17),
+             receives,
+             ..m.servers[3].clone()
+         });
+@@ -983,7 +1015,7 @@ fn more_servers_than_init_has_threads_to_watch_are_refused() {
+             name: format!("s{n}"),
+             program: "fsd".into(),
+             receives,
+-            budget: budget(1),
++            budget: budget(17),
+             ..m.servers[3].clone()
+         });
+         m.servers.last_mut().unwrap().devices.clear();
+diff --git a/stub/src/lib.rs b/stub/src/lib.rs
+index 1ca15a904..af73531ab 100644
+--- a/stub/src/lib.rs
++++ b/stub/src/lib.rs
+@@ -98,6 +98,14 @@ pub const MAX_IMAGE_LEN: usize = STUB_ENTRY;
+ pub const IMAGE_AT: usize = 0x4000_0000;
+ pub const STARTUP_AT: usize = 0x7FF0_0000;
+ pub const STACK_TOP: usize = 0x8000_0000;
++/// Largest launched first-thread stack: 512 KiB, leaving 127 unmapped pages above the startup page.
++pub const MAX_STACK_PAGES: usize = 128;
++/// The high half of each painted stack unit; the low half holds the server tag and unit index.
++pub const STACK_PAINT: u32 = 0x5354_414b;
++/// Unit `index` is counted from the stack's lowest address, in eight-byte steps.
++pub const fn stack_paint(tag: u16, index: u16) -> u64 {
++    ((STACK_PAINT as u64) << 32) | ((tag as u64) << 16) | index as u64
++}
+ const _: () = assert!(IMAGE_AT >= STUB_ENTRY + 0x10_0000 && STARTUP_AT >= STUB_ENTRY + 0x10_0000);
+ 
+ /// Why an image was refused whole (servers/init.md R32: a hostile image hurts only its process
+diff --git a/tests/data/init/bound.json b/tests/data/init/bound.json
+index df0fbee54..20db50bad 100644
+--- a/tests/data/init/bound.json
++++ b/tests/data/init/bound.json
+@@ -54,49 +54,49 @@
+     {
+       "name": "s0",
+       "program": "blkd",
+-      "budget": {"pages": "16", "processes": 1, "weight": 100},
++      "budget": {"pages": "17", "processes": 1, "weight": 100},
+       "receives": ["e0-0", "e0-1", "e0-2", "e0-3", "e0-4", "e0-5", "e0-6", "e0-7", "e0-8", "e0-9", "e0-10", "e0-11", "e0-12", "e0-13", "e0-14", "e0-15", "e0-16", "e0-17", "e0-18", "e0-19", "e0-20", "e0-21", "e0-22", "e0-23", "e0-24", "e0-25", "e0-26", "e0-27", "e0-28", "e0-29", "e0-30", "e0-31", "e0-32", "e0-33", "e0-34", "e0-35", "e0-36", "e0-37", "e0-38", "e0-39", "e0-40", "e0-41", "e0-42", "e0-43", "e0-44", "e0-45", "e0-46", "e0-47", "e0-48", "e0-49", "e0-50", "e0-51", "e0-52", "e0-53", "e0-54", "e0-55", "e0-56", "e0-57", "e0-58", "e0-59"], "args": ["endpoint=e0-0"]
+     },
+     {
+       "name": "s1",
+       "program": "blkd",
+-      "budget": {"pages": "16", "processes": 1, "weight": 100},
++      "budget": {"pages": "17", "processes": 1, "weight": 100},
+       "receives": ["e1-0", "e1-1", "e1-2", "e1-3", "e1-4", "e1-5", "e1-6", "e1-7", "e1-8", "e1-9", "e1-10", "e1-11", "e1-12", "e1-13", "e1-14", "e1-15", "e1-16", "e1-17", "e1-18", "e1-19", "e1-20", "e1-21", "e1-22", "e1-23", "e1-24", "e1-25", "e1-26", "e1-27", "e1-28", "e1-29", "e1-30", "e1-31", "e1-32", "e1-33", "e1-34", "e1-35", "e1-36", "e1-37", "e1-38", "e1-39", "e1-40", "e1-41", "e1-42", "e1-43", "e1-44", "e1-45", "e1-46", "e1-47", "e1-48", "e1-49", "e1-50", "e1-51", "e1-52", "e1-53", "e1-54", "e1-55", "e1-56", "e1-57", "e1-58", "e1-59"], "args": ["endpoint=e1-0"]
+     },
+     {
+       "name": "s2",
+       "program": "blkd",
+-      "budget": {"pages": "16", "processes": 1, "weight": 100},
++      "budget": {"pages": "17", "processes": 1, "weight": 100},
+       "receives": ["e2-0", "e2-1", "e2-2", "e2-3", "e2-4", "e2-5", "e2-6", "e2-7", "e2-8", "e2-9", "e2-10", "e2-11", "e2-12", "e2-13", "e2-14", "e2-15", "e2-16", "e2-17", "e2-18", "e2-19", "e2-20", "e2-21", "e2-22", "e2-23", "e2-24", "e2-25", "e2-26", "e2-27", "e2-28", "e2-29", "e2-30", "e2-31", "e2-32", "e2-33", "e2-34", "e2-35", "e2-36", "e2-37", "e2-38", "e2-39", "e2-40", "e2-41", "e2-42", "e2-43", "e2-44", "e2-45", "e2-46", "e2-47", "e2-48", "e2-49", "e2-50", "e2-51", "e2-52", "e2-53", "e2-54", "e2-55", "e2-56", "e2-57", "e2-58", "e2-59"], "args": ["endpoint=e2-0"]
+     },
+     {
+       "name": "s3",
+       "program": "blkd",
+-      "budget": {"pages": "16", "processes": 1, "weight": 100},
++      "budget": {"pages": "17", "processes": 1, "weight": 100},
+       "receives": ["e3-0", "e3-1", "e3-2", "e3-3", "e3-4", "e3-5", "e3-6", "e3-7", "e3-8", "e3-9", "e3-10", "e3-11", "e3-12", "e3-13", "e3-14", "e3-15", "e3-16", "e3-17", "e3-18", "e3-19", "e3-20", "e3-21", "e3-22", "e3-23", "e3-24", "e3-25", "e3-26", "e3-27", "e3-28", "e3-29", "e3-30", "e3-31", "e3-32", "e3-33", "e3-34", "e3-35", "e3-36", "e3-37", "e3-38", "e3-39", "e3-40", "e3-41", "e3-42", "e3-43", "e3-44", "e3-45", "e3-46", "e3-47", "e3-48", "e3-49", "e3-50", "e3-51", "e3-52", "e3-53", "e3-54", "e3-55", "e3-56", "e3-57", "e3-58", "e3-59"], "args": ["endpoint=e3-0"]
+     },
+     {
+       "name": "s4",
+       "program": "blkd",
+-      "budget": {"pages": "16", "processes": 1, "weight": 100},
++      "budget": {"pages": "17", "processes": 1, "weight": 100},
+       "receives": ["e4-0", "e4-1", "e4-2", "e4-3", "e4-4", "e4-5", "e4-6", "e4-7", "e4-8", "e4-9", "e4-10", "e4-11", "e4-12", "e4-13", "e4-14", "e4-15", "e4-16", "e4-17", "e4-18", "e4-19", "e4-20", "e4-21", "e4-22", "e4-23", "e4-24", "e4-25", "e4-26", "e4-27", "e4-28", "e4-29", "e4-30", "e4-31", "e4-32", "e4-33", "e4-34", "e4-35", "e4-36", "e4-37", "e4-38", "e4-39", "e4-40", "e4-41", "e4-42", "e4-43", "e4-44", "e4-45", "e4-46", "e4-47", "e4-48", "e4-49", "e4-50", "e4-51", "e4-52", "e4-53", "e4-54", "e4-55", "e4-56", "e4-57", "e4-58", "e4-59"], "args": ["endpoint=e4-0"]
+     },
+     {
+       "name": "s5",
+       "program": "blkd",
+-      "budget": {"pages": "16", "processes": 1, "weight": 100},
++      "budget": {"pages": "17", "processes": 1, "weight": 100},
+       "receives": ["e5-0", "e5-1", "e5-2", "e5-3", "e5-4", "e5-5", "e5-6", "e5-7", "e5-8", "e5-9", "e5-10", "e5-11", "e5-12", "e5-13", "e5-14", "e5-15", "e5-16", "e5-17", "e5-18", "e5-19", "e5-20", "e5-21", "e5-22", "e5-23", "e5-24", "e5-25", "e5-26", "e5-27", "e5-28", "e5-29", "e5-30", "e5-31", "e5-32", "e5-33", "e5-34", "e5-35", "e5-36", "e5-37", "e5-38", "e5-39", "e5-40", "e5-41", "e5-42", "e5-43", "e5-44", "e5-45", "e5-46", "e5-47", "e5-48", "e5-49", "e5-50", "e5-51", "e5-52", "e5-53", "e5-54", "e5-55", "e5-56", "e5-57", "e5-58", "e5-59"], "args": ["endpoint=e5-0"]
+     },
+     {
+       "name": "s6",
+       "program": "blkd",
+-      "budget": {"pages": "16", "processes": 1, "weight": 100},
++      "budget": {"pages": "17", "processes": 1, "weight": 100},
+       "receives": ["e6-0", "e6-1", "e6-2", "e6-3", "e6-4", "e6-5", "e6-6", "e6-7", "e6-8", "e6-9", "e6-10", "e6-11", "e6-12", "e6-13", "e6-14", "e6-15", "e6-16", "e6-17", "e6-18", "e6-19", "e6-20", "e6-21", "e6-22", "e6-23", "e6-24", "e6-25", "e6-26", "e6-27", "e6-28", "e6-29", "e6-30", "e6-31", "e6-32", "e6-33", "e6-34", "e6-35", "e6-36", "e6-37", "e6-38", "e6-39", "e6-40", "e6-41", "e6-42", "e6-43", "e6-44", "e6-45", "e6-46", "e6-47", "e6-48", "e6-49", "e6-50", "e6-51", "e6-52", "e6-53", "e6-54", "e6-55", "e6-56", "e6-57", "e6-58", "e6-59"], "args": ["endpoint=e6-0"]
+     },
+     {
+       "name": "s7",
+       "program": "big",
+-      "budget": {"pages": "16", "processes": 1, "weight": 100},
++      "budget": {"pages": "17", "processes": 1, "weight": 100},
+       "receives": ["e7-0", "e7-1", "e7-2", "e7-3", "e7-4", "e7-5", "e7-6", "e7-7", "e7-8", "e7-9", "e7-10", "e7-11", "e7-12", "e7-13", "e7-14", "e7-15", "e7-16", "e7-17", "e7-18", "e7-19", "e7-20", "e7-21", "e7-22", "e7-23", "e7-24", "e7-25", "e7-26", "e7-27", "e7-28", "e7-29", "e7-30", "e7-31", "e7-32", "e7-33", "e7-34", "e7-35", "e7-36", "e7-37", "e7-38", "e7-39", "e7-40", "e7-41", "e7-42", "e7-43", "e7-44", "e7-45", "e7-46", "e7-47", "e7-48", "e7-49", "e7-50", "e7-51", "e7-52", "e7-53", "e7-54", "e7-55", "e7-56", "e7-57", "e7-58", "e7-59"]
+     }
+   ],
+diff --git a/tests/init-boot.toml b/tests/init-boot.toml
+index 6d6598127..2e593a542 100644
+--- a/tests/init-boot.toml
++++ b/tests/init-boot.toml
+@@ -8,6 +8,7 @@ recipe = "image/boot.toml"
+ # The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
+ # the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+ memory_mib = 1024
++memory = true
+ timeout_secs = 60
+ expect = [
+     '^init: up$',
+diff --git a/tools/testbench/Cargo.toml b/tools/testbench/Cargo.toml
+index 27eb5318a..008d506ac 100644
+--- a/tools/testbench/Cargo.toml
++++ b/tools/testbench/Cargo.toml
+@@ -20,6 +20,10 @@ redoubt-blkd = { path = "../../servers/blkd" }                           # a cas
+ redoubt-fsd = { path = "../../servers/fsd" }                             # a disk recipe's volumes, packed by fsd's own code
+ sha2 = { version = "0.11", default-features = false }                    # the userland disk's object names (userland.rs)
+ 
++stub = { path = "../../stub" } # the launched stack's paint format
++redoubt-client = { path = "../../libs/client" } # the launcher's default stack size
++redoubt-sys = { path = "../../libs/sys" } # the shared page size
++
+ [dev-dependencies]
+ # The oracle's own evidence (sched_oracle.rs): traces from the executable model, with its tie
+ # rules broken on purpose, must be rejected.
+diff --git a/tools/testbench/src/case.rs b/tools/testbench/src/case.rs
+index 5cc94e663..b66ecd2d5 100644
+--- a/tools/testbench/src/case.rs
++++ b/tools/testbench/src/case.rs
+@@ -242,6 +242,9 @@ pub struct Boot {
+     /// Guest RAM in MiB (QEMU `-m`); default `target::DEFAULT_MEMORY_MIB`. Small for cases
+     /// that exhaust RAM on purpose, so they take milliseconds.
+     pub memory_mib: Option<u32>,
++    /// Pause after the console verdict and measure every manifest server's painted stack in RAM.
++    #[serde(default)]
++    pub memory: bool,
+     /// Regular expressions that must each match a console line, in this order.
+     pub expect: Vec<String>,
+     /// Regular expressions that must never match.
+@@ -743,6 +746,10 @@ impl Case {
+     fn check(&self) -> Result<()> {
+         match &self.kind {
+             Kind::Boot(boot) => {
++                if boot.memory {
++                    ensure!(boot.under_init(), "memory needs a boot under init");
++                    ensure!(!boot.poweroff, "memory needs a running guest after its verdict");
++                }
+                 for pattern in &boot.distinct_across_boots {
+                     let groups = regex::Regex::new(pattern)?.captures_len();
+                     ensure!(groups >= 2, "distinct_across_boots /{pattern}/ needs a capture group");
+diff --git a/tools/testbench/src/main.rs b/tools/testbench/src/main.rs
+index 811af0d94..00449c2bd 100644
+--- a/tools/testbench/src/main.rs
++++ b/tools/testbench/src/main.rs
+@@ -12,6 +12,7 @@ mod cruft;
+ mod disk;
+ mod elixir;
+ mod fmt;
++mod memory;
+ mod peer;
+ mod pty;
+ mod qemu;
+diff --git a/tools/testbench/src/qemu.rs b/tools/testbench/src/qemu.rs
+index 75504acd6..cca7a3d7b 100644
+--- a/tools/testbench/src/qemu.rs
++++ b/tools/testbench/src/qemu.rs
+@@ -3,16 +3,19 @@
+ use std::collections::VecDeque;
+ use std::io::{BufRead, BufReader, Write};
+ use std::net::TcpListener;
++use std::os::unix::net::UnixStream;
+ use std::path::Path;
+ use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::{Arc, Mutex, mpsc};
+ use std::time::{Duration, Instant};
+ 
+-use anyhow::{Context, Result};
++use anyhow::{Context, Result, bail};
+ use regex::Regex;
++use serde_json::{Value, json};
+ 
+ use crate::case::{ALWAYS_FORBIDDEN, Boot, PASSED};
++use crate::memory;
+ use crate::peer;
+ use crate::ssh;
+ use crate::target::Machine;
+@@ -470,6 +473,10 @@ pub fn run(
+         .transpose()?;
+ 
+     let mut qemu = image.qemu();
++    let qmp_path = log.with_extension("qmp");
++    if boot.memory {
++        qemu.args(["-qmp", &format!("unix:{},server=on,wait=off", qmp_path.display())]);
++    }
+     qemu.args(["-display", "none", "-monitor", "none", "-serial", "stdio"])
+         .stdin(Stdio::piped())
+         .stdout(Stdio::piped())
+@@ -553,9 +560,89 @@ pub fn run(
+     if console.announced.is_some() && !console.passed_seen {
+         return Ok(Verdict::Fail("ended without the reporter's PASSED".into()));
+     }
++    if boot.memory {
++        if guest.0.try_wait()?.is_some() {
++            return Ok(Verdict::Fail("guest exited before its stack measurement".into()));
++        }
++        let measured = measure_stacks(image, boot, workspace, log, &qmp_path);
++        match measured {
++            Ok(measured) => {
++                for line in measured.lines {
++                    println!("{line}");
++                    writeln!(console.log, "{line}")?;
++                }
++                if !measured.failures.is_empty() {
++                    return Ok(Verdict::Fail(measured.failures.join("; ")));
++                }
++            }
++            Err(error) => return Ok(Verdict::Fail(format!("stack measurement: {error:#}"))),
++        }
++    }
+     Ok(Verdict::Pass(console.captured))
+ }
+ 
++/// Stop the running guest before QMP saves its physical RAM. The dump stays in the case's own
++/// log directory only until the scan ends; its errors are case failures, never guest verdicts.
++fn measure_stacks(
++    image: &Image,
++    boot: &Boot,
++    workspace: &Path,
++    log: &Path,
++    qmp_path: &Path,
++) -> Result<memory::Measurement> {
++    let stacks = memory::stacks(boot, workspace)?;
++    let stream =
++        UnixStream::connect(qmp_path).with_context(|| format!("connecting to {}", qmp_path.display()))?;
++    stream.set_read_timeout(Some(Duration::from_secs(60)))?;
++    stream.set_write_timeout(Some(Duration::from_secs(60)))?;
++    let mut reader = BufReader::new(stream.try_clone()?);
++    let mut writer = stream;
++    let mut greeting = String::new();
++    reader.read_line(&mut greeting)?;
++    if !greeting.contains("\"QMP\"") {
++        bail!("QMP did not greet the bench");
++    }
++    qmp_command(&mut reader, &mut writer, json!({"execute":"qmp_capabilities"}))?;
++    qmp_command(&mut reader, &mut writer, json!({"execute":"stop"}))?;
++    let dump = log.with_extension("ram");
++    let bytes = u64::from(image.memory_mib) * 1024 * 1024;
++    let result = (|| {
++        qmp_command(
++            &mut reader,
++            &mut writer,
++            json!({"execute":"pmemsave", "arguments":{
++                "val": 0x8000_0000u64, "size": bytes, "filename": dump.display().to_string()
++            }}),
++        )?;
++        let file = std::fs::File::open(&dump).with_context(|| format!("opening {}", dump.display()))?;
++        memory::scan(BufReader::new(file), bytes, &stacks)
++    })();
++    if result.is_ok() {
++        std::fs::remove_file(&dump).ok();
++    }
++    result
++}
++
++/// QMP may send asynchronous events between a command and its reply; only `return` or `error`
++/// answers the command.
++fn qmp_command(reader: &mut BufReader<UnixStream>, writer: &mut UnixStream, command: Value) -> Result<()> {
++    writeln!(writer, "{command}")?;
++    writer.flush()?;
++    loop {
++        let mut line = String::new();
++        if reader.read_line(&mut line)? == 0 {
++            bail!("QMP closed before replying to {command}");
++        }
++        let reply: Value = serde_json::from_str(&line).context("QMP reply is not JSON")?;
++        if let Some(error) = reply.get("error") {
++            bail!("QMP {command}: {error}");
++        }
++        if reply.get("return").is_some() {
++            return Ok(());
++        }
++    }
++}
++
+ /// Run the case's SSH sessions while still watching the console, so that a panic or the guest
+ /// dying during a session fails the case. Returns why it failed, if it did.
+ fn run_sessions(

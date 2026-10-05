@@ -1,0 +1,12 @@
+FROM redoubt-dev:latest
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends podman uidmap \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf 'dev:3713496320:65536\n' > /etc/subuid \
+    && printf 'dev:3713496320:65536\n' > /etc/subgid \
+    && printf '[storage]\ndriver = "vfs"\n' > /etc/containers/storage.conf
+
+ENV STORAGE_DRIVER=vfs
+USER dev

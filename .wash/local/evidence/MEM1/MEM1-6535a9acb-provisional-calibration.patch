@@ -1,0 +1,62 @@
+diff --git a/image/manifest.json b/image/manifest.json
+index ee454bec8..681cebfec 100644
+--- a/image/manifest.json
++++ b/image/manifest.json
+@@ -65,7 +65,7 @@
+       "receives": ["fsd:system"],
+       "args": ["endpoint=fsd:system", "buckets=4"] },
+     { "name": "beamlet", "program": "beamlet",
+-      "stack_pages": "3",
++      "stack_pages": "16",
+       "budget": { "pages": "24576", "processes": 1, "weight": 100 },
+       "handed": [ { "endpoint": "bootfsd", "badge": "7" }, { "endpoint": "fsd:system", "badge": "7" } ],
+       "args": ["budget_pages=24576", "Elixir.Redoubt.Shell"] }
+diff --git a/servers/init/tests/manifest.rs b/servers/init/tests/manifest.rs
+index 3f8195373..d1caa4507 100644
+--- a/servers/init/tests/manifest.rs
++++ b/servers/init/tests/manifest.rs
+@@ -149,13 +149,13 @@ fn the_image_manifest_s_bound() {
+     // The arena (256 + 3 tables), 9 receive and 10 exit endpoints and init's reports endpoint
+     // (beamlet receives on none), 10 process objects, 10 blocks with 3 tables each, 10 watching
+     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
+-    // batch of beamlet's image + 3, stack 5 + 3), the lend (2 + 3), and one handle-table page:
++    // batch of beamlet's image + 3, stack 16 + 3), the lend (2 + 3), and one handle-table page:
+     // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 9 + 6 + 40 + 3 + 1 = 59
+     // added (the two volumes' ranges among the 6 badges) pass page 0's 64.
+     let devices = virt_devices();
+     let m = machine(&devices, &ENTRIES);
+     assert_eq!(m.handles_at_start, 22);
+-    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 5 + 3) + 1 + 5);
++    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 16 + 3) + 1 + 5);
+ }
+ 
+ /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
+diff --git a/tests/userland-boot.toml b/tests/userland-boot.toml
+index 1140b18b6..dd3dacd96 100644
+--- a/tests/userland-boot.toml
++++ b/tests/userland-boot.toml
+@@ -5,6 +5,7 @@ recipe = "image/boot.toml"
+ # The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
+ # the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+ memory_mib = 1024
++memory = true
+ timeout_secs = 450
+ expect = [
+     '^init: started beamlet, console [0-9a-f]{16}$',
+@@ -40,4 +41,3 @@ recipe = "image/disk.toml"
+ stage = "tests/data/fsd/stage"
+ 
+ [net]
+-
+diff --git a/tests/userland-read-only.toml b/tests/userland-read-only.toml
+index f1a6160e2..a63b62ee4 100644
+--- a/tests/userland-read-only.toml
++++ b/tests/userland-read-only.toml
+@@ -17,6 +17,7 @@ programs = [
+ # The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
+ # the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+ memory_mib = 1024
++memory = true
+ timeout_secs = 330
+ # The client's lines come long before the shell's banner; they are expected first, so the call
+ # to Version follows the attack.

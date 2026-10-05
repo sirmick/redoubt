@@ -1,0 +1,273 @@
+{
+  "devices": [
+    {
+      "base": "268435456",
+      "dma": false,
+      "irq": 10,
+      "name": "uart0"
+    },
+    {
+      "base": "268468224",
+      "dma": true,
+      "irq": 8,
+      "name": "disk0"
+    },
+    {
+      "base": "268460032",
+      "dma": true,
+      "irq": 6,
+      "name": "disk1"
+    },
+    {
+      "base": "268464128",
+      "dma": true,
+      "irq": 7,
+      "name": "net0"
+    }
+  ],
+  "public": [
+    "system.index"
+  ],
+  "servers": [
+    {
+      "args": [
+        "host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111",
+        "audit,audit,2222222222222222222222222222222222222222222222222222222222222222",
+        "buckets=4"
+      ],
+      "budget": {
+        "pages": "256",
+        "processes": 1,
+        "weight": 100
+      },
+      "name": "keyd",
+      "program": "keyd",
+      "receives": [
+        "keyd"
+      ]
+    },
+    {
+      "args": [
+        "buckets=4"
+      ],
+      "budget": {
+        "pages": "1024",
+        "processes": 1,
+        "weight": 1000
+      },
+      "devices": [
+        {
+          "as": "uart",
+          "device": "uart0"
+        }
+      ],
+      "name": "consoled",
+      "program": "consoled",
+      "receives": [
+        "consoled"
+      ]
+    },
+    {
+      "args": [
+        "buckets=4"
+      ],
+      "budget": {
+        "pages": "640",
+        "processes": 1,
+        "weight": 100
+      },
+      "name": "bootfsd",
+      "program": "bootfsd",
+      "receives": [
+        "bootfsd"
+      ]
+    },
+    {
+      "args": [
+        "endpoint=blkd"
+      ],
+      "budget": {
+        "pages": "512",
+        "processes": 1,
+        "weight": 1000
+      },
+      "devices": [
+        {
+          "as": "disk",
+          "device": "disk0"
+        }
+      ],
+      "name": "blkd",
+      "program": "blkd",
+      "receives": [
+        "blkd"
+      ]
+    },
+    {
+      "args": [
+        "client=5"
+      ],
+      "budget": {
+        "pages": "1024",
+        "processes": 1,
+        "weight": 1000
+      },
+      "devices": [
+        {
+          "as": "net",
+          "device": "net0"
+        }
+      ],
+      "handed": [
+        {
+          "badge": "3",
+          "endpoint": "ipd"
+        }
+      ],
+      "name": "netd",
+      "program": "netd",
+      "receives": [
+        "netd"
+      ]
+    },
+    {
+      "args": [
+        "addr=10.0.2.15/24",
+        "gateway=10.0.2.2",
+        "ingress=3",
+        "scope=4:c:0.0.0.0/0:1-65535",
+        "buckets=4"
+      ],
+      "budget": {
+        "pages": "4096",
+        "processes": 1,
+        "weight": 100
+      },
+      "handed": [
+        {
+          "badge": "5",
+          "endpoint": "netd"
+        }
+      ],
+      "name": "ipd",
+      "program": "ipd",
+      "receives": [
+        "ipd"
+      ]
+    },
+    {
+      "args": [
+        "endpoint=fsd:data",
+        "buckets=4"
+      ],
+      "budget": {
+        "pages": "1024",
+        "processes": 1,
+        "weight": 100
+      },
+      "name": "fsd:data",
+      "program": "fsd",
+      "receives": [
+        "fsd:data"
+      ],
+      "volume": "data"
+    },
+    {
+      "args": [
+        "endpoint=blkd:system"
+      ],
+      "budget": {
+        "pages": "512",
+        "processes": 1,
+        "weight": 1000
+      },
+      "devices": [
+        {
+          "as": "disk",
+          "device": "disk1"
+        }
+      ],
+      "name": "blkd:system",
+      "program": "blkd",
+      "receives": [
+        "blkd:system"
+      ]
+    },
+    {
+      "args": [
+        "endpoint=fsd:system",
+        "buckets=4"
+      ],
+      "budget": {
+        "pages": "1024",
+        "processes": 1,
+        "weight": 100
+      },
+      "name": "fsd:system",
+      "program": "fsd",
+      "receives": [
+        "fsd:system"
+      ],
+      "volume": "system"
+    },
+    {
+      "args": [
+        "budget_pages=24576",
+        "Elixir.Redoubt.Shell"
+      ],
+      "budget": {
+        "pages": "24576",
+        "processes": 1,
+        "weight": 100
+      },
+      "handed": [
+        {
+          "badge": "7",
+          "endpoint": "bootfsd"
+        },
+        {
+          "badge": "7",
+          "endpoint": "fsd:system"
+        }
+      ],
+      "name": "beamlet",
+      "program": "beamlet"
+    },
+    {
+      "args": [
+        "readonly",
+        "fsd:system",
+        "Elixir.Version.beam"
+      ],
+      "budget": {
+        "pages": "256",
+        "processes": 1,
+        "weight": 100
+      },
+      "handed": [
+        {
+          "badge": "8",
+          "endpoint": "bootfsd"
+        },
+        {
+          "badge": "8",
+          "endpoint": "fsd:system"
+        }
+      ],
+      "name": "client",
+      "program": "fsd-client"
+    }
+  ],
+  "volumes": [
+    {
+      "disk": "blkd",
+      "name": "data",
+      "partition": 0
+    },
+    {
+      "disk": "blkd:system",
+      "name": "system",
+      "partition": 0
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+BEAM7 checkpoint at clean HEAD d26324470. Resume from /home/mcloonan/redoubt/.wash/local/BEAM7-report.md and BEAM7-host-routing.md. Two commits preserve source/tests and partial build.rs. No source edits after this update. Need case.rs window, named test cases, all Tier A execution, docs window, final review. App_spec test compiled, not executed. SCHED1 controls QEMU timing.

@@ -1,0 +1,18 @@
+MEM1-cal-init-boot-rv64.tar.gz: 10 peaks
+MEM1-cal-init-boot-rv32.tar.gz: 10 peaks
+MEM1-cal-userland-boot-rv64.tar.gz: 10 peaks
+MEM1-cal2-userland-boot-rv32.tar.gz: 10 peaks
+MEM1-cal2-userland-read-only-rv64.tar.gz: 11 peaks
+MEM1-cal2-userland-read-only-rv32.tar.gz: 11 peaks
+server,max_peak_bytes,final_pages
+keyd,5224,3
+consoled,8328,5
+bootfsd,6936,4
+blkd,4408,3
+netd,4264,3
+ipd,8008,4
+fsd:data,6888,4
+blkd:system,4408,3
+fsd:system,12072,6
+beamlet,31784,16
+read-only client,6568,4 (case default 16)
