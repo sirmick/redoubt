@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 25
+revision = 30
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -859,3 +859,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by TOOL1's gates 2026-10-05: tools/testbench ssh::tests::the_keeper_finds_what_names_the_case (BENCHENV1's keeper: a qemu-system-riscv64 naming the case directory after the sessions) failed once in a whole bench's host-tests case and once in cargo test -p testbench under load, 0 of 30 alone. Likely a /proc/*/cmdline scan racing a process that is starting or exiting. Make the test deterministic (spawn and wait for the stand-in to be visible before scanning; or order on an event) without weakening the keeper. Tier B (a host test), size S, no needs."
   state = "todo"
   revision = 23
+
+[[node]]
+  id = "DOC1"
+  title = "Getting started names the prerequisites for a machine without apt"
+  template = "package"
+  parent = "M1"
+  body = "Owner 2026-10-05: the page should list the dependencies too, for an OS that is not Debian-family. Docs only: one block under the script's paragraph in GETTING-STARTED.md naming the system tools (C toolchain, git, curl, xz, CA certificates, qemu-system-riscv64/32 >= 8.2, OpenSSH client >= 9.6, dpkg-deb, GDB with RISC-V optional), the rustup lines (1.99.0 from rust-toolchain.toml with its targets and components; nightly rustfmt/miri/rust-src; the four pinned cargo tools), and --with-beam's OTP/Elixir, pointing at the files that pin them. Written by the orchestrator, reviewed by an editor, doccheck. Tier: docs only, size XS."
+  state = "done"
+  revision = 30
