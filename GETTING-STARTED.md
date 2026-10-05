@@ -5,28 +5,36 @@ book. What Redoubt is, and what each part does, is in [the book](docs/README.md)
 
 ## Prerequisites
 
-The dev container has everything the operating system needs: Rust with the RISC-V bare-metal
-targets, QEMU 10.1 or later for both widths and OpenSSH 10.1 or later.
+Run [`scripts/setup.sh`](scripts/setup.sh) (any apt-based system: Debian, Ubuntu and their
+derivatives; `--with-beam` for beamlet's suites), or `./dev.sh` for the same in a container.
 
 ```sh
-./dev.sh                 # build the image (first time), then a shell in /work
+scripts/setup.sh         # the packages, rustup, the pinned cargo tools, the firmware; then checks
+./dev.sh                 # or: build the image (first time), then a shell in /work
 ./dev.sh --rebuild       # rebuild the image after editing the Dockerfile
 ./dev.sh ./test          # run one command and exit
 ```
 
-The container mounts only this directory, as `/work`, plus the agent tools' configuration
-directories; nothing else from your home ([`dev.sh`](dev.sh)).
+The script is the one list of what Redoubt needs. It installs the system packages with `sudo`
+(or as root), and Rust with `rustup` in your home (or `CARGO_HOME` and `RUSTUP_HOME`). Each step
+is skipped when already done. It then checks the versions the bench needs, QEMU 8.2 or later and
+OpenSSH 9.6 or later (the oldest the whole bench has passed on), builds the kernel and lists the
+bench's cases, and stops at the first thing that fails, naming it. If your `PATH` finds another
+`cargo` before rustup's, it says so.
 
-Your own machine instead needs:
-- Rust (stable, and nightly for `rustfmt`) with the targets `riscv64imac-unknown-none-elf`,
-  `riscv32imac-unknown-none-elf` and `riscv64gc-unknown-none-elf`;
-- `qemu-system-riscv64` and `qemu-system-riscv32`;
-- OpenSSH, for the bench's SSH sessions;
-- `curl`, `dpkg-deb` and `xz`, and the network once: the guest that runs OpenSSH's reference
-  server is built from Debian's packages the first time a bench needs it, then kept in
-  `target/ssh-reference/` ([the loopback server](docs/testbench.md#sessions-and-the-loopback-server));
-- `mdbook` and `mdbook-mermaid`, to render the book (`cargo install mdbook mdbook-mermaid`); the
-  book's own preprocessor for address maps builds with `cargo`.
+The bench needs only OpenSSH's client on your machine. The first bench that needs OpenSSH's
+reference server builds the guest that server runs in from Debian's packages, with `curl`,
+`dpkg-deb` and `xz` and the network once, then keeps it in `target/ssh-reference/`
+([the loopback server](docs/testbench.md#sessions-and-the-loopback-server)).
+
+Rust is pinned by version in [`rust-toolchain.toml`](rust-toolchain.toml), which rustup selects in
+this checkout, so every machine and the container compile with the same `rustc` and produce
+the same code: the rv32 image has to fit its memory layout, and a new compiler can move it.
+`bios/` pins its own nightly. Only `rustfmt` (`cargo +nightly fmt`, for the options
+`rustfmt.toml` uses) and the bench's Miri cases run on nightly.
+
+The container mounts only this directory, at `/work` and at its own path; nothing else from
+your home ([`dev.sh`](dev.sh)).
 
 ## Firmware
 
@@ -34,9 +42,9 @@ Your own machine instead needs:
 ./scripts/build-bios.sh  # builds the vendored RustSBI prototyper in bios/, both widths
 ```
 
-Both widths boot only the vendored RustSBI firmware; there is no fallback to QEMU's own. Skip
-this if `bios/target/` is already built for both widths. A checkout elsewhere (a worktree) can
-point at built images with `RUSTSBI_PROTOTYPER` and `RUSTSBI_PROTOTYPER_RV32`.
+Both widths boot only the vendored RustSBI firmware; there is no fallback to QEMU's own.
+`scripts/setup.sh` builds it once; run this again after changing `bios/`. A checkout elsewhere
+(a worktree) can point at built images with `RUSTSBI_PROTOTYPER` and `RUSTSBI_PROTOTYPER_RV32`.
 The firmware logs at WARN, so a boot log starts at the loader's first line; set
 `BIOS_LOG_LEVEL=INFO` when building to see its banner and platform report.
 
@@ -114,10 +122,10 @@ beamlet, the Elixir VM, runs on the host and boots the shell on Redoubt's UART c
 (`cargo testbench userland-boot`). Its differential and Elixir suites also need
 OTP 28.5.0.6 and Elixir 1.20.4. `tools/env.sh` puts `otp-28.5.0.6/bin` and `elixir-1.20.4/bin`
 under `BEAMLET_TOOLCHAINS` on the path, and with that unset, the same directories under the
-repository's untracked `toolchains/`. The container provides both under `/opt/toolchains`, OTP
-built from its release source and Elixir from its release's precompiled zip, each pinned by
-version and sha256 in the [Dockerfile](Dockerfile), and sets `BEAMLET_TOOLCHAINS` to it. Your
-own machine keeps its own build in `toolchains/`. The pure-Rust unit tests need neither.
+repository's untracked `toolchains/`. `scripts/setup.sh --with-beam` builds both there, OTP
+from its release source and Elixir from its release's precompiled zip, each pinned by version
+and sha256 in the script (`--toolchains <dir>` puts them elsewhere). The container runs it into
+`/opt/toolchains` and sets `BEAMLET_TOOLCHAINS` to it. The pure-Rust unit tests need neither.
 
 ```sh
 cd userland/otp

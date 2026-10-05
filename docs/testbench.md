@@ -363,7 +363,8 @@ runs a module on beamlet. Before any script the case checks the toolchain: the `
 `userland/otp/tools/env.sh` puts on the path must be of the OTP release `otp` (its
 `releases/<major>/OTP_VERSION`), and `elixir --version` must say `elixir`. A missing or other
 toolchain fails the case even with `--allow-skip`, and no `must_fail` waits for it: an oracle that
-does not run catches nothing, and the dev image carries both.
+does not run catches nothing; the dev image carries both, and `scripts/setup.sh --with-beam`
+builds both on your own machine.
 
 ## Checked builds
 
