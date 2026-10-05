@@ -38,6 +38,19 @@ stop." Done. Do not start packages until the owner asks for development.
   load): todo, small.
 - Ready and briefed but not started: MEM2, VOL1, BEAM3, K19, SMP1, BEAM6.
 
+## Native from here on (verified 2026-10-05 ~07:10)
+
+The host runs the whole toolchain without Docker: `scripts/setup.sh --with-beam` done by the
+owner (rustc 1.99.0 from the pin, three targets, nightly rustfmt/miri/rust-src, mdbook 0.5.4,
+QEMU 10.2.1 both widths, OpenSSH 10.2, dpkg-deb/curl/xz, gdb-multiarch, `toolchains/otp-28.5.0.6`
+and `elixir-1.20.4`), firmware in the root `bios/target/`. Proof: `cargo testbench --arch rv64
+redoubt-ipc` PASS (11.9 s) and `cargo testbench elixir-oracles` PASS, run natively from the root.
+**Launch every new member with plain `cargo testbench ...` from its worktree**, with
+`RUSTSBI_PROTOTYPER=/home/mcloonan/redoubt/bios/target/riscv64gc-unknown-none-elf/release/rustsbi-prototyper`
+and `RUSTSBI_PROTOTYPER_RV32=/home/mcloonan/redoubt/bios/target/riscv32imac-unknown-none-elf/release/rustsbi-prototyper`
+in its instructions (a worktree has no bios/target), and `~/.cargo/bin` first on PATH. `in-dev`
+and `./dev.sh` remain the identical container fallback (first use rebuilds the image to rev 5).
+
 ## Environment notes
 
 - Workspace `c7d0423bb3c3a1a44703a0a409b0e0c6`, catalog `anthropic-pro`. The catalog's `coding`
