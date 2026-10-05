@@ -64,10 +64,23 @@
 //! a case can require some of the latter in a share's window (`stale_waits_in=<share>`), so the
 //! check it runs cannot pass for want of the interrupts it is about.
 //!
+//! **The cluster** (`post_check = "sched_oracle cluster ..."`, kernel/scheduling.md,
+//! "Responsiveness") is judged on conservative kernel-clock envelopes, plan `v3-kernel-envelope`.
+//! Each stand-in attempt reports B (a kernel reading before arming), its delay, L = B + delay, P (a
+//! kernel reading after service) and U = P + 1; the check rebuilds every field, requires
+//! R <= L <= P and U <= F, and credits only an audit's certified interior `[u + 1, v)` inside
+//! `[L, U)`. The driver's lower witness, its RTC gross less the union of the audits' outer bins
+//! `[u, v + 1)` inside the envelope, decides whether an old-control miss is latency
+//! (`cluster_old_control`).
+//!
+//! **A sibling's first run** (`round`, kernel/scheduling.md, "Residual risks"): the program
+//! destroys an empty budget and then makes the one it marks, which must run before any other
+//! budget is picked twice.
+//!
 //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
 //! saw nothing proves nothing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One trace record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -536,6 +549,1127 @@ fn percentile(v: &mut [u64], q: usize) -> u64 {
     v.get((v.len() * q).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0)
 }
 
+/// Prove the timeout wake happened while the spinner's slice was still running. Timer `I` and
+/// `O` bracket the wake by record sequence, even when reconcile advances the entry number after
+/// `I`. A wake from a device IRQ has no timer `I`, so it cannot satisfy this check.
+fn check_wake_no_preempt(records: &[Record], expected: usize) -> Result<String, String> {
+    let mut intervals = Vec::new();
+    let mut begin = None;
+    for (i, r) in records.iter().enumerate() {
+        match r.kind {
+            'I' => {
+                if begin.replace(i).is_some() {
+                    return Err(format!("record {}: nested timer interval", r.seq));
+                }
+            }
+            'O' => {
+                let b = begin.take().ok_or_else(|| format!("record {}: unmatched timer return", r.seq))?;
+                intervals.push((b, i));
+            }
+            _ => {}
+        }
+    }
+    if begin.is_some() {
+        return Err("unended timer interval".into());
+    }
+    let mut proof = BTreeMap::<(u64, u64), usize>::new();
+    for (n, &(b, e)) in intervals.iter().enumerate() {
+        let interval = &records[b..=e];
+        let spinner = records[b].id;
+        if spinner == 0
+            || records[e].pass != 1
+            || !records[..b].iter().rposition(|r| r.kind == 'K').is_some_and(|k| records[k].id == spinner)
+            || interval.iter().any(|r| "KDXY".contains(r.kind))
+        {
+            continue;
+        }
+        let wakes: Vec<_> = interval.iter().filter(|r| r.kind == 'W').collect();
+        if wakes.len() != 1 || wakes[0].id == spinner {
+            continue;
+        }
+        let sleeper = wakes[0].id;
+        if !interval.iter().any(|r| r.kind == 'E' && r.id == sleeper && r.pass == 1) {
+            continue;
+        }
+        let Some(&(next_b, next_e)) = intervals.get(n + 1) else { continue };
+        if records[next_b].id != spinner || records[next_e].pass != 0 {
+            continue;
+        }
+        let ending = &records[next_b..=next_e];
+        if !ending.iter().any(|r| r.kind == 'R' && r.id == spinner)
+            || ending.iter().any(|r| "WDXY".contains(r.kind))
+            || !records[e + 1..next_b].iter().all(|r| r.kind != 'K' && r.kind != 'X')
+            || !records[next_e + 1..]
+                .iter()
+                .find(|r| r.kind == 'K' || r.kind == 'I')
+                .is_some_and(|r| r.kind == 'K')
+        {
+            continue;
+        }
+        *proof.entry((spinner, sleeper)).or_default() += 1;
+    }
+    let matches: Vec<_> = proof.iter().filter(|(_, count)| **count == expected).collect();
+    if matches.len() != 1 {
+        return Err(format!(
+            "wake-no-preempt: wanted one spinner/sleeper pair with {expected} I...W...O=1, later I...R...O=0 proofs; found {proof:?}"
+        ));
+    }
+    let (&(spinner, sleeper), &count) = matches[0];
+    Ok(format!(
+        "wake-no-preempt: {count} timeout wakes of budget {sleeper} continued spinner {spinner} to its slice end"
+    ))
+}
+
+/// The fixture fixes both the start order and the sample plan. This parser rejects missing or
+/// repeated setup acknowledgements and altered plans before any W is classified.
+fn cluster_plan(log: &str) -> Result<(u64, u64, u64, u64), String> {
+    let mut ready = Vec::new();
+    let mut plan = 0;
+    let mut window = None;
+    let mut tpu = None;
+    for line in log.lines().map(|x| x.trim_end_matches('\r')) {
+        if let Some(n) = line.strip_prefix("CLUSTER-READY ") {
+            ready.push(n.parse::<usize>().map_err(|_| format!("bad {line:?}"))?);
+        } else if line == "CLUSTER-PLAN v3-kernel-envelope 100 300 600 850 200 80000 50000" {
+            plan += 1;
+        } else if line.starts_with("CLUSTER-PLAN ") {
+            return Err(format!("unknown cluster plan version: {line:?}"));
+        } else if let Some(rest) = line.strip_prefix("CLUSTER-WINDOW ") {
+            let fields: Vec<_> = rest.split_whitespace().collect();
+            if fields.len() != 3 || window.is_some() {
+                return Err(format!("bad {line:?}"));
+            }
+            let parse = |s: &str| s.parse::<u64>().map_err(|_| format!("bad {line:?}"));
+            window = Some((parse(fields[0])?, parse(fields[1])?, parse(fields[2])?));
+        } else if let Some(rest) = line.strip_prefix("[cluster] calibrated: ") {
+            let Some(ticks) = rest.split_whitespace().next() else { return Err(format!("bad {line:?}")) };
+            if tpu.replace(ticks.parse::<u64>().map_err(|_| format!("bad {line:?}"))?).is_some() {
+                return Err("two cluster calibrations".into());
+            }
+        }
+    }
+    if ready != (0..19).collect::<Vec<_>>() || plan != 1 {
+        return Err(format!(
+            "cluster setup: ready {ready:?}, plans {plan}; expected 0..18 and one fixed plan"
+        ));
+    }
+    let (start, release, end) = window.ok_or("cluster window missing")?;
+    let tpu = tpu.ok_or("cluster timebase missing")?;
+    if tpu == 0 || start.checked_add(50_000) != Some(release) || release.checked_add(16_000_000) != Some(end)
+    {
+        return Err(format!("cluster window {start}/{release}/{end} or timebase {tpu} invalid"));
+    }
+    Ok((start, release, end, tpu))
+}
+
+#[derive(Clone, Copy)]
+struct ClusterSample {
+    intent_positive: bool,
+    prep_us: i64,
+    before: u64,
+    lower: u64,
+    early: u64,
+    observed: u64,
+    upper: u64,
+    arm: u64,
+    deadline: u64,
+    service: u64,
+    delay_us: u64,
+    rtc_gross: u64,
+}
+
+/// Metadata is sent in original attempt order after measurement, after each stand-in's header
+/// echoing the H and F it received. B, L, E, P and U are `time_now` microseconds; the driver's
+/// a, d and s are goldfish RTC nanoseconds (`rtc_ns`), and the timer has none (`no_rtc`, all 0).
+fn cluster_metadata(
+    log: &str,
+    start: u64,
+    release: u64,
+    end: u64,
+) -> Result<[Vec<ClusterSample>; 2], String> {
+    let mut out = [Vec::new(), Vec::new()];
+    let mut headers = [0usize; 2];
+    for line in log.lines().map(|x| x.trim_end_matches('\r')) {
+        if let Some(rest) = line.strip_prefix("CLUSTER-HEADER ") {
+            let f: Vec<_> = rest.split_whitespace().collect();
+            let standin = match f.first().copied() {
+                Some("driver_wake") => 0,
+                Some("timer_wake") => 1,
+                _ => return Err(format!("bad cluster header {line:?}")),
+            };
+            if f.len() != 3 || f[1].parse::<u64>() != Ok(start) || f[2].parse::<u64>() != Ok(end) {
+                return Err(format!("bad cluster header {line:?}"));
+            }
+            headers[standin] += 1;
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("CLUSTER-SAMPLE ") else { continue };
+        let f: Vec<_> = rest.split_whitespace().collect();
+        let bad = || format!("malformed cluster metadata {line:?}");
+        if f.len() != 16 {
+            return Err(bad());
+        }
+        let standin = match (f[0], f[15]) {
+            ("driver_wake", "rtc_ns") => 0,
+            ("timer_wake", "no_rtc") => 1,
+            _ => return Err(bad()),
+        };
+        if headers[standin] != 1 {
+            return Err(format!("cluster metadata before its stand-in's window header: {line:?}"));
+        }
+        let num = |i: usize| f[i].parse::<u64>().map_err(|_| bad());
+        let index = usize::try_from(num(1)?).map_err(|_| bad())?;
+        let intent = num(2)?;
+        let slot = num(3)?;
+        let prep_us = f[4].parse::<i64>().map_err(|_| bad())?;
+        let (before, delay_us, lower, early, observed, upper) =
+            (num(5)?, num(6)?, num(7)?, num(8)?, num(9)?, num(10)?);
+        let (arm, deadline, service, rtc_gross) = (num(11)?, num(12)?, num(13)?, num(14)?);
+        let expected_phase = [100, 300, 600, 850][index % 4];
+        let at = release.checked_add((index as u64).checked_mul(80_000).ok_or_else(bad)?).ok_or_else(bad)?;
+        let target = at.checked_add(expected_phase).ok_or_else(bad)?;
+        let signed_prep =
+            i64::try_from(before).ok().and_then(|b| i64::try_from(at).ok().and_then(|a| b.checked_sub(a)));
+        // L = B + delta is fixed before arming; U = P + 1 covers P's whole floored microsecond.
+        let (Some(want_lower), Some(want_upper)) = (before.checked_add(delay_us), observed.checked_add(1))
+        else {
+            return Err(format!("cluster metadata arithmetic overflow at {line:?}"));
+        };
+        // The driver's RTC deadline d = a + 1000 delta; the timer has no E and no RTC fields.
+        let driver_ok = || -> Option<bool> {
+            let deadline_from_arm = arm.checked_add(delay_us.checked_mul(1_000)?)?;
+            Some(
+                before <= early
+                    && early <= observed
+                    && deadline == deadline_from_arm
+                    && service >= deadline
+                    && rtc_gross == (service - deadline) / 1_000,
+            )
+        };
+        let raw_ok = if standin == 0 {
+            driver_ok().ok_or_else(|| format!("cluster metadata arithmetic overflow at {line:?}"))?
+        } else {
+            [early, arm, deadline, service, rtc_gross] == [0; 5]
+        };
+        if index != out[standin].len()
+            || index >= 200
+            || intent > 1
+            || (intent == 1) != (index / 4 % 2 == 1)
+            || slot != index as u64 * 80_000
+            || signed_prep != Some(prep_us)
+            || (intent == 1 && before < at)
+            || delay_us == 0
+            || (intent == 1 && delay_us != expected_phase)
+            || (intent == 0 && target.checked_sub(before) != Some(delay_us))
+            || lower != want_lower
+            || upper != want_upper
+            || lower < release
+            || lower > observed
+            || upper > end
+            || !raw_ok
+        {
+            return Err(format!("cluster metadata order/construction failure at {line:?}"));
+        }
+        out[standin].push(ClusterSample {
+            intent_positive: intent == 1,
+            prep_us,
+            before,
+            lower,
+            early,
+            observed,
+            upper,
+            arm,
+            deadline,
+            service,
+            delay_us,
+            rtc_gross,
+        });
+    }
+    if headers != [1, 1] || out.iter().any(|samples| samples.len() != 200) {
+        return Err(format!("cluster metadata counts {:?}, expected 200 per stand-in", out.map(|v| v.len())));
+    }
+    Ok(out)
+}
+
+/// Full v3 envelope, independently checked against the trusted latency record.
+fn cluster_window_bounds(
+    sample_end: u64,
+    gross: u64,
+    meta: ClusterSample,
+) -> Result<(u64, u64), &'static str> {
+    if sample_end != meta.upper || sample_end.checked_sub(gross) != Some(meta.lower) {
+        return Err("cluster envelope and trusted window disagree");
+    }
+    Ok((meta.lower, meta.upper))
+}
+
+/// A report boundary must be identified independently of the wake count. Inside it, each one-
+/// thread stand-in has one D, then one W and a service K for every reported attempt. A report
+/// wake after the boundary therefore cannot replace a missing or immediate measurement wake.
+fn cluster_waits_before(
+    records: &[Record],
+    id: u64,
+    after_go: usize,
+    before_report: usize,
+) -> Result<Vec<usize>, String> {
+    let events: Vec<_> = records[after_go + 1..before_report]
+        .iter()
+        .enumerate()
+        .filter_map(|(offset, r)| {
+            (r.id == id && (r.kind == 'D' || r.kind == 'W')).then_some((after_go + 1 + offset, r.kind))
+        })
+        .collect();
+    if events.len() != 400 {
+        return Err(format!(
+            "cluster budget {id}: {} D/W events before report boundary, expected 400",
+            events.len()
+        ));
+    }
+    let mut wakes = Vec::with_capacity(200);
+    for (index, pair) in events.chunks_exact(2).enumerate() {
+        if pair[0].1 != 'D' || pair[1].1 != 'W' {
+            return Err(format!("cluster budget {id} sample {index}: no single D...W blocked wait"));
+        }
+        let after_w = events.get(index * 2 + 2).map_or(before_report, |next| next.0);
+        if !records[pair[1].0 + 1..after_w].iter().any(|r| r.kind == 'K' && r.id == id) {
+            return Err(format!("cluster budget {id} sample {index}: no service K before next wait"));
+        }
+        wakes.push(pair[1].0);
+    }
+    Ok(wakes)
+}
+
+#[derive(Clone, Copy)]
+struct ClusterFence {
+    x: usize,
+    y: usize,
+    marker_id: u64,
+}
+
+/// Only the stand-ins destroy a budget after go. An empty marker has no W, so its handle and
+/// budget ID cannot be equated: the most recent K at X identifies the running one-thread caller.
+/// Require exactly one distinct, paired X/Y per caller and no deschedule after that K.
+fn cluster_fences(
+    records: &[Record],
+    standins: [u64; 2],
+    go_w: [usize; 2],
+) -> Result<[ClusterFence; 2], String> {
+    let after_go = go_w[0].max(go_w[1]);
+    let mut last_k = records[..=after_go].iter().rposition(|r| r.kind == 'K');
+    let mut fences = [None, None];
+    let mut n = 0;
+    for (i, r) in records.iter().enumerate().skip(after_go + 1) {
+        if r.kind == 'K' {
+            last_k = Some(i);
+        }
+        if r.kind != 'X' {
+            continue;
+        }
+        n += 1;
+        let k = last_k.ok_or_else(|| format!("cluster marker X {} has no caller K", r.seq))?;
+        let caller = records[k].id;
+        let standin = standins.iter().position(|id| *id == caller).ok_or_else(|| {
+            format!("cluster marker X {} was called by budget {caller}, not a stand-in", r.seq)
+        })?;
+        if fences[standin].is_some()
+            || records[k + 1..i]
+                .iter()
+                .any(|event| event.id == caller && (event.kind == 'R' || event.kind == 'D'))
+        {
+            return Err(format!("cluster marker X {} has duplicate or descheduled caller {caller}", r.seq));
+        }
+        let y = records[i + 1..]
+            .iter()
+            .position(|event| event.kind == 'Y')
+            .map(|at| i + 1 + at)
+            .ok_or_else(|| format!("cluster marker X {} has no Y", r.seq))?;
+        if records[y].id != r.id
+            || records[y].pass < r.pass
+            || records[i + 1..y].iter().any(|event| event.kind == 'X')
+        {
+            return Err(format!("cluster marker X {} has no unique matching Y", r.seq));
+        }
+        fences[standin] = Some(ClusterFence { x: i, y, marker_id: r.id });
+    }
+    let [Some(driver), Some(timer)] = fences else {
+        return Err(format!("cluster marker fences: found {n} X, expected one per stand-in"));
+    };
+    if n != 2 || driver.marker_id == timer.marker_id {
+        return Err(format!("cluster marker fences: found {n} X or repeated marker ID"));
+    }
+    Ok([driver, timer])
+}
+
+/// Reconstruct the serial readiness and launcher-driven go protocol for all 19 children. A
+/// FOREVER readiness send may complete immediately or block once; the window receive must block
+/// once in either case. The server's first W after the final isolated spawn anchors go because
+/// the launcher consumes every readiness report before sending any window, starting with server.
+fn cluster_go_boundaries(records: &[Record], mapped: &[(usize, u64)]) -> Result<[usize; 19], String> {
+    if mapped.len() != 19 {
+        return Err(format!("cluster setup mapped {} children, expected 19", mapped.len()));
+    }
+    let final_spawn = mapped[18].0;
+    let server = mapped[0].1;
+    let anchor = records[final_spawn + 1..]
+        .iter()
+        .position(|r| r.kind == 'W' && r.id == server)
+        .map(|offset| final_spawn + 1 + offset)
+        .ok_or("cluster server lacked a go-phase W after final spawn")?;
+    let launcher = records[..anchor]
+        .iter()
+        .rposition(|r| r.kind == 'K')
+        .map(|at| records[at].id)
+        .ok_or("cluster go anchor lacked a launcher pick")?;
+    if mapped.iter().any(|(_, id)| *id == launcher) {
+        return Err(format!("cluster go anchor caller {launcher} is a child"));
+    }
+    let mut go = [0usize; 19];
+    for (child, &(spawn, id)) in mapped.iter().enumerate() {
+        let readiness_limit = if child == 18 { anchor } else { mapped[child + 1].0 };
+        let first_pick = records[spawn + 1..readiness_limit]
+            .iter()
+            .position(|r| r.kind == 'K' && r.id == id)
+            .map(|offset| spawn + 1 + offset)
+            .ok_or_else(|| format!("cluster child {child} budget {id} lacked isolated spawn pick"))?;
+        let actual_go = records[anchor..]
+            .iter()
+            .position(|r| r.kind == 'W' && r.id == id)
+            .map(|offset| anchor + offset)
+            .ok_or_else(|| format!("cluster child {child} budget {id} lacked go W"))?;
+        if (child == 0 && actual_go != anchor) || (child > 0 && actual_go <= go[child - 1]) {
+            return Err(format!("cluster child {child} budget {id} go W was out of launcher order"));
+        }
+        let events: Vec<_> = records[spawn + 1..actual_go]
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, r)| {
+                (r.id == id && (r.kind == 'D' || r.kind == 'W')).then_some((spawn + 1 + offset, r.kind))
+            })
+            .collect();
+        let go_d = match events.as_slice() {
+            [(d, 'D')] => *d, // readiness send completed immediately
+            [(ready_d, 'D'), (ready_w, 'W'), (window_d, 'D')] => {
+                if *ready_w >= readiness_limit
+                    || *ready_d <= first_pick
+                    || !records[ready_w + 1..*window_d].iter().any(|r| r.kind == 'K' && r.id == id)
+                    || records[..*ready_w]
+                        .iter()
+                        .rposition(|r| r.kind == 'K')
+                        .is_none_or(|at| records[at].id != launcher)
+                {
+                    return Err(format!(
+                        "cluster child {child} budget {id} readiness pair was late or unserved"
+                    ));
+                }
+                *window_d
+            }
+            _ => {
+                return Err(format!(
+                    "cluster child {child} budget {id} has ambiguous readiness/window D-W prefix {events:?}"
+                ));
+            }
+        };
+        if go_d <= first_pick
+            || records[..actual_go]
+                .iter()
+                .rposition(|r| r.kind == 'K')
+                .is_none_or(|at| records[at].id != launcher)
+        {
+            return Err(format!("cluster child {child} budget {id} go lacked blocked window or launcher"));
+        }
+        go[child] = actual_go;
+    }
+    Ok(go)
+}
+
+/// After its validated go, each spinner blocks once toward the common release. This next D/W,
+/// rather than a fixed global W ordinal, names the release regardless of readiness-send cost.
+fn cluster_spinner_releases(
+    records: &[Record],
+    mapped: &[(usize, u64)],
+    go: &[usize; 19],
+) -> Result<BTreeMap<u64, usize>, String> {
+    let mut release = BTreeMap::new();
+    for child in 1..=16 {
+        let id = mapped[child].1;
+        let mut events = records[go[child] + 1..].iter().enumerate().filter_map(|(offset, r)| {
+            (r.id == id && (r.kind == 'D' || r.kind == 'W')).then_some((go[child] + 1 + offset, r.kind))
+        });
+        let Some((d, 'D')) = events.next() else {
+            return Err(format!("cluster spinner {id} lacked a blocked release D"));
+        };
+        let Some((w, 'W')) = events.next() else {
+            return Err(format!(
+                "cluster spinner {id} lacked a matching release W after D {}",
+                records[d].seq
+            ));
+        };
+        if !records[go[child] + 1..d].iter().any(|r| r.kind == 'K' && r.id == id) {
+            return Err(format!("cluster spinner {id} did not run after go before release D"));
+        }
+        release.insert(id, w);
+    }
+    Ok(release)
+}
+
+/// Check the actual common release and classify all stand-in wakes using independently replayed
+/// ranks. The last 19 *first* budget wakes must belong to the 19 serially started, acknowledged
+/// one-thread children; no numeric budget-id assumption enters the mapping. A child must first
+/// be picked before the next child's first W, matching the readiness handshake.
+struct ClusterProof {
+    report: String,
+    metrics: [Vec<ClusterMetric>; 2],
+    /// Each stand-in's positive-lead wakes: the spinners ranked before each.
+    positive_ahead: [Vec<usize>; 2],
+}
+
+#[derive(Clone, Copy)]
+struct ClusterMetric {
+    gross: u64,
+    credit: u64,
+    net: u64,
+    lower_witness: u64,
+}
+
+/// Certified audit interiors credit the whole reported envelope; outer bins bound physical
+/// audit overlap in the opposite direction for the driver's negative-control witness.
+fn cluster_metric(
+    audits: &[(u64, u64)],
+    lower: u64,
+    upper: u64,
+    rtc_gross: u64,
+) -> Result<ClusterMetric, String> {
+    let gross = upper.checked_sub(lower).ok_or("reversed cluster envelope")?;
+    let mut credit = 0u64;
+    let mut outer = 0u64;
+    let mut outer_end = lower;
+    for &(u, v) in audits {
+        if v < u {
+            return Err("reversed cluster audit".into());
+        }
+        let interior_start = u.checked_add(1).ok_or("cluster audit interior overflow")?;
+        let part = v.min(upper).saturating_sub(interior_start.max(lower));
+        credit = credit.checked_add(part).ok_or("cluster audit credit overflow")?;
+        let outer_stop = v.checked_add(1).ok_or("cluster audit outer overflow")?.min(upper);
+        let outer_start = u.max(lower).max(outer_end);
+        if outer_stop > outer_start {
+            outer =
+                outer.checked_add(outer_stop - outer_start).ok_or("cluster audit outer credit overflow")?;
+        }
+        outer_end = outer_end.max(outer_stop);
+    }
+    let net = gross.checked_sub(credit).ok_or("cluster audit credit exceeds envelope")?;
+    Ok(ClusterMetric { gross, credit, net, lower_witness: rtc_gross.saturating_sub(outer) })
+}
+
+fn check_cluster(
+    log: &str,
+    records: &[Record],
+    samples: &BTreeMap<(usize, &str), Vec<(u64, u64)>>,
+    audits: &[(u64, u64)],
+) -> Result<ClusterProof, String> {
+    let (start, release, end, tpu) = cluster_plan(log)?;
+    let metadata = cluster_metadata(log, start, release, end)?;
+    let mut first = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (i, r) in records.iter().enumerate() {
+        if r.kind == 'W' && seen.insert(r.id) {
+            first.push((i, r.id));
+        }
+    }
+    let map_start = first.len().checked_sub(19).ok_or("fewer than 19 first budget wakes")?;
+    let mapped = &first[map_start..];
+    let go = cluster_go_boundaries(records, mapped)?;
+    let go_w = [go[17], go[18]];
+    let server = mapped[0].1;
+    let spinners: BTreeSet<u64> = mapped[1..=16].iter().map(|(_, id)| *id).collect();
+    let standins = [mapped[17].1, mapped[18].1];
+    if spinners.len() != 16 || standins[0] == standins[1] {
+        return Err("cluster setup budget mapping is ambiguous".into());
+    }
+    let spinner_release = cluster_spinner_releases(records, mapped, &go)?;
+    let fences = cluster_fences(records, standins, go_w)?;
+    let measurement_wakes = [
+        cluster_waits_before(records, standins[0], go_w[0], fences[0].x)?,
+        cluster_waits_before(records, standins[1], go_w[1], fences[1].x)?,
+    ];
+    let mut queues: BTreeMap<u64, (u128, Key)> = BTreeMap::new();
+    let mut floor = 0u128;
+    let mut requeues = 0i128;
+    let mut released = None;
+    let mut clustered = BTreeSet::new();
+    let mut first_cluster_w = None;
+    let mut wake_counts = BTreeMap::<u64, usize>::new();
+    let mut wakes = [Vec::new(), Vec::new()];
+    let mut witnesses: [Vec<(u128, u128, usize, Option<bool>)>; 2] = [Vec::new(), Vec::new()];
+    let mut categories = [[0usize; 4]; 4]; // driver zero/positive, timer zero/positive
+    let mut pick_positions: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+    let spread_limit = (u128::from(100 * tpu) * u128::from(redoubt_stride::STRIDE)).div_ceil(100);
+    let mut spread = 0u128;
+    for (i, r) in records.iter().enumerate() {
+        if r.kind == 'W' {
+            wake_counts.entry(r.id).and_modify(|n| *n += 1).or_insert(1);
+            // Readiness can itself block; the validated D/W after each spinner's go is release.
+            // Later reporting can itself block and wake after measurement.
+            if spinners.contains(&r.id) {
+                if spinner_release.get(&r.id) == Some(&i) {
+                    first_cluster_w.get_or_insert(i);
+                    clustered.insert(r.id);
+                } else if spinner_release.get(&r.id).is_some_and(|release| i > *release) && released.is_none()
+                {
+                    return Err(format!(
+                        "cluster spinner {} woke again before the release pick at record {}",
+                        r.id, r.seq
+                    ));
+                }
+            }
+            if let Some(standin) = standins.iter().position(|id| *id == r.id) {
+                if i > go_w[standin] && i < fences[standin].x {
+                    let sample_index = wakes[standin].len();
+                    if measurement_wakes[standin].get(sample_index) != Some(&i) {
+                        return Err(format!(
+                            "cluster stand-in {} W {} did not join a bounded sample before marker X",
+                            r.id, r.seq
+                        ));
+                    }
+                    let phase = sample_index % 4;
+                    let intended_positive = metadata[standin][sample_index].intent_positive;
+                    let lead = r.pass.saturating_sub(floor);
+                    let key = (0, -i128::from(r.entry));
+                    let ahead = spinners
+                        .iter()
+                        .filter(|id| {
+                            queues
+                                .get(id)
+                                .is_some_and(|&(pass, rank)| (pass, rank, **id) < (r.pass, key, r.id))
+                        })
+                        .count();
+                    // A positive lead is a pass above the replayed floor. How many spinners rank
+                    // before the wake is the slice's doing, not the debt's: under 1 ms a waker
+                    // is picked within one slice of the lowest spinner, so `ahead` stays a
+                    // reported witness, not a qualifier (the old control's non-vacuity uses it).
+                    let qualified = if intended_positive && lead > 0 {
+                        Some(true)
+                    } else if !intended_positive && lead == 0 {
+                        Some(false)
+                    } else {
+                        None
+                    };
+                    if let Some(positive) = qualified {
+                        categories[standin * 2 + usize::from(positive)][phase] += 1;
+                    }
+                    witnesses[standin].push((floor, lead, ahead, qualified));
+                    wakes[standin].push(i);
+                }
+            }
+        }
+        match r.kind {
+            'W' => {
+                queues.insert(r.id, (r.pass, (0, -i128::from(r.entry))));
+            }
+            'R' => {
+                requeues += 1;
+                queues.insert(r.id, (r.pass, (1, requeues)));
+            }
+            'D' => {
+                queues.remove(&r.id);
+            }
+            'P' => {
+                if let Some(q) = queues.get_mut(&r.id) {
+                    q.0 = r.pass;
+                }
+            }
+            'K' => {
+                pick_positions.entry(r.id).or_default().push(i);
+                if released.is_none() && !clustered.is_empty() {
+                    if clustered.len() != 16 || !spinners.iter().all(|id| queues.contains_key(id)) {
+                        return Err(format!(
+                            "cluster release: only {} spinner W before next K {}",
+                            clustered.len(),
+                            r.seq
+                        ));
+                    }
+                    let low = spinners.iter().map(|id| queues[id].0).min().unwrap();
+                    let high = spinners.iter().map(|id| queues[id].0).max().unwrap();
+                    spread = high - low;
+                    if spread > spread_limit {
+                        return Err(format!(
+                            "cluster pass spread {spread:#x} exceeds 100 us equivalent {spread_limit:#x}"
+                        ));
+                    }
+                    released = Some(i);
+                }
+            }
+            _ => {}
+        }
+        let waking = r.kind == 'W' || (r.kind == 'P' && !queues.contains_key(&r.id));
+        if !waking {
+            if let Some(min) = queues.values().map(|(pass, _)| *pass).min() {
+                floor = floor.max(min);
+            }
+        }
+    }
+    let release_at = released.ok_or("cluster release had no qualifying sixteen-W interval")?;
+    if wake_counts.get(&server).is_none_or(|n| *n < 2)
+        || !spinners.iter().all(|id| wake_counts.get(id).is_some_and(|n| *n >= 3))
+        || standins.iter().any(|id| wake_counts.get(id).is_none_or(|n| *n < 202))
+    {
+        return Err(format!(
+            "cluster setup/sample W counts lack one spawn, one go and 200 bounded waits: server {:?}, spinners {:?}, stand-ins {:?}",
+            wake_counts.get(&server),
+            spinners.iter().map(|id| wake_counts.get(id)).collect::<Vec<_>>(),
+            standins.map(|id| wake_counts.get(&id))
+        ));
+    }
+    let first_release = first_cluster_w.ok_or("cluster release lacked a spinner W")?;
+    let last_release = *spinner_release.values().max().ok_or("cluster release lacked its last spinner W")?;
+    let last_pick =
+        records[..first_release].iter().rposition(|r| r.kind == 'K').ok_or("no pick before release")?;
+    if records[last_pick].id != server {
+        return Err(format!(
+            "busy server {} was not running across release; last pick was {}",
+            server, records[last_pick].id
+        ));
+    }
+    let mut lines = Vec::new();
+    let mut metrics: [Vec<ClusterMetric>; 2] = [Vec::new(), Vec::new()];
+    let mut positive_ahead: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+    for (standin, measure) in ["driver_wake", "timer_wake"].iter().enumerate() {
+        let windows =
+            samples.get(&(standin, "cluster")).ok_or(format!("cluster {measure} windows missing"))?;
+        if windows.len() != 200 || wakes[standin].len() != 200 {
+            return Err(format!(
+                "cluster {measure}: {} windows and {} bounded measurement W, expected exactly 200 each",
+                windows.len(),
+                wakes[standin].len()
+            ));
+        }
+        let mut picks = 0usize;
+        let mut peer_r10_overlap_us = 0u64;
+        let mut net = Vec::new();
+        let mut category_net = [Vec::new(), Vec::new()];
+        let mut details = Vec::new();
+        for (sample_index, (&w, &(sample_end, gross))) in
+            wakes[standin][..200].iter().zip(windows).enumerate()
+        {
+            let meta = metadata[standin][sample_index];
+            let next = wakes[standin].get(sample_index + 1).copied().unwrap_or(fences[standin].x);
+            let service =
+                pick_positions[&standins[standin]].iter().copied().find(|&k| k > w && k < next).ok_or_else(
+                    || {
+                        format!(
+                            "cluster {measure} sample {sample_index}: no unique service K after W {}",
+                            records[w].seq
+                        )
+                    },
+                )?;
+            let earlier = records[w + 1..service].iter().filter(|r| r.kind == 'K').count();
+            picks += earlier;
+            let (sample_start, sample_stop) = cluster_window_bounds(sample_end, gross, meta)
+                .map_err(|e| format!("cluster {measure} sample {sample_index}: {e}"))?;
+            let metric = cluster_metric(audits, sample_start, sample_stop, meta.rtc_gross)
+                .map_err(|e| format!("cluster {measure} sample {sample_index}: {e}"))?;
+            metrics[standin].push(metric);
+            let peer = fences[1 - standin];
+            let peer_begin = records[peer.x].pass as u64;
+            let peer_end = records[peer.y].pass as u64;
+            let overlap = sample_stop.min(peer_end).saturating_sub(sample_start.max(peer_begin));
+            peer_r10_overlap_us += overlap;
+            let elapsed = metric.net;
+            net.push(elapsed);
+            let (floor, lead, ahead, qualified) = witnesses[standin][sample_index];
+            if let Some(positive) = qualified {
+                category_net[usize::from(positive)].push(elapsed);
+                // The timer reads no E and no RTC: it reports B, L, P and U only.
+                let raw = if standin == 0 {
+                    format!(
+                        "B/L/E/P/U {}/{}/{}/{}/{} µs RTC a/d/s {}/{}/{} ns RTC-gross {} µs lower-witness {} µs",
+                        meta.before,
+                        meta.lower,
+                        meta.early,
+                        meta.observed,
+                        meta.upper,
+                        meta.arm,
+                        meta.deadline,
+                        meta.service,
+                        meta.rtc_gross,
+                        metric.lower_witness
+                    )
+                } else {
+                    format!("B/L/P/U {}/{}/{}/{} µs", meta.before, meta.lower, meta.observed, meta.upper)
+                };
+                details.push(format!(
+                    "{measure} #{sample_index} programmed-offset {} {} prep-slip {} µs delay {} µs {raw} W {} floor {floor:#x} lead {lead:#x} ahead {ahead} earlier-picks {earlier} peer-R10-overlap {overlap} µs envelope/certified-audit-credit/net {}/{}/{} µs",
+                    [100, 300, 600, 850][sample_index % 4],
+                    if positive { "positive" } else { "zero" },
+                    meta.prep_us,
+                    meta.delay_us,
+                    records[w].seq,
+                    metric.gross,
+                    metric.credit,
+                    metric.net,
+                ));
+            }
+        }
+        for category in 0..2 {
+            let counts = categories[standin * 2 + category];
+            let total: usize = counts.iter().sum();
+            if total < 25 || counts.iter().any(|n| *n < 5) {
+                return Err(format!(
+                    "cluster {measure} {}-lead coverage {counts:?}, total {total}, needs >=25 and >=5 per offset",
+                    if category == 0 { "zero" } else { "positive" }
+                ));
+            }
+        }
+        // `ahead` per category, as a distribution: min, median, max.
+        let ahead_in = |positive: bool| -> Vec<u64> {
+            witnesses[standin].iter().filter(|w| w.3 == Some(positive)).map(|w| w.2 as u64).collect()
+        };
+        let spread_of = |mut v: Vec<u64>| {
+            let median = percentile(&mut v, 50);
+            format!("{}/{median}/{}", v.first().copied().unwrap_or(0), v.last().copied().unwrap_or(0))
+        };
+        let ahead = format!(
+            "; spinners ranked before the wake, min/median/max: zero {}, positive {}",
+            spread_of(ahead_in(false)),
+            spread_of(ahead_in(true))
+        );
+        positive_ahead[standin] = ahead_in(true).into_iter().map(|a| a as usize).collect();
+        let (p50, p99) = (percentile(&mut net.clone(), 50), percentile(&mut net, 99));
+        let zero = category_net[0].len();
+        let positive = category_net[1].len();
+        let (z50, z99) = (percentile(&mut category_net[0].clone(), 50), percentile(&mut category_net[0], 99));
+        let (p50_cat, p99_cat) =
+            (percentile(&mut category_net[1].clone(), 50), percentile(&mut category_net[1], 99));
+        let mut lower: Vec<u64> = metrics[standin].iter().map(|m| m.lower_witness).collect();
+        let (l50, l99) = (percentile(&mut lower.clone(), 50), percentile(&mut lower, 99));
+        let witness = if standin == 0 {
+            format!("; RTC gross less outer audit bins (lower witness) p50/p99 {l50}/{l99} µs")
+        } else {
+            String::new()
+        };
+        lines.push(format!(
+            "{measure}: 200 fenced D-W-service/sample envelopes, {} later report wakes, marker {} X {} Y {} duration {} µs, peer R10 overlap {peer_r10_overlap_us} µs retained; {zero} zero and {positive} positive, {picks} earlier picks before service; all envelope net (an upper bound on non-audit latency) p50/p99 {p50}/{p99} µs{witness}; zero {z50}/{z99}; positive {p50_cat}/{p99_cat}{ahead}\n      {}",
+            wake_counts[&standins[standin]] - 202,
+            fences[standin].marker_id,
+            records[fences[standin].x].seq,
+            records[fences[standin].y].seq,
+            records[fences[standin].y].pass - records[fences[standin].x].pass,
+            details.join("\n      ")
+        ));
+    }
+    let report = format!(
+        "cluster: 16 queued spinner W before K {}, W entries {}..{}, sequences {}..{}, spread {spread:#x} <= {spread_limit:#x}; {}",
+        records[release_at].seq,
+        records[first_release].entry,
+        records[last_release].entry,
+        records[first_release].seq,
+        records[last_release].seq,
+        lines.join("; ")
+    );
+    Ok(ClusterProof { report, metrics, positive_ahead })
+}
+
+/// The old 10-ms build is a demonstrated negative control only if, with every construction and
+/// coverage gate already passed, it shows the attack (at least 25 positive-lead wakes per
+/// stand-in with eight or more spinners ranked before them), misses at least one unchanged
+/// envelope target **and** a driver lower-witness percentile exceeds its target. An envelope miss
+/// alone may be only the observation's uncertainty (arming, the reads, P's resolution bin), not
+/// latency.
+fn cluster_old_control_verdict(
+    envelope_missed: bool,
+    mut lower_witness: Vec<u64>,
+    (b50, b99): (u64, u64),
+    positive_ahead: &[Vec<usize>; 2],
+) -> Result<String, String> {
+    let behind = positive_ahead.each_ref().map(|v| v.iter().filter(|a| **a >= 8).count());
+    if behind.iter().any(|n| *n < 25) {
+        return Err(format!(
+            "old control is vacuous: positive-lead wakes with >=8 spinners ahead {behind:?} (driver, timer), needs >=25 each"
+        ));
+    }
+    let l50 = percentile(&mut lower_witness, 50);
+    let l99 = percentile(&mut lower_witness, 99);
+    if !envelope_missed {
+        return Err("old control met every unchanged cluster envelope target".into());
+    }
+    if l50 <= b50 && l99 <= b99 {
+        return Err(format!(
+            "old control envelope-only failure: driver lower witness p50/p99 {l50}/{l99} µs within {b50}/{b99}"
+        ));
+    }
+    Ok(format!(
+        "old control: an envelope target missed, and driver lower witness p50/p99 {l50}/{l99} µs passes a target of {b50}/{b99}"
+    ))
+}
+
+/// The guest's own gates, which the control's case does not expect by line (it expects the
+/// trace instead, so that a classified failure reaches this check). Without a `CLUSTER-FAIL`, the
+/// program must have passed. With one, the only failures allowed are those stand-ins' own
+/// "took all 200 real waits": any other (a spinner or the server that did not run, a report
+/// count, a setup acknowledgement) is not the classified kind.
+fn cluster_control_guest_gates(log: &str) -> Result<(), String> {
+    let lines = || log.lines().map(|x| x.trim_end_matches('\r'));
+    let failed: Vec<&str> = lines()
+        .filter_map(|l| {
+            l.strip_prefix("CLUSTER-FAIL ")?.split_whitespace().find_map(|f| f.strip_prefix("role="))
+        })
+        .collect();
+    if failed.is_empty() {
+        if !lines().any(|l| l == "SCHED-CLUSTER TEST PASSED") {
+            return Err(
+                "control: the program did not pass, and no stand-in failed of the classified kind".into()
+            );
+        }
+        return Ok(());
+    }
+    for fail in lines().filter(|l| l.starts_with("[cluster] FAIL: ")) {
+        let allowed = failed
+            .iter()
+            .any(|role| fail == format!("[cluster] FAIL: stand-in {role} took all 200 real waits"));
+        if !allowed {
+            return Err(format!("control: a failure other than a classified stand-in's: {fail:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// An old control whose stand-in could not reach its next slot (kernel/scheduling.md,
+/// "Responsiveness"; the control ruling). It is the demonstrated negative only if every
+/// `CLUSTER-FAIL` is a zero-intent attempt `i >= 1` whose target had passed at B (branch 2,
+/// result 0), the stand-in's attempts before `i` joined the trace as blocked waits after its go,
+/// and for at least one such stand-in the miss `B - target`, less the certified audit time
+/// inside `[target, B)`, exceeds that stand-in's p99 target. The trace is required: `parse`
+/// has already refused a log without one.
+fn cluster_control_classify(
+    log: &str,
+    records: &[Record],
+    audits: &[(u64, u64)],
+    bounds: &BTreeMap<&str, u64>,
+) -> Result<String, String> {
+    let (_, release, _, _) = cluster_plan(log)?;
+    let mut first = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (i, r) in records.iter().enumerate() {
+        if r.kind == 'W' && seen.insert(r.id) {
+            first.push((i, r.id));
+        }
+    }
+    let map_start = first.len().checked_sub(19).ok_or("fewer than 19 first budget wakes")?;
+    let mapped = &first[map_start..];
+    let go = cluster_go_boundaries(records, mapped)?;
+    let mut failed = [None, None];
+    for line in log.lines().map(|x| x.trim_end_matches('\r')) {
+        let Some(rest) = line.strip_prefix("CLUSTER-FAIL ") else { continue };
+        let bad = || format!("control: malformed {line:?}");
+        let field = |name: &str| -> Result<i64, String> {
+            rest.split_whitespace()
+                .find_map(|f| f.strip_prefix(name)?.strip_prefix('=')?.parse::<i64>().ok())
+                .ok_or_else(bad)
+        };
+        let (role, index, branch, result) =
+            (field("role")?, field("index")?, field("branch")?, field("result")?);
+        let (target, current) = (field("target_us")?, field("current_us")?);
+        let standin = match role {
+            17 => 0,
+            18 => 1,
+            _ => return Err(bad()),
+        };
+        let index = usize::try_from(index).map_err(|_| bad())?;
+        let phase = [100i64, 300, 600, 850][index % 4];
+        if branch != 2
+            || result != 0
+            || index == 0
+            || index >= 200
+            || index / 4 % 2 == 1
+            || target != index as i64 * 80_000 + phase
+            || current <= target
+            || failed[standin].is_some()
+        {
+            return Err(format!("control: {line:?} is not a zero-intent attempt whose target had passed"));
+        }
+        failed[standin] = Some((index, phase, target, current));
+    }
+    let mut lines = Vec::new();
+    let mut demonstrated = false;
+    for (standin, measure) in ["driver_wake", "timer_wake"].iter().enumerate() {
+        let id = mapped[17 + standin].1;
+        let Some((index, phase, target, current)) = failed[standin] else {
+            lines.push(format!("stand-in {measure} reported no failure (its samples are not judged)"));
+            continue;
+        };
+        // Attempts 0..index each took a real blocked wait after go: a D, its W, and a pick of the
+        // stand-in before its next D, as the full check joins every sample.
+        let after = go[17 + standin] + 1;
+        let waits: Vec<(usize, char)> = records[after..]
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.id == id && (r.kind == 'D' || r.kind == 'W'))
+            .map(|(at, r)| (after + at, r.kind))
+            .take(2 * index + 1)
+            .collect();
+        for attempt in 0..index {
+            let (Some(&(_, 'D')), Some(&(w, 'W'))) = (waits.get(2 * attempt), waits.get(2 * attempt + 1))
+            else {
+                return Err(format!("control: {measure} attempt {attempt} did not join a blocked wait"));
+            };
+            let next = waits.get(2 * attempt + 2).map_or(records.len(), |e| e.0);
+            if !records[w + 1..next].iter().any(|r| r.kind == 'K' && r.id == id) {
+                return Err(format!("control: {measure} attempt {attempt} has no service pick"));
+            }
+        }
+        let at = |us: i64| -> Result<u64, String> {
+            release
+                .checked_add_signed(us)
+                .ok_or_else(|| format!("control: {measure} time {us} outside the clock"))
+        };
+        let (from, to) = (at(target)?, at(current)?);
+        let miss = to - from;
+        let credit = cluster_metric(audits, from, to, 0)?.credit;
+        let net = miss - credit;
+        let bound = *bounds.get(&*format!("{measure}_p99_us")).ok_or("control: p99 target missing")?;
+        let over = net > bound;
+        demonstrated |= over;
+        lines.push(format!(
+            "control: stand-in {measure} could not take attempt {index} (zero intent, offset {phase}): B exceeded its target by {miss} µs, {credit} µs of audits inside, net {net} µs {} {bound}",
+            if over { ">" } else { "<=" }
+        ));
+    }
+    if !demonstrated {
+        return Err(format!("control: no net miss above its p99 target: {}", lines.join("; ")));
+    }
+    Ok(lines.join("; "))
+}
+
+/// The 999/1000 carve must return while the same parent is still in the turn picked before the
+/// down-weight. `G` carries both weights and the parent's low-weight lead before the up-weight;
+/// the ordinary oracle independently checks both reweigh calculations and the later share.
+fn check_carve_return(log: &str, records: &[Record]) -> Result<String, String> {
+    let observations: Vec<_> = log.lines().filter_map(|line| line.strip_prefix("CARVE-OBS ")).collect();
+    let [observation] = observations.as_slice() else {
+        return Err(format!("carve-return: expected one observation, found {}", observations.len()));
+    };
+    let fields: Vec<_> = observation.split_whitespace().collect();
+    if fields.len() != 3 {
+        return Err(format!("carve-return: malformed observation {observation:?}"));
+    }
+    let mut numbers = fields.iter().map(|s| s.parse::<u64>());
+    let (create, returned, absolute) = (
+        numbers.next().unwrap().map_err(|_| "bad carve create duration")?,
+        numbers.next().unwrap().map_err(|_| "bad carve return duration")?,
+        numbers.next().unwrap().map_err(|_| "bad carve return time")?,
+    );
+    if create == 0 || returned < create || absolute == 0 {
+        return Err(format!("carve-return: invalid create {create} or return {returned} µs"));
+    }
+    let changes: Vec<_> = records
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| {
+            if r.kind != 'G' {
+                return None;
+            }
+            let packed = records.get(i + 2)?.pass;
+            Some((i, r.id, packed >> 32, packed & 0xffff_ffff, records.get(i + 3)?.pass, r.pass))
+        })
+        .collect();
+    let downs: Vec<_> = changes.iter().filter(|(_, _, old, new, _, _)| (*old, *new) == (1000, 1)).collect();
+    let ups: Vec<_> = changes.iter().filter(|(_, _, old, new, _, _)| (*old, *new) == (1, 1000)).collect();
+    let ([down], [up]) = (downs.as_slice(), ups.as_slice()) else {
+        return Err(format!(
+            "carve-return: expected one 1000->1 and one 1->1000 change, found {}/{}",
+            downs.len(),
+            ups.len()
+        ));
+    };
+    let (start, parent) = (down.0, down.1);
+    let (finish, low_pass, floor) = (up.0, up.5, up.4);
+    if up.1 != parent || finish <= start || low_pass <= floor {
+        return Err(format!(
+            "carve-return: parent {parent} lacked positive low-weight lead ({low_pass:#x} vs floor {floor:#x})"
+        ));
+    }
+    let pick = records[..start]
+        .iter()
+        .rposition(|r| r.kind == 'K')
+        .ok_or("carve-return: no pick before the down-weight")?;
+    if records[pick].id != parent {
+        return Err(format!(
+            "carve-return: last pick before carve was budget {}, not parent {parent}",
+            records[pick].id
+        ));
+    }
+    if let Some(r) = records[pick + 1..finish].iter().find(|r| {
+        r.kind == 'K' || (r.id == parent && "RD".contains(r.kind)) || (r.kind == 'O' && r.pass == 0)
+    }) {
+        return Err(format!(
+            "carve-return: parent {parent} lost its running turn at record {} ({})",
+            r.seq, r.kind
+        ));
+    }
+    Ok(format!(
+        "carve-return: parent {parent} K {} through 1000->1 and 1->1000 with low-weight lead {:#x}; create {create} µs, return {returned} µs after wake at time_now {absolute}",
+        records[pick].seq,
+        low_pass - floor
+    ))
+}
+
+/// A budget made after a marker runs before any other budget is picked twice: the program
+/// destroys an empty marker budget (one never woken, picked or queued), then makes a budget; the
+/// first wake after the marker's `Y` must be that new budget's first (a waker's `P`, its pass
+/// raised to the floor, comes just before its `W`), and it must be picked before any other budget
+/// is picked twice. A lineage's raw debt, unlifted, would cost it several rounds; the lift's own
+/// arithmetic is [`check_lift`]'s.
+fn check_round(records: &[Record]) -> Result<String, String> {
+    let queued: BTreeSet<u64> = records.iter().filter(|r| "WKRD".contains(r.kind)).map(|r| r.id).collect();
+    let markers: Vec<usize> =
+        (0..records.len()).filter(|&i| records[i].kind == 'X' && !queued.contains(&records[i].id)).collect();
+    let [x] = markers.as_slice() else {
+        return Err(format!("round: expected one empty marker destruction, found {}", markers.len()));
+    };
+    let marker = records[*x].id;
+    let y = records[x + 1..]
+        .iter()
+        .position(|r| r.kind == 'Y' && r.id == marker)
+        .map(|at| x + 1 + at)
+        .ok_or_else(|| format!("round: marker {marker} has no Y"))?;
+    let w = records[y + 1..]
+        .iter()
+        .position(|r| r.kind == 'W')
+        .map(|at| y + 1 + at)
+        .ok_or_else(|| format!("round: no wake after marker {marker}"))?;
+    let marked = records[w].id;
+    if records[..w].iter().any(|r| r.id == marked && "WRDK".contains(r.kind)) {
+        return Err(format!(
+            "round: the first wake after marker {marker}, record {}, is budget {marked}'s, which is not new",
+            records[w].seq
+        ));
+    }
+    let mut picks = BTreeMap::<u64, usize>::new();
+    for r in &records[w + 1..] {
+        if r.kind != 'K' {
+            continue;
+        }
+        if r.id == marked {
+            return Ok(format!(
+                "round: budget {marked}, new at record {}, picked at record {} after {} picks of other budgets, none twice",
+                records[w].seq,
+                r.seq,
+                picks.len()
+            ));
+        }
+        let n = picks.entry(r.id).or_default();
+        *n += 1;
+        if *n == 2 {
+            return Err(format!(
+                "round: budget {} was picked twice (record {}) before budget {marked}, new at record {}",
+                r.id, r.seq, records[w].seq
+            ));
+        }
+    }
+    Err(format!("round: budget {marked}, new at record {}, was never picked", records[w].seq))
+}
+
 /// The audit time inside `[from, to]`, µs: the part of each audit's span that falls in it, so an
 /// audit straddling an edge counts only its inside. `audits` is in trace order, so by time.
 pub fn audit_inside(audits: &[(u64, u64)], from: u64, to: u64) -> u64 {
@@ -628,6 +1762,8 @@ fn shares(log: &str) -> Result<Vec<Share<'_>>, String> {
 /// `walk-trace` kernel's walks may each be bounded, `pump_max_us=N`, `expiry_max_us=N` and
 /// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99. Every window a target
 /// or a share judges has the checked build's audit time inside it subtracted; R10's has none.
+/// `round` requires the budget the program marks to run before any other budget is picked twice
+/// ([`check_round`]).
 pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
@@ -644,9 +1780,46 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     // Each bound, by its argument's name.
     let mut bounds = BTreeMap::new();
     let mut stale_in = Vec::new();
+    let mut wake_no_preempt = None;
+    let mut cluster = false;
+    let mut cluster_old_control = false;
+    let mut carve_return = false;
+    let mut round = false;
     for arg in args.split_whitespace() {
+        if arg == "cluster" {
+            if cluster {
+                return Err("duplicate cluster check".into());
+            }
+            cluster = true;
+            continue;
+        }
+        if arg == "cluster_old_control" {
+            if cluster_old_control {
+                return Err("duplicate cluster old-control check".into());
+            }
+            cluster_old_control = true;
+            continue;
+        }
+        if arg == "carve_return" {
+            if carve_return {
+                return Err("duplicate carve-return check".into());
+            }
+            carve_return = true;
+            continue;
+        }
+        if arg == "round" {
+            if round {
+                return Err("duplicate round check".into());
+            }
+            round = true;
+            continue;
+        }
         if let Some(share) = arg.strip_prefix("stale_waits_in=") {
             stale_in.push(share);
+            continue;
+        }
+        if let Some(count) = arg.strip_prefix("wake_no_preempt=") {
+            wake_no_preempt = Some(count.parse::<usize>().map_err(|_| format!("bad wake count {arg:?}"))?);
             continue;
         }
         let (name, bound) = arg
@@ -663,6 +1836,24 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         }
         bounds.insert(name, bound);
     }
+    let wake_proof = wake_no_preempt.map(|count| check_wake_no_preempt(&records, count)).transpose()?;
+    if cluster_old_control && !cluster {
+        return Err("cluster_old_control requires cluster".into());
+    }
+    // An old control whose stand-in could not reach a slot took no 200 samples: it is judged by
+    // the classification alone, never by the full cluster check or its partial samples.
+    let control_failed =
+        cluster_old_control && log.lines().any(|l| l.trim_end_matches('\r').starts_with("CLUSTER-FAIL "));
+    let cluster_proof = (cluster && !control_failed)
+        .then(|| check_cluster(log, &records, &samples, &sum.audits))
+        .transpose()?;
+    if cluster_old_control {
+        cluster_control_guest_gates(log)?;
+    }
+    let control_classified =
+        control_failed.then(|| cluster_control_classify(log, &records, &sum.audits, &bounds)).transpose()?;
+    let carve_proof = carve_return.then(|| check_carve_return(log, &records)).transpose()?;
+    let round_proof = round.then(|| check_round(&records)).transpose()?;
     // Each walk net of the audits inside it, as a release kernel runs it; a walk's bound is
     // judged before R10's, so a case whose R10 must fail still holds its walks.
     let walks: Vec<(Vec<u64>, u64)> = sum
@@ -690,6 +1881,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     }
     // Each measure in each group, net of the audits inside its windows.
     let (mut lines, mut missed, mut decision_p99) = (Vec::new(), false, None::<u64>);
+    // The old control's cluster envelope targets: whether any of them missed.
+    let mut cluster_missed = false;
     for (m, measure) in MEASURES.iter().enumerate() {
         let want = ["p50", "p99"].map(|q| (q, bounds.get(&*format!("{measure}_{q}_us"))));
         let groups: Vec<_> = samples.range((m, "")..(m + 1, "")).filter(|(_, w)| !w.is_empty()).collect();
@@ -697,10 +1890,31 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             return Err(format!("a {measure} bound is set, but the log holds no {measure} sample"));
         }
         for ((_, group), windows) in groups {
-            let mut gross: Vec<u64> = windows.iter().map(|(_, g)| *g).collect();
-            let inside: Vec<u64> =
-                windows.iter().map(|(end, g)| audit_inside(&sum.audits, end - g, *end)).collect();
-            let mut net: Vec<u64> = windows.iter().zip(&inside).map(|((_, g), a)| g - a).collect();
+            if control_failed && *group == "cluster" {
+                continue;
+            }
+            let cluster_metrics = if *group == "cluster" {
+                let proof = cluster_proof.as_ref().ok_or("cluster samples without cluster check")?;
+                Some(
+                    proof
+                        .metrics
+                        .get(m)
+                        .ok_or_else(|| format!("cluster {measure} samples: not a stand-in measure"))?,
+                )
+            } else {
+                None
+            };
+            let mut gross: Vec<u64> = if let Some(metrics) = cluster_metrics {
+                metrics.iter().map(|x| x.gross).collect()
+            } else {
+                windows.iter().map(|(_, g)| *g).collect()
+            };
+            let inside: Vec<u64> = if let Some(metrics) = cluster_metrics {
+                metrics.iter().map(|x| x.credit).collect()
+            } else {
+                windows.iter().map(|(end, g)| audit_inside(&sum.audits, end - g, *end)).collect()
+            };
+            let mut net: Vec<u64> = gross.iter().zip(&inside).map(|(g, a)| g - a).collect();
             let stats =
                 |v: &mut Vec<u64>| (percentile(v, 50), percentile(v, 99), v.last().copied().unwrap_or(0));
             let ((g50, g99, gmax), (n50, n99, nmax)) = (stats(&mut gross), stats(&mut net));
@@ -711,7 +1925,11 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
                 })
                 .collect();
             let met = judged.iter().all(|(_, ok)| *ok);
-            missed |= !met;
+            if cluster_old_control && *group == "cluster" {
+                cluster_missed |= !met;
+            } else {
+                missed |= !met;
+            }
             if *measure == "decision_wake" {
                 decision_p99 = Some(decision_p99.unwrap_or(0).max(n99));
             }
@@ -721,8 +1939,14 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
                 let texts: Vec<&str> = judged.iter().map(|(text, _)| text.as_str()).collect();
                 format!("target {} ({})", if met { "met" } else { "missed" }, texts.join(", "))
             };
+            // A cluster window is the conservative envelope, net of certified audit interiors.
+            let (kind, credit) = if cluster_metrics.is_some() {
+                ("envelope ", "certified audit credit")
+            } else {
+                ("", "audits")
+            };
             lines.push(format!(
-                "{group} {measure} ({}): net p50/p99/max {n50}/{n99}/{nmax} µs, gross {g50}/{g99}/{gmax}, audits {} µs: {target}",
+                "{group} {measure} ({}): {kind}net p50/p99/max {n50}/{n99}/{nmax} µs, {kind}gross {g50}/{g99}/{gmax}, {credit} {} µs: {target}",
                 gross.len(),
                 inside.iter().sum::<u64>()
             ));
@@ -780,6 +2004,32 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.timer_empty.len()
     );
     let mut report = Vec::new();
+    if let Some(proof) = wake_proof {
+        report.push(proof);
+    }
+    if let Some(line) = control_classified {
+        report.push(line);
+    }
+    if let Some(proof) = cluster_proof {
+        if cluster_old_control {
+            let lower: Vec<u64> = proof.metrics[0].iter().map(|m| m.lower_witness).collect();
+            let b50 = bounds.get("driver_wake_p50_us").ok_or("old control driver p50 target missing")?;
+            let b99 = bounds.get("driver_wake_p99_us").ok_or("old control driver p99 target missing")?;
+            report.push(cluster_old_control_verdict(
+                cluster_missed,
+                lower,
+                (*b50, *b99),
+                &proof.positive_ahead,
+            )?);
+        }
+        report.push(proof.report);
+    }
+    if let Some(proof) = carve_proof {
+        report.push(proof);
+    }
+    if let Some(proof) = round_proof {
+        report.push(proof);
+    }
     for (name, (net, audits)) in WALKS.iter().zip(walks) {
         let mut net = net;
         if net.is_empty() {
@@ -807,6 +2057,677 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cluster_plan_rejects_the_old_construction() {
+        let mut setup = String::from("[cluster] calibrated: 10 ticks/us, 1 iterations/ms\n");
+        for i in 0..19 {
+            setup.push_str(&format!("CLUSTER-READY {i}\n"));
+        }
+        setup.push_str("CLUSTER-WINDOW 950000 1000000 17000000\n");
+        let new = format!("{setup}CLUSTER-PLAN v3-kernel-envelope 100 300 600 850 200 80000 50000\n");
+        assert!(cluster_plan(&new).is_ok());
+        let old = format!("{setup}CLUSTER-PLAN v2-relative 100 300 600 850 200 80000 50000\n");
+        assert!(cluster_plan(&old).is_err());
+        assert!(
+            cluster_plan(
+                &(new.clone() + "CLUSTER-PLAN v3-kernel-envelope 100 300 600 850 200 80000 50000\n")
+            )
+            .is_err()
+        );
+    }
+
+    /// Two headers, then 200 consistent attempts per stand-in: release R = 1,000,000 µs, fixed end
+    /// F = 17,000,000 µs. Zero intent arms 20 µs before its slot, positive intent 2 µs after it.
+    fn cluster_fixture() -> Vec<String> {
+        let mut lines = vec![
+            "CLUSTER-HEADER driver_wake 950000 17000000".to_string(),
+            "CLUSTER-HEADER timer_wake 950000 17000000".to_string(),
+        ];
+        for (measure, driver) in [("driver_wake", true), ("timer_wake", false)] {
+            for i in 0..200u64 {
+                let phase = [100, 300, 600, 850][i as usize % 4];
+                let positive = i / 4 % 2 == 1;
+                let at = 1_000_000 + i * 80_000;
+                let before = if positive { at + 2 } else { at - 20 };
+                let delay = if positive { phase } else { phase + 20 };
+                let lower = before + delay;
+                let observed = lower + 10;
+                let (early, arm, deadline, service, rtc_gross, clock) = if driver {
+                    let arm = 50_000_000_000 + i * 80_000_000;
+                    (before, arm, arm + delay * 1_000, arm + delay * 1_000 + 10_000, 10, "rtc_ns")
+                } else {
+                    (0, 0, 0, 0, 0, "no_rtc")
+                };
+                lines.push(format!(
+                    "CLUSTER-SAMPLE {measure} {i} {} {} {} {before} {delay} {lower} {early} {observed} {} {arm} {deadline} {service} {rtc_gross} {clock}",
+                    usize::from(positive),
+                    i * 80_000,
+                    before as i64 - at as i64,
+                    observed + 1
+                ));
+            }
+        }
+        lines
+    }
+
+    /// `lines` with fields of line `at` replaced, numbered as the parser numbers them (0 is the
+    /// measure, after the `CLUSTER-SAMPLE` tag).
+    fn edited(lines: &[String], at: usize, fields: &[(usize, String)]) -> Vec<String> {
+        let mut out = lines.to_vec();
+        let mut f: Vec<String> = out[at].split_whitespace().map(str::to_owned).collect();
+        for (i, v) in fields {
+            f[*i + 1] = v.clone();
+        }
+        out[at] = f.join(" ");
+        out
+    }
+
+    fn metadata_of(lines: &[String]) -> Result<[Vec<ClusterSample>; 2], String> {
+        cluster_metadata(&lines.join("\n"), 950_000, 1_000_000, 17_000_000)
+    }
+
+    #[test]
+    fn cluster_metadata_rejects_bad_records_and_bounds() {
+        let lines = cluster_fixture();
+        assert!(metadata_of(&lines).is_ok());
+        let mut missing = lines.clone();
+        missing.remove(4);
+        assert!(metadata_of(&missing).is_err());
+        let mut reordered = lines.clone();
+        reordered.swap(4, 5);
+        assert!(metadata_of(&reordered).is_err());
+        let mut duplicate = lines.clone();
+        duplicate.insert(2, duplicate[2].clone());
+        assert!(metadata_of(&duplicate).is_err());
+        // Line 2 is driver attempt 0: each field wrong on its own, the units mixed or old.
+        for (field, value) in [
+            (2, "1"),
+            (3, "1"),
+            (4, "0"),
+            (5, "2000000"),
+            (6, "0"),
+            (7, "999999"),
+            (8, "2000000"),
+            (9, "999999"),
+            (10, "17000001"),
+            (12, "0"),
+            (13, "0"),
+            (14, "999"),
+            (15, "no_rtc"),
+            (15, "timer_us"),
+        ] {
+            assert!(metadata_of(&edited(&lines, 2, &[(field, value.into())])).is_err(), "field {field}");
+        }
+        // The timer has no E and no RTC: any of them set, or an RTC unit, is rejected.
+        let timer0 = 2 + 200;
+        for field in [8, 11, 12, 13, 14] {
+            assert!(metadata_of(&edited(&lines, timer0, &[(field, "1".into())])).is_err(), "timer {field}");
+        }
+        assert!(metadata_of(&edited(&lines, timer0, &[(15, "rtc_ns".into())])).is_err());
+        // Plan and stand-in window headers must match, once each, before the samples.
+        let mut header = lines.clone();
+        header[0] = "CLUSTER-HEADER driver_wake 950000 17000001".into();
+        assert!(metadata_of(&header).is_err());
+        let mut header = lines.clone();
+        header.push(lines[0].clone());
+        assert!(metadata_of(&header).is_err());
+        let mut late_header = lines.clone();
+        let h = late_header.remove(0);
+        late_header.push(h);
+        assert!(metadata_of(&late_header).is_err());
+    }
+
+    #[test]
+    fn cluster_metadata_rejects_arming_and_containment_failures() {
+        let lines = cluster_fixture();
+        let n = |v: u64| v.to_string();
+        // Zero intent, attempt 0 (slot 1,000,000, phase 100): a target already passed, or reached.
+        let late = |b: u64, delay: u64| {
+            // a = 50,000,000,000 ns and s = a + 130,000 ns, as in the fixture; d follows the delay.
+            let d = 1_000 * delay;
+            let f = [
+                (4, n(b - 1_000_000)),
+                (5, n(b)),
+                (6, n(delay)),
+                (7, n(b + delay)),
+                (8, n(b)),
+                (12, n(50_000_000_000 + d)),
+                (14, n((130_000 - d) / 1_000)),
+            ];
+            edited(&lines, 2, &f)
+        };
+        assert!(metadata_of(&late(1_000_099, 1)).is_ok());
+        assert!(metadata_of(&late(1_000_101, 1)).is_err());
+        let reached = late(1_000_100, 0);
+        assert!(metadata_of(&reached).is_err());
+        // Positive intent, attempt 4 (line 6, slot 1,320,000): B 5 µs after the slot is accepted,
+        // B 1 µs before it is not, the rest kept consistent.
+        let slot = 1_320_000;
+        let positive = |b: u64| {
+            let mut f = vec![(5, n(b)), (7, n(b + 100)), (8, n(b))];
+            f.push((4, (b as i64 - slot as i64).to_string()));
+            edited(&lines, 6, &f)
+        };
+        assert!(metadata_of(&positive(slot + 5)).is_ok());
+        assert!(metadata_of(&positive(slot - 1)).is_err());
+        // L above P, and E before B, E after P.
+        assert!(metadata_of(&edited(&lines, 6, &[(9, n(slot + 101)), (10, n(slot + 102))])).is_err());
+        assert!(metadata_of(&edited(&lines, 6, &[(8, n(slot + 1))])).is_err());
+        assert!(metadata_of(&edited(&lines, 6, &[(8, n(slot + 113))])).is_err());
+        // The last attempt: P = F - 1 gives U = F and is inside; P = F gives U > F and is not.
+        let last = 2 + 199;
+        assert!(metadata_of(&edited(&lines, last, &[(9, n(16_999_999)), (10, n(17_000_000))])).is_ok());
+        assert!(metadata_of(&edited(&lines, last, &[(9, n(17_000_000)), (10, n(17_000_001))])).is_err());
+        // d - a must be the delay in ns, and s >= d.
+        let wrong_d = edited(&lines, 2, &[(12, n(50_000_000_000 + 120_001))]);
+        assert!(metadata_of(&wrong_d).is_err());
+        let early_s = edited(&lines, 2, &[(13, n(50_000_000_000 + 119_999)), (14, n(0))]);
+        assert!(metadata_of(&early_s).is_err());
+        // Overflow anywhere is a rejection, not a wrap: d, U and L = B + delta.
+        let max = u64::MAX;
+        assert!(metadata_of(&edited(&lines, 2, &[(11, n(max - 5))])).is_err());
+        assert!(metadata_of(&edited(&lines, 2, &[(9, n(max)), (10, n(0))])).is_err());
+        assert!(metadata_of(&edited(&lines, 2, &[(5, n(max))])).is_err());
+    }
+
+    #[test]
+    fn cluster_metadata_rejects_a_preparation_slip_it_cannot_sign() {
+        // A window just below 2^63 µs, so every slot is a signed number and nothing else
+        // overflows. Driver attempts 0 to 4; the stand-in counts are short, so a record the
+        // parser accepts ends in the count error, and one it refuses in a construction error.
+        let release = (1u64 << 63) - 1_000_000;
+        let (start, end) = (release - 50_000, release + 16_000_000);
+        let log = |last_before: u64| {
+            let mut lines = vec![
+                format!("CLUSTER-HEADER driver_wake {start} {end}"),
+                format!("CLUSTER-HEADER timer_wake {start} {end}"),
+            ];
+            for i in 0..5u64 {
+                let phase = [100, 300, 600, 850][i as usize % 4];
+                let positive = i / 4 % 2 == 1;
+                let at = release + i * 80_000;
+                let before = if i == 4 {
+                    last_before
+                } else if positive {
+                    at + 2
+                } else {
+                    at - 20
+                };
+                let delay = if positive { phase } else { phase + 20 };
+                let (lower, arm) = (before + delay, 50_000_000_000 + i * 80_000_000);
+                let (deadline, observed) = (arm + delay * 1_000, lower + 10);
+                lines.push(format!(
+                    "CLUSTER-SAMPLE driver_wake {i} {} {} {} {before} {delay} {lower} {before} {observed} {} {arm} {deadline} {} 10 rtc_ns",
+                    usize::from(positive),
+                    i * 80_000,
+                    before.wrapping_sub(at) as i64,
+                    observed + 1,
+                    deadline + 10_000
+                ));
+            }
+            cluster_metadata(&lines.join("\n"), start, release, end)
+        };
+        let at = release + 4 * 80_000;
+        // B 5 µs after its slot: every field holds, and only the counts are short.
+        assert!(log(at + 5).is_err_and(|e| e.contains("expected 200 per stand-in")));
+        // B at 2^63: still at or after its slot, L, P and U inside the window, but B - slot has
+        // no signed reading, so the record is refused for it.
+        assert!(1u64 << 63 > at && (1u64 << 63) + 112 < end);
+        assert!(log(1 << 63).is_err_and(|e| e.contains("construction failure")));
+    }
+
+    #[test]
+    fn cluster_envelope_qualifies_where_the_old_rtc_interval_did_not() {
+        // Driver attempt 0 serviced 36,267 µs late on the RTC, with E and P 200 µs after L: the
+        // old interval [E - RTC gross, E] starts before release, but [L, U) is inside [R, F].
+        let lines = cluster_fixture();
+        let (lower, arm, deadline) = (1_000_100u64, 50_000_000_000u64, 50_000_120_000u64);
+        let service = deadline + 36_267_192;
+        let early = lower + 200;
+        let ok = edited(
+            &lines,
+            2,
+            &[
+                (8, early.to_string()),
+                (9, early.to_string()),
+                (10, (early + 1).to_string()),
+                (13, service.to_string()),
+                (14, "36267".into()),
+            ],
+        );
+        let meta = metadata_of(&ok).unwrap()[0][0];
+        assert_eq!((meta.arm, meta.deadline), (arm, deadline));
+        assert!(early - 36_267 < 1_000_000);
+        assert_eq!(cluster_window_bounds(meta.upper, meta.upper - meta.lower, meta), Ok((lower, early + 1)));
+        // A printed window that does not match the envelope, here one reaching before release.
+        assert!(cluster_window_bounds(meta.upper, 36_267, meta).is_err());
+        assert!(cluster_window_bounds(meta.upper - 1, meta.upper - meta.lower - 1, meta).is_err());
+    }
+
+    #[test]
+    fn cluster_credit_is_the_certified_interior_only() {
+        // Envelope [100, 200). Interiors [91, 120) and [181, 250) credit 20 and 19 at the edges.
+        let m = cluster_metric(&[(90, 120), (180, 250)], 100, 200, 0).unwrap();
+        assert_eq!((m.gross, m.credit, m.net), (100, 39, 61));
+        // Empty and sub-microsecond interiors, and audits wholly outside, credit nothing.
+        for audits in [[(99, 100)], [(150, 151)], [(150, 150)], [(10, 50)], [(200, 300)], [(300, 400)]] {
+            assert_eq!(cluster_metric(&audits, 100, 200, 0).unwrap().net, 100, "{audits:?}");
+        }
+        // The uncertain leading bin of a stamp is never credited: never more than `audit_inside`.
+        let edge = [(100, 105), (150, 160)];
+        let m = cluster_metric(&edge, 100, 200, 0).unwrap();
+        assert_eq!(m.credit, 4 + 9);
+        assert!(m.credit <= audit_inside(&edge, 100, 200));
+        // Invalid audits fail closed: reversed, overflowing, or crediting more than the envelope.
+        assert!(cluster_metric(&[(20, 10)], 0, 100, 0).is_err());
+        assert!(cluster_metric(&[(u64::MAX, u64::MAX)], 0, 100, 0).is_err());
+        assert!(cluster_metric(&[(0, 20), (0, 20)], 10, 15, 0).is_err());
+        let huge = [(0, u64::MAX - 1), (0, u64::MAX - 1)];
+        assert!(cluster_metric(&huge, 0, u64::MAX, 0).is_err());
+        assert!(cluster_metric(&[], 20, 10, 0).is_err());
+    }
+
+    #[test]
+    fn cluster_lower_witness_counts_the_union_of_outer_bins() {
+        // Outer bins [10, 14) and [13, 17) overlap in 13: their union is 7 µs, not 8.
+        assert_eq!(cluster_metric(&[(10, 13), (13, 16)], 10, 17, 10).unwrap().lower_witness, 3);
+        assert_eq!(cluster_metric(&[(10, 13), (13, 16)], 10, 17, 7).unwrap().lower_witness, 0);
+        // Only the part inside the envelope counts; none inside, the RTC gross stands.
+        assert_eq!(cluster_metric(&[(5, 12)], 10, 17, 10).unwrap().lower_witness, 7);
+        assert_eq!(cluster_metric(&[(30, 40)], 10, 17, 10).unwrap().lower_witness, 10);
+    }
+
+    #[test]
+    fn the_old_control_must_fail_on_its_lower_witness() {
+        let bounds = (15_000, 50_000);
+        // The attack shown: 25 positive wakes per stand-in behind eight or more spinners.
+        let behind = [vec![12usize; 25], [vec![9usize; 25], vec![1; 30]].concat()];
+        let mut lower = vec![10u64; 200];
+        // Met every envelope target: no negative control at all.
+        assert!(cluster_old_control_verdict(false, lower.clone(), bounds, &behind).is_err());
+        // An envelope miss whose lower witness meets both targets is observation, not latency.
+        assert!(cluster_old_control_verdict(true, lower.clone(), bounds, &behind).is_err());
+        // A lower witness past the p99 target (three of 200 above it), or past the p50 one.
+        lower[..3].fill(60_000);
+        assert!(cluster_old_control_verdict(true, lower.clone(), bounds, &behind).is_ok());
+        assert!(cluster_old_control_verdict(false, lower.clone(), bounds, &behind).is_err());
+        assert!(cluster_old_control_verdict(true, vec![20_000; 200], bounds, &behind).is_ok());
+        // Vacuous: one stand-in has only 24 positive wakes behind eight or more spinners, however
+        // it misses.
+        let short = [vec![12usize; 25], [vec![8usize; 24], vec![7; 40]].concat()];
+        let vacuous = cluster_old_control_verdict(true, lower, bounds, &short);
+        assert!(vacuous.is_err_and(|e| e.contains("vacuous") && e.contains("[25, 24]")));
+        assert!(run(&audited(""), "cluster_old_control").is_err_and(|e| e.contains("requires cluster")));
+        assert!(
+            run(&audited(""), "cluster cluster_old_control cluster_old_control")
+                .is_err_and(|e| e.contains("duplicate"))
+        );
+    }
+
+    /// A control whose driver failed at attempt 1: the plan lines, the failure, and a trace in
+    /// which all 19 children start and go, and the driver's attempt 0 is a blocked wait.
+    fn control_fixture(fail: &str) -> (String, Vec<Record>) {
+        let mut log = String::from("[cluster] calibrated: 10 ticks/us, 1 iterations/ms\n");
+        for i in 0..19 {
+            log += &format!("CLUSTER-READY {i}\n");
+        }
+        log += "CLUSTER-PLAN v3-kernel-envelope 100 300 600 850 200 80000 50000\n";
+        log += "CLUSTER-WINDOW 950000 1000000 17000000\n";
+        log += fail;
+        let mut records = Vec::new();
+        let mut add = |kind: char, id: u64| {
+            let at = records.len() as u64;
+            records.push(Record { seq: at, entry: at, kind, id, pass: 1 });
+        };
+        for child in 0..19 {
+            let id = 100 + child;
+            add('W', id); // isolated spawn
+            add('K', id);
+            add('D', id); // the window receive blocks
+            add('K', 1);
+        }
+        for child in 0..19 {
+            add('K', 1);
+            add('W', 100 + child); // go
+        }
+        for kind in ['K', 'D', 'W', 'K'] {
+            add(kind, 117); // the driver's attempt 0
+        }
+        (log, records)
+    }
+
+    #[test]
+    fn a_control_that_misses_its_slot_is_classified_net_of_audits() {
+        let bounds = BTreeMap::from([("driver_wake_p99_us", 50_000), ("timer_wake_p99_us", 50_000)]);
+        let fail = "CLUSTER-FAIL role=17 index=1 branch=2 result=0 target_us=80300 current_us=184488\n";
+        let (log, records) = control_fixture(fail);
+        // Target R + 80,300, B at R + 184,488: a 104,188 µs miss; an audit stamped 1,100,000 to
+        // 1,110,000 certifies 9,999 µs inside it.
+        let audits = [(1_100_000, 1_110_000)];
+        let ok = cluster_control_classify(&log, &records, &audits, &bounds);
+        assert!(
+            ok.as_ref().is_ok_and(|s| s.contains(
+                "control: stand-in driver_wake could not take attempt 1 (zero intent, offset 300): B exceeded its target by 104188 µs, 9999 µs of audits inside, net 94189 µs > 50000"
+            ) && s.contains("stand-in timer_wake reported no failure (its samples are not judged)")),
+            "{ok:?}"
+        );
+        // Net of audits under the target: not a control.
+        let heavy = [(1_080_300, 1_150_000)];
+        assert!(
+            cluster_control_classify(&log, &records, &heavy, &bounds)
+                .is_err_and(|e| e.contains("no net miss"))
+        );
+        // Another kind of failure: another branch, a positive-intent attempt, attempt 0, a target
+        // not yet passed, or a target that is not the attempt's.
+        for other in [
+            "CLUSTER-FAIL role=17 index=1 branch=3 result=0 target_us=80300 current_us=184488\n",
+            "CLUSTER-FAIL role=17 index=4 branch=2 result=0 target_us=320100 current_us=400000\n",
+            "CLUSTER-FAIL role=17 index=0 branch=2 result=0 target_us=100 current_us=60000\n",
+            "CLUSTER-FAIL role=17 index=1 branch=2 result=0 target_us=80300 current_us=80300\n",
+            "CLUSTER-FAIL role=17 index=1 branch=2 result=0 target_us=80000 current_us=184488\n",
+            "CLUSTER-FAIL role=16 index=1 branch=2 result=0 target_us=80300 current_us=184488\n",
+        ] {
+            let (log, records) = control_fixture(other);
+            assert!(cluster_control_classify(&log, &records, &audits, &bounds).is_err(), "{other}");
+        }
+        // Attempt 0 must have joined a blocked wait in the trace.
+        let mut unjoined = records.clone();
+        unjoined.truncate(unjoined.len() - 2);
+        assert!(
+            cluster_control_classify(&log, &unjoined, &audits, &bounds)
+                .is_err_and(|e| e.contains("did not join"))
+        );
+        // A stand-in's attempt 0 with no service pick before the failure, and a second failure
+        // for one stand-in.
+        let mut unpicked = records.clone();
+        unpicked.pop();
+        assert!(
+            cluster_control_classify(&log, &unpicked, &audits, &bounds)
+                .is_err_and(|e| e.contains("no service pick"))
+        );
+        let twice = format!("{log}{fail}");
+        assert!(cluster_control_classify(&twice, &records, &audits, &bounds).is_err());
+        // No trace, no control: the log is refused before any classification.
+        let no_trace = run(&log, "cluster cluster_old_control driver_wake_p99_us=50000");
+        assert!(no_trace.is_err_and(|e| e.contains("no SCHED-TRACE-END")));
+    }
+
+    #[test]
+    fn a_control_keeps_the_programs_own_gates() {
+        let fail = "CLUSTER-FAIL role=17 index=1 branch=2 result=0 target_us=80300 current_us=184488\n";
+        let own = "[cluster] FAIL: stand-in 17 took all 200 real waits\n";
+        // Classified: only the failing stand-in's own failure line.
+        assert!(cluster_control_guest_gates(&format!("{fail}{own}")).is_ok());
+        for other in [
+            "[cluster] FAIL: spinner/server 3 ran\n",
+            "[cluster] FAIL: child 5 has 2 reports (expected one)\n",
+            "[cluster] FAIL: child 9 acknowledged its isolated setup wake\n",
+            "[cluster] FAIL: stand-in 18 took all 200 real waits\n",
+        ] {
+            assert!(cluster_control_guest_gates(&format!("{fail}{own}{other}")).is_err(), "{other}");
+        }
+        // Unclassified: the program must have passed.
+        assert!(cluster_control_guest_gates("SCHED-CLUSTER TEST PASSED\n").is_ok());
+        assert!(cluster_control_guest_gates("[cluster] FAIL: spinner/server 3 ran\n").is_err());
+        assert!(cluster_control_guest_gates("").is_err());
+    }
+
+    #[test]
+    fn cluster_go_protocol_distinguishes_readiness_from_window_and_release() {
+        fn add(records: &mut Vec<Record>, kind: char, id: u64) -> usize {
+            let at = records.len();
+            records.push(Record { seq: at as u64, entry: at as u64, kind, id, pass: 1 });
+            at
+        }
+        fn mapped(records: &[Record]) -> Vec<(usize, u64)> {
+            let mut seen = BTreeSet::new();
+            records
+                .iter()
+                .enumerate()
+                .filter_map(|(at, r)| (r.kind == 'W' && seen.insert(r.id)).then_some((at, r.id)))
+                .collect()
+        }
+        let mut records = Vec::new();
+        let mut ready_w = [None; 19];
+        let mut window_d = [0usize; 19];
+        for child in 0..19 {
+            let id = 100 + child as u64;
+            add(&mut records, 'W', id); // isolated spawn
+            add(&mut records, 'K', id);
+            if [0, 5, 17, 18].contains(&child) {
+                add(&mut records, 'D', id); // reliable readiness send blocked
+                add(&mut records, 'K', 1); // launcher receives the readiness report
+                ready_w[child] = Some(add(&mut records, 'W', id));
+                add(&mut records, 'K', id);
+            }
+            window_d[child] = add(&mut records, 'D', id); // window receive always blocks
+            add(&mut records, 'K', 1);
+        }
+        let mut expected_go = [0usize; 19];
+        for (child, go) in expected_go.iter_mut().enumerate() {
+            add(&mut records, 'K', 1);
+            *go = add(&mut records, 'W', 100 + child as u64);
+        }
+        for child in 1..=16 {
+            let id = 100 + child as u64;
+            add(&mut records, 'K', id);
+            add(&mut records, 'D', id); // common timeout wait
+            add(&mut records, 'K', 100);
+            add(&mut records, 'W', id);
+        }
+        let starts = mapped(&records);
+        assert_eq!(starts.len(), 19);
+        let go = cluster_go_boundaries(&records, &starts).unwrap();
+        assert_eq!(go, expected_go);
+        let releases = cluster_spinner_releases(&records, &starts, &go).unwrap();
+        assert_eq!(releases.len(), 16);
+        assert!(releases.values().all(|at| *at > go[18]));
+
+        let mut extra_ready = records.clone();
+        extra_ready.insert(window_d[5], Record { kind: 'W', id: 105, ..records[window_d[5]] });
+        assert!(cluster_go_boundaries(&extra_ready, &mapped(&extra_ready)).is_err());
+
+        let mut late_ready = records.clone();
+        let w = late_ready.remove(ready_w[5].unwrap());
+        let next_spawn = late_ready.iter().position(|r| r.kind == 'W' && r.id == 106).unwrap();
+        late_ready.insert(next_spawn + 1, w);
+        assert!(cluster_go_boundaries(&late_ready, &mapped(&late_ready)).is_err());
+
+        let mut no_window_wait = records.clone();
+        no_window_wait.remove(window_d[18]);
+        assert!(cluster_go_boundaries(&no_window_wait, &mapped(&no_window_wait)).is_err());
+
+        let mut out_of_order = records.clone();
+        out_of_order.swap(go[5], go[6]);
+        assert!(cluster_go_boundaries(&out_of_order, &mapped(&out_of_order)).is_err());
+
+        let mut extra_release = records.clone();
+        extra_release.insert(go[1] + 1, Record { kind: 'W', id: 101, ..records[go[1]] });
+        let starts = mapped(&extra_release);
+        let go = cluster_go_boundaries(&extra_release, &starts).unwrap();
+        assert!(cluster_spinner_releases(&extra_release, &starts, &go).is_err());
+    }
+
+    #[test]
+    fn cluster_wait_boundary_rejects_report_substitution_and_extra_wakes() {
+        let mut records = Vec::new();
+        let push = |kind: char, records: &mut Vec<Record>| {
+            records.push(Record {
+                seq: records.len() as u64,
+                entry: records.len() as u64,
+                kind,
+                id: 17,
+                pass: 1,
+            });
+        };
+        push('W', &mut records); // The already validated go wake.
+        for _ in 0..200 {
+            for kind in ['D', 'W', 'K'] {
+                push(kind, &mut records);
+            }
+        }
+        let boundary = records.len();
+        push('X', &mut records);
+        for kind in ['D', 'W', 'K'] {
+            push(kind, &mut records); // A later handover wake cannot fill a missing sample.
+        }
+        assert_eq!(cluster_waits_before(&records, 17, 0, boundary).unwrap().len(), 200);
+        let mut immediate = records.clone();
+        immediate.remove(1 + 4 * 3 + 1); // No W for sample 4; later report W remains.
+        assert!(cluster_waits_before(&immediate, 17, 0, boundary - 1).is_err());
+        let mut extra = records.clone();
+        extra.insert(4, Record { seq: 0, entry: 0, kind: 'W', id: 17, pass: 1 });
+        assert!(cluster_waits_before(&extra, 17, 0, boundary + 1).is_err());
+        let mut reordered = records;
+        reordered.swap(1, 2);
+        assert!(cluster_waits_before(&reordered, 17, 0, boundary).is_err());
+    }
+
+    #[test]
+    fn cluster_fences_reject_missing_duplicate_and_wrong_callers() {
+        let rec = |kind, id, time| Record { seq: 0, entry: 0, kind, id, pass: time };
+        let good = vec![
+            rec('W', 17, 0),
+            rec('K', 17, 0),
+            rec('X', 101, 100),
+            rec('Y', 101, 105),
+            rec('K', 18, 0),
+            rec('X', 102, 110),
+            rec('Y', 102, 115),
+        ];
+        assert_eq!(cluster_fences(&good, [17, 18], [0, 0]).unwrap().map(|f| f.marker_id), [101, 102]);
+        let mut missing = good.clone();
+        missing.truncate(5);
+        assert!(cluster_fences(&missing, [17, 18], [0, 0]).is_err());
+        let mut duplicate = good.clone();
+        duplicate.extend([rec('K', 17, 0), rec('X', 103, 120), rec('Y', 103, 125)]);
+        assert!(cluster_fences(&duplicate, [17, 18], [0, 0]).is_err());
+        let mut wrong_caller = good.clone();
+        wrong_caller[4].id = 42;
+        assert!(cluster_fences(&wrong_caller, [17, 18], [0, 0]).is_err());
+        let mut descheduled = good.clone();
+        descheduled.insert(2, rec('R', 17, 0));
+        assert!(cluster_fences(&descheduled, [17, 18], [0, 0]).is_err());
+        let mut repeated_marker = good;
+        repeated_marker[5].id = 101;
+        repeated_marker[6].id = 101;
+        assert!(cluster_fences(&repeated_marker, [17, 18], [0, 0]).is_err());
+    }
+
+    #[test]
+    fn timeout_wake_proof_rejects_preemption_and_an_unframed_wake() {
+        let events = [
+            ('K', 7, 0),
+            ('I', 7, 100),
+            ('E', 8, 1),
+            ('W', 8, 10),
+            ('O', 0, 1),
+            ('I', 7, 900),
+            ('E', 0, 0),
+            ('R', 7, 20),
+            ('O', 0, 0),
+            ('K', 8, 10),
+        ];
+        let records = |events: &[(char, u64, u128)]| {
+            events
+                .iter()
+                .enumerate()
+                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
+                .collect::<Vec<_>>()
+        };
+        assert!(check_wake_no_preempt(&records(&events), 1).is_ok());
+        let mut preempted = events.to_vec();
+        preempted.insert(4, ('K', 8, 10));
+        assert!(check_wake_no_preempt(&records(&preempted), 1).is_err());
+        let mut unframed = events;
+        unframed[3] = ('B', 8, 10);
+        assert!(check_wake_no_preempt(&records(&unframed), 1).is_err());
+    }
+
+    #[test]
+    fn carve_return_proof_requires_the_same_running_turn() {
+        let mut events = vec![('K', 9, 110)];
+        for (before, old, new, floor) in [(110, 1000, 1, 100), (210, 1, 1000, 100)] {
+            events.extend([
+                ('G', 9, before),
+                ('g', 9, 0),
+                ('v', 9, (old << 32) | new),
+                ('f', 9, floor),
+                ('N', 9, before),
+                ('n', 9, 0),
+            ]);
+        }
+        let records = |events: &[(char, u64, u128)]| {
+            events
+                .iter()
+                .enumerate()
+                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
+                .collect::<Vec<_>>()
+        };
+        assert!(check_carve_return("CARVE-OBS 900 950 12345\n", &records(&events)).is_ok());
+        events.insert(7, ('K', 5, 150));
+        assert!(check_carve_return("CARVE-OBS 900 950 12345\n", &records(&events)).is_err());
+    }
+
+    fn records_of(events: &[(char, u64)]) -> Vec<Record> {
+        events
+            .iter()
+            .enumerate()
+            .map(|(i, &(kind, id))| Record { seq: i as u64, entry: i as u64, kind, id, pass: 0 })
+            .collect()
+    }
+
+    /// Budgets 2 and 3 run, 4 is destroyed after its runs (not a marker), 9 is the empty marker,
+    /// and 7 is made after it, picked after one pick each of 3 and 2.
+    fn round_events() -> Vec<(char, u64)> {
+        vec![
+            ('W', 4),
+            ('K', 4),
+            ('X', 4),
+            ('Y', 4),
+            ('K', 2),
+            ('X', 9),
+            ('Y', 9),
+            ('P', 7),
+            ('W', 7),
+            ('K', 3),
+            ('K', 2),
+            ('K', 7),
+        ]
+    }
+
+    #[test]
+    fn a_marked_wake_picked_within_one_round_passes() {
+        let proof = check_round(&records_of(&round_events())).unwrap();
+        assert!(proof.contains("budget 7") && proof.contains("after 2 picks"), "{proof}");
+    }
+
+    /// The raw debt, unlifted, leaves the new budget behind second picks of those ahead.
+    #[test]
+    fn a_budget_picked_twice_before_the_marked_one_fails() {
+        let mut events = round_events();
+        events.insert(11, ('K', 3));
+        let err = check_round(&records_of(&events)).unwrap_err();
+        assert!(err.contains("budget 3 was picked twice"), "{err}");
+    }
+
+    #[test]
+    fn a_round_check_without_its_marker_or_new_budget_fails() {
+        let mut events = round_events();
+        events.retain(|&(_, id)| id != 9);
+        let err = check_round(&records_of(&events)).unwrap_err();
+        assert!(err.contains("found 0"), "{err}");
+        let mut twice = round_events();
+        twice.extend([('X', 11), ('Y', 11)]);
+        assert!(check_round(&records_of(&twice)).unwrap_err().contains("found 2"));
+        // The first wake after the marker is an old budget's, not the new one's.
+        let mut old = round_events();
+        old.insert(7, ('W', 2));
+        assert!(check_round(&records_of(&old)).unwrap_err().contains("not new"));
+        let unpicked: Vec<_> = round_events().into_iter().take(11).collect();
+        assert!(check_round(&records_of(&unpicked)).unwrap_err().contains("never picked"));
+    }
 
     /// A trace from `(entry, kind, id, pass)` records, with its end line.
     fn trace(records: &[(u64, char, u64, u128)]) -> String {

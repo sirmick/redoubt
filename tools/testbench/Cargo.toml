@@ -18,6 +18,7 @@ libc = "0.2"                                                             # openp
 redoubt-signing = { path = "../../libs/signing" }                        # the bundle signature's preimage
 redoubt-blkd = { path = "../../servers/blkd" }                           # a case disk's GPT, written by blkd's own builder
 redoubt-littlefsd = { path = "../../servers/littlefsd" }                 # a disk recipe's volumes, packed by littlefsd's own code
+redoubt-stride = { path = "../../libs/stride" }                          # cluster pass spread from the scheduler's stride unit
 redoubt-verity = { path = "../../libs/verity" }                          # a verified volume's tree, as verityd checks it (disk.rs)
 sha2 = { version = "0.11", default-features = false }                    # a run directory's and a guest file's names
 
