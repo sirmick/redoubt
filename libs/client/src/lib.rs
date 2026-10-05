@@ -30,5 +30,5 @@ pub mod launch;
 pub mod ns;
 pub mod typed;
 
-pub use error::{Error, Refusal};
+pub use error::{Error, Name, Refusal};
 pub use redoubt_rt::client::Lend;

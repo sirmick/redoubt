@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use redoubt_client::file::Connection;
-use redoubt_client::{Error, Lend, fsd};
+use redoubt_client::{Error, Lend, Name, fsd};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle, MAX_LABELS};
 use redoubt_rt::handle::Endpoint;
@@ -227,14 +227,14 @@ fn the_client_library_works_against_fsd() {
             Err(Error::Server(ErrorCode::Refused.code()))
         );
         // The handle on the renamed file now names nothing at its path.
-        assert_eq!(file.read_at(&mut lend, 0, &mut out), Err(Error::Rerror));
+        assert_eq!(file.read_at(&mut lend, 0, &mut out), Err(Error::Rerror(Name::Other)));
         assert_eq!(fsd::get_attr(&mut lend, &file, 16), Err(Error::Server(ErrorCode::Removed.code())));
         let moved = c.open(&mut lend, "d/moved", mode::OREAD).unwrap();
         assert_eq!(fsd::get_attr(&mut lend, &moved, 16).unwrap(), b"blue");
         let copy = c.open(&mut lend, "d/copy", mode::OREAD).unwrap();
         assert_eq!(copy.read_at(&mut lend, 0, &mut out).unwrap(), 12);
         c.remove(&mut lend, "d/copy").unwrap();
-        assert_eq!(copy.read_at(&mut lend, 0, &mut out), Err(Error::Rerror));
+        assert_eq!(copy.read_at(&mut lend, 0, &mut out), Err(Error::Rerror(Name::Other)));
         copy.close(&mut lend).unwrap();
     });
     assert_eq!(volume.stop(), redoubt_rt::exit::OK);
@@ -321,7 +321,7 @@ fn a_range_of_noise_is_served_as_corrupt() {
         let refused = f.as_process(volume.init, || {
             Connection::attach(Endpoint::from_handle(volume.founding), &mut Lend::new(1).unwrap()).err()
         });
-        assert_eq!(refused, Some(Error::Rerror));
+        assert_eq!(refused, Some(Error::Rerror(Name::Other)));
     }
     assert!(volume.disk.lock().unwrap().bytes == noise, "never formatted");
     assert_eq!(volume.stop(), redoubt_rt::exit::OK);
@@ -415,9 +415,12 @@ fn a_read_only_range_is_served_read_only() {
     fake().as_process(session, || {
         let mut lend = Lend::new(4).unwrap();
         let c = Connection::attach(Endpoint::from_handle(conn), &mut lend).unwrap();
-        assert_eq!(c.open(&mut lend, "kept", mode::OWRITE).err(), Some(Error::Rerror));
-        assert_eq!(c.create(&mut lend, "", "new", 0o644, mode::OWRITE).err(), Some(Error::Rerror));
-        assert_eq!(c.remove(&mut lend, "kept"), Err(Error::Rerror));
+        assert_eq!(c.open(&mut lend, "kept", mode::OWRITE).err(), Some(Error::Rerror(Name::Other)));
+        assert_eq!(
+            c.create(&mut lend, "", "new", 0o644, mode::OWRITE).err(),
+            Some(Error::Rerror(Name::Other))
+        );
+        assert_eq!(c.remove(&mut lend, "kept"), Err(Error::Rerror(Name::Other)));
         let file = c.open(&mut lend, "kept", mode::OREAD).unwrap();
         assert_eq!(fsd::set_attr(&mut lend, &file, 16, b"x"), Err(Error::Server(ErrorCode::Refused.code())));
         let mut out = [0u8; 8];
@@ -430,7 +433,7 @@ fn a_read_only_range_is_served_read_only() {
     let refused = fake().as_process(blank.init, || {
         Connection::attach(Endpoint::from_handle(blank.founding), &mut Lend::new(1).unwrap()).err()
     });
-    assert_eq!(refused, Some(Error::Rerror));
+    assert_eq!(refused, Some(Error::Rerror(Name::Other)));
     assert!(blank.disk.lock().unwrap().bytes.iter().all(|b| *b == 0), "never formatted");
     assert_eq!(blank.stop(), redoubt_rt::exit::OK);
 }

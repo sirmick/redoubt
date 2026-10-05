@@ -6,11 +6,14 @@
 //! a block that does not hash to the root the signed manifest pins never reaches `fsd`, which
 //! then serves the volume as corrupt.
 //!
-//! A name the volume does not hold is absent, and the VM's lookup goes on as for any name it
-//! lacks. A file that opens but cannot be read whole loads nothing, is said once on the console,
-//! and is never looked for anywhere else.
+//! A name the volume's `fsd` answers `not_found` to is absent, and the VM's lookup goes on as for
+//! any name it lacks. Any other refusal, at the open or on a read (`corrupt` from a volume `fsd`
+//! serves as corrupt, a block `verityd` failed, a device error), loads nothing, is said once on the
+//! console naming the file and the error's name, and is never looked for anywhere else.
 
 use alloc::vec::Vec;
+
+use redoubt_client::{Error, Name};
 
 use crate::{Modules, Unloaded};
 
@@ -20,10 +23,23 @@ const MAX_NAME: usize = 260;
 /// Why a file gave nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unread {
-    /// The volume holds no such file, or would not open it.
+    /// The volume's `fsd` answered `not_found` at the open: there is no such file.
     Absent,
-    /// It opened, but a read failed: a block that did not check, or a volume served as corrupt.
-    Failed,
+    /// Any other refusal, at the open or on a read, and why, naming the error.
+    Failed(&'static str),
+}
+
+/// What a refusal by the volume's `fsd` means for a lookup, by the error's name
+/// (servers/wire.md, "Error names"): `not_found` at the open is absent; any other refusal, and any
+/// on a read, failed, with the reason beamlet says, naming the error.
+pub fn unread(e: Error, at_open: bool) -> Unread {
+    Unread::Failed(match e {
+        Error::Rerror(Name::NotFound) if at_open => return Unread::Absent,
+        Error::Rerror(Name::NotFound) => "its file could not be read: not_found",
+        Error::Rerror(Name::Other) => "its file could not be read: other",
+        Error::Disconnected => "its file could not be read: disconnected",
+        _ => "its file could not be read: failed",
+    })
 }
 
 /// Where the files are: the userland volume's `fsd` on the machine.
@@ -66,7 +82,7 @@ impl<F: Files> Modules for Disk<F> {
                 Ok(bytes)
             }
             Err(Unread::Absent) => Err(Unloaded::Absent),
-            Err(Unread::Failed) => Err(Unloaded::Refused("its file could not be read")),
+            Err(Unread::Failed(why)) => Err(Unloaded::Refused(why)),
         }
     }
 }

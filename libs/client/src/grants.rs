@@ -76,7 +76,7 @@ impl Grants {
         for grant in self.entries.drain(..) {
             let released = match grant {
                 Grant::Connection { parent, id } => match parent.disconnect(id, RELEASE_TIMEOUT) {
-                    Err(Error::Rerror) => Ok(()),
+                    Err(Error::Rerror(_)) => Ok(()),
                     done => done,
                 },
                 Grant::Typed { at, release } => release_typed(at, &release),

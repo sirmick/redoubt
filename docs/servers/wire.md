@@ -150,13 +150,13 @@ stated in the table's page.
 
 ### Error names
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: only `not_found` against the rest is built, in the client library; the table in `libs/wire`, servers answering by name, the drift check and beamlet's `file` errors are not built (M1 (separation and containment)) · tested: host:redoubt-client::an_rerror_keeps_its_name_not_found_against_the_rest, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name
 
 A 9P `Rerror` carries one of a fixed set of texts, so a hostile request cannot choose it
 ([serving](serving.md#the-9p-server-skeleton)). The set is one table in `libs/wire`: a server
 answers only with a name of the table, whose text the type holds, so no server can make up a text;
 the client library reads the text back to its name, never keeps the text, and calls a text outside
-the table `other` ([native programs](../userland/native.md#dropped-files-error-names-and-generated-calls)).
+the table `other` ([native programs](../userland/native.md#an-rerror-has-a-name)).
 A name means one thing wherever it is used, in a 9P reply and in a typed protocol's error table
 alike: `not_permitted`, not a second word for it.
 
@@ -183,11 +183,14 @@ alike: `not_permitted`, not a second word for it.
 | `malformed message`, `unknown fid`, `fid already in use`, `fid is open`, `fid not open for this`, `bad open mode`, `bad offset`, `count too small`, `reply too large`, `no such connection`, `no connection id`, `authentication not required` | `protocol` | `eio` |
 | a text not in the table | `other` | `eio` |
 
+A walk of several names that stops short says only how far it got, not why: a refusal after
+the first name (a label check, a failed read) reads as `not_found`, so a caller that must tell the
+two apart walks one name at a time
+([an `Rerror` has a name](../userland/native.md#an-rerror-has-a-name)).
+
 Where two texts share a name, the first is the one a server sends from then on; the second is the
 text `ipd` or a quota hook sends today, read to the same name. A new error is a new row, and the
 drift check holds the serving library, the client library and this page to it.
-
-**Open:** none.
 
 ### Wire tables and the generator
 

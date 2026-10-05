@@ -1,4 +1,4 @@
-description = "The image boots its shell on the UART from its verified userland volume (docs/userland/shell.md, \"The shell in a session\"; docs/kernel/boot.md, R75 (verified userland); docs/servers/verityd.md, R76 (verified volumes)): init starts verity:system, which checks the volume's top tree block against the root the signed manifest pins, beamlet reads Redoubt.Shell through fsd:system and verity:system, and a typed Enum.sum(1..10) prints 55. The attack, verity-flipped-block, is the same boot: the disk has one bit of the data of Elixir.Version flipped after the pack, while the manifest's root is the pack's, and Version is loaded only when called. A call to it: verityd's console line names the block, beamlet's names the module and that its file could not be read, and the prompt is still there: a typed 1 + 1 prints 2. Version's own UndefinedFunctionError is not expected: once fsd serves the volume as corrupt, the modules that print it cannot load either. The verdict is the system's: verityd hashes each block through the tree to the signed root, and init's lines show no exit and no reboot (rule F)"
+description = "The image boots its shell on the UART from its verified userland volume (docs/userland/shell.md, \"The shell in a session\"; docs/kernel/boot.md, R75 (verified userland); docs/servers/verityd.md, R76 (verified volumes)): init starts verity:system, which checks the volume's top tree block against the root the signed manifest pins, beamlet reads Redoubt.Shell through fsd:system and verity:system, and a typed Enum.sum(1..10) prints 55. The attack, verity-flipped-block, is the same boot: the disk has one bit of the data of Elixir.Version flipped after the pack, while the manifest's root is the pack's, and Version is loaded only when called. A call to it: verityd's console line names the block, beamlet's names the module and that its file could not be read, and the prompt is still there: a typed 1 + 1 prints 2. Version's own UndefinedFunctionError is not expected: once fsd serves the volume as corrupt, the modules that print it cannot load either. fsd now serves the volume as corrupt, so a module never loaded before, OptionParser, fails at its open, in fsd's metadata, and beamlet says so naming the error rather than taking it for a name the system lacks; a call to a module no volume holds (NoSuch) stays silent. The verdict is the system's: verityd hashes each block through the tree to the signed root, and init's lines show no exit and no reboot (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -17,7 +17,8 @@ expect = [
     'UndefinedFunctionError\) function NoSuch.call/0 is undefined',
     '^\[con [0-9a-f]{16}\] / \([0-9]+\)> 55$',
     '^\[con [0-9a-f]{16}\] verityd: block [0-9]+ does not match the tree$',
-    'beamlet: Elixir.Version not loaded: its file could not be read$',
+    'beamlet: Elixir.Version not loaded: its file could not be read: other$',
+    'beamlet: Elixir.OptionParser not loaded: its file could not be read: other$',
     '^\[con [0-9a-f]{16}\] / \([0-9]+\)> 2$',
 ]
 forbid = [
@@ -32,11 +33,12 @@ forbid = [
     'EXCEPTION',
     'verityd: the volume is refused',
     'served as corrupt',
+    'beamlet: Elixir.NoSuch',
 ]
 
 [[input]]
 after = 'Redoubt shell, on Elixir '
-send = "NoSuch.call()\nEnum.sum(1..10)\nVersion.parse(\"1.2.3\")\n1 + 1\n"
+send = "NoSuch.call()\nEnum.sum(1..10)\nVersion.parse(\"1.2.3\")\nOptionParser.split(\"a b\")\n1 + 1\n"
 
 [userland]
 recipe = "image/userland.toml"

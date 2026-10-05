@@ -26,8 +26,8 @@ impl Write for Screen {
     fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
 }
 
-/// The volume's files by name; a name in `failing` opens and then fails its read, as a block
-/// `verityd` refuses does.
+/// The volume's files by name; a name in `failing` is refused with a name other than
+/// `not_found`, as a file `fsd` serves from a volume whose block `verityd` refused is.
 struct Volume {
     files: HashMap<String, Vec<u8>>,
     failing: Vec<&'static str>,
@@ -38,7 +38,7 @@ impl Files for Volume {
     fn read(&mut self, name: &str) -> Result<Vec<u8>, Unread> {
         self.reads.fetch_add(1, Ordering::Relaxed);
         if self.failing.contains(&name) {
-            return Err(Unread::Failed);
+            return Err(Unread::Failed("its file could not be read: other"));
         }
         self.files.get(name).cloned().ok_or(Unread::Absent)
     }
@@ -91,7 +91,7 @@ fn verified_module_lookup_propagates_found_absent_and_refused() {
     let screen = with_platform(|platform, reads| {
         check_lookups(platform, reads, Redoubt::load_module, b"module good");
     });
-    assert_eq!(screen, "beamlet: bad not loaded: its file could not be read\n");
+    assert_eq!(screen, "beamlet: bad not loaded: its file could not be read: other\n");
 }
 
 #[test]
@@ -99,5 +99,5 @@ fn verified_application_lookup_propagates_found_absent_and_refused() {
     let screen = with_platform(|platform, reads| {
         check_lookups(platform, reads, Redoubt::load_app, b"app good");
     });
-    assert_eq!(screen, "beamlet: bad not loaded: its file could not be read\n");
+    assert_eq!(screen, "beamlet: bad not loaded: its file could not be read: other\n");
 }

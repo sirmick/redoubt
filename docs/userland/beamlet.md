@@ -161,8 +161,10 @@ Everything the VM gets from outside comes through the `Platform` trait
   searches the code path's directories in order, including those added with `code:add_patha/1`;
   `Refused` stops without touching the code path
   ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). On Redoubt
-  a file the verified userland volume does not hold is absent, while one that opens but does not
-  read whole is refused ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). `load_app`
+  a name the userland volume's `fsd` answers `not_found` to is absent, while any other refusal at
+  the open or on the read (`corrupt`, a short or long file, a device error) is refused, with one
+  console line naming the file and the error's name
+  ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). `load_app`
   carries the same three outcomes: `beamlet:app_spec/1` makes one platform attempt and returns
   the bytes on `Found`, or `error` on `Absent` and `Refused`. Residual:
   the bundle's protocols are not consolidated when it is built, so a protocol consolidated in a
@@ -282,7 +284,7 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: files, programs, `/net` and the system natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
+Status: built · partly tested: files, programs, `/net` and the system natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console and verified code lookup,
@@ -296,7 +298,7 @@ remain planned.
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
-| `load_module`, `load_app` | reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `fsd` (`fsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `fsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A file the volume does not hold is `Absent`; one that opens but does not read whole is `Refused`, with one console diagnostic and no other source tried; the bytes it read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
+| `load_module`, `load_app` | reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `fsd` (`fsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `fsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `fsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
 | `files` | the client library's `file`: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
 | `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)) |
 

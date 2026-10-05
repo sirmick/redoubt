@@ -24,7 +24,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec::Vec;
 
-use beamlet_redoubt::userland::{Disk, Files, Unread};
+use beamlet_redoubt::userland::{Disk, Files, Unread, unread};
 use beamlet_redoubt::{Modules, Threads, Unloaded};
 use redoubt_client::console::Console;
 use redoubt_client::file::Connection;
@@ -133,10 +133,11 @@ impl System {
 }
 
 impl Files for System {
-    /// A file that does not open is absent; one that opens but does not read whole failed.
+    /// A file `fsd` answers `not_found` to at the open is absent; any other refusal, at the open
+    /// or on a read, failed.
     fn read(&mut self, name: &str) -> Result<Vec<u8>, Unread> {
         let lend = &mut self.lend;
-        let open = self.fsd.open(lend, name, mode::OREAD).map_err(|_| Unread::Absent)?;
+        let open = self.fsd.open(lend, name, mode::OREAD).map_err(|e| unread(e, true))?;
         let mut bytes = Vec::new();
         let mut chunk = alloc::vec![0u8; lend.iounit()];
         let read = loop {
@@ -148,6 +149,6 @@ impl Files for System {
         };
         // The fid goes back to the connection whether or not the read finished.
         let closed = open.close(lend);
-        read.and(closed).map(|()| bytes).map_err(|_: Error| Unread::Failed)
+        read.and(closed).map(|()| bytes).map_err(|e| unread(e, false))
     }
 }

@@ -295,7 +295,7 @@ fn corrupt(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), Strin
     let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
     for _ in 0..3 {
         match Connection::attach(Endpoint::from_handle(handle), &mut out.lend) {
-            Err(Error::Rerror) => {}
+            Err(Error::Rerror(_)) => {}
             Err(e) => return Err(format!("attach: {e:?}, not Rerror")),
             Ok(_) => return Err("a corrupt volume was attached".into()),
         }
@@ -329,7 +329,7 @@ fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String>
         match hog.write_at(&mut out.lend, filled, &chunk) {
             Ok(0) => return Err("a write took nothing".into()),
             Ok(n) => filled += n as u64,
-            Err(Error::Rerror) => break,
+            Err(Error::Rerror(_)) => break,
             Err(e) => return Err(format!("write full: {e:?}")),
         }
         if filled > QUOTA {
@@ -393,7 +393,7 @@ fn outsider(
     while !matches!(own.receive(FOREVER, 0), Ok(Event::Send(_))) {}
     let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
     match Connection::attach(Endpoint::from_handle(handle), &mut out.lend) {
-        Err(Error::Rerror) => {}
+        Err(Error::Rerror(_)) => {}
         Err(e) => return Err(format!("attach: {e:?}, not Rerror")),
         Ok(_) => return Err("attached without the volume's labels".into()),
     }

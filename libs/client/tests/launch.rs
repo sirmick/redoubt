@@ -10,7 +10,7 @@ use common::{AUDIT_BADGE, Boot, Keyd};
 use redoubt_client::file::Connection;
 use redoubt_client::grants::{Grants, RELEASE_TIMEOUT};
 use redoubt_client::launch::{Job, Launch, PLACE_PAGES, STACK_PAGES, stack_paint};
-use redoubt_client::{Error, Lend, Refusal, typed};
+use redoubt_client::{Error, Lend, Name, Refusal, typed};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Cause, Error as SysError, FOREVER, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE};
 use redoubt_rt::handle::{Budget, Endpoint};
@@ -309,7 +309,10 @@ fn the_exit_notice_releases_every_grant() {
     for (who, conn) in [(child, boot_conn), (grandchild, minted)] {
         f.as_process(who, || {
             let mut lend = Lend::new(1).unwrap();
-            assert_eq!(Connection::attach(Endpoint::from_handle(conn), &mut lend).err(), Some(Error::Rerror));
+            assert_eq!(
+                Connection::attach(Endpoint::from_handle(conn), &mut lend).err(),
+                Some(Error::Rerror(Name::Other))
+            );
         });
     }
     assert_eq!(signs(child), Err(Error::Server(ErrorCode::NotPermitted.code())));
@@ -355,7 +358,10 @@ fn a_hung_server_does_not_stop_the_reaping() {
     assert_eq!(holding.join().unwrap(), 0);
     f.as_process(launcher, || {
         let mut lend = Lend::new(1).unwrap();
-        assert_eq!(Connection::attach(Endpoint::from_handle(conn), &mut lend).err(), Some(Error::Rerror));
+        assert_eq!(
+            Connection::attach(Endpoint::from_handle(conn), &mut lend).err(),
+            Some(Error::Rerror(Name::Other))
+        );
     });
     boot.stop();
 }

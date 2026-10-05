@@ -524,11 +524,10 @@ What the client library adds before beamlet's files run on it, each keeping the 
   mapped or called from a drop, each fid is clunked once, a fid is never reused while the server
   may hold it, and a program whose files are dropped (beamlet's belong to Erlang processes, which
   can be killed mid-read) does not run out of fids for them.
-- **An `Rerror` has a name.** A 9P server answers with one of a fixed set of texts, one table the
-  serving library and this library share ([wire](../servers/wire.md#error-names)); the library
-  keeps the name (`not_found`, `not_permitted`, `exists` and the rest), never the text, and a text not in
-  the table is `other`. beamlet's files adapter turns the name into the POSIX error OTP's `file`
-  expects (`enoent`, `eacces`, `eexist`).
+- **Every error name.** The library tells `not_found` from the rest already
+  ([an `Rerror` has a name](#an-rerror-has-a-name)); it keeps every other name of the table
+  (`not_permitted`, `exists` and the rest) the same way, and beamlet's files adapter turns the name
+  into the POSIX error OTP's `file` expects (`enoent`, `eacces`, `eexist`).
 - **Calls by path.** `Namespace` opens, creates, stats and removes by a full path: the lookup, then
   the call on the connection it found, so a caller cannot take one connection and use another's
   rest of the path.
@@ -546,7 +545,26 @@ thread is mid-read on it is clunked only after that read's reply, and once; a se
 answers a clunk delays one later call by one timeout, and fails none; a server that answers with a
 text outside the table is `other`, and the text reaches no caller.
 
-**Open:** none.
+**Open:** a walk that stops short after the first name is `not_found` whatever refused it, a
+label check or a failed read included, since 9P keeps no reason; whether the library walks a
+path one name at a time, or keeps how far a walk got, so a caller can tell a refusal mid-path
+from absence, is BEAM3's, with the rest of the table.
+
+### An `Rerror` has a name
+
+Status: built · partly tested: only `not_found` is told apart from `other`; the other names of the table are planned with the section above · tested: host:redoubt-client::an_rerror_keeps_its_name_not_found_against_the_rest, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name
+
+A 9P server answers with one of a fixed set of texts, one table the serving library and this
+library share ([wire](../servers/wire.md#error-names)); the library keeps the name, never the
+text, and a text not in the table is `other`. Today the name is `not_found`, for `file does not
+exist` and for a walk that stopped short, or `other` for every other text
+(`Error::Rerror(Name::NotFound)` and `Error::Rerror(Name::Other)`). A walk of several names stops
+short on any refusal after the first, a label check or a failed read among them, and 9P drops
+the reason, so that is `not_found` too: a caller that must tell a refusal from absence walks one
+name at a time, as beamlet's lookup does.
+That is what a lookup needs: beamlet's module lookup takes `not_found` at the open as a name the
+system lacks, and silently goes on, and any other refusal as a file it may not load, said on its
+console with the name ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)).
 
 ### The Rust `std` target
 
