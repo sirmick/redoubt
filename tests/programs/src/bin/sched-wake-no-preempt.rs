@@ -1,11 +1,10 @@
 //! A timeout only wakes (kernel/scheduling.md, "Preemption points"): it never takes the CPU from
 //! the thread running.
 //!
-//! A sleeper and a spinner, in budgets of equal weight. The sleeper sleeps 3 ms, twenty times;
-//! each time it blocks, the spinner is picked and starts a 10 ms slice, so the sleeper's timeout
-//! falls about 3 ms into that slice. The sleeper then runs only when the slice ends, about 7 ms
-//! after its timeout. A kernel whose timeout preempted would run it within microseconds. Asserted:
-//! even the shortest of the twenty delays is over 4 ms.
+//! A sleeper and a spinner, in budgets of equal weight. The sleeper sleeps 300 µs, twenty times;
+//! each time it blocks, the spinner is picked and starts a 1 ms slice. The timeout should fall
+//! inside that slice, so the sleeper runs only after its end. The trace post-check establishes
+//! that event order; the shortest measured delay must also exceed 400 µs.
 
 #![no_std]
 #![no_main]
@@ -14,8 +13,8 @@ use test_programs::rd;
 use test_programs::sched::{Bench, Role};
 
 /// The sleeper's nap, and the least delay after it that shows no preemption.
-const NAP_US: u64 = 3_000;
-const LEAST_US: u64 = 4_000;
+const NAP_US: u64 = 300;
+const LEAST_US: u64 = 400;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {

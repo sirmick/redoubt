@@ -25,7 +25,7 @@ use crate::spawn::{self, Image};
 /// Iterations between clock checks in the counting loop.
 const CHUNK: u64 = 256;
 /// The slice (kernel/scheduling.md, "Preemption points"), in microseconds.
-pub const SLICE_US: u64 = 10_000;
+pub const SLICE_US: u64 = 1_000;
 
 // The latency workload (kernel/scheduling.md, "Responsiveness"), one definition used by both
 // `sched-latency` and `kernel-containment`. The targets are the case files' post-check bounds.
@@ -107,9 +107,9 @@ pub enum Role {
     /// ahead, each round then counting for 1 ms; report the count.
     DeadlineFlood = 19,
     /// Sleep, so that what follows begins a slice; carve p0 of this budget's weight (slot 3) to an
-    /// empty child, count until 9 ms after the wake, destroy the child so the weight comes back,
-    /// then count until the window ends; report, first, the `time_now` (µs) the destruction
-    /// returned at, then that last count.
+    /// empty child, count until nine tenths of a slice after the wake, then destroy it so the
+    /// weight comes back. Count until the window ends; report create and return offsets (µs),
+    /// `time_now` of the return, then that last count.
     CarveSpin = 20,
     /// The containment gate's hostile agent, run by the steward in a lease (kernel/README.md,
     /// "Containment").
@@ -529,17 +529,21 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
         }
         Some(Role::BudgetChurn) => budget_churn(end, tpu),
         Some(Role::CarveSpin) => {
-            // The carve must begin a slice, and the count end 9 ms into it, the carve's own time
-            // (about a millisecond) included, so that the destruction falls inside it: requeued at
+            // The carve must begin a slice, and the count end nine tenths into it, the carve's own
+            // time (about a millisecond) included, so that the destruction falls inside it: requeued at
             // weight 1, this budget's pass would defer the destruction by seconds. A wake is picked
-            // with a fresh slice; a sleep of a microsecond is over before it blocks.
+            // with a fresh slice; the one-millisecond timeout lets it block before that wake.
             let _ = rd::receive(None, 1_000, 0);
             let woke = ticks();
             let child = rd::create(3, &rd::spec(0, 0, param(0) as u32)).expect("the carve");
-            spin_until(woke + 9_000 * tpu);
+            let created = ticks();
+            spin_until(woke + (9 * SLICE_US / 10) * tpu);
             rd::destroy(child).expect("the carve's return");
+            let returned_ticks = ticks();
             let returned = rd::time_now().unwrap_or(0);
             let n = spin_until(end);
+            report(created.saturating_sub(woke) / tpu);
+            report(returned_ticks.saturating_sub(woke) / tpu);
             report(returned);
             n
         }
