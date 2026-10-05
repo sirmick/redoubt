@@ -5,7 +5,9 @@ stop." Done. Do not start packages until the owner asks for development.
 
 ## Published
 
-- `main` = `34a2d9981` = `origin/main`. Today's merges, both pushed:
+- `main` = `37ae709ed` = `origin/main` (DOC1 `37ae709ed`, docs only: GETTING-STARTED's
+  "On a machine without apt" block, editor OK, doccheck run natively on the pinned 1.99.0).
+  Before it, `34a2d9981`. Today's package merges, all pushed:
   - **BENCHENV1** `b15ecfba6`: OpenSSH's reference server runs in a per-session riscv64 Linux
     guest under `qemu-system-riscv64` (recipe `tests/ssh-reference/guest.toml`, snapshot-pinned);
     no container runtime anywhere. Whole bench rv64 226/0/0, rv32 211/0/0, no `--allow-skip`.
