@@ -1,0 +1,21 @@
+description = "The cluster's known-bad control: sched-cluster's v3 construction and gates, run only by name on the kernel built with its test-only slice-10ms (the old 10 ms slice); it passes only when the oracle classifies a miss: either the envelope target misses and the driver's lower witness exceeds its target, or a stand-in could not reach a zero-intent slot by more than the p99 target net of audits (kernel/scheduling.md, Responsiveness)"
+arch = ["rv64", "rv32"]
+whole_run = false
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+qemu_seed = 3
+programs = ["sched-cluster"]
+kernel_features = ["sched-trace", "slice-10ms"]
+post_check = "sched_oracle cluster cluster_old_control driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000"
+timeout_secs = 600
+# No TEST PASSED expect: a control whose stand-in cannot reach its slot fails in the guest, and
+# its verdict is the oracle's classification of that failure from the console and the trace. The
+# oracle requires the program's pass itself unless the run is classified, and then allows only
+# the failing stand-in's own failure line.
+expect = [
+    '^CLUSTER-PLAN v3-kernel-envelope 100 300 600 850 200 80000 50000$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['PROGRAM HALT']
+poweroff = true

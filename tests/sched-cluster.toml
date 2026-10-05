@@ -1,0 +1,17 @@
+description = "Sixteen near-common spinner wakes and 200 RTC/timeout stand-in wakes expose retained stride debt; the trace oracle proves rank, cluster and both lead categories (a positive lead is a pass above the replayed floor; spinners ranked ahead are reported) before judging each attempt's kernel-clock envelope net of certified audit interiors (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+qemu_seed = 3
+programs = ["sched-cluster"]
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle cluster driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000"
+timeout_secs = 600
+expect = [
+    '^CLUSTER-PLAN v3-kernel-envelope 100 300 600 850 200 80000 50000$',
+    '^SCHED-CLUSTER TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['PROGRAM HALT']
+poweroff = true

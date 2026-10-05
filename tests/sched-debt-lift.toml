@@ -1,13 +1,19 @@
-description = "A destroyed lineage's debt reaches a shared parent normalized (pass inheritance): a sibling created after a weight-1 grandchild's lineage is destroyed runs within one round (virtual time, checked build)"
+description = "A destroyed lineage's debt reaches a shared parent normalized (pass inheritance): a sibling created after a weight-1 grandchild's lineage is destroyed runs before any other budget is picked twice, which its raw debt would have cost about six rounds; the one-round bound rests on the lift's arithmetic, which the oracle recomputes, and no boot exercises it (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-debt-lift"]
+# Test builds only: the trace ring (never in a default kernel). The oracle checks every pick and
+# recomputes every lift, and (`round`) that the sibling the program makes after its empty marker
+# budget is picked before any other budget is picked twice (kernel/scheduling.md, "Residual risks").
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle round"
 timeout_secs = 600
 expect = [
-    '^\[debt-lift\] ok: the sibling first ran',
+    '^\[debt-lift\] ok: the sibling ran',
     '^SCHED-DEBT-LIFT TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[debt-lift\] FAIL']
 poweroff = true

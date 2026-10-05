@@ -1,4 +1,4 @@
-description = "A large-weight server keeps its share under load (R12): weight 1000 against eight users of 100 gets 1000/1800 (virtual time, checked build)"
+description = "A large-weight server keeps its share under load (R12): weight 1000 against eight users of 100 gets 1000/1800 by ratio of counts, within 50 per thousand either side, and each user within a tenth of the users' mean, with useful work over the window printed beside (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -7,6 +7,7 @@ programs = ["sched-large-weight"]
 timeout_secs = 600
 expect = [
     '^\[large-weight\] ok: the weight-1000 server got',
+    '^\[large-weight\] ok: the least user got',
     '^SCHED-LARGE-WEIGHT TEST PASSED$',
 ]
 forbid = ['\[large-weight\] FAIL']
