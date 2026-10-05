@@ -107,9 +107,9 @@ pub enum Role {
     /// ahead, each round then counting for 1 ms; report the count.
     DeadlineFlood = 19,
     /// Sleep, so that what follows begins a slice; carve p0 of this budget's weight (slot 3) to an
-    /// empty child, count until 9 ms after the wake, destroy the child so the weight comes back,
-    /// then count until the window ends; report, first, the `time_now` (µs) the destruction
-    /// returned at, then that last count.
+    /// empty child, count until nine tenths of a slice after the wake, then destroy it so the
+    /// weight comes back. Count until the window ends; report create and return offsets (µs),
+    /// `time_now` of the return, then that last count.
     CarveSpin = 20,
     /// The containment gate's hostile agent, run by the steward in a lease (kernel/README.md,
     /// "Containment").
@@ -124,6 +124,14 @@ pub enum Role {
     Containment = 25,
     /// The endpoint maker, run once in `users`.
     EndpointMaker = 26,
+    /// Cluster fixture: one absolute release timeout, then ordinary spinning.
+    ClusterSpinner = 27,
+    /// Cluster fixture: spin across the spinners' common release.
+    ClusterServer = 28,
+    /// Cluster fixture: 200 goldfish RTC interrupt waits with fixed programmed offsets.
+    ClusterDriver = 29,
+    /// Cluster fixture: 200 timeout waits with the same programmed offsets.
+    ClusterTimer = 30,
 }
 
 impl Role {
@@ -156,6 +164,10 @@ impl Role {
             Bystander,
             Containment,
             EndpointMaker,
+            ClusterSpinner,
+            ClusterServer,
+            ClusterDriver,
+            ClusterTimer,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -175,6 +187,20 @@ pub fn spin_until(end: u64) -> u64 {
         }
         if ticks() >= end {
             return n;
+        }
+    }
+}
+
+/// Cluster workload and positive preparation use the same billed kernel clock as its window.
+#[inline(never)]
+fn cluster_spin_until(end: u64) -> Result<u64, Error> {
+    let mut n = 0u64;
+    loop {
+        for _ in 0..CHUNK {
+            n = core::hint::black_box(n + 1);
+        }
+        if rd::time_now()? >= end {
+            return Ok(n);
         }
     }
 }
@@ -353,6 +379,241 @@ fn await_done(n: usize) {
 /// A child's entry: its role from the startup block.
 pub extern "C" fn child(arg: usize) -> ! { run_child(arg, None) }
 
+/// The cluster fixture's one-thread-per-budget children. Each reports readiness before the next
+/// child is created, making its first W an isolated setup wake in the fixed start order.
+pub extern "C" fn cluster_child(arg: usize) -> ! {
+    IS_CHILD.store(true, SeqCst);
+    let role = Role::from_u8(spawn::startup_byte(arg, 0));
+    for (i, p) in PARAMS.iter().enumerate() {
+        p.store(word(arg, i) as usize, SeqCst);
+    }
+    report(0); // setup acknowledgement; consumed before the parent starts the next child
+    let (start, end) = window();
+    let Some(release) = start.checked_add(50_000) else { rd::process_exit(91) };
+    match role {
+        Some(Role::ClusterServer) => report(cluster_spin_until(end).unwrap_or(u64::MAX)),
+        Some(Role::ClusterSpinner) => {
+            let before = rd::time_now().unwrap_or(u64::MAX);
+            let Some(delay) = release.checked_sub(before).filter(|d| *d > 0) else {
+                report(u64::MAX);
+                rd::process_exit(92)
+            };
+            report(if rd::receive(None, delay, 0) == Err(Error::Timeout) {
+                cluster_spin_until(end).unwrap_or(u64::MAX)
+            } else {
+                u64::MAX
+            });
+        }
+        Some(Role::ClusterDriver | Role::ClusterTimer) => cluster_wakes(role.unwrap(), start, release, end),
+        _ => report(u64::MAX),
+    }
+    rd::process_exit(0)
+}
+
+/// One blocking wait per reported wake. Zero intent waits toward its nominal slot and phase;
+/// positive intent spins to the nominal slot, then arms a fresh relative wait for the phase.
+/// Neither path makes an extra preparatory wait, so W/sample order remains joinable.
+fn cluster_wakes(role: Role, start: u64, release: u64, end: u64) {
+    const N: usize = 200;
+    const PHASES: [u64; 4] = [100, 300, 600, 850];
+    let base = if role == Role::ClusterDriver {
+        match rd::map_device(3) {
+            Ok((base, _)) => base,
+            Err(e) => {
+                cluster_failure(role, 0, 1, e as usize, release, release, release, &[], &[]);
+                return;
+            }
+        }
+    } else {
+        0
+    };
+    let mut windows = [Window::default(); MAX_SAMPLES];
+    let mut metadata = [ClusterMeta::default(); MAX_SAMPLES];
+    let mut n = 0;
+    for i in 0..N {
+        let Some(slot) = release.checked_add(i as u64 * 80_000) else { break };
+        let Some(target) = slot.checked_add(PHASES[i % 4]) else { break };
+        // Each phase has 25 zero and 25 positive intent rounds. The trace, not this intent,
+        // decides which samples qualify in either category.
+        let positive = i / 4 % 2 == 1;
+        if positive {
+            if cluster_spin_until(slot).is_err() {
+                cluster_failure(role, i, 6, 0, target, slot, release, &windows[..n], &metadata[..n]);
+                return;
+            }
+        }
+        let before = match rd::time_now() {
+            Ok(v) => v,
+            Err(e) => {
+                cluster_failure(role, i, 6, e as usize, target, slot, release, &windows[..n], &metadata[..n]);
+                return;
+            }
+        };
+        let delay = if positive { Some(PHASES[i % 4]) } else { target.checked_sub(before) };
+        let Some(delay) = delay.filter(|d| *d > 0) else {
+            cluster_failure(role, i, 2, 0, target, before, release, &windows[..n], &metadata[..n]);
+            return;
+        };
+        if positive && before < slot {
+            cluster_failure(role, i, 2, 0, target, before, release, &windows[..n], &metadata[..n]);
+            return;
+        }
+        let Some(lower) = before.checked_add(delay) else {
+            cluster_failure(role, i, 2, 0, target, before, release, &windows[..n], &metadata[..n]);
+            return;
+        };
+        let prep_us = if before >= slot { (before - slot) as i32 } else { -((slot - before) as i32) };
+        let (early, observed, arm, deadline, service) = if role == Role::ClusterDriver {
+            let arm = rtc::now_ns(base);
+            let Some(deadline) = delay.checked_mul(1_000).and_then(|d| arm.checked_add(d)) else {
+                cluster_failure(role, i, 2, 0, target, before, release, &windows[..n], &metadata[..n]);
+                return;
+            };
+            rtc::alarm(base, deadline);
+            let received = rd::receive(Some(4), delay + 100_000, 0);
+            let early = rd::time_now().unwrap_or(0);
+            let service = rtc::now_ns(base);
+            let observed = match rd::time_now() {
+                Ok(now) => now,
+                Err(e) => {
+                    cluster_failure(
+                        role,
+                        i,
+                        6,
+                        e as usize,
+                        target,
+                        before,
+                        release,
+                        &windows[..n],
+                        &metadata[..n],
+                    );
+                    return;
+                }
+            };
+            rtc::clear(base);
+            if !matches!(received, Ok(Received::Interrupt)) {
+                cluster_failure(
+                    role,
+                    i,
+                    3,
+                    cluster_result(received),
+                    target,
+                    before,
+                    release,
+                    &windows[..n],
+                    &metadata[..n],
+                );
+                return;
+            }
+            (early, observed, arm, deadline, service)
+        } else {
+            let received = rd::receive(None, delay, 0);
+            let observed = rd::time_now().unwrap_or(0);
+            if received != Err(Error::Timeout) {
+                cluster_failure(
+                    role,
+                    i,
+                    4,
+                    cluster_result(received),
+                    target,
+                    before,
+                    release,
+                    &windows[..n],
+                    &metadata[..n],
+                );
+                return;
+            }
+            (before, observed, before, lower, observed)
+        };
+        let Some(upper) = observed.checked_add(1) else {
+            cluster_failure(role, i, 7, 0, target, observed, release, &windows[..n], &metadata[..n]);
+            return;
+        };
+        if lower < release
+            || lower > observed
+            || upper > end
+            || early < before
+            || early > observed
+            || service < deadline
+            || arm > deadline
+        {
+            cluster_failure(role, i, 7, 0, target, observed, release, &windows[..n], &metadata[..n]);
+            return;
+        }
+        windows[n] = Window { end: upper, gross: upper - lower };
+        metadata[n] = ClusterMeta {
+            prep_us,
+            delay_us: delay as u32,
+            before,
+            lower,
+            early,
+            observed,
+            arm,
+            deadline,
+            service,
+        };
+        n += 1;
+    }
+    let tag = if role == Role::ClusterDriver { Stats::DRIVER_WAKE } else { Stats::TIMER_WAKE };
+    // Only these two empty zero-weight scopes are destroyed by the stand-ins. Their existing
+    // R10 X/Y records fence all 200 waits before any reporting send can block and wake again.
+    let marker = if role == Role::ClusterDriver { 5 } else { 3 };
+    if let Err(e) = rd::destroy(marker) {
+        cluster_failure(
+            role,
+            N,
+            5,
+            e as usize,
+            release + (199 * 80_000 + 850),
+            release,
+            release,
+            &windows[..n],
+            &metadata[..n],
+        );
+        return;
+    }
+    report_windows(&windows[..n], tag);
+    hand_over_cluster(tag, start, end, &windows[..n], &metadata[..n]);
+}
+
+/// A failure report occupies the usual one-report slot. Its times are signed microseconds from
+/// the common release; the high bit in word 2 marks it as diagnostic, not a latency statistic.
+/// Branches are map error (1), zero delay (2), driver receive (3), timer receive (4),
+/// marker destruction (5), post-RTC-service clock read (6).
+/// Results are map errors' ABI codes, zero for delay, or receive variants 1..4 and errors
+/// 0x80 | ABI code. This path runs only after a failed attempt, outside valid sample windows.
+fn cluster_failure(
+    role: Role,
+    index: usize,
+    branch: usize,
+    result: usize,
+    target: u64,
+    now: u64,
+    release: u64,
+    windows: &[Window],
+    metadata: &[ClusterMeta],
+) {
+    let relative = |at: u64| -> usize {
+        let us = if at >= release { (at - release) as i32 } else { -((release - at) as i32) };
+        us as u32 as usize
+    };
+    let tag = if role == Role::ClusterDriver { Stats::DRIVER_WAKE } else { Stats::TIMER_WAKE };
+    let code = 0x8000_0000usize | (index << 16) | (branch << 8) | result;
+    let _ =
+        rd::send(1, &rd::body([relative(target), relative(now), code, tag | index << 8]), None, rd::FOREVER);
+    hand_over_cluster(tag, release - 50_000, release + WINDOW_US, windows, metadata);
+}
+
+fn cluster_result(received: Result<Received, Error>) -> usize {
+    match received {
+        Ok(Received::Message(_)) => 1,
+        Ok(Received::Interrupt) => 2,
+        Ok(Received::Exit(_)) => 3,
+        Ok(Received::Abandoned(_)) => 4,
+        Err(e) => 0x80 | e as usize,
+    }
+}
+
 /// The containment gate's children's entry: [`child`], with the gate's roles. Only the gate's
 /// program names it, so no other case's image carries the gate's code (an image's size is in
 /// every spawn a case measures).
@@ -529,17 +790,21 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
         }
         Some(Role::BudgetChurn) => budget_churn(end, tpu),
         Some(Role::CarveSpin) => {
-            // The carve must begin a slice, and the count end 9 ms into it, the carve's own time
-            // (about a millisecond) included, so that the destruction falls inside it: requeued at
+            // The carve must begin a slice, and the count end nine tenths into it, the carve's own
+            // time (about a millisecond) included, so that the destruction falls inside it: requeued at
             // weight 1, this budget's pass would defer the destruction by seconds. A wake is picked
-            // with a fresh slice; a sleep of a microsecond is over before it blocks.
+            // with a fresh slice; the one-millisecond timeout lets it block before that wake.
             let _ = rd::receive(None, 1_000, 0);
             let woke = ticks();
             let child = rd::create(3, &rd::spec(0, 0, param(0) as u32)).expect("the carve");
-            spin_until(woke + 9_000 * tpu);
+            let created = ticks();
+            spin_until(woke + (9 * SLICE_US / 10) * tpu);
             rd::destroy(child).expect("the carve's return");
+            let returned_ticks = ticks();
             let returned = rd::time_now().unwrap_or(0);
             let n = spin_until(end);
+            report(created.saturating_sub(woke) / tpu);
+            report(returned_ticks.saturating_sub(woke) / tpu);
             report(returned);
             n
         }
@@ -738,6 +1003,25 @@ struct Window {
     gross: u64,
 }
 
+/// Ordered cluster metadata, held until both stand-ins finish their measurements. Driver clock
+/// fields are goldfish RTC nanoseconds; timer clock fields are `time_now` microseconds.
+#[derive(Clone, Copy, Default)]
+struct ClusterMeta {
+    /// Arming preparation relative to the nominal slot, in signed microseconds.
+    prep_us: i32,
+    delay_us: u32,
+    before: u64,
+    lower: u64,
+    early: u64,
+    observed: u64,
+    arm: u64,
+    deadline: u64,
+    service: u64,
+}
+
+// 200 * (64-byte metadata + 16-byte window) = 16,000 bytes on the child's 32-KiB stack.
+const _: () = assert!(core::mem::size_of::<ClusterMeta>() == 64);
+
 /// After a stand-in's reports, once the launcher asks on slot 2 (when every measurement is over,
 /// so the windows' messages perturb none): send each window, `[end, end, gross, tag]` (the end in
 /// halves), then `[0; 4]`.
@@ -747,6 +1031,36 @@ fn hand_over(sets: &[(usize, &[Window])]) {
         for w in windows.iter() {
             let [lo, hi] = halves(w.end);
             let _ = rd::send(1, &rd::body([lo, hi, w.gross as usize, *tag]), None, rd::FOREVER);
+        }
+    }
+    let _ = rd::send(1, &rd::body([0; 4]), None, rd::FOREVER);
+}
+
+/// Cluster-only metadata and windows, after measurement and after the parent's explicit request.
+/// Four metadata messages then one trusted latency window per attempt, in original order.
+fn hand_over_cluster(tag: usize, start: u64, end: u64, windows: &[Window], metadata: &[ClusterMeta]) {
+    let _ = rd::receive(Some(2), rd::FOREVER, 0);
+    let [h0, h1] = halves(start);
+    let [f0, f1] = halves(end);
+    let _ = rd::send(1, &rd::body([h0, h1, f0, f1]), None, rd::FOREVER);
+    for (i, (w, meta)) in windows.iter().zip(metadata).enumerate() {
+        let [b0, b1] = halves(meta.before);
+        let [l0, l1] = halves(meta.lower);
+        let [e0, e1] = halves(meta.early);
+        let [p0, p1] = halves(meta.observed);
+        let [arm_lo, arm_hi] = halves(meta.arm);
+        let [deadline_lo, deadline_hi] = halves(meta.deadline);
+        let [service_lo, service_hi] = halves(meta.service);
+        let [end_lo, end_hi] = halves(w.end);
+        for words in [
+            [i, usize::from(i / 4 % 2 == 1), meta.prep_us as u32 as usize, meta.delay_us as usize],
+            [b0, b1, l0, l1],
+            [e0, e1, p0, p1],
+            [arm_lo, arm_hi, deadline_lo, deadline_hi],
+            [service_lo, service_hi, i, 0xc4],
+            [end_lo, end_hi, w.gross as usize, tag],
+        ] {
+            let _ = rd::send(1, &rd::body(words), None, rd::FOREVER);
         }
     }
     let _ = rd::send(1, &rd::body([0; 4]), None, rd::FOREVER);
@@ -1850,6 +2164,22 @@ impl Bench {
         (now_u + lead_us, now_u + lead_us + length_us)
     }
 
+    /// The cluster alone uses one `time_now` reading for all go payloads and the printed plan.
+    pub fn go_cluster(&mut self) -> (u64, u64, u64) {
+        let h = self.now_us().checked_add(200_000).expect("cluster H");
+        let r = h.checked_add(50_000).expect("cluster R");
+        let f = r.checked_add(WINDOW_US).expect("cluster F");
+        let [h0, h1] = halves(h);
+        let [f0, f1] = halves(f);
+        for i in 0..self.started {
+            if self.go[i] != 0 {
+                rd::send(self.go[i], &rd::body([h0, h1, f0, f1]), None, rd::FOREVER).expect("cluster go");
+                self.go[i] = 0;
+            }
+        }
+        (h, r, f)
+    }
+
     /// Collect `n` reports, by child index.
     pub fn collect(&mut self, n: usize) -> [u64; 64] {
         let mut out = [0u64; 64];
@@ -1885,6 +2215,39 @@ impl Bench {
         out
     }
 
+    /// Cluster children each send one report. Wait for all distinct children, preserving counts
+    /// so a duplicate cannot hide a missing child's report or start diagnostics mid-window.
+    pub fn collect_cluster_words(&mut self, n: usize) -> ([[[usize; 4]; 4]; 64], [usize; 64]) {
+        let mut out = [[[0usize; 4]; 4]; 64];
+        let mut seen = [0usize; 64];
+        let mut distinct = 0;
+        while distinct < n {
+            let Ok(Received::Message(m)) = rd::receive(Some(self.rep), 60_000_000, 0) else { break };
+            let i = (m.badge as usize).saturating_sub(1);
+            if i < n {
+                if seen[i] == 0 {
+                    distinct += 1;
+                }
+                if seen[i] < 4 {
+                    out[i][seen[i]] = m.body.words;
+                }
+                seen[i] += 1;
+            }
+        }
+        // No sample handover has begun. Count any already queued extras as duplicate reports.
+        while let Ok(Received::Message(m)) = rd::receive(Some(self.rep), 0, 0) {
+            let i = (m.badge as usize).saturating_sub(1);
+            if i < n {
+                if seen[i] < 4 {
+                    out[i][seen[i]] = m.body.words;
+                }
+                seen[i] += 1;
+            }
+        }
+        while rd::receive(Some(self.exit), 0, 0).is_ok() {}
+        (out, seen)
+    }
+
     /// Ask child `i`, a stand-in holding its samples, for them, once every report is collected,
     /// and print each as `LATENCY-SAMPLE <group> <measure> <end> <gross>` (µs) for the bench's
     /// post-check (`sched_oracle`), which judges the targets net of the checked build's audits.
@@ -1917,6 +2280,77 @@ impl Bench {
             let w = m.body.words;
             let Some(measure) = Stats::measure(w[3]) else { return };
             let _ = writeln!(Console, "LATENCY-SAMPLE {} {} {} {}", group, measure, join(w[0], w[1]), w[2]);
+        }
+    }
+
+    /// Receive the cluster's ordered per-attempt metadata and trusted latency windows after all
+    /// measurement reports. The explicit index and intent make a shifted handover fail closed.
+    pub fn cluster_samples(&mut self, i: usize, count: usize, tag: usize) {
+        let Some(measure) = Stats::measure(tag) else {
+            self.check(false, format_args!("cluster child {i}: unknown sample tag {tag}"));
+            return;
+        };
+        if count > 200 {
+            self.check(false, format_args!("cluster child {i}: {count} samples exceed 200"));
+            return;
+        }
+        let _ = writeln!(Console, "LATENCY-COUNT cluster {measure} {count}");
+        let _ = rd::send(self.ask[i], &rd::body([0; 4]), None, rd::FOREVER);
+        let Some(header) = self.cluster_word(i) else { return };
+        let _ = writeln!(
+            Console,
+            "CLUSTER-HEADER {measure} {} {}",
+            join(header[0], header[1]),
+            join(header[2], header[3])
+        );
+        for index in 0..count {
+            let Some(header) = self.cluster_word(i) else { return };
+            let Some(bounds) = self.cluster_word(i) else { return };
+            let Some(observations) = self.cluster_word(i) else { return };
+            let Some(times) = self.cluster_word(i) else { return };
+            let Some(last) = self.cluster_word(i) else { return };
+            let Some(window) = self.cluster_word(i) else { return };
+            let intent = usize::from(index / 4 % 2 == 1);
+            let (arm, deadline, service) =
+                (join(times[0], times[1]), join(times[2], times[3]), join(last[0], last[1]));
+            let (before, lower) = (join(bounds[0], bounds[1]), join(bounds[2], bounds[3]));
+            let (early, observed) =
+                (join(observations[0], observations[1]), join(observations[2], observations[3]));
+            let upper = join(window[0], window[1]);
+            if header[0] != index
+                || header[1] != intent
+                || last[2..] != [index, 0xc4]
+                || window[3] != tag
+                || lower != before.checked_add(header[3] as u64).unwrap_or(0)
+                || observed.checked_add(1) != Some(upper)
+                || upper.checked_sub(lower) != Some(window[2] as u64)
+            {
+                self.check(false, format_args!("cluster {measure} sample {index}: malformed metadata"));
+                return;
+            }
+            let _ = writeln!(
+                Console,
+                "CLUSTER-SAMPLE {measure} {index} {intent} {} {} {before} {} {lower} {early} {observed} {upper} {arm} {deadline} {service} {} {}",
+                index * 80_000,
+                header[2] as u32 as i32,
+                header[3],
+                if tag == Stats::DRIVER_WAKE { service.saturating_sub(deadline) / 1_000 } else { 0 },
+                if tag == Stats::DRIVER_WAKE { "rtc_ns" } else { "timer_us" },
+            );
+            let _ = writeln!(Console, "LATENCY-SAMPLE cluster {measure} {upper} {}", window[2]);
+        }
+        if self.cluster_word(i) != Some([0; 4]) {
+            self.check(false, format_args!("cluster {measure}: missing handover terminator"));
+        }
+    }
+
+    fn cluster_word(&mut self, i: usize) -> Option<[usize; 4]> {
+        match rd::receive(Some(self.rep), 60_000_000, 0) {
+            Ok(Received::Message(m)) if m.badge as usize == i + 1 => Some(m.body.words),
+            _ => {
+                self.check(false, format_args!("cluster child {i}: a metadata word stopped or moved"));
+                None
+            }
         }
     }
 

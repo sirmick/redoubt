@@ -7,13 +7,14 @@ programs = ["sched-carve-return"]
 # Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
 # judges U's share from its carve's return, which the program prints with that window (`SHARE`),
 # net of the audit time inside it (kernel/scheduling.md, "Responsiveness"). U sleeps before it
-# carves, so the carve begins a slice, and runs until 9 ms into it, so the destruction falls inside
+# carves, so the carve begins a slice, and runs until 9/10 of it, so the destruction falls inside
 # it: a slice ending first would requeue U at weight 1, whose pass defers the destruction past the
 # window.
 kernel_features = ["sched-trace"]
-post_check = "sched_oracle"
+post_check = "sched_oracle carve_return"
 timeout_secs = 600
 expect = [
+    '^CARVE-OBS \d+ \d+ \d+$',
     '^SHARE u-after-return \d+ \d+ \d+ 450 1000$',
     '^SCHED-CARVE-RETURN TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',

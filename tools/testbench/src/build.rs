@@ -314,7 +314,7 @@ impl Builder {
             reason
                 .lines()
                 .rev()
-                .take(12)
+                .take(120)
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()

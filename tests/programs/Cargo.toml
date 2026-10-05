@@ -85,6 +85,7 @@ bin = [
     { name = "sched-budget-churn", test = false },
     { name = "sched-carve-inflation", test = false },
     { name = "sched-carve-return", test = false },
+    { name = "sched-cluster", test = false },
     { name = "sched-debt-lift", test = false },
     { name = "sched-destroy-billing", test = false },
     { name = "sched-exit-churn", test = false },

@@ -1,0 +1,4 @@
+description = "Focused SCHED1 host oracle checks"
+kind = "host-tests"
+packages = ["testbench"]
+tests = ["sched_oracle_only"]

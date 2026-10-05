@@ -4,10 +4,13 @@ kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-wake-no-preempt"]
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle wake_no_preempt=20"
 timeout_secs = 120
 expect = [
     '^\[wake\] ok: a timeout mid-slice waited for the slice.s end',
     '^SCHED-WAKE-NO-PREEMPT TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[wake\] FAIL', 'PROGRAM HALT']
 poweroff = true
