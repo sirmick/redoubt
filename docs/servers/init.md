@@ -69,9 +69,9 @@ and `init`'s only input. Its entries:
   budget. `init` refuses zero, more than 128 pages, or a stack not smaller than its budget's pages,
   before it starts any server. A budget that holds the stack but not the image beside it makes that
   server's launch fail, which refuses the boot, or on a restart reboots the machine
-  ([restarts and reboots](#restarts-and-reboots)). The bench measures each server's peak on the
-  driven boot path and requires the declaration to hold at least twice that peak
-  ([the memory budget](../testbench.md#the-memory-budget)).
+  ([restarts and reboots](#restarts-and-reboots)). The bench measures each server's peak across
+  the required boot and userland paths and requires the declaration to hold at least twice the
+  largest peak ([the memory budget](../testbench.md#the-memory-budget)).
 - **One entry per device.** A `devices` entry names one device, by its register region and its
   interrupt, and `init` hands that device's objects together to the one server that holds the
   entry. They go under the name the server's entry gives the device: `NAME` for the register region and `NAME-irq` for the

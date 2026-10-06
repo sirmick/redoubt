@@ -5,6 +5,7 @@ recipe = "image/boot.toml"
 # The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
 # the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
 memory_mib = 1024
+memory = true
 timeout_secs = 450
 expect = [
     '^init: started beamlet, console [0-9a-f]{16}$',

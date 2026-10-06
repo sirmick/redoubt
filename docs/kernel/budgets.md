@@ -197,7 +197,7 @@ keeps free. What `init` launches counts in the budgets it launches into.
   Each child's first-thread stack is charged to that server's own budget, at the manifest's
   `stack_pages` size ([the boot manifest](../servers/init.md#the-boot-manifest)).
 
-  With `beamlet` and the userland disk's `blkd` and `fsd`, the image manifest's bound is 507 pages
+  With `beamlet` and the userland disk's `blkd` and `fsd`, the image manifest's bound is 508 pages
   on both widths (`init-boot` prints it), and the fixed 1,024-page limit more than doubles it.
   The image's `beamlet` is budgeted 24,576 pages, twice its measured use at the prompt (11,877
   pages on rv64, 7,554 on rv32), so the image's servers need about 34,600 of `system`'s pages:

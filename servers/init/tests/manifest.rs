@@ -149,13 +149,13 @@ fn the_image_manifest_s_bound() {
     // The arena (256 + 3 tables), 9 receive and 10 exit endpoints and init's reports endpoint
     // (beamlet receives on none), 10 process objects, 10 blocks with 3 tables each, 10 watching
     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
-    // batch of beamlet's image + 3, stack 16 + 3), the lend (2 + 3), and one handle-table page:
+    // batch of beamlet's image + 3, stack 17 + 3), the lend (2 + 3), and one handle-table page:
     // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 9 + 6 + 40 + 3 + 1 = 59
     // added (the two volumes' ranges among the 6 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 16 + 3) + 1 + 5);
+    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 17 + 3) + 1 + 5);
 }
 
 /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table

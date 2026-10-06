@@ -1000,7 +1000,7 @@ part of the trusted computing base
 
 ## The memory budget
 
-Status: built · tested: bench:init-boot, bench:init-refuses-stack, bench:memory-host-tests
+Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:init-refuses-stack, bench:memory-host-tests
 
 A boot case under `init` can set `memory = true`. After its console verdict, the bench stops
 QEMU over QMP and dumps the guest's physical RAM beside the case's log, as
@@ -1018,6 +1018,25 @@ umask, so it is private to the bench's user only under umask 077 or on a single-
 ([a private directory for the QMP socket](todo/qmp-socket-private-dir.md)). The manifest's
 `stack_pages` defaults to 16 and cannot exceed 128
 ([the boot manifest](servers/init.md#the-boot-manifest)).
+
+The standard image is scanned after `init-boot`, `userland-boot` and `userland-read-only` on both
+widths. Its server declarations use twice the largest peak across those six runs, rounded up to
+pages. The read-only case also scans its additional client from the merged manifest.
+
+| Image server | Largest peak (bytes) | Declared stack (pages) |
+| --- | ---: | ---: |
+| `keyd` | 5,264 | 3 |
+| `consoled` | 9,112 | 5 |
+| `bootfsd` | 7,304 | 4 |
+| `blkd` | 4,504 | 3 |
+| `netd` | 4,280 | 3 |
+| `ipd` | 8,040 | 4 |
+| `fsd:data` | 7,176 | 4 |
+| `blkd:system` | 4,504 | 3 |
+| `fsd:system` | 12,680 | 7 |
+| `beamlet` | 33,240 | 17 |
+
+The read-only client's largest peak is 6,616 bytes; its case uses the 16-page default.
 
 This is a measurement of the paths the case drove. Other requests or deeper call paths may
 need more stack, and any guest, including another server, can forge the public paint pattern. The
