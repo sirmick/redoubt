@@ -41,6 +41,13 @@
 //! window less the share's CPU, so a net share is never past the whole. An audit unpaired, or
 //! inside a destruction (R10's own window, which then subtracts nothing), fails the check.
 //!
+//! **A share of the charged CPU** (`CHARGED-SHARE`) takes no count from a program: the program
+//! prints its window and marks the budgets it means (an empty child of a weight of its choosing,
+//! carved and destroyed, so the trace's lift names the parent), and this check sums the kernel's
+//! charges in the window from each budget's pass, its rises times its weight, for the first marked
+//! budget against every marked budget and the budgets lifted into them. The checked build's audits
+//! are charged to no budget, so it is net of them by construction.
+//!
 //! Each process's threads ending, the pumps after them included, is bracketed by `T` and `t`
 //! records (the time in µs): the check reports each destruction's time in its threads' ending
 //! beside R10's (kernel/budgets.md, "Residual risks"). A span unpaired or nested fails it.
@@ -1779,6 +1786,222 @@ fn check_lift_delay(log: &str, records: &[Record], floor: &[u128]) -> Result<Str
     if failed { Err(out) } else { Ok(out) }
 }
 
+/// A share of the CPU the kernel charged, judged on the trace alone: `CHARGED-SHARE <name>
+/// <start> <end> <tolerance> <mark>...`, a window `[start, end]` on `time_now` in µs, how far in
+/// thousandths the share may lie from its weight's, and the weights of the marks. A mark is an
+/// empty budget of that weight the program carves from a budget and destroys, so the trace names
+/// the budget (its lift's parent). The first mark's budget is the one judged; it and every marked
+/// budget, with all the budgets lifted into them, are the whole it is judged of.
+struct ChargedShare<'a> {
+    name: &'a str,
+    window: (u64, u64),
+    tolerance: u64,
+    marks: Vec<u64>,
+}
+
+/// The share, in thousandths, that weight `judged` is owed among `weights` (its own included):
+/// what R12 gives it of the CPU the runnable budgets share.
+fn expected_share(judged: u64, weights: &BTreeMap<u64, u64>) -> u64 {
+    judged * 1000 / weights.values().sum::<u64>().max(1)
+}
+
+/// The charged shares the program printed, in order.
+fn charged_shares(log: &str) -> Result<Vec<ChargedShare<'_>>, String> {
+    let mut out = Vec::new();
+    for line in log.lines().map(|line| line.trim_end_matches('\r')) {
+        let Some(rest) = line.strip_prefix("CHARGED-SHARE ") else { continue };
+        let bad = || format!("malformed {line:?}");
+        let f: Vec<&str> = rest.split_whitespace().collect();
+        let nums: Vec<u64> =
+            f.iter().skip(1).map(|v| v.parse::<u64>().map_err(|_| bad())).collect::<Result<_, _>>()?;
+        let [start, end, tolerance, ref marks @ ..] = nums[..] else { return Err(bad()) };
+        let distinct: BTreeSet<&u64> = marks.iter().collect();
+        if marks.is_empty() || distinct.len() != marks.len() || start >= end || tolerance > 1000 {
+            return Err(bad());
+        }
+        out.push(ChargedShare { name: f[0], window: (start, end), tolerance, marks: marks.to_vec() });
+    }
+    Ok(out)
+}
+
+/// Judge a charged share. A budget's pass rises by its charge times `STRIDE` over its stride
+/// weight, so between two of its records that carry its pass the kernel charged it the rise times
+/// that weight: every such rise inside the window is summed, at the weight the budget had then. A
+/// rise is not a charge across a wake (the floor lifts the pass), a weight change or a lift (the
+/// rule restates the pass, and the oracle has checked it), so each of those starts the count
+/// again. A weight is the trace's: before a budget's first weight change its old weight, after one
+/// its new, and with none the weight its destruction's lift states; a budget charged in the window
+/// with no weight in the trace fails the check. The checked build's audits are charged to no
+/// budget, so the share is net of them by construction. What a budget out of the queue is charged
+/// shows only in its next wake's pass, where the floor's lift hides it; the wakes in the window are
+/// counted beside. A budget charged in the window that no lift places under a mark is named
+/// beside too, so a whole the trace could not place is seen. The window is the records from the
+/// first stamped with a time in it (a timer interrupt, an audit, a destruction, a threads span or
+/// a walk) to the last.
+///
+/// What the judged budget is owed is its weight over the weights of the budgets under the marks
+/// that the kernel charged in the window (its competitors, itself included), each as the trace
+/// states it; the share must lie within the tolerance of that. A window in which the competitors
+/// could change is refused: a weight change or a lift of a budget under the marks inside it (a
+/// budget made, carved from or ended).
+fn check_charged_share(records: &[Record], s: &ChargedShare) -> Result<(String, bool), String> {
+    let queued: BTreeSet<u64> = records.iter().filter(|r| "WKRDP".contains(r.kind)).map(|r| r.id).collect();
+    // Each lift: the child's parent and its weight; each weight change: where, old and new.
+    let mut parent = BTreeMap::new();
+    let mut last_weight = BTreeMap::new();
+    let mut marked: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    let mut changes: BTreeMap<u64, Vec<(usize, u64, u64)>> = BTreeMap::new();
+    for (i, r) in records.iter().enumerate() {
+        match r.kind {
+            'L' => {
+                let (child, w) = (records[i + 1].id, records[i + 6].pass >> 32);
+                parent.insert(child, r.id);
+                last_weight.insert(child, w as u64);
+                if !queued.contains(&child) {
+                    marked.entry(w as u64).or_default().push(r.id);
+                }
+            }
+            'G' => {
+                let w = records[i + 2].pass;
+                changes.entry(r.id).or_default().push((i, (w >> 32) as u64, (w & 0xffff_ffff) as u64));
+            }
+            _ => {}
+        }
+    }
+    let mut roots = Vec::new();
+    for w in &s.marks {
+        match marked.get(w).map(Vec::as_slice) {
+            Some([b]) => roots.push(*b),
+            other => {
+                return Err(format!(
+                    "charged share {}: {} empty budgets of mark weight {w} destroyed, not one",
+                    s.name,
+                    other.map_or(0, <[u64]>::len)
+                ));
+            }
+        }
+    }
+    let judged = roots[0];
+    // The whole: the marked budgets and every budget whose lifts lead to one.
+    let under = |mut b: u64| loop {
+        if roots.contains(&b) {
+            return true;
+        }
+        match parent.get(&b) {
+            Some(&p) if p != b => b = p,
+            _ => return false,
+        }
+    };
+    let weight_at = |b: u64, i: usize| -> Option<u64> {
+        let cs = changes.get(&b).map(Vec::as_slice).unwrap_or(&[]);
+        match cs.iter().rposition(|c| c.0 < i) {
+            Some(at) => Some(cs[at].2),
+            None => cs.first().map(|c| c.1).or_else(|| last_weight.get(&b).copied()),
+        }
+    };
+    let (start, end) = s.window;
+    let stamped = |r: &Record| "IUVXYTtMm".contains(r.kind) && (start..=end).contains(&(r.pass as u64));
+    let (Some(first), Some(last)) = (records.iter().position(stamped), records.iter().rposition(stamped))
+    else {
+        return Err(format!("charged share {}: no record stamped inside [{start}, {end}]", s.name));
+    };
+    // Each budget's pass last seen and whether it is out of the queue (left it, or never woke).
+    let mut seen: BTreeMap<u64, (u128, bool)> = BTreeMap::new();
+    // Each budget's charge in the window: its pass's rises times its weight (ticks times STRIDE).
+    let mut charged: BTreeMap<u64, u128> = BTreeMap::new();
+    // The budgets charged in the window that no lift places under a mark.
+    let mut outside = BTreeSet::new();
+    let mut wakes = 0;
+    let mut i = 0;
+    while i < records.len() {
+        let (r, inside) = (records[i], (first..=last).contains(&i));
+        let out = seen.get(&r.id).is_none_or(|s| s.1);
+        // Each pass the record states: (the budget, the pass, whether the rise to it is a charge,
+        // whether the budget is out of the queue after it).
+        let passes = match r.kind {
+            'W' => vec![(r.id, r.pass, false, false)],
+            'D' => vec![(r.id, r.pass, true, true)],
+            'K' | 'R' => vec![(r.id, r.pass, true, false)],
+            // Out of the queue, a pass changes only on the way back in: the floor's lift.
+            'P' => vec![(r.id, r.pass, !out, out)],
+            // A weight change: the rise to its pass before is charged at the old weight; the pass
+            // after starts the count again.
+            'G' => vec![(r.id, r.pass, true, out), (r.id, records[i + 4].pass, false, out)],
+            // A lift: the parent's rise and the child's are charged; the parent's pass after starts
+            // the count again.
+            'L' => vec![
+                (r.id, r.pass, true, out),
+                (records[i + 1].id, records[i + 1].pass, true, true),
+                (r.id, records[i + 7].pass, false, out),
+            ],
+            _ => Vec::new(),
+        };
+        wakes += usize::from(inside && r.kind == 'W' && under(r.id));
+        let changed = match r.kind {
+            'G' => Some(r.id),
+            'L' => Some(records[i + 1].id),
+            _ => None,
+        };
+        if let Some(b) = changed.filter(|b| inside && under(*b)) {
+            return Err(format!(
+                "charged share {}: budget {b} under its marks was {} at record {}, inside [{start}, {end}]: its competitors changed",
+                s.name,
+                if r.kind == 'G' { "reweighed" } else { "ended" },
+                r.seq
+            ));
+        }
+        for (b, pass, charge, out) in passes {
+            let Some((before, _)) = seen.insert(b, (pass, out)) else { continue };
+            let rise = pass.saturating_sub(before);
+            if !(charge && inside && rise > 0) {
+                continue;
+            }
+            if !under(b) {
+                outside.insert(b);
+                continue;
+            }
+            let w = weight_at(b, i).ok_or_else(|| {
+                format!(
+                    "charged share {}: budget {b} was charged in the window, but the trace states no weight for it",
+                    s.name
+                )
+            })?;
+            *charged.entry(b).or_default() += rise * u128::from(w);
+        }
+        i += match r.kind {
+            'G' => REWEIGH.len(),
+            'L' => LIFT.len(),
+            _ => 1,
+        };
+    }
+    let all: u128 = charged.values().sum();
+    if all == 0 {
+        return Err(format!("charged share {}: nothing charged under its marks in [{start}, {end}]", s.name));
+    }
+    let its = charged.get(&judged).copied().unwrap_or(0);
+    let share = (its * 1000 / all) as u64;
+    // The competitors' weights in the window (none changes inside it).
+    let weights: BTreeMap<u64, u64> =
+        charged.keys().map(|&b| (b, weight_at(b, first).unwrap_or(0))).collect();
+    let expected = expected_share(weights.get(&judged).copied().unwrap_or(0), &weights);
+    let (min, max) = (expected.saturating_sub(s.tolerance), (expected + s.tolerance).min(1000));
+    let met = (min..=max).contains(&share);
+    let stride = u128::from(redoubt_stride::STRIDE);
+    Ok((
+        format!(
+            "charged share {}: {share} of 1000 of the CPU the kernel charged to the budgets under its marks in [{start}, {end}] µs (records {}..={}): budget {judged} {} ticks of {}, audits charged to none; competitors by weight {weights:?}, expected {expected}; {wakes} wakes in the window; charged outside its marks: {:?}: target {} ({min} <= share <= {max})",
+            s.name,
+            records[first].seq,
+            records[last].seq,
+            its / stride,
+            all / stride,
+            outside,
+            if met { "met" } else { "missed" }
+        ),
+        met,
+    ))
+}
+
 /// The audit time inside `[from, to]`, µs: the part of each audit's span that falls in it, so an
 /// audit straddling an edge counts only its inside. `audits` is in trace order, so by time.
 pub fn audit_inside(audits: &[(u64, u64)], from: u64, to: u64) -> u64 {
@@ -1871,7 +2094,8 @@ fn shares(log: &str) -> Result<Vec<Share<'_>>, String> {
 /// `walk-trace` kernel's walks may each be bounded, `pump_max_us=N`, `expiry_max_us=N` and
 /// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99. Every window a target
 /// or a share judges has the checked build's audit time inside it subtracted (a share's up to the
-/// window less its CPU); R10's has none.
+/// window less its CPU); R10's has none. Each charged share the program printed is judged on the
+/// kernel's charges in the trace ([`check_charged_share`]).
 /// `round` requires the budget the program marks to run before any other budget is picked twice
 /// ([`check_round`]).
 pub fn run(log: &str, args: &str) -> Result<String, String> {
@@ -2098,6 +2322,12 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             if stale_missed { " (none, but the case requires some)" } else { "" },
             if met { "met" } else { "missed" }
         ));
+    }
+    // Each share of the charged CPU, of the kernel's charges alone.
+    for s in charged_shares(log)? {
+        let (line, met) = check_charged_share(&records, &s)?;
+        missed |= !met;
+        lines.push(line);
     }
     let mut lease_end = String::new();
     if let Some(bound) = bounds.get("lease_end_p99_us") {
@@ -3403,6 +3633,229 @@ mod tests {
         ] {
             assert!(run(&audited(bad), "").is_err_and(|e| e.contains("malformed")), "{bad:?}");
         }
+    }
+
+    type Rec = (u64, char, u64, u128);
+
+    /// A weight change's group by the rule; the pass after.
+    fn push_reweigh(t: &mut Vec<Rec>, e: u64, id: u64, pb: u128, old: u128, new: u128, f: u128) -> u128 {
+        let owed = pb.saturating_sub(f) * old.max(1);
+        let (pa, ra) = (f + owed / new.max(1), owed % new.max(1));
+        for (kind, pass) in [('G', pb), ('g', 0), ('v', old << 32 | new), ('f', f), ('N', pa), ('n', ra)] {
+            t.push((e, kind, id, pass));
+        }
+        pa
+    }
+
+    /// A destruction's lift group by the rule (the child entered at 0, no remainders); the
+    /// parent's pass after.
+    fn push_lift(
+        t: &mut Vec<Rec>,
+        e: u64,
+        (parent, pb): (u64, u128),
+        (child, cp): (u64, u128),
+        f: u128,
+        wc: u128,
+        wp: u128,
+    ) -> u128 {
+        let work = cp.saturating_sub(f) * wc;
+        let base = pb.max(f);
+        let pa = base + work / wp;
+        let group = [
+            ('L', parent, pb),
+            ('l', child, cp),
+            ('e', child, 0),
+            ('f', 0, f),
+            ('r', child, 0),
+            ('q', parent, 0),
+            ('w', 0, wc << 32 | wp),
+            ('A', parent, pa),
+            ('a', parent, work % wp),
+        ];
+        t.extend(group.map(|(kind, id, pass)| (e, kind, id, pass)));
+        pa
+    }
+
+    /// The containment gate's steady window as the 1 ms slice runs it: the bystander (44, weight
+    /// 100, marked by an empty child of weight 2) beside both slots' leases (55 and 65, under
+    /// sessions 50, marked 3), each of free weight `lease` less its sub-agent's 1 (57 and 67). Every
+    /// slice is 1,200 µs charged, of which the bystander's counting thread runs 1,000: the rest is
+    /// the per-switch kernel time the page states as today's (the program's gross count read 758
+    /// of 1000 against a floor of 783 on rv64 seed 13). The picks follow the rank clauses. Halfway
+    /// through, the bystander leaves the queue for `away` slices. The log, and the share of the
+    /// window the bystander's count stands for (the old clause's).
+    fn containment(lease: u128, slices: u64, away: u64, marks: &str) -> (String, u64) {
+        const SLICE_US: u64 = 1_200;
+        let stride = u128::from(redoubt_stride::STRIDE);
+        let mut t: Vec<Rec> = Vec::new();
+        // The marks: carved, destroyed and lifted, each parent's weight restated both ways.
+        for (parent, mark, w) in [(44, 60, 2), (50, 61, 3)] {
+            push_reweigh(&mut t, 1, parent, 0, 100, 100 - w, 0);
+            t.push((1, 'X', mark, 10));
+            push_reweigh(&mut t, 1, parent, 0, 100 - w, 100, 0);
+            push_lift(&mut t, 1, (parent, 0), (mark, 0), 0, w, 100);
+            t.push((1, 'Y', mark, 11));
+        }
+        // Sessions carves each slot's lease; each lease carves its sub-agent.
+        let slots = [(55u64, 57u64), (65, 67)];
+        let mut sessions = 0;
+        for (i, (l, _)) in slots.iter().enumerate() {
+            let w = 100 - lease * i as u128;
+            sessions = push_reweigh(&mut t, 1, 50, sessions, w, w - lease, 0);
+            push_reweigh(&mut t, 1, *l, 0, lease, lease - 1, 0);
+        }
+        let weight = BTreeMap::from([(44u64, 100u128), (55, lease - 1), (57, 1), (65, lease - 1), (67, 1)]);
+        // Each queued budget: its pass and rank key, as the oracle ranks them.
+        let mut queue: BTreeMap<u64, (u128, (u8, i128))> = BTreeMap::new();
+        for &id in weight.keys() {
+            t.push((1, 'W', id, 0));
+            queue.insert(id, (0, (0, -1)));
+        }
+        let (start, mut now, mut counted) = (1_000u64, 1_000u64, 0u64);
+        let mut gone = None;
+        for n in 0..slices {
+            let e = n + 2;
+            if away > 0 && n == slices / 2 {
+                gone = queue.remove(&44).map(|q| q.0);
+                t.push((e, 'D', 44, gone.unwrap()));
+            }
+            if let Some(pass) = gone.filter(|_| n == slices / 2 + away) {
+                let floor = queue.values().map(|q| q.0).min().unwrap();
+                t.push((e, 'W', 44, pass.max(floor)));
+                queue.insert(44, (pass.max(floor), (0, -i128::from(e))));
+                gone = None;
+            }
+            let (&b, &(pass, _)) = queue.iter().min_by_key(|(id, (p, k))| (*p, *k, **id)).unwrap();
+            let after = pass + u128::from(SLICE_US * 10) * stride / weight[&b];
+            t.extend([(e, 'K', b, pass), (e, 'I', b, u128::from(now)), (e, 'R', b, after), (e, 'O', 0, 0)]);
+            queue.insert(b, (after, (1, i128::from(n as u32))));
+            counted += if b == 44 { 1_000 } else { 0 };
+            now += SLICE_US;
+        }
+        let end = start + slices * SLICE_US;
+        // Each lease ends: its sub-agent, then itself, each lifted into its parent.
+        let e = slices + 2;
+        let f = queue.values().map(|q| q.0).min().unwrap();
+        for (i, (l, sub)) in slots.into_iter().enumerate() {
+            let at = u128::from(end) + 100 + 10 * i as u128;
+            let (mut lease_pass, sub_pass) = (queue[&l].0, queue[&sub].0);
+            t.push((e, 'D', sub, sub_pass));
+            t.push((e, 'X', sub, at));
+            lease_pass = push_reweigh(&mut t, e, l, lease_pass, lease - 1, lease, f);
+            t.push((e, 'P', l, lease_pass));
+            lease_pass = push_lift(&mut t, e, (l, lease_pass), (sub, sub_pass), f, 1, lease);
+            t.push((e, 'P', l, lease_pass));
+            t.push((e, 'Y', sub, at + 1));
+            t.push((e, 'D', l, lease_pass));
+            t.push((e, 'X', l, at + 2));
+            let w = 100 - lease * (2 - i as u128);
+            sessions = push_reweigh(&mut t, e, 50, sessions, w, w + lease, f);
+            sessions = push_lift(&mut t, e, (50, sessions), (l, lease_pass), f, lease, w + lease);
+            t.push((e, 'Y', l, at + 3));
+        }
+        let log = trace(&t) + &format!("CHARGED-SHARE bystander {start} {end} 50 {marks}\n");
+        (log, counted * 1000 / (end - start))
+    }
+
+    #[test]
+    fn a_charged_share_is_the_kernels_not_the_count() {
+        // The gate's steady window: the count reads 694 of the window, under the old floor of 783;
+        // the kernel charged the bystander 100 of every 120 parts it charged under users, its
+        // weight's share among the budgets it ran beside.
+        let (log, gross) = containment(10, 1_200, 0, "2 3");
+        assert_eq!(gross, 694);
+        let ok = run(&log, "");
+        assert!(
+            ok.as_ref().is_ok_and(|s| s.contains("charged share bystander: 833 of 1000")
+                && s.contains("competitors by weight {44: 100, 55: 9, 57: 1, 65: 9, 67: 1}, expected 833;")
+                && s.contains("target met (783 <= share <= 883)")),
+            "{ok:?}"
+        );
+        // Out of the queue for a quarter of the window, it did not keep its share.
+        let (log, _) = containment(10, 1_200, 300, "2 3");
+        let missed = run(&log, "");
+        assert!(
+            missed
+                .as_ref()
+                .is_err_and(|e| e.contains("expected 833; 1 wakes") && e.contains("target missed")),
+            "{missed:?}"
+        );
+        // Leases of weight 41 are owed 80 of 182: what is expected follows the competitors.
+        let (log, _) = containment(41, 1_820, 0, "2 3");
+        let ok = run(&log, "");
+        assert!(ok.as_ref().is_ok_and(|s| s.contains("expected 549;") && s.contains("target met")), "{ok:?}");
+        // Without the sessions mark, the whole is the bystander alone.
+        let (log, _) = containment(10, 1_200, 0, "2");
+        assert!(run(&log, "").is_ok_and(|s| s.contains("bystander: 1000 of 1000")
+            && s.contains("competitors by weight {44: 100}, expected 1000;")));
+        // A mark the trace does not hold fails the check.
+        let (log, _) = containment(10, 1_200, 0, "2 5");
+        assert!(run(&log, "").is_err_and(|e| e.contains("0 empty budgets of mark weight 5 destroyed")));
+        // A lease of a mark's weight is no mark: it ran.
+        let (log, _) = containment(3, 360, 0, "2 3");
+        assert!(run(&log, "").is_ok());
+        // Malformed: no mark, a mark twice, not a number, a tolerance past the whole.
+        for bad in [" 50\n", " 50 2 2\n", " 50 x\n", " 1001 2\n"] {
+            let (log, _) = containment(10, 12, 0, "");
+            let log = log.replace(" 50 \n", bad);
+            assert!(run(&log, "").is_err_and(|e| e.contains("malformed")), "{bad:?}");
+        }
+        assert!(
+            run(&(trace(&[(1, 'W', 1, 0), (1, 'K', 1, 0)]) + "CHARGED-SHARE b 5 5 0 2\n"), "")
+                .is_err_and(|e| e.contains("malformed"))
+        );
+    }
+
+    #[test]
+    fn a_charged_share_counts_charges_never_the_floors_lift() {
+        // Budget 44 (weight 100, marked 2) is charged 2^24 of pass (1,600 ticks), leaves, and
+        // wakes 2^28 higher: the floor's lift, not a charge. Budget 9 is not under the mark.
+        let mut t: Vec<Rec> = Vec::new();
+        push_reweigh(&mut t, 1, 44, 0, 100, 98, 0);
+        t.push((1, 'X', 60, 10));
+        push_reweigh(&mut t, 1, 44, 0, 98, 100, 0);
+        push_lift(&mut t, 1, (44, 0), (60, 0), 0, 2, 100);
+        t.push((1, 'Y', 60, 11));
+        t.extend([
+            (2, 'W', 44, 0),
+            (2, 'K', 44, 0),
+            (2, 'I', 44, 100),
+            (2, 'R', 44, 1 << 24),
+            (2, 'O', 0, 0),
+            (3, 'K', 44, 1 << 24),
+            (3, 'D', 44, 1 << 24),
+            (4, 'W', 9, 1 << 29),
+            (4, 'P', 44, 1 << 28),
+            (4, 'W', 44, 1 << 28),
+            (4, 'K', 44, 1 << 28),
+            (4, 'I', 44, 200),
+            (4, 'O', 0, 0),
+        ]);
+        let log = trace(&t) + "CHARGED-SHARE b 50 300 0 2\n";
+        let ok = run(&log, "");
+        assert!(
+            ok.as_ref().is_ok_and(|s| s.contains(
+                "charged share b: 1000 of 1000 of the CPU the kernel charged to the budgets under its marks in [50, 300] µs (records 25..=34): budget 44 1600 ticks of 1600, audits charged to none; competitors by weight {44: 100}, expected 1000; 1 wakes in the window; charged outside its marks: {}: target met (1000 <= share <= 1000)"
+            )),
+            "{ok:?}"
+        );
+        // A weight change inside the window: the competitors could change, and the window is
+        // refused.
+        let mut changed = t.clone();
+        let mut carve = Vec::new();
+        push_reweigh(&mut carve, 2, 44, 0, 100, 99, 0);
+        changed.splice(26..26, carve);
+        let log = trace(&changed) + "CHARGED-SHARE b 50 300 0 2\n";
+        assert!(
+            run(&log, "").is_err_and(|e| e.contains("budget 44 under its marks was reweighed at record 26"))
+        );
+        // A second empty budget of the mark's weight, under budget 9: the mark names no one.
+        let mut forged = t.clone();
+        forged.push((5, 'X', 61, 400));
+        push_lift(&mut forged, 5, (9, 1 << 29), (61, 0), 1 << 28, 2, 10);
+        forged.push((5, 'Y', 61, 401));
+        let log = trace(&forged) + "CHARGED-SHARE b 50 300 0 2\n";
+        assert!(run(&log, "").is_err_and(|e| e.contains("2 empty budgets of mark weight 2 destroyed")));
     }
 
     #[test]

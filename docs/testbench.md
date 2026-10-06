@@ -470,8 +470,23 @@ a net share is never past the whole (`sched-budget-churn`'s deadline victim, whi
 the program's calibrated CPU count runs at least 0.3% (rv64) and 0.65% (rv32) over the work it
 measures, a bias in every share's CPU that the cap now hides behind its `credited` note; the
 calibration is the likely source, and it is a follow-up. A case that judges a share
-in its program has no audit inside its window. An audit that never ends, ends without beginning
-or runs inside a destruction fails the check. The oracle subtracts only what the trace shows it: a
+in its program has no audit inside its window. Where the budgets a share is judged among run
+hostile agents, no count of theirs may decide it, so the share is the kernel's charges alone
+(`CHARGED-SHARE <name> <start> <end> <tolerance> <mark>...`, the containment gate's bystander).
+The program prints its window and marks the budgets it means, each by carving an empty child of
+the mark's weight and destroying it, so the trace's lift names the parent; `sched_oracle` sums
+each budget's pass rises in the window times its weight as the trace states it, for the first
+mark's budget against every marked budget and those lifted into them. What the budget is owed is
+its weight over the weights of those the kernel charged in the window, its competitors, and the
+share must lie within the tolerance of it; a window in which a budget under the marks is
+reweighed or ended is refused, since its competitors changed. The audits are charged to no
+budget, so the share is net of them by construction; what a budget is charged out of the queue
+shows only under its next wake's floor lift and is not counted, so the wakes in the window are
+reported beside, with every budget charged in it that no lift places under a mark. The residual:
+it judges what the kernel charged, so a kernel that under-bills every budget under the marks
+alike (idle or switch time charged to no one) passes it; the gate's own expect lines and its
+latency clauses bound that, not this one. An audit
+that never ends, ends without beginning or runs inside a destruction fails the check. The oracle subtracts only what the trace shows it: a
 kernel built with `audit-unstamped`, which leaves the audit after a destruction unstamped, misses
 the containment gate's deadline notice, in a recorded negative run. The audits themselves stay
 full. The cluster's envelopes ([responsiveness](kernel/scheduling.md#responsiveness)) are credited
