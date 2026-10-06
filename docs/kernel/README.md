@@ -183,9 +183,11 @@ console, so no line on it can come from a hostile agent. Each victim reports thr
 program badged for it, and the program never counts a hostile agent's report as a verdict.
 
 **The run.** The boot runs on rv64 and rv32, on one hart, in a checked build with the tracing
-kernel ([R23 (no test channels)](scheduling.md#r23-no-test-channels)). It uses the latency
-workload's virtual time and one pinned seed. A sweep of 16 seeds on both widths sets which seed
-the gate runs, and this page records the sweep. The targets are the ones in
+kernel ([R23 (no test channels)](scheduling.md#r23-no-test-channels)). Its trace ring is
+192 MiB (`sched-trace-large`, at 512 MiB of RAM), not the usual 64: at the 1 ms slice the run
+writes about ten records a slice, some four million, and a trace that drops one fails the gate.
+It uses the latency workload's virtual time and one pinned seed. A sweep of 16 seeds on both
+widths sets which seed the gate runs, and this page records the sweep. The targets are the ones in
 [responsiveness](scheduling.md#responsiveness), and the gate adds none. If the gate misses one of
 them, that is a finding against the kernel, not a reason to set a new target.
 

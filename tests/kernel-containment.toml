@@ -7,8 +7,10 @@ icount = "shift=3,sleep=off"
 # 16-seed sweep is recorded on docs/kernel/README.md#containment.
 qemu_seed = 13
 programs = ["kernel-containment"]
-# Test builds only: the trace ring and its dump (never in a default or production kernel).
-kernel_features = ["sched-trace"]
+# Test builds only: the trace ring and its dump (never in a default or production kernel), at
+# 192 MiB: at the 1 ms slice the run writes about ten records a slice, twice what 64 MiB holds.
+kernel_features = ["sched-trace-large"]
+memory_mib = 512
 # The rank oracle; R10's kernel time from the trace's X/Y records, p99 <= 30 ms; a lease's end (the
 # worst net decision-wake p99 plus R10's), <= 125 ms; and every latency target, judged on the
 # program's sample windows net of the checked build's audit time inside each (kernel/scheduling.md,
