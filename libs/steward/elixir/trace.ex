@@ -125,6 +125,7 @@ defmodule Redoubt.Steward.Trace do
   defp hash(h), do: Base.decode16!(h, case: :mixed)
 
   defp kind("Login", f), do: {:login, unquote_(f["principal"]), list(f["labels"]), num(f["key"])}
+  defp kind("Console", f), do: {:console, unquote_(f["principal"])}
   defp kind("ChannelClosed", f), do: {:channel_closed, num(f["session"])}
 
   defp kind("ApprovalOpened", f),

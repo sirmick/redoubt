@@ -298,6 +298,38 @@ pub(crate) fn release(store: &mut Store, domain: &Domain, kind: Kind, id: u64) {
 /// The route of a session's or lease's badge.
 pub(crate) fn route(store: &Store, badge: u64) -> Option<Route> { store.index.routes.get(&badge).cloned() }
 
+/// A session of principal `p` in `domain`, opened by a login with `key` or as the console
+/// principal's (key 0): the login is counted against the domain's blame, the session made, and its
+/// machine started on `opened`.
+#[allow(clippy::too_many_arguments)]
+fn open_session(
+    store: &mut Store,
+    call: &Call<'_>,
+    event: &Event,
+    out: &mut Out,
+    p: usize,
+    domain: &Domain,
+    key: u64,
+    opened: gen::session::Event,
+) {
+    run::<BlameM>(store, call, out, domain, 0, gen::blame::Event::Login);
+    let (id, badge) = (fresh(store, event, out), fresh(store, event, out));
+    let s = Session {
+        id,
+        state: gen::session::State::Starting,
+        principal: p,
+        key,
+        badge,
+        number: 0,
+        reply: event.reply,
+    };
+    insert(store, domain, Kind::Session, id, |st| {
+        st.sessions.insert(id, s);
+    });
+    let call = Call { created: true, ..call.clone() };
+    run::<SessionM>(store, &call, out, domain, id, opened);
+}
+
 /// An event from outside the core.
 pub(crate) fn external(store: &mut Store, event: &Event, out: &mut Out) {
     let call = Call::of(event);
@@ -310,23 +342,13 @@ pub(crate) fn external(store: &mut Store, event: &Event, out: &mut Out) {
             let Some(domain) = store.find(account, labels) else {
                 return refuse(event, out, Refusal::NotOwner);
             };
-            run::<BlameM>(store, &call, out, &domain, 0, gen::blame::Event::Login);
-            let (id, badge) = (fresh(store, event, out), fresh(store, event, out));
-            let reply = event.reply;
-            let s = Session {
-                id,
-                state: gen::session::State::Starting,
-                principal: p,
-                key: *key,
-                badge,
-                number: 0,
-                reply,
-            };
-            insert(store, &domain, Kind::Session, id, |st| {
-                st.sessions.insert(id, s);
-            });
-            let call = Call { created: true, ..call };
-            run::<SessionM>(store, &call, out, &domain, id, gen::session::Event::Login);
+            open_session(store, &call, event, out, p, &domain, *key, gen::session::Event::Login);
+        }
+        EventKind::Console { principal } => {
+            let Some(p) = store.fixed.principal(principal) else { return unknown(event, out) };
+            let account = store.fixed.principals[p].account.get();
+            let Some(domain) = store.find(account, &[]) else { return unknown(event, out) };
+            open_session(store, &call, event, out, p, &domain, 0, gen::session::Event::Console);
         }
         EventKind::ChannelClosed { session } => {
             let Some((domain, Kind::Session)) = store.index.ids.get(session).cloned() else {

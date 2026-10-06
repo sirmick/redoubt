@@ -402,6 +402,24 @@ defmodule Redoubt.Steward do
     end
   end
 
+  # The console principal's session on the UART: no key, in the principal's unlabelled domain,
+  # otherwise a login's.
+  defp external(store, %{kind: {:console, name}} = e, out) do
+    with p when p != nil <- principal(store.fixed, name),
+         account = Enum.at(store.fixed.principals, p).account,
+         d when d != nil <- find(store, account, []) do
+      {_, store, out} = run(store, out, e, d, :blame, 0, :login)
+      {id, out} = fresh(store, e, out)
+      {badge, out} = fresh(store, e, out)
+
+      s = %{id: id, state: :starting, principal: p, key: 0, badge: badge, number: 0, reply: e.reply}
+      {_, store} = insert(store, d, :session, id, s)
+      done(run(store, out, e, d, :session, id, :console, %{created: true}))
+    else
+      nil -> unknown(store, e, out)
+    end
+  end
+
   defp external(store, %{kind: {:channel_closed, session}} = e, out) do
     case store.ids[session] do
       {d, :session} -> answered(run(store, out, e, d, :session, session, :channel_closed), e)

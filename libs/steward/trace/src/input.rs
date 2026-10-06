@@ -136,6 +136,7 @@ fn event_kind(name: &str, f: &Fields<'_>) -> Result<(EventKind, bool), String> {
             labels: f.list("labels")?,
             key: f.u64("key")?,
         },
+        "Console" => EventKind::Console { principal: string(f.get("principal")?)? },
         "ChannelClosed" => EventKind::ChannelClosed { session: f.u64("session")? },
         "ApprovalOpened" => EventKind::ApprovalOpened {
             channel: f.u64("channel")?,
