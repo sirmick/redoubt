@@ -14,6 +14,7 @@ use core::ops::Range;
 use fdt_rs::base::DevTree;
 use fdt_rs::index::{DevTreeIndex, DevTreeIndexNode};
 use fdt_rs::prelude::*;
+use redoubt_layout::MAX_HARTS;
 
 /// MMIO regions the loader reports, the interrupt controller's included. A tree with more stops
 /// the boot (kernel/boot.md, "Hardware bounds"): dropping one would boot without a device.
@@ -23,6 +24,11 @@ pub const MAX_MMIO: usize = 32;
 /// with more stops the boot, as one with more MMIO regions does.
 pub const MAX_IRQ: usize = 32;
 const MAX_SEED: usize = 64;
+
+/// Where a PLIC's per-context registers (threshold and claim) begin, and each context's stride:
+/// the RISC-V PLIC specification's layout, which QEMU's `virt` follows.
+const PLIC_CONTEXT_BASE: usize = 0x20_0000;
+const PLIC_CONTEXT_STRIDE: usize = 0x1000;
 
 pub struct MmioRegion {
     pub range: Range<usize>,
@@ -55,6 +61,11 @@ pub struct Platform {
     pub rng_seed_len: usize,
     pub timebase_hz: u64,
     pub cpu_count: usize,
+    /// The harts the kernel starts, by boot index: the boot hart first, then the others in tree
+    /// order, at most `MAX_HARTS`. A hart past it, or whose PLIC S-mode context is not inside
+    /// the PLIC's window, is left out and stays parked (kernel/boot.md, `Hart`).
+    pub harts: [usize; MAX_HARTS],
+    pub harts_len: usize,
     pub plic: Option<Plic>,
     /// The hart's local interrupt controller (timer and software interrupts), found on its
     /// own rather than through the device list: the kernel is told this range so that it, not
@@ -154,6 +165,8 @@ impl Platform {
             rng_seed_len: 0,
             timebase_hz: 0,
             cpu_count: 0,
+            harts: [0; MAX_HARTS],
+            harts_len: 0,
             plic: None,
             clint: None,
             mmio: core::array::from_fn(|_| MmioRegion {
@@ -268,6 +281,27 @@ impl Platform {
         platform.irq[..platform.irq_len].sort_unstable();
 
         platform.plic = read_plic(&idx, &root, ac, sc, hart);
+        platform.harts[0] = hart;
+        platform.harts_len = 1;
+        let plic_node = plic_node(&idx);
+        let cpus = root.children().find(|n| n.name() == Ok("cpus"));
+        for cpu in
+            cpus.iter().flat_map(|c| c.children()).filter(|n| n.name().unwrap_or("").starts_with("cpu@"))
+        {
+            let Some(id) = cell(prop(&cpu, "reg")) else { continue };
+            if id == hart as u64 || platform.harts_len == MAX_HARTS {
+                continue;
+            }
+            // Every hart started has an S-mode context the kernel's PLIC window reaches.
+            if let (Some(plic), Some(node)) = (&platform.plic, &plic_node) {
+                match s_context(node, &root, id) {
+                    Some(c) if context_in_window(c, plic.range.len()) => {}
+                    _ => continue,
+                }
+            }
+            platform.harts[platform.harts_len] = id as usize;
+            platform.harts_len += 1;
+        }
         platform.clint = idx.nodes().find(|n| compatible_has(n, b"clint")).and_then(|n| {
             let reg = prop(&n, "reg")?;
             let base = read_cells(reg, 0, ac) as usize;
@@ -279,6 +313,41 @@ impl Platform {
     pub fn mmio(&self) -> &[MmioRegion] { &self.mmio[..self.mmio_len] }
 
     pub fn rng_seed(&self) -> &[u8] { &self.rng_seed[..self.rng_seed_len] }
+
+    pub fn harts(&self) -> &[usize] { &self.harts[..self.harts_len] }
+}
+
+/// Whether PLIC context `context`'s registers lie inside a PLIC window of `size` bytes.
+fn context_in_window(context: usize, size: usize) -> bool {
+    context
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(PLIC_CONTEXT_STRIDE))
+        .and_then(|n| n.checked_add(PLIC_CONTEXT_BASE))
+        .is_some_and(|end| end <= size)
+}
+
+fn plic_node<'a, 'i, 'dt>(idx: &'a DevTreeIndex<'i, 'dt>) -> Option<Node<'a, 'i, 'dt>> {
+    idx.nodes().find(|n| prop(n, "compatible").map_or(false, |b| b.windows(4).any(|w| w == b"plic")))
+}
+
+/// The index of hart `hart`'s S-mode context in `plic`'s `interrupts-extended`: the pair naming
+/// the interrupt controller of the cpu whose `reg` is `hart`, with interrupt 9.
+fn s_context(plic: &Node, root: &Node, hart: u64) -> Option<usize> {
+    const SUPERVISOR_EXTERNAL: u32 = 9;
+    let cpus = root.children().find(|n| n.name() == Ok("cpus"))?;
+    let phandle = cpus.children().find_map(|cpu| {
+        if cell(prop(&cpu, "reg"))? != hart {
+            return None;
+        }
+        let intc = cpu.children().find(|c| c.name().unwrap_or("").starts_with("interrupt-controller"))?;
+        Some(cell(prop(&intc, "phandle"))? as u32)
+    })?;
+    let extended = prop(plic, "interrupts-extended").unwrap_or(&[]);
+    extended.chunks_exact(8).position(|pair| {
+        let p = u32::from_be_bytes([pair[0], pair[1], pair[2], pair[3]]);
+        let irq = u32::from_be_bytes([pair[4], pair[5], pair[6], pair[7]]);
+        p == phandle && irq == SUPERVISOR_EXTERNAL
+    })
 }
 
 /// Locate the PLIC and the S-mode context wired to the boot hart, the cpu whose `reg` is
@@ -289,34 +358,13 @@ impl Platform {
 /// with no such context for the boot hart stops the boot (kernel/boot.md, R17): booting on
 /// would leave every driver deaf, or enable interrupts on a hart that never takes them.
 fn read_plic(idx: &DevTreeIndex, root: &Node, ac: usize, sc: usize, hart: usize) -> Option<Plic> {
-    const SUPERVISOR_EXTERNAL: u32 = 9;
-    let plic =
-        idx.nodes().find(|n| prop(n, "compatible").map_or(false, |b| b.windows(4).any(|w| w == b"plic")))?;
+    let plic = plic_node(idx)?;
     let reg = prop(&plic, "reg").expect("the PLIC has no reg");
     let base = read_cells(reg, 0, ac) as usize;
     let range = base..base + read_cells(reg, ac, sc) as usize;
-
-    // The boot hart's interrupt-controller child's phandle.
-    let cpus = root.children().find(|n| n.name() == Ok("cpus"));
-    let boot_phandle = cpus.and_then(|cpus| {
-        cpus.children().find_map(|cpu| {
-            if cell(prop(&cpu, "reg"))? != hart as u64 {
-                return None;
-            }
-            let intc = cpu.children().find(|c| c.name().unwrap_or("").starts_with("interrupt-controller"))?;
-            Some(cell(prop(&intc, "phandle"))? as u32)
-        })
-    });
-
-    let extended = prop(&plic, "interrupts-extended").unwrap_or(&[]);
-    let context = boot_phandle.and_then(|boot| {
-        extended.chunks_exact(8).position(|pair| {
-            let phandle = u32::from_be_bytes([pair[0], pair[1], pair[2], pair[3]]);
-            let irq = u32::from_be_bytes([pair[4], pair[5], pair[6], pair[7]]);
-            phandle == boot && irq == SUPERVISOR_EXTERNAL
-        })
-    });
-    let context = context.unwrap_or_else(|| panic!("the PLIC has no S-mode context for boot hart {}", hart));
+    let context = s_context(&plic, root, hart as u64)
+        .unwrap_or_else(|| panic!("the PLIC has no S-mode context for boot hart {}", hart));
+    assert!(context_in_window(context, range.len()), "boot hart {}'s PLIC context lies past the PLIC", hart);
     Some(Plic { range, context })
 }
 
@@ -410,6 +458,19 @@ mod tests {
     }
 
     fn machine_with(extended: &[u32], hart: usize, devices: usize, irqs: u32) -> Platform {
+        tree(&[0, 1], extended, hart, 0x60_0000, devices, irqs)
+    }
+
+    /// A machine with a cpu for each `reg` in `cpus` (the n-th's interrupt controller has phandle
+    /// n + 1), a PLIC `plic_size` bytes long wiring the contexts in `extended`, and `devices`.
+    fn tree(
+        cpus: &[u32],
+        extended: &[u32],
+        hart: usize,
+        plic_size: u32,
+        devices: usize,
+        irqs: u32,
+    ) -> Platform {
         let mut t = Fdt::default();
         t.begin("").cells("#address-cells", &[2]).cells("#size-cells", &[2]);
         t.begin("memory@80000000").prop("device_type", b"memory\0");
@@ -420,14 +481,14 @@ mod tests {
         t.prop("rng-seed", &[7; 32]).end();
         t.begin("cpus").cells("#address-cells", &[1]).cells("#size-cells", &[0]);
         t.cells("timebase-frequency", &[10_000_000]);
-        for (reg, phandle) in [(0, 1), (1, 2)] {
-            t.begin(if reg == 0 { "cpu@0" } else { "cpu@1" }).cells("reg", &[reg]);
-            t.begin("interrupt-controller").cells("phandle", &[phandle]).end();
+        for (i, reg) in cpus.iter().enumerate() {
+            t.begin(&std::format!("cpu@{:x}", reg)).cells("reg", &[*reg]);
+            t.begin("interrupt-controller").cells("phandle", &[i as u32 + 1]).end();
             t.end();
         }
         t.end();
         t.begin("soc").begin("plic@c000000").prop("compatible", b"riscv,plic0\0");
-        t.prop("interrupt-controller", &[]).cells("reg", &[0, 0xc00_0000, 0, 0x60_0000]);
+        t.prop("interrupt-controller", &[]).cells("reg", &[0, 0xc00_0000, 0, plic_size]);
         t.cells("interrupts-extended", extended).end();
         for i in 0..devices {
             let base = 0x1000_1000 + i as u32 * 0x1000;
@@ -447,6 +508,40 @@ mod tests {
 
     const M: u32 = 11;
     const S: u32 = 9;
+
+    /// (phandle, M), (phandle, S) for each of `n` cpus: contexts 2i and 2i + 1.
+    fn wired(n: u32) -> Vec<u32> { (1..=n).flat_map(|p| [p, M, p, S]).collect() }
+
+    #[test]
+    fn harts_are_listed_by_boot_index_never_by_id() {
+        // Sparse and wide ids, the boot hart in the middle: it is index 0, the rest in tree order.
+        let platform = tree(&[0, 5, 1000], &wired(3), 5, 0x60_0000, 0, 0);
+        assert_eq!(platform.harts(), &[5, 0, 1000]);
+    }
+
+    #[test]
+    fn harts_past_max_harts_stay_parked() {
+        let cpus: Vec<u32> = (0..12).collect();
+        let platform = tree(&cpus, &wired(12), 3, 0x60_0000, 0, 0);
+        assert_eq!(platform.harts(), &[3, 0, 1, 2, 4, 5, 6, 7]);
+        assert_eq!(platform.cpu_count, 12);
+    }
+
+    #[test]
+    fn a_hart_whose_s_mode_context_is_past_the_plic_window_stays_parked() {
+        // Contexts 1, 3, 5: a PLIC of 0x20_0000 + 4 contexts reaches the first two harts' only.
+        let platform = tree(&[0, 1, 2], &wired(3), 0, 0x20_4000, 0, 0);
+        assert_eq!(platform.harts(), &[0, 1]);
+        // A hart with no S-mode context at all is parked too.
+        let platform = tree(&[0, 1], &[1, M, 1, S, 2, M], 0, 0x60_0000, 0, 0);
+        assert_eq!(platform.harts(), &[0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "PLIC context lies past the PLIC")]
+    fn a_boot_hart_whose_context_is_past_the_plic_window_is_refused() {
+        tree(&[0, 1], &wired(2), 1, 0x20_2000, 0, 0);
+    }
 
     #[test]
     fn booting_on_hart_1_takes_hart_1s_s_mode_context() {

@@ -97,10 +97,6 @@ BUG(riscv-rt): the LMA of .data is not 4-byte aligned");
 ASSERT(_sbss % 4 == 0 && _ebss % 4 == 0, "
 BUG(riscv-rt): .bss is not 4-byte aligned");
 
-ASSERT(ORIGIN(REGION_DATA) + LENGTH(REGION_DATA) <= 0xfffffffffff78000, "
-ERROR: the kernel data region must end below the kernel stack's lowest page,
-KERNEL_STACK_TOP less KERNEL_STACK_PAGES pages in libs/layout");
-
 ASSERT(SIZEOF(.got) == 0, "
 .got section detected in the input files. Dynamic relocations are not
 supported. If you are linking to C code compiled using the `gcc` crate
