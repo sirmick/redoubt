@@ -1,7 +1,8 @@
 //! The platform's console, over the client library's hub, against the fixture's console server, on
 //! the fake kernel: what the VM writes reaches the screen, whole and in order, what is typed
 //! reaches the VM, a read with nothing typed yet waits without holding the VM's thread, the end of
-//! the input is the end, and the console costs one waiter thread and no other.
+//! the input is the end, a VM away from it past the server's session bound keeps it, and the
+//! console costs one waiter thread and no other.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -117,6 +118,29 @@ fn a_read_waits_for_typing_without_holding_the_vm() {
             }
         }
         // The keyboard goes away: the input ends.
+        drop(keys);
+        assert_eq!(read_to_end(p), b"");
+    });
+}
+
+#[test]
+fn a_vm_busy_past_the_session_bound_keeps_its_console() {
+    let (keyboard, mut keys) = std::io::pipe().unwrap();
+    with_platform(keyboard, move |p| {
+        // A read parked at the server and a write's answer on its way, then the VM's thread is
+        // away from the platform longer than the console server's session bound.
+        assert_eq!(p.console_read(), ConsoleInput::Nothing);
+        p.console_write(b"> ");
+        std::thread::sleep(std::time::Duration::from_secs(12));
+        keys.write_all(b"ls\n").unwrap();
+        let mut read = Vec::new();
+        while read != b"ls\n" {
+            match p.console_read() {
+                ConsoleInput::Data(bytes) => read.extend(bytes),
+                ConsoleInput::Nothing => p.idle(None),
+                ConsoleInput::Eof => panic!("the console ended while the VM was busy"),
+            }
+        }
         drop(keys);
         assert_eq!(read_to_end(p), b"");
     });

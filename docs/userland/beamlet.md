@@ -547,10 +547,11 @@ over cells; widgets, layout and focus are Elixir ([the shell](shell.md#full-scre
 
 ### Asynchronous underneath, synchronous on top
 
-<details><summary>Status: built · tested (8)</summary>
+<details><summary>Status: built · tested (9)</summary>
 
 - host:beamlet-redoubt::the_console_is_one_hub_connection_with_one_waiter
 - host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm
+- host:beamlet-redoubt::a_vm_busy_past_the_session_bound_keeps_its_console
 - host:beamlet-redoubt::two_askers_wait_at_once_and_each_gets_its_own_answer
 - host:beamlet-vm::a_completion_reaches_the_process_that_asked_and_no_other
 - host:beamlet-vm::a_message_does_not_end_a_wait_for_a_file
@@ -597,8 +598,10 @@ what a person or a peer takes to answer costs nothing but the request. Every 9P 
 image serves multiplexed sessions, so no call needs a thread of its own. What the scheduler's
 thread still waits for itself: typed calls, which no hub carries (the console's `size` and
 `littlefsd`'s `rename`), and the system volume's module lookups, since loading code is
-synchronous in the VM; a server that stops answering one of them stops the VM. The serving
-natives and a job's exit notice are [launching's](#natives) (planned).
+synchronous in the VM; a server that stops answering one of them stops the VM. A scheduler away
+from its endpoint that long, past a server's session bound, keeps its sessions: each waiter holds
+what arrives meanwhile and keeps calling ([a busy caller](native.md#many-requests-at-once)). The
+serving natives and a job's exit notice are [launching's](#natives) (planned).
 
 Residual: each connection costs its waiter thread, since a thread waits on one endpoint at a time;
 one thread waiting on several at once would be kernel work ([IPC](../kernel/ipc.md)).

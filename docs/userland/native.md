@@ -451,7 +451,7 @@ reaping by one timeout, no more.
 
 ### Many requests at once
 
-<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (11)</summary>
+<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (12)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
@@ -463,6 +463,7 @@ reaping by one timeout, no more.
 - host:redoubt-client::a_batch_goes_a_page_at_a_time
 - host:redoubt-client::a_write_is_at_most_one_page
 - host:redoubt-client::two_connections_have_a_waiter_each_and_the_caller_idles_in_receive
+- host:redoubt-client::a_caller_busy_past_the_session_bound_keeps_its_session
 - host:redoubt-client::a_server_that_breaks_its_hold_loses_the_session_at_the_margin
 
 </details>
@@ -502,9 +503,14 @@ schedulers submit, and a waiter per connection wakes it
 - **More connections have a waiter each**, a thread blocked in that connection's completion call.
   The caller idles in `receive` on an endpoint of its own, taking transfers of a completion
   buffer's size; a waiter hands its filled buffer over as the transfer of a one-word wake-up
-  `send` there, and calls again at once with a fresh one. A waiter
-  owns no other buffer and talks to no other server, and the hub takes a wake-up only from the
-  badge it minted for that waiter.
+  `send` there, and calls again at once with a fresh one. A waiter talks to no other server, and
+  the hub takes a wake-up only from the badge it minted for that waiter.
+- **A busy caller keeps its sessions.** A wake-up the caller does not take within `HAND_OVER_US`
+  (2.5 s, a quarter of `COLLECT_WAIT`) is held by its waiter, moved into the answers' own pages,
+  while the waiter calls again with a hold of 0, which keeps the session and takes what is
+  ready, and offers the oldest again. It holds at most `MAX_HELD` (4) such wake-ups; with that
+  many it reads no more and waits for the caller without bound, and the server may end the
+  session at its bound.
 - **An `Rerror` keeps its name**, read by the same table as a blocking call's
   ([an `Rerror` has a name](#an-rerror-has-a-name)); `busy`, over the connection's share, is
   `Busy`, for its submitter to ask again.
