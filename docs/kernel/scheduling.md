@@ -894,7 +894,7 @@ It is attacked three ways:
 
 ### R78 (fair kernel entry)
 
-Status: planned · M2 (usable shell)
+Status: built · tested: bench:smp-boot
 
 On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
 so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
@@ -902,17 +902,23 @@ for ever. The rule exists for R12. A test-and-set lock is unfair: a hart can los
 later arrivals indefinitely, and the budget running on that hart loses its share with it, so one
 budget's harts can starve another's of kernel entry, which no pattern of calls may do. FIFO
 bounds the wait by the hart count, and the bound is part of how R12's shares are judged across
-harts ([several harts](../plan/m2-usable-shell.md#several-harts)). The lock is taken once at
-trap entry and released before the return to user mode or an idle wait; its spins run the pause
-hint, and a Zawrs wait goes in the same place later. It is attacked by a kernel built with the
-ticket lock replaced by test-and-set (`sched-test-and-set-entry`, a debug-only kernel feature
-like the tie fault, [below](#failure-and-restart); not a model mutation, since the model has one
-hart), which the several-hart boot case's FIFO check must catch in a recorded negative run: two
-harts that both enter the kernel in a loop are each served in turn, and the count of kernel
-sections one waits behind never exceeds the hart count less one.
+harts ([several harts](../plan/m2-usable-shell.md#several-harts)).
 
-**Open:** the lock is built when the kernel runs on every hart; until then the rule, its boot
-case and its mutation are planned, and the one-hart kernel is the uncontended case of it.
+The lock (`kernel/src/cell.rs`, `TicketLock`) draws a ticket with a relaxed `fetch_add`, spins
+until `serving` reads it (acquire), and releases by `serving + 1` (release); each turn of the
+spin runs the pause hint through one named place, `wait_for_change`, where a Zawrs wait goes
+later (no `wrs.nto` is emitted today). It is taken once at trap entry and released before the
+return to user mode or an idle wait. A checked build asserts, at every acquisition, that the
+hart waited behind fewer sections than harts were started (the draw, the read and the release
+are sequentially consistent there, so the count can only under-count); `bench:smp-boot` prints
+the most any hart waited (one section at two harts, three at four, on both widths). Under the
+ticket lock the count cannot exceed the harts less one by construction, so the assertion is
+structural for the real lock, and the test-and-set negative below is the one attack. It is
+attacked by a kernel built with the ticket lock replaced by test-and-set
+(`sched-test-and-set-entry`, a debug-only kernel feature like the tie fault,
+[below](#failure-and-restart); not a model mutation, since the model has one hart): with it,
+`smp-boot` fails at the FIFO assertion at two and at four harts on both widths, in a recorded
+negative run. The one-hart kernel is the uncontended case of the same lock.
 
 ### R23 (no test channels)
 
@@ -937,8 +943,8 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
-`sched-test-and-set-entry`, planned with [R78](#r78-fair-kernel-entry), a debug-only
-replacement of the kernel lock by test-and-set for its recorded negative run;
+`sched-test-and-set-entry`, which replaces the kernel lock by test-and-set for
+[R78](#r78-fair-kernel-entry)'s recorded negative run;
 `audit-unstamped`, which leaves the audit
 after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
 budget that ran it and counts it against its slice, each for one recorded negative run

@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 ///
 /// Every hart runs the kernel, but only one at a time: a hart holds [`KERNEL_LOCK`] from its trap
 /// entry, once the interrupted registers are saved, to just before its `sret` to user mode or its
-/// idle `wfi`. So a `KernelCell` is reached by one thread of execution
+/// idle `wfi` (kernel/scheduling.md, R78). So a `KernelCell` is reached by one thread of execution
 /// at a time, and a checked build asserts that the hart reaching it holds the lock.
 ///
 /// Inside one kernel section the kernel is not *truly re-entrant*: a nested borrow would be a
@@ -50,19 +50,29 @@ impl<T> KernelCell<T> {
 /// The big kernel lock: one for every global, so no two locks nest and none needs an order.
 pub static KERNEL_LOCK: TicketLock = TicketLock::new();
 
-/// A ticket lock, so kernel entry is FIFO: a hart that has drawn a ticket is passed by no other
-/// hart twice, so it waits behind at most `MAX_HARTS` - 1 kernel sections. It is **not
-/// reentrant**: a second acquire by the hart that holds it waits for ever. A hart waiting for it
-/// serves any shootdown asked of it on every turn (`arch::hart::serve`), so the holder's wait for
-/// its acknowledgement cannot deadlock.
+/// A ticket lock, so kernel entry is FIFO (R78): a hart that has drawn a ticket is passed by no
+/// other hart twice, so it waits behind at most `MAX_HARTS` - 1 kernel sections. A test-and-set
+/// lock is unfair, and could starve a hart of kernel entry for ever, and with it the budget running
+/// there. It is **not reentrant**: a second acquire by the hart that holds it waits for ever.
+///
+/// The test-only `sched-test-and-set-entry` swaps in test-and-set, which `smp-boot`'s FIFO check
+/// must catch. A hart waiting for it serves any shootdown asked of it on every turn
+/// (`arch::hart::serve`), so the holder's wait for its acknowledgement cannot deadlock.
 pub struct TicketLock {
     /// The next ticket to draw.
     next: AtomicU32,
-    /// The ticket being served.
+    /// The ticket being served; under test-and-set, the count of sections served.
     serving: AtomicU32,
+    /// Test-and-set only: 1 while held.
+    #[cfg(feature = "sched-test-and-set-entry")]
+    taken: AtomicU32,
     /// A checked build's record of the holder: its hart index plus one, 0 for none.
     #[cfg(debug_assertions)]
     holder: AtomicU32,
+    /// A checked build's FIFO evidence: the most sections any acquisition waited behind, counted
+    /// from its draw (`smp-boot` fails if it exceeds the harts less one).
+    #[cfg(debug_assertions)]
+    most_waited: AtomicU32,
 }
 
 impl TicketLock {
@@ -70,20 +80,56 @@ impl TicketLock {
         TicketLock {
             next: AtomicU32::new(0),
             serving: AtomicU32::new(0),
+            #[cfg(feature = "sched-test-and-set-entry")]
+            taken: AtomicU32::new(0),
             #[cfg(debug_assertions)]
             holder: AtomicU32::new(0),
+            #[cfg(debug_assertions)]
+            most_waited: AtomicU32::new(0),
         }
     }
 
     /// Take the lock, waiting in turn.
     pub fn acquire(&self) {
-        let ticket = self.next.fetch_add(1, Ordering::Relaxed);
-        while self.serving.load(Ordering::Acquire) != ticket {
-            crate::arch::hart::serve();
-            wait_for_change(&self.serving);
-        }
+        #[cfg(not(feature = "sched-test-and-set-entry"))]
+        let waited = {
+            let ticket = self.next.fetch_add(1, DRAW);
+            // The checked build's count: the tickets ahead, read after the draw. The draw, this
+            // read and every release are sequentially consistent there, so the read sees `serving`
+            // at or after the draw: it can count fewer sections than were ahead, never more, and a
+            // count above the bound is a real one.
+            let waited = ticket.wrapping_sub(self.serving.load(DRAW));
+            while self.serving.load(Ordering::Acquire) != ticket {
+                crate::arch::hart::serve();
+                wait_for_change(&self.serving);
+            }
+            waited
+        };
+        #[cfg(feature = "sched-test-and-set-entry")]
+        let waited = {
+            let drawn = self.serving.load(Ordering::Relaxed);
+            while self.taken.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+                crate::arch::hart::serve();
+                pause();
+            }
+            self.serving.load(Ordering::Relaxed).wrapping_sub(drawn)
+        };
         #[cfg(debug_assertions)]
-        self.holder.store(crate::arch::hart::index() as u32 + 1, Ordering::Relaxed);
+        {
+            self.holder.store(crate::arch::hart::index() as u32 + 1, Ordering::Relaxed);
+            self.most_waited.fetch_max(waited, Ordering::Relaxed);
+            // R78: no hart is passed by another twice (`smp-boot`; the test-and-set mutation
+            // must trip this).
+            let harts = crate::arch::hart::started() as u32;
+            assert!(
+                waited < harts,
+                "the kernel lock: waited behind {} sections, {} hart(s) (R78)",
+                waited,
+                harts
+            );
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = waited;
     }
 
     /// Give the lock to the next ticket. The caller holds it.
@@ -94,7 +140,13 @@ impl TicketLock {
             self.holder.store(0, Ordering::Relaxed);
         }
         let serving = self.serving.load(Ordering::Relaxed);
-        self.serving.store(serving.wrapping_add(1), Ordering::Release);
+        #[cfg(not(feature = "sched-test-and-set-entry"))]
+        self.serving.store(serving.wrapping_add(1), SERVE);
+        #[cfg(feature = "sched-test-and-set-entry")]
+        {
+            self.serving.store(serving.wrapping_add(1), Ordering::Relaxed);
+            self.taken.store(0, Ordering::Release);
+        }
     }
 
     /// Whether this hart holds the lock (a checked build's record).
@@ -102,7 +154,17 @@ impl TicketLock {
     pub fn held_here(&self) -> bool {
         self.holder.load(Ordering::Relaxed) == crate::arch::hart::index() as u32 + 1
     }
+
+    /// The most kernel sections any acquisition has waited behind (a checked build's record).
+    #[cfg(debug_assertions)]
+    pub fn most_waited(&self) -> u32 { self.most_waited.load(Ordering::Relaxed) }
 }
+
+/// The draw's ordering: Relaxed, as the lock needs; sequentially consistent in a checked build,
+/// for its FIFO count ([`TicketLock::acquire`]).
+const DRAW: Ordering = if cfg!(debug_assertions) { Ordering::SeqCst } else { Ordering::Relaxed };
+/// The release's ordering: Release, as the lock needs; sequentially consistent in a checked build.
+const SERVE: Ordering = if cfg!(debug_assertions) { Ordering::SeqCst } else { Ordering::Release };
 
 /// One turn of a spin: the pause hint (`zihintpause`; a FENCE hint, which a core without the
 /// extension runs as a no-op), which on a core whose harts share issue slots gives them to the

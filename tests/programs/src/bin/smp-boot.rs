@@ -1,7 +1,8 @@
 //! Every hart reaches the scheduler and runs user threads (`bench:smp-boot`): spinners in budgets
 //! of their own, as many as the most harts the case boots, beside two budgets whose threads enter
 //! the kernel without pause, so the harts contend for the kernel lock. The kernel's account at
-//! `system_reset` says whether every hart ran user code.
+//! `system_reset` says how many harts ran user code, and its lock checks that no hart waited behind
+//! more sections than there are other harts (R78).
 #![no_std]
 #![no_main]
 

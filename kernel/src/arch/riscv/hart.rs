@@ -145,7 +145,8 @@ pub fn set_pid(pid: Pid) {
 static RAN_USER: AtomicUsize = AtomicUsize::new(0);
 
 /// A checked build's account at `system_reset`, for `smp-boot`: whether every hart in the device
-/// tree was started and ran a process.
+/// tree was started and ran a process, and the kernel lock's FIFO evidence, the most kernel
+/// sections any acquisition waited behind (cell.rs; at most the harts less one, R78).
 #[cfg(debug_assertions)]
 pub fn report() {
     let (ran, started, found) =
@@ -155,6 +156,11 @@ pub fn report() {
     } else {
         println!("harts: FAIL: {} in the tree, {} started, {} ran user code", found, started, ran);
     }
+    println!(
+        "kernel lock: most waited {} section(s), {} hart(s)",
+        crate::cell::KERNEL_LOCK.most_waited(),
+        started
+    );
 }
 
 /// The thread this hart runs, 0 for none.
@@ -248,6 +254,9 @@ pub fn serve() {
     if asked != 0 {
         super::mem::shot_down(asked - 1);
         block.left.store(asked - 1, Ordering::Relaxed);
+        // Served by polling or by its interrupt: either way the interrupt has done its work, and a
+        // hart running a process is never idle, so no reschedule interrupt is pending to lose.
+        ack_ipi();
         block.shoot.store(0, Ordering::Release);
     }
 }
