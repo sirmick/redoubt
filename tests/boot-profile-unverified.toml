@@ -1,4 +1,4 @@
-description = "A measurement, and the unverified boot-time target (the prompt within 20 s of guest time): boot-profile's boot with the userland volume unverified, the cost of verification measured by difference (docs/servers/verityd.md, \"Memory and cost\"). The same programs, built with boot-stats, and the same objects, packed with no hash tree (tests/data/boot-profile/userland-unverified.toml); the manifest is the image's without the system volume's verity and without verity:system (tests/data/boot-profile/manifest-unverified.json), so erofsd:system reads its range at blkd:system directly. Its milestones and counts are boot-profile's, less verityd's; a typed Enum.sum(1..10) prints 55"
+description = "A measurement, and the unverified boot-time target (the prompt within 20 s of guest time): boot-profile's boot with the userland volume unverified, the cost of verification measured by difference (docs/servers/verityd.md, \"Memory and cost\"). The same programs, built with boot-stats, and the same objects and boot pack, packed with no hash tree (tests/data/boot-profile/userland-unverified.toml); the manifest is the image's without the system volume's verity and without verity:system (tests/data/boot-profile/manifest-unverified.json), so erofsd:system reads its range at blkd:system directly. Its milestones and counts are boot-profile's, less verityd's; a typed Enum.sum(1..10) prints 55"
 arch = ["rv64", "rv32"]
 kind = "boot"
 programs = [
@@ -23,7 +23,8 @@ expect = [
     '^init: up \[t=[0-9]+\]$',
     '^init: started erofsd:system, console [0-9a-f]{16} \[t=[0-9]+\]$',
     '^init: started beamlet, console [0-9a-f]{16} \[t=[0-9]+\]$',
-    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from erofsd:system \[t=[0-9]+\]$',
+    '^\[con [0-9a-f]{16}\] beamlet: boot pack read [0-9]+ bytes, 94 entries \[t=[0-9]+\]$',
+    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from (erofsd:system|the boot pack) \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     # The shell's prompt has no newline: the line follows it on the console's line.
     # The boot-time target: the prompt within 20 s: 1.5 times the 12.5 s measured on rv64 (12.1 s on rv32), rounded up to 10 s (docs/userland/beamlet.md).

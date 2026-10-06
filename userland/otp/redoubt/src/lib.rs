@@ -29,6 +29,7 @@ extern crate alloc;
 
 #[cfg(feature = "fake")]
 pub mod fixture;
+pub mod pack;
 pub mod userland;
 
 use alloc::boxed::Box;
@@ -63,6 +64,9 @@ pub trait Threads: Send {
 /// `Send`, as [`Threads`] is.
 pub trait Modules: Send {
     fn load(&mut self, file: &str) -> Result<Vec<u8>, Unloaded>;
+
+    /// The loads the boot pack answered so far ([`pack`]), which `boot-stats` says apart.
+    fn packed(&self) -> u64 { 0 }
 }
 
 /// Why [`Modules::load`] gave nothing.
@@ -155,11 +159,12 @@ impl Redoubt {
             say(&self.console, &format!("beamlet: first console read{}", stamp()));
             let Loads { found, absent, refused, bytes, us, started } = self.loads;
             let since = redoubt_rt::handle::time_now().unwrap_or(0).saturating_sub(started);
+            let packed = self.modules.packed();
             say(
                 &self.console,
                 &format!(
-                    "beamlet: boot-stats: loads {} (found {found}, absent {absent}, refused {refused}), \
-                     {bytes} bytes, {us} us in loads, {since} us since the platform started",
+                    "beamlet: boot-stats: loads {} (found {found}, of them {packed} from the pack, absent {absent}, \
+                     refused {refused}), {bytes} bytes, {us} us in loads, {since} us since the platform started",
                     found + absent + refused
                 ),
             );

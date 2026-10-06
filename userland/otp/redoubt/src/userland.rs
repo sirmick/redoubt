@@ -10,11 +10,16 @@
 //! any name it lacks. Any other refusal, at the open or on a read (`corrupt` from a volume the server
 //! serves as corrupt, a block `verityd` failed, a device error), loads nothing, is said once on the
 //! console naming the file and the error's name, and is never looked for anywhere else.
+//!
+//! Before the volume, a lookup asks the boot pack ([`crate::pack`]), if beamlet read one: a name
+//! it holds is its bytes, which the VM then decodes; a name it does not hold is the volume's file,
+//! as above. Once the VM has taken every entry, the pack goes.
 
 use alloc::vec::Vec;
 
 use redoubt_client::{Error, Name};
 
+use crate::pack::Pack;
 use crate::{Modules, Unloaded};
 
 /// The longest name a file may have: a module's atom, at most 255 characters, and `.beam`.
@@ -48,17 +53,25 @@ pub trait Files: Send {
     fn read(&mut self, name: &str) -> Result<Vec<u8>, Unread>;
 }
 
-/// Modules from `files`, by the name the VM asks for.
+/// Modules from `pack`, then from `files`, by the name the VM asks for.
 pub struct Disk<F: Files> {
     files: F,
+    pack: Option<Pack>,
     loaded: usize,
+    packed: u64,
 }
 
 impl<F: Files> Disk<F> {
-    pub fn new(files: F) -> Disk<F> { Disk { files, loaded: 0 } }
+    pub fn new(files: F) -> Disk<F> { Disk::with_pack(files, None) }
 
-    /// The files given so far.
+    /// Modules from `pack` first, if there is one, then from `files`.
+    pub fn with_pack(files: F, pack: Option<Pack>) -> Disk<F> { Disk { files, pack, loaded: 0, packed: 0 } }
+
+    /// The files given so far, from the pack or the volume.
     pub fn loaded(&self) -> usize { self.loaded }
+
+    /// Whether the pack holds `file`; `false` once it has gone.
+    pub fn packs(&self, file: &str) -> bool { self.pack.as_ref().is_some_and(|p| p.holds(file)) }
 }
 
 /// A module's file or an application resource's: printable ASCII, no space, no `/`, not starting
@@ -76,6 +89,16 @@ impl<F: Files> Modules for Disk<F> {
         if !valid_name(file) {
             return Err(Unloaded::Absent);
         }
+        if let Some(pack) = &mut self.pack {
+            if let Some(bytes) = pack.take(file) {
+                if pack.spent() {
+                    self.pack = None;
+                }
+                self.loaded += 1;
+                self.packed += 1;
+                return Ok(bytes);
+            }
+        }
         match self.files.read(file) {
             Ok(bytes) => {
                 self.loaded += 1;
@@ -85,4 +108,6 @@ impl<F: Files> Modules for Disk<F> {
             Err(Unread::Failed(why)) => Err(Unloaded::Refused(why)),
         }
     }
+
+    fn packed(&self) -> u64 { self.packed }
 }
