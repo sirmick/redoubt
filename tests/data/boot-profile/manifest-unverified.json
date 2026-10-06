@@ -11,7 +11,7 @@
   ],
   "servers": [
     { "name": "keyd", "program": "keyd",
-      "stack_pages": "3", "heap_pages": "8",
+      "stack_pages": "4", "heap_pages": "8",
       "budget": { "pages": "256", "processes": 1, "weight": 100 },
       "receives": ["keyd"],
       "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111",

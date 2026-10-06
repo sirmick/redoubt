@@ -1114,7 +1114,7 @@ volume on EROFS.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
-| `keyd` | 5,264 | 3 | 4 | 8 |
+| `keyd` | 6,248 | 4 | 4 | 8 |
 | `consoled` | 9,112 | 5 | 9 | 18 |
 | `bootfsd` | 7,304 | 4 | 28 | 56 |
 | `blkd` | 4,504 | 3 | 17 | 34 |

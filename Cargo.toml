@@ -256,6 +256,11 @@ path = "vendor/zeroize_derive"
 [patch.crates-io.virtue]
 path = "vendor/virtue"
 
+# The box's one Ed25519 (the loader, keyd, verityd), built for size: at "s" its verification
+# inlines into about 900 KB on rv32, which a verified volume's verityd cannot hold.
+[profile.release.package.ed25519-compact]
+opt-level = "z"
+
 # Arithmetic overflow remains an invariant failure in the executable model.
 [profile.release.package.redoubt-model]
 overflow-checks = true
