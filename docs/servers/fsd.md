@@ -13,7 +13,10 @@ not trust each other. `fsd` keeps each volume's parser apart from every other vo
 labels per volume so a vault's files never share metadata with an unlabelled volume's, and meters
 bytes per attach root so one principal filling a shared volume cannot make another's saves fail.
 littlefs was chosen for a published format, an independent second implementation to test against,
-power-loss safety by design, and a size that can be read.
+power-loss safety by design, and a size that can be read. littlefs is the file system of every
+**writable** volume, and of those only: its format is built for a written medium (commits, power
+loss). A read-only volume is to be EROFS, served by [`erofsd`](erofsd.md) (planned); a writable
+file system for an SSD is a later question.
 
 ## Interface
 

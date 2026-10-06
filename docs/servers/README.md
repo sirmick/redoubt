@@ -233,6 +233,7 @@ Status: planned · M1 (separation and containment)
 | `blkd` | its own endpoint | the disk's MMIO (DMA) and IRQ handles | anything else |
 | `verityd` | its own endpoint | a `blkd` range for its verified volume | a device; a write to the range |
 | `fsd:volume` | its own endpoint | a `blkd` range for its volume, or a [`verityd`](verityd.md) range for a verified one | another volume |
+| [`erofsd:volume`](erofsd.md) | its own endpoint | a `blkd` range for its read-only volume, or a [`verityd`](verityd.md) range for a verified one | another volume; a write to the range |
 | `netd` | its own endpoint | the network card's MMIO (DMA) and IRQ handles | anything else |
 | `ipd:network` | its own endpoint | a `netd` connection | a budget; a labelled caller's request |
 
@@ -265,6 +266,18 @@ M1 (separation and containment).*
 
 **Open:** whether `init` keeps a copy of each device handle it places, so it can restart a driver,
 and so stays a co-holder ([devices](../kernel/devices.md#which-process-gets-which-device)).
+
+## Naming
+
+Status: planned · M1 (separation and containment)
+
+A file server is named for the format it serves, and its endpoints for the volumes: `erofsd`
+serves EROFS and `erofsd:system` is the system volume; `littlefsd` serves littlefs and
+`littlefsd:data` is the data volume. The name says what parser stands between a client and
+the medium, which is what [R47 (one volume per instance)](fsd.md#r47-one-volume-per-instance)
+bounds. Servers that serve no format keep their role's name (`blkd`, `bootfsd`, `verityd`).
+
+**Open:** `fsd`, which serves littlefs, still carries its role's name.
 
 ## The network path
 

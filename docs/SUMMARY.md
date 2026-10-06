@@ -33,6 +33,7 @@
   - [keyd](servers/keyd.md)
   - [bootfsd](servers/bootfsd.md)
   - [fsd](servers/fsd.md)
+  - [erofsd](servers/erofsd.md)
   - [blkd](servers/blkd.md)
   - [verityd](servers/verityd.md)
   - [netd](servers/netd.md)
