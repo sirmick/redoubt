@@ -82,6 +82,9 @@ impl AtomTable {
 
     pub fn len(&self) -> usize { self.by_name.len() }
 
+    /// Every atom's name (for memory reports).
+    pub fn names(&self) -> impl Iterator<Item = &'static str> + '_ { self.by_name.keys().copied() }
+
     pub fn is_empty(&self) -> bool { self.by_name.is_empty() }
 }
 

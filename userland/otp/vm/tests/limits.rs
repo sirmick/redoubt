@@ -3,10 +3,11 @@
 //! The fixture's source is `src/limits.erl`.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use beamlet_vm::Vm;
-use beamlet_vm::platform::{Lookup, Platform, PlatformError};
-use beamlet_vm::vm::Limits;
+use beamlet_vm::platform::{ConsoleInput, Lookup, Platform, PlatformError};
+use beamlet_vm::vm::{Config, Limits};
 
 struct TestPlatform {
     now: u64,
@@ -35,6 +36,47 @@ impl Platform for TestPlatform {
             [("limits", include_bytes!("fixtures/limits.beam").as_slice())].into_iter().collect();
         modules.get(module).map_or(Lookup::Absent, |b| Lookup::Found(b.to_vec()))
     }
+}
+
+/// A console with nothing to read until the VM first waits, and then its end, which keeps what is
+/// written.
+struct Console {
+    inner: TestPlatform,
+    waited: bool,
+    written: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Platform for Console {
+    fn monotonic_us(&mut self) -> u64 { self.inner.monotonic_us() }
+
+    fn system_time_us(&mut self) -> Option<u64> { None }
+
+    fn idle(&mut self, deadline: Option<u64>) {
+        self.waited = true;
+        self.inner.idle(deadline)
+    }
+
+    fn console_write(&mut self, bytes: &[u8]) { self.written.lock().unwrap().extend_from_slice(bytes) }
+
+    fn console_read(&mut self) -> ConsoleInput {
+        if self.waited { ConsoleInput::Eof } else { ConsoleInput::Nothing }
+    }
+
+    fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError> { self.inner.random(buf) }
+
+    fn load_module(&mut self, module: &str) -> Lookup { self.inner.load_module(module) }
+}
+
+/// Runs `limits:footprint()`, which waits for console input, and returns what the console got.
+fn footprint(report_memory: Option<beamlet_vm::memory::HeapPages>) -> String {
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let platform = Console { inner: TestPlatform { now: 0 }, waited: false, written: Arc::clone(&written) };
+    let mut vm = Vm::with_config(Box::new(platform), Config { report_memory, ..Config::default() });
+    let pid = vm.spawn("limits", "footprint", |_| Vec::new()).unwrap();
+    let r = vm.run_bounded(pid, 1_000_000).expect("finished");
+    assert_eq!(r.unwrap().unwrap().to_string(), "eof");
+    let report = written.lock().unwrap().clone();
+    String::from_utf8(report).unwrap()
 }
 
 /// Run `limits:f()` under `limits` and return its result as text.
@@ -96,6 +138,34 @@ fn ets_inserts_past_the_limit_raise() {
 #[test]
 fn memory_is_reported() {
     assert_eq!(run("memory", small()), "{true,true,true}");
+}
+
+#[test]
+fn the_footprint_is_reported_at_the_first_wait_for_input() {
+    let report = footprint(Some(|| Some((7, 9))));
+    for row in
+        ["sizes Instr=", "code.instrs count=", "code.operands count=", "literal_table count=", "atoms count="]
+    {
+        assert!(report.contains(&format!("footprint {row}")), "no {row} in {report}");
+    }
+    assert!(report.contains(" replaced=0 largest "), "{report}");
+    assert!(report.contains("footprint process.heaps_collected count="), "{report}");
+    assert!(report.contains("footprint total held="), "{report}");
+    assert!(
+        report.ends_with("footprint runtime pages held_now=7 peak=9 unaccounted=0 transient=2\n"),
+        "{report}"
+    );
+    assert_eq!(report.matches("footprint sizes").count(), 1, "reported once: {report}");
+    assert_eq!(footprint(None), "", "silent unless asked");
+}
+
+#[test]
+fn held_bytes_follow_the_runtime_heap() {
+    use beamlet_vm::memory::held;
+    assert_eq!(
+        [held(0), held(1), held(16), held(17), held(2048), held(2049), held(8192)],
+        [0, 16, 16, 32, 2048, 4096, 8192]
+    );
 }
 
 #[test]

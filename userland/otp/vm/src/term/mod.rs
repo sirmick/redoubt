@@ -341,6 +341,14 @@ impl Literals {
 
     /// Cells in all chunks (for memory reports).
     pub fn cells(&self) -> usize { self.0.iter().map(|c| c.terms.len()).sum() }
+
+    /// Each chunk's cells held (its capacity), off-heap entries held, and the bytes its off-heap
+    /// values hold (for memory reports).
+    pub fn each_chunk(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        self.0
+            .iter()
+            .map(|c| (c.terms.capacity(), c.offheap.capacity(), c.offheap.iter().map(OffHeap::size).sum()))
+    }
 }
 
 /// A heap: the objects of one process (or of one [`OwnedTerm`]).
@@ -442,6 +450,9 @@ impl Heap {
 
     /// Cells in use.
     pub fn len(&self) -> usize { self.terms.len() }
+
+    /// Cells held, in use or not (for memory reports).
+    pub fn capacity(&self) -> usize { self.terms.capacity() }
 
     pub fn is_empty(&self) -> bool { self.terms.is_empty() }
 

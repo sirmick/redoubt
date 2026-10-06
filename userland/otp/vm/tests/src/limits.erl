@@ -2,7 +2,7 @@
 %% VM ended the offender. Only BIFs are used: the tests load no OTP modules. Rebuild: erlc +deterministic -o vm/tests/fixtures vm/tests/src/limits.erl
 -module(limits).
 -export([mailbox/0, mailbox_self/0, heap/0, heap_flag/0, heap_spawn_opt/0, heap_ok/0,
-         ets/0, memory/0, no_programs/0, garbage/0, binary_garbage/0]).
+         ets/0, memory/0, no_programs/0, garbage/0, binary_garbage/0, footprint/0]).
 
 %% Another process floods a receiver that never reads.
 mailbox() ->
@@ -81,3 +81,8 @@ binary_garbage() ->
 
 bins(0) -> ok;
 bins(N) -> _ = binary:copy(<<0>>, 100000), bins(N - 1).
+
+%% Waits for console input: the VM reports its memory, if asked, when it first has nothing else to do.
+footprint() ->
+    beamlet:console_subscribe(),
+    receive {beamlet_console, eof} -> eof end.

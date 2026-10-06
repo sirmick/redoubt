@@ -1,10 +1,11 @@
 //! `beamlet`: the Elixir VM on Redoubt, a program `init` starts like any other
 //! (docs/userland/beamlet.md, "beamlet on Redoubt").
 //!
-//!     beamlet budget_pages=N MODULE [FUNCTION]
+//!     beamlet budget_pages=N [report_memory] MODULE [FUNCTION]
 //!
 //! Its arguments, from its startup block, give its budget's pages, which size the VM's limits
-//! ([`beamlet_redoubt::limits`]), and name the function it runs, `start` by default; it runs
+//! ([`beamlet_redoubt::limits`]), ask for its memory breakdown at its first prompt
+//! ([`beamlet_redoubt::REPORT_MEMORY`]), and name the function it runs, `start` by default; it runs
 //! it as `fake-redoubt` does on a host (`beamlet_redoubt::run`), and exits with the code that
 //! returns. Its console is `/dev/cons` in its namespace; its threads are the runtime's. Its
 //! modules are the userland volume's files, each read whole by its name through its handle
@@ -53,12 +54,16 @@ const STACK_PAGES: usize = 4;
 const LEND_PAGES: usize = 4;
 
 fn start(startup: &Startup) -> u32 {
-    // `budget_pages=N`, anywhere, sizes the VM's limits. The rest are MODULE [FUNCTION].
+    // `budget_pages=N`, anywhere, sizes the VM's limits, and `report_memory`, anywhere, asks for
+    // the breakdown. The rest are MODULE [FUNCTION].
     let Some(budget_pages) = beamlet_redoubt::budget_pages(startup.args()) else {
         say(startup, "beamlet: no budget_pages=N, or a malformed one, in its arguments");
         return BAD_ARGS;
     };
-    let mut args = startup.args().filter(|arg| !arg.starts_with(beamlet_redoubt::BUDGET_PAGES));
+    let report_memory = startup.args().any(|arg| arg == beamlet_redoubt::REPORT_MEMORY);
+    let mut args = startup.args().filter(|arg| {
+        !arg.starts_with(beamlet_redoubt::BUDGET_PAGES) && *arg != beamlet_redoubt::REPORT_MEMORY
+    });
     let Some(module) = args.next() else {
         say(startup, "beamlet: no module to run in its arguments");
         return USAGE;
@@ -89,8 +94,28 @@ fn start(startup: &Startup) -> u32 {
     // Stamped only for the boot profile, so every other case sees the line as it was.
     #[cfg(feature = "boot-stats")]
     say(startup, &format!("beamlet: {module} read from littlefsd:system{}", beamlet_redoubt::stamp()));
-    beamlet_redoubt::run(startup, Box::new(Machine), Box::new(modules), module, function, Some(budget_pages))
+    let report_memory = report_memory.then_some(heap_pages as beamlet_vm::memory::HeapPages);
+    beamlet_redoubt::run(
+        startup,
+        Box::new(Machine),
+        Box::new(modules),
+        module,
+        function,
+        Some(budget_pages),
+        report_memory,
+    )
 }
+
+/// The runtime heap's pages, held now and at its peak.
+#[cfg(target_os = "none")]
+fn heap_pages() -> Option<(u64, u64)> {
+    let (now, peak) = redoubt_rt::heap_pages();
+    Some((now as u64, peak))
+}
+
+/// On the host, where the program is only built, there is no runtime heap.
+#[cfg(not(target_os = "none"))]
+fn heap_pages() -> Option<(u64, u64)> { None }
 
 /// Says `line` and waits for good: a disk that would only fail again is never a restart loop.
 fn park(startup: &Startup, line: &str) -> ! {

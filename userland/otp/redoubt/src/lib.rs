@@ -39,6 +39,7 @@ use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
 use beamlet_vm::bif::NativeSpec;
+use beamlet_vm::memory::HeapPages;
 use beamlet_vm::platform::{ConsoleInput, Lookup, Platform, PlatformError};
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
@@ -333,6 +334,10 @@ impl Platform for Redoubt {
 /// again here.
 pub const BUDGET_PAGES: &str = "budget_pages=";
 
+/// The argument that has the VM print its memory breakdown at its first prompt
+/// ([`beamlet_vm::memory::footprint`]); absent, it prints none.
+pub const REPORT_MEMORY: &str = "report_memory";
+
 /// The share of the budget each of the heap and ETS limits gets: one part in this many
 /// (docs/userland/beamlet.md, "Limits inside one VM").
 pub const LIMIT_SHARE: u64 = 16;
@@ -369,7 +374,8 @@ pub fn limits(budget_pages: Option<u64>) -> Limits {
 /// with the natives the shell's modules need, and writes how it ended to the console: the value
 /// it returned, or the exception that ended it. The result is the process's exit code: 0 once the
 /// function ran, however it ended; 1 if the VM could not start it or failed. The VM's limits
-/// are sized to its budget, `budget_pages`, if the embedder knows it ([`limits`]).
+/// are sized to its budget, `budget_pages`, if the embedder knows it ([`limits`]). With
+/// `report_memory`, the VM prints its memory breakdown when it first waits for console input.
 pub fn run(
     startup: &Startup,
     threads: Box<dyn Threads>,
@@ -377,13 +383,15 @@ pub fn run(
     module: &str,
     function: &str,
     budget_pages: Option<u64>,
+    report_memory: Option<HeapPages>,
 ) -> u32 {
     // Without a console there is nowhere to say why.
     let Ok(platform) = Redoubt::new(startup, threads, modules) else { return 1 };
     let console = Arc::clone(&platform.console);
     let natives: &'static [NativeSpec] =
         Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
-    let mut vm = Vm::with_config(Box::new(platform), Config { natives, limits: limits(budget_pages) });
+    let mut vm =
+        Vm::with_config(Box::new(platform), Config { natives, limits: limits(budget_pages), report_memory });
     let first = match vm.spawn(module, function, |_| Vec::new()) {
         Ok(pid) => pid,
         Err(e) => {

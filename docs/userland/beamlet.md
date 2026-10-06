@@ -72,7 +72,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (14)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (17)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::full_own_mailbox_kills_the_sender
@@ -88,6 +88,9 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::unreferenced_binaries_are_freed
 - bench:beamlet-heap-flood
 - bench:beamlet-budget-flood
+- host:beamlet-vm::the_footprint_is_reported_at_the_first_wait_for_input
+- host:beamlet-vm::held_bytes_follow_the_runtime_heap
+- bench:beamlet-footprint
 
 </details>
 
@@ -125,6 +128,39 @@ under `init`'s restart rule: a VM that cannot stay up (a start module that fails
 manifest without `budget_pages`) is restarted until the limit, and then the machine reboots
 ([init](../servers/init.md#restarts-and-reboots)). CPU between VMs is the kernel's to share, by
 budget weight ([scheduling](../kernel/scheduling.md)).
+
+#### What the VM holds at its prompt
+
+Started with the argument `report_memory`, which the image never passes, the VM prints what it
+holds the first time it waits for console input with nothing else to run, for the shell at its
+prompt, one console line a row ([`memory.rs`](../../userland/otp/vm/src/memory.rs)). It is the
+VM's own count: each allocation as the runtime's heap holds it (a power-of-two block up to 2 KiB,
+whole pages above), every waiting process collected first; B-tree nodes are not counted.
+`beamlet` adds its runtime heap's pages held at that moment and its record's peak, and the bench's
+scan of that record ([the memory budget](../testbench.md#the-memory-budget)) is the independent
+total, read once the case has typed one command. In pages, each row rounded up on its own:
+
+| What | rv64 | rv32 |
+| --- | ---: | ---: |
+| Decoded code: instructions | 2,725 | 1,362 |
+| Decoded code: operands | 4,455 | 2,313 |
+| Literals: each module's | 36 | 36 |
+| Literals: the shared table | 1,100 | 1,096 |
+| Module tables | 231 | 202 |
+| Atoms | 92 | 64 |
+| Processes (19): heaps, collected | 46 | 46 |
+| Processes: the rest | 100 | 95 |
+| ETS and binaries | 1 | 1 |
+| Accounted | 8,788 | 5,217 |
+| Runtime heap at the prompt: held, peak | 9,003, 9,003 | 5,331, 5,331 |
+| Not accounted (held less accounted) | 215 | 114 |
+| The scan's peak, after one command | 10,519 | 6,243 |
+
+An instruction is 32 bytes on rv64 and 16 on rv32, its operands a vector of their own, so decoded
+code is most of the count: about four fifths on rv64 and seven tenths on rv32. The five largest
+modules are `unicode_util`, `erl_parse`, `Elixir.Enum`, `erl_eval` and `string`. What is not
+accounted is free small blocks, B-tree nodes and the platform's buffers; the scan's peak is higher
+than the prompt's because the first command loads more modules.
 
 ### The `Platform` boundary
 
