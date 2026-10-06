@@ -7,7 +7,14 @@
 # hand goes through q too: `q run --cores 8 -- cargo build ...`, `q run --cores 4 -- cargo test ...`.
 #
 # targets
-#   rv64/<case>  rv32/<case>   `cargo testbench --arch <w> <case>`; log target/jobs/<w>-<case>.log
+#   rv64/<case>  rv32/<case>   that one case on that width; log target/jobs/<w>-<case>.log: from
+#                              target/prebuilt with no cargo when its <w>/index.json exists
+#                              (`target/prebuilt/testbench --prebuilt target/prebuilt`), else
+#                              `cargo testbench`
+#   prebuilt                   every case's pieces for both widths built once into
+#                              target/prebuilt (8 cores; one job, the widths in turn: their
+#                              userland disks compile the same Mix projects). Make it again after
+#                              any change to the tree: a run from one made from another is refused
 #   build-rv64   build-rv32    ./build --arch <w> --programs            (8 cores)
 #   docs                       cargo testbench docs                    (2 cores)
 #   cases-rv64   cases-rv32    every case of that width but the quiet ones
@@ -38,10 +45,11 @@ net := $(filter-out $(quiet),$(sort $(basename $(notdir $(shell grep -lE '^(forw
 bounded := $(filter-out $(quiet) $(net),$(sort $(basename $(notdir $(shell grep -lE '^kind *= *"host-tests"' tests/*.toml)))))
 boot := $(filter-out $(quiet) $(net) $(bounded),$(cases))
 logs := target/jobs
+prebuilt := target/prebuilt
 # cores for a boot case: its largest smp value (default 1)
 smp = $(or $(lastword $(sort $(shell grep -oE '[0-9]+' <<< "$$(grep -E '^smp *=' tests/$(1).toml 2>/dev/null)"))),1)
 
-.PHONY: list list-classes docs build-rv64 build-rv32 cases-rv64 cases-rv32 quiet-rv64 quiet-rv32 all-rv64 all-rv32 \
+.PHONY: list list-classes docs prebuilt build-rv64 build-rv32 cases-rv64 cases-rv32 quiet-rv64 quiet-rv32 all-rv64 all-rv32 \
 	$(addprefix rv64/,$(cases)) $(addprefix rv32/,$(cases))
 
 list:
@@ -53,12 +61,16 @@ list-classes:
 docs:
 	@mkdir -p $(logs); $(q) run --cores 2 --name docs -- cargo testbench docs > $(logs)/docs.log 2>&1; rc=$$?; tail -3 $(logs)/docs.log; echo "docs rc=$$rc"; exit $$rc
 
+prebuilt:
+	@mkdir -p $(logs); $(q) run --cores 8 --name prebuilt -- cargo testbench --prebuild $(prebuilt) > $(logs)/prebuilt.log 2>&1; rc=$$?; tail -2 $(logs)/prebuilt.log; echo "prebuilt rc=$$rc"; exit $$rc
+
 build-rv64 build-rv32: build-%:
 	@mkdir -p $(logs); $(q) run --cores 8 --name build-$* -- ./build --arch $* --programs > $(logs)/build-$*.log 2>&1; rc=$$?; tail -2 $(logs)/build-$*.log; echo "build-$* rc=$$rc"; exit $$rc
 
 define case_recipe
 @mkdir -p $(logs); w=$(@D); c=$(@F)
-$(q) run $(1) --name $$w/$$c -- cargo testbench --arch $$w $$c > $(logs)/$$w-$$c.log 2>&1; rc=$$?
+bench=(cargo testbench); [ -f $(prebuilt)/$$w/index.json ] && bench=($(prebuilt)/testbench --prebuilt $(prebuilt))
+$(q) run $(1) --name $$w/$$c -- "$${bench[@]}" --exact --arch $$w $$c > $(logs)/$$w-$$c.log 2>&1; rc=$$?
 grep -E '^(PASS|FAIL|SKIP)' $(logs)/$$w-$$c.log || tail -5 $(logs)/$$w-$$c.log
 echo "$@ rc=$$rc ($(2))"; exit $$rc
 endef
