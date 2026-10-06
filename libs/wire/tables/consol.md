@@ -2,10 +2,11 @@ The `consol` protocol's message and error tables, included by its owning page, [
 
 <!-- ANCHOR: tables -->
 <!-- wire: consol ninep -->
-| Opcode | Message | Fields | Reply |
-| --- | --- | --- | --- |
-| 16 | `size` | - | `cols: u16`, `rows: u16` |
-| 17 | `resize` | - | `cols: u16`, `rows: u16` |
+| Opcode | Kind | Message | Fields | Reply |
+| --- | --- | --- | --- | --- |
+| 16 | call | `size` | - | `cols: u16`, `rows: u16` |
+| 17 | call | `resize` | - | `cols: u16`, `rows: u16` |
+| 18 | send | `ended` | - | - |
 
 <!-- wire-errors: consol -->
 | Code | Error |

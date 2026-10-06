@@ -140,12 +140,13 @@ connection's id, the one its requester was given, in 16 lowercase hex digits. `i
 of each child's connection, bare, when it starts the child (`init: started NAME, console N`), so a
 reader of the console can tell `init` from every program and each program from the others,
 as the bench's log server does today
-([rule F](../testbench.md#rule-f-trusted-verdicts)). If a write comes from a different connection
-than the one that left the last line unfinished, `consoled` ends that line first. So a line a
-program writes cannot come out bare, and it cannot carry another connection's id. A transmitter
-that takes only part of a prefix leaves the line open, and the rest of the prefix goes out before
-any more of the writer's bytes; ended by another writer, such a line holds the start of its
-writer's prefix and nothing else.
+([rule F](../testbench.md#rule-f-trusted-verdicts)). `ended` on a minted connection releases it:
+the steward says so when the console session it started is over. If a write comes from a
+different connection than the one that left the last line unfinished, `consoled` ends that line
+first. So a line a program writes cannot come out bare, and it cannot carry another connection's
+id. A transmitter that takes only part of a prefix leaves the line open, and the rest of the
+prefix goes out before any more of the writer's bytes; ended by another writer, such a line holds
+the start of its writer's prefix and nothing else.
 
 The rule names the handles `NAME` and `NAME-irq` from one `devices` entry
 ([init](init.md#the-boot-manifest)); `consoled` takes `uart` and `uart-irq`.

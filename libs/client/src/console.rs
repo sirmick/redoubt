@@ -55,9 +55,13 @@ impl Console {
 
     fn ask(&self, lend: &mut Lend, message: Message) -> Result<(u16, u16), Error> {
         let endpoint = self.file.connection().endpoint();
-        typed::call::<consol::Protocol, _>(endpoint, lend, &message, &[], |reply, _| match reply {
-            Reply::Size(r) => (r.cols, r.rows),
-            Reply::Resize(r) => (r.cols, r.rows),
-        })
+        let size =
+            typed::call::<consol::Protocol, _>(endpoint, lend, &message, &[], |reply, _| match reply {
+                Reply::Size(r) => Some((r.cols, r.rows)),
+                Reply::Resize(r) => Some((r.cols, r.rows)),
+                // `ended` is the steward's word to the server, never asked here.
+                Reply::Ended(_) => None,
+            });
+        size?.ok_or(Error::Unexpected)
     }
 }

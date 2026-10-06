@@ -22,4 +22,9 @@ defmodule Redoubt.Wire.Client.Consol do
   def resize(conn, timeout \\ C.timeout()) do
     C.call(conn, P, {:resize, %{}}, [], timeout)
   end
+
+  @doc "Sends `ended`, one way."
+  def ended(conn) do
+    C.send(conn, P, {:ended, %{}}, [])
+  end
 end
