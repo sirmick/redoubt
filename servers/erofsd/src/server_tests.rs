@@ -453,6 +453,6 @@ fn the_conformance_vectors_run_against_erofsd() {
 
 #[test]
 fn the_limits_fit_the_budget() {
-    assert!(limits(4).fits(&COST, BUDGET));
-    assert!(!limits(5).fits(&COST, BUDGET));
+    assert!(limits(6).fits(&COST, BUDGET));
+    assert!(!limits(7).fits(&COST, BUDGET));
 }
