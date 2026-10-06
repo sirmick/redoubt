@@ -5,7 +5,7 @@
 //! - [`keys`]: the keys, where they come from (the boot manifest, one per argument) and what a *purpose* is —
 //!   the one message shape a badge may ask for.
 //! - [`ssh`]: the SSH exchange hash `keyd` computes for itself, which is the session identifier.
-//! - [`sha256`]: the hash that needs.
+//! - [`sha256`]: the hash that needs, `libs/sha256`, shared with `init` and the steward.
 //! - [`server`]: the typed protocol, with `admit` and `check` on every request.
 //!
 //! Three properties are structural rather than checked, which is the point of them:
@@ -39,7 +39,7 @@ extern crate alloc;
 
 pub mod keys;
 pub mod server;
-pub mod sha256;
+pub use redoubt_sha256 as sha256;
 pub mod ssh;
 
 pub use keys::{Keys, Purpose};

@@ -11,6 +11,8 @@ path = "src/bin/keyd.rs"
 
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
+# SHA-256 for the exchange hash and the audit digest: our own, with no dependencies.
+redoubt-sha256 = { path = "../../libs/sha256" }
 # TENETS.md 5: the one outside crate keyd links. Pinned by Cargo.lock at 2.4.2, the same
 # version and the same `default-features = false` the loader already uses for verified boot
 # (docs/kernel/boot.md), so the box has one Ed25519 implementation, not two. With the default

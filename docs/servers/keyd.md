@@ -68,8 +68,8 @@ gives each root badge the same meaning without keeping anything. Badges at or ab
 - host:redoubt-keyd::parts_cannot_be_slid_into_each_other
 - host:redoubt-keyd::a_transcript_no_exchange_could_make_is_refused
 - host:redoubt-keyd::a_relayed_ssh_user_auth_blob_is_never_what_gets_signed
-- host:redoubt-keyd::fips_180_4_vectors
-- host:redoubt-keyd::chunking_never_changes_the_digest
+- host:redoubt-sha256::fips_180_4_vectors
+- host:redoubt-sha256::chunking_never_changes_the_digest
 
 </details>
 
@@ -92,8 +92,9 @@ purpose and applies the label check to the key's labels; only then does any work
   badge's: public keys are published, and the asker already holds the one it asks about.
 - **`grant`** and **`release(id)`**: below.
 
-`keyd`'s SHA-256 (`servers/keyd/src/sha256.rs`) is its own, one function with no dependencies,
-because the maintained crate brings six more into the process holding every private key.
+`keyd`'s SHA-256 (`libs/sha256`, shared with `init` and the steward) is the box's own, one
+function with no dependencies, because the maintained crate brings six more into the process
+holding every private key.
 
 The table: [libs/wire/tables/keyd.md](../../libs/wire/tables/keyd.md).
 
