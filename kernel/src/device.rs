@@ -107,6 +107,10 @@ const W_DESTROYED: usize = 11;
 /// Its link in its owner's list is apart, at `budget::OWNED_WORD`.
 const WORDS: usize = 12;
 const _: () = assert!(WORDS * 8 <= PAGE_SIZE);
+/// Where its list of the threads waiting for its interrupt starts (`message.rs`): after its own
+/// words, which storing it rewrites, and below every word kept apart.
+pub const LIST_WORD: usize = WORDS;
+const _: () = assert!(LIST_WORD + redoubt_ipclist::DEVICE_WORDS <= crate::budget::DEFER_WORD);
 
 impl MemoryManager {
     pub fn device(&self, frame: u32) -> Device {
@@ -471,6 +475,7 @@ pub fn irq_fired(irq: usize) -> bool {
             mm.store_device(frame, &d);
             crate::arch::irq::disable_irq(irq);
             crate::message::irq_ready(ss, mm, frame);
+            crate::message::audit(mm);
             true
         })
     })

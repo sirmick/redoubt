@@ -195,10 +195,10 @@ t = rem + ticks x STRIDE;   pass += t / w;   rem = t mod w      (w: the free wei
 Kernel time is billed as well:
 - a system call's time is its caller's;
 - an expired timeout is billed to its thread's budget, and a deadline's destruction as below,
-  each with the walk that found it. The timer is armed for a timeout only when its thread
-  blocks; a wait that ends before its timeout leaves it early, and the walk that finds the wait
-  gone is billed to that thread's budget. The rest of an entry that found either, its last walk
-  and the timer's own handling included, is billed to the budget it found last: the budget it
+  each with its share of the walk that found it. The timer is armed for a timeout only when its
+  thread blocks; a wait that ends before its timeout leaves it early, and the walk that finds the
+  wait gone is billed to that thread's budget. The rest of an entry that found either, the
+  timer's own handling included, is billed to the budget it found last: the budget it
   interrupted pays for none of it. A timer interrupt that found neither is the running budget's
   when it ends that budget's slice, and nobody's otherwise;
 - an interrupt's handling is billed to the owner of its device object
@@ -658,7 +658,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); a delivery's and a timer expiry's walks of every thread are measured at full occupancy by `bench:worst-walk`, run by name, and break it there ([residual risks](#residual-risks)); `worst-walk` also measures a reconcile with 250 budgets waking at once, on rv64 only (on rv32 the deadline's waits end one per entry) · tested (40)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (41)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -674,6 +674,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:sched-carve-return
 - bench:map-anon-search-bound
 - bench:scan-bounds
+- bench:worst-walk
 - host:redoubt-stride::the_crate_and_the_model_agree
 - host:redoubt-stride::a_broken_model_disagrees
 - host:redoubt-model::scheduler_fairness
@@ -719,14 +720,19 @@ platform's interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant
 RAM frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
 every wake waits for it. R10 (destruction) walks only the dying subtree, its owner lists, the
 dying processes' own tables and page tables, and the chains of the handles held outside it
-([budgets](budgets.md#residual-risks)), so it is no exception. What a call looks up by PID or by
+([budgets](budgets.md#residual-risks)), so it is no exception. Delivery visits only the endpoint's
+own receivers, groups and notices, so it is no exception either. What a call looks up by PID or by
 interrupt number it finds in an index the kernel keeps as objects are made and freed: a process
 object in one of `MAX_PROCESS_COUNT` slots, an IRQ object in one of `MAX_IRQS` (1024, the PLIC's
 sources; a boot naming a higher interrupt stops). PID 1 is the kernel's, which has no process
 object, so processes take PIDs 2 to `MAX_PROCESS_COUNT` (511): `process_create`'s PID draw looks
 at most at those 510 slots, an owed exit notice is sought among at most 510 process objects, and
 an interrupt finds its object in one lookup; a checked build proves each index against a scan of
-every object frame.
+every object frame. A checked build checks the delivery lists. At each kernel exit that changed
+one, it starts from every thread and its open calls, checking each list it meets whole and the
+totals by kind. After each destruction, at each process-object free and before the hart idles, it
+starts from every budget and endpoint instead, so a list no waiting thread belongs to is checked
+there.
 In `bench:scan-bounds`, after one budget fills 20,000 pages with endpoints, `process_create` with
 its exit notice and an interrupt take what they took on an empty system; with the old scans, the
 first took 1.2 s against 22 ms. So do a one-page `map_anon`, a `budget_create` and a
@@ -876,11 +882,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
-- **A delivery and a timer expiry walk every thread.** At full occupancy they break R12's "never
-  depends on what other processes hold" ([IPC](ipc.md#residual-risks),
-  [timer](timer.md#residual-risks)). A reconcile does not: it visits only the budgets whose
-  runnable state changed in the entry
-  ([the current minimum and ties](#the-current-minimum-and-ties)).
+- **A destruction walks every process.** At full occupancy (510 processes) a destruction takes
+  53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30, and breaks R12's "never depends on what
+  other processes hold": three of its steps walk every process object
+  ([destruction walks every process](../todo/destruction-walks-every-process.md)).
 - **A destroyed lineage can delay one sibling by a round.** Debt lifted onto a shared parent (such
   as `users`) can delay one sibling created under it in the same round by at most one round,
   decaying once the floor passes the parent's pass. A lifted pass loses the wake-first tie to

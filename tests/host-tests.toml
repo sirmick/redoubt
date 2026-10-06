@@ -1,7 +1,7 @@
-description = "Host unit tests that no boot can reach: the signing domain's own bytes, the bench's golden signature, the loader's refusal of RAM past the physmap (R17), its choice of the boot hart's PLIC context on device-tree fixtures, and the paging crate's satp layouts, ASID-width decision and flush rules on both widths"
+description = "Host unit tests that no boot can reach: the signing domain's own bytes, the bench's golden signature, the loader's refusal of RAM past the physmap (R17), its choice of the boot hart's PLIC context on device-tree fixtures, the paging crate's satp layouts, ASID-width decision and flush rules on both widths, and the kernel's IPC lists (redoubt-ipclist) against R2 as the model states it"
 kind = "host-tests"
 # A typo in `BUNDLE_DOMAIN` would boot every case in this suite, because the loader and the bench
 # share the constant and would agree on the wrong bytes. What catches it is a test that spells the
 # domain out by hand (redoubt/signing) and one that pins a signature made under it
 # (redoubt/testbench, build.rs), which also holds the refusals Ed25519 gives for free.
-packages = ["loader", "paging", "redoubt-layout", "redoubt-signing", "testbench"]
+packages = ["loader", "paging", "redoubt-ipclist", "redoubt-layout", "redoubt-signing", "testbench"]

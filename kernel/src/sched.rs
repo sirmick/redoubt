@@ -292,12 +292,16 @@ pub fn bill_irq(irq: usize, started: u64) {
 /// The ticks now, for measuring a piece of kernel work to [`bill`].
 pub fn now_ticks() -> u64 { ticks() }
 
-/// The checked build's audit after a destruction's `Y` (`budget::destroy_subtree`).
+/// The checked build's audit after a destruction's `Y` (`budget::destroy_subtree`), or a
+/// deadline's expiry (`time::expire_due`).
 #[cfg(debug_assertions)]
 pub const AUDIT_DESTRUCTION: u64 = 1;
 /// The PID index's audit at a process object's change (`MemoryManager::index_process`).
 #[cfg(debug_assertions)]
 pub const AUDIT_PROCESS_INDEX: u64 = 2;
+/// The IPC lists' audit at the end of an entry that changed one (`message::audit`).
+#[cfg(debug_assertions)]
+pub const AUDIT_IPC_LISTS: u64 = 3;
 /// The scheduler's marks' audit after a reconcile ([`audit_marks`]).
 #[cfg(debug_assertions)]
 pub const AUDIT_MARKS: u64 = 4;

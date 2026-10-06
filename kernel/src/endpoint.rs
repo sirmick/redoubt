@@ -10,12 +10,15 @@
 //! (I1).
 //!
 //! # What it does *not* hold
-//! It holds no message queue. A queued message is a message whose sender is blocked in `send` or
+//! It holds no message buffer. A queued message is a message whose sender is blocked in `send` or
 //! `call`, and a thread blocks at most once, so the queue *is* the set of blocked senders, which
-//! `message.rs` keeps in each thread's own page and finds by scanning. The same goes for the
-//! threads blocked in `receive` on it. R2's turns live there too: each queued message carries when
-//! its group's turn became due. So an endpoint remembers nothing between calls but its id and its
-//! owner, and no sender can make the kernel allocate.
+//! `message.rs` keeps in each thread's own page. The endpoint's frame holds only the heads of the
+//! lists that link them, R2's groups in turn order, and its receivers, owed notices and open
+//! calls ([`LIST_WORD`]); the links are in the threads' and the open calls' pages. So no sender
+//! can make the kernel allocate.
+//!
+//! R2's groups are ordered by when their turns fall due, values of one counter that no two turns
+//! share, so the kernel never meets the tie R2 breaks by group key.
 //!
 //! The **owner** is the budget of the process that created it, which is what R1 compares a sender
 //! with (I7) and where the cost table charges the page.
@@ -56,15 +59,6 @@ impl Group {
             budget: if sender.account == 0 { sender.id } else { 0 },
         }
     }
-
-    /// A total order over groups, so R2's ties go the same way on every run (I11). Accounts, then
-    /// label sets, then budget id.
-    pub fn order(&self, other: &Group) -> core::cmp::Ordering {
-        self.account
-            .cmp(&other.account)
-            .then(self.labels[..self.nlabels].cmp(&other.labels[..other.nlabels]))
-            .then(self.budget.cmp(&other.budget))
-    }
 }
 
 /// An endpoint as the kernel works with it; it lives in its frame as words (`endpoint`, `store`).
@@ -79,6 +73,10 @@ pub struct Endpoint {
 /// Words an endpoint takes in its frame (a frame has 512). Its link in its owner's list is
 /// apart, at `budget::OWNED_WORD`.
 const WORDS: usize = 4;
+/// Where its lists start (`message.rs`): after its own words, which storing it rewrites, and
+/// below every word kept apart.
+pub const LIST_WORD: usize = WORDS;
+const _: () = assert!(LIST_WORD + redoubt_ipclist::ENDPOINT_WORDS <= crate::budget::DEFER_WORD);
 
 impl MemoryManager {
     pub fn endpoint(&self, frame: u32) -> Endpoint {

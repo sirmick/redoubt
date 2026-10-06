@@ -638,11 +638,12 @@ without preemption.*
 
 ## Residual risks
 
-- **Destruction costs time nobody can interrupt.** Destroying a budget runs with interrupts off
-  and is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
-  dominates lease termination, R39 (leases end). The cost must follow the objects the dying subtree holds,
-  not every object page in the system and not every live table. Destruction gives three indexes,
-  handle chains, two thread walks, and a walk of each dying process's own frames:
+- **Destruction costs time nobody can interrupt.** Destroying a budget runs with interrupts off and
+  is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
+  dominates lease termination, R39 (leases end). The cost must follow the objects the dying subtree
+  holds, not every object page in the system and not every live table. Destruction gives three
+  indexes, handle chains, the dying endpoints' and stamps' own lists, and a walk of each dying
+  process's own frames:
 
   1. **The budget tree is linked downward.** Each budget keeps a `first_child` and a `next_sibling`
      beside its `parent`, so `mark_dying`, `lift_dying` and the final free walk the subtree
@@ -694,24 +695,23 @@ without preemption.*
      The chain entries make a slot eight words, 64 bytes, so a table page holds 64 handles and a
      full table (`MAX_HANDLES`) is 64 pages. A message's copy of a handle keeps the four-word
      form, since the chains index tables, not messages.
-  4. **Two thread walks for the endpoints' teardown, not three per endpoint.** `destroy_endpoint`
-     ran three all-thread scans per endpoint — fail its blocked senders and receivers, fail callers
-     waiting for a reply through it, clear the abandoned-call notices owed on it — and
-     `endpoint_dying` a process-object scan, so a full lease cost its endpoints times the threads.
-     `budgets_dying` now walks the threads twice for the whole subtree, keyed on *the endpoint's
-     owner is dying* (and on the stamp, for a message already sent), never on *this one
-     endpoint*: receivers and senders on a dying endpoint first, then callers waiting for a reply
-     through one and messages whose stamp is dying. The second walk also drops the notices owed
-     on a dying endpoint, reading each open call's flags alone: `abandon` owes no notice on an
-     endpoint whose owner is dying, so every such notice was owed before the destruction began,
-     and the walk's first pass meets each once, however many callers it fails.
-     `process::endpoints_dying` drops the exit notices in one process-object pass. Each walk
-     visits the threads that exist, at most `MAX_PROCESS_COUNT` × `MAX_THREADS`, the walk
-     [R2 (fair waiting)](ipc.md#r2-fair-waiting) already makes on the delivery path, repeated
-     only while a pass fails a waiter: the cost follows the subtree's own parked calls, never its
-     endpoint count. Freeing an endpoint's frame touches only the frame, once its handles are
-     closed (item 2), not the dying budget that owns it: the budget's whole object list is going
-     with it, and its endpoints' pages come back in one write.
+  4. **The endpoints' teardown reads their own lists.** `destroy_endpoint` once ran three
+     all-thread scans per endpoint, and later `budgets_dying` two walks of every thread for the
+     whole subtree. Now each endpoint keeps its receivers, its queued senders by
+     [R2 (fair waiting)](ipc.md#r2-fair-waiting) group, the calls owing a notice on it and the calls
+     taken through it whose callers wait; and each budget keeps two chains of what was sent through
+     a handle stamped with it, the queued messages and the taken calls whose callers wait.
+     `budgets_dying` walks the dying subtree's owner chains and empties each dying endpoint's lists:
+     its receivers and senders fail with `Dead`, the notices owed on it are dropped, and the callers
+     waiting for a reply through it fail with `Dead`, their calls abandoned with no notice
+     (`abandon` owes none on an endpoint whose owner is dying). Then it empties every dying budget's
+     chain of queued messages, and then each one's chain of taken calls, so no pump a failed caller
+     makes takes a message whose stamp is dying. Each fails in list order. The cost follows the
+     subtree's own parked messages and calls, never the threads that exist or its endpoint count.
+     `process::endpoints_dying` drops the exit notices in one process-object pass. Freeing an
+     endpoint's frame touches only the frame, once its handles are closed (item 2), not the dying
+     budget that owns it: the budget's whole object list is going with it, and its endpoints' pages
+     come back in one write.
   5. **A process's frames are found from the process.** Ending a process releases the frames it
      owns by walking its own page tables: the tables themselves, the user half's pages and the
      process area's saved registers, each freed if the ownership table still credits it to the
@@ -772,13 +772,16 @@ without preemption.*
   - the threads' teardown, 3.1 ms (8 ms; 6.7 ms pumping after each thread). Every thread ends
     first, and then each endpoint their waits served is pumped once, so the cost follows the
     served endpoints, not the parked calls: the four parked lend calls are one pump of the
-    server's endpoint, a walk of every thread, not four;
-  - the thread walks, 1.3 ms (2 ms);
+    server's endpoint, which reads that endpoint's own lists, not four;
+  - the message reach, 1.3 ms (2 ms) when it was two walks of every thread; it now reads the
+    dying endpoints' lists and the dying budgets' two stamp chains;
   - the rest, 2.9 ms (3 ms).
 
-  Those are the gate's fill. At full occupancy, every PID in use with every thread, the walks of
-  every thread dominate and one destruction takes seconds
-  ([delivery walks every thread](../todo/delivery-walks-every-thread.md)).
+  Those are the gate's fill.
+- **A destruction at full occupancy walks every process.** At full occupancy (510 processes) a
+  destruction takes 53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30: three of its steps walk
+  every process object
+  ([destruction walks every process](../todo/destruction-walks-every-process.md)).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

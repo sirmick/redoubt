@@ -469,7 +469,7 @@ hours), and the blame window (3 crashes in 10 minutes).
 
 ## Where the model meets the kernel's code
 
-Status: built · tested: host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees
+Status: built · tested: host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-ipclist::the_groups_follow_the_model
 
 `redoubt-stride` (`libs/stride`) holds the stride arithmetic and ranks that the kernel links. Its
 differential test drives the crate, wired as the kernel's `sched.rs` calls it, and the model's
@@ -484,6 +484,15 @@ billing of a deadline's destruction work, which the differential does not drive;
 own checks catch both. The bench case `stride-host-tests` runs both tests. This compares one kernel crate with the
 model, on the host; the kernel's own use of it runs in boot cases
 ([scheduling](scheduling.md)).
+
+`redoubt-ipclist` (`libs/ipclist`) holds the kernel's IPC lists: the links of what waits on each
+endpoint, device and budget, of the exit notices owed on an endpoint and the processes that
+report there, and of each process's waits with a deadline; R2's groups in the order their turns
+fall due, the expiry's sort, and each list's audit. The kernel links it and keeps every rule in
+`message.rs`. `the_groups_follow_the_model` states R2 beside it as the model's `next_sender` and
+`served` do, and in 200 seeds of 300 random queues, leaves and takes each, the two must pick the
+same message, for a receiver below `MAX_OPEN_CALLS` and for one at it. The `host-tests` case runs
+it.
 
 ## Replaying traces on the real kernel
 

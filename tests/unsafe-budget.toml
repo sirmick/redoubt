@@ -34,6 +34,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# The kernel's IPC lists, linked into the kernel. `#![forbid(unsafe_code)]`.
+name = "redoubt-ipclist (IPC lists)"
+paths = ["libs/ipclist/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 name = "loader"
 paths = ["loader/src"]
 max_unsafe = 18 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer, and Platform::read;

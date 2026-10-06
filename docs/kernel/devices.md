@@ -367,7 +367,8 @@ level-triggered source still asserted when the driver receives fires again at on
 - An interrupt no IRQ object owns is completed and masked, and stays masked.
 - Every IRQ object starts masked, so a source nobody receives on cannot storm the kernel.
 - An interrupt that fires with no thread waiting keeps `fired` set; the next `receive` returns
-  at once. One fire answers one waiting thread.
+  at once. One fire answers one waiting thread. Threads waiting on one interrupt are woken in
+  the order they began to wait.
 - The kernel's time handling an interrupt is billed to the budget that owns the IRQ object
   ([scheduling](scheduling.md)), not to whichever budget it interrupted.
 

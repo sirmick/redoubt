@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 152
+revision = 157
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -674,8 +674,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16", "SCHED1"]
   body = "Docs: docs/kernel/{ipc,timer,scheduling,budgets}.md. Brief/layout/rulings/report under .wash/local/IPC3*.md; use final implementer-5 report. wp-ipc3 a0fbbcab1 remains unmerged. Owner QA IPC3-wake-latency requires scheduler fix before merge with unchanged targets. SCHED1 explicit unmet prerequisite, no reverse dependency: experiment stacks on IPC3 then scheduler-only range replays onto main for independent tests/review/merge. Rebase and fully revalidate/review IPC3 afterward. QA remains blocking; initial1ms pinned success is not IPC3 acceptance. K19/SMP1 remain downstream."
-  state = "reported"
-  revision = 75
+  state = "done"
+  revision = 157
   overrides = ["2026-10-05: started by Orchestrator before SCHED1 (active): IPC3 needs SCHED1, which is built on IPC3's branch; the two merge together (IPC3 first) once SCHED1's bench passes, so IPC3 rebases now"]
 
 [[node]]
@@ -765,8 +765,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["BEAM2", "MEM2"]
   body = "Brief: .wash/local/BEAM6-implementer.md. Tier A (the VM, the shell's start, the image), size M, needs BEAM2 and MEM2 (merged): start from main. Today the VM's budget holds 11,877 pages (rv64) / 7,554 (rv32) at the prompt, its runtime heap 11,814 / 6,966: the heap is the footprint. Step 1 measures a breakdown the VM prints under an argument (code per module with size_of::<Instr>, atoms, literals, process heaps live and held, ETS, binaries, loader copies, runtime pages held vs accounted), on the host then in a case beamlet-footprint with the memory scan as the verdict; checkpoint 1 with the table and ranked levers. Step 2: lazy loading in the shell's start, no second copy of a module's chunks, compact code only if it is a third of the heap (else proposed as its own package), smaller heaps and a shrinking collector, free-but-held pages (libs/rt by permission). Step 3: the owner's targets, the image at 512 MiB (VM about 10,000 pages rv64) or 256 MiB (about 2,700); manifest, memory_mib lines, README, budgets.md, testbench.md's table and beamlet.md's new breakdown subsection move with the target met; checkpoint 2 if missed. Short gate plus the beamlet and verity cases at the new RAM. Code-page sharing between VMs is for sessions, not here."
-  state = "active"
-  revision = 151
+  state = "reported"
+  revision = 155
   overrides = ["2026-10-06: started by Orchestrator before M1 (reported): BEAM6's needs (BEAM2, MEM2) are merged; M1 is reported, not done, which is the plan's state for every active package"]
 
 [[node]]
@@ -982,3 +982,22 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "docs/kernel/scheduling.md states a derived bound: a lineage's debt, carried onto a sibling as the parent's lead, delays the sibling's first run by at most about a round when the parent is small and the lift fresh. No boot exercises it: under a parent as wide as `users` the lift is a few thousandths of a slice, and sched-debt-lift judges only that the sibling runs before any other budget is picked twice (its raw debt would cost ~6 rounds). Tier A bench/fixtures, size S. Build a construction that puts a fresh lift of about a round on a small shared parent and observes the sibling's first run on both widths, the oracle's check_lift beside it; if the one-round claim is false for small parents, the page changes to what the construction finds. A stated bound the pages carry is exercised or dropped. Ruling and arithmetic: .wash/local/SCHED1-five-cases-ruling.md 'debt-lift (red round 5, P1)'."
   state = "todo"
   revision = 149
+
+[[node]]
+  id = "B12"
+  title = "The loopback sshd prints 'Error: Ssh(SessionEOF)' after a refused login; the ssh-loopback refusal cases fail on main"
+  template = "package"
+  parent = "M1"
+  body = "Found by the wave bench on bd6f768f6 and reproduced alone: bench-ssh-loopback-exit and bench-ssh-loopback-host-key fail on both widths because, after the expected refusal (mallory: Permission denied (publickey); alice: Host key verification failed), a line 'Error: Ssh(SessionEOF)' follows and becomes the session's last output. The string is servers/sshd's Error::Ssh(sunset::Error) (lib.rs:183) reaching a main that prints it: the guest sshd treats the client's close after a refusal as an error. Bisect by first-parent: passes at 27e74ec3b (B10's gate on 373396887 ran both alone, PASS), fails at 3aafc7a83 (MEM2's merge) and after. MEM2 changed libs/rt (heap cap, startup block v2), libs/client launch, and the bench's memory scan; find which path changed sshd's exit after EOF (the runtime's exit/report path? a heap record? the bench forwarding the guest console's last line where it did not before?) and fix the cause, not the regex: a refused login ends the connection quietly, as the page states (docs/servers/sshd.md). Size S. Gate: the 14 ssh-loopback-kind cases + bench-ssh-guest both widths, sshd and rt host tests."
+  state = "active"
+  revision = 154
+
+[[node]]
+  id = "BEAM8"
+  title = "The VM's code is compact: one flat operand array per module, an 8-byte instruction"
+  template = "package"
+  parent = "M2"
+  needs = ["BEAM6"]
+  body = "Found by BEAM6's breakdown: decoded code is 7,180 pages on rv64 at the shell's prompt (242,345 instructions of 32 bytes, 521,551 operands of 24 in one Vec per instruction, 82 % of what the VM accounts for). Design measured by BEAM6: a flat per-module operand array, `Instr` = op, count, start (8 bytes), `Arg::List` boxed so `Arg` is 16 bytes; the interpreter reads operands through its one accessor (`interp.rs` `arg(ins, i)`); the loader, the native-body patch and `on_load_entry` are the other users. About 2,510 pages of code either width, saving about 4,670 on rv64 and 1,165 on rv32. Tier A, size M. Done when `beamlet-footprint`'s table shows it on both widths, every limits and boot case passes, and the manifest's budget follows. Open: QEMU's default 256 MiB (about 2,700 pages) is still out of reach with it; code kept in its on-disk form or loaded per function is the question that package would answer. Ruling: .wash/local/BEAM6-implementer.md 'Checkpoint 1 ruling'."
+  state = "todo"
+  revision = 156

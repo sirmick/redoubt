@@ -1,0 +1,9 @@
+[package]
+name = "redoubt-ipclist"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The kernel's IPC lists (docs/kernel/ipc.md R2, R3, R4a; docs/kernel/budgets.md R10): intrusive lists in the kernel's frames, R2's group order, the expiry's sort, and each list's audit, host-tested"
+
+# No dependencies: the kernel links this, so it is TCB.
+[dependencies]

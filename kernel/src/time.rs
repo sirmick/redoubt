@@ -20,14 +20,15 @@
 //! `kmain` expires, then picks, then switches, with no kernel entry in between.
 //!
 //! # Hints
-//! Finding what is due means walking every thread (`message.rs`) and the list of budgets with a
-//! deadline (`budget.rs`). Both are skipped while the cached earliest deadlines are still in the
-//! future. A hint is only ever early: a thread that blocks with a timeout or a new budget lowers
-//! it, and a wait that ends before its timeout or a destroyed budget leaves it where it was, which
-//! costs at most one early interrupt and a walk that recomputes it. So nothing is missed. A call
-//! answered at once, or whose timeout has already passed, never blocks and lowers nothing. The
-//! walk that finds an ended wait is its thread's budget's, as is the rest of an entry that found
-//! nothing else; a destroyed budget's early walk of the deadline list is nobody's.
+//! Finding what is due means reading the timed waits of each process whose cached earliest
+//! timeout has come (`message::collect_due`) and walking the list of budgets with a deadline
+//! (`budget.rs`). Both are skipped while the cached earliest deadlines are still in the future. A
+//! hint is only ever early: a thread that blocks with a timeout or a new budget lowers it, and a
+//! wait that ends before its timeout or a destroyed budget leaves it where it was, which costs at
+//! most one early interrupt and a walk that recomputes it. So nothing is missed. A call answered at
+//! once, or whose timeout has already passed, never blocks and lowers nothing. The walk that finds
+//! an ended wait is its thread's budget's, as is the rest of an entry that found nothing else; a
+//! destroyed budget's early walk of the deadline list is nobody's.
 //!
 //! Microseconds are the ABI's unit (kernel/timer.md, "Time"): deadlines are kept in them, and
 //! converted to timer ticks rounding up, so an interrupt never comes before its deadline.
@@ -116,32 +117,43 @@ pub struct Expired {
 /// Handle everything due (module docs), then re-arm for the next thing. Takes the scheduler only:
 /// destroying a budget borrows the memory manager in phases (`process.rs`, Locks).
 ///
-/// Each item's handling is billed (`sched::bill`): a timeout to its thread's budget, and a
-/// deadline, the whole destruction, to the dying budget's parent once its carve is back, or the
-/// nearest ancestor with free weight (`destroy_subtree`, R10). So is the walk that found it: a
-/// budget with many timeouts due at once pays for the walk each one costs. The last walk, which
-/// finds nothing more, and the re-arm are billed to the budget billed last. With nothing expired,
-/// they are the budget of a wait the walk found ended before its timeout (it left the timer
-/// early), and with none, nobody's.
+/// One walk finds every wait due and orders it (`message::collect_due`), so ending R waits costs
+/// one walk and R steps, not a walk each. Each item's handling is billed (`sched::bill`): a
+/// timeout to its thread's budget, and a deadline, the whole destruction, to the dying budget's
+/// parent once its carve is back, or the nearest ancestor with free weight (`destroy_subtree`,
+/// R10). The walk and its ordering are billed in equal shares to the waits it found, the
+/// remainder to the first, each with its own ending, so a budget pays its share of a shared
+/// instant, not a neighbour's (R12); a wait found ended meanwhile is billed its share too. The
+/// re-arm, and any share left over (a wait whose thread a deadline's destruction ended), go to
+/// the budget billed last. With no wait due, the walk goes with the first deadline, or to the
+/// budget of a wait the walk found ended before its timeout (it left the timer early), or with
+/// neither to nobody.
 pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     let now = now_us();
     if TIMER.with(|t| t.threads > now && t.budgets > now) {
         return Expired { destroyed: false, last: None };
     }
-    #[cfg(feature = "walk-trace")]
-    let _walk = crate::sched::trace::walk(crate::sched::trace::EXPIRY);
+    let mut started = crate::sched::now_ticks();
+    // The `EXPIRY` walk is the timer's own: the collect walk and its sort. Each ending, and the
+    // pump it makes, is recorded after it, as its own.
+    let walk = {
+        #[cfg(feature = "walk-trace")]
+        let _walk = crate::sched::trace::walk(crate::sched::trace::EXPIRY);
+        MemoryManager::with_mut(|mm| crate::message::collect_due(mm, now))
+    };
+    let (mut pool, share, mut first) = match walk.count {
+        0 => (0, 0, 0),
+        n => {
+            let pool = crate::sched::now_ticks().saturating_sub(started);
+            started = crate::sched::now_ticks();
+            (pool, pool / n, pool % n)
+        }
+    };
     let mut destroyed = false;
     let mut expired = false;
     let mut last = None;
-    let mut stale_pid;
-    let mut next_timeout;
-    let mut started;
     loop {
-        started = crate::sched::now_ticks();
-        let walk = MemoryManager::with_mut(|mm| crate::message::next_timeout(mm, now));
-        let timeout = walk.due;
-        next_timeout = walk.next;
-        stale_pid = walk.stale;
+        let timeout = MemoryManager::with(crate::message::first_due);
         let budget = due_budget(now);
         // Earliest first; at an equal instant, the timeout.
         let timeout_first = match (timeout, budget) {
@@ -152,10 +164,14 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
         expired = true;
         if let (true, Some((_, pid, tid))) = (timeout_first, timeout) {
             last = MemoryManager::with_mut(|mm| {
-                crate::message::time_out(ss, mm, pid, tid);
+                if crate::message::pop_due(mm, pid, tid) {
+                    crate::message::time_out(ss, mm, pid, tid);
+                }
+                let take = (share + core::mem::take(&mut first)).min(pool);
+                pool -= take;
                 let frame = mm.budget_of(pid)?;
                 let b = BudgetRef { frame, id: mm.budget(frame).id };
-                crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started));
+                crate::sched::bill(mm, b, take + crate::sched::now_ticks().saturating_sub(started));
                 Some(b)
             });
         } else if let Some((_, _, frame)) = budget {
@@ -167,13 +183,13 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
             crate::budget::destroy_subtree(ss, frame, running(), Some(started));
             destroyed = true;
         }
+        started = crate::sched::now_ticks();
     }
-    // Nothing expired: the walk found a wait that ended before its timeout (an item expired
-    // leaves its own process's cache behind, which the walks after it find).
-    let stale = !expired && stale_pid.is_some();
+    // Nothing expired: the walk found a wait that ended before its timeout.
+    let stale = !expired && walk.stale.is_some();
     if stale {
         last = MemoryManager::with(|mm| {
-            let frame = mm.budget_of(stale_pid?)?;
+            let frame = mm.budget_of(walk.stale?)?;
             Some(BudgetRef { frame, id: mm.budget(frame).id })
         });
     }
@@ -183,16 +199,23 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
         mm.deadlines().map(|(d, _, _)| d).filter(|d| *d > now).min().unwrap_or(NEVER)
     });
     TIMER.with(|t| {
-        t.threads = next_timeout;
+        t.threads = walk.next;
         t.budgets = next_budget;
         // The hardware fired (or will, for what just passed); arm afresh.
         t.armed = 0;
     });
     rearm();
-    if let Some(b) = last {
-        MemoryManager::with_mut(|mm| {
-            crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started))
-        });
+    MemoryManager::with_mut(|mm| {
+        if let Some(b) = last {
+            crate::sched::bill(mm, b, pool + crate::sched::now_ticks().saturating_sub(started));
+        }
+        crate::message::audit(mm);
+    });
+    // The deadlines' destructions audit once, here: inside the loop, a wait due later than one
+    // was still on the due list.
+    #[cfg(debug_assertions)]
+    if destroyed {
+        crate::budget::audit_destruction();
     }
     Expired { destroyed, last }
 }

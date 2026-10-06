@@ -158,6 +158,11 @@ pub extern "C" fn kmain() {
                 // Sleep until an interrupt: a device, or the timer, which is always armed for the
                 // next deadline (`time.rs`). A deadline that passed since the check above is
                 // already pending, so `wfi` returns at once.
+                // A checked build's full audit of the IPC lists first (`message::check_all`).
+                #[cfg(debug_assertions)]
+                crate::sched::audit(crate::sched::AUDIT_IPC_LISTS, || {
+                    crate::mem::MemoryManager::with(crate::message::check_all)
+                });
                 crate::sched::stop_billing();
                 if !arch::idle() {
                     return;

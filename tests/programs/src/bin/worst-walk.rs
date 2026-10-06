@@ -25,8 +25,10 @@ const USERS: usize = 382;
 /// Holders whose report is held until every holder is in, and then answered with one deadline:
 /// what one process may hold open (`MAX_OPEN_CALLS`, 256), less a margin.
 const HELD: usize = 250;
-/// How far ahead the deadline is, µs: after every held report has its reply.
-const DEADLINE: u64 = 1_000_000;
+/// How far ahead the deadline is, µs: after every held report has its reply. The checked build
+/// audits the IPC lists at each reply's exit, one walk of every thread: about 0.4 s at full
+/// occupancy, so the 250 replies take about 100 s.
+const DEADLINE: u64 = 300_000_000;
 /// Pages a holder's budget has above the probe's usage, for what its start takes and gives back.
 const SPARE: u64 = 16;
 /// The holder's send right to this program, in its slot 1.
