@@ -88,8 +88,11 @@ against what was packed); `erofsd` skips it with every other attribute.
 
 `erofsd` is started by `init` as `littlefsd` is, one instance per read-only volume, with the same
 arguments (`endpoint=`, `buckets=`) and the same range: a `blkd` range for an unverified
-volume, a `verityd` range for a verified one ([blkd](blkd.md), [verityd](verityd.md)). At
-start it reads the superblock and the root inode, then serves:
+volume, a `verityd` range for a verified one ([blkd](blkd.md), [verityd](verityd.md)). Its
+clients share a 1.5 MiB budget: a bucket at its caps costs 225,280 bytes, so six fit, and every
+session's domain is one, beside the steward's ([the steward](steward.md#authentication-and-sessions));
+a `buckets=N` the budget cannot hold and `erofsd` does not start. At start it reads the superblock
+and the root inode, then serves:
 
 - `attach`, `walk`, `open` for reading, `read`, `stat`, directory reads and `clunk`, with the
   serving library's 9P skeleton, admission and label check as every file server
