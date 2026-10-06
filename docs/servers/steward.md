@@ -22,7 +22,7 @@ standing labelled reader.
 
 ### The policy core
 
-<details><summary>Status: built · tested (55)</summary>
+<details><summary>Status: built · tested (56)</summary>
 
 - host:redoubt-steward::a_manifest_with_a_key_in_two_roles_is_refused
 - host:redoubt-steward::the_lines_read_as_the_manifest_and_write_back_the_same
@@ -79,6 +79,7 @@ standing labelled reader.
 - host:redoubt-steward-trace::strings_round_trip
 - bench:elixir-oracles
 - bench:bench-elixir-oracles-broken-guard
+- host:redoubt-steward-server::the_binding_table_binds_each_slot_as_the_page_says
 
 </details>
 
@@ -111,7 +112,7 @@ The embedder guarantees, and the core assumes, that:
 - events come one at a time, and a batch's `Done` arrives before any other event about that
   object;
 - each event's caller is the one the kernel stamped. The badge class decides the role (`sshd`,
-  `init`, an approval channel, a session's minted badge, the steward's exit endpoint), and the
+  `init`, an approval channel, a session's minted badge, the steward's exit reports), and the
   embedder maps a session's badge to its session through the core's routing index;
 - `now` never goes back, and the random words come from the kernel's generator.
 
@@ -172,7 +173,7 @@ the steward's own write to the unlabelled volume, with no budget.
 The events are `Boot` (the manifest), `Login`, `ChannelClosed`, `ApprovalOpened` and
 `ApprovalClosed` from `sshd`; `StartAgent`, `Submit`, `EndLease` and `EndSession` from a session;
 `Pending`, `Approve` and `Deny` from an approval channel; `Blame` from `init`; `Exited` from the
-steward's exit endpoint (a session, a lease or a crossing budget's process); and `Done` for a
+steward's exit reports (a session, a lease or a crossing budget's process); and `Done` for a
 batch.
 
 Each machine's table has the rows `| From | Event | Guard | To | Effects |`. Guards and effects are
@@ -272,8 +273,20 @@ so the steward still holds no key.
 
 #### Two embedders and a reference
 
-- **The steward server** (planned, with the mechanism sections below) binds effects to the client
-  library and the kernel.
+- **The steward server** (`servers/steward`) binds effects to the client library and the kernel:
+  it runs each batch's steps in order, stopping at the first that fails, and reports the batch
+  as one `Done`. Its binding table maps each `Shared` slot to a server, a root and a badge per
+  domain class; a slot bound to nothing for that class is produced without a call. One function
+  is the table (`own::binding`): the connections and the launch both read it. The slots, in
+  order: `bootfsd` at `/boot`; the home volume's server at the home's path; the label set's
+  volume's server at `/vault` (a vault session only); `ipd` at `/net`, granted the
+  principal's scope (an unlabelled session only); the console at `/dev/cons` (`sshd`'s channel,
+  or `consoled` for the console principal's session); and the system volume's `erofsd`. The
+  child finds the first and last also under beamlet's handle names, `bootfsd` and
+  `erofsd:system`, the latter named by its `endpoint=` argument. Every
+  random word it hands the core has its top bit set, so every id and badge the core draws is in
+  the minted range ([R27](serving.md#r27-badge-allocation)) and no session's badge is a root
+  badge.
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
   policy, so the property families (P1 to P16) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
@@ -301,6 +314,18 @@ the manifest is never public, so `/boot` cannot carry it. A trace begins with th
   [residual risks](#residual-risks)).
 - `servers N`, the shared servers' slots a session connects to.
 - `sizes session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N`, the budgets the steward carves.
+
+After the core's lines `init` appends the steward's own, which the server parses and the core
+never sees, each naming only what `init`'s check found in the manifest:
+- `label "NAME" id=N`, a label's name, for a login's label;
+- `home "PRINCIPAL" handle=H path=/P`, its home at the server `init` handed the steward as the
+  named handle `H`;
+- `vault "PRINCIPAL" labels=[..] handle=H`, the labelled volume of one label set it works under
+  (a set with no volume has no line);
+- `net "PRINCIPAL" PREFIX:PORTS ...`, its network scope in the manifest's form, `*` for every
+  port, which the steward passes to `ipd`'s `grant`.
+- `console "PRINCIPAL"`, the manifest's `console`: the principal whose unlabelled session the
+  steward opens on the UART.
 
 The parser is the core's (`libs/steward/src/manifest.rs`), `no_std` and strict: each field once and
 no other, `keyd`, `servers` and `sizes` at most once and `sizes` required, a number digits only.
@@ -402,7 +427,11 @@ Status: planned · M1 (sessions over SSH, kept apart)
 - **A session** is processes started with capabilities derived from the principal's set, never
   more. The steward carves the session budget from the right sub-budget, with the principal's
   account and the session's labels, gives it a namespace of fresh connections it asked each server
-  for ([init](init.md#fresh-connections-per-child)), and launches it through the loader stub.
+  for ([init](init.md#fresh-connections-per-child)), and launches it through the loader stub. Each
+  session's process has an exit endpoint of its own, which a watcher thread of the steward's waits
+  on and reports on the steward's endpoint when the process ends. A thread's stack is never given
+  back, so a watcher that has reported waits for the next session, and a new one starts only when
+  every watcher is watching: there are never more watchers than sessions alive at once.
 - **Normal sessions are unlabelled** (`ssh alice@box`): full network and every tool; they cannot
   read labelled volumes.
 - **A vault session carries exactly one label.** `ssh alice+secrets@box` opens a session labelled
@@ -423,7 +452,9 @@ Status: planned · M1 (sessions over SSH, kept apart)
   already outside the threat model ([the tenets](../TENETS.md#threat-model)), so the field
   records who the cable is, it does not grant more. A manifest without `console` starts no
   console session; one naming no principal is refused by `init` at the manifest check, so the
-  steward never sees a bad name.
+  steward never sees a bad name. Reopening is the server's decision, not the core's: when the core
+  forgets the console session, the server opens a new one through the core's `Console` event, and
+  a console session that cannot start is said once, not retried.
 - **Defaults.** The steward mounts known-sensitive places (`~/.ssh`, credential directories) from
   the principal's labelled volume.
 
@@ -461,11 +492,25 @@ page. Its sessions' operation is `login` (from `sshd`); the operations for lease
 crash blame are below ([the lease and approval operations](#the-lease-and-approval-operations)).
 
 **Each operation is accepted only through the badge class it belongs to.** The steward gives a
-root badge per caller role (`sshd`, `init`, the approval channel), and sessions get minted badges.
-An operation on any other badge is refused, with the same answer as an unknown one, so a session
-cannot send `login`, `approve` or `blame`.
+root badge per caller role (`sshd` 1, the approval channel 2, `init` 3, each a `handed` badge in
+the manifest), and sessions get minted badges. An operation on any other badge is malformed, the
+same answer as an unknown one, so a session cannot send `login`, `approve` or `blame`.
 
-**Open:** the table's other operations' fields; it is written with the steward.
+- **`login`** carries the principal's name, the label's name (empty for an unlabelled session),
+  the raw key and the channel's console connection, which `sshd` made for the session and which
+  becomes its `/dev/cons`. The steward checks the label's name against the manifest's and derives
+  the key's id ([the manifest lines](#the-manifest-lines)); a name the manifest does not hold is
+  `not_owner`. The reply is the session's id, its name and the channel's labels.
+- **`channel_closed`** ends the session the channel carried.
+- **Not yet bound:** `submit`, `start_agent`, `end_lease`, `approve`, `deny`, `pending`,
+  `approval_opened`, `approval_closed` and `blame` are in the table and accepted only on their
+  badge classes, and answered `unknown` until their batches are built.
+
+The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
+
+{{#include ../../libs/wire/tables/steward.md:tables}}
+
+**Open:** none.
 
 ### The lease and approval operations
 
@@ -875,7 +920,11 @@ connection narrowed to a session's budget cannot be written, since `Connect` tak
 which only a zero-limit `CreateScope` makes. The attack test hands a server a session's budget and
 expects it refused.
 
-**Open:** none.
+**Open:** a connection does not carry the revocation scope the steward makes for it:
+`new_connection` has no scope, and only the process that makes a handle stamps it. Narrowing by
+scope needs a means (a scope handle a server accepts at `new_connection` and kills by, or a
+disconnect-by-scope), designed before any lease relies on R41; until then connections
+end by the launcher's disconnect.
 
 ### R42 (one approved item)
 
@@ -895,7 +944,10 @@ Status: planned · M1 (sessions over SSH, kept apart)
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` destroys and
   recreates the `users` budget, which logs every session out and ends every lease, and restarts the
-  steward ([init](init.md#restarts-and-reboots)).
+  steward ([init](init.md#restarts-and-reboots)). So the steward always carves into an empty
+  `users`, and it checks that it is: at its start, a `users` holding any pages, process or child
+  is a start failure, said once (`users not empty`), never a second set of carves beside the
+  first.
 - **A session crashes:** the steward destroys its budget; `sshd` closes its channel; nobody else is
   affected.
 - **A reader or writer budget** outlives nothing: it has a deadline, and the steward destroys it

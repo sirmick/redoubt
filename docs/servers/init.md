@@ -18,7 +18,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-<details><summary>Status: built · tested (26)</summary>
+<details><summary>Status: built · tested (27)</summary>
 
 - bench:init-boot
 - bench:init-refuses-public-manifest
@@ -47,6 +47,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 - host:redoubt-init::the_steward_object_and_console_name_what_the_manifest_holds
 - host:redoubt-init::the_steward_s_sizes_fit_every_principal_s_smallest_share
 - host:redoubt-init::a_key_in_two_roles_across_principals_is_refused
+- host:redoubt-init::the_steward_s_own_lines_bind_homes_vaults_and_scopes
 
 </details>
 
@@ -61,7 +62,7 @@ and `init`'s only input. Its entries:
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`; a volume's server has `program` `walfsd` or `littlefsd` for a writable volume, or `erofsd` for a read-only one, and no other key says the format), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only, each once across every principal's login and approval lists) for login and approval, budget, account, owned labels, the label sets it works under (each a fixed, equal share of the principal's budget), home (volume and path), and network scope (IP prefixes and ports) |
-| `steward` | optional; the `servers` entry that is the steward, which alone `init` hands `users` at step 6, and the sizes it carves (`sizes`: `session`, `agent`, `sub_agent` and `crossing`, each a budget, and `cost`, a budget object's own pages). `init` checks every limit nonzero and each size within every principal's smallest share, and hands the steward the principals and sizes as the manifest lines ([steward](steward.md#the-manifest-lines)) |
+| `steward` | optional; the `servers` entry that is the steward, which alone `init` hands `users` at step 6, and the sizes it carves (`sizes`: `session`, `agent`, `sub_agent` and `crossing`, each a budget, and `cost`, a budget object's own pages). `init` checks every limit nonzero and each size within every principal's smallest share, and hands the steward the principals and sizes as the manifest lines, then its own lines: label names, and each principal's home, labelled volumes and network scope, whose servers the steward's entry must be handed ([steward](steward.md#the-manifest-lines)) |
 | `console` | optional; the principal whose unlabelled session the steward opens on the UART console ([steward](steward.md#authentication-and-sessions)); it needs a `steward`, and a name that is not a `principals` entry refuses the boot |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
 
