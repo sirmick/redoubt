@@ -825,11 +825,13 @@ without preemption.*
     dying endpoints' lists and the dying budgets' two stamp chains;
   - the rest, 2.9 ms (3 ms).
 
-  Those are the gate's fill.
-- **A destruction at full occupancy walks every process.** At full occupancy (510 processes) a
-  destruction takes 53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30: three of its steps walk
-  every process object
-  ([destruction walks every process](../todo/destruction-walks-every-process.md)).
+  Those are the gate's fill. At full occupancy, every PID in use and each holder's budget
+  holding `MAX_THREADS` threads (129,796 live threads across 510 processes), one holder's
+  destruction stays within R10's 30 ms (`bench:worst-walk`, net of the checked build's audits, at
+  the 1 ms slice): the run's two destructions, one near empty and one at full occupancy, take 16.4
+  and 17.1 ms on rv64 and 17.4 and 18.2 ms on rv32. Their threads' teardown is 13.1 and 13.8 ms
+  of each, and the rest, about 4.0 and 4.4 ms at most, follows the dying subtree's own chains
+  (item 2).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

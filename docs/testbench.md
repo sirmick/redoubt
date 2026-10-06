@@ -383,7 +383,7 @@ bounds a measured cost. Two arguments judge a sibling's first run: `round`, that
 any other budget is picked twice, and `lift-delay`, that it comes within a round of what the lift
 on its parent predicts. A `walk-trace` kernel's walks are bounded by their longest, net of the
 audits inside them (`pump_max_us`, `expiry_max_us`, `reconcile_max_us`), judged before
-`r10_p99_us`, so `worst-walk`, whose destruction bound must fail, still holds its walks.
+`r10_p99_us`, so a run whose destruction is over its bound still has its walks judged.
 
 ### Starting a case's programs
 

@@ -443,13 +443,13 @@ checks that receiving notices refunds the creator's pages exactly.
 With k groups of R2 blocked on an endpoint, and the receiving process holding fewer than
 `MAX_OPEN_CALLS` open calls, each group's oldest message is taken within k receives.
 
-**Kept in** `next_sender` (`kernel/src/message.rs`): the oldest message of the group whose turn
-has been due longest, ties to the lower group. Each queued message carries its group's turn
-(`W_DUE`): its arrival, then, at each take of its group, a fresh value of the kernel's one order
-of arrivals and takes (`next_seq`), which `deliver` writes to the group's waiting messages. A
-waiting group keeps its turn until it is taken, a taken group goes behind every group already
-waiting, and a group that arrives later is due later, so at most k−1 groups go first. A refused
-message (R4) takes its turn too, so a group that cannot be paid for does not stall the others.
+**Kept in** `pick` (`kernel/src/message.rs`) and `redoubt-ipclist`'s groups: each endpoint keeps
+its waiting groups in the order their turns fall due, a group's turn being its oldest queued
+message's arrival or its last take, whichever came later, both values of the kernel's one order of
+arrivals and takes (`next_seq`). A take (`served`) moves its group behind every group already
+waiting, in one write, and a group that arrives later is due later, so at most k−1 groups go
+first. A refused message (R4) takes its turn too, so a group that cannot be paid for does not
+stall the others.
 
 **Model check:** `Ghost::took`: while one group's oldest message waits, no other group is taken
 twice. The `flood` family queues up to 10,000 senders from many groups, some servers hoarding
