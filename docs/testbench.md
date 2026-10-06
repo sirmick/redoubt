@@ -1035,7 +1035,7 @@ part of the trusted computing base
 
 ## The memory budget
 
-Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:init-refuses-stack, bench:memory-host-tests
+Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:beamlet-footprint, bench:init-refuses-stack, bench:memory-host-tests
 
 A boot case under `init` can set `memory = true`. After its console verdict the bench stops
 QEMU over QMP and dumps the guest's physical RAM beside the case's log, as
@@ -1069,14 +1069,20 @@ none. The same scan finds each server's record by its magic word and tag and pri
 duplicated record, a record whose cap is not the manifest's `heap_pages`, and a capped server
 whose cap is less than twice its peak; an uncapped server is reported only.
 
-The standard image is scanned after `init-boot`, `userland-boot` and `userland-read-only` on both
-widths. Its server declarations use twice the largest peak across six such runs: each stack
-rounded up to pages, from the runs that sized the stacks, before the heap caps existed; and each
-heap cap in pages, from six later runs with the stacks as declared. The stack columns below are
-the first runs' and the heap columns the later runs'. `beamlet`'s heap peak moves by a page between
-runs, so its cap is instead the most its budget holds beside its stack, 24,558 pages. The
-read-only case also scans its additional client from the merged manifest. `verity:system`'s row and
-`littlefsd:system`'s heap are from six runs with the userland volume read through `verity:system`.
+The standard image is scanned after `init-boot`, `userland-boot`, `userland-read-only` and
+`beamlet-footprint` on both widths. Its server declarations use twice the largest peak across six
+such runs: each stack rounded up to pages, from the runs that sized the stacks, before the heap
+caps existed; and each heap cap in pages, from six later runs with the stacks as declared. The
+stack columns below are the first runs' and the heap columns the later runs'. `beamlet`'s heap peak
+moves by a page between runs, so its cap is instead the most its budget holds beside its stack,
+20,846 pages: at least twice its largest peak across six runs of each memory case on each width,
+`beamlet-footprint` included, 72 pages over twice it. Its budget, 20,864 pages, is that cap and its
+stack rounded up to 128, not to 1,024, because at 512 MiB it must lie between 20,792 pages (a cap
+of twice the peak) and 20,990 (a case that adds a 256-page client still fits on rv32); the image
+then has 383 pages to spare on rv32, a client case 126
+([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The read-only case also scans its
+additional client from the merged manifest. `verity:system`'s row and `littlefsd:system`'s heap
+are from six runs with the userland volume read through `verity:system`.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1090,13 +1096,14 @@ read-only case also scans its additional client from the merged manifest. `verit
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
 | `verity:system` | 7,864 | 4 | 47 | 94 |
 | `littlefsd:system` | 12,680 | 7 | 19 | 38 |
-| `beamlet` | 33,240 | 17 | 11,814 | 24,558 |
+| `beamlet` | 33,240 | 17 | 10,387 | 20,846 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
-the 16-page stack default and no cap. `beamlet`'s heap peak is the shell at its prompt (6,966
-pages on rv32); its cap leaves its process heap and ETS limits, a sixteenth of its budget each
-(1,536 pages), reachable: a flooding process, about four times its limit, still fits under the
-cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
+the 16-page stack default and no cap. `beamlet`'s heap peak is the shell after the commands
+`userland-read-only` types (6,048 pages on rv32), above what its prompt holds
+([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)); its cap leaves its process heap
+and ETS limits, a sixteenth of its budget each (1,304 pages), reachable: a flooding process, about
+four times its limit, still fits under the cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
 
 This is a measurement of the paths the case drove. Other requests or deeper call paths may
 need more stack or heap, and any guest, including another server, can forge the public paint

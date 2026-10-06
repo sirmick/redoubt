@@ -1,0 +1,64 @@
+description = "The shell's VM prints what it holds at its prompt (docs/userland/beamlet.md, \"What the VM holds at its prompt\"): the image boots with beamlet's arguments given report_memory, and when the shell first waits for input the VM prints its breakdown, one line a row (loaded code, its operands and tables, atoms, the literal table, process heaps before and after a collection, binaries, ETS, the total, and beamlet's runtime heap pages held then and at their peak), then the shell still answers. The verdict on the total is the bench's memory scan, from the guest's RAM: its line heap beamlet PEAK of CAP pages, independent of the VM's own report, which is evidence (docs/testbench.md, \"The memory budget\")"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs; the manifest is the image's with beamlet's arguments given report_memory.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+]
+# The image needs 512 MiB: beamlet's budget, twice the shell VM's largest peak, does not fit the
+# system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+memory_mib = 512
+memory = true
+timeout_secs = 330
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    'footprint sizes Instr=[0-9]+ Arg=[0-9]+ Term=[0-9]+ ',
+    '^\[con [0-9a-f]{16}\] footprint code\.instrs count=[0-9]+ asked=[0-9]+ held=[0-9]+$',
+    '^\[con [0-9a-f]{16}\] footprint code\.operands count=',
+    '^\[con [0-9a-f]{16}\] footprint literal_table count=',
+    '^\[con [0-9a-f]{16}\] footprint process\.heaps_collected count=',
+    '^\[con [0-9a-f]{16}\] footprint modules count=[0-9]+ chunks=[0-9]+ replaced=0 largest ',
+    '^\[con [0-9a-f]{16}\] footprint total held=[0-9]+ pages=[0-9]+$',
+    '^\[con [0-9a-f]{16}\] footprint runtime pages held_now=[0-9]+ peak=[0-9]+ unaccounted=[0-9]+ transient=[0-9]+$',
+    # The prompt was printed before the breakdown, so the answer is a line of its own.
+    '^\[con [0-9a-f]{16}\] 2$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'init: rebooting',
+    'not loaded',
+    'EXCEPTION',
+]
+
+[[input]]
+after = 'footprint runtime pages held_now='
+send = "1 + 1\n"
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
+
+[[file.servers]]
+name = "beamlet"
+args = ["budget_pages=20864", "report_memory", "Elixir.Redoubt.Shell"]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/littlefsd/stage"
+
+[net]

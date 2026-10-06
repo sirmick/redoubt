@@ -53,6 +53,8 @@ type Result<T> = core::result::Result<T, LoadError>;
 pub fn load(bytes: &[u8], atoms: &mut AtomTable, lits: &mut Literals) -> Result<Module> {
     let mut heap = Heap::new(&Literals::default());
     let mut module = parse(bytes, atoms, &mut heap)?;
+    // Loaded code never grows: it keeps no room the decoding's doubling left.
+    module.code.shrink_to_fit();
     let space = lits.add(heap, &mut []);
     let relocate = |t: &mut Term| crate::term::relocate(t, space);
     module.literals.iter_mut().for_each(relocate);

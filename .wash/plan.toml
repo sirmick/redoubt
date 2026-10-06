@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 172
+revision = 173
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -765,8 +765,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["BEAM2", "MEM2"]
   body = "Brief: .wash/local/BEAM6-implementer.md. Tier A (the VM, the shell's start, the image), size M, needs BEAM2 and MEM2 (merged): start from main. Today the VM's budget holds 11,877 pages (rv64) / 7,554 (rv32) at the prompt, its runtime heap 11,814 / 6,966: the heap is the footprint. Step 1 measures a breakdown the VM prints under an argument (code per module with size_of::<Instr>, atoms, literals, process heaps live and held, ETS, binaries, loader copies, runtime pages held vs accounted), on the host then in a case beamlet-footprint with the memory scan as the verdict; checkpoint 1 with the table and ranked levers. Step 2: lazy loading in the shell's start, no second copy of a module's chunks, compact code only if it is a third of the heap (else proposed as its own package), smaller heaps and a shrinking collector, free-but-held pages (libs/rt by permission). Step 3: the owner's targets, the image at 512 MiB (VM about 10,000 pages rv64) or 256 MiB (about 2,700); manifest, memory_mib lines, README, budgets.md, testbench.md's table and beamlet.md's new breakdown subsection move with the target met; checkpoint 2 if missed. Short gate plus the beamlet and verity cases at the new RAM. Code-page sharing between VMs is for sessions, not here."
-  state = "reported"
-  revision = 155
+  state = "done"
+  revision = 173
   overrides = ["2026-10-06: started by Orchestrator before M1 (reported): BEAM6's needs (BEAM2, MEM2) are merged; M1 is reported, not done, which is the plan's state for every active package"]
 
 [[node]]

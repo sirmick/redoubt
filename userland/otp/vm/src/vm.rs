@@ -68,6 +68,9 @@ pub struct Config {
     /// module and function also exist in a loaded module replaces that function's body, the
     /// way `erlang:load_nif/2` does in BEAM.
     pub natives: &'static [bif::NativeSpec],
+    /// Print the VM's memory breakdown on its console when it first waits for console input
+    /// ([`crate::memory::footprint`]); the function gives the embedder's heap pages, if it knows them.
+    pub report_memory: Option<crate::memory::HeapPages>,
 }
 
 /// Everything but the process table. The running process is borrowed separately, so native
@@ -92,7 +95,9 @@ pub struct System {
     pub(crate) generations: Arc<crate::sched::Generations>,
     pub atom_table: AtomTable,
     pub atoms: Atoms,
-    modules: BTreeMap<String, &'static Module>,
+    pub(crate) modules: BTreeMap<String, &'static Module>,
+    /// Modules replaced by a newer copy of themselves, whose old code stays allocated.
+    pub(crate) replaced: usize,
     natives: bif::Registry,
     pub(crate) run_queue: VecDeque<Pid>,
     /// Everything waiting for a time: receive timeouts and message timers, by deadline.
@@ -158,6 +163,8 @@ pub struct System {
     stopping: bool,
     /// Nothing can ever run again.
     stuck: bool,
+    /// [`Config::report_memory`], until the report is made.
+    report_memory: Option<crate::memory::HeapPages>,
 }
 
 /// Most directories on the code path.
@@ -279,6 +286,14 @@ impl ProcTable {
             Some(Slot::Present(p)) if p.pid == pid => Some(p),
             _ => None,
         }
+    }
+
+    /// Every process not running now (for memory reports).
+    pub(crate) fn present_mut(&mut self) -> impl Iterator<Item = &mut Process> {
+        self.slots.iter_mut().filter_map(|s| match s {
+            Slot::Present(p) => Some(&mut **p),
+            _ => None,
+        })
     }
 
     pub(crate) fn is_alive(&self, pid: Pid) -> bool {
@@ -498,7 +513,7 @@ impl Vm {
     pub fn new(platform: Box<dyn Platform>) -> Vm { Vm::with_limits(platform, Limits::default()) }
 
     pub fn with_limits(platform: Box<dyn Platform>, limits: Limits) -> Vm {
-        Vm::with_config(platform, Config { limits, natives: &[] })
+        Vm::with_config(platform, Config { limits, ..Default::default() })
     }
 
     /// A VM with resource limits and extra natives chosen by the embedder.
@@ -520,6 +535,7 @@ impl Vm {
                 atom_table,
                 atoms,
                 modules: BTreeMap::new(),
+                replaced: 0,
                 natives,
                 run_queue: VecDeque::new(),
                 timers: BTreeSet::new(),
@@ -552,6 +568,7 @@ impl Vm {
                 wake_all: false,
                 stopping: false,
                 stuck: false,
+                report_memory: config.report_memory,
             }),
             wakeup: Wakeup::default(),
         }
@@ -770,6 +787,16 @@ impl System {
         self.atom_table.intern(name).expect("VM-internal atom names are within limits")
     }
 
+    /// The memory breakdown, once, if the embedder asked for it: on the console, a line a row.
+    fn report_memory(&mut self) {
+        let Some(heap_pages) = self.report_memory.take() else { return };
+        let lines = crate::memory::footprint(self, heap_pages);
+        let mut platform = self.platform.lock();
+        for line in lines {
+            platform.console_write(line.as_bytes());
+        }
+    }
+
     /// Loaded code changed: every cache of resolved calls is stale.
     fn code_changed(&mut self) {
         self.resolved.clear();
@@ -816,7 +843,9 @@ impl System {
             }
         }
         let name = module.name;
-        self.modules.insert(name.as_str().to_string(), Box::leak(Box::new(module)));
+        if self.modules.insert(name.as_str().to_string(), Box::leak(Box::new(module))).is_some() {
+            self.replaced += 1;
+        }
         self.code_changed();
         Ok(name)
     }
@@ -1105,6 +1134,9 @@ impl System {
             }
             // Nothing running either: sleep until the next timer or console input, or give up
             // if nothing can ever arrive.
+            if self.console_reader.is_some() {
+                self.report_memory();
+            }
             return match self.timers.first() {
                 Some(&(deadline, _)) => {
                     self.platform.lock().idle(Some(deadline));

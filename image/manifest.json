@@ -72,9 +72,9 @@
       "receives": ["littlefsd:system"],
       "args": ["endpoint=littlefsd:system", "buckets=4"] },
     { "name": "beamlet", "program": "beamlet",
-      "stack_pages": "17", "heap_pages": "24558",
-      "budget": { "pages": "24576", "processes": 1, "weight": 100 },
+      "stack_pages": "17", "heap_pages": "20846",
+      "budget": { "pages": "20864", "processes": 1, "weight": 100 },
       "handed": [ { "endpoint": "littlefsd:system", "badge": "7" } ],
-      "args": ["budget_pages=24576", "Elixir.Redoubt.Shell"] }
+      "args": ["budget_pages=20864", "Elixir.Redoubt.Shell"] }
   ]
 }

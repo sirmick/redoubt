@@ -325,7 +325,10 @@ impl Literals {
     /// terms that point into it. The heap should hold only what `roots` reach.
     pub fn add(&mut self, heap: Heap, roots: &mut [Term]) -> u32 {
         let space = u32::try_from(self.0.len() + 1).expect("under 2^32 literal chunks");
-        let Heap { mut terms, offheap, .. } = heap;
+        let Heap { mut terms, mut offheap, .. } = heap;
+        // A chunk never grows: it keeps no room the heap's doubling left.
+        terms.shrink_to_fit();
+        offheap.shrink_to_fit();
         let relocate = |t: &mut Term| {
             if let Some(p) = t.ptr_mut() {
                 if p.space == 0 {
@@ -341,6 +344,14 @@ impl Literals {
 
     /// Cells in all chunks (for memory reports).
     pub fn cells(&self) -> usize { self.0.iter().map(|c| c.terms.len()).sum() }
+
+    /// Each chunk's cells held (its capacity), off-heap entries held, and the bytes its off-heap
+    /// values hold (for memory reports).
+    pub fn each_chunk(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        self.0
+            .iter()
+            .map(|c| (c.terms.capacity(), c.offheap.capacity(), c.offheap.iter().map(OffHeap::size).sum()))
+    }
 }
 
 /// A heap: the objects of one process (or of one [`OwnedTerm`]).
@@ -442,6 +453,9 @@ impl Heap {
 
     /// Cells in use.
     pub fn len(&self) -> usize { self.terms.len() }
+
+    /// Cells held, in use or not (for memory reports).
+    pub fn capacity(&self) -> usize { self.terms.capacity() }
 
     pub fn is_empty(&self) -> bool { self.terms.is_empty() }
 

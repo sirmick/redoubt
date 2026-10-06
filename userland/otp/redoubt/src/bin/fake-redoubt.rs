@@ -1,6 +1,6 @@
 //! `fake-redoubt`: beamlet on Redoubt's platform, run on a host, on the fake kernel.
 //!
-//!     fake-redoubt [-pa DIR]... MODULE [FUNCTION]
+//!     fake-redoubt [-pa DIR]... [report_memory] MODULE [FUNCTION]
 //!
 //! It starts the fake kernel, a console server on this terminal (the fixture's, see
 //! `beamlet_redoubt::fixture`), and a session process whose namespace holds `/dev/cons`; in that
@@ -25,13 +25,14 @@ fn host_seed() -> std::io::Result<u64> {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fake-redoubt [-pa DIR]... MODULE [FUNCTION]");
+    eprintln!("usage: fake-redoubt [-pa DIR]... [report_memory] MODULE [FUNCTION]");
     ExitCode::from(2)
 }
 
 fn main() -> ExitCode {
     let mut dirs = Vec::new();
     let mut positional = Vec::new();
+    let mut report_memory = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -39,6 +40,9 @@ fn main() -> ExitCode {
                 Some(dir) => dirs.push(PathBuf::from(dir)),
                 None => return usage(),
             },
+            beamlet_redoubt::REPORT_MEMORY => {
+                report_memory = Some((|| None) as beamlet_vm::memory::HeapPages)
+            }
             _ => positional.push(arg),
         }
     }
@@ -70,6 +74,7 @@ fn main() -> ExitCode {
             &module,
             &function,
             None,
+            report_memory,
         )
     });
     let status = vm.join().unwrap_or(1);
