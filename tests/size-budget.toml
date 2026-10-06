@@ -74,6 +74,11 @@ paths = ["libs/steward/src"]
 max_lines = 3160
 
 [[crate]]
+name = "libs/erofs"
+paths = ["libs/erofs/src"]
+max_lines = 578
+
+[[crate]]
 name = "libs/littlefs"
 paths = ["libs/littlefs/src"]
 max_lines = 2033
