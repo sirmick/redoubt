@@ -1229,6 +1229,7 @@ dependencies = [
  "stub",
  "tar",
  "toml",
+ "walfs",
 ]
 
 [[package]]

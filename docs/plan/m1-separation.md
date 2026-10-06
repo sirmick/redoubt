@@ -143,6 +143,9 @@ Built and attack-tested today:
   ([littlefsd](../servers/littlefsd.md#littlefs)).
 - **The file server:** `littlefsd` over `blkd`, placed by `init`, with one volume per instance, quotas
   and typed operations ([littlefsd](../servers/littlefsd.md)).
+- **walfs**, the format for the SSD's writable volumes, on the host: its library against a model,
+  a power cut at every write and hostile volumes, and the bench's packer; its server, `walfsd`,
+  remains planned ([walfsd](../servers/walfsd.md)).
 - **`bootfsd`, `consoled` and `keyd`**, attacked in host tests and booted under `init`
   ([bootfsd](../servers/bootfsd.md), [consoled](../servers/consoled.md), [keyd](../servers/keyd.md)).
 - **Launching:** the startup block and the loader stub ([init](../servers/init.md#the-startup-block)).
@@ -173,4 +176,4 @@ Built and attack-tested today:
   [SSH sessions](../testbench.md#sessions-and-the-loopback-server)).
 
 Not built: the VM's file operations and native launching on Redoubt, the steward server,
-`sshd` on the box, sessions and the agent.
+`sshd` on the box, `walfsd`, sessions and the agent.

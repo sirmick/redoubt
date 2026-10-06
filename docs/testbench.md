@@ -705,7 +705,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (26)</summary>
+<details><summary>Status: built · tested (27)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -730,6 +730,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::the_userland_pack_is_deterministic_and_stages_each_object_by_name
 - host:testbench::a_verified_partition_is_its_volume_then_its_tree
 - host:testbench::an_erofs_partition_is_its_stage_and_each_damage_is_corrupt_where_it_is
+- host:testbench::a_walfs_partition_is_its_stage_and_two_packs_are_the_same_bytes
 - host:testbench::the_manifest_pins_the_packs_root
 - host:testbench::a_signed_partition_ends_in_its_root_block_signed_deterministically
 - host:testbench::the_cases_volume_seed_is_the_development_seed
@@ -759,15 +760,16 @@ host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions ac
 A disk `recipe` (`image/disk.toml`) is packed by the code `./mkimage` runs (`testbench
 --pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as its `fs`
 says, holding its stage's tree: `littlefs`, a writable volume written through `littlefsd`'s own
-code, or `erofs`, a read-only volume written by `libs/erofs`'s writer
-([erofsd](servers/erofsd.md#the-packer)), so a case boots the disk the image ships.
+code; `erofs`, a read-only volume written by `libs/erofs`'s writer
+([erofsd](servers/erofsd.md#the-packer)); or `walfs`, a writable volume written by `libs/walfs`
+itself ([walfsd](servers/walfsd.md#the-packer)), so a case boots the disk the image ships.
 
-A recipe's littlefs or erofs partition may also generate files, for a case that needs many and not their
+A recipe's volume may also generate files, for a case that needs many and not their
 contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in the volume's root
 (as many digits as the last needs), all empty except `read`, which holds its own name and a
 newline. They sit beside the stage's tree, if there is one, and a name in both is refused.
 
-A littlefs or erofs partition may be verified, `verity = true`: it holds the largest volume that
+A volume may be verified, `verity = true`: it holds the largest volume that
 fits beside its hash tree, then the tree ([verityd](servers/verityd.md#the-tree)), and the pack says
 its root and data blocks. An erofs volume is followed in its range by zeros, which the tree covers
 too. A verified partition may be signed, `sign = { key = PATH, version = N }`: its last whole block

@@ -1,7 +1,8 @@
 //! Disks: a GPT of equal partitions for a case's `[disk]`, and a disk recipe (`image/disk.toml`)
 //! packed whole, its partition table by `blkd`'s builder, each littlefs partition by `littlefsd`'s
-//! own packer and each EROFS partition by `libs/erofs`'s writer (docs/testbench.md, "Disks and
-//! network cards"; image/README.md). A partition the recipe marks `verity` holds the largest
+//! own packer, each EROFS partition by `libs/erofs`'s writer and each walfs partition by `libs/walfs`
+//! itself (docs/testbench.md, "Disks and network cards"; image/README.md; docs/servers/walfsd.md, "The
+//! packer"). A partition the recipe marks `verity` holds the largest
 //! volume that fits beside its hash tree, and the tree after it (docs/servers/verityd.md, "The
 //! tree"); its root and block count are what a manifest pins. One the recipe also `sign`s ends in
 //! a root block instead, its N, version and root signed under the volume domain with a seed file
@@ -36,18 +37,19 @@ pub struct Recipe {
 pub struct Partition {
     /// The volume's name, as the manifest's `volumes` entry names it.
     pub name: String,
-    /// What the partition holds: `littlefs`, a writable volume; `erofs`, a read-only one; or, for
-    /// a case, `noise`: the same pseudo-random bytes every time, which no filesystem mounts.
+    /// What the partition holds: `littlefs`, a writable volume; `erofs`, a read-only one; `walfs`,
+    /// a writable volume in Redoubt's own format; or, for a case, `noise`: the same pseudo-random
+    /// bytes every time, which no filesystem mounts.
     pub fs: String,
-    /// For `littlefs` or `erofs`, the directory whose tree the volume holds, relative to the
+    /// For a volume (all but `noise`), the directory whose tree the volume holds, relative to the
     /// workspace root.
     /// A userland disk's (a recipe with `objects`) is where `--pack-disk` stages them, and is left
     /// out where only the bench packs it, from its own staging.
     pub stage: Option<PathBuf>,
-    /// For `littlefs` or `erofs`, files made for the pack in the volume's root, beside the
+    /// For a volume, files made for the pack in the volume's root, beside the
     /// stage's tree.
     pub generated: Option<Generated>,
-    /// For `littlefs` or `erofs`, a verified volume: the volume is followed by its hash tree, and
+    /// For a volume, a verified volume: the volume is followed by its hash tree, and
     /// the pack says its root and block count, which the manifest pins.
     #[serde(default)]
     pub verity: bool,
@@ -137,7 +139,7 @@ impl Recipe {
         ensure!(
             recipe.objects.is_none()
                 || matches!(&recipe.partition[..], [p] if p.fs != "noise" && p.generated.is_none()),
-            "{}: objects are one littlefs or erofs partition's stage, with nothing generated",
+            "{}: objects are one volume's stage, with nothing generated",
             path.display()
         );
         for p in &recipe.partition {
@@ -148,7 +150,7 @@ impl Recipe {
                 p.name
             );
             match p.fs.as_str() {
-                "littlefs" | "erofs" => {
+                "littlefs" | "erofs" | "walfs" => {
                     let (stage, generated) = (p.stage.is_some(), p.generated.as_ref());
                     ensure!(
                         stage || generated.is_some() || recipe.objects.is_some(),
@@ -180,7 +182,7 @@ impl Recipe {
                 ),
                 fs => {
                     bail!(
-                        "{}: partition {}: fs {fs:?} is not littlefs, erofs or noise",
+                        "{}: partition {}: fs {fs:?} is not littlefs, erofs, walfs or noise",
                         path.display(),
                         p.name
                     )
@@ -250,7 +252,7 @@ fn noise(bytes: &mut [u8]) {
 }
 
 /// The disk `recipe` describes, its stages read under `root`, and each verified partition as
-/// packed, in table order; `stage`, if given, stands in for every littlefs and erofs partition's own.
+/// packed, in table order; `stage`, if given, stands in for every volume's own.
 pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u8>, Vec<Verified>)> {
     ensure!(recipe.size_kib > 0, "a disk of no size");
     let sectors = recipe.size_kib * 1024 / SECTOR;
@@ -313,6 +315,8 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
                 volume.resize((data * SECTOR) as usize, 0);
                 volume
             }
+            "walfs" => pack_walfs(data / SECTORS_PER_BLOCK, &staged)
+                .with_context(|| format!("packing {}", p.name))?,
             _ => {
                 let entries: Vec<pack::Entry> = staged
                     .iter()
@@ -363,6 +367,59 @@ fn pack_erofs(staged: &[(String, Option<Vec<u8>>)]) -> Result<Vec<u8>> {
         .collect();
     erofs::pack(&entries, |data| sha2::Sha256::digest(data).into())
         .map_err(|e| anyhow::anyhow!("{}: {}", e.path, e.why))
+}
+
+/// A walfs volume in memory, for the packer: whole blocks, and a `sync` that has nothing to do.
+struct Ram(Vec<u8>);
+
+impl walfs::BlockDevice for Ram {
+    fn block_count(&self) -> u32 { (self.0.len() / BLOCK) as u32 }
+
+    fn read(&mut self, block: u32, buf: &mut walfs::Block) -> Result<(), walfs::Error> {
+        let at = block as usize * BLOCK;
+        buf.copy_from_slice(self.0.get(at..at + BLOCK).ok_or(walfs::Error::Io)?);
+        Ok(())
+    }
+
+    fn write(&mut self, block: u32, data: &walfs::Block) -> Result<(), walfs::Error> {
+        let at = block as usize * BLOCK;
+        self.0.get_mut(at..at + BLOCK).ok_or(walfs::Error::Io)?.copy_from_slice(data);
+        Ok(())
+    }
+
+    fn sync(&mut self) -> Result<(), walfs::Error> { Ok(()) }
+}
+
+/// `staged` as a walfs volume of `blocks` blocks, written by `libs/walfs` itself: formatted with
+/// an inode for every 16 blocks (or for every entry, if more), then each directory made and each
+/// file created and written, in the stage's order, every mtime 0.
+fn pack_walfs(blocks: u64, staged: &[(String, Option<Vec<u8>>)]) -> Result<Vec<u8>> {
+    let blocks = u32::try_from(blocks).context("a volume past walfs's 2^32 blocks")?;
+    let mut geometry = walfs::Geometry::for_blocks(blocks);
+    geometry.inode_count = geometry.inode_count.max((staged.len() as u32 + 2).next_multiple_of(32));
+    let fail = |path: &str, e: walfs::Error| anyhow::anyhow!("{path}: {e}");
+    let mut ram = Ram(vec![0; blocks as usize * BLOCK]);
+    walfs::Filesystem::format(&mut ram, geometry).map_err(|e| fail("format", e))?;
+    let mut fs = walfs::Filesystem::mount(&mut ram).map_err(|e| fail("mount", e))?;
+    for (path, data) in staged {
+        let at = format!("/{path}");
+        match data {
+            None => fs.mkdir(&at).map_err(|e| fail(path, e))?,
+            Some(data) => {
+                let o = walfs::OpenOptions { write: true, create: true, ..Default::default() };
+                let h = fs.open(&at, o).map_err(|e| fail(path, e))?;
+                let wrote = fs.write(h, data);
+                fs.close(h).map_err(|e| fail(path, e))?;
+                match wrote {
+                    Ok(n) if n == data.len() => {}
+                    Ok(_) | Err(walfs::Error::NoSpace) => bail!("{path}: the volume is full"),
+                    Err(e) => return Err(fail(path, e)),
+                }
+            }
+        }
+    }
+    drop(fs);
+    Ok(ram.0)
 }
 
 /// Where the inode at `path` (`""` the root) starts in the EROFS `volume`, and the inode, found
@@ -646,6 +703,52 @@ mod tests {
         std::fs::write(&path, noisy).unwrap();
         assert!(Recipe::load(&path).is_err(), "noise is never verified");
         std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A `walfs` partition is the stage as `libs/walfs` itself writes it, read back whole and sound
+    /// by the same crate; two packs of one stage are the same bytes; a stage that does not fit is
+    /// refused.
+    #[test]
+    fn a_walfs_partition_is_its_stage_and_two_packs_are_the_same_bytes() {
+        let dir = stage("walfs");
+        let mut big = vec![0u8; 200_000];
+        noise(&mut big);
+        std::fs::write(dir.join("big"), &big).unwrap();
+        std::fs::write(dir.join("etc/empty"), b"").unwrap();
+        let recipe: Recipe = toml::from_str(
+            "size_kib = 2048\n[[partition]]\nname = \"home\"\nfs = \"walfs\"\nstage = \"x\"\n",
+        )
+        .unwrap();
+        let disk = pack_disk(&recipe, Path::new("/"), Some(&dir)).unwrap();
+        assert_eq!(disk, pack_disk(&recipe, Path::new("/"), Some(&dir)).unwrap());
+        let at = (FIRST_USABLE * SECTOR) as usize;
+        let sectors = (disk.len() - 2 * at) / SECTOR as usize;
+        let mut ram = Ram(disk[at..at + sectors / SECTORS_PER_BLOCK as usize * BLOCK].to_vec());
+        let mut fs = walfs::Filesystem::mount(&mut ram).unwrap();
+        assert!(fs.check().unwrap().is_empty());
+        for (path, data) in tree(&dir).unwrap() {
+            let at = format!("/{path}");
+            let m = fs.stat(&at).unwrap();
+            assert_eq!(m.mtime, 0, "{path}");
+            let Some(data) = data else {
+                assert_eq!(m.kind, walfs::FileType::Dir, "{path}");
+                continue;
+            };
+            let h = fs.open(&at, walfs::OpenOptions { read: true, ..Default::default() }).unwrap();
+            let mut read = vec![0u8; data.len() + 1];
+            let mut got = 0;
+            while let Ok(n @ 1..) = fs.read(h, &mut read[got..]) {
+                got += n;
+            }
+            assert_eq!(&read[..got], &data[..], "{path}");
+        }
+        let mut names = 0;
+        fs.read_dir("/", |_| names += 1).unwrap();
+        assert_eq!(names, 3, "big, etc and motd");
+        drop(fs);
+        std::fs::write(dir.join("huge"), vec![1u8; 3 << 20]).unwrap();
+        assert!(pack_disk(&recipe, Path::new("/"), Some(&dir)).is_err(), "3 MiB does not fit 2 MiB");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

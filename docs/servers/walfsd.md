@@ -348,7 +348,11 @@ written) and `mutate` (a valid volume with bytes changed, its hashes forged or n
 
 ### The packer
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (1)</summary>
+
+- host:testbench::a_walfs_partition_is_its_stage_and_two_packs_are_the_same_bytes
+
+</details>
 
 The bench's disk packer writes a walfs volume from a staged directory (`fs = "walfs"` in a disk
 recipe), with `libs/walfs`'s own code on a RAM device: `format`, with an inode for every 16
