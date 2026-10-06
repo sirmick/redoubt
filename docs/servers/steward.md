@@ -264,9 +264,11 @@ embedder's half, and stay mutations of the model's embedder.
 So does an item written by a session without exactly its labels (`PolicyWriteUp`): that check is
 the volume's ([R25](serving.md#r25-the-label-check)), and no steward event.
 
-The request binding hash is SHA-256 over the request's canonical encoding, through the
-workspace's vendored `sha2`. It is the core's one cryptographic function. It binds content and
-signs nothing, so the steward still holds no key.
+The request binding hash is SHA-256 over the request's canonical encoding, through the box's
+own `libs/sha256`, which `keyd` and `init` use too: one function with no dependencies
+([tenet 5](../TENETS.md#5-dependencies-are-part-of-the-trusted-computing-base)). It is the
+core's one cryptographic function, with a login key's id. It binds content and signs nothing,
+so the steward still holds no key.
 
 #### Two embedders and a reference
 

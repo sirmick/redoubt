@@ -14,6 +14,7 @@ members = [
   "libs/paging",
   "libs/rt",
   "libs/rt/fake",
+  "libs/sha256",
   "libs/signing",
   "libs/stride",
   "libs/steward",

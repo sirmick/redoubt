@@ -1,18 +1,26 @@
-//! SHA-256 (FIPS 180-4), for the SSH exchange hash of RFC 4253 §8 (`curve25519-sha256`,
-//! RFC 8731). That hash is the one place `keyd` needs a hash it does not get from
-//! `ed25519-compact` (which brings SHA-512 for Ed25519 itself).
+//! SHA-256 (FIPS 180-4), the one implementation the trusted servers share: `keyd` for the SSH
+//! exchange hash of RFC 4253 §8 (`curve25519-sha256`, RFC 8731) and its audit digest, and the
+//! steward's policy core for its request binding hash and a login key's id, which `init` computes
+//! too (servers/steward.md, "The manifest lines").
 //!
 //! Written here rather than taken from a crate (TENETS.md 5: reuse when the crate is small,
 //! `no_std`, pure Rust and we have read it, "otherwise we write the 50 lines"). The maintained
 //! option, `sha2`, is fine code but arrives with `digest`, `block-buffer`, `crypto-common`,
 //! `generic-array`/`typenum`, `cfg-if` and `cpufeatures` behind it, which is six more crates
-//! inside the process that holds every private key on the box. This is one function with one
-//! constant table and no dependencies.
+//! inside the processes that hold every private key on the box, start every server, and decide
+//! every session. This is one function with one constant table and no dependencies.
 //!
 //! **Constant time.** There is no branch and no memory index that depends on the *contents* of
 //! the input: the compression function is straight-line 32-bit arithmetic over a fixed
 //! 64-round loop, and the only branches are on how many bytes are buffered, which is a length.
-//! Lengths here are public (`keyd` replies with a fixed-size signature whatever the input).
+//! Lengths are public wherever it is used (`keyd` replies with a fixed-size signature whatever
+//! the input).
+
+#![no_std]
+#![forbid(unsafe_code)]
+
+#[cfg(test)]
+extern crate alloc;
 
 /// The 64 round constants: the first 32 bits of the fractional parts of the cube roots of the
 /// first 64 primes (FIPS 180-4, §4.2.2).
