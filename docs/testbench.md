@@ -458,7 +458,13 @@ the program prints its window, the CPU its count stands for and its bounds in th
 (`SHARE <name> <start> <end> <cpu> <min> <max>`), and `sched_oracle` judges it of the window net of
 the audit time inside it (`sched-budget-churn`'s victim, whose attacker destroys a budget each
 slice; `sched-exit-churn`'s, whose attacker's processes start and end; `sched-timer-flood`'s,
-beside deadlines; `sched-carve-return`'s, from the return of a carve). A case that judges a share
+beside deadlines; `sched-carve-return`'s, from the return of a carve). An audit runs beside the
+work a share counts, never inside it, so the credit stops at the window less the share's CPU and
+a net share is never past the whole (`sched-budget-churn`'s deadline victim, which counted
+1,960,657 µs of a 2 s window holding 49,077 µs of audits, read 1004 before the cap). The residual:
+the program's calibrated CPU count runs at least 0.3% (rv64) and 0.65% (rv32) over the work it
+measures, a bias in every share's CPU that the cap now hides behind its `credited` note; the
+calibration is the likely source, and it is a follow-up. A case that judges a share
 in its program has no audit inside its window. An audit that never ends, ends without beginning
 or runs inside a destruction fails the check. The oracle subtracts only what the trace shows it: a
 kernel built with `audit-unstamped`, which leaves the audit after a destruction unstamped, misses

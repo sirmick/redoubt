@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 173
+revision = 182
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -998,6 +998,36 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["BEAM6"]
-  body = "Found by BEAM6's breakdown: decoded code is 7,180 pages on rv64 at the shell's prompt (242,345 instructions of 32 bytes, 521,551 operands of 24 in one Vec per instruction, 82 % of what the VM accounts for). Design measured by BEAM6: a flat per-module operand array, `Instr` = op, count, start (8 bytes), `Arg::List` boxed so `Arg` is 16 bytes; the interpreter reads operands through its one accessor (`interp.rs` `arg(ins, i)`); the loader, the native-body patch and `on_load_entry` are the other users. About 2,510 pages of code either width, saving about 4,670 on rv64 and 1,165 on rv32. Tier A, size M. Done when `beamlet-footprint`'s table shows it on both widths, every limits and boot case passes, and the manifest's budget follows. Open: QEMU's default 256 MiB (about 2,700 pages) is still out of reach with it; code kept in its on-disk form or loaded per function is the question that package would answer. Ruling: .wash/local/BEAM6-implementer.md 'Checkpoint 1 ruling'."
+  body = "Brief: .wash/local/BEAM8-implementer.md. Found by BEAM6's breakdown: decoded code is 7,180 pages on rv64 at the shell's prompt (242,345 instructions of 32 bytes, 521,551 operands of 24 in one Vec per instruction, 82 % of what the VM accounts for). Design: a flat per-module operand array, `Instr` = op, count, start (8 bytes), `Arg::List` boxed or indexed so `Arg` is 16 bytes, pinned by size_of asserts on both widths; the interpreter reads operands through its one accessor (`interp.rs` `arg(ins, i)`); the loader, the native-body patch and `on_load_entry` go through the same view; the .beam loader's input and refusals, eager loading, literals, atoms, heaps and the interpreter's semantics unchanged. About 2,510 pages of code either width, saving about 4,670 on rv64 and 1,165 on rv32. Tier A, size M. Done when `beamlet-footprint`'s table shows it on both widths, every limits and boot case passes, and the manifest's budget follows by the six-run rule. Open: QEMU's default 256 MiB (about 2,700 pages) is still out of reach with it; code kept in its on-disk form or loaded per function is the question that package would answer."
+  state = "active"
+  revision = 177
+  overrides = ["2026-10-06: started by Orchestrator before M1 (reported): BEAM8's need BEAM6 is merged; M1 is reported, the plan's state for every active package"]
+
+[[node]]
+  id = "B13"
+  title = "A share judged net of audits can exceed the whole: sched-budget-churn's deadline clause reads 1003 of 1000 and fails at the 1 ms slice"
+  template = "package"
+  parent = "M1"
+  body = "Found by the train bench on main after SCHED1's merge (rv64, icount shift=3, deterministic): sched-budget-churn's 'share deadline: net 1003, gross 980 of 1000: target missed (450 <= share <= 1000)'. The victim's gross share is 980; the audit correction (B5: shares net of the checked build's audits, 46,022 us here) lifts it past the whole, and the clause's upper bound is the whole. At 1 ms the audits are a larger fraction of the window, so the correction's rounding shows. Nothing is unfair: a victim at or above 1000 means the churner gained nothing, which is the claim. Size S, Tier A bench. Fix the arithmetic, not the bound: the net share of a window cannot exceed the whole (clamp the correction at the window less the other budgets' net work, or compute net shares from net totals so they sum to 1000), with a host test on the oracle's share arithmetic that reproduces 1003 from the recorded numbers and reads 1000 after; state the rule on docs/testbench.md where B5's net-of-audits sentence is. Gate: sched-budget-churn both widths, the five sched share cases rv64, the oracle host tests."
+  state = "done"
+  revision = 182
+
+[[node]]
+  id = "B14"
+  title = "The share fixtures' calibrated CPU count runs over the work it measures: find the bias in the calibration"
+  template = "package"
+  parent = "M1"
+  needs = ["B13"]
+  body = "Found by B13's review: the oracle's net share is cpu*1000/(window - credited audits); with the credit now capped at the window less the share's CPU (B13), the fact that the program's calibrated CPU count exceeds the work by >= 0.3 % on rv64 and >= 0.65 % on rv32 (sched-budget-churn's deadline variant: 1,960,670 counted of a 2,000,000 window with 46-49 ms of audits; rv32 71,097 us audits, 58,089 credited) is hidden behind the report's 'credited N' and biases every SHARE's cpu high by that much. Size S, Tier A bench. Find the source in the fixtures' calibration (tests/programs' share programs: the loop count per unit of time at startup under the 1 ms slice), correct it or state the bias as a measured constant the oracle subtracts, with a host test and the page sentence beside B5's and B13's."
   state = "todo"
-  revision = 156
+  revision = 179
+
+[[node]]
+  id = "PACK1"
+  title = "The system's boot modules in one pack: beamlet reads them in one sequential read, not 96 lookups"
+  template = "package"
+  parent = "M1"
+  needs = ["BOOT1"]
+  body = "Owner's package (text: .wash/local/PACK1-owner.md). Tier A (beamlet's platform, mkimage, the bench), size S. BOOT1's profile: 1,016 s guest to the prompt verified (535 s unverified), 99 % in the VM's 96 lazy module loads: 77,710 block reads of 673 distinct blocks, 97 % re-walking the root directory. mkimage emits one pack of the boot module set (raw .beam bytes behind an index of name, offset, length; deterministic, sorted by name); it lives inside the signed root (verified volume entry or bootfsd bundle entry: the Architect picks; trust unchanged, R75 holds, never written at run time); beamlet reads it once at VM start in one read into memory charged to the VM and locate_module consults it before the code path; a module not in the pack loads per file as today; no change to decoded representation, loader checks or lazy-load semantics; the pack's bytes released once decoded unless keeping them is shown cheaper (BEAM6's second-copy question: coordinate). Per VM: no page sharing, no steward cache, no snapshot, no per-profile pack (decided elsewhere; the docs say so). Orthogonal to EROFS1; rebases onto whichever merges first. Verdict: boot-profile and boot-profile-unverified with the pack, numbers and 9P/block counts on beamlet.md beside the baseline; target under 30 s guest verified on littlefs (floor ~16 s; exact figure at checkpoint 1); a module outside the pack still loads; a bad pack entry fails the VM's start cleanly; beamlet-footprint's scan rises by at most the pack's size. Checkpoint 1 after the placement decision with the measured floor; checkpoint 2 only if the target is missed."
+  state = "active"
+  revision = 181

@@ -37,7 +37,8 @@
 //! time inside each window, judges the net p50 and p99 against the case's bounds
 //! (`deadline_notice_p99_us=40000`), and reports the audit time beside each. A share is a target
 //! too: the program prints its window, the CPU its count stands for and its bounds (`SHARE`), and
-//! this check judges it of the window net of the audit time inside it. An audit unpaired, or
+//! this check judges it of the window net of the audit time inside it, a credit that stops at the
+//! window less the share's CPU, so a net share is never past the whole. An audit unpaired, or
 //! inside a destruction (R10's own window, which then subtracts nothing), fails the check.
 //!
 //! Each process's threads ending, the pumps after them included, is bracketed by `T` and `t`
@@ -1761,7 +1762,8 @@ fn shares(log: &str) -> Result<Vec<Share<'_>>, String> {
 /// interrupt that found another budget's wait ended early inside that share's window. A
 /// `walk-trace` kernel's walks may each be bounded, `pump_max_us=N`, `expiry_max_us=N` and
 /// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99. Every window a target
-/// or a share judges has the checked build's audit time inside it subtracted; R10's has none.
+/// or a share judges has the checked build's audit time inside it subtracted (a share's up to the
+/// window less its CPU); R10's has none.
 /// `round` requires the budget the program marks to run before any other budget is picked twice
 /// ([`check_round`]).
 pub fn run(log: &str, args: &str) -> Result<String, String> {
@@ -1963,13 +1965,18 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         let stale_missed = stale_in.contains(&s.name) && stale == 0;
         missed |= stale_missed;
         let inside = audit_inside(&sum.audits, start, end);
-        let (gross, net) = (s.cpu * 1000 / (end - start), s.cpu * 1000 / (end - start - inside).max(1));
+        // The audits run beside the counted work, never inside it, so the net window holds at
+        // least the CPU counted in it: the credit stops there, and the correction never lifts a
+        // share past the whole.
+        let credit = inside.min((end - start).saturating_sub(s.cpu));
+        let (gross, net) = (s.cpu * 1000 / (end - start), s.cpu * 1000 / (end - start - credit).max(1));
         let (min, max) = s.bounds;
         let met = (min..=max).contains(&net);
         missed |= !met;
         lines.push(format!(
-            "share {}: net {net}, gross {gross} of 1000, audits {inside} µs, {} timer interrupts nobody's, {stale} finding another budget's wait ended early{}: target {} ({min} <= share <= {max})",
+            "share {}: net {net}, gross {gross} of 1000, audits {inside} µs{}, {} timer interrupts nobody's, {stale} finding another budget's wait ended early{}: target {} ({min} <= share <= {max})",
             s.name,
+            if credit < inside { format!(" (credited {credit}, the window less the share's CPU)") } else { String::new() },
             sum.timer_empty.iter().filter(|t| (start..end).contains(*t)).count(),
             if stale_missed { " (none, but the case requires some)" } else { "" },
             if met { "met" } else { "missed" }
@@ -3129,6 +3136,19 @@ mod tests {
         // never saw.
         let unstamped = trace(&[(2, 'W', 1, 5), (2, 'K', 1, 5)]) + "SHARE victim 100 300 88 450 1000\n";
         assert!(run(&unstamped, "").is_err_and(|e| e.contains("net 440, gross 440")));
+        // sched-budget-churn's deadline victim on rv64: 1,960,657 µs counted in a 2 s window that
+        // held 49,077 µs of audits (gross 980). Netting all of them read 1004 of 1000; the credit
+        // stops at the window less the counted CPU, so the share is the whole.
+        let churn = trace(&[(1, 'U', 1, 1_000), (1, 'V', 1, 50_077), (2, 'W', 1, 5), (2, 'K', 1, 5)])
+            + "SHARE deadline 0 2000000 1960657 450 1000\n";
+        let met = run(&churn, "");
+        assert!(
+            met.as_ref().is_ok_and(|s| s.contains(
+                "share deadline: net 1000, gross 980 of 1000, audits 49077 µs (credited 39343, the window less the share's CPU),"
+            )),
+            "{met:?}"
+        );
+        assert_eq!(1_960_657 * 1000 / (2_000_000 - 49_077), 1004);
         // Malformed: a field short or over, an empty window, bounds reversed or past the whole.
         for bad in [
             "SHARE victim 100 300 88 450\n",
