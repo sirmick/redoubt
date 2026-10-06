@@ -1,0 +1,6 @@
+description = "littlefsd builds for both widths (rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# Builds the library and `littlefsd` binary. littlefsd under init, on the image's disk, is not here; the
+# host tests in `servers/littlefsd` cover what it serves.
+package = "redoubt-littlefsd"

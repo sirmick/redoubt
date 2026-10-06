@@ -1,0 +1,36 @@
+description = "A confined boot with a labelled volume (servers/init.md, \"The confinement check\"; R34): alice works under alice-secrets, the volume carries it, and blkd, littlefsd and the one client carry it too, while keyd and consoled stay unlabelled and shared, used only by unlabelled domains; init accepts the manifest, littlefsd, carrying the volume's labels, formats and writes through blkd, the client writes a file, and its next start reads it back unchanged. The client cannot write the unlabelled console, so its verdicts are exit codes init reports"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and one labelled littlefsd-client.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+# No reporter: every verdict is init's bare line. The writer's codes are
+# tests/littlefsd-programs/src/bin/littlefsd-client.rs's verdict: 10 wrote, 11 read back unchanged.
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started littlefsd, console [0-9a-f]{16}$',
+    '^init: writer \(PID [0-9]+\) exited, code 10$',
+    '^init: writer \(PID [0-9]+\) exited, code 11$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: writer \(PID [0-9]+\) exited, code ([0-9]|1[2-9]|[2-9][0-9]|[0-9]{3,})$',
+    '^init: .* (faulted|was killed)',
+    '^init: (keyd|consoled|blkd|littlefsd) .*exited',
+    'init: rebooting',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/littlefsd/confined.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1

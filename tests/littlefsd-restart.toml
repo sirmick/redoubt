@@ -1,0 +1,44 @@
+description = "`littlefsd` is killed (a test feature triggered once) and `init` restarts it; the restarted `littlefsd` mounts with a boot's checks; an old connection's call gets `Dead`, and a fresh one reads the files."
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, littlefsd built with its test-only feature
+# restart-probe, and littlefsd-client, which walks to the probe once.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd", features = ["restart-probe"] },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started littlefsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    # 9: PROBE_EXIT (servers/littlefsd/src/server.rs). An exit holding the client's call is faulted,
+    # with the code given (kernel/processes.md).
+    '^init: littlefsd \(PID [0-9]+\) faulted, code 9, serving nobody, labels none; blamed on nobody: no steward$',
+    '^init: restarted littlefsd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client.s call got Dead, and a fresh connection read kept back$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+# littlefsd's one exit is the point; nothing else may end, and the machine may not reboot.
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|blkd|client) .*(exited|faulted|was killed)',
+    '^init: littlefsd .*(exited|was killed)',
+    '^init: restarted (keyd|consoled|blkd|client)\b',
+    'init: rebooting',
+    'littlefsd-client TEST FAILED',
+]
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/littlefsd/boot.json" }
+servers = [{ name = "client", args = ["restart", "littlefsd:data", "littlefsd-restart-probe"] }]
+
+[disk]
+size_kib = 4096
+partitions = 1

@@ -9,7 +9,7 @@ programs = [
     { package = "redoubt-blkd", bin = "blkd" },
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
-    { package = "redoubt-fsd", bin = "fsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
 ]
 timeout_secs = 30
 expect = ['^init: refused the boot: servers\[0\]\.stack_pages: a stack is 1 to 128 pages and smaller than its budget$']

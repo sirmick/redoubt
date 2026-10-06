@@ -1,8 +1,0 @@
-# fsd-large-directory's disk: a GPT whose one partition is a littlefs volume holding 600 files in
-# its root, f000 to f599, packed through fsd's own code (tools/testbench/src/disk.rs).
-size_kib = 4096
-
-[[partition]]
-name = "data"
-fs = "littlefs"
-generated = { files = 600, read = "f000" }

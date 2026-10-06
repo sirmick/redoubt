@@ -1,16 +1,16 @@
 description = "beamlet runs on the machine under init (docs/userland/beamlet.md, \"beamlet on Redoubt\"): init starts the program beamlet with its own console from consoled and a connection to bootfsd; the VM reads its modules from /boot, runs one that writes a line to the console and returns ok, and beamlet exits with code 0"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# The real init, keyd, consoled, bootfsd, blkd, fsd and beamlet, built from userland/otp's own
+# The real init, keyd, consoled, bootfsd, blkd, littlefsd and beamlet, built from userland/otp's own
 # workspace; the test module and the one OTP module it needs (io) are files on the userland disk,
-# served by fsd:system.
+# served by littlefsd:system.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
     { package = "redoubt-consoled", bin = "consoled" },
     { package = "redoubt-bootfsd", bin = "bootfsd" },
     { package = "redoubt-blkd", bin = "blkd" },
-    { package = "redoubt-fsd", bin = "fsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
 ]
 timeout_secs = 60

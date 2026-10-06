@@ -1,5 +1,4 @@
 {
-  "confined": true,
   "devices": [
     {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
     {"name": "disk0", "base": "268468224", "irq": 8, "dma": true}
@@ -28,25 +27,33 @@
       "program": "blkd",
       "budget": {"pages": "512", "processes": 1, "weight": 1000},
       "devices": [{"device": "disk0", "as": "disk"}],
-      "labels": ["alice-secrets"],
       "receives": ["blkd"], "args": ["endpoint=blkd"]
     },
     {
-      "name": "fsd",
-      "program": "fsd",
+      "name": "littlefsd",
+      "program": "littlefsd",
       "budget": {"pages": "1024", "processes": 1, "weight": 100},
       "volume": "data",
       "labels": ["alice-secrets"],
-      "receives": ["fsd:data"],
-      "args": ["endpoint=fsd:data", "buckets=4"]
+      "receives": ["littlefsd:data"],
+      "args": ["endpoint=littlefsd:data", "buckets=4"]
     },
     {
       "name": "writer",
-      "program": "fsd-client",
+      "program": "littlefsd-client",
       "budget": {"pages": "256", "processes": 1, "weight": 100},
       "labels": ["alice-secrets"],
-      "handed": [{"endpoint": "fsd:data", "badge": "7"}],
-      "args": ["labelled", "fsd:data"]
+      "receives": ["writer"],
+      "handed": [{"endpoint": "littlefsd:data", "badge": "7"}, {"endpoint": "outsider", "badge": "1"}],
+      "args": ["labelled", "littlefsd:data", "writer", "outsider"]
+    },
+    {
+      "name": "outsider",
+      "program": "littlefsd-client",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["outsider"],
+      "handed": [{"endpoint": "littlefsd:data", "badge": "8"}, {"endpoint": "writer", "badge": "1"}],
+      "args": ["outsider", "littlefsd:data", "outsider", "writer"]
     }
   ],
   "labels": [
@@ -57,8 +64,7 @@
       "name": "alice",
       "account": "1001",
       "budget": {"pages": "4096", "processes": 1, "weight": 100},
-      "ssh_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g"],
-      "label_sets": [{"labels": ["alice-secrets"], "budget": {"pages": "64", "processes": 1, "weight": 100}}]
+      "ssh_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g"]
     }
   ]
 }

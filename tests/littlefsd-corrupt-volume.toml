@@ -1,0 +1,32 @@
+description = "A volume of noise is served as corrupt (servers/littlefsd.md, \"Volumes, connections and labels\", R49): init starts blkd and a littlefsd for a partition holding noise; littlefsd does not format it, says on its console that it serves the volume as corrupt, and stays up; a client handed a root badge at littlefsd is refused at each of three attaches by the same instance, and the boot goes on with no restart"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and littlefsd-client, which holds no Reset right, so
+# the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started littlefsd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] littlefsd: the volume does not mount, and is served as corrupt$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client was refused at each of 3 attaches$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+# A corrupt volume must not become a restart loop: nothing ends and nothing restarts.
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'littlefsd-client TEST FAILED']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/littlefsd/boot.json" }
+servers = [{ name = "client", args = ["corrupt", "littlefsd:data"] }]
+
+[disk]
+recipe = "tests/data/littlefsd/noise-disk.toml"

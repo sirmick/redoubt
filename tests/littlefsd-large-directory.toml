@@ -1,0 +1,32 @@
+description = "A large directory lists quickly, and littlefsd answers others meanwhile (servers/littlefsd.md, \"A directory is listed a window at a time\"): the disk is packed from a recipe whose volume holds 600 files in its root, generated for the pack; a lister lists the root through littlefsd, each entry once, in under 2 s from its first read to its last; after its first read, a second client handed its own badge at the same littlefsd reads a file, and the listing goes on only once that read was answered"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and two littlefsd-clients.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+# The order is events', not times': the reader reads only once the lister's first read is
+# answered, and the lister reads on only once the reader sends back. The listing's time is the
+# kernel's clock, in microseconds: at most 1,999,999.
+expect = [
+    '^init: the manifest is checked: 6 servers, bound \d+ pages$',
+    '^init: started littlefsd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client read /f000 during the listing in \d+ us$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client listed 600 in 1?\d{1,6} us, in \d+ reads$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'littlefsd-client TEST FAILED']
+reporter = "lister"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/littlefsd/large-directory.json" }
+
+[disk]
+recipe = "tests/data/littlefsd/large-directory-disk.toml"

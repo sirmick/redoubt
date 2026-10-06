@@ -1,4 +1,4 @@
-description = '64 reads outstanding on one fsd connection from one thread with no waiter (servers/serving.md, "Multiplexed connections"; userland/native.md, "Many requests at once"): under init, aio-reader writes /aio, sends 64 reads in one batch and leaves them uncollected while a second program reads /aio by one call and is answered; then its own completion calls bring all 64, each with its own bytes'
+description = '64 reads outstanding on one littlefsd connection from one thread with no waiter (servers/serving.md, "Multiplexed connections"; userland/native.md, "Many requests at once"): under init, aio-reader writes /aio, sends 64 reads in one batch and leaves them uncollected while a second program reads /aio by one call and is answered; then its own completion calls bring all 64, each with its own bytes'
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The real init, the servers the manifest names, and two aio-readers: the burst, which reports, and
@@ -8,13 +8,13 @@ programs = [
     { package = "redoubt-keyd", bin = "keyd" },
     { package = "redoubt-consoled", bin = "consoled" },
     { package = "redoubt-blkd", bin = "blkd" },
-    { package = "redoubt-fsd", bin = "fsd" },
-    { package = "redoubt-fsd-programs", bin = "aio-reader" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-littlefsd-programs", bin = "aio-reader" },
 ]
 timeout_secs = 90
 expect = [
     '^init: the manifest is checked: 6 servers, bound \d+ pages$',
-    '^init: started fsd, console [0-9a-f]{16}$',
+    '^init: started littlefsd, console [0-9a-f]{16}$',
     '^init: started burst, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] aio-reader second: read answered during the burst$',
     '^\[con [0-9a-f]{16}\] aio-reader burst: 64 of 64 reads answered on 1 connection\(s\); the second program read during the burst; 1 thread, 0 waiters$',
@@ -26,7 +26,7 @@ reporter = "burst"
 [[file]]
 name = "manifest"
 from = { path = "tests/data/aio/boot.json" }
-servers = [{ name = "burst", args = ["burst", "fsd:data", "burst", "second"] }]
+servers = [{ name = "burst", args = ["burst", "littlefsd:data", "burst", "second"] }]
 
 [disk]
 size_kib = 4096

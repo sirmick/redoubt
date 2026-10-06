@@ -4,7 +4,8 @@
     {"name": "disk0", "base": "268468224", "irq": 8, "dma": true}
   ],
   "volumes": [
-    {"name": "data", "partition": 0}
+    {"name": "a", "partition": 0},
+    {"name": "b", "partition": 1}
   ],
   "servers": [
     {
@@ -30,28 +31,27 @@
       "receives": ["blkd"], "args": ["endpoint=blkd"]
     },
     {
-      "name": "fsd",
-      "program": "fsd",
+      "name": "littlefsd:a",
+      "program": "littlefsd",
       "budget": {"pages": "1024", "processes": 1, "weight": 100},
-      "volume": "data",
-      "receives": ["fsd:data"],
-      "args": ["endpoint=fsd:data", "buckets=4"]
+      "volume": "a",
+      "receives": ["littlefsd:a"],
+      "args": ["endpoint=littlefsd:a", "buckets=4"]
     },
     {
-      "name": "lister",
-      "program": "fsd-client",
-      "budget": {"pages": "256", "processes": 1, "weight": 100},
-      "receives": ["lister"],
-      "handed": [{"endpoint": "fsd:data", "badge": "7"}, {"endpoint": "reader", "badge": "1"}],
-      "args": ["list", "fsd:data", "600", "lister", "reader"]
+      "name": "littlefsd:b",
+      "program": "littlefsd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "volume": "b",
+      "receives": ["littlefsd:b"],
+      "args": ["endpoint=littlefsd:b", "buckets=4"]
     },
     {
-      "name": "reader",
-      "program": "fsd-client",
+      "name": "client",
+      "program": "littlefsd-client",
       "budget": {"pages": "256", "processes": 1, "weight": 100},
-      "receives": ["reader"],
-      "handed": [{"endpoint": "fsd:data", "badge": "8"}, {"endpoint": "lister", "badge": "1"}],
-      "args": ["reader", "fsd:data", "/f000", "f000\n", "reader", "lister"]
+      "handed": [{"endpoint": "littlefsd:a", "badge": "7"}, {"endpoint": "littlefsd:b", "badge": "7"}],
+      "args": ["apart", "littlefsd:a", "littlefsd:b"]
     }
   ]
 }

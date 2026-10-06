@@ -30,19 +30,19 @@
       "receives": ["blkd"], "args": ["endpoint=blkd"]
     },
     {
-      "name": "fsd",
-      "program": "fsd",
+      "name": "littlefsd",
+      "program": "littlefsd",
       "budget": {"pages": "1024", "processes": 1, "weight": 100},
       "volume": "data",
-      "receives": ["fsd:data"],
-      "args": ["endpoint=fsd:data", "buckets=4"]
+      "receives": ["littlefsd:data"],
+      "args": ["endpoint=littlefsd:data", "buckets=4"]
     },
     {
       "name": "client",
-      "program": "fsd-client",
+      "program": "littlefsd-client",
       "budget": {"pages": "256", "processes": 1, "weight": 100},
-      "handed": [{"endpoint": "fsd:data", "badge": "7"}],
-      "args": ["boot", "fsd:data"]
+      "handed": [{"endpoint": "littlefsd:data", "badge": "7"}],
+      "args": ["boot", "littlefsd:data"]
     }
   ]
 }
