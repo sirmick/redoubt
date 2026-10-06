@@ -64,6 +64,8 @@ impl<R: Range> Blocks<R> {
 impl<R: Range> BlockDevice for Blocks<R> {
     fn read(&mut self, block: u32, off: u32, buf: &mut [u8]) -> Result<(), Error> {
         let first = self.first_sector(block, off, buf.len())?;
+        #[cfg(feature = "boot-stats")]
+        crate::stats::block_read(block, off, buf.len(), BLOCK);
         let skip = (off % SECTOR) as usize;
         let span = (skip + buf.len()).div_ceil(SECTOR as usize) * SECTOR as usize;
         self.range.read(first, &mut self.scratch[..span]).map_err(|_| Error::Io)?;

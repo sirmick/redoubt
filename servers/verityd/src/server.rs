@@ -41,6 +41,10 @@ pub enum Said {
     Refused(Refusal),
     /// A read did not check.
     Bad(Bad),
+    /// Test-only (`boot-stats`): the reads served so far and the volume's counts, at each power
+    /// of two of reads from 2^12.
+    #[cfg(feature = "boot-stats")]
+    Stats(u64, crate::volume::Counts),
 }
 
 impl fmt::Display for Said {
@@ -48,6 +52,12 @@ impl fmt::Display for Said {
         match self {
             Said::Refused(why) => write!(f, "verityd: the volume is refused: {why}"),
             Said::Bad(bad) => write!(f, "verityd: {bad}"),
+            #[cfg(feature = "boot-stats")]
+            Said::Stats(served, c) => write!(
+                f,
+                "verityd: boot-stats: reads {served}, data blocks checked {}, level-1 hits {}, blkd reads {}",
+                c.checked, c.hits, c.reads
+            ),
         }
     }
 }
@@ -65,6 +75,9 @@ pub struct Verityd<R> {
     /// bad block again and again gets one line.
     said: Option<Said>,
     last_bad: Option<Bad>,
+    /// Reads served (`boot-stats`).
+    #[cfg(feature = "boot-stats")]
+    served: u64,
 }
 
 impl<R: Range> Verityd<R> {
@@ -85,6 +98,8 @@ impl<R: Range> Verityd<R> {
             scratch,
             said,
             last_bad: None,
+            #[cfg(feature = "boot-stats")]
+            served: 0,
         }
     }
 
@@ -175,6 +190,13 @@ impl<R: Range> Verityd<R> {
             }
             at += n;
             s += (n / SECTOR as usize) as u64;
+        }
+        #[cfg(feature = "boot-stats")]
+        {
+            self.served += 1;
+            if self.served >= 1 << 12 && self.served.is_power_of_two() {
+                self.said = Some(Said::Stats(self.served, volume.counts()));
+            }
         }
         Ok(Answer::new(Reply::Read(ReadReply { data: &self.scratch[..bytes] })))
     }

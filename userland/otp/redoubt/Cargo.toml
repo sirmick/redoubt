@@ -18,6 +18,9 @@ redoubt-fake-kernel = { path = "../../../libs/rt/fake", optional = true }
 
 [features]
 fake = ["dep:redoubt-fake-kernel"]
+# Test-only, for the bench's boot-profile cases, and off in every default build: the start
+# module's line carries `[t=N]`, and the VM's lookups are counted and said at the prompt.
+boot-stats = []
 
 # beamlet on the machine, started by init (docs/userland/beamlet.md, "beamlet on Redoubt").
 [[bin]]

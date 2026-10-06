@@ -53,6 +53,10 @@ pub struct BlockServer<T: Transport> {
     /// region**: the device's bytes are copied here once, with a length `blkd` chose, so nothing
     /// the reply is built from can change underneath it (servers/blkd.md, "The DMA region").
     scratch: Vec<u8>,
+    /// Test-only (`boot-stats`): reads served and their sectors, and whether they are due to be
+    /// said, at each power of two of reads from 2^12.
+    #[cfg(feature = "boot-stats")]
+    stats: (u64, u64, bool),
 }
 
 impl<T: Transport> BlockServer<T> {
@@ -60,7 +64,21 @@ impl<T: Transport> BlockServer<T> {
     /// entry, in entry order, as [`crate::read_partitions`] returns it, and `labels` one per slot,
     /// as [`crate::args::Args::range_labels`] returns it; a slot past its end has no labels.
     pub fn new(disk: Disk<T>, roots: Vec<Option<Range>>, labels: Vec<Labels>) -> BlockServer<T> {
-        BlockServer { disk, roots, labels, scratch: vec![0; DATA_LEN] }
+        BlockServer {
+            disk,
+            roots,
+            labels,
+            scratch: vec![0; DATA_LEN],
+            #[cfg(feature = "boot-stats")]
+            stats: (0, 0, false),
+        }
+    }
+
+    /// The reads served and their sectors, once each time they are due to be said.
+    #[cfg(feature = "boot-stats")]
+    pub fn take_stats(&mut self) -> Option<(u64, u64)> {
+        let (reads, sectors, due) = &mut self.stats;
+        core::mem::take(due).then_some((*reads, *sectors))
     }
 
     pub fn disk(&self) -> &Disk<T> { &self.disk }
@@ -145,6 +163,13 @@ impl<T: Transport> BlockServer<T> {
         let lba = range.absolute(sector, u64::from(count)).ok_or(ErrorCode::OutOfRange)?;
         let out = self.scratch.get_mut(..bytes).ok_or(ErrorCode::Failed)?;
         self.disk.read(lba, out).map_err(device_error)?;
+        #[cfg(feature = "boot-stats")]
+        {
+            let (reads, sectors, due) = &mut self.stats;
+            *reads += 1;
+            *sectors += u64::from(count);
+            *due = *reads >= 1 << 12 && reads.is_power_of_two();
+        }
         // Borrowed from `self`, not from the lend: the reply is encoded over the lend.
         Ok(Answer::new(Reply::Read(ReadReply { data: &self.scratch[..bytes] })))
     }

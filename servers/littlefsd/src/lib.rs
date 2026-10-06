@@ -40,6 +40,8 @@ pub mod one_volume;
 pub mod pack;
 mod quota;
 pub mod server;
+#[cfg(feature = "boot-stats")]
+pub mod stats;
 pub mod typed;
 pub mod volume;
 
