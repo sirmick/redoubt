@@ -644,6 +644,16 @@ name = "redoubt-doccheck"
 version = "0.1.0"
 
 [[package]]
+name = "redoubt-erofsd"
+version = "0.1.0"
+dependencies = [
+ "erofs",
+ "redoubt-client",
+ "redoubt-fake-kernel",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-fake-kernel"
 version = "0.1.0"
 dependencies = [

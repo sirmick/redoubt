@@ -1,0 +1,3 @@
+description = "erofsd on the host: its files through the 9P skeleton on a range in memory (reads at block edges and across an inline tail, one range read per read, listings by page, the refusals, labels, minted roots, corrupt and failing ranges, the conformance vectors), and the whole program on a fake blkd through the client library"
+kind = "host-tests"
+packages = ["redoubt-erofsd"]

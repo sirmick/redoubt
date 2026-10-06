@@ -131,6 +131,11 @@ paths = ["servers/init/src"]
 max_lines = 2108
 
 [[crate]]
+name = "servers/erofsd"
+paths = ["servers/erofsd/src"]
+max_lines = 398
+
+[[crate]]
 name = "servers/littlefsd"
 paths = ["servers/littlefsd/src"]
 max_lines = 1510

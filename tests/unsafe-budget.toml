@@ -177,6 +177,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# erofsd forbids unsafe code: erofs and the runtime do all it needs.
+name = "erofsd (the read-only file server; parses one volume's medium)"
+paths = ["servers/erofsd/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # verityd forbids unsafe code: the runtime and the tree's crate do all it needs.
 name = "verityd (checks one verified volume's blocks)"
 paths = ["servers/verityd/src"]
@@ -234,6 +241,13 @@ max_undocumented = 0
 # The littlefs driver. `#![forbid(unsafe_code)]`; the budget says so where the rest is counted.
 name = "redoubt-littlefs"
 paths = ["libs/littlefs/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
+# The EROFS parser and writer. `#![forbid(unsafe_code)]`; the budget says so where the rest is counted.
+name = "erofs"
+paths = ["libs/erofs/src"]
 max_unsafe = 0
 max_undocumented = 0
 

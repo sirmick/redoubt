@@ -1,0 +1,20 @@
+[package]
+name = "redoubt-erofsd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "erofsd: one read-only EROFS volume, a range at blkd or at a verityd, served over 9P with its label set"
+
+[[bin]]
+name = "erofsd"
+path = "src/bin/erofsd.rs"
+
+# The runtime, and erofs for the medium; nothing else parses what the volume holds
+# (TENETS.md 5).
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+erofs = { path = "../../libs/erofs" }
+
+[dev-dependencies]
+redoubt-fake-kernel = { path = "../../libs/rt/fake" }
+redoubt-client = { path = "../../libs/client" }

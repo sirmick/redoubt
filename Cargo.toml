@@ -33,6 +33,7 @@ members = [
   "servers/netd",
   "servers/ipd",
   "servers/init",
+  "servers/erofsd",
   "servers/littlefsd",
   "servers/verityd",
   "stub",
