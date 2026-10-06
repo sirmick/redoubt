@@ -489,8 +489,8 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
     let mut m = image();
     m.public = vec!["trace".into()];
     let bootfsd = &m.servers[2];
-    assert_eq!(redoubt_init::check::args(&m, bootfsd), ["buckets=4", "trace"]);
-    assert_eq!(redoubt_init::check::args(&m, &m.servers[0]).len(), 3, "only bootfsd gets it");
+    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY), ["buckets=4", "trace"]);
+    assert_eq!(redoubt_init::check::args(&m, &m.servers[0], &BUNDLE_KEY).len(), 3, "only bootfsd gets it");
     // The names bootfsd serves come from public alone.
     server(&mut m, "bootfsd").args.push("trace".into());
     refused_at(&m, "servers[2].args[1]", Why::Argument);
@@ -528,7 +528,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
     server(&mut m, "bootfsd").volume = Some("scratch".into());
     assert!(on_virt(&m).is_ok());
     let args = |m: &Manifest, name: &str| {
-        redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap())
+        redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap(), &BUNDLE_KEY)
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
     assert_eq!(args(&m, "bootfsd"), ["buckets=4"]);
@@ -650,7 +650,7 @@ fn each_volume_s_range_is_minted_at_its_own_disk_s_blkd() {
     assert_eq!(at(&m, "data").as_deref(), Some("blkd"));
     assert_eq!(at(&m, "system").as_deref(), Some("blkd:system"));
     let args = |m: &Manifest, name: &str| {
-        redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap())
+        redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap(), &BUNDLE_KEY)
     };
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd"]);
     assert_eq!(args(&m, "blkd:system"), ["endpoint=blkd:system", "labels.0=7"]);
@@ -1116,7 +1116,12 @@ fn verified_volume(m: &mut Manifest, name: &str, partition: i64, labels: Vec<Str
         partition,
         labels: labels.clone(),
         disk: disk.map(Into::into),
-        verity: Some(Verity { server: verifier.clone(), root: ROOT.into(), blocks: 100 }),
+        verity: Some(Verity {
+            server: verifier.clone(),
+            root: Some(ROOT.into()),
+            blocks: Some(100),
+            ..Verity::default()
+        }),
     });
     let declared = server(&mut image(), "verity:system").clone();
     m.servers.push(Server {
@@ -1144,7 +1149,8 @@ fn named<'m>(m: &'m Manifest, name: &str) -> &'m Server { m.servers.iter().find(
 /// `blocks=` from `init` (servers/init.md, Volumes; servers/verityd.md, "Arguments").
 #[test]
 fn a_verified_volume_s_server_reads_through_its_verifier() {
-    use redoubt_init::check::{args, range};
+    use redoubt_init::check::range;
+    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY);
     let mut m = without_volumes();
     verified_volume(&mut m, "data", 2, vec![], None);
     assert!(on_virt(&m).is_ok());
@@ -1190,10 +1196,10 @@ fn a_verified_volume_s_key_and_verifier_are_refused_naming_the_field() {
     };
     for root in [ROOT.to_uppercase(), ROOT[1..].to_string(), format!("{ROOT}0"), ROOT.replace('a', "g")] {
         let root = root.clone();
-        refused_at(&with(&|v| v.root = root.clone()), "volumes[0].verity.root", Why::Value);
+        refused_at(&with(&|v| v.root = Some(root.clone())), "volumes[0].verity.root", Why::Value);
     }
     for blocks in [0, u64::MAX] {
-        refused_at(&with(&|v| v.blocks = blocks), "volumes[0].verity.blocks", Why::Value);
+        refused_at(&with(&|v| v.blocks = Some(blocks)), "volumes[0].verity.blocks", Why::Value);
     }
     refused_at(&with(&|v| v.server = "nobody".into()), "volumes[0].verity.server", Why::Unknown);
     refused_at(&with(&|v| v.server = "littlefsd:data".into()), "volumes[0].verity.server", Why::NotVerityd);
@@ -1238,6 +1244,74 @@ fn a_verified_volume_s_key_and_verifier_are_refused_naming_the_field() {
     let netd = m.servers.iter().position(|s| s.name == "netd").unwrap();
     let k = m.servers[netd].handed.len() - 1;
     refused_at(&m, &format!("servers[{netd}].handed[{k}].endpoint"), Why::VerifierHanded);
+}
+
+/// A verified volume is pinned (`root` and `blocks`) or signed (`key` and `floor`): both modes,
+/// neither, or a part of one is refused, and so is a key that is neither 64 lowercase hex digits
+/// nor `bundle`, and a floor that is not a decimal string. Signed, the verifier gets `key=` (the
+/// bundle's own key, by name, for `bundle`) and `floor=` in place of `root=` and `blocks=`
+/// (servers/init.md, Volumes; servers/verityd.md, "The root block, and the two modes").
+#[test]
+fn a_verified_volume_is_pinned_or_signed_and_never_both() {
+    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY);
+    let signed = |key: &str| {
+        let mut m = without_volumes();
+        verified_volume(&mut m, "data", 0, vec![], None);
+        m.volumes[0].verity = Some(Verity {
+            server: "verity:data".into(),
+            key: Some(key.into()),
+            floor: Some(2),
+            ..Verity::default()
+        });
+        m
+    };
+    let bundle = signed("bundle");
+    assert_eq!(on_virt(&bundle).unwrap().bundle_key, BUNDLE_KEY, "the key check() was given");
+    // `bundle` is the key the loader verified the bundle with, as check() was given it: here the
+    // fuzz harness's, not the development key.
+    assert_ne!(BUNDLE_KEY, redoubt_signing::DEV_PUBLIC_KEY);
+    let dev: String = BUNDLE_KEY.iter().map(|b| format!("{b:02x}")).collect();
+    let key = format!("key={dev}");
+    assert_eq!(
+        args(&bundle, named(&bundle, "verity:data")),
+        ["endpoint=verity:data", key.as_str(), "floor=2"]
+    );
+    let own = signed(ROOT);
+    assert!(on_virt(&own).is_ok());
+    let key = format!("key={ROOT}");
+    assert_eq!(args(&own, named(&own, "verity:data")), ["endpoint=verity:data", key.as_str(), "floor=2"]);
+    for key in ["Bundle", "bundle ", "", &ROOT.to_uppercase(), &ROOT[2..]] {
+        refused_at(&signed(key), "volumes[0].verity.key", Why::Value);
+    }
+    let modes = |change: &dyn Fn(&mut Verity)| {
+        let mut m = signed("bundle");
+        change(m.volumes[0].verity.as_mut().unwrap());
+        m
+    };
+    let mode = Why::VerityMode;
+    refused_at(&modes(&|v| (v.root, v.blocks) = (Some(ROOT.into()), Some(100))), "volumes[0].verity", mode);
+    refused_at(&modes(&|v| v.blocks = Some(100)), "volumes[0].verity", mode);
+    refused_at(&modes(&|v| v.floor = None), "volumes[0].verity", mode);
+    refused_at(&modes(&|v| v.key = None), "volumes[0].verity", mode);
+    refused_at(&modes(&|v| (v.key, v.floor) = (None, None)), "volumes[0].verity", mode);
+    let pinned_half = |v: &mut Verity| (v.key, v.floor, v.root) = (None, None, Some(ROOT.into()));
+    refused_at(&modes(&pinned_half), "volumes[0].verity", mode);
+    // A floor is a decimal string, as every 64-bit quantity in the manifest; anything else is not
+    // decoded.
+    let floor = |floor: &str| {
+        let text = format!(
+            r#"{{ "volumes": [ {{ "name": "data", "partition": 0, "verity": {{ "server": "v", "key": "bundle", "floor": {floor} }} }} ] }}"#
+        );
+        match read(text.as_bytes(), ARENA_PAGES) {
+            Err(Refusal::Schema(e)) => Some((e.path, e.kind)),
+            Ok(_) => None,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(floor(r#""2""#), None);
+    for bad in ["2", r#""-1""#, r#""two""#, r#""18446744073709551616""#] {
+        assert_eq!(floor(bad), Some(("volumes[0].verity.floor".into(), SchemaKind::WrongType)), "{bad}");
+    }
 }
 
 /// Each verifier is one more server and one more minted range: what it costs `init` in `root`
@@ -1304,7 +1378,8 @@ fn confined_gives_each_label_set_its_own_verifier() {
 /// a labelled one through `littlefsd` on a disk of its own.
 #[test]
 fn an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
-    use redoubt_init::check::{args, range};
+    use redoubt_init::check::range;
+    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY);
     let mut m = without_volumes();
     m.confined = true;
     secrets(&mut m);

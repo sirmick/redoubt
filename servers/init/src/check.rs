@@ -18,7 +18,7 @@ use stub::MAX_STACK_PAGES;
 
 use crate::bound::{self, Counts};
 use crate::confine;
-use crate::manifest::{Budget, Manifest, Server, Volume};
+use crate::manifest::{Budget, Manifest, Server, Verity, Volume};
 use crate::refusal::{Refusal, Why};
 use crate::sshkey::{self, KEY_LEN};
 
@@ -57,9 +57,15 @@ pub const ENDPOINT_ARG: &str = "endpoint=";
 pub const VERITYD: &str = "verityd";
 /// The one badge a `verityd` serves, which `init` mints for its volume's server.
 pub const VERIFIED_BADGE: u64 = 1;
-/// The arguments giving a `verityd` the root and the data blocks it checks against.
+/// The arguments giving a `verityd` the root and the data blocks it checks against, pinned, or
+/// the key and the floor its volume's root block is checked against, signed.
 pub const ROOT_ARG: &str = "root=";
 pub const BLOCKS_ARG: &str = "blocks=";
+pub const KEY_ARG: &str = "key=";
+pub const FLOOR_ARG: &str = "floor=";
+/// A signed volume's `key` naming the key the loader verified the bundle with, by name so no copy
+/// of it drifts (servers/verityd.md, "The root block, and the two modes").
+pub const BUNDLE_VOLUME_KEY: &str = "bundle";
 /// Where [`Plan::keys`] says the bundle's verifying key comes from.
 pub const BUNDLE_KEY: &str = "bundle key";
 
@@ -101,6 +107,9 @@ pub struct Plan {
     pub init_badges: Vec<(usize, u64)>,
     /// The bound on what the boot costs `init` in `root`, in pages.
     pub bound: u64,
+    /// The key the loader verified the bundle with: what a signed volume's `"key": "bundle"`
+    /// hands its verifier ([`args`]).
+    pub bundle_key: [u8; KEY_LEN],
 }
 
 fn at(at: String, why: Why) -> Refusal { Refusal::At { at, why } }
@@ -120,7 +129,7 @@ pub fn check(m: &Manifest, machine: &Machine, bundle_key: [u8; KEY_LEN]) -> Resu
     budgets(m)?;
     fit(m, &machine.system)?;
     public(m, machine)?;
-    blocks(m, machine)?;
+    blocks(m, machine, &bundle_key)?;
     let mut keys = keys(m)?;
     keys.push((String::from(BUNDLE_KEY), bundle_key));
     let buckets = buckets(m)?;
@@ -137,7 +146,7 @@ pub fn check(m: &Manifest, machine: &Machine, bundle_key: [u8; KEY_LEN]) -> Resu
     if bound > free {
         return Err(Refusal::Bound { need: bound, free });
     }
-    Ok(Plan { placements, keys, buckets, init_badges: init_badges(m), bound })
+    Ok(Plan { placements, keys, buckets, init_badges: init_badges(m), bound, bundle_key })
 }
 
 /// Every name follows the rule, and names of one kind differ.
@@ -456,12 +465,24 @@ fn references(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
             if verifier(m, v).is_none() {
                 return Err(at(format!("volumes[{i}].verity.server"), Why::Unknown));
             }
-            if redoubt_verity::from_hex(&verity.root).is_none() {
-                return Err(at(format!("volumes[{i}].verity.root"), Why::Value));
-            }
-            // The count `verityd` takes: at least one block, its tree beside it in `u64` sectors.
-            if redoubt_verity::Geometry::new(verity.blocks).is_none() {
-                return Err(at(format!("volumes[{i}].verity.blocks"), Why::Value));
+            let field = |name: &str| format!("volumes[{i}].verity.{name}");
+            match verity {
+                Verity { root: Some(root), blocks: Some(blocks), key: None, floor: None, .. } => {
+                    if redoubt_verity::from_hex(root).is_none() {
+                        return Err(at(field("root"), Why::Value));
+                    }
+                    // The count `verityd` takes: at least one block, its tree beside it in `u64`
+                    // sectors.
+                    if redoubt_verity::Geometry::new(*blocks).is_none() {
+                        return Err(at(field("blocks"), Why::Value));
+                    }
+                }
+                Verity { root: None, blocks: None, key: Some(key), floor: Some(_), .. } => {
+                    if key != BUNDLE_VOLUME_KEY && redoubt_verity::from_hex(key).is_none() {
+                        return Err(at(field("key"), Why::Value));
+                    }
+                }
+                _ => return Err(at(format!("volumes[{i}].verity"), Why::VerityMode)),
             }
         }
     }
@@ -667,10 +688,11 @@ fn fit(m: &Manifest, system: &Usage) -> Result<(), Refusal> {
 /// volume's server, `labels=` its volume's label ids, absent when the set is empty; and for a
 /// `blkd`, `labels.P=` the ids of each labelled volume on its disk, P its GPT entry
 /// (servers/blkd.md, "Ranges and badges"); for a volume's `verityd`, `endpoint=` its first
-/// endpoint, `labels=` its volume's ids as its server's, and `root=` and `blocks=` from the
-/// volume's `verity` (servers/verityd.md, "Arguments"). A label the manifest does not define is
-/// left out: the check refused it before.
-pub fn args(m: &Manifest, s: &Server) -> Vec<String> {
+/// endpoint, `labels=` its volume's ids as its server's, and `root=` and `blocks=`, or `key=`
+/// (`bundle_key` in hex for `bundle`) and `floor=`, from the volume's `verity`
+/// (servers/verityd.md, "Arguments"). A label the manifest does not define is left out: the
+/// check refused it before.
+pub fn args(m: &Manifest, s: &Server, bundle_key: &[u8; KEY_LEN]) -> Vec<String> {
     let ids = |names: &[String]| {
         let ids: Vec<String> = names
             .iter()
@@ -695,8 +717,21 @@ pub fn args(m: &Manifest, s: &Server) -> Vec<String> {
         if !v.labels.is_empty() {
             args.push(format!("{LABELS_ARG}{}", ids(&v.labels)));
         }
-        args.push(format!("{ROOT_ARG}{}", verity.root));
-        args.push(format!("{BLOCKS_ARG}{}", verity.blocks));
+        // The check let through one mode, both of its members.
+        if let (Some(root), Some(blocks)) = (&verity.root, verity.blocks) {
+            args.push(format!("{ROOT_ARG}{root}"));
+            args.push(format!("{BLOCKS_ARG}{blocks}"));
+        }
+        if let (Some(key), Some(floor)) = (&verity.key, verity.floor) {
+            match key.as_str() {
+                BUNDLE_VOLUME_KEY => {
+                    let hex: String = bundle_key.iter().map(|b| format!("{b:02x}")).collect();
+                    args.push(format!("{KEY_ARG}{hex}"));
+                }
+                key => args.push(format!("{KEY_ARG}{key}")),
+            }
+            args.push(format!("{FLOOR_ARG}{floor}"));
+        }
     }
     if s.program == BLKD {
         for v in m.volumes.iter().filter(|v| !v.labels.is_empty() && on_disk(m, v, s)) {
@@ -736,7 +771,7 @@ fn public(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
 /// Each server's startup block holds its handles and arguments within one page and
 /// `MAX_START_HANDLES`: the block written here is the one the boot writes, with the same names,
 /// a console connection at `/dev/cons`, the image, the heap cap and the tag.
-fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
+fn blocks(m: &Manifest, machine: &Machine, bundle_key: &[u8; KEY_LEN]) -> Result<(), Refusal> {
     for (i, s) in m.servers.iter().enumerate() {
         let refused = || at(format!("servers[{i}]"), Why::Block);
         let mut names: Vec<String> = s.receives.clone();
@@ -758,7 +793,7 @@ fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
             block.handle(name, handle(n + 1)?);
         }
         block.namespace("/dev/cons", handle(count)?);
-        for a in args(m, s) {
+        for a in args(m, s, bundle_key) {
             block.arg(&a);
         }
         let len = machine.entries.iter().find(|(e, _)| *e == s.program).map_or(0, |(_, len)| *len);
