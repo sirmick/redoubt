@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 182
+revision = 190
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -911,8 +911,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["VOL1"]
   body = "Brief: .wash/local/VOL2-implementer.md (architect-15; VOL1's step 2 as the owner ruled it 2026-10-03). Tier A, size S. docs/servers/verityd.md (R76's signed-volume extension); docs/kernel/boot.md#verified-boot (the volume domain); docs/servers/init.md#the-boot-manifest (the verity object's two modes); docs/testbench.md#disks-and-network-cards (the recipe's sign key). Cases verity-signed, verity-bad-signature, verity-rollback."
-  state = "active"
-  revision = 169
+  state = "reported"
+  revision = 189
 
 [[node]]
   id = "B10"
@@ -980,8 +980,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["SCHED1"]
   body = "Brief: .wash/local/LIFT1-implementer.md. docs/kernel/scheduling.md states a derived bound: a lineage's debt, carried onto a sibling as the parent's lead, delays the sibling's first run by at most about a round when the parent is small and the lift fresh. No boot exercises it: under a parent as wide as `users` the lift is a few thousandths of a slice, and sched-debt-lift judges only that the sibling runs before any other budget is picked twice. Tier A bench/fixtures, size S. The claim made exact: a destroyed child's lead W lands on parent P as W/w_P, the sibling enters at P's pass, so its first pick waits about (W/STRIDE) x (w_peer/w_P) rounds, independent of the sibling's weight. Construction: sixteen weight-100 spinners under users, three phases in one boot (w_P = 100, 50, 10), child destroyed and sibling created back to back; the oracle's check_lift_delay computes the expectation from the recorded lift and compares with the picks before the sibling's first pick within one round, failing a stale lift so the case cannot pass vacuously. The page's residual becomes the measured formula and three points per width, or what the trace shows if refuted. Ruling: .wash/local/SCHED1-five-cases-ruling.md 'debt-lift (red round 5, P1)'."
-  state = "active"
-  revision = 171
+  state = "done"
+  revision = 188
 
 [[node]]
   id = "B12"
@@ -1031,3 +1031,21 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Owner's package (text: .wash/local/PACK1-owner.md). Tier A (beamlet's platform, mkimage, the bench), size S. BOOT1's profile: 1,016 s guest to the prompt verified (535 s unverified), 99 % in the VM's 96 lazy module loads: 77,710 block reads of 673 distinct blocks, 97 % re-walking the root directory. mkimage emits one pack of the boot module set (raw .beam bytes behind an index of name, offset, length; deterministic, sorted by name); it lives inside the signed root (verified volume entry or bootfsd bundle entry: the Architect picks; trust unchanged, R75 holds, never written at run time); beamlet reads it once at VM start in one read into memory charged to the VM and locate_module consults it before the code path; a module not in the pack loads per file as today; no change to decoded representation, loader checks or lazy-load semantics; the pack's bytes released once decoded unless keeping them is shown cheaper (BEAM6's second-copy question: coordinate). Per VM: no page sharing, no steward cache, no snapshot, no per-profile pack (decided elsewhere; the docs say so). Orthogonal to EROFS1; rebases onto whichever merges first. Verdict: boot-profile and boot-profile-unverified with the pack, numbers and 9P/block counts on beamlet.md beside the baseline; target under 30 s guest verified on littlefs (floor ~16 s; exact figure at checkpoint 1); a module outside the pack still loads; a bad pack entry fails the VM's start cleanly; beamlet-footprint's scan rises by at most the pack's size. Checkpoint 1 after the placement decision with the measured floor; checkpoint 2 only if the target is missed."
   state = "active"
   revision = 181
+
+[[node]]
+  id = "B15"
+  title = "The containment gate's bystander clause is judged by the oracle over the kernel's trace, net of audits, not by the program's gross count"
+  template = "package"
+  parent = "M1"
+  body = "Found by the train bench on main after SCHED1's merge (rv64, icount, seed 13, deterministic): '[containment] FAIL: the bystander kept its weight's share (share 758 of 1000, floor 783)'. The bystander's share is the gate program's own gross count (tests/programs/.../kernel-containment.rs:34, clause :247-256) against a floor of its weight's share less a tolerance; at the 1 ms slice ~24 % of the CPU is per-switch kernel time (scheduling.md:222-223, today's cost), so the gross count reads 758. Ruling (.wash/local/B15-ruling.md): the clause follows the five-cases ruling: R12's claim is relative; no verdict may come from a hostile agent and the competing counts are the agents', so the oracle judges the bystander's charged runtime over every users budget's charged runtime in the window, net of the checked build's audits, against its weight's share (100/120) within R12's 50 per thousand; the program prints its count as useful work, no verdict on it; window bounds printed by the program or taken as the bystander's first to last pick (the implementer says which). Page: docs/kernel/README.md:177's row as the ruling words it; SECURITY's row unchanged. Also: the bench reports a FAIL line followed by QEMU's exit 0 as 'guest exited while waiting'; report the FAIL it saw. Tier B, size S; not the kernel, not the slice. Gate: kernel-containment both widths, the oracle host tests."
+  state = "active"
+  revision = 184
+
+[[node]]
+  id = "B16"
+  title = "The memory scan counts a stack page's paint units from the one physical page that holds the most of them; a word copied into a buffer is not a duplicate"
+  template = "package"
+  parent = "M1"
+  body = "Found by EROFS1 (rv32 userland-boot with the system volume on EROFS, prompt in 14 s): 'beamlet: stack paint unit 6763 found twice': the unit sits at two pages each holding only that one painted word at the unit's in-page offset, neither beamlet's stack page: a stack word copied into a buffer or a message, which the fast boot no longer overwrites before the dump; the scanner's offset filter does not rule it out (its known blind spot). Ruling (.wash/local/SCAN-duplicate-ruling.md): the paint proves a word was never written; a copy proves the same about the same word, so it is no second unit; the duplicate rule is for forgery and corruption. Rule: the unit index fixes stack page k = unit/512 and the offset; for each k the scan counts units only from the one physical page holding the most of page k's units at their offsets; units elsewhere are copies, ignored; two pages holding equally many of page k's units are still refused; never undercounts (a copied buffer is a subset of the real page's words). Page sentence for testbench.md's memory paragraph in the ruling. Tier B bench, size S: tools/testbench/src/memory.rs and scanner tests (a single copied word ignored; a copied buffer ignored; an intact page copy refused). Gate: the memory host tests; init-boot, userland-boot, userland-read-only both widths; EROFS1's kept dump as the regression input if it can be reduced. Merges ahead of EROFS1 in its train."
+  state = "reported"
+  revision = 190

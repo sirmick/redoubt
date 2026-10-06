@@ -1,0 +1,23 @@
+description = "A fresh lift on a small shared parent delays the sibling made under it by the child's lead in slices times the peers' weight over the parent's, in rounds, whatever the sibling's weight: three phases under sixteen weight-20 spinners (light, so the launcher's own work moves the floor little), parents of 20, 10 and 2 and siblings of 2, 5 and 1, the oracle computing each expectation from the lift's own records and requiring the floor to have moved under half a round between the lift and the sibling's wake (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-lift-delay"]
+# Test builds only: the trace ring (never in a default kernel). The oracle checks every pick and
+# recomputes every lift, and (`lift-delay`) that each sibling's first run comes within a round of
+# what its parent's lifted lead predicts, with the lift still fresh at the sibling's wake
+# (kernel/scheduling.md, "Residual risks").
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle lift-delay"
+timeout_secs = 600
+expect = [
+    '^\[lift-delay\] phase 1: S ran at',
+    '^\[lift-delay\] phase 2: S ran at',
+    '^\[lift-delay\] phase 3: S ran at',
+    '^\[lift-delay\] ok: the sibling ran in each phase',
+    '^SCHED-LIFT-DELAY TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[lift-delay\] FAIL']
+poweroff = true

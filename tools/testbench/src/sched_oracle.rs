@@ -78,6 +78,10 @@
 //! destroys an empty budget and then makes the one it marks, which must run before any other
 //! budget is picked twice.
 //!
+//! **A fresh lift's delay** (`lift-delay`, the same section): a sibling made under a parent just
+//! lifted must wait the rounds the lift's own records predict, to within a round, with the lift
+//! still fresh at its wake.
+//!
 //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
 //! saw nothing proves nothing.
 
@@ -257,6 +261,8 @@ pub struct Summary {
     /// Each destruction's pumps: how many, and their time, µs (`M`/`m` of a pump inside its `X`
     /// and `Y`), in trace order.
     pub r10_pumps: Vec<(usize, u64)>,
+    /// The floor as each record found it, by record.
+    pub floor: Vec<u128>,
 }
 
 /// A timer interrupt from user mode, from its `I` to its `O`.
@@ -344,6 +350,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     let mut sum = Summary::default();
     let mut i = 0;
     while i < records.len() {
+        // A group's records find the floor its first did.
+        sum.floor.resize(i + 1, floor);
         let r = &records[i];
         i += 1;
         // A budget's pass never falls (the records that carry one).
@@ -528,6 +536,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
             }
         }
     }
+    sum.floor.resize(records.len(), floor);
     if let Some((id, _)) = open_audit {
         return Err(format!("audit {id} began and never ended"));
     }
@@ -1671,6 +1680,105 @@ fn check_round(records: &[Record]) -> Result<String, String> {
     Err(format!("round: budget {marked}, new at record {}, was never picked", records[w].seq))
 }
 
+/// The most a lift's lead may have faded, in rounds, by the sibling's wake for `lift-delay` to
+/// judge it.
+const LIFT_FRESH: f64 = 0.5;
+
+/// **A fresh lift's delay** (`lift-delay`, kernel/scheduling.md, "Residual risks"). Each phase is
+/// the first lift into a budget P that never queues (it holds no process) of a child that did,
+/// and the first budget new to the trace to wake after it: the sibling S made under P. The lift
+/// gave P a lead of `W / w_P` over the floor (the child's work and P's weight, from the lift's
+/// records), and a round moves the floor by one step of the budgets that take turns: the median
+/// pass step between a budget's consecutive picks. So S, entering at P's pass, should wait
+/// `W / w_P / step` rounds: the most any other budget is picked before S's first pick must be
+/// less than a round from that, and from S's own lead over the floor at its wake. S must enter at
+/// P's lifted pass, and the floor must have moved less than [`LIFT_FRESH`] of a round between
+/// the lift and S's wake: a lift the floor has passed, or nearly, proves nothing. The phases must
+/// number the program's `[lift-delay] phase` lines.
+fn check_lift_delay(log: &str, records: &[Record], floor: &[u128]) -> Result<String, String> {
+    let queued: BTreeSet<u64> = records.iter().filter(|r| "WRDPK".contains(r.kind)).map(|r| r.id).collect();
+    let mut last = BTreeMap::new();
+    let mut steps: Vec<u128> = records
+        .iter()
+        .filter(|r| r.kind == 'K')
+        .filter_map(|r| last.insert(r.id, r.pass).map(|p| r.pass.saturating_sub(p)))
+        .collect();
+    steps.sort_unstable();
+    let step = steps
+        .get(steps.len() / 2)
+        .copied()
+        .filter(|s| *s > 0)
+        .ok_or("lift-delay: no budget's pass rose between two picks: no round to measure")?;
+    let (mut lifted, mut phases, mut failed) = (BTreeSet::new(), Vec::new(), false);
+    for (i, r) in records.iter().enumerate() {
+        let Some(g) = records.get(i..i + LIFT.len()).filter(|g| g[0].kind == 'L') else { continue };
+        if queued.contains(&r.id) || !queued.contains(&g[1].id) || !lifted.insert(r.id) {
+            continue;
+        }
+        let n = phases.len() + 1;
+        let [cp, e, f, cr, w, pa] = [1, 2, 3, 4, 6, 7].map(|k| g[k].pass);
+        let (wc, wp) = (w >> 32, w & 0xffff_ffff);
+        let work = cp.saturating_sub(e.max(f)) * wc + cr;
+        let expected = work as f64 / wp.max(1) as f64 / step as f64;
+        let after = i + LIFT.len();
+        let new = |j: usize| !records[..j].iter().any(|x| x.id == records[j].id && "WRDK".contains(x.kind));
+        let w = (after..records.len()).find(|&j| records[j].kind == 'W' && new(j)).ok_or_else(|| {
+            format!("lift-delay: phase {n}: no new budget woke after budget {}'s lift", r.id)
+        })?;
+        let (s, sp) = (records[w].id, records[w].pass);
+        let head = format!("lift-delay: phase {n}: W={work} w_P={wp} expected {expected:.1} rounds");
+        if sp != pa || sp <= floor[w] {
+            failed = true;
+            phases.push(format!(
+                "{head}, but budget {s} woke at pass {sp:#x}, not above the floor {:#x} at P's lifted pass {pa:#x}: \
+                 the floor had passed the lift",
+                floor[w]
+            ));
+            continue;
+        }
+        let lead = (sp - floor[w]) as f64 / step as f64;
+        let moved = floor[w].saturating_sub(f) as f64 / step as f64;
+        let (mut picks, mut k) = (BTreeMap::<u64, usize>::new(), None);
+        for x in records[w + 1..].iter().filter(|x| x.kind == 'K') {
+            if x.id == s {
+                k = Some(x);
+                break;
+            }
+            *picks.entry(x.id).or_default() += 1;
+        }
+        let k = k.ok_or_else(|| {
+            format!("lift-delay: phase {n}: budget {s}, new at record {}, was never picked", records[w].seq)
+        })?;
+        let most = picks.values().max().copied().unwrap_or(0);
+        let fresh = moved < LIFT_FRESH;
+        let within = [expected, lead].iter().all(|x| (most as f64 - x).abs() < 1.0);
+        failed |= !(fresh && within);
+        phases.push(format!(
+            "{head}, observed {} picks, max {most} of one budget (budget {s} new at record {}, its lead at the wake \
+             {lead:.1} rounds, the floor moved {moved:.2} rounds since the lift, picked at record {}){}",
+            picks.values().sum::<usize>(),
+            records[w].seq,
+            k.seq,
+            if !fresh {
+                ": the lift was not fresh"
+            } else if !within {
+                ": not within a round"
+            } else {
+                ""
+            }
+        ));
+    }
+    let printed = log.lines().filter(|l| l.trim_end_matches('\r').starts_with("[lift-delay] phase ")).count();
+    if phases.is_empty() || phases.len() != printed {
+        return Err(format!(
+            "lift-delay: the trace shows {} phases, the program printed {printed}",
+            phases.len()
+        ));
+    }
+    let out = format!("{} (a round's step {step:#x})", phases.join("; "));
+    if failed { Err(out) } else { Ok(out) }
+}
+
 /// The audit time inside `[from, to]`, µs: the part of each audit's span that falls in it, so an
 /// audit straddling an edge counts only its inside. `audits` is in trace order, so by time.
 pub fn audit_inside(audits: &[(u64, u64)], from: u64, to: u64) -> u64 {
@@ -1787,6 +1895,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     let mut cluster_old_control = false;
     let mut carve_return = false;
     let mut round = false;
+    let mut lift_delay = false;
     for arg in args.split_whitespace() {
         if arg == "cluster" {
             if cluster {
@@ -1814,6 +1923,13 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
                 return Err("duplicate round check".into());
             }
             round = true;
+            continue;
+        }
+        if arg == "lift-delay" {
+            if lift_delay {
+                return Err("duplicate lift-delay check".into());
+            }
+            lift_delay = true;
             continue;
         }
         if let Some(share) = arg.strip_prefix("stale_waits_in=") {
@@ -1856,6 +1972,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         control_failed.then(|| cluster_control_classify(log, &records, &sum.audits, &bounds)).transpose()?;
     let carve_proof = carve_return.then(|| check_carve_return(log, &records)).transpose()?;
     let round_proof = round.then(|| check_round(&records)).transpose()?;
+    let lift_delay_proof = lift_delay.then(|| check_lift_delay(log, &records, &sum.floor)).transpose()?;
     // Each walk net of the audits inside it, as a release kernel runs it; a walk's bound is
     // judged before R10's, so a case whose R10 must fail still holds its walks.
     let walks: Vec<(Vec<u64>, u64)> = sum
@@ -2035,6 +2152,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         report.push(proof);
     }
     if let Some(proof) = round_proof {
+        report.push(proof);
+    }
+    if let Some(proof) = lift_delay_proof {
         report.push(proof);
     }
     for (name, (net, audits)) in WALKS.iter().zip(walks) {
@@ -2734,6 +2854,130 @@ mod tests {
         assert!(check_round(&records_of(&old)).unwrap_err().contains("not new"));
         let unpicked: Vec<_> = round_events().into_iter().take(11).collect();
         assert!(check_round(&records_of(&unpicked)).unwrap_err().contains("never picked"));
+    }
+
+    /// Phases of a lift delay, the n-th (from 0) with P 10n + 11, C 10n + 15 and S 10n + 17: the
+    /// lift gives P a
+    /// lead of 90 over the floor (C's 300 at weight 3 into P at 10), a round's step is 10, so S
+    /// should wait 9 rounds; budgets 2 and 3 are each picked `picks` times before S. With the
+    /// floor at each record.
+    fn lift_delay_trace(picks: &[usize]) -> (Vec<Record>, Vec<u128>) {
+        let (mut events, mut floor, mut t) = (Vec::new(), Vec::new(), 100u128);
+        for (n, &k) in picks.iter().enumerate() {
+            let (p, c, s) = (10 * n as u64 + 11, 10 * n as u64 + 15, 10 * n as u64 + 17);
+            let lift = [
+                ('W', c, t),
+                ('K', c, t),
+                ('L', p, t),
+                ('l', c, t + 300),
+                ('e', c, t),
+                ('f', 0, t),
+                ('r', c, 0),
+                ('q', p, 0),
+                ('w', 0, 3 << 32 | 10),
+                ('A', p, t + 90),
+                ('a', p, 0),
+                ('W', s, t + 90),
+            ];
+            let wake = t;
+            events.extend(lift);
+            floor.extend([wake; 12]);
+            for _ in 0..k {
+                events.extend([('K', 2, t), ('K', 3, t)]);
+                floor.extend([t; 2]);
+                t += 10;
+            }
+            events.push(('K', s, wake + 90));
+            floor.push(t);
+        }
+        let records = events
+            .iter()
+            .enumerate()
+            .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
+            .collect();
+        (records, floor)
+    }
+
+    fn phase_lines(n: usize) -> String {
+        (1..=n).map(|i| format!("[lift-delay] phase {i}: S ran\n")).collect()
+    }
+
+    #[test]
+    fn a_sibling_delayed_as_its_parents_lift_predicts_passes() {
+        let (records, floor) = lift_delay_trace(&[9]);
+        let proof = check_lift_delay(&phase_lines(1), &records, &floor).unwrap();
+        assert!(proof.contains("expected 9.0 rounds") && proof.contains("max 9 of one budget"), "{proof}");
+    }
+
+    #[test]
+    fn a_sibling_held_a_round_past_its_parents_lift_fails() {
+        let (records, floor) = lift_delay_trace(&[10]);
+        let err = check_lift_delay(&phase_lines(1), &records, &floor).unwrap_err();
+        assert!(err.contains("max 10 of one budget") && err.contains("not within a round"), "{err}");
+        // A round short of it fails too.
+        let (records, floor) = lift_delay_trace(&[8]);
+        assert!(check_lift_delay(&phase_lines(1), &records, &floor).is_err());
+    }
+
+    #[test]
+    fn a_lift_the_floor_had_passed_fails() {
+        // S wakes at P's lifted pass, but the floor has reached it.
+        let (records, mut floor) = lift_delay_trace(&[9]);
+        let w = records.iter().position(|r| r.kind == 'W' && r.id == 17).unwrap();
+        floor[w] = records[w].pass;
+        let err = check_lift_delay(&phase_lines(1), &records, &floor).unwrap_err();
+        assert!(err.contains("the floor had passed the lift"), "{err}");
+        // S entered at a floor above P's lifted pass.
+        let (mut records, floor) = lift_delay_trace(&[9]);
+        records[w].pass += 5;
+        assert!(
+            check_lift_delay(&phase_lines(1), &records, &floor).unwrap_err().contains("the floor had passed")
+        );
+        // The floor moved half a round between the lift and S's wake: the lift has faded.
+        let (records, mut floor) = lift_delay_trace(&[9]);
+        floor[w] += 5;
+        let err = check_lift_delay(&phase_lines(1), &records, &floor).unwrap_err();
+        assert!(err.contains("moved 0.50 rounds") && err.contains("not fresh"), "{err}");
+        floor[w] -= 1;
+        assert!(check_lift_delay(&phase_lines(1), &records, &floor).is_ok());
+    }
+
+    /// The floor `check()` keeps is recorded at each record, the members of a group at its first's.
+    #[test]
+    fn the_floor_is_recorded_at_each_record() {
+        let records = parse(&trace(&[
+            (1, 'W', 1, 100),
+            (1, 'W', 2, 120),
+            (2, 'K', 1, 100),
+            (3, 'R', 1, 130),
+            (3, 'G', 2, 120),
+            (3, 'g', 2, 0),
+            (3, 'v', 2, 1 << 32 | 1),
+            (3, 'f', 2, 120),
+            (3, 'N', 2, 120),
+            (3, 'n', 2, 0),
+            (4, 'K', 2, 120),
+        ]))
+        .unwrap();
+        let sum = check(&records).unwrap();
+        assert_eq!(sum.floor, [0, 0, 0, 100, 120, 120, 120, 120, 120, 120, 120]);
+    }
+
+    #[test]
+    fn each_phase_is_reported_on_its_own() {
+        let (records, floor) = lift_delay_trace(&[9, 9, 9]);
+        let proof = check_lift_delay(&phase_lines(3), &records, &floor).unwrap();
+        assert!((1..=3).all(|n| proof.contains(&format!("phase {n}: W=900 w_P=10 expected 9.0"))), "{proof}");
+        // One phase late fails the check, and the report names it.
+        let (records, floor) = lift_delay_trace(&[9, 11, 9]);
+        let err = check_lift_delay(&phase_lines(3), &records, &floor).unwrap_err();
+        assert!(
+            err.contains("phase 2: W=900 w_P=10 expected 9.0 rounds, observed 22 picks, max 11"),
+            "{err}"
+        );
+        // The phases must number the program's lines.
+        let (records, floor) = lift_delay_trace(&[9, 9]);
+        assert!(check_lift_delay(&phase_lines(3), &records, &floor).unwrap_err().contains("shows 2 phases"));
     }
 
     /// A trace from `(entry, kind, id, pass)` records, with its end line.

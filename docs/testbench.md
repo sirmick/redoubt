@@ -254,7 +254,9 @@ feature, so the two cases do not combine their Cargo features.
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
 reading of the rules ([scheduling](kernel/scheduling.md)); a limit such as `r10_p99_us=30000`
-bounds a measured cost. A `walk-trace` kernel's walks are bounded by their longest, net of the
+bounds a measured cost. Two arguments judge a sibling's first run: `round`, that it comes before
+any other budget is picked twice, and `lift-delay`, that it comes within a round of what the lift
+on its parent predicts. A `walk-trace` kernel's walks are bounded by their longest, net of the
 audits inside them (`pump_max_us`, `expiry_max_us`, `reconcile_max_us`), judged before
 `r10_p99_us`, so `worst-walk`, whose destruction bound must fail, still holds its walks.
 
