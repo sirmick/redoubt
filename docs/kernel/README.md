@@ -226,7 +226,7 @@ under load, against one party that tries them all at once.
 
 ## The TCB and its size
 
-Status: built · partly tested: the line counts are measured, not pinned by a case · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::every_configured_root_must_contain_rust_source
+Status: built · partly tested: the inclusive line counts in the table are snapshots, not pinned by a case · tested: bench:unsafe-budget, bench:size-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::every_configured_root_must_contain_rust_source
 
 The trusted computing base (TCB) is the code whose failure can break Redoubt's guarantees: the
 firmware interface, the loader and the kernel, with the libraries they link, plus any server that
@@ -322,8 +322,9 @@ two, where a file serves two mechanisms).
   `unsafe`, not that the comment is true, and it counts only the paths its budgets list: a TCB
   file no budget names is not counted, and the case cannot notice
   ([test bench](../testbench.md#the-unsafe-budget)).
-- **Size is measured, not budgeted.** The line counts above are read from the tree. No case fails
-  when the kernel grows; only `unsafe` has a ceiling.
+- **The table's inclusive line counts are snapshots.** The size budget has separate ceilings
+  for shipped code lines, excluding comments and tests, and fails if a trusted crate grows past
+  its ceiling ([the size budget](../testbench.md#the-size-budget)).
 - **One hart.** The kernel runs on one hart. The `smp` feature starts a second hart only to show
   that `KernelCell`'s spinlock holds under contention (`bench:smp-spike`); no user code runs on a
   second hart, and completion races between harts are not attacked by a case

@@ -160,7 +160,7 @@ principals' budgets.*
 
 ### The tree from the boot manifest
 
-<details><summary>Status: built · partly tested: the steward's carving of `users` is not built · tested (8)</summary>
+<details><summary>Status: built · partly tested: the steward's carving of `users` is not built · tested (9)</summary>
 
 - bench:init-boot
 - bench:init-servers
@@ -170,6 +170,7 @@ principals' budgets.*
 - host:redoubt-init::the_image_manifest_s_bound
 - host:redoubt-init::an_image_and_a_stack_larger_than_a_batch_count_one_batch
 - host:redoubt-init::a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused
+- host:redoubt-init::the_bound_uses_the_largest_declared_stack_batch
 
 </details>
 
@@ -183,7 +184,7 @@ keeps free. What `init` launches counts in the budgets it launches into.
   ([init](../servers/init.md#the-boot-manifest)).
 - **`INIT_PAGES` is `init`'s working set, with room to spare.** Everything `init` uses is charged
   to `root`:
-  - its first thread's 32-page stack;
+  - its first thread's stack: 32 pages reserved by the loader, with one page initially backed;
   - its heap, one fixed arena mapped once, for the manifest and the startup blocks it builds;
   - a handle table of up to 64 pages;
   - a page for each server endpoint it owns;
@@ -193,10 +194,14 @@ keeps free. What `init` launches counts in the budgets it launches into.
     stack at a time, copied through its pages and moved to the child
     ([the loader stub](../userland/native.md#the-loader-stub)).
 
-  With `beamlet` and the userland disk's `blkd` and `fsd`, the bound is 446 pages on both widths
-  (`beamlet-boot` prints it), and 1,024 at least doubles it. The image's `beamlet` is budgeted
-  24,576 pages, twice its measured use at the prompt (11,877 pages on rv64, 7,554 on rv32), so the
-  image's servers need about 34,600 of `system`'s pages: the image needs more than 512 MiB of RAM,
+  Each child's first-thread stack is charged to that server's own budget, at the manifest's
+  `stack_pages` size ([the boot manifest](../servers/init.md#the-boot-manifest)).
+
+  With `beamlet` and the userland disk's `blkd` and `fsd`, the image manifest's bound is 507 pages
+  on both widths (`init-boot` prints it), and the fixed 1,024-page limit more than doubles it.
+  The image's `beamlet` is budgeted 24,576 pages, twice its measured use at the prompt (11,877
+  pages on rv64, 7,554 on rv32), so the image's servers need about 34,600 of `system`'s pages:
+  the image needs more than 512 MiB of RAM,
   and the bench and `mkimage`'s instructions give it 1 GiB. The bound is a fixed count, not a share
   of RAM, because `init`'s needs do not grow with the machine, nor with the size of a program it
   starts, and a share of a large machine would sit idle in `root`. The manifest cannot change it,

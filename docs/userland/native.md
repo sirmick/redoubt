@@ -323,10 +323,11 @@ Every one is also to build for rv32, where the vendored crates are checked too, 
 
 ### The client library
 
-<details><summary>Status: built · partly tested: only on the host (no program on the machine links it yet); `fsd`'s operations and `consol`'s `size` and `resize` against in-test servers until `fsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested (28)</summary>
+<details><summary>Status: built · partly tested: `init-boot` exercises launching on the machine; `fsd`'s operations and `consol`'s `size` and `resize` remain tested against in-test servers until `fsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested (29)</summary>
 
 - bench:client-host-tests
 - bench:client-build
+- bench:init-boot
 - host:redoubt-client::each_operation_names_its_files_fids
 - host:redoubt-client::files_on_two_connections_are_refused_before_any_call
 - host:redoubt-client::a_child_gets_the_stub_its_image_a_stack_and_its_block
@@ -377,6 +378,12 @@ from its pool of I/O threads
 | `grants` | the launcher's ledger of what servers granted a child, released and disconnected when the child's exit notice arrives ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)) |
 | `typed` | one call for any typed protocol, over the module the generator wrote from its table ([wire](../servers/wire.md#wire-tables-and-the-generator)) |
 
+The `launch` builder's `stack_pages` chooses the first thread's mapped stack (16 pages by
+default, at most 128). Its `stack_tag` identifies a server's stack to the bench: a tagged launch
+paints the stack before the child starts, so a stopped-guest memory scan can measure the deepest
+unit it touched ([the memory budget](../testbench.md#the-memory-budget)); an untagged stack is
+zeroed.
+
 Time and randomness are the runtime's kernel calls, and raw `call`, `send` and `serve` are the
 runtime's `ipc`, which beamlet's natives use directly. `/net` is files, so `file` covers it. There
 is no module per typed server beyond `fsd`, whose operations name fids that live in Rust: for
@@ -413,10 +420,11 @@ tables through generated Elixir clients ([wire](../servers/wire.md#generated-cli
   `typed` calls the generated codecs through the `typed::Protocol` trait each generated module
   implements ([wire](../servers/wire.md#wire-tables-and-the-generator)).
 - **A launch refuses before the kernel does.** More than `MAX_START_HANDLES` handles, an empty
-  image or a block the parser refuses fails before `process_create`; a kernel refusal after it
-  hands back the caller's budget, holding the process that never started, for the caller to
-  destroy. The caller brings the stub's bytes as it brings the image's, and each job has its own
-  exit endpoint, since `process_create` gives no PID to tell two children's notices apart.
+  image, a stack of no pages or more than 128, or a block the parser refuses fails before
+  `process_create`; a kernel refusal after it hands back the caller's budget, holding the process
+  that never started, for the caller to destroy. The caller brings the stub's bytes as it brings
+  the image's, and each job has its own exit endpoint, since `process_create` gives no PID to tell
+  two children's notices apart.
 - **A release is bounded.** A child's grants are released when its exit notice arrives, each
   within `RELEASE_TIMEOUT` (a second: one short call a live server answers at once), so one hung
   server cannot stop a launcher reaping; a release that times out is reported in the job's end,
