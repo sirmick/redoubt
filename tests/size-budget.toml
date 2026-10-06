@@ -84,6 +84,11 @@ paths = ["libs/littlefs/src"]
 max_lines = 2033
 
 [[crate]]
+name = "libs/walfs"
+paths = ["libs/walfs/src"]
+max_lines = 1689
+
+[[crate]]
 name = "model"
 paths = ["model/src"]
 max_lines = 10240
