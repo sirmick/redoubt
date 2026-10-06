@@ -3,3 +3,6 @@ kind = "host-tests"
 packages = ["redoubt-rt"]
 tests = ["connection", "heap", "mapping_views", "ninep_status", "outcomes", "panic", "parked", "parked_write", "refusals", "registers", "regressions", "vectors"]
 miri = true
+fanout = { each = "file" }
+# heap's file is the longest: 60 to 96 s measured, and a third.
+timeout_secs = 128
