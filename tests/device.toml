@@ -1,6 +1,7 @@
 description = "Device objects and the Redoubt memory calls: map_device on an MMIO handle, with the length of what it mapped, and refused for every other kind; dma_alloc contiguous, zeroed and only with the DMA flag; map_anon zeroed and charged, unmap returning the pages, set_flags dropping and adding permissions without ever W+X (R11); system_reset only through the Reset right, which ends the case (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 device-test is in init's place, so it holds every device object the kernel made from
@@ -9,7 +10,7 @@ debug_assertions = true
 # no log-server here: only one process can own the UART, and this one maps it through its own
 # handle and prints on it.
 programs = ["device-test"]
-timeout_secs = 30
+timeout_secs = 10
 # Every check prints "ok" or "FAIL"; FAIL is forbidden, so a check that fails fails the case.
 # The last line is not enough on its own: `poweroff` requires the machine to go down through
 # `system_reset`, which only the Reset handle can do.

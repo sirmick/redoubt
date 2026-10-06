@@ -1,11 +1,12 @@
 description = "W^X per frame (R11): map_device and dma_alloc map read-write; set_flags refuses execute on device registers, a second mapping of them and a DMA page, and grants it on RAM; children holding the device fault on a fetch from either, by the kernel's exit notice (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # The first program, alone: it holds every device object and judges the kernel (docs/testbench.md,
 # "Rule F"). The children's verdicts are the exit notices the kernel writes.
 programs = ["device-exec-refused"]
-timeout_secs = 30
+timeout_secs = 10
 expect = [
     '^\[device-exec\] ok: map_device and dma_alloc map read-write$',
     '^\[device-exec\] ok: set_flags refuses execute on device registers and DMA pages$',

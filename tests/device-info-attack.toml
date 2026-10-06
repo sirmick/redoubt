@@ -1,12 +1,13 @@
 description = "device_info: the kernel names each device handle's device as its Devs entry (the Reset right, QEMU virt's UART at its base and size, its interrupt, every other MMIO region and then every other interrupt ascending), and refuses a budget and an endpoint (WrongObject), a closed handle, an index not held and a handle register wider than 32 bits (BadHandle); it maps and charges nothing"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # The bundle's first program holds every device object (kernel/boot.md, "Devices handed to the
 # first program"), the Reset right and the console, and prints through the console it maps
 # itself: there is no log-server here. Its verdict needs the power-off through the Reset right.
 programs = ["device-info-attack"]
-timeout_secs = 30
+timeout_secs = 10
 expect = [
     '^\[device-info\] mapped the console$',
     '^\[device-info\] ok: handle 4 is the Reset right$',

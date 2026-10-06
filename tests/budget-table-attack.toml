@@ -1,6 +1,7 @@
 description = "Exhausting the handle table ends in TooLarge at MAX_HANDLES = 4096 (32 pages of 128), each page charged to the holder's budget and freed when emptied or swept; system keeps serving"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # PID 2 log-server; PID 3 budget-victim, the first program started, holding the boot endpoint's
 # receive right and `system`; PID 4 the attacker, holding `users` (slot 4), never a device. Each
 # runs in a budget of its own under `system`.
@@ -9,7 +10,7 @@ programs = [
     { bin = "budget-victim", budgets = ["system"] },
     { bin = "budget-table-attack", budgets = ["users"] },
 ]
-timeout_secs = 30
+timeout_secs = 10
 # The attacker fills its table with revocation scopes until the kernel refuses, closes the last
 # page and reopens it, then destroys the pool, which closes
 # every scope. A table grown without bound, or a page index past the table, would take the
