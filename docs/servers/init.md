@@ -53,6 +53,7 @@ and `init`'s only input. Its entries:
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
+| `console` | optional; the principal whose unlabelled session the steward opens on the UART console ([steward](steward.md#authentication-and-sessions)); a name that is not a `principals` entry refuses the boot |
 
 - **Types.** Each field has one JSON type. A 64-bit quantity (a label id, an account, a size in
   pages or bytes, a deadline) is a decimal string; a small count (processes, a weight, a depth, a

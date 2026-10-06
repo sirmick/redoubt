@@ -382,6 +382,14 @@ Status: planned · M1 (separation and containment)
 - **Every id is unpredictable.** Session, request and connection ids are random 64-bit words from
   a keyed generator, never a counter, which would tell every principal how many the others made
   ([R36 (unpredictable ids)](#r36-unpredictable-ids)).
+- **The console is one principal's session.** The manifest's `console` names a principal; at
+  boot the steward opens that principal's unlabelled session on the UART console (`consoled`'s
+  connection at `/dev/cons`) and reopens it when it ends. The console's authority is that
+  principal's, stated in the manifest, never an unnamed one: physical access to the box is
+  already outside the threat model ([the tenets](../TENETS.md#threat-model)), so the field
+  records who the cable is, it does not grant more. A manifest without `console` starts no
+  console session; one naming no principal is refused by `init` at the manifest check, so the
+  steward never sees a bad name.
 - **Defaults.** The steward mounts known-sensitive places (`~/.ssh`, credential directories) from
   the principal's labelled volume.
 
