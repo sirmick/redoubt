@@ -26,6 +26,7 @@ recorded as ruled out, with the reason, so they are not proposed again without o
 | [ASLR](aslr.md) | randomised address-space layout |
 | [Scheduling extensions](scheduling-extensions.md) | time donation and CPU quotas |
 | [Label extensions](label-extensions.md) | taint-on-read and integrity labels |
+| [Assurance](assurance.md) | verified components, model checking, Kani, Verus, gateware proofs and adversarial agent games |
 
 **A direction, the owner's:** the system-call ABI is kept free of the MMU (a transport trait,
 lends and transfers stated as ownership), so that a backend without one, cooperative and in one
