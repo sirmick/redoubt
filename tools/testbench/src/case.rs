@@ -215,6 +215,10 @@ pub struct HostTests {
     /// Run under nightly Miri, which checks the `unsafe` a native run only executes.
     #[serde(default)]
     pub miri: bool,
+    /// Host programs the tests run as an oracle (`mkfs.erofs`): each must be on the path, or the
+    /// case is something the host lacks, a skip only with `--allow-skip`.
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
