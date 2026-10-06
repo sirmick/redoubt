@@ -170,6 +170,9 @@ impl Heap {
     /// The record the bench reads.
     pub fn record(&self) -> &Record { &self.record }
 
+    /// The pages the heap holds now, small classes' pages and live large blocks.
+    pub fn held(&self) -> usize { self.held.load(Ordering::Relaxed) }
+
     /// `len` bytes of fresh pages (a multiple of the page size), unless they would take the heap
     /// past its cap. Needs the lock. 0 if memory is exhausted or capped.
     fn pages(&self, locked: &Locked, len: usize) -> usize {

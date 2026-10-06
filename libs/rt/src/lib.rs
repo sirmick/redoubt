@@ -79,3 +79,8 @@ static HEAP: heap::Heap = heap::Heap::new();
 /// from the boot manifest"). Every other program's heap grows on demand.
 #[cfg(target_os = "none")]
 pub fn fix_heap(pages: usize) -> Result<(), abi::Error> { HEAP.fix(pages) }
+
+/// This program's heap: the pages it holds now, and the most it has held at once (its record's
+/// peak). For a program to report its own footprint; the bench reads the record itself.
+#[cfg(target_os = "none")]
+pub fn heap_pages() -> (usize, u64) { (HEAP.held(), HEAP.record().get(heap::Record::PEAK)) }
