@@ -55,7 +55,9 @@ pattern ever matches, and the boot ends as the case says. Three patterns are alw
 `PANIC`, `TEST FAILED` and `WARNING: INSECURE`. After the last `expect`, and any sessions, the bench
 keeps reading for 50 ms (1 s in a checked build), so a forbidden line right after the last expected
 one still fails the case. With `poweroff = true` it reads instead until QEMU exits, and requires the
-exit status the case names (0 by default; 255 for an SBI system failure). The bench starts QEMU
+exit status the case names (0 by default; 255 for an SBI system failure). A boot that ends, or
+times out, while an `expect` is still waited for fails with the first failure a program printed
+(`[name] FAIL`) ahead of the line it waited for, since that is the cause. The bench starts QEMU
 with Linux's parent-death signal asked for between fork and exec, so a bench killed at its
 timeout, even outright, takes its QEMU with it and leaves no guest running to skew the next run.
 

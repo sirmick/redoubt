@@ -43,5 +43,5 @@ expect = [
     "^KERNEL-CONTAINMENT TEST PASSED$",
     "^SCHED-TRACE-END \\d+ dropped 0$",
 ]
-forbid = ['\\[containment\\] FAIL', 'PROGRAM HALT']
+forbid = ['\[containment\] FAIL', 'PROGRAM HALT']
 poweroff = true
