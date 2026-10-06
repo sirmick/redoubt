@@ -2,7 +2,8 @@
 //! volume, to the badge `init` minted for the volume's `littlefsd` (docs/servers/verityd.md,
 //! "Messages").
 //!
-//! - `info` gives the volume's data blocks in sectors, read-only, whether or not the start check passed: an
+//! - `info` gives the volume's data blocks in sectors, read-only, whether or not the start check passed (a
+//!   signed volume refused before its N is known gives the range's blocks before its root block): an
 //!   `littlefsd` that cannot size its range exits and would be restarted, while one whose mount fails serves
 //!   the volume as corrupt and stays up (servers/littlefsd.md R49).
 //! - `read` works in whole blocks: each block the request touches is checked through the tree
@@ -24,10 +25,10 @@ use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::blkd::{
     ErrorCode, FlushReply, Info, InfoReply, Message, Read, ReadReply, Reply,
 };
-use redoubt_verity::{Geometry, Hash, SECTORS_PER_BLOCK};
+use redoubt_verity::SECTORS_PER_BLOCK;
 
 use crate::volume::{Bad, Refusal, Volume};
-use crate::{Range, SECTOR};
+use crate::{Mode, Range, SECTOR};
 
 /// The most sectors one `read` may ask for, as at `blkd` (servers/blkd.md, "Messages").
 pub const MAX_SECTORS: u32 = 64;
@@ -82,19 +83,22 @@ pub struct Verityd<R> {
 }
 
 impl<R: Range> Verityd<R> {
-    /// Checks `range` against `root` for a volume of `geometry`, and serves it under `labels`.
-    pub fn new(range: R, geometry: Geometry, root: &Hash, labels: Vec<u64>) -> Verityd<R> {
+    /// Checks `range` against `mode` ([`Volume::open`]), and serves it under `labels`.
+    pub fn new(range: R, mode: &Mode, labels: Vec<u64>) -> Verityd<R> {
         let mut scratch = Vec::new();
         let bytes = MAX_SECTORS as usize * SECTOR as usize;
-        let volume = match scratch.try_reserve_exact(bytes) {
-            Ok(()) => Volume::open(range, geometry, root),
-            Err(_) => Err(Refusal::NoMemory),
+        let (volume, sectors) = match (scratch.try_reserve_exact(bytes), mode) {
+            (Ok(()), _) => Volume::open(range, mode),
+            (Err(_), Mode::Pinned { geometry, .. }) => {
+                (Err(Refusal::NoMemory), geometry.data_blocks() * SECTORS_PER_BLOCK)
+            }
+            (Err(_), Mode::Signed { .. }) => (Err(Refusal::NoMemory), 0),
         };
         scratch.resize(scratch.capacity().min(bytes), 0);
         let said = volume.as_ref().err().map(|why| Said::Refused(*why));
         Verityd {
             volume,
-            sectors: geometry.data_blocks() * SECTORS_PER_BLOCK,
+            sectors,
             labels,
             scratch,
             said,

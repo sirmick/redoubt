@@ -109,6 +109,8 @@ pub enum Why {
     BlkdEndpoint,
     /// A verified volume's `verity.server` that is not a `verityd` entry.
     NotVerityd,
+    /// A verified volume's `verity` that is not one mode, pinned or signed, with both its members.
+    VerityMode,
     /// A `verityd` no volume names as its verifier.
     NoVolume,
     /// A `verityd` that attaches a volume itself or receives on no endpoint: its range and its
@@ -169,6 +171,7 @@ impl fmt::Display for Why {
             Why::NoKeyd => "no keyd to ask about the keys the box is authenticated by (R35)",
             Why::ConsoledRoot => "only init holds a root badge at consoled",
             Why::NotVerityd => "a volume's verifier is a verityd entry",
+            Why::VerityMode => "a verified volume is pinned (root and blocks) or signed (key and floor)",
             Why::NoVolume => "a verityd verifies the one volume that names it",
             Why::Verifier => "a verityd receives on an endpoint and takes its volume from init alone",
             Why::VerifierLabels => "a verityd's labels are its volume's",

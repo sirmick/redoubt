@@ -164,3 +164,90 @@ fn a_root_is_64_lowercase_hex_digits() {
         assert_eq!(from_hex(bad), None, "{bad}");
     }
 }
+
+fn root_block() -> RootBlock {
+    RootBlock {
+        geometry: Geometry::new(4054).unwrap(),
+        version: 7,
+        root: core::array::from_fn(|i| i as u8),
+        signature: core::array::from_fn(|i| 0x80 | i as u8),
+    }
+}
+
+/// The layout as servers/verityd.md states it, byte by byte, and read back.
+#[test]
+fn a_root_block_is_its_documented_bytes() {
+    let r = root_block();
+    let block = r.encode();
+    assert_eq!(&block[..8], b"RVOLROOT");
+    assert_eq!(&block[8..16], &4054u64.to_le_bytes());
+    assert_eq!(&block[16..24], &7u64.to_le_bytes());
+    assert_eq!(&block[24..56], &r.root);
+    assert_eq!(&block[56..120], &r.signature);
+    assert!(block[120..].iter().all(|b| *b == 0));
+    assert_eq!(ROOT_BLOCK_USED, 120);
+    assert_eq!(RootBlock::parse(&block), Ok(r));
+    assert_eq!(r.signed(), redoubt_signing::volume_preimage(4054, 7, &r.root));
+}
+
+/// A short or long block, the wrong magic, a block count with no geometry, and any byte of the
+/// fill are refused.
+#[test]
+fn a_malformed_root_block_is_refused() {
+    let block = root_block().encode();
+    assert_eq!(RootBlock::parse(&block[..BLOCK - 1]), Err(Malformed));
+    assert_eq!(RootBlock::parse(&[]), Err(Malformed));
+    let mut long = block.to_vec();
+    long.push(0);
+    assert_eq!(RootBlock::parse(&long), Err(Malformed));
+    let changed = |at: usize, to: &[u8]| {
+        let mut bad = block;
+        bad[at..at + to.len()].copy_from_slice(to);
+        RootBlock::parse(&bad)
+    };
+    assert_eq!(changed(0, b"R"), Ok(root_block()), "the same byte changes nothing");
+    assert_eq!(changed(0, b"S"), Err(Malformed));
+    assert_eq!(changed(8, &0u64.to_le_bytes()), Err(Malformed), "no blocks");
+    assert_eq!(changed(8, &u64::MAX.to_le_bytes()), Err(Malformed), "no tree fits beside them");
+    for at in [120, 2000, BLOCK - 1] {
+        assert_eq!(changed(at, &[1]), Err(Malformed), "fill byte {at}");
+    }
+}
+
+/// Arbitrary bytes are a root block that encodes back to themselves, or refused, and never panic:
+/// the body of the fuzz target (`fuzz/fuzz_targets/root_block.rs`), over generated blocks.
+#[test]
+fn arbitrary_bytes_are_one_root_block_or_none() {
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let good = root_block().encode();
+    let mut parsed = 0;
+    for _ in 0..2000 {
+        let mut block = good;
+        // A few bytes changed at random, so some of what is tried is a root block.
+        for _ in 0..next() % 3 {
+            let at = (next() % ROOT_BLOCK_USED as u64) as usize;
+            block[at] = next() as u8;
+        }
+        let len = if next() % 8 == 0 { (next() % BLOCK as u64) as usize } else { BLOCK };
+        if let Ok(r) = RootBlock::parse(&block[..len]) {
+            assert_eq!(r.encode(), block);
+            parsed += 1;
+        }
+    }
+    assert!(parsed > 100, "{parsed}");
+}
+
+/// The root block is the range's last whole block: a partial block at the end is not it.
+#[test]
+fn the_root_block_is_the_last_whole_block() {
+    assert_eq!(root_block_at(0), None);
+    assert_eq!(root_block_at(SECTORS_PER_BLOCK - 1), None);
+    assert_eq!(root_block_at(SECTORS_PER_BLOCK), Some(0));
+    assert_eq!(root_block_at(10 * SECTORS_PER_BLOCK + 7), Some(9));
+}

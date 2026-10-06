@@ -8,6 +8,7 @@ roots = [
     "libs/littlefs/fuzz",
     "libs/rt/fuzz",
     "libs/sys/fuzz",
+    "libs/verity/fuzz",
     "libs/wire/fuzz",
     "servers/blkd/fuzz",
     "servers/init/fuzz",

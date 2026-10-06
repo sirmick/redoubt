@@ -1,11 +1,11 @@
 # verityd
 
-`verityd` makes a volume verified. It sits between [`blkd`](blkd.md) and the volume's file
-server, [`erofsd`](erofsd.md) for the read-only system volume or a [`littlefsd`](littlefsd.md): it
-holds the volume's range at `blkd`, checks every block it reads against a hash tree whose root the
-signed boot manifest pins, and serves only blocks that check, on `blkd`'s own protocol. So
-everything the file server parses on a verified volume, data and metadata alike, is what the
-image's builder wrote.
+`verityd` makes a volume verified. It sits between [`blkd`](blkd.md) and the volume's file server,
+[`erofsd`](erofsd.md) for the read-only system volume or a [`littlefsd`](littlefsd.md): it holds the
+volume's range at `blkd`, checks every block it reads against a hash tree whose root the signed boot
+manifest pins, or that the volume's own root block gives, signed under a key the manifest names, and
+serves only blocks that check, on `blkd`'s own protocol. So everything the file server parses on a
+verified volume, data and metadata alike, is what the image's builder wrote.
 
 ## Purpose
 
@@ -31,12 +31,16 @@ read whole.
 key); a manifest that sets one itself is refused.
 - `endpoint=NAME`, the manifest's name of the endpoint it receives on (`verity:system`).
 - `labels=ID[,ID...]`, the volume's label set, absent when it is empty.
-- `root=<64 lowercase hex>`, the root the manifest pins, and `blocks=N`, the volume's data blocks.
+- One mode ([below](#the-root-block-and-the-two-modes)):
+  - pinned: `root=<64 lowercase hex>`, the root the manifest pins, and `blocks=N`, the volume's
+    data blocks;
+  - signed: `key=<64 lowercase hex>`, the Ed25519 key the volume's root block is signed under, and
+    `floor=N`, the lowest version it may carry.
 - One named handle, `volume`: the volume's range at its disk's `blkd`.
 
-Anything else, any of them twice, or a block count of 0 stops it before it serves. It serves one
-badge, 1, the one `init` mints at its endpoint for the volume's file server; any other gets
-`not_permitted`.
+Anything else, any of them twice, both modes or a part of one, or a block count of 0 stops it before
+it serves. It serves one badge, 1, the one `init` mints at its endpoint for the volume's file
+server; any other gets `not_permitted`.
 
 ### The tree
 
@@ -64,6 +68,58 @@ the root. The geometry is overflow-checked arithmetic in one function. A tree co
 its volume, so any error in data or tree is detected, which is stronger than a CRC; nothing
 corrects one.
 
+### The root block, and the two modes
+
+<details><summary>Status: built · tested (11)</summary>
+
+- bench:verity-signed
+- bench:verity-bad-signature
+- bench:verity-rollback
+- host:redoubt-verity::a_root_block_is_its_documented_bytes
+- host:redoubt-verity::a_malformed_root_block_is_refused
+- host:redoubt-verity::arbitrary_bytes_are_one_root_block_or_none
+- host:redoubt-verity::the_root_block_is_the_last_whole_block
+- host:redoubt-verityd::a_signed_volume_opens_from_its_root_block_at_or_above_its_floor
+- host:redoubt-verityd::a_root_block_that_does_not_verify_is_refused_naming_the_signature
+- host:redoubt-verityd::a_root_block_below_the_floor_is_refused_naming_the_version
+- host:testbench::a_signed_partition_ends_in_its_root_block_signed_deterministically
+
+</details>
+
+A volume is checked against one of two things, which its manifest entry's `verity` states
+([init](init.md#the-boot-manifest)):
+- **Pinned:** the manifest gives the root and N. The volume changes only with the bundle.
+- **Signed:** the manifest gives a key and a floor, and the volume carries its own N and root in a
+  root block, so it can be updated apart from the bundle.
+
+**The root block** is the last whole block of the volume's range, after the tree, defined once in
+`libs/verity` (`RootBlock`):
+- a magic, `RVOLROOT`; N and a version, each a `u64` little-endian; the root; an Ed25519 signature
+  of 64 bytes; then zeros to the end of the block. Any other byte there is malformed, so a block
+  has one reading.
+- The signature covers the preimage `redoubt_signing::volume_preimage` builds, under the domain
+  `"redoubt.volume.v1\0"`, built as the bundle's is: the domain, a fixed-width length, then N,
+  the version and the root ([boot](../kernel/boot.md#verified-boot)).
+- It is checked with `ed25519-compact`, the loader's and `keyd`'s crate at the same version: one
+  Ed25519 on the box.
+
+**At start, signed,** `verityd` reads the root block, parses it, verifies the signature under
+`key=`, and refuses the volume if the version is below `floor=`, a rollback; nothing in the block
+is used before its signature verifies. Then it takes N and the root from the block and goes on as
+pinned: the data and tree must end before the root block, and the top tree block must hash to the
+root. A refusal names its reason in the one line [below](#starting): `its root block is
+malformed`, `its root block's signature does not verify under its key`, or `its root block's
+version 1 is below the floor 2`. A refused signed volume, whose N is not believed, answers `info`
+with its range's whole blocks before the root block.
+
+**The key** is the manifest's: 64 hex digits, or `bundle`, the key the loader verified the
+bundle with, named so no copy of it can drift. **The floor** is the
+manifest's too, so it comes and goes with the bundle ([below](#residual-risks)).
+
+**Signing is on the build host only** ([R35 (key separation)](init.md#r35-key-separation)): the
+bench's packer signs a recipe's `sign = { key = PATH, version = N }` with the 32-byte seed in
+`PATH` ([the bench](../testbench.md#disks-and-network-cards)). The device never holds the key.
+
 ### Starting
 
 <details><summary>Status: built · tested (4)</summary>
@@ -75,7 +131,8 @@ corrects one.
 
 </details>
 
-At start `verityd` calls `info` at `blkd`, refuses a range shorter than the data blocks and their
+At start `verityd` calls `info` at `blkd`, for a signed volume checks its root block
+([above](#the-root-block-and-the-two-modes)), refuses a range shorter than the data blocks and their
 tree, reads the top tree block and checks it against the root. If any of that fails, it says one
 line on its console naming the reason (`verityd: the volume is refused: ...`), answers `info`
 truthfully, answers every `read` with `failed`, and stays up. So a bad medium is never a restart
@@ -133,6 +190,13 @@ matters: a file server that cannot size its range exits, and would be restarted.
 - **Measured** by bench:boot-profile and bench:boot-profile-unverified: what verification costs
   the boot, verified against unverified, on littlefs and on EROFS, is
   [beamlet's table](../userland/beamlet.md#beamlet-on-redoubt).
+- **A signed volume costs one Ed25519 verification at start:** `verityd`'s start on
+  `verity-signed`'s volume, root block and top block read, takes about 140 ms in guest time on
+  either width under `icount` (`shift=3`).
+- **The verifier's code is built for size.** `ed25519-compact`, the box's one Ed25519, is built at
+  `opt-level = "z"` (the root `Cargo.toml`): at the workspace's `"s"` its verification inlines
+  into about 900 KB on rv32, more than a verifier's budget holds; at `"z"` it is about 20 KB, and
+  the check is slower for it (the loader's bundle check by under 7% per byte).
 - **Read-ahead is not done** ([below](#a-cache-of-checked-data-blocks)).
 
 ### A cache of checked data blocks
@@ -168,12 +232,16 @@ Status: built · tested: host:redoubt-verityd::only_the_volumes_badge_is_served,
 
 ### R76 (verified volumes)
 
-<details><summary>Status: built · tested (9)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - bench:userland-boot
 - bench:userland-bad-start
 - bench:verity-flipped-tree
 - bench:verity-wrong-root
+- bench:verity-bad-signature
+- bench:verity-rollback
+- host:redoubt-verityd::a_root_block_that_does_not_verify_is_refused_naming_the_signature
+- host:redoubt-verityd::a_root_block_below_the_floor_is_refused_naming_the_version
 - host:redoubt-verity::a_flipped_bit_at_each_level_is_refused
 - host:redoubt-verityd::a_wrong_root_or_top_is_refused
 - host:redoubt-verityd::a_mismatch_is_failed_and_said_naming_the_block
@@ -183,10 +251,11 @@ Status: built · tested: host:redoubt-verityd::only_the_volumes_badge_is_served,
 </details>
 
 A reader of a verified volume sees only blocks that hash, through the tree, to the root the signed
-manifest gives. Otherwise it sees a device failure, which the file server serves as `corrupt`.
-`erofsd` and `littlefsd` both poison a volume on an I/O error until they start or mount it again,
-so one bad block fails closed for the whole volume: later loads fail too, and a reader keeps what it
-already has.
+manifest gives, or, for a signed volume, to the root its root block gives, signed under the
+manifest's key at a version no lower than the manifest's floor. Otherwise it sees a device failure,
+which the file server serves as `corrupt`. `erofsd` and `littlefsd` both poison a volume on an I/O
+error until they start or mount it again, so one bad block fails closed for the whole volume: later
+loads fail too, and a reader keeps what it already has.
 
 ## Failure and restart
 
@@ -201,9 +270,15 @@ Status: built · partly tested: the exits on bad arguments and on no `volume` ha
 
 ## Residual risks
 
-- **Rollback is the bundle's.** The root comes with the signed manifest, so an older bundle brings
-  its older volume back with it; [boot](../kernel/boot.md) has no rollback protection, and this is
-  no worse.
+- **Rollback is the bundle's.** The root, or a signed volume's floor, comes with the signed
+  manifest, so an older bundle brings its older volume, or a lower floor, back with it;
+  [boot](../kernel/boot.md) has no rollback protection, and this is no worse. Nothing on the box
+  raises a floor: a higher one arrives with a new bundle, and a monotonic store belongs to
+  [M5 (persist, install, share)](../plan/m5-persist.md).
+- **A root block names no volume.** Its signature covers N, the version and the root, not which
+  volume it is, so two volumes signed under one key at versions over the floor can stand in for
+  each other on a disk. A deployment gives each signed volume a key of its own, until a later
+  version of the domain signs a name.
 - **Writable volumes are unverified.** They keep littlefs's metadata CRC and
   [R49](littlefsd.md#r49-a-hostile-medium-is-corrupt-not-a-crash) only.
 - **A reader trusts the file server and `verityd`.** Under R76 the reader of a verified volume trusts the

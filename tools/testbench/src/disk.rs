@@ -1,17 +1,19 @@
 //! Disks: a GPT of equal partitions for a case's `[disk]`, and a disk recipe (`image/disk.toml`)
 //! packed whole, its partition table by `blkd`'s builder, each littlefs partition by `littlefsd`'s
 //! own packer and each EROFS partition by `libs/erofs`'s writer (docs/testbench.md, "Disks and
-//! network cards"; image/README.md). A partition the
-//! recipe marks `verity` holds the largest volume that fits beside its hash tree, and the tree
-//! after it (docs/servers/verityd.md, "The tree"); its root and block count are what a manifest
-//! pins.
+//! network cards"; image/README.md). A partition the recipe marks `verity` holds the largest
+//! volume that fits beside its hash tree, and the tree after it (docs/servers/verityd.md, "The
+//! tree"); its root and block count are what a manifest pins. One the recipe also `sign`s ends in
+//! a root block instead, its N, version and root signed under the volume domain with a seed file
+//! on the build host ("The root block, and the two modes"): the device never holds the key (R35).
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
+use ed25519_compact::{KeyPair, Seed};
 use redoubt_blkd::image::{Entry, FIRST_USABLE, Image};
 use redoubt_littlefsd::pack;
-use redoubt_verity::{BLOCK, Geometry, Hash, SECTORS_PER_BLOCK};
+use redoubt_verity::{BLOCK, Geometry, Hash, RootBlock, SECTORS_PER_BLOCK, root_block_at};
 use serde::Deserialize;
 
 /// A disk sector, in bytes.
@@ -52,6 +54,8 @@ pub struct Partition {
     /// For `erofs`, for a case: one thing the packed volume is made to hold that `erofsd` must
     /// serve as corrupt ([`Damage`]).
     pub damage: Option<Damage>,
+    /// For a verified volume, a signed root block in place of a pinned root.
+    pub sign: Option<Sign>,
 }
 
 /// What an EROFS volume is damaged with after its pack, for `erofs-corrupt`
@@ -67,8 +71,18 @@ pub struct Damage {
     pub path: String,
 }
 
-/// A verified partition as packed: the root and data blocks its manifest entry pins, and where
-/// its volume and tree lie on the disk.
+/// A signed volume's root block, as a recipe asks for it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sign {
+    /// The 32-byte Ed25519 seed file it is signed with, relative to the workspace root.
+    pub key: PathBuf,
+    /// The version it carries, which `verityd` holds to the manifest's floor.
+    pub version: u64,
+}
+
+/// A verified partition as packed: the root and data blocks its manifest entry pins, or its root
+/// block carries, and where its volume and tree lie on the disk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verified {
     /// The volume's name, as the manifest's `volumes` entry names it.
@@ -77,6 +91,8 @@ pub struct Verified {
     pub geometry: Geometry,
     /// The partition's first byte on the disk.
     pub start: usize,
+    /// A signed volume's root block: its version, and its first byte on the disk.
+    pub signed: Option<(u64, usize)>,
 }
 
 impl Verified {
@@ -149,9 +165,15 @@ impl Recipe {
                             g.read
                         );
                     }
+                    ensure!(
+                        p.verity || p.sign.is_none(),
+                        "{}: partition {}: only a verified volume is signed",
+                        path.display(),
+                        p.name
+                    );
                 }
                 "noise" => ensure!(
-                    p.stage.is_none() && p.generated.is_none() && !p.verity,
+                    p.stage.is_none() && p.generated.is_none() && !p.verity && p.sign.is_none(),
                     "{}: partition {}: noise is neither staged nor generated",
                     path.display(),
                     p.name
@@ -227,13 +249,8 @@ fn noise(bytes: &mut [u8]) {
     }
 }
 
-/// The disk `recipe` describes, its stages read under `root`; `stage`, if given, stands in for
-/// every littlefs and erofs partition's own.
-pub fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<Vec<u8>> {
-    pack(recipe, root, stage).map(|(disk, _)| disk)
-}
-
-/// [`pack_disk`], and each verified partition's root and geometry, in table order.
+/// The disk `recipe` describes, its stages read under `root`, and each verified partition as
+/// packed, in table order; `stage`, if given, stands in for every littlefs and erofs partition's own.
 pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u8>, Vec<Verified>)> {
     ensure!(recipe.size_kib > 0, "a disk of no size");
     let sectors = recipe.size_kib * 1024 / SECTOR;
@@ -265,10 +282,15 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
             staged.push((name, data));
         }
         let sectors = at.last_lba - at.first_lba + 1;
-        // A verified volume is the largest whose data and tree fit the partition.
+        // A verified volume is the largest whose data and tree fit the partition, before its root
+        // block if it is signed: the partition's last whole block.
+        let room = match &p.sign {
+            Some(_) => root_block_at(sectors),
+            None => Some(sectors / SECTORS_PER_BLOCK),
+        };
         let geometry = match p.verity {
             true => Some(
-                Geometry::largest(sectors / SECTORS_PER_BLOCK)
+                room.and_then(Geometry::largest)
                     .with_context(|| format!("{}: no room for a verified volume", p.name))?,
             ),
             false => None,
@@ -306,11 +328,24 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
         disk[start..start + volume.len()].copy_from_slice(&volume);
         if let Some(geometry) = geometry {
             let mut tree = vec![0u8; geometry.tree_blocks() as usize * BLOCK];
-            let root = redoubt_verity::build(&geometry, &volume, &mut tree)
+            let hash = redoubt_verity::build(&geometry, &volume, &mut tree)
                 .map_err(|_| anyhow::anyhow!("{}: the volume is not its geometry's size", p.name))?;
             let at = start + volume.len();
             disk[at..at + tree.len()].copy_from_slice(&tree);
-            verified.push(Verified { name: p.name.clone(), root, geometry, start });
+            let signed = match (&p.sign, room) {
+                (Some(sign), Some(blocks)) => {
+                    let at = start + blocks as usize * BLOCK;
+                    disk[at..at + BLOCK].copy_from_slice(&root_block(
+                        &root.join(&sign.key),
+                        sign.version,
+                        geometry,
+                        hash,
+                    )?);
+                    Some((sign.version, at))
+                }
+                _ => None,
+            };
+            verified.push(Verified { name: p.name.clone(), root: hash, geometry, start, signed });
         }
     }
     Ok((disk, verified))
@@ -390,6 +425,28 @@ fn damage_erofs(volume: &mut [u8], damage: &Damage) -> Result<()> {
     Ok(())
 }
 
+/// The root block of a volume of `geometry` at `version` and `root`, signed with the 32-byte seed
+/// in the file `key`. Ed25519 is deterministic, so the same inputs sign the same block.
+fn root_block(key: &Path, version: u64, geometry: Geometry, root: Hash) -> Result<[u8; BLOCK]> {
+    let seed = std::fs::read(key).with_context(|| format!("reading {}", key.display()))?;
+    let seed: [u8; 32] =
+        seed.try_into().map_err(|_| anyhow::anyhow!("{}: a seed is 32 bytes", key.display()))?;
+    let mut block = RootBlock { geometry, version, root, signature: [0; 64] };
+    block.signature = *KeyPair::from_seed(Seed::new(seed)).sk.sign(block.signed(), None);
+    Ok(block.encode())
+}
+
+/// Flips one bit of the version in the signed volume `v`'s root block on `disk`, after the
+/// signing: the signature no longer verifies.
+pub fn flip_version(disk: &mut [u8], v: &Verified) -> Result<()> {
+    let (_, at) = v.signed.with_context(|| format!("{} is not signed", v.name))?;
+    let block = &mut disk[at..at + BLOCK];
+    let mut changed = RootBlock::parse(block).map_err(|_| anyhow::anyhow!("{}: no root block", v.name))?;
+    changed.version ^= 1;
+    block.copy_from_slice(&changed.encode());
+    Ok(())
+}
+
 /// Flips one bit of `file`'s bytes where the verified volume `v` holds them on `disk`, after the
 /// pack, so the volume no longer hashes to its root: a 64-byte run of the file from its middle,
 /// found exactly once in the volume's data blocks.
@@ -418,6 +475,11 @@ pub fn flip_tree(disk: &mut [u8], v: &Verified) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The disk alone.
+    fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<Vec<u8>> {
+        pack(recipe, root, stage).map(|(disk, _)| disk)
+    }
 
     /// A stage of its own under the system's temporary directory.
     fn stage(name: &str) -> PathBuf {
@@ -621,6 +683,61 @@ mod tests {
             damage = { what = \"magic\" }\n";
         std::fs::write(&path, littlefs).unwrap();
         assert!(Recipe::load(&path).is_err(), "only an erofs volume is damaged");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A signed partition is its volume, its tree, and its root block in its last whole block,
+    /// signed with the seed file so it verifies under the bundle's key (the seed is the bundle
+    /// builder's): byte-identical in two packs, Ed25519 being deterministic. A flipped version
+    /// no longer verifies; a seed of the wrong length and a signed volume that is not verified are
+    /// refused.
+    #[test]
+    fn a_signed_partition_ends_in_its_root_block_signed_deterministically() {
+        use ed25519_compact::{PublicKey, Signature};
+        let dir = stage("signed");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let seed = root.join("tests/data/verity/dev-seed");
+        let text = |sign: &str| {
+            format!(
+                "size_kib = 2048\n[[partition]]\nname = \"system\"\nfs = \"littlefs\"\nverity = true\n{sign}"
+            )
+        };
+        let sign = format!("sign = {{ key = {:?}, version = 3 }}\n", seed.display().to_string());
+        let recipe: Recipe = toml::from_str(&text(&sign)).unwrap();
+        let (disk, verified) = pack(&recipe, &root, Some(&dir)).unwrap();
+        assert_eq!((disk.clone(), verified.clone()), pack(&recipe, &root, Some(&dir)).unwrap());
+        let [v] = &verified[..] else { panic!("one verified partition") };
+        let (version, at) = v.signed.unwrap();
+        let end = disk.len() - (FIRST_USABLE * SECTOR) as usize;
+        assert_eq!((version, at), (3, (end - v.start) / BLOCK * BLOCK + v.start - BLOCK));
+        assert!(
+            v.start + (v.geometry.total_sectors() / SECTORS_PER_BLOCK) as usize * BLOCK <= at,
+            "before it"
+        );
+        let block = RootBlock::parse(&disk[at..at + BLOCK]).unwrap();
+        assert_eq!((block.geometry, block.version, block.root), (v.geometry, 3, v.root));
+        let verify = |b: &RootBlock| {
+            PublicKey::new(redoubt_signing::DEV_PUBLIC_KEY).verify(b.signed(), &Signature::new(b.signature))
+        };
+        assert!(verify(&block).is_ok());
+        let mut flipped = disk.clone();
+        flip_version(&mut flipped, v).unwrap();
+        assert_eq!(flipped.iter().zip(&disk).filter(|(a, b)| a != b).count(), 1);
+        let changed = RootBlock::parse(&flipped[at..at + BLOCK]).unwrap();
+        assert_eq!(changed.version, 2);
+        assert!(verify(&changed).is_err());
+        // Without `sign`, the same partition has no root block: the volume fills it.
+        let (_, plain) = pack(&toml::from_str(&text("")).unwrap(), &root, Some(&dir)).unwrap();
+        assert!(plain[0].signed.is_none() && plain[0].geometry.data_blocks() >= v.geometry.data_blocks());
+        assert!(flip_version(&mut flipped, &plain[0]).is_err());
+        let short = dir.join("short-seed");
+        std::fs::write(&short, [0x42; 31]).unwrap();
+        let sign = format!("sign = {{ key = {:?}, version = 3 }}\n", short.display().to_string());
+        assert!(pack(&toml::from_str(&text(&sign)).unwrap(), &root, Some(&dir)).is_err(), "31 bytes");
+        let path = std::env::temp_dir().join(format!("testbench-signed-{}.toml", std::process::id()));
+        std::fs::write(&path, text(&sign).replace("verity = true\n", "stage = \"s\"\n")).unwrap();
+        assert!(Recipe::load(&path).is_err(), "only a verified volume is signed");
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }

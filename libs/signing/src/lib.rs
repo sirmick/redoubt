@@ -19,6 +19,10 @@
 //! the container it is reading (the initrd, after the 64-byte signature). It must never take a
 //! length out of the signed bytes: those are the attacker's.
 //!
+//! A verified volume's root block (`docs/servers/verityd.md`, "The root block, and the two modes")
+//! is signed over `"redoubt.volume.v1\0" || u64_le(48) || u64_le(N) || u64_le(version) || root`,
+//! all of it built by `volume_preimage` here: the packer signs it and `verityd` verifies it.
+//!
 //! The other domains (`"redoubt.audit.v1\0"`, today defined in `keyd` itself, see
 //! `docs/servers/keyd.md`; `"redoubt.pkg.v1\0"` for packages, `docs/servers/pkg.md`, not built
 //! yet) belong here too, built the same way.
@@ -57,6 +61,33 @@ pub fn bundle_preamble(len: u64) -> [u8; BUNDLE_PREAMBLE_LEN] {
     preamble
 }
 
+/// A verified volume's root block signing domain, NUL-terminated (servers/verityd.md, "The root
+/// block, and the two modes").
+pub const VOLUME_DOMAIN: &[u8] = b"redoubt.volume.v1\0";
+
+/// Bytes a volume's root block signs after its preamble: N, the version, and the root.
+pub const VOLUME_SIGNED_LEN: usize = 2 * core::mem::size_of::<u64>() + 32;
+
+/// Bytes of a volume's whole preimage: the domain, the `u64_le` length, and what it counts.
+pub const VOLUME_PREIMAGE_LEN: usize = VOLUME_DOMAIN.len() + core::mem::size_of::<u64>() + VOLUME_SIGNED_LEN;
+
+/// The preimage a verified volume's root block is signed over: `"redoubt.volume.v1\0" ||
+/// u64_le(48) || u64_le(blocks) || u64_le(version) || root`. Every field is fixed-width, so the
+/// length is a constant; it is there so the construction is the bundle's.
+pub fn volume_preimage(blocks: u64, version: u64, root: &[u8; 32]) -> [u8; VOLUME_PREIMAGE_LEN] {
+    let mut preimage = [0u8; VOLUME_PREIMAGE_LEN];
+    let (domain, rest) = preimage.split_at_mut(VOLUME_DOMAIN.len());
+    domain.copy_from_slice(VOLUME_DOMAIN);
+    let (length, rest) = rest.split_at_mut(8);
+    length.copy_from_slice(&(VOLUME_SIGNED_LEN as u64).to_le_bytes());
+    let (n, rest) = rest.split_at_mut(8);
+    n.copy_from_slice(&blocks.to_le_bytes());
+    let (v, r) = rest.split_at_mut(8);
+    v.copy_from_slice(&version.to_le_bytes());
+    r.copy_from_slice(root);
+    preimage
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,12 +113,37 @@ mod tests {
         assert_ne!(bundle_preamble(64), bundle_preamble(65));
     }
 
-    /// The domain is NUL-terminated and nothing else contains a NUL, so no domain name can be a
-    /// prefix of another: the property the separation rests on.
+    /// A volume's preimage, spelled out by hand as servers/verityd.md states it: as with the
+    /// bundle's, editing this test is changing every signed volume's format.
+    #[test]
+    fn volume_preimage_is_the_documented_bytes() {
+        assert_eq!(VOLUME_DOMAIN, b"redoubt.volume.v1\x00");
+        assert_eq!((VOLUME_SIGNED_LEN, VOLUME_PREIMAGE_LEN), (48, 74));
+        let root: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let mut expected = [0u8; 74];
+        expected[..18].copy_from_slice(b"redoubt.volume.v1\x00");
+        expected[18] = 48;
+        expected[26..34].copy_from_slice(&[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]);
+        expected[34] = 2;
+        expected[42..].copy_from_slice(&root);
+        assert_eq!(volume_preimage(0x0102_0304_0506_0708, 2, &root), expected);
+        // N, the version and the root are each signed: changing one changes the preimage.
+        let base = volume_preimage(1, 1, &root);
+        assert_ne!(base, volume_preimage(2, 1, &root));
+        assert_ne!(base, volume_preimage(1, 2, &root));
+        assert_ne!(base, volume_preimage(1, 1, &[0; 32]));
+    }
+
+    /// Each domain is NUL-terminated and nothing else in it contains a NUL, so no domain name can
+    /// be a prefix of another: the property the separation rests on. The two differ, so a bundle's
+    /// signature is never a volume's.
     #[test]
     fn domain_is_prefix_free() {
-        assert_eq!(BUNDLE_DOMAIN.iter().filter(|&&b| b == 0).count(), 1);
-        assert_eq!(BUNDLE_DOMAIN.last(), Some(&0));
-        assert!(BUNDLE_DOMAIN.iter().all(|b| b.is_ascii()));
+        for domain in [BUNDLE_DOMAIN, VOLUME_DOMAIN] {
+            assert_eq!(domain.iter().filter(|&&b| b == 0).count(), 1);
+            assert_eq!(domain.last(), Some(&0));
+            assert!(domain.iter().all(|b| b.is_ascii()));
+        }
+        assert!(!BUNDLE_DOMAIN.starts_with(VOLUME_DOMAIN) && !VOLUME_DOMAIN.starts_with(BUNDLE_DOMAIN));
     }
 }

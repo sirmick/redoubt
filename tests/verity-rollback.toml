@@ -1,0 +1,32 @@
+description = "The attack: a rollback, a volume validly signed at version 1 under a manifest whose floor is 2 (docs/servers/verityd.md, \"The root block, and the two modes\"; R76 (verified volumes)). The signature verifies; verityd then holds the version to the floor, finds it below, and says so naming both; it stays up, answers info and fails every read, so littlefsd serves the volume as corrupt, and a client is refused at each attach. Nobody exits, restarts or reboots. The verdict is the system's: verityd's line, littlefsd's and init's (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and littlefsd-client, which holds no Reset right, so
+# the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 6 servers, bound \d+ pages$',
+    '^\[con [0-9a-f]{16}\] verityd: the volume is refused: its root block.s version 1 is below the floor 2$',
+    '^\[con [0-9a-f]{16}\] littlefsd: the volume does not mount, and is served as corrupt$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client was refused at each of 3 attaches$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'littlefsd-client TEST FAILED', 'signature does not verify']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/verity/signed.json" }
+servers = [{ name = "client", args = ["corrupt", "littlefsd:data"] }]
+
+[disk]
+recipe = "tests/data/verity/rollback-disk.toml"

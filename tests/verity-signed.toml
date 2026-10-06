@@ -1,0 +1,30 @@
+description = "A signed volume mounts and reads (docs/servers/verityd.md, \"The root block, and the two modes\"; R76 (verified volumes)): the disk's one partition is a verified volume whose root block, its last whole block, is signed at version 2 with the development seed; the manifest's verity names the bundle's key and a floor of 2, so the version equals the floor. init hands verityd key= and floor=; verityd verifies the root block, takes N and the root from it, checks the top tree block, and serves the volume; littlefsd mounts it and a client reads each staged file back. The verdict is the client's reads, checked against the bytes the stage holds, and init's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and littlefsd-client, which holds no Reset right, so
+# the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 6 servers, bound \d+ pages$',
+    '^init: started verity:data, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client read 2 files$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'littlefsd-client TEST FAILED', 'verityd: the volume is refused', 'does not match the tree', 'served as corrupt']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/verity/signed.json" }
+
+[disk]
+recipe = "tests/data/verity/signed-disk.toml"

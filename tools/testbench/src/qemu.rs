@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use regex::Regex;
 use serde_json::{Value, json};
 
@@ -237,7 +237,15 @@ pub fn virtio_devices(
             Some(recipe) => {
                 let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
                 let recipe = crate::disk::Recipe::load(&root.join(recipe))?;
-                std::fs::write(disk, crate::disk::pack_disk(&recipe, &root, spec.stage.as_deref())?)?;
+                let (mut bytes, verified) = crate::disk::pack(&recipe, &root, spec.stage.as_deref())?;
+                if spec.flip_version {
+                    let signed: Vec<_> = verified.iter().filter(|v| v.signed.is_some()).collect();
+                    ensure!(!signed.is_empty(), "a flipped version needs a signed volume");
+                    for v in signed {
+                        crate::disk::flip_version(&mut bytes, v)?;
+                    }
+                }
+                std::fs::write(disk, bytes)?;
             }
             None => {
                 std::fs::File::create(disk)?.set_len(spec.size_kib * 1024)?;

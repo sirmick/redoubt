@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn the_manifest_pins_the_packs_root() {
         let geometry = redoubt_verity::Geometry::new(1000).unwrap();
-        let v = Verified { name: "system".into(), root: [0xab; 32], geometry, start: 0 };
+        let v = Verified { name: "system".into(), root: [0xab; 32], geometry, start: 0, signed: None };
         let image = br#"{ "volumes": [
             { "name": "data", "partition": 0 },
             { "name": "system", "partition": 0, "verity": { "server": "verity:system", "root": "00", "blocks": "1" } }
@@ -725,6 +725,14 @@ mod tests {
     #[test]
     fn the_signing_seed_is_the_key_the_loader_trusts() {
         assert_eq!(*KeyPair::from_seed(Seed::new(DEV_SEED)).pk, redoubt_signing::DEV_PUBLIC_KEY);
+    }
+
+    /// The seed file the signed-volume cases sign with (`tests/data/verity/dev-seed`) is this
+    /// seed, so their manifests' `"key": "bundle"` verifies it.
+    #[test]
+    fn the_cases_volume_seed_is_the_development_seed() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/verity/dev-seed");
+        assert_eq!(std::fs::read(path).unwrap(), DEV_SEED);
     }
 
     /// What the bench signs is the documented preimage, and nothing else. The loader hashes

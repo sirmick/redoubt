@@ -69,6 +69,8 @@ exclude = [
   "libs/rt/fuzz",
   # Host-only fuzz targets for blkd (see servers/blkd/fuzz/Cargo.toml).
   "servers/blkd/fuzz",
+  # Host-only fuzz target for a signed volume's root block (see libs/verity/fuzz/Cargo.toml).
+  "libs/verity/fuzz",
   # Host-only fuzz targets for netd and ipd (see servers/ipd/fuzz/Cargo.toml).
   "servers/netd/fuzz",
   "servers/ipd/fuzz",
@@ -253,6 +255,11 @@ path = "vendor/snafu-derive"
 path = "vendor/zeroize_derive"
 [patch.crates-io.virtue]
 path = "vendor/virtue"
+
+# The box's one Ed25519 (the loader, keyd, verityd), built for size: at "s" its verification
+# inlines into about 900 KB on rv32, which a verified volume's verityd cannot hold.
+[profile.release.package.ed25519-compact]
+opt-level = "z"
 
 # Arithmetic overflow remains an invariant failure in the executable model.
 [profile.release.package.redoubt-model]

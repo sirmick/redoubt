@@ -41,7 +41,7 @@ max_lines = 650
 [[crate]]
 name = "libs/verity"
 paths = ["libs/verity/src"]
-max_lines = 130
+max_lines = 173
 
 [[crate]]
 name = "libs/ipclist"
@@ -51,7 +51,7 @@ max_lines = 499
 [[crate]]
 name = "libs/signing"
 paths = ["libs/signing/src"]
-max_lines = 15
+max_lines = 31
 
 [[crate]]
 name = "libs/client"
@@ -128,7 +128,7 @@ max_lines = 2928
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 2109
+max_lines = 2142
 
 [[crate]]
 name = "servers/erofsd"
@@ -143,4 +143,4 @@ max_lines = 1510
 [[crate]]
 name = "servers/verityd"
 paths = ["servers/verityd/src"]
-max_lines = 541
+max_lines = 604

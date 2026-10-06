@@ -470,7 +470,7 @@ mod machine {
                 };
                 handed.push((VOLUME, minted.handle()));
             }
-            let args = args(m, s);
+            let args = args(m, s, &self.plan.bundle_key);
             let mut launch = Launch::new(STUB_BIN, image, budget, exit);
             launch.stack_pages(s.stack_pages as usize).stack_tag((i + 1) as u16);
             launch.heap_pages(s.heap_pages.unwrap_or(0));

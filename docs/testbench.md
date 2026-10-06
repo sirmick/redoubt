@@ -599,7 +599,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (22)</summary>
+<details><summary>Status: built · tested (26)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -612,6 +612,8 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - bench:userland-read-only
 - bench:verity-flipped-tree
 - bench:verity-wrong-root
+- bench:verity-signed
+- bench:verity-bad-signature
 - host:testbench::a_recipe_can_generate_a_directory_of_files
 - host:testbench::a_recipe_packs_a_table_and_a_volume_per_partition
 - host:testbench::a_stage_is_walked_parents_first_in_name_order
@@ -623,6 +625,8 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::a_verified_partition_is_its_volume_then_its_tree
 - host:testbench::an_erofs_partition_is_its_stage_and_each_damage_is_corrupt_where_it_is
 - host:testbench::the_manifest_pins_the_packs_root
+- host:testbench::a_signed_partition_ends_in_its_root_block_signed_deterministically
+- host:testbench::the_cases_volume_seed_is_the_development_seed
 
 </details>
 
@@ -633,6 +637,7 @@ partitions = 1               # optional: a GPT of this many equal partitions, by
 # or, instead of both: a disk recipe packed for every boot as ./mkimage packs it
 # recipe = "image/disk.toml"
 # stage = "tests/data/littlefsd/stage"   # optional: what every partition holds instead of its stage
+# flip_version = true        # optional, with a recipe: one bit of each signed volume's version flipped
 
 [userland]                   # the userland disk, attached read-only, packed once per run
 recipe = "image/userland.toml"
@@ -657,9 +662,18 @@ contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in
 newline. They sit beside the stage's tree, if there is one, and a name in both is refused.
 
 A littlefs or erofs partition may be verified, `verity = true`: it holds the largest volume that
-fits beside its hash tree, then the tree ([verityd](servers/verityd.md#the-tree)), and the pack
-says its root and data blocks. An erofs volume is followed in its range by zeros, which the tree
-covers too.
+fits beside its hash tree, then the tree ([verityd](servers/verityd.md#the-tree)), and the pack says
+its root and data blocks. An erofs volume is followed in its range by zeros, which the tree covers
+too. A verified partition may be signed, `sign = { key = PATH, version = N }`: its last whole block
+is then a root block holding N, the version and the root, signed with the 32-byte Ed25519 seed in
+the file `PATH` (relative to the workspace root) under the volume domain
+([verityd](servers/verityd.md#the-root-block-and-the-two-modes)), the volume and tree fit before it,
+and the pack says the version too. Signing is on the build host only; a manifest names the key,
+never the seed. The cases' seed, `tests/data/verity/dev-seed`, is 32 bytes of `0x42` (`B`): the
+bundle builder's development seed (`DEV_SEED` in `tools/testbench/src/build.rs`), so `"key":
+"bundle"` verifies it. Ed25519 is deterministic, so two packs are byte-identical. A case's
+`flip_version` flips one bit of each signed volume's version after the signing, on the disk and
+never in the manifest.
 
 For `erofs-corrupt`, an erofs partition may be damaged after its pack, through the parser
 `erofsd` uses to find the place: `damage = { what = "magic" }` flips a bit of the superblock's
@@ -1110,11 +1124,12 @@ then has 383 pages to spare on rv32, a client case 126
 ([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The read-only case also scans its
 additional client from the merged manifest. `erofsd:system`'s row and
 `verity:system`'s heap, which holds 4 checked data blocks, are from the six runs with the userland
-volume on EROFS.
+volume on EROFS. `verity:system`'s stack is from rv64 `userland-boot` once it also checks a signed
+volume's root block, which it does not use there but whose code lies in its start path.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
-| `keyd` | 5,264 | 3 | 4 | 8 |
+| `keyd` | 6,248 | 4 | 4 | 8 |
 | `consoled` | 9,112 | 5 | 9 | 18 |
 | `bootfsd` | 7,304 | 4 | 28 | 56 |
 | `blkd` | 4,504 | 3 | 17 | 34 |
@@ -1122,7 +1137,7 @@ volume on EROFS.
 | `ipd` | 8,040 | 4 | 4 | 8 |
 | `littlefsd:data` | 7,176 | 4 | 9 | 18 |
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
-| `verity:system` | 7,864 | 4 | 50 | 100 |
+| `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 12 | 24 |
 | `beamlet` | 33,240 | 17 | 10,387 | 20,846 |
 

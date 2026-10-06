@@ -14,6 +14,11 @@
 //!
 //! The geometry is overflow-checked arithmetic in one function, [`Geometry::new`]; everything
 //! else reads what it computed.
+//!
+//! A signed volume ("The root block, and the two modes") carries its own N and root in a
+//! [`RootBlock`], the last whole block of its range, signed under the volume domain
+//! (`redoubt_signing::volume_preimage`). Its layout is here and nowhere else; the signature is
+//! made by the packer on the build host and checked by `verityd`.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -171,6 +176,71 @@ pub fn from_hex(s: &str) -> Option<Hash> {
 pub fn slot(block: &[u8], slot: usize) -> Option<&[u8]> {
     block.get(slot.checked_mul(DIGEST)?..slot.checked_mul(DIGEST)?.checked_add(DIGEST)?)
 }
+
+/// The first bytes of a signed volume's root block.
+pub const MAGIC: [u8; 8] = *b"RVOLROOT";
+/// An Ed25519 signature, in bytes.
+pub const SIGNATURE: usize = 64;
+/// The root block's bytes before its zero fill: the magic, N, the version, the root and the
+/// signature.
+pub const ROOT_BLOCK_USED: usize = MAGIC.len() + 8 + 8 + DIGEST + SIGNATURE;
+
+/// A signed volume's root block: N (as the geometry it gives), the version, the root, and the
+/// signature over [`RootBlock::signed`]. In the block, in that order after [`MAGIC`]: N and the
+/// version as `u64` little-endian, the root, the signature, then zeros to the end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RootBlock {
+    pub geometry: Geometry,
+    pub version: u64,
+    pub root: Hash,
+    pub signature: [u8; SIGNATURE],
+}
+
+/// A block that is not a root block: not [`BLOCK`] bytes, the wrong magic, a block count with no
+/// geometry, or a byte past the signature that is not zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Malformed;
+
+impl RootBlock {
+    /// The root block `block` holds. Every byte is checked, the fill too, so one block has one
+    /// reading.
+    pub fn parse(block: &[u8]) -> Result<RootBlock, Malformed> {
+        if block.len() != BLOCK || block[..MAGIC.len()] != MAGIC {
+            return Err(Malformed);
+        }
+        let (fields, fill) = block.split_at(ROOT_BLOCK_USED);
+        if fill.iter().any(|b| *b != 0) {
+            return Err(Malformed);
+        }
+        let word = |at: usize| u64::from_le_bytes(fields[at..at + 8].try_into().unwrap_or([0; 8]));
+        let mut root = [0u8; DIGEST];
+        root.copy_from_slice(&fields[24..24 + DIGEST]);
+        let mut signature = [0u8; SIGNATURE];
+        signature.copy_from_slice(&fields[24 + DIGEST..]);
+        let geometry = Geometry::new(word(8)).ok_or(Malformed)?;
+        Ok(RootBlock { geometry, version: word(16), root, signature })
+    }
+
+    /// The block's bytes, which [`RootBlock::parse`] reads back.
+    pub fn encode(&self) -> [u8; BLOCK] {
+        let mut block = [0u8; BLOCK];
+        block[..8].copy_from_slice(&MAGIC);
+        block[8..16].copy_from_slice(&self.geometry.data_blocks().to_le_bytes());
+        block[16..24].copy_from_slice(&self.version.to_le_bytes());
+        block[24..24 + DIGEST].copy_from_slice(&self.root);
+        block[24 + DIGEST..ROOT_BLOCK_USED].copy_from_slice(&self.signature);
+        block
+    }
+
+    /// What the signature covers: N, the version and the root under the volume domain.
+    pub fn signed(&self) -> [u8; redoubt_signing::VOLUME_PREIMAGE_LEN] {
+        redoubt_signing::volume_preimage(self.geometry.data_blocks(), self.version, &self.root)
+    }
+}
+
+/// Where a signed volume's root block lies in a range of `sectors` sectors: its last whole
+/// block, which its data and tree must lie before. `None` for a range of no whole block.
+pub fn root_block_at(sectors: u64) -> Option<u64> { (sectors / SECTORS_PER_BLOCK).checked_sub(1) }
 
 /// The packer's sizes do not match the geometry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

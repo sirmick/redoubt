@@ -62,7 +62,7 @@ struct Args {
     /// Instead of running tests, pack the disk recipe RECIPE (`image/disk.toml` or
     /// `image/userland.toml`, which `./mkimage` uses) into the raw disk image OUT, and exit. The
     /// userland disk's objects are staged first, and each verified volume's root and data blocks
-    /// are printed: the ones the bundle's manifest pins.
+    /// are printed: the ones the bundle's manifest pins, or a signed volume's root block carries.
     #[arg(long, num_args = 2, value_names = ["RECIPE", "OUT"])]
     pack_disk: Option<Vec<PathBuf>>,
     /// Hart count for --run.
@@ -191,7 +191,16 @@ fn main() -> Result<()> {
         std::fs::write(out, disk).with_context(|| format!("writing {}", out.display()))?;
         for v in &verified {
             let blocks = v.geometry.data_blocks();
-            println!("verified volume {}: root {}, {blocks} blocks", v.name, v.root_hex());
+            match v.signed {
+                Some((version, _)) => {
+                    println!(
+                        "signed volume {}: version {version}, root {}, {blocks} blocks",
+                        v.name,
+                        v.root_hex()
+                    )
+                }
+                None => println!("verified volume {}: root {}, {blocks} blocks", v.name, v.root_hex()),
+            }
         }
         return Ok(());
     }

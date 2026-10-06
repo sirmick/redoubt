@@ -866,6 +866,7 @@ dependencies = [
 name = "redoubt-verity"
 version = "0.1.0"
 dependencies = [
+ "redoubt-signing",
  "sha2",
 ]
 
@@ -873,6 +874,7 @@ dependencies = [
 name = "redoubt-verityd"
 version = "0.1.0"
 dependencies = [
+ "ed25519-compact",
  "redoubt-rt",
  "redoubt-verity",
 ]

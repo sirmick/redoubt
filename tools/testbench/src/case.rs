@@ -404,6 +404,10 @@ pub struct Disk {
     pub recipe: Option<PathBuf>,
     /// With a `recipe`, the directory every partition holds instead of the recipe's own stage.
     pub stage: Option<PathBuf>,
+    /// With a `recipe`, one bit of each signed volume's root block's version flipped after the
+    /// signing: the disk changes, never the manifest.
+    #[serde(default)]
+    pub flip_version: bool,
 }
 
 /// The userland disk (image/userland.toml): the run's one pack of its recipe, whose verified
@@ -798,6 +802,7 @@ impl Case {
                         None => {
                             ensure!(disk.size_kib > 0, "a disk needs size_kib or a recipe");
                             ensure!(disk.stage.is_none(), "a stage needs a disk recipe");
+                            ensure!(!disk.flip_version, "a flipped version needs a disk recipe");
                         }
                     }
                 }

@@ -372,12 +372,13 @@ for `./mkimage` and for `init-boot`, which boots the recipe's bundle to `init`'s
 
 ### Verified boot
 
-<details><summary>Status: built · partly tested: the two boot cases run on rv64 only; the rv32 loader's check is the same code, not attacked · tested (6)</summary>
+<details><summary>Status: built · partly tested: the two boot cases run on rv64 only; the rv32 loader's check is the same code, not attacked · tested (7)</summary>
 
 - bench:verified-boot-rejects-tamper
 - bench:verified-boot-rejects-bare-archive
 - host:redoubt-signing::preamble_is_the_documented_bytes
 - host:redoubt-signing::domain_is_prefix_free
+- host:redoubt-signing::volume_preimage_is_the_documented_bytes
 - host:testbench::the_signed_bytes_are_the_documented_preimage
 - host:testbench::golden_signature_over_a_known_archive
 
@@ -392,6 +393,12 @@ for `./mkimage` and for `init-boot`, which boots the recipe's bundle to `init`'s
   preimage: the 18-byte NUL-terminated domain `"redoubt.bundle.v1\0"`, the archive's length as
   a little-endian `u64`, then the archive. The domain's only NUL is its last byte, so no
   domain name is a prefix of another.
+- **The volume domain, built the same way.** A signed volume's root block is signed over
+  `"redoubt.volume.v1\0"`, the length 48 as a little-endian `u64`, then N, the version and the
+  root, from `redoubt_signing::volume_preimage`
+  ([verityd](../servers/verityd.md)). The domain test holds both
+  domains NUL-terminated and neither a prefix of the other, so a bundle signature is never a
+  volume's.
 - **The length is measured, never read.** It is the number of bytes after the signature in the
   initrd the loader was handed, not a field of the archive, which is the attacker's to write.
 - **One construction.** Both the loader and every signer take the 26-byte preamble from

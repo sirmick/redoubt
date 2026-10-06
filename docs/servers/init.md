@@ -18,7 +18,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-<details><summary>Status: built · tested (22)</summary>
+<details><summary>Status: built · tested (23)</summary>
 
 - bench:init-boot
 - bench:init-refuses-public-manifest
@@ -42,6 +42,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 - host:redoubt-init::a_server_stack_defaults_and_is_checked_against_its_budget
 - host:redoubt-init::a_verified_volume_s_server_reads_through_its_verifier
 - host:redoubt-init::a_verified_volume_s_key_and_verifier_are_refused_naming_the_field
+- host:redoubt-init::a_verified_volume_is_pinned_or_signed_and_never_both
 
 </details>
 
@@ -52,7 +53,7 @@ and `init`'s only input. Its entries:
 | --- | --- |
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
-| `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it), and for a verified volume `verity`: its verifier (the `servers` entry of a [`verityd`](verityd.md)) and the root it pins, `{ "server", "root": 64 lowercase hex digits, "blocks": a decimal string }` |
+| `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it), and for a verified volume `verity`: its verifier (the `servers` entry of a [`verityd`](verityd.md)) and one mode, pinned, the root and data blocks it pins, `{ "server", "root": 64 lowercase hex digits, "blocks": a decimal string }`, or signed, the key its root block is signed under and the lowest version it may carry, `{ "server", "key": 64 lowercase hex digits or "bundle", "floor": a decimal string }` |
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`; a volume's server has `program` `littlefsd`, or `erofsd` for a read-only volume, and no other key says the format), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
@@ -123,11 +124,14 @@ and `init`'s only input. Its entries:
   ([verityd](verityd.md)): its server still lists the volume, but `init` mints that server's
   `volume` badge, 1, at the verifier's endpoint instead of at `blkd`, and mints the range badge at
   the disk's `blkd` for the verifier, handed as its `volume`. The verifier gets `endpoint=` the
-  endpoint it receives on first, `labels=` the volume's ids, `root=` and `blocks=`. Refused, each
-  naming the field: a root that is not 64 lowercase hex digits, or a block count of 0 or one whose
-  tree does not count in sectors; a `server` naming no entry, or one that is not a `verityd`; a
-  verifier named by two volumes, or by none; a verifier attaching a volume itself, receiving on no
-  endpoint, or carrying any argument (each is `init`'s); a verifier whose labels differ from its
+  endpoint it receives on first, `labels=` the volume's ids, and `root=` and `blocks=`, or, signed,
+  `key=` and `floor=`, `bundle` given in hex as the key the loader verified the bundle with,
+  named so no copy drifts ([verityd](verityd.md)). Refused, each naming the field: both modes,
+  neither, or a part of one; a root that is not 64 lowercase hex digits, or a block count of 0 or
+  one whose tree does not count in sectors; a key that is neither 64 lowercase hex digits nor
+  `bundle`; a floor that is not a decimal string (the wrong type); a `server` naming no entry, or
+  one that is not a `verityd`; a verifier named by two volumes, or by none; a verifier attaching
+  a volume itself, receiving on no endpoint, or carrying any argument (each is `init`'s); a verifier whose labels differ from its
   volume's; and a `handed` item at a verifier's endpoint, since the one badge there is the
   volume's range.
 - **Sizing.** Every shared server takes `buckets=N` as an argument, parsed once in the serving

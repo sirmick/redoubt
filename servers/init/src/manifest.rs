@@ -11,7 +11,7 @@
 //! | `confined` | a boolean, optional |
 //! | `devices[]` | `name`; `base` (string), `irq` (number), either may be absent, not both; `dma` (boolean) |
 //! | `labels[]` | `name`, `owner` (a principal), `id` (string) |
-//! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`), `verity` (`server`, the `servers` entry of its `verityd`; `root`, 64 lowercase hex digits; `blocks` (string)) |
+//! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`), `verity` (`server`, the `servers` entry of its `verityd`; pinned, `root` (64 lowercase hex digits) and `blocks` (string), or signed, `key` (64 lowercase hex digits or `bundle`) and `floor` (string)) |
 //! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `stack_pages` (string), `heap_pages` (string), `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
 //! | `public` | bundle entry names |
 //! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`, `budget`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
@@ -61,18 +61,24 @@ pub struct Volume {
     /// The name of the `servers` entry of the `blkd` serving the volume's disk; required when
     /// the manifest has more than one `blkd`.
     pub disk: Option<String>,
-    /// For a verified volume (servers/verityd.md), its verifier and the tree's root.
+    /// For a verified volume (servers/verityd.md), its verifier and what it checks against.
     pub verity: Option<Verity>,
 }
 
 /// A verified volume's `verity` key: the `servers` entry of the `verityd` that checks it, and
-/// the root and data blocks it checks against.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// what it checks against, pinned (the root and data blocks) or signed (the key the volume's root
+/// block is signed under and the lowest version it may carry). Decoding takes any of the four;
+/// [`crate::check`] holds the entry to one mode, both of its members.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Verity {
     pub server: String,
     /// As the manifest gives it; [`crate::check`] holds it to 64 lowercase hex digits.
-    pub root: String,
-    pub blocks: u64,
+    pub root: Option<String>,
+    pub blocks: Option<u64>,
+    /// As the manifest gives it; [`crate::check`] holds it to 64 lowercase hex digits or
+    /// `bundle`.
+    pub key: Option<String>,
+    pub floor: Option<u64>,
 }
 
 /// The limits of a budget `init` creates.
@@ -220,8 +226,10 @@ fn verity(v: &Value) -> Result<Verity, SchemaError> {
     v.object(|m| {
         Ok(Verity {
             server: m.required("server", string)?,
-            root: m.required("root", string)?,
-            blocks: m.required("blocks", Value::u64_string)?,
+            root: m.optional("root", string)?,
+            blocks: m.optional("blocks", Value::u64_string)?,
+            key: m.optional("key", string)?,
+            floor: m.optional("floor", Value::u64_string)?,
         })
     })
 }
