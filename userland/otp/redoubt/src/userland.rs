@@ -41,6 +41,7 @@ pub fn unread(e: Error, at_open: bool) -> Unread {
     Unread::Failed(match e {
         Error::Rerror(Name::NotFound) if at_open => return Unread::Absent,
         Error::Rerror(Name::NotFound) => "its file could not be read: not_found",
+        Error::Rerror(Name::Corrupt) => "its file could not be read: corrupt",
         Error::Rerror(Name::Other) => "its file could not be read: other",
         Error::Disconnected => "its file could not be read: disconnected",
         _ => "its file could not be read: failed",

@@ -4,6 +4,8 @@ use redoubt_rt::abi;
 use redoubt_rt::client::ClientError;
 use redoubt_rt::startup::StartupError;
 use redoubt_rt::wire;
+/// An `Rerror`'s name: the one table's (servers/wire.md, "Error names"), re-exported.
+pub use redoubt_rt::wire::ninep::ErrorName as Name;
 
 /// Why a call failed: the kernel's refusal, a server gone, a reply that does not decode or answer
 /// the request, the server's own refusal, or a refusal made here before any call.
@@ -27,15 +29,6 @@ pub enum Error {
     Rerror(Name),
     /// Refused here, before any call was made.
     Refused(Refusal),
-}
-
-/// An `Rerror`'s name. Only `not_found` is told apart so far; every other text is `Other`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Name {
-    /// `file does not exist`, or a walk that stopped short: the name is not there.
-    NotFound,
-    /// Any other text.
-    Other,
 }
 
 /// What the library refuses before making a call: what the call could not carry, or what would
@@ -68,7 +61,8 @@ impl From<ClientError> for Error {
             ClientError::Sys(e) => e.into(),
             ClientError::Wire(e) | ClientError::Encode(e) => Error::Wire(e),
             ClientError::Pages(e) => e.into(),
-            ClientError::NotFound => Error::Rerror(Name::NotFound),
+            ClientError::Rerror(name) => Error::Rerror(name),
+            // A typed refusal of `new_connection` or `disconnect`: no name but that it refused.
             ClientError::Remote => Error::Rerror(Name::Other),
             ClientError::Unexpected => Error::Unexpected,
             ClientError::BadPath => Error::Refused(Refusal::BadPath),

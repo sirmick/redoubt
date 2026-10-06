@@ -94,10 +94,10 @@ page.
   typed operations, the console, launching, a launcher's grants and one typed call, the API every
   userland binds to, tested on the host against real servers
   ([native programs](../userland/native.md#the-client-library)). `init` and beamlet's platform are
-  built on it. Before beamlet's files run on it: dropped files' fids that come back, `Rerror`s by
-  name, whole reads and writes, and generated Elixir clients
-  ([native programs](../userland/native.md#dropped-files-error-names-and-generated-calls),
-  [wire](../servers/wire.md#error-names)).
+  built on it, and an `Rerror` keeps its name by one table
+  ([wire](../servers/wire.md#error-names)). Still planned: dropped files' fids that come back,
+  calls by path, whole reads and writes, and generated Elixir clients
+  ([native programs](../userland/native.md#dropped-files-calls-by-path-and-generated-calls)).
 - **The VM's remaining platform work.** The VM and shell boot on the UART console; asynchronous
    file operations and native launching remain to be connected to the VM
    ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)). `littlefsd` runs under `init`; files over 9P

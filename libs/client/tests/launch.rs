@@ -311,7 +311,7 @@ fn the_exit_notice_releases_every_grant() {
             let mut lend = Lend::new(1).unwrap();
             assert_eq!(
                 Connection::attach(Endpoint::from_handle(conn), &mut lend).err(),
-                Some(Error::Rerror(Name::Other))
+                Some(Error::Rerror(Name::Protocol))
             );
         });
     }
@@ -360,7 +360,7 @@ fn a_hung_server_does_not_stop_the_reaping() {
         let mut lend = Lend::new(1).unwrap();
         assert_eq!(
             Connection::attach(Endpoint::from_handle(conn), &mut lend).err(),
-            Some(Error::Rerror(Name::Other))
+            Some(Error::Rerror(Name::Protocol))
         );
     });
     boot.stop();

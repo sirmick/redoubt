@@ -27,6 +27,8 @@
 //!     caller's own endpoint, where the caller idles in `receive` with a `max_transfer` of
 //!     [`COMPLETION_PAGES`], and the caller hands it to the hub ([`Hub::deliver`]). A waiter owns no other
 //!     buffer and talks to no other server.
+//! - **An `Rerror` keeps its name** ([`Outcome::Rerror`]), read by the one table's decoder as the blocking
+//!   client reads it; `busy`, over the connection's share, is [`Outcome::Busy`].
 //! - **The server is not trusted.** An answer must frame, decode and carry a tag outstanding on its
 //!   connection; anything else ends the connection, as the server's own end does: every request still
 //!   outstanding comes back [`Outcome::Ended`], with its buffer, its fate unknown.
@@ -41,11 +43,11 @@ use core::num::NonZeroU64;
 use redoubt_rt::abi::{Error as SysError, FOREVER, MAX_LEND_PAGES, PAGE_SIZE};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Delivery, Words};
-use redoubt_rt::server::ninep::{COLLECT_WAIT, IN_WORDS, MAX_TAGS, NineError, OPENED, collect_words};
+use redoubt_rt::server::ninep::{COLLECT_WAIT, IN_WORDS, MAX_TAGS, OPENED, collect_words};
 use redoubt_rt::wire::MSIZE;
 use redoubt_rt::wire::ninep::{Body, IOHDRSZ, Message, message_size};
 
-use crate::error::{Error, Refusal};
+use crate::error::{Error, Name, Refusal};
 
 /// How long a submit waits for its server to take the request (µs) before it is queued instead.
 pub const SUBMIT_TIMEOUT_US: u64 = 1_000;
@@ -85,8 +87,9 @@ pub enum Outcome {
     Flushed,
     /// Over the connection's share at the server: not served.
     Busy,
-    /// Any other `Rerror` (its text is not kept).
-    Rerror,
+    /// Any other `Rerror`, by its text's name in the one table (servers/wire.md, "Error names"); the
+    /// text is not kept.
+    Rerror(Name),
     /// Any other R-message, whole.
     Reply(Vec<u8>),
     /// The connection ended with the request outstanding: whether it happened is unknown.
@@ -349,8 +352,8 @@ impl Hub {
                     None => Outcome::Reply(bytes[..size].to_vec()),
                 },
                 Body::Rwrite { count } => Outcome::Wrote(count),
-                Body::Rerror { ename } if ename == NineError::BUSY.0 => Outcome::Busy,
-                Body::Rerror { .. } => Outcome::Rerror,
+                Body::Rerror { ename } if Name::of(ename) == Name::Busy => Outcome::Busy,
+                Body::Rerror { ename } => Outcome::Rerror(Name::of(ename)),
                 Body::Rflush => {
                     // The flushed request, if its answer did not come first: it ends here, once.
                     let old =

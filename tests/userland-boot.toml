@@ -17,8 +17,8 @@ expect = [
     'UndefinedFunctionError\) function NoSuch.call/0 is undefined',
     '^\[con [0-9a-f]{16}\] / \([0-9]+\)> 55$',
     '^\[con [0-9a-f]{16}\] verityd: block [0-9]+ does not match the tree$',
-    'beamlet: Elixir.Version not loaded: its file could not be read: other$',
-    'beamlet: Elixir.OptionParser not loaded: its file could not be read: other$',
+    'beamlet: Elixir.Version not loaded: its file could not be read: corrupt$',
+    'beamlet: Elixir.OptionParser not loaded: its file could not be read: corrupt$',
     '^\[con [0-9a-f]{16}\] / \([0-9]+\)> 2$',
 ]
 forbid = [

@@ -150,13 +150,16 @@ stated in the table's page.
 
 ### Error names
 
-Status: built · partly tested: only `not_found` against the rest is built, in the client library; the table in `libs/wire`, servers answering by name, the drift check and beamlet's `file` errors are not built (M1 (separation and containment)) · tested: host:redoubt-client::an_rerror_keeps_its_name_not_found_against_the_rest, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name
+Status: built · partly tested: the table is `libs/wire`'s and both client paths read names by it; servers still send their texts from constants of their own, and the drift check that would hold them to the table is not built (M1 (separation and containment)) · tested: host:redoubt-wire::every_text_reads_back_to_its_name_and_any_other_is_other, host:redoubt-client::an_rerror_keeps_its_name_not_found_against_the_rest, host:redoubt-client::an_rerror_through_the_hub_keeps_its_name, host:beamlet-redoubt::every_row_of_the_error_table_maps_to_its_posix_error, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name
 
 A 9P `Rerror` carries one of a fixed set of texts, so a hostile request cannot choose it
-([serving](serving.md#the-9p-server-skeleton)). The set is one table in `libs/wire`: a server
-answers only with a name of the table, whose text the type holds, so no server can make up a text;
-the client library reads the text back to its name, never keeps the text, and calls a text outside
-the table `other` ([native programs](../userland/native.md#an-rerror-has-a-name)).
+([serving](serving.md#the-9p-server-skeleton)). The set is one table in `libs/wire`
+([`ErrorName`](../../libs/wire/src/ninep.rs)): a server answers only with a text of the table;
+the client library, a blocking call or the hub alike, reads the text back to its name, never
+keeps the text, and calls a text outside the table `other`
+([native programs](../userland/native.md#an-rerror-has-a-name)). beamlet's `File` boundary maps a
+name to the POSIX error OTP's `file` expects by the last column, and nowhere else
+([files](../userland/files.md#files-over-9p)).
 A name means one thing wherever it is used, in a 9P reply and in a typed protocol's error table
 alike: `not_permitted`, not a second word for it.
 
@@ -169,19 +172,26 @@ alike: `not_permitted`, not a second word for it.
 | `is a directory` | `is_dir` | `eisdir` |
 | `directory not empty` | `not_empty` | `enotempty` |
 | `no space`, `quota refused` | `no_space` | `enospc` |
-| `read-only` | `read_only` | `erofs` |
+| `read-only`, `read-only volume` | `read_only` | `erofs` |
 | `removed` | `removed` | `estale` |
 | `too many open files`, `too_many` | `too_many` | `emfile` |
 | `out of memory`, `no charge` | `no_memory` | `enomem` |
 | `not supported` | `not_supported` | `enotsup` |
 | `bad file name`, `path too deep` | `bad_name` | `einval` |
+| `file too large` | `too_large` | `efbig` |
+| `corrupt` | `corrupt` | `eio` |
 | `refused` | `refused` | `econnrefused` |
 | `timeout` | `timeout` | `etimedout` |
 | `unreachable` | `unreachable` | `ehostunreach` |
 | `in_use` | `in_use` | `eaddrinuse` |
 | `state` | `state` | `enotconn` |
+| `busy` | `busy` | `eio` |
 | `malformed message`, `unknown fid`, `fid already in use`, `fid is open`, `fid not open for this`, `bad open mode`, `bad offset`, `count too small`, `reply too large`, `no such connection`, `no connection id`, `authentication not required` | `protocol` | `eio` |
 | a text not in the table | `other` | `eio` |
+
+`removed` is a file removed under a fid still held, so `estale`; a name never there is
+`not_found`, so `enoent`. A typed protocol's error code means the same as the 9P name it shares
+(`littlefsd`'s `refused` is `refused`).
 
 A walk of several names that stops short says only how far it got, not why: a refusal after
 the first name (a label check, a failed read) reads as `not_found`, so a caller that must tell the

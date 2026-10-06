@@ -149,7 +149,7 @@ impl Me {
                         |i: usize| u32::from_le_bytes([words[i], words[i + 1], words[i + 2], words[i + 3]]);
                     return Ok((word(0), word(4)));
                 }
-                Err(ClientError::Remote) => continue,
+                Err(ClientError::Rerror(_)) => continue,
                 _ => return Err(code::STATUS),
             }
         }
@@ -163,7 +163,7 @@ impl Me {
             match self.c.read(&mut self.lend, s.data, 0, &mut out[got..]) {
                 Ok(0) => return Err(code::READ),
                 Ok(n) => got += n,
-                Err(ClientError::Remote) if waits < WAITS => waits += 1,
+                Err(ClientError::Rerror(_)) if waits < WAITS => waits += 1,
                 Err(_) => return Err(code::READ),
             }
         }
@@ -247,7 +247,7 @@ impl Me {
                 let got = match self.c.read(&mut self.lend, s.data, 0, &mut buf) {
                     Ok(0) => break,
                     Ok(n) => n,
-                    Err(ClientError::Remote) if waits < WAITS => {
+                    Err(ClientError::Rerror(_)) if waits < WAITS => {
                         waits += 1;
                         continue;
                     }
@@ -299,7 +299,7 @@ impl Me {
                         let _ = self.ctl(&s, net_ctl::Message::Abort(net_ctl::Abort {}), code::CLOSE);
                         code::CONNECTED + state.min(5)
                     }
-                    Err(ClientError::Remote) => code::TIMED_OUT,
+                    Err(ClientError::Rerror(_)) => code::TIMED_OUT,
                     _ => code::STATUS,
                 }
             }
@@ -327,12 +327,12 @@ impl Me {
             match self.c.read(&mut self.lend, s.data, 0, &mut buf) {
                 // The abandoned call keeps the lend; the next call maps a fresh one.
                 Err(ClientError::Sys(redoubt_rt::abi::Error::Timeout)) => {}
-                Err(ClientError::Remote) => return Err(code::PIN_REFUSED),
+                Err(ClientError::Rerror(_)) => return Err(code::PIN_REFUSED),
                 _ => return Err(code::READ),
             }
         }
         self.c.timeout = FOREVER;
-        if self.c.read(&mut self.lend, s.data, 0, &mut buf) != Err(ClientError::Remote) {
+        if !matches!(self.c.read(&mut self.lend, s.data, 0, &mut buf), Err(ClientError::Rerror(_))) {
             return Err(code::NO_DEADLINE);
         }
         let sent = b"d3 still echoing after the pins\n";
@@ -348,7 +348,7 @@ impl Me {
         let listen = net_ctl::Message::Listen(net_ctl::Listen { port: code::PIN_LISTEN_PORT, backlog: 1 });
         self.ctl(&listener, listen, code::LISTEN)?;
         let mut words = [0u8; 8];
-        if self.c.read(&mut self.lend, listener.ctl, 0, &mut words) != Err(ClientError::Remote) {
+        if !matches!(self.c.read(&mut self.lend, listener.ctl, 0, &mut words), Err(ClientError::Rerror(_))) {
             return Err(code::NO_CTL_DEADLINE);
         }
         Ok(())

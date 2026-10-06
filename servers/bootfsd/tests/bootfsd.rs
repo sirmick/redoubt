@@ -14,6 +14,7 @@ use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::MALFORMED;
 use redoubt_rt::server::ninep::mode;
 use redoubt_rt::startup::{Startup, StartupBuilder};
+use redoubt_rt::wire::ninep::ErrorName;
 use redoubt_rt::wire::proto::bootfs::{Add, ErrorCode, Message, Reply, Seal};
 
 #[path = "../src/bin/bootfsd.rs"]
@@ -136,7 +137,7 @@ fn a_session_reads_the_public_entries_and_sees_nothing_else() {
         let never = c.walk(&mut lend, 0, 30, "no-such-entry").unwrap_err();
         assert_eq!(c.walk(&mut lend, 0, 30, MANIFEST).unwrap_err(), never);
         assert_eq!(c.walk(&mut lend, 0, 30, "kernel").unwrap_err(), never);
-        assert_eq!(never, ClientError::NotFound);
+        assert_eq!(never, ClientError::Rerror(ErrorName::NotFound));
         // And the directory lists exactly the public list, in the manifest's order.
         assert_eq!(names(&c, &mut lend, 0), PUBLIC.map(String::from).to_vec());
     });
@@ -208,12 +209,18 @@ fn a_client_cannot_publish_into_boot() {
         let n = c.read(&mut lend, 1, 0, &mut got).unwrap();
         assert_eq!(&got[..n], b"good", "the client's bytes never reached /boot");
         // Nor can it write through 9P.
-        assert_eq!(c.open(&mut lend, 2, mode::OWRITE).unwrap_err(), ClientError::Remote);
+        assert_eq!(c.open(&mut lend, 2, mode::OWRITE).unwrap_err(), ClientError::Rerror(ErrorName::Protocol));
         c.walk(&mut lend, 0, 3, "keyd").unwrap();
-        assert_eq!(c.open(&mut lend, 3, mode::OWRITE).unwrap_err(), ClientError::Remote);
-        assert_eq!(c.open(&mut lend, 3, mode::ORDWR).unwrap_err(), ClientError::Remote);
+        assert_eq!(
+            c.open(&mut lend, 3, mode::OWRITE).unwrap_err(),
+            ClientError::Rerror(ErrorName::NotPermitted)
+        );
+        assert_eq!(
+            c.open(&mut lend, 3, mode::ORDWR).unwrap_err(),
+            ClientError::Rerror(ErrorName::NotPermitted)
+        );
         c.open(&mut lend, 3, mode::OREAD).unwrap();
-        assert_eq!(c.write(&mut lend, 3, 0, b"evil").unwrap_err(), ClientError::Remote);
+        assert_eq!(c.write(&mut lend, 3, 0, b"evil").unwrap_err(), ClientError::Rerror(ErrorName::Protocol));
     });
 
     f.destroy(server, receive);

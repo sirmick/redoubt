@@ -127,7 +127,7 @@ fn a_labelled_session_cannot_write_the_console() {
         let startup = Startup::parse(&block).unwrap();
         let mut lend = Lend::new(1).unwrap();
         let ns = Namespace::from_startup(&startup, &mut lend).unwrap();
-        assert_eq!(Console::open(&ns, &mut lend).err(), Some(Error::Rerror(Name::Other)));
+        assert_eq!(Console::open(&ns, &mut lend).err(), Some(Error::Rerror(Name::NotPermitted)));
         let (conn, rest) = ns.lookup("/dev/cons").unwrap();
         conn.open(&mut lend, rest, mode::OREAD).unwrap().close(&mut lend).unwrap();
     });
