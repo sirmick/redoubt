@@ -927,15 +927,20 @@ fn blocks(m: &Manifest, machine: &Machine, bundle_key: &[u8; KEY_LEN]) -> Result
     Ok(())
 }
 
-/// Every principal's login and approval key, decoded (R35 (key separation)).
+/// Every principal's login and approval key, decoded (R35 (key separation)), each once across
+/// every principal's lists: a key that logs one principal in and approves for another, or is
+/// listed twice, is refused here, before any server runs (the steward's core refuses it too).
 fn keys(m: &Manifest) -> Result<Vec<(String, [u8; KEY_LEN])>, Refusal> {
-    let mut keys = Vec::new();
+    let mut keys: Vec<(String, [u8; KEY_LEN])> = Vec::new();
     for (i, p) in m.principals.iter().enumerate() {
         let lists = [("ssh_keys", &p.ssh_keys), ("approval_keys", &p.approval_keys)];
         for (member, list) in lists {
             for (k, text) in list.iter().enumerate() {
                 let path = format!("principals[{i}].{member}[{k}]");
                 let key = sshkey::ed25519(text).ok_or_else(|| at(path.clone(), Why::Key))?;
+                if keys.iter().any(|(_, seen)| *seen == key) {
+                    return Err(at(path, Why::Twice));
+                }
                 keys.push((path, key));
             }
         }
