@@ -1019,28 +1019,46 @@ umask, so it is private to the bench's user only under umask 077 or on a single-
 `stack_pages` defaults to 16 and cannot exceed 128
 ([the boot manifest](servers/init.md#the-boot-manifest)).
 
+Each server's runtime also keeps a heap record, 32 bytes in its data: a magic word, the server's
+launch tag, its heap cap and the most pages its heap has held at once
+([the native runtime](userland/native.md#redoubt-rt-the-native-runtime)). The runtime writes the
+magic word and the tag before `main`, so the program's file and the launcher's copies of it hold
+none. The same scan finds each server's record by its magic word and tag and prints
+`heap NAME PEAK of CAP pages`, or `heap NAME PEAK pages uncapped`. It fails a missing or
+duplicated record, a record whose cap is not the manifest's `heap_pages`, and a capped server
+whose cap is less than twice its peak; an uncapped server is reported only.
+
 The standard image is scanned after `init-boot`, `userland-boot` and `userland-read-only` on both
-widths. Its server declarations use twice the largest peak across those six runs, rounded up to
-pages. The read-only case also scans its additional client from the merged manifest.
+widths. Its server declarations use twice the largest peak across six such runs: each stack
+rounded up to pages, from the runs that sized the stacks, before the heap caps existed; and each
+heap cap in pages, from six later runs with the stacks as declared. The stack columns below are
+the first runs' and the heap columns the later runs'. `beamlet`'s heap peak moves by a page between
+runs, so its cap is instead the most its budget holds beside its stack, 24,558 pages. The
+read-only case also scans its additional client from the merged manifest.
 
-| Image server | Largest peak (bytes) | Declared stack (pages) |
-| --- | ---: | ---: |
-| `keyd` | 5,264 | 3 |
-| `consoled` | 9,112 | 5 |
-| `bootfsd` | 7,304 | 4 |
-| `blkd` | 4,504 | 3 |
-| `netd` | 4,280 | 3 |
-| `ipd` | 8,040 | 4 |
-| `fsd:data` | 7,176 | 4 |
-| `blkd:system` | 4,504 | 3 |
-| `fsd:system` | 12,680 | 7 |
-| `beamlet` | 33,240 | 17 |
+| Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
+| --- | ---: | ---: | ---: | ---: |
+| `keyd` | 5,264 | 3 | 4 | 8 |
+| `consoled` | 9,112 | 5 | 9 | 18 |
+| `bootfsd` | 7,304 | 4 | 28 | 56 |
+| `blkd` | 4,504 | 3 | 17 | 34 |
+| `netd` | 4,280 | 3 | 2 | 4 |
+| `ipd` | 8,040 | 4 | 4 | 8 |
+| `fsd:data` | 7,176 | 4 | 9 | 18 |
+| `blkd:system` | 4,504 | 3 | 17 | 34 |
+| `fsd:system` | 12,680 | 7 | 16 | 32 |
+| `beamlet` | 33,240 | 17 | 11,814 | 24,558 |
 
-The read-only client's largest peak is 6,616 bytes; its case uses the 16-page default.
+The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
+the 16-page stack default and no cap. `beamlet`'s heap peak is the shell at its prompt (6,966
+pages on rv32); its cap leaves its process heap and ETS limits, a sixteenth of its budget each
+(1,536 pages), reachable: a flooding process, about four times its limit, still fits under the
+cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
 
 This is a measurement of the paths the case drove. Other requests or deeper call paths may
-need more stack, and any guest, including another server, can forge the public paint pattern. The
-result is evidence for the image's declarations, not a proof against hostile guest code.
+need more stack or heap, and any guest, including another server, can forge the public paint
+pattern and the heap record. The result is evidence for the image's declarations, not a proof
+against hostile guest code.
 
 ## Vendored dependencies
 

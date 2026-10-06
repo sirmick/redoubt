@@ -125,13 +125,16 @@ pub fn start_first(main: fn(&'static [u8]) -> u32, bundle: usize, len: usize) ->
     crate::handle::process_exit(main(premapped(bundle, len)))
 }
 
-/// Parses the startup block at `block` (0 = none), runs `main`, and exits with its code.
+/// Parses the startup block at `block` (0 = none), caps the heap as the block says and marks its
+/// record with the block's tag, runs `main`, and exits with its code.
 #[cfg(target_os = "none")]
 pub fn start(main: fn(&Startup<'static>) -> u32, block: usize) -> ! {
     let startup = match startup_block(block) {
         Ok(startup) => startup,
         Err(_) => crate::handle::process_exit(exit::BAD_STARTUP),
     };
+    // Before `main` nothing has started or fixed the heap, and the block's cap is never 0.
+    let _ = crate::HEAP.start(startup.heap_pages(), startup.tag());
     note_console(&startup);
     crate::handle::process_exit(main(&startup))
 }

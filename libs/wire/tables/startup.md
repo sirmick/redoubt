@@ -4,7 +4,7 @@ The `startup` protocol's message and error tables, included by its owning page, 
 <!-- wire: startup -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
-| 1 | `startup` | `version: u32`, `handle_count: u32`, `namespace: bytes`, `handles: bytes`, `argv: bytes`, `image_addr: u64`, `image_len: u64` | - |
+| 1 | `startup` | `version: u32`, `handle_count: u32`, `namespace: bytes`, `handles: bytes`, `argv: bytes`, `image_addr: u64`, `image_len: u64`, `heap_pages: u32`, `tag: u16` | - |
 
 <!-- wire-errors: startup -->
 | Code | Error |

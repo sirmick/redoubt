@@ -160,7 +160,7 @@ principals' budgets.*
 
 ### The tree from the boot manifest
 
-<details><summary>Status: built · partly tested: the steward's carving of `users` is not built · tested (9)</summary>
+<details><summary>Status: built · partly tested: the steward's carving of `users` is not built · tested (10)</summary>
 
 - bench:init-boot
 - bench:init-servers
@@ -171,11 +171,18 @@ principals' budgets.*
 - host:redoubt-init::an_image_and_a_stack_larger_than_a_batch_count_one_batch
 - host:redoubt-init::a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused
 - host:redoubt-init::the_bound_uses_the_largest_declared_stack_batch
+- host:redoubt-init::a_server_heap_cap_is_optional_and_fits_its_budget_beside_its_stack
 
 </details>
 
 The loader starts only `init`, which runs in `root` on the weight and the one process `root`
 keeps free. What `init` launches counts in the budgets it launches into.
+
+A server's heap cap (`heap_pages`, [init](../servers/init.md#the-boot-manifest)) is its runtime's
+own ceiling inside its budget: past it the runtime refuses an allocation before the kernel is
+asked, and the cap reserves nothing until it is used. The budget stays the hard bound on
+everything else the server holds: its image, its stacks, its buffers and lends, its page tables
+and its kernel objects.
 
 - **The kernel keeps its fixed split**, the table above. The boot manifest does not size
   `system`: the kernel reads no manifest and the loader parses no JSON, so the split is set in

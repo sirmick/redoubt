@@ -1168,6 +1168,7 @@ dependencies = [
  "redoubt-client",
  "redoubt-fsd",
  "redoubt-model",
+ "redoubt-rt",
  "redoubt-signing",
  "redoubt-sys",
  "regex",

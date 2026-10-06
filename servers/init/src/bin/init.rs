@@ -462,6 +462,7 @@ mod machine {
             let args = args(m, s);
             let mut launch = Launch::new(STUB_BIN, image, budget, exit);
             launch.stack_pages(s.stack_pages as usize).stack_tag((i + 1) as u16);
+            launch.heap_pages(s.heap_pages.unwrap_or(0));
             for name in &s.receives {
                 launch.handle(name, self.endpoint(name));
             }

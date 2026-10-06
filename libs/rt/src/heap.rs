@@ -13,11 +13,17 @@
 //!   small classes' and large blocks', comes from it and never from `map_anon`. Freed large blocks go on a
 //!   first-fit list of page runs instead of being unmapped; when the region is spent, an allocation fails
 //!   (null) like an exhausted `map_anon`.
+//! - **A cap** ([`Heap::start`]): the most pages the heap holds at once, small classes' pages and live large
+//!   blocks, below the server's kernel budget (servers/init.md, "Heaps"). An allocation that would pass it
+//!   fails (null) here, before `map_anon` is asked. A cap and a fixed arena exclude each other: the arena is
+//!   its own cap.
+//! - **The record** ([`Record`]): 32 bytes in the program's data that the bench finds in a stopped guest's
+//!   RAM (testbench.md, "The memory budget"): the heap's cap and the most pages it has held.
 //!
 //! One spin lock guards the lists. Contention costs spinning, never correctness.
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use redoubt_sys::{Error, MemFlags, PAGE_SIZE};
 
@@ -31,6 +37,42 @@ const MIN_SMALL: usize = 16;
 const _: () = assert!(MIN_SMALL >= size_of::<[usize; 2]>() && MIN_SMALL % align_of::<[usize; 2]>() == 0);
 const CLASSES: usize = 8; // 16, 32, ..., 2048
 
+/// The record's first word, once [`Heap::start`] has written it.
+pub const RECORD_MAGIC: u64 = 0x5041_4548_5442_4452;
+
+/// What the bench reads of a heap: four little-endian `u64`s, the same on both widths. All zero
+/// until [`Heap::start`], so the program's file never holds a marked record. Aligned to its own
+/// size, so it never crosses a page: the bench reads physical RAM, where the next virtual page is
+/// another frame, and a record split across two would not be found.
+#[repr(C, align(32))]
+pub struct Record([AtomicU32; 8]);
+const _: () = assert!(size_of::<Record>() == 32 && PAGE_SIZE % align_of::<Record>() == 0);
+
+impl Record {
+    /// The cap in pages, 0 for none.
+    pub const CAP: usize = 2;
+    /// The magic word.
+    pub const MAGIC: usize = 0;
+    /// The most pages the heap has held at once.
+    pub const PEAK: usize = 3;
+    /// The launch tag (servers/init.md, "The startup block"), 0 for none.
+    pub const TAG: usize = 1;
+
+    const fn new() -> Record { Record([const { AtomicU32::new(0) }; 8]) }
+
+    /// Word `i`.
+    pub fn get(&self, i: usize) -> u64 {
+        let half = |j: usize| u64::from(self.0[2 * i + j].load(Ordering::Relaxed));
+        half(0) | (half(1) << 32)
+    }
+
+    /// Sets word `i`. Needs the heap's lock.
+    fn set(&self, _: &Locked, i: usize, value: u64) {
+        self.0[2 * i].store(value as u32, Ordering::Relaxed);
+        self.0[2 * i + 1].store((value >> 32) as u32, Ordering::Relaxed);
+    }
+}
+
 /// The allocator. On the machine it is the global allocator; tests make their own.
 pub struct Heap {
     lock: AtomicBool,
@@ -43,6 +85,9 @@ pub struct Heap {
     /// The arena's first freed run of pages; 0 = none. Each run holds its length and the next run
     /// at its start. Changed only under `lock`.
     runs: AtomicUsize,
+    /// The pages held now; the cap is the record's. Changed only under `lock`.
+    held: AtomicUsize,
+    record: Record,
 }
 
 impl Default for Heap {
@@ -78,6 +123,8 @@ impl Heap {
             next: AtomicUsize::new(0),
             end: AtomicUsize::new(0),
             runs: AtomicUsize::new(0),
+            held: AtomicUsize::new(0),
+            record: Record::new(),
         }
     }
 
@@ -89,11 +136,12 @@ impl Heap {
     }
 
     /// Maps one region of `pages` pages and takes every later page from it, never from `map_anon`
-    /// again. Blocks allocated before keep working. Once only: a second call is `InvalidArgument`.
+    /// again. Blocks allocated before keep working. Once only, and never on a capped heap: either
+    /// is `InvalidArgument`.
     pub fn fix(&self, pages: usize) -> Result<(), Error> {
         let _locked = self.lock();
         let len = pages.checked_mul(PAGE_SIZE).filter(|len| *len != 0).ok_or(Error::InvalidArgument)?;
-        if self.end.load(Ordering::Relaxed) != 0 {
+        if self.end.load(Ordering::Relaxed) != 0 || self.record.get(Record::CAP) != 0 {
             return Err(Error::InvalidArgument);
         }
         let base = map_anon(len, MemFlags::READ | MemFlags::WRITE)?;
@@ -102,10 +150,47 @@ impl Heap {
         Ok(())
     }
 
-    /// `len` bytes of fresh pages (a multiple of the page size): the arena's, once fixed, first
-    /// from a freed run and then from its tail; else `map_anon`'s. Needs the lock. 0 if memory is
-    /// exhausted.
+    /// Starts the heap as the startup block says: caps the pages it holds at once at `cap`, if
+    /// any, and marks the record with its magic word and the launch `tag`, so the bench can find
+    /// it. Past the cap an allocation fails without asking the kernel; pages are counted as they
+    /// are mapped, so the cap reserves nothing. Once only, a cap never 0 and never on a fixed
+    /// heap: each is `InvalidArgument`, and leaves the heap as it was.
+    pub fn start(&self, cap: Option<usize>, tag: u16) -> Result<(), Error> {
+        let locked = self.lock();
+        let fixed = self.end.load(Ordering::Relaxed) != 0;
+        if self.record.get(Record::MAGIC) != 0 || cap == Some(0) || (cap.is_some() && fixed) {
+            return Err(Error::InvalidArgument);
+        }
+        self.record.set(&locked, Record::CAP, cap.unwrap_or(0) as u64);
+        self.record.set(&locked, Record::TAG, u64::from(tag));
+        self.record.set(&locked, Record::MAGIC, RECORD_MAGIC);
+        Ok(())
+    }
+
+    /// The record the bench reads.
+    pub fn record(&self) -> &Record { &self.record }
+
+    /// `len` bytes of fresh pages (a multiple of the page size), unless they would take the heap
+    /// past its cap. Needs the lock. 0 if memory is exhausted or capped.
     fn pages(&self, locked: &Locked, len: usize) -> usize {
+        let held = self.held.load(Ordering::Relaxed).saturating_add(len / PAGE_SIZE);
+        let cap = self.record.get(Record::CAP);
+        if cap != 0 && held as u64 > cap {
+            return 0;
+        }
+        let addr = self.fresh(locked, len);
+        if addr != 0 {
+            self.held.store(held, Ordering::Relaxed);
+            if held as u64 > self.record.get(Record::PEAK) {
+                self.record.set(locked, Record::PEAK, held as u64);
+            }
+        }
+        addr
+    }
+
+    /// `len` bytes of fresh pages: the arena's, once fixed, first from a freed run and then from
+    /// its tail; else `map_anon`'s. Needs the lock. 0 if memory is exhausted.
+    fn fresh(&self, locked: &Locked, len: usize) -> usize {
         let end = self.end.load(Ordering::Relaxed);
         if end == 0 {
             return map_anon(len, MemFlags::READ | MemFlags::WRITE).unwrap_or(0);
@@ -142,6 +227,7 @@ impl Heap {
     /// Gives back a large block's `len` bytes at `addr`: to the arena's runs once fixed, else to
     /// the kernel. Needs the lock.
     fn free_pages(&self, locked: &Locked, addr: usize, len: usize) {
+        self.held.fetch_sub(len / PAGE_SIZE, Ordering::Relaxed);
         if self.end.load(Ordering::Relaxed) == 0 {
             // The kernel refuses to unmap what is not ours, so a failure here would be a bug in
             // the caller, which GlobalAlloc's contract rules out; there is nothing to report to.

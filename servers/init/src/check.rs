@@ -505,7 +505,7 @@ fn devices(m: &Manifest, machine: &Machine) -> Result<Vec<Vec<(String, Handle)>>
 }
 
 /// Limits a process can run in: at least one process and some weight, within what the kernel
-/// takes.
+/// takes; a first-thread stack, and a heap cap if any, that leave room in the server's budget.
 fn budgets(m: &Manifest) -> Result<(), Refusal> {
     let fine = |b: &Budget| {
         (1..=i64::from(u32::MAX)).contains(&b.processes) && (1..=i64::from(u32::MAX)).contains(&b.weight)
@@ -517,6 +517,11 @@ fn budgets(m: &Manifest) -> Result<(), Refusal> {
         s.stack_pages == 0 || s.stack_pages > MAX_STACK_PAGES as u64 || s.stack_pages >= s.budget.pages
     }) {
         return Err(at(format!("servers[{i}].stack_pages"), Why::Stack));
+    }
+    if let Some(i) = m.servers.iter().position(|s| {
+        s.heap_pages.is_some_and(|heap| heap == 0 || u64::from(heap) + s.stack_pages >= s.budget.pages)
+    }) {
+        return Err(at(format!("servers[{i}].heap_pages"), Why::Heap));
     }
     for (i, p) in m.principals.iter().enumerate() {
         if !fine(&p.budget) {
@@ -608,7 +613,7 @@ fn public(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
 
 /// Each server's startup block holds its handles and arguments within one page and
 /// `MAX_START_HANDLES`: the block written here is the one the boot writes, with the same names,
-/// a console connection at `/dev/cons`, and the image.
+/// a console connection at `/dev/cons`, the image, the heap cap and the tag.
 fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
     for (i, s) in m.servers.iter().enumerate() {
         let refused = || at(format!("servers[{i}]"), Why::Block);
@@ -635,7 +640,8 @@ fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
             block.arg(&a);
         }
         let len = machine.entries.iter().find(|(e, _)| *e == s.program).map_or(0, |(_, len)| *len);
-        block.image(stub::IMAGE_AT, len);
+        // The tag is the server's place, as at launch.
+        block.image(stub::IMAGE_AT, len).heap_pages(s.heap_pages.unwrap_or(0)).tag((i + 1) as u16);
         block.finish().map_err(|_| refused())?;
     }
     Ok(())

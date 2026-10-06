@@ -111,7 +111,9 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
 
 These limits are measurements, not an allocator: one native that allocates a lot at once is caught
 afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session budget's page
-limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). On Redoubt the platform lowers
+limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). The image also caps `beamlet`'s heap
+([init](../servers/init.md#the-boot-manifest)), but at the budget's edge, where the budget binds
+first: that cap is there for the bench's measurement. On Redoubt the platform lowers
 `max_heap_words` and `max_ets_words` to a sixteenth of the VM's budget each, which it takes from its
 required argument `budget_pages=N`, the budget's pages
 ([todo](../todo/beamlet-budget-from-startup.md)). A flooding process peaks at about four times its
