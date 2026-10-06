@@ -6,6 +6,7 @@
 //! - [`Platform`]: what the core asks for: `keyd`'s signature over an exchange and its `holds`, the steward's
 //!   login, and a session's console, [`Session`].
 //! - [`Login`]: the user name's grammar, `principal` or `principal+label`.
+//! - [`listener`]: the reads the program's threads ask `ipd` again when its wait runs out.
 //!
 //! What the core decides, so that no platform has to:
 //!
@@ -31,6 +32,11 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+
+extern crate alloc;
+
+pub mod console;
+pub mod listener;
 
 use sunset::ed25519_compact::PublicKey as Ed25519Public;
 pub use sunset::event::ExchangeTranscript;

@@ -147,8 +147,10 @@ max_undocumented = 0
 [[budget]]
 name = "sshd (the network's first parser; carries every channel)"
 paths = ["servers/sshd/src"]
-# None, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
-max_unsafe = 0
+# The core says `#![forbid(unsafe_code)]`. The program's two: `getrandom`'s source, which
+# `getrandom` declares and calls as an `unsafe` function, and the one slice it makes of the
+# buffer that call passes (vendor/README.md, "sshd's SSH library").
+max_unsafe = 2
 max_undocumented = 0
 
 [[budget]]

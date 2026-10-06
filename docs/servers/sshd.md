@@ -19,7 +19,7 @@ steward started.
 
 ### The core and its platforms
 
-<details><summary>Status: built · partly tested: the box's platform is not built yet; it needs `init` and the steward · tested (10)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - bench:sshd-host-tests
 - bench:sshd-build
@@ -130,17 +130,38 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (11)</summary>
 
-- **Listening.** `sshd` is the sole holder of an `ipd` scope that listens on TCP port 22.
+- bench:steward-ssh-two-principals
+- bench:steward-vault-session
+- bench:steward-login-refused
+- bench:steward-session-ends
+- bench:steward-sub-budget-flood
+- host:redoubt-sshd::a_read_waits_for_input_and_takes_what_was_typed
+- host:redoubt-sshd::a_write_waits_for_room_and_the_channel_takes_it
+- host:redoubt-sshd::an_accept_ipd_s_wait_ran_out_on_is_asked_again
+- host:redoubt-sshd::a_data_call_refused_too_many_is_asked_again_a_bounded_number_of_times
+- host:redoubt-sshd::an_ended_session_reads_the_end_and_cannot_write
+- host:redoubt-sshd::the_console_is_one_file_carrying_the_channel_s_labels
+
+</details>
+
+- **Listening.** `sshd` is the sole holder of an `ipd` scope that listens on TCP port 22. Its
+  accept, and each reader's wait for a client's bytes, outlive `ipd`'s wait: a read `ipd` answers
+  `timeout` is asked again ([ipd](ipd.md#the-net-tree)), and any other failure of the accept ends
+  `sshd` ([failure and restart](#failure-and-restart)). A connection's reads and writes are asked
+  again on `timeout` too, and on `too many`, which `ipd` answers when every in-flight call of
+  `sshd`'s share is taken (the accept and the four slots' parked reads), after 10 ms, up to 500
+  times in a row; any other failure ends that connection only.
 - **The host key.** `sshd` holds `keyd`'s `ssh_host` root badge, handed to it by the manifest, and
   asks `keyd` to sign each key exchange; `keyd` builds the exchange hash itself
   ([keyd](keyd.md#messages)). The host key is never in `sshd`'s memory, and the steward never holds
   its badge.
 - **Login.** A user name is `principal` or `principal+label`. `sshd` rejects a login key that `keyd`
-  holds (`holds`), then asks the steward whose key it is; the steward answers with a session, or
-  refuses ([steward](steward.md#authentication-and-sessions)). Login keys are the person's own and
-  never live in `keyd` ([R35 (key separation)](init.md#r35-key-separation)).
+  holds (`holds`), then asks the steward whose key it is with the typed call `login(principal,
+  label, key, console)`; the steward answers with a session, or refuses
+  ([steward](steward.md#authentication-and-sessions)). Login keys are the person's own and never
+  live in `keyd` ([R35 (key separation)](init.md#r35-key-separation)).
 - **A key is tried twice.** A client first asks whether a key would do, then sends a signature
   with it. `sshd` answers the question with `holds` alone: a key `keyd` holds is refused, any other
   may be tried. It asks the steward only once the signature has verified. So the steward never
@@ -169,8 +190,14 @@ Status: planned · M1 (separation and containment)
   the steward opened for the label's owner, and only a pty channel its owner authenticated: no
   forwarding, no subsystems, no `exec` on a labelled channel. No other sink has an owner exemption
   ([R67 (a channel keeps its labels)](#r67-a-channel-keeps-its-labels)).
-- **Ending.** A session's channel closes when the steward ends the session or its VM dies; a closed
-  channel ends the session.
+- **The box's platform** serves four connections at once, each on two threads started once: a
+  driver that runs the core, serves the channel's `/dev/cons` and makes the connection's calls
+  to `keyd`, the steward and `ipd`, and a reader that waits in `ipd` for the client's bytes and
+  hands each read to the driver. A call to `keyd` or the steward holds up only its own
+  connection; a fifth connection is closed when it arrives.
+- **Ending.** A session's channel closes when the steward ends the session or its VM dies, which
+  the steward tells `sshd` with `ended` on the channel's connection; a closed channel ends the
+  session.
 
 ```mermaid
 sequenceDiagram
@@ -179,24 +206,21 @@ sequenceDiagram
     participant KD as keyd
     participant ST as steward
     participant S as session
-    Note over C,S: planned
-    C-->>SH: key exchange
-    SH-->>KD: sign_ssh_exchange(transcript)
-    KD-->>SH: signature
-    C-->>SH: userauth alice+secrets, key K
-    SH-->>KD: holds(K)
-    KD-->>SH: no
-    SH-->>ST: login(alice, secrets, K)
-    ST-->>SH: session, labels {alice-secrets}
-    C-->>SH: pty channel
-    SH-->>S: /dev/cons on the labelled channel
+    C->>SH: key exchange
+    SH->>KD: sign_ssh_exchange(transcript)
+    KD->>SH: signature
+    C->>SH: userauth alice+secrets, key K
+    SH->>KD: holds(K)
+    KD->>SH: no
+    SH->>ST: login(alice, secrets, K)
+    ST->>SH: session, labels {alice-secrets}
+    C->>SH: pty channel
+    SH->>S: /dev/cons on the labelled channel
 ```
-*Figure: an SSH login to a vault session. All of it is planned.*
+*Figure: an SSH login to a vault session.*
 
-**Open:** how many channels and connections one principal may hold at once; whether the box's
-platform lets a call to the steward or `keyd` hold up other connections; a post-quantum key
-exchange (`mlkem768x25519-sha256`), which changes the transcript `keyd` signs. The operations
-`sshd` sends the steward are in the steward's table ([steward](steward.md#the-stewards-protocol)).
+The operations `sshd` sends the steward are in the steward's table
+([steward](steward.md#the-stewards-protocol)).
 
 ### `approve@box`
 
@@ -256,7 +280,7 @@ a compromised transfer server.
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: the transfer server request comes with M3 (files in and out) · tested: bench:steward-ssh-two-principals
 
 - `sshd` holds its `ipd` listen scope for port 22, `keyd`'s `ssh_host` root badge, a connection to the
   steward, and the `/dev/cons` endpoints it serves to sessions.
@@ -266,19 +290,15 @@ Status: planned · M1 (separation and containment)
 - It is trusted across the labels of the channels it carries: with the steward it is the
   confinement check's one named exception ([init](init.md#the-confinement-check)).
 
-**Open:** none.
-
 ## Security properties
 
 ### R67 (a channel keeps its labels)
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:sshd-loopback-r67, bench:steward-vault-session, host:redoubt-sshd::the_console_is_one_file_carrying_the_channel_s_labels
 
 Each SSH channel carries its session's labels, and a labelled session's output reaches only its own
 pty channel, authenticated by the label's owner, with no forwarding, subsystem or `exec`. So vault
 data leaves the box over SSH only to the person who owns the label, on the channel they opened.
-
-**Open:** none.
 
 ### R68 (only the steward on approve@box)
 
@@ -329,7 +349,11 @@ Status: planned · M1 (separation and containment)
   which `sunset` refuses before the core (with a failure only if the client wants a reply, and
   `ssh` does not). Read from the vendored source; no case shows it, since nothing reaches the log.
 - **The key exchange is not post-quantum.** Traffic recorded now could be read by whoever later
-  breaks X25519.
+  breaks X25519. A post-quantum exchange (`mlkem768x25519-sha256`) changes the transcript `keyd`
+  signs.
+- **Connections are first come, first served.** `sshd` serves four connections at once, whoever
+  opened them, and closes any beyond; how many one principal may hold is not decided, so one
+  principal's open connections can keep another's logins out until they end.
 
 ## Why
 
