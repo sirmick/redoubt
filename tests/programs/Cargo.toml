@@ -94,6 +94,7 @@ bin = [
     { name = "sched-idle-gap", test = false },
     { name = "sched-large-weight", test = false },
     { name = "sched-latency", test = false },
+    { name = "sched-lift-delay", test = false },
     { name = "sched-server-busy", test = false },
     { name = "sched-share", test = false },
     { name = "sched-sleep-gaming", test = false },
