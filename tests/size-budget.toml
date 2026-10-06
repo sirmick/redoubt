@@ -41,7 +41,7 @@ max_lines = 650
 [[crate]]
 name = "libs/verity"
 paths = ["libs/verity/src"]
-max_lines = 130
+max_lines = 173
 
 [[crate]]
 name = "libs/ipclist"
@@ -51,7 +51,7 @@ max_lines = 499
 [[crate]]
 name = "libs/signing"
 paths = ["libs/signing/src"]
-max_lines = 15
+max_lines = 31
 
 [[crate]]
 name = "libs/client"

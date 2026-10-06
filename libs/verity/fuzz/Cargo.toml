@@ -1,0 +1,27 @@
+[package]
+name = "redoubt-verity-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Host-only and out of the main workspace (its own workspace below), so the fuzzer's nightly
+# toolchain and libfuzzer never touch the machine build (TENETS.md 3 and 6). Run from
+# libs/verity:
+#     cargo fuzz run -s none root_block fuzz/corpus/root_block fuzz/seeds/root_block
+# `-s none` because the address sanitizer adds nothing to a crate that forbids `unsafe`.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+redoubt-verity = { path = ".." }
+
+[[bin]]
+name = "root_block"
+path = "fuzz_targets/root_block.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

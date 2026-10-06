@@ -69,6 +69,8 @@ exclude = [
   "libs/rt/fuzz",
   # Host-only fuzz targets for blkd (see servers/blkd/fuzz/Cargo.toml).
   "servers/blkd/fuzz",
+  # Host-only fuzz target for a signed volume's root block (see libs/verity/fuzz/Cargo.toml).
+  "libs/verity/fuzz",
   # Host-only fuzz targets for netd and ipd (see servers/ipd/fuzz/Cargo.toml).
   "servers/netd/fuzz",
   "servers/ipd/fuzz",

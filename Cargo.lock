@@ -866,6 +866,7 @@ dependencies = [
 name = "redoubt-verity"
 version = "0.1.0"
 dependencies = [
+ "redoubt-signing",
  "sha2",
 ]
 
