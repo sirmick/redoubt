@@ -18,3 +18,10 @@ pub const CROSSING_LIFE: u64 = 1_000_000;
 pub const RANDOM_WORDS: usize = 8;
 /// A label set's length, the kernel's.
 pub const MAX_LABELS: usize = redoubt_sys::MAX_LABELS;
+
+/// The shared servers a session's namespace holds a connection to, one `Shared` slot each in the
+/// binding table, in this order: `bootfsd` at `/boot`, the home volume's server, the labelled
+/// volume's at `/vault`, `ipd` at `/net`, the console at `/dev/cons`, and the system volume's
+/// `erofsd` (servers/steward.md, "Two embedders and a reference"). The manifest's `servers` line
+/// must say this many: `init` writes it, and the steward refuses to start on another.
+pub const SLOTS: u16 = 6;

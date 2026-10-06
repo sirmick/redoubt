@@ -12,8 +12,7 @@
 
 use alloc::vec::Vec;
 
-/// The most rules one scope holds.
-pub const MAX_RULES: usize = 8;
+pub use redoubt_rt::wire::ipd_scope::{MAX_RULES, RULE_BYTES};
 
 /// An IPv4 prefix: an address (as a big-endian `u32`, so `10.0.0.0` is `0x0a00_0000`) and a
 /// length of 0 to 32. Canonical: no bit is set after the length.
@@ -151,27 +150,21 @@ impl Scope {
         Ok(Scope { rules })
     }
 
-    /// The same layout, for a client building a `grant` (and the tests).
+    /// The same layout, for a client building a `grant` (and the tests), through
+    /// [`redoubt_rt::wire::ipd_scope`].
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(1 + self.rules.len() * RULE_BYTES);
-        out.push(self.rules.len() as u8);
-        for rule in &self.rules {
-            let (kind, addr, len, ports) = match rule {
-                Rule::Connect(p, ports) => (1u8, p.addr, p.len, ports),
-                Rule::Listen(ports) => (2u8, 0, 0, ports),
-            };
-            out.push(kind);
-            out.extend_from_slice(&addr.to_be_bytes());
-            out.push(len);
-            out.extend_from_slice(&ports.lo.to_le_bytes());
-            out.extend_from_slice(&ports.hi.to_le_bytes());
-        }
-        out
+        use redoubt_rt::wire::ipd_scope::{CONNECT, LISTEN, encode, rule};
+        let rules: Vec<_> = self
+            .rules
+            .iter()
+            .map(|r| match r {
+                Rule::Connect(p, ports) => rule(CONNECT, p.addr.to_be_bytes(), p.len, ports.lo, ports.hi),
+                Rule::Listen(ports) => rule(LISTEN, [0; 4], 0, ports.lo, ports.hi),
+            })
+            .collect();
+        encode(&rules).unwrap_or_default()
     }
 }
-
-/// Bytes of one encoded rule.
-pub const RULE_BYTES: usize = 10;
 
 /// The box's own addresses, refused to every scope (servers/ipd.md R59):
 /// `ipd`'s address, its network's network and broadcast addresses, the limited broadcast, the
