@@ -243,6 +243,24 @@ inside the run's directory. `--jobs J` boots up to J seeds at once. It is never 
 result under it is worth is the shared-host rule below. A timing gate runs one pinned seed and
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
+**Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
+something in it waits on the host, and 131 of the 194 do. What keeps a case on the host's clock:
+a disk or a userland disk (38 cases; the rule for a disk is above); host sockets, a `forward`, a
+`poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
+the rv32 UART lost a burst of it); several harts that spin, since under `icount` QEMU runs the
+harts in turn on one host thread and a hart spinning on the kernel's lock spends its whole turn
+(3: `all-together` at 2 harts and `ipc` at 4 take from three to ten times as long, and
+`smp-boot` at 4 sees a hart that never ran user code); and a run whose purpose is the host's
+time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`, which needs
+QEMU's multi-threaded TCG). Three cases read no host clock and stay on it for now: `redoubt-ipc`
+fails under `icount` on both widths (189 calls abandoned of the 256 it wants), until that is
+understood; `sum-clear` and `lend-untouched-page` (at 4 harts) fail without it too, and move
+once they pass. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
+is given at least four times its slowest pass alone on either width, rounded up to 10 s, and
+more than any wait of its own program, so that a stuck check reports itself; it is never raised
+without a measurement. `bench-poweroff-missing` keeps its 3 s: there the deadline is the oracle,
+the timeout its `must_fail` waits for.
+
 **On a shared host.** `cargo testbench` runs its cases one after another; what may run beside
 the invocation, another invocation in its own run directory, a seed under `--jobs`, a build, is
 decided by the clock each case measures with. A boot case with `icount` measures in guest time:
@@ -250,7 +268,7 @@ the host's load does not move a guest time, so its pass, and a failure the guest
 reports, are verdicts whatever ran beside it (a pinned seed adds only that the run repeats
 exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's deadline for the
 boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
-alone. A boot case without `icount` (most of them) keeps the host's clock in the guest, so load
+alone. A boot case without `icount` (60 of them) keeps the host's clock in the guest, so load
 lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
 bound on a time, and a failure beside other work has no verdict until it fails alone. A `[net]`
 table by itself changes neither class: an empty one gives the guest a card that reaches
@@ -282,10 +300,11 @@ cores: `q run --cores N -- <command>` waits for N free cores, runs the command p
 `--quiet` runs a host-clock case on a reserved core set, one such case at a time, while the rest
 of the machine keeps working; `--lock net` keeps two `[net]` boots apart; a lease ends with the
 client process, so a killed job frees its cores. `scripts/jobs.mk` names every case as a make
-target (`rv64/<case>`, `cases-rv64`, `quiet-rv64`, `build-rv64`, `docs`) and picks the class for
-it: a boot takes one core per guest hart, a `host-tests` case four, the host-clock cases go
-quiet. `q ls` shows the core map and the queue; `q log` the recent jobs with the time each
-waited and ran.
+target (`rv64/<case>`, `cases-rv64`, `quiet-rv64`, `build-rv64`, `prebuilt`, `docs`) and picks
+the class for it: a boot takes one core per guest hart, a `host-tests` case four, the host-clock
+cases go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its
+width is there ([building once](#building-once)), else through `cargo testbench`. `q ls` shows
+the core map and the queue; `q log` the recent jobs with the time each waited and ran.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
