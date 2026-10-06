@@ -685,6 +685,7 @@ dependencies = [
  "redoubt-init",
  "redoubt-rt",
  "redoubt-signing",
+ "redoubt-steward",
  "redoubt-sys",
  "redoubt-verity",
  "stub",
@@ -833,6 +834,7 @@ dependencies = [
 name = "redoubt-steward"
 version = "0.1.0"
 dependencies = [
+ "redoubt-steward",
  "redoubt-sys",
  "sha2",
 ]

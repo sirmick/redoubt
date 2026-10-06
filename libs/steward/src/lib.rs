@@ -23,6 +23,8 @@ mod edges;
 pub mod effect;
 pub mod effects;
 pub mod event;
+#[cfg(feature = "fuzz")]
+pub mod fuzz;
 pub mod gen;
 pub mod guards;
 pub mod hash;

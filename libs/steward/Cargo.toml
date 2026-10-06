@@ -11,3 +11,11 @@ description = "The steward's policy core (docs/servers/steward.md): one pure sta
 redoubt-sys = { path = "../sys" }
 # The request binding hash, the core's one cryptographic function.
 sha2 = { version = "0.11", default-features = false }
+
+[features]
+# The manifest lines' fuzz body, for `fuzz/` (libs/steward/fuzz); host tests build it as well.
+fuzz = []
+
+[dev-dependencies]
+# The fuzz body, for the tests in tests/.
+redoubt-steward = { path = ".", features = ["fuzz"] }

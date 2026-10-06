@@ -84,6 +84,8 @@ exclude = [
   "stub/fuzz",
   # Host-only fuzz target for init's manifest checks (see servers/init/fuzz/Cargo.toml).
   "servers/init/fuzz",
+  # Host-only fuzz target for the steward's manifest lines (see libs/steward/fuzz/Cargo.toml).
+  "libs/steward/fuzz",
   # beamlet, the BEAM VM for the OTP userland: its own workspace (host tools and `no_std`
   # target crates, its own test toolchain), built by its own `cargo` invocations.
   "userland/otp",

@@ -3,10 +3,11 @@
 //! image's own manifest (`image/manifest.json`) in one way and expects the refusal for that rule
 //! and no other.
 
-use redoubt_init::check::{MANIFEST, Machine, Plan};
+use redoubt_init::check::{MANIFEST, Machine, Plan, STEWARD_SLOTS, args, is_steward};
 use redoubt_init::fuzz::{BUNDLE_KEY, ENTRIES, machine, virt_devices};
 use redoubt_init::manifest::{
-    Budget, Device, DeviceUse, Handed, Label, LabelSet, Net, Principal, Server, Verity, Volume,
+    Budget, Device, DeviceUse, Handed, Label, LabelSet, Net, Principal, Server, Sizes, Steward, Verity,
+    Volume,
 };
 use redoubt_init::refusal::{Refusal, Sharing, Why};
 use redoubt_init::{ARENA_PAGES, Manifest, check, read};
@@ -783,9 +784,9 @@ fn a_shared_server_needs_a_bucket_per_declared_domain_and_root_badge() {
     secrets(&mut m);
     m.principals.push(Principal {
         label_sets: vec![
-            LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) },
+            LabelSet { labels: vec!["alice-secrets".into()] },
             // The same set again is the same domain.
-            LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) },
+            LabelSet { labels: vec!["alice-secrets".into()] },
         ],
         ..alice()
     });
@@ -848,7 +849,7 @@ fn confined_gives_a_labelled_domain_no_network() {
     let mut m = confined();
     secrets(&mut m);
     m.principals.push(Principal {
-        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) }],
+        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }],
         net: vec![Net { prefix: "0.0.0.0/0".into(), ports: vec![443] }],
         ..alice()
     });
@@ -977,10 +978,8 @@ fn confined_counts_only_a_shared_servers_own_label_set() {
     let mut m = without_volumes();
     m.confined = true;
     secrets(&mut m);
-    m.principals.push(Principal {
-        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) }],
-        ..alice()
-    });
+    m.principals
+        .push(Principal { label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }], ..alice() });
     let secret = || vec![String::from("alice-secrets")];
     m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret(), disk: None, verity: None });
     server(&mut m, "blkd").labels = secret();
@@ -1013,6 +1012,132 @@ fn confined_lets_label_sets_that_share_nothing_share_the_cores() {
     m.servers[0].labels = vec!["alice-secrets".into()];
     m.servers[0].args.pop();
     assert!(on_virt(&m).is_ok());
+}
+
+// ---- the steward: its entry, sizes, console and manifest lines ----
+
+/// The image without its userland, with alice (owning alice-secrets and working under it) and
+/// bob, and a steward entry the `steward` object names.
+fn with_steward() -> Manifest {
+    let mut m = without_userland();
+    secrets(&mut m);
+    let top = Budget { pages: 4096, processes: 4, weight: 100 };
+    m.principals.push(Principal {
+        labels: vec!["alice-secrets".into()],
+        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }],
+        budget: top,
+        ..alice()
+    });
+    m.principals.push(Principal {
+        name: "bob".into(),
+        account: 1002,
+        ssh_keys: vec![],
+        budget: top,
+        ..alice()
+    });
+    let base = server(&mut image(), "keyd").clone();
+    m.servers.push(Server {
+        name: "steward".into(),
+        program: "steward".into(),
+        budget: budget(256),
+        receives: vec!["steward".into()],
+        args: vec![],
+        ..base
+    });
+    let size = |pages| Budget { pages, processes: 1, weight: 10 };
+    m.steward = Some(Steward {
+        server: "steward".into(),
+        sizes: Sizes {
+            session: size(512),
+            agent: size(256),
+            sub_agent: size(64),
+            crossing: size(32),
+            cost: 1,
+        },
+    });
+    m
+}
+
+/// The lines carry each principal with its keys' ids, its owned labels' ids and its domains, its
+/// unlabelled set first; `keyd []`, since the live key-separation checks are init's and sshd's;
+/// the steward's slot count; and the sizes. Only the steward's entry gets them, and `users`.
+#[test]
+fn the_steward_s_entry_alone_is_given_the_manifest_lines() {
+    let m = with_steward();
+    on_virt(&m).unwrap();
+    let key: [u8; 32] = core::array::from_fn(|i| i as u8 + 1);
+    let id = redoubt_steward::hash::key_id(&key);
+    let steward = m.servers.iter().find(|s| s.name == "steward").unwrap();
+    assert_eq!(
+        args(&m, steward, &BUNDLE_KEY),
+        [
+            format!(
+                "principal \"alice\" account=1001 login=[{id}] approval=[] owned=[7] sets=[[],[7]] top=4096,4,100"
+            ),
+            "principal \"bob\" account=1002 login=[] approval=[] owned=[] sets=[[]] top=4096,4,100".into(),
+            "keyd []".into(),
+            format!("servers {STEWARD_SLOTS}"),
+            "sizes session=512,1,10 agent=256,1,10 sub_agent=64,1,10 crossing=32,1,10 cost=1".into(),
+        ]
+    );
+    // The policy core reads them back as the manifest they came from.
+    let lines = args(&m, steward, &BUNDLE_KEY);
+    let read = redoubt_steward::manifest::parse_lines(lines.iter().map(String::as_str)).unwrap();
+    assert_eq!(read.principals[0].login_keys, [id]);
+    for s in m.servers.iter().filter(|s| s.name != "steward") {
+        assert!(!is_steward(&m, s));
+        assert!(!args(&m, s, &BUNDLE_KEY).iter().any(|a| a.starts_with("principal ")), "{}", s.name);
+    }
+    assert!(is_steward(&m, steward));
+}
+
+#[test]
+fn the_steward_object_and_console_name_what_the_manifest_holds() {
+    let schema = |text: &str| match read(text.as_bytes(), ARENA_PAGES) {
+        Err(Refusal::Schema(e)) => (e.path, e.kind),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(schema(r#"{ "steward": {} }"#), ("steward.server".into(), SchemaKind::Missing));
+    // A label set's sub-budget is the steward's equal share, never the manifest's to give.
+    let set = r#"{ "principals": [ { "name": "a", "account": "1", "budget": { "pages": "4", "processes": 1, "weight": 1 }, "label_sets": [ { "labels": [], "budget": {} } ] } ] }"#;
+    assert_eq!(schema(set), ("principals[0].label_sets[0].budget".into(), SchemaKind::Unknown));
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().server = "nobody".into();
+    refused_at(&m, "steward.server", Why::Unknown);
+    let mut m = with_steward();
+    m.console = Some("carol".into());
+    refused_at(&m, "console", Why::Unknown);
+    m.console = Some("alice".into());
+    assert!(on_virt(&m).is_ok());
+    m.steward = None;
+    refused_at(&m, "console", Why::Unknown); // The lines are init's to write: a principal in the entry's own arguments is refused.
+    let mut m = with_steward();
+    server(&mut m, "steward").args = vec!["buckets=4".into(), "principal \"eve\"".into()];
+    refused_at(&m, "servers[7].args[1]", Why::Argument);
+}
+
+/// Every size a process can run in, and each within the smallest sub-budget the steward carves:
+/// an equal share of a principal's budget per domain, less a budget's own cost.
+#[test]
+fn the_steward_s_sizes_fit_every_principal_s_smallest_share() {
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().sizes.agent.pages = 0;
+    refused_at(&m, "steward.sizes.agent", Why::Budget);
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().sizes.crossing.processes = 0;
+    refused_at(&m, "steward.sizes.crossing", Why::Budget);
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().sizes.cost = 0;
+    refused_at(&m, "steward.sizes.cost", Why::Budget);
+    // alice's two domains share 4096 pages: 2047 each after the cost; bob's one, 4095.
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().sizes.session.pages = 2047;
+    assert!(on_virt(&m).is_ok());
+    m.steward.as_mut().unwrap().sizes.session.pages = 2048;
+    refused_at(&m, "principals[0].budget", Why::Sizes("session"));
+    let mut m = with_steward();
+    m.principals[1].budget.weight = 9;
+    refused_at(&m, "principals[1].budget", Why::Sizes("session"));
 }
 
 // ---- the bound on root ----
