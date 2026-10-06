@@ -197,7 +197,7 @@ fn reconcile<S: Budgets<u64>, const N: usize>(
 ) {
     let lost: Vec<u64> = q.queued().collect();
     let mut gained = runnable.to_vec();
-    q.reconcile(bs, running, &lost, &mut gained, |_, b| runnable.contains(&b));
+    q.reconcile(bs, |b| running == Some(b), &lost, &mut gained, |_, b| runnable.contains(&b));
 }
 
 #[test]
@@ -206,14 +206,14 @@ fn ranks_follow_all_four_clauses() {
     let mut q: Queue<u64, 8> = Queue::new();
     // Clause 3: wakes in one reconcile run lowest id first.
     reconcile(&mut q, &mut bs, None, &[3, 1, 2]);
-    assert_eq!(q.pick(&bs), Some(1));
+    assert_eq!(q.pick(&bs, |_| false), Some(1));
     // Budget 1 runs a slice and is requeued; its pass is now higher, so 2 is next.
     q.fold(&mut bs, 1, 100);
     q.deschedule(&mut bs, 1, true);
-    assert_eq!(q.pick(&bs), Some(2));
+    assert_eq!(q.pick(&bs, |_| false), Some(2));
     // Clause 2: a later reconcile's wake at the same pass (the floor) goes ahead of earlier ones.
     reconcile(&mut q, &mut bs, None, &[1, 2, 3, 4]);
-    assert_eq!(q.pick(&bs), Some(4));
+    assert_eq!(q.pick(&bs, |_| false), Some(4));
     // Clause 1 and 4: requeued budgets at an equal pass go behind wakers, in FIFO order.
     q.fold(&mut bs, 4, 0);
     q.deschedule(&mut bs, 4, true);
@@ -225,7 +225,7 @@ fn ranks_follow_all_four_clauses() {
     reconcile(&mut q, &mut bs, None, &[1, 2, 3, 4, 5]);
     let order: Vec<u64> = (0..4)
         .map(|_| {
-            let b = q.pick(&bs).unwrap();
+            let b = q.pick(&bs, |_| false).unwrap();
             q.fold(&mut bs, b, 1000);
             q.deschedule(&mut bs, b, true);
             b
@@ -319,16 +319,80 @@ fn a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran() {
     assert_eq!((cpu.cur, cpu.pending), (None, 0));
 }
 
+/// Two harts on one queue: budgets 1 and 2 runnable, hart 1 running 1 and hart 0 running 2.
+fn two_harts_running() -> (Map, Harts<u64, 4, 2>) {
+    let mut bs = map(&[1, 2, 3]);
+    let mut harts: Harts<u64, 4, 2> = Harts::new();
+    harts.reconcile(&mut bs, &[], &mut [1, 2], |_, b| b != 3);
+    assert_eq!(harts.pick(1, &mut bs, |_, b| Some(b)), Some((1, 1)));
+    harts.switch(1, &mut bs, Some(1), |_, _| true);
+    assert_eq!(harts.pick(0, &mut bs, |_, b| Some(b)), Some((2, 2)));
+    harts.switch(0, &mut bs, Some(2), |_, _| true);
+    (bs, harts)
+}
+
+#[test]
+fn a_budget_running_on_another_hart_stays_queued_through_this_harts_reconcile() {
+    let (mut bs, mut harts) = two_harts_running();
+    // Hart 0's reconcile lists 1 as lost (its one thread is the one running on hart 1): it stays.
+    harts.reconcile(&mut bs, &[1], &mut [], |_, b| b == 2);
+    assert!(harts.q.contains(1) && bs.state(1).queued);
+    // Once no hart runs it, the same reconcile takes it out.
+    harts.switch(1, &mut bs, None, |_, _| false);
+    harts.reconcile(&mut bs, &[1], &mut [], |_, b| b == 2);
+    assert!(!harts.q.contains(1));
+}
+
+#[test]
+fn a_pick_skips_budgets_running_on_other_harts() {
+    let (mut bs, mut harts) = two_harts_running();
+    // Hart 0 leaves 2 and picks again: 1 is lower (it ran nothing) but runs on hart 1.
+    harts.switch(0, &mut bs, None, |_, _| true);
+    assert_eq!(harts.pick(0, &mut bs, |_, b| Some(b)), Some((2, 2)));
+    // With 3 runnable it is still never 1.
+    harts.reconcile(&mut bs, &[], &mut [3], |_, _| true);
+    for _ in 0..4 {
+        let (b, _) = harts.pick(0, &mut bs, |_, b| Some(b)).unwrap();
+        assert_ne!(b, 1);
+        harts.switch(0, &mut bs, Some(b), |_, _| true);
+        harts.switch(0, &mut bs, None, |_, _| true);
+    }
+    // Hart 1 itself may pick it again.
+    harts.switch(1, &mut bs, None, |_, _| true);
+    assert!(harts.pick(1, &mut bs, |_, b| Some(b)).is_some());
+}
+
+#[test]
+fn a_switch_on_one_hart_leaves_the_others_runner_alone_and_charges_its_minimum() {
+    let (mut bs, mut harts) = two_harts_running();
+    harts.accrue(1, 7);
+    let before = (bs.state(1).pass, bs.state(2).pass);
+    // Hart 0 leaves 2 having accrued nothing: MIN_CHARGE for 2 (at the fixture's weight, 10),
+    // nothing for 1.
+    harts.switch(0, &mut bs, None, |_, _| true);
+    assert_eq!(bs.state(2).pass, before.1 + u128::from(MIN_CHARGE * STRIDE / 10));
+    assert_eq!(bs.state(1).pass, before.0);
+    assert_eq!(harts.runners[1], Runner { cur: Some(1), pending: 7 });
+    // Work billed to 1 joins hart 1's pending; a settle folds exactly that.
+    harts.bill(&mut bs, 1, 3);
+    harts.settle(&mut bs, 1);
+    assert_eq!(bs.state(1).pass, before.0 + u128::from(STRIDE));
+    assert_eq!(harts.runners[1].pending, 0);
+    // A destruction clears the runner of the hart that runs it.
+    harts.destroy(&mut bs, 1, None, |_| {});
+    assert_eq!(harts.runners[1], Runner::new());
+}
+
 #[test]
 fn a_reconcile_visits_only_the_budgets_it_is_given() {
     let mut bs = Leaving(map(&[1, 2, 3]), Vec::new());
     let mut q: Queue<u64, 4> = Queue::new();
-    q.reconcile(&mut bs, None, &[], &mut [2, 1, 2], |_, b| b != 3);
+    q.reconcile(&mut bs, |_| false, &[], &mut [2, 1, 2], |_, b| b != 3);
     assert!(q.contains(1) && q.contains(2) && !q.contains(3));
     // 1 has no runnable thread now, but is not among those that lost one: it stays.
-    q.reconcile(&mut bs, None, &[2], &mut [3], |_, b| b == 2);
+    q.reconcile(&mut bs, |_| false, &[2], &mut [3], |_, b| b == 2);
     assert!(bs.1.is_empty() && q.contains(1) && !q.contains(3));
-    q.reconcile(&mut bs, None, &[1, 1], &mut [], |_, b| b == 2);
+    q.reconcile(&mut bs, |_| false, &[1, 1], &mut [], |_, b| b == 2);
     assert_eq!(bs.1, [1]);
     assert!(!q.contains(1) && q.contains(2));
 }
@@ -407,11 +471,11 @@ fn a_missed_mark_trips_the_audit() {
     let entry = |bs: &mut Counted, marks: &mut Marks<u64, 4>, q: &mut Queue<u64, 4>, t: u64| {
         marks.settle(bs, now);
         let (lost, gained) = marks.changed();
-        q.reconcile(bs, None, lost, gained, |bs, b| bs.ready(b) > 0);
-        assert_eq!(marks.check_visited(bs, None), Ok(()));
+        q.reconcile(bs, |_| false, lost, gained, |bs, b| bs.ready(b) > 0);
+        assert_eq!(marks.check_visited(bs, |_| false), Ok(()));
         marks.clear();
-        let idle = q.pick(bs).is_none();
-        marks.audit_due(t, EVERY, idle).then(|| marks.audit(bs, q, None, 0..4, now))
+        let idle = q.pick(bs, |_| false).is_none();
+        marks.audit_due(t, EVERY, idle).then(|| marks.audit(bs, q, |_| false, 0..4, now))
     };
     bs.slots[0] = (1, Some(1));
     bs.slots[1] = (1, Some(2));
@@ -453,15 +517,15 @@ fn a_missed_mark_trips_the_audit() {
     // Marked, it wakes; within a slice of that walk, no other runs.
     marks.mark(2);
     assert_eq!(entry(&mut bs, &mut marks, &mut q, 133), None);
-    assert_eq!(marks.audit(&bs, &q, None, 0..4, now), Ok(()));
+    assert_eq!(marks.audit(&bs, &q, |_| false, 0..4, now), Ok(()));
     // A process that ended with no mark: no longer live, still counted.
-    assert_eq!(marks.audit(&bs, &q, None, 0..2, now), Err(Missed::Slot { slot: 2, counted: 1, has: 0 }));
+    assert_eq!(marks.audit(&bs, &q, |_| false, 0..2, now), Err(Missed::Slot { slot: 2, counted: 1, has: 0 }));
     // A count out of step with its slots, and a queue out of step with the counts.
     bs.ready.insert(2, 5);
-    assert_eq!(marks.audit(&bs, &q, None, 0..4, now), Err(Missed::Count { id: 2, kept: 5, sum: 1 }));
+    assert_eq!(marks.audit(&bs, &q, |_| false, 0..4, now), Err(Missed::Count { id: 2, kept: 5, sum: 1 }));
     bs.ready.insert(2, 1);
     q.deschedule(&mut bs, 2, false);
-    assert_eq!(marks.audit(&bs, &q, None, 0..4, now), Err(Missed::Queue { id: 2, queued: false }));
+    assert_eq!(marks.audit(&bs, &q, |_| false, 0..4, now), Err(Missed::Queue { id: 2, queued: false }));
 }
 
 #[test]
@@ -477,24 +541,24 @@ fn a_wrong_reconcile_trips_its_own_check() {
     // A reconcile that takes budget 2 for not runnable leaves it asleep with a ready thread: the
     // check of the budgets it visited says so at once.
     let (lost, gained) = marks.changed();
-    q.reconcile(&mut bs, None, lost, gained, |_, b| b != 2);
-    assert_eq!(marks.check_visited(&bs, None), Err(Missed::Queue { id: 2, queued: false }));
+    q.reconcile(&mut bs, |_| false, lost, gained, |_, b| b != 2);
+    assert_eq!(marks.check_visited(&bs, |_| false), Err(Missed::Queue { id: 2, queued: false }));
     marks.clear();
     // And one that keeps a budget queued with none.
     marks.mark(1);
     marks.settle(&mut bs, now);
     let (lost, gained) = marks.changed();
-    q.reconcile(&mut bs, None, lost, gained, |_, _| true);
-    assert_eq!(marks.check_visited(&bs, None), Ok(()));
+    q.reconcile(&mut bs, |_| false, lost, gained, |_, _| true);
+    assert_eq!(marks.check_visited(&bs, |_| false), Ok(()));
     marks.clear();
     bs.slots[0] = (0, Some(1));
     marks.mark(0);
     marks.settle(&mut bs, now);
     let (lost, gained) = marks.changed();
-    q.reconcile(&mut bs, None, lost, gained, |_, _| true);
-    assert_eq!(marks.check_visited(&bs, None), Err(Missed::Queue { id: 1, queued: true }));
+    q.reconcile(&mut bs, |_| false, lost, gained, |_, _| true);
+    assert_eq!(marks.check_visited(&bs, |_| false), Err(Missed::Queue { id: 1, queued: true }));
     // The running budget may stay queued with none.
-    assert_eq!(marks.check_visited(&bs, Some(1)), Ok(()));
+    assert_eq!(marks.check_visited(&bs, |b| b == 1), Ok(()));
 }
 
 #[test]
@@ -523,8 +587,8 @@ fn the_marked_reconcile_matches_a_full_one() {
             6 | 7 => {
                 marks.settle(&mut bs, now);
                 let (lost, gained) = marks.changed();
-                q.reconcile(&mut bs, None, lost, gained, |bs, b| bs.ready(b) > 0);
-                assert_eq!(marks.check_visited(&bs, None), Ok(()), "step {step}");
+                q.reconcile(&mut bs, |_| false, lost, gained, |bs, b| bs.ready(b) > 0);
+                assert_eq!(marks.check_visited(&bs, |_| false), Ok(()), "step {step}");
                 marks.clear();
                 let runnable: Vec<u64> = ids
                     .iter()
@@ -532,7 +596,7 @@ fn the_marked_reconcile_matches_a_full_one() {
                     .filter(|b| bs.slots.iter().any(|s| s.0 > 0 && s.1 == Some(*b)))
                     .collect();
                 reconcile(&mut fq, &mut full, None, &runnable);
-                assert_eq!(marks.audit(&bs, &q, None, 0..8, now), Ok(()), "step {step}");
+                assert_eq!(marks.audit(&bs, &q, |_| false, 0..8, now), Ok(()), "step {step}");
                 for b in ids {
                     assert_eq!(bs.state(b), full.state(b), "step {step} budget {b}");
                 }
@@ -540,8 +604,8 @@ fn the_marked_reconcile_matches_a_full_one() {
             }
             _ => {
                 // The lowest-ranked runs and is requeued if it still has a ready thread.
-                if let Some(b) = q.pick(&bs) {
-                    assert_eq!(fq.pick(&full), Some(b), "step {step}");
+                if let Some(b) = q.pick(&bs, |_| false) {
+                    assert_eq!(fq.pick(&full, |_| false), Some(b), "step {step}");
                     let t = rng.range(1, 1000);
                     let still = bs.ready(b) > 0;
                     q.fold(&mut bs, b, t);

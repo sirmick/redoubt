@@ -24,10 +24,11 @@
 //! - **Deschedule**: a budget taken off the CPU is charged what it ran, and at least [`MIN_CHARGE`] (a run
 //!   too short for the clock to see is not free).
 //!
-//! [`Cpu`] is the wiring itself: the budget whose runtime is accruing, when it is folded, and the
-//! order of the steps at a deschedule, a pick, a creation, a weight change and a destruction. The
-//! kernel's `sched.rs` drives it with its trap-boundary accounting and the budgets' frames; the
-//! differential drives the same code against the model.
+//! [`Harts`] is the wiring itself: one [`Runner`] per hart, the budget whose runtime is accruing
+//! there, when it is folded, and the order of the steps at a deschedule, a pick, a creation, a
+//! weight change and a destruction. A budget runs on at most one hart at a time. The kernel's
+//! `sched.rs` drives it with its trap-boundary accounting and the budgets' frames; [`Cpu`] is the
+//! same wiring for one hart, and the differential drives it against the model.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -175,8 +176,8 @@ pub trait Budgets<B> {
     fn reweighed(&mut self, _b: B, _r: &Reweigh) {}
 }
 
-/// The queue: every budget with a runnable thread (or running), at most `N` of them, and the
-/// floor and tie counters.
+/// The queue: every budget with a runnable thread (or running on a hart), at most `N` of them,
+/// and the floor and tie counters.
 #[derive(Clone, Debug)]
 pub struct Queue<B, const N: usize> {
     pub floor: u128,
@@ -282,21 +283,22 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     /// The end of a kernel entry. It visits only the budgets whose runnable state may have changed
     /// since the last reconcile ([`Marks`]): `lost` those that may have lost their last runnable
     /// thread, `gained` those that may have gained one (each in any order, repeats allowed);
-    /// `runnable` says whether a budget has a runnable thread now, and `running` is the budget on
-    /// the CPU, if any. Of those, budgets that lost their last runnable thread leave the queue;
+    /// `runnable` says whether a budget has a runnable thread now, and `running` whether a budget
+    /// runs on a hart now: one that does stays queued while it runs, though its one thread is the
+    /// running one. Of the others, budgets that lost their last runnable thread leave the queue;
     /// budgets that gained one wake at `max(own, floor)`, in descending id so the lowest id ranks
     /// first (`gained` is sorted so).
     pub fn reconcile<S: Budgets<B>>(
         &mut self,
         bs: &mut S,
-        running: Option<B>,
+        running: impl Fn(B) -> bool,
         lost: &[B],
         gained: &mut [B],
         runnable: impl Fn(&S, B) -> bool,
     ) {
         let mut left = false;
         for &b in lost {
-            if running == Some(b) || !bs.live(b) {
+            if running(b) || !bs.live(b) {
                 continue;
             }
             let mut s = bs.state(b);
@@ -343,9 +345,11 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         self.raise_floor(bs);
     }
 
-    /// The queued budget with the lowest rank.
-    pub fn pick(&self, bs: &impl Budgets<B>) -> Option<B> {
-        self.queued().min_by_key(|b| {
+    /// The queued budget with the lowest rank, of those `elsewhere` does not rule out: a budget
+    /// running on another hart, so that a budget runs on at most one hart at a time and its stride
+    /// state has one runner (`kernel/scheduling.md`, "One flat stride queue").
+    pub fn pick(&self, bs: &impl Budgets<B>, elsewhere: impl Fn(B) -> bool) -> Option<B> {
+        self.queued().filter(|b| !elsewhere(*b)).min_by_key(|b| {
             let s = bs.state(*b);
             Rank { pass: s.pass, tie: s.tie, id: bs.id(*b) }
         })
@@ -398,11 +402,147 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     }
 }
 
-/// One CPU wired to the queue: the budget whose runtime is accruing (`cur`: on the CPU, or in
-/// the kernel on its behalf) and what it has accrued and not yet been charged (`pending`). Runtime
-/// is folded into a pass only here: at a deschedule ([`Cpu::switch`], at least [`MIN_CHARGE`]),
-/// before a weight change or a creation under the budget ([`Cpu::settle`]), at a destruction, and
-/// for work billed to a budget that is not running ([`Cpu::bill`]).
+/// One hart's runner: the budget whose runtime is accruing there (`cur`: on the hart, or in the
+/// kernel on its behalf) and what it has accrued and not yet been charged (`pending`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Runner<B> {
+    pub cur: Option<B>,
+    pub pending: u64,
+}
+
+impl<B> Runner<B> {
+    pub const fn new() -> Self { Runner { cur: None, pending: 0 } }
+
+    /// `cur` ran, or the kernel worked for it, `t` more.
+    pub fn accrue(&mut self, t: u64) { self.pending = self.pending.saturating_add(t); }
+}
+
+impl<B> Default for Runner<B> {
+    fn default() -> Self { Self::new() }
+}
+
+/// The queue wired to its runners, one per hart: when runtime is folded, and the order of the
+/// steps at a deschedule, a pick, a creation, a weight change and a destruction. Runtime is folded
+/// into a pass only here: at a deschedule ([`Wiring::switch`], at least [`MIN_CHARGE`]), before a
+/// weight change or a creation under the budget ([`Wiring::settle`]), at a destruction, and for
+/// work billed to a budget that runs on no hart ([`Wiring::bill`]). A budget is some runner's
+/// `cur` on at most one hart at a time: a pick skips budgets other harts run.
+struct Wiring<'a, B, const N: usize> {
+    q: &'a mut Queue<B, N>,
+    runners: &'a mut [Runner<B>],
+}
+
+impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
+    /// The hart whose runner is `b`, if any.
+    fn runner_of(&self, b: B) -> Option<usize> { self.runners.iter().position(|r| r.cur == Some(b)) }
+
+    fn bill(&mut self, bs: &mut impl Budgets<B>, b: B, t: u64) {
+        match self.runner_of(b) {
+            Some(h) => self.runners[h].accrue(t),
+            None if bs.live(b) => self.q.fold(bs, b, t),
+            None => {}
+        }
+    }
+
+    fn settle(&mut self, bs: &mut impl Budgets<B>, b: B) {
+        if let Some(h) = self.runner_of(b) {
+            let run = core::mem::take(&mut self.runners[h].pending);
+            if bs.live(b) {
+                self.q.fold(bs, b, run);
+            }
+        }
+    }
+
+    fn change_weight<S: Budgets<B>>(&mut self, bs: &mut S, b: B, change: impl FnOnce(&mut S)) {
+        self.settle(bs, b);
+        let old = bs.weight(b);
+        change(bs);
+        let new = bs.weight(b);
+        self.q.reweigh(bs, b, old, new);
+    }
+
+    fn switch<S: Budgets<B>>(
+        &mut self,
+        h: usize,
+        bs: &mut S,
+        next: Option<B>,
+        still_runnable: impl FnOnce(&S, B) -> bool,
+    ) -> Option<B> {
+        let r = &mut self.runners[h];
+        if next == r.cur {
+            return None;
+        }
+        let left = r.cur.take();
+        let run = core::mem::take(&mut r.pending).max(MIN_CHARGE);
+        r.cur = next;
+        if let Some(c) = left.filter(|c| bs.live(*c)) {
+            self.q.fold(bs, c, run);
+            let still = still_runnable(bs, c);
+            self.q.deschedule(bs, c, still);
+        }
+        left
+    }
+
+    fn reconcile<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        lost: &[B],
+        gained: &mut [B],
+        runnable: impl Fn(&S, B) -> bool,
+    ) {
+        let runners = &*self.runners;
+        self.q.reconcile(bs, |b| runners.iter().any(|r| r.cur == Some(b)), lost, gained, runnable);
+    }
+
+    fn pick<S: Budgets<B>, T>(
+        &mut self,
+        h: usize,
+        bs: &mut S,
+        mut next: impl FnMut(&S, B) -> Option<T>,
+    ) -> Option<(B, T)> {
+        let runners = &*self.runners;
+        let elsewhere = |b| runners.iter().enumerate().any(|(i, r)| i != h && r.cur == Some(b));
+        loop {
+            let b = self.q.pick(bs, elsewhere)?;
+            if let Some(t) = next(bs, b) {
+                return Some((b, t));
+            }
+            self.q.deschedule(bs, b, false);
+        }
+    }
+
+    fn create(&mut self, bs: &mut impl Budgets<B>, child: B, parent: Option<B>) {
+        if let Some(p) = parent {
+            self.settle(bs, p);
+        }
+        self.q.create(bs, child, parent);
+    }
+
+    fn destroy<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        child: B,
+        parent: Option<B>,
+        return_weight: impl FnOnce(&mut S),
+    ) {
+        self.settle(bs, child);
+        for r in self.runners.iter_mut().filter(|r| r.cur == Some(child)) {
+            *r = Runner::new();
+        }
+        let w_child = bs.weight(child);
+        let w_parent = match parent {
+            Some(p) => {
+                self.change_weight(bs, p, return_weight);
+                bs.weight(p)
+            }
+            None => 0,
+        };
+        self.q.destroy(bs, child, parent, w_child, w_parent);
+    }
+}
+
+/// One CPU wired to the queue: the one-hart form, whose runner is `cur` and `pending`. The
+/// differential drives it against the model.
 #[derive(Clone, Debug)]
 pub struct Cpu<B, const N: usize> {
     pub q: Queue<B, N>,
@@ -417,38 +557,29 @@ impl<B: Copy + PartialEq, const N: usize> Default for Cpu<B, N> {
 impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
     pub const fn new() -> Self { Cpu { q: Queue::new(), cur: None, pending: 0 } }
 
+    /// Run `f` on the queue wired to this CPU's one runner.
+    fn wired<R>(&mut self, f: impl FnOnce(&mut Wiring<'_, B, N>) -> R) -> R {
+        let mut runner = [Runner { cur: self.cur, pending: self.pending }];
+        let out = f(&mut Wiring { q: &mut self.q, runners: &mut runner });
+        (self.cur, self.pending) = (runner[0].cur, runner[0].pending);
+        out
+    }
+
     /// `cur` ran, or the kernel worked for it, `t` more.
     pub fn accrue(&mut self, t: u64) { self.pending = self.pending.saturating_add(t); }
 
     /// `t` of work was done for `b`: `cur`'s joins its pending runtime, anyone else's is charged
     /// at once.
-    pub fn bill(&mut self, bs: &mut impl Budgets<B>, b: B, t: u64) {
-        if self.cur == Some(b) {
-            self.accrue(t);
-        } else if bs.live(b) {
-            self.q.fold(bs, b, t);
-        }
-    }
+    pub fn bill(&mut self, bs: &mut impl Budgets<B>, b: B, t: u64) { self.wired(|w| w.bill(bs, b, t)) }
 
     /// If `b` is accruing runtime, charge it now, at its present weight: a weight change or a
     /// creation under it follows.
-    pub fn settle(&mut self, bs: &mut impl Budgets<B>, b: B) {
-        if self.cur == Some(b) {
-            let run = core::mem::take(&mut self.pending);
-            if bs.live(b) {
-                self.q.fold(bs, b, run);
-            }
-        }
-    }
+    pub fn settle(&mut self, bs: &mut impl Budgets<B>, b: B) { self.wired(|w| w.settle(bs, b)) }
 
     /// `b`'s stride weight changes by `change`: what it ran is charged at the old weight first,
     /// then its lead and remainder are converted to the new weight.
     pub fn change_weight<S: Budgets<B>>(&mut self, bs: &mut S, b: B, change: impl FnOnce(&mut S)) {
-        self.settle(bs, b);
-        let old = bs.weight(b);
-        change(bs);
-        let new = bs.weight(b);
-        self.q.reweigh(bs, b, old, new);
+        self.wired(|w| w.change_weight(bs, b, change))
     }
 
     /// The CPU goes to `next` (`None`: to nobody's budget). If that is not `cur`, `cur` is taken
@@ -460,18 +591,7 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
         next: Option<B>,
         still_runnable: impl FnOnce(&S, B) -> bool,
     ) -> Option<B> {
-        if next == self.cur {
-            return None;
-        }
-        let left = self.cur.take();
-        let run = core::mem::take(&mut self.pending).max(MIN_CHARGE);
-        if let Some(c) = left.filter(|c| bs.live(*c)) {
-            self.q.fold(bs, c, run);
-            let still = still_runnable(bs, c);
-            self.q.deschedule(bs, c, still);
-        }
-        self.cur = next;
-        left
+        self.wired(|w| w.switch(0, bs, next, still_runnable))
     }
 
     /// The end of a kernel entry: [`Queue::reconcile`] with `cur` running.
@@ -482,8 +602,7 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
         gained: &mut [B],
         runnable: impl Fn(&S, B) -> bool,
     ) {
-        let running = self.cur.filter(|c| bs.live(*c));
-        self.q.reconcile(bs, running, lost, gained, runnable);
+        self.wired(|w| w.reconcile(bs, lost, gained, runnable))
     }
 
     /// The lowest-ranked queued budget and what `next` chooses to run of it. A queued budget with
@@ -491,24 +610,15 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
     pub fn pick<S: Budgets<B>, T>(
         &mut self,
         bs: &mut S,
-        mut next: impl FnMut(&S, B) -> Option<T>,
+        next: impl FnMut(&S, B) -> Option<T>,
     ) -> Option<(B, T)> {
-        loop {
-            let b = self.q.pick(bs)?;
-            if let Some(t) = next(bs, b) {
-                return Some((b, t));
-            }
-            self.q.deschedule(bs, b, false);
-        }
+        self.wired(|w| w.pick(0, bs, next))
     }
 
     /// A new budget `child` under `parent`: a running parent is charged first, then the child
     /// enters at `max(floor, parent's pass)`. The carve ([`Cpu::change_weight`]) follows.
     pub fn create(&mut self, bs: &mut impl Budgets<B>, child: B, parent: Option<B>) {
-        if let Some(p) = parent {
-            self.settle(bs, p);
-        }
-        self.q.create(bs, child, parent);
+        self.wired(|w| w.create(bs, child, parent))
     }
 
     /// `child` is destroyed (its own children already were, bottom-up): what it ran is charged,
@@ -521,20 +631,96 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
         parent: Option<B>,
         return_weight: impl FnOnce(&mut S),
     ) {
-        self.settle(bs, child);
-        if self.cur == Some(child) {
-            self.cur = None;
-            self.pending = 0;
-        }
-        let w_child = bs.weight(child);
-        let w_parent = match parent {
-            Some(p) => {
-                self.change_weight(bs, p, return_weight);
-                bs.weight(p)
-            }
-            None => 0,
-        };
-        self.q.destroy(bs, child, parent, w_child, w_parent);
+        self.wired(|w| w.destroy(bs, child, parent, return_weight))
+    }
+}
+
+/// `H` harts wired to one queue, a [`Runner`] each, indexed by the hart's boot index: what
+/// [`Cpu`] is for one. A switch, an accrual and a pick act for one hart; a bill, a settle and a
+/// destruction find the budget's runner on whichever hart runs it; a reconcile keeps a budget
+/// queued while any hart runs it.
+#[derive(Clone, Debug)]
+pub struct Harts<B, const N: usize, const H: usize> {
+    pub q: Queue<B, N>,
+    pub runners: [Runner<B>; H],
+}
+
+impl<B: Copy + PartialEq, const N: usize, const H: usize> Default for Harts<B, N, H> {
+    fn default() -> Self { Self::new() }
+}
+
+impl<B: Copy + PartialEq, const N: usize, const H: usize> Harts<B, N, H> {
+    pub const fn new() -> Self { Harts { q: Queue::new(), runners: [const { Runner::new() }; H] } }
+
+    fn wiring(&mut self) -> Wiring<'_, B, N> { Wiring { q: &mut self.q, runners: &mut self.runners } }
+
+    /// Hart `h`'s budget.
+    pub fn cur(&self, h: usize) -> Option<B> { self.runners[h].cur }
+
+    /// Whether `b` runs on a hart now.
+    pub fn running(&self, b: B) -> bool { self.runners.iter().any(|r| r.cur == Some(b)) }
+
+    /// Hart `h`'s `cur` ran, or the kernel worked for it, `t` more.
+    pub fn accrue(&mut self, h: usize, t: u64) { self.runners[h].accrue(t) }
+
+    /// `t` of work was done for `b`: if a hart runs it, it joins that runner's pending runtime,
+    /// and otherwise it is charged at once.
+    pub fn bill(&mut self, bs: &mut impl Budgets<B>, b: B, t: u64) { self.wiring().bill(bs, b, t) }
+
+    /// If `b` is accruing runtime on a hart, charge it now, at its present weight.
+    pub fn settle(&mut self, bs: &mut impl Budgets<B>, b: B) { self.wiring().settle(bs, b) }
+
+    /// [`Cpu::change_weight`], with `b`'s runner on whichever hart runs it.
+    pub fn change_weight<S: Budgets<B>>(&mut self, bs: &mut S, b: B, change: impl FnOnce(&mut S)) {
+        self.wiring().change_weight(bs, b, change)
+    }
+
+    /// Hart `h` goes to `next`: [`Cpu::switch`] on its runner. Other harts' runners are untouched.
+    pub fn switch<S: Budgets<B>>(
+        &mut self,
+        h: usize,
+        bs: &mut S,
+        next: Option<B>,
+        still_runnable: impl FnOnce(&S, B) -> bool,
+    ) -> Option<B> {
+        self.wiring().switch(h, bs, next, still_runnable)
+    }
+
+    /// The end of a kernel entry: [`Queue::reconcile`] with every hart's `cur` running.
+    pub fn reconcile<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        lost: &[B],
+        gained: &mut [B],
+        runnable: impl Fn(&S, B) -> bool,
+    ) {
+        self.wiring().reconcile(bs, lost, gained, runnable)
+    }
+
+    /// Hart `h`'s pick: [`Cpu::pick`] over the budgets no other hart runs.
+    pub fn pick<S: Budgets<B>, T>(
+        &mut self,
+        h: usize,
+        bs: &mut S,
+        next: impl FnMut(&S, B) -> Option<T>,
+    ) -> Option<(B, T)> {
+        self.wiring().pick(h, bs, next)
+    }
+
+    /// [`Cpu::create`], the parent's runner on whichever hart runs it.
+    pub fn create(&mut self, bs: &mut impl Budgets<B>, child: B, parent: Option<B>) {
+        self.wiring().create(bs, child, parent)
+    }
+
+    /// [`Cpu::destroy`]; the runner of whichever hart runs `child` is cleared.
+    pub fn destroy<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        child: B,
+        parent: Option<B>,
+        return_weight: impl FnOnce(&mut S),
+    ) {
+        self.wiring().destroy(bs, child, parent, return_weight)
     }
 }
 

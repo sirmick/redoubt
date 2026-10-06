@@ -135,13 +135,13 @@ impl<B: Copy + PartialEq, const N: usize> Marks<B, N> {
     }
 
     /// The checked kernel's check of every reconcile, before [`Marks::clear`]: each budget it
-    /// visited is queued exactly when it has a ready thread (the running one may stay queued
-    /// without one). A walk of the budgets visited, never of every slot.
-    pub fn check_visited<S: Ready<B>>(&self, bs: &S, running: Option<B>) -> Result<(), Missed> {
+    /// visited is queued exactly when it has a ready thread (one `running` on a hart may stay
+    /// queued without one). A walk of the budgets visited, never of every slot.
+    pub fn check_visited<S: Ready<B>>(&self, bs: &S, running: impl Fn(B) -> bool) -> Result<(), Missed> {
         let visited = self.lost[..self.n_lost].iter().chain(&self.gained[..self.n_gained]);
         for &b in visited.filter(|b| bs.live(**b)) {
             let (queued, ready) = (bs.state(b).queued, bs.ready(b) > 0);
-            if queued != ready && !(queued && running == Some(b)) {
+            if queued != ready && !(queued && running(b)) {
                 return Err(Missed::Queue { id: bs.id(b), queued });
             }
         }
@@ -162,14 +162,14 @@ impl<B: Copy + PartialEq, const N: usize> Marks<B, N> {
 
     /// The checked kernel's audit, after a reconcile: every slot's count is what `now` (a walk of
     /// the slot) says, each budget's count is the sum of its slots', and the queue holds exactly
-    /// the budgets with a ready thread, and `running` if it is queued. `live` names, once each,
-    /// every slot that may have ready threads (those with a process in a budget); a slot counted
+    /// the budgets with a ready thread, and those `running` on a hart if they are queued. `live` names, once
+    /// each, every slot that may have ready threads (those with a process in a budget); a slot counted
     /// and not among them ended with no mark. It walks those slots, never all `N`.
     pub fn audit<S: Ready<B>, const Q: usize>(
         &mut self,
         bs: &S,
         q: &Queue<B, Q>,
-        running: Option<B>,
+        running: impl Fn(B) -> bool,
         live: impl Iterator<Item = usize>,
         now: impl Fn(&S, usize) -> (u32, Option<B>),
     ) -> Result<(), Missed> {
@@ -213,12 +213,12 @@ impl<B: Copy + PartialEq, const N: usize> Marks<B, N> {
                 return Err(Missed::Count { id: bs.id(b), kept, sum });
             }
         }
-        // Every queued budget but the running one has ready threads, so is among them; and as many
+        // Every queued budget but the running ones has ready threads, so is among them; and as many
         // of them are queued as there are, so all are.
         let mut queued = 0;
         for b in q.queued() {
             let found = by_id.binary_search_by_key(&bs.id(b), |i| bs.id(counted[*i].1)).is_ok();
-            if !bs.state(b).queued || !found && running != Some(b) {
+            if !bs.state(b).queued || !found && !running(b) {
                 return Err(Missed::Queue { id: bs.id(b), queued: true });
             }
             queued += usize::from(found);

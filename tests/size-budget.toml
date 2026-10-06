@@ -36,7 +36,7 @@ max_lines = 257
 [[crate]]
 name = "libs/stride"
 paths = ["libs/stride/src"]
-max_lines = 522
+max_lines = 650
 
 [[crate]]
 name = "libs/verity"
