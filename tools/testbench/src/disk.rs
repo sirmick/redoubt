@@ -447,21 +447,24 @@ pub fn flip_version(disk: &mut [u8], v: &Verified) -> Result<()> {
     Ok(())
 }
 
-/// Flips one bit of `file`'s bytes where the verified volume `v` holds them on `disk`, after the
-/// pack, so the volume no longer hashes to its root: a 64-byte run of the file from its middle,
-/// found exactly once in the volume's data blocks.
-pub fn flip_file(disk: &mut [u8], v: &Verified, file: &[u8]) -> Result<usize> {
+/// Flips one bit of `file`'s bytes wherever the verified volume `v` holds them on `disk`, after
+/// the pack, so the volume no longer hashes to its root: a 64-byte run of the file from its
+/// middle, found exactly `copies` times in the volume's data blocks (twice for a file the boot
+/// pack holds as well, once for any other), flipped in each. Returns where the first flip is.
+pub fn flip_file(disk: &mut [u8], v: &Verified, file: &[u8], copies: usize) -> Result<usize> {
     let data = v.data(disk);
     for from in (file.len() / 2..file.len().saturating_sub(64)).step_by(97) {
         let run = &file[from..from + 64];
-        let mut found = data.windows(64).enumerate().filter(|(_, w)| *w == run).map(|(i, _)| i);
-        if let (Some(at), None) = (found.next(), found.next()) {
-            let at = v.start + at + 32;
-            disk[at] ^= 0x10;
-            return Ok(at);
+        let found: Vec<usize> =
+            data.windows(64).enumerate().filter(|(_, w)| *w == run).map(|(i, _)| i).collect();
+        if found.len() == copies {
+            for at in &found {
+                disk[v.start + at + 32] ^= 0x10;
+            }
+            return Ok(v.start + found[0] + 32);
         }
     }
-    bail!("{}: no run of the file is on the volume once", v.name)
+    bail!("{}: no run of the file is on the volume exactly {copies} times", v.name)
 }
 
 /// Flips one bit of the first level-1 tree block of the verified volume `v` on `disk`: the block
@@ -618,15 +621,24 @@ mod tests {
         assert!(pack(&plain, Path::new("/"), Some(&dir)).unwrap().1.is_empty());
         // A case's damage changes the disk and never the root: the volume no longer hashes to it.
         let mut flipped = disk.clone();
-        let at_file = flip_file(&mut flipped, v, &module).unwrap();
+        let at_file = flip_file(&mut flipped, v, &module, 1).unwrap();
         assert_eq!(flipped.iter().zip(&disk).filter(|(a, b)| a != b).count(), 1);
         assert!(at_file >= v.start && at_file < at, "in the data blocks");
         let mut again = vec![0u8; tree.len()];
         assert_ne!(redoubt_verity::build(&g, v.data(&flipped), &mut again).unwrap(), v.root);
+        // A file the volume holds twice, as the boot pack holds a module beside its own file,
+        // is flipped in both copies, and is not found once.
+        std::fs::write(dir.join("boot.pack"), &module).unwrap();
+        let (twice, verified) = pack(&recipe, Path::new("/"), Some(&dir)).unwrap();
+        let mut flipped = twice.clone();
+        assert!(flip_file(&mut flipped, &verified[0], &module, 1).is_err());
+        flip_file(&mut flipped, &verified[0], &module, 2).unwrap();
+        assert_eq!(flipped.iter().zip(&twice).filter(|(a, b)| a != b).count(), 2);
+        std::fs::remove_file(dir.join("boot.pack")).unwrap();
         let mut flipped = disk.clone();
         assert_eq!(flip_tree(&mut flipped, v), at + 7);
         assert!(
-            flip_file(&mut flipped, v, b"not on the volume, nowhere near long enough to be found once")
+            flip_file(&mut flipped, v, b"not on the volume, nowhere near long enough to be found once", 1)
                 .is_err()
         );
         let noisy = "size_kib = 1024\n[[partition]]\nname = \"a\"\nfs = \"noise\"\nverity = true\n";
