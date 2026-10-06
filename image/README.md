@@ -21,7 +21,10 @@ The sources of the signed boot bundle and the disk images; what they produce goe
 - `userland.toml`: the userland disk, attached read-only. `./mkimage` packs it with the same
   packer into `target/image/userland.img`: each module of the applications it names, compiled by
   the pinned toolchain and stripped, as a plain file under its own name (`Elixir.Enum.beam`,
-  `elixir.app`), on one verified volume, an EROFS volume written by Redoubt's own writer
-  ([erofsd](../docs/servers/erofsd.md)) and followed by its hash tree. The pack
-  prints the volume's root and data blocks, the ones the bundle's manifest pins.
+  `elixir.app`), and the boot pack, `boot.pack`: the files the shell's prompt loads, which the
+  recipe's `pack` list names, again in one file that beamlet reads whole at start
+  ([beamlet on Redoubt](../docs/userland/beamlet.md#beamlet-on-redoubt)); all on one verified
+  volume, an EROFS volume written by Redoubt's own writer ([erofsd](../docs/servers/erofsd.md))
+  and followed by its hash tree. The packer prints the volume's root and data blocks, the ones the
+  bundle's manifest pins.
   Two packs of the same inputs are byte-identical.

@@ -339,7 +339,7 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: files, programs, `/net` and the system natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:boot-profile, bench:boot-profile-unverified, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
+Status: built · partly tested: files, programs, `/net` and the system natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console and verified code lookup,
@@ -353,7 +353,7 @@ remain planned.
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
-| `load_module`, `load_app` | reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `erofsd` (`erofsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `erofsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `erofsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
+| `load_module`, `load_app` | takes the requested file from the boot pack, if the pack holds it (below); otherwise reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `erofsd` (`erofsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `erofsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `erofsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
 | `files` | the client library's `file`: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
 | `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)) |
 
@@ -381,6 +381,7 @@ Measured in that build under `icount` (`shift=3`, sleep on) with seed 1, in gues
 | --- | ---: | ---: | ---: | ---: |
 | littlefs (`littlefsd`, retired for this volume) | 1,016.7 s | 534.7 s | 1,044.2 s | 558.0 s |
 | EROFS (`erofsd`) | 16.0 s | 12.5 s | 15.7 s | 12.1 s |
+| EROFS, with the boot pack | 12.4 s | 9.9 s | 12.0 s | 9.6 s |
 
 On littlefs 99 % of the boot was in the VM's 96 lookups: `littlefsd` found each file's name in the
 volume's root directory again two or three times for every 9P operation, 77,710 block reads of 673
@@ -388,14 +389,41 @@ distinct blocks ([littlefsd](../servers/littlefsd.md#residual-risks)). On EROFS 
 make the same 652 9P operations, and `erofsd` reads the volume 641 times (112 inodes, 243
 directory blocks, 286 runs of a file's blocks) in 642 range calls of 3.35 MB; the loads take 7.1 s
 verified and 3.7 s unverified, and the VM's own work and its console about 6.5 s either way.
+With the boot pack (below) the 96 lookups become one read of the pack, 115 9P reads of 16 KiB:
+the boot makes 208 9P operations, and `erofsd` reads the volume 208 times (16 inodes, 35 directory
+blocks, 157 runs of a file's blocks) in 209 range calls of 2.46 MB. Reading the pack takes 3.6 s
+verified and 1.2 s unverified, and the VM's work after it, decoding the modules as they are
+called, 8.0 s; the verified prompt is the same across seeds 1 to 5. On littlefs the prompt with
+the boot pack is at 152 s verified, since `littlefsd` finds the file again for each read.
 
-**The boot-time target:** in this build, the prompt within 30 s of guest time verified and 20 s
-unverified, on both widths. `boot-profile` and `boot-profile-unverified` fail past it, and run in
-every whole run of the bench.
+**The boot-time target:** in this build, the prompt within 15 s of guest time, verified and
+unverified, on both widths: the slowest measured prompt plus a tenth, rounded up to 5 s.
+`boot-profile` and `boot-profile-unverified` fail past it, and run in every whole run of the bench.
 
-If the volume does not attach, because `erofsd` serves it as corrupt, or the module it is told to
-start cannot load, it says why on its console and waits without exiting: a tampered disk must not
-become a restart loop that reboots the machine.
+Before its VM starts, beamlet reads the volume's boot pack, `boot.pack`, whole: one open, one `stat`
+for its length, one allocation of that length charged to the VM, and reads of 16 KiB in order, the
+lend a module's file is read through ([`pack.rs`](../../userland/otp/redoubt/src/pack.rs)). The
+image's builder makes the boot pack from the modules and resources the shell loads to its prompt,
+which `image/userland.toml` names, their bytes copied from the files beside it: a magic and a
+version word, the entry count, an index of each entry's name, offset and length sorted by name, then
+the entries' bytes back to back. The same files and names give the same pack, byte for byte. beamlet
+checks the boot pack whole before using any of it: the magic and the version, each name a module's
+or a resource's file name in strictly ascending order, the entries' bytes back to back from the
+index's end to the file's, and each module's first atom, its own name, the one its entry names. A
+lookup takes a name the boot pack holds from it, a copy of its bytes that the loader decodes and
+drops as it decodes a file's, and asks the volume for any other name, as above, so the order is the
+boot pack, then the volume's file, then the code path. Once every entry has been taken, at the
+prompt, the boot pack's allocation goes; a module it holds that is never called keeps it, at most
+the pack's size. A boot pack the volume does not hold is said once on the console and the lookups go
+to the files; one that cannot be read, or does not check, is said once, naming the boot pack and
+why, and beamlet waits as below. The boot pack is per VM and read-only: no sharing of its pages
+between VMs, no byte cache in the steward, no decoded snapshot, no pack per profile. It is a file of
+the verified volume ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)), never
+written at run time.
+
+If the volume does not attach, because `erofsd` serves it as corrupt, the boot pack cannot be read
+or does not check, or the module it is told to start cannot load, it says why on its console and
+waits without exiting: a tampered disk must not become a restart loop that reboots the machine.
 
 Each label set that runs beamlet reads its own attachment of the userland image through its own
 `blkd`, `verityd` and `erofsd`, all carrying that set

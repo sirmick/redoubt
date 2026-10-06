@@ -490,7 +490,7 @@ no second acceptance path.
 
 ### R75 (verified userland)
 
-Status: built · partly tested: built for modules and application resources; a program launched from the userland disk comes from the same volume by launching, which is BEAM4's and not built · tested: bench:userland-bad-start, bench:userland-boot, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-vm::a_refused_system_module_never_touches_the_code_path, host:beamlet-vm::app_spec_uses_one_source_attempt_and_keeps_its_erlang_result, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
+Status: built · partly tested: built for modules and application resources; a program launched from the userland disk comes from the same volume by launching, which is BEAM4's and not built · tested: bench:userland-bad-start, bench:userland-boot, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:beamlet-vm::a_refused_system_module_never_touches_the_code_path, host:beamlet-vm::app_spec_uses_one_source_attempt_and_keeps_its_erlang_result, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
 
 A module or application resource the system resolves by name, and a program it launches from the
 userland disk, comes only from a verified volume
@@ -499,11 +499,16 @@ its manifest entry pins the root of its hash tree, the manifest is a bundle entr
 [R15](#r15-verified-boot) covers the root, and the volume's `erofsd` reads it only through its
 `verityd`. beamlet reads each module and resource as the plain file of its name
 (`Elixir.Enum.beam`, `elixir.app`) at the volume's root and checks nothing itself: a reader of a
-verified volume trusts the servers that verify it, as it trusts `consoled` for its console. A name
-the volume's `erofsd` answers `not_found` to is absent: the lookup goes on as for any name the system
-lacks, and for a module that absence permits the VM to search its authorized code path. Any other
-refusal at the open or on the read (`corrupt` from a volume `erofsd` serves as corrupt after `verityd`
-failed a block, a short or long file, a device error) is a refusal: beamlet writes one line on its
+verified volume trusts the servers that verify it, as it trusts `consoled` for its console. The
+volume also carries the boot pack, `boot.pack`, a file the image's builder made from the same
+module files, which beamlet reads whole before its VM starts: a module found in it is those bytes,
+never searched for on the code path, and a pack that cannot be read, or does not check whole, is
+refused, said once naming the pack, and the VM does not start. A volume without a pack is not a
+refusal: beamlet says so once and its modules load from their files. A name the volume's `erofsd`
+answers `not_found` to is absent: the lookup goes on as for any name the system lacks, and for a
+module that absence permits the VM to search its authorized code path. Any other refusal at the
+open or on the read (`corrupt` from a volume `erofsd` serves as corrupt after `verityd` failed a
+block, a short or long file, a device error) is a refusal: beamlet writes one line on its
 console naming the module or application and the error's name
 ([error names](../userland/native.md#an-rerror-has-a-name)), retries nothing, and never searches
 the code path for the refused name. An application specification likewise makes one source

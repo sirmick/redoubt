@@ -1122,10 +1122,12 @@ stack rounded up to 128, not to 1,024, because at 512 MiB it must lie between 20
 of twice the peak) and 20,990 (a case that adds a 256-page client still fits on rv32); the image
 then has 383 pages to spare on rv32, a client case 126
 ([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The read-only case also scans its
-additional client from the merged manifest. `erofsd:system`'s row and
-`verity:system`'s heap, which holds 4 checked data blocks, are from the six runs with the userland
-volume on EROFS. `verity:system`'s stack is from rv64 `userland-boot` once it also checks a signed
-volume's root block, which it does not use there but whose code lies in its start path.
+additional client from the merged manifest. `beamlet`'s stack peak is from `beamlet-footprint` on
+rv64 with the boot pack read before its VM starts; twice it still fits its 17 pages.
+`erofsd:system`'s row and `verity:system`'s heap, which holds 4 checked data blocks, are from the
+six runs with the userland volume on EROFS. `verity:system`'s stack is from rv64 `userland-boot`
+once it also checks a signed volume's root block, which it does not use there but whose code lies
+in its start path.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1139,7 +1141,7 @@ volume's root block, which it does not use there but whose code lies in its star
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 12 | 24 |
-| `beamlet` | 33,240 | 17 | 10,387 | 20,846 |
+| `beamlet` | 33,768 | 17 | 10,387 | 20,846 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
 the 16-page stack default and no cap. `beamlet`'s heap peak is the shell after the commands
