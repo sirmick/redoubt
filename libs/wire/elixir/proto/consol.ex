@@ -14,11 +14,13 @@ defmodule Redoubt.Wire.Proto.Consol do
   # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
   @requests %{
     16 => {:size, :inline, 0},
-    17 => {:resize, :inline, 0}
+    17 => {:resize, :inline, 0},
+    18 => {:ended, :inline, 0}
   }
   @replies %{
     16 => {:size, :inline, 0},
-    17 => {:resize, :inline, 0}
+    17 => {:resize, :inline, 0},
+    18 => {:ended, :inline, 0}
   }
   @errors %{
     1 => :malformed
@@ -31,6 +33,7 @@ defmodule Redoubt.Wire.Proto.Consol do
   """
   def layout(:size), do: {16, :inline, [], [], {[{:cols, :u16}, {:rows, :u16}], []}}
   def layout(:resize), do: {17, :inline, [], [], {[{:cols, :u16}, {:rows, :u16}], []}}
+  def layout(:ended), do: {18, :inline, [], [], {[], []}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."
@@ -59,11 +62,15 @@ defmodule Redoubt.Wire.Proto.Consol do
   defp enc(:reply, :size, %{cols: v_cols, rows: v_rows} = f) when map_size(f) == 2, do: {16, [W.u(v_cols, 16), W.u(v_rows, 16)]}
   defp enc(:request, :resize, %{} = f) when map_size(f) == 0, do: {17, []}
   defp enc(:reply, :resize, %{cols: v_cols, rows: v_rows} = f) when map_size(f) == 2, do: {17, [W.u(v_cols, 16), W.u(v_rows, 16)]}
+  defp enc(:request, :ended, %{} = f) when map_size(f) == 0, do: {18, []}
+  defp enc(:reply, :ended, %{} = f) when map_size(f) == 0, do: {18, []}
   defp enc(_, _, _), do: throw({:wire, :bad_message})
 
   defp read(:request, 16, <<rest::binary>>), do: {:ok, :size, %{}, rest}
   defp read(:reply, 16, <<v_cols::little-16, v_rows::little-16, rest::binary>>), do: {:ok, :size, %{cols: v_cols, rows: v_rows}, rest}
   defp read(:request, 17, <<rest::binary>>), do: {:ok, :resize, %{}, rest}
   defp read(:reply, 17, <<v_cols::little-16, v_rows::little-16, rest::binary>>), do: {:ok, :resize, %{cols: v_cols, rows: v_rows}, rest}
+  defp read(:request, 18, <<rest::binary>>), do: {:ok, :ended, %{}, rest}
+  defp read(:reply, 18, <<rest::binary>>), do: {:ok, :ended, %{}, rest}
   defp read(_, _, _), do: {:error, :short_fields}
 end

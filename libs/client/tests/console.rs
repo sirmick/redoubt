@@ -143,7 +143,8 @@ fn size_and_resize_come_from_the_server() {
         let reply = match Message::decode(&words, &[], request.handles.as_slice().len()) {
             Ok(Message::Size(_)) => Reply::Size(SizeReply { cols: 80, rows: 24 }),
             Ok(Message::Resize(_)) => Reply::Resize(ResizeReply { cols: 132, rows: 43 }),
-            Err(_) => {
+            // `ended` is the steward's to a console's server, never this client's.
+            Ok(Message::Ended(_)) | Err(_) => {
                 return finish(
                     request,
                     &Outcome { words: [1, 0, 0, 0], send: Handles::new(), close: Handles::new() },
