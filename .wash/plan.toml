@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 193
+revision = 198
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1039,7 +1039,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   body = "Found by the train bench on main after SCHED1's merge (rv64, icount, seed 13, deterministic): '[containment] FAIL: the bystander kept its weight's share (share 758 of 1000, floor 783)'. The bystander's share is the gate program's own gross count (tests/programs/.../kernel-containment.rs:34, clause :247-256) against a floor of its weight's share less a tolerance; at the 1 ms slice ~24 % of the CPU is per-switch kernel time (scheduling.md:222-223, today's cost), so the gross count reads 758. Ruling (.wash/local/B15-ruling.md): the clause follows the five-cases ruling: R12's claim is relative; no verdict may come from a hostile agent and the competing counts are the agents', so the oracle judges the bystander's charged runtime over every users budget's charged runtime in the window, net of the checked build's audits, against its weight's share (100/120) within R12's 50 per thousand; the program prints its count as useful work, no verdict on it; window bounds printed by the program or taken as the bystander's first to last pick (the implementer says which). Page: docs/kernel/README.md:177's row as the ruling words it; SECURITY's row unchanged. Also: the bench reports a FAIL line followed by QEMU's exit 0 as 'guest exited while waiting'; report the FAIL it saw. Tier B, size S; not the kernel, not the slice. Gate: kernel-containment both widths, the oracle host tests."
   state = "active"
-  revision = 184
+  revision = 197
 
 [[node]]
   id = "B16"
@@ -1047,5 +1047,35 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by EROFS1 (rv32 userland-boot with the system volume on EROFS, prompt in 14 s): 'beamlet: stack paint unit 6763 found twice': the unit sits at two pages each holding only that one painted word at the unit's in-page offset, neither beamlet's stack page: a stack word copied into a buffer or a message, which the fast boot no longer overwrites before the dump; the scanner's offset filter does not rule it out (its known blind spot). Ruling (.wash/local/SCAN-duplicate-ruling.md): the paint proves a word was never written; a copy proves the same about the same word, so it is no second unit; the duplicate rule is for forgery and corruption. Rule: the unit index fixes stack page k = unit/512 and the offset; for each k the scan counts units only from the one physical page holding the most of page k's units at their offsets; units elsewhere are copies, ignored; two pages holding equally many of page k's units are still refused; never undercounts (a copied buffer is a subset of the real page's words). Page sentence for testbench.md's memory paragraph in the ruling. Tier B bench, size S: tools/testbench/src/memory.rs and scanner tests (a single copied word ignored; a copied buffer ignored; an intact page copy refused). Gate: the memory host tests; init-boot, userland-boot, userland-read-only both widths; EROFS1's kept dump as the regression input if it can be reduced. Merges ahead of EROFS1 in its train."
-  state = "reported"
-  revision = 190
+  state = "done"
+  revision = 198
+
+[[node]]
+  id = "K23"
+  title = "A dead steward restarts: init reaps its users and relaunches it, no reboot"
+  template = "package"
+  parent = "M1"
+  needs = ["STEWARD2"]
+  body = "Owner (2026-10-06): \"a crash should restart it\": a dead steward's restart must be a logout, not a reboot. Brief: .wash/local/K23-implementer.md (architect-16). Tier A, size M. A kernel call budget_reap(handle) -> remaining destroys one child subtree of the budget as R10 does and keeps the budget (limits, class, labels, account, deadline), returning the children left, so each kernel entry is one destruction within R10's bound; authority is the handle, as budget_destroy's; a child handle cannot reap its parent; the model gets reap_budget and three mutations. init, on the steward's exit: settles the dead steward's carve (sessions' process objects and notices go with it), reaps users in a loop, restarts the steward, which finds users empty and starts the console session again; its users-not-empty check stays as the guard. steward-restart's verdict becomes: emptied, restarted, prompt back, no reboot. Pages: budgets.md (the call, R10's paragraph, the lost-budget residual), init.md, steward.md, abi.md, SECURITY.md; docs/todo/empty-a-budget.md deleted."
+  state = "todo"
+  revision = 194
+
+[[node]]
+  id = "WFS1"
+  title = "A logged file system of Redoubt's own for the SSD's writable volumes: format, library, oracle, packer"
+  template = "package"
+  parent = "M1"
+  needs = ["EROFS1"]
+  body = "Owner (2026-10-06): the SSD's writable volumes move off littlefs ('not a NAND flash one') to walfs, an xv6-style logged file system of Redoubt's own with per-block hashes (owner's decision 4e1539fe: the logged format; littlefs STAYS in the image for a flash medium; WFS1 and WFS2 both in M1). Design note .wash/local/WFS1-design.md (architect-16). Tier A, size M: the format's specification page; libs/walfs (no_std, no unsafe, deps: libs/sha256): superblock, write-ahead log of whole 4 KiB blocks with one commit block, inodes, bitmap, data, a hash region with a SHA-256 per block checked on read (corrupt, never a crash); whole-transaction atomicity (R50 exact); a model oracle with random operations, a power-loss fuzzer cutting the device at every write, image fuzzing; the host packer writes a volume. Not here: the server (WFS2), the volumes' move."
+  state = "todo"
+  revision = 196
+
+[[node]]
+  id = "WFS2"
+  title = "walfsd serves /home and /vault; littlefs stays for a flash medium"
+  template = "package"
+  parent = "M1"
+  needs = ["WFS1", "STEWARD2"]
+  body = "servers/walfsd on the file-server skeleton serving walfs volumes one instance per volume (R47, R48, R49, R50 rows); the image's data and labelled volumes on walfs, init's volumes and the steward's home and vault lines on walfsd: handles; machine cases: power loss before-or-after, hostile medium corrupt, quota, the steward's session cases on the new volumes. littlefs stays in the image (owner's decision 4e1539fe: kept for a flash medium); littlefsd keeps its cases and pages, serving no volume of the default image unless a case asks. Tier A, size M. Brief by the Architect at launch."
+  state = "todo"
+  revision = 196

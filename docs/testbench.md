@@ -1056,14 +1056,17 @@ printed first, as `memory: dumped twice, waited S s for NAMES`. The launcher has
 server's first-thread stack with a tag for that server and an index for every eight-byte unit.
 The bench scans the RAM for those tags at their encoded offsets within physical pages. That
 ignores paint words copied into ordinary stack slots, while refusing a missing server, a
-duplicate unit or an out-of-range index at an encoded offset. The lowest missing unit marks the
-stack's deepest touched point. The bench prints `stack NAME PEAK of PAGES pages` for each
-server and fails when the declared pages are less than twice the measured peak rounded up to a
-page. The dump, the size of the guest's RAM, is deleted once scanned; a scan that fails on a
-duplicate or out-of-range unit, or cannot read the dump, keeps it as the evidence. The QMP socket
-is always removed. It is in the temporary directory, under a name another user can predict, and
-QEMU creates it under the bench's umask, so it is private to the bench's user only under umask
-077 or on a single-user host
+duplicate unit or an out-of-range index at an encoded offset. A stack page's units are counted
+from the one physical page that holds the most of them, so a stack word copied into a buffer or a
+message is not a duplicate. The lowest missing unit marks the stack's deepest touched point; two
+pages holding equally many of a stack page's units are refused for that unit's stack page or one
+below it, and ignored above it, where either leaves the peak where it is. The bench prints
+`stack NAME PEAK of PAGES pages` for each server and fails when the declared pages are less than
+twice the measured peak rounded up to a page. The dump, the size of the guest's RAM, is deleted
+once scanned; a scan that fails on a duplicate or out-of-range unit, or cannot read the dump,
+keeps it as the evidence. The QMP socket is always removed. It is in the temporary directory,
+under a name another user can predict, and QEMU creates it under the bench's umask, so it is
+private to the bench's user only under umask 077 or on a single-user host
 ([a private directory for the QMP socket](todo/qmp-socket-private-dir.md)). The manifest's
 `stack_pages` defaults to 16 and cannot exceed 128
 ([the boot manifest](servers/init.md#the-boot-manifest)).
