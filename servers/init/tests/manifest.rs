@@ -22,13 +22,12 @@ const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0
 fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
 
 /// The image's manifest with one disk: without the userland disk (`disk1`, its `blkd`, its
-/// volume, its verifier and `littlefsd`, and `beamlet`, which reads it).
+/// volume, its verifier and `erofsd`, and `beamlet`, which reads it).
 fn without_userland() -> Manifest {
     let mut m = image();
     m.volumes.retain(|v| v.name != "system");
-    m.servers.retain(|s| {
-        !["beamlet", "blkd:system", "verity:system", "littlefsd:system"].contains(&s.name.as_str())
-    });
+    m.servers
+        .retain(|s| !["beamlet", "blkd:system", "verity:system", "erofsd:system"].contains(&s.name.as_str()));
     m.devices.retain(|d| d.name != "disk1");
     m
 }
@@ -95,7 +94,7 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     // No principals: only the bundle key is asked about.
     assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
     // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; littlefsd:data: nobody's
-    // yet, a principal's connection being the steward's to grant; littlefsd:system: beamlet's.
+    // yet, a principal's connection being the steward's to grant; erofsd:system: beamlet's.
     assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0), (9, 1)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
@@ -183,7 +182,7 @@ fn the_image_manifest_s_bound() {
     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
     // batch of beamlet's image + 3, stack 17 + 3), the lend (2 + 3), and one handle-table page:
     // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 6 + 44 + 3 + 1 =
-    // 64 added (the three volume ranges, littlefsd:data's, littlefsd:system's at verity:system and
+    // 64 added (the three volume ranges, littlefsd:data's, erofsd:system's at verity:system and
     // verity:system's at blkd:system, among the 6 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
@@ -449,7 +448,7 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
     // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
-    // ipd 4096, littlefsd:data and littlefsd:system 1024 each, beamlet 20,864 pages, and a page each for the
+    // ipd 4096, littlefsd:data and erofsd:system 1024 each, beamlet 20,864 pages, and a page each for the
     // budgets.
     let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 20_864 + 11;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;

@@ -969,12 +969,24 @@ mod tests {
             .collect();
         assert_eq!(
             bins,
-            ["init", "keyd", "consoled", "bootfsd", "blkd", "verityd", "netd", "ipd", "littlefsd", "beamlet"]
+            [
+                "init",
+                "keyd",
+                "consoled",
+                "bootfsd",
+                "blkd",
+                "verityd",
+                "netd",
+                "ipd",
+                "littlefsd",
+                "erofsd",
+                "beamlet"
+            ]
         );
         assert!(programs[0].is_init());
         let otp = Path::new("userland/otp");
-        assert!(matches!(&programs[9], Program::Package { workspace: Some(w), .. } if w == otp));
-        assert!(matches!(&programs[8], Program::Package { workspace: None, .. }));
+        assert!(matches!(&programs[10], Program::Package { workspace: Some(w), .. } if w == otp));
+        assert!(matches!(&programs[9], Program::Package { workspace: None, .. }));
         // The manifest, with the userland disk's root pinned in it from the run's pack.
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "manifest");

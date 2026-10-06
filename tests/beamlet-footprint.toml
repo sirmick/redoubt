@@ -12,6 +12,7 @@ programs = [
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
     { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
 ]
 # The image needs 512 MiB: beamlet's budget, twice the shell VM's largest peak, does not fit the
@@ -52,7 +53,7 @@ verity = "image/userland.toml"
 
 [[file.servers]]
 name = "beamlet"
-args = ["budget_pages=20864", "report_memory", "Elixir.Redoubt.Shell"]
+args = ["budget_pages=20864", "endpoint=erofsd:system", "report_memory", "Elixir.Redoubt.Shell"]
 
 [userland]
 recipe = "image/userland.toml"

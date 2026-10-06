@@ -216,7 +216,7 @@ Everything the VM gets from outside comes through the `Platform` trait
   searches the code path's directories in order, including those added with `code:add_patha/1`;
   `Refused` stops without touching the code path
   ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). On Redoubt
-  a name the userland volume's `littlefsd` answers `not_found` to is absent, while any other refusal at
+  a name the userland volume's `erofsd` answers `not_found` to is absent, while any other refusal at
   the open or on the read (`corrupt`, a short or long file, a device error) is refused, with one
   console line naming the file and the error's name
   ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). `load_app`
@@ -353,7 +353,7 @@ remain planned.
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
-| `load_module`, `load_app` | reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `littlefsd` (`littlefsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `littlefsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `littlefsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
+| `load_module`, `load_app` | reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `erofsd` (`erofsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `erofsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `erofsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
 | `files` | the client library's `file`: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
 | `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)) |
 
@@ -365,7 +365,8 @@ before the change; a caller that wants to be told of a change uses the parked `r
 ([the shell](shell.md)).
 
 On the machine, beamlet is the program `beamlet`, started like any other with a console, a
-budget, and a connection to the userland disk's `littlefsd`, a named handle (`littlefsd:system`). It runs one scheduler thread until several harts
+budget, and a connection to the userland disk's `erofsd`, a named handle its argument
+`endpoint=` names (`erofsd:system`). It runs one scheduler thread until several harts
 ([several harts](../plan/m2-usable-shell.md#several-harts)), and starts its threads with the
 runtime's `thread::spawn`.
 
@@ -382,12 +383,12 @@ reads of 673 distinct blocks; a block read costs 6.8 ms of guest time unverified
 instructions) and 13.0 ms verified, so reading takes 529 s of the unverified boot and 1,009 s of
 the verified one. The VM's own work and its console take 6.5 s either way.
 
-If the volume does not attach, because `littlefsd` serves it as corrupt, or the module it is told to
+If the volume does not attach, because `erofsd` serves it as corrupt, or the module it is told to
 start cannot load, it says why on its console and waits without exiting: a tampered disk must not
 become a restart loop that reboots the machine.
 
 Each label set that runs beamlet reads its own attachment of the userland image through its own
-`blkd`, `verityd` and `littlefsd`, all carrying that set
+`blkd`, `verityd` and `erofsd`, all carrying that set
 ([R34 (confined placement)](../servers/init.md#r34-confined-placement)).
 
 The timer's counter frequency is not needed: `time_now`'s microseconds serve the clock and

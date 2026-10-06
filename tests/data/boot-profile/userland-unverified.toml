@@ -1,6 +1,6 @@
 # The userland disk of image/userland.toml, unverified, for boot-profile-unverified only: the same
-# objects in a littlefs volume the whole partition holds, with no hash tree after it, so a
-# littlefsd attached to the range directly mounts it (tests/boot-profile-unverified.toml).
+# objects in an EROFS volume, with no hash tree after it, so an erofsd attached to the range
+# directly reads it (tests/boot-profile-unverified.toml).
 # Everything below this header is image/userland.toml's, but `verity`.
 
 # Whole disk, in KiB (a whole number of 512-byte sectors).
@@ -21,6 +21,6 @@ docs = false
 
 [[partition]]
 name = "system"
-fs = "littlefs"
+fs = "erofs"
 # Emptied and filled with the objects before every pack.
 stage = "target/image/userland"

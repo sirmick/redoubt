@@ -1,9 +1,10 @@
 # verityd
 
-`verityd` makes a volume verified. It sits between [`blkd`](blkd.md) and the volume's
-[`littlefsd`](littlefsd.md): it holds the volume's range at `blkd`, checks every block it reads against a hash
-tree whose root the signed boot manifest pins, and serves only blocks that check, on `blkd`'s own
-protocol. So everything littlefs parses on a verified volume, data and metadata alike, is what the
+`verityd` makes a volume verified. It sits between [`blkd`](blkd.md) and the volume's file
+server, [`erofsd`](erofsd.md) for the read-only system volume or a [`littlefsd`](littlefsd.md): it
+holds the volume's range at `blkd`, checks every block it reads against a hash tree whose root the
+signed boot manifest pins, and serves only blocks that check, on `blkd`'s own protocol. So
+everything the file server parses on a verified volume, data and metadata alike, is what the
 image's builder wrote.
 
 ## Purpose
@@ -34,7 +35,7 @@ key); a manifest that sets one itself is refused.
 - One named handle, `volume`: the volume's range at its disk's `blkd`.
 
 Anything else, any of them twice, or a block count of 0 stops it before it serves. It serves one
-badge, 1, the one `init` mints at its endpoint for the volume's `littlefsd`; any other gets
+badge, 1, the one `init` mints at its endpoint for the volume's file server; any other gets
 `not_permitted`.
 
 ### The tree
@@ -78,9 +79,9 @@ At start `verityd` calls `info` at `blkd`, refuses a range shorter than the data
 tree, reads the top tree block and checks it against the root. If any of that fails, it says one
 line on its console naming the reason (`verityd: the volume is refused: ...`), answers `info`
 truthfully, answers every `read` with `failed`, and stays up. So a bad medium is never a restart
-loop, and `littlefsd`, whose mount then fails, serves the volume as corrupt
+loop, and the volume's file server, whose first read then fails, serves the volume as corrupt
 ([R49 (a hostile medium is corrupt, not a crash)](littlefsd.md#r49-a-hostile-medium-is-corrupt-not-a-crash)) and stays up too. Answering `info`
-matters: a `littlefsd` that cannot size its range exits, and would be restarted.
+matters: a file server that cannot size its range exits, and would be restarted.
 
 ### Messages
 
@@ -97,7 +98,7 @@ matters: a `littlefsd` that cannot size its range exits, and would be restarted.
 
 </details>
 
-`verityd` serves [`blkd`'s protocol](blkd.md#messages), unchanged, so `littlefsd` cannot tell it from a
+`verityd` serves [`blkd`'s protocol](blkd.md#messages), unchanged, so a file server cannot tell it from a
 `blkd`:
 - **`info`**: N × 8 sectors, read-only. The tree is not part of the volume.
 - **`read`** works in whole blocks. It fetches each block the request touches, hashes it, checks
@@ -157,7 +158,7 @@ Status: built · tested: host:redoubt-verityd::only_the_volumes_badge_is_served,
 
 - `verityd` holds one range at `blkd`, its endpoint, and a console connection. It holds no MMIO,
   interrupt or DMA, mints nothing, and never writes its range.
-- The volume's `littlefsd` holds the one badge it serves.
+- The volume's file server holds the one badge it serves.
 - The crate forbids `unsafe`.
 
 ## Security properties
@@ -179,9 +180,10 @@ Status: built · tested: host:redoubt-verityd::only_the_volumes_badge_is_served,
 </details>
 
 A reader of a verified volume sees only blocks that hash, through the tree, to the root the signed
-manifest gives. Otherwise it sees a device failure, which `littlefsd` serves as `corrupt`. `littlefsd` already
-poisons a volume on an I/O error until it is next mounted, so one bad block fails closed for the
-whole volume: later loads fail too, and a reader keeps what it already has.
+manifest gives. Otherwise it sees a device failure, which the file server serves as `corrupt`.
+`erofsd` and `littlefsd` both poison a volume on an I/O error until they start or mount it again,
+so one bad block fails closed for the whole volume: later loads fail too, and a reader keeps what it
+already has.
 
 ## Failure and restart
 
@@ -189,8 +191,8 @@ Status: built · partly tested: the exits on bad arguments and on no `volume` ha
 
 - **Bad arguments or no `volume` handle:** `verityd` exits with a code before serving.
 - **The start check fails:** it stays up, refused, as above.
-- **A read does not check:** that read is `failed`; `verityd` keeps serving, and `littlefsd` poisons the
-  volume.
+- **A read does not check:** that read is `failed`; `verityd` keeps serving, and the file server
+  poisons the volume.
 - **`verityd` restarts:** it checks the range again from the root, holding nothing across the
   restart.
 
@@ -201,10 +203,10 @@ Status: built · partly tested: the exits on bad arguments and on no `volume` ha
   no worse.
 - **Writable volumes are unverified.** They keep littlefs's metadata CRC and
   [R49](littlefsd.md#r49-a-hostile-medium-is-corrupt-not-a-crash) only.
-- **A reader trusts `littlefsd` and `verityd`.** Under R76 the reader of a verified volume trusts the
+- **A reader trusts the file server and `verityd`.** Under R76 the reader of a verified volume trusts the
   servers that verify it, as it trusts `consoled` for its console; neither checks the other's
   answers beyond the protocol.
-- **One bad block fails the volume** until `littlefsd` mounts it again: detection, not correction.
+- **One bad block fails the volume** until its file server starts again: detection, not correction.
 
 ## Why
 

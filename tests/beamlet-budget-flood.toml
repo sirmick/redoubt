@@ -8,7 +8,7 @@ programs = [
     { package = "redoubt-consoled", bin = "consoled" },
     { package = "redoubt-bootfsd", bin = "bootfsd" },
     { package = "redoubt-blkd", bin = "blkd" },
-    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
 ]
 timeout_secs = 60

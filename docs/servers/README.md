@@ -272,15 +272,13 @@ and so stays a co-holder ([devices](../kernel/devices.md#which-process-gets-whic
 
 ## Naming
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:init-boot, bench:userland-boot
 
 A file server is named for the format it serves, and its endpoints for the volumes: `erofsd`
 serves EROFS and `erofsd:system` is the system volume; `littlefsd` serves littlefs and
 `littlefsd:data` is the data volume. The name says what parser stands between a client and
 the medium, which is what [R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance)
 bounds. Servers that serve no format keep their role's name (`blkd`, `bootfsd`, `verityd`).
-
-**Open:** none.
 
 ## The network path
 
@@ -336,7 +334,7 @@ inside `gatewayd` until the web stack needs `tlsd` beyond M5.
   server's share of the CPU from its other callers, never more
   ([scheduling](../kernel/scheduling.md#residual-risks)).
 - **The DMA drivers are TCB** while there is no IOMMU ([devices](../kernel/devices.md#residual-risks)).
-- **Volumes are kept apart by placement.** The image's `init` runs `littlefsd:data` and `littlefsd:system`,
+- **Volumes are kept apart by placement.** The image's `init` runs `littlefsd:data` and `erofsd:system`,
   one instance per volume, so one volume's data is out of another's instance only because `init`
   places each volume once ([R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance)).
 

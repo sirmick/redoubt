@@ -8,7 +8,7 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   the `init-boot` case boots the same bundle. The builder writes the userland volume's root and
   block count into the manifest it packs, from its own pack of `userland.toml`.
 - `manifest.json`: the boot manifest `init` reads, with eleven servers, including `littlefsd:data` for
-  the disk's `data` volume, the userland disk's `blkd:system`, `verity:system` and `littlefsd:system`,
+  the disk's `data` volume, the userland disk's `blkd:system`, `verity:system` and `erofsd:system`,
   and `beamlet` running the shell, `Redoubt.Shell`, on the UART console. The userland volume is
   verified: its entry's `verity` names `verity:system`, and the root and block count in this file
   are placeholders the builder replaces with the pack's ([verityd](../docs/servers/verityd.md)),
@@ -21,6 +21,7 @@ The sources of the signed boot bundle and the disk images; what they produce goe
 - `userland.toml`: the userland disk, attached read-only. `./mkimage` packs it with the same
   packer into `target/image/userland.img`: each module of the applications it names, compiled by
   the pinned toolchain and stripped, as a plain file under its own name (`Elixir.Enum.beam`,
-  `elixir.app`), on one verified volume, a littlefs volume followed by its hash tree. The pack
+  `elixir.app`), on one verified volume, an EROFS volume written by Redoubt's own writer
+  ([erofsd](../docs/servers/erofsd.md)) and followed by its hash tree. The pack
   prints the volume's root and data blocks, the ones the bundle's manifest pins.
   Two packs of the same inputs are byte-identical.

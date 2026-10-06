@@ -489,13 +489,13 @@ A module or application resource the system resolves by name, and a program it l
 userland disk, comes only from a verified volume
 ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)). The userland disk is one:
 its manifest entry pins the root of its hash tree, the manifest is a bundle entry, so
-[R15](#r15-verified-boot) covers the root, and the volume's `littlefsd` reads it only through its
+[R15](#r15-verified-boot) covers the root, and the volume's `erofsd` reads it only through its
 `verityd`. beamlet reads each module and resource as the plain file of its name
 (`Elixir.Enum.beam`, `elixir.app`) at the volume's root and checks nothing itself: a reader of a
 verified volume trusts the servers that verify it, as it trusts `consoled` for its console. A name
-the volume's `littlefsd` answers `not_found` to is absent: the lookup goes on as for any name the system
+the volume's `erofsd` answers `not_found` to is absent: the lookup goes on as for any name the system
 lacks, and for a module that absence permits the VM to search its authorized code path. Any other
-refusal at the open or on the read (`corrupt` from a volume `littlefsd` serves as corrupt after `verityd`
+refusal at the open or on the read (`corrupt` from a volume `erofsd` serves as corrupt after `verityd`
 failed a block, a short or long file, a device error) is a refusal: beamlet writes one line on its
 console naming the module or application and the error's name
 ([error names](../userland/native.md#an-rerror-has-a-name)), retries nothing, and never searches

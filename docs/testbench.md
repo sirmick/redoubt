@@ -1108,8 +1108,9 @@ stack rounded up to 128, not to 1,024, because at 512 MiB it must lie between 20
 of twice the peak) and 20,990 (a case that adds a 256-page client still fits on rv32); the image
 then has 383 pages to spare on rv32, a client case 126
 ([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The read-only case also scans its
-additional client from the merged manifest. `verity:system`'s row and `littlefsd:system`'s heap
-are from six runs with the userland volume read through `verity:system`.
+additional client from the merged manifest. `verity:system`'s row is from six runs
+with the userland volume read through it on littlefs, and `erofsd:system`'s from the six runs with
+the volume on EROFS.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1122,7 +1123,7 @@ are from six runs with the userland volume read through `verity:system`.
 | `littlefsd:data` | 7,176 | 4 | 9 | 18 |
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
 | `verity:system` | 7,864 | 4 | 47 | 94 |
-| `littlefsd:system` | 12,680 | 7 | 19 | 38 |
+| `erofsd:system` | 9,704 | 5 | 12 | 24 |
 | `beamlet` | 33,240 | 17 | 10,387 | 20,846 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses

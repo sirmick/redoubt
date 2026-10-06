@@ -107,7 +107,17 @@ fid.
 
 ### The packer
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (7)</summary>
+
+- bench:erofs-oracle
+- bench:erofs-read-only
+- bench:userland-boot
+- host:erofs::the_writer_refuses_what_it_cannot_name
+- host:erofs::two_packs_of_one_tree_are_the_same_bytes
+- host:erofs::what_our_writer_packs_fsck_erofs_checks_and_extracts_as_the_tree
+- host:testbench::an_erofs_partition_is_its_stage_and_each_damage_is_corrupt_where_it_is
+
+</details>
 
 The bench's disk packer writes an EROFS volume from a staged directory (`fs = "erofs"` in a
 disk recipe, in place of `fs = "littlefs"`), with Redoubt's own writer in `libs/erofs`: flat
@@ -118,11 +128,10 @@ oracle, as littlefs's C reference is ([littlefsd](littlefsd.md#littlefs)): a vol
 checked by `fsck.erofs`, and one `mkfs.erofs` packs from the same tree is mounted and read by
 our parser with equal results. Nothing of erofs-utils runs on the target. The userland disk's
 recipe packs its objects this way. A verified volume is followed in its range by the verifier's
-tree over its blocks, as any verified volume is ([verityd](verityd.md#the-tree)); because a
-file's blocks are consecutive, which suits a cache of checked data blocks if
-[verityd](verityd.md#a-cache-of-checked-data-blocks) gets one.
-
-**Open:** none.
+tree over its blocks, as any verified volume is ([verityd](verityd.md#the-tree)), and the rest
+of its range, zeros, is covered too. A file's blocks are consecutive, so each is read once; the
+blocks read again are a directory's and those holding inodes, which
+[verityd's cache of checked data blocks](verityd.md#a-cache-of-checked-data-blocks) holds.
 
 ## Authority
 
