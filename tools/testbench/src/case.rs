@@ -248,6 +248,9 @@ pub struct Boot {
     /// Guest RAM in MiB (QEMU `-m`); default `target::DEFAULT_MEMORY_MIB`. Small for cases
     /// that exhaust RAM on purpose, so they take milliseconds.
     pub memory_mib: Option<u32>,
+    /// Pause after the console verdict and measure every manifest server's painted stack in RAM.
+    #[serde(default)]
+    pub memory: bool,
     /// Regular expressions that must each match a console line, in this order.
     pub expect: Vec<String>,
     /// Regular expressions that must never match.
@@ -749,6 +752,10 @@ impl Case {
     fn check(&self) -> Result<()> {
         match &self.kind {
             Kind::Boot(boot) => {
+                if boot.memory {
+                    ensure!(boot.under_init(), "memory needs a boot under init");
+                    ensure!(!boot.poweroff, "memory needs a running guest after its verdict");
+                }
                 for pattern in &boot.distinct_across_boots {
                     let groups = regex::Regex::new(pattern)?.captures_len();
                     ensure!(groups >= 2, "distinct_across_boots /{pattern}/ needs a capture group");

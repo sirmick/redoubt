@@ -17,6 +17,7 @@ programs = [
 # The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
 # the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
 memory_mib = 1024
+memory = true
 timeout_secs = 330
 # The client's lines come long before the shell's banner; they are expected first, so the call
 # to Version follows the attack.

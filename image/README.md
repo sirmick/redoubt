@@ -6,7 +6,7 @@ The sources of the signed boot bundle and the disk images; what they produce goe
 - `boot.toml`: the bundle's entries in order, the kernel, `init`, the servers, `beamlet`,
   `system.index` and the manifest. `./mkimage` packs it with the bench's builder into
   `target/image/redoubt.bundle`, and the `init-boot` case boots the same bundle.
-- `manifest.json`: the boot manifest `init` reads, with the six servers, `fsd:data` for the
+- `manifest.json`: the boot manifest `init` reads, with ten servers, including `fsd:data` for the
   disk's `data` volume, the userland disk's `blkd:system` and `fsd:system`, and `beamlet` running
   the shell, `Redoubt.Shell`, on the UART console; `bootfsd` serves `system.index` at `/boot`. The
   image needs 1 GiB of RAM (QEMU `-m 1G`): the shell's budget, twice what its VM uses at the

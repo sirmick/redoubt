@@ -1,0 +1,3 @@
+description = "The bench's RAM stack scanner computes a high-water mark, ignores a paint word copied into another stack slot or residue whose index no longer names its slot, and rejects a missing server, a duplicate paint unit, an out-of-range index at its page offset, or a declaration below twice the peak"
+kind = "host-tests"
+packages = ["testbench"]

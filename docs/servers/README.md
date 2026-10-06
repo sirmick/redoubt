@@ -154,8 +154,9 @@ caller influences is visible to a caller without that label: `fsd` keeps state p
 
 ## Connections
 
-<details><summary>Status: built · partly tested: the rule runs in host tests against the runtime's fake kernel; no boot has a launcher hand a child a fresh connection · tested (6)</summary>
+<details><summary>Status: built · partly tested: `init-boot` exercises fresh child connections on the machine; their isolation and disconnect behavior are attacked only against the runtime's fake kernel · tested (7)</summary>
 
+- bench:init-boot
 - host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it
 - host:redoubt-rt::new_connection_is_rooted_below_the_callers_root
 - host:redoubt-rt::a_disconnect_frees_its_fids_and_every_connection_minted_under_it
@@ -317,8 +318,9 @@ inside `gatewayd` until the web stack needs `tlsd` beyond M5.
   server's share of the CPU from its other callers, never more
   ([scheduling](../kernel/scheduling.md#residual-risks)).
 - **The DMA drivers are TCB** while there is no IOMMU ([devices](../kernel/devices.md#residual-risks)).
-- **Until `init` places it, `fsd` runs only under test launchers.** Its rules hold where a test
-  launches it; one instance per volume is what the running system adds ([fsd](fsd.md)).
+- **Volumes are kept apart by placement.** The image's `init` runs `fsd:data` and `fsd:system`,
+  one instance per volume, so one volume's data is out of another's instance only because `init`
+  places each volume once ([R47 (one volume per instance)](fsd.md#r47-one-volume-per-instance)).
 
 ## Why
 

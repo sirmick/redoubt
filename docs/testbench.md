@@ -151,6 +151,7 @@ programs = [                 # the first in init's place, the rest started by it
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
 memory_mib = 32              # guest RAM (default 256)
+memory = false               # true: stop an init guest and measure its servers' painted stacks
 timeout_secs = 60            # default 60; fractions allowed
 icount = "shift=3,sleep=off" # virtual time: 2^3 ns per guest instruction, the RTC on it too
 qemu_seed = 1                # pin the guest's randomness (QEMU -seed)
@@ -996,6 +997,50 @@ proc macro, can emit `mod x;` or `include!` at a call site, and the case reads o
 trusted crate's dependencies are known to, and adding one is a `Cargo.toml` change reviewed as
 part of the trusted computing base
 ([tenet 5](TENETS.md#5-dependencies-are-part-of-the-trusted-computing-base)).
+
+## The memory budget
+
+Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:init-refuses-stack, bench:memory-host-tests
+
+A boot case under `init` can set `memory = true`. After its console verdict, the bench stops
+QEMU over QMP and dumps the guest's physical RAM beside the case's log, as
+`<case>-<arch>-smp<N>.ram`. The launcher has painted each server's
+first-thread stack with a tag for that server and an index for every eight-byte unit. The bench
+scans the RAM for those tags at their encoded offsets within physical pages. That ignores paint
+words copied into ordinary stack slots, while refusing a missing server, a duplicate unit or an
+out-of-range index at an encoded offset. The lowest missing unit marks the stack's deepest touched
+point. The bench prints `stack NAME PEAK of PAGES pages` for each server and fails when the
+declared pages are less than twice the measured peak rounded up to a page. The dump, the size of
+the guest's RAM, is deleted once scanned; a scan that fails on a duplicate or out-of-range unit, or
+cannot read the dump, keeps it as the evidence. The QMP socket is always removed. It is in the
+temporary directory, under a name another user can predict, and QEMU creates it under the bench's
+umask, so it is private to the bench's user only under umask 077 or on a single-user host
+([a private directory for the QMP socket](todo/qmp-socket-private-dir.md)). The manifest's
+`stack_pages` defaults to 16 and cannot exceed 128
+([the boot manifest](servers/init.md#the-boot-manifest)).
+
+The standard image is scanned after `init-boot`, `userland-boot` and `userland-read-only` on both
+widths. Its server declarations use twice the largest peak across those six runs, rounded up to
+pages. The read-only case also scans its additional client from the merged manifest.
+
+| Image server | Largest peak (bytes) | Declared stack (pages) |
+| --- | ---: | ---: |
+| `keyd` | 5,264 | 3 |
+| `consoled` | 9,112 | 5 |
+| `bootfsd` | 7,304 | 4 |
+| `blkd` | 4,504 | 3 |
+| `netd` | 4,280 | 3 |
+| `ipd` | 8,040 | 4 |
+| `fsd:data` | 7,176 | 4 |
+| `blkd:system` | 4,504 | 3 |
+| `fsd:system` | 12,680 | 7 |
+| `beamlet` | 33,240 | 17 |
+
+The read-only client's largest peak is 6,616 bytes; its case uses the 16-page default.
+
+This is a measurement of the paths the case drove. Other requests or deeper call paths may
+need more stack, and any guest, including another server, can forge the public paint pattern. The
+result is evidence for the image's declarations, not a proof against hostile guest code.
 
 ## Vendored dependencies
 

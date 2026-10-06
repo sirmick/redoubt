@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 20
+revision = 125
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -47,8 +47,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "M1 (separation and containment)"
   template = "milestone"
   body = "docs/plan/m1-separation.md"
-  state = "active"
-  revision = 2
+  state = "reported"
+  revision = 105
 
 [[node]]
   id = "M2"
@@ -180,10 +180,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The steward"
   template = "step"
   parent = "M1"
-  needs = ["fsd", "beamlet-redoubt", "STEWARD1"]
-  body = "docs/servers/steward.md; docs/todo/budget-destroy-cost.md (must restore the R10 30 ms and deadline-notice 40 ms targets relaxed in K7); docs/kernel/scheduling.md#responsiveness"
+  needs = ["STEWARD1", "FSD3", "BEAM2", "INIT3", "SSH1"]
+  body = "docs/servers/steward.md; docs/userland/sessions.md; docs/servers/sshd.md#sessions-over-ssh. The server in four packages: STEWARD2 (principals, sub-budgets, sessions on the console and over SSH), STEWARD3 (leases, approve@box, blame), STEWARD4 (declassification and push; the responsiveness targets with the real steward, docs/kernel/scheduling.md#responsiveness, R10 30 ms and the deadline notice 40 ms already restored). Sessions are M1's by docs/userland/sessions.md."
   state = "todo"
-  revision = 2
+  revision = 86
 
 [[node]]
   id = "FMT1"
@@ -573,8 +573,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["K16", "K21", "SMP1-design", "IPC3", "K22", "ASID1"]
   body = "Brief: .wash/local/SMP1-implementer.md (updated for the owner's answers on QA SMP1-design: many harts by design, built as SMP1, SMP3, then SMP2; no ASIDs).\n\nBuilds docs/plan/m2-usable-shell.md#several-harts steps 1-3, and of step 4 its first stage:\n- any boot hart, up to MAX_HARTS (8), started through SBI HSM; one build (the smp feature and the spike go);\n- per-hart state through sscratch, including the hart's current process;\n- a FIFO ticket lock at trap entry;\n- device interrupts on the boot hart;\n- reschedule IPIs;\n- a budget runs on at most one hart at a time (interim: one predicate in the pick, lifted by SMP3);\n- the shootdown, built for a set of harts (the other harts whose current process is the target, flushed and acknowledged without the lock); its one caller here is a destruction, plus kernel-half unmaps to every hart;\n- the trace ring with a hart field;\n- `cargo testbench --smp N`.\n\nCases: smp-boot (2 and 4 harts); smp-evict, with a recorded negative; the whole bench at --smp 2. Started ahead of M2 on the owner's word (2026-10-03). Tier A, size L."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 123
+  overrides = ["2026-10-06: started by Orchestrator before IPC3 (reported), M1 (reported): owner's direction (2026-10-03 'start looking at SMP now', tonight's card-first sketch): SMP1 starts on SCHED1's branch, which carries IPC3; it rebases onto main once IPC3 and SCHED1 merge", "2026-10-06: started by Orchestrator before IPC3 (reported), M1 (reported): SMP1 runs ahead of IPC3's merge on the owner's word (start looking at SMP now; card-first sketch); it rebases once IPC3 and SCHED1 merge", "2026-10-06: started by Orchestrator before IPC3 (reported), M1 (reported): SMP1 runs ahead of IPC3's merge on the owner's word; its red review runs on content now"]
 
 [[node]]
   id = "SMP2"
@@ -673,8 +674,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K16", "SCHED1"]
   body = "Docs: docs/kernel/{ipc,timer,scheduling,budgets}.md. Brief/layout/rulings/report under .wash/local/IPC3*.md; use final implementer-5 report. wp-ipc3 a0fbbcab1 remains unmerged. Owner QA IPC3-wake-latency requires scheduler fix before merge with unchanged targets. SCHED1 explicit unmet prerequisite, no reverse dependency: experiment stacks on IPC3 then scheduler-only range replays onto main for independent tests/review/merge. Rebase and fully revalidate/review IPC3 afterward. QA remains blocking; initial1ms pinned success is not IPC3 acceptance. K19/SMP1 remain downstream."
-  state = "active"
-  revision = 2
+  state = "reported"
+  revision = 75
+  overrides = ["2026-10-05: started by Orchestrator before SCHED1 (active): IPC3 needs SCHED1, which is built on IPC3's branch; the two merge together (IPC3 first) once SCHED1's bench passes, so IPC3 rebases now"]
 
 [[node]]
   id = "HW1"
@@ -732,8 +734,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["BEAM2"]
   body = "Owner requested pause. Clean wp-MEM1 cd73175b5 includes scanner a1187eac3 plus final measured declarations/docs. All six FINAL full-workload scans (init-boot,userland-boot,userland-read-only rv64/rv32) PASS exit0, raw evidence archived before pruning in .wash/local/evidence/MEM1. Beamlet16pages,fsd:system6; standard bound507 vs merged521, doubling prose scoped to standard image. Focused host/size/unsafe/no-cruft/docs/format gates PASS. QEMU released, no new runs authorized during pause. target/MEM1-final-report.md records exact identities/peaks. Remaining on resume: full final-head bench on supported rootless reference environment, integration/sign-off, exact-head panel/acceptance. QA MEM1-runtime-stack stays blocking; no package merge/acceptance."
-  state = "reported"
-  revision = 2
+  state = "done"
+  revision = 125
 
 [[node]]
   id = "MEM2"
@@ -742,9 +744,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["MEM1", "ABI1"]
   body = "Owner (2026-10-03; Redoubt-side seam for an outside no-MMU variant: keep small). Brief: .wash/local/MEM2-implementer.md. Size S+ (the startup block's version and the consumer sweep it forces). Needs MEM1 (scan, tag, manifest checks) and ABI1 (rt's seam).\n\nManifest key heap_pages (absent = no cap; refused 0, or heap + stack at/above the budget's pages). The startup block, version 2, gains heap_pages and tag; rt sets the cap before main. The cap is rt's ceiling below the kernel budget: pages the allocator holds, refused (null) before any map_anon, counted as mapped, not committed; the budget still bounds stacks, Buffers, lends, tables. Past the cap an infallible allocation panics (exit 101, init's restart rule); a fallible one sees the error. A heap record (magic, tag, cap, peak) in data, found by MEM1's scan; the bench fails a cap under twice the peak. Image servers get measured caps. beamlet's budget_pages= todo is not this package's.\n\nAcceptance: rt host tests over the fake (refusal with no map_anon), startup v2/v1, init tests; a tests/programs case capped low; heaps reported by MEM1's memory case both widths. Pages: init.md, budgets.md, native.md, testbench.md."
-  state = "reported"
-  revision = 10
-  overrides = ["2026-10-05: started by Orchestrator before MEM1 (reported): MEM1 is reported and final (cd73175b5, six scans PASS, awaiting its whole bench and panel); MEM2 branches from MEM1's head and rebases onto main once MEM1 merges"]
+  state = "active"
+  revision = 84
+  overrides = ["2026-10-05: started by Orchestrator before MEM1 (reported): MEM1 is reported and final (cd73175b5, six scans PASS, awaiting its whole bench and panel); MEM2 branches from MEM1's head and rebases onto main once MEM1 merges", "2026-10-05: started by Orchestrator before MEM1 (active): MEM1 is final and rebasing for its bench; MEM2 builds on MEM1's head and rebases after MEM1 merges", "2026-10-05: started by Orchestrator before MEM1 (active): MEM1 is at its final head cfad0b83d awaiting acceptance; MEM2 rebases onto it now so its review can start", "2026-10-06: started by Orchestrator before MEM1 (active): MEM2's review runs on content now; it merges after MEM1, whose head it is built on", "2026-10-06: started by Orchestrator before MEM1 (active): MEM2's fix round runs on content now; it merges after MEM1, whose head it is built on"]
 
 [[node]]
   id = "VOL1"
@@ -753,8 +755,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["BEAM2"]
   body = "Brief: .wash/local/VOL1-implementer.md (architect-14). Tier A, size M+ (pinned root M, signed-root step +S). RULED by the owner 2026-10-03: verifier server; BEAM2 lands as built, then VOL1 deletes system.index and beamlet's check; decision 5 reversed (readers trust their verifying servers). Start from main after BEAM2 merges. QA: VOL1-verified-volumes.\n\nStep 1, pinned root: libs/verity (no_std, forbid(unsafe_code), sha2; dm-verity tree after the fs blocks; root = SHA-256(0x02||N||top)) pinned in the volume's manifest entry, signed with the bundle (R15). servers/verityd between blkd and fsd: serves blkd's protocol read-only to the volume's fsd, verifies each block first; mismatch = failed (fsd: corrupt); bad root/truncated: info answers, reads fail, stays up. fsd, littlefs, blkd untouched. init: volumes `verity`, fsd's badge at the verifier, confinement users gain it. Re-aims BEAM2 (plain files, R75 over new R76).\n\nStep 2, signed root: a root block at the range's end (N, version, root, Ed25519 under new domain redoubt.volume.v1 in libs/signing, ed25519-compact); manifest key (hex or \"bundle\") + floor instead of root; verityd refuses a bad signature or version < floor; the packer signs when the recipe names a key (build host only, R35). Image's userland volume stays pinned. SHA-256 tree already detects every bit error (CRC stays under it); no correction.\n\nAcceptance, both widths: verity-flipped-block, -flipped-tree, -wrong-root, userland-boot via verityd; verity-signed, -bad-signature, -rollback; host tests of verity, verityd, init, signing domain, packer determinism. Measured: extra calls, cache hits, boot-to-prompt with/without. Pages: verityd.md (R76), init.md, fsd.md, blkd.md, boot.md (R75, volume domain), beamlet.md, packages.md, testbench.md, SECURITY.md, image/README.md. Hotspot: MEM1."
-  state = "reported"
-  revision = 15
+  state = "active"
+  revision = 121
 
 [[node]]
   id = "BEAM6"
@@ -811,7 +813,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K22", "ASID1"]
   body = "Go-boundary host fix fe3ae211 at HEAD7b23f5283 passed red dd2a73b1, guest unchanged. Corrected archived replay stops sample0: conservative L920616<release920644; clock bracket cannot prove real deadline early/inside. Independently E-gross audit interval starts27us before release, so timestamp witness alone cannot qualify archive. .wash/local/SCHED1-sample0-clock-ruling.md. Architect3382d196 preparing complete prospective time/window/measurement construction, including raw-counter go vs reported time_now mismatch; no clamp, dropped samples, margin tuning or silent gate changes. Source/machine held. All200 exact waits/fences/category/debt/latency gates, same candidate/control, old10ms qualification/failure, both widths and final costs/sweeps/fullTierA/docs/scheduler-only replay/review/merge remain. QA IPC3-wake-latency blocking; IPC3 follows accepted scheduler."
   state = "active"
-  revision = 17
+  revision = 69
 
 [[node]]
   id = "BEAM7"
@@ -869,3 +871,84 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Owner 2026-10-05: the page should list the dependencies too, for an OS that is not Debian-family. Docs only: one block under the script's paragraph in GETTING-STARTED.md naming the system tools (C toolchain, git, curl, xz, CA certificates, qemu-system-riscv64/32 >= 8.2, OpenSSH client >= 9.6, dpkg-deb, GDB with RISC-V optional), the rustup lines (1.99.0 from rust-toolchain.toml with its targets and components; nightly rustfmt/miri/rust-src; the four pinned cargo tools), and --with-beam's OTP/Elixir, pointing at the files that pin them. Written by the orchestrator, reviewed by an editor, doccheck. Tier: docs only, size XS."
   state = "done"
   revision = 2
+
+[[node]]
+  id = "STEWARD2"
+  title = "The steward server: principals from the manifest, fixed sub-budgets per label set, sessions on the console and over SSH"
+  template = "package"
+  parent = "steward"
+  needs = ["STEWARD1", "FSD3", "BEAM2", "SSH1", "INIT3", "MEM2"]
+  body = "Brief: .wash/local/STEWARD2-implementer.md (architect-15). Tier A, size L. docs/servers/steward.md#principals, #fixed-sub-budgets-per-label-set, #authentication-and-sessions (the console is one principal's session: owner's decision on QA steward-console-principal), #the-stewards-protocol; docs/userland/sessions.md#logging-in, #a-session-is-a-vm-in-a-budget, #vault-sessions, #namespaces; docs/servers/sshd.md#sessions-over-ssh; docs/servers/init.md#the-boot-manifest."
+  state = "active"
+  revision = 112
+  overrides = ["2026-10-06: started by Orchestrator before MEM2 (active): owner's go (2026-10-06): the steward server starts now; MEM2 merges within hours and STEWARD2 rebases onto it (heap_pages for the sub-budgets' servers is the one dependency)", "2026-10-06: started by Orchestrator before MEM2 (active): STEWARD2 runs ahead of MEM2's merge on the owner's go; it rebases onto MEM2's merge when told"]
+
+[[node]]
+  id = "STEWARD3"
+  title = "The steward server: leases and agents, the powerbox at approve@box, crash blame"
+  template = "package"
+  parent = "steward"
+  needs = ["STEWARD2", "BEAM4", "IPC3", "SCHED1"]
+  body = "Brief: .wash/local/STEWARD3-implementer.md (architect-15). Tier A, size L. docs/servers/steward.md#leases, #the-powerbox-and-approvals, #crash-blame, R38-R41; docs/userland/sessions.md#approve; docs/userland/agents.md; docs/servers/init.md#restarts-and-reboots; docs/servers/serving.md#admit."
+  state = "todo"
+  revision = 86
+
+[[node]]
+  id = "STEWARD4"
+  title = "The steward server: declassification and push; the responsiveness targets measured with the real steward"
+  template = "package"
+  parent = "steward"
+  needs = ["STEWARD3", "K19"]
+  body = "Brief: .wash/local/STEWARD4-implementer.md (architect-15). Tier A, size M. docs/servers/steward.md#declassification-and-push, R42; docs/servers/init.md#the-confinement-check; docs/kernel/scheduling.md#responsiveness (targets unchanged; a new case steward-latency beside sched-latency; a miss is a finding, not a tuning)."
+  state = "todo"
+  revision = 86
+
+[[node]]
+  id = "VOL2"
+  title = "Verified volumes: the signed root, Ed25519 under redoubt.volume.v1 with a version floor in the manifest"
+  template = "package"
+  parent = "M1"
+  needs = ["VOL1"]
+  body = "Brief: .wash/local/VOL2-implementer.md (architect-15; VOL1's step 2 as the owner ruled it 2026-10-03). Tier A, size S. docs/servers/verityd.md (R76's signed-volume extension); docs/kernel/boot.md#verified-boot (the volume domain); docs/servers/init.md#the-boot-manifest (the verity object's two modes); docs/testbench.md#disks-and-network-cards (the recipe's sign key). Cases verity-signed, verity-bad-signature, verity-rollback."
+  state = "todo"
+  revision = 86
+
+[[node]]
+  id = "B10"
+  title = "The model's tests take their thread count from a bound; the two wall-clock bounds load can fail become a count and a deadline wait"
+  template = "package"
+  parent = "M1"
+  body = "Brief: .wash/local/B10-implementer.md (architect-15). Tier A tooling (the model's harness, the bench's keeper), size S. docs/testbench.md#on-a-shared-host (model-host-tests leaves the alone list; ssh-loopback is class (ii)); docs/kernel/model.md (MODEL_THREADS beside REDOUBT_MODEL_SEQUENCES). Hotspot: B9 touches the keeper's host test."
+  state = "active"
+  revision = 117
+
+[[node]]
+  id = "BOOT1"
+  title = "A boot profile of the image (the littlefs baseline, then EROFS), and verityd's LRU of checked blocks, with a boot-time target"
+  template = "package"
+  parent = "M1"
+  needs = ["VOL1"]
+  body = "Brief: .wash/local/BOOT1-implementer.md (architect-15; refocused 2026-10-06: littlefs's read cache dropped, the system volume moves to EROFS in EROFS1; the profile is the before/after measurement). Tier A (verityd, fsd's stamps, the bench), size M. docs/servers/verityd.md (the cost paragraph, its Open item); docs/userland/beamlet.md#beamlet-on-redoubt (the boot-time target, bench:boot-profile); docs/testbench.md#checked-builds (boot-stats). Checkpoint after step 1's profile; the target is set from the profile on EROFS (EROFS1)."
+  state = "active"
+  revision = 109
+  overrides = ["2026-10-06: started by Orchestrator before VOL1 (active): owner's go (2026-10-06): the boot profile and the two caches start now on VOL1's head (its verityd and image); BOOT1 rebases onto main once VOL1 merges", "2026-10-06: started by Orchestrator before VOL1 (reported): BOOT1 runs ahead of VOL1's merge on the owner's go; it rebases onto VOL1's merge"]
+
+[[node]]
+  id = "EROFS1"
+  title = "erofsd: the read-only EROFS volume and its packer; the system volume leaves littlefs"
+  template = "package"
+  parent = "M1"
+  needs = ["VOL1", "BOOT1", "FSN1"]
+  body = "Owner (2026-10-06): the read-only system volume stops using littlefs; a read-only EROFS replaces it, built now; littlefs stays for writable volumes. Design: docs/servers/erofsd.md (the uncompressed subset: flat plain and flat inline layouts, sorted dirents, xattrs skipped; its own small server on bootfsd's pattern; Redoubt's own deterministic writer with erofs-utils as a host oracle). Brief: .wash/local/EROFS1-implementer.md (architect-15). Tier A, size M. Needs VOL1, FSN1 (final names) and BOOT1's step-1 profile (the littlefs baseline)."
+  state = "todo"
+  revision = 107
+
+[[node]]
+  id = "FSN1"
+  title = "fsd is renamed littlefsd: a file server is named for the format it serves"
+  template = "package"
+  parent = "M1"
+  needs = ["VOL1", "MEM2"]
+  body = "Owner (2026-10-06): name file servers carefully for multiple fs servers; rename fsd to fsd-littlefs or similar. Convention on docs/servers/README.md#naming; the name is littlefsd. Brief: .wash/local/FSN1-implementer.md (architect-15). Mechanical rename (crate, image manifest, 47 case files, 26 pages, 30 recipes; 1,285 occurrences), no behaviour change; size S; three commits. Lands before EROFS1."
+  state = "todo"
+  revision = 108

@@ -12,7 +12,7 @@
 //! | `devices[]` | `name`; `base` (string), `irq` (number), either may be absent, not both; `dma` (boolean) |
 //! | `labels[]` | `name`, `owner` (a principal), `id` (string) |
 //! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`) |
-//! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
+//! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `stack_pages` (string), `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
 //! | `public` | bundle entry names |
 //! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`, `budget`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
 //!
@@ -22,6 +22,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use redoubt_client::launch::STACK_PAGES;
 use redoubt_rt::wire::json::{self, Members, SchemaError, SchemaKind, Value};
 
 /// The decoded manifest.
@@ -89,6 +90,8 @@ pub struct Server {
     pub name: String,
     pub program: String,
     pub budget: Budget,
+    /// First-thread stack, in pages; absent in an older manifest means the launcher default.
+    pub stack_pages: u64,
     pub labels: Vec<String>,
     pub devices: Vec<DeviceUse>,
     pub volume: Option<String>,
@@ -226,6 +229,7 @@ fn server(v: &Value) -> Result<Server, SchemaError> {
             name: m.required("name", string)?,
             program: m.required("program", string)?,
             budget: m.required("budget", budget)?,
+            stack_pages: m.optional("stack_pages", Value::u64_string)?.unwrap_or(STACK_PAGES as u64),
             labels: list(m, "labels", string)?,
             devices: list(m, "devices", device_use)?,
             volume: m.optional("volume", string)?,

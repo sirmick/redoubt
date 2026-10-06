@@ -212,7 +212,7 @@ User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the 
 | `0x4000_0000`..`0x4040_0000` | the message area (4 MiB): where the kernel maps a lend or transfer the process receives, every one inside it | the kernel |
 | `0x6000_0000`..`0x7000_0000` | the `map_anon` area (256 MiB): where `map_anon`, `map_device` and `dma_alloc` place pages, every run inside it | the kernel |
 | `0x7FF0_0000` | the startup block, in a launched process | the launcher |
-| `0x7FFE_0000`..`0x8000_0000` | the first thread's stack: 32 pages (128 KiB) reserved, only the top one backed; the rest are backed on first touch | the loader for a boot process; a launcher places its own |
+| `0x7FF8_0000`..`0x8000_0000` | the first thread's stack: the loader reserves 32 pages (`0x7FFE_0000`..`0x8000_0000`) for a boot process, backing only the top one before first touch; a launcher maps and backs all of a child's chosen 1 to 128 pages here | the loader for a boot process; a launcher places its own |
 
 The kernel searches its two areas for the first free run of pages, starting at its last
 choice; `map_anon`'s choice is [memory](memory.md)'s. A process started by the loader gets its
@@ -224,7 +224,7 @@ end of user space.
 ```memmap
 top 0x7fff_ffff
 columns widths
-0x7ffe_0000 | first thread's stack (128 KiB reserved) | Sv32: the end of user space; Sv39: user space goes on to 0x40_0000_0000
+0x7ff8_0000 | first thread's stack (up to 128 pages launched; boot reserves top 32 pages) | Sv32: the end of user space; Sv39: user space goes on to 0x40_0000_0000
 0x7ff0_0000 | startup block (launched)
 0x7000_0000 hole | free
 0x6000_0000 | map_anon area, 256 MiB
@@ -273,11 +273,12 @@ A launcher places the startup block and the child's stack outside the link range
 takes the placement from one definition beside `STUB_ENTRY` in the stub crate
 ([`stub/src/lib.rs`](../../stub/src/lib.rs)): the stack top at `STACK_TOP` (`0x8000_0000`), the
 startup block at `STARTUP_AT` (`0x7FF0_0000`) and the copy of the ELF image at `IMAGE_AT`
-(`0x4000_0000`). The stub cannot see the stack. With
-the stack outside the link range, no segment of an honest image can meet it; a hostile segment
-that names the stack's pages is still refused, by `map_fixed`, which never replaces a mapping
-([R11](memory.md#r11-memory)). The stub does not check for a gap between a segment and the
-stack; see Residual risks.
+(`0x4000_0000`). The client launcher accepts at most `MAX_STACK_PAGES` (128) stack pages, so even
+its lowest stack page is above the startup block with unmapped pages between them. The stub cannot
+see the stack. With the stack outside the link range, no segment of an honest image can meet it;
+a hostile segment that names the stack's pages is still refused by `map_fixed`, which never
+replaces a mapping ([R11](memory.md#r11-memory)). The stub does not check for a gap between a
+segment and the stack; see Residual risks.
 
 ## Sv32 and Sv39 compared
 

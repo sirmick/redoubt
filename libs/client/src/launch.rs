@@ -4,7 +4,7 @@
 //! writes the startup block with the runtime's `StartupBuilder`.
 //!
 //! What it refuses is refused before `process_create`, so no half-made process is left: more than
-//! `MAX_START_HANDLES` handles, an empty image, a stack larger than the space below `STACK_TOP`,
+//! `MAX_START_HANDLES` handles, an empty image, a stack outside 1..=MAX_STACK_PAGES,
 //! or a block the parser refuses (a bad name or path, one given twice). A kernel refusal after
 //! `process_create` leaves a process that never started in the caller's budget, which comes back
 //! with the error for the caller to destroy.
@@ -16,18 +16,26 @@ use redoubt_rt::handle::{Budget, Endpoint, Process};
 use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::server::close_delivery;
 use redoubt_rt::startup::StartupBuilder;
-use stub::{IMAGE_AT, STACK_TOP, STARTUP_AT, STUB_ENTRY};
+use stub::{IMAGE_AT, MAX_STACK_PAGES, STACK_TOP, STARTUP_AT, STUB_ENTRY};
 
 use crate::error::{Error, Refusal};
 use crate::grants::Grants;
 
 /// The child's stack unless the launcher says otherwise.
-const STACK_PAGES: usize = 16;
+pub const STACK_PAGES: usize = 16;
 
 /// The most pages a launch holds at once: it copies the image and the stack into the child this
 /// many pages at a time (servers/init.md, "Launching through the loader stub"), and `init`'s
 /// bound counts one batch.
 pub const PLACE_PAGES: usize = 64;
+
+/// The high half of each painted stack unit; the low half holds the server tag and unit index.
+pub const STACK_PAINT: u32 = 0x5354_414b;
+
+/// Unit `index` is counted from the stack's lowest address, in eight-byte steps.
+pub const fn stack_paint(tag: u16, index: u16) -> u64 {
+    ((STACK_PAINT as u64) << 32) | ((tag as u64) << 16) | index as u64
+}
 
 /// One launch, assembled.
 pub struct Launch<'a> {
@@ -36,6 +44,7 @@ pub struct Launch<'a> {
     budget: Budget,
     exit: Endpoint,
     stack_pages: usize,
+    stack_tag: Option<u16>,
     namespace: Vec<(&'a str, Handle)>,
     handles: Vec<(&'a str, Handle)>,
     args: Vec<&'a str>,
@@ -61,6 +70,7 @@ impl<'a> Launch<'a> {
             budget,
             exit,
             stack_pages: STACK_PAGES,
+            stack_tag: None,
             namespace: Vec::new(),
             handles: Vec::new(),
             args: Vec::new(),
@@ -90,6 +100,13 @@ impl<'a> Launch<'a> {
         self
     }
 
+    /// Paints this child's first-thread stack with `tag` for the bench's RAM measurement; an
+    /// untagged stack is zeroed.
+    pub fn stack_tag(&mut self, tag: u16) -> &mut Self {
+        self.stack_tag = Some(tag);
+        self
+    }
+
     /// What servers granted the child, released when its exit notice arrives.
     pub fn grants(&mut self, grants: Grants) -> &mut Self {
         self.grants = grants;
@@ -109,10 +126,10 @@ impl<'a> Launch<'a> {
         };
         let rw = MemFlags::READ | MemFlags::WRITE;
         let rx = MemFlags::READ | MemFlags::EXECUTE;
-        let started = place(&process, self.stub, pages_of(self.stub), STUB_ENTRY, rx)
-            .and_then(|()| place(&process, self.image, pages_of(self.image), IMAGE_AT, rw))
-            .and_then(|()| place(&process, &[], self.stack_pages, stack_at, rw))
-            .and_then(|()| place(&process, &block, pages_of(&block), STARTUP_AT, MemFlags::READ))
+        let started = place(&process, self.stub, pages_of(self.stub), STUB_ENTRY, rx, None)
+            .and_then(|()| place(&process, self.image, pages_of(self.image), IMAGE_AT, rw, None))
+            .and_then(|()| place(&process, &[], self.stack_pages, stack_at, rw, self.stack_tag))
+            .and_then(|()| place(&process, &block, pages_of(&block), STARTUP_AT, MemFlags::READ, None))
             .and_then(|()| process.start(STUB_ENTRY, STACK_TOP - 16, STARTUP_AT, &slots));
         match started {
             Ok(()) => Ok(Job { process, budget: self.budget, exit: self.exit, grants: self.grants }),
@@ -129,11 +146,10 @@ impl<'a> Launch<'a> {
         if self.image.is_empty() {
             return Err(Refusal::EmptyImage.into());
         }
-        let stack_at = self
-            .stack_pages
-            .checked_mul(PAGE_SIZE)
-            .and_then(|stack| STACK_TOP.checked_sub(stack))
-            .ok_or(Refusal::StackTooLarge)?;
+        if self.stack_pages == 0 || self.stack_pages > MAX_STACK_PAGES {
+            return Err(Refusal::StackTooLarge.into());
+        }
+        let stack_at = STACK_TOP - self.stack_pages * PAGE_SIZE;
         let mut slots: Vec<Handle> = Vec::new();
         let mut slot = |handle: Handle| match slots.iter().position(|h| *h == handle) {
             Some(i) => i,
@@ -172,11 +188,19 @@ impl<'a> Launch<'a> {
 /// The pages of `bytes`, at least one.
 fn pages_of(bytes: &[u8]) -> usize { bytes.len().max(1).div_ceil(PAGE_SIZE) }
 
-/// Fills `pages` pages at `dst` in the child with `bytes`, zeroes after them, `PLACE_PAGES` at a
-/// time: each batch is copied into fresh pages and moved in before the next is made, so the
-/// caller never holds more than one batch. A refusal leaves the batches already moved in the
-/// child, which has not started, and returns the refused batch's pages to the caller.
-fn place(process: &Process, bytes: &[u8], pages: usize, dst: usize, flags: MemFlags) -> Result<(), SysError> {
+/// Fills `pages` pages at `dst` in the child with `bytes`, zeroes after them (with `stack_tag`, the
+/// stack's paint instead), `PLACE_PAGES` at a time: each batch is copied into fresh pages and moved
+/// in before the next is made, so the caller never holds more than one batch. A refusal leaves the
+/// batches already moved in the child, which has not started, and returns the refused batch's
+/// pages to the caller.
+fn place(
+    process: &Process,
+    bytes: &[u8],
+    pages: usize,
+    dst: usize,
+    flags: MemFlags,
+    stack_tag: Option<u16>,
+) -> Result<(), SysError> {
     // At least one batch: one of no pages is refused, as a whole one was.
     for done in (0..pages.max(1)).step_by(PLACE_PAGES) {
         let n = (pages - done).min(PLACE_PAGES);
@@ -184,6 +208,12 @@ fn place(process: &Process, bytes: &[u8], pages: usize, dst: usize, flags: MemFl
         let from = bytes.get(done * PAGE_SIZE..).unwrap_or_default();
         let len = from.len().min(n * PAGE_SIZE);
         batch[..len].copy_from_slice(&from[..len]);
+        if let Some(tag) = stack_tag {
+            for (i, unit) in batch.chunks_exact_mut(8).enumerate() {
+                let index = (done * PAGE_SIZE / 8 + i) as u16;
+                unit.copy_from_slice(&stack_paint(tag, index).to_le_bytes());
+            }
+        }
         process.map(batch, dst + done * PAGE_SIZE, flags)?;
     }
     Ok(())

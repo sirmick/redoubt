@@ -154,7 +154,8 @@ Built and attack-tested today:
   reset device, and reboots when one cannot stay up. Every server's case boots `init`
   ([init](../servers/init.md),
   [starting a case's programs](../testbench.md#starting-a-cases-programs)).
-- **The client library**, tested on the host against real servers
+- **The client library**, with launching exercised by `init-boot` on the machine and its other
+  tested operations exercised on the host against real servers
   ([native programs](../userland/native.md#the-client-library)).
 - **beamlet** on the host and under `init` on Redoubt, with console, clock and randomness;
   its modules come from the userland disk and are checked against the signed bundle

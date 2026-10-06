@@ -14,6 +14,7 @@ use redoubt_rt::abi::{Handle, MAX_LABELS, MAX_START_HANDLES, MAX_THREADS, Usage}
 use redoubt_rt::server::minted::FIRST_MINTED_BADGE;
 use redoubt_rt::startup::{StartupBuilder, valid_name};
 use redoubt_sys::DeviceInfo;
+use stub::MAX_STACK_PAGES;
 
 use crate::bound::{self, Counts};
 use crate::confine;
@@ -65,9 +66,8 @@ pub struct Machine<'a> {
     pub root: Usage,
     /// The bundle's entries after `init`: each name and its length in bytes.
     pub entries: &'a [(&'a str, usize)],
-    /// The stub's length in bytes, and the stack each launch gives, in pages.
+    /// The stub's length in bytes.
     pub stub_bytes: usize,
-    pub stack_pages: usize,
     /// The arena `init` parses and checks in, in pages.
     pub arena_pages: usize,
     /// The handles in `init`'s table at its start.
@@ -513,6 +513,11 @@ fn budgets(m: &Manifest) -> Result<(), Refusal> {
     if let Some(i) = m.servers.iter().position(|s| !fine(&s.budget)) {
         return Err(at(format!("servers[{i}].budget"), Why::Budget));
     }
+    if let Some(i) = m.servers.iter().position(|s| {
+        s.stack_pages == 0 || s.stack_pages > MAX_STACK_PAGES as u64 || s.stack_pages >= s.budget.pages
+    }) {
+        return Err(at(format!("servers[{i}].stack_pages"), Why::Stack));
+    }
     for (i, p) in m.principals.iter().enumerate() {
         if !fine(&p.budget) {
             return Err(at(format!("principals[{i}].budget"), Why::Budget));
@@ -726,7 +731,7 @@ fn counts(m: &Manifest, machine: &Machine) -> Counts {
         handed: m.servers.iter().map(|s| s.handed.len() as u64 + u64::from(s.volume.is_some())).sum(),
         stub_bytes: machine.stub_bytes as u64,
         largest_image_bytes: m.servers.iter().map(image).max().unwrap_or(0) as u64,
-        stack_pages: machine.stack_pages as u64,
+        stack_pages: m.servers.iter().map(|s| s.stack_pages).max().unwrap_or(0),
         handles_at_start: machine.handles_at_start as u64,
         arena_pages: machine.arena_pages as u64,
     }

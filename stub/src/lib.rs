@@ -98,6 +98,8 @@ pub const MAX_IMAGE_LEN: usize = STUB_ENTRY;
 pub const IMAGE_AT: usize = 0x4000_0000;
 pub const STARTUP_AT: usize = 0x7FF0_0000;
 pub const STACK_TOP: usize = 0x8000_0000;
+/// Largest launched first-thread stack: 512 KiB, leaving 127 unmapped pages above the startup page.
+pub const MAX_STACK_PAGES: usize = 128;
 const _: () = assert!(IMAGE_AT >= STUB_ENTRY + 0x10_0000 && STARTUP_AT >= STUB_ENTRY + 0x10_0000);
 
 /// Why an image was refused whole (servers/init.md R32: a hostile image hurts only its process

@@ -12,6 +12,7 @@ mod cruft;
 mod disk;
 mod elixir;
 mod fmt;
+mod memory;
 mod peer;
 mod pty;
 mod qemu;

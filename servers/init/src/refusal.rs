@@ -70,6 +70,8 @@ pub enum Why {
     Badge,
     /// Limits no process could run in, or beyond what the kernel takes.
     Budget,
+    /// A first-thread stack is empty, over the cap, or does not fit its own budget.
+    Stack,
     /// More labels than a budget holds.
     TooManyLabels,
     /// An argument with a NUL, one a `bootfsd` entry may not carry, or one `init` passes itself
@@ -134,6 +136,7 @@ impl fmt::Display for Why {
             Why::BudgetHandle => "a server may not hold a budget handle (R33)",
             Why::Badge => "not a root badge given once at its endpoint",
             Why::Budget => "no process could run in this budget",
+            Why::Stack => "a stack is 1 to 128 pages and smaller than its budget",
             Why::TooManyLabels => "more labels than a budget holds",
             Why::Argument => {
                 "an argument with a NUL, on bootfsd one that is not buckets=N, or one init passes itself"

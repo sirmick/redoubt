@@ -16,7 +16,7 @@ max_lines = 868
 [[crate]]
 name = "stub"
 paths = ["stub/src"]
-max_lines = 361
+max_lines = 362
 
 [[crate]]
 name = "libs/sys"
@@ -46,7 +46,7 @@ max_lines = 15
 [[crate]]
 name = "libs/client"
 paths = ["libs/client/src"]
-max_lines = 966
+max_lines = 987
 
 [[crate]]
 name = "libs/rt"
@@ -113,7 +113,7 @@ max_lines = 2928
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 1952
+max_lines = 1957
 
 [[crate]]
 name = "servers/fsd"

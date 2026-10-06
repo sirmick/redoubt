@@ -18,11 +18,12 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-<details><summary>Status: built · tested (18)</summary>
+<details><summary>Status: built · tested (20)</summary>
 
 - bench:init-boot
 - bench:init-refuses-public-manifest
 - bench:init-refuses-device-dma
+- bench:init-refuses-stack
 - host:redoubt-init::what_is_not_strict_json_is_refused_with_where
 - host:redoubt-init::names_follow_the_rule_and_differ
 - host:redoubt-init::references_name_what_the_manifest_and_bundle_hold
@@ -38,6 +39,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 - host:redoubt-init::the_fuzz_corpus_still_passes
 - host:redoubt-init::each_volume_s_range_is_minted_at_its_own_disk_s_blkd
 - host:redoubt-init::a_blkd_receives_where_init_mints_its_ranges
+- host:redoubt-init::a_server_stack_defaults_and_is_checked_against_its_budget
 
 </details>
 
@@ -49,7 +51,7 @@ and `init`'s only input. Its entries:
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it) |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), and arguments |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -63,6 +65,13 @@ and `init`'s only input. Its entries:
   `[a-z0-9_:+-]`, starting with a letter (`fsd:data`, `alice+secrets`), compared byte for byte.
   Names become endpoint names, volume names and 9P paths, so no empty name, NUL, U+FEFF or control
   character may reach them. The startup block applies the same rule (`valid_name`).
+- **Stacks.** A server's `stack_pages` is the size of its first thread's stack, charged to its
+  budget. `init` refuses zero, more than 128 pages, or a stack not smaller than its budget's pages,
+  before it starts any server. A budget that holds the stack but not the image beside it makes that
+  server's launch fail, which refuses the boot, or on a restart reboots the machine
+  ([restarts and reboots](#restarts-and-reboots)). The bench measures each server's peak across
+  the required boot and userland paths and requires the declaration to hold at least twice the
+  largest peak ([the memory budget](../testbench.md#the-memory-budget)).
 - **One entry per device.** A `devices` entry names one device, by its register region and its
   interrupt, and `init` hands that device's objects together to the one server that holds the
   entry. They go under the name the server's entry gives the device: `NAME` for the register region and `NAME-irq` for the
@@ -406,9 +415,10 @@ image can hurt only the process it was going to become.
 1. The launcher creates the child's budget and process (`process_create`) with an exit endpoint.
 2. It maps into the child, with `process_map`: the stub, read-only and executable, at
    `STUB_ENTRY` (`0x1FF0_0000`); a copy of the program's ELF image, read-write, placed 64 pages
-   at a time; the stack; and the startup block, read-only, naming the image with `image_addr`
-   and `image_len`. Where each goes is on
-   [memory layout](../kernel/memory-layout.md#launcher-placement).
+   at a time; the stack, zeroed, or painted with a pattern the bench reads when the launcher tags
+   it, as `init` tags each server's ([the memory budget](../testbench.md#the-memory-budget)); and
+   the startup block, read-only, naming the image with `image_addr` and `image_len`. Where each
+   goes is on [memory layout](../kernel/memory-layout.md#launcher-placement).
 3. It starts the child's first thread at `STUB_ENTRY`, with the startup block's address as the
    argument, installing the child's handles.
 4. The stub reads `image_addr` and `image_len` from the block, checks that the image lies clear

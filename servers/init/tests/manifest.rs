@@ -12,6 +12,7 @@ use redoubt_init::refusal::{Refusal, Sharing, Why};
 use redoubt_init::{ARENA_PAGES, Manifest, check, read};
 use redoubt_rt::abi::MAX_START_HANDLES;
 use redoubt_rt::wire::json::SchemaKind;
+use stub::MAX_STACK_PAGES;
 
 const IMAGE: &str = include_str!("../../../image/manifest.json");
 
@@ -100,6 +101,38 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
 }
 
 #[test]
+fn a_server_stack_defaults_and_is_checked_against_its_budget() {
+    let absent =
+        br#"{"servers":[{"name":"x","program":"x","budget":{"pages":"32","processes":1,"weight":1}}]}"#;
+    assert_eq!(read(absent, ARENA_PAGES).unwrap().servers[0].stack_pages, 16);
+    let mut m = image();
+    for pages in [0, MAX_STACK_PAGES as u64 + 1, m.servers[0].budget.pages] {
+        m.servers[0].stack_pages = pages;
+        refused_at(&m, "servers[0].stack_pages", Why::Stack);
+    }
+    m.servers[0].stack_pages = MAX_STACK_PAGES as u64;
+    assert!(on_virt(&m).is_ok());
+    m.servers[0].budget.pages = 32;
+    m.servers[0].stack_pages = 32;
+    refused_at(&m, "servers[0].stack_pages", Why::Stack);
+}
+
+#[test]
+fn the_bound_uses_the_largest_declared_stack_batch() {
+    let mut m = image();
+    for server in &mut m.servers {
+        server.stack_pages = 16;
+    }
+    let base = on_virt(&m).unwrap().bound;
+    server(&mut m, "keyd").stack_pages = 32;
+    assert_eq!(on_virt(&m).unwrap().bound, base + 16);
+    server(&mut m, "consoled").stack_pages = 48;
+    assert_eq!(on_virt(&m).unwrap().bound, base + 32);
+    server(&mut m, "keyd").stack_pages = MAX_STACK_PAGES as u64;
+    assert_eq!(on_virt(&m).unwrap().bound, base + 48);
+}
+
+#[test]
 fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
     let mut m = without_volumes();
     for (holder, badge) in [("ipd", 1), ("netd", 2), ("blkd", 4)] {
@@ -116,13 +149,13 @@ fn the_image_manifest_s_bound() {
     // The arena (256 + 3 tables), 9 receive and 10 exit endpoints and init's reports endpoint
     // (beamlet receives on none), 10 process objects, 10 blocks with 3 tables each, 10 watching
     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
-    // batch of beamlet's image + 3, stack 16 + 3), the lend (2 + 3), and one handle-table page:
+    // batch of beamlet's image + 3, stack 17 + 3), the lend (2 + 3), and one handle-table page:
     // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 9 + 6 + 40 + 3 + 1 = 59
     // added (the two volumes' ranges among the 6 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 16 + 3) + 1 + 5);
+    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 17 + 3) + 1 + 5);
 }
 
 /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
@@ -849,6 +882,7 @@ fn confined_gives_each_label_set_its_own_userland_disk() {
         name: name.into(),
         program: "beamlet".into(),
         budget: budget(256),
+        stack_pages: 16,
         labels,
         devices: vec![],
         volume: None,
@@ -950,7 +984,7 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
         m.servers.push(Server {
             name: format!("s{n}"),
             program: "fsd".into(),
-            budget: budget(16),
+            budget: budget(17),
             receives,
             ..m.servers[3].clone()
         });
@@ -983,7 +1017,7 @@ fn more_servers_than_init_has_threads_to_watch_are_refused() {
             name: format!("s{n}"),
             program: "fsd".into(),
             receives,
-            budget: budget(1),
+            budget: budget(17),
             ..m.servers[3].clone()
         });
         m.servers.last_mut().unwrap().devices.clear();
