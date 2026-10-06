@@ -165,7 +165,7 @@ impl Connection {
     /// drain the connection's fids. Anything else leaves it in use for good.
     fn settle<T>(&self, fid: u32, result: &Result<T, client::ClientError>) {
         match result {
-            Ok(_) | Err(client::ClientError::Remote) => self.0.fids.free(fid),
+            Ok(_) | Err(client::ClientError::Remote | client::ClientError::NotFound) => self.0.fids.free(fid),
             Err(e) if e.unsent() => self.0.fids.free(fid),
             Err(_) => {}
         }

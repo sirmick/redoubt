@@ -48,9 +48,8 @@
       "name": "beamlet",
       "program": "beamlet",
       "budget": {"pages": "4096", "processes": 1, "weight": 100},
-      "handed": [{"endpoint": "bootfsd", "badge": "7"}, {"endpoint": "fsd:system", "badge": "7"}],
+      "handed": [{"endpoint": "fsd:system", "badge": "7"}],
       "args": ["budget_pages=4096", "beamlet_console"]
     }
-  ],
-  "public": ["system.index"]
+  ]
 }

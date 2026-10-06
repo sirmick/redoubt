@@ -8,15 +8,17 @@
 //! (the steward does, within a label set by this same rule), so a shared server, one sized with
 //! `buckets=N`, is used by every principal domain with its own label set: only such a domain may
 //! later be granted a connection there. A server is also used by every server handed one of its
-//! endpoints, and `blkd` by every server attaching a volume, whose range `init` mints at it, so a
-//! confined disk holds one label set's volumes. The steward and `sshd` serve every domain by
-//! design and are exempt, by program name.
+//! endpoints; `blkd` by every server holding a volume's range at it, the server attaching the
+//! volume or, for a verified volume, its `verityd`; and a `verityd` by the server attaching its
+//! volume, whose range `init` mints at the verifier's endpoint. So a confined disk holds one label
+//! set's volumes, and each label set reading a verified volume has its own verifier. The steward
+//! and `sshd` serve every domain by design and are exempt, by program name.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::check::{BLKD, BUCKETS_ARG, on_disk};
+use crate::check::{BLKD, BUCKETS_ARG, holds_range, on_disk, verified};
 use crate::manifest::{Manifest, Server};
 use crate::refusal::{Refusal, Sharing};
 
@@ -49,16 +51,21 @@ fn exempt(s: &Server) -> bool { EXEMPT.contains(&s.program.as_str()) }
 
 fn shared(s: &Server) -> bool { s.args.iter().any(|a| a.starts_with(BUCKETS_ARG)) }
 
+/// Whether server `t` attaches the volume `s` verifies, through the badge `init` mints at `s`.
+fn reads_through(m: &Manifest, s: &Server, t: &Server) -> bool {
+    verified(m, s).is_some_and(|v| t.volume.as_ref() == Some(&v.name))
+}
+
 /// The label sets that use server `i`: its own, every server handed one of its endpoints or a
-/// volume's range at it (an `fsd` on that `blkd`'s disk), and, if it is shared, every principal
-/// domain with its own set.
+/// volume's range at it (an `fsd`, or a verified volume's `verityd`, on that `blkd`'s disk; an
+/// `fsd` at its volume's `verityd`), and, if it is shared, every principal domain with its own
+/// set.
 fn users<'a>(m: &'a Manifest, i: usize) -> Vec<Set<'a>> {
     let s = &m.servers[i];
     let mut sets = alloc::vec![set(&s.labels)];
-    let attaches =
-        |t: &Server| m.volumes.iter().any(|v| t.volume.as_ref() == Some(&v.name) && on_disk(m, v, s));
+    let holds = |t: &Server| m.volumes.iter().any(|v| on_disk(m, v, s) && holds_range(m, v, t));
     for t in &m.servers {
-        let range = s.program == BLKD && attaches(t);
+        let range = (s.program == BLKD && holds(t)) || reads_through(m, s, t);
         if range || t.handed.iter().any(|h| s.receives.contains(&h.endpoint)) {
             sets.push(set(&t.labels));
         }
@@ -76,14 +83,17 @@ fn refuse(at: String, sharing: Sharing) -> Result<(), Refusal> { Err(Refusal::Co
 
 /// R34 for a manifest with `confined` set.
 pub fn check(m: &Manifest) -> Result<(), Refusal> {
-    // An endpoint: its receiver and every server handed it.
+    // An endpoint: its receiver, every server handed it, and at a verifier's first, the server
+    // attaching its volume.
     for (i, s) in m.servers.iter().enumerate().filter(|(_, s)| !exempt(s)) {
         for (k, e) in s.receives.iter().enumerate() {
             let mut sets = alloc::vec![set(&s.labels)];
             sets.extend(
                 m.servers
                     .iter()
-                    .filter(|t| t.handed.iter().any(|h| &h.endpoint == e))
+                    .filter(|t| {
+                        t.handed.iter().any(|h| &h.endpoint == e) || (k == 0 && reads_through(m, s, t))
+                    })
                     .map(|t| set(&t.labels)),
             );
             if differ(&sets) {

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use common::{BOOT, Boot, QUOTA, Served};
 use redoubt_client::file::Connection;
-use redoubt_client::{Error, Lend, Refusal};
+use redoubt_client::{Error, Lend, Name, Refusal};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::path::MAX_NAME;
@@ -57,10 +57,16 @@ fn a_refusal_is_the_servers_and_costs_no_fid() {
         let mut lend = Lend::new(1).unwrap();
         let conn = Connection::attach(Endpoint::from_handle(conn), &mut lend).unwrap();
         for _ in 0..2 * MAX_FIDS {
-            assert_eq!(conn.open(&mut lend, "manifest.json", mode::OREAD).err(), Some(Error::Rerror));
-            assert_eq!(conn.open(&mut lend, "keyd", mode::OWRITE).err(), Some(Error::Rerror));
-            assert_eq!(conn.create(&mut lend, "", "new", 0o644, mode::OWRITE).err(), Some(Error::Rerror));
-            assert_eq!(conn.remove(&mut lend, "keyd"), Err(Error::Rerror));
+            assert_eq!(
+                conn.open(&mut lend, "manifest.json", mode::OREAD).err(),
+                Some(Error::Rerror(Name::NotFound))
+            );
+            assert_eq!(conn.open(&mut lend, "keyd", mode::OWRITE).err(), Some(Error::Rerror(Name::Other)));
+            assert_eq!(
+                conn.create(&mut lend, "", "new", 0o644, mode::OWRITE).err(),
+                Some(Error::Rerror(Name::Other))
+            );
+            assert_eq!(conn.remove(&mut lend, "keyd"), Err(Error::Rerror(Name::Other)));
         }
         // `..` never climbs above the connection's root: it cleans away, here and in the server.
         let file = conn.open(&mut lend, "../../keyd", mode::OREAD).unwrap();
@@ -155,9 +161,9 @@ fn files_are_created_written_and_removed() {
         assert_eq!(names, ["note", "draft"]);
         dir.close(&mut lend).unwrap();
         conn.remove(&mut lend, "home/a/draft").unwrap();
-        assert_eq!(conn.stat(&mut lend, "home/a/draft").err(), Some(Error::Rerror));
+        assert_eq!(conn.stat(&mut lend, "home/a/draft").err(), Some(Error::Rerror(Name::NotFound)));
         // Twice is refused, by the server.
-        assert_eq!(conn.remove(&mut lend, "home/a/draft"), Err(Error::Rerror));
+        assert_eq!(conn.remove(&mut lend, "home/a/draft"), Err(Error::Rerror(Name::NotFound)));
     });
     served.stop();
 }
@@ -176,7 +182,10 @@ fn a_minted_connection_cannot_climb_out_of_its_root_and_a_refused_quota_mints_no
     let minted = fake().as_process(launcher, || {
         let mut lend = Lend::new(1).unwrap();
         let conn = Connection::attach(Endpoint::from_handle(conn), &mut lend).unwrap();
-        assert_eq!(conn.new_connection(&mut lend, "home/a", QUOTA + 1).err(), Some(Error::Rerror));
+        assert_eq!(
+            conn.new_connection(&mut lend, "home/a", QUOTA + 1).err(),
+            Some(Error::Rerror(Name::Other))
+        );
         assert_eq!(fake().held(launcher).0, held, "a refused quota brought no handle");
         conn.new_connection(&mut lend, "home/a", QUOTA).unwrap().0
     });
@@ -187,7 +196,11 @@ fn a_minted_connection_cannot_climb_out_of_its_root_and_a_refused_quota_mints_no
         assert_eq!(conn.stat(&mut lend, "note").unwrap().length, 5);
         // Every way up cleans back to its own root, where `b` is not.
         for path in ["../b/secret", "../../home/b/secret", "/../b/secret", "note/../../b/secret"] {
-            assert_eq!(conn.open(&mut lend, path, mode::OREAD).err(), Some(Error::Rerror), "{path}");
+            assert_eq!(
+                conn.open(&mut lend, path, mode::OREAD).err(),
+                Some(Error::Rerror(Name::NotFound)),
+                "{path}"
+            );
         }
         let root = conn.open(&mut lend, "..", mode::OREAD).unwrap();
         let names: Vec<_> = root.read_dir(&mut lend, 0).unwrap().0.into_iter().map(|e| e.name).collect();
@@ -247,4 +260,29 @@ fn a_gone_server_is_disconnected_every_time() {
         }
     });
     assert_eq!(fake().held(session).0, held, "and no handle came of it");
+}
+
+/// An `Rerror` keeps its name, never its text (servers/wire.md, "Error names"): a name that is
+/// not there, whether the server answers `file does not exist` or walks only part of the path, is
+/// `not_found`; any other refusal is `Other`. A reader tells a missing file from a refused one by
+/// this alone (fsd's `corrupt` is `Other`: servers/fsd/tests/fsd.rs).
+#[test]
+fn an_rerror_keeps_its_name_not_found_against_the_rest() {
+    let served = Served::start(|_, request| {
+        drop(request);
+        Ok(())
+    });
+    let (client, conn) = served.client(1001, 1);
+    fake().as_process(client, || {
+        let mut lend = Lend::new(1).unwrap();
+        let conn = Connection::attach(Endpoint::from_handle(conn), &mut lend).unwrap();
+        // The first name is not there: the server's `file does not exist`.
+        assert_eq!(conn.open(&mut lend, "nowhere", mode::OREAD).err(), Some(Error::Rerror(Name::NotFound)));
+        // The walk stops after `home`: a short `Rwalk`, not an `Rerror`, and the same name.
+        assert_eq!(conn.stat(&mut lend, "home/nobody").err(), Some(Error::Rerror(Name::NotFound)));
+        // `home` is there but not empty: the server's `permission denied`.
+        assert_eq!(conn.remove(&mut lend, "home"), Err(Error::Rerror(Name::Other)));
+        conn.open(&mut lend, "home/a/note", mode::OREAD).unwrap().close(&mut lend).unwrap();
+    });
+    served.stop();
 }

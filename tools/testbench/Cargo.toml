@@ -18,7 +18,8 @@ libc = "0.2"                                                             # openp
 redoubt-signing = { path = "../../libs/signing" }                        # the bundle signature's preimage
 redoubt-blkd = { path = "../../servers/blkd" }                           # a case disk's GPT, written by blkd's own builder
 redoubt-fsd = { path = "../../servers/fsd" }                             # a disk recipe's volumes, packed by fsd's own code
-sha2 = { version = "0.11", default-features = false }                    # the userland disk's object names (userland.rs)
+redoubt-verity = { path = "../../libs/verity" }                          # a verified volume's tree, as verityd checks it (disk.rs)
+sha2 = { version = "0.11", default-features = false }                    # a run directory's and a guest file's names
 
 stub = { path = "../../stub" } # the largest launched stack
 redoubt-client = { path = "../../libs/client" } # the launcher's default stack size and paint format

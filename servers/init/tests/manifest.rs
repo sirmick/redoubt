@@ -6,7 +6,7 @@
 use redoubt_init::check::{MANIFEST, Machine, Plan};
 use redoubt_init::fuzz::{BUNDLE_KEY, ENTRIES, machine, virt_devices};
 use redoubt_init::manifest::{
-    Budget, Device, DeviceUse, Handed, Label, LabelSet, Net, Principal, Server, Volume,
+    Budget, Device, DeviceUse, Handed, Label, LabelSet, Net, Principal, Server, Verity, Volume,
 };
 use redoubt_init::refusal::{Refusal, Sharing, Why};
 use redoubt_init::{ARENA_PAGES, Manifest, check, read};
@@ -22,11 +22,12 @@ const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0
 fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
 
 /// The image's manifest with one disk: without the userland disk (`disk1`, its `blkd`, its
-/// volume and `fsd`, and `beamlet`, which reads it).
+/// volume, its verifier and `fsd`, and `beamlet`, which reads it).
 fn without_userland() -> Manifest {
     let mut m = image();
     m.volumes.retain(|v| v.name != "system");
-    m.servers.retain(|s| !["beamlet", "blkd:system", "fsd:system"].contains(&s.name.as_str()));
+    m.servers
+        .retain(|s| !["beamlet", "blkd:system", "verity:system", "fsd:system"].contains(&s.name.as_str()));
     m.devices.retain(|d| d.name != "disk1");
     m
 }
@@ -92,10 +93,9 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert!(plan.placements[0].is_empty());
     // No principals: only the bundle key is asked about.
     assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
-    // keyd and consoled: init alone calls them; bootfsd: init and beamlet; ipd: netd's badge;
-    // fsd:data: nobody's yet, a principal's connection being the steward's to grant; fsd:system:
-    // beamlet's.
-    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 2), (5, 1), (6, 0), (8, 1)]);
+    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; fsd:data: nobody's
+    // yet, a principal's connection being the steward's to grant; fsd:system: beamlet's.
+    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0), (9, 1)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
 }
@@ -177,16 +177,17 @@ fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
 #[test]
 fn the_image_manifest_s_bound() {
     let plan = on_virt(&image()).unwrap();
-    // The arena (256 + 3 tables), 9 receive and 10 exit endpoints and init's reports endpoint
-    // (beamlet receives on none), 10 process objects, 10 blocks with 3 tables each, 10 watching
+    // The arena (256 + 3 tables), 10 receive and 11 exit endpoints and init's reports endpoint
+    // (beamlet receives on none), 11 process objects, 11 blocks with 3 tables each, 11 watching
     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
     // batch of beamlet's image + 3, stack 17 + 3), the lend (2 + 3), and one handle-table page:
-    // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 9 + 6 + 40 + 3 + 1 = 59
-    // added (the two volumes' ranges among the 6 badges) pass page 0's 64.
+    // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 6 + 44 + 3 + 1 =
+    // 64 added (the three volume ranges, fsd:data's, fsd:system's at verity:system and
+    // verity:system's at blkd:system, among the 6 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 20 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 17 + 3) + 1 + 5);
+    assert_eq!(plan.bound, 259 + 22 + 11 + 44 + 88 + (4 + 3 + 64 + 3 + 17 + 3) + 1 + 5);
 }
 
 /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
@@ -194,7 +195,7 @@ fn the_image_manifest_s_bound() {
 #[test]
 fn a_volume_s_range_badge_counts_in_the_bound_as_a_handed_item_does() {
     let mut m = without_volumes();
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None });
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None, verity: None });
     let bound = |m: &Manifest| on_virt(m).unwrap().bound;
     let mut handed = m.clone();
     server(&mut handed, "ipd").handed.push(Handed { endpoint: "bootfsd".into(), badge: 1 });
@@ -446,9 +447,10 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let devices = virt_devices();
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
-    // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, netd 1024, ipd 4096, fsd:data
-    // and fsd:system 1024 each, beamlet 24,576 pages, and a page each for the budgets.
-    let pages = 256 + 1024 + 640 + 512 * 2 + 1024 + 4096 + 1024 * 2 + 24_576 + 10;
+    // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
+    // ipd 4096, fsd:data and fsd:system 1024 each, beamlet 24,576 pages, and a page each for the
+    // budgets.
+    let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 24_576 + 11;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),
@@ -456,11 +458,11 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     );
     machine.system.pages_limit += 1;
     assert!(on(&m, &machine).is_ok());
-    machine.system.processes_usage = machine.system.processes_limit - 9;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 10, free: 9 });
+    machine.system.processes_usage = machine.system.processes_limit - 10;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 11, free: 10 });
     machine.system.processes_usage = 0;
-    machine.system.weight_carved = machine.system.weight_limit - 4599;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 4600, free: 4599 });
+    machine.system.weight_carved = machine.system.weight_limit - 4699;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 4700, free: 4699 });
 }
 
 // ---- public ----
@@ -514,12 +516,13 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
     let mut m = without_volumes();
     secrets(&mut m);
     m.principals.push(alice());
-    m.volumes.push(Volume { name: "scratch".into(), partition: 0, labels: vec![], disk: None });
+    m.volumes.push(Volume { name: "scratch".into(), partition: 0, labels: vec![], disk: None, verity: None });
     m.volumes.push(Volume {
         name: "vault".into(),
         partition: 2,
         labels: vec!["alice-secrets".into()],
         disk: None,
+        verity: None,
     });
     server(&mut m, "keyd").volume = Some("vault".into());
     server(&mut m, "bootfsd").volume = Some("scratch".into());
@@ -528,7 +531,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
         redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap())
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=4", "system.index"]);
+    assert_eq!(args(&m, "bootfsd"), ["buckets=4"]);
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 
@@ -536,7 +539,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
 /// is minted at its disk's `blkd`; and no entry carries an argument `init` passes itself.
 #[test]
 fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
-    let data = || Volume { name: "data".into(), partition: 0, labels: vec![], disk: None };
+    let data = || Volume { name: "data".into(), partition: 0, labels: vec![], disk: None, verity: None };
     let mut m = without_volumes();
     m.volumes = vec![data(), Volume { name: "other".into(), ..data() }];
     refused_at(&m, "volumes[1].partition", Why::Twice);
@@ -574,7 +577,7 @@ fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
 #[test]
 fn no_server_is_handed_a_badge_at_blkd() {
     let mut m = without_volumes();
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None });
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None, verity: None });
     m.servers[0].volume = Some("data".into());
     assert!(on_virt(&m).is_ok());
     let blkd = server(&mut m, "blkd").receives[0].clone();
@@ -605,6 +608,7 @@ fn second_disk(m: &mut Manifest, device: &str, suffix: &str, labels: Vec<String>
         partition: 0,
         labels: labels.clone(),
         disk: Some(blkd.clone()),
+        verity: None,
     });
     let base = server(&mut image(), "blkd").clone();
     m.servers.push(Server {
@@ -830,7 +834,7 @@ fn confined_refuses_two_label_sets_on_one_volume() {
     m.confined = true;
     secrets(&mut m);
     m.principals.push(alice());
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None });
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None, verity: None });
     // A labelled server attaching an unlabelled volume.
     m.servers[0].volume = Some("data".into());
     m.servers[0].labels = vec!["alice-secrets".into()];
@@ -869,7 +873,13 @@ fn confined_refuses_two_label_sets_on_one_disk() {
     }
     // An fsd for each volume, each carrying its volume's set.
     for (name, partition, label) in [("vault", 0, "alice-secrets"), ("other", 1, "alice-other")] {
-        m.volumes.push(Volume { name: name.into(), partition, labels: vec![label.into()], disk: None });
+        m.volumes.push(Volume {
+            name: name.into(),
+            partition,
+            labels: vec![label.into()],
+            disk: None,
+            verity: None,
+        });
         let endpoint = format!("fsd:{name}");
         m.servers.push(Server {
             name: endpoint.clone(),
@@ -944,7 +954,7 @@ fn confined_refuses_a_server_instance_serving_two_label_sets() {
     secrets(&mut m);
     m.principals.push(alice());
     let secret = || vec![String::from("alice-secrets")];
-    m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: secret(), disk: None });
+    m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: secret(), disk: None, verity: None });
     server(&mut m, "blkd").devices.clear();
     let base = server(&mut image(), "fsd:data").clone();
     m.servers.push(Server { labels: secret(), volume: Some("vault".into()), ..base });
@@ -971,7 +981,7 @@ fn confined_counts_only_a_shared_servers_own_label_set() {
         ..alice()
     });
     let secret = || vec![String::from("alice-secrets")];
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret(), disk: None });
+    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret(), disk: None, verity: None });
     server(&mut m, "blkd").labels = secret();
     let base = server(&mut image(), "fsd:data").clone();
     m.servers.push(Server { labels: secret(), ..base.clone() });
@@ -1090,4 +1100,199 @@ fn the_fuzz_corpus_still_passes() {
     }
     assert!(ran >= 1, "the corpus is there: {ran} inputs");
     redoubt_init::fuzz::check_one(IMAGE.as_bytes());
+}
+
+// ---- verified volumes ----
+
+/// A root of the right form: the tests here never boot it.
+const ROOT: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+/// A verified volume `name` (servers/verityd.md): the volume on `disk`'s GPT entry `partition`,
+/// its `verityd` `verity:NAME` and its `fsd` `fsd:NAME`, all under `labels`.
+fn verified_volume(m: &mut Manifest, name: &str, partition: i64, labels: Vec<String>, disk: Option<&str>) {
+    let verifier = format!("verity:{name}");
+    m.volumes.push(Volume {
+        name: name.into(),
+        partition,
+        labels: labels.clone(),
+        disk: disk.map(Into::into),
+        verity: Some(Verity { server: verifier.clone(), root: ROOT.into(), blocks: 100 }),
+    });
+    let declared = server(&mut image(), "verity:system").clone();
+    m.servers.push(Server {
+        name: verifier.clone(),
+        labels: labels.clone(),
+        receives: vec![verifier],
+        ..declared
+    });
+    let base = server(&mut image(), "fsd:data").clone();
+    let fsd = format!("fsd:{name}");
+    m.servers.push(Server {
+        name: fsd.clone(),
+        labels,
+        volume: Some(name.into()),
+        receives: vec![fsd.clone()],
+        args: vec![format!("endpoint={fsd}"), "buckets=4".into()],
+        ..base
+    });
+}
+
+fn named<'m>(m: &'m Manifest, name: &str) -> &'m Server { m.servers.iter().find(|s| s.name == name).unwrap() }
+
+/// A verified volume's server gets its `volume` badge, 1, at its verifier's endpoint, and the
+/// verifier the volume's range at the disk's `blkd`, with `endpoint=`, `labels=`, `root=` and
+/// `blocks=` from `init` (servers/init.md, Volumes; servers/verityd.md, "Arguments").
+#[test]
+fn a_verified_volume_s_server_reads_through_its_verifier() {
+    use redoubt_init::check::{args, range};
+    let mut m = without_volumes();
+    verified_volume(&mut m, "data", 2, vec![], None);
+    assert!(on_virt(&m).is_ok());
+    assert_eq!(range(&m, named(&m, "fsd:data")), Some(("verity:data", 1)));
+    assert_eq!(range(&m, named(&m, "verity:data")), Some(("blkd", 3)));
+    assert_eq!(range(&m, named(&m, "blkd")), None);
+    let root = format!("root={ROOT}");
+    assert_eq!(args(&m, named(&m, "verity:data")), ["endpoint=verity:data", root.as_str(), "blocks=100"]);
+    assert_eq!(args(&m, named(&m, "fsd:data")), ["endpoint=fsd:data", "buckets=4"]);
+    // Labelled: the verifier, the server and blkd each get the volume's ids.
+    let mut m = without_volumes();
+    secrets(&mut m);
+    m.principals.push(alice());
+    verified_volume(&mut m, "vault", 0, vec!["alice-secrets".into()], None);
+    assert!(on_virt(&m).is_ok());
+    let args_of = |name: &str| args(&m, named(&m, name));
+    assert_eq!(args_of("verity:vault"), ["endpoint=verity:vault", "labels=7", root.as_str(), "blocks=100"]);
+    assert_eq!(args_of("fsd:vault").last().unwrap(), "labels=7");
+    assert_eq!(args_of("blkd"), ["endpoint=blkd", "labels.0=7"]);
+    // Beside it, an unverified volume's server keeps its range at blkd.
+    m.volumes.push(Volume { name: "plain".into(), partition: 1, labels: vec![], disk: None, verity: None });
+    server(&mut m, "keyd").volume = Some("plain".into());
+    assert!(on_virt(&m).is_ok());
+    assert_eq!(range(&m, named(&m, "keyd")), Some(("blkd", 2)));
+}
+
+/// Each refusal of the `verity` key, naming the field (servers/init.md, Volumes).
+#[test]
+fn a_verified_volume_s_key_and_verifier_are_refused_naming_the_field() {
+    let base = || {
+        let mut m = without_volumes();
+        verified_volume(&mut m, "data", 0, vec![], None);
+        assert!(on_virt(&m).is_ok());
+        m
+    };
+    let verity = |m: &mut Manifest| m.volumes[0].verity.as_mut().unwrap().clone();
+    let with = |change: &dyn Fn(&mut Verity)| {
+        let mut m = base();
+        let mut v = verity(&mut m);
+        change(&mut v);
+        m.volumes[0].verity = Some(v);
+        m
+    };
+    for root in [ROOT.to_uppercase(), ROOT[1..].to_string(), format!("{ROOT}0"), ROOT.replace('a', "g")] {
+        let root = root.clone();
+        refused_at(&with(&|v| v.root = root.clone()), "volumes[0].verity.root", Why::Value);
+    }
+    for blocks in [0, u64::MAX] {
+        refused_at(&with(&|v| v.blocks = blocks), "volumes[0].verity.blocks", Why::Value);
+    }
+    refused_at(&with(&|v| v.server = "nobody".into()), "volumes[0].verity.server", Why::Unknown);
+    refused_at(&with(&|v| v.server = "fsd:data".into()), "volumes[0].verity.server", Why::NotVerityd);
+    // The servers here: keyd, consoled, bootfsd, blkd, netd, ipd, then verity:data and fsd:data.
+    let verifier = 6;
+    assert_eq!(base().servers[verifier].name, "verity:data");
+    // A verifier named by two volumes, and one named by none.
+    let mut m = base();
+    let mut second = m.volumes[0].clone();
+    second.name = "more".into();
+    second.partition = 1;
+    m.volumes.push(second);
+    refused_at(&m, "volumes[1].verity.server", Why::Twice);
+    let mut m = base();
+    let mut spare = m.servers[verifier].clone();
+    spare.name = "spare".into();
+    spare.receives = vec!["spare".into()];
+    m.servers.push(spare);
+    refused_at(&m, "servers[8]", Why::NoVolume);
+    // A verifier attaching a volume itself, receiving on nothing, or carrying an argument.
+    let mut m = base();
+    m.volumes.push(Volume { name: "other".into(), partition: 1, labels: vec![], disk: None, verity: None });
+    m.servers[verifier].volume = Some("other".into());
+    refused_at(&m, &format!("servers[{verifier}].volume"), Why::Verifier);
+    let mut m = base();
+    m.servers[verifier].receives.clear();
+    refused_at(&m, &format!("servers[{verifier}].receives"), Why::Verifier);
+    for arg in ["endpoint=verity:data", "labels=7", &format!("root={ROOT}"), "blocks=100", "buckets=4"] {
+        let mut m = base();
+        m.servers[verifier].args.push(arg.into());
+        refused_at(&m, &format!("servers[{verifier}].args[0]"), Why::Argument);
+    }
+    // A verifier whose labels are not its volume's.
+    let mut m = base();
+    secrets(&mut m);
+    m.principals.push(alice());
+    m.servers[verifier].labels = vec!["alice-secrets".into()];
+    refused_at(&m, &format!("servers[{verifier}].labels"), Why::VerifierLabels);
+    // A badge handed at a verifier's endpoint would be the volume's range in another's hands.
+    let mut m = base();
+    server(&mut m, "netd").handed.push(Handed { endpoint: "verity:data".into(), badge: 2 });
+    let netd = m.servers.iter().position(|s| s.name == "netd").unwrap();
+    let k = m.servers[netd].handed.len() - 1;
+    refused_at(&m, &format!("servers[{netd}].handed[{k}].endpoint"), Why::VerifierHanded);
+}
+
+/// Each verifier is one more server and one more minted range: what it costs `init` in `root`
+/// beside the same volume unverified is one server's pages (two endpoints, a process object, a
+/// block and its tables, a watching thread) and here the handle-table page its handles open.
+#[test]
+fn a_verifier_costs_init_one_server_and_its_range() {
+    let mut plain = without_volumes();
+    plain.volumes.push(Volume {
+        name: "data".into(),
+        partition: 0,
+        labels: vec![],
+        disk: None,
+        verity: None,
+    });
+    plain.servers.push(server(&mut image(), "fsd:data").clone());
+    let mut verified = without_volumes();
+    verified_volume(&mut verified, "data", 0, vec![], None);
+    let bound = |m: &Manifest| on_virt(m).unwrap().bound;
+    // 22 handles at the start: 42 added fill page 0 exactly, and the verifier's 6 open page 1.
+    assert_eq!(bound(&verified) - bound(&plain), 2 + 1 + 4 + 8 + 1);
+}
+
+/// R34 (confined placement) with verified volumes: each label set reads its own verified volume
+/// through its own disk, `blkd`, `verityd` and `fsd`, and boots; an {alice-secrets} `fsd` on the
+/// unlabelled verifier shares the verifier's endpoint across two sets, and is refused there.
+#[test]
+fn confined_gives_each_label_set_its_own_verifier() {
+    let mut m = without_volumes();
+    m.confined = true;
+    secrets(&mut m);
+    m.principals.push(alice());
+    let secret = || vec![String::from("alice-secrets")];
+    disk1(&mut m);
+    m.devices.push(Device { name: "disk2".into(), base: Some(0x1000_5000), irq: Some(5), dma: true });
+    for (device, suffix, labels) in [("disk1", "", vec![]), ("disk2", "-l", secret())] {
+        let blkd = format!("blkd:system{suffix}");
+        let base = server(&mut image(), "blkd").clone();
+        m.servers.push(Server {
+            name: blkd.clone(),
+            labels: labels.clone(),
+            receives: vec![blkd.clone()],
+            devices: vec![DeviceUse { device: device.into(), name: "disk".into() }],
+            args: vec![format!("endpoint={blkd}")],
+            ..base
+        });
+        verified_volume(&mut m, &format!("system{suffix}"), 0, labels, Some(blkd.as_str()));
+    }
+    let devices = virt_devices();
+    let machine = machine(&devices, &ENTRIES);
+    assert!(on(&m, &machine).is_ok());
+    server(&mut m, "fsd:system").labels = secret();
+    let verifier = m.servers.iter().position(|s| s.name == "verity:system").unwrap();
+    assert_eq!(
+        on(&m, &machine).unwrap_err(),
+        Refusal::Confined { at: format!("servers[{verifier}].receives[0]"), sharing: Sharing::Endpoint }
+    );
 }

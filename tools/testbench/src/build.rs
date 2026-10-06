@@ -9,6 +9,7 @@ use ed25519_compact::{KeyPair, Seed};
 use serde::Deserialize;
 
 use crate::case::{Corruption, HostTests, Program};
+use crate::disk::Verified;
 use crate::target::Target;
 use crate::userland::Staged;
 
@@ -200,9 +201,6 @@ impl Builder {
             }
             Program::Erlang { erlang } => return self.erlc(erlang),
             Program::Otp { otp } => return self.otp_module(otp),
-            Program::UserlandIndex { userland_index } => {
-                return Ok((String::from("system.index"), self.userland(userland_index)?.index));
-            }
             Program::Zeros { zeros } => return self.zeros(*zeros),
             Program::TestProgram(bin) | Program::Bin { bin, .. } => {
                 ("test-programs", bin.as_str(), &[], None)
@@ -217,8 +215,10 @@ impl Builder {
         Ok((bin.to_string(), built))
     }
 
-    /// The userland disk `recipe` packs, staged once in this run: its objects' directory, its
-    /// `system.index` and what the index names (`userland.rs`).
+    /// The userland disk `recipe` packs, staged and packed once in this run: its objects'
+    /// directory, the disk, and its verified volumes' roots (`userland.rs`, `disk.rs`). The
+    /// bundle's manifest and every boot take this one pack, so the root the manifest pins is the
+    /// disk's.
     pub fn userland(&self, recipe: &Path) -> Result<Staged> {
         let mut staged = self.staged.lock().unwrap();
         if let Some((_, done)) = staged.iter().find(|(r, _)| r == recipe) {
@@ -226,11 +226,13 @@ impl Builder {
         }
         let stem = recipe.file_stem().context("a recipe with no name")?.to_string_lossy();
         let dir = self.run.join("userland").join(&*stem);
-        let (objects, index) = (dir.join("objects"), dir.join("system.index"));
+        let (objects, image) = (dir.join("objects"), dir.join("userland.img"));
         let loaded = crate::disk::Recipe::load(&self.workspace.join(recipe))?;
         let wanted = loaded.objects.as_ref().with_context(|| format!("{}: no objects", recipe.display()))?;
-        let (names, _) = crate::userland::stage(&self.workspace, wanted, &objects, &index)?;
-        let done = Staged { objects, index, names };
+        crate::userland::stage(&self.workspace, wanted, &objects)?;
+        let (disk, verified) = crate::disk::pack(&loaded, &self.workspace, Some(&objects))?;
+        std::fs::write(&image, disk).with_context(|| format!("writing {}", image.display()))?;
+        let done = Staged { objects, image, verified };
         staged.push((recipe.to_path_buf(), done.clone()));
         Ok(done)
     }
@@ -426,6 +428,32 @@ pub fn programs_entry(programs: &[(String, PathBuf)], budgets: &[&[String]]) -> 
     text.into_bytes()
 }
 
+/// `manifest` with each of `verified`'s roots and data blocks written into the `verity` of the
+/// `volumes` entry of its name (servers/init.md, "Verified volumes"): the pack's own, so the
+/// signed manifest pins the disk the case boots. A verified volume the manifest does not verify is
+/// refused. With `wrong_root`, the root's first digit is changed: a manifest pinning another root.
+pub fn pin_roots(manifest: &[u8], verified: &[Verified], wrong_root: bool) -> Result<Vec<u8>> {
+    use serde_json::Value;
+    let mut m: Value = serde_json::from_slice(manifest).context("a manifest is JSON")?;
+    let volumes = m.get_mut("volumes").and_then(Value::as_array_mut).context("a manifest with volumes")?;
+    for v in verified {
+        let verity = volumes
+            .iter_mut()
+            .find(|e| e["name"] == v.name.as_str())
+            .and_then(|e| e.get_mut("verity"))
+            .and_then(Value::as_object_mut)
+            .with_context(|| format!("the manifest does not verify volume {}", v.name))?;
+        let mut root = v.root_hex();
+        if wrong_root {
+            let other = if root.starts_with('0') { "1" } else { "0" };
+            root.replace_range(..1, other);
+        }
+        verity.insert("root".into(), root.into());
+        verity.insert("blocks".into(), v.geometry.data_blocks().to_string().into());
+    }
+    Ok(serde_json::to_vec_pretty(&m)?)
+}
+
 /// Build the boot bundle, sign it, and write `signature || tar` to `path`: the kernel, the first
 /// program in `init`'s place, the `programs` entry the tester reads (`listing`; a case that
 /// brings its own as a file has none here), the other programs, then `files`, the data entries.
@@ -514,6 +542,33 @@ pub fn miri_available() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pack's root and block count go into the `verity` of the volume of its name, and
+    /// nowhere else; a volume the manifest does not verify is refused; a wrong root differs in
+    /// its first digit only.
+    #[test]
+    fn the_manifest_pins_the_packs_root() {
+        let geometry = redoubt_verity::Geometry::new(1000).unwrap();
+        let v = Verified { name: "system".into(), root: [0xab; 32], geometry, start: 0 };
+        let image = br#"{ "volumes": [
+            { "name": "data", "partition": 0 },
+            { "name": "system", "partition": 0, "verity": { "server": "verity:system", "root": "00", "blocks": "1" } }
+        ] }"#;
+        let pinned: serde_json::Value =
+            serde_json::from_slice(&pin_roots(image.as_slice(), &[v.clone()], false).unwrap()).unwrap();
+        let system = pinned["volumes"].as_array().unwrap().iter().find(|e| e["name"] == "system").unwrap();
+        assert_eq!(system["verity"]["root"], "ab".repeat(32));
+        assert_eq!(system["verity"]["blocks"], "1000");
+        assert_eq!(system["verity"]["server"], "verity:system");
+        let data = pinned["volumes"].as_array().unwrap().iter().find(|e| e["name"] == "data").unwrap();
+        assert!(data.get("verity").is_none());
+        let wrong: serde_json::Value =
+            serde_json::from_slice(&pin_roots(image.as_slice(), &[v.clone()], true).unwrap()).unwrap();
+        let root = wrong["volumes"][1]["verity"]["root"].as_str().unwrap().to_string();
+        assert_eq!(root, format!("0{}", &"ab".repeat(32)[1..]));
+        let other = Verified { name: "data".into(), ..v };
+        assert!(pin_roots(image.as_slice(), &[other], false).is_err(), "data is not verified");
+    }
 
     /// A Miri case runs the named test files under nightly Miri with isolation off; a plain case
     /// runs every test target natively.

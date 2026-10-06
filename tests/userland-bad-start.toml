@@ -1,4 +1,4 @@
-description = "The attack: one byte flipped in the userland disk's object for the start module, Elixir.Redoubt.Shell (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/kernel/boot.md, R75). beamlet checks it before the VM runs anything, says why on its console and parks: it does not exit, so init neither restarts it nor reboots the machine, and the rest of the boot goes on. The verdict is beamlet's check against the signed bundle's index and init's lines (rule F)"
+description = "The attack: one bit flipped, after the pack, in the userland volume's data of the start module, Elixir.Redoubt.Shell, while the signed manifest pins the pack's root (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/kernel/boot.md, R75; docs/servers/verityd.md, R76). verityd refuses the block and names it, fsd fails the read, and beamlet, reading the start module before the VM runs anything, says why on its console and parks: it does not exit, so init neither restarts it nor reboots the machine, and the rest of the boot goes on. The verdict is verityd's check against the signed root and init's lines (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -6,11 +6,11 @@ recipe = "image/boot.toml"
 # the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
 memory_mib = 1024
 timeout_secs = 400
-# beamlet reads the index once init has pushed it and sealed bootfsd; init's last line may come
-# before or after its check, so only the parked line is ordered after the push.
+# verityd says its line before it fails the read, so it comes before beamlet's.
 expect = [
-    '^init: 1 public entries pushed to bootfsd, and sealed$',
-    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell not loaded: its object does not match system.index; parked$',
+    '^init: started beamlet, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] verityd: block [0-9]+ does not match the tree$',
+    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell not loaded: its file could not be read: other; parked$',
 ]
 forbid = [
     'init: refused the boot',
@@ -18,6 +18,7 @@ forbid = [
     'init: restarted beamlet',
     'init: rebooting',
     'Redoubt shell, on Elixir',
+    'verityd: the volume is refused',
 ]
 
 [userland]
@@ -29,4 +30,3 @@ recipe = "image/disk.toml"
 stage = "tests/data/fsd/stage"
 
 [net]
-

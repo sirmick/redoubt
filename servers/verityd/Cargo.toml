@@ -1,0 +1,16 @@
+[package]
+name = "redoubt-verityd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "verityd: one verified volume, its range at blkd checked block by block against a pinned root and served on blkd's protocol"
+
+[[bin]]
+name = "verityd"
+path = "src/bin/verityd.rs"
+
+# The runtime, and the tree's one definition; nothing else reads what the range holds
+# (TENETS.md 5).
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+redoubt-verity = { path = "../../libs/verity" }

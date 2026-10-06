@@ -144,7 +144,7 @@ impl Out {
         let mut rest = text.as_bytes();
         while !rest.is_empty() {
             match self.console.write(&mut self.lend, rest)? {
-                0 => return Err(Error::Rerror),
+                0 => return Err(Error::Rerror(redoubt_client::Name::Other)),
                 n => rest = &rest[n..],
             }
         }

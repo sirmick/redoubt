@@ -177,6 +177,20 @@ pub fn note_console(startup: &Startup) {
     }
 }
 
+/// Says `line` on the console `init` gave this process, `/dev/cons` in its namespace, if it has
+/// one: an attach, an open, a write and a clunk on a lend of its own. A console that fails is not
+/// retried: for a server (`fsd`, `verityd`), serving matters more than the line.
+pub fn say(startup: &Startup, line: &str) {
+    let Some((_, console)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") else { return };
+    let Ok(mut lend) = Lend::new(1) else { return };
+    let console = Connection::new(Endpoint::from_handle(console));
+    let _ = console
+        .attach(&mut lend, 0, "")
+        .and_then(|_| console.open(&mut lend, 0, mode::OWRITE))
+        .and_then(|_| console.write(&mut lend, 0, 0, line.as_bytes()));
+    let _ = console.clunk(&mut lend, 0);
+}
+
 /// The panic handler's body ([`panic_handler!`]): runs `hook`, if any, reports the panic, and
 /// exits with [`exit::PANIC`].
 #[cfg(target_os = "none")]

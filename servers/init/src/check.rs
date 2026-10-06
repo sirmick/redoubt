@@ -49,8 +49,17 @@ pub const LABELS_ARG: &str = "labels=";
 /// The prefix of the arguments giving `blkd` each labelled range's ids, `labels.P=ID,...` for
 /// GPT entry P (servers/blkd.md, "Ranges and badges").
 pub const RANGE_LABELS_ARG: &str = "labels.";
-/// The argument naming the endpoint a `blkd` receives on (servers/blkd.md, "Its endpoint").
+/// The argument naming the endpoint a `blkd` or a `verityd` receives on (servers/blkd.md, "Its
+/// endpoint").
 pub const ENDPOINT_ARG: &str = "endpoint=";
+/// The program that verifies a volume (servers/verityd.md): `init` mints the volume's range at it
+/// for the volume's server, and its own range at the disk's `blkd`.
+pub const VERITYD: &str = "verityd";
+/// The one badge a `verityd` serves, which `init` mints for its volume's server.
+pub const VERIFIED_BADGE: u64 = 1;
+/// The arguments giving a `verityd` the root and the data blocks it checks against.
+pub const ROOT_ARG: &str = "root=";
+pub const BLOCKS_ARG: &str = "blocks=";
 /// Where [`Plan::keys`] says the bundle's verifying key comes from.
 pub const BUNDLE_KEY: &str = "bundle key";
 
@@ -106,6 +115,7 @@ pub fn check(m: &Manifest, machine: &Machine, bundle_key: [u8; KEY_LEN]) -> Resu
     references(m, machine)?;
     init_calls(m)?;
     volumes(m)?;
+    verifiers(m)?;
     let placements = devices(m, machine)?;
     budgets(m)?;
     fit(m, &machine.system)?;
@@ -265,6 +275,44 @@ pub fn blkd<'m>(m: &'m Manifest, v: &Volume) -> Option<&'m Server> {
 /// Whether volume `v` is on the disk the `blkd` `s` serves.
 pub fn on_disk(m: &Manifest, v: &Volume, s: &Server) -> bool { blkd(m, v).is_some_and(|b| b.name == s.name) }
 
+/// The `verityd` entry verifying volume `v`, if `v` is verified.
+pub fn verifier<'m>(m: &'m Manifest, v: &Volume) -> Option<&'m Server> {
+    let name = &v.verity.as_ref()?.server;
+    m.servers.iter().find(|s| &s.name == name)
+}
+
+/// The volume server `s` verifies, if any names it.
+pub fn verified<'m>(m: &'m Manifest, s: &Server) -> Option<&'m Volume> {
+    m.volumes.iter().find(|v| v.verity.as_ref().is_some_and(|verity| verity.server == s.name))
+}
+
+/// Where `init` mints server `s`'s `volume` handle, and its badge there: for a volume's server,
+/// the badge of its GPT entry + 1 at its disk's `blkd` (servers/blkd.md, "Ranges and badges"), or,
+/// for a verified volume, [`VERIFIED_BADGE`] at its verifier's endpoint; for a verifier, its
+/// volume's range at the disk's `blkd` (servers/verityd.md).
+pub fn range<'m>(m: &'m Manifest, s: &Server) -> Option<(&'m str, u64)> {
+    let at_blkd = |v: &Volume| {
+        let endpoint = blkd(m, v)?.receives.first()?;
+        Some((endpoint.as_str(), v.partition as u64 + 1))
+    };
+    match s.volume.as_ref().and_then(|n| m.volumes.iter().find(|v| &v.name == n)) {
+        Some(v) => match verifier(m, v) {
+            Some(verifier) => verifier.receives.first().map(|e| (e.as_str(), VERIFIED_BADGE)),
+            None => at_blkd(v),
+        },
+        None => verified(m, s).and_then(at_blkd),
+    }
+}
+
+/// Whether server `t` holds volume `v`'s range at its disk's `blkd`: the verifier of a verified
+/// volume, the server attaching any other.
+pub fn holds_range(m: &Manifest, v: &Volume, t: &Server) -> bool {
+    match verifier(m, v) {
+        Some(verifier) => verifier.name == t.name,
+        None => t.volume.as_ref() == Some(&v.name),
+    }
+}
+
 /// Each volume is one GPT entry of its disk, served by at most one server (R47 (one volume per
 /// instance)), and a volume a server attaches has its disk's `blkd`, receiving on an endpoint, to
 /// mint its range at. With more than one `blkd`, every volume names its disk. No entry is handed a
@@ -326,6 +374,56 @@ fn volumes(m: &Manifest) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Each verified volume names a `verityd` entry that no other volume names, and each `verityd`
+/// verifies one volume (servers/verityd.md, R76 (verified volumes)). A verifier receives on an
+/// endpoint, attaches no volume itself, carries no argument (every one is `init`'s), has its
+/// volume's label set, and has its volume's disk's `blkd`, receiving, to hold its range at. No
+/// entry is handed a badge where a verifier receives: the one badge there is the volume's range,
+/// which only `init` mints, for the volume's server.
+fn verifiers(m: &Manifest) -> Result<(), Refusal> {
+    for (i, v) in m.volumes.iter().enumerate() {
+        let Some(verity) = &v.verity else { continue };
+        let path = || format!("volumes[{i}].verity.server");
+        if verifier(m, v).is_none_or(|s| s.program != VERITYD) {
+            return Err(at(path(), Why::NotVerityd));
+        }
+        if m.volumes[..i].iter().any(|w| w.verity.as_ref().is_some_and(|w| w.server == verity.server)) {
+            return Err(at(path(), Why::Twice));
+        }
+    }
+    fn sorted(labels: &[String]) -> Vec<&str> {
+        let mut set: Vec<&str> = labels.iter().map(String::as_str).collect();
+        set.sort_unstable();
+        set
+    }
+    for (i, s) in m.servers.iter().enumerate().filter(|(_, s)| s.program == VERITYD) {
+        let Some(v) = verified(m, s) else { return Err(at(format!("servers[{i}]"), Why::NoVolume)) };
+        if s.volume.is_some() {
+            return Err(at(format!("servers[{i}].volume"), Why::Verifier));
+        }
+        if s.receives.is_empty() {
+            return Err(at(format!("servers[{i}].receives"), Why::Verifier));
+        }
+        if !s.args.is_empty() {
+            return Err(at(format!("servers[{i}].args[0]"), Why::Argument));
+        }
+        if sorted(&s.labels) != sorted(&v.labels) {
+            return Err(at(format!("servers[{i}].labels"), Why::VerifierLabels));
+        }
+        if blkd(m, v).is_none_or(|b| b.receives.is_empty()) {
+            return Err(at(format!("servers[{i}]"), Why::NoBlkd));
+        }
+    }
+    let verifies =
+        |e: &str| m.servers.iter().any(|s| s.program == VERITYD && s.receives.iter().any(|r| r == e));
+    for (i, s) in m.servers.iter().enumerate() {
+        if let Some(k) = s.handed.iter().position(|h| verifies(&h.endpoint)) {
+            return Err(at(format!("servers[{i}].handed[{k}].endpoint"), Why::VerifierHanded));
+        }
+    }
+    Ok(())
+}
+
 /// Every reference names something the manifest or the bundle holds.
 fn references(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
     let label = |n: &String| m.labels.iter().any(|l| &l.name == n);
@@ -353,6 +451,18 @@ fn references(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
         }
         if v.disk.is_some() && blkd(m, v).is_none() {
             return Err(at(format!("volumes[{i}].disk"), Why::Unknown));
+        }
+        if let Some(verity) = &v.verity {
+            if verifier(m, v).is_none() {
+                return Err(at(format!("volumes[{i}].verity.server"), Why::Unknown));
+            }
+            if redoubt_verity::from_hex(&verity.root).is_none() {
+                return Err(at(format!("volumes[{i}].verity.root"), Why::Value));
+            }
+            // The count `verityd` takes: at least one block, its tree beside it in `u64` sectors.
+            if redoubt_verity::Geometry::new(verity.blocks).is_none() {
+                return Err(at(format!("volumes[{i}].verity.blocks"), Why::Value));
+            }
         }
     }
     let volume = |n: &str| m.volumes.iter().any(|v| v.name == n);
@@ -556,8 +666,10 @@ fn fit(m: &Manifest, system: &Usage) -> Result<(), Refusal> {
 /// which `bootfsd` builds its table from (servers/bootfsd.md, "Started by `init`"); for a
 /// volume's server, `labels=` its volume's label ids, absent when the set is empty; and for a
 /// `blkd`, `labels.P=` the ids of each labelled volume on its disk, P its GPT entry
-/// (servers/blkd.md, "Ranges and badges"). A label the manifest does not define is left out: the
-/// check refused it before.
+/// (servers/blkd.md, "Ranges and badges"); for a volume's `verityd`, `endpoint=` its first
+/// endpoint, `labels=` its volume's ids as its server's, and `root=` and `blocks=` from the
+/// volume's `verity` (servers/verityd.md, "Arguments"). A label the manifest does not define is
+/// left out: the check refused it before.
 pub fn args(m: &Manifest, s: &Server) -> Vec<String> {
     let ids = |names: &[String]| {
         let ids: Vec<String> = names
@@ -575,6 +687,16 @@ pub fn args(m: &Manifest, s: &Server) -> Vec<String> {
         if !v.labels.is_empty() {
             args.push(format!("{LABELS_ARG}{}", ids(&v.labels)));
         }
+    }
+    if let Some((v, verity)) = verified(m, s).and_then(|v| Some((v, v.verity.as_ref()?))) {
+        if let Some(e) = s.receives.first() {
+            args.push(format!("{ENDPOINT_ARG}{e}"));
+        }
+        if !v.labels.is_empty() {
+            args.push(format!("{LABELS_ARG}{}", ids(&v.labels)));
+        }
+        args.push(format!("{ROOT_ARG}{}", verity.root));
+        args.push(format!("{BLOCKS_ARG}{}", verity.blocks));
     }
     if s.program == BLKD {
         for v in m.volumes.iter().filter(|v| !v.labels.is_empty() && on_disk(m, v, s)) {
@@ -619,7 +741,7 @@ fn blocks(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
         let refused = || at(format!("servers[{i}]"), Why::Block);
         let mut names: Vec<String> = s.receives.clone();
         names.extend(s.handed.iter().map(|h| h.endpoint.clone()));
-        if s.volume.is_some() {
+        if s.volume.is_some() || verified(m, s).is_some() {
             names.push(String::from(VOLUME));
         }
         for d in &s.devices {
@@ -733,8 +855,13 @@ fn counts(m: &Manifest, machine: &Machine) -> Counts {
     Counts {
         servers: m.servers.len() as u64,
         endpoints: m.servers.iter().map(|s| s.receives.len() as u64).sum(),
-        // Each `handed` item, and each volume's range badge, is a badged handle `init` mints.
-        handed: m.servers.iter().map(|s| s.handed.len() as u64 + u64::from(s.volume.is_some())).sum(),
+        // Each `handed` item, and each volume's range badge (a verifier's included), is a badged
+        // handle `init` mints.
+        handed: m
+            .servers
+            .iter()
+            .map(|s| s.handed.len() as u64 + u64::from(s.volume.is_some() || verified(m, s).is_some()))
+            .sum(),
         stub_bytes: machine.stub_bytes as u64,
         largest_image_bytes: m.servers.iter().map(image).max().unwrap_or(0) as u64,
         stack_pages: m.servers.iter().map(|s| s.stack_pages).max().unwrap_or(0),

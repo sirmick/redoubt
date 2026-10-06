@@ -39,6 +39,11 @@ paths = ["libs/stride/src"]
 max_lines = 522
 
 [[crate]]
+name = "libs/verity"
+paths = ["libs/verity/src"]
+max_lines = 130
+
+[[crate]]
 name = "libs/signing"
 paths = ["libs/signing/src"]
 max_lines = 15
@@ -46,12 +51,12 @@ max_lines = 15
 [[crate]]
 name = "libs/client"
 paths = ["libs/client/src"]
-max_lines = 993
+max_lines = 999
 
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 3504
+max_lines = 3516
 
 [[crate]]
 name = "libs/wire"
@@ -113,9 +118,14 @@ max_lines = 2928
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 1970
+max_lines = 2097
 
 [[crate]]
 name = "servers/fsd"
 paths = ["servers/fsd/src"]
-max_lines = 1405
+max_lines = 1395
+
+[[crate]]
+name = "servers/verityd"
+paths = ["servers/verityd/src"]
+max_lines = 488

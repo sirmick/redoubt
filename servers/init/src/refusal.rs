@@ -77,7 +77,7 @@ pub enum Why {
     /// More labels than a budget holds.
     TooManyLabels,
     /// An argument with a NUL, one a `bootfsd` entry may not carry, or one `init` passes itself
-    /// (`labels=` to a volume's server, `labels.` to `blkd`).
+    /// (`labels=` to a volume's server, `labels.` to `blkd`, any to a `verityd`).
     Argument,
     /// A `buckets=` argument the serving library would refuse.
     BucketsArgument,
@@ -107,6 +107,18 @@ pub enum Why {
     /// A `blkd` whose `endpoint=` argument, exactly one, does not name the endpoint it receives
     /// on first, where `init` mints its volumes' ranges.
     BlkdEndpoint,
+    /// A verified volume's `verity.server` that is not a `verityd` entry.
+    NotVerityd,
+    /// A `verityd` no volume names as its verifier.
+    NoVolume,
+    /// A `verityd` that attaches a volume itself or receives on no endpoint: its range and its
+    /// endpoint are its volume's, from `init`.
+    Verifier,
+    /// A `verityd` whose labels are not its volume's.
+    VerifierLabels,
+    /// An endpoint a `verityd` receives on, handed to a server: the one badge there is a verified
+    /// volume's range, which only `init` mints, for the volume's server (R76).
+    VerifierHanded,
     /// A second entry for a program `init` calls itself (`keyd`, `consoled`, `bootfsd`): `init`
     /// starts and calls one of each.
     Second(&'static str),
@@ -156,6 +168,11 @@ impl fmt::Display for Why {
             Why::BlkdEndpoint => "a blkd's one endpoint= names the endpoint it receives on first",
             Why::NoKeyd => "no keyd to ask about the keys the box is authenticated by (R35)",
             Why::ConsoledRoot => "only init holds a root badge at consoled",
+            Why::NotVerityd => "a volume's verifier is a verityd entry",
+            Why::NoVolume => "a verityd verifies the one volume that names it",
+            Why::Verifier => "a verityd receives on an endpoint and takes its volume from init alone",
+            Why::VerifierLabels => "a verityd's labels are its volume's",
+            Why::VerifierHanded => "only init mints a badge at verityd, a verified volume's range (R76)",
         })
     }
 }

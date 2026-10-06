@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 139
+revision = 144
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -755,8 +755,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["BEAM2"]
   body = "Brief: .wash/local/VOL1-implementer.md (architect-14). Tier A, size M+ (pinned root M, signed-root step +S). RULED by the owner 2026-10-03: verifier server; BEAM2 lands as built, then VOL1 deletes system.index and beamlet's check; decision 5 reversed (readers trust their verifying servers). Start from main after BEAM2 merges. QA: VOL1-verified-volumes.\n\nStep 1, pinned root: libs/verity (no_std, forbid(unsafe_code), sha2; dm-verity tree after the fs blocks; root = SHA-256(0x02||N||top)) pinned in the volume's manifest entry, signed with the bundle (R15). servers/verityd between blkd and fsd: serves blkd's protocol read-only to the volume's fsd, verifies each block first; mismatch = failed (fsd: corrupt); bad root/truncated: info answers, reads fail, stays up. fsd, littlefs, blkd untouched. init: volumes `verity`, fsd's badge at the verifier, confinement users gain it. Re-aims BEAM2 (plain files, R75 over new R76).\n\nStep 2, signed root: a root block at the range's end (N, version, root, Ed25519 under new domain redoubt.volume.v1 in libs/signing, ed25519-compact); manifest key (hex or \"bundle\") + floor instead of root; verityd refuses a bad signature or version < floor; the packer signs when the recipe names a key (build host only, R35). Image's userland volume stays pinned. SHA-256 tree already detects every bit error (CRC stays under it); no correction.\n\nAcceptance, both widths: verity-flipped-block, -flipped-tree, -wrong-root, userland-boot via verityd; verity-signed, -bad-signature, -rollback; host tests of verity, verityd, init, signing domain, packer determinism. Measured: extra calls, cache hits, boot-to-prompt with/without. Pages: verityd.md (R76), init.md, fsd.md, blkd.md, boot.md (R75, volume domain), beamlet.md, packages.md, testbench.md, SECURITY.md, image/README.md. Hotspot: MEM1."
-  state = "active"
-  revision = 128
+  state = "done"
+  revision = 144
 
 [[node]]
   id = "BEAM6"
@@ -812,8 +812,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K22", "ASID1"]
   body = "Go-boundary host fix fe3ae211 at HEAD7b23f5283 passed red dd2a73b1, guest unchanged. Corrected archived replay stops sample0: conservative L920616<release920644; clock bracket cannot prove real deadline early/inside. Independently E-gross audit interval starts27us before release, so timestamp witness alone cannot qualify archive. .wash/local/SCHED1-sample0-clock-ruling.md. Architect3382d196 preparing complete prospective time/window/measurement construction, including raw-counter go vs reported time_now mismatch; no clamp, dropped samples, margin tuning or silent gate changes. Source/machine held. All200 exact waits/fences/category/debt/latency gates, same candidate/control, old10ms qualification/failure, both widths and final costs/sweeps/fullTierA/docs/scheduler-only replay/review/merge remain. QA IPC3-wake-latency blocking; IPC3 follows accepted scheduler."
-  state = "active"
-  revision = 69
+  state = "reported"
+  revision = 140
 
 [[node]]
   id = "BEAM7"
@@ -955,10 +955,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "RECON1"
-  title = "The reconcile's cost bounded by its stated loop bounds: a kept ready count, one floor raise, tens of instructions per visited budget"
+  title = "The reconcile's cost bounded by its stated loop bounds: the floor raised only when it can move, from ranks the queue keeps beside its slots"
   template = "package"
   parent = "M1"
   needs = ["SCHED1"]
-  body = "SCHED1's release measurement (.wash/local/evidence/SCHED1/five-cases/RESULTS.md): a slice end costs ~0.36 ms rv64 / ~0.45 ms rv32 of kernel time, two-thirds of it ~3.2 reconciles per slice at ~9k instructions each for a handful of marked budgets, against docs/kernel/scheduling.md's claim that a reconcile visits only the budgets whose runnable state changed (K22) and R12's kernel-time text. Brief: .wash/local/RECON1-brief.md. Tier A kernel, size S. Candidates: ready_count's bit-by-bit count (ptable.rs:145), raise_floor twice per reconcile; SCHED1's successor fills the per-step attribution. Gate: release per-switch kernel time at the pick/switch/trap/SBI floor plus tens of us (slice-end gap method, both widths, before/after); sched-large-weight's useful work at 1 ms within 0.90 of 10 ms both widths. Owner's decision (IPC3-wake-latency): SCHED1 merges first with the cost a stated residual in Charging; RECON1 is the next kernel package and replaces that sentence."
+  body = "SCHED1's release measurement (.wash/local/evidence/SCHED1/five-cases/RESULTS.md): a slice end costs ~0.36 ms rv64 / ~0.45 ms rv32 of kernel time, linear in the queued budgets L (~28 us per budget in release), against docs/kernel/scheduling.md's claims (K22's reconcile visits only the budgets that changed; R12's kernel-time text). Attributed (reconcile-finding.md): Queue::raise_floor's unconditional walks reading every queued budget's 7-word State through checked frame reads, 4-9 walks per slice end; not settle/ready_count. Brief: .wash/local/RECON1-brief.md (architect-15). Tier A kernel (libs/stride's Queue, sched.rs's state cache), size S. Fix: raise_floor only when the floor can rise; (pass, tie) cached in the queue's slots, audited against the frame in the checked build. Gate: under 3 us per queued budget per slice end in release, the fixed L=0 term (100-155 us: traps, two SBI ecalls) unchanged and not this package's; sched-large-weight's useful work at 1 ms within 0.85 of 10 ms both widths. Needs SCHED1 (owner's option (b): SCHED1 merges first with the cost a residual; RECON1 next, replacing its sentence)."
   state = "todo"
-  revision = 138
+  revision = 142

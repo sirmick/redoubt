@@ -2,8 +2,8 @@
 //! one boundary, answered by the client library (`redoubt-client`) and the runtime's kernel calls.
 //!
 //! This first part serves the console, the clock and randomness; the module source is the
-//! embedder's ([`Modules`]): the userland disk on the machine, each object checked against the
-//! signed `system.index` ([`userland`]), directories on a host; there are no files and no programs
+//! embedder's ([`Modules`]): the userland volume's files on the machine, read through a verified
+//! volume ([`userland`]), directories on a host; there are no files and no programs
 //! yet. What it proves is the shape the rest will take: a call that waits, here a console read,
 //! is made by a thread of its own, never by the thread the VM runs on, and its result reaches the
 //! VM as a message, which [`Platform::idle`] waits for (beamlet.md,
@@ -69,8 +69,9 @@ pub trait Modules: Send {
 pub enum Unloaded {
     /// The source has no such name: the VM's lookup goes on, as for any name it lacks.
     Absent,
-    /// The source names it, but its bytes failed the check, for this reason: the platform says so
-    /// on the console, and the VM finds nothing (R75 (verified userland)).
+    /// The source has it, but could not give its bytes, for this reason (a block that did not
+    /// check under R76): the platform says so on the console, and the VM finds nothing
+    /// (R75 (verified userland)).
     Refused(&'static str),
 }
 

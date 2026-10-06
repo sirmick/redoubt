@@ -34,6 +34,7 @@
   - [bootfsd](servers/bootfsd.md)
   - [fsd](servers/fsd.md)
   - [blkd](servers/blkd.md)
+  - [verityd](servers/verityd.md)
   - [netd](servers/netd.md)
   - [ipd](servers/ipd.md)
   - [The resolver](servers/resolver.md)

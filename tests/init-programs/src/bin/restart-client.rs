@@ -94,7 +94,7 @@ fn check(startup: &Startup, lend: &mut Lend) -> Result<(), String> {
     let again = Connection::attach(Endpoint::from_handle(at.handle()), lend)
         .map_err(|e| format!("attach to the new instance: {e:?}"))?;
     match again.disconnect(second, TIMEOUT) {
-        Err(Error::Rerror) => {}
+        Err(Error::Rerror(_)) => {}
         other => return Err(format!("the old instance's id was not refused: {other:?}")),
     }
     match cons.write(lend, CONS_FID, 0, b"restart-client writes through a dead console\n") {

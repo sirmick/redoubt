@@ -21,11 +21,21 @@ pub enum Error {
     /// The server's typed error code (the protocol's `ErrorCode::from_code` names it; 1 is
     /// `Malformed` in every protocol).
     Server(u32),
-    /// The server answered a 9P request with `Rerror` (its text is not kept), or walked only part
-    /// of a path.
-    Rerror,
+    /// The server answered a 9P request with `Rerror`, by its text's name in the error table
+    /// (servers/wire.md, "Error names"; the text is never kept), or walked only part of a path,
+    /// which is `not_found`.
+    Rerror(Name),
     /// Refused here, before any call was made.
     Refused(Refusal),
+}
+
+/// An `Rerror`'s name. Only `not_found` is told apart so far; every other text is `Other`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Name {
+    /// `file does not exist`, or a walk that stopped short: the name is not there.
+    NotFound,
+    /// Any other text.
+    Other,
 }
 
 /// What the library refuses before making a call: what the call could not carry, or what would
@@ -58,7 +68,8 @@ impl From<ClientError> for Error {
             ClientError::Sys(e) => e.into(),
             ClientError::Wire(e) | ClientError::Encode(e) => Error::Wire(e),
             ClientError::Pages(e) => e.into(),
-            ClientError::Remote => Error::Rerror,
+            ClientError::NotFound => Error::Rerror(Name::NotFound),
+            ClientError::Remote => Error::Rerror(Name::Other),
             ClientError::Unexpected => Error::Unexpected,
             ClientError::BadPath => Error::Refused(Refusal::BadPath),
         }

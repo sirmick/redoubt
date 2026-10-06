@@ -14,9 +14,9 @@
 //! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends an `fsd` built with its test-only
 //!   feature `restart-probe`, and reads the file back through a fresh connection.
 //! - `readonly ENDPOINT FILE`: on a volume `fsd` serves read-only (the userland disk), a create, and a write
-//!   to the object `/boot/system.index` names for `FILE` (read through its `bootfsd` badge), are each
-//!   refused. Its case takes the system's word that the object did not change from beamlet, which loads it
-//!   only if its bytes still hash to the signed bundle's entry.
+//!   to the file `FILE`, are each refused. Its case takes the system's word that the file did not change from
+//!   beamlet, which loads it through the volume's `verityd`, which serves only blocks that hash to the signed
+//!   manifest's root.
 //! - `labelled ENDPOINT [OWN PEER]`, `outsider ENDPOINT OWN PEER`: under the volume's labels a file is
 //!   written, and read back unchanged by the next start; without them the attach is refused. With `OWN` and
 //!   `PEER`, the endpoints each receives on and is handed at the other's, the next start sends on `PEER` and
@@ -42,7 +42,7 @@ use redoubt_client::fsd::rename;
 use redoubt_client::{Error, Lend};
 use redoubt_init_programs::Out;
 use redoubt_rt::abi::FOREVER;
-use redoubt_rt::handle::{Endpoint, sleep, time_now};
+use redoubt_rt::handle::{Endpoint, time_now};
 use redoubt_rt::ipc::Event;
 use redoubt_rt::server::ninep::{DMDIR, mode};
 use redoubt_rt::startup::Startup;
@@ -182,31 +182,11 @@ fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> 
     out.say("fsd-client wrote, read, renamed and removed\n").map_err(|e| format!("say: {e:?}"))
 }
 
-/// The object `system.index` in `/boot` names for `file`: the line's hash, a file on the userland
-/// disk. `init` pushes the index after it starts the servers, so it waits, for a bounded time.
-fn object_of(startup: &Startup, out: &mut Out, file: &str) -> Result<String, String> {
-    let boot = attach(startup, out, "bootfsd")?;
-    let mut tries = 0;
-    while boot.stat(&mut out.lend, "/system.index").is_err() {
-        if tries == 200 {
-            return Err("no /boot/system.index".into());
-        }
-        tries += 1;
-        sleep(10_000).map_err(|e| format!("sleep: {e:?}"))?;
-    }
-    let index = read_file(&boot, &mut out.lend, "/system.index")?;
-    let index = core::str::from_utf8(&index).map_err(|_| String::from("the index is not UTF-8"))?;
-    let line = index.lines().find(|l| l.split(' ').next() == Some(file));
-    let hash = line.and_then(|l| l.split(' ').nth(1)).ok_or_else(|| format!("the index names no {file}"))?;
-    Ok(format!("/{hash}"))
-}
-
-/// `userland-read-only`: on a read-only volume a create is refused, and so is a write to the
-/// object the index names for `file`, whether at its open or at the write; the object reads back
-/// the same length after.
+/// `userland-read-only`: on a read-only volume a create is refused, and so is a write to `file`,
+/// whether at its open or at the write; the file reads back the same length after.
 fn readonly(startup: &Startup, out: &mut Out, endpoint: &str, file: Option<&str>) -> Result<(), String> {
     let file = file.ok_or_else(|| String::from("no file named"))?;
-    let object = object_of(startup, out, file)?;
+    let object = format!("/{file}");
     let conn = attach(startup, out, endpoint)?;
     let before = read_file(&conn, &mut out.lend, &object)?;
     if conn.create(&mut out.lend, "/", "planted", 0o644, mode::OWRITE).is_ok() {
@@ -225,7 +205,7 @@ fn readonly(startup: &Startup, out: &mut Out, endpoint: &str, file: Option<&str>
     if read_file(&conn, &mut out.lend, &object)?.len() != before.len() {
         return Err(format!("{object} reads back another length"));
     }
-    out.say(&format!("fsd-client: a create and a write to the object of {file} refused\n"))
+    out.say(&format!("fsd-client: a create and a write to {file} refused\n"))
         .map_err(|e| format!("say: {e:?}"))
 }
 
@@ -315,7 +295,7 @@ fn corrupt(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), Strin
     let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
     for _ in 0..3 {
         match Connection::attach(Endpoint::from_handle(handle), &mut out.lend) {
-            Err(Error::Rerror) => {}
+            Err(Error::Rerror(_)) => {}
             Err(e) => return Err(format!("attach: {e:?}, not Rerror")),
             Ok(_) => return Err("a corrupt volume was attached".into()),
         }
@@ -349,7 +329,7 @@ fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String>
         match hog.write_at(&mut out.lend, filled, &chunk) {
             Ok(0) => return Err("a write took nothing".into()),
             Ok(n) => filled += n as u64,
-            Err(Error::Rerror) => break,
+            Err(Error::Rerror(_)) => break,
             Err(e) => return Err(format!("write full: {e:?}")),
         }
         if filled > QUOTA {
@@ -413,7 +393,7 @@ fn outsider(
     while !matches!(own.receive(FOREVER, 0), Ok(Event::Send(_))) {}
     let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
     match Connection::attach(Endpoint::from_handle(handle), &mut out.lend) {
-        Err(Error::Rerror) => {}
+        Err(Error::Rerror(_)) => {}
         Err(e) => return Err(format!("attach: {e:?}, not Rerror")),
         Ok(_) => return Err("attached without the volume's labels".into()),
     }

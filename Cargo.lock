@@ -671,6 +671,7 @@ dependencies = [
  "redoubt-rt",
  "redoubt-signing",
  "redoubt-sys",
+ "redoubt-verity",
  "stub",
 ]
 
@@ -829,6 +830,21 @@ dependencies = [
  "redoubt-keyd",
  "smoltcp",
  "sunset",
+]
+
+[[package]]
+name = "redoubt-verity"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "redoubt-verityd"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+ "redoubt-verity",
 ]
 
 [[package]]
@@ -1171,6 +1187,7 @@ dependencies = [
  "redoubt-rt",
  "redoubt-signing",
  "redoubt-sys",
+ "redoubt-verity",
  "regex",
  "serde",
  "serde_json",

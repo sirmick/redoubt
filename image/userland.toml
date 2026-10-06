@@ -1,13 +1,13 @@
-# The userland disk: OTP, Elixir and Redoubt's own Elixir, one object per module, read-only.
+# The userland disk: OTP, Elixir and Redoubt's own Elixir, one file per module, read-only.
 #
 # `./mkimage` packs it into target/image/userland.img with the bench's packer (`testbench
 # --pack-disk`), the one `disk.toml` goes through. First it stages the objects: each module of the
-# applications below, compiled by the pinned toolchain and stripped, as one file named by the
-# SHA-256 of its bytes, and each application's resource the same way; and it writes
-# target/image/system.index, one line per object, `<file> <sha256 hex> <bytes>`, sorted, which
-# `boot.toml` puts in the signed bundle. Then it packs the one partition as a littlefs volume
-# holding those files. beamlet checks each object against the index before it loads it
-# (docs/kernel/boot.md, R75).
+# applications below, compiled by the pinned toolchain and stripped, as a plain file under the
+# name the VM asks for (`Elixir.Enum.beam`), and each application's resource the same way
+# (`elixir.app`). Then it packs the one partition as a verified volume: a littlefs volume holding
+# those files, followed by its hash tree (docs/servers/verityd.md). The bundle's manifest pins
+# the tree's root, so verityd serves the volume only in blocks the signed manifest covers
+# (docs/kernel/boot.md, R75; R76).
 
 # Whole disk, in KiB (a whole number of 512-byte sectors).
 size_kib = 16384
@@ -24,10 +24,10 @@ mix = ["userland/shell"]
 exclude = ["application.beam", "gen_tcp.beam", "ram_file.beam"]
 # The `Docs` chunk goes with the rest, so `h/1` says no documentation is available.
 docs = false
-index = "target/image/system.index"
 
 [[partition]]
 name = "system"
 fs = "littlefs"
 # Emptied and filled with the objects before every pack.
 stage = "target/image/userland"
+verity = true

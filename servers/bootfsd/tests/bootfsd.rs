@@ -136,7 +136,7 @@ fn a_session_reads_the_public_entries_and_sees_nothing_else() {
         let never = c.walk(&mut lend, 0, 30, "no-such-entry").unwrap_err();
         assert_eq!(c.walk(&mut lend, 0, 30, MANIFEST).unwrap_err(), never);
         assert_eq!(c.walk(&mut lend, 0, 30, "kernel").unwrap_err(), never);
-        assert_eq!(never, ClientError::Remote);
+        assert_eq!(never, ClientError::NotFound);
         // And the directory lists exactly the public list, in the manifest's order.
         assert_eq!(names(&c, &mut lend, 0), PUBLIC.map(String::from).to_vec());
     });

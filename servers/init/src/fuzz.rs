@@ -52,12 +52,12 @@ pub const ENTRIES: [(&str, usize); 11] = [
     ("consoled", 150_000),
     ("bootfsd", 150_000),
     ("blkd", 150_000),
+    ("verityd", 100_000),
     ("netd", 150_000),
     ("ipd", 600_000),
     ("fsd", 300_000),
     ("beamlet", 4_000_000),
     ("trace", 100),
-    ("system.index", 50_000),
 ];
 
 /// The machine `init` would see on QEMU `virt` with the 1 GiB the image needs, with `devices`

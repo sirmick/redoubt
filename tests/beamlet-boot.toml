@@ -2,8 +2,8 @@ description = "beamlet runs on the machine under init (docs/userland/beamlet.md,
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The real init, keyd, consoled, bootfsd, blkd, fsd and beamlet, built from userland/otp's own
-# workspace; the test module and the one OTP module it needs (io) are objects on the userland disk,
-# served by fsd:system, and /boot holds their system.index.
+# workspace; the test module and the one OTP module it needs (io) are files on the userland disk,
+# served by fsd:system.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
@@ -23,10 +23,6 @@ expect = [
     '^init: beamlet \(PID [0-9]+\) exited, code 0$',
 ]
 forbid = ['init: refused the boot', '^init: (keyd|consoled|bootfsd) .*(exited|faulted|was killed)', 'init: rebooting', 'panicked']
-
-[[file]]
-name = "system.index"
-from = { userland_index = "tests/data/beamlet/userland.toml" }
 
 [[file]]
 name = "manifest"

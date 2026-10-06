@@ -1,7 +1,8 @@
 # The beamlet cases' userland disk (docs/testbench.md, "Disks and network cards"): the test
-# modules and the few OTP modules they need, one object each, packed as image/userland.toml is,
-# with the index each case's bundle signs. No whole application, so the VM keeps its own
-# stand-in logger, as it does without kernel's.
+# modules and the few OTP modules they need, one file each, packed as image/userland.toml is but
+# unverified: these cases are about the VM, and their manifests attach the volume to fsd
+# directly. No whole application, so the VM keeps its own stand-in logger, as it does without
+# kernel's.
 size_kib = 2048
 
 [objects]
