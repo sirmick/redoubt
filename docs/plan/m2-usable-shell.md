@@ -137,7 +137,12 @@ attacked before the next, in this order:
 2. **Per-hart kernel state:** a trap stack and the current process and thread per hart, reached
    through `sscratch`, and scheduling on every hart.
 3. **One big kernel lock** taken at trap entry, and one global run queue
-   ([scheduling](../kernel/scheduling.md)).
+   ([scheduling](../kernel/scheduling.md)). The lock is a FIFO ticket lock, so kernel entry is
+   fair across harts ([R78 (fair kernel entry)](../kernel/scheduling.md#r78-fair-kernel-entry)):
+   test-and-set would let one budget's harts starve another's. Every kernel global is reached
+   only under it; the one-hart kernel is its uncontended case. The run queue stays global at
+   every step below: each hart picks from the one stride queue, so a budget's share is judged
+   across harts as on one.
 4. **Cross-hart interrupts, shootdowns and fences.** Inter-processor interrupts to reschedule.
    A process's translations carry its PID as their ASID, and a hart keeps them across switches.
    A hart running the process when its tables lose a mapping is sent a shootdown, flushes that
@@ -149,8 +154,24 @@ attacked before the next, in this order:
    An instruction fence goes to the harts running a process when a page of it becomes
    executable, and when a thread moves ([memory](../kernel/memory.md#residual-risks),
    [memory layout](../kernel/memory-layout.md#residual-risks)).
-5. **Finer locking:** the per-process thread-context pages first, and anything finer only once
-   the steps above are stable and attacked.
+5. **Lock to decide, unlock to do.** Frame zeroing, large copies and the wait for shootdown
+   acknowledgements move outside the lock, on frames no other hart can name: a frame leaves the
+   free-frame bitmap into an in-flight state before the lock is dropped, and enters a process
+   only after the work is done and the lock is taken again. That invariant is a rule beside
+   [R11 (memory)](../kernel/memory.md#r11-memory), with an attack case (a second hart racing to
+   allocate, map or free the in-flight frame) before any work relies on it.
+6. **Per-hart frame magazines,** each refilled from the bitmap under the lock and drawn from
+   with interrupts off, so a hart's common allocation takes no lock at all; frames are zeroed as
+   they enter a magazine, by step 5's rule.
+7. **Finer locking:** one trap-entry lock whose guard owns a token, so that the kernel's globals
+   become token-guarded cells and a compile-time lock order exists if the lock is ever split;
+   the per-process thread-context pages first, and anything finer only once the steps above are
+   stable and attacked.
+
+Steps 1 to 3 and the first stage of step 4 are the package that puts the kernel on every hart
+under one lock; the second stage of step 4 and steps 5 and 6 are the package that runs one
+process's threads on several harts; step 7 waits on their measurements (lock hold time and
+contention), as the [platform page](../beyond/fpga-platform.md#measurement-gates) says.
 
 ## Progress
 

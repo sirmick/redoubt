@@ -751,6 +751,28 @@ It is attacked three ways:
   scenarios, each with an independent check) or the scheduler contracts must catch it
   ([model](model.md)).
 
+### R78 (fair kernel entry)
+
+Status: planned · M2 (usable shell)
+
+On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
+so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
+for ever. The rule exists for R12. A test-and-set lock is unfair: a hart can lose the lock to
+later arrivals indefinitely, and the budget running on that hart loses its share with it, so one
+budget's harts can starve another's of kernel entry, which no pattern of calls may do. FIFO
+bounds the wait by the hart count, and the bound is part of how R12's shares are judged across
+harts ([several harts](../plan/m2-usable-shell.md#several-harts)). The lock is taken once at
+trap entry and released before the return to user mode or an idle wait; its spins run the pause
+hint, and a Zawrs wait goes in the same place later. It is attacked by a kernel built with the
+ticket lock replaced by test-and-set (`sched-test-and-set-entry`, a debug-only kernel feature
+like the tie fault, [below](#failure-and-restart); not a model mutation, since the model has one
+hart), which the several-hart boot case's FIFO check must catch in a recorded negative run: two
+harts that both enter the kernel in a loop are each served in turn, and the count of kernel
+sections one waits behind never exceeds the hart count less one.
+
+**Open:** the lock is built when the kernel runs on every hart; until then the rule, its boot
+case and its mutation are planned, and the one-hart kernel is the uncontended case of it.
+
 ### R23 (no test channels)
 
 Status: built · partly tested: no case builds the production kernel and checks that it carries no trace, or that a test-only feature is refused without debug assertions
@@ -773,6 +795,8 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
+`sched-test-and-set-entry`, planned with [R78](#r78-fair-kernel-entry), a debug-only
+replacement of the kernel lock by test-and-set for its recorded negative run;
 `audit-unstamped`, which leaves the audit
 after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
 budget that ran it and counts it against its slice, each for one recorded negative run
@@ -842,6 +866,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   a lease's end from the steward's decision is 125 ms, not 80. A pinned seed repeats one run; a
   change that moves the phase can land on a worse one than the sweep saw, which the margin covers
   and a new sweep re-measures.
+- **Fair kernel entry is bounded by count, not time.** On several harts, R78 bounds the wait
+  for the kernel lock by `MAX_HARTS` - 1 kernel sections, each as long as the call or
+  destruction holding it: a long section delays every waiting hart by its length, which is one
+  more reason R12 bounds a call's kernel time.
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   dominates lease termination and follows the dying subtree and the handles that depend on it, so its target
