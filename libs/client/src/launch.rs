@@ -1,7 +1,8 @@
 //! Launching a native program through the loader stub (servers/init.md, "Launching through the
-//! loader stub"): the caller brings the stub's and the program's bytes, a budget it carved, the
-//! endpoint the exit notice goes to, and what the child is given; the library makes the calls and
-//! writes the startup block with the runtime's `StartupBuilder`.
+//! loader stub"): the caller brings the stub's bytes, the program's (bytes it holds, or a reader
+//! the library asks for one batch at a time), a budget it carved, the endpoint the exit notice
+//! goes to, and what the child is given; the library makes the calls and writes the startup block
+//! with the runtime's `StartupBuilder`.
 //!
 //! What it refuses is refused before `process_create`, so no half-made process is left: more than
 //! `MAX_START_HANDLES` handles, an empty image, a stack outside 1..=MAX_STACK_PAGES,
@@ -37,10 +38,29 @@ pub const fn stack_paint(tag: u16, index: u16) -> u64 {
     ((STACK_PAINT as u64) << 32) | ((tag as u64) << 16) | index as u64
 }
 
+/// Reads `buf.len()` bytes of a program's image from offset `at` into `buf`.
+pub type ReadImage<'a> = &'a mut dyn FnMut(usize, &mut [u8]) -> Result<(), SysError>;
+
+/// Where a program's image comes from: bytes the launcher holds (`init`'s bundle), or a reader it
+/// calls for each batch (a file on `/boot`), so that it never holds more than one batch.
+enum Image<'a> {
+    Bytes(&'a [u8]),
+    Read { len: usize, read: ReadImage<'a> },
+}
+
+impl Image<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Image::Bytes(b) => b.len(),
+            Image::Read { len, .. } => *len,
+        }
+    }
+}
+
 /// One launch, assembled.
 pub struct Launch<'a> {
     stub: &'a [u8],
-    image: &'a [u8],
+    image: Image<'a>,
     budget: Budget,
     exit: Endpoint,
     stack_pages: usize,
@@ -65,6 +85,22 @@ impl<'a> Launch<'a> {
     /// `stub` and `image` are bytes the caller read; `budget` is one it carved for the child;
     /// `exit` is a receive right, the job's own, where the child's one exit notice arrives.
     pub fn new(stub: &'a [u8], image: &'a [u8], budget: Budget, exit: Endpoint) -> Launch<'a> {
+        Launch::with(stub, Image::Bytes(image), budget, exit)
+    }
+
+    /// As [`Launch::new`], with an image of `len` bytes that `read` supplies one batch at a
+    /// time, as it is placed: the launcher holds one batch of it, never the whole.
+    pub fn streamed(
+        stub: &'a [u8],
+        len: usize,
+        read: ReadImage<'a>,
+        budget: Budget,
+        exit: Endpoint,
+    ) -> Launch<'a> {
+        Launch::with(stub, Image::Read { len, read }, budget, exit)
+    }
+
+    fn with(stub: &'a [u8], image: Image<'a>, budget: Budget, exit: Endpoint) -> Launch<'a> {
         Launch {
             stub,
             image,
@@ -124,7 +160,7 @@ impl<'a> Launch<'a> {
 
     /// Starts the child. Every refusal of its own comes before any kernel call.
     #[allow(clippy::result_large_err)]
-    pub fn start(self) -> Result<Job, Failed> {
+    pub fn start(mut self) -> Result<Job, Failed> {
         let (slots, block, stack_at) = match self.plan() {
             Ok(plan) => plan,
             Err(error) => return Err(self.failed(error)),
@@ -135,10 +171,26 @@ impl<'a> Launch<'a> {
         };
         let rw = MemFlags::READ | MemFlags::WRITE;
         let rx = MemFlags::READ | MemFlags::EXECUTE;
-        let started = place(&process, self.stub, pages_of(self.stub), STUB_ENTRY, rx, None)
-            .and_then(|()| place(&process, self.image, pages_of(self.image), IMAGE_AT, rw, None))
-            .and_then(|()| place(&process, &[], self.stack_pages, stack_at, rw, self.stack_tag))
-            .and_then(|()| place(&process, &block, pages_of(&block), STARTUP_AT, MemFlags::READ, None))
+        let image_pages = self.image.len().max(1).div_ceil(PAGE_SIZE);
+        let image = &mut self.image;
+        let started = place(&process, &mut from(self.stub), pages_of(self.stub), STUB_ENTRY, rx, None)
+            .and_then(|()| match image {
+                Image::Bytes(b) => place(&process, &mut from(b), image_pages, IMAGE_AT, rw, None),
+                // The reader is asked only for the image's own bytes; the rest of its last page
+                // stays zero.
+                Image::Read { len, read } => {
+                    let len = *len;
+                    let mut fill = |at: usize, buf: &mut [u8]| {
+                        let n = buf.len().min(len.saturating_sub(at));
+                        if n > 0 { read(at, &mut buf[..n]) } else { Ok(()) }
+                    };
+                    place(&process, &mut fill, image_pages, IMAGE_AT, rw, None)
+                }
+            })
+            .and_then(|()| place(&process, &mut from(&[]), self.stack_pages, stack_at, rw, self.stack_tag))
+            .and_then(|()| {
+                place(&process, &mut from(&block), pages_of(&block), STARTUP_AT, MemFlags::READ, None)
+            })
             .and_then(|()| process.start(STUB_ENTRY, STACK_TOP - 16, STARTUP_AT, &slots));
         match started {
             Ok(()) => Ok(Job { process, budget: self.budget, exit: self.exit, grants: self.grants }),
@@ -152,7 +204,7 @@ impl<'a> Launch<'a> {
     /// The handles for the child's slots 1..=n, each once, its startup block, and where its stack
     /// goes.
     fn plan(&self) -> Result<(Vec<Handle>, Vec<u8>, usize), Error> {
-        if self.image.is_empty() {
+        if self.image.len() == 0 {
             return Err(Refusal::EmptyImage.into());
         }
         if self.stack_pages == 0 || self.stack_pages > MAX_STACK_PAGES {
@@ -197,14 +249,24 @@ impl<'a> Launch<'a> {
 /// The pages of `bytes`, at least one.
 fn pages_of(bytes: &[u8]) -> usize { bytes.len().max(1).div_ceil(PAGE_SIZE) }
 
-/// Fills `pages` pages at `dst` in the child with `bytes`, zeroes after them (with `stack_tag`, the
-/// stack's paint instead), `PLACE_PAGES` at a time: each batch is copied into fresh pages and moved
-/// in before the next is made, so the caller never holds more than one batch. A refusal leaves the
-/// batches already moved in the child, which has not started, and returns the refused batch's
-/// pages to the caller.
+/// A fill from bytes held: what lies past their end stays zero.
+fn from(bytes: &[u8]) -> impl FnMut(usize, &mut [u8]) -> Result<(), SysError> + '_ {
+    move |at, buf| {
+        let src = bytes.get(at..).unwrap_or_default();
+        let len = src.len().min(buf.len());
+        buf[..len].copy_from_slice(&src[..len]);
+        Ok(())
+    }
+}
+
+/// Fills `pages` pages at `dst` in the child, `fill` writing each batch's bytes from its offset
+/// (zero after them; with `stack_tag`, the stack's paint instead), `PLACE_PAGES` at a time: each
+/// batch is filled into fresh pages and moved in before the next is made, so the caller never
+/// holds more than one batch. A refusal leaves the batches already moved in the child, which has
+/// not started, and returns the refused batch's pages to the caller.
 fn place(
     process: &Process,
-    bytes: &[u8],
+    fill: &mut dyn FnMut(usize, &mut [u8]) -> Result<(), SysError>,
     pages: usize,
     dst: usize,
     flags: MemFlags,
@@ -214,9 +276,7 @@ fn place(
     for done in (0..pages.max(1)).step_by(PLACE_PAGES) {
         let n = (pages - done).min(PLACE_PAGES);
         let mut batch = Buffer::new(n)?;
-        let from = bytes.get(done * PAGE_SIZE..).unwrap_or_default();
-        let len = from.len().min(n * PAGE_SIZE);
-        batch[..len].copy_from_slice(&from[..len]);
+        fill(done * PAGE_SIZE, &mut batch[..n * PAGE_SIZE])?;
         if let Some(tag) = stack_tag {
             for (i, unit) in batch.chunks_exact_mut(8).enumerate() {
                 let index = (done * PAGE_SIZE / 8 + i) as u16;
