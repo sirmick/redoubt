@@ -701,7 +701,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (15)</summary>
+<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (16)</summary>
 
 - bench:bench-ssh-loopback
 - bench:bench-ssh-loopback-openssh
@@ -716,6 +716,7 @@ The guest's own claims about the network are never trusted.
 - host:testbench::the_guest_recipe_parses_and_hashes
 - host:testbench::a_bad_package_is_broken_and_no_network_is_the_hosts
 - host:testbench::the_keeper_finds_what_names_the_case
+- host:testbench::the_keeper_waits_to_the_deadline
 - host:testbench::resize_needs_a_pty
 - host:testbench::no_other_child_inherits_a_sessions_terminal
 
@@ -789,8 +790,10 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
   hangs up on its proxy. What `sshd` logs after that is lost; the lines the cases ask for come
   earlier. `ssh` has no parent-death signal, so a bench killed outright leaves it running until
   its session ends, and its guest with it. **The keeper:** once a case's sessions have all exited,
-  any `qemu-system-riscv64` whose command line names the case's directory (the run's own) has five
-  seconds to go; one still running then is killed, and the case fails, naming it.
+  any `qemu-system-riscv64` whose command line names the case's directory (the run's own) has
+  until the case's deadline, and at least five seconds, to go, as a loaded host may slow a
+  guest's shutdown with nothing wrong; one still running then is killed, and the case fails,
+  naming it, unless a session has already failed it.
 - **Before the first OpenSSH loopback case** the bench logs in once and runs `exit 0`, and the
   server's log must name OpenSSH's version, so that no other server can pass for it. Its `ssh` waits
   at most 30 seconds for the server's banner, so a guest that never boots fails the probe rather
