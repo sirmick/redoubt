@@ -1,0 +1,32 @@
+description = "The steward's boot under the real init (servers/steward.md, \"Fixed sub-budgets per label set\"): init starts four servers and the steward, handing it users and the manifest lines; the steward carves each principal's top budget under users and a sub-budget per label set, and says the tree on its console, the only program on it besides init and the servers"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the four servers and the steward, and a manifest naming two principals: alice
+# with a vault label set, bob without. The case ends at the steward's last line.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-steward-server", bin = "steward" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: \{\} \{7\}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/bob account 1002: \{\}$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|steward) .* (exited|faulted|was killed), code',
+    'steward: (a manifest line is refused|the manifest is refused|cannot carve)',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/boot.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1

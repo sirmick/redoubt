@@ -384,6 +384,10 @@ set's sub-budget would need a second domain, which no handler can borrow, so it 
 ([guards and effects](#guards-and-effects)). Sizes per label set may return with run-time
 principals in M5 (persist, install, share), if evidence asks for them.
 
+The steward carves at its start: for each principal a top budget under `users` with its account,
+and under it a sub-budget per label set with that set's labels; a carve the kernel refuses is a
+start failure, and the box has no users.
+
 **Open:** none.
 
 ### Authentication and sessions
