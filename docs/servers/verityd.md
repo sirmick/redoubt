@@ -113,44 +113,47 @@ matters: a file server that cannot size its range exits, and would be restarted.
 
 ### Memory and cost
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
 - bench:boot-profile
+- bench:boot-profile-unverified
 - host:redoubt-verityd::the_last_block_and_the_tree_cache_save_reads
 
 </details>
 
 - **Memory is fixed,** whatever the volume's size: the top block, pinned at start; a cache of 32
-  checked tree blocks, least recently used out first; the last checked data block, so sub-block
-  reads within it hash once; and a 2-page lend at `blkd`, as `littlefsd`'s.
+  checked tree blocks and one of 4 checked data blocks, each least recently used out first
+  ([below](#a-cache-of-checked-data-blocks)); and a 2-page lend at `blkd`.
 - **A block is checked from the top down.** The lowest block on its path already held (the top
   always is) gives the digest the next block down must hash to; a block fetched is checked before
   it is kept. A level-1 block held costs one hash per data block.
-- **Per block `littlefsd` reads:** one more call and a copy of at most 4 KiB. The tree's reads are about
-  1/128 more, mostly cached. Its weight is ordinary, like `littlefsd`'s: each request is a bounded
-  amount of work, at most 8 blocks.
-- **Measured** by bench:boot-profile and bench:boot-profile-unverified, a `boot-stats` build on
-  QEMU rv64 under `icount` (`shift=3`, sleep on) with seed 1, in guest time: the image reaches its
-  prompt in 1,016 s through `verity:system` and 536 s with the same volume attached to `littlefsd`
-  directly. Every one of `littlefsd`'s 77,710 block reads reaches `verityd`; by its 65,536th,
-  `verityd` had checked 51,313 data blocks, the last-block buffer saving the other 22 %, and held
-  the level-1 block for 99.96 % of them. The boot reads only 673 distinct blocks, each about 115
-  times: `littlefsd` finds every file's name in the volume's root directory again for each 9P
-  operation, and 97 % of its reads are those metadata blocks
-  ([littlefsd](littlefsd.md#residual-risks)). The tree is not the cost; the repeated blocks are.
+- **Per block the file server reads:** one more call and a copy of at most 4 KiB. The tree's reads
+  are about 1/128 more, mostly cached. Its weight is ordinary, like the file servers': each request
+  is a bounded amount of work, at most 8 blocks.
+- **Measured** by bench:boot-profile and bench:boot-profile-unverified: what verification costs
+  the boot, verified against unverified, on littlefs and on EROFS, is
+  [beamlet's table](../userland/beamlet.md#beamlet-on-redoubt).
 - **Read-ahead is not done** ([below](#a-cache-of-checked-data-blocks)).
 
 ### A cache of checked data blocks
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (2)</summary>
 
-A few checked data blocks, least recently used out first, beside the tree cache, would hash a
-block `littlefsd` reads in pieces once, and read-ahead (8 blocks per `blkd` call, hashed and cached)
-would cut the calls at `blkd` on sequential reads. Both are local to `verityd` and change no
-protocol; the measurement above says the timing asks for one.
+- bench:boot-profile
+- host:redoubt-verityd::the_data_cache_holds_the_last_blocks_least_recently_used_out
 
-**Open:** a few-block LRU of checked data blocks, read-ahead, or both, and how many blocks of fixed
-memory: a follow-up, with the signed root or on its own.
+</details>
+
+The last 4 data blocks checked are kept, least recently used out first, in place of the one
+last-block buffer: a block asked for again while it is held is neither read nor hashed again.
+On EROFS a file's blocks are read once each, in order, but `erofsd` reads the same few blocks
+again and again: a directory's blocks at every walk, and the blocks holding the inodes. By its
+512th read in the rv64 boot profile (boot-stats build, seed 1) `verityd` was asked for 849 data
+blocks: one block held 100 of them (12 %), 4 hold 197 (23 %) and 8 would hold 289 (34 %). 4
+blocks, 16 KiB, are what is built.
+
+Read-ahead (8 blocks per `blkd` call, hashed and cached) is not built: `erofsd` already reads a
+file's blocks in one call of up to 64 sectors, which `verityd` splits into block reads at `blkd`.
 
 ## Authority
 

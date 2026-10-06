@@ -42,7 +42,7 @@ pub enum Said {
     /// A read did not check.
     Bad(Bad),
     /// Test-only (`boot-stats`): the reads served so far and the volume's counts, at each power
-    /// of two of reads from 2^12.
+    /// of two of reads from 2^7.
     #[cfg(feature = "boot-stats")]
     Stats(u64, crate::volume::Counts),
 }
@@ -55,8 +55,9 @@ impl fmt::Display for Said {
             #[cfg(feature = "boot-stats")]
             Said::Stats(served, c) => write!(
                 f,
-                "verityd: boot-stats: reads {served}, data blocks checked {}, level-1 hits {}, blkd reads {}",
-                c.checked, c.hits, c.reads
+                "verityd: boot-stats: reads {served}, data blocks asked {}, held {}, checked {}, level-1 hits {}, \
+                 blkd reads {}",
+                c.requests, c.held, c.checked, c.hits, c.reads
             ),
         }
     }
@@ -194,7 +195,7 @@ impl<R: Range> Verityd<R> {
         #[cfg(feature = "boot-stats")]
         {
             self.served += 1;
-            if self.served >= 1 << 12 && self.served.is_power_of_two() {
+            if self.served >= 1 << 7 && self.served.is_power_of_two() {
                 self.said = Some(Said::Stats(self.served, volume.counts()));
             }
         }

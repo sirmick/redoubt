@@ -507,8 +507,8 @@ default and never in the image's build. Without it the release binaries of `init
 `verityd`, `littlefsd`, `erofsd` and `beamlet` have the section sizes they had before it, on rv64 and rv32
 (measured with `llvm-size` against the commit before it, both built from the same path: `beamlet`'s
 sizes move with its build path). With it, `init`'s lines and beamlet's line for its first object
-carry `[t=N]`, `time_now` in µs; `blkd`, `verityd`, `littlefsd` and `erofsd` say their counts at
-each power of two of their requests from 2^12, and `littlefsd` and `erofsd` once more, exactly, on a
+carry `[t=N]`, `time_now` in µs; `blkd`, `littlefsd` and `erofsd` say their counts at each power
+of two of their requests from 2^12 and `verityd` from 2^7, and `littlefsd` and `erofsd` once more, exactly, on a
 walk of
 `Elixir.BootStats.beam`, a name no volume holds; and at the VM's first console read beamlet says
 `beamlet: first console read [t=N]` and what its lookups cost: their count and the guest time spent
@@ -1108,9 +1108,9 @@ stack rounded up to 128, not to 1,024, because at 512 MiB it must lie between 20
 of twice the peak) and 20,990 (a case that adds a 256-page client still fits on rv32); the image
 then has 383 pages to spare on rv32, a client case 126
 ([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The read-only case also scans its
-additional client from the merged manifest. `verity:system`'s row is from six runs
-with the userland volume read through it on littlefs, and `erofsd:system`'s from the six runs with
-the volume on EROFS.
+additional client from the merged manifest. `erofsd:system`'s row and
+`verity:system`'s heap, which holds 4 checked data blocks, are from the six runs with the userland
+volume on EROFS.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1122,7 +1122,7 @@ the volume on EROFS.
 | `ipd` | 8,040 | 4 | 4 | 8 |
 | `littlefsd:data` | 7,176 | 4 | 9 | 18 |
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
-| `verity:system` | 7,864 | 4 | 47 | 94 |
+| `verity:system` | 7,864 | 4 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 12 | 24 |
 | `beamlet` | 33,240 | 17 | 10,387 | 20,846 |
 

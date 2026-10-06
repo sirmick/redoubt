@@ -3,7 +3,8 @@
 //!
 //! **Memory is fixed, whatever the volume's size:** the top tree block, pinned at start;
 //! [`TREE_CACHE`] tree blocks, each kept only once it was checked against the block above it; and
-//! the last checked data block, so reads within one block hash it once.
+//! [`DATA_CACHE`] checked data blocks, least recently used out first, so a block read again (a
+//! directory block, the block holding a file's inode) is hashed and fetched once while it is held.
 //!
 //! **A block is checked from the top down.** The lowest block on its path that is already held
 //! (the top always is) gives the digest the next block down must hash to; each block fetched is
@@ -19,6 +20,10 @@ use crate::Range;
 
 /// Tree blocks kept after they were checked, beside the pinned top: 128 KiB.
 pub const TREE_CACHE: usize = 32;
+/// Checked data blocks kept: 16 KiB. Sized from the EROFS boot profile: by the 512th read, 1, 4 and
+/// 8 blocks held 100, 197 and 289 of 849 blocks asked for (servers/verityd.md, "A cache of checked
+/// data blocks"); 8 is the next cut.
+pub const DATA_CACHE: usize = 4;
 
 /// Why the volume is refused at start: every read then fails, and `verityd` stays up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +84,10 @@ pub struct Counts {
     pub hits: u64,
     /// Reads at `blkd`: data blocks and tree blocks.
     pub reads: u64,
+    /// Data blocks asked for.
+    pub requests: u64,
+    /// Of those, the ones already held, checked, in the data cache.
+    pub held: u64,
 }
 
 /// A vector of `len` zero bytes, or `None` if there is no memory for it.
@@ -89,15 +98,18 @@ fn zeroed(len: usize) -> Option<Vec<u8>> {
     Some(v)
 }
 
-/// The checked tree blocks, least recently used out first.
-struct Cache {
-    tags: [Option<u64>; TREE_CACHE],
-    used: [u64; TREE_CACHE],
+/// Checked blocks, `N` of them, least recently used out first: the tree's and the data's.
+struct Cache<const N: usize> {
+    tags: [Option<u64>; N],
+    used: [u64; N],
     clock: u64,
     blocks: Vec<u8>,
 }
 
-impl Cache {
+impl<const N: usize> Cache<N> {
+    /// An empty cache over `blocks`, `N` blocks of bytes.
+    fn new(blocks: Vec<u8>) -> Cache<N> { Cache { tags: [None; N], used: [0; N], clock: 0, blocks } }
+
     fn bytes(&self, i: usize) -> &[u8] { &self.blocks[i * BLOCK..(i + 1) * BLOCK] }
 
     /// The slot holding tree block `n`, marked used.
@@ -110,12 +122,12 @@ impl Cache {
 
     /// A slot to read a block into, emptied: a free one, else the least recently used.
     fn victim(&mut self) -> usize {
-        let i = (0..TREE_CACHE).min_by_key(|&i| (self.tags[i].is_some(), self.used[i])).unwrap_or(0);
+        let i = (0..N).min_by_key(|&i| (self.tags[i].is_some(), self.used[i])).unwrap_or(0);
         self.tags[i] = None;
         i
     }
 
-    /// Keeps slot `i` as tree block `n`, which was checked.
+    /// Keeps slot `i` as block `n`, which was checked.
     fn keep(&mut self, i: usize, n: u64) {
         self.clock += 1;
         self.tags[i] = Some(n);
@@ -137,7 +149,7 @@ struct Tree<R> {
     range: R,
     geometry: Geometry,
     top: Vec<u8>,
-    cache: Cache,
+    cache: Cache<TREE_CACHE>,
     #[cfg(any(test, feature = "boot-stats"))]
     counts: Counts,
 }
@@ -199,9 +211,8 @@ impl<R: Range> Tree<R> {
 /// A volume that passed the start check.
 pub struct Volume<R> {
     tree: Tree<R>,
-    /// The last data block checked, and its bytes.
-    last: Option<u64>,
-    block: Vec<u8>,
+    /// The data blocks checked most recently, and their bytes.
+    data: Cache<DATA_CACHE>,
 }
 
 impl<R: Range> Volume<R> {
@@ -212,8 +223,8 @@ impl<R: Range> Volume<R> {
         if size.sectors < geometry.total_sectors() {
             return Err(Refusal::Truncated);
         }
-        let (Some(mut top), Some(blocks), Some(block)) =
-            (zeroed(BLOCK), zeroed(TREE_CACHE * BLOCK), zeroed(BLOCK))
+        let (Some(mut top), Some(blocks), Some(data)) =
+            (zeroed(BLOCK), zeroed(TREE_CACHE * BLOCK), zeroed(DATA_CACHE * BLOCK))
         else {
             return Err(Refusal::NoMemory);
         };
@@ -221,31 +232,40 @@ impl<R: Range> Volume<R> {
         if root(geometry.data_blocks(), &top) != *root_ {
             return Err(Refusal::Root);
         }
-        let cache = Cache { tags: [None; TREE_CACHE], used: [0; TREE_CACHE], clock: 0, blocks };
         let tree = Tree {
             range,
             geometry,
             top,
-            cache,
+            cache: Cache::new(blocks),
             #[cfg(any(test, feature = "boot-stats"))]
             counts: Counts { reads: 1, ..Counts::default() },
         };
-        Ok(Volume { tree, last: None, block })
+        Ok(Volume { tree, data: Cache::new(data) })
     }
 
     /// Data block `b`, checked; a block that does not check is never returned, and is read again
     /// next time.
     pub fn block(&mut self, b: u64) -> Result<&[u8], Bad> {
-        if self.last != Some(b) {
-            self.last = None;
-            if b >= self.tree.geometry.data_blocks() {
-                return Err(Bad::Data(b));
-            }
-            self.tree.read(b, &mut self.block)?;
-            self.tree.check(b, &leaf(&self.block))?;
-            self.last = Some(b);
+        #[cfg(any(test, feature = "boot-stats"))]
+        {
+            self.tree.counts.requests += 1;
         }
-        Ok(&self.block)
+        if let Some(i) = self.data.find(b) {
+            #[cfg(any(test, feature = "boot-stats"))]
+            {
+                self.tree.counts.held += 1;
+            }
+            return Ok(self.data.bytes(i));
+        }
+        if b >= self.tree.geometry.data_blocks() {
+            return Err(Bad::Data(b));
+        }
+        let i = self.data.victim();
+        let bytes = &mut self.data.blocks[i * BLOCK..(i + 1) * BLOCK];
+        self.tree.read(b, bytes)?;
+        self.tree.check(b, &leaf(bytes))?;
+        self.data.keep(i, b);
+        Ok(self.data.bytes(i))
     }
 
     #[cfg(any(test, feature = "boot-stats"))]
