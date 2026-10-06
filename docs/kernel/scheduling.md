@@ -900,7 +900,7 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 
 ## Why
 
-- **Weights, not priorities.** A server ahead of everyone would let one user make `fsd` or `keyd`
+- **Weights, not priorities.** A server ahead of everyone would let one user make `littlefsd` or `keyd`
   do expensive work while no user budget runs. Large weights from the boot manifest
   ([init](../servers/init.md)) keep `init`, the steward and the drivers responsive without that; a driver that spins while others are runnable is a bug for
   the bench to find, not a mode to support.

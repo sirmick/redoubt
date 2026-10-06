@@ -230,7 +230,7 @@ File transfer is SFTP, for unlabelled sessions only
   nothing else, so no path, however written, reaches anything outside them, and `..` at a root stays
   at the root.
 - **Unsupported operations fail visibly.** Symlink, readlink and link get "operation unsupported";
-  setting a size truncates, and mtime is set where `fsd` stores it; mode, owner and group get
+  setting a size truncates, and mtime is set where `littlefsd` stores it; mode, owner and group get
   "operation unsupported" rather than a silent no-op.
 - **SCP is served only as SFTP.** Current `scp` clients use SFTP by default; legacy `scp -O`, which
   runs `scp` on the server, is refused, since there is no `exec` and no shell to run it. Old clients
@@ -248,7 +248,7 @@ session's binds; symlink, chmod and chown are refused; `scp -O` is refused; a su
 vault channel is refused; every operation yields exactly one signed audit record with the right
 principal; a second principal's files are unreachable.
 
-**Open:** auditing at `fsd` of the transfer server's handles, needed only if the audit must survive
+**Open:** auditing at `littlefsd` of the transfer server's handles, needed only if the audit must survive
 a compromised transfer server.
 
 ## Authority

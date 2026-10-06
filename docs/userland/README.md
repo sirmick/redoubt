@@ -109,7 +109,7 @@ flowchart TB
         SH["the shell"] -.-> EX["Elixir modules: File, IO, Redoubt.*"]
         EX -.-> NAT["beamlet natives and the Platform"]
     end
-    NAT -.->|"9P and typed calls"| SRV["servers: fsd, consoled, ipd, ..."]
+    NAT -.->|"9P and typed calls"| SRV["servers: littlefsd, consoled, ipd, ..."]
     NAT -.->|"launch in a carved budget"| N["native programs on redoubt-rt"]
     N -.->|"9P"| SRV
 ```

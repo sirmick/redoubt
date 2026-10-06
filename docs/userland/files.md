@@ -52,13 +52,13 @@ flowchart LR
     F["File, IO<br/>(Elixir)"] -.-> FM[":file, file_io_server<br/>(OTP, unchanged)"]
     FM -.-> PF["prim_file natives<br/>(beamlet)"]
     PF -.-> C["the 9P client<br/>(beamlet's Platform)"]
-    C -.->|"9P over call and lend"| FSD["fsd, one per volume"]
-    FSD -.-> LFS["littlefs"]
+    C -.->|"9P over call and lend"| LFSD["littlefsd, one per volume"]
+    LFSD -.-> LFS["littlefs"]
     LFS -.->|"typed calls"| B["blkd"]
     B -.-> D["virtio block device"]
 ```
 *Figure: the file I/O path from `File` to the block device. Every link is planned (dashed). The
-servers are [the file server](../servers/fsd.md)'s and [blkd](../servers/blkd.md)'s pages.*
+servers are [the file server](../servers/littlefsd.md)'s and [blkd](../servers/blkd.md)'s pages.*
 
 `File.read!/1` becomes OTP's `file` module, whose `prim_file` calls beamlet implements over its
 9P client ([beamlet](beamlet.md#the-platform-boundary)). The client resolves the path in the
@@ -129,7 +129,7 @@ into its startup block, so a session's binds reach a child only if the session p
 Status: planned · M1 (separation and containment)
 
 Labels are per volume: each volume has its own file server instance and its own label set, fixed
-when the volume is set up ([the file server](../servers/fsd.md)). The file server checks every
+when the volume is set up ([the file server](../servers/littlefsd.md)). The file server checks every
 request against the caller's label set, which the kernel stamps on the message
 ([R14 (unforgeable sender)](../kernel/ipc.md#r14-unforgeable-sender)), by the servers' label rule
 ([labels](../servers/README.md#labels)):

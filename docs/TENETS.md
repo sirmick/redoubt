@@ -182,7 +182,7 @@ flowchart TB
           KD["keyd"]
         end
         subgraph SH["shared servers"]
-          FS["bootfsd, fsd, consoled"]
+          FS["bootfsd, littlefsd, consoled"]
           DRV["blkd, netd (drivers)"]
           IPD["ipd, resolver"]
           GW["gatewayd"]

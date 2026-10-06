@@ -161,7 +161,7 @@ Everything the VM gets from outside comes through the `Platform` trait
   searches the code path's directories in order, including those added with `code:add_patha/1`;
   `Refused` stops without touching the code path
   ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). On Redoubt
-  a name the userland volume's `fsd` answers `not_found` to is absent, while any other refusal at
+  a name the userland volume's `littlefsd` answers `not_found` to is absent, while any other refusal at
   the open or on the read (`corrupt`, a short or long file, a device error) is refused, with one
   console line naming the file and the error's name
   ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). `load_app`
@@ -298,7 +298,7 @@ remain planned.
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
-| `load_module`, `load_app` | reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `fsd` (`fsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `fsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `fsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
+| `load_module`, `load_app` | reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `littlefsd` (`littlefsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `littlefsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `littlefsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
 | `files` | the client library's `file`: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
 | `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)) |
 
@@ -310,16 +310,16 @@ before the change; a caller that wants to be told of a change uses the parked `r
 ([the shell](shell.md)).
 
 On the machine, beamlet is the program `beamlet`, started like any other with a console, a
-budget, and a connection to the userland disk's `fsd`, a named handle (`fsd:system`). It runs one scheduler thread until several harts
+budget, and a connection to the userland disk's `littlefsd`, a named handle (`littlefsd:system`). It runs one scheduler thread until several harts
 ([several harts](../plan/m2-usable-shell.md#several-harts)), and starts its threads with the
 runtime's `thread::spawn`.
 
-If the volume does not attach, because `fsd` serves it as corrupt, or the module it is told to
+If the volume does not attach, because `littlefsd` serves it as corrupt, or the module it is told to
 start cannot load, it says why on its console and waits without exiting: a tampered disk must not
 become a restart loop that reboots the machine.
 
 Each label set that runs beamlet reads its own attachment of the userland image through its own
-`blkd`, `verityd` and `fsd`, all carrying that set
+`blkd`, `verityd` and `littlefsd`, all carrying that set
 ([R34 (confined placement)](../servers/init.md#r34-confined-placement)).
 
 The timer's counter frequency is not needed: `time_now`'s microseconds serve the clock and
@@ -366,7 +366,7 @@ always `new_connection`, a typed call on a connection, not a native ([sessions](
 
 The namespace and launching natives are the client library's `ns` and `launch`, so policy stays
 in Elixir and encoding in Rust. The file server's operations that name fids (`Redoubt.File`'s
-`rename`, `copy_file` and attributes) go through the library's `fsd` beside the file natives,
+`rename`, `copy_file` and attributes) go through the library's `littlefsd` beside the file natives,
 since the fids are the platform's, not Elixir's ([native programs](native.md#the-client-library)).
 
 The Elixir modules over them are of two layers. A server's typed calls are generated from its

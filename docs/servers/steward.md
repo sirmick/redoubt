@@ -399,7 +399,7 @@ sequenceDiagram
     participant SH as sshd
     participant KD as keyd
     participant ST as steward
-    participant F as fsd, ipd, consoled
+    participant F as littlefsd, ipd, consoled
     participant S as session
     Note over C,S: planned
     C-->>SH: SSH, user alice+secrets, key K
@@ -598,8 +598,8 @@ sequenceDiagram
     participant P as Alice (owner)
     participant ST as steward
     participant R as reader budget {alice-secrets}
-    participant V as fsd:alice-secrets
-    participant U as fsd:data
+    participant V as littlefsd:alice-secrets
+    participant U as littlefsd:data
     Note over P,U: planned
     P-->>ST: declassify(item)
     ST-->>R: create (exact labels, deadline), call
@@ -727,7 +727,7 @@ The steward keeps each principal's package records and never parses a package
 Status: planned · M5 (persist, install, share)
 
 A **project** is a principal sponsored by several members, with its own budget, volume
-(`fsd:project-x`), package directory and profile, and optionally a label. Membership is
+(`littlefsd:project-x`), package directory and profile, and optionally a label. Membership is
 capabilities minted into a revocation scope per member; removing a member destroys the scope. A
 labelled project is worked on in project vault sessions (`ssh alice+project-x@box`), and
 declassifying one of its items needs a project owner's approval. No kernel mechanism is involved.

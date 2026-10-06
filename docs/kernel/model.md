@@ -418,7 +418,7 @@ are planned.*
 ([the policy core](../servers/steward.md#the-policy-core)), on the kernel model, and
 `model/src/policy.rs` holds its properties. `init` creates the shared server's endpoint and the
 steward's own, and starts the steward in `system`, with handles to `users`, `system` and both
-endpoints. The steward starts the **server**, a system-class process standing in for `fsd` that
+endpoints. The steward starts the **server**, a system-class process standing in for `littlefsd` that
 holds no budget handle, receiving on the shared endpoint. Every principal's budget and its fixed
 sub-budget per label set is a `budget_create` at boot. Then the core decides every call, and the
 embedder runs each batch it returns as calls on the kernel model, in order, stopping at the first
