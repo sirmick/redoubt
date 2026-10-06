@@ -431,3 +431,7 @@ fn process_map_destination_validation_precedes_started_state() {
 
 #[test]
 fn scheduler_contracts_hold() { sched_contracts(None).unwrap(); }
+
+/// R10: a destruction delivers nothing until its end; the trace replays.
+#[test]
+fn a_destruction_delivers_at_its_end() { trace::check(&destruction_delivery_trace(), None).unwrap(); }

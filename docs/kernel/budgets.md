@@ -509,7 +509,7 @@ by itself.
 
 ### R10 (destruction)
 
-<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; that the caller is killed last is not pinned by a case: the kernel's kill lines, the only ones in kill order, carry the PIDs it draws, the tester's lines that name each program come in no defined order, and the bench has no check across lines (`budget-destroy-kills` checks that both die); the equal-instant order of timeouts before deadlines is attacked only in the model · tested (34)</summary>
+<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; that the caller is killed last is not pinned by a case: the kernel's kill lines, the only ones in kill order, carry the PIDs it draws, the tester's lines that name each program come in no defined order, and the bench has no check across lines (`budget-destroy-kills` checks that both die); the equal-instant order of timeouts before deadlines is attacked only in the model · tested (36)</summary>
 
 - bench:budget
 - bench:budget-destroy-attack
@@ -532,6 +532,7 @@ by itself.
 - host:redoubt-model::budget_lifecycles
 - host:redoubt-model::a_reap_destroys_one_child_and_keeps_the_budget
 - host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit
+- host:redoubt-model::a_destruction_delivers_at_its_end
 - mutation:R10KeepForeignHandles
 - mutation:R10KeepCarvedLimits
 - mutation:R10SpareDescendantProcesses
@@ -544,6 +545,7 @@ by itself.
 - mutation:R10ReapDestroysParent
 - mutation:R10ReapKeepsCarve
 - mutation:R10ReapSkipsGrandchildren
+- mutation:R10DeliveredMidDestruction
 - mutation:ExpireBudgetsFirst
 
 </details>

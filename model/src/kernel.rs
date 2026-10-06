@@ -2119,13 +2119,26 @@ impl Kernel {
             }
         }
         let doomed: BTreeSet<u64> = order.iter().copied().collect();
-        for x in &order {
+        // The kills follow the kernel's walk: the top first, then each child's subtree, the newest
+        // child first (its list's head), so nothing here leans on an order the kernel lacks.
+        let mut kills = Vec::new();
+        let mut stack = vec![b];
+        while let Some(x) = stack.pop() {
+            kills.push(x);
+            stack.extend(self.children(x));
+        }
+        for x in &kills {
             if *x != b && self.broken(Mutation::R10SpareDescendantProcesses) {
                 continue;
             }
             let pids: Vec<u64> = self.processes.values().filter(|p| p.budget == *x).map(|p| p.pid).collect();
             for pid in pids {
                 self.end_process(pid, 0, Blame::killed());
+                // Nothing is delivered until the destruction's end: what a kill makes deliverable
+                // waits for the step's `settle`, when nothing dying is left to take it.
+                if self.broken(Mutation::R10DeliveredMidDestruction) {
+                    self.settle();
+                }
             }
         }
         // Process objects charged to the doomed budgets are freed with them, killing the processes
@@ -2241,6 +2254,10 @@ impl Kernel {
             self.budgets.remove(&x);
             self.sched.destroy_budget(x);
         }
+        // The destruction's end: what it made deliverable is delivered now, before anything else
+        // the step does, as the kernel drains its to-pump list at the end of each destruction (a
+        // second deadline due in the same expiry finds this one's deliveries made).
+        self.settle();
     }
 
     /// R10 over one child: destroy the first child of `b` (the newest: the kernel links a new
