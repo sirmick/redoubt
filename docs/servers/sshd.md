@@ -58,7 +58,9 @@ steward and `/dev/cons`. On the build host it is a host tool, so the bench logs 
 ([against Redoubt's sshd](../testbench.md#against-redoubts-sshd)):
 
 - **Transport:** standard input and output, one connection per process, as `ssh` starts it for
-  a `ProxyCommand`; a log file of the server's own lines.
+  a `ProxyCommand`; a log file of the server's own lines. A client that hangs up, as `ssh` does
+  after a refused login, ends the connection without an error, so nothing of the server's
+  follows on the standard error it shares with `ssh`.
 - **Signer:** `keyd`'s own server code, in the same process, given one key in `keyd`'s argument
   form, `name,ssh_host,seed`. So OpenSSH verifies a signature over the exchange hash `keyd`
   built, end to end. The host tool tests the protocol, the login flow and the channel rules, not
