@@ -4,6 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod exercise;
+pub mod forge;
 pub mod ops;
 
 use walfs::{BLOCK, Block, BlockDevice, Error, FileType, Filesystem, Geometry, OpenOptions};
