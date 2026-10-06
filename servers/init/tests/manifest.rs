@@ -1298,6 +1298,55 @@ fn confined_gives_each_label_set_its_own_verifier() {
     );
 }
 
+/// An `erofsd` entry is a volume server as a `littlefsd` one is (servers/init.md, "The boot
+/// manifest"): `init` names neither program, so a read-only volume's server gets its range at its
+/// verifier, its arguments and its place in confinement exactly as a writable volume's does.
+/// Here a confined manifest serves an unlabelled verified volume read-only through `erofsd`, and
+/// a labelled one through `littlefsd` on a disk of its own.
+#[test]
+fn an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
+    use redoubt_init::check::{args, range};
+    let mut m = without_volumes();
+    m.confined = true;
+    secrets(&mut m);
+    m.principals.push(alice());
+    let secret = || vec![String::from("alice-secrets")];
+    disk1(&mut m);
+    m.devices.push(Device { name: "disk2".into(), base: Some(0x1000_5000), irq: Some(5), dma: true });
+    for (device, suffix, labels) in [("disk1", "", vec![]), ("disk2", "-l", secret())] {
+        let blkd = format!("blkd:system{suffix}");
+        let base = server(&mut image(), "blkd").clone();
+        m.servers.push(Server {
+            name: blkd.clone(),
+            labels: labels.clone(),
+            receives: vec![blkd.clone()],
+            devices: vec![DeviceUse { device: device.into(), name: "disk".into() }],
+            args: vec![format!("endpoint={blkd}")],
+            ..base
+        });
+        verified_volume(&mut m, &format!("system{suffix}"), 0, labels, Some(blkd.as_str()));
+    }
+    let erofsd = m.servers.iter_mut().find(|s| s.name == "littlefsd:system").unwrap();
+    erofsd.name = "erofsd:system".into();
+    erofsd.program = "erofsd".into();
+    erofsd.receives = vec!["erofsd:system".into()];
+    erofsd.args = vec!["endpoint=erofsd:system".into(), "buckets=4".into()];
+    let devices = virt_devices();
+    let machine = machine(&devices, &ENTRIES);
+    assert!(on(&m, &machine).is_ok());
+    assert_eq!(range(&m, named(&m, "erofsd:system")), Some(("verity:system", 1)));
+    assert_eq!(args(&m, named(&m, "erofsd:system")), ["endpoint=erofsd:system", "buckets=4"]);
+    assert_eq!(args(&m, named(&m, "littlefsd:system-l")).last().unwrap(), "labels=7");
+    // Under the labelled set it would read the unlabelled volume's verifier from a labelled
+    // domain: confinement refuses it as it would a `littlefsd`.
+    server(&mut m, "erofsd:system").labels = secret();
+    let verifier = m.servers.iter().position(|s| s.name == "verity:system").unwrap();
+    assert_eq!(
+        on(&m, &machine).unwrap_err(),
+        Refusal::Confined { at: format!("servers[{verifier}].receives[0]"), sharing: Sharing::Endpoint }
+    );
+}
+
 /// `boot-profile-unverified` boots the image less its verification
 /// (tests/boot-profile-unverified.toml), from copies: the image's manifest without each volume's
 /// `verity` and the verifiers it names, and its userland recipe without `verity = true`. Every
