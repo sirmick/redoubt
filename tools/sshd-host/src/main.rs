@@ -81,6 +81,16 @@ impl Minter for NoKernel {
 }
 
 impl Host {
+    /// The platform with `keyd` holding the host key `seed`, and the host key's public half.
+    fn new(seed: &[u8; 32], logins: Vec<(String, PublicKey)>, log: Log) -> Result<(Host, PublicKey)> {
+        let keys = Keys::from_args([keyfile::host_key_arg("host", seed)].iter().map(String::as_str))
+            .map_err(|e| anyhow::anyhow!("keyd refused the host key: {e:?}"))?;
+        let public = *keys.get(0).context("no host key")?.public();
+        let keyd = KeyServer::new(keys, limits(16), &COST, BUDGET, 1)
+            .map_err(|_| anyhow::anyhow!("keyd's limits"))?;
+        Ok((Host { keyd, logins, log }, public))
+    }
+
     /// One request to `keyd` through its protocol, with the host key's badge.
     fn ask(&mut self, request: &Message<'_>) -> Option<Vec<u8>> {
         let mut buf = vec![0u8; 64 * 1024];
@@ -169,36 +179,36 @@ fn main() -> Result<()> {
     }
     let host_key = host_key.context("--host-key is required")?;
     let seed = keyfile::seed(&std::fs::read_to_string(&host_key).with_context(|| host_key.clone())?)?;
-    let keys = Keys::from_args([keyfile::host_key_arg("host", &seed)].iter().map(String::as_str))
-        .map_err(|e| anyhow::anyhow!("keyd refused the host key: {e:?}"))?;
-    let public = *keys.get(0).context("no host key")?.public();
-    let keyd =
-        KeyServer::new(keys, limits(16), &COST, BUDGET, 1).map_err(|_| anyhow::anyhow!("keyd's limits"))?;
     let log = log.context("--log is required")?;
-    let mut host = Host { keyd, logins, log: log.clone() };
-    let result = serve(&mut host, &public);
+    let (mut host, public) = Host::new(&seed, logins, log.clone())?;
+    let result = serve(&mut host, &public, std::io::stdin(), &mut std::io::stdout().lock());
     if let Err(e) = &result {
         log.line(&format!("connection failed: {e:#}"));
     }
     result
 }
 
-/// Serves one connection on standard input and output until it closes.
-fn serve(host: &mut Host, public: &PublicKey) -> Result<()> {
+/// Serves one connection, its bytes from `input` and to `output` (standard input and output), until
+/// it closes.
+fn serve(
+    host: &mut Host,
+    public: &PublicKey,
+    input: impl Read + Send + 'static,
+    output: &mut impl Write,
+) -> Result<()> {
     let (mut inbuf, mut outbuf) = (vec![0; BUF], vec![0; BUF]);
     let mut conn = Box::new(Connection::new(&mut inbuf, &mut outbuf, public));
-    // Standard input is read on its own thread, so the loop can run the console while it waits.
+    // The input is read on its own thread, so the loop can run the console while it waits.
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
-        let mut stdin = std::io::stdin().lock();
-        while let Ok(n @ 1..) = stdin.read(&mut buf) {
+        let mut input = input;
+        while let Ok(n @ 1..) = input.read(&mut buf) {
             if tx.send(buf[..n].to_vec()).is_err() {
                 return;
             }
         }
     });
-    let mut stdout = std::io::stdout().lock();
     let mut pending = Vec::new();
     loop {
         match rx.recv_timeout(TICK) {
@@ -208,13 +218,20 @@ fn serve(host: &mut Host, public: &PublicKey) -> Result<()> {
             Err(mpsc::RecvTimeoutError::Disconnected) => (),
         }
         loop {
-            let n = conn.input(&pending).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            // Once the input is closed, `sunset` refuses any more, even none (`SessionEOF`), and
+            // nothing more arrives: a client that hangs up, as `ssh` does after a refused login,
+            // is the connection's end, which `progress` reports, not an error.
+            let n = if pending.is_empty() {
+                0
+            } else {
+                conn.input(&pending).map_err(|e| anyhow::anyhow!("{e:?}"))?
+            };
             pending.drain(..n);
             let progress = conn.progress(host).map_err(|e| anyhow::anyhow!("{e:?}"))?;
             let out = conn.output_buf();
             let written = out.len();
-            stdout.write_all(out)?;
-            stdout.flush()?;
+            output.write_all(out)?;
+            output.flush()?;
             conn.consume_output(written);
             match progress {
                 Progress::Busy => continue,
@@ -228,7 +245,21 @@ fn serve(host: &mut Host, public: &PublicKey) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Log;
+    use super::{Host, Log, serve};
+
+    /// A client that hangs up, as `ssh` does once its login is refused, ends the connection
+    /// quietly: `serve` returns no error for `main` to print, where `ssh`'s output would show it.
+    #[test]
+    fn a_client_that_hangs_up_ends_the_connection_quietly() {
+        let path = std::env::temp_dir().join(format!("redoubt-sshd-host-hang-up-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let (mut host, public) =
+            Host::new(&[7; 32], Vec::new(), Log::append(path.to_str().unwrap()).unwrap()).unwrap();
+        let mut output = Vec::new();
+        let result = serve(&mut host, &public, std::io::empty(), &mut output);
+        std::fs::remove_file(&path).unwrap();
+        assert!(result.is_ok(), "{result:?}");
+    }
 
     /// Two servers appending to one log, as a case's sessions do: every line arrives whole, none
     /// split and none joined to another.

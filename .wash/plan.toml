@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 157
+revision = 161
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -633,9 +633,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "beamlet-redoubt"
   needs = ["BEAM2", "AIO1", "BEAM7"]
-  body = "Design assessment: .wash/local/BEAM3-brief.md. Owning pages: docs/userland/beamlet.md#asynchronous-underneath-synchronous-on-top; docs/userland/files.md#files-over-9p; docs/userland/native.md#dropped-files-error-names-and-generated-calls. Assessment complete, broad implementation not started. BEAM7 delivers terminal module/app refusal before files. Later client fid lifecycle, named errors, path/whole-file helpers and generated clients require explicit prerequisite nodes before file integration starts; ordering is in the brief. Build on accepted AIO1 hub/connection waiters and one M1 scheduler; do not implement stale fixed-pool prose literally. VM completion/cancellation/resource design, honest metadata and asynchronous console need bounded design checkpoints. BEAM7 completion does not complete this node."
+  body = "Asynchronous underneath: the VM's I/O threads, and files over 9P. Also owed to STEWARD2: the steward's SSH-session cases take their file verdicts (File.write/read/ls under /home/<principal>, /vault, /net, and their refusals across principals and labels) only once the VM has a `files` platform over the namespace; until then those cases verify prompts, VMs, budgets and the binding table, and the namespace/label checks are host tests (steward.md says which)."
   state = "todo"
-  revision = 2
+  revision = 159
 
 [[node]]
   id = "BEAM4"
@@ -794,8 +794,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["IPC3"]
   body = "Brief: .wash/local/K19-implementer.md. Tier A, size M+, needs IPC3 merged (start from main). Part A, pumps at the boundary: no delivery inside a destruction; pumps become entries on a bounded to-pump list of endpoints, drained once after step 9 and before the bill; the five dying/doomed checks deleted or made checked-build assertions; commit 1 is a model trace of the mid-kill delivery, and the model's destroy pumps last; R10 step 4 tightens to \"from the mark on, no message stamped with a dying budget is delivered\" with a new model mutation (no R4b doomed mutation exists to retire: say so). Part B, per-budget chains of process objects (charged: the creator's owner chain; counted: a chain keyed on counted_in) so destroy_subtree's kill, step 3's frees and step 8's migration follow the dying subtree. Done when worst-walk's R10 p99 at full fill is within 30 ms net on both widths, its must_fail and docs/todo/destruction-walks-every-process.md gone, the residual bullets rewritten. Short gate plus the R10/R4b case lists and worst-walk by name. IPC3 already removed fail_all's rescan."
-  state = "todo"
-  revision = 150
+  state = "active"
+  revision = 158
 
 [[node]]
   id = "AIO1"
@@ -989,8 +989,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by the wave bench on bd6f768f6 and reproduced alone: bench-ssh-loopback-exit and bench-ssh-loopback-host-key fail on both widths because, after the expected refusal (mallory: Permission denied (publickey); alice: Host key verification failed), a line 'Error: Ssh(SessionEOF)' follows and becomes the session's last output. The string is servers/sshd's Error::Ssh(sunset::Error) (lib.rs:183) reaching a main that prints it: the guest sshd treats the client's close after a refusal as an error. Bisect by first-parent: passes at 27e74ec3b (B10's gate on 373396887 ran both alone, PASS), fails at 3aafc7a83 (MEM2's merge) and after. MEM2 changed libs/rt (heap cap, startup block v2), libs/client launch, and the bench's memory scan; find which path changed sshd's exit after EOF (the runtime's exit/report path? a heap record? the bench forwarding the guest console's last line where it did not before?) and fix the cause, not the regex: a refused login ends the connection quietly, as the page states (docs/servers/sshd.md). Size S. Gate: the 14 ssh-loopback-kind cases + bench-ssh-guest both widths, sshd and rt host tests."
-  state = "active"
-  revision = 154
+  state = "done"
+  revision = 161
 
 [[node]]
   id = "BEAM8"
