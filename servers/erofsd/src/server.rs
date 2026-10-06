@@ -27,8 +27,11 @@ pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 /// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
 /// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 64 requests at 256
-/// and 2 pages at 4 KiB: 225 280 bytes, so the manifests' 4 buckets take 901 120, and 4 fit.
-pub const BUDGET: u64 = 1024 * 1024;
+/// and 2 pages at 4 KiB: 225 280 bytes, so 6 fit here (1 351 680). Every session reads the system
+/// volume on a connection the steward makes for it, so each principal's domain is a bucket beside
+/// the steward's: the image's three and the steward take 4, a case's extra client 5, and one more
+/// principal's domain fits.
+pub const BUDGET: u64 = 1536 * 1024;
 
 /// The `Rerror` texts `erofsd` adds to the skeleton's fixed set, `littlefsd`'s words for the same
 /// things.
