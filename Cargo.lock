@@ -820,8 +820,13 @@ version = "0.1.0"
 name = "redoubt-sshd"
 version = "0.1.0"
 dependencies = [
+ "getrandom",
  "heapless",
+ "redoubt-client",
+ "redoubt-fake-kernel",
+ "redoubt-ipd",
  "redoubt-keyd",
+ "redoubt-rt",
  "sunset",
 ]
 
