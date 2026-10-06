@@ -790,13 +790,19 @@ impl<S: FileServer> NineServer<S> {
 
     /// The root the caller's connection attaches at, checked readable.
     fn root(&mut self, caller: &Caller, aname: &str) -> Result<(S::Node, Qid), NineError> {
-        let root = if caller.badge >= FIRST_MINTED_BADGE {
-            self.minted.get(caller.badge).cloned().ok_or(NineError::NO_CONNECTION)?
-        } else {
-            self.fs.attach(caller, aname)?
-        };
+        let root = self.attached(caller, aname)?;
         self.may_read(caller, &root.0)?;
         Ok(root)
+    }
+
+    /// The root the caller's connection attaches at, unchecked: for a mint there, which reads
+    /// nothing.
+    fn attached(&mut self, caller: &Caller, aname: &str) -> Result<(S::Node, Qid), NineError> {
+        if caller.badge >= FIRST_MINTED_BADGE {
+            self.minted.get(caller.badge).cloned().ok_or(NineError::NO_CONNECTION)
+        } else {
+            self.fs.attach(caller, aname)
+        }
     }
 
     /// The share `caller`'s requests count in: its badge, or, for a connection it minted for
@@ -837,11 +843,13 @@ impl<S: FileServer> NineServer<S> {
         share: u64,
     ) -> Result<(Handle, u64, u64), NineError> {
         // `root` is only a path, relative to the caller's root, cleaned so it never climbs above
-        // it, and every step is checked as a `Twalk`'s is.
+        // it, and every step is checked as a `Twalk`'s is. A mint at the caller's own root walks
+        // nothing and reads nothing (R25): the reply is a handle and an id, and the holder's
+        // `Tattach` is the root's first read, checked against the holder's labels.
         let names = path::clean(root).map_err(|_| NineError::BAD_NAME)?;
         let mut steps = Vec::new();
         steps.try_reserve(names.len() + 1).map_err(|_| NineError::NO_MEMORY)?;
-        steps.push(self.root(caller, "")?);
+        steps.push(if names.is_empty() { self.attached(caller, "")? } else { self.root(caller, "")? });
         for name in &names {
             self.step(caller, &mut steps, name)?;
         }

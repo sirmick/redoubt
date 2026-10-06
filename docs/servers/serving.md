@@ -391,8 +391,11 @@ request makes fails cleanly with an `Rerror`, never by killing the server.
 
 **`ninep_common`** (the table is on [wire](wire.md)): `new_connection(root, quota)` mints a
 connection rooted at `root`, a path relative to the caller's own root, cleaned so it never climbs
-above it and walked with the same label checks as a `Twalk`. It is admitted as a `State` of the
-caller's share, and the file server's `minted` hook may refuse it (a quota it cannot grant).
+above it and walked with the same label checks as a `Twalk`. A mint at the caller's own root (an
+empty path) walks nothing and reads nothing: the reply carries a handle and an id, no qid, and the
+first read of that root is the holder's `Tattach`, checked against the holder's labels like every
+request after it, so a server may hand out a connection to data it cannot read itself and learns
+nothing by it. It is admitted as a `State` of the caller's share, and the file server's `minted` hook may refuse it (a quota it cannot grant).
 `disconnect(id)` frees the connection and everything minted under it: their fids are clunked,
 their admission released, and the file server told (`disconnected`). `mint_rooted` mints a
 connection at a root the file server chose, in the same table, for a typed `grant` whose scope the
@@ -532,7 +535,7 @@ or decoded again when it is served; which typed operations may park at all
 
 ### R25 (the label check)
 
-<details><summary>Status: built · tested (8)</summary>
+<details><summary>Status: built · tested (9)</summary>
 
 - host:redoubt-rt::matches_the_set_definition
 - host:redoubt-rt::properties
@@ -540,6 +543,7 @@ or decoded again when it is served; which typed operations may park at all
 - host:redoubt-rt::every_write_needs_equal_labels
 - host:redoubt-rt::labelled_metadata_does_not_flow_down
 - host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it
+- host:redoubt-rt::a_mint_at_its_own_root_reads_nothing
 - bench:net-attacks
 - bench:littlefsd-label-check
 
@@ -552,7 +556,9 @@ are the ones the kernel attached to the message
 ([R14 (unforgeable sender)](../kernel/ipc.md#r14-unforgeable-sender)). With the kernel's R1
 between user budgets, this makes every flow through a shared server one the kernel would have
 allowed between the two budgets directly: a write then a read carries a's data to x only if x
-could read a's labels itself (`properties` checks exactly that).
+could read a's labels itself (`properties` checks exactly that). Minting a connection is not a
+read: nothing of the node flows to the minter, and the holder's requests are checked against the
+holder's labels.
 
 ### R26 (admission fairness)
 

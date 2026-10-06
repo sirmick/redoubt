@@ -139,6 +139,26 @@ fn new_connection_is_rooted_below_the_callers_root() {
     assert_eq!(t.err(&ghost, attach), "no such connection");
 }
 
+/// A mint at the caller's own root is not a read (R25): an unlabelled minter whose root is
+/// labelled mints there, learning a handle and an id; the holder's `Tattach` is the first read,
+/// refused to an unlabelled holder and allowed to a labelled one; a path into that root is
+/// walked, and refused at its first step.
+#[test]
+fn a_mint_at_its_own_root_reads_nothing() {
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    let vault = caller(ALICE, 1001, &[7]);
+    let (inside, _) = t.connect(&mut k, &vault, "vault", 0).unwrap();
+    // An unlabelled caller holding a connection rooted in the vault.
+    let minter = through(&alice(), inside);
+    let (minted, _) = t.connect(&mut k, &minter, "", 0).unwrap();
+    let attach = Body::Tattach { fid: 0, afid: NOFID, uname: "", aname: "" };
+    assert_eq!(t.err(&through(&alice(), minted), attach), "permission denied");
+    let holder = through(&vault, minted);
+    t.attach(&holder, 0, "");
+    assert_eq!(t.walk(&holder, 0, 1, &["key"]), vec![6]);
+    assert_eq!(t.connect(&mut k, &minter, "key", 0), Err(REFUSED));
+}
+
 #[test]
 fn a_disconnect_frees_its_fids_and_every_connection_minted_under_it() {
     let (mut t, mut k) = (T::new(), FakeKernel::new());
