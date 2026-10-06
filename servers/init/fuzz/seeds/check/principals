@@ -190,12 +190,7 @@
     {
      "labels": [
       "alice-secrets"
-     ],
-     "budget": {
-      "pages": "512",
-      "processes": 1,
-      "weight": 10
-     }
+     ]
     }
    ],
    "home": "data:/home/alice",

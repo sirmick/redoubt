@@ -14,7 +14,9 @@
 //! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`), `verity` (`server`, the `servers` entry of its `verityd`; pinned, `root` (64 lowercase hex digits) and `blocks` (string), or signed, `key` (64 lowercase hex digits or `bundle`) and `floor` (string)) |
 //! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `stack_pages` (string), `heap_pages` (string), `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
 //! | `public` | bundle entry names |
-//! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`, `budget`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
+//! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
+//! | `steward` | `server` (the `servers` entry of the steward), `sizes` (`session`, `agent`, `sub_agent`, `crossing`: each a `budget`; `cost` (string)), optional |
+//! | `console` | a principal's name, optional |
 //!
 //! A `budget` is `{ "pages": string, "processes": number, "weight": number }`. Every list is
 //! optional and empty when absent.
@@ -35,6 +37,27 @@ pub struct Manifest {
     pub servers: Vec<Server>,
     pub public: Vec<String>,
     pub principals: Vec<Principal>,
+    pub steward: Option<Steward>,
+    /// The principal whose unlabelled session the steward opens on the UART.
+    pub console: Option<String>,
+}
+
+/// The steward: its `servers` entry, which `init` hands `users`, and the sizes it carves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Steward {
+    pub server: String,
+    pub sizes: Sizes,
+}
+
+/// The sizes the steward carves for each session, agent, sub-agent and crossing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sizes {
+    pub session: Budget,
+    pub agent: Budget,
+    pub sub_agent: Budget,
+    pub crossing: Budget,
+    /// The pages a budget object itself costs.
+    pub cost: u64,
 }
 
 /// One device: its register region by base, its interrupt by number, or both.
@@ -121,11 +144,11 @@ pub struct Server {
     pub args: Vec<String>,
 }
 
-/// A label set a principal works under, with its fixed sub-budget.
+/// A label set a principal works under: its fixed sub-budget is an equal share of the
+/// principal's budget (servers/steward.md, "Fixed sub-budgets per label set").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabelSet {
     pub labels: Vec<String>,
-    pub budget: Budget,
 }
 
 /// A network scope: an IP prefix and the ports in it.
@@ -171,6 +194,8 @@ fn manifest(v: &Value) -> Result<Manifest, SchemaError> {
             servers: list(m, "servers", server)?,
             public: list(m, "public", string)?,
             principals: list(m, "principals", principal)?,
+            steward: m.optional("steward", steward)?,
+            console: m.optional("console", string)?,
         })
     })
 }
@@ -278,8 +303,24 @@ fn server(v: &Value) -> Result<Server, SchemaError> {
     })
 }
 
+fn steward(v: &Value) -> Result<Steward, SchemaError> {
+    v.object(|m| Ok(Steward { server: m.required("server", string)?, sizes: m.required("sizes", sizes)? }))
+}
+
+fn sizes(v: &Value) -> Result<Sizes, SchemaError> {
+    v.object(|m| {
+        Ok(Sizes {
+            session: m.required("session", budget)?,
+            agent: m.required("agent", budget)?,
+            sub_agent: m.required("sub_agent", budget)?,
+            crossing: m.required("crossing", budget)?,
+            cost: m.required("cost", Value::u64_string)?,
+        })
+    })
+}
+
 fn label_set(v: &Value) -> Result<LabelSet, SchemaError> {
-    v.object(|m| Ok(LabelSet { labels: list(m, "labels", string)?, budget: m.required("budget", budget)? }))
+    v.object(|m| Ok(LabelSet { labels: list(m, "labels", string)? }))
 }
 
 fn net(v: &Value) -> Result<Net, SchemaError> {

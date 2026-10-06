@@ -65,3 +65,11 @@ pub fn binding(domain: &Domain, r: &Request) -> [u8; 32] {
 
 /// An item's digest, as a push's screen shows it.
 pub fn item(b: &[u8]) -> [u8; 32] { Sha256::digest(b).into() }
+
+/// The id the core knows an `ssh-ed25519` key by: the first eight bytes, little-endian, of
+/// SHA-256 over its 32 raw bytes. `init` computes it for the manifest lines and the steward for a
+/// login, so the core never sees a key.
+pub fn key_id(key: &[u8; 32]) -> u64 {
+    let d = Sha256::digest(key);
+    u64::from_le_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]])
+}

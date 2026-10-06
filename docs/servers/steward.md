@@ -22,9 +22,15 @@ standing labelled reader.
 
 ### The policy core
 
-<details><summary>Status: built · tested (49)</summary>
+<details><summary>Status: built · tested (55)</summary>
 
 - host:redoubt-steward::a_manifest_with_a_key_in_two_roles_is_refused
+- host:redoubt-steward::the_lines_read_as_the_manifest_and_write_back_the_same
+- host:redoubt-steward::keyd_and_servers_are_empty_when_absent_and_sizes_is_required
+- host:redoubt-steward::a_malformed_line_is_refused_with_its_number
+- host:redoubt-steward::a_name_with_any_bytes_writes_back_the_same
+- host:redoubt-steward::the_key_id_is_the_first_eight_bytes_of_the_key_s_sha_256_little_endian
+- host:redoubt-steward::the_kept_corpus_reads_or_is_refused_without_a_panic
 - host:redoubt-steward::boot_carves_a_fixed_sub_budget_per_label_set
 - host:redoubt-steward::login_key
 - host:redoubt-steward::owns_labels_reads_the_manifest_not_the_domains
@@ -281,15 +287,35 @@ signs nothing, so the steward still holds no key.
   [tenet 3](../TENETS.md#3-rust-and-assembly-only-where-rust-cannot-reach)
   allows on the build host. It is never authoritative and never runs on the box.
 
+#### The manifest lines
+
+The core's view of the boot manifest is a few text lines, which `init` hands the steward as its
+arguments, one line each after its entry's own ([init](init.md#starting-the-servers), step 6):
+the manifest is never public, so `/boot` cannot carry it. A trace begins with the same lines.
+- `principal "NAME" account=N login=[..] approval=[..] owned=[..] sets=[[..],..] top=P,N,W`: one
+  per principal, its keys by id, its owned labels and each label set by label ids, its unlabelled
+  set first, and its budget.
+- `keyd [..]`, the ids of keys `keyd` holds; `init` writes `keyd []` (see
+  [residual risks](#residual-risks)).
+- `servers N`, the shared servers' slots a session connects to.
+- `sizes session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N`, the budgets the steward carves.
+
+The parser is the core's (`libs/steward/src/manifest.rs`), `no_std` and strict: each field once and
+no other, `keyd`, `servers` and `sizes` at most once and `sizes` required, a number digits only.
+A line it refuses is a start failure, said once on the console. `init` writes the lines with the
+core's own writer, so the two cannot drift. A key's id is the first eight bytes, little-endian, of
+SHA-256 over its 32 raw bytes (`hash::key_id`): `init` computes it for the lines, and the steward
+for a login, so the core never sees a key. The parser is fuzzed
+([tenet 6](../TENETS.md#6-tested-to-hell-and-back)).
+
 #### The trace encoding
 
 A trace is a text file, `libs/steward/trace/traces/*.trace`, and the crate
 `redoubt-steward-trace` (host-only, outside the shipped core) reads it, runs it through the core
 and checks the reference's output against the core's. Its input is the boot manifest, then one
 event per line:
-- `principal "NAME" account=N login=[..] approval=[..] owned=[..] sets=[[..],..] top=P,N,W`,
-  `keyd [..]`, `servers N` and `sizes session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N`
-  give the manifest; `#` starts a comment.
+- the [manifest lines](#the-manifest-lines), read by the core's own parser; blank lines are
+  skipped and `#` starts a comment.
 - `event now=N random=[..] reply=N Kind field=value...` is one event: its time, at most the core's
   count of random words (the rest zero), the reply slot, and the event with its fields by name. An
   object is `kind@account/labels#id` (`session@1/7#101`). A string is quoted, with the escapes
@@ -347,14 +373,16 @@ Status: planned · M1 (separation and containment)
 Status: planned · M1 (separation and containment)
 
 At boot the steward splits each principal's top budget into fixed sub-budgets, one per label set
-the manifest names for it (`users/alice/{}`, `users/alice/{alice-secrets}`), each with its own
-pages, processes and weight. Every session and lease of one (principal, label set) is carved from
-its own sub-budget. So a vault session's leases never change what the unlabelled side can carve:
-carving under one shared top budget would let the unlabelled side read the vault's activity in
-its free limits ([R37 (vault non-interference)](#r37-vault-non-interference)). The model checks
-that every session and lease is carved from its label set's sub-budget (its P1). A carve from
-another label set's sub-budget would need a second domain, which no handler can borrow, so it has
-no mutation ([guards and effects](#guards-and-effects)).
+the manifest names for it (`users/alice/{}`, `users/alice/{alice-secrets}`), each an equal share
+of the principal's top budget, less a budget's own cost. Every session and lease of one
+(principal, label set) is carved from its own sub-budget. So a vault session's leases never
+change what the unlabelled side can carve: carving under one shared top budget would let the
+unlabelled side read the vault's activity in its free limits
+([R37 (vault non-interference)](#r37-vault-non-interference)). The model checks that every
+session and lease is carved from its label set's sub-budget (its P1). A carve from another label
+set's sub-budget would need a second domain, which no handler can borrow, so it has no mutation
+([guards and effects](#guards-and-effects)). Sizes per label set may return with run-time
+principals in M5 (persist, install, share), if evidence asks for them.
 
 **Open:** none.
 
@@ -867,6 +895,11 @@ Status: planned · M1 (separation and containment)
 - **`approve@box` shares `sshd` with every channel.** A `sunset` bug reached from any channel
   controls the approval screen, and a network flood delays approvals. Its own `sshd` instance or
   the console is [sshd](sshd.md)'s to give.
+- **The core's `keyd`-key guard is vacuous on the box:** `init`'s and `sshd`'s `holds` checks are
+  the live ones. `init` writes `keyd []` in the [manifest lines](#the-manifest-lines), since it
+  holds `keyd`'s seeds, not their public keys; it refuses the boot if `keyd` holds any login or
+  approval key, and `sshd` refuses a key `keyd` holds before a login reaches the steward. The
+  guard stays, exercised by the model and the traces.
 - **Steward work is paid by the steward.** A principal's requests cost the steward's budget and
   time, bounded by its caps and per-request work, not by the requester's budget.
 - **Blame follows the current call.** A request that corrupts a server which crashes later, while
