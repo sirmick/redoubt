@@ -325,7 +325,10 @@ impl Literals {
     /// terms that point into it. The heap should hold only what `roots` reach.
     pub fn add(&mut self, heap: Heap, roots: &mut [Term]) -> u32 {
         let space = u32::try_from(self.0.len() + 1).expect("under 2^32 literal chunks");
-        let Heap { mut terms, offheap, .. } = heap;
+        let Heap { mut terms, mut offheap, .. } = heap;
+        // A chunk never grows: it keeps no room the heap's doubling left.
+        terms.shrink_to_fit();
+        offheap.shrink_to_fit();
         let relocate = |t: &mut Term| {
             if let Some(p) = t.ptr_mut() {
                 if p.space == 0 {

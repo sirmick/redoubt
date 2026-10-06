@@ -142,25 +142,35 @@ total, read once the case has typed one command. In pages, each row rounded up o
 
 | What | rv64 | rv32 |
 | --- | ---: | ---: |
-| Decoded code: instructions | 2,725 | 1,362 |
+| Decoded code: instructions | 1,944 | 993 |
 | Decoded code: operands | 4,455 | 2,313 |
 | Literals: each module's | 36 | 36 |
-| Literals: the shared table | 1,100 | 1,096 |
+| Literals: the shared table | 753 | 749 |
 | Module tables | 231 | 202 |
 | Atoms | 92 | 64 |
 | Processes (19): heaps, collected | 46 | 46 |
 | Processes: the rest | 100 | 95 |
 | ETS and binaries | 1 | 1 |
-| Accounted | 8,788 | 5,217 |
-| Runtime heap at the prompt: held, peak | 9,003, 9,003 | 5,331, 5,331 |
-| Not accounted (held less accounted) | 215 | 114 |
-| The scan's peak, after one command | 10,519 | 6,243 |
+| Accounted | 7,660 | 4,502 |
+| Runtime heap at the prompt: held, peak | 7,876, 7,897 | 4,616, 4,622 |
+| Not accounted (held less accounted) | 216 | 114 |
+| The scan's peak, after one command | 9,369 | 5,511 |
 
 An instruction is 32 bytes on rv64 and 16 on rv32, its operands a vector of their own, so decoded
 code is most of the count: about four fifths on rv64 and seven tenths on rv32. The five largest
 modules are `unicode_util`, `erl_parse`, `Elixir.Enum`, `erl_eval` and `string`. What is not
-accounted is free small blocks, B-tree nodes and the platform's buffers; the scan's peak is higher
-than the prompt's because the first command loads more modules.
+accounted is free small blocks, B-tree nodes and the platform's buffers; the peak above what is
+held is a load's transient, and the scan's peak is higher than the prompt's because the first
+command loads more modules.
+
+- **Loaded code keeps no spare room.** The loader shrinks a module's instructions to their count
+  once decoded, where the decoding's doubling left up to twice as many (about 780 pages on rv64,
+  370 on rv32).
+- **A literal chunk keeps no spare room.** A module's constants are shrunk to their count before
+  they join the shared table (about 350 pages on either width).
+- **Loading stays eager.** The shell's start loads what its prompt needs. The largest modules are
+  the ones evaluating any line needs, so loading them on first call would move their pages to the
+  first command, not save them.
 
 ### The `Platform` boundary
 
