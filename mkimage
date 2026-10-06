@@ -15,8 +15,8 @@
 #   target/image/disk.img         raw virtio-blk disk: a GPT, then the data partition as a
 #                                 littlefs volume written by littlefsd's own code
 #
-# The image needs 1 GiB of RAM (QEMU -m 1G): the shell's beamlet is budgeted twice what its VM
-# uses at the prompt, which a smaller machine's system budget does not hold.
+# The image needs 512 MiB of RAM (QEMU -m 512M): the shell's beamlet is budgeted twice what its
+# VM holds at its largest peak, which a smaller machine's system budget does not hold.
 #
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"

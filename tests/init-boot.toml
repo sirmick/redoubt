@@ -6,9 +6,9 @@ kind = "boot"
 # the UART it maps and then through consoled; a refusal would be init's line and a power-off
 # reporting a system failure.
 recipe = "image/boot.toml"
-# The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
-# the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
-memory_mib = 1024
+# The image needs 512 MiB: beamlet's budget, twice the shell VM's largest peak, does not fit the
+# system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+memory_mib = 512
 memory = true
 timeout_secs = 60
 expect = [

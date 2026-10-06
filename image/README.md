@@ -12,9 +12,9 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   and `beamlet` running the shell, `Redoubt.Shell`, on the UART console. The userland volume is
   verified: its entry's `verity` names `verity:system`, and the root and block count in this file
   are placeholders the builder replaces with the pack's ([verityd](../docs/servers/verityd.md)),
-  so the signed manifest pins the disk. The image needs 1 GiB of RAM (QEMU `-m 1G`): the shell's
-  budget, twice what its VM uses at the prompt, does not fit the `system` budget of a smaller
-  machine ([budgets](../docs/kernel/budgets.md)).
+  so the signed manifest pins the disk. The image needs 512 MiB of RAM (QEMU `-m 512M`): the
+  shell's budget, twice what its VM holds at its largest peak, does not fit the `system` budget of
+  a smaller machine ([budgets](../docs/kernel/budgets.md)).
 - `disk.toml`: the disk image. `./mkimage` packs it into `target/image/disk.img`: a GPT, then the
   `data` partition as a littlefs volume holding `target/image/stage/`, written through `littlefsd`'s own
   code, and the `image-disk` case boots a disk packed the same way.

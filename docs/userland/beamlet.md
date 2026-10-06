@@ -172,6 +172,15 @@ command loads more modules.
   the ones evaluating any line needs, so loading them on first call would move their pages to the
   first command, not save them.
 
+The image budgets the VM twice the largest peak the scan finds across its memory cases, and with
+that budget the image boots in 512 MiB
+([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
+
+Residual: QEMU's default 256 MiB is out of reach. Its `system` budget leaves the VM about 2,700
+pages beside the other servers, and the VM would still hold about 5,450 on rv64 at its prompt with
+code decoded compactly (one operand array a module, an 8-byte instruction). Fitting needs code
+kept in its on-disk form or loaded a function at a time.
+
 ### The `Platform` boundary
 
 <details><summary>Status: built · partly tested: file and program grants run on the host only; Redoubt's verified lookup is tested below · tested (9)</summary>
