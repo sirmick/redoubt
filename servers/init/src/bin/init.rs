@@ -63,8 +63,6 @@ mod machine {
     const SYSTEM: u32 = 2;
     const RESET: u32 = 4;
     const CONSOLE_MMIO: u32 = 5;
-    /// The stack each child starts on, in pages (`redoubt_client::launch`'s default).
-    const STACK_PAGES: usize = 16;
     /// The bytes of a public entry each `add` carries: a page, inside the lend with its name.
     const CHUNK: usize = PAGE_SIZE;
 
@@ -162,7 +160,6 @@ mod machine {
             root,
             entries,
             stub_bytes: STUB_BIN.len(),
-            stack_pages: STACK_PAGES,
             arena_pages: ARENA_PAGES,
             // The budgets, then the devices from the Reset right on.
             handles_at_start: RESET as usize - 1 + devices.len(),
@@ -464,6 +461,7 @@ mod machine {
             }
             let args = args(m, s);
             let mut launch = Launch::new(STUB_BIN, image, budget, exit);
+            launch.stack_pages(s.stack_pages as usize).stack_tag((i + 1) as u16);
             for name in &s.receives {
                 launch.handle(name, self.endpoint(name));
             }

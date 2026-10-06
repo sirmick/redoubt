@@ -12,6 +12,7 @@ use redoubt_init::refusal::{Refusal, Sharing, Why};
 use redoubt_init::{ARENA_PAGES, Manifest, check, read};
 use redoubt_rt::abi::MAX_START_HANDLES;
 use redoubt_rt::wire::json::SchemaKind;
+use stub::MAX_STACK_PAGES;
 
 const IMAGE: &str = include_str!("../../../image/manifest.json");
 
@@ -97,6 +98,38 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 2), (5, 1), (6, 0), (8, 1)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
+}
+
+#[test]
+fn a_server_stack_defaults_and_is_checked_against_its_budget() {
+    let absent =
+        br#"{"servers":[{"name":"x","program":"x","budget":{"pages":"32","processes":1,"weight":1}}]}"#;
+    assert_eq!(read(absent, ARENA_PAGES).unwrap().servers[0].stack_pages, 16);
+    let mut m = image();
+    for pages in [0, MAX_STACK_PAGES as u64 + 1, m.servers[0].budget.pages] {
+        m.servers[0].stack_pages = pages;
+        refused_at(&m, "servers[0].stack_pages", Why::Stack);
+    }
+    m.servers[0].stack_pages = MAX_STACK_PAGES as u64;
+    assert!(on_virt(&m).is_ok());
+    m.servers[0].budget.pages = 32;
+    m.servers[0].stack_pages = 32;
+    refused_at(&m, "servers[0].stack_pages", Why::Stack);
+}
+
+#[test]
+fn the_bound_uses_the_largest_declared_stack_batch() {
+    let mut m = image();
+    for server in &mut m.servers {
+        server.stack_pages = 16;
+    }
+    let base = on_virt(&m).unwrap().bound;
+    server(&mut m, "keyd").stack_pages = 32;
+    assert_eq!(on_virt(&m).unwrap().bound, base + 16);
+    server(&mut m, "consoled").stack_pages = 48;
+    assert_eq!(on_virt(&m).unwrap().bound, base + 32);
+    server(&mut m, "keyd").stack_pages = MAX_STACK_PAGES as u64;
+    assert_eq!(on_virt(&m).unwrap().bound, base + 48);
 }
 
 #[test]
@@ -849,6 +882,7 @@ fn confined_gives_each_label_set_its_own_userland_disk() {
         name: name.into(),
         program: "beamlet".into(),
         budget: budget(256),
+        stack_pages: 16,
         labels,
         devices: vec![],
         volume: None,
@@ -950,7 +984,7 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
         m.servers.push(Server {
             name: format!("s{n}"),
             program: "fsd".into(),
-            budget: budget(16),
+            budget: budget(17),
             receives,
             ..m.servers[3].clone()
         });
@@ -983,7 +1017,7 @@ fn more_servers_than_init_has_threads_to_watch_are_refused() {
             name: format!("s{n}"),
             program: "fsd".into(),
             receives,
-            budget: budget(1),
+            budget: budget(17),
             ..m.servers[3].clone()
         });
         m.servers.last_mut().unwrap().devices.clear();

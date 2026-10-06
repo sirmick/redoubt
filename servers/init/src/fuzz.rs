@@ -69,7 +69,6 @@ pub fn machine<'a>(devices: &'a [(Handle, DeviceInfo)], entries: &'a [(&'a str, 
         root: usage(1000),
         entries,
         stub_bytes: 16 * 1024,
-        stack_pages: 16,
         arena_pages: crate::ARENA_PAGES,
         handles_at_start: 3 + devices.len(),
     }
