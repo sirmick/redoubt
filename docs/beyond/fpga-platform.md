@@ -2,8 +2,9 @@
 
 ## Idea
 
-Redoubt on its own open soft-core system-on-chip, on a PCIe card whose virtio devices are served
-by a userland backend on the host beside it, as QEMU serves them in development:
+Redoubt on its own open soft-core system-on-chip, on a PCIe card whose console and virtio devices
+are served by a userland backend on the host beside it ([the card's host backend](card-host.md)),
+as QEMU serves them in development:
 
 - **A YPCB-00338-1P1 card (Kintex-7 XC7K480T, PCIe), the target:** four cores to start, scaled
   by measurement; a host running the backend over PCIe; and **DMA confined in hardware**:
@@ -57,7 +58,11 @@ are stated today as residual risks.
   `add_pcie` makes the host a master on the main bus, and its DDR3 target for this card is
   unfinished.
 - **Memory.** UberDDR3 on both channels: channel A is main memory, channel B is DMA only.
-- **The 16550** from the `pcie_7x` project, so the kernel keeps one console driver.
+- **The 16550** from the `pcie_7x` project, so the kernel and `consoled` keep one console driver
+  and the console works from the firmware's first instruction. A UART is trivial
+  ([tenet 7](../TENETS.md#7-devices-speak-virtio)), so it is not a virtio device. Its byte stream
+  crosses the link like everything else: what it transmits becomes a posted record in the host's
+  inbox, and what the host types is a posted write into its receive FIFO.
 - **The virtio-mmio shim,** one per slot. Its register file is local to the card: the host
   programs it once (magic, version 2, the IDs, the features, `QueueNumMax`, the config space),
   and the guest's reads of it never cross the link. What the guest writes that the host must
@@ -69,32 +74,39 @@ are stated today as residual risks.
   attributes are fixed when it is generated and have no write-through, so a region shared with
   a host is either uncached or reached coherently. `dma_alloc` hands out frames from it alone;
   today it draws them from the ordinary pool ([devices](../kernel/devices.md)).
+- **The ring region** is block RAM, uncached like channel B and confined like it, where drivers
+  put their virtio rings: an uncached read of a ring index costs a cycle or two there instead of a
+  DDR3 access. A queue of 256 entries is about 6.5 KB, so every queue fits.
 
 ### The host backend
 
-One Rust program on the host serves every virtio device (console, then block, then network),
-on rust-vmm's `virtio-queue` and `vm-memory`, over VFIO: BAR0 mapped into the process, MSI-X
-delivered as eventfds. It sits where QEMU sits in the
+One Rust program on the host, `cardd`, serves the console, the disk and the network, in that
+order, over VFIO: BAR0 mapped into the process, MSI delivered as eventfds
+([the card's host backend](card-host.md)). It sits where QEMU sits in the
 [threat model](../TENETS.md#host-virtio-emulation): trusted to serve virtio honestly, and kept
 from network data by TLS and SSH.
 
-The signalling rule: **only posted writes cross between the card and the backend, and each side
-waits by spinning on memory local to it.** A read across the PCIe link costs a whole round trip
-(about a microsecond) and appears nowhere on the hot path.
+The signalling rule: **each side's inbox lives in its own memory, and only posted writes cross
+into it.** The host's inbox is pinned host memory; the card's is the BAR0 mailbox. A read across
+the PCIe link costs a whole round trip (about a microsecond) and appears nowhere on a core's hot
+path; the one read that crosses is the DMA engine fetching bulk reply data from host staging.
 
-- **Card to host.** The shim turns a `QueueNotify` into a notify record written into pinned host
-  memory, where it lands in the host's last-level cache. The backend spins on it from a core
-  Linux leaves alone (`isolcpus`, `nohz_full`, the backend's memory locked); after a quiet spell
-  it arms the interrupt and blocks, and MSI-X wakes it, at several microseconds.
-- **Host to card.** The backend fills the used ring, makes a release store on the used index,
-  and rings the card with a posted write to the slot's doorbell, wired to the PLIC.
-- **Ordering.** The guest driver issues `fence w,w` before `QueueNotify`; the backend's release
-  store on the used index precedes its doorbell.
+- **Card to host.** The shim turns a `QueueNotify` into a notify record written into the host's
+  inbox. The backend waits on it from a core Linux leaves alone (`isolcpus`, `nohz_full`, the
+  backend's memory locked): spinning, then sleeping on the line with `UMWAIT` or `MWAITX`, and
+  after a quiet spell it arms the interrupt and blocks, and MSI wakes it, at several
+  microseconds.
+- **Host to card.** The backend posts a completion into the mailbox and rings the slot's
+  doorbell, wired to the PLIC; the card writes the used ring, with a release store on the used
+  index.
+- **Ordering.** The guest driver issues `fence w,w` before `QueueNotify`; the used ring's entries
+  precede the release store on its index, and that store precedes the interrupt.
 - **The contract.** The shim advertises `VIRTIO_F_ACCESS_PLATFORM`, so every virtio buffer the
-  guest offers comes from `dma_alloc`, inside a channel-B window, and `EVENT_IDX` is on. The
-  backend bounds-checks every descriptor against the window it serves. That check protects the
-  host process from a hostile guest; the guest's protection from the host is channel B's decode,
-  below, not anything the backend does.
+  guest offers comes from `dma_alloc`, inside a channel-B window, and `EVENT_IDX` is on. The host
+  never parses a guest pointer: every descriptor is checked against its window on the card, by
+  the DMA engine or the forwarder, and the backend parses only records in its own memory. Those
+  checks protect the host process from a hostile guest; the guest's protection from the host is
+  channel B's decode, below, not anything the backend does.
 
 ### The card
 
@@ -113,9 +125,10 @@ waits by spinning on memory local to it.** A read across the PCIe link costs a w
   - Our own glue: the BAR block, the DMA engine, the shims and the interconnect.
 - **Speed.** Expect the cores at 60 to 80 MHz under openXC7 at first. Vivado is used only to tell
   a tool fault from a design fault.
-- **Transport.** VFIO, as above. At first the backend reads rings from card memory across the
-  link (about a microsecond a read); later a forwarder in the fabric pushes descriptors to the
-  host instead.
+- **Transport.** VFIO, as above. At first the backend walks the rings through mailbox commands
+  that have the DMA engine copy a checked channel-B range into host staging (a round trip or two
+  a copy); later a forwarder in the fabric walks them and pushes whole requests to the host
+  instead ([two phases](card-host.md#two-phases)).
 
 ### What the card guarantees
 
@@ -126,7 +139,9 @@ waits by spinning on memory local to it.** A read across the PCIe link costs a w
   physical access ([out of scope](../TENETS.md#threat-model)). Whether the edge connector wires
   PERST# or JTAG to the configuration pins is checked on the board.
 - **The host's window into the card is a mailbox.** BAR0 decodes only to doorbell and mailbox
-  registers; no CSR, core reset, memory or window register is reachable through it.
+  registers, and the registers that tell the card where the host's inbox is; no CSR, core reset,
+  memory or window register is reachable through it. The inbox's addresses are host addresses: a
+  host that lies about them misdirects the card's writes into its own memory.
 
 **What Redoubt needs from the hardware:**
 - **DMA confinement in RTL.** Every bus master other than the cores (the DMA engine, PCIe
@@ -192,7 +207,8 @@ Standard extensions that make Redoubt faster without weakening it, each testable
   trap-entry lock whose guard owns a token, so that kernel globals become token-guarded cells,
   with a compile-time lock order if the lock is ever split; shootdowns through SBI's remote
   fences, then AIA.
-- `dma_alloc` drawing only from the DMA region, and the loader reading it from the device tree
+- `dma_alloc` drawing only from the DMA region and the ring region, and the loader reading both
+  from the device tree
   ([`loader/src/dt.rs`](../../loader/src/dt.rs)).
 - The ISA features above. (`senvcfg` is already written 0 on every hart at boot:
   [backing and zeroing](../kernel/memory.md#backing-and-zeroing).)
@@ -213,7 +229,7 @@ the trace ring; that path is part of the bring-up.
 
 1. A latency bitstream on the card: the `pcie_7x` endpoint, UberDDR3 channel A and the BAR0
    mailbox, with a fabric cycle counter timing doorbell and interrupt round trips over VFIO.
-2. One core: RustSBI, the kernel, and virtio-console through the host backend.
+2. One core: RustSBI, the kernel, and the 16550 through the host backend.
 3. virtio-blk and virtio-net, then the full bench on the card.
 4. Confined DMA (channel B and its windows), the boot ROM, Zkr.
 5. Two cores (the SMP work), then four; measure, then scale.
@@ -226,8 +242,8 @@ the trace ring; that path is part of the bring-up.
 - A bitstream reload or flash write from the host or a core has no path.
 - A loader the boot ROM does not accept does not run.
 - User `seed`, `cbo.inval` and counter reads fault.
-- A descriptor outside the window the backend serves is refused by the backend, and a device
-  writing through it is stopped by the decode.
+- A descriptor outside its window is refused by the DMA engine or the forwarder before anything
+  reaches the host, and a device writing through it is stopped by the decode.
 - Every scheduling and memory case reruns on several harts.
 
 **Open:**

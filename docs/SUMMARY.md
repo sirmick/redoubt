@@ -76,6 +76,7 @@
   - [The file servers parse their arguments and call their range three times over](todo/file-server-arguments-and-range-client.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
+  - [The card's host backend](beyond/card-host.md)
   - [rv32](beyond/rv32.md)
   - [Other runtimes](beyond/runtimes.md)
   - [The web stack](beyond/web-stack.md)
