@@ -5,12 +5,10 @@ use std::fmt::Write as _;
 
 use redoubt_steward::effect::Produced;
 use redoubt_steward::event::{Content, Event, EventKind};
-use redoubt_steward::manifest::{Limits, Manifest};
+use redoubt_steward::manifest::{Manifest, lines};
 
 use crate::output::object;
 use crate::text::{hex, quote, show_list};
-
-fn limits(l: &Limits) -> String { format!("{},{},{}", l.pages, l.processes, l.weight) }
 
 fn produced(p: &Produced) -> String {
     match p {
@@ -80,31 +78,9 @@ pub fn trace(comment: &str, m: &Manifest, events: &[Event]) -> String {
     for line in comment.lines() {
         let _ = writeln!(s, "# {line}");
     }
-    for p in &m.principals {
-        let sets: Vec<String> = p.label_sets.iter().map(|l| show_list(l)).collect();
-        let _ = writeln!(
-            s,
-            "principal {} account={} login={} approval={} owned={} sets=[{}] top={}",
-            quote(p.name.as_bytes()),
-            p.account,
-            show_list(&p.login_keys),
-            show_list(&p.approval_keys),
-            show_list(&p.owned),
-            sets.join(","),
-            limits(&p.top)
-        );
+    for line in lines(m) {
+        let _ = writeln!(s, "{line}");
     }
-    let z = &m.sizes;
-    let _ = writeln!(s, "keyd {}\nservers {}", show_list(&m.keyd_keys), m.servers);
-    let _ = writeln!(
-        s,
-        "sizes session={} agent={} sub_agent={} crossing={} cost={}",
-        limits(&z.session),
-        limits(&z.agent),
-        limits(&z.sub_agent),
-        limits(&z.crossing),
-        z.budget_cost
-    );
     for e in events {
         let _ = writeln!(s, "{}", event(e));
     }

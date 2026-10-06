@@ -77,7 +77,8 @@ pub enum Why {
     /// More labels than a budget holds.
     TooManyLabels,
     /// An argument with a NUL, one a `bootfsd` entry may not carry, or one `init` passes itself
-    /// (`labels=` to a volume's server, `labels.` to `blkd`, any to a `verityd`).
+    /// (`labels=` to a volume's server, `labels.` to `blkd`, any to a `verityd`, the manifest
+    /// lines to the steward, whose entry carries only `buckets=`).
     Argument,
     /// A `buckets=` argument the serving library would refuse.
     BucketsArgument,
@@ -124,6 +125,9 @@ pub enum Why {
     /// A second entry for a program `init` calls itself (`keyd`, `consoled`, `bootfsd`): `init`
     /// starts and calls one of each.
     Second(&'static str),
+    /// A principal's budget whose equal share per domain, less a budget's own cost, is smaller
+    /// than the steward's size of this name in some limit: the steward could not carve it.
+    Sizes(&'static str),
 }
 
 /// What two label sets would share under `confined` (servers/init.md, "The confinement check").
@@ -140,6 +144,9 @@ impl fmt::Display for Why {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Why::Second(program) => return write!(f, "a second {program}, and init calls only one"),
+            Why::Sizes(size) => {
+                return write!(f, "a share per label set is smaller than the steward's {size} size");
+            }
             Why::NotAName => "not a name",
             Why::Twice => "named twice",
             Why::Unknown => "names nothing the manifest or the bundle holds",
@@ -156,7 +163,7 @@ impl fmt::Display for Why {
             Why::Heap => "a heap cap is at least 1 page and, with the stack, smaller than its budget",
             Why::TooManyLabels => "more labels than a budget holds",
             Why::Argument => {
-                "an argument with a NUL, on bootfsd one that is not buckets=N, or one init passes itself"
+                "an argument with a NUL, on bootfsd or the steward one that is not buckets=N, or one init passes itself"
             }
             Why::BucketsArgument => "not one buckets=N of 1 to 32",
             Why::Block => "the handles and arguments do not fit a startup block",
