@@ -260,16 +260,22 @@ the kernel's alone, and the boot cases are its only check.
 
 ### Inheritance
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (19)</summary>
 
 - bench:sched-budget-churn
 - bench:sched-debt-lift
+- bench:sched-lift-delay
 - bench:sched-idle-gap
 - host:redoubt-stride::create_then_destroy_without_a_run_moves_nothing
 - host:redoubt-stride::a_churned_child_adds_to_a_leading_parent
 - host:redoubt-stride::the_inherited_wait_is_not_counted_again
 - host:testbench::a_marked_wake_picked_within_one_round_passes
 - host:testbench::a_budget_picked_twice_before_the_marked_one_fails
+- host:testbench::a_sibling_delayed_as_its_parents_lift_predicts_passes
+- host:testbench::a_sibling_held_a_round_past_its_parents_lift_fails
+- host:testbench::a_lift_the_floor_had_passed_fails
+- host:testbench::each_phase_is_reported_on_its_own
+- host:testbench::the_floor_is_recorded_at_each_record
 - mutation:R12DestroyDropsDebt
 - mutation:R12CreateAtFloorOnly
 - mutation:R12LiftByMax
@@ -793,7 +799,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (41)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (42)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -802,6 +808,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:sched-budget-churn
 - bench:sched-carve-inflation
 - bench:sched-debt-lift
+- bench:sched-lift-delay
 - bench:sched-timer-flood
 - bench:sched-server-busy
 - bench:sched-large-weight
@@ -936,9 +943,10 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `SCHED-TRACE` console lines are not compiled;
 - the bench turns it on per case (`kernel_features`), only for `sched-ties`,
   `sched-budget-churn`, `sched-exit-churn`, `sched-timer-flood`, `sched-carve-return`,
-  `sched-debt-lift`, `sched-wake-no-preempt`, `sched-cluster`, `sched-cluster-old-control`,
-  `sched-latency`, `sched-latency-tcg`, `kernel-containment` and `endpoint-destroy-full`, whose
-  `sched_oracle` post-check reads the trace printed at `system_reset`.
+  `sched-debt-lift`, `sched-lift-delay`, `sched-wake-no-preempt`, `sched-cluster`,
+  `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `kernel-containment` and
+  `endpoint-destroy-full`, whose `sched_oracle` post-check reads the trace printed at
+  `system_reset`.
 
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
@@ -1035,14 +1043,27 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   ([destruction walks every process](../todo/destruction-walks-every-process.md)).
 - **A destroyed lineage's debt is carried onto its siblings as the parent's lead.** Debt lifted onto
   a shared parent is normalized to the parent's weight, and a sibling created under it enters at the
-  parent's pass; the oracle recomputes every lift. How long that lead delays the sibling is the
-  parent's lead over the floor against the sibling's weight: about a round when the parent is small
-  and the lift fresh, a few thousandths of a slice under a parent as wide as `users`. No boot case
-  yet puts a fresh lift on a small parent, so the delay's bound rests on the lift's arithmetic, not
-  on a measurement; `bench:sched-debt-lift` checks that a sibling created after a weight-1 lineage's
-  destruction runs before any other budget is picked twice, which its raw debt, unlifted, would have
-  cost about six rounds. Rounding loses under one pass unit per destroyed budget, and the loss falls
-  on the budget that churns.
+  parent's pass; the oracle recomputes every lift. A fresh lift delays the sibling by the child's
+  lead, in slices of the other runnable budgets (the peers), times the peers' weight over the
+  parent's weight; the sibling's own weight does not enter. In a checked build a child that ran to
+  the end of a slice leads by 1.4 peer slices, so under a parent of a peer's weight the next child
+  waits 1.4 rounds, and under a parent of a tenth of it 14. `bench:sched-lift-delay` measures it
+  in a checked build in virtual time, under sixteen weight-20 peers, with parents of weight 20, 10
+  and 2 and siblings of weight 2, 5 and 1. The oracle computes the delay from the lift's records as
+  the child's work over the parent's weight over a round's pass step: 1.4, 2.8 and 14.0 rounds on
+  rv64 (1.4, 2.8 and 13.8 on rv32), and no other budget is picked more than 1, 3 and 14 times
+  before the sibling's first run (2, 3 and 14 on rv32). The oracle requires that count to be less
+  than a round from the prediction and from the sibling's lead at its wake, and the floor to have
+  moved less than half a round between the lift and the wake (under 0.3 rounds on rv64, 0.32 on
+  rv32), so each phase's lead at the wake is within half a round of the prediction. Under a parent
+  as wide as `users` the lift is a few thousandths of a slice. The lead fades as the floor rises,
+  so a sibling made later waits less; with peers of weight 100 the floor passed the lift of a
+  weight-100 parent while the launcher started the sibling, so the case uses weight-20 peers,
+  which the launcher outweighs.
+  `bench:sched-debt-lift` checks that a sibling created after a weight-1 lineage's destruction
+  runs before any other budget is picked twice, which its raw debt, unlifted, would have cost about
+  six rounds. Rounding loses under one pass unit per destroyed budget, and the loss falls on the
+  budget that churns.
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).
