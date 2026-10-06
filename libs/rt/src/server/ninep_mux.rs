@@ -93,6 +93,11 @@ pub trait Around<S: FileServer> {
     fn turn(&mut self, _server: &mut NineServer<S>, _now: u64) {}
     /// An abandoned-call notice for a call that is no completion call: one parked here.
     fn abandoned(&mut self, _server: &mut NineServer<S>, _id: NonZeroU64) {}
+    /// A send that is no multiplexed request: a protocol's one-way message, which the server
+    /// decodes itself (`consol`'s `ended`), or nothing it knows, dropped.
+    fn send(&mut self, _server: &mut NineServer<S>, delivery: Delivery, _now: u64) {
+        super::super::close_delivery(&delivery);
+    }
 }
 
 /// [`NineServer::run`]'s: calls served, the server's own typed opcodes by the closure.
@@ -488,7 +493,7 @@ impl<S: FileServer> NineServer<S> {
                 Ok(Event::Call(request)) => around.call(self, request, now),
                 Ok(Event::Send(delivery)) => {
                     if let Some(other) = self.deliver(delivery, now) {
-                        super::super::close_delivery(&other);
+                        around.send(self, other, now);
                     }
                 }
                 Ok(Event::Abandoned(id)) => {

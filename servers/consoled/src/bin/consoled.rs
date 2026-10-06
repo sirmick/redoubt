@@ -33,10 +33,14 @@ use redoubt_consoled::server::{BUDGET, COST, Console, limits};
 use redoubt_consoled::uart::Uart;
 use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
-use redoubt_rt::ipc::{Buffer, Request};
-use redoubt_rt::server::ninep::{Around, NineError, NineServer, WORDS_9P, refuse, refuse_malformed};
+use redoubt_rt::ipc::{Buffer, Delivery, Request};
+use redoubt_rt::server::close_delivery;
+use redoubt_rt::server::ninep::{
+    Around, FIRST_MINTED_BADGE, NineError, NineServer, WORDS_9P, refuse, refuse_malformed,
+};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::startup::Startup;
+use redoubt_rt::wire::proto::consol;
 
 redoubt_rt::entry!(serve);
 
@@ -156,6 +160,17 @@ impl Around<Console> for Readers {
     /// reaches nobody (R3).
     fn abandoned(&mut self, server: &mut NineServer<Console>, id: NonZeroU64) {
         self.0.abandoned(server.admission_mut(), id, &WORDS_9P);
+    }
+
+    /// `consol`'s `ended` on a minted connection releases it: the steward says so when the
+    /// console session it started is over (servers/consoled.md, "Started by `init`"). On a root
+    /// badge, `init`'s, it is no message of its.
+    fn send(&mut self, server: &mut NineServer<Console>, delivery: Delivery, _: u64) {
+        close_delivery(&delivery);
+        let ended = matches!(consol::Message::decode(&delivery.words, &[], 0), Ok(consol::Message::Ended(_)));
+        if ended && delivery.caller.badge >= FIRST_MINTED_BADGE {
+            server.unmint(delivery.caller.badge);
+        }
     }
 }
 

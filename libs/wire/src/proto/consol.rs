@@ -28,10 +28,19 @@ pub struct ResizeReply {
     pub rows: u16,
 }
 
+/// `ended`: opcode 18, inline, a `send`: its buffer is a transfer and there is no reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ended {}
+
+/// The reply to [`Ended`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndedReply {}
+
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
     Layout { opcode: 16, inline: true, handles: 0 },
     Layout { opcode: 17, inline: true, handles: 0 },
+    Layout { opcode: 18, inline: true, handles: 0 },
 ];
 
 /// Every request of the protocol.
@@ -39,6 +48,7 @@ const REQUESTS: &[Layout] = &[
 pub enum Message {
     Size(Size),
     Resize(Resize),
+    Ended(Ended),
 }
 
 impl<'a> Message {
@@ -47,6 +57,7 @@ impl<'a> Message {
         match self {
             Message::Size(_) => &[],
             Message::Resize(_) => &[],
+            Message::Ended(_) => &[],
         }
     }
 
@@ -55,6 +66,7 @@ impl<'a> Message {
         match self {
             Message::Size(_) => 16,
             Message::Resize(_) => 17,
+            Message::Ended(_) => 18,
         }
     }
 
@@ -62,6 +74,7 @@ impl<'a> Message {
         match self {
             Message::Size(_) => Ok(()),
             Message::Resize(_) => Ok(()),
+            Message::Ended(_) => Ok(()),
         }
     }
 
@@ -69,6 +82,7 @@ impl<'a> Message {
         Ok(match opcode {
             16 => Message::Size(Size {}),
             17 => Message::Resize(Resize {}),
+            18 => Message::Ended(Ended {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -77,6 +91,7 @@ impl<'a> Message {
         Ok(match opcode {
             16 => Message::Size(Size {}),
             17 => Message::Resize(Resize {}),
+            18 => Message::Ended(Ended {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -104,12 +119,19 @@ impl<'a> Message {
     pub fn encode_file(&self, out: &mut [u8]) -> Result<usize, Error> {
         typed::encode_file(typed::layout(REQUESTS, self.opcode())?, out, |w| self.write(w))
     }
+
+    /// Whether this message is sent one-way (`send`, its buffer a transfer) rather than
+    /// called: a receiver must not reply to it, and a sender must not wait for a reply.
+    pub fn is_send(&self) -> bool {
+        matches!(self, Message::Ended(_))
+    }
 }
 
 /// Replies, by the opcode of their request.
 const REPLIES: &[Layout] = &[
     Layout { opcode: 16, inline: true, handles: 0 },
     Layout { opcode: 17, inline: true, handles: 0 },
+    Layout { opcode: 18, inline: true, handles: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.
@@ -117,6 +139,7 @@ const REPLIES: &[Layout] = &[
 pub enum Reply {
     Size(SizeReply),
     Resize(ResizeReply),
+    Ended(EndedReply),
 }
 
 impl<'a> Reply {
@@ -125,6 +148,7 @@ impl<'a> Reply {
         match self {
             Reply::Size(_) => &[],
             Reply::Resize(_) => &[],
+            Reply::Ended(_) => &[],
         }
     }
 
@@ -133,6 +157,7 @@ impl<'a> Reply {
         match self {
             Reply::Size(_) => 16,
             Reply::Resize(_) => 17,
+            Reply::Ended(_) => 18,
         }
     }
 
@@ -146,6 +171,7 @@ impl<'a> Reply {
                 w.u16(m.cols)?;
                 w.u16(m.rows)
             }
+            Reply::Ended(_) => Ok(()),
         }
     }
 
@@ -153,6 +179,7 @@ impl<'a> Reply {
         Ok(match opcode {
             16 => Reply::Size(SizeReply { cols: r.u16()?, rows: r.u16()? }),
             17 => Reply::Resize(ResizeReply { cols: r.u16()?, rows: r.u16()? }),
+            18 => Reply::Ended(EndedReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -161,6 +188,7 @@ impl<'a> Reply {
         Ok(match opcode {
             16 => Reply::Size(SizeReply { cols: r.u16()?, rows: r.u16()? }),
             17 => Reply::Resize(ResizeReply { cols: r.u16()?, rows: r.u16()? }),
+            18 => Reply::Ended(EndedReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }
