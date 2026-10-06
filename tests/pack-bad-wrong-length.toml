@@ -1,0 +1,32 @@
+description = "A boot pack with a bad entry fails the VM's start cleanly (docs/userland/beamlet.md, \"beamlet on Redoubt\"): beamlet-boot's boot, with a boot pack whose first entry's length is one more than its bytes (tests/data/pack/userland-wrong-length.toml), on a volume packed unverified so the pack reaches beamlet as written: on the verified volume the bytes are the image builder's or a block verityd refuses (userland-bad-start). beamlet checks the pack whole before the VM runs anything, says why it refuses it, and parks: the VM does not start, beamlet does not exit, so init neither restarts it nor reboots the machine. The verdict is beamlet's own check and init's lines (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started beamlet, console [0-9a-f]{16}$',
+    "^\\[con [0-9a-f]{16}\\] beamlet: boot.pack refused: an entry's bytes are not where the one before it ends; parked$",
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted beamlet',
+    'init: rebooting',
+    'panicked',
+    'hello from the VM',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/boot.json" }
+
+[userland]
+recipe = "tests/data/pack/userland-wrong-length.toml"

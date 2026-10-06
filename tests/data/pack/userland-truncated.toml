@@ -1,0 +1,14 @@
+# pack-bad-truncated's userland disk (tests/pack-bad-truncated.toml): beamlet-boot's, with a
+# boot pack one byte short, inside its last entry, packed unverified so the pack reaches beamlet
+# as written.
+size_kib = 2048
+
+[objects]
+modules = ["io", "lists"]
+erlang = ["userland/otp/redoubt/tests/erlang/beamlet_boot.erl"]
+pack = ["beamlet_boot.beam", "io.beam", "lists.beam"]
+pack_fault = "truncated"
+
+[[partition]]
+name = "system"
+fs = "erofs"

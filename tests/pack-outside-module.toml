@@ -1,0 +1,28 @@
+description = "A module outside the boot pack still loads from the volume (docs/userland/beamlet.md, \"beamlet on Redoubt\"): beamlet-boot's boot, with a boot pack that holds io and lists and not the start module, beamlet_boot (tests/data/pack/userland.toml). beamlet, built with boot-stats so it says what it read, reads the pack whole, two entries; beamlet_boot, which the pack does not hold, is read from its file on the volume, runs, writes its line through io, and returns ok, and beamlet exits with code 0"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp", features = ["boot-stats"] },
+]
+timeout_secs = 60
+expect = [
+    '^init: started beamlet, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] beamlet: boot pack read [0-9]+ bytes, 2 entries \[t=[0-9]+\]$',
+    '^\[con [0-9a-f]{16}\] beamlet: beamlet_boot read from erofsd:system \[t=[0-9]+\]$',
+    '^\[con [0-9a-f]{16}\] beamlet-boot: hello from the VM$',
+    '^init: beamlet \(PID [0-9]+\) exited, code 0$',
+]
+forbid = ['init: refused the boot', '^init: (keyd|consoled|bootfsd) .*(exited|faulted|was killed)', 'init: rebooting', 'panicked', 'not loaded', 'refused']
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/boot.json" }
+
+[userland]
+recipe = "tests/data/pack/userland.toml"
