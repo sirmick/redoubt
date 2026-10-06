@@ -1,0 +1,16 @@
+[package]
+name = "redoubt-steward-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The steward: embeds the policy core, carves the principals' budgets, and binds its effects to the kernel"
+
+[[bin]]
+name = "steward"
+path = "src/bin/steward.rs"
+
+# Only our own crates: the policy core and the runtime. The core is the one place the steward's
+# policy lives; this crate binds its effects.
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+redoubt-steward = { path = "../../libs/steward" }

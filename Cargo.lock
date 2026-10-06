@@ -844,6 +844,14 @@ name = "redoubt-steward-gen"
 version = "0.1.0"
 
 [[package]]
+name = "redoubt-steward-server"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+ "redoubt-steward",
+]
+
+[[package]]
 name = "redoubt-steward-trace"
 version = "0.1.0"
 dependencies = [

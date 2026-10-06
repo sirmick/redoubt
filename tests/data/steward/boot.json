@@ -1,0 +1,68 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "disk0", "base": "268468224", "irq": 8, "dma": true}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "audit,audit,2222222222222222222222222222222222222222222222222222222222222222", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "bootfsd",
+      "program": "bootfsd",
+      "budget": {"pages": "640", "processes": 1, "weight": 100},
+      "receives": ["bootfsd"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "blkd",
+      "program": "blkd",
+      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "devices": [{"device": "disk0", "as": "disk"}],
+      "receives": ["blkd"], "args": ["endpoint=blkd"]
+    },
+    {
+      "name": "steward",
+      "program": "steward",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["steward"]
+    }
+  ],
+  "labels": [{"name": "alice-secrets", "owner": "alice", "id": "7"}],
+  "principals": [
+    {
+      "name": "alice", "account": "1001",
+      "budget": {"pages": "1024", "processes": 8, "weight": 1000},
+      "ssh_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDt1lueD/60r1ts1aRlj6N8dIiPh+ilx1ItumEnCCCwi"],
+      "labels": ["alice-secrets"],
+      "label_sets": [{"labels": ["alice-secrets"]}]
+    },
+    {
+      "name": "bob", "account": "1002",
+      "budget": {"pages": "512", "processes": 4, "weight": 500},
+      "ssh_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINaP/Ds30AkdLUuZ9wf5M6Zt+ZM+8y5Ojl6TllLOgm5n"]
+    }
+  ],
+  "steward": {
+    "server": "steward",
+    "sizes": {
+      "session": {"pages": "256", "processes": 2, "weight": 100},
+      "agent": {"pages": "128", "processes": 1, "weight": 50},
+      "sub_agent": {"pages": "64", "processes": 1, "weight": 25},
+      "crossing": {"pages": "32", "processes": 1, "weight": 10},
+      "cost": "1"
+    }
+  }
+}

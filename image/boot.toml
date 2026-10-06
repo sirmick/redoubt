@@ -60,6 +60,10 @@ name = "walfsd"
 package = "redoubt-walfsd"
 
 [[entry]]
+name = "steward"
+package = "redoubt-steward-server"
+
+[[entry]]
 name = "beamlet"
 # The Erlang VM, the shell's, in a workspace of its own.
 package = "beamlet-redoubt"
