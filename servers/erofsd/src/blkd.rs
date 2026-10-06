@@ -71,6 +71,8 @@ impl Range for Blkd {
             let n = (out.len() - done).min((MAX_SECTORS * SECTOR) as usize - skip);
             let count = (skip + n).div_ceil(SECTOR as usize) as u32;
             let piece = &mut out[done..done + n];
+            #[cfg(feature = "boot-stats")]
+            crate::stats::call(count as usize * SECTOR as usize);
             self.call(2, &Message::Read(Read { sector, count }), |reply| match reply {
                 Reply::Read(r) if r.data.len() == count as usize * SECTOR as usize => {
                     piece.copy_from_slice(&r.data[skip..skip + n]);

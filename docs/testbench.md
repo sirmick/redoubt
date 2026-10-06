@@ -502,13 +502,14 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECK
 That run fails `bench-debug-assertions-off`, as it should; everything else must pass.
 
 `boot-stats` is a diagnostic feature like `sched-trace` and `walk-trace`, but of programs, not the
-kernel: a Cargo feature of `init`, `blkd`, `verityd`, `littlefsd` and `beamlet-redoubt`, off by
+kernel: a Cargo feature of `init`, `blkd`, `verityd`, `littlefsd`, `erofsd` and `beamlet-redoubt`, off by
 default and never in the image's build. Without it the release binaries of `init`, `blkd`,
-`verityd`, `littlefsd` and `beamlet` have the section sizes they had before it, on rv64 and rv32
+`verityd`, `littlefsd`, `erofsd` and `beamlet` have the section sizes they had before it, on rv64 and rv32
 (measured with `llvm-size` against the commit before it, both built from the same path: `beamlet`'s
 sizes move with its build path). With it, `init`'s lines and beamlet's line for its first object
-carry `[t=N]`, `time_now` in µs; `blkd`, `verityd` and `littlefsd` say their counts at each power
-of two of their requests from 2^12, and `littlefsd` once more, exactly, on a walk of
+carry `[t=N]`, `time_now` in µs; `blkd`, `verityd`, `littlefsd` and `erofsd` say their counts at
+each power of two of their requests from 2^12, and `littlefsd` and `erofsd` once more, exactly, on a
+walk of
 `Elixir.BootStats.beam`, a name no volume holds; and at the VM's first console read beamlet says
 `beamlet: first console read [t=N]` and what its lookups cost: their count and the guest time spent
 in them ([beamlet on Redoubt](userland/beamlet.md#beamlet-on-redoubt)). The feature needs no

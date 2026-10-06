@@ -49,6 +49,15 @@ pub fn serve(startup: &Startup) -> u32 {
     // not become a restart loop.
     let Ok(erofsd) = Erofsd::new(range, labels) else { return NO_VOLUME };
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
+    // Test-only: the boot's counts, said on the console (src/stats.rs).
+    #[cfg(feature = "boot-stats")]
+    let erofsd = {
+        let mut erofsd = erofsd;
+        if let Some(console) = console_only(startup) {
+            erofsd.say_stats(alloc::boxed::Box::new(move |line| say(&console, line)));
+        }
+        erofsd
+    };
     if erofsd.is_corrupt() {
         say(startup, CORRUPT);
     }
@@ -56,4 +65,14 @@ pub fn serve(startup: &Startup) -> u32 {
     // 9P, multiplexed 9P and `ninep_common` in the skeleton's loop; there are no typed
     // operations of `erofsd`'s own.
     server.run(&endpoint, |_, request| refuse_malformed(request))
+}
+
+/// Test-only (`boot-stats`): a startup block naming only this one's console, kept for as long as
+/// `erofsd` runs, so its counts can be said from inside the server.
+#[cfg(feature = "boot-stats")]
+fn console_only(startup: &Startup) -> Option<Startup<'static>> {
+    let (_, console) = startup.namespace().find(|(path, _)| *path == "/dev/cons")?;
+    let block =
+        redoubt_rt::startup::StartupBuilder::new(console.index()).namespace("/dev/cons", console).finish();
+    Startup::parse(alloc::boxed::Box::leak(block.ok()?.into_boxed_slice())).ok()
 }

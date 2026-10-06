@@ -15,6 +15,11 @@ path = "src/bin/erofsd.rs"
 redoubt-rt = { path = "../../libs/rt" }
 erofs = { path = "../../libs/erofs" }
 
+[features]
+# Test-only, for the bench's boot-profile cases, and off in every default build: erofsd counts its
+# 9P operations and its range reads, and says them (src/stats.rs).
+boot-stats = []
+
 [dev-dependencies]
 redoubt-fake-kernel = { path = "../../libs/rt/fake" }
 redoubt-client = { path = "../../libs/client" }

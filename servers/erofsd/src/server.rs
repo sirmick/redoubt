@@ -144,6 +144,8 @@ fn read_inode<R: Range>(range: &mut R, sb: &Superblock, nid: u64) -> Result<Inod
     let at = sb.inode_at(nid)?;
     let mut bytes = [0u8; EXTENDED];
     let len = (sb.bytes() - at).min(EXTENDED as u64) as usize;
+    #[cfg(feature = "boot-stats")]
+    crate::stats::read_for(crate::stats::For::Inode);
     range.read(at, &mut bytes[..len])?;
     Ok(Inode::parse(sb, nid, &bytes[..len])?)
 }
@@ -173,7 +175,13 @@ pub struct Erofsd<R: Range> {
     scratch: Vec<u8>,
     held: Option<Held>,
     cursor: Option<Cursor>,
+    #[cfg(feature = "boot-stats")]
+    say: Option<Say>,
 }
+
+/// Says a line on `erofsd`'s console (`boot-stats`).
+#[cfg(feature = "boot-stats")]
+pub type Say = alloc::boxed::Box<dyn Fn(&str)>;
 
 impl<R: Range> Erofsd<R> {
     /// The server for `range`, with the volume's `labels`: the superblock and the root inode are
@@ -185,7 +193,34 @@ impl<R: Range> Erofsd<R> {
         scratch.try_reserve_exact(BLOCK).map_err(|_| Fault)?;
         scratch.resize(BLOCK, 0);
         let volume = open(range, sectors, &mut scratch);
-        Ok(Erofsd { volume, labels, scratch, held: None, cursor: None })
+        Ok(Erofsd {
+            volume,
+            labels,
+            scratch,
+            held: None,
+            cursor: None,
+            #[cfg(feature = "boot-stats")]
+            say: None,
+        })
+    }
+
+    /// Says the boot's counts through `say` (src/stats.rs).
+    #[cfg(feature = "boot-stats")]
+    pub fn say_stats(&mut self, say: Say) { self.say = Some(say) }
+
+    /// Counts `op`, and says the counts at each power of two of requests.
+    #[cfg(feature = "boot-stats")]
+    fn counted(&self, op: crate::stats::Op) {
+        if crate::stats::op(op) {
+            self.said();
+        }
+    }
+
+    #[cfg(feature = "boot-stats")]
+    fn said(&self) {
+        if let Some(say) = &self.say {
+            say(&crate::stats::line());
+        }
     }
 
     /// Whether the volume is served as corrupt: every attach refused with `corrupt`.
@@ -217,6 +252,8 @@ impl<R: Range> Erofsd<R> {
         }
         let (at, len) = dir.dir_block(index).ok_or(Failure::Corrupt)?;
         let volume = self.volume.as_mut().ok_or(Failure::Corrupt)?;
+        #[cfg(feature = "boot-stats")]
+        crate::stats::read_for(crate::stats::For::Directory);
         volume.range.read(at, &mut self.scratch[..len])?;
         self.held = Some(Held { nid: dir.nid(), index, len });
         Ok(len)
@@ -314,6 +351,13 @@ impl<R: Range> FileServer for Erofsd<R> {
 
     /// One lookup in `dir`, and the inode it names read once, kept on the fid.
     fn walk(&mut self, _: &Caller, dir: &Node, name: &str) -> Result<(Node, Qid), NineError> {
+        #[cfg(feature = "boot-stats")]
+        {
+            self.counted(crate::stats::Op::Walk);
+            if name == crate::stats::SENTINEL {
+                self.said();
+            }
+        }
         self.volume()?;
         if dir.inode.kind() != Kind::Dir {
             return Err(NineError::NOT_DIR);
@@ -332,6 +376,8 @@ impl<R: Range> FileServer for Erofsd<R> {
 
     /// Reading only: any mode that could change a file is refused before anything else.
     fn open(&mut self, _: &Caller, node: &Node, m: u8) -> Result<Qid, NineError> {
+        #[cfg(feature = "boot-stats")]
+        self.counted(crate::stats::Op::Open);
         self.volume()?;
         if matches!(m & 3, mode::OWRITE | mode::ORDWR) || m & mode::OTRUNC != 0 {
             return Err(text::READ_ONLY);
@@ -342,6 +388,8 @@ impl<R: Range> FileServer for Erofsd<R> {
     /// The file's bytes from `offset`, cut to its size: one range read of its blocks, and one of
     /// its inline tail where the read reaches it.
     fn read(&mut self, _: &Caller, node: &Node, offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
+        #[cfg(feature = "boot-stats")]
+        self.counted(crate::stats::Op::Read);
         self.volume()?;
         if node.inode.kind() != Kind::File {
             return Err(NineError::NOT_SUPPORTED);
@@ -351,11 +399,15 @@ impl<R: Range> FileServer for Erofsd<R> {
         while done < want {
             let (at, run) = node.inode.extent(offset + done as u64).ok_or(text::CORRUPT)?;
             let n = run.min((want - done) as u64) as usize;
+            #[cfg(feature = "boot-stats")]
+            crate::stats::read_for(crate::stats::For::Data);
             if let Err(f) = self.volume()?.range.read(at, &mut out[done..done + n]) {
                 return Err(self.failed(f.into()));
             }
             done += n;
         }
+        #[cfg(feature = "boot-stats")]
+        crate::stats::read_bytes(want);
         Ok(Read::Done(want))
     }
 
@@ -364,6 +416,8 @@ impl<R: Range> FileServer for Erofsd<R> {
     }
 
     fn stat(&mut self, _: &Caller, node: &Node) -> Result<FileStat, NineError> {
+        #[cfg(feature = "boot-stats")]
+        self.counted(crate::stats::Op::Stat);
         self.volume()?;
         stat_of(&node.inode, &node.name)
     }
@@ -396,6 +450,9 @@ impl<R: Range> FileServer for Erofsd<R> {
     }
 
     fn remove(&mut self, _: &Caller, _: &Node) -> Result<(), NineError> { Err(text::READ_ONLY) }
+
+    #[cfg(feature = "boot-stats")]
+    fn clunk(&mut self, _: &Node) { self.counted(crate::stats::Op::Clunk) }
 }
 
 #[cfg(test)]

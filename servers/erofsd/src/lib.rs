@@ -24,5 +24,7 @@ extern crate alloc;
 
 pub mod blkd;
 pub mod server;
+#[cfg(feature = "boot-stats")]
+pub mod stats;
 
 pub use server::{Args, BUDGET, BadArgs, COST, Erofsd, Fault, Range, limits, parse_args};

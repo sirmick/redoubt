@@ -133,7 +133,7 @@ max_lines = 2109
 [[crate]]
 name = "servers/erofsd"
 paths = ["servers/erofsd/src"]
-max_lines = 398
+max_lines = 515
 
 [[crate]]
 name = "servers/littlefsd"
