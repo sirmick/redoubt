@@ -1143,15 +1143,12 @@ impl Kernel {
     }
 
     /// Page-table pages (in pages to charge) that mapping `vpns` into `pid` would allocate.
-    fn tables_needed(&self, pid: u64, vpns: impl IntoIterator<Item = u64>) -> u64 {
+    fn tables_needed(&mut self, pid: u64, vpns: impl IntoIterator<Item = u64>) -> u64 {
         let Some(p) = self.processes.get(&pid) else { return 0 };
         let mut new = BTreeSet::new();
         for v in vpns {
-            for k in table_keys(v) {
-                if !p.tables.contains_key(&k) {
-                    new.insert(k);
-                }
-            }
+            self.ghost.map_steps += 1;
+            new.extend(table_keys(v).into_iter().filter(|k| !p.tables.contains_key(k)));
         }
         new.len() as u64 * self.page_table_cost()
     }
@@ -1226,9 +1223,9 @@ impl Kernel {
     /// overlap check): the opposite of `own_range`, wanting nothing there rather than an owned
     /// mapping, and a single `BTreeMap::range` lookup instead of `n` point lookups, so it stays
     /// cheap even for a huge `n` (R22).
-    fn range_free(&self, pid: u64, first: u64, n: u64) -> bool {
-        let Some(p) = self.processes.get(&pid) else { return false };
-        p.space.range(first..first + n).next().is_none()
+    fn range_free(&mut self, pid: u64, first: u64, n: u64) -> bool {
+        self.ghost.map_steps += 1;
+        self.processes.get(&pid).is_some_and(|p| p.space.range(first..first + n).next().is_none())
     }
 
     // ---------------------------------------------------------------------------------------

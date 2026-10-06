@@ -52,22 +52,21 @@ fn map_fixed_near_user_top_does_not_starve_map_anon() {
 
 /// A hostile huge `len` must be refused promptly: the overlap check is one `BTreeMap` range
 /// lookup and the pages-vs-budget check runs before `tables_needed` ever walks the range. The
-/// range matches the boot bench's (4 GiB to the top of user space, about 2^26 pages). The bound
-/// is generous for a debug build: the fixed path is microseconds, while a regression to one
-/// lookup per page, or to `tables_needed` first (2^26 vpns into a `BTreeSet`), takes seconds. It is
-/// the one wall-clock bound the host tests keep: about 10^5 times what the call takes, which no
-/// load on the machine closes.
+/// range matches the boot bench's (4 GiB to the top of user space, about 2^26 pages). The work is
+/// counted, not timed: the refusal is arithmetic and takes no step over the range, while a
+/// regression to `tables_needed` first walks all 2^26 pages, and one to the overlap check first
+/// counts its lookups. A count no load on the machine changes.
 #[test]
 fn huge_len_is_refused_promptly() {
     let mut w = World::new(None);
     let before = w.k.budgets[&1].pages_used;
+    let steps = w.k.ghost.map_steps;
     let addr = 0x1_0000_0000;
-    let start = std::time::Instant::now();
     let r = call(&mut w, 1, Syscall::MapFixed { addr, len: USER_TOP - addr, flags: FLAG_R });
-    let elapsed = start.elapsed();
     assert_eq!(r, Err(Error::OutOfMemory));
     assert_eq!(w.k.budgets[&1].pages_used, before);
-    assert!(elapsed < std::time::Duration::from_secs(1), "took {elapsed:?}");
+    let steps = w.k.ghost.map_steps - steps;
+    assert_eq!(steps, 0, "the refusal took {steps} steps over its range");
 }
 
 /// Free pages in the budget process 1 runs in.

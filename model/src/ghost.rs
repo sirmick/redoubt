@@ -192,6 +192,10 @@ pub struct Ghost {
     pub armed: BTreeMap<u64, BTreeSet<u64>>,
     /// Violations found while a step ran (the checks run after it).
     pub violations: Vec<String>,
+    /// Steps mapping calls have taken over their ranges, ever: one per page `tables_needed` walks
+    /// and one per lookup `range_free` makes. R22's measure, so a test counts the work a refusal
+    /// did rather than timing it.
+    pub map_steps: u64,
 }
 
 impl Ghost {

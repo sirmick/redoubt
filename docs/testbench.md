@@ -213,18 +213,15 @@ host can serve the kind, never a case's verdict. So a loopback case that asserts
 the 14) passes as a verdict, and a failure that is only its deadline is rerun alone. A case
 that measures with the host's clock is a verdict only alone: the rule asks that no other
 invocation and no build run beside it. Those are a `host-tests` case whose crates' tests assert
-a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd`, `redoubt-consoled` and
-`redoubt-model` do; `redoubt-ipd` and `testbench` only read the clock), which no tolerance
-would make load-proof; and a case whose expectation is a timeout (`bench-ssh-guest`, and
+a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
+`redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
+make load-proof; and a case whose expectation is a timeout (`bench-ssh-guest`, and
 `bench-ssh-loopback-deadlock`, whose `must_fail` is the mark it never gets). A
 `host-tests` case whose crates assert no bound measures nothing with the host's clock; it may
 run beside other work, and the rule asks that its test threads be bounded then
-(`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The model's property
-runs spawn a thread per host core inside
-each test (`model/tests/common/mod.rs`), on top of cargo's own parallelism: that case runs
-alone, and oversubscribes the host alone, until its runs take their thread count from the same
-bound. The kinds that boot nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets,
-the docs checker, the Elixir oracles) have no clock, and are verdicts anywhere.
+(`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The kinds that boot
+nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
+oracles) have no clock, and are verdicts anywhere.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
@@ -701,7 +698,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (15)</summary>
+<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (16)</summary>
 
 - bench:bench-ssh-loopback
 - bench:bench-ssh-loopback-openssh
@@ -716,6 +713,7 @@ The guest's own claims about the network are never trusted.
 - host:testbench::the_guest_recipe_parses_and_hashes
 - host:testbench::a_bad_package_is_broken_and_no_network_is_the_hosts
 - host:testbench::the_keeper_finds_what_names_the_case
+- host:testbench::the_keeper_waits_to_the_deadline
 - host:testbench::resize_needs_a_pty
 - host:testbench::no_other_child_inherits_a_sessions_terminal
 
@@ -789,8 +787,10 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
   hangs up on its proxy. What `sshd` logs after that is lost; the lines the cases ask for come
   earlier. `ssh` has no parent-death signal, so a bench killed outright leaves it running until
   its session ends, and its guest with it. **The keeper:** once a case's sessions have all exited,
-  any `qemu-system-riscv64` whose command line names the case's directory (the run's own) has five
-  seconds to go; one still running then is killed, and the case fails, naming it.
+  any `qemu-system-riscv64` whose command line names the case's directory (the run's own) has
+  until the case's deadline, and at least five seconds, to go, as a loaded host may slow a
+  guest's shutdown with nothing wrong; one still running then is killed, and the case fails,
+  naming it, unless a session has already failed it.
 - **Before the first OpenSSH loopback case** the bench logs in once and runs `exit 0`, and the
   server's log must name OpenSSH's version, so that no other server can pass for it. Its `ssh` waits
   at most 30 seconds for the server's banner, so a guest that never boots fails the probe rather

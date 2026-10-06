@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 134
+revision = 139
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -919,8 +919,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Brief: .wash/local/B10-implementer.md (architect-15). Tier A tooling (the model's harness, the bench's keeper), size S. docs/testbench.md#on-a-shared-host (model-host-tests leaves the alone list; ssh-loopback is class (ii)); docs/kernel/model.md (MODEL_THREADS beside REDOUBT_MODEL_SEQUENCES). Hotspot: B9 touches the keeper's host test."
-  state = "active"
-  revision = 130
+  state = "done"
+  revision = 139
 
 [[node]]
   id = "BOOT1"
@@ -931,7 +931,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Brief: .wash/local/BOOT1-implementer.md (architect-15; refocused 2026-10-06: littlefs's read cache dropped, the system volume moves to EROFS in EROFS1; the profile is the before/after measurement). Tier A (verityd, fsd's stamps, the bench), size M. docs/servers/verityd.md (the cost paragraph, its Open item); docs/userland/beamlet.md#beamlet-on-redoubt (the boot-time target, bench:boot-profile); docs/testbench.md#checked-builds (boot-stats). Checkpoint after step 1's profile; the target is set from the profile on EROFS (EROFS1)."
   state = "active"
   revision = 109
-  overrides = ["2026-10-06: started by Orchestrator before VOL1 (active): owner's go (2026-10-06): the boot profile and the two caches start now on VOL1's head (its verityd and image); BOOT1 rebases onto main once VOL1 merges", "2026-10-06: started by Orchestrator before VOL1 (reported): BOOT1 runs ahead of VOL1's merge on the owner's go; it rebases onto VOL1's merge"]
+  overrides = ["2026-10-06: started by Orchestrator before VOL1 (active): owner's go (2026-10-06): the boot profile and the two caches start now on VOL1's head (its verityd and image); BOOT1 rebases onto main once VOL1 merges", "2026-10-06: started by Orchestrator before VOL1 (reported): BOOT1 runs ahead of VOL1's merge on the owner's go; it rebases onto VOL1's merge", "2026-10-06: started by Orchestrator before VOL1 (active): BOOT1 builds on VOL1's branch head and rebases onto VOL1's merge; its review and gates run on that base now so the merge follows VOL1's directly"]
 
 [[node]]
   id = "EROFS1"
@@ -952,3 +952,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Owner (2026-10-06): name file servers carefully for multiple fs servers; rename fsd to fsd-littlefs or similar. Convention on docs/servers/README.md#naming; the name is littlefsd. Brief: .wash/local/FSN1-implementer.md (architect-15). Mechanical rename (crate, image manifest, 47 case files, 26 pages, 30 recipes; 1,285 occurrences), no behaviour change; size S; three commits. Lands before EROFS1."
   state = "todo"
   revision = 108
+
+[[node]]
+  id = "RECON1"
+  title = "The reconcile's cost bounded by its stated loop bounds: a kept ready count, one floor raise, tens of instructions per visited budget"
+  template = "package"
+  parent = "M1"
+  needs = ["SCHED1"]
+  body = "SCHED1's release measurement (.wash/local/evidence/SCHED1/five-cases/RESULTS.md): a slice end costs ~0.36 ms rv64 / ~0.45 ms rv32 of kernel time, two-thirds of it ~3.2 reconciles per slice at ~9k instructions each for a handful of marked budgets, against docs/kernel/scheduling.md's claim that a reconcile visits only the budgets whose runnable state changed (K22) and R12's kernel-time text. Brief: .wash/local/RECON1-brief.md. Tier A kernel, size S. Candidates: ready_count's bit-by-bit count (ptable.rs:145), raise_floor twice per reconcile; SCHED1's successor fills the per-step attribution. Gate: release per-switch kernel time at the pick/switch/trap/SBI floor plus tens of us (slice-end gap method, both widths, before/after); sched-large-weight's useful work at 1 ms within 0.90 of 10 ms both widths. Owner's decision (IPC3-wake-latency): SCHED1 merges first with the cost a stated residual in Charging; RECON1 is the next kernel package and replaces that sentence."
+  state = "todo"
+  revision = 138

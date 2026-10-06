@@ -316,7 +316,7 @@ pub fn loopback_usable(workspace: &Path, dir: &Path) -> Result<(), Unusable> {
         Ok((output, case_dir))
     };
     let (output, case_dir) = probe().map_err(broken)?;
-    if let Some(why) = leftover_guest(&case_dir) {
+    if let Some(why) = leftover_guest(&case_dir, Instant::now() + PROBE_TIMEOUT) {
         return Err(Unusable::Broken(format!("the loopback probe: {why}")));
     }
     if !output.status.success() {
@@ -469,7 +469,7 @@ pub fn run(
     });
     // The keeper: no guest outlives its case's sessions.
     let leftover = match server {
-        Server::Loopback { case_dir, .. } => leftover_guest(case_dir),
+        Server::Loopback { case_dir, .. } => leftover_guest(case_dir, deadline),
         Server::Guest { .. } | Server::Redoubt { .. } => None,
     };
     let mut failure = None;
@@ -485,18 +485,25 @@ pub fn run(
     Ok(failure.or(leftover))
 }
 
-/// How long a case's guests have to go once their sessions' ssh have exited: ssh hangs up on its
-/// proxy as it exits.
+/// The least time a case's guests have to go once their sessions' ssh have exited, however near
+/// the deadline those ended: ssh hangs up on its proxy as it exits.
 const GUESTS_GO: Duration = Duration::from_secs(5);
 
-/// The keeper: a guest of the case's still running once its sessions are done is named, and
-/// killed so that it does not outlive the bench. The case's directory is the run's own, so a
-/// guest whose command line names it is this case's.
-fn leftover_guest(case_dir: &Path) -> Option<String> {
-    let named = format!("{}/", case_dir.display());
-    let deadline = Instant::now() + GUESTS_GO;
+/// The keeper: a guest of the case's still running at `deadline` (the case's, or the probe's),
+/// or `GUESTS_GO` after its sessions are done if that is later, is named, and killed so that it
+/// does not outlive the bench. Until then a guest may take as long as a loaded host makes it to
+/// go. A session's own failure, a timeout included, is the case's verdict before this one. The
+/// case's directory is the run's own, so a guest whose command line names it is this case's.
+fn leftover_guest(case_dir: &Path, deadline: Instant) -> Option<String> {
+    leftover(ssh_guest::QEMU, &format!("{}/", case_dir.display()), deadline)
+}
+
+/// `leftover_guest` for any `program` with an argument naming `named`.
+fn leftover(program: &str, named: &str, deadline: Instant) -> Option<String> {
+    let start = Instant::now();
+    let deadline = deadline.max(start + GUESTS_GO);
     loop {
-        let left = processes_naming(ssh_guest::QEMU, &named);
+        let left = processes_naming(program, named);
         if left.is_empty() {
             return None;
         }
@@ -504,9 +511,8 @@ fn leftover_guest(case_dir: &Path) -> Option<String> {
             let pids: Vec<String> = left.iter().map(u32::to_string).collect();
             Command::new("kill").arg("-KILL").args(&pids).status().ok();
             return Some(format!(
-                "{} for {named} still ran {}s after its sessions ended (pid {}; killed)",
-                ssh_guest::QEMU,
-                GUESTS_GO.as_secs(),
+                "{program} for {named} still ran {}s after its sessions ended (pid {}; killed)",
+                start.elapsed().as_secs(),
                 pids.join(", ")
             ));
         }
@@ -845,5 +851,27 @@ mod tests {
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(processes_naming("sh", &named), [] as [u32; 0]);
+    }
+
+    /// A guest that goes late but before the case's deadline is not reported; one still running
+    /// at the deadline is named and killed, and never before `GUESTS_GO`, however near the
+    /// deadline its sessions ended.
+    #[test]
+    fn the_keeper_waits_to_the_deadline() {
+        let named = format!("/keeper-wait-{}/", std::process::id());
+        let mut late = Command::new("sh").args(["-c", "sleep 1", &format!("{named}late")]).spawn().unwrap();
+        assert_eq!(processes_naming("sh", &named), [late.id()]);
+        // Reaped as it exits, as ssh reaps its proxy.
+        let reaper = std::thread::spawn(move || late.wait().unwrap());
+        assert_eq!(leftover("sh", &named, Instant::now() + Duration::from_secs(60)), None);
+        reaper.join().unwrap();
+
+        let mut stuck =
+            Command::new("sh").args(["-c", "sleep 30", &format!("{named}stuck")]).spawn().unwrap();
+        let ended = Instant::now();
+        let why = leftover("sh", &named, ended).expect("still running");
+        assert!(ended.elapsed() >= GUESTS_GO, "killed after {:?}", ended.elapsed());
+        assert!(why.contains(&format!("(pid {}; killed)", stuck.id())), "{why}");
+        assert!(!stuck.wait().unwrap().success());
     }
 }
