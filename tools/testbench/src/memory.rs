@@ -4,6 +4,7 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use redoubt_client::launch::STACK_PAINT;
@@ -16,6 +17,8 @@ use crate::case::{Boot, Program};
 
 const UNIT: usize = 8;
 const CHUNK: usize = 64 * 1024;
+/// How long the guest runs on between dumps while a server has not written its record.
+const RUN_ON: Duration = Duration::from_secs(1);
 
 /// What a server declares: its first-thread stack, and its heap cap, 0 for none.
 #[derive(Clone, Debug)]
@@ -29,6 +32,40 @@ pub struct Server {
 pub struct Measurement {
     pub lines: Vec<String>,
     pub failures: Vec<String>,
+    /// The servers whose heap record the dump lacks: not started yet, or never.
+    pub missing: Vec<String>,
+}
+
+/// Dump and scan until every declared server has written its heap record, which the runtime does
+/// before `main`, or until `deadline`; between dumps the guest runs on for at most `RUN_ON`. A
+/// record still missing then fails as the scan says; a scan's error ends the wait at once. When it
+/// took more than one dump, the first line says how many, how long the guest ran on, and for whom.
+pub fn until_started(
+    deadline: Instant,
+    mut dump: impl FnMut() -> Result<Measurement>,
+    mut run_on: impl FnMut(Duration) -> Result<()>,
+) -> Result<Measurement> {
+    let mut measured = dump()?;
+    let waited_for = measured.missing.join(", ");
+    let mut dumps = 1;
+    let mut waited = Duration::ZERO;
+    while !measured.missing.is_empty() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let ran = Instant::now();
+        run_on(left.min(RUN_ON))?;
+        waited += ran.elapsed();
+        measured = dump()?;
+        dumps += 1;
+    }
+    if dumps > 1 {
+        let dumped = if dumps == 2 { "twice".to_string() } else { format!("{dumps} times") };
+        let waited = waited.as_secs_f64();
+        measured.lines.insert(0, format!("memory: dumped {dumped}, waited {waited:.1} s for {waited_for}"));
+    }
+    Ok(measured)
 }
 
 /// Read exactly the manifest a memory case puts in the bundle, including the case's server
@@ -116,6 +153,7 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
     }
     let mut lines = Vec::new();
     let mut failures = Vec::new();
+    let mut missing = Vec::new();
     for (i, server) in servers.iter().enumerate() {
         if !seen[i].contains(&true) {
             failures.push(format!("{}: no stack paint found", server.name));
@@ -136,6 +174,7 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
         let name = &server.name;
         let Some((cap, peak)) = *heap else {
             failures.push(format!("{name}: no heap record found"));
+            missing.push(name.clone());
             continue;
         };
         if cap != server.heap_pages {
@@ -152,7 +191,7 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
             cap => format!("heap {name} {peak} of {cap} pages"),
         });
     }
-    Ok(Measurement { lines, failures })
+    Ok(Measurement { lines, failures, missing })
 }
 
 #[cfg(test)]
@@ -302,5 +341,99 @@ mod tests {
         ram.extend(record(1, 0, 1));
         let error = scan(&ram[..], ram.len() as u64, &servers).unwrap_err();
         assert!(error.to_string().contains("a: heap record found twice"));
+    }
+
+    /// RAM as the guest stopped with its last server inside the stub, which loads the image on
+    /// the server's own stack before the runtime writes the record: its stack touched, its record
+    /// absent; and the same RAM once that server has started.
+    fn before_and_after_beamlet() -> (Vec<u8>, Vec<u8>, [Server; 2]) {
+        let mut before = painted(1, 1);
+        let mut late = painted(2, 2);
+        let len = late.len();
+        late[len - 904..].fill(0);
+        before.extend(late);
+        before.extend(record(1, 0, 3));
+        let mut after = before.clone();
+        after.extend(record(2, 0, 1));
+        (before, after, [server("a", 1), server("beamlet", 2)])
+    }
+
+    /// The first dump lacks beamlet's record, so the guest runs on and the second has it: the
+    /// verdict is the second dump's alone, and the output says it waited.
+    #[test]
+    fn scanner_waits_for_every_server_to_start() {
+        let (before, after, servers) = before_and_after_beamlet();
+        assert_eq!(
+            scan(&before[..], before.len() as u64, &servers).unwrap().failures,
+            ["beamlet: no heap record found"]
+        );
+        let mut dumps = [&before, &after].into_iter();
+        let mut runs = 0;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let measured = until_started(
+            deadline,
+            || {
+                let ram = dumps.next().unwrap();
+                scan(&ram[..], ram.len() as u64, &servers)
+            },
+            |_| Ok(runs += 1),
+        )
+        .unwrap();
+        assert_eq!(runs, 1);
+        assert!(measured.failures.is_empty(), "{:?}", measured.failures);
+        assert!(measured.lines[0].starts_with("memory: dumped twice, waited "), "{}", measured.lines[0]);
+        assert!(measured.lines[0].ends_with(" s for beamlet"));
+        assert_eq!(
+            measured.lines[1..],
+            [
+                "stack a 0 of 1 pages",
+                "stack beamlet 904 of 2 pages",
+                "heap a 3 pages uncapped",
+                "heap beamlet 1 pages uncapped"
+            ]
+        );
+    }
+
+    /// A server that has not started by the case's deadline fails, after the guest ran on.
+    #[test]
+    fn scanner_fails_a_server_not_started_by_the_deadline() {
+        let (before, _, servers) = before_and_after_beamlet();
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let measured = until_started(
+            deadline,
+            || scan(&before[..], before.len() as u64, &servers),
+            |pause| Ok(std::thread::sleep(pause)),
+        )
+        .unwrap();
+        assert_eq!(measured.failures, ["beamlet: no heap record found"]);
+        assert!(measured.lines[0].starts_with("memory: dumped "), "{}", measured.lines[0]);
+        // Past the deadline already: one dump, no running on.
+        let measured = until_started(
+            Instant::now(),
+            || scan(&before[..], before.len() as u64, &servers),
+            |_| panic!("ran on past the deadline"),
+        )
+        .unwrap();
+        assert_eq!(measured.failures, ["beamlet: no heap record found"]);
+        assert_eq!(measured.lines[0], "stack a 0 of 1 pages");
+    }
+
+    /// A scan's error, here a duplicate record in the second dump, ends the wait at once.
+    #[test]
+    fn scanner_stops_waiting_at_an_error() {
+        let (before, mut after, servers) = before_and_after_beamlet();
+        after.extend(record(2, 0, 1));
+        let mut dumps = [&before, &after].into_iter();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let error = until_started(
+            deadline,
+            || {
+                let ram = dumps.next().expect("no dump after the error");
+                scan(&ram[..], ram.len() as u64, &servers)
+            },
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("beamlet: heap record found twice"));
     }
 }

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 162
+revision = 166
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -941,8 +941,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["VOL1", "BOOT1", "FSN1"]
   body = "Owner (2026-10-06): the read-only system volume stops using littlefs; a read-only EROFS replaces it, built now; littlefs stays for writable volumes. Design: docs/servers/erofsd.md (the uncompressed subset: flat plain and flat inline layouts, sorted dirents, xattrs skipped; its own small server on bootfsd's pattern; Redoubt's own deterministic writer with erofs-utils as a host oracle). Brief: .wash/local/EROFS1-implementer.md (architect-15). Tier A, size M. Needs VOL1, FSN1 (final names) and BOOT1's step-1 profile (the littlefs baseline)."
-  state = "todo"
-  revision = 107
+  state = "active"
+  revision = 163
 
 [[node]]
   id = "FSN1"
@@ -970,8 +970,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Seen twice on 2026-10-06 (VOL1's shared run on f873f6a15, and the wave bench on bd6f768f6): rv32 init-boot fails with 'beamlet: no heap record found' when the host is loaded, and passes alone (7.2 s). The scan (tools/testbench/src/memory.rs, MEM2's heap record read over QMP after the boot) reads a record the guest may not have written yet, or reads it before the dump settles: a race the load exposes. A shared-host verdict rule depends on guest-time cases being load-independent (docs/testbench.md 'On a shared host'), so the scan must wait for the record (a console line the guest prints when the record is final, or a retry to the case's deadline), not sample once. Size S. Gate: init-boot rv32 passes 10/10 beside a build; the memory host tests."
-  state = "todo"
-  revision = 146
+  state = "done"
+  revision = 166
 
 [[node]]
   id = "LIFT1"
