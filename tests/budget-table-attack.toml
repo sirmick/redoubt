@@ -10,7 +10,9 @@ programs = [
     { bin = "budget-victim", budgets = ["system"] },
     { bin = "budget-table-attack", budgets = ["users"] },
 ]
-timeout_secs = 10
+timeout_secs = 30
+# A checked build: the rolled-back `process_create` runs the kernel's audits mid-call.
+debug_assertions = true
 # The attacker fills its table with revocation scopes until the kernel refuses, closes the last
 # page and reopens it, then destroys the pool, which closes
 # every scope. A table grown without bound, or a page index past the table, would take the
@@ -20,6 +22,7 @@ expect = [
     '^\[server\] started budget-table-attack as pid 4$',
     '^\[pid 4\] \[table\] filled to handle 4096, then TooLarge; the pool paid \d+ pages \(one per scope\)$',
     '^\[pid 4\] \[table\] its own budget paid 63 pages for the table$',
+    '^\[pid 4\] \[table\] process_create at a full table -> Err\(TooLarge\); nothing kept: true$',
     '^\[pid 4\] \[table\] closed 4033..=4096: true; reopened -> Ok\(4033\)$',
     '^\[pid 4\] \[table\] destroyed the pool -> Ok\(\(\)\); its own usage back where it was: true$',
     '^\[pid 4\] \[table\] every swept index is empty: true$',

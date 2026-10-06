@@ -560,7 +560,8 @@ model, on the host; the kernel's own use of it runs in boot cases
 
 `redoubt-ipclist` (`libs/ipclist`) holds the kernel's IPC lists: the links of what waits on each
 endpoint, device and budget, of the exit notices owed on an endpoint and the processes that
-report there, and of each process's waits with a deadline; R2's groups in the order their turns
+report there, of the process objects charged to each budget and counted in it, and of each
+process's waits with a deadline; R2's groups in the order their turns
 fall due, the expiry's sort, and each list's audit. The kernel links it and keeps every rule in
 `message.rs`. `the_groups_follow_the_model` states R2 beside it as the model's `next_sender` and
 `served` do, and in 200 seeds of 300 random queues, leaves and takes each, the two must pick the

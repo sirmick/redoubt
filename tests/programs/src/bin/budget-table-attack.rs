@@ -1,7 +1,8 @@
 //! Attacker: exhaust the handle table. It fills its table with revocation scopes (cheap: one
 //! page each, charged to a pool it carves from `users`) until the kernel refuses (`TooLarge` past
-//! `MAX_HANDLES`), closes and reopens across a page boundary, then destroys the pool, which
-//! closes every one of them.
+//! `MAX_HANDLES`), makes a process it has no index left for (`TooLarge`, the creation rolled back
+//! whole), closes and reopens across a page boundary, then destroys the pool, which closes every
+//! one of them.
 //! Every table page is charged to the budget it runs in, its own (slot 3), and the victim beside
 //! it, under `system` too, must still get its pages afterwards. See `tests/budget-table-attack.toml`.
 
@@ -19,6 +20,8 @@ pub extern "C" fn _start() -> ! {
     let (own, users) = (rd::OWN, rd::GIVEN);
     // Log once before its own usage is read: the first line maps what logging needs.
     log!(logger, "[attacker] starting");
+    // An exit endpoint for the process it will try to make once the table is full.
+    let exit = rd::endpoint_create().expect("endpoint");
     let before = rd::usage(own).unwrap().pages_usage;
     // The first index this program does not already hold.
     let base = rd::first_free();
@@ -46,6 +49,13 @@ pub extern "C" fn _start() -> ! {
     // the pool is `users`'.
     let table_pages = rd::usage(own).unwrap().pages_usage - before;
     log!(logger, "[table] its own budget paid {} pages for the table", table_pages);
+    // With no index left for its handle, a process the kernel had already half made (its PID, its
+    // address space, its object) is undone: nothing stays charged or counted.
+    let full = rd::usage(own).unwrap();
+    let made = rd::process_create(own, exit);
+    let undone = rd::usage(own).unwrap();
+    let same = (undone.pages_usage, undone.processes_usage) == (full.pages_usage, full.processes_usage);
+    log!(logger, "[table] process_create at a full table -> {:?}; nothing kept: {}", made, same);
     // Hand back the last page's handles, then take one again: the page is freed and recharged.
     let closed = (4033..=last).all(|h| rd::close(h).is_ok());
     let reopened = rd::create(pool, &rd::spec(0, 0, 0));

@@ -1,5 +1,5 @@
 //! The kernel's IPC lists: who waits where, kept on the objects waited on (kernel/ipc.md R2, R3,
-//! R4a; kernel/budgets.md R10 step 4; kernel/timer.md, "Expiry").
+//! R4a; kernel/budgets.md R10 steps 2 to 4 and 8; kernel/timer.md, "Expiry").
 //!
 //! Every list is intrusive: its head lives in the frame of the object it belongs to, and its links
 //! in its members' own pages, a thread's IPC page or an open call's page. So a list costs no
@@ -19,8 +19,10 @@
 //!   while its caller waits and on its notice list while its notice is owed (never both: [`C_EPREV`]), and on
 //!   its stamp budget's chain while its caller waits ([`C_SPREV`]). A process object is on its exit
 //!   endpoint's reporters while its process runs and on its exits while its notice is owed (never both:
-//!   [`P_PREV`]). Inside a destruction only, an endpoint that may have something to deliver is on the
-//!   kernel's to-pump list ([`E_PPREV`]), once.
+//!   [`P_PREV`]), and from its making to its free on two budgets' chains: its creator's, which it is charged
+//!   to ([`P_CHPREV`]), and the one whose process limit counts its PID ([`P_CTPREV`]). Inside a destruction
+//!   only, an endpoint that may have something to deliver is on the kernel's to-pump list ([`E_PPREV`]),
+//!   once.
 //! - **R2's groups** ([`enqueue`], [`pick`], [`served`], [`dequeue`]). An endpoint keeps the groups with a
 //!   message queued in the order their turns fall due, and apart, the groups with a send queued in the order
 //!   their oldest sends fall due, for a receiver at `MAX_OPEN_CALLS` (R4a). A group's node lives in its
@@ -44,7 +46,7 @@ pub enum Page {
     Endpoint(u32),
     /// A device object's frame.
     Device(u32),
-    /// A budget's frame: the chains of what was sent under its stamp.
+    /// A budget's frame: the chains of what was sent under its stamp, and of its process objects.
     Budget(u32),
     /// An endpoint on the kernel's to-pump list, by its frame + 1: a list member's page holds its
     /// list word as every other member's does, so following a link costs no conversion.
@@ -105,8 +107,14 @@ pub const CALL_WORDS: usize = 4;
 /// A process object's links on its exit endpoint's reporters or exits.
 pub const P_PREV: usize = 0;
 pub const P_NEXT: usize = 1;
+/// Its links on the chain of the budget it is charged to.
+pub const P_CHPREV: usize = 2;
+pub const P_CHNEXT: usize = 3;
+/// Its links on the chain of the budget that counts its PID.
+pub const P_CTPREV: usize = 4;
+pub const P_CTNEXT: usize = 5;
 /// Words the lists take in a process object's frame.
-pub const PROCESS_WORDS: usize = 2;
+pub const PROCESS_WORDS: usize = 6;
 
 /// An endpoint's lists: receivers, groups and send groups (head, tail), notices and open calls
 /// (head), exit notices owed (head, tail) and the processes that report here (head).
@@ -132,9 +140,12 @@ const D_IRQ: usize = 0;
 /// Words the lists take in a device's frame.
 pub const DEVICE_WORDS: usize = 2;
 
-/// A budget's chains: the queued messages and the waiting taken calls stamped with it.
+/// A budget's chains: the queued messages and the waiting taken calls stamped with it, and the
+/// process objects charged to it and counted in it.
 pub const B_QUEUED: usize = 0;
 pub const B_OPEN: usize = 1;
+const B_CHARGED: usize = 2;
+const B_COUNTED: usize = 3;
 
 /// The due list (head, tail) and the to-pump list (head, tail), in the kernel's own words; then
 /// each process slot's timed waits (head).
@@ -187,15 +198,15 @@ impl List {
         List { owner, head, tail: None, member: Member::Call, counted: false, prev, next }
     }
 
-    const fn processes(e: u32, head: usize, tail: bool) -> List {
+    const fn processes(owner: Page, head: usize, tail: bool, (prev, next): (usize, usize)) -> List {
         List {
-            owner: Page::Endpoint(e),
+            owner,
             head,
             tail: if tail { Some(head + 1) } else { None },
             member: Member::Process,
-            counted: true,
-            prev: P_PREV,
-            next: P_NEXT,
+            counted: false,
+            prev,
+            next,
         }
     }
 
@@ -218,10 +229,14 @@ impl List {
     pub const fn open(e: u32) -> List { List::calls(Page::Endpoint(e), E_OPEN, (C_EPREV, C_ENEXT)).counted() }
 
     /// The process objects owing an exit notice on endpoint `e`, in the order their notices came.
-    pub const fn exits(e: u32) -> List { List::processes(e, E_EXITS, true) }
+    pub const fn exits(e: u32) -> List {
+        List::processes(Page::Endpoint(e), E_EXITS, true, (P_PREV, P_NEXT)).counted()
+    }
 
     /// The process objects naming endpoint `e` as their exit endpoint whose processes still run.
-    pub const fn reporters(e: u32) -> List { List::processes(e, E_REPORTERS, false) }
+    pub const fn reporters(e: u32) -> List {
+        List::processes(Page::Endpoint(e), E_REPORTERS, false, (P_PREV, P_NEXT)).counted()
+    }
 
     /// The queued messages sent through a handle stamped with budget `b`.
     pub const fn queued(b: u32) -> List {
@@ -230,6 +245,16 @@ impl List {
 
     /// The taken calls, their callers still waiting, sent through a handle stamped with budget `b`.
     pub const fn taken(b: u32) -> List { List::calls(Page::Budget(b), B_OPEN, (C_SPREV, C_SNEXT)) }
+
+    /// The process objects charged to budget `b`: those its processes created.
+    pub const fn charged(b: u32) -> List {
+        List::processes(Page::Budget(b), B_CHARGED, false, (P_CHPREV, P_CHNEXT))
+    }
+
+    /// The process objects whose PIDs count in budget `b`'s process limit.
+    pub const fn counted_in(b: u32) -> List {
+        List::processes(Page::Budget(b), B_COUNTED, false, (P_CTPREV, P_CTNEXT))
+    }
 
     /// An expiry's due waits.
     pub const fn due() -> List { List::threads(Page::Kernel, K_DUE, true, (T_XPREV, T_XNEXT)) }

@@ -699,8 +699,13 @@ without preemption.*
      devices, which leave them, each moved to its chain's head first so that leaving does not
      walk the endpoints ahead of it; the endpoints stay until the handle chains are closed, and a
      second walk frees each in a link read and a free. Process objects are not scanned either:
-     the PID index (`Objects::processes`) finds them in at most 510 lookups, one for each PID a
-     process can take ([R12 (scheduling)](scheduling.md#r12-scheduling)).
+     each budget heads a chain of the process objects charged to it and one of those whose PIDs
+     it counts ([objects](objects.md#what-objects-cost)). Step 2 kills the live processes on the
+     dying budgets' counted chains, step 3 frees what is on their charged chains, and step 8 moves
+     what is left on their counted chains onto the parent's, recounting each; none reads a process
+     object outside the subtree. Only `root`'s destruction walks every live PID, since then every
+     process dies, `init` with them, which the loader started with no process object and which
+     runs in `root` alone.
   3. **Handles held outside a budget are chained to it.** A handle dies when the object it names
      is destroyed or when the budget that stamped it is. A handle whose holder runs inside that
      budget's subtree dies with its holder's table, so it needs nothing more. A handle held

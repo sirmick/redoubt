@@ -25,11 +25,11 @@
 //! R12): each endpoint keeps its receivers in the order they began to wait, R2's groups in the
 //! order their turns fall due, the calls owing a notice there and the calls taken there whose
 //! callers wait; each device keeps the threads waiting for its interrupt; each budget keeps what
-//! was sent under its stamp, for R10. The lists are intrusive, their heads in those objects'
-//! frames and their links in the threads' and the open calls' own pages, so they cost no
-//! allocation; their links and R2's order are `redoubt-ipclist`'s, host-tested, and every rule
-//! here. A checked build audits them against the threads at the end of the kernel entry that
-//! changed one ([`audit`]).
+//! was sent under its stamp and the process objects charged to it or counted in it, for R10. The
+//! lists are intrusive, their heads in those objects' frames and their links in the threads', the
+//! open calls' and the process objects' own pages, so they cost no allocation; their links and
+//! R2's order are `redoubt-ipclist`'s, host-tested, and every rule here. A checked build audits
+//! them against the threads at the end of the kernel entry that changed one ([`audit`]).
 //!
 //! # Locks
 //! Every entry point takes the scheduler (`ss`) and the memory manager (`mm`) together, borrowed
@@ -449,7 +449,7 @@ fn call_of(r: u64) -> u32 { frame_of(r).expect("I1: a list names no open call") 
 fn object_of(r: u64) -> u32 { frame_of(r).expect("I1: a list names no process object") }
 
 /// The lists' words in the kernel's frames: in each kind of page above its own words, which
-/// storing the object rewrites; a budget's two chain heads beside its handle chains' heads.
+/// storing the object rewrites; a budget's four chain heads beside its handle chains' heads.
 struct Frames<'a>(&'a MemoryManager);
 
 /// The lists' words that are the kernel's own: an expiry's due list's head and tail
@@ -507,7 +507,8 @@ impl Frames<'_> {
             Page::Pumped(r) => (mm.object_phys((r - 1) as u32), crate::endpoint::LIST_WORD + word),
             Page::Device(frame) => (mm.object_phys(frame), crate::device::LIST_WORD + word),
             Page::Budget(frame) => {
-                let at = [crate::budget::QUEUED_WORD, crate::budget::TAKEN_WORD][word];
+                use crate::budget::{CHARGED_WORD, COUNTED_WORD, QUEUED_WORD, TAKEN_WORD};
+                let at = [QUEUED_WORD, TAKEN_WORD, CHARGED_WORD, COUNTED_WORD][word];
                 (mm.object_phys(frame), at)
             }
             Page::Kernel => unreachable!("the kernel's words are no frame's"),
@@ -1127,6 +1128,46 @@ pub fn pop_naming(mm: &MemoryManager, e: u32) -> Option<u32> {
         r => r,
     };
     frame_of(r)
+}
+
+// --- A budget's process objects (R10) ----------------------------------------------------------------
+
+/// Process object `frame`, just made, joins the chains of `creator`, the budget it is charged to,
+/// and of `counted`, the budget whose process limit counts its PID.
+pub fn chain(mm: &MemoryManager, frame: u32, creator: BudgetFrame, counted: BudgetFrame) {
+    let w = &mut Frames(mm);
+    List::charged(creator).push_front(w, frame_word(frame));
+    List::counted_in(counted).push_front(w, frame_word(frame));
+}
+
+/// Process object `frame`, being freed, leaves both its budgets' chains.
+pub fn unchain(mm: &MemoryManager, frame: u32, creator: BudgetFrame, counted: BudgetFrame) {
+    let (w, r) = (&mut Frames(mm), frame_word(frame));
+    let (charged, counted) = (List::charged(creator), List::counted_in(counted));
+    assert!(
+        charged.contains(w, r) && counted.contains(w, r),
+        "I1: a process object is off its budgets' chains"
+    );
+    charged.remove(w, r);
+    counted.remove(w, r);
+}
+
+/// The first of the process objects charged to budget `b`.
+pub fn first_charged(mm: &MemoryManager, b: BudgetFrame) -> Option<u32> {
+    frame_of(List::charged(b).first(&Frames(mm)))
+}
+
+/// The process object counted in budget `b` after `after`, or its first for `None`.
+pub fn next_counted(mm: &MemoryManager, b: BudgetFrame, after: Option<u32>) -> Option<u32> {
+    let (w, list) = (&Frames(mm), List::counted_in(b));
+    frame_of(after.map_or_else(|| list.first(w), |f| list.next(w, frame_word(f))))
+}
+
+/// Process object `frame`'s PID counts in budget `to` from now on, not in `from` (R10 step 8).
+pub fn recount(mm: &MemoryManager, frame: u32, from: BudgetFrame, to: BudgetFrame) {
+    let w = &mut Frames(mm);
+    List::counted_in(from).remove(w, frame_word(frame));
+    List::counted_in(to).push_front(w, frame_word(frame));
 }
 
 // --- Delivery (R2, R4, R4a) --------------------------------------------------------------------
@@ -2083,6 +2124,8 @@ struct Listed {
     exits: usize,
     reporters: usize,
     timed: usize,
+    charged: usize,
+    counted: usize,
 }
 
 /// The checked build's full audit of the lists, at its full-audit points: after each destruction (a
@@ -2113,6 +2156,16 @@ fn check_lists(mm: &MemoryManager) -> Listed {
     let mut listed = Listed::default();
     let mut want = Listed::default();
     for pid in mm.live_pids() {
+        // Only `init`, which the loader started, runs with no process object: so every other
+        // process is on the chain of the budget it runs in, where a destruction finds it. A
+        // `process_create` rolled back after its object was freed leaves its child, which has no
+        // thread yet, for a moment with none, until the same call ends it.
+        let object = crate::process::object_of(mm, pid);
+        let unstarted = mm.account(pid).is_some_and(|a| a.threads == 0);
+        assert!(
+            object.is_some() || pid == crate::budget::INIT_PID || unstarted,
+            "I1: a process has no object"
+        );
         for tid in mm.live_tids(pid) {
             let Some(phys) = thread_phys(mm, pid, tid) else { continue };
             let me = tref(pid, tid);
@@ -2178,9 +2231,18 @@ fn check_lists(mm: &MemoryManager) -> Listed {
             }
         }
     }
-    // And every process object naming an exit endpoint: on its exits or its reporters.
+    // Every process object: on its creator's chain and on the chain of the budget counting its PID,
+    // and, if it names an exit endpoint, on that endpoint's exits or its reporters.
     for frame in mm.process_frames() {
         let p = mm.process(frame);
+        want.charged += 1;
+        want.counted += 1;
+        if List::charged(p.creator.frame).first(w) == frame_word(frame) {
+            listed.charged += audit_budget_processes(mm, p.creator.frame, true);
+        }
+        if List::counted_in(p.counted_in.frame).first(w) == frame_word(frame) {
+            listed.counted += audit_budget_processes(mm, p.counted_in.frame, false);
+        }
         let Some(e) = p.endpoint else { continue };
         let (list, held, n) = if p.notice_queued() {
             (List::exits(e.frame), &mut listed.exits, &mut want.exits)
@@ -2216,6 +2278,8 @@ fn enumerate_lists(mm: &MemoryManager) -> Listed {
     while let Some(b) = cur {
         all.stamped += audit_stamped(mm, b);
         all.taken += audit_calls(mm, List::taken(b), F_WAITING, 0, Some(b));
+        all.charged += audit_budget_processes(mm, b, true);
+        all.counted += audit_budget_processes(mm, b, false);
         let mut owned = mm.budget(b).first_owned;
         while let Some(o) = owned {
             owned = mm.owned_next(o);
@@ -2338,6 +2402,23 @@ fn audit_processes(mm: &MemoryManager, list: List, e: u32) -> usize {
         let p = mm.process(object_of(r));
         let at = p.endpoint.map(|x| x.frame) == Some(e);
         member(at && p.notice_queued() == exits && !(exits && p.alive()), Page::Process(r))
+    })
+    .unwrap_or_else(|f| audit_failed(f))
+}
+
+/// Budget `b`'s chain of the process objects charged to it (`charged`), or of those whose PIDs it
+/// counts: each a process object naming `b` so; one counted in `b` and still alive runs in `b`.
+#[cfg(debug_assertions)]
+fn audit_budget_processes(mm: &MemoryManager, b: BudgetFrame, charged: bool) -> usize {
+    let list = if charged { List::charged(b) } else { List::counted_in(b) };
+    list.audit(&Frames(mm), |_, r| {
+        let p = mm.process(object_of(r));
+        let at = if charged {
+            p.creator.frame == b
+        } else {
+            p.counted_in.frame == b && (!p.alive() || mm.budget_of(p.pid) == Some(b))
+        };
+        member(at, Page::Process(r))
     })
     .unwrap_or_else(|f| audit_failed(f))
 }
