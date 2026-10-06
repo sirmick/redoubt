@@ -204,12 +204,18 @@ nothing, and binds no host port. A table with a `forward`, a `poke`, a peer or a
 sockets beside the boot, in wall time: its dials retry until the case's deadline, so a pass
 stands and a failure is rerun alone, as for any host-clock wait; and because the bench picks a
 forwarded host port by binding and releasing it before QEMU takes it, two such boots at once
-may race for one port, so the rule asks that two such boots not run at once. A case that measures with
-the host's clock is a verdict only alone: the rule asks that no other invocation and no build
-run beside it. Those are a `host-tests` case whose crates' tests assert a wall-clock bound
-(`redoubt-rt`, `redoubt-client`, `redoubt-keyd`, `redoubt-consoled` and `redoubt-model` do;
-`redoubt-ipd` and `testbench` only read the clock), which no tolerance would make load-proof;
-every `ssh-loopback` case; and a case whose expectation is a timeout (`bench-ssh-guest`). A
+may race for one port, so the rule asks that two such boots not run at once. An `ssh-loopback`
+case is the same kind of case: its `sshd` runs in inetd mode through `ssh`'s `ProxyCommand`
+and binds no port, its guest's stdio is a virtio-serial port, and the kind's probe (one
+loopback session with a 30 s connect timeout) runs once before any case and decides whether the
+host can serve the kind, never a case's verdict. So a loopback case that asserts no time (13 of
+the 14) passes as a verdict, and a failure that is only its deadline is rerun alone. A case
+that measures with the host's clock is a verdict only alone: the rule asks that no other
+invocation and no build run beside it. Those are a `host-tests` case whose crates' tests assert
+a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd`, `redoubt-consoled` and
+`redoubt-model` do; `redoubt-ipd` and `testbench` only read the clock), which no tolerance
+would make load-proof; and a case whose expectation is a timeout (`bench-ssh-guest`, and
+`bench-ssh-loopback-deadlock`, whose `must_fail` is the mark it never gets). A
 `host-tests` case whose crates assert no bound measures nothing with the host's clock; it may
 run beside other work, and the rule asks that its test threads be bounded then
 (`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The model's property
