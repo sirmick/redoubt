@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""q: one scheduler for the whole machine; every member's build, test and QEMU run goes through it.
+
+    q daemon [--cores 0-23] [--quiet 20-23]   the scheduler (one per machine; `q ping` checks)
+    q run [--cores N] [--quiet] [--lock NAME] [--prio P] [--tenant T] [--name S] -- <cmd...>
+                                             wait for a lease of N cores, run <cmd> pinned to them
+                                             (taskset), exit with its code; the lease ends with
+                                             this process, however it ends
+    q ls                                     the core map, the running jobs, the queue
+    q log [N]                                the last N finished jobs (default 30)
+    q stop                                   end the daemon (running jobs keep their cores)
+
+A job says how many cores it needs; the daemon bin-packs leases onto real core IDs and the
+client pins the command there, so a QEMU guest gets a core of its own and a build gets its N
+(CARGO_BUILD_JOBS and RUST_TEST_THREADS are set to N; make's jobserver flags are stripped).
+
+Classes are flags, not names to learn:
+  --quiet     a host-clock case: runs alone on the reserved quiet core set, one at a time
+              among quiet jobs, while everything else keeps running on the general cores
+  --lock NAME a named mutex (the [net] cases: one at a time among themselves, shared otherwise)
+  --prio P    higher runs first (default 5, or $Q_PRIO; a whole-bench train exports Q_PRIO=0 so
+              members' gates go first; a sweep too)
+  Fairness: tenants are served round-robin by running cores, and while another tenant waits no
+  tenant grows past half the general cores, so a long train or a big suite cannot hold the
+  machine against everyone's gates.
+  --tenant T  who is asking (default: the worktree, from cwd); tenants share the machine
+              round-robin so one cannot starve the rest
+
+There is no drain mode. A lease belongs to the client's connection: a killed client frees its
+cores at once, so nothing leaks. The daemon runs nothing itself.
+"""
+import argparse
+import json
+import os
+import selectors
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+SOCK = os.environ.get("REDOUBT_Q", "/tmp/redoubt-q.sock")
+LOG = SOCK + ".log"
+STARVE_S = 60.0  # a job that cannot fit for this long blocks smaller ones behind it
+
+
+def parse_cores(spec):
+    out = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-")
+            out.extend(range(int(a), int(b) + 1))
+        else:
+            out.append(int(part))
+    return sorted(set(out))
+
+
+def fmt_cores(cores):
+    cores = sorted(cores)
+    if not cores:
+        return "-"
+    runs, start, prev = [], cores[0], cores[0]
+    for c in cores[1:]:
+        if c == prev + 1:
+            prev = c
+            continue
+        runs.append((start, prev))
+        start = prev = c
+    runs.append((start, prev))
+    return ",".join(f"{a}-{b}" if a != b else f"{a}" for a, b in runs)
+
+
+# ----------------------------------------------------------------------------- daemon
+
+
+class Job:
+    __slots__ = ("conn", "req", "seq", "t_in", "t_start", "cores", "quiet", "lock", "tenant")
+
+    def __init__(self, conn, req, seq):
+        self.conn = conn
+        self.req = req
+        self.seq = seq
+        self.t_in = time.time()
+        self.t_start = None
+        self.cores = []
+        self.quiet = bool(req.get("quiet"))
+        self.lock = req.get("lock") or None
+        self.tenant = req.get("tenant") or "?"
+
+    @property
+    def want(self):
+        return max(1, int(self.req.get("cores") or 1))
+
+    @property
+    def prio(self):
+        return int(self.req.get("prio") or 5)
+
+    @property
+    def name(self):
+        return str(self.req.get("name") or " ".join(self.req.get("cmd") or [])[:60])
+
+
+class Daemon:
+    def __init__(self, all_cores, quiet_cores):
+        self.quiet_set = [c for c in quiet_cores if c in all_cores]
+        self.general = [c for c in all_cores if c not in self.quiet_set]
+        self.free = set(self.general)
+        self.quiet_busy = None  # the one quiet job
+        self.locks = {}  # name -> job
+        self.waiting = []  # Job, in arrival order
+        self.running = {}  # conn -> Job
+        self.bufs = {}  # conn -> partial line
+        self.seq = 0
+        self.sel = selectors.DefaultSelector()
+        self.log = open(LOG, "a", buffering=1)
+        self.t0 = time.time()
+
+    def logline(self, s):
+        self.log.write(time.strftime("%H:%M:%S ") + s + "\n")
+
+    # --- scheduling -----------------------------------------------------------------
+    def tenant_load(self, tenant):
+        return sum(len(j.cores) for j in self.running.values() if j.tenant == tenant)
+
+    def order(self):
+        return sorted(self.waiting, key=lambda j: (-j.prio, self.tenant_load(j.tenant), j.seq))
+
+    def fits(self, job):
+        if job.lock and job.lock in self.locks:
+            return False
+        if job.quiet:
+            return self.quiet_busy is None and bool(self.quiet_set)
+        return len(self.free) >= min(job.want, len(self.general))
+
+    def over_share(self, job):
+        """While another tenant waits, no tenant grows past half the general cores."""
+        others = any(j.tenant != job.tenant and not j.quiet for j in self.waiting)
+        if not others:
+            return False
+        return self.tenant_load(job.tenant) + min(job.want, len(self.general)) > len(self.general) // 2
+
+    def schedule(self):
+        now = time.time()
+        blocked_general = False
+        for job in self.order():
+            if job.quiet:
+                if self.fits(job):
+                    self.start(job, list(self.quiet_set))
+                continue
+            if blocked_general:
+                continue
+            if self.over_share(job):
+                continue
+            if self.fits(job):
+                n = min(job.want, len(self.general))
+                cores = sorted(self.free)[:n]
+                self.start(job, cores)
+            elif not (job.lock and job.lock in self.locks) and now - job.t_in > STARVE_S:
+                # the head job has waited long enough: hold the cores for it
+                blocked_general = True
+
+    def start(self, job, cores):
+        self.waiting.remove(job)
+        job.cores = cores
+        job.t_start = time.time()
+        if job.quiet:
+            self.quiet_busy = job
+        else:
+            self.free -= set(cores)
+        if job.lock:
+            self.locks[job.lock] = job
+        self.running[job.conn] = job
+        try:
+            job.conn.sendall((json.dumps({"cores": cores}) + "\n").encode())
+        except OSError:
+            self.finish(job.conn)
+            return
+        self.logline(f"start  {job.tenant} {job.name!r} cores={fmt_cores(cores)}"
+                     f"{' quiet' if job.quiet else ''}{' lock=' + job.lock if job.lock else ''}"
+                     f" waited={job.t_start - job.t_in:.1f}s")
+
+    def finish(self, conn):
+        job = self.running.pop(conn, None)
+        if job is None:
+            for j in self.waiting:
+                if j.conn is conn:
+                    self.waiting.remove(j)
+                    self.logline(f"cancel {j.tenant} {j.name!r} after {time.time() - j.t_in:.1f}s waiting")
+                    break
+        else:
+            if job.quiet:
+                self.quiet_busy = None
+            else:
+                self.free |= set(job.cores)
+            if job.lock and self.locks.get(job.lock) is job:
+                del self.locks[job.lock]
+            self.logline(f"end    {job.tenant} {job.name!r} cores={fmt_cores(job.cores)}"
+                         f" ran={time.time() - job.t_start:.1f}s")
+        self.bufs.pop(conn, None)
+        try:
+            self.sel.unregister(conn)
+        except Exception:
+            pass
+        conn.close()
+
+    # --- protocol -------------------------------------------------------------------
+    def status(self):
+        now = time.time()
+        lines = [f"general cores {fmt_cores(self.general)}: {len(self.free)} free ({fmt_cores(self.free)});"
+                 f" quiet cores {fmt_cores(self.quiet_set)}: {'busy' if self.quiet_busy else 'free'};"
+                 f" up {int(now - self.t0)}s"]
+        lines.append(f"running {len(self.running)}:")
+        for j in sorted(self.running.values(), key=lambda j: j.t_start):
+            lines.append(f"  {fmt_cores(j.cores):>6}  {int(now - j.t_start):>5}s  {j.tenant:<18} {j.name}"
+                         f"{'  [quiet]' if j.quiet else ''}{'  lock=' + j.lock if j.lock else ''}")
+        lines.append(f"waiting {len(self.waiting)}:")
+        for j in self.order():
+            lines.append(f"  want {j.want:>2}  {int(now - j.t_in):>5}s  p{j.prio} {j.tenant:<18} {j.name}"
+                         f"{'  [quiet]' if j.quiet else ''}{'  lock=' + j.lock if j.lock else ''}")
+        if self.locks:
+            lines.append("locks: " + ", ".join(sorted(self.locks)))
+        return "\n".join(lines) + "\n"
+
+    def handle(self, conn):
+        try:
+            data = conn.recv(65536)
+        except OSError:
+            data = b""
+        if not data:
+            self.finish(conn)
+            return
+        buf = self.bufs.get(conn, b"") + data
+        if b"\n" not in buf:
+            self.bufs[conn] = buf
+            return
+        line, _, rest = buf.partition(b"\n")
+        self.bufs[conn] = rest
+        try:
+            req = json.loads(line)
+        except ValueError:
+            self.finish(conn)
+            return
+        op = req.get("op")
+        if op == "run":
+            self.seq += 1
+            self.waiting.append(Job(conn, req, self.seq))
+        elif op == "ls":
+            try:
+                conn.sendall(self.status().encode())
+            except OSError:
+                pass
+            self.finish(conn)
+        elif op == "ping":
+            try:
+                conn.sendall(b"ok\n")
+            except OSError:
+                pass
+            self.finish(conn)
+        elif op == "stop":
+            try:
+                conn.sendall(b"stopping\n")
+            except OSError:
+                pass
+            self.finish(conn)
+            raise SystemExit(0)
+        else:
+            self.finish(conn)
+
+    def serve(self):
+        if os.path.exists(SOCK):
+            try:
+                probe = socket.socket(socket.AF_UNIX)
+                probe.settimeout(1)
+                probe.connect(SOCK)
+                probe.sendall(b'{"op":"ping"}\n')
+                if probe.recv(16).startswith(b"ok"):
+                    print(f"a daemon already answers on {SOCK}", file=sys.stderr)
+                    return 1
+            except OSError:
+                pass
+            os.unlink(SOCK)
+        srv = socket.socket(socket.AF_UNIX)
+        srv.bind(SOCK)
+        os.chmod(SOCK, 0o600)
+        srv.listen(256)
+        srv.setblocking(False)
+        self.sel.register(srv, selectors.EVENT_READ, "srv")
+        self.logline(f"daemon general={fmt_cores(self.general)} quiet={fmt_cores(self.quiet_set)}")
+        def on_term(*_):
+            raise SystemExit(0)
+
+        signal.signal(signal.SIGTERM, on_term)
+        try:
+            while True:
+                for key, _ in self.sel.select(timeout=1.0):
+                    if key.data == "srv":
+                        conn, _ = srv.accept()
+                        conn.setblocking(False)
+                        self.sel.register(conn, selectors.EVENT_READ, "conn")
+                    else:
+                        self.handle(key.fileobj)
+                self.schedule()
+        finally:
+            self.logline("daemon stop")
+            try:
+                os.unlink(SOCK)
+            except OSError:
+                pass
+        return 0
+
+
+# ----------------------------------------------------------------------------- client
+
+
+def connect():
+    s = socket.socket(socket.AF_UNIX)
+    s.connect(SOCK)
+    return s
+
+
+def default_tenant(cwd):
+    # the worktree's name, or the repo root's
+    parts = cwd.rstrip("/").split("/")
+    if ".worktrees" in parts:
+        i = parts.index(".worktrees")
+        if i + 1 < len(parts):
+            return parts[i + 1]
+    return parts[-1] if parts else "?"
+
+
+def cmd_run(a, cmd):
+    if not cmd:
+        print("q run: no command", file=sys.stderr)
+        return 2
+    cwd = os.getcwd()
+    req = {"op": "run", "cores": a.cores, "quiet": a.quiet, "lock": a.lock, "prio": a.prio,
+           "tenant": a.tenant or default_tenant(cwd), "name": a.name, "pid": os.getpid(),
+           "cwd": cwd, "cmd": cmd}
+    try:
+        s = connect()
+    except OSError as e:
+        print(f"q: no daemon at {SOCK} ({e}); start one with `q daemon`", file=sys.stderr)
+        return 3
+    s.sendall((json.dumps(req) + "\n").encode())
+    buf = b""
+    while b"\n" not in buf:
+        chunk = s.recv(4096)
+        if not chunk:
+            print("q: the daemon went away before the lease", file=sys.stderr)
+            return 3
+        buf += chunk
+    lease = json.loads(buf.partition(b"\n")[0])
+    cores = lease["cores"]
+    n = len(cores)
+    env = dict(os.environ)
+    for k in ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "CARGO_MAKEFLAGS"):
+        env.pop(k, None)
+    env["CARGO_BUILD_JOBS"] = str(n)
+    env["RUST_TEST_THREADS"] = str(max(1, n))
+    env["Q_CORES"] = fmt_cores(cores)
+    argv = ["taskset", "-c", ",".join(map(str, cores))] + cmd
+    # Keep the socket open for the whole run: the lease is the connection.
+    child = subprocess.Popen(argv, env=env)
+
+    def relay(sig, _):
+        try:
+            child.send_signal(sig)
+        except OSError:
+            pass
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, relay)
+    rc = child.wait()
+    s.close()
+    return rc
+
+
+def cmd_simple(op):
+    try:
+        s = connect()
+    except OSError as e:
+        print(f"q: no daemon at {SOCK} ({e})", file=sys.stderr)
+        return 3
+    s.sendall((json.dumps({"op": op}) + "\n").encode())
+    out = b""
+    while True:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        out += chunk
+    sys.stdout.write(out.decode())
+    return 0
+
+
+def cmd_log(n):
+    try:
+        with open(LOG) as f:
+            lines = f.readlines()
+    except OSError:
+        return 0
+    sys.stdout.writelines(lines[-n:])
+    return 0
+
+
+def main():
+    argv = sys.argv[1:]
+    if not argv:
+        print(__doc__)
+        return 2
+    sub = argv[0]
+    if sub == "daemon":
+        p = argparse.ArgumentParser(prog="q daemon")
+        p.add_argument("--cores", default=f"0-{os.cpu_count() - 1}")
+        p.add_argument("--quiet", default="")
+        a = p.parse_args(argv[1:])
+        all_cores = parse_cores(a.cores)
+        quiet = parse_cores(a.quiet) if a.quiet else all_cores[-4:]
+        return Daemon(all_cores, quiet).serve()
+    if sub == "run":
+        rest = argv[1:]
+        cmd = []
+        if "--" in rest:
+            i = rest.index("--")
+            rest, cmd = rest[:i], rest[i + 1:]
+        p = argparse.ArgumentParser(prog="q run")
+        p.add_argument("--cores", type=int, default=1)
+        p.add_argument("--quiet", action="store_true")
+        p.add_argument("--lock", default=None)
+        p.add_argument("--prio", type=int, default=int(os.environ.get("Q_PRIO", "5")))
+        p.add_argument("--tenant", default=None)
+        p.add_argument("--name", default=None)
+        a = p.parse_args(rest)
+        return cmd_run(a, cmd)
+    if sub in ("ls", "ping", "stop"):
+        return cmd_simple(sub)
+    if sub == "log":
+        return cmd_log(int(argv[1]) if len(argv) > 1 else 30)
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

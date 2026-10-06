@@ -60,6 +60,8 @@ your home ([`dev.sh`](dev.sh)).
 
 ```sh
 ./scripts/build-bios.sh  # builds the vendored RustSBI prototyper in bios/, both widths
+scripts/q daemon &       # once per machine: the scheduler every build and bench run goes through
+                         # (scripts/q run --cores 8 -- cargo build ...; make -f scripts/jobs.mk -C . rv64/<case>)
 ```
 
 Both widths boot only the vendored RustSBI firmware; there is no fallback to QEMU's own.

@@ -226,6 +226,17 @@ run beside other work, and the rule asks that its test threads be bounded then
 nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
 oracles) have no clock, and are verdicts anywhere.
 
+`scripts/q` applies that rule for a whole machine. It is one scheduler process that leases real
+cores: `q run --cores N -- <command>` waits for N free cores, runs the command pinned to them
+(`taskset`; cargo's jobs and `RUST_TEST_THREADS` follow the lease) and returns its exit code;
+`--quiet` runs a host-clock case on a reserved core set, one such case at a time, while the rest
+of the machine keeps working; `--lock net` keeps two `[net]` boots apart; a lease ends with the
+client process, so a killed job frees its cores. `scripts/jobs.mk` names every case as a make
+target (`rv64/<case>`, `cases-rv64`, `quiet-rv64`, `build-rv64`, `docs`) and picks the class for
+it: a boot takes one core per guest hart, a `host-tests` case four, the host-clock cases go
+quiet. `q ls` shows the core map and the queue; `q log` the recent jobs with the time each
+waited and ran.
+
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
 name only". It has one reason: a measurement too long to repeat at every train.
