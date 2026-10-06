@@ -853,6 +853,13 @@ fn step(sys: &mut Sched<'_>, p: &mut Process, module: &'static Module) -> R<Flow
             let &(n, name, arity) =
                 module.body_natives.get(u(ins, 0)?).ok_or(Fault::BadCode("native body"))?;
             let r = call_native(sys, p, n, (&module.name, &name), arity as usize)?;
+            if p.retry {
+                // Not finished yet: this body runs again, its arguments still in the x registers,
+                // when the process next runs, as an external call's native is made again.
+                p.retry = false;
+                p.pc.pc = here;
+                return Ok(Flow::Stop(Stop::Yield));
+            }
             p.x[0] = r;
             return Ok(do_return(p));
         }
