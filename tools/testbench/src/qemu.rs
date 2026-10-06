@@ -597,7 +597,7 @@ pub fn run(
         if guest.0.try_wait()?.is_some() {
             return Ok(Verdict::Fail("guest exited before its stack measurement".into()));
         }
-        let measured = measure_stacks(image, boot, workspace, log, &qmp_path);
+        let measured = measure_stacks(image, boot, workspace, log, &qmp_path, &mut console, deadline);
         match measured {
             Ok(measured) => {
                 for line in measured.lines {
@@ -614,15 +614,20 @@ pub fn run(
     Ok(Verdict::Pass(console.captured))
 }
 
-/// Stop the running guest before QMP saves its physical RAM, beside the case's log. The dump is
-/// deleted once scanned; a scan that fails, as on a duplicate or out-of-range unit, keeps it as the
-/// evidence. Its errors are case failures, never guest verdicts.
+/// Stop the running guest before QMP saves its physical RAM, beside the case's log. A dump that
+/// lacks a declared server's heap record lets the guest run on, its console read under the case's
+/// `forbid`, and is taken again, until every record is present or the case's `deadline`
+/// ([`memory::until_started`]). The dump is deleted once scanned; a scan that fails, as on a
+/// duplicate or out-of-range unit, keeps it as the evidence. Its errors are case failures, never
+/// guest verdicts.
 fn measure_stacks(
     image: &Image,
     boot: &Boot,
     workspace: &Path,
     log: &Path,
     qmp_path: &Path,
+    console: &mut Console,
+    deadline: Instant,
 ) -> Result<memory::Measurement> {
     let servers = memory::servers(boot, workspace)?;
     let stream =
@@ -640,17 +645,36 @@ fn measure_stacks(
     qmp_command(&mut reader, &mut writer, json!({"execute":"stop"}))?;
     let dump = log.with_extension("ram");
     let bytes = u64::from(image.memory_mib) * 1024 * 1024;
-    let result = (|| {
-        qmp_command(
-            &mut reader,
-            &mut writer,
-            json!({"execute":"pmemsave", "arguments":{
-                "val": 0x8000_0000u64, "size": bytes, "filename": dump.display().to_string()
-            }}),
-        )?;
-        let file = std::fs::File::open(&dump).with_context(|| format!("opening {}", dump.display()))?;
-        memory::scan(BufReader::new(file), bytes, &servers)
-    })();
+    let qmp = std::cell::RefCell::new((reader, writer));
+    let result = memory::until_started(
+        deadline,
+        || {
+            let (reader, writer) = &mut *qmp.borrow_mut();
+            qmp_command(
+                reader,
+                writer,
+                json!({"execute":"pmemsave", "arguments":{
+                    "val": 0x8000_0000u64, "size": bytes, "filename": dump.display().to_string()
+                }}),
+            )?;
+            let file = std::fs::File::open(&dump).with_context(|| format!("opening {}", dump.display()))?;
+            memory::scan(BufReader::new(file), bytes, &servers)
+        },
+        |pause| {
+            let (reader, writer) = &mut *qmp.borrow_mut();
+            qmp_command(reader, writer, json!({"execute":"cont"}))?;
+            let until = Instant::now() + pause;
+            loop {
+                match console.next(until)? {
+                    Line::Text(_) => {}
+                    Line::Forbidden(why) => bail!("{why}"),
+                    Line::Timeout => break,
+                    Line::Exited => bail!("the guest exited while the bench waited for its servers to start"),
+                }
+            }
+            qmp_command(reader, writer, json!({"execute":"stop"}))
+        },
+    );
     if result.is_ok() {
         std::fs::remove_file(&dump).ok();
     }
