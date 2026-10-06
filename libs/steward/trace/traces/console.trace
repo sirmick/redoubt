@@ -1,0 +1,26 @@
+# The console principal's session on the UART (servers/steward.md, "Authentication and
+# sessions"): the steward opens it with no key, in the principal's unlabelled domain, and opens it
+# again when it ends; a console for a principal the manifest does not name is unknown, and one in
+# a locked-out domain is refused.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+# At boot: the session batch, as a login's.
+event now=1 random=[101,102] Console principal="alice"
+event now=1 Done object=session@1/#101 ok=[budget(901),scope,connection,process(71)]
+# Its VM ends: the session ends, and the steward opens it again.
+event now=2 Exited object=session@1/#101
+event now=2 Done object=session@1/#101 ok=[done]
+event now=3 random=[111,112] Console principal="alice"
+event now=3 Done object=session@1/#111 ok=[budget(902),scope,connection,process(72)]
+# No such principal.
+event now=4 random=[121,122] Console principal="carol"
+# The unlabelled domain locked out by three crashes: its session ends, and the console is refused
+# until the window passes.
+event now=5 Blame account=1 labels=[]
+event now=6 Blame account=1 labels=[]
+event now=7 Blame account=1 labels=[]
+event now=8 Done object=session@1/#111 ok=[done]
+event now=9 random=[131,132] Console principal="alice"
+event now=600000008 random=[141,142] Console principal="alice"
+event now=600000008 Done object=session@1/#141 ok=[budget(903),scope,connection,process(73)]

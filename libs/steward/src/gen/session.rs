@@ -24,6 +24,7 @@ impl State {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Event {
     Login,
+    Console,
     Done,
     Failed,
     EndSession,
@@ -37,7 +38,7 @@ impl Event {
     pub const fn ahead(self) -> bool { false }
 
     /// Taken before the object exists: some row from `-` names it.
-    pub const fn creates(self) -> bool { matches!(self, Event::Login) }
+    pub const fn creates(self) -> bool { matches!(self, Event::Login | Event::Console) }
 }
 
 /// Takes the first row for (`from`, `event`) whose guards hold, runs its effects through `p`
@@ -63,6 +64,21 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
                 (p.refuse)(cx);
                 return Next::Nothing;
             }
+            'row: {
+                match (p.not_locked)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                (p.refuse)(cx);
+                return Next::Nothing;
+            }
+            (p.carve_session)(cx);
+            (p.create_scope)(cx);
+            (p.connect)(cx);
+            (p.launch)(cx);
+            Next::To(State::Starting)
+        }
+        (None, Event::Console) => {
             'row: {
                 match (p.not_locked)(cx) {
                     Ok(()) => break 'row,
@@ -110,7 +126,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Starting), Event::LockedOut) => {
             Next::Stay
         }
-        (Some(State::Starting), Event::Login) => Next::NoRow,
+        (Some(State::Starting), Event::Login | Event::Console) => Next::NoRow,
         (Some(State::Ending), Event::Done) => {
             (p.forget)(cx);
             Next::To(State::Ended)
@@ -131,7 +147,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Ending), Event::LockedOut) => {
             Next::Stay
         }
-        (Some(State::Ending), Event::Login) => Next::NoRow,
+        (Some(State::Ending), Event::Login | Event::Console) => Next::NoRow,
         (Some(State::Running), Event::Done) => {
             Next::Unreachable
         }
@@ -163,7 +179,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
         }
-        (Some(State::Running), Event::Login) => Next::NoRow,
-        (Some(State::Ended), Event::Login | Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::LockedOut) => Next::NoRow,
+        (Some(State::Running), Event::Login | Event::Console) => Next::NoRow,
+        (Some(State::Ended), Event::Login | Event::Console | Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::LockedOut) => Next::NoRow,
     }
 }
