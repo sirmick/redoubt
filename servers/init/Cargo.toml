@@ -12,6 +12,9 @@ path = "src/bin/init.rs"
 [features]
 # The body of the fuzz target, for `fuzz/` (servers/init/fuzz); host tests build it as well.
 fuzz = []
+# Test-only, for the bench's boot-profile cases, and off in every default build: the boot's
+# milestones carry `[t=N]`, `time_now` in µs (docs/testbench.md, "Checked builds").
+boot-stats = []
 
 # Only our own crates: the most privileged process after the kernel reads one file, through
 # wire's strict JSON parser (TENETS.md 5).

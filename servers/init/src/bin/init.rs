@@ -99,6 +99,12 @@ mod machine {
 
     fn h(index: u32) -> Handle { Handle::new(index).expect("a slot is at least 1") }
 
+    /// ` [t=N]`, `time_now` in µs, after a line the boot profile times (docs/testbench.md,
+    /// "Checked builds"). Only a `boot-stats` build has it: every other build, and every other
+    /// case, has the line as it was.
+    #[cfg(feature = "boot-stats")]
+    fn stamp() -> String { format!(" [t={}]", redoubt_rt::handle::time_now().unwrap_or(0)) }
+
     /// Where `init`'s lines go: the UART until `consoled` starts, then `init`'s own connection to
     /// `consoled`; nowhere in between, or while `consoled` is down.
     enum Out {
@@ -253,6 +259,14 @@ mod machine {
             self.out.write(Some(&mut self.lend), &format!("{line}\n"))
         }
 
+        /// A line the boot profile times: [`Boot::say`], stamped in a `boot-stats` build.
+        fn milestone(&mut self, line: fmt::Arguments) {
+            #[cfg(feature = "boot-stats")]
+            self.say(format_args!("{line}{}", stamp()));
+            #[cfg(not(feature = "boot-stats"))]
+            self.say(line);
+        }
+
         /// A step after the checks failed: a bug in the bound or the checks. `at` names where. The
         /// boot is refused; a restart that fails reboots instead, as one that cannot stay up does.
         fn failed(&mut self, at: &str, step: &'static str) -> ! {
@@ -365,7 +379,7 @@ mod machine {
             self.say(format_args!(
                 "init: holds none of the {badges} badges and {consoles} console connections it handed"
             ));
-            self.say(format_args!(
+            self.milestone(format_args!(
                 "init: the boot is done: {} servers, root holds {used} pages for it, within the bound of {}",
                 m.servers.len(),
                 self.plan.bound
@@ -508,9 +522,9 @@ mod machine {
             match id {
                 // The id bare, as `consoled` prefixes the child's lines with it
                 // (servers/consoled.md, "Started by `init`").
-                Some(id) => self.say(format_args!("init: {verb} {}, console {id:016x}", s.name)),
+                Some(id) => self.milestone(format_args!("init: {verb} {}, console {id:016x}", s.name)),
                 None if !matches!(self.out, Out::Nowhere) => {
-                    self.say(format_args!("init: {verb} {}", s.name))
+                    self.milestone(format_args!("init: {verb} {}", s.name))
                 }
                 None => {}
             }
@@ -679,7 +693,7 @@ mod machine {
             self.console_at = ended;
             let name = &self.manifest.servers[i].name;
             if ended == 0 {
-                self.say(format_args!("init: started {name}, and writes through it"));
+                self.milestone(format_args!("init: started {name}, and writes through it"));
             } else {
                 self.say(format_args!(
                     "init: restarted {name}; every other server's console connection is gone until it restarts"
@@ -778,7 +792,10 @@ mod machine {
         let Ok(mut lend) = Lend::new(LEND_PAGES as usize) else {
             refuse(&out, None, &Refusal::failed("init", "map its lend"))
         };
+        #[cfg(not(feature = "boot-stats"))]
         out.write(None, "init: up\n");
+        #[cfg(feature = "boot-stats")]
+        out.write(None, &format!("init: up{}\n", stamp()));
         let (Ok(root), Ok(())) = (root, arena) else {
             refuse(&out, Some(&mut lend), &Refusal::failed("init", "take its arena"))
         };

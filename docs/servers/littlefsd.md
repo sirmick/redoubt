@@ -445,8 +445,14 @@ wherever a request meets it ([R49](#r49-a-hostile-medium-is-corrupt-not-a-crash)
   it out; a virtio disk levels its own.
 - **Attributes and data are two commits.** A power cut between them leaves a file's new data with
   its old attributes, or the reverse.
-- **Large directories and files scale poorly** in littlefs's format; a listing is linear in the
-  directory.
+- **Large directories and files scale poorly** in littlefs's format. A listing is linear in the
+  directory, and so is a lookup, and `littlefsd` looks a file up from the root for each request on
+  it: three times for a walk, twice for an open or a read. On the image's userland volume, whose
+  root holds every module, a lookup fetches about 21 metadata pairs. A fetch is three block reads
+  (the revision count of each block of the pair, then the newer block). So the boot's 652 9P
+  operations make 1,194 lookups and 25,040 fetches: 75,120 of its 77,710 block reads, 97 %
+  (bench:boot-profile). A read-only server for the volume need not repeat this: it can resolve a
+  name once and keep the result.
 - **A listing across a change may skip or repeat an entry.** A directory read goes on by entry
   index, and a change between two reads refills the window from the directory as it is then, so
   an entry created or removed before that index shifts the rest by one (9P allows it). And a

@@ -16,3 +16,8 @@ path = "src/bin/blkd.rs"
 # and is the thing the device attacks.
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
+
+[features]
+# Test-only, for the bench's boot-profile cases, and off in every default build: blkd counts its
+# reads and their sectors, and says them (src/bin/blkd.rs).
+boot-stats = []

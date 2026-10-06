@@ -84,7 +84,11 @@ fn start(startup: &Startup) -> u32 {
         }
         Err(Unloaded::Refused(why)) => park(startup, &format!("beamlet: {module} not loaded: {why}; parked")),
     }
+    #[cfg(not(feature = "boot-stats"))]
     say(startup, &format!("beamlet: {module} read from littlefsd:system"));
+    // Stamped only for the boot profile, so every other case sees the line as it was.
+    #[cfg(feature = "boot-stats")]
+    say(startup, &format!("beamlet: {module} read from littlefsd:system{}", beamlet_redoubt::stamp()));
     beamlet_redoubt::run(startup, Box::new(Machine), Box::new(modules), module, function, Some(budget_pages))
 }
 

@@ -23,6 +23,9 @@ restart-probe = []
 # serving, littlefsd tries to reach past its endpoint and its range and says what it found
 # (src/one_volume.rs).
 one-volume-probe = []
+# Test-only, for the bench's boot-profile cases, and off in every default build: littlefsd counts
+# its 9P operations and littlefs's reads, and says them (src/stats.rs).
+boot-stats = []
 
 [dev-dependencies]
 redoubt-fake-kernel = { path = "../../libs/rt/fake" }

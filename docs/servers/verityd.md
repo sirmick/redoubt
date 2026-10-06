@@ -112,8 +112,9 @@ matters: a `littlefsd` that cannot size its range exits, and would be restarted.
 
 ### Memory and cost
 
-<details><summary>Status: built · tested (1)</summary>
+<details><summary>Status: built · tested (2)</summary>
 
+- bench:boot-profile
 - host:redoubt-verityd::the_last_block_and_the_tree_cache_save_reads
 
 </details>
@@ -127,12 +128,15 @@ matters: a `littlefsd` that cannot size its range exits, and would be restarted.
 - **Per block `littlefsd` reads:** one more call and a copy of at most 4 KiB. The tree's reads are about
   1/128 more, mostly cached. Its weight is ordinary, like `littlefsd`'s: each request is a bounded
   amount of work, at most 8 blocks.
-- **Measured** on rv64 under QEMU, the image booted to its prompt and `Enum.sum(1..10)`: 172.9 s
-  through `verity:system`, 102.9 s with the same volume attached to `littlefsd` directly. By then `littlefsd`
-  had made 65,536 reads, for which `verityd` checked 51,312 data blocks; level-1 blocks were held
-  for 99.96 % of them. littlefs reads a block in pieces and alternates between blocks, so the
-  last-block buffer saved 22 % of the reads, and each of the ~1,950 blocks the boot loads was
-  fetched and hashed about 26 times. The tree is not the cost; the repeated data blocks are.
+- **Measured** by bench:boot-profile and bench:boot-profile-unverified, a `boot-stats` build on
+  QEMU rv64 under `icount` (`shift=3`, sleep on) with seed 1, in guest time: the image reaches its
+  prompt in 1,016 s through `verity:system` and 536 s with the same volume attached to `littlefsd`
+  directly. Every one of `littlefsd`'s 77,710 block reads reaches `verityd`; by its 65,536th,
+  `verityd` had checked 51,313 data blocks, the last-block buffer saving the other 22 %, and held
+  the level-1 block for 99.96 % of them. The boot reads only 673 distinct blocks, each about 115
+  times: `littlefsd` finds every file's name in the volume's root directory again for each 9P
+  operation, and 97 % of its reads are those metadata blocks
+  ([littlefsd](littlefsd.md#residual-risks)). The tree is not the cost; the repeated blocks are.
 - **Read-ahead is not done** ([below](#a-cache-of-checked-data-blocks)).
 
 ### A cache of checked data blocks

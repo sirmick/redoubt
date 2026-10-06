@@ -14,3 +14,8 @@ path = "src/bin/verityd.rs"
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-verity = { path = "../../libs/verity" }
+
+[features]
+# Test-only, for the bench's boot-profile cases, and off in every default build: verityd counts
+# its reads, checks, tree-cache hits and reads at blkd, and says them (src/server.rs, `Said`).
+boot-stats = []

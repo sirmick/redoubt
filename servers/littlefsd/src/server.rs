@@ -267,7 +267,14 @@ pub struct Littlefsd<R: Range> {
     /// How many passes over a directory listings made.
     #[cfg(test)]
     pub(crate) passes: u32,
+    /// Where the boot's counts are said (src/stats.rs).
+    #[cfg(feature = "boot-stats")]
+    say: Option<Say>,
 }
+
+/// Says a line on `littlefsd`'s console (`boot-stats`).
+#[cfg(feature = "boot-stats")]
+pub type Say = alloc::boxed::Box<dyn Fn(&str)>;
 
 impl<R: Range> Littlefsd<R> {
     /// The server for what [`crate::volume::mount`] found, under `labels`. A volume whose ids do
@@ -312,6 +319,27 @@ impl<R: Range> Littlefsd<R> {
             out_of_room: 0,
             #[cfg(test)]
             passes: 0,
+            #[cfg(feature = "boot-stats")]
+            say: None,
+        }
+    }
+
+    /// Says the boot's counts through `say` (src/stats.rs).
+    #[cfg(feature = "boot-stats")]
+    pub fn say_stats(&mut self, say: Say) { self.say = Some(say) }
+
+    /// Counts `op`, and says the counts at each power of two of requests.
+    #[cfg(feature = "boot-stats")]
+    fn counted(&self, op: crate::stats::Op) {
+        if crate::stats::op(op) {
+            self.said();
+        }
+    }
+
+    #[cfg(feature = "boot-stats")]
+    fn said(&self) {
+        if let Some(say) = &self.say {
+            say(&crate::stats::line());
         }
     }
 
@@ -848,6 +876,13 @@ impl<R: Range> FileServer for Littlefsd<R> {
         if name == PROBE {
             redoubt_rt::handle::process_exit(PROBE_EXIT);
         }
+        #[cfg(feature = "boot-stats")]
+        {
+            self.counted(crate::stats::Op::Walk);
+            if name == crate::stats::SENTINEL {
+                self.said();
+            }
+        }
         self.find(dir).map_err(nine)?;
         let node = self.node_at(join(&dir.path, name)?).map_err(nine)?;
         let qid = self.qid(&node).map_err(nine)?;
@@ -855,6 +890,8 @@ impl<R: Range> FileServer for Littlefsd<R> {
     }
 
     fn open(&mut self, _: &Caller, node: &Node, m: u8) -> Result<Qid, NineError> {
+        #[cfg(feature = "boot-stats")]
+        self.counted(crate::stats::Op::Open);
         if matches!(m & 3, mode::OWRITE | mode::ORDWR) || m & mode::OTRUNC != 0 {
             self.writable().map_err(nine)?;
         }
@@ -876,18 +913,23 @@ impl<R: Range> FileServer for Littlefsd<R> {
     }
 
     fn read(&mut self, _: &Caller, node: &Node, offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
+        #[cfg(feature = "boot-stats")]
+        self.counted(crate::stats::Op::Read);
         // Past what littlefs can address there is nothing to read.
         let Ok(offset) = u32::try_from(offset) else { return Ok(Read::Done(0)) };
         let read = OpenOptions { read: true, ..OpenOptions::default() };
-        self.on_file(node, read, |fs, h| {
+        let n = self.on_file(node, read, |fs, h| {
             if offset >= fs.file_size(h)? {
                 return Ok(0);
             }
             fs.seek(h, offset)?;
             fs.read(h, out)
-        })
-        .map(Read::Done)
-        .map_err(nine)
+        });
+        #[cfg(feature = "boot-stats")]
+        if let Ok(n) = n {
+            crate::stats::read_bytes(n);
+        }
+        n.map(Read::Done).map_err(nine)
     }
 
     fn write(&mut self, _: &Caller, node: &Node, offset: u64, data: &[u8]) -> Result<usize, NineError> {
@@ -915,8 +957,13 @@ impl<R: Range> FileServer for Littlefsd<R> {
     }
 
     fn stat(&mut self, _: &Caller, node: &Node) -> Result<FileStat, NineError> {
+        #[cfg(feature = "boot-stats")]
+        self.counted(crate::stats::Op::Stat);
         self.stat_of(node).map_err(nine)
     }
+
+    #[cfg(feature = "boot-stats")]
+    fn clunk(&mut self, _: &Node) { self.counted(crate::stats::Op::Clunk) }
 
     fn dir_entry(
         &mut self,

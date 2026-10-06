@@ -1,0 +1,26 @@
+# The userland disk of image/userland.toml, unverified, for boot-profile-unverified only: the same
+# objects in a littlefs volume the whole partition holds, with no hash tree after it, so a
+# littlefsd attached to the range directly mounts it (tests/boot-profile-unverified.toml).
+# Everything below this header is image/userland.toml's, but `verity`.
+
+# Whole disk, in KiB (a whole number of 512-byte sectors).
+size_kib = 16384
+
+[objects]
+# Each application the shell's idle prompt loads a module of or starts, whole: the shell's own,
+# Elixir's and the OTP applications they name, with Elixir's logger, and erts, whose `prim_file`
+# the file server calls for the prompt's working directory.
+applications = ["erts", "kernel", "stdlib", "compiler", "crypto", "elixir", "logger", "redoubt_shell"]
+# Built here, with MIX_ENV=prod, apart from the development build `./shell` runs.
+mix = ["userland/shell"]
+# The modules beamlet embeds in place of kernel's own (userland/otp/vm/src/vm.rs, EMBEDDED): it
+# loads them before it can read this disk.
+exclude = ["application.beam", "gen_tcp.beam", "ram_file.beam"]
+# The `Docs` chunk goes with the rest, so `h/1` says no documentation is available.
+docs = false
+
+[[partition]]
+name = "system"
+fs = "littlefs"
+# Emptied and filled with the objects before every pack.
+stage = "target/image/userland"

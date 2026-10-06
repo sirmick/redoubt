@@ -65,6 +65,15 @@ pub fn serve(startup: &Startup) -> u32 {
     // not become a restart loop.
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
     let littlefsd = Littlefsd::new(mounted, labels);
+    // Test-only: the boot's counts, said on the console (src/stats.rs).
+    #[cfg(feature = "boot-stats")]
+    let littlefsd = {
+        let mut littlefsd = littlefsd;
+        if let Some(console) = console_only(startup) {
+            littlefsd.say_stats(alloc::boxed::Box::new(move |line| say(&console, line)));
+        }
+        littlefsd
+    };
     if littlefsd.is_corrupt() {
         say(startup, CORRUPT);
     }
@@ -72,4 +81,14 @@ pub fn serve(startup: &Startup) -> u32 {
     // 9P, multiplexed 9P and `ninep_common` in the skeleton's loop; the four typed operations
     // are ours.
     server.run(&endpoint, |s, request| serve_call::<Littlefsds, _>(&mut Typed(s), request))
+}
+
+/// Test-only (`boot-stats`): a startup block naming only this one's console, kept for as long as
+/// `littlefsd` runs, so its counts can be said from inside the server.
+#[cfg(feature = "boot-stats")]
+fn console_only(startup: &Startup) -> Option<Startup<'static>> {
+    let (_, console) = startup.namespace().find(|(path, _)| *path == "/dev/cons")?;
+    let block =
+        redoubt_rt::startup::StartupBuilder::new(console.index()).namespace("/dev/cons", console).finish();
+    Startup::parse(alloc::boxed::Box::leak(block.ok()?.into_boxed_slice())).ok()
 }

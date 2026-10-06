@@ -98,7 +98,28 @@ pub struct Redoubt {
     ended: bool,
     threads: Box<dyn Threads>,
     modules: Box<dyn Modules>,
+    /// What the lookups cost (`boot-stats`).
+    #[cfg(feature = "boot-stats")]
+    loads: Loads,
 }
+
+/// What the VM's lookups cost, said at its first console read (`boot-stats`, test-only, for the
+/// bench's boot-profile cases): each outcome's count, the bytes found, and the guest time spent
+/// inside them, against the time since the platform started.
+#[cfg(feature = "boot-stats")]
+#[derive(Default)]
+struct Loads {
+    found: u64,
+    absent: u64,
+    refused: u64,
+    bytes: u64,
+    us: u64,
+    started: u64,
+}
+
+/// ` [t=N]`: `time_now` in µs, the stamp on a line the boot profile times (`boot-stats`).
+#[cfg(feature = "boot-stats")]
+pub fn stamp() -> alloc::string::String { format!(" [t={}]", redoubt_rt::handle::time_now().unwrap_or(0)) }
 
 impl Redoubt {
     /// The platform of a process started with `startup`, whose namespace holds `/dev/cons`.
@@ -120,11 +141,28 @@ impl Redoubt {
             ended: false,
             threads,
             modules,
+            #[cfg(feature = "boot-stats")]
+            loads: Loads { started: redoubt_rt::handle::time_now().unwrap_or(0), ..Loads::default() },
         })
     }
 
-    /// Starts the reader thread, the first time input is asked for.
+    /// Starts the reader thread, the first time input is asked for. A `boot-stats` build says so,
+    /// with the time and what the lookups cost: for the shell, its prompt is drawn and waiting.
     fn start_reader(&mut self) {
+        #[cfg(feature = "boot-stats")]
+        {
+            say(&self.console, &format!("beamlet: first console read{}", stamp()));
+            let Loads { found, absent, refused, bytes, us, started } = self.loads;
+            let since = redoubt_rt::handle::time_now().unwrap_or(0).saturating_sub(started);
+            say(
+                &self.console,
+                &format!(
+                    "beamlet: boot-stats: loads {} (found {found}, absent {absent}, refused {refused}), \
+                     {bytes} bytes, {us} us in loads, {since} us since the platform started",
+                    found + absent + refused
+                ),
+            );
+        }
         self.reading = true;
         let console = Arc::clone(&self.console);
         let to = NonZeroU64::new(READER)
@@ -144,7 +182,20 @@ impl Redoubt {
     /// `file` from the module source, for `name`: one the source refuses is said on the console,
     /// naming it and why, and ends this lookup.
     fn load(&mut self, name: &str, file: &str) -> Lookup {
-        match self.modules.load(file) {
+        #[cfg(feature = "boot-stats")]
+        let begun = redoubt_rt::handle::time_now().unwrap_or(0);
+        let loaded = self.modules.load(file);
+        #[cfg(feature = "boot-stats")]
+        {
+            let l = &mut self.loads;
+            l.us += redoubt_rt::handle::time_now().unwrap_or(0).saturating_sub(begun);
+            match &loaded {
+                Ok(bytes) => (l.found, l.bytes) = (l.found + 1, l.bytes + bytes.len() as u64),
+                Err(Unloaded::Absent) => l.absent += 1,
+                Err(Unloaded::Refused(_)) => l.refused += 1,
+            }
+        }
+        match loaded {
             Ok(bytes) => Lookup::Found(bytes),
             Err(Unloaded::Absent) => Lookup::Absent,
             Err(Unloaded::Refused(why)) => {

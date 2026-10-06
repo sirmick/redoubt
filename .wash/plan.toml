@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 161
+revision = 162
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -930,8 +930,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["VOL1"]
   body = "Brief: .wash/local/BOOT1-implementer.md (architect-15; refocused 2026-10-06: littlefs's read cache dropped, the system volume moves to EROFS in EROFS1; the profile is the before/after measurement). Tier A (verityd, fsd's stamps, the bench), size M. docs/servers/verityd.md (the cost paragraph, its Open item); docs/userland/beamlet.md#beamlet-on-redoubt (the boot-time target, bench:boot-profile); docs/testbench.md#checked-builds (boot-stats). Checkpoint after step 1's profile; the target is set from the profile on EROFS (EROFS1)."
-  state = "reported"
-  revision = 147
+  state = "done"
+  revision = 162
   overrides = ["2026-10-06: started by Orchestrator before VOL1 (active): owner's go (2026-10-06): the boot profile and the two caches start now on VOL1's head (its verityd and image); BOOT1 rebases onto main once VOL1 merges", "2026-10-06: started by Orchestrator before VOL1 (reported): BOOT1 runs ahead of VOL1's merge on the owner's go; it rebases onto VOL1's merge", "2026-10-06: started by Orchestrator before VOL1 (active): BOOT1 builds on VOL1's branch head and rebases onto VOL1's merge; its review and gates run on that base now so the merge follows VOL1's directly"]
 
 [[node]]

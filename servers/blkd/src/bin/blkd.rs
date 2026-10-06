@@ -69,5 +69,14 @@ pub fn serve(startup: &Startup) -> u32 {
     let mut server = BlockServer::new(disk, roots, labels);
     let endpoint = Endpoint::from_handle(handle);
     // The handler answers every call; what it returns is dropped.
-    redoubt_rt::server::serve(&endpoint, |request| server.serve(request))
+    redoubt_rt::server::serve(&endpoint, |request| {
+        let served = server.serve(request);
+        // Test-only: the boot's counts, said on the console.
+        #[cfg(feature = "boot-stats")]
+        if let Some((reads, sectors)) = server.take_stats() {
+            let line = alloc::format!("blkd: boot-stats: reads {reads}, sectors {sectors}\n");
+            redoubt_rt::start::say(startup, &line);
+        }
+        served
+    })
 }

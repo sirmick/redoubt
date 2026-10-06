@@ -68,8 +68,9 @@ impl fmt::Display for Bad {
     }
 }
 
-/// What the volume has done: the tree cache's work, which the host tests read.
-#[cfg(test)]
+/// What the volume has done: the tree cache's work, which the host tests read and a
+/// `boot-stats` build says.
+#[cfg(any(test, feature = "boot-stats"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counts {
     /// Data blocks checked.
@@ -137,14 +138,14 @@ struct Tree<R> {
     geometry: Geometry,
     top: Vec<u8>,
     cache: Cache,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "boot-stats"))]
     counts: Counts,
 }
 
 impl<R: Range> Tree<R> {
     /// Reads block `n` of the range into `out`, one block.
     fn read(&mut self, n: u64, out: &mut [u8]) -> Result<(), Bad> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "boot-stats"))]
         {
             self.counts.reads += 1;
         }
@@ -165,7 +166,7 @@ impl<R: Range> Tree<R> {
                 break;
             }
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "boot-stats"))]
         {
             self.counts.checked += 1;
             self.counts.hits += u64::from(from == 0);
@@ -226,7 +227,7 @@ impl<R: Range> Volume<R> {
             geometry,
             top,
             cache,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "boot-stats"))]
             counts: Counts { reads: 1, ..Counts::default() },
         };
         Ok(Volume { tree, last: None, block })
@@ -247,6 +248,6 @@ impl<R: Range> Volume<R> {
         Ok(&self.block)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "boot-stats"))]
     pub fn counts(&self) -> Counts { self.tree.counts }
 }
