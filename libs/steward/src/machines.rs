@@ -328,6 +328,27 @@ pub(crate) fn external(store: &mut Store, event: &Event, out: &mut Out) {
             let call = Call { created: true, ..call };
             run::<SessionM>(store, &call, out, &domain, id, gen::session::Event::Login);
         }
+        EventKind::Console { principal } => {
+            let Some(p) = store.fixed.principal(principal) else { return unknown(event, out) };
+            let account = store.fixed.principals[p].account.get();
+            let Some(domain) = store.find(account, &[]) else { return unknown(event, out) };
+            run::<BlameM>(store, &call, out, &domain, 0, gen::blame::Event::Login);
+            let (id, badge) = (fresh(store, event, out), fresh(store, event, out));
+            let s = Session {
+                id,
+                state: gen::session::State::Starting,
+                principal: p,
+                key: 0,
+                badge,
+                number: 0,
+                reply: event.reply,
+            };
+            insert(store, &domain, Kind::Session, id, |st| {
+                st.sessions.insert(id, s);
+            });
+            let call = Call { created: true, ..call };
+            run::<SessionM>(store, &call, out, &domain, id, gen::session::Event::Console);
+        }
         EventKind::ChannelClosed { session } => {
             let Some((domain, Kind::Session)) = store.index.ids.get(session).cloned() else {
                 return unknown(event, out);

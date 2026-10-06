@@ -27,6 +27,7 @@ fn kind(k: &EventKind) -> String {
         EventKind::Login { principal, labels, key } => {
             format!("Login principal={} labels={} key={key}", q(principal), show_list(labels))
         }
+        EventKind::Console { principal } => format!("Console principal={}", q(principal)),
         EventKind::ChannelClosed { session } => format!("ChannelClosed session={session}"),
         EventKind::ApprovalOpened { channel, principal, key } => {
             format!("ApprovalOpened channel={channel} principal={} key={key}", q(principal))

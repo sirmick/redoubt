@@ -39,6 +39,12 @@ pub enum EventKind {
         labels: Vec<u64>,
         key: u64,
     },
+    /// The console principal's session on the UART: the steward's own event, at its start and
+    /// whenever that session ends. No key: the manifest named the principal for the console. In
+    /// its unlabelled domain, with a login's effects otherwise.
+    Console {
+        principal: String,
+    },
     /// The SSH channel of session `session` closed.
     ChannelClosed {
         session: u64,
