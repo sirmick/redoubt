@@ -16,6 +16,7 @@ use stub::MAX_STACK_PAGES;
 use crate::case::{Boot, Program};
 
 const UNIT: usize = 8;
+const PAGE_UNITS: usize = PAGE_SIZE / UNIT;
 const CHUNK: usize = 64 * 1024;
 /// How long the guest runs on between dumps while a server has not written its record.
 const RUN_ON: Duration = Duration::from_secs(1);
@@ -101,12 +102,46 @@ pub fn servers(boot: &Boot, workspace: &Path) -> Result<Vec<Server>> {
         .collect()
 }
 
+/// The units of one stack page found in one physical page, a bit per in-page offset.
+type Units = [u64; PAGE_UNITS / 64];
+
+/// One stack page's paint: the physical page holding the most of its units so far, and the page
+/// being scanned. Units in any other page are copies.
+#[derive(Clone, Default)]
+struct StackPage {
+    best: Units,
+    count: u32,
+    /// Another page held as many as `best`.
+    tied: bool,
+    here: Units,
+}
+
+impl StackPage {
+    /// The physical page being scanned has ended: keep it if it holds more than the best so far.
+    fn end_page(&mut self) {
+        let count = self.here.iter().map(|word| word.count_ones()).sum();
+        if count > self.count {
+            (self.best, self.count, self.tied) = (self.here, count, false);
+        } else if count == self.count {
+            self.tied = true;
+        }
+        self.here = Units::default();
+    }
+
+    fn found(&self, offset: usize) -> bool { self.best[offset / 64] >> (offset % 64) & 1 != 0 }
+}
+
 /// Scan every aligned RAM unit, recording where each tagged stack unit survived and each tagged
-/// heap record. A duplicate unit or record is ambiguous even if the copy came from the guest's
-/// ordinary data.
+/// heap record. A stack page's units count only from the physical page holding the most of them,
+/// so a painted word copied into a buffer is ignored. Two pages holding equally many of a stack
+/// page at or below the lowest missing unit's, or a duplicate record, are ambiguous even if the
+/// copy came from the guest's ordinary data.
 pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measurement> {
-    let mut seen: Vec<Vec<bool>> =
-        servers.iter().map(|s| vec![false; s.stack_pages * PAGE_SIZE / UNIT]).collect();
+    let mut stacks: Vec<Vec<StackPage>> =
+        servers.iter().map(|s| vec![StackPage::default(); s.stack_pages]).collect();
+    // The (server, stack page) pairs found in the physical page being scanned.
+    let mut here: Vec<(usize, usize)> = Vec::new();
+    let mut physical_page = 0;
     // Each server's heap record, (cap, peak); and the last four units, a record's length.
     let mut heaps: Vec<Option<(u64, u64)>> = vec![None; servers.len()];
     let mut window = [0u64; 4];
@@ -117,6 +152,11 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
         ram.read_exact(&mut chunk[..n]).context("reading the QMP RAM dump")?;
         let first_unit = (bytes - left) / UNIT as u64;
         for (at, unit) in chunk[..n].chunks_exact(UNIT).enumerate() {
+            let ram_unit = first_unit + at as u64;
+            if ram_unit / PAGE_UNITS as u64 != physical_page {
+                physical_page = ram_unit / PAGE_UNITS as u64;
+                here.drain(..).for_each(|(i, k)| stacks[i][k].end_page());
+            }
             let word = u64::from_le_bytes(unit.try_into().unwrap());
             window.rotate_left(1);
             window[3] = word;
@@ -138,29 +178,48 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
             // A live stack can copy a painted word into another stack slot. Only its original
             // position within a physical page is evidence of an untouched unit. Frame order
             // need not match virtual stack order, but the offset inside each frame does.
-            if (first_unit + at as u64) % (PAGE_SIZE / UNIT) as u64 != (index % (PAGE_SIZE / UNIT)) as u64 {
+            let offset = index % PAGE_UNITS;
+            if ram_unit % PAGE_UNITS as u64 != offset as u64 {
                 continue;
             }
             ensure!(
-                index < seen[i].len(),
+                index < stacks[i].len() * PAGE_UNITS,
                 "{}: stack paint index {index} is outside its stack",
                 servers[i].name
             );
-            ensure!(!seen[i][index], "{}: stack paint unit {index} found twice", servers[i].name);
-            seen[i][index] = true;
+            // The offset fixes the slot, so a unit is found at most once per physical page.
+            let k = index / PAGE_UNITS;
+            let page = &mut stacks[i][k].here;
+            if *page == Units::default() {
+                here.push((i, k));
+            }
+            page[offset / 64] |= 1 << (offset % 64);
         }
         left -= n as u64;
     }
+    here.drain(..).for_each(|(i, k)| stacks[i][k].end_page());
     let mut lines = Vec::new();
     let mut failures = Vec::new();
     let mut missing = Vec::new();
     for (i, server) in servers.iter().enumerate() {
-        if !seen[i].contains(&true) {
+        let units = stacks[i].len() * PAGE_UNITS;
+        if stacks[i].iter().all(|page| page.count == 0) {
             failures.push(format!("{}: no stack paint found", server.name));
             continue;
         }
-        let untouched = seen[i].iter().position(|found| !found).unwrap_or(seen[i].len());
-        let peak = (seen[i].len() - untouched) * UNIT;
+        let untouched = (0..units)
+            .position(|index| !stacks[i][index / PAGE_UNITS].found(index % PAGE_UNITS))
+            .unwrap_or(units);
+        // Above the page holding the lowest missing unit, either of two tied pages leaves it there.
+        let frontier = untouched / PAGE_UNITS;
+        if let Some((k, page)) = stacks[i].iter().enumerate().take(frontier + 1).find(|(_, page)| page.tied) {
+            bail!(
+                "{}: stack page {k}'s paint found twice, {} units in each of two pages",
+                server.name,
+                page.count
+            );
+        }
+        let peak = (units - untouched) * UNIT;
         let required = (2 * peak).div_ceil(PAGE_SIZE);
         if server.stack_pages < required {
             failures.push(format!(
@@ -241,13 +300,11 @@ mod tests {
         assert!(
             scan(&empty[..], empty.len() as u64, &server).unwrap().failures[0].contains("no stack paint")
         );
-        let mut duplicate = painted(1, 1);
-        duplicate.extend_from_slice(&stack_paint(1, 0).to_le_bytes());
-        assert!(
-            scan(&duplicate[..], duplicate.len() as u64, &server)
-                .unwrap_err()
-                .to_string()
-                .contains("found twice")
+        // A whole stack page copied intact: either page could be the stack's.
+        let duplicate = painted(1, 1).repeat(2);
+        assert_eq!(
+            scan(&duplicate[..], duplicate.len() as u64, &server).unwrap_err().to_string(),
+            "a: stack page 0's paint found twice, 512 units in each of two pages"
         );
         let mut used = painted(1, 1);
         used[PAGE_SIZE - 3000..].fill(0);
@@ -266,6 +323,63 @@ mod tests {
         let measured = scan(&ram[..], ram.len() as u64, &servers).unwrap();
         assert!(measured.failures.is_empty());
         assert_eq!(measured.lines[0], "stack a 16 of 1 pages");
+    }
+
+    /// RAM holding a's stack of `pages` with its last `touched` units touched, then `copied`'s
+    /// painted words at their in-page offsets in pages of their own, as a buffer or a message
+    /// holds them.
+    fn stack_and_copies(pages: usize, touched: usize, copied: &[std::ops::Range<u16>]) -> Vec<u8> {
+        let mut ram = painted(pages, 1);
+        let len = ram.len();
+        ram[len - touched * UNIT..].fill(0);
+        for units in copied {
+            let mut page = vec![0; PAGE_SIZE];
+            for index in units.clone() {
+                let at = usize::from(index) % PAGE_UNITS * UNIT;
+                page[at..at + UNIT].copy_from_slice(&stack_paint(1, index).to_le_bytes());
+            }
+            ram.extend(page);
+        }
+        records(&mut ram, 1);
+        ram
+    }
+
+    /// EROFS1's rv32 dump: unit 6763 alone at its offset in two pages, neither the stack's.
+    #[test]
+    fn scanner_ignores_a_single_paint_word_copied_into_another_page() {
+        let servers = [server("a", 2)];
+        let ram = stack_and_copies(2, 200, &[0..1, 0..1, 900..901]);
+        let measured = scan(&ram[..], ram.len() as u64, &servers).unwrap();
+        assert!(measured.failures.is_empty(), "{:?}", measured.failures);
+        assert_eq!(measured.lines[0], "stack a 1600 of 2 pages");
+    }
+
+    /// A buffer copied while the stack was shallower holds units since touched; the stack page
+    /// still holds more, so the lowest missing unit stays where the stack's own page puts it.
+    #[test]
+    fn scanner_ignores_a_copied_buffer_of_paint_words() {
+        let servers = [server("a", 2)];
+        let ram = stack_and_copies(2, 200, &[700..900, 10..60]);
+        let measured = scan(&ram[..], ram.len() as u64, &servers).unwrap();
+        assert!(measured.failures.is_empty(), "{:?}", measured.failures);
+        assert_eq!(measured.lines[0], "stack a 1600 of 2 pages");
+    }
+
+    /// Stack page 2 holds the lowest missing unit, 1025, and only unit 1024 untouched; page 3 is
+    /// all touched. Two identical copies tying for page 3 cannot move the peak; a tie for page 2
+    /// could, and is refused.
+    #[test]
+    fn scanner_refuses_a_tie_only_at_or_below_the_frontier() {
+        let servers = [server("a", 4)];
+        let ram = stack_and_copies(4, 1023, &[1600..1601, 1600..1601]);
+        let measured = scan(&ram[..], ram.len() as u64, &servers).unwrap();
+        assert!(measured.failures.is_empty(), "{:?}", measured.failures);
+        assert_eq!(measured.lines[0], "stack a 8184 of 4 pages");
+        let ram = stack_and_copies(4, 1023, &[1024..1025, 1024..1025]);
+        assert_eq!(
+            scan(&ram[..], ram.len() as u64, &servers).unwrap_err().to_string(),
+            "a: stack page 2's paint found twice, 1 units in each of two pages"
+        );
     }
 
     #[test]
