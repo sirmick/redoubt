@@ -567,12 +567,13 @@ written takes nothing, so the notice stays for the holder's next good `receive`
 sets the call's notice flag in the same step that clears its waiting flag; `pump` delivers the
 notice to the holding thread before any exit notice or message and clears the flag; `reply` to a
 call whose caller no longer waits frees the lend and reports `discarded`, and since the call
-leaves the thread's open calls there, no notice is left to deliver; `budgets_dying` clears the
-notices owed on every endpoint a destruction ends, whose `Dead` is the holder's report (and
-`process::endpoints_dying` the exit notices owed there), and `reply` checks,
-in a checked build, that none is owed on a destroyed endpoint. Each step runs to its end
-with interrupts off, holding the memory manager, so a reply and an abandonment cannot both
-win.
+leaves the thread's open calls there, no notice is left to deliver; `endpoint_dying` clears the
+notices owed on every endpoint a destruction ends, those its own failed callers left included,
+whose `Dead` is the holder's report (and `process::endpoint_dying` the exit notices owed there),
+and `reply` checks, in a checked build, that none is owed on a destroyed endpoint; and since
+nothing is delivered while a budget is dying, no notice reaches a thread the destruction is
+about to end. Each step runs to its end with interrupts off, holding the memory manager, so a
+reply and an abandonment cannot both win.
 
 **Model check:** `Checker::i15_abandoned`: a thread waiting in `receive` on the call's endpoint
 has been told of every abandoned call it holds; `Checker::flows`: a notice goes only to the

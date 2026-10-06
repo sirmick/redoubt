@@ -568,9 +568,10 @@ this order:
 4. **Reach messages in flight.** Every endpoint a dying budget owns is destroyed: calls and sends
    blocked on it and receives waiting on it fail with `Dead`, calls a server took through it are
    abandoned (R3), and exit notices owed to it are dropped. Every device object charged to a
-   dying budget is destroyed. A message still queued that was sent through a handle stamped with
-   a dying budget fails its sender with `Dead`. A call sent through one that a server already took
-   fails its caller with `Dead` at once, not when the server replies, and is abandoned.
+   dying budget is destroyed. From the mark on, no message stamped with a dying budget is
+   delivered: a message still queued that was sent through a handle stamped with a dying budget
+   fails its sender with `Dead`. A call sent through one that a server already took fails its
+   caller with `Dead` at once, not when the server replies, and is abandoned.
 5. **Lift.** Each dying budget's work since it entered the queue moves to its parent, bottom-up
    ([scheduling](scheduling.md)).
 6. **Sweep.** Every handle that names a dying budget, or an endpoint, device or process object that
@@ -587,6 +588,18 @@ this order:
    not taken the notice ([R6](#r6-charging)). Both move after the carve came back, and both were
    inside it, so the parent never goes over its limit.
 9. **Free.** The dying budgets' pages are freed and they leave the deadline list.
+
+Nothing is delivered while a budget is dying. Every surviving endpoint that lost a receiver or
+gained a notice during the destruction is pumped once, at its end, when no doomed process and no
+dying object is left to take anything.
+
+What that end delivers is notices, never a message stamped with a dying budget. Outside a
+destruction every delivery is made at once, so at the mark nothing a waiting receiver could take
+is queued. A kill gives the survivors only notices, callers woken with `Dead` and the dying
+processes' freed open-call slots, never a receiver newly able to take a message, and step 4 fails
+every message stamped with a dying budget. The one thing a delivery inside the destruction could
+do is hand a doomed receiver a notice owed to a survivor, which putting each endpoint on a list
+and pumping the list at the end prevents.
 
 A budget is emptied one child at a time by `budget_reap`, each child destroyed as above (B is
 the child: its processes killed, the calls its servers held failing their callers with `Dead`,
@@ -730,12 +743,15 @@ without preemption.*
      a handle stamped with it, the queued messages and the taken calls whose callers wait.
      `budgets_dying` walks the dying subtree's owner chains and empties each dying endpoint's lists:
      its receivers and senders fail with `Dead`, the notices owed on it are dropped, and the callers
-     waiting for a reply through it fail with `Dead`, their calls abandoned with no notice
-     (`abandon` owes none on an endpoint whose owner is dying). Then it empties every dying budget's
-     chain of queued messages, and then each one's chain of taken calls, so no pump a failed caller
-     makes takes a message whose stamp is dying. Each fails in list order. The cost follows the
-     subtree's own parked messages and calls, never the threads that exist or its endpoint count.
-     `process::endpoints_dying` drops the exit notices in one process-object pass. Freeing an
+     waiting for a reply through it fail with `Dead`, their calls abandoned, and then every notice
+     owed on it is dropped, those abandonments' included. Then it empties every dying budget's
+     chain of queued messages, and then each one's chain of taken calls. Each fails in list order.
+     No pump runs inside a destruction: each endpoint that may have something to deliver is put
+     once on a to-pump list, linked through the endpoints' own frames, a dying one leaves it as the
+     owner walk meets it, and the destruction's last act pumps each survivor on it once. The cost
+     follows the subtree's own parked messages and calls, never the threads that exist or its
+     endpoint count. `process::endpoint_dying` drops the exit notices owed on a dying endpoint
+     from its own exits and reporters. Freeing an
      endpoint's frame touches only the frame, once its handles are closed (item 2), not the dying
      budget that owns it: the budget's whole object list is going with it, and its endpoints' pages
      come back in one write.

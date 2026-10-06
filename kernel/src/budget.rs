@@ -1127,15 +1127,6 @@ impl MemoryManager {
         self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
     }
 
-    /// Whether the destruction under way will kill `pid`: it runs in a dying budget, or its
-    /// process object is charged to one, which frees the object and kills the process with it
-    /// (`process::budgets_dying`).
-    pub fn process_is_doomed(&self, pid: Pid) -> bool {
-        self.runs_in_dying(pid)
-            || crate::process::object_of(self, pid)
-                .is_some_and(|f| self.budget_at(self.process(f).creator).dying)
-    }
-
     /// Last step of `budget_destroy`, once the doomed budgets' processes are gone: close every
     /// handle naming a doomed budget or stamped with one, in every table (R10, I2); give the
     /// parent back what `top` carved from it (I10), then charge it the quarantined DMA pages and
@@ -1350,11 +1341,18 @@ pub fn destroy_subtree(
         // Each budget's work since entry moves to its parent, bottom-up, and its carve returns.
         mm.lift_dying(top);
         mm.destroy_marked(top);
+        mm.end_destruction();
+        // Nothing was delivered while a budget was dying: each endpoint a kill, a free or a failed
+        // caller may have given something to deliver was listed instead (`message::pump_endpoint`),
+        // and is pumped now, once, when no doomed thread and no dying object is left to take
+        // anything (R4b). What this delivers is notices, never a message stamped with a dying
+        // budget, and why a pump inside the destruction could only have handed a doomed thread a
+        // notice owed to a survivor, is kernel/budgets.md's, under R10.
+        crate::message::pump_listed(ss, mm);
         // A deadline's whole cost, the walk that found it included, is its payer's (R10, R12).
         if let (Some(started), Some(payer)) = (deadline_since, payer) {
             crate::sched::bill(mm, payer, crate::sched::now_ticks().saturating_sub(started));
         }
-        mm.end_destruction();
     });
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);

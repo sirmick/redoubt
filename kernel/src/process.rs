@@ -681,8 +681,9 @@ pub fn faulted(pid: Pid, code: u32) {
     ProcessTable::with_mut(|ss| died(ss, pid, tid, Cause::Faulted, code));
 }
 
-/// R10: destroying a budget kills the processes running in it. The notice has cause `killed`
-/// (`died` drops it if the object is going too, which [`budgets_dying`] sees to afterwards).
+/// R10: destroying a budget kills the processes running in it. The notice has cause `killed`; one
+/// whose object is going too is withdrawn when [`budgets_dying`] frees the object, before anything
+/// is delivered.
 pub fn killed(ss: &mut ProcessTable, victim: Pid) { died(ss, victim, INITIAL_TID, Cause::Killed, 0); }
 
 /// The one path out of a process, whatever ended it: record the notice, tear the process down,
@@ -756,14 +757,12 @@ fn end_process(ss: &mut ProcessTable, pid: Pid) {
 
 /// Deliver the notice if R1 allows and there is somewhere to deliver it, or drop it. A dropped
 /// notice frees the object at once, so nothing waits for a notice that can never arrive.
+///
+/// Inside a destruction nothing is delivered until its end, so a notice whose object is charged to
+/// a dying budget is withdrawn before anyone could take it: step 3 frees the object, which takes
+/// it off the exits (R10).
 fn settle_notice(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32, flow: Option<Flow>) {
     let p = mm.process(frame);
-    // R10 drops objects charged to a dying creator without emitting their notices, even
-    // when an external receiver is already blocked on a surviving exit endpoint.
-    if mm.budget_at(p.creator).dying {
-        free_object(mm, frame);
-        return;
-    }
     match p.endpoint.filter(|e| mm.is_live_endpoint(*e) && allowed(mm, *e, flow)) {
         Some(e) => {
             let mut p = p;
@@ -778,10 +777,8 @@ fn settle_notice(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32, flow
 
 /// R1 for an exit notice: a flow from the budget the process ran in to the exit endpoint's owner.
 fn allowed(mm: &MemoryManager, e: EndpointRef, flow: Option<Flow>) -> bool {
+    // An endpoint whose owner is dying drops the notices owed there with it (R10 step 4).
     let owner = mm.budget_at(mm.endpoint_at(e).owner);
-    if owner.dying {
-        return false;
-    }
     // Notices carry a one-way flow. Only a system-class destination bypasses its label check.
     if owner.class == Class::System {
         return true;

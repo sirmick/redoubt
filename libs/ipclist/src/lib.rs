@@ -5,11 +5,12 @@
 //! in its members' own pages, a thread's IPC page or an open call's page. So a list costs no
 //! allocation and no table, and nothing a budget is not already paying for. The kernel keeps each
 //! word where [`Words`] puts it; this crate holds only the links, R2's order and the audits, so they
-//! can be host-tested (`src/tests.rs`). Every rule decision (who may take what, a doomed receiver,
-//! R4a's limit, R4's costs) stays in the kernel's `message.rs`.
+//! can be host-tested (`src/tests.rs`). Every rule decision (who may take what, R4a's limit, R4's
+//! costs) stays in the kernel's `message.rs`.
 //!
-//! - **Members.** A thread is named by `pid << 8 | tid` (TIDs to 255), an open call or a process object by
-//!   its frame plus 1. 0 names nothing, so a zeroed frame is an empty list and an unlinked member.
+//! - **Members.** A thread is named by `pid << 8 | tid` (TIDs to 255), an open call, a process object or an
+//!   endpoint by its frame plus 1. 0 names nothing, so a zeroed frame is an empty list and an unlinked
+//!   member.
 //! - **One wait, one list.** A thread waits on one thing, so one pair of links ([`T_PREV`], [`T_NEXT`])
 //!   serves every list a wait puts it on: an endpoint's receivers, a device's interrupt waiters, or its R2
 //!   group's sends or calls. A queued message is also on its stamp budget's chain ([`T_SPREV`]); a wait with
@@ -18,7 +19,8 @@
 //!   while its caller waits and on its notice list while its notice is owed (never both: [`C_EPREV`]), and on
 //!   its stamp budget's chain while its caller waits ([`C_SPREV`]). A process object is on its exit
 //!   endpoint's reporters while its process runs and on its exits while its notice is owed (never both:
-//!   [`P_PREV`]).
+//!   [`P_PREV`]). Inside a destruction only, an endpoint that may have something to deliver is on the
+//!   kernel's to-pump list ([`E_PPREV`]), once.
 //! - **R2's groups** ([`enqueue`], [`pick`], [`served`], [`dequeue`]). An endpoint keeps the groups with a
 //!   message queued in the order their turns fall due, and apart, the groups with a send queued in the order
 //!   their oldest sends fall due, for a receiver at `MAX_OPEN_CALLS` (R4a). A group's node lives in its
@@ -44,6 +46,9 @@ pub enum Page {
     Device(u32),
     /// A budget's frame: the chains of what was sent under its stamp.
     Budget(u32),
+    /// An endpoint on the kernel's to-pump list, by its frame + 1: a list member's page holds its
+    /// list word as every other member's does, so following a link costs no conversion.
+    Pumped(u64),
     /// The kernel's own words: the expiry's due list, and each process's timed waits.
     Kernel,
 }
@@ -116,8 +121,11 @@ const E_OPEN: usize = 7;
 const E_WAITING: usize = 8;
 const E_EXITS: usize = 9;
 const E_REPORTERS: usize = 11;
+/// Its links on the kernel's to-pump list, inside a destruction.
+pub const E_PPREV: usize = 12;
+pub const E_PNEXT: usize = 13;
 /// Words the lists take in an endpoint's frame.
-pub const ENDPOINT_WORDS: usize = 12;
+pub const ENDPOINT_WORDS: usize = 14;
 
 /// A device's interrupt waiters (head, tail).
 const D_IRQ: usize = 0;
@@ -128,10 +136,11 @@ pub const DEVICE_WORDS: usize = 2;
 pub const B_QUEUED: usize = 0;
 pub const B_OPEN: usize = 1;
 
-/// The due list (head, tail), in the kernel's own words; then each process slot's timed waits
-/// (head).
+/// The due list (head, tail) and the to-pump list (head, tail), in the kernel's own words; then
+/// each process slot's timed waits (head).
 const K_DUE: usize = 0;
-const K_TIMED: usize = 2;
+const K_PUMP: usize = 2;
+const K_TIMED: usize = 4;
 
 /// Words the lists take in the kernel's own, for `slots` process slots.
 pub const fn kernel_words(slots: usize) -> usize { K_TIMED + slots }
@@ -144,6 +153,7 @@ enum Member {
     Thread,
     Call,
     Process,
+    Endpoint,
 }
 
 /// One doubly linked list: where its head (and tail, if it keeps one) is, and which words of its
@@ -224,6 +234,19 @@ impl List {
     /// An expiry's due waits.
     pub const fn due() -> List { List::threads(Page::Kernel, K_DUE, true, (T_XPREV, T_XNEXT)) }
 
+    /// A destruction's endpoints to pump at its end, in the order they were listed.
+    pub const fn pumps() -> List {
+        List {
+            owner: Page::Kernel,
+            head: K_PUMP,
+            tail: Some(K_PUMP + 1),
+            member: Member::Endpoint,
+            counted: false,
+            prev: E_PPREV,
+            next: E_PNEXT,
+        }
+    }
+
     /// The threads of the process in slot `slot` in a wait with a deadline.
     pub const fn timed(slot: usize) -> List {
         List::threads(Page::Kernel, K_TIMED + slot, false, (T_DPREV, T_DNEXT))
@@ -247,6 +270,7 @@ impl List {
             Member::Thread => Page::Thread(r),
             Member::Call => Page::Call(r),
             Member::Process => Page::Process(r),
+            Member::Endpoint => Page::Pumped(r),
         }
     }
 

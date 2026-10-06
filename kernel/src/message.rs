@@ -504,6 +504,7 @@ impl Frames<'_> {
             Page::Call(r) => (mm.object_phys(call_of(r)), C_LISTS + word),
             Page::Process(r) => (mm.object_phys(object_of(r)), crate::process::LIST_WORD + word),
             Page::Endpoint(frame) => (mm.object_phys(frame), crate::endpoint::LIST_WORD + word),
+            Page::Pumped(r) => (mm.object_phys((r - 1) as u32), crate::endpoint::LIST_WORD + word),
             Page::Device(frame) => (mm.object_phys(frame), crate::device::LIST_WORD + word),
             Page::Budget(frame) => {
                 let at = [crate::budget::QUEUED_WORD, crate::budget::TAKEN_WORD][word];
@@ -715,7 +716,7 @@ fn fail_wait(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID, 
     let served = unwind(ss, mm, pid, tid);
     wake(ss, mm, pid, tid, result);
     if let Some(e) = served {
-        pump(ss, mm, e);
+        pump_endpoint(ss, mm, e);
     }
 }
 
@@ -1130,14 +1131,48 @@ pub fn pop_naming(mm: &MemoryManager, e: u32) -> Option<u32> {
 
 // --- Delivery (R2, R4, R4a) --------------------------------------------------------------------
 
-/// Deliver whatever is pending on `e` (`process.rs` calls this when an exit notice appears).
-pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) { pump(ss, mm, e); }
+/// `e` may have something to deliver (`process.rs` calls this when an exit notice appears): pump
+/// it now, or, inside a destruction, list it once to be pumped at the destruction's end
+/// ([`pump_listed`]). Nothing is delivered while a budget is dying (R10), so no thread the
+/// destruction is about to end is ever offered anything (R4b).
+pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
+    if !mm.objects.deferring {
+        return pump(ss, mm, e);
+    }
+    let (w, r) = (&mut Frames(mm), frame_word(e.frame));
+    if !List::pumps().contains(w, r) {
+        List::pumps().push_back(w, r);
+    }
+}
+
+/// The end of a destruction: pump each endpoint it listed, once, in the order listed. Every dying
+/// endpoint left the list as its owner's walk met it (`budgets_dying`), and every frame is freed,
+/// so each is a survivor and nothing doomed is left to take anything. A pump here lists nothing,
+/// since the destruction is over.
+pub fn pump_listed(ss: &mut ProcessTable, mm: &mut MemoryManager) {
+    loop {
+        let r = List::pumps().pop_front(&mut Frames(mm));
+        let Some(frame) = frame_of(r) else { break };
+        // `endpoint` stops on a frame that no longer holds one (I1).
+        let e = EndpointRef { frame, id: mm.endpoint(frame).id };
+        #[cfg(debug_assertions)]
+        {
+            let owner = mm.endpoint(frame).owner;
+            assert!(
+                mm.is_live_budget(owner) && !mm.budget(owner.frame).dying,
+                "R10: a listed endpoint's owner died"
+            );
+        }
+        pump(ss, mm, e);
+    }
+}
 
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
 /// delivered. Notices come before messages (kernel/ipc.md, "What `receive` returns"). Each pick
 /// reads `e`'s own lists: its owed notices, its receivers from the first until one can take, and
 /// two group heads (R2), never another endpoint's or every thread.
 fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
+    debug_assert!(!mm.objects.deferring, "R10: a pump inside a destruction");
     #[cfg(feature = "walk-trace")]
     let _walk = crate::sched::trace::walk(crate::sched::trace::PUMP);
     loop {
@@ -1183,21 +1218,13 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
     }
 }
 
-/// The receiver on `e` after list member `after` (0: from the first) that `pump` may feed: one in
-/// a process no destruction is about to end. A doomed thread takes nothing, so what it would have
-/// taken stays for a live receiver (R4b).
+/// The receiver on `e` after list member `after` (0: from the first). No pump runs inside a
+/// destruction (`pump_endpoint`), so none meets a thread it is about to end (R4b).
 fn next_receiver(mm: &MemoryManager, e: EndpointRef, after: u64) -> Option<(Pid, TID)> {
     let w = &Frames(mm);
     let list = List::receivers(e.frame);
-    let mut r = if after == 0 { list.first(w) } else { list.next(w, after) };
-    while r != 0 {
-        let (pid, tid) = thread_of(r);
-        if !mm.process_is_doomed(pid) {
-            return Some((pid, tid));
-        }
-        r = list.next(w, r);
-    }
-    None
+    let r = if after == 0 { list.first(w) } else { list.next(w, after) };
+    (r != 0).then(|| thread_of(r))
 }
 
 /// The abandoned-call notice `pump` delivers next on `e`, with the thread it goes to: of the
@@ -1213,7 +1240,7 @@ fn owed_notice(mm: &MemoryManager, e: EndpointRef) -> Option<(Pid, TID, u32, u64
         let call = open_call_at(mm, frame);
         let (pid, tid) = call.server;
         let s = slot(mm, pid, tid);
-        if s.wait == Wait::Receive && s.endpoint == Some(e) && !mm.process_is_doomed(pid) {
+        if s.wait == Wait::Receive && s.endpoint == Some(e) {
             let arrived = w.read(Page::Thread(tref(pid, tid)), lists::T_SEQ);
             if best.is_none_or(|(a, rid, ..)| (arrived, call.rid) < (a, rid)) {
                 best = Some((arrived, call.rid, pid, tid, frame));
@@ -1671,15 +1698,11 @@ fn abandon(ss: &ProcessTable, mm: &mut MemoryManager, frame: u32) {
     if call.flags & F_WAITING == 0 {
         return;
     }
-    // No notice is owed on an endpoint that is being destroyed: nobody is left to receive it on
-    // (R3), and the destruction drops the ones owed before it began (`budgets_dying`).
-    let notice = if mm.budget_at(mm.endpoint_at(call.endpoint).owner).dying { 0 } else { F_NOTICE };
+    // A notice owed on an endpoint that is being destroyed is dropped with it (`endpoint_dying`).
     unlist_call(mm, frame, &call);
-    call.flags = (call.flags & !F_WAITING) | F_ABANDONED | notice;
+    call.flags = (call.flags & !F_WAITING) | F_ABANDONED | F_NOTICE;
     store_open_call(mm, frame, &call);
-    if notice != 0 {
-        List::notices(call.endpoint.frame).push_front(&mut Frames(mm), cref(frame));
-    }
+    List::notices(call.endpoint.frame).push_front(&mut Frames(mm), cref(frame));
     if call.lend_pages == 0 {
         return;
     }
@@ -1777,7 +1800,7 @@ pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
     });
     for i in 0..n {
         let e = SERVED.with(|served| served[i]);
-        pump(ss, mm, e);
+        pump_endpoint(ss, mm, e);
     }
 }
 
@@ -1798,7 +1821,8 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
     // the subtree owns, never a scan of every frame. A destroyed device leaves the chain, so
     // only endpoints are left on it; it is moved to the chain's head first, so leaving it does
     // not walk the endpoints ahead of it. Each endpoint's message reach is its own lists
-    // (`endpoint_dying`); one that nothing waits on costs one read, its count of members.
+    // (`endpoint_dying`); one that nothing waits on costs one read, its count of members, and one
+    // or two more to take it off the destruction's to-pump list if a kill put it there.
     let mut cur = Some(top);
     while let Some(frame) = cur {
         let (mut owned, mut prev) = (mm.budget(frame).first_owned, None);
@@ -1809,6 +1833,10 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
                 if lists::waiting(&Frames(mm), o) != 0 {
                     endpoint_dying(ss, mm, o);
                 }
+                let w = &mut Frames(mm);
+                if List::pumps().contains(w, frame_word(o)) {
+                    List::pumps().remove(w, frame_word(o));
+                }
             } else {
                 mm.owned_to_head(frame, prev, o);
                 destroy_device(ss, mm, o);
@@ -1817,8 +1845,9 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
         cur = mm.subtree_next(top, frame);
     }
     // Then what was sent through a handle stamped with a dying budget, on any endpoint: every
-    // dying budget's queued messages first, so that no pump the failed callers below make takes
-    // one, then the taken calls whose callers wait, each caller failed and its call abandoned.
+    // dying budget's queued messages, then the taken calls whose callers wait, each caller failed
+    // and its call abandoned. Nothing is delivered until the destruction's end (`pump_endpoint`), so
+    // the order is free.
     let mut cur = Some(top);
     while let Some(frame) = cur {
         fail_each(ss, mm, List::queued(frame));
@@ -1870,12 +1899,11 @@ pub fn destroy_quarantined_devices(ss: &mut ProcessTable, mm: &mut MemoryManager
 }
 
 /// R10 step 4 for one dying endpoint `e`, from its own lists: its receivers and its queued
-/// senders fail with `Dead`, the notices owed on it are dropped (there is no endpoint left to
-/// receive one on, R3, and no notice may name a frame about to be freed, I1), and the callers
-/// waiting for a reply through it fail with `Dead`, their calls abandoned with no notice
-/// (`abandon` owes none on an endpoint whose owner is dying). A failed caller's pump of `e` finds
-/// no receiver there, and no other endpoint is pumped. Then the exit notices owed on it are
-/// dropped and the processes reporting to it lose their ear (`process.rs`).
+/// senders fail with `Dead`, the callers waiting for a reply through it fail with `Dead`, their
+/// calls abandoned, and then every notice owed on it is dropped, those abandonments' included
+/// (there is no endpoint left to receive one on, R3, and no notice may name a frame about to be
+/// freed, I1). Then the exit notices owed on it are dropped and the processes reporting to it
+/// lose their ear (`process.rs`).
 fn endpoint_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, e: u32) {
     fail_each(ss, mm, List::receivers(e));
     loop {
@@ -1885,6 +1913,7 @@ fn endpoint_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, e: u32) {
         }
         fail_one(ss, mm, sender);
     }
+    fail_callers(ss, mm, List::open(e));
     loop {
         let c = List::notices(e).first(&Frames(mm));
         if c == 0 {
@@ -1895,7 +1924,6 @@ fn endpoint_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, e: u32) {
         call.flags &= !F_NOTICE;
         store_open_call(mm, call_of(c), &call);
     }
-    fail_callers(ss, mm, List::open(e));
     crate::process::endpoint_dying(mm, e);
 }
 
