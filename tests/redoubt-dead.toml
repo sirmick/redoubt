@@ -1,6 +1,7 @@
 description = "R4b and R4's Refused: a server thread that exits holding an open call gives its caller Dead and its lend back intact, the endpoint survives for the next server, and a message the receiving budget cannot pay for is Refused to its sender while the receiver keeps waiting (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 log-server; PID 3 redoubt-dead, which holds the budget it runs in (slot 3), since the
@@ -9,7 +10,7 @@ debug_assertions = true
 # of system's free pages bar one, 15 processes, weight 1,000), system-class as system is, so the
 # step is the same.
 programs = ["log-server", "redoubt-dead"]
-timeout_secs = 30
+timeout_secs = 20
 expect = [
     '^\[pid 3\] \[dead\] server took a call with a lend of Some\(1\) pages, and exits$',
     '^\[pid 3\] \[dead\] its own budget down to \d+ free pages$',

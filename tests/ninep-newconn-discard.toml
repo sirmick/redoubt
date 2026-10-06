@@ -1,9 +1,10 @@
 description = "The 9P skeleton rolls back a new_connection whose reply lost its capability (servers/serving.md, \"Replies and rollback\"): a client with its handle table full asks for twice its bucket's connections, each reply's capability dropped by the kernel; the server's own tables show every one rolled back, and with one slot free the next new_connection stands, alone in its bucket, and giving it back empties the bucket"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 programs = ["log-server", "ninep-discard-server", "ninep-discard-client"]
-timeout_secs = 60
+timeout_secs = 10
 # The server's line is the verdict (rule F): the client could print anything.
 expect = [
     '^\[pid 3\] \[ninep-server\] serving, 4 connections per bucket$',

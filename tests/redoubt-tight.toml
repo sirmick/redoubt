@@ -1,6 +1,7 @@
 description = "A receiver carved to exactly the open-call page plus the lent pages, with nothing for the page tables that map the lend: R4 counts those too, so the sender is Refused and the receiver is charged nothing; the kernel used to charge them and then stop on the charge that followed (attack, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # Built with the checks on (docs/testbench.md, "Checked builds"): the bug was an arithmetic
 # shortfall that a release build would have hidden until the charge itself failed.
 debug_assertions = true
@@ -9,7 +10,7 @@ debug_assertions = true
 # system; its own budget now is an equal share of system for one program (all of system's free
 # pages bar one, 15 processes, weight 1,000), and the carve leaves it the same exact 4 pages.
 programs = ["log-server", "redoubt-tight"]
-timeout_secs = 30
+timeout_secs = 10
 expect = [
     '^\[pid 3\] \[tight\] its own budget free after the carve: 4 \(want 4\)$',
     '^\[pid 3\] \[tight\] the tight lend -> Err\(Refused\), 0 pages spent$',

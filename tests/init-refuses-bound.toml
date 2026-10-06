@@ -1,6 +1,7 @@
 description = "init refuses a manifest that would cost init more of root than INIT_PAGES keeps: one line saying where and why, then a power-off reporting a system failure (system_reset kind 3, status 255), before any server runs"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # The real init, the images its manifest names, and the manifest: image/manifest.json with eight
 # more servers receiving on 60 endpoints each, a page of root's apiece, and s7's program a batch
 # of zeros (below). The verdict is init's line and the firmware's status, which only system_reset
@@ -14,7 +15,7 @@ programs = [
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
 ]
-timeout_secs = 30
+timeout_secs = 10
 # The printed bound, so the number is real: the same on both widths, the image term in it being
 # one batch.
 expect = ['^init: refused the boot: the boot would cost init 1047 pages of root and root keeps 1023 \(INIT_PAGES\)$']

@@ -1,6 +1,7 @@
 description = "init refuses a devices entry no device handle has: one line saying where and why, then a power-off reporting a system failure (system_reset kind 3, status 255), before any server runs"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # The real init, the images its manifest names, and the manifest: image/manifest.json with disk0's
 # base moved to 0x1000, where virt has no device. The verdict is init's line and the firmware's
 # status, which only system_reset kind 3 gives.
@@ -13,7 +14,7 @@ programs = [
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
 ]
-timeout_secs = 30
+timeout_secs = 10
 expect = ['^init: refused the boot: devices\[1\]\.base: no device handle has it$']
 forbid = ['^init: started']
 poweroff = true
