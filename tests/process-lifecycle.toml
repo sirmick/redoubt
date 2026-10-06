@@ -1,9 +1,10 @@
 description = "Native process/thread exits composed with current IPC loans, abandonment, exact budget restoration and randomized PID reuse"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 programs = ["proc-lifecycle"]
-timeout_secs = 60
+timeout_secs = 20
 expect = [
     '^\[lifecycle\] native server exit returns live lend and all child resources$',
     '^\[lifecycle\] final thread_exit returns live lend and all child resources$',

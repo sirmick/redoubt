@@ -1,13 +1,14 @@
 description = "No cached translation outlives its mapping (kernel/memory-layout.md, \"`satp`\"): a page unmapped and mapped again reads its new frame, and a child that draws a dead child's PID, its ASID, reads its own fresh page where the dead one wrote a marker; the checked build's flush audit stops the kernel if any page-table write is unflushed at a return (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # PID 2 alone. Each verdict is a value read through the MMU, where a stale translation would read
 # another frame. QEMU's TLB is not tagged by ASID and is emptied on every sfence.vma and every
 # satp change, so a missing flush shows here only through the audit: the recorded negatives
 # `asid-no-reuse-flush` and `asid-no-leaf-flush` stop the kernel on it.
 programs = ["asid-reuse-stale"]
-timeout_secs = 120
+timeout_secs = 70
 expect = [
     '^\[pid 2\] \[asid-reuse\] one process: V reads 0x0 after an unmap and a new map, neither marker: true$',
     '^\[pid 2\] \[asid-reuse\] A \(pid \d+\) wrote its marker at V and read it back: true$',

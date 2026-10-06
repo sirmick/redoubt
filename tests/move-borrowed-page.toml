@@ -1,10 +1,11 @@
 description = "A server cannot transfer on a page that was only lent to it: the transfer is refused, not a kernel panic, and the lender gets its page back"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # PID 2 log-server; PID 3 move-borrowed (attacker), second, so it holds the boot endpoint's
 # receive right; PID 4 move-borrowed-victim (lender), which calls it there.
 programs = ["log-server", "move-borrowed", "move-borrowed-victim"]
-timeout_secs = 30
+timeout_secs = 10
 # The kernel once changed the page tables for such a move (a transfer, now), then found the frame belonged to
 # the lender and panicked ("unable to send"). The verdict is the victim's line, relayed under
 # its own PID 4, which the attacker cannot forge: its lend returned and its page still holds

@@ -1,10 +1,11 @@
 description = "R4b, R10 and exit notices: destroying a budget B feeds no notice to a process in a live budget whose process object B pays for, which the same destruction kills; B's process's notice reaches its creator, and the killed child's is never made (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # The program runs first and judges from the kernel's answers: the notices its receive returns.
 programs = ["destroy-keeps-notices-creator"]
-timeout_secs = 60
+timeout_secs = 10
 expect = [
     '^\[destroy-keeps-notices-creator\] ok: P started C in L, and C is receiving on E$',
     '^\[destroy-keeps-notices-creator\] ok: E holds P.s notice, cause killed \(pid \d+\)$',

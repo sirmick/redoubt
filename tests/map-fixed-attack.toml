@@ -1,9 +1,10 @@
 description = "map_fixed (R11, R22): a range check, an overlap check (stack, untouched reservation, map_anon, both sides of a lend), the record check on an untouched page and the flags rule each refuse with nothing mapped and nothing charged; both halves of the charge check (pages, then page tables) are exact; a huge len is refused within 10 ms, over mappings too, before the overlap walk, and so are unmap, set_flags, process_map and a lend over a huge range; the success path zeroes, enforces flags and unmaps back to baseline; page 0 is user space"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 programs = ["map-fixed-attack"]
-timeout_secs = 30
+timeout_secs = 10
 expect = [
     '^\[map-fixed\] ok: addr unaligned$',
     '^\[map-fixed\] ok: nothing charged$',

@@ -1,6 +1,7 @@
 description = "Mapping and touching more anonymous memory than there is RAM is the one process's OutOfMemory, not the kernel's end (verdict: survival only)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # 32 MiB so the attacker (64 MiB of touches) exhausts RAM in milliseconds.
 memory_mib = 32
 # PID 2 log-server; PID 3 survivor, second, so that it and not the attacker holds the boot
@@ -10,7 +11,7 @@ memory_mib = 32
 # kernel abandons that call (at the exit, or at the call's own timeout had the attacker chosen
 # one), and only the abandoned notice lets the survivor report, never a delay.
 programs = ["log-server", "touch-beyond-ram-survivor", "touch-beyond-ram"]
-timeout_secs = 30
+timeout_secs = 10
 # The fault-path allocator once `.expect()`ed and halted the machine on OOM. PANIC is always
 # forbidden; the verdict is the survivor's report, log-server's DONE line naming it, and the clean
 # power-off, which a panicked kernel never reaches. The attacker prints BREACH only if it was

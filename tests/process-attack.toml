@@ -1,9 +1,10 @@
 description = "Hostile mapping/startup (bad flags refused before the source is backed), R8 accounts, R9 creation stamps, I8 user-class restrictions, pending exit-record rollback and creator-paid notice exhaustion"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 programs = ["proc-attack"]
-timeout_secs = 60
+timeout_secs = 10
 # Only the trusted parent holds UART/reset. Probe replies are checked against actual kernel
 # usage, handle revocation and notice metadata; every success also requires a clean SBI reset.
 expect = [

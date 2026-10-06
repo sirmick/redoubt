@@ -1,9 +1,10 @@
 description = "A lend that once panicked the kernel is a clean error: an oversized lend is refused TooLarge and does not underflow (verdict: survival only)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # PID 2 log-server; PID 3 syscall-attack, which reports DONE when its attempts are made.
 programs = ["log-server", "syscall-attack"]
-timeout_secs = 30
+timeout_secs = 10
 # The attempt once reached a panic (a message-region size underflow). PANIC is always forbidden;
 # the verdict is log-server's DONE line naming PID 3 and its clean power-off, which a panicked
 # kernel never reaches. The attacker's line is progress only, and pins the error kind, so a refusal
