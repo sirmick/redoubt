@@ -1,8 +1,9 @@
 description = "The loader refuses a boot bundle whose signature covers the bare archive, with no domain and no length"
 arch = ["rv64"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 programs = ["log-server"]
-timeout_secs = 20
+timeout_secs = 10
 # Signed with the right key, over an untouched and well-formed archive: only the preimage is
 # wrong. This is exactly what a signer that predates the bundle domain produces, and what the
 # loader once accepted (kernel/boot.md, "Verified boot"). What it catches is a second

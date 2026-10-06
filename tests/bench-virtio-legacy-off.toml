@@ -1,10 +1,11 @@
 description = "Bench self-check: a case with [net] gets virtio-mmio's modern transport (force-legacy off), which netd and blkd require: the network card, alone, reports version 2 at its fixed slot, 0x10007000"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # The tester in init's place: the first program holds every device object and reads the card's
 # identification registers through its handle, and the kernel's device_info for its base.
 programs = ["virtio-probe"]
-timeout_secs = 60
+timeout_secs = 10
 expect = [
     'network device, mac 52:54:00:12:34:56, at 0x10007000, version 2$',
     '\[virtio\] 1 device\(s\)',

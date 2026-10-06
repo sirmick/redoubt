@@ -1,10 +1,11 @@
 description = "A print or a panic inside the kernel's print! does not take the console a second time: a test build prints a value whose Display prints and then panics at boot; the inner print goes to the firmware's stateless console and leaves the outer print's claim in place, so the panic handler reports through that console too, marked as struck while printing, then powers off (panic-in-print, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 kernel_features = ["panic-in-print"]
 programs = ["rng-test"]
-timeout_secs = 20
+timeout_secs = 10
 allow_panic = true          # the kernel is supposed to panic here
 poweroff = true
 poweroff_status = 255

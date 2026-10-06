@@ -1,6 +1,7 @@
 description = "Bench self-check: `poweroff = true` fails a guest that passes its expectations but never powers off"
 arch = ["rv64"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 programs = ["log-server", "ipc-client"]
 timeout_secs = 3
 expect = ['IPC TEST PASSED']
