@@ -4,8 +4,9 @@
 # --pack-disk`), the one `disk.toml` goes through. First it stages the objects: each module of the
 # applications below, compiled by the pinned toolchain and stripped, as a plain file under the
 # name the VM asks for (`Elixir.Enum.beam`), and each application's resource the same way
-# (`elixir.app`). Then it packs the one partition as a verified volume: a littlefs volume holding
-# those files, followed by its hash tree (docs/servers/verityd.md). The bundle's manifest pins
+# (`elixir.app`). Then it packs the one partition as a verified volume: an EROFS volume holding
+# those files, written by Redoubt's own writer (docs/servers/erofsd.md), followed by its hash tree
+# (docs/servers/verityd.md). The bundle's manifest pins
 # the tree's root, so verityd serves the volume only in blocks the signed manifest covers
 # (docs/kernel/boot.md, R75; R76).
 
@@ -27,7 +28,7 @@ docs = false
 
 [[partition]]
 name = "system"
-fs = "littlefs"
+fs = "erofs"
 # Emptied and filled with the objects before every pack.
 stage = "target/image/userland"
 verity = true

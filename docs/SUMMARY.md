@@ -73,6 +73,7 @@
   - [beamlet is told its budget by an argument the manifest keeps equal by hand](todo/beamlet-budget-from-startup.md)
   - [A private directory for the QMP socket](todo/qmp-socket-private-dir.md)
   - [Destruction walks every process](todo/destruction-walks-every-process.md)
+  - [The file servers parse their arguments and call their range three times over](todo/file-server-arguments-and-range-client.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [rv32](beyond/rv32.md)

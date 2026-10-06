@@ -74,6 +74,11 @@ paths = ["libs/steward/src"]
 max_lines = 3160
 
 [[crate]]
+name = "libs/erofs"
+paths = ["libs/erofs/src"]
+max_lines = 578
+
+[[crate]]
 name = "libs/littlefs"
 paths = ["libs/littlefs/src"]
 max_lines = 2033
@@ -123,7 +128,12 @@ max_lines = 2928
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 2108
+max_lines = 2109
+
+[[crate]]
+name = "servers/erofsd"
+paths = ["servers/erofsd/src"]
+max_lines = 515
 
 [[crate]]
 name = "servers/littlefsd"
@@ -133,4 +143,4 @@ max_lines = 1510
 [[crate]]
 name = "servers/verityd"
 paths = ["servers/verityd/src"]
-max_lines = 528
+max_lines = 541

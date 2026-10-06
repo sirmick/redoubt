@@ -335,6 +335,8 @@ fn main() -> Result<()> {
         if let Kind::HostTests(host) = &case.kind {
             let started = Instant::now();
             let available = if host.miri { build::miri_available() } else { Ok(()) };
+            let path = std::env::var_os("PATH");
+            let available = available.and_then(|()| build::tools_available(&host.tools, path.as_deref()));
             let outcome = match available.map(|()| builder.cargo_test(host)) {
                 Err(why) => missing(why),
                 Ok(Ok(None)) => Outcome::Pass,

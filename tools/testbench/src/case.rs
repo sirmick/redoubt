@@ -215,6 +215,10 @@ pub struct HostTests {
     /// Run under nightly Miri, which checks the `unsafe` a native run only executes.
     #[serde(default)]
     pub miri: bool,
+    /// Host programs the tests run as an oracle (`mkfs.erofs`): each must be on the path, or the
+    /// case is something the host lacks, a skip only with `--allow-skip`.
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -965,12 +969,24 @@ mod tests {
             .collect();
         assert_eq!(
             bins,
-            ["init", "keyd", "consoled", "bootfsd", "blkd", "verityd", "netd", "ipd", "littlefsd", "beamlet"]
+            [
+                "init",
+                "keyd",
+                "consoled",
+                "bootfsd",
+                "blkd",
+                "verityd",
+                "netd",
+                "ipd",
+                "littlefsd",
+                "erofsd",
+                "beamlet"
+            ]
         );
         assert!(programs[0].is_init());
         let otp = Path::new("userland/otp");
-        assert!(matches!(&programs[9], Program::Package { workspace: Some(w), .. } if w == otp));
-        assert!(matches!(&programs[8], Program::Package { workspace: None, .. }));
+        assert!(matches!(&programs[10], Program::Package { workspace: Some(w), .. } if w == otp));
+        assert!(matches!(&programs[9], Program::Package { workspace: None, .. }));
         // The manifest, with the userland disk's root pinned in it from the run's pack.
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "manifest");

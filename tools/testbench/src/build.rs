@@ -539,6 +539,23 @@ pub fn miri_available() -> Result<(), String> {
     }
 }
 
+/// Whether every one of `tools` is an executable file in a directory of `path` (`$PATH`'s
+/// form); `Err` names the first that is not.
+pub fn tools_available(tools: &[String], path: Option<&std::ffi::OsStr>) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let dirs: Vec<PathBuf> = path.map(|p| std::env::split_paths(p).collect()).unwrap_or_default();
+    for tool in tools {
+        let found = dirs.iter().any(|dir| {
+            std::fs::metadata(dir.join(tool))
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        });
+        if !found {
+            return Err(format!("{tool} is not on the path (scripts/setup.sh installs it)"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,6 +610,30 @@ mod tests {
         );
         let native: HostTests = toml::from_str("packages = ['p']").unwrap();
         assert_eq!(args(&native), ("test -p p".into(), None));
+    }
+
+    /// A tool the oracle needs is found on the path only as an executable file; the first
+    /// missing one is named.
+    #[test]
+    fn an_oracles_tools_must_be_on_the_path() {
+        let dir = std::env::temp_dir().join(format!("testbench-tools-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("plain"), "").unwrap();
+        std::fs::write(dir.join("tool"), "").unwrap();
+        std::fs::set_permissions(dir.join("tool"), std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = std::env::join_paths([Path::new("/nonexistent"), &dir]).unwrap();
+        let names = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(tools_available(&names(&["tool"]), Some(&path)), Ok(()));
+        assert_eq!(tools_available(&[], None), Ok(()));
+        for (tools, missing) in
+            [(&["tool", "absent"][..], "absent"), (&["plain"], "plain"), (&["tool"], "tool")]
+        {
+            let path = if missing == "tool" { None } else { Some(path.as_os_str()) };
+            let why = tools_available(&names(tools), path).unwrap_err();
+            assert!(why.starts_with(&format!("{missing} is not on the path")), "{why}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A host case may name the beamlet workspace and its fake-kernel feature. Invalid

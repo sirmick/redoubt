@@ -58,16 +58,16 @@
       "budget": { "pages": "512", "processes": 1, "weight": 1000 },
       "devices": [ { "device": "disk1", "as": "disk" } ],
       "receives": ["blkd:system"], "args": ["endpoint=blkd:system"] },
-    { "name": "littlefsd:system", "program": "littlefsd",
-      "stack_pages": "7", "heap_pages": "38",
+    { "name": "erofsd:system", "program": "erofsd",
+      "stack_pages": "5", "heap_pages": "24",
       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
       "volume": "system",
-      "receives": ["littlefsd:system"],
-      "args": ["endpoint=littlefsd:system", "buckets=4"] },
+      "receives": ["erofsd:system"],
+      "args": ["endpoint=erofsd:system", "buckets=4"] },
     { "name": "beamlet", "program": "beamlet",
-      "stack_pages": "17", "heap_pages": "24558",
-      "budget": { "pages": "24576", "processes": 1, "weight": 100 },
-      "handed": [ { "endpoint": "littlefsd:system", "badge": "7" } ],
-      "args": ["budget_pages=24576", "Elixir.Redoubt.Shell"] }
+      "stack_pages": "17", "heap_pages": "20846",
+      "budget": { "pages": "20864", "processes": 1, "weight": 100 },
+      "handed": [ { "endpoint": "erofsd:system", "badge": "7" } ],
+      "args": ["budget_pages=20864", "endpoint=erofsd:system", "Elixir.Redoubt.Shell"] }
   ]
 }

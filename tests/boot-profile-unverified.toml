@@ -1,6 +1,5 @@
-description = "A measurement, not a verdict on time: boot-profile's boot with the userland volume unverified, the cost of verification measured by difference (docs/servers/verityd.md, \"Memory and cost\"). The same programs, built with boot-stats, and the same objects, packed with no hash tree (tests/data/boot-profile/userland-unverified.toml); the manifest is the image's without the system volume's verity and without verity:system (tests/data/boot-profile/manifest-unverified.json), so littlefsd:system reads its range at blkd:system directly. Its milestones and counts are boot-profile's, less verityd's; a typed Enum.sum(1..10) prints 55"
+description = "A measurement, and the unverified boot-time target (the prompt within 20 s of guest time): boot-profile's boot with the userland volume unverified, the cost of verification measured by difference (docs/servers/verityd.md, \"Memory and cost\"). The same programs, built with boot-stats, and the same objects, packed with no hash tree (tests/data/boot-profile/userland-unverified.toml); the manifest is the image's without the system volume's verity and without verity:system (tests/data/boot-profile/manifest-unverified.json), so erofsd:system reads its range at blkd:system directly. Its milestones and counts are boot-profile's, less verityd's; a typed Enum.sum(1..10) prints 55"
 arch = ["rv64", "rv32"]
-whole_run = false
 kind = "boot"
 programs = [
     { package = "redoubt-init", bin = "init", features = ["boot-stats"] },
@@ -11,6 +10,7 @@ programs = [
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
     { package = "redoubt-littlefsd", bin = "littlefsd", features = ["boot-stats"] },
+    { package = "redoubt-erofsd", bin = "erofsd", features = ["boot-stats"] },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp", features = ["boot-stats"] },
 ]
 # The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
@@ -21,15 +21,16 @@ qemu_seed = 1
 timeout_secs = 900
 expect = [
     '^init: up \[t=[0-9]+\]$',
-    '^init: started littlefsd:system, console [0-9a-f]{16} \[t=[0-9]+\]$',
+    '^init: started erofsd:system, console [0-9a-f]{16} \[t=[0-9]+\]$',
     '^init: started beamlet, console [0-9a-f]{16} \[t=[0-9]+\]$',
-    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from littlefsd:system \[t=[0-9]+\]$',
+    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from erofsd:system \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     # The shell's prompt has no newline: the line follows it on the console's line.
-    'beamlet: first console read \[t=[0-9]+\]$',
+    # The boot-time target: the prompt within 20 s: 1.5 times the 12.5 s measured on rv64 (12.1 s on rv32), rounded up to 10 s (docs/userland/beamlet.md).
+    'beamlet: first console read \[t=([0-9]{1,7}|1[0-9]{7})\]$',
     '^\[con [0-9a-f]{16}\] beamlet: boot-stats: loads [0-9]+ ',
     '^\[con [0-9a-f]{16}\] 55$',
-    '^\[con [0-9a-f]{16}\] littlefsd: boot-stats: 9P [0-9]+ ',
+    '^\[con [0-9a-f]{16}\] erofsd: boot-stats: 9P [0-9]+ ',
     'UndefinedFunctionError\) function BootStats.x/0 is undefined',
 ]
 forbid = [

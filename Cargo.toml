@@ -20,6 +20,7 @@ members = [
   "libs/steward/gen",
   "libs/steward/trace",
   "libs/sys",
+  "libs/erofs",
   "libs/littlefs",
   "libs/verity",
   "libs/wire",
@@ -32,11 +33,13 @@ members = [
   "servers/netd",
   "servers/ipd",
   "servers/init",
+  "servers/erofsd",
   "servers/littlefsd",
   "servers/verityd",
   "stub",
   "tests/programs",
   "tests/init-programs",
+  "tests/erofsd-programs",
   "tests/littlefsd-programs",
   "tests/net",
   "tests/net/client",
@@ -55,6 +58,8 @@ resolver = "2"
 exclude = [
   # Host-only fuzz targets, built by cargo-fuzz (see libs/wire/fuzz/Cargo.toml).
   "libs/wire/fuzz",
+  # Host-only erofs fuzz target (see libs/erofs/fuzz/Cargo.toml).
+  "libs/erofs/fuzz",
   # Host-only littlefs test crates: the C reference as an oracle, and the fuzzer. They must
   # never enter a normal build (TENETS.md 3: host-only oracles and fuzz drivers stay outside the
   # workspace build and are never linked into anything that runs on the machine).

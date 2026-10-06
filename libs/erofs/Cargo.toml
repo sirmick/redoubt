@@ -1,0 +1,20 @@
+[package]
+name = "erofs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "EROFS's uncompressed subset in pure Rust, no_std + alloc: the parser erofsd reads with and the writer the bench packs with"
+
+# No dependencies: this crate parses an untrusted medium (TENETS.md 5). The writer takes its
+# SHA-256 from the caller.
+[dependencies]
+
+# The tests' SHA-256, for the writer's `user.sha256`.
+[dev-dependencies]
+sha2 = { version = "0.11", default-features = false }
+
+# The differential run against erofs-utils (tests/oracle.rs) needs `mkfs.erofs`, `fsck.erofs` and
+# `dump.erofs` on the path: its own bench case, `erofs-oracle`, which names them, and builds
+# it with this feature (the file is empty without).
+[features]
+oracle = []

@@ -1,0 +1,24 @@
+[package]
+name = "erofs-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Host-only, and outside the workspace (see the root Cargo.toml `exclude`).
+# Run from libs/erofs (nightly comes from rust-toolchain.toml):
+#   cargo fuzz run -s none image fuzz/corpus/image fuzz/seeds/image
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+erofs = { path = ".." }
+
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+bench = false

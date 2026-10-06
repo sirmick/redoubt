@@ -1,4 +1,4 @@
-description = "The attack: a program handed the userland littlefsd's endpoint tries to create a file on the userland disk and to write Elixir.Version.beam (servers/littlefsd.md, \"Read-only ranges\"; docs/kernel/boot.md, R75). verityd reports the volume read-only, so littlefsd serves it read-only and refuses the create and the writes itself, before they reach verityd, which refuses every write too, blkd, or the host, which attaches the disk read-only; the file reads back the same length. The verdict that the file did not change is the system's: the shell then calls Version, and beamlet loads it only because verityd served every block of it as hashing to the signed manifest's root (R76; rule F)"
+description = "The attack: a program handed the userland erofsd's endpoint tries to create a file on the userland disk and to write Elixir.Version.beam (servers/erofsd.md, \"Serving\"; docs/kernel/boot.md, R75). erofsd serves only reads and refuses the create and the writes itself, before they reach verityd, which refuses every write too, blkd, or the host, which attaches the disk read-only; the file reads back the same length. The verdict that the file did not change is the system's: the shell then calls Version, and beamlet loads it only because verityd served every block of it as hashing to the signed manifest's root (R76; rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The image's programs and littlefsd-client; the manifest is the image's with the client added.
@@ -12,6 +12,7 @@ programs = [
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
     { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
     { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
 ]
@@ -49,8 +50,8 @@ verity = "image/userland.toml"
 name = "client"
 program = "littlefsd-client"
 budget = { pages = "256", processes = 1, weight = 100 }
-handed = [{ endpoint = "littlefsd:system", badge = "8" }]
-args = ["readonly", "littlefsd:system", "Elixir.Version.beam"]
+handed = [{ endpoint = "erofsd:system", badge = "8" }]
+args = ["readonly", "erofsd:system", "Elixir.Version.beam"]
 
 [userland]
 recipe = "image/userland.toml"

@@ -1,0 +1,32 @@
+description = "A hostile EROFS volume is corrupt, not a crash (servers/erofsd.md, \"The format\"; servers/littlefsd.md R49): four erofsd instances, one per volume, each damaged after its pack: a flipped superblock magic (every attach refused, and erofsd says so on its console), a file whose blocks start past the block count, a file laid out compressed (outside the subset), and a directory block whose last name starts past its end; each refusal is erofsd's own Rerror text, every erofsd stays up, and nothing restarts"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-erofsd-programs", bin = "erofsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 8 servers, bound \d+ pages$',
+    '^\[con [0-9a-f]{16}\] erofsd: the volume does not read as EROFS, and is served as corrupt$',
+    '^\[con [0-9a-f]{16}\] erofsd-client: erofsd:magic: attach refused: corrupt, and again: corrupt$',
+    '^\[con [0-9a-f]{16}\] erofsd-client: erofsd:past: walk to tail.txt refused: corrupt$',
+    '^\[con [0-9a-f]{16}\] erofsd-client: erofsd:compressed: walk to motd refused: corrupt$',
+    '^\[con [0-9a-f]{16}\] erofsd-client: erofsd:names: walk to lib/a.beam refused: corrupt$',
+    '^\[con [0-9a-f]{16}\] erofsd-client TEST PASSED$',
+]
+# A corrupt volume must not become a restart loop: nothing ends and nothing restarts.
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'erofsd-client TEST FAILED']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/erofsd/corrupt.json" }
+servers = [{ name = "client", args = ["corrupt", "erofsd:magic", "motd", "erofsd:past", "tail.txt", "erofsd:compressed", "motd", "erofsd:names", "lib/a.beam"] }]
+
+[disk]
+recipe = "tests/data/erofsd/corrupt-disk.toml"

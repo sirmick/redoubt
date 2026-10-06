@@ -52,6 +52,10 @@ name = "littlefsd"
 package = "redoubt-littlefsd"
 
 [[entry]]
+name = "erofsd"
+package = "redoubt-erofsd"
+
+[[entry]]
 name = "beamlet"
 # The Erlang VM, the shell's, in a workspace of its own.
 package = "beamlet-redoubt"

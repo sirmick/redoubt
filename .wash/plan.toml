@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 198
+revision = 199
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -941,8 +941,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["VOL1", "BOOT1", "FSN1"]
   body = "Owner (2026-10-06): the read-only system volume stops using littlefs; a read-only EROFS replaces it, built now; littlefs stays for writable volumes. Design: docs/servers/erofsd.md (the uncompressed subset: flat plain and flat inline layouts, sorted dirents, xattrs skipped; its own small server on bootfsd's pattern; Redoubt's own deterministic writer with erofs-utils as a host oracle). Brief: .wash/local/EROFS1-implementer.md (architect-15). Tier A, size M. Needs VOL1, FSN1 (final names) and BOOT1's step-1 profile (the littlefs baseline)."
-  state = "reported"
-  revision = 193
+  state = "done"
+  revision = 199
 
 [[node]]
   id = "FSN1"

@@ -1,0 +1,192 @@
+{
+  "devices": [
+    {
+      "name": "uart0",
+      "base": "268435456",
+      "irq": 10,
+      "dma": false
+    },
+    {
+      "name": "disk0",
+      "base": "268468224",
+      "irq": 8,
+      "dma": true
+    }
+  ],
+  "volumes": [
+    {
+      "name": "magic",
+      "partition": 0
+    },
+    {
+      "name": "past",
+      "partition": 1
+    },
+    {
+      "name": "compressed",
+      "partition": 2
+    },
+    {
+      "name": "names",
+      "partition": 3
+    }
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {
+        "pages": "256",
+        "processes": 1,
+        "weight": 100
+      },
+      "receives": [
+        "keyd"
+      ],
+      "args": [
+        "host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111",
+        "buckets=4"
+      ]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {
+        "pages": "1024",
+        "processes": 1,
+        "weight": 1000
+      },
+      "devices": [
+        {
+          "device": "uart0",
+          "as": "uart"
+        }
+      ],
+      "receives": [
+        "consoled"
+      ],
+      "args": [
+        "buckets=4"
+      ]
+    },
+    {
+      "name": "blkd",
+      "program": "blkd",
+      "budget": {
+        "pages": "512",
+        "processes": 1,
+        "weight": 1000
+      },
+      "devices": [
+        {
+          "device": "disk0",
+          "as": "disk"
+        }
+      ],
+      "receives": [
+        "blkd"
+      ],
+      "args": [
+        "endpoint=blkd"
+      ]
+    },
+    {
+      "name": "erofsd:magic",
+      "program": "erofsd",
+      "budget": {
+        "pages": "256",
+        "processes": 1,
+        "weight": 100
+      },
+      "volume": "magic",
+      "receives": [
+        "erofsd:magic"
+      ],
+      "args": [
+        "endpoint=erofsd:magic",
+        "buckets=4"
+      ]
+    },
+    {
+      "name": "erofsd:past",
+      "program": "erofsd",
+      "budget": {
+        "pages": "256",
+        "processes": 1,
+        "weight": 100
+      },
+      "volume": "past",
+      "receives": [
+        "erofsd:past"
+      ],
+      "args": [
+        "endpoint=erofsd:past",
+        "buckets=4"
+      ]
+    },
+    {
+      "name": "erofsd:compressed",
+      "program": "erofsd",
+      "budget": {
+        "pages": "256",
+        "processes": 1,
+        "weight": 100
+      },
+      "volume": "compressed",
+      "receives": [
+        "erofsd:compressed"
+      ],
+      "args": [
+        "endpoint=erofsd:compressed",
+        "buckets=4"
+      ]
+    },
+    {
+      "name": "erofsd:names",
+      "program": "erofsd",
+      "budget": {
+        "pages": "256",
+        "processes": 1,
+        "weight": 100
+      },
+      "volume": "names",
+      "receives": [
+        "erofsd:names"
+      ],
+      "args": [
+        "endpoint=erofsd:names",
+        "buckets=4"
+      ]
+    },
+    {
+      "name": "client",
+      "program": "erofsd-client",
+      "budget": {
+        "pages": "256",
+        "processes": 1,
+        "weight": 100
+      },
+      "handed": [
+        {
+          "endpoint": "erofsd:magic",
+          "badge": "7"
+        },
+        {
+          "endpoint": "erofsd:past",
+          "badge": "7"
+        },
+        {
+          "endpoint": "erofsd:compressed",
+          "badge": "7"
+        },
+        {
+          "endpoint": "erofsd:names",
+          "badge": "7"
+        }
+      ],
+      "args": [
+        "corrupt"
+      ]
+    }
+  ]
+}

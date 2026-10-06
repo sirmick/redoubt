@@ -1,0 +1,7 @@
+# erofs-read-only's disk: one EROFS volume of the stage, as the bench packs it.
+size_kib = 1024
+
+[[partition]]
+name = "system"
+fs = "erofs"
+stage = "tests/data/erofsd/stage"

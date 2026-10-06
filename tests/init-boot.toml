@@ -24,10 +24,10 @@ expect = [
     '^init: started littlefsd:data, console [0-9a-f]{16}$',
     '^init: started blkd:system, console [0-9a-f]{16}$',
     '^init: started verity:system, console [0-9a-f]{16}$',
-    '^init: started littlefsd:system, console [0-9a-f]{16}$',
+    '^init: started erofsd:system, console [0-9a-f]{16}$',
     '^init: started beamlet, console [0-9a-f]{16}$',
     '^init: 0 public entries pushed to bootfsd, and sealed$',
-    # The manifest's three handed items, the three volume ranges (littlefsd:data's, littlefsd:system's at
+    # The manifest's three handed items, the three volume ranges (littlefsd:data's, erofsd:system's at
     # verity:system and verity:system's at blkd:system), and the nine consoles after consoled's,
     # each found gone.
     '^init: holds none of the 6 badges and 9 console connections it handed$',

@@ -127,7 +127,7 @@ description says so ("verdict: survival only").
 
 ### The case file
 
-Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures
+Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures
 
 A case is one TOML file. Paths in it are relative to the workspace root, and an unknown field or
 table is an error, so a misspelling cannot silently drop a check. The one exception is a `programs`
@@ -236,7 +236,7 @@ The kinds, and the fields each takes besides `description`, `arch` and `whole_ru
 | --- | --- | --- |
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
-| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features` |
+| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features`, `tools` |
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
@@ -249,7 +249,10 @@ directory below it with a `Cargo.toml`; an absolute path, a path outside the rep
 missing workspace fails before Cargo runs. `features` defaults to none and passes the named
 features to Cargo. For example, `beamlet-lookup-host` runs the VM and Redoubt tests from
 `userland/otp` with `beamlet-redoubt/fake`; `beamlet-lookup-cli-host` runs separately without that
-feature, so the two cases do not combine their Cargo features.
+feature, so the two cases do not combine their Cargo features. `tools` names host programs the
+tests run as an oracle (`erofs-oracle`'s `mkfs.erofs`, `fsck.erofs` and `dump.erofs`): each must be
+an executable on the path, or the case fails naming the first missing, and skips it with
+`--allow-skip`, as for any other host lack.
 
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
@@ -499,18 +502,19 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECK
 That run fails `bench-debug-assertions-off`, as it should; everything else must pass.
 
 `boot-stats` is a diagnostic feature like `sched-trace` and `walk-trace`, but of programs, not the
-kernel: a Cargo feature of `init`, `blkd`, `verityd`, `littlefsd` and `beamlet-redoubt`, off by
+kernel: a Cargo feature of `init`, `blkd`, `verityd`, `littlefsd`, `erofsd` and `beamlet-redoubt`, off by
 default and never in the image's build. Without it the release binaries of `init`, `blkd`,
-`verityd`, `littlefsd` and `beamlet` have the section sizes they had before it, on rv64 and rv32
+`verityd`, `littlefsd`, `erofsd` and `beamlet` have the section sizes they had before it, on rv64 and rv32
 (measured with `llvm-size` against the commit before it, both built from the same path: `beamlet`'s
 sizes move with its build path). With it, `init`'s lines and beamlet's line for its first object
-carry `[t=N]`, `time_now` in µs; `blkd`, `verityd` and `littlefsd` say their counts at each power
-of two of their requests from 2^12, and `littlefsd` once more, exactly, on a walk of
+carry `[t=N]`, `time_now` in µs; `blkd`, `littlefsd` and `erofsd` say their counts at each power
+of two of their requests from 2^12 and `verityd` from 2^7, and `littlefsd` and `erofsd` once more, exactly, on a
+walk of
 `Elixir.BootStats.beam`, a name no volume holds; and at the VM's first console read beamlet says
 `beamlet: first console read [t=N]` and what its lookups cost: their count and the guest time spent
 in them ([beamlet on Redoubt](userland/beamlet.md#beamlet-on-redoubt)). The feature needs no
-checked build. `boot-profile` and `boot-profile-unverified`, by name only, boot the image's
-programs with it under `icount` and a pinned seed: measurements, which assert no time.
+checked build. `boot-profile` and `boot-profile-unverified` boot the image's programs with it under `icount` and a pinned seed: measurements, which bound only the boot's time
+to its prompt ([the boot-time target](userland/beamlet.md#beamlet-on-redoubt)).
 
 ## Hostile inputs
 
@@ -595,10 +599,12 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (19)</summary>
+<details><summary>Status: built · tested (22)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
+- bench:erofs-corrupt
+- bench:erofs-read-only
 - bench:image-disk
 - bench:init-boot
 - bench:net-tcp
@@ -615,6 +621,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::the_userland_disk_sits_on_its_slot_read_only
 - host:testbench::the_userland_pack_is_deterministic_and_stages_each_object_by_name
 - host:testbench::a_verified_partition_is_its_volume_then_its_tree
+- host:testbench::an_erofs_partition_is_its_stage_and_each_damage_is_corrupt_where_it_is
 - host:testbench::the_manifest_pins_the_packs_root
 
 </details>
@@ -639,18 +646,27 @@ host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions ac
 ```
 
 A disk `recipe` (`image/disk.toml`) is packed by the code `./mkimage` runs (`testbench
---pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as a littlefs
-volume holding its stage's tree, written through `littlefsd`'s own code, so a case boots the disk the
-image ships.
+--pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as its `fs`
+says, holding its stage's tree: `littlefs`, a writable volume written through `littlefsd`'s own
+code, or `erofs`, a read-only volume written by `libs/erofs`'s writer
+([erofsd](servers/erofsd.md#the-packer)), so a case boots the disk the image ships.
 
-A recipe's littlefs partition may also generate files, for a case that needs many and not their
+A recipe's littlefs or erofs partition may also generate files, for a case that needs many and not their
 contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in the volume's root
 (as many digits as the last needs), all empty except `read`, which holds its own name and a
 newline. They sit beside the stage's tree, if there is one, and a name in both is refused.
 
-A littlefs partition may be verified, `verity = true`: it holds the largest volume that fits
-beside its hash tree, then the tree ([verityd](servers/verityd.md#the-tree)), and the pack says
-its root and data blocks.
+A littlefs or erofs partition may be verified, `verity = true`: it holds the largest volume that
+fits beside its hash tree, then the tree ([verityd](servers/verityd.md#the-tree)), and the pack
+says its root and data blocks. An erofs volume is followed in its range by zeros, which the tree
+covers too.
+
+For `erofs-corrupt`, an erofs partition may be damaged after its pack, through the parser
+`erofsd` uses to find the place: `damage = { what = "magic" }` flips a bit of the superblock's
+magic; `{ what = "block-past-count", path = "tail.txt" }` starts that file's blocks at the
+volume's block count; `{ what = "compressed", path = "motd" }` lays that file out compressed;
+`{ what = "name-offset", path = "lib" }` starts the last name of that directory's first block past
+the block's end.
 
 The userland disk (`image/userland.toml`) is packed by the same code: first its objects are
 staged, each module of the applications the recipe names, compiled by the pinned toolchain and
@@ -1092,8 +1108,9 @@ stack rounded up to 128, not to 1,024, because at 512 MiB it must lie between 20
 of twice the peak) and 20,990 (a case that adds a 256-page client still fits on rv32); the image
 then has 383 pages to spare on rv32, a client case 126
 ([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The read-only case also scans its
-additional client from the merged manifest. `verity:system`'s row and `littlefsd:system`'s heap
-are from six runs with the userland volume read through `verity:system`.
+additional client from the merged manifest. `erofsd:system`'s row and
+`verity:system`'s heap, which holds 4 checked data blocks, are from the six runs with the userland
+volume on EROFS.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1105,8 +1122,8 @@ are from six runs with the userland volume read through `verity:system`.
 | `ipd` | 8,040 | 4 | 4 | 8 |
 | `littlefsd:data` | 7,176 | 4 | 9 | 18 |
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
-| `verity:system` | 7,864 | 4 | 47 | 94 |
-| `littlefsd:system` | 12,680 | 7 | 19 | 38 |
+| `verity:system` | 7,864 | 4 | 50 | 100 |
+| `erofsd:system` | 9,704 | 5 | 12 | 24 |
 | `beamlet` | 33,240 | 17 | 10,387 | 20,846 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses

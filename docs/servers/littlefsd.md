@@ -15,8 +15,8 @@ bytes per attach root so one principal filling a shared volume cannot make anoth
 littlefs was chosen for a published format, an independent second implementation to test against,
 power-loss safety by design, and a size that can be read. littlefs is the file system of every
 **writable** volume, and of those only: its format is built for a written medium (commits, power
-loss). A read-only volume is to be EROFS, served by [`erofsd`](erofsd.md) (planned); a writable
-file system for an SSD is a later question.
+loss). A read-only volume is EROFS, served by [`erofsd`](erofsd.md); a writable file system for an
+SSD is a later question.
 
 ## Interface
 
@@ -361,16 +361,18 @@ volume's labels and its root's quota.
 
 ### R47 (one volume per instance)
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
 - bench:littlefsd-one-volume
+- host:redoubt-init::an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is
 - host:redoubt-init::no_server_is_handed_a_badge_at_blkd
 
 </details>
 
 Each `littlefsd` instance serves one volume and holds only that volume's block range. A client who
 exploits the filesystem parser through a crafted volume or request reaches that volume's data and
-nothing else: no other volume, no other partition, no device.
+nothing else: no other volume, no other partition, no device. A read-only volume's
+[`erofsd`](erofsd.md) is placed the same way.
 
 ### R48 (a quota per attach root)
 
@@ -389,8 +391,10 @@ quota's.)
 
 ### R49 (a hostile medium is corrupt, not a crash)
 
-<details><summary>Status: built · tested (8)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
+- bench:erofs-corrupt
+- fuzz:erofs/image
 - fuzz:littlefs/image
 - fuzz:littlefs/mutate
 - host:littlefs::corrupted_bytes_never_panic
@@ -405,7 +409,9 @@ quota's.)
 Whatever bytes the medium holds, littlefs refuses them as corrupt rather than panicking, looping
 or allocating beyond the volume's size, and a stale handle never touches another file's metadata
 or data. So a hostile disk image can make its own volume unreadable, never crash or hang its
-`littlefsd` in the parser.
+`littlefsd` in the parser. [`erofsd`](erofsd.md) keeps the rule for a read-only volume: whatever
+bytes it holds, `libs/erofs` refuses them as corrupt, and a range that fails makes the volume
+corrupt until `erofsd` starts again.
 
 ### R50 (power loss leaves before or after)
 
@@ -447,12 +453,11 @@ wherever a request meets it ([R49](#r49-a-hostile-medium-is-corrupt-not-a-crash)
   its old attributes, or the reverse.
 - **Large directories and files scale poorly** in littlefs's format. A listing is linear in the
   directory, and so is a lookup, and `littlefsd` looks a file up from the root for each request on
-  it: three times for a walk, twice for an open or a read. On the image's userland volume, whose
-  root holds every module, a lookup fetches about 21 metadata pairs. A fetch is three block reads
-  (the revision count of each block of the pair, then the newer block). So the boot's 652 9P
-  operations make 1,194 lookups and 25,040 fetches: 75,120 of its 77,710 block reads, 97 %
-  (bench:boot-profile). A read-only server for the volume need not repeat this: it can resolve a
-  name once and keep the result.
+  it: three times for a walk, twice for an open or a read. When the image's userland volume was
+  littlefs, its root held every module, and a lookup fetched about 21 metadata pairs, each three
+  block reads (the revision count of each block of the pair, then the newer block); the boot's 652
+  9P operations made 1,194 lookups and 25,040 fetches, 75,120 of its 77,710 block reads (97 %).
+  That volume is now EROFS, and [`erofsd`](erofsd.md) resolves a name once per fid.
 - **A listing across a change may skip or repeat an entry.** A directory read goes on by entry
   index, and a change between two reads refills the window from the directory as it is then, so
   an entry created or removed before that index shifts the rest by one (9P allows it). And a
@@ -481,5 +486,8 @@ wherever a request meets it ([R49](#r49-a-hostile-medium-is-corrupt-not-a-crash)
   from the granter's keeps the whole tree of grants within what its root was given.
 - **littlefs, reimplemented.** A published format with a second implementation gives a
   differential oracle; the C library wrapped in Rust would put C on the target.
+- **Writable volumes only.** A volume written once on the build host and read whole at every boot
+  gains nothing from littlefs's commits and pays for its metadata walks on every lookup, so
+  read-only volumes are EROFS ([`erofsd`](erofsd.md#why)).
 - **No wear levelling.** A virtio disk levels its own wear; the code left out is code that cannot
   be wrong.

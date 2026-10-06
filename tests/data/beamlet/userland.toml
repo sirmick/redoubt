@@ -1,6 +1,6 @@
 # The beamlet cases' userland disk (docs/testbench.md, "Disks and network cards"): the test
 # modules and the few OTP modules they need, one file each, packed as image/userland.toml is but
-# unverified: these cases are about the VM, and their manifests attach the volume to littlefsd
+# unverified: these cases are about the VM, and their manifests attach the volume to erofsd
 # directly. No whole application, so the VM keeps its own stand-in logger, as it does without
 # kernel's.
 size_kib = 2048
@@ -16,4 +16,4 @@ erlang = [
 
 [[partition]]
 name = "system"
-fs = "littlefs"
+fs = "erofs"

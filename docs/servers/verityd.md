@@ -1,9 +1,10 @@
 # verityd
 
-`verityd` makes a volume verified. It sits between [`blkd`](blkd.md) and the volume's
-[`littlefsd`](littlefsd.md): it holds the volume's range at `blkd`, checks every block it reads against a hash
-tree whose root the signed boot manifest pins, and serves only blocks that check, on `blkd`'s own
-protocol. So everything littlefs parses on a verified volume, data and metadata alike, is what the
+`verityd` makes a volume verified. It sits between [`blkd`](blkd.md) and the volume's file
+server, [`erofsd`](erofsd.md) for the read-only system volume or a [`littlefsd`](littlefsd.md): it
+holds the volume's range at `blkd`, checks every block it reads against a hash tree whose root the
+signed boot manifest pins, and serves only blocks that check, on `blkd`'s own protocol. So
+everything the file server parses on a verified volume, data and metadata alike, is what the
 image's builder wrote.
 
 ## Purpose
@@ -34,7 +35,7 @@ key); a manifest that sets one itself is refused.
 - One named handle, `volume`: the volume's range at its disk's `blkd`.
 
 Anything else, any of them twice, or a block count of 0 stops it before it serves. It serves one
-badge, 1, the one `init` mints at its endpoint for the volume's `littlefsd`; any other gets
+badge, 1, the one `init` mints at its endpoint for the volume's file server; any other gets
 `not_permitted`.
 
 ### The tree
@@ -78,9 +79,9 @@ At start `verityd` calls `info` at `blkd`, refuses a range shorter than the data
 tree, reads the top tree block and checks it against the root. If any of that fails, it says one
 line on its console naming the reason (`verityd: the volume is refused: ...`), answers `info`
 truthfully, answers every `read` with `failed`, and stays up. So a bad medium is never a restart
-loop, and `littlefsd`, whose mount then fails, serves the volume as corrupt
+loop, and the volume's file server, whose first read then fails, serves the volume as corrupt
 ([R49 (a hostile medium is corrupt, not a crash)](littlefsd.md#r49-a-hostile-medium-is-corrupt-not-a-crash)) and stays up too. Answering `info`
-matters: a `littlefsd` that cannot size its range exits, and would be restarted.
+matters: a file server that cannot size its range exits, and would be restarted.
 
 ### Messages
 
@@ -97,7 +98,7 @@ matters: a `littlefsd` that cannot size its range exits, and would be restarted.
 
 </details>
 
-`verityd` serves [`blkd`'s protocol](blkd.md#messages), unchanged, so `littlefsd` cannot tell it from a
+`verityd` serves [`blkd`'s protocol](blkd.md#messages), unchanged, so a file server cannot tell it from a
 `blkd`:
 - **`info`**: N × 8 sectors, read-only. The tree is not part of the volume.
 - **`read`** works in whole blocks. It fetches each block the request touches, hashes it, checks
@@ -112,44 +113,47 @@ matters: a `littlefsd` that cannot size its range exits, and would be restarted.
 
 ### Memory and cost
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
 - bench:boot-profile
+- bench:boot-profile-unverified
 - host:redoubt-verityd::the_last_block_and_the_tree_cache_save_reads
 
 </details>
 
 - **Memory is fixed,** whatever the volume's size: the top block, pinned at start; a cache of 32
-  checked tree blocks, least recently used out first; the last checked data block, so sub-block
-  reads within it hash once; and a 2-page lend at `blkd`, as `littlefsd`'s.
+  checked tree blocks and one of 4 checked data blocks, each least recently used out first
+  ([below](#a-cache-of-checked-data-blocks)); and a 2-page lend at `blkd`.
 - **A block is checked from the top down.** The lowest block on its path already held (the top
   always is) gives the digest the next block down must hash to; a block fetched is checked before
   it is kept. A level-1 block held costs one hash per data block.
-- **Per block `littlefsd` reads:** one more call and a copy of at most 4 KiB. The tree's reads are about
-  1/128 more, mostly cached. Its weight is ordinary, like `littlefsd`'s: each request is a bounded
-  amount of work, at most 8 blocks.
-- **Measured** by bench:boot-profile and bench:boot-profile-unverified, a `boot-stats` build on
-  QEMU rv64 under `icount` (`shift=3`, sleep on) with seed 1, in guest time: the image reaches its
-  prompt in 1,016 s through `verity:system` and 536 s with the same volume attached to `littlefsd`
-  directly. Every one of `littlefsd`'s 77,710 block reads reaches `verityd`; by its 65,536th,
-  `verityd` had checked 51,313 data blocks, the last-block buffer saving the other 22 %, and held
-  the level-1 block for 99.96 % of them. The boot reads only 673 distinct blocks, each about 115
-  times: `littlefsd` finds every file's name in the volume's root directory again for each 9P
-  operation, and 97 % of its reads are those metadata blocks
-  ([littlefsd](littlefsd.md#residual-risks)). The tree is not the cost; the repeated blocks are.
+- **Per block the file server reads:** one more call and a copy of at most 4 KiB. The tree's reads
+  are about 1/128 more, mostly cached. Its weight is ordinary, like the file servers': each request
+  is a bounded amount of work, at most 8 blocks.
+- **Measured** by bench:boot-profile and bench:boot-profile-unverified: what verification costs
+  the boot, verified against unverified, on littlefs and on EROFS, is
+  [beamlet's table](../userland/beamlet.md#beamlet-on-redoubt).
 - **Read-ahead is not done** ([below](#a-cache-of-checked-data-blocks)).
 
 ### A cache of checked data blocks
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (2)</summary>
 
-A few checked data blocks, least recently used out first, beside the tree cache, would hash a
-block `littlefsd` reads in pieces once, and read-ahead (8 blocks per `blkd` call, hashed and cached)
-would cut the calls at `blkd` on sequential reads. Both are local to `verityd` and change no
-protocol; the measurement above says the timing asks for one.
+- bench:boot-profile
+- host:redoubt-verityd::the_data_cache_holds_the_last_blocks_least_recently_used_out
 
-**Open:** a few-block LRU of checked data blocks, read-ahead, or both, and how many blocks of fixed
-memory: a follow-up, with the signed root or on its own.
+</details>
+
+The last 4 data blocks checked are kept, least recently used out first, in place of the one
+last-block buffer: a block asked for again while it is held is neither read nor hashed again.
+On EROFS a file's blocks are read once each, in order, but `erofsd` reads the same few blocks
+again and again: a directory's blocks at every walk, and the blocks holding the inodes. By its
+512th read in the rv64 boot profile (boot-stats build, seed 1) `verityd` was asked for 849 data
+blocks: one block held 100 of them (12 %), 4 hold 197 (23 %) and 8 would hold 289 (34 %). 4
+blocks, 16 KiB, are what is built.
+
+Read-ahead (8 blocks per `blkd` call, hashed and cached) is not built: `erofsd` already reads a
+file's blocks in one call of up to 64 sectors, which `verityd` splits into block reads at `blkd`.
 
 ## Authority
 
@@ -157,7 +161,7 @@ Status: built · tested: host:redoubt-verityd::only_the_volumes_badge_is_served,
 
 - `verityd` holds one range at `blkd`, its endpoint, and a console connection. It holds no MMIO,
   interrupt or DMA, mints nothing, and never writes its range.
-- The volume's `littlefsd` holds the one badge it serves.
+- The volume's file server holds the one badge it serves.
 - The crate forbids `unsafe`.
 
 ## Security properties
@@ -179,9 +183,10 @@ Status: built · tested: host:redoubt-verityd::only_the_volumes_badge_is_served,
 </details>
 
 A reader of a verified volume sees only blocks that hash, through the tree, to the root the signed
-manifest gives. Otherwise it sees a device failure, which `littlefsd` serves as `corrupt`. `littlefsd` already
-poisons a volume on an I/O error until it is next mounted, so one bad block fails closed for the
-whole volume: later loads fail too, and a reader keeps what it already has.
+manifest gives. Otherwise it sees a device failure, which the file server serves as `corrupt`.
+`erofsd` and `littlefsd` both poison a volume on an I/O error until they start or mount it again,
+so one bad block fails closed for the whole volume: later loads fail too, and a reader keeps what it
+already has.
 
 ## Failure and restart
 
@@ -189,8 +194,8 @@ Status: built · partly tested: the exits on bad arguments and on no `volume` ha
 
 - **Bad arguments or no `volume` handle:** `verityd` exits with a code before serving.
 - **The start check fails:** it stays up, refused, as above.
-- **A read does not check:** that read is `failed`; `verityd` keeps serving, and `littlefsd` poisons the
-  volume.
+- **A read does not check:** that read is `failed`; `verityd` keeps serving, and the file server
+  poisons the volume.
 - **`verityd` restarts:** it checks the range again from the root, holding nothing across the
   restart.
 
@@ -201,10 +206,10 @@ Status: built · partly tested: the exits on bad arguments and on no `volume` ha
   no worse.
 - **Writable volumes are unverified.** They keep littlefs's metadata CRC and
   [R49](littlefsd.md#r49-a-hostile-medium-is-corrupt-not-a-crash) only.
-- **A reader trusts `littlefsd` and `verityd`.** Under R76 the reader of a verified volume trusts the
+- **A reader trusts the file server and `verityd`.** Under R76 the reader of a verified volume trusts the
   servers that verify it, as it trusts `consoled` for its console; neither checks the other's
   answers beyond the protocol.
-- **One bad block fails the volume** until `littlefsd` mounts it again: detection, not correction.
+- **One bad block fails the volume** until its file server starts again: detection, not correction.
 
 ## Why
 

@@ -22,13 +22,12 @@ const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0
 fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
 
 /// The image's manifest with one disk: without the userland disk (`disk1`, its `blkd`, its
-/// volume, its verifier and `littlefsd`, and `beamlet`, which reads it).
+/// volume, its verifier and `erofsd`, and `beamlet`, which reads it).
 fn without_userland() -> Manifest {
     let mut m = image();
     m.volumes.retain(|v| v.name != "system");
-    m.servers.retain(|s| {
-        !["beamlet", "blkd:system", "verity:system", "littlefsd:system"].contains(&s.name.as_str())
-    });
+    m.servers
+        .retain(|s| !["beamlet", "blkd:system", "verity:system", "erofsd:system"].contains(&s.name.as_str()));
     m.devices.retain(|d| d.name != "disk1");
     m
 }
@@ -95,7 +94,7 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     // No principals: only the bundle key is asked about.
     assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
     // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; littlefsd:data: nobody's
-    // yet, a principal's connection being the steward's to grant; littlefsd:system: beamlet's.
+    // yet, a principal's connection being the steward's to grant; erofsd:system: beamlet's.
     assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0), (9, 1)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
@@ -183,7 +182,7 @@ fn the_image_manifest_s_bound() {
     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
     // batch of beamlet's image + 3, stack 17 + 3), the lend (2 + 3), and one handle-table page:
     // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 6 + 44 + 3 + 1 =
-    // 64 added (the three volume ranges, littlefsd:data's, littlefsd:system's at verity:system and
+    // 64 added (the three volume ranges, littlefsd:data's, erofsd:system's at verity:system and
     // verity:system's at blkd:system, among the 6 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
@@ -449,7 +448,7 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
     // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
-    // ipd 4096, littlefsd:data and littlefsd:system 1024 each, beamlet 20,864 pages, and a page each for the
+    // ipd 4096, littlefsd:data and erofsd:system 1024 each, beamlet 20,864 pages, and a page each for the
     // budgets.
     let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 20_864 + 11;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
@@ -1291,6 +1290,55 @@ fn confined_gives_each_label_set_its_own_verifier() {
     let machine = machine(&devices, &ENTRIES);
     assert!(on(&m, &machine).is_ok());
     server(&mut m, "littlefsd:system").labels = secret();
+    let verifier = m.servers.iter().position(|s| s.name == "verity:system").unwrap();
+    assert_eq!(
+        on(&m, &machine).unwrap_err(),
+        Refusal::Confined { at: format!("servers[{verifier}].receives[0]"), sharing: Sharing::Endpoint }
+    );
+}
+
+/// An `erofsd` entry is a volume server as a `littlefsd` one is (servers/init.md, "The boot
+/// manifest"): `init` names neither program, so a read-only volume's server gets its range at its
+/// verifier, its arguments and its place in confinement exactly as a writable volume's does.
+/// Here a confined manifest serves an unlabelled verified volume read-only through `erofsd`, and
+/// a labelled one through `littlefsd` on a disk of its own.
+#[test]
+fn an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
+    use redoubt_init::check::{args, range};
+    let mut m = without_volumes();
+    m.confined = true;
+    secrets(&mut m);
+    m.principals.push(alice());
+    let secret = || vec![String::from("alice-secrets")];
+    disk1(&mut m);
+    m.devices.push(Device { name: "disk2".into(), base: Some(0x1000_5000), irq: Some(5), dma: true });
+    for (device, suffix, labels) in [("disk1", "", vec![]), ("disk2", "-l", secret())] {
+        let blkd = format!("blkd:system{suffix}");
+        let base = server(&mut image(), "blkd").clone();
+        m.servers.push(Server {
+            name: blkd.clone(),
+            labels: labels.clone(),
+            receives: vec![blkd.clone()],
+            devices: vec![DeviceUse { device: device.into(), name: "disk".into() }],
+            args: vec![format!("endpoint={blkd}")],
+            ..base
+        });
+        verified_volume(&mut m, &format!("system{suffix}"), 0, labels, Some(blkd.as_str()));
+    }
+    let erofsd = m.servers.iter_mut().find(|s| s.name == "littlefsd:system").unwrap();
+    erofsd.name = "erofsd:system".into();
+    erofsd.program = "erofsd".into();
+    erofsd.receives = vec!["erofsd:system".into()];
+    erofsd.args = vec!["endpoint=erofsd:system".into(), "buckets=4".into()];
+    let devices = virt_devices();
+    let machine = machine(&devices, &ENTRIES);
+    assert!(on(&m, &machine).is_ok());
+    assert_eq!(range(&m, named(&m, "erofsd:system")), Some(("verity:system", 1)));
+    assert_eq!(args(&m, named(&m, "erofsd:system")), ["endpoint=erofsd:system", "buckets=4"]);
+    assert_eq!(args(&m, named(&m, "littlefsd:system-l")).last().unwrap(), "labels=7");
+    // Under the labelled set it would read the unlabelled volume's verifier from a labelled
+    // domain: confinement refuses it as it would a `littlefsd`.
+    server(&mut m, "erofsd:system").labels = secret();
     let verifier = m.servers.iter().position(|s| s.name == "verity:system").unwrap();
     assert_eq!(
         on(&m, &machine).unwrap_err(),

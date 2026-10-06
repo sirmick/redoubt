@@ -1,0 +1,5 @@
+description = "erofs on the host: every superblock field out of range, both inode sizes and layouts, the extended attributes' bounds, directory blocks' counts, offsets and order, lookup and listing against random trees, and the writer's determinism and refusals"
+kind = "host-tests"
+# The differential run against erofs-utils is erofs-oracle; the fuzz target needs cargo-fuzz
+# (libs/erofs/fuzz) and is not a host-tests package.
+packages = ["erofs"]

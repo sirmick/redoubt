@@ -1,0 +1,7 @@
+description = "erofs against erofs-utils 1.9: what mkfs.erofs packs in the subset's options our parser reads as the tree, and what our writer packs fsck.erofs checks and extracts as the tree"
+kind = "host-tests"
+packages = ["erofs"]
+tests = ["oracle"]
+features = ["oracle"]
+# Without them the case is something the host lacks: it fails, or skips with --allow-skip.
+tools = ["mkfs.erofs", "fsck.erofs", "dump.erofs"]

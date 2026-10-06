@@ -1,6 +1,7 @@
 //! Disks: a GPT of equal partitions for a case's `[disk]`, and a disk recipe (`image/disk.toml`)
-//! packed whole, its partition table by `blkd`'s builder and each littlefs partition by `littlefsd`'s
-//! own packer (docs/testbench.md, "Disks and network cards"; image/README.md). A partition the
+//! packed whole, its partition table by `blkd`'s builder, each littlefs partition by `littlefsd`'s
+//! own packer and each EROFS partition by `libs/erofs`'s writer (docs/testbench.md, "Disks and
+//! network cards"; image/README.md). A partition the
 //! recipe marks `verity` holds the largest volume that fits beside its hash tree, and the tree
 //! after it (docs/servers/verityd.md, "The tree"); its root and block count are what a manifest
 //! pins.
@@ -33,19 +34,37 @@ pub struct Recipe {
 pub struct Partition {
     /// The volume's name, as the manifest's `volumes` entry names it.
     pub name: String,
-    /// What the partition holds: `littlefs`, the only filesystem there is, or, for a case,
-    /// `noise`: the same pseudo-random bytes every time, which no filesystem mounts.
+    /// What the partition holds: `littlefs`, a writable volume; `erofs`, a read-only one; or, for
+    /// a case, `noise`: the same pseudo-random bytes every time, which no filesystem mounts.
     pub fs: String,
-    /// For `littlefs`, the directory whose tree the volume holds, relative to the workspace root.
+    /// For `littlefs` or `erofs`, the directory whose tree the volume holds, relative to the
+    /// workspace root.
     /// A userland disk's (a recipe with `objects`) is where `--pack-disk` stages them, and is left
     /// out where only the bench packs it, from its own staging.
     pub stage: Option<PathBuf>,
-    /// For `littlefs`, files made for the pack in the volume's root, beside the stage's tree.
+    /// For `littlefs` or `erofs`, files made for the pack in the volume's root, beside the
+    /// stage's tree.
     pub generated: Option<Generated>,
-    /// For `littlefs`, a verified volume: the volume is followed by its hash tree, and the pack
-    /// says its root and block count, which the manifest pins.
+    /// For `littlefs` or `erofs`, a verified volume: the volume is followed by its hash tree, and
+    /// the pack says its root and block count, which the manifest pins.
     #[serde(default)]
     pub verity: bool,
+    /// For `erofs`, for a case: one thing the packed volume is made to hold that `erofsd` must
+    /// serve as corrupt ([`Damage`]).
+    pub damage: Option<Damage>,
+}
+
+/// What an EROFS volume is damaged with after its pack, for `erofs-corrupt`
+/// (servers/erofsd.md, "The format"): `magic`, a bit of the superblock's magic flipped;
+/// `block-past-count`, the file at `path` (with at least one whole block) starting at the volume's
+/// block count; `compressed`, the file at `path` laid out as compressed; `name-offset`, the last
+/// name of the first block of the directory at `path` starting past the block's end.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Damage {
+    pub what: String,
+    #[serde(default)]
+    pub path: String,
 }
 
 /// A verified partition as packed: the root and data blocks its manifest entry pins, and where
@@ -101,13 +120,19 @@ impl Recipe {
         // The objects are the partition's stage, staged whole before the pack: nothing beside them.
         ensure!(
             recipe.objects.is_none()
-                || matches!(&recipe.partition[..], [p] if p.fs == "littlefs" && p.generated.is_none()),
-            "{}: objects are one littlefs partition's stage, with nothing generated",
+                || matches!(&recipe.partition[..], [p] if p.fs != "noise" && p.generated.is_none()),
+            "{}: objects are one littlefs or erofs partition's stage, with nothing generated",
             path.display()
         );
         for p in &recipe.partition {
+            ensure!(
+                p.damage.is_none() || p.fs == "erofs",
+                "{}: partition {}: only an erofs volume is damaged",
+                path.display(),
+                p.name
+            );
             match p.fs.as_str() {
-                "littlefs" => {
+                "littlefs" | "erofs" => {
                     let (stage, generated) = (p.stage.is_some(), p.generated.as_ref());
                     ensure!(
                         stage || generated.is_some() || recipe.objects.is_some(),
@@ -132,7 +157,11 @@ impl Recipe {
                     p.name
                 ),
                 fs => {
-                    bail!("{}: partition {}: fs {fs:?} is neither littlefs nor noise", path.display(), p.name)
+                    bail!(
+                        "{}: partition {}: fs {fs:?} is not littlefs, erofs or noise",
+                        path.display(),
+                        p.name
+                    )
                 }
             }
         }
@@ -154,7 +183,7 @@ pub fn gpt_disk(sectors: u64, partitions: u64) -> Vec<u8> {
     Image::new(sectors, &shares(sectors, partitions)).bytes
 }
 
-/// The tree under `stage`, parents first, in name order, as `littlefsd`'s packer takes it: each path
+/// The tree under `stage`, parents first, in name order, as both packers take it: each path
 /// relative to `stage`, and each file's bytes.
 fn tree(stage: &Path) -> Result<Vec<(String, Option<Vec<u8>>)>> {
     let mut out = Vec::new();
@@ -199,7 +228,7 @@ fn noise(bytes: &mut [u8]) {
 }
 
 /// The disk `recipe` describes, its stages read under `root`; `stage`, if given, stands in for
-/// every littlefs partition's own.
+/// every littlefs and erofs partition's own.
 pub fn pack_disk(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<Vec<u8>> {
     pack(recipe, root, stage).map(|(disk, _)| disk)
 }
@@ -235,13 +264,6 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
             );
             staged.push((name, data));
         }
-        let entries: Vec<pack::Entry> = staged
-            .iter()
-            .map(|(path, data)| match data {
-                Some(data) => pack::Entry::File(path, data),
-                None => pack::Entry::Dir(path),
-            })
-            .collect();
         let sectors = at.last_lba - at.first_lba + 1;
         // A verified volume is the largest whose data and tree fit the partition.
         let geometry = match p.verity {
@@ -252,8 +274,35 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
             false => None,
         };
         let data = geometry.map_or(sectors, |g| g.data_blocks() * SECTORS_PER_BLOCK);
-        let volume = pack::pack(data, &entries)
-            .map_err(|e| anyhow::anyhow!("packing {}: {}: {}", p.name, e.path, e.why))?;
+        let volume = match p.fs.as_str() {
+            "erofs" => {
+                let mut volume = pack_erofs(&staged).with_context(|| format!("packing {}", p.name))?;
+                ensure!(
+                    volume.len() as u64 <= data * SECTOR,
+                    "{}: the volume's {} bytes do not fit the partition's {}",
+                    p.name,
+                    volume.len(),
+                    data * SECTOR
+                );
+                if let Some(damage) = &p.damage {
+                    damage_erofs(&mut volume, damage).with_context(|| format!("damaging {}", p.name))?;
+                }
+                // The rest of the range reads as zeros: a verified volume's tree covers it too.
+                volume.resize((data * SECTOR) as usize, 0);
+                volume
+            }
+            _ => {
+                let entries: Vec<pack::Entry> = staged
+                    .iter()
+                    .map(|(path, data)| match data {
+                        Some(data) => pack::Entry::File(path, data),
+                        None => pack::Entry::Dir(path),
+                    })
+                    .collect();
+                pack::pack(data, &entries)
+                    .map_err(|e| anyhow::anyhow!("packing {}: {}: {}", p.name, e.path, e.why))?
+            }
+        };
         disk[start..start + volume.len()].copy_from_slice(&volume);
         if let Some(geometry) = geometry {
             let mut tree = vec![0u8; geometry.tree_blocks() as usize * BLOCK];
@@ -265,6 +314,80 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
         }
     }
     Ok((disk, verified))
+}
+
+/// `staged` as an EROFS volume, each file's SHA-256 its `user.sha256`.
+fn pack_erofs(staged: &[(String, Option<Vec<u8>>)]) -> Result<Vec<u8>> {
+    use sha2::Digest;
+    let entries: Vec<erofs::Entry> = staged
+        .iter()
+        .map(|(path, data)| match data {
+            Some(data) => erofs::Entry::File(path, data),
+            None => erofs::Entry::Dir(path),
+        })
+        .collect();
+    erofs::pack(&entries, |data| sha2::Sha256::digest(data).into())
+        .map_err(|e| anyhow::anyhow!("{}: {}", e.path, e.why))
+}
+
+/// Where the inode at `path` (`""` the root) starts in the EROFS `volume`, and the inode, found
+/// through the parser `erofsd` uses.
+fn erofs_inode(volume: &[u8], path: &str) -> Result<(usize, erofs::Inode)> {
+    let corrupt = |_| anyhow::anyhow!("the packed volume does not parse");
+    let sb = erofs::Superblock::parse(volume, (volume.len() / BLOCK) as u64).map_err(corrupt)?;
+    let inode = |nid| -> Result<(usize, erofs::Inode)> {
+        let at = sb.inode_at(nid).map_err(corrupt)? as usize;
+        let end = volume.len().min(at + erofs::EXTENDED);
+        Ok((at, erofs::Inode::parse(&sb, nid, &volume[at..end]).map_err(corrupt)?))
+    };
+    let mut found = inode(sb.root)?;
+    for name in path.split('/').filter(|n| !n.is_empty()) {
+        let dir = found.1;
+        let nid = (0..dir.dir_blocks())
+            .filter_map(|i| dir.dir_block(i))
+            .find_map(|(at, len)| {
+                let block = &volume[at as usize..at as usize + len];
+                erofs::Dirents::parse(block).ok()?.lookup(name.as_bytes()).map(|e| e.nid)
+            })
+            .with_context(|| format!("{path}: no {name}"))?;
+        found = inode(nid)?;
+    }
+    Ok(found)
+}
+
+/// Damages the packed EROFS `volume` as `damage` says.
+fn damage_erofs(volume: &mut [u8], damage: &Damage) -> Result<()> {
+    let put16 = |volume: &mut [u8], at: usize, v: u16| volume[at..at + 2].copy_from_slice(&v.to_le_bytes());
+    match damage.what.as_str() {
+        "magic" => volume[erofs::SUPERBLOCK_AT] ^= 0x01,
+        "block-past-count" => {
+            let (at, inode) = erofs_inode(volume, &damage.path)?;
+            ensure!(inode.size() >= BLOCK as u64, "{} has no whole block", damage.path);
+            let count = (volume.len() / BLOCK) as u32;
+            let start = at + erofs::field::inode::START;
+            volume[start..start + 4].copy_from_slice(&count.to_le_bytes());
+        }
+        "compressed" => {
+            let (at, _) = erofs_inode(volume, &damage.path)?;
+            // Layout 3, compressed with compact indexes; the inode's size bit kept.
+            let at = at + erofs::field::inode::FORMAT;
+            let format = u16::from_le_bytes([volume[at], volume[at + 1]]);
+            put16(volume, at, (format & 1) | 3 << 1);
+        }
+        "name-offset" => {
+            let (_, dir) = erofs_inode(volume, &damage.path)?;
+            let (at, len) = dir.dir_block(0).context("an empty directory")?;
+            let block = &volume[at as usize..at as usize + len];
+            let count = erofs::Dirents::parse(block).map_err(|_| anyhow::anyhow!("a bad block"))?.len();
+            put16(
+                volume,
+                at as usize + (count - 1) * erofs::DIRENT + erofs::field::dirent::NAME,
+                len as u16 + 1,
+            );
+        }
+        what => bail!("no damage {what:?}: magic, block-past-count, compressed or name-offset"),
+    }
+    Ok(())
 }
 
 /// Flips one bit of `file`'s bytes where the verified volume `v` holds them on `disk`, after the
@@ -448,6 +571,56 @@ mod tests {
         let path = std::env::temp_dir().join(format!("testbench-verity-noise-{}.toml", std::process::id()));
         std::fs::write(&path, noisy).unwrap();
         assert!(Recipe::load(&path).is_err(), "noise is never verified");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An `erofs` partition is the stage as `libs/erofs` packs it, read back whole by the parser
+    /// `erofsd` uses, and verified like any other; each damage a case asks for is refused by that
+    /// parser exactly where it was made, and the rest of the volume still reads.
+    #[test]
+    fn an_erofs_partition_is_its_stage_and_each_damage_is_corrupt_where_it_is() {
+        let dir = stage("erofs");
+        std::fs::write(dir.join("big"), vec![7u8; 5000]).unwrap();
+        let recipe: Recipe = toml::from_str(
+            "size_kib = 2048\n[[partition]]\nname = \"system\"\nfs = \"erofs\"\nverity = true\n",
+        )
+        .unwrap();
+        let (disk, verified) = pack(&recipe, Path::new("/"), Some(&dir)).unwrap();
+        let [v] = &verified[..] else { panic!("one verified partition") };
+        let mut read = erofs::read_tree(v.data(&disk)).unwrap();
+        let mut staged = tree(&dir).unwrap();
+        read.sort();
+        staged.sort();
+        assert_eq!(read, staged);
+        let mut tree = vec![0u8; v.geometry.tree_blocks() as usize * BLOCK];
+        assert_eq!(redoubt_verity::build(&v.geometry, v.data(&disk), &mut tree).unwrap(), v.root);
+
+        let packed = pack_erofs(&staged).unwrap();
+        let damaged = |what: &str, path: &str| {
+            let mut volume = packed.clone();
+            damage_erofs(&mut volume, &Damage { what: what.into(), path: path.into() }).unwrap();
+            volume
+        };
+        let volume = damaged("magic", "");
+        assert!(erofs::Superblock::parse(&volume, (volume.len() / BLOCK) as u64).is_err());
+        for (what, path) in [("block-past-count", "big"), ("compressed", "motd"), ("name-offset", "etc")] {
+            let volume = damaged(what, path);
+            let broken = if what == "name-offset" { "etc/deep" } else { path };
+            assert!(erofs_inode(&volume, broken).is_err(), "{what}");
+            assert!(erofs_inode(&volume, "etc").is_ok() && erofs_inode(&volume, "").is_ok(), "{what}");
+        }
+        let mut volume = packed.clone();
+        assert!(
+            damage_erofs(&mut volume, &Damage { what: "block-past-count".into(), path: "motd".into() })
+                .is_err()
+        );
+        assert!(damage_erofs(&mut volume, &Damage { what: "nothing".into(), path: String::new() }).is_err());
+        let path = std::env::temp_dir().join(format!("testbench-erofs-damage-{}.toml", std::process::id()));
+        let littlefs = "size_kib = 1024\n[[partition]]\nname = \"a\"\nfs = \"littlefs\"\nstage = \"x\"\n\
+            damage = { what = \"magic\" }\n";
+        std::fs::write(&path, littlefs).unwrap();
+        assert!(Recipe::load(&path).is_err(), "only an erofs volume is damaged");
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }

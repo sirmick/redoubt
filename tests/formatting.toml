@@ -3,6 +3,7 @@ description = "Every Rust source is formatted with the repository's rustfmt.toml
 kind = "fmt"
 roots = [
     ".",
+    "libs/erofs/fuzz",
     "libs/littlefs/diff",
     "libs/littlefs/fuzz",
     "libs/rt/fuzz",

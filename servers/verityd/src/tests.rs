@@ -14,7 +14,7 @@ use redoubt_verity::{BLOCK, Geometry, Hash, SECTORS_PER_BLOCK, build};
 
 use super::*;
 use crate::server::{BADGE, MAX_SECTORS, Said, answer_with};
-use crate::volume::{Bad, TREE_CACHE};
+use crate::volume::{Bad, DATA_CACHE, TREE_CACHE};
 
 const LEND: usize = 64 * 1024;
 
@@ -272,6 +272,39 @@ fn the_last_block_and_the_tree_cache_save_reads() {
     assert!(s.counts().unwrap().reads >= before + 2, "block 0's level-1 block was evicted");
 }
 
+/// The last [`DATA_CACHE`] data blocks asked for are held checked: going back to any of them
+/// reads and hashes nothing, and one more block puts out the least recently used.
+#[test]
+fn the_data_cache_holds_the_last_blocks_least_recently_used_out() {
+    let (g, bytes, root) = packed(64, 0);
+    let mut s = server(g, bytes.clone(), &root, &[]);
+    let n = DATA_CACHE as u64;
+    for b in 0..n {
+        assert_eq!(
+            ask(&mut s, &littlefsd(), &read(b * SECTORS_PER_BLOCK, 1)),
+            sectors(&bytes, b * SECTORS_PER_BLOCK, 1)
+        );
+    }
+    let c = s.counts().unwrap();
+    assert_eq!((c.requests, c.held, c.checked), (n, 0, n));
+    // Back to every one of them, in the other order: nothing read, nothing hashed.
+    for b in (0..n).rev() {
+        assert_eq!(
+            ask(&mut s, &littlefsd(), &read(b * SECTORS_PER_BLOCK + 3, 2)),
+            sectors(&bytes, b * SECTORS_PER_BLOCK + 3, 2)
+        );
+    }
+    let c2 = s.counts().unwrap();
+    assert_eq!((c2.requests, c2.held, c2.checked, c2.reads), (2 * n, n, n, c.reads));
+    // One more block puts out the least recently used, the first of the second round, which is
+    // then read again; the most recent is still held.
+    ask(&mut s, &littlefsd(), &read(n * SECTORS_PER_BLOCK, 1));
+    ask(&mut s, &littlefsd(), &read((n - 1) * SECTORS_PER_BLOCK, 1));
+    ask(&mut s, &littlefsd(), &read(0, 1));
+    let c3 = s.counts().unwrap();
+    assert_eq!((c3.checked, c3.held), (n + 2, n + 1));
+}
+
 #[test]
 fn a_mismatch_is_failed_and_said_naming_the_block() {
     let (g, bytes, root) = packed(129 * 128, 0);
@@ -307,7 +340,7 @@ fn a_mismatch_is_failed_and_said_naming_the_block() {
     assert_eq!(std::format!("{}", Said::Bad(Bad::Data(7))), "verityd: block 7 does not match the tree");
 }
 
-/// A block that failed is never served from the last-block buffer: the next read checks again.
+/// A block that failed is never served from the data cache: the next read checks again.
 #[test]
 fn a_failed_block_is_never_kept() {
     let (g, mut bytes, root) = packed(4, 0);
