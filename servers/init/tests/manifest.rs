@@ -775,6 +775,28 @@ fn every_login_and_approval_key_then_the_bundle_key_is_asked_about() {
     refused_at(&m, "principals[0].ssh_keys[1]", Why::Key);
 }
 
+/// Every key once across all principals' lists: a login key of one principal that is another's
+/// approval key, or one listed twice, refuses the boot before any server runs.
+#[test]
+fn a_key_in_two_roles_across_principals_is_refused() {
+    let mut m = image();
+    m.principals.push(alice());
+    m.principals.push(Principal {
+        name: "bob".into(),
+        account: 1002,
+        ssh_keys: vec![],
+        approval_keys: vec![LOGIN_KEY.into()],
+        ..alice()
+    });
+    refused_at(&m, "principals[1].approval_keys[0]", Why::Twice);
+    let mut m = image();
+    m.principals.push(Principal { ssh_keys: vec![LOGIN_KEY.into(), LOGIN_KEY.into()], ..alice() });
+    refused_at(&m, "principals[0].ssh_keys[1]", Why::Twice);
+    let mut m = image();
+    m.principals.push(Principal { approval_keys: vec![LOGIN_KEY.into()], ..alice() });
+    refused_at(&m, "principals[0].approval_keys[0]", Why::Twice);
+}
+
 // ---- buckets ----
 
 #[test]
@@ -790,13 +812,14 @@ fn a_shared_server_needs_a_bucket_per_declared_domain_and_root_badge() {
         ],
         ..alice()
     });
-    m.principals.push(Principal { name: "bob".into(), account: 1002, ..alice() });
+    // Without alice's login key, which may appear only once.
+    m.principals.push(Principal { name: "bob".into(), account: 1002, ssh_keys: vec![], ..alice() });
     // alice {} and {alice-secrets}, bob {}: 3, and init at keyd: 4, which buckets=4 holds.
     let plan = on_virt(&m).unwrap();
     assert_eq!(plan.buckets[0], (0, 4));
     // ipd: the 3 domains and netd's root badge.
     assert_eq!(plan.buckets[3], (5, 4));
-    m.principals.push(Principal { name: "carol".into(), account: 1003, ..alice() });
+    m.principals.push(Principal { name: "carol".into(), account: 1003, ssh_keys: vec![], ..alice() });
     assert_eq!(on_virt(&m).unwrap_err(), Refusal::Buckets { at: "servers[0]".into(), have: 4, need: 5 });
     let mut m = image();
     server(&mut m, "keyd").args.push("buckets=5".into());
