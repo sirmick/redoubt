@@ -74,13 +74,13 @@ name = "kernel: RISC-V arch (shared with rv32)"
 paths = [
     "kernel/src/arch/riscv/irq.rs", "kernel/src/arch/riscv/process.rs", "kernel/src/arch/riscv/syscall.rs",
     "kernel/src/arch/riscv/mod.rs", "kernel/src/arch/riscv/exception.rs", "kernel/src/arch/riscv/panic.rs",
-    "kernel/src/arch/riscv/smp.rs", "kernel/src/arch/mod.rs",
+    "kernel/src/arch/riscv/hart.rs", "kernel/src/arch/mod.rs",
 ]
-# Includes smp.rs's hart-block `Sync`, its write of the block and the parked hart's `wfi` (the
-# `smp` spike), and syscall.rs's hand-made S-mode trap, `kmain`'s private switch (`switch_trap`).
+# Includes hart.rs's clear of this hart's pending reschedule interrupt (`sip.SSIP`), and
+# syscall.rs's hand-made S-mode trap, `kmain`'s private switch (`switch_trap`).
 # And irq.rs's `sum-probe` load (test builds only): a stray load through a user address is the
 # fault R24 must produce, and only a raw pointer read can make it.
-max_unsafe = 13
+max_unsafe = 11
 max_undocumented = 0
 
 [[budget]]
@@ -95,13 +95,12 @@ paths = [
 ]
 # time.rs, sched.rs and bits.rs (the kernel's timer, scheduler and bit sets) have no unsafe, and
 # device.rs none of its own (it reaches frames through kframe.rs and the page tables through
-# arch::mem). Among the 18: kframe.rs's three (words of kernel-object frames and of records, through
+# arch::mem). Among the 16: kframe.rs's three (words of kernel-object frames and of records, through
 # the physmap); mem.rs's slice of the free-frame bitmap, made once at boot over kernel-owned frames
-# like the ownership table's; cell.rs's three (`SpinLock`/`KernelCell` `Sync` and the lock's
-# access); the debug console's two (setting `OUTPUT` at boot and `print!`'s use of it); dma.rs's
+# like the ownership table's; cell.rs's one (`KernelCell`'s `Sync`, under the kernel lock); the debug console's two (setting `OUTPUT` at boot and `print!`'s use of it); dma.rs's
 # volatile read and write of a DMA device's registers through the kernel's register window (the
 # reset before reuse, I16), the only access to a device's registers that needs one.
-max_unsafe = 18
+max_unsafe = 16
 max_undocumented = 0
 
 [[budget]]

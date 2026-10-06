@@ -42,8 +42,10 @@ sequenceDiagram
 
 The firmware runs in M-mode and enters the loader in S-mode on one boot hart, with the MMU
 off, `a0` = the hart id and `a1` = the physical address of the flattened device tree. The
-signed bundle is the initrd: the device tree's `/chosen` node names its range. The other harts
-stay parked in the firmware until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)).
+signed bundle is the initrd: the device tree's `/chosen` node names its range. The kernel
+starts the other harts, up to 8, through SBI's hart state management; a hart past the eighth
+stays parked, and the kernel says so once
+([several harts](../plan/m2-usable-shell.md#several-harts)).
 
 The loader ([`loader/src/main.rs`](../../loader/src/main.rs)) builds the kernel's address
 space and `init`'s, then turns paging on and enters the kernel at its `init` function
@@ -119,7 +121,7 @@ runs the same builder and writes `target/image/redoubt.bundle`.
    unowned: the kernel reuses them.
    A second table, two bytes per MMIO page, follows. Both are `redoubt_layout`'s `Option<Pid>`,
    the same type on both sides of the handoff.
-3. **Describes the machine**: the `MREx`, `Ctrl`, `Devs`, `Plic`, `Seed` and `Time` tags of
+3. **Describes the machine**: the `MREx`, `Ctrl`, `Devs`, `Plic`, `Hart`, `Seed` and `Time` tags of
    the [argument block](#the-argument-block), all from the device tree. A seed under 16 bytes,
    or a tree with no console or no console interrupt, stops the boot here.
 4. **Verifies the bundle** ([R15](#r15-verified-boot)). Only then does it parse the archive.
@@ -171,7 +173,7 @@ title one tag: a header of two words, then its data
 
 ```mermaid
 flowchart LR
-    XArg --> MREx --> Ctrl --> Devs --> Plic --> Seed --> Time
+    XArg --> MREx --> Ctrl --> Devs --> Plic --> Hart --> Seed --> Time
 ```
 
 ```mermaid
@@ -193,6 +195,7 @@ title one Devs entry, six words
 | `Ctrl` | the PLIC and CLINT ranges, four words each: base (2), size (2) | `device.rs` | no controller check |
 | `Devs` | one entry per device object, six words each (below) | `device.rs` | no device objects |
 | `Plic` | PLIC base (2), size (2), the PLIC's S-mode context of the boot hart (the hart ID the firmware passes in `a0`), matched to the cpu node whose `reg` is that ID, 0; a device tree with a PLIC but no S-mode context for the boot hart stops the boot (R17). | `arch/riscv/intc_plic.rs` | no external interrupts |
+| `Hart` | the cpu nodes in the tree, the harts listed, then each listed hart's id (2), the boot hart first: by boot index, at most `MAX_HARTS` (8), in tree order. A hart past the eighth, or whose PLIC S-mode context is not inside the PLIC's window, is left out and stays parked; the loader maps each listed hart's kernel and trap stacks in `HART_STACKS` ([memory layout](memory-layout.md)), and a boot hart whose context is past the window stops the boot (R17). | `arch/riscv/hart.rs` | the boot hart runs alone |
 | `Seed` | `/chosen/rng-seed`: 16 to 64 bytes, zero-padded to words | `platform/sbi/rand.rs` | the boot stops ([R17](#r17-fail-closed)) |
 | `Time` | the timebase: ticks of the `time` counter per second (2) | `arch/riscv/timer_sbi.rs` | the boot stops (R17) |
 
@@ -243,7 +246,7 @@ through the PLIC ([timer](timer.md)). The loader drops an interrupt 0 that a dev
 
 ### Hardware bounds
 
-Status: built · partly tested: the compile-time bounds hold by the build and are not attacked by a case; the loader's device-table refusal and the kernel's ASID-width refusal are tested on the host, not by a boot (every QEMU hart has the whole field) · tested: host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept, host:loader::an_interrupt_two_devices_raise_takes_one_slot, host:paging::the_asid_width_decision
+Status: built · partly tested: the compile-time bounds hold by the build and are not attacked by a case; the loader's device-table refusal and the kernel's ASID-width refusal are tested on the host, not by a boot (every QEMU hart has the whole field) · tested: host:loader::a_33rd_mmio_region_is_refused, host:loader::a_33rd_interrupt_is_refused, host:loader::thirty_two_devices_are_kept, host:loader::an_interrupt_two_devices_raise_takes_one_slot, host:loader::harts_are_listed_by_boot_index_never_by_id, host:loader::harts_past_max_harts_stay_parked, host:loader::a_hart_whose_s_mode_context_is_past_the_plic_window_stays_parked, host:loader::a_boot_hart_whose_context_is_past_the_plic_window_is_refused, host:paging::the_asid_width_decision
 
 Every constant that mirrors a hardware field or a platform limit is held to it. A field the
 ISA fixes is a compile-time assert on each width, so a build that breaks it does not exist. A
@@ -262,6 +265,9 @@ is refused ([R17 (fail closed)](#r17-fail-closed)), never truncated.
 | the kernel's windows (PLIC, DMA registers, process area, stacks) | each other and the physmap | compile time |
 | the physmap | the RAM the platform reports | at boot |
 | the PLIC window | the PLIC's reported size | at boot |
+| `MAX_HARTS` (8) | the harts in the tree, numbered by the platform sparsely and widely: per-hart state is by dense boot index, and a hart past the eighth stays parked | at boot (loader) |
+| a started hart's PLIC S-mode context | inside the PLIC's reported window; another hart's that is not stays parked, the boot hart's stops the boot | at boot (loader) |
+| `HART_STACKS` | `MAX_HARTS` slots of 18 pages, inside the kernel area below the image, 1 MiB on Sv32 ([the two address maps](memory-layout.md#the-two-address-maps)) | compile time |
 | `MAX_IRQS` (1024) | the PLIC's sources, 1 to 1023 | at boot, per device |
 | the loader's device table (32 regions, 32 interrupts) | the device tree's devices | at boot |
 | the timebase | `timebase-frequency`, not 0 | at boot |

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
+use redoubt_layout::KERNEL_PID;
 use riscv::register::{scause, sepc, sstatus, stval};
 
 use crate::arch::current_pid;
@@ -20,6 +21,10 @@ fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
     crate::sched::leave(current_pid());
     #[cfg(debug_assertions)]
     crate::arch::mem::audit::returning();
+    #[cfg(debug_assertions)]
+    assert!(!crate::arch::hart::shot_down(), "a hart shot down returns to user mode");
+    // A system call returns to user mode: the last kernel work of this entry.
+    crate::cell::KERNEL_LOCK.release();
     // SAFETY: `_redoubt_syscall_return_result` (asm) writes `args` into the return registers
     // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
     // does not return.
@@ -122,6 +127,21 @@ pub extern "C" fn trap_handler(
     a6: usize,
     a7: usize,
 ) -> ! {
+    // A trap from user mode takes the kernel lock, its registers saved; one from S-mode (`kmain`'s
+    // switch, or an interrupt in its idle window) holds it already (cell.rs, `KERNEL_LOCK`).
+    let from_user = sstatus::read().spp() == sstatus::SPP::User;
+    if from_user {
+        crate::arch::hart::serve();
+        crate::cell::KERNEL_LOCK.acquire();
+        // Shot down while it ran here (`hart::shootdown`): its process was destroyed from another
+        // hart, and its thread and context are gone. The hart's own mark says so, not the process
+        // table, which may already hold a new process under the same PID. Nothing of the trap is
+        // handled: the hart goes to `kmain`.
+        if crate::arch::hart::shot_down() {
+            ProcessTable::with_mut(|ss| ss.switch_to_thread(KERNEL_PID, None)).expect("kmain exists");
+            resume_current();
+        }
+    }
     let sc = scause::read();
 
     // If we were previously in Supervisor mode and we've just tried to write to
@@ -140,9 +160,11 @@ pub extern "C" fn trap_handler(
     let epc = sepc::read();
 
     let ex = RiscvException::from_regs(sc.bits(), epc, stval::read());
+    if !matches!(ex, RiscvException::StorePageFault(..) | RiscvException::LoadPageFault(..)) {
+        crate::arch::mem::retry_reset();
+    }
 
     // The user time since the last return is the running budget's (`sched.rs`).
-    let from_user = sstatus::read().spp() == sstatus::SPP::User;
     let timer = matches!(ex, RiscvException::SupervisorTimerInterrupt(_));
     if from_user {
         crate::sched::from_user();
@@ -211,6 +233,12 @@ pub extern "C" fn trap_handler(
             }
             resume_current();
         }
+        // Another hart's reschedule interrupt: a budget became runnable while this hart idled
+        // (`hart::wake_idle`). `kmain` picks again when it is resumed.
+        RiscvException::SupervisorSoftwareInterrupt(_) => {
+            crate::arch::hart::ack_ipi();
+            resume_current()
+        }
         // Hardware interrupt
         RiscvException::UserExternalInterrupt(_) | RiscvException::SupervisorExternalInterrupt(_) => {
             // The controller claims one interrupt; `None` is a spurious trap with nothing
@@ -240,6 +268,11 @@ pub extern "C" fn trap_handler(
         RiscvException::StorePageFault(_pc, addr) | RiscvException::LoadPageFault(_pc, addr) => {
             #[cfg(all(feature = "debug-print", feature = "print-panics"))]
             println!("KERNEL({}): RISC-V fault: {} @ {:08x}, addr {:08x} - ", pid, ex, _pc, addr);
+            // A translation already valid that allows the access: another hart changed it and this
+            // one cached the old entry. Flush that address in this ASID and retry, once.
+            if crate::arch::mem::retry_stale(addr, matches!(ex, RiscvException::StorePageFault(..))) {
+                resume_current();
+            }
             crate::mem::MemoryManager::with_mut(|mm| {
                 // A valid mapping faulted on permissions: retrying cannot make progress.
                 if crate::arch::mem::is_mapped(addr) {

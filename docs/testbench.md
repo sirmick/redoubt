@@ -479,7 +479,7 @@ fails `scan-bounds` on both widths in a recorded negative run
 ([R12 (scheduling)](kernel/scheduling.md#r12-scheduling)).
 
 Many cases use the profile: every case file with `debug_assertions = true`, most of them over
-both widths (`budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc` and `smp-spike` among
+both widths (`budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc` and `smp-boot` among
 them), and some, such as `all-together`, on rv64 only. The kernel
 prints one line under `cfg!(debug_assertions)`: `bench-debug-assertions` expects it, and
 `bench-debug-assertions-off` forbids it in an ordinary boot. To check the whole suite:

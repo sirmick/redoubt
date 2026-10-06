@@ -29,7 +29,6 @@ redoubt-stride = { path = "../libs/stride" }
 redoubt-sys = { path = "../libs/sys" }
 
 [features]
-smp = [] # multi-hart: KernelCell becomes a spinlock (the big kernel lock)
 # Implied by every test-only feature below; the kernel refuses to compile it without debug
 # assertions (main.rs), so a release kernel carries none of them (R23).
 test-only = []
@@ -43,6 +42,14 @@ walk-trace = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]
+# Debug only, never in a bench build but one recorded negative run: the kernel lock is
+# test-and-set instead of a ticket lock (cell.rs), so `smp-boot`'s FIFO check must fail (R78).
+sched-test-and-set-entry = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run each: a destruction does not
+# shoot its process down on another hart running it (`smp-no-evict`), or a hart installs a process
+# it owes an ASID flush without making it (`smp-no-stale-mask`), so `smp-evict` must fail.
+smp-no-evict = ["test-only"]
+smp-no-stale-mask = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: the audit after a destruction
 # runs unstamped, so the oracle cannot subtract it and the deadline notice must miss.
 audit-unstamped = ["sched-trace"]

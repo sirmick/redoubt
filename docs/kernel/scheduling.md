@@ -20,13 +20,16 @@ serves the steward.
 
 ### One flat stride queue
 
-<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (8)</summary>
+<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (11)</summary>
 
 - bench:sched-share
 - bench:sched-large-weight
 - bench:sched-server-busy
 - bench:sched-carve-inflation
+- bench:smp-boot
 - host:redoubt-stride::the_crate_and_the_model_agree
+- host:redoubt-stride::a_pick_skips_budgets_running_on_other_harts
+- host:redoubt-stride::a_budget_running_on_another_hart_stays_queued_through_this_harts_reconcile
 - mutation:R12PriorityById
 - mutation:R12IgnoreWeight
 - mutation:R12StrideWeightIsLimit
@@ -37,6 +40,9 @@ Every budget with a runnable thread is in one queue, whatever its class. There i
 no second queue and no flag that jumps it. The kernel runs the queued budget with the lowest
 pass, and running raises its pass by its runtime times `STRIDE` (2^20) divided by its weight. So
 over any stretch in which budgets stay runnable, each gets CPU in proportion to its weight.
+On several harts each hart picks the lowest-pass budget not running on another, so a budget
+runs on at most one hart at a time and its stride state has one runner. A reconcile keeps a
+budget queued while any hart runs it.
 
 The weight the queue uses is the budget's **free weight**: its weight limit less what its
 children carved ([R7 (carving)](budgets.md#r7-carving)). Carving moves share to the child and
@@ -888,7 +894,7 @@ It is attacked three ways:
 
 ### R78 (fair kernel entry)
 
-Status: planned · M2 (usable shell)
+Status: built · tested: bench:smp-boot
 
 On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
 so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
@@ -896,17 +902,23 @@ for ever. The rule exists for R12. A test-and-set lock is unfair: a hart can los
 later arrivals indefinitely, and the budget running on that hart loses its share with it, so one
 budget's harts can starve another's of kernel entry, which no pattern of calls may do. FIFO
 bounds the wait by the hart count, and the bound is part of how R12's shares are judged across
-harts ([several harts](../plan/m2-usable-shell.md#several-harts)). The lock is taken once at
-trap entry and released before the return to user mode or an idle wait; its spins run the pause
-hint, and a Zawrs wait goes in the same place later. It is attacked by a kernel built with the
-ticket lock replaced by test-and-set (`sched-test-and-set-entry`, a debug-only kernel feature
-like the tie fault, [below](#failure-and-restart); not a model mutation, since the model has one
-hart), which the several-hart boot case's FIFO check must catch in a recorded negative run: two
-harts that both enter the kernel in a loop are each served in turn, and the count of kernel
-sections one waits behind never exceeds the hart count less one.
+harts ([several harts](../plan/m2-usable-shell.md#several-harts)).
 
-**Open:** the lock is built when the kernel runs on every hart; until then the rule, its boot
-case and its mutation are planned, and the one-hart kernel is the uncontended case of it.
+The lock (`kernel/src/cell.rs`, `TicketLock`) draws a ticket with a relaxed `fetch_add`, spins
+until `serving` reads it (acquire), and releases by `serving + 1` (release); each turn of the
+spin runs the pause hint through one named place, `wait_for_change`, where a Zawrs wait goes
+later (no `wrs.nto` is emitted today). It is taken once at trap entry and released before the
+return to user mode or an idle wait. A checked build asserts, at every acquisition, that the
+hart waited behind fewer sections than harts were started (the draw, the read and the release
+are sequentially consistent there, so the count can only under-count); `bench:smp-boot` prints
+the most any hart waited (one section at two harts, three at four, on both widths). Under the
+ticket lock the count cannot exceed the harts less one by construction, so the assertion is
+structural for the real lock, and the test-and-set negative below is the one attack. It is
+attacked by a kernel built with the ticket lock replaced by test-and-set
+(`sched-test-and-set-entry`, a debug-only kernel feature like the tie fault,
+[below](#failure-and-restart); not a model mutation, since the model has one hart): with it,
+`smp-boot` fails at the FIFO assertion at two and at four harts on both widths, in a recorded
+negative run. The one-hart kernel is the uncontended case of the same lock.
 
 ### R23 (no test channels)
 
@@ -931,8 +943,8 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
-`sched-test-and-set-entry`, planned with [R78](#r78-fair-kernel-entry), a debug-only
-replacement of the kernel lock by test-and-set for its recorded negative run;
+`sched-test-and-set-entry`, which replaces the kernel lock by test-and-set for
+[R78](#r78-fair-kernel-entry)'s recorded negative run;
 `audit-unstamped`, which leaves the audit
 after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
 budget that ran it and counts it against its slice, each for one recorded negative run
@@ -1036,8 +1048,9 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   ([TENETS](../TENETS.md#threat-model)).
 - **Measured on QEMU, on one hart.** The targets are guest instructions under `icount`; no hardware
   run is measured, and a hardware run will characterise in cycles, not gate. A target set from a
-  sweep holds for the seeds swept, not for every seed. The queue and its accounting drive one hart
-  until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases
+  sweep holds for the seeds swept, not for every seed. The queue and its accounting are judged on
+  one hart until R12 is restated across harts
+  ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases
   that read the trace run a kernel built with it, which has a record at every queue event and 64
   MiB less RAM for the budget tree, taken from the top of RAM below the DMA pool so the frames
   below sit where a release kernel's do.

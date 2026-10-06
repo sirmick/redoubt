@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 168
+revision = 172
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -573,8 +573,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["K16", "K21", "SMP1-design", "IPC3", "K22", "ASID1"]
   body = "Brief: .wash/local/SMP1-implementer.md (updated for the owner's answers on QA SMP1-design: many harts by design, built as SMP1, SMP3, then SMP2; no ASIDs).\n\nBuilds docs/plan/m2-usable-shell.md#several-harts steps 1-3, and of step 4 its first stage:\n- any boot hart, up to MAX_HARTS (8), started through SBI HSM; one build (the smp feature and the spike go);\n- per-hart state through sscratch, including the hart's current process;\n- a FIFO ticket lock at trap entry;\n- device interrupts on the boot hart;\n- reschedule IPIs;\n- a budget runs on at most one hart at a time (interim: one predicate in the pick, lifted by SMP3);\n- the shootdown, built for a set of harts (the other harts whose current process is the target, flushed and acknowledged without the lock); its one caller here is a destruction, plus kernel-half unmaps to every hart;\n- the trace ring with a hart field;\n- `cargo testbench --smp N`.\n\nCases: smp-boot (2 and 4 harts); smp-evict, with a recorded negative; the whole bench at --smp 2. Started ahead of M2 on the owner's word (2026-10-03). Tier A, size L."
-  state = "reported"
-  revision = 126
+  state = "done"
+  revision = 172
   overrides = ["2026-10-06: started by Orchestrator before IPC3 (reported), M1 (reported): owner's direction (2026-10-03 'start looking at SMP now', tonight's card-first sketch): SMP1 starts on SCHED1's branch, which carries IPC3; it rebases onto main once IPC3 and SCHED1 merge", "2026-10-06: started by Orchestrator before IPC3 (reported), M1 (reported): SMP1 runs ahead of IPC3's merge on the owner's word (start looking at SMP now; card-first sketch); it rebases once IPC3 and SCHED1 merge", "2026-10-06: started by Orchestrator before IPC3 (reported), M1 (reported): SMP1 runs ahead of IPC3's merge on the owner's word; its red review runs on content now"]
 
 [[node]]
@@ -911,8 +911,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["VOL1"]
   body = "Brief: .wash/local/VOL2-implementer.md (architect-15; VOL1's step 2 as the owner ruled it 2026-10-03). Tier A, size S. docs/servers/verityd.md (R76's signed-volume extension); docs/kernel/boot.md#verified-boot (the volume domain); docs/servers/init.md#the-boot-manifest (the verity object's two modes); docs/testbench.md#disks-and-network-cards (the recipe's sign key). Cases verity-signed, verity-bad-signature, verity-rollback."
-  state = "todo"
-  revision = 86
+  state = "active"
+  revision = 169
 
 [[node]]
   id = "B10"
@@ -979,9 +979,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["SCHED1"]
-  body = "docs/kernel/scheduling.md states a derived bound: a lineage's debt, carried onto a sibling as the parent's lead, delays the sibling's first run by at most about a round when the parent is small and the lift fresh. No boot exercises it: under a parent as wide as `users` the lift is a few thousandths of a slice, and sched-debt-lift judges only that the sibling runs before any other budget is picked twice (its raw debt would cost ~6 rounds). Tier A bench/fixtures, size S. Build a construction that puts a fresh lift of about a round on a small shared parent and observes the sibling's first run on both widths, the oracle's check_lift beside it; if the one-round claim is false for small parents, the page changes to what the construction finds. A stated bound the pages carry is exercised or dropped. Ruling and arithmetic: .wash/local/SCHED1-five-cases-ruling.md 'debt-lift (red round 5, P1)'."
-  state = "todo"
-  revision = 149
+  body = "Brief: .wash/local/LIFT1-implementer.md. docs/kernel/scheduling.md states a derived bound: a lineage's debt, carried onto a sibling as the parent's lead, delays the sibling's first run by at most about a round when the parent is small and the lift fresh. No boot exercises it: under a parent as wide as `users` the lift is a few thousandths of a slice, and sched-debt-lift judges only that the sibling runs before any other budget is picked twice. Tier A bench/fixtures, size S. The claim made exact: a destroyed child's lead W lands on parent P as W/w_P, the sibling enters at P's pass, so its first pick waits about (W/STRIDE) x (w_peer/w_P) rounds, independent of the sibling's weight. Construction: sixteen weight-100 spinners under users, three phases in one boot (w_P = 100, 50, 10), child destroyed and sibling created back to back; the oracle's check_lift_delay computes the expectation from the recorded lift and compares with the picks before the sibling's first pick within one round, failing a stale lift so the case cannot pass vacuously. The page's residual becomes the measured formula and three points per width, or what the trace shows if refuted. Ruling: .wash/local/SCHED1-five-cases-ruling.md 'debt-lift (red round 5, P1)'."
+  state = "active"
+  revision = 171
 
 [[node]]
   id = "B12"

@@ -177,6 +177,16 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         None => println!("  no PLIC found in the device tree"),
     }
 
+    // The harts the kernel starts, by boot index, the boot hart first; the rest stay parked.
+    println!("  harts started by the kernel: {:?} of {}", platform.harts(), platform.cpu_count);
+    args.begin(b"Hart");
+    args.word(platform.cpu_count.max(platform.harts().len()) as u32);
+    args.word(platform.harts().len() as u32);
+    for id in platform.harts() {
+        args.word64(*id as u64);
+    }
+    args.end();
+
     // Entropy for the kernel's RNG. Server IDs are drawn from it, so it must not be guessable.
     let seed = platform.rng_seed();
     if seed.len() >= 16 {

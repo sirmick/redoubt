@@ -51,11 +51,13 @@ registers hold ([ABI](abi.md#unknown-call-numbers)). The kernel never calls into
 never switches straight from one process to another. User mode is entered two ways (resuming a
 thread, or returning from a call) and left one way (a trap), so every instruction a process runs
 is counted against the budget the scheduler picked
-([R12 (scheduling)](scheduling.md#r12-scheduling)). The kernel runs on one hart with interrupts
-off while it runs. Each kernel global (the memory manager, the process table, the timer, the
-generator) sits in a `KernelCell` of its own (`kernel/src/cell.rs`): on one hart a
-run-time-checked borrow, so a nested borrow is a panic, not two live references; in a build for
-more than one hart, a spinlock per global.
+([R12 (scheduling)](scheduling.md#r12-scheduling)). The kernel runs on every hart, with
+interrupts off while it runs, under one FIFO lock that a hart takes at its trap from user mode and
+gives up at its return or idle. Each kernel global (the memory manager, the process table, the
+timer, the generator) sits in a `KernelCell` of its own (`kernel/src/cell.rs`): a run-time-checked
+borrow under that lock, so a nested borrow is a panic, not two live references. A checked build
+asserts that the hart reaching it holds the lock; a release build does not check, and rests on
+the trap paths taking it.
 
 `bench:no-cruft` reads the sources and fails on a name from a list of call-interface
 identifiers Redoubt does not have, on a silenced dead-code warning (`allow(dead_code)` or
@@ -298,7 +300,7 @@ two, where a file serves two mechanisms).
 | `arch/riscv/timer_sbi.rs` | the hart timer, through SBI TIME | [timer](timer.md) |
 | `arch/riscv/mem.rs`, `physmap.rs`, `mmu_flags.rs` | page tables, the physmap, PTE flags, the kernel's W^X check | [memory](memory.md), [memory layout](memory-layout.md) |
 | `arch/riscv/process.rs` | the process header, threads' saved contexts, PID slots | [processes](processes.md), [memory layout](memory-layout.md) |
-| `arch/riscv/smp.rs` | the two-hart spike (feature `smp`) | [this page](#residual-risks) |
+| `arch/riscv/hart.rs` | each hart's block, starting the other harts, the reschedule interrupt and the shootdown | [memory](memory.md#residual-risks) |
 | `arch/riscv/panic.rs` | a kernel panic prints and powers off | [boot](boot.md#failure-and-restart) |
 | `libs/sys` (`redoubt-sys`) | call numbers, registers, records, errors | [ABI](abi.md) |
 | `libs/paging` (`paging`) | typed Sv32/Sv39 page tables, shared with the loader | [memory layout](memory-layout.md) |
@@ -325,11 +327,10 @@ two, where a file serves two mechanisms).
 - **The table's inclusive line counts are snapshots.** The size budget has separate ceilings
   for shipped code lines, excluding comments and tests, and fails if a trusted crate grows past
   its ceiling ([the size budget](../testbench.md#the-size-budget)).
-- **One hart.** The kernel runs on one hart. The `smp` feature starts a second hart only to show
-  that `KernelCell`'s spinlock holds under contention (`bench:smp-spike`); no user code runs on a
-  second hart, and completion races between harts are not attacked by a case
-  ([IPC](ipc.md#residual-risks)). Running user code on several harts is M2 (usable shell)'s
-  ([several harts](../plan/m2-usable-shell.md#several-harts)).
+- **Several harts, one lock.** Every hart runs user code, a budget on one hart at a time, under
+  one kernel lock (`bench:smp-boot`); completion races between harts are not attacked by a case
+  ([IPC](ipc.md#residual-risks)). One process on several harts at once, and finer locking, are
+  M2 (usable shell)'s later steps ([several harts](../plan/m2-usable-shell.md#several-harts)).
 - **The containment gate is one workload.** [Containment](#containment) runs hostile leases of
   one size, against stand-ins for the steward and a driver, on one hart and under one pinned
   seed. It shows that the kernel's primitives hold together for that workload. It does not bound

@@ -55,6 +55,10 @@ pub unsafe extern "C" fn init(
     rpt_offset: usize,
     xpt_offset: usize,
 ) {
+    // The boot hart holds the kernel lock from here to its first return to user mode or idle;
+    // the harts it starts below wait for it (cell.rs).
+    arch::hart::init_boot();
+    cell::KERNEL_LOCK.acquire();
     args::KernelArguments::init(arg_offset);
     platform::early_init();
     // Before anything else writes `satp` (kernel/boot.md, "Hardware bounds").
@@ -69,6 +73,8 @@ pub unsafe extern "C" fn init(
     });
     ProcessTable::with_mut(|pt| pt.init_from_memory(init_offset));
 
+    // The other harts' stacks, before the budget tree counts free RAM (arch/riscv/hart.rs).
+    crate::mem::MemoryManager::with_mut(arch::hart::map_stacks);
     // Test builds only: the scheduling trace's ring, before the budget tree counts free RAM.
     #[cfg(feature = "sched-trace")]
     crate::mem::MemoryManager::with_mut(crate::sched::trace::init);
@@ -108,16 +114,14 @@ pub unsafe extern "C" fn init(
     // than sheer paranoia
     platform::rand::get_u32();
     platform::rand::get_u32();
+    // The other harts, each into `kmain` once it holds the lock (arch/riscv/hart.rs).
+    arch::hart::start_others();
 }
 
-/// The kernel's main loop, entered once `init` has run.
+/// The kernel's main loop, on every hart: entered once `init` has run, and by each hart it
+/// started (`arch::hart`), holding the kernel lock.
 #[no_mangle]
 pub extern "C" fn kmain() {
-    // SMP bring-up spike: start a second hart and validate the spinlock big-kernel-lock
-    // under real cross-hart contention before entering the scheduler. See arch/riscv/smp.rs.
-    #[cfg(feature = "smp")]
-    crate::arch::smp::run();
-
     // The loader wrote every boot program's image: make instruction fetch see it before the
     // first of them runs (`fence.i`; every later executable page is fenced as it is mapped).
     crate::arch::mem::sync_icache();

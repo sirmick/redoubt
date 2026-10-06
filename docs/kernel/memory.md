@@ -426,9 +426,15 @@ kernel, running the call to its end with interrupts off, would stall every other
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`. It harms only that
   process.
-- **One hart.** `fence.i` and the TLB flush act on the hart that runs the call. Running user
-  code on several harts needs them on every hart, and when a thread moves
-  (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
+- **Several harts.** `fence.i` and the TLB flush act on the hart that runs the call. A
+  process's translations carry its ASID, and a hart that ran it may keep them; it flushes
+  that ASID before it next runs the process if any of its mappings were removed meanwhile or
+  its PID was given out again. A budget runs on one hart at a time, so a process's own unmap,
+  lend or reply needs no other hart's flush. A destruction first shoots the process down on
+  any other hart running it, which flushes its ASID and acknowledges before any of its frames
+  is freed, so a stale translation never reaches the frame's next owner. One process on several
+  harts at once needs that shootdown at every unmap, lend
+  and reply (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
 - **A lend within one process** (a thread calling an endpoint its own process receives on) is
   argued from the code, not attacked, when its threads run on several harts. `process-lifecycle`
   attacks it on one hart, the process ending with the call open included.
@@ -439,9 +445,9 @@ kernel, running the call to its end with interrupts off, would stall every other
   path that frees a mapped frame unmaps it and flushes the TLB first, or frees an ended
   process's frames or a refused `process_create`'s, whose cached translations carry that
   process's ASID, which nothing runs under again until the PID is given out, and that flushes it
-  first ([`satp`](memory-layout.md#satp)); on one hart that leaves no stale mapping.
-  Several harts need the TLB shootdown before the free
-  (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
+  first ([`satp`](memory-layout.md#satp)); on one hart that leaves no stale mapping. On several,
+  a destruction shoots the process down on any other hart running it before the free
+  (above, `bench:smp-evict`).
 
 ## Why
 

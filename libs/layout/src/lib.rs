@@ -50,10 +50,9 @@ pub mod sv32 {
     /// The kernel's code and constants, 512 KiB: `FLASH` in `kernel/link.x`, which a host test
     /// holds to this value.
     pub const KERNEL_TEXT: usize = 0xffd0_0000;
-    pub const KERNEL_STACK_TOP: usize = 0xfff8_0000;
-    pub const KERNEL_STACK_PAGES: usize = 8;
-    pub const TRAP_STACK_TOP: usize = 0xffff_0000;
-    pub const TRAP_STACK_PAGES: usize = 8;
+    /// Every hart's kernel and trap stacks ([`super::hart_kernel_stack_top`]), below the
+    /// kernel's code, in root entry 1023.
+    pub const HART_STACKS: usize = 0xffc0_0000;
 }
 
 /// Sv39 layout. See `docs/kernel/memory-layout.md`.
@@ -76,10 +75,9 @@ mod sv39 {
     /// The kernel's window on DMA devices' registers, one page per device: right
     /// after the largest PLIC (64 MiB), far below the kernel stacks and image.
     pub const KERNEL_DMA_REGS: usize = 0xffff_ffff_f400_0000;
-    pub const KERNEL_STACK_TOP: usize = 0xffff_ffff_fff8_0000;
-    pub const KERNEL_STACK_PAGES: usize = 8;
-    pub const TRAP_STACK_TOP: usize = 0xffff_ffff_ffff_0000;
-    pub const TRAP_STACK_PAGES: usize = 8;
+    /// Every hart's kernel and trap stacks ([`super::hart_kernel_stack_top`]), below the
+    /// kernel's code, above the DMA register window.
+    pub const HART_STACKS: usize = 0xffff_ffff_ffc0_0000;
 }
 #[cfg(target_pointer_width = "32")]
 pub use sv32::*;
@@ -109,6 +107,7 @@ const _: () = {
         KERNEL_TEXT,
         KERNEL_STACK_TOP,
         TRAP_STACK_TOP,
+        HART_STACKS,
     ];
     let mut i = 0;
     while i < bases.len() {
@@ -120,6 +119,40 @@ const _: () = {
 // The physmap's end is an address of this width: `physmap_covers` adds the two unchecked.
 const _: () = assert!(PHYSMAP_PHYS_BASE.checked_add(PHYSMAP_SIZE).is_some(), "the physmap ends past usize");
 
+/// The most harts the kernel runs; a hart past it stays parked in the firmware.
+pub const MAX_HARTS: usize = 8;
+
+/// Pages in each hart's kernel stack and trap stack.
+pub const KERNEL_STACK_PAGES: usize = 8;
+pub const TRAP_STACK_PAGES: usize = 8;
+
+/// One slot of [`HART_STACKS`] per boot index: an unmapped guard page, the hart's kernel stack,
+/// another guard page, its trap stack. Slot 0 is the boot hart's, which the loader maps; the
+/// kernel maps a slot when it starts its hart, and the guards are never mapped.
+pub const HART_STACK_SLOT: usize = (1 + KERNEL_STACK_PAGES + 1 + TRAP_STACK_PAGES) * PAGE_SIZE;
+
+/// The top of the kernel stack of the hart with boot index `index`.
+pub const fn hart_kernel_stack_top(index: usize) -> usize {
+    HART_STACKS + index * HART_STACK_SLOT + (1 + KERNEL_STACK_PAGES) * PAGE_SIZE
+}
+
+/// The top of the trap stack of the hart with boot index `index`.
+pub const fn hart_trap_stack_top(index: usize) -> usize { HART_STACKS + (index + 1) * HART_STACK_SLOT }
+
+/// The boot hart's stacks: slot 0's.
+pub const KERNEL_STACK_TOP: usize = hart_kernel_stack_top(0);
+pub const TRAP_STACK_TOP: usize = hart_trap_stack_top(0);
+
+const _: () = {
+    // The window lies in the shared kernel area (so past the per-process area), below the
+    // kernel's image, above the PLIC and DMA register windows, and on Sv32 within the 1 MiB below
+    // the image.
+    let end = HART_STACKS + MAX_HARTS * HART_STACK_SLOT;
+    assert!(HART_STACKS >= KERNEL_AREA && end <= KERNEL_TEXT);
+    assert!(HART_STACKS > KERNEL_PLIC_BASE && HART_STACKS >= KERNEL_DMA_REGS + KERNEL_DMA_PAGES * PAGE_SIZE);
+    assert!(end - HART_STACKS <= 1 << 20);
+};
+
 /// Pages in the DMA register window: one per DMA device the kernel can reset
 /// (`docs/kernel/devices.md`).
 pub const KERNEL_DMA_PAGES: usize = 16;
@@ -130,7 +163,7 @@ const _: () = {
     assert!(KERNEL_DMA_REGS > KERNEL_PLIC_BASE);
     assert!(KERNEL_DMA_REGS >= PHYSMAP_BASE + PHYSMAP_SIZE);
     assert!(end <= PROCESS_AREA || KERNEL_DMA_REGS >= PROCESS_AREA + (1 << 30));
-    assert!(end <= KERNEL_STACK_TOP - KERNEL_STACK_PAGES * PAGE_SIZE);
+    assert!(end <= HART_STACKS);
 };
 
 /// RAM pages the kernel keeps at boot for `dma_alloc`'s runs, on both widths: the DMA pool

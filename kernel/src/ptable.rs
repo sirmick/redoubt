@@ -406,6 +406,12 @@ impl ProcessTable {
     ///
     /// If the current process is not running, or if it's "Running" but has no free contexts
     pub fn switch_to_thread(&mut self, pid: Pid, tid: Option<TID>) -> Result<(), ProcessError> {
+        // `kmain` runs on every hart at once: the kernel's process stays `Running`.
+        if pid == KERNEL_PID {
+            self.get_process(KERNEL_PID)?.activate();
+            ArchProcess::current().set_tid(INITIAL_TID);
+            return Ok(());
+        }
         let process = self.get_process_mut(pid)?;
 
         // Determine which thread to switch to
@@ -514,6 +520,48 @@ impl ProcessTable {
         Ok(())
     }
 
+    /// The running thread `previous_tid` of `previous_pid` is switched away from: it is ready
+    /// again if `can_resume`.
+    fn leave_previous(&mut self, previous_pid: Pid, previous_tid: TID, can_resume: bool) {
+        let previous = self.get_process_mut(previous_pid).expect("couldn't get previous pid");
+        let _oldstate = previous.state; // for tracking state in the debug print after the following closure
+        if previous.current_thread != previous_tid {
+            println!(
+                "WARNING: previous.current_thread {} != previous_tid {}",
+                previous.current_thread, previous_tid
+            );
+        }
+        previous.current_thread = previous_tid;
+        previous.set_state(match previous.state {
+            // If the previous process had exactly one thread that can be
+            // run, then the Running thread list will be 0.  In that case,
+            // we will either need to Sleep this process, or mark it as
+            // being Ready to run.
+            ProcessState::Running(x) if x.is_empty() => {
+                if can_resume {
+                    ProcessState::Ready(TidMask::of(previous_tid))
+                } else {
+                    ProcessState::Sleeping
+                }
+            }
+            // Otherwise, there are additional threads that can be run.
+            // Convert the previous process into "Ready", and include the
+            // current context number only if `can_resume` is `true`.
+            ProcessState::Running(x) => {
+                if can_resume {
+                    ProcessState::Ready(x.with(previous_tid))
+                } else {
+                    ProcessState::Ready(x)
+                }
+            }
+            other => panic!(
+                "previous process PID {} was in an invalid state (not Running): {:?}",
+                previous_pid, other
+            ),
+        });
+        klog!("PID {:?} state change from {:?} -> {:?}", previous_pid, _oldstate, previous.state);
+    }
+
     /// Resume the given process, picking up exactly where it left off. If the
     /// process is in the Setup state, set it up and then resume.
     pub fn activate_process_thread(
@@ -530,6 +578,15 @@ impl ProcessTable {
             klog!("Activating process {} thread {}", new_pid, new_tid);
         } else {
             klog!("Activating process {} thread ANY", new_pid);
+        }
+
+        // `kmain` runs on every hart at once, so the kernel's process stays `Running` and only
+        // the thread switched away from changes state.
+        if new_pid == KERNEL_PID && previous_pid != KERNEL_PID {
+            self.leave_previous(previous_pid, previous_tid, can_resume);
+            self.get_process(KERNEL_PID)?.activate();
+            ArchProcess::current().set_tid(INITIAL_TID);
+            return Ok(INITIAL_TID);
         }
 
         // Save state if the PID has changed.  This will activate the new memory
@@ -596,45 +653,11 @@ impl ProcessTable {
             });
             new.activate();
 
-            // Mark the previous process as ready to run, since we just switched
-            // away
-            let previous = self.get_process_mut(previous_pid).expect("couldn't get previous pid");
-            let _oldstate = previous.state; // for tracking state in the debug print after the following closure
-            if previous.current_thread != previous_tid {
-                println!(
-                    "WARNING: previous.current_thread {} != previous_tid {}",
-                    previous.current_thread, previous_tid
-                );
+            // Mark the previous process as ready to run, since we just switched away. The
+            // kernel's process stays `Running`: `kmain` runs on every hart.
+            if previous_pid != KERNEL_PID {
+                self.leave_previous(previous_pid, previous_tid, can_resume);
             }
-            previous.current_thread = previous_tid;
-            previous.set_state(match previous.state {
-                // If the previous process had exactly one thread that can be
-                // run, then the Running thread list will be 0.  In that case,
-                // we will either need to Sleep this process, or mark it as
-                // being Ready to run.
-                ProcessState::Running(x) if x.is_empty() => {
-                    if can_resume {
-                        ProcessState::Ready(TidMask::of(previous_tid))
-                    } else {
-                        ProcessState::Sleeping
-                    }
-                }
-                // Otherwise, there are additional threads that can be run.
-                // Convert the previous process into "Ready", and include the
-                // current context number only if `can_resume` is `true`.
-                ProcessState::Running(x) => {
-                    if can_resume {
-                        ProcessState::Ready(x.with(previous_tid))
-                    } else {
-                        ProcessState::Ready(x)
-                    }
-                }
-                other => panic!(
-                    "previous process PID {} was in an invalid state (not Running): {:?}",
-                    previous_pid, other
-                ),
-            });
-            klog!("PID {:?} state change from {:?} -> {:?}", previous_pid, _oldstate, previous.state);
         } else {
             let new = self.get_process_mut(new_pid)?;
 
@@ -761,6 +784,10 @@ impl ProcessTable {
     pub fn kill_process(&mut self, target: Pid) -> Result<(), ProcessError> {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
+        // Another hart may be running it: shoot it down there before any of its memory goes.
+        crate::arch::hart::shootdown(target);
+        #[cfg(debug_assertions)]
+        crate::arch::hart::audit_left(target);
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target));
         // `terminate` needs no address space: it names the target's mapping itself.
         self.get_process_mut(target)?.terminate()?;

@@ -1,0 +1,16 @@
+description = "Every hart reaches the scheduler and runs user threads, and kernel entry is FIFO across harts (R78): spinners and kernel-heavy threads in budgets of their own, at 2 and 4 harts (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on (docs/testbench.md, "Checked builds"): the lock's FIFO check and the
+# harts' account at `system_reset` are the checked kernel's.
+debug_assertions = true
+programs = ["smp-boot"]
+smp = [2, 4]
+timeout_secs = 300
+expect = [
+    '^SMP-BOOT TEST PASSED$',
+    '^harts: all [24] in the tree ran user code',
+    '^kernel lock: most waited',
+]
+forbid = ['\[smp\] FAIL', 'the kernel lock: waited behind', 'harts: FAIL']
+poweroff = true
