@@ -1,6 +1,7 @@
 description = "A device that does not confirm its reset keeps its frames for ever (I16; kernel/devices.md, \"Quarantine\"): two drivers hold DMA runs on one slot; the first faults, the slot's first reset fails (dma-reset-deaf), so its run is quarantined and every handle to the slot is gone; the co-holder's run is quarantined too when it dies after; each destroyed budget's charge moves to its parent; a search of the DMA pool, with halving chunks until OutOfMemory, takes the whole pool but the two quarantined runs, none of it overlaps a quarantined run, and the last refusal is the pool's, with the budget's room left (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 kernel_features = ["dma-reset-deaf"]
 # In init's place, so it holds every device object (kernel/devices.md), and runs in root.

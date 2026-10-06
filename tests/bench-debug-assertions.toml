@@ -1,6 +1,8 @@
 description = "Bench self-check: `debug_assertions = true` really builds the kernel with the checks on"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
+timeout_secs = 10
 # The kernel prints this line only under `cfg!(debug_assertions)`, so it fails if the checked
 # profile ever stops reaching the build and the other checked cases quietly boot a release kernel.
 debug_assertions = true

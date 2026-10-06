@@ -1,6 +1,8 @@
 description = "W^X: trusted checker observes native child exit notices for attempted data execution and code writes"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
+timeout_secs = 10
 debug_assertions = true
 programs = ["wx-test"]
 expect = [

@@ -1,11 +1,12 @@
 description = "Destroying a budget kills every process in it and under it, the caller's own included (R10); here system, under which the tester starts every program"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # PID 2 log-server; PID 3 budget-victim, a bystander blocked in `receive` on the boot endpoint;
 # PID 4 budget-destroy-system, holding `system` (slot 4). Each runs in a budget of its own under
 # `system`, so destroying `system` reaches both.
 programs = ["log-server", "budget-victim", { bin = "budget-destroy-system", budgets = ["system"] }]
-timeout_secs = 30
+timeout_secs = 10
 # The kills are the kernel's own lines (no `[pid` prefix, so no process can print them), and each
 # program's exit notice is the tester's own line, from an endpoint it gave that program alone,
 # naming the program and its place. Only the kernel's lines come in kill order, and they carry

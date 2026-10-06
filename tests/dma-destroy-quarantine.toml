@@ -1,6 +1,7 @@
 description = "Devices quarantined while a budget is destroyed still lose their handles (R10, I1, I2, I16; kernel/devices.md, \"Quarantine\"): two drivers each dma_alloc through a distinct deaf slot and park, then one budget_destroy ends both (not a fault), so a destruction runs with object-frame frees deferred while each death fails its slot's first reset (dma-reset-deaf) and quarantines it; the destruction returns, every handle to either quarantined slot is gone (BadHandle), the second death's quarantine does not free the first device's already-deferred frame, and both runs' charges move to the parent"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 kernel_features = ["dma-reset-deaf"]
 # In init's place, so it holds every device object (kernel/devices.md).

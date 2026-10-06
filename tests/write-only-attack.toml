@@ -1,9 +1,10 @@
 description = "R11: map_anon, set_flags and process_map refuse a writable page that is not readable and leave the mapping unchanged (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 programs = ["write-only-attack"]
-timeout_secs = 30
+timeout_secs = 10
 # The program is the loader's trusted parent, holding UART/reset. Each verdict is a kernel
 # result: the refusal, the child's usage, the child's still-free destination, and the kernel's
 # output-record check, which accepts only readable and writable RAM. Success also needs a

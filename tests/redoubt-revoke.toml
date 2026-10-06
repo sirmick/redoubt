@@ -1,6 +1,7 @@
 description = "R10 reaching messages in flight: destroying the budget a handle is stamped with fails a queued message and a taken call with Dead, the taken call is abandoned and its reply reaches nobody, and a handle inside a queued message arrives as 0; a budget handle only narrows (I3) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 log-server; PID 3 redoubt-revoke, holding the budget it runs in (slot 3), root and users,
@@ -8,7 +9,7 @@ debug_assertions = true
 # system, so its handles were stamped with system; now they are stamped with its own budget, an
 # equal share of system for one program, and root is still above it and users beside it.
 programs = ["log-server", { bin = "redoubt-revoke", budgets = ["root", "users"] }]
-timeout_secs = 30
+timeout_secs = 20
 expect = [
     '^\[pid 3\] \[revoke\] server took call \d+ badge 6$',
     '^\[pid 3\] \[revoke\] server: call \d+ abandoned, reply Ok\(\(\)\)$',

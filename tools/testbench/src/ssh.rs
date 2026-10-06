@@ -150,15 +150,8 @@ fn expected_host_key(workspace: &Path, host_key: Option<&str>) -> Result<String>
     }
 }
 
-/// Set up Redoubt's `sshd` on its host platform: it builds `redoubt-sshd-host`, whose host key is
-/// `loopback-host` and whose login table gives each `authorized` test key a principal of its name.
-pub fn redoubt(
-    workspace: &Path,
-    dir: &Path,
-    case: &str,
-    authorized: &[String],
-    host_key: Option<&str>,
-) -> Result<Server<'static>> {
+/// Build Redoubt's `sshd` on its host platform, `redoubt-sshd-host`, and return its binary.
+pub fn build_redoubt(workspace: &Path) -> Result<PathBuf> {
     let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     let output = cargo
         .current_dir(workspace)
@@ -170,9 +163,22 @@ pub fn redoubt(
         "building redoubt-sshd-host failed: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
+    Ok(workspace.join("target/debug/redoubt-sshd-host"))
+}
+
+/// Set up Redoubt's `sshd` on its host platform, `binary` ([`build_redoubt`]), whose host key is
+/// `loopback-host` and whose login table gives each `authorized` test key a principal of its name.
+pub fn redoubt(
+    workspace: &Path,
+    binary: &Path,
+    dir: &Path,
+    case: &str,
+    authorized: &[String],
+    host_key: Option<&str>,
+) -> Result<Server<'static>> {
     let keys = workspace.join(KEYS);
     let mut words = vec![
-        workspace.join("target/debug/redoubt-sshd-host").display().to_string(),
+        binary.display().to_string(),
         "--host-key".into(),
         keys.join("loopback-host").display().to_string(),
         "--log".into(),

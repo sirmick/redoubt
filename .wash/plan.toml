@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 211
+revision = 218
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -792,10 +792,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "A destruction's deliveries happen at its boundary: pumps after the mark, not in its middle"
   template = "package"
   parent = "M1"
-  needs = ["IPC3"]
+  needs = ["K24"]
   body = "Brief: .wash/local/K19-implementer.md. Tier A, size M+, needs IPC3 merged (start from main). Part A, pumps at the boundary: no delivery inside a destruction; pumps become entries on a bounded to-pump list of endpoints, drained once after step 9 and before the bill; the five dying/doomed checks deleted or made checked-build assertions; commit 1 is a model trace of the mid-kill delivery, and the model's destroy pumps last; R10 step 4 tightens to \"from the mark on, no message stamped with a dying budget is delivered\" with a new model mutation (no R4b doomed mutation exists to retire: say so). Part B, per-budget chains of process objects (charged: the creator's owner chain; counted: a chain keyed on counted_in) so destroy_subtree's kill, step 3's frees and step 8's migration follow the dying subtree. Done when worst-walk's R10 p99 at full fill is within 30 ms net on both widths, its must_fail and docs/todo/destruction-walks-every-process.md gone, the residual bullets rewritten. Short gate plus the R10/R4b case lists and worst-walk by name. IPC3 already removed fail_all's rescan."
-  state = "active"
-  revision = 202
+  state = "reported"
+  revision = 215
 
 [[node]]
   id = "AIO1"
@@ -1104,5 +1104,24 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Measured on train 3 and 4 (2026-10-06): a case's start costs about 10 s beside other cases, mostly `cargo run -p testbench` contending on the build-directory lock and the bench's own per-run cargo builds (build.rs:313) of the kernel and programs; 500 case runs a train pay it in parallel but it is most of why a 0.6 s case takes 2.5 s and why the heavy tail's guests start late. Also: only 36 of 190 boot cases run under icount (shift=3,sleep=off); the rest pay every timeout, deadline and 20 s wait on the host's clock and are load-sensitive (11 scheduler-sensitive failures in train 4 beside work that train 3 did not see). Tier B, size M: (1) measure a case's start (cargo lock wait, the bench's builds, image packing, QEMU start) with timestamps; (2) build once: a run directory per train holds the bench binary and every built kernel/program/image, and `cargo testbench --prebuilt <dir> <case>` (or jobs.mk calling the binary directly) runs a case with no cargo at all; (3) audit the real-time boot cases: every case whose expectations and oracles do not read the host's clock moves to icount shift=3,sleep=off (a table in the report: case, what it measures, moved or why not), timeouts of 20 s waits that are bounds not measurements shortened; (4) testbench.md: the run directory, the prebuilt path, the class note updated. Gates: the moved cases both widths, cargo test -p testbench, docs/fmt/no-cruft/size. Acceptance: a light case's wall time under q within 1 s of its guest time; the light set (cases-rv64 + cases-rv32 without the heavy tail) under 5 min."
+  state = "done"
+  revision = 218
+
+[[node]]
+  id = "K24"
+  title = "A slice starts when the thread returns to user, so a pick whose exit work outran the slice still runs: no livelock at 250 queued budgets"
+  template = "package"
+  parent = "M1"
+  body = "Found by K19's follow-up (report .wash/local/K19-report.md, last two sections; handoff k19-implementer-2): on main (14aceaa63 alone reproduces; train 4's worst-walk on 992d447ce hung the same way) kmain's pick sets slice_end = now + 1 ms before the exit path runs; with ~250 budgets queued the non-audit exit work (reconcile, raise_floor, the queue walk in leave) takes more than 1 ms of guest time, so the picked thread is timer-preempted at its first user instruction (gdb: sepc after the ecall, scause timer from U), forever; worst-walk never reaches its destroy. With slice-10ms it passes (rv64 468.6 s, R10 p50/p99 16,371/16,383 us). Tier A, size S: the slice is the thread's user time: start it at the return to user (or guarantee one user slice to a pick whose slice is already over at the return); kernel/scheduling.md R12 says so in one sentence and the residual names the exit cost RECON1 bounds; the model gets the rule and a mutation; a regression case (worst-walk's queue depth with the 1 ms slice, or worst-walk itself both widths) and sched-latency/sched-budget-churn rerun to show the targets stand. Lands before K19, which rebases over it. Not here: the exit path's cost (RECON1)."
   state = "todo"
-  revision = 210
+  revision = 214
+
+[[node]]
+  id = "MODEL1"
+  title = "The steward families of the model cost 0.6 and 0.94 s a seed in release; three mutations are caught only after minutes"
+  template = "package"
+  parent = "M1"
+  needs = ["B18"]
+  body = "Measured by B18 (2026-10-06): in release on one thread, the model's steward_policy family costs 0.6 s/seed and steward_noninterference 0.94 s/seed (kernel families under 1 ms/seed); at 20,000 and 10,000 seeds the two are about 6 core-hours, which no fanout hides; and three mutations (PolicyDeclassifyUnfit caught at steward_policy seed 4,709 after 1,720 s; R2OneCursor and PolicyAgentOtherSet past 29 min) are caught only deep in the run. B18 splits the steward families into their own bounded case and bounds a mutation job. Tier A (the model), size M: (1) profile a steward seed and bring its cost down where the cost is accidental (allocation, cloning the steward core's state per step, the Elixir-shaped reference); (2) decide the seed counts from the coverage they buy, with a measurement (how many seeds until every rule and mutation is reached), not by habit; (3) the three late-caught mutations: a directed scenario each that catches them in seconds, or the finding that the model cannot distinguish them, written as a residual; (4) the model's page states the per-family cost and budget. Acceptance: the steward case under 10 min on 4 cores; every mutation caught inside the bench's bound."
+  state = "todo"
+  revision = 216

@@ -1,10 +1,11 @@
 description = "init refuses a manifest whose public list names the manifest (servers/init.md, \"The boot manifest\"): one line saying where and why, then a power-off reporting a system failure (system_reset kind 3, status 255), before any server runs"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # The real init in its place, keyd's image, and a manifest that names itself public. The verdict is the
 # firmware's status, which only system_reset kind 3 gives, and init's line before it.
 programs = [{ package = "redoubt-init", bin = "init" }, { package = "redoubt-keyd", bin = "keyd" }]
-timeout_secs = 30
+timeout_secs = 10
 expect = ['^init: refused the boot: public\[0\]: the manifest is never public$']
 forbid = ['^init: started']
 poweroff = true

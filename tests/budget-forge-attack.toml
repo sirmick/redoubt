@@ -1,6 +1,7 @@
 description = "Forged handle indices (unused slots, pages the table does not have, past the table, 0, wider than 32 bits) are BadHandle for every call; none reaches a budget the attacker holds (I1)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # PID 2 log-server; PID 3 budget-victim, the first program started, holding the boot endpoint's
 # receive right and `system`; PID 4 the attacker, holding `system` (slot 4), never a device.
 # Each runs in a budget of its own under `system`.
@@ -9,7 +10,7 @@ programs = [
     { bin = "budget-victim", budgets = ["system"] },
     { bin = "budget-forge-attack", budgets = ["system"] },
 ]
-timeout_secs = 30
+timeout_secs = 10
 # Indices 129..=133 and 257..=261 name slots 1-5 of pages the attacker's table does not have, and
 # 2^32 + 4 has system's index in its low half: a kernel that dropped the page, or truncated,
 # would destroy system, and the victim, whose budget is under it, would never report. The verdict is

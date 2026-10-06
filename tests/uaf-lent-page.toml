@@ -1,11 +1,12 @@
 description = "A process that dies while a page is lent out must not let that frame be reused under the borrower"
 arch = ["rv64"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # PID 3 uaf-holder is the borrower whose page is at stake and judges; PID 4 uaf-victim lends
 # it a page and dies; PID 5 uaf-grabber attacks, stamping every page it can get;
 # the holder reports to log-server's DONE, which ends the case.
 programs = ["log-server", "uaf-holder", "uaf-victim", "uaf-grabber"]
-timeout_secs = 30
+timeout_secs = 10
 expect = [
     '^\[pid 3\] \[holder\] holding page',
     # The kernel's abandoned notice for the lending call: the victim is gone, and the grabber

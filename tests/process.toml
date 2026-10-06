@@ -1,6 +1,7 @@
 description = "Process creation and exit: process_create, process_map and process_start with its arg and its handle list; thread_create, thread_exit and process_exit; exit notices with cause, code, blamed account and blamed labels, all three causes, a labelled process's notice reaching a system-class reader, blame following the failing thread's current call and nothing else, a creator's budget destroyed killing its children with no notice, and a store to a page that is only readable faulting rather than spinning in the page-fault handler (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # proc-test is the bundle's only program, so it holds root, system, users and every device
@@ -9,7 +10,7 @@ debug_assertions = true
 # them, so they cannot print: every line here is the parent's, and everything it says about a
 # child is what the kernel told it in an exit notice.
 programs = ["proc-test"]
-timeout_secs = 60
+timeout_secs = 10
 expect = [
     '^\[proc\] mapped the console$',
     '^\[proc\] ok: a child budget starts with no processes$',

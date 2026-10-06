@@ -1,11 +1,12 @@
 description = "Every PID in use at once: processes in budgets carved from all of system's and users' until PIDs 2..=511 are taken; the next process_create is OutOfProcesses in every budget, never a panic; all end and every page comes back (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # init alone: it carves both budgets, starts the children and checks itself. Each verdict is a
 # kernel result: the refusals, the exit notices' PIDs and budget_usage.
 programs = ["process-fill"]
-timeout_secs = 120
+timeout_secs = 40
 expect = [
     '^\[process-fill\] 509 children, \d+ pages each$',
     '^\[process-fill\] the next process_create is OutOfProcesses in every budget$',

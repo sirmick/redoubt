@@ -1,6 +1,8 @@
 description = "Bench self-check: a case without `debug_assertions` boots a kernel with the checks off"
 arch = ["rv64"]
 kind = "boot"
+icount = "shift=3,sleep=off"
+timeout_secs = 10
 # The other side of `bench-debug-assertions`: the kernel prints its checks line straight after
 # the banner, within the bench's grace period, so a profile that turned the checks on for every
 # case (and with them the extra panics of a debug build) would fail here.

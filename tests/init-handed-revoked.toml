@@ -1,6 +1,7 @@
 description = "A badge init handed a server dies with the instance (servers/init.md, \"Restarts and reboots\"): passer passes a copy of its badge at orphan-server to keeper and exits; init restarts it with the same badge minted again, and keeper finds the dead instance's copy gone while the new instance's is answered, so the badge has no holder init does not know"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # The real init, keyd, consoled and bootfsd, orphan-server, keeper and passer. The exit and restart
 # lines are init's; the verdict is keeper's, judged from the kernel's and the server's answers.
@@ -13,7 +14,7 @@ programs = [
     { package = "redoubt-init-programs", bin = "keeper" },
     { package = "redoubt-init-programs", bin = "passer" },
 ]
-timeout_secs = 60
+timeout_secs = 20
 expect = [
     '^init: started passer, console [0-9a-f]{16}$',
     '^init: passer \(PID [0-9]+\) exited, code 9$',

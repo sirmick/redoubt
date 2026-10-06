@@ -1,11 +1,12 @@
 description = "A process holds exactly MAX_THREADS (255) threads, its initial one included, with TIDs 1..=255; the next thread_create is TooManyThreads; its budget is charged the header page and its tables at creation and one page per thread, and all of it comes back (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # The first program, alone, with the holder a child in a budget of its own. The TIDs, the refusal
 # and every page count are the kernel's answers.
 programs = ["thread-limit"]
-timeout_secs = 60
+timeout_secs = 20
 expect = [
     '^\[pid 2\] \[thread-limit\] process_create charges the header page and [23] tables: true$',
     '^\[pid 2\] \[thread-limit\] 255 threads, the initial one included$',

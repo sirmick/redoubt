@@ -1,11 +1,12 @@
 description = "R10 closes every handle that depends on the dying subtree wherever it is held (kernel/budgets.md, \"Residual risks\", item 3; I1, I2): a handle minted into a dying budget's scope, one naming the dying budget, one naming an endpoint it owns, and one naming a process object the destruction frees though its creator lives (held by the creator, inside the creator's budget, and outside it under the live stamp), each held in system several levels up, in the dying top's parent and in its sibling, are BadHandle after the destruction, a handle under a live stamp still closes, and the checked build's chain audit passes (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # The program runs first and judges from what the kernel answers each holder's closes; the
 # checked build audits every table's chain entries after the walk.
 programs = ["handle-chain-attack"]
-timeout_secs = 60
+timeout_secs = 10
 expect = [
     '^\[chain-attack\] ok: C.s endpoint, owned by low, is held in system$',
     '^\[chain-attack\] ok: holder 0 in upper holds C.s endpoint and the process object$',

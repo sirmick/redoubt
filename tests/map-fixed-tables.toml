@@ -1,6 +1,7 @@
 description = "map_fixed's page-table count across gigabytes (R22, I14): unmap frees the 514 tables a setup made, and a range needing 515 tables across a gigabyte boundary is refused one table short with nothing charged instead of panicking the kernel"
 arch = ["rv64"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # `system` gets a quarter of RAM, nearly all of it this program's, and must afford the 261634-page range; the guest touches ~130 MiB.
 memory_mib = 4608

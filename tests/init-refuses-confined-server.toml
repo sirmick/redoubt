@@ -1,6 +1,7 @@
 description = "init refuses a confined manifest whose label sets share an endpoint (R34): netd, labelled alice-secrets, receives on an endpoint the unlabelled ipd is handed: one line saying where and why, then a power-off reporting a system failure (system_reset kind 3, status 255), before any server runs"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # The real init, the images its manifest names, and the manifest: image/manifest.json with
 # confined, alice working under a labelled set too, and netd labelled while ipd, which it serves,
 # is not. The verdict is init's line and the firmware's status, which only system_reset kind 3
@@ -14,7 +15,7 @@ programs = [
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
 ]
-timeout_secs = 30
+timeout_secs = 10
 expect = ['^init: refused the boot: servers\[4\]\.receives\[0\]: two label sets share an endpoint in a confined boot \(R34\)$']
 forbid = ['^init: started']
 poweroff = true

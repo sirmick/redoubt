@@ -14,6 +14,7 @@ mod elixir;
 mod fmt;
 mod memory;
 mod peer;
+mod prebuilt;
 mod pty;
 mod qemu;
 mod run;
@@ -34,6 +35,7 @@ use clap::Parser;
 
 use crate::build::{Builder, Profile};
 use crate::case::{Case, Kind, LoopbackServer, Program};
+use crate::prebuilt::{Entry, Packed};
 use crate::qemu::{Image, Verdict};
 use crate::target::{Machine, Target};
 
@@ -42,6 +44,9 @@ use crate::target::{Machine, Target};
 struct Args {
     /// Only run cases whose name contains this.
     filter: Option<String>,
+    /// The filter is a case's whole name: run that case alone, or refuse if there is none.
+    #[arg(long, requires = "filter")]
+    exact: bool,
     /// Only run on this target (rv64, rv32).
     #[arg(long)]
     arch: Option<String>,
@@ -91,6 +96,14 @@ struct Args {
     /// A result under J above 1 is a sweep datum, never a verdict.
     #[arg(long, value_name = "J", requires = "sweep")]
     jobs: Option<usize>,
+    /// Instead of running tests, build every boot and build case's pieces for each target (or
+    /// --arch's) into DIR, with this bench beside them, and exit: what --prebuilt runs from.
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["run", "list", "sweep", "prebuilt"])]
+    prebuild: Option<PathBuf>,
+    /// Run boot and build cases from the pieces --prebuild left in DIR: no cargo, no packing.
+    /// Refused if the tree has changed since.
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["run", "sweep"])]
+    prebuilt: Option<PathBuf>,
 }
 
 /// The seeds of a `--sweep`, each once.
@@ -163,6 +176,7 @@ fn sweep<'a>(
     Ok(Some(Sweep { case, seeds: seeds.clone(), jobs }))
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 enum Outcome {
     Pass,
     Fail(String),
@@ -274,6 +288,16 @@ fn main() -> Result<()> {
         .collect();
     paths.sort();
     let cases = paths.iter().map(|p| Case::load(p)).collect::<Result<Vec<_>>>()?;
+    let filter = args.filter.as_deref();
+    if args.exact && !cases.iter().any(|case| Some(case.name.as_str()) == filter) {
+        bail!("no case is named {:?}", filter.unwrap_or(""));
+    }
+    let matches = |case: &Case| selected(case, filter, args.exact).0;
+    let chosen = |case: &Case| selected(case, filter, args.exact).1;
+    if let Some(dir) = &args.prebuild {
+        let cases: Vec<&Case> = cases.iter().filter(|case| matches(case)).collect();
+        return prebuild(&workspace, args.verbose, dir, &cases, args.arch.as_deref());
+    }
     let parallelism = std::thread::available_parallelism().map_or(1, |n| n.get());
     let replay = std::env::var("TESTBENCH_QEMU_SEED").ok();
     if let Some(sweep) = sweep(&args, &cases, replay, parallelism)? {
@@ -283,13 +307,16 @@ fn main() -> Result<()> {
     let mut failures = 0;
     // Probed once, at the first loopback case.
     let mut loopback_usable: Option<Result<(), ssh::Unusable>> = None;
-    for case in cases.iter().filter(|c| c.matches(args.filter.as_deref())) {
+    // With --prebuilt: the tree's fingerprint, then each target's pieces, read at its first case.
+    let fingerprint = args.prebuilt.as_ref().map(|_| prebuilt::fingerprint(&workspace)).transpose()?;
+    let mut prebuilt_targets = std::collections::BTreeMap::new();
+    for case in cases.iter().filter(|c| matches(c)) {
         if args.list {
             let mark = if case.whole_run { "" } else { "(by name only) " };
             println!("{:<16} [{}] {mark}{}", case.name, case.arch.join(", "), case.description);
             continue;
         }
-        if !case.chosen(args.filter.as_deref()) {
+        if !chosen(case) {
             continue;
         }
         if let Kind::UnsafeBudget(check) = &case.kind {
@@ -371,7 +398,7 @@ fn main() -> Result<()> {
             let outcome = match usable {
                 Err(ssh::Unusable::Host(why)) => missing(why),
                 Err(ssh::Unusable::Broken(why)) => Outcome::Fail(why),
-                Ok(()) => match ssh_loopback(&workspace, case, loopback, &logs) {
+                Ok(()) => match ssh_loopback(&workspace, case, loopback, &logs, args.prebuilt.as_deref()) {
                     Ok(outcome) => judge(loopback.must_fail.as_deref(), outcome)?,
                     // The bench's own trouble is never what a `must_fail` is waiting for.
                     Err(e) => Outcome::Fail(format!("bench error: {e:#}")),
@@ -398,7 +425,25 @@ fn main() -> Result<()> {
         for arch in case.arch.iter().filter(|a| args.arch.as_ref().is_none_or(|only| only == *a)) {
             let target =
                 target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
-            for (variant, outcome, seconds) in run_case(&builder, case, target, &logs, &missing)? {
+            let entry = match (&args.prebuilt, &fingerprint) {
+                (Some(dir), Some(fingerprint)) => {
+                    if !prebuilt_targets.contains_key(arch) {
+                        prebuilt_targets
+                            .insert(arch.clone(), prebuilt::load(dir, arch, &workspace, fingerprint)?);
+                    }
+                    match prebuilt_targets[arch].get(&case.name) {
+                        Some(entry) => Some(entry),
+                        None => {
+                            let why = format!("not in {}: made with another filter", dir.display());
+                            failures +=
+                                report(&format!("{} [{}]", case.name, target.name), Outcome::Fail(why), 0.0);
+                            continue;
+                        }
+                    }
+                }
+                _ => None,
+            };
+            for (variant, outcome, seconds) in run_case(&builder, case, target, &logs, &missing, entry)? {
                 failures += report(&format!("{} [{}{}]", case.name, target.name, variant), outcome, seconds);
             }
         }
@@ -407,6 +452,17 @@ fn main() -> Result<()> {
         bail!("{failures} test(s) failed; console logs are in {}", logs.display());
     }
     Ok(())
+}
+
+/// Whether a run with `filter` takes `case` (for `--list` and `--prebuild`), and whether it runs
+/// it. With `exact`, the filter is a whole name: it takes and runs that case alone, `whole_run`
+/// or not, and never a case whose name only contains it.
+fn selected(case: &Case, filter: Option<&str>, exact: bool) -> (bool, bool) {
+    if exact {
+        let named = Some(case.name.as_str()) == filter;
+        return (named, named);
+    }
+    (case.matches(filter), case.chosen(filter))
 }
 
 /// Print one result line; returns 1 for a failure, to count them.
@@ -457,7 +513,7 @@ fn run_sweep(
     let mut built = Vec::new();
     for arch in case.arch.iter().filter(|a| only_arch.is_none_or(|only| only == *a)) {
         let target = target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
-        match build_case(builder, case, target, logs, missing)? {
+        match build_case(builder, case, target, logs, missing, None)? {
             Ok(ready) => built.push(ready),
             Err(results) => {
                 for (variant, outcome, seconds) in results {
@@ -665,15 +721,17 @@ fn distinct_within(patterns: &[String], log: &str) -> Result<(), String> {
 type Results = Vec<(String, Outcome, f32)>;
 
 /// Run one case on one target. A boot case yields one result per `smp` entry. `missing` turns
-/// something the host lacks into a failure or, with --allow-skip, a skip.
+/// something the host lacks into a failure or, with --allow-skip, a skip. `prebuilt` is what a
+/// `--prebuild` left for it, if the run is from one.
 fn run_case(
     builder: &Builder,
     case: &Case,
     target: &'static Target,
     logs: &Path,
     missing: &dyn Fn(String) -> Outcome,
+    prebuilt: Option<&Entry>,
 ) -> Result<Results> {
-    match build_case(builder, case, target, logs, missing)? {
+    match build_case(builder, case, target, logs, missing, prebuilt)? {
         Ok(ready) => boot_case(builder, &ready, qemu_seed(ready.boot)?, logs, &mut |line| println!("{line}")),
         Err(results) => Ok(results),
     }
@@ -686,20 +744,65 @@ struct Built<'a> {
     target: &'static Target,
     machine: &'static Machine,
     firmware: String,
-    loader: PathBuf,
-    bundle: PathBuf,
-    userland: Option<userland::Staged>,
+    packed: Packed,
 }
 
-/// Build a boot case for `target`, or the results of a case that ends here: a build case, a host
-/// that cannot boot it, a build that fails.
+/// Build a boot case for `target`, or take its pieces from `prebuilt`; or the results of a case
+/// that ends here: a build case, a host that cannot boot it, a build that fails.
 fn build_case<'a>(
     builder: &Builder,
     case: &'a Case,
     target: &'static Target,
     logs: &Path,
     missing: &dyn Fn(String) -> Outcome,
+    prebuilt: Option<&Entry>,
 ) -> Result<Result<Built<'a>, Results>> {
+    let (boot, machine) = match (&case.kind, &target.machine) {
+        (Kind::Boot(boot), Ok(machine)) => (boot, machine),
+        // A build case, or a target that cannot boot: its results are its build's.
+        _ => {
+            return Ok(Err(match prebuilt {
+                Some(Entry::Results(results)) => results.clone(),
+                Some(Entry::Packed(_)) => bail!("{}: packed by --prebuild, but not a boot", case.name),
+                None => match pack_case(builder, case, target, logs)? {
+                    Err(results) => results,
+                    Ok(_) => unreachable!("only a boot case on a bootable target is packed"),
+                },
+            }));
+        }
+    };
+    let firmware = match rustsbi_prototyper(target) {
+        Ok(firmware) => firmware,
+        Err(why) => return Ok(Err(vec![(String::new(), missing(why), 0.0)])),
+    };
+    if let Err(why) = qemu::usable(machine.qemu) {
+        return Ok(Err(vec![(String::new(), missing(why), 0.0)]));
+    }
+    if !boot.session.is_empty() {
+        if let Err(why) = ssh_available() {
+            return Ok(Err(vec![(String::new(), missing(why), 0.0)]));
+        }
+    }
+    let packed = match prebuilt {
+        Some(Entry::Packed(packed)) => packed.clone(),
+        Some(Entry::Results(results)) => return Ok(Err(results.clone())),
+        None => match pack_case(builder, case, target, logs)? {
+            Ok(packed) => packed,
+            Err(results) => return Ok(Err(results)),
+        },
+    };
+    Ok(Ok(Built { boot, name: &case.name, target, machine, firmware, packed }))
+}
+
+/// Build and pack a case's pieces for `target` in `builder`'s run, the bundle in `logs`; or the
+/// results of a case that ends at its build: a build case, a target that cannot boot, a build
+/// that fails.
+fn pack_case(
+    builder: &Builder,
+    case: &Case,
+    target: &'static Target,
+    logs: &Path,
+) -> Result<Result<Packed, Results>> {
     let started = Instant::now();
     let elapsed = |since: Instant| since.elapsed().as_secs_f32();
 
@@ -727,18 +830,6 @@ fn build_case<'a>(
         Ok(machine) => machine,
         Err(why) => return Ok(Err(vec![(String::new(), Outcome::Skip(why.to_string()), 0.0)])),
     };
-    let firmware = match rustsbi_prototyper(target) {
-        Ok(firmware) => firmware,
-        Err(why) => return Ok(Err(vec![(String::new(), missing(why), 0.0)])),
-    };
-    if let Err(why) = qemu::usable(machine.qemu) {
-        return Ok(Err(vec![(String::new(), missing(why), 0.0)]));
-    }
-    if !boot.session.is_empty() {
-        if let Err(why) = ssh_available() {
-            return Ok(Err(vec![(String::new(), missing(why), 0.0)]));
-        }
-    }
 
     // Build everything once, then boot it once per hart count. A build failure is the bench's
     // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
@@ -764,7 +855,74 @@ fn build_case<'a>(
         Ok(staged) => staged,
         Err(e) => return Ok(Err(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))])),
     };
-    Ok(Ok(Built { boot, name: &case.name, target, machine, firmware, loader, bundle, userland }))
+    Ok(Ok(Packed { loader, bundle, userland }))
+}
+
+/// Redoubt's `sshd` on its host platform, in a prebuilt directory.
+const SSHD_HOST: &str = "redoubt-sshd-host";
+
+/// `--prebuild DIR`: every one of `cases` packed for each of its targets (`arch`'s alone, if
+/// given) into DIR (`prebuilt.rs`), and this bench copied beside them. A build that fails is kept
+/// as the case's result, printed here and again by each run of the case.
+fn prebuild(workspace: &Path, verbose: bool, dir: &Path, cases: &[&Case], arch: Option<&str>) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let dir = dir.canonicalize()?;
+    let fingerprint = prebuilt::fingerprint(workspace)?;
+    prebuilt::copy_binary(&dir)?;
+    if cases.iter().any(|c| matches!(&c.kind, Kind::SshLoopback(l) if l.server == LoopbackServer::Redoubt)) {
+        prebuilt::copy(&ssh::build_redoubt(workspace)?, &dir.join(SSHD_HOST))?;
+    }
+    for target in target::TARGETS.iter().filter(|t| arch.is_none_or(|only| only == t.name)) {
+        let started = Instant::now();
+        let staging = prebuilt::building(&dir, target.name);
+        if staging.exists() {
+            std::fs::remove_dir_all(&staging)?;
+        }
+        std::fs::create_dir_all(&staging)?;
+        let builder = Builder {
+            workspace: workspace.to_path_buf(),
+            run: staging.clone(),
+            verbose,
+            staged: Default::default(),
+        };
+        let mut entries = Vec::new();
+        let mut failed = 0;
+        for case in cases.iter().filter(|c| c.arch.iter().any(|a| a == target.name)) {
+            if !matches!(case.kind, Kind::Boot(_) | Kind::Build(_)) {
+                continue;
+            }
+            let entry = match pack_case(&builder, case, target, &staging)? {
+                Ok(packed) => Entry::Packed(packed),
+                Err(results) => {
+                    for (variant, outcome, seconds) in &results {
+                        if let Outcome::Fail(_) = outcome {
+                            failed += report(
+                                &format!("{} [{}{variant}]", case.name, target.name),
+                                outcome.clone(),
+                                *seconds,
+                            );
+                        }
+                    }
+                    Entry::Results(results)
+                }
+            };
+            entries.push((case.name.clone(), entry));
+        }
+        let count = entries.len();
+        // A change to the tree while it built would leave pieces of either tree under its name.
+        if prebuilt::fingerprint(workspace)? != fingerprint {
+            std::fs::remove_dir_all(&staging).ok();
+            bail!("the tree changed while {} was built: make it again", dir.join(target.name).display());
+        }
+        prebuilt::finish(&dir, target.name, &staging, workspace, fingerprint.clone(), entries)?;
+        println!(
+            "prebuilt {}: {count} cases, {failed} failed, in {:.1}s: {}",
+            target.name,
+            started.elapsed().as_secs_f32(),
+            dir.join(target.name).display()
+        );
+    }
+    Ok(())
 }
 
 /// Boot a built case once per hart count with guest seed `seed`, keeping its files in `logs`.
@@ -776,7 +934,7 @@ fn boot_case(
     logs: &Path,
     out: &mut dyn FnMut(String),
 ) -> Result<Results> {
-    let Built { boot, name, target, machine, firmware, loader, bundle, userland } = built;
+    let Built { boot, name, target, machine, firmware, packed: Packed { loader, bundle, userland } } = built;
     let elapsed = |since: Instant| since.elapsed().as_secs_f32();
     if let Some(seed) = seed {
         out(format!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)"));
@@ -906,15 +1064,27 @@ fn ssh_available() -> Result<(), String> {
 }
 
 /// Run an `ssh-loopback` case: its sessions against a host server accepting its keys. An error
-/// is the bench's own trouble; the outcome is the sessions' verdict.
-fn ssh_loopback(workspace: &Path, case: &Case, loopback: &case::SshLoopback, logs: &Path) -> Result<Outcome> {
+/// is the bench's own trouble; the outcome is the sessions' verdict. Redoubt's server is the one
+/// in `prebuilt`, if the run is from a prebuilt directory, or else built now.
+fn ssh_loopback(
+    workspace: &Path,
+    case: &Case,
+    loopback: &case::SshLoopback,
+    logs: &Path,
+    prebuilt: Option<&Path>,
+) -> Result<Outcome> {
     let deadline = Instant::now() + std::time::Duration::from_secs_f64(loopback.timeout_secs);
-    let serve = match loopback.server {
-        LoopbackServer::Redoubt => ssh::redoubt,
-        LoopbackServer::Openssh => ssh::loopback,
+    let (dir, authorized, host_key) = (&logs.join("ssh"), &loopback.authorized, loopback.host_key.as_deref());
+    let server = match loopback.server {
+        LoopbackServer::Redoubt => {
+            let binary = match prebuilt {
+                Some(prebuilt) => prebuilt.join(SSHD_HOST),
+                None => ssh::build_redoubt(workspace)?,
+            };
+            ssh::redoubt(workspace, &binary, dir, &case.name, authorized, host_key)?
+        }
+        LoopbackServer::Openssh => ssh::loopback(workspace, dir, &case.name, authorized, host_key)?,
     };
-    let server =
-        serve(workspace, &logs.join("ssh"), &case.name, &loopback.authorized, loopback.host_key.as_deref())?;
     let abort = std::sync::atomic::AtomicBool::new(false);
     let sessions = ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort)?;
     // What the server saw comes first: a case that fails as its `must_fail` expects still fails if
@@ -1031,6 +1201,22 @@ mod tests {
             plan(&["sched", "--sweep", "1..4", "--arch", "rv32"], None).unwrap(),
             Some((&"sched".to_string(), 1))
         );
+    }
+
+    /// `--exact` takes the one case its filter names, out of the whole run or not, and no case
+    /// whose name only contains it; without it a filter takes every case containing it, and runs
+    /// a case out of the whole run only by its whole name. It needs a filter.
+    #[test]
+    fn an_exact_filter_runs_one_case() {
+        let boot = "kind = 'boot'\nprograms = []\nexpect = []\n";
+        let (latency, tcg) =
+            (case("sched-latency", boot), case("sched-latency-tcg", &format!("whole_run = false\n{boot}")));
+        assert_eq!(selected(&latency, Some("sched-latency"), true), (true, true));
+        assert_eq!(selected(&tcg, Some("sched-latency"), true), (false, false));
+        assert_eq!(selected(&tcg, Some("sched-latency-tcg"), true), (true, true));
+        assert_eq!(selected(&tcg, Some("sched-latency"), false), (true, false));
+        assert_eq!(selected(&latency, Some("sched"), false), (true, true));
+        assert!(args(&["--exact"]).is_err(), "--exact without a filter");
     }
 
     /// No two boots of a sweep share a file: each seed and target has a directory of its own, and

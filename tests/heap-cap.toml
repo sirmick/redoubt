@@ -1,12 +1,13 @@
 description = "A server's heap cap is the runtime's, inside its budget (servers/init.md, \"Heaps\"): a tester in init's place launches heap-capped through the stub with its heap capped at 16 pages; the child takes pages until its runtime refuses one, then asks fallibly for 64 more, which are refused; the child's budget, read by the tester with budget_usage, holds the same pages before and after, with room for the 64; then the child asks for them infallibly and its exit notice carries the runtime's panic code, 101"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # The tester in init's place, since servers under init hold no budget handle (R33), and the
 # child it launches from the bundle. The verdict is the kernel's account of the child's budget;
 # the child's words are traces. Its last, infallible request ends it by panic, which the exit notice
 # shows.
 programs = ["heap-cap", "heap-capped"]
-timeout_secs = 30
+timeout_secs = 10
 expect = [
     '^\[heap-cap\] trace: the child holds (1[0-6]|[1-9]) heap pages at its cap of 16$',
     '^\[heap-cap\] ok: 64 pages past the cap: refused; the budget held \d+ pages before and \d+ after, with room for \d+$',

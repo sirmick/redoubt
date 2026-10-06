@@ -1,6 +1,7 @@
 description = "Hostile arguments to every budget, IPC and memory call (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 log-server; PID 3 budget-victim, the first program started, holding the boot endpoint's
@@ -12,7 +13,7 @@ programs = [
     { bin = "budget-victim", budgets = ["system"] },
     { bin = "budget-syscall-attack", budgets = ["system"] },
 ]
-timeout_secs = 30
+timeout_secs = 10
 # Each targeted attempt's error is pinned as progress, so a refusal for the wrong reason (or in
 # the wrong order) fails. The verdict is the kernel surviving (PANIC is always forbidden), the
 # victim's pages and its DONE and the power-off.

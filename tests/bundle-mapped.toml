@@ -1,12 +1,13 @@
 description = "The loader maps the whole verified bundle read-only into the one process it starts: a0 and a1 give its address and length, the archive holds the kernel then that program, whose read-only segments match its own image, root pays for the frames, map_fixed over it is refused as an overlap, and a write to the mapping faults"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # The one program, in init's place: it holds the console and the Reset right and judges the
 # kernel and the loader (docs/testbench.md, "Rule F"). Its `ok:` lines read back what the loader
 # and the kernel set up. The last verdict is the kernel's: the store fault on the bundle, at the
 # loader's BUNDLE_AT, ends the process, and the program's line after the store is forbidden.
 programs = ["bundle-mapped"]
-timeout_secs = 30
+timeout_secs = 10
 expect = [
     '^\[bundle-mapped\] the bundle is at 0x20000000, [0-9]+ bytes$',
     '^\[bundle-mapped\] ok: a0 is a page, a1 more than a signature$',

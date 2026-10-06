@@ -1,6 +1,7 @@
 description = "init refuses an empty declared server stack before any server runs, then powers off with a system failure"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
@@ -11,7 +12,7 @@ programs = [
     { package = "redoubt-ipd", bin = "ipd" },
     { package = "redoubt-littlefsd", bin = "littlefsd" },
 ]
-timeout_secs = 30
+timeout_secs = 10
 expect = ['^init: refused the boot: servers\[0\]\.stack_pages: a stack is 1 to 128 pages and smaller than its budget$']
 forbid = ['^init: started']
 poweroff = true

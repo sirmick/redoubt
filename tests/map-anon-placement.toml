@@ -1,13 +1,14 @@
 description = "Where the kernel places pages: a map_anon request larger than its area is refused with OutOfMemory and nothing charged though the budget could pay, and a received lend and a received transfer each land in the message area (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # The first program, alone: every ok line is an error, a usage or an address the kernel returned
 # (docs/testbench.md, "Rule F"). `system` gets a quarter of RAM and must be able to pay for more
 # than the 256 MiB area, so the refusal is the area's, not the budget's.
 programs = ["map-anon-placement"]
 memory_mib = 1536
-timeout_secs = 30
+timeout_secs = 10
 expect = [
     '^\[placement\] ok: the budget could pay for more than the area$',
     '^\[placement\] ok: a request larger than the area is refused$',

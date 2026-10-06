@@ -1,10 +1,11 @@
 description = "Self-check of cbo-user-fault (must fail): the same boot with the kernel built plant-senvcfg, which writes senvcfg permissive after the boot's check, standing in for a hart whose reset value is not 0. Each child's operation then runs, cbo.inval, cbo.clean, cbo.flush and cbo.zero alike, and the child exits 0, so the case's closing verdict line never comes. Proves the case would catch a hart left permissive, and that QEMU runs all four operations when they are allowed, so the case does not pass vacuously"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 kernel_features = ["plant-senvcfg"]
 programs = ["cbo-user-fault"]
-timeout_secs = 30
+timeout_secs = 10
 # Each line is the kernel's exit notice for one child, read by the sole first program: `exited`
 # with code 0 means the operation ran unrefused. All four must be seen before the run fails on the
 # missing verdict line.

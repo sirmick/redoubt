@@ -1,6 +1,8 @@
 description = "The kernel verifies at boot that none of its code is writable, directly or through the physmap"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
+timeout_secs = 10
 programs = ["log-server"]
 # The verdict is the kernel's own boot-time check, printed before any program runs; anchored,
 # so a program's relayed `[pid N]` line could not match it.

@@ -1,10 +1,11 @@
 description = "Minted log badges cannot pose as PIDs (rule F, R1): a first program's child, logging through a handle from logsrv::mint_child, relays the first program's verdict line and a DONE lookalike, and both print only as [badge 256]; mint_child refuses a badge below 0x100"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # PID 2 alone: it owns the console, serves the log endpoint and spawns the two children.
 programs = ["logsrv-badge-forgery"]
-timeout_secs = 30
+timeout_secs = 10
 # The child's copies come out prefixed with its minted badge; only this program's own verdict
 # line starts `[pid 2]`, and no `[server] done:` line appears at all (the bench fails any).
 expect = [

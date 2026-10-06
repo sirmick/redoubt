@@ -5,6 +5,8 @@ description = "Every anonymous page a process is given is zero (freed-frame reus
 # physical addresses (the model's invariant I9).
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
+timeout_secs = 10
 # PID 3 mem-victim frees pages holding its secret and judges, on the boot endpoint's receive
 # right; PID 4 mem-attack lends it every anonymous page it can get.
 programs = ["log-server", "mem-victim", "mem-attack"]

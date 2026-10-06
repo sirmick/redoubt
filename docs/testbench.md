@@ -15,6 +15,9 @@ cargo testbench timer           # cases whose name contains "timer"
 cargo testbench --arch rv64     # one target
 cargo testbench --list          # names and descriptions, those run only by name marked
 cargo testbench sched-latency --sweep 1..20 --jobs 4   # one case, a seed sweep, 4 boots at a time
+cargo testbench --exact sched-latency   # that case alone, not sched-latency-tcg too
+cargo testbench --prebuild target/prebuilt   # build every case's pieces once, both widths
+target/prebuilt/testbench --prebuilt target/prebuilt --exact --arch rv64 timer   # run from them
 ./test                          # the same, from the repository root
 ```
 
@@ -34,6 +37,51 @@ fallback to QEMU's own firmware.
 | `tests/*.toml` | the cases, one per file (`tests/data/`: files they read; `tests/keys/`: SSH test keys) |
 | `tests/programs/` | `no_std` programs that run inside Redoubt: the log server, victims, attackers, checkers |
 | `tests/net/` | the network clients and the judge that the net cases start under `init`, and the host test that checks each net case's manifest against its case file |
+
+A filter takes every case whose name contains it, so `cargo testbench timeouts` runs
+`timeouts-tcg` too; `--exact` takes the one case it names, run only by name or not, and refuses a
+name no case has. A run stages each userland disk it boots in a directory named for the recipe's
+whole path, as two recipes may share a file name.
+
+### Building once
+
+Status: built · tested: host:testbench::an_index_survives_its_rename_and_names_its_tree, host:testbench::the_fingerprint_follows_the_trees_changes, host:testbench::an_exact_filter_runs_one_case, host:testbench::userland_recipes_of_one_name_stage_apart
+
+A run builds what it boots: `cargo run` of the bench, then a cargo build of the kernel, the loader
+and each program, a check that costs about 30 ms when nothing changed and waits on the build
+directory's lock while another run compiles, then the bundle and any userland disk. Alone that is
+a quarter of a second before QEMU starts; beside a train of other runs, each waiting on the
+others' compiles, it was most of a case's time. `--prebuild DIR` does it once for every case:
+
+```text
+DIR/testbench            the bench, copied from the --prebuild that made the directory
+DIR/redoubt-sshd-host    Redoubt's sshd on its host platform, for the loopback cases against it
+DIR/<arch>/index.json    the tree's fingerprint; each case's pieces, or its build's results
+DIR/<arch>/...           cargo's copies, the bundles, the userland disks
+```
+
+Every `boot` and `build` case is built for each of its targets (`--arch` for one; a filter for
+some), the widths one after the other in one process: two userland stages at once would compile
+the same Mix project in its one build directory. A build that fails is kept as the case's
+result, printed by the prebuild and again by each run of the case, as is a `build` case's
+verdict. Each width is built in a directory of its own and renamed into place when done, so a
+run reading the old pieces never sees a half-written one.
+
+`DIR/testbench --prebuilt DIR` then runs cases as `cargo testbench` does, but takes each boot
+case's bundle, loader and userland disk from `DIR` and runs no cargo and packs nothing; what
+stays per boot is what each boot must have afresh: the QEMU probe, its disk (a disk recipe is
+still packed for every boot) and its devices. A case starts in about the time QEMU takes to
+start. The index names the workspace that made it and the tree's fingerprint: its commit, its
+uncommitted changes and its untracked files that git does not ignore, taken when the prebuild
+starts and again before each width is put in place, which a change in between refuses. A run
+from a directory another workspace made is refused naming it, and so is one from this tree
+before a change, never a silent test of old code, so the directory is made again after any
+change. What git ignores is not in the fingerprint: the pinned toolchains (`toolchains/`, or
+where `BEAMLET_TOOLCHAINS` points) and a Mix project's `_build` (`userland/shell/_build/`); a
+change to those needs a prebuild by hand. The other kinds run as
+always, with their own cargo where they have one (`host-tests`). `scripts/jobs.mk` makes the
+directory (`prebuilt`) and runs every case target from it when it is there ("On a shared host"
+under [the case file](#the-case-file)).
 
 ## Verdicts
 
@@ -195,6 +243,24 @@ inside the run's directory. `--jobs J` boots up to J seeds at once. It is never 
 result under it is worth is the shared-host rule below. A timing gate runs one pinned seed and
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
+**Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
+something in it waits on the host, and 131 of the 194 do. What keeps a case on the host's clock:
+a disk or a userland disk (38 cases; the rule for a disk is above); host sockets, a `forward`, a
+`poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
+the rv32 UART lost a burst of it); several harts that spin, since under `icount` QEMU runs the
+harts in turn on one host thread and a hart spinning on the kernel's lock spends its whole turn
+(3: `all-together` at 2 harts and `ipc` at 4 take from three to ten times as long, and
+`smp-boot` at 4 sees a hart that never ran user code); and a run whose purpose is the host's
+time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`, which needs
+QEMU's multi-threaded TCG). Three cases read no host clock and stay on it for now: `redoubt-ipc`
+fails under `icount` on both widths (189 calls abandoned of the 256 it wants), until that is
+understood; `sum-clear` and `lend-untouched-page` (at 4 harts) fail without it too, and move
+once they pass. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
+is given at least four times its slowest pass alone on either width, rounded up to 10 s, and
+more than any wait of its own program, so that a stuck check reports itself; it is never raised
+without a measurement. `bench-poweroff-missing` keeps its 3 s: there the deadline is the oracle,
+the timeout its `must_fail` waits for.
+
 **On a shared host.** `cargo testbench` runs its cases one after another; what may run beside
 the invocation, another invocation in its own run directory, a seed under `--jobs`, a build, is
 decided by the clock each case measures with. A boot case with `icount` measures in guest time:
@@ -202,7 +268,7 @@ the host's load does not move a guest time, so its pass, and a failure the guest
 reports, are verdicts whatever ran beside it (a pinned seed adds only that the run repeats
 exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's deadline for the
 boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
-alone. A boot case without `icount` (most of them) keeps the host's clock in the guest, so load
+alone. A boot case without `icount` (60 of them) keeps the host's clock in the guest, so load
 lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
 bound on a time, and a failure beside other work has no verdict until it fails alone. A `[net]`
 table by itself changes neither class: an empty one gives the guest a card that reaches
@@ -234,10 +300,11 @@ cores: `q run --cores N -- <command>` waits for N free cores, runs the command p
 `--quiet` runs a host-clock case on a reserved core set, one such case at a time, while the rest
 of the machine keeps working; `--lock net` keeps two `[net]` boots apart; a lease ends with the
 client process, so a killed job frees its cores. `scripts/jobs.mk` names every case as a make
-target (`rv64/<case>`, `cases-rv64`, `quiet-rv64`, `build-rv64`, `docs`) and picks the class for
-it: a boot takes one core per guest hart, a `host-tests` case four, the host-clock cases go
-quiet. `q ls` shows the core map and the queue; `q log` the recent jobs with the time each
-waited and ran.
+target (`rv64/<case>`, `cases-rv64`, `quiet-rv64`, `build-rv64`, `prebuilt`, `docs`) and picks
+the class for it: a boot takes one core per guest hart, a `host-tests` case four, the host-clock
+cases go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its
+width is there ([building once](#building-once)), else through `cargo testbench`. `q ls` shows
+the core map and the queue; `q log` the recent jobs with the time each waited and ran.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by

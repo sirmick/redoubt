@@ -1,6 +1,7 @@
 description = "A server faults while it serves a labelled client, and init restarts it (servers/init.md, \"Restarts and reboots\"): init reports the fault with the client's labels, blamed on nobody while no steward runs; the client's call gets Dead and its next is served by the new instance, which refuses an id the old one minted; the dead instance's console connection, written through a copy the server handed the client, is refused (\"Fresh connections per child\"); and before the fault a reply the kernel rejected reached the client as malformed while the server went on serving (servers/serving.md, \"Replies and rollback\")"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 # The real init, keyd, consoled and bootfsd, restartee, restart-client and restart-faulter, each client
 # handed a badge at restartee. The faulter is labelled `secrets`, and restartee faults serving its
@@ -16,7 +17,7 @@ programs = [
     { package = "redoubt-init-programs", bin = "restart-client" },
     { package = "redoubt-init-programs", bin = "restart-faulter" },
 ]
-timeout_secs = 60
+timeout_secs = 20
 expect = [
     '^init: started restartee, console [0-9a-f]{16}$',
     '^init: started restart-client, console [0-9a-f]{16}$',

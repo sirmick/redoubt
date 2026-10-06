@@ -1,6 +1,7 @@
 description = "Destroying a budget while handles to it and its descendants are held closes every one of them: each stale index is BadHandle, before and after frames and indices are reused (R10, I1, I2)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # PID 2 log-server; PID 3 budget-victim, the first program started, holding the boot endpoint's
 # receive right and `system`; PID 4 the attacker, holding `users` (slot 4), never a device. Each
 # runs in a budget of its own, an equal share of `system`; the attacker builds its tree in its own.
@@ -9,7 +10,7 @@ programs = [
     { bin = "budget-victim", budgets = ["system"] },
     { bin = "budget-destroy-attack", budgets = ["users"] },
 ]
-timeout_secs = 30
+timeout_secs = 10
 # A handle that outlived its budget would reach a freed frame, and the kernel stops on that
 # (I1): a PANIC, always forbidden. The verdict is the kernel surviving, the victim's pages and
 # its DONE and the power-off. The attacker's lines pin that each stale index was refused and the

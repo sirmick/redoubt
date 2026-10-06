@@ -1,9 +1,10 @@
 description = "A user parent launches children through the real loader stub (servers/init.md, \"Launching through the loader stub\"; R32). A well-formed ELF runs and exits from its own entry. Hostile ELFs (overlapping segments, a segment over the stub, the startup page or the stack, an entry outside executable segments, truncated headers, a huge image_len, segment bytes past the mapped image, and 32 header-fuzzed images) only exit or fault the child; a segment the child's budget cannot hold exits 112, and the same image runs in a budget that holds it: the parent's budget returns to the same usage after each, and a well-formed child still runs afterwards"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 programs = ["stub-launch"]
-timeout_secs = 60
+timeout_secs = 10
 expect = [
     '^\[stub-launch\] ok: well-formed child: exited 77$',
     '^\[stub-launch\] ok: overlapping segments: exited 111$',

@@ -1,12 +1,13 @@
 description = "Bench self-check: a [[file]] entry reaches the guest signed, as data the loader never runs, and the program in init's place reads it back from the bundle's pages byte for byte (the read-back through /boot under init is the servers' half)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # The one program, in init's place: it holds the console and the Reset right, finds the entry
 # named `data` in the bundle the loader mapped for it, and compares it with the file it was built
 # with (docs/testbench.md, "Bundle files"). The verdict is its own line, on the console only it
 # holds, and the power-off; no other program runs (docs/testbench.md, "Rule F").
 programs = ["bundle-file"]
-timeout_secs = 20
+timeout_secs = 10
 expect = ['^\[bundle-file\] ok: the data entry is the injected file, \d+ bytes$']
 forbid = ['\[bundle-file\] FAIL']
 poweroff = true

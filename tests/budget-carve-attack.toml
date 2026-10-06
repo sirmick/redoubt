@@ -1,6 +1,7 @@
 description = "Carving beyond a parent is refused for every limit, the largest values and sums that would wrap, and every parent stays within its limits, which a program beside the attacker reads (R7)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 # PID 2 log-server; PID 3 budget-victim, the first program started, holding the boot endpoint's
 # receive right, `system` and `users`; PID 4 the attacker, holding root, system and users (slots 4-6),
 # never a device. Each runs in a budget of its own, an equal share of `system`.
@@ -9,7 +10,7 @@ programs = [
     { bin = "budget-victim", budgets = ["system", "users"] },
     { bin = "budget-carve-attack", budgets = ["root", "system", "users"] },
 ]
-timeout_secs = 30
+timeout_secs = 10
 # The attacker tries to carve more pages than `system` has free (the tester carved them all), then
 # more than `users` has of each limit, and more than `root` has; a carve the kernel wrongly
 # allowed would leave `system` or `users` past a limit, and the victim, reading both afterwards,
