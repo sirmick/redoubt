@@ -90,6 +90,7 @@
   - [ASLR](beyond/aslr.md)
   - [Scheduling extensions](beyond/scheduling-extensions.md)
   - [Label extensions](beyond/label-extensions.md)
+  - [Assurance](beyond/assurance.md)
 
 # Working on Redoubt
 
