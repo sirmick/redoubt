@@ -410,6 +410,22 @@ struct Console {
     /// The loader's first line, which only a reset of the machine prints again: a new boot, in
     /// which `init` announces the reporter anew.
     loader: Regex,
+    /// A program's failure line ([`FAIL_LINE`]), and the first one the guest printed.
+    fail: Regex,
+    failed: Option<String>,
+}
+
+/// A program's own failure, as the test programs print it (`[name] FAIL: what`, behind a console
+/// prefix under `init`): the cause a wait that ends without its line reports first.
+const FAIL_LINE: &str = r"\[[^\]\s]+\] FAIL\b";
+
+/// What ended a wait for an expected line: `wait`, after the first failure the guest reported, if
+/// it reported one, since that is the cause and the wait only its consequence.
+fn after_failure(failed: Option<&str>, wait: String) -> String {
+    match failed {
+        Some(line) => format!("the guest reported a failure ({line}); then {wait}"),
+        None => wait,
+    }
 }
 
 /// The loader's first line (loader/src/main.rs), bare: nothing but the loader and `init` prints
@@ -431,6 +447,9 @@ impl Console {
         self.seen = true;
         if let Some(pattern) = self.forbid.iter().find(|p| p.is_match(&line)) {
             return Ok(Line::Forbidden(format!("forbidden output /{pattern}/: {line}")));
+        }
+        if self.failed.is_none() && self.fail.is_match(&line) {
+            self.failed = Some(line.clone());
         }
         if let Some(announced) = &self.announced {
             // A reboot: the next boot's `init` announces the reporter again, under a console
@@ -559,6 +578,8 @@ pub fn run(
         reporter: None,
         passed_seen: false,
         loader: Regex::new(LOADER_LINE)?,
+        fail: Regex::new(FAIL_LINE)?,
+        failed: None,
     };
     let deadline = Instant::now() + Duration::from_secs_f64(boot.timeout_secs);
     let mut next = 0;
@@ -567,9 +588,15 @@ pub fn run(
             Line::Text(line) if expect[next].is_match(&line) => next += 1,
             Line::Text(_) => {}
             Line::Forbidden(why) => return Ok(Verdict::Fail(why)),
-            Line::Timeout => return Ok(Verdict::Fail(format!("timed out waiting for /{}/", expect[next]))),
+            Line::Timeout => {
+                let failure = format!("timed out waiting for /{}/", expect[next]);
+                return Ok(Verdict::Fail(after_failure(console.failed.as_deref(), failure)));
+            }
             Line::Exited => {
-                let failure = format!("guest exited while waiting for /{}/", expect[next]);
+                let failure = after_failure(
+                    console.failed.as_deref(),
+                    format!("guest exited while waiting for /{}/", expect[next]),
+                );
                 return Ok(Verdict::Fail(exited(failure, guest.0.wait()?, &mut console, &stderr)?));
             }
         }
@@ -778,6 +805,28 @@ mod tests {
         std::fs::remove_file(&disk).ok();
         std::fs::remove_dir_all(disk.with_extension("peers")).ok();
         args
+    }
+
+    /// The containment gate printed `[containment] FAIL: the bystander kept its weight's share
+    /// (...)`, which a mis-quoted `forbid` let through, and exited: the bench said only that the
+    /// guest exited while waiting. A wait that ends without its line now leads with the failure.
+    #[test]
+    fn a_wait_cut_short_reports_the_failure_the_guest_printed() {
+        let fail = Regex::new(FAIL_LINE).unwrap();
+        let line = "[containment] FAIL: the bystander kept its weight's share (share 758 of 1000, floor 783)";
+        for printed in [line, "[con 3] [ipc] FAIL: panic: oops", "[pid 4] [wx] FAIL"] {
+            assert!(fail.is_match(printed), "{printed}");
+        }
+        for other in ["[containment] ok: FAIL is a word here", "[x] FAILED", "FAIL: bare", "[a b] FAIL: x"] {
+            assert!(!fail.is_match(other), "{other}");
+        }
+        let wait = "guest exited while waiting for /^done$/: QEMU exited with exit status: 0".to_string();
+        assert_eq!(
+            after_failure(Some(line), wait.clone()),
+            format!("the guest reported a failure ({line}); then {wait}")
+        );
+        // Nothing reported: the wait alone, as the must-fail cases match it.
+        assert_eq!(after_failure(None, wait.clone()), wait);
     }
 
     /// Set in the stand-in bench that `a_killed_bench_leaves_no_qemu` starts: QEMU's QMP socket.

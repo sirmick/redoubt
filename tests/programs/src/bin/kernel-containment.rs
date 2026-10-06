@@ -16,7 +16,10 @@
 //! runs a sub-agent with a later deadline, and fills its lease and handle table. Targets are the
 //! responsiveness ones, and the gate adds none: the program judges none of them, it prints each
 //! sample's window (`LATENCY-SAMPLE`), and the bench's post-check judges them net of the checked
-//! build's audits (the bounds are tests/kernel-containment.toml's).
+//! build's audits (the bounds are tests/kernel-containment.toml's). The bystander's share (R12)
+//! is the post-check's too: its share of the CPU the kernel charged under `users`, from the trace
+//! (`CHARGED-SHARE`), in a window the steward opens once both slots' leases run; the program
+//! prints its count beside, as its useful work.
 //!
 //! See `tests/kernel-containment.toml`.
 
@@ -25,13 +28,23 @@
 
 use test_programs::rd::{self, Received};
 use test_programs::sched::{
-    Bench, CT_CALLERS, CT_LEASES, CT_VERDICT, K, R10_P99, Role, Stats, containment_child, rtc,
+    Bench, CT_CALLERS, CT_LEASES, CT_STEADY, CT_VERDICT, K, R10_P99, Role, Stats, containment_child, join,
+    rtc,
 };
 
-/// The gate's window, µs: long enough for both slots' nine leases at the D deadline.
-const WINDOW_US: u64 = 10_000_000;
-/// The bystander's floor, thousandths: 100/120 of the spinning CPU, less R12's 50.
-const SHARE_FLOOR: u64 = 100_000 / 120 - 50;
+/// How far the bystander's share may lie from its weight's, thousandths (R12's 50).
+const TOLERANCE: u64 = 50;
+/// The weights of the empty children that mark the bystander and `sessions` in the kernel's trace
+/// for the post-check: no lease (10) or sub-agent (1) weighs either.
+const BYSTANDER_MARK: u32 = 2;
+const SESSIONS_MARK: u32 = 3;
+
+/// Mark `budget` in the kernel's trace: carve an empty child of weight `weight` and destroy it, so
+/// the trace's lift names `budget` as its parent.
+fn mark(budget: u32, weight: u32) {
+    let child = rd::create(budget, &rd::spec(0, 0, weight)).expect("a mark");
+    rd::destroy(child).expect("a mark's destruction");
+}
 
 fn verdict(met: bool) -> &'static str { if met { "met" } else { "missed" } }
 
@@ -121,14 +134,26 @@ pub extern "C" fn _start() -> ! {
     let victim_b = rd::create(rd::SYSTEM, &rd::spec(400, 2, 100)).expect("victim budget");
     let sessions = rd::create(rd::USERS, &rd::spec(20000, 16, 100)).expect("sessions");
     let bystander_b = rd::create(rd::USERS, &rd::spec(400, 2, 100)).expect("bystander budget");
+    // `users` holds these two: the bystander's share is of what the kernel charges under them.
+    mark(bystander_b, BYSTANDER_MARK);
+    mark(sessions, SESSIONS_MARK);
+    // The bystander's window comes from the steward, once both slots' leases run.
+    let window_rx = rd::endpoint_create().expect("the bystander's window");
+    let window_send = rd::mint_from_handle(window_rx, 0x78, None).expect("the window's send");
     // The driver and the steward hold their samples' windows until asked, below.
     let d = b.start(driver_b, Role::Driver, &[K, 1], &[rtc_mmio, rtc_irq]);
-    let s =
-        b.start(steward_b, Role::Containment, &[], &[sessions, call_rx, send_d, send_h, progress, gift_send]);
+    let s = b.start(
+        steward_b,
+        Role::Containment,
+        &[],
+        &[sessions, call_rx, send_d, send_h, progress, gift_send, window_send],
+    );
     let v = b.start(victim_b, Role::Victim, &[], &[call_rx, send_d, send_h, queue_d, queue_h, victim_b]);
-    let y = b.start(bystander_b, Role::Bystander, &[], &[gift_rx, queue_d_send, queue_h_send]);
+    let y = b.start(bystander_b, Role::Bystander, &[], &[gift_rx, queue_d_send, queue_h_send, window_rx]);
 
-    b.go(50_000, WINDOW_US);
+    // The children wait for the go; none counts to the go window's end (the bystander's window is
+    // the steward's).
+    b.go(50_000, 0);
     // Driver 2, steward 5, victim 1, bystander 1.
     let mut words = [[[0usize; 4]; 32]; 64];
     let mut seen = [0usize; 64];
@@ -210,6 +235,10 @@ pub extern "C" fn _start() -> ! {
                 format_args!("every lease filled its handle table to MAX_HANDLES before its pages ran out"),
             );
             b.check(
+                fails & 64 == 0,
+                format_args!("the bystander's window opened under both slots' leases and closed before slot D's deadline"),
+            );
+            b.check(
                 fails & 16 == 0,
                 format_args!("every lease armed and was given its carried handle while it lived"),
             );
@@ -244,16 +273,27 @@ pub extern "C" fn _start() -> ! {
     );
     b.check(vf & 128 == 0, format_args!("the victim's usage returned to its start"));
 
-    // The bystander's share (R12).
-    let count = words[y][0][0] as u64;
-    let share = b.share(count, WINDOW_US);
-    b.check(
-        share >= SHARE_FLOOR,
-        format_args!(
-            "the bystander kept its weight's share (share {} of 1000, floor {})",
-            share, SHARE_FLOOR
-        ),
-    );
+    // The bystander's share (R12): of the CPU the kernel charged under `users` in the window the
+    // steward opened, which the post-check reads from the trace. Its count is its useful work,
+    // printed beside.
+    match stat(s, CT_STEADY) {
+        Some(w) => {
+            let start = join(w[0], w[1]);
+            let length = w[2] as u64;
+            b.charged_share(
+                "bystander",
+                (start, start + length),
+                TOLERANCE,
+                &[BYSTANDER_MARK, SESSIONS_MARK],
+            );
+            b.note(format_args!(
+                "the bystander's count under both slots' leases: {} of 1000 of the window ({} µs), gross: its useful work; its share of the CPU charged under users is the post-check's",
+                b.share(words[y][0][0] as u64, length),
+                length
+            ));
+        }
+        None => b.check(false, format_args!("the steward opened no window for the bystander")),
+    }
 
     b.finish("KERNEL-CONTAINMENT")
 }

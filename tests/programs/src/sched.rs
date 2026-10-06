@@ -1416,6 +1416,14 @@ const CT_DONE: usize = 3;
 /// The tag of the steward's verdict report on its slot 1 (the only line a hostile agent's lease
 /// could otherwise write to is progress, never a report).
 pub const CT_VERDICT: usize = 7;
+/// The tag of the steward's report of the bystander's window: `[start, start, length, tag]` (µs,
+/// the start in halves).
+pub const CT_STEADY: usize = 8;
+/// The bystander's window, µs (kernel/README.md, "Containment"): opened once both slots' leases
+/// and their sub-agents run, cut short so that it closes before slot D's deadline.
+const CT_STEADY_US: u64 = 10_000_000;
+/// The shortest window the steward accepts.
+const CT_STEADY_MIN_US: u64 = 1_000_000;
 
 // Handle slots each role receives (Bench::start: 1 report, 2 go, extras from 3).
 const CT_V_CALL: u32 = 3;
@@ -1430,9 +1438,11 @@ const CT_S_SEND_D: u32 = 5;
 const CT_S_SEND_H: u32 = 6;
 const CT_S_PROGRESS: u32 = 7;
 const CT_S_GIFT: u32 = 8;
+const CT_S_COUNT: u32 = 9;
 const CT_B_GIFT: u32 = 3;
 const CT_B_QUEUED_D: u32 = 4;
 const CT_B_QUEUED_H: u32 = 5;
+const CT_B_COUNT: u32 = 6;
 const CT_M_HANDOFF: u32 = 1;
 
 /// What a lend of the agent's carries: a function of the lease, the caller and the page.
@@ -1756,21 +1766,27 @@ fn victim() -> ! {
 
 // --- The bystander ---
 
-/// The bystander's counting thread: count for the window, report, then end this thread. It does
-/// not `receive` from any endpoint, so it never takes a gift meant for the relay.
+/// The bystander's counting thread: wait for its window from the steward (`[start, end]` in µs,
+/// in halves), count to its end, report, then end this thread. It receives only on its own
+/// endpoint, so it never takes a gift meant for the relay.
 extern "C" fn bystander_count(_: usize) -> ! {
-    let count = spin_until(end_ticks());
+    let end = match rd::receive(Some(CT_B_COUNT), rd::FOREVER, 0) {
+        Ok(Received::Message(m)) => join(m.body.words[2], m.body.words[3]),
+        _ => 0,
+    };
+    let left = end.saturating_sub(rd::time_now().unwrap_or(end));
+    let count = spin_until(ticks() + left * tpu());
     let _ = rd::send(1, &rd::body([count as usize, 0, 0, 0]), None, rd::FOREVER);
     rd::thread_exit().ok();
     crate::park()
 }
 
 /// The bystander: two threads relay the leases' carried handles for the whole run, one more counts
-/// its share over the window. A relay takes a lease-stamped handle from the steward and queues it
-/// to the victim through an unstamped handle, so the lease's death revokes it in flight and the
-/// victim receives it as 0 (R10, R9). A relay's send waits until the victim takes the message, at
-/// that lease's end; two leases are live at once, so two relays keep the steward from waiting on
-/// one lease's end to give the other its handle.
+/// its share over the window the steward opens. A relay takes a lease-stamped handle from the
+/// steward and queues it to the victim through an unstamped handle, so the lease's death revokes it
+/// in flight and the victim receives it as 0 (R10, R9). A relay's send waits until the victim takes
+/// the message, at that lease's end; two leases are live at once, so two relays keep the steward
+/// from waiting on one lease's end to give the other its handle.
 fn bystander() -> ! {
     thread(bystander_count, 0);
     thread(bystander_relay, 0);
@@ -2036,6 +2052,21 @@ fn containment() -> ! {
             lead = lead.saturating_mul(2);
         };
         arm_hint = arm_hint.max(h_arm).max(d_arm);
+        // The bystander's window: both slots' leases and sub-agents now run, and until slot D's
+        // deadline no budget under `users` is made, carved or ended. It closes a margin before
+        // that deadline.
+        if r == 0 {
+            let start = now();
+            let end = (start + CT_STEADY_US).min(d_deadline.saturating_sub(CT_D_MARGIN_US));
+            if end < start + CT_STEADY_MIN_US {
+                fails |= 64;
+            }
+            let end = end.max(start + CT_STEADY_MIN_US);
+            let ([a, b], [c, d]) = (halves(start), halves(end));
+            let _ = rd::send(CT_S_COUNT, &rd::body([a, b, c, d]), None, rd::FOREVER);
+            let length = (end - start) as usize;
+            let _ = rd::send(1, &rd::body([a, b, length, CT_STEADY | 1 << 8]), None, rd::FOREVER);
+        }
         // D: its deadline ends it while H still lives, so two hostile leases are live at the end.
         let sample = Some((&mut notice[..], &mut nn));
         take_notices(exit[0], Some(d_deadline), owed(&ls, &d), sample, &mut fails);
@@ -2412,6 +2443,20 @@ impl Bench {
         let cpu = count * 1000 / self.rate.max(1);
         let _ = writeln!(Console, "SHARE {} {} {} {} {} {}", name, start, end, cpu, min, max);
         self.share(count, end - start)
+    }
+
+    /// A share of the CPU the kernel charged, which the bench's post-check (`sched_oracle`) reads
+    /// from the trace alone: printed as `CHARGED-SHARE <name> <start> <end> <tolerance>
+    /// <mark>...`, the window in µs, how far in thousandths the share may lie from what its weight
+    /// is owed among the budgets charged beside it, and the weights of the empty budgets the
+    /// program carved and destroyed to mark the budget judged (the first) and the budgets it is
+    /// judged among (each mark's, and those under it).
+    pub fn charged_share(&self, name: &str, (start, end): (u64, u64), tolerance: u64, marks: &[u32]) {
+        let _ = write!(Console, "CHARGED-SHARE {} {} {} {}", name, start, end, tolerance);
+        for m in marks {
+            let _ = write!(Console, " {}", m);
+        }
+        let _ = writeln!(Console);
     }
 
     pub fn check(&mut self, ok: bool, what: core::fmt::Arguments) {

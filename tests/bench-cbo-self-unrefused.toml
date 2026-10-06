@@ -16,4 +16,4 @@ expect = [
     '^\[cbo-user-fault\] CBO USER FAULT$',
 ]
 poweroff = true
-must_fail = '^guest exited while waiting for /\^\\\[cbo-user-fault\\\] CBO USER FAULT\$/: QEMU exited with exit status: 0$'
+must_fail = '^the guest reported a failure \(\[cbo-user-fault\] FAIL: cbo\.inval by a child ended Exited with code 0\); then guest exited while waiting for /\^\\\[cbo-user-fault\\\] CBO USER FAULT\$/: QEMU exited with exit status: 0$'

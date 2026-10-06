@@ -35,6 +35,9 @@ test-only = []
 # Test builds only: record the stride queue's raw events in a bounded ring and print it at
 # `system_reset`, for the bench's independent rank oracle (tools/testbench, sched_oracle).
 sched-trace = ["test-only"]
+# Test builds only: the same ring at 192 MiB rather than 64, for a run too long for it (the
+# containment gate, at 512 MiB of RAM).
+sched-trace-large = ["sched-trace"]
 # Test builds only: also bracket each receive's pump, timer expiry and reconcile in the trace, for
 # the worst-walk case's numbers (kernel/ipc.md, kernel/timer.md, "Residual risks"). Not in the
 # gate: a record pair at every kernel entry would fill its ring.

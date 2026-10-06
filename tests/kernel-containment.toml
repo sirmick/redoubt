@@ -1,4 +1,4 @@
-description = "The kernel containment gate (kernel/README.md, \"Containment\"): one composite boot of hostile leases under `users`, two live at a time (slot D ended by its deadline, slot H by the steward's decision), each agent spinning, entering the kernel in a tight loop, parking lend calls and blocked sends at a victim through lease-stamped handles, running a sub-agent with a later deadline, and filling its lease and handle table; verdicts from the kernel's exit notices and trace, the victims, budget_usage and the oracle, never from a hostile agent. Targets are responsiveness's own (sched-latency), judged by the post-check net of the checked build's audits, and the gate adds none (virtual time, checked build, one hart, tracing kernel)"
+description = "The kernel containment gate (kernel/README.md, \"Containment\"): one composite boot of hostile leases under `users`, two live at a time (slot D ended by its deadline, slot H by the steward's decision), each agent spinning, entering the kernel in a tight loop, parking lend calls and blocked sends at a victim through lease-stamped handles, running a sub-agent with a later deadline, and filling its lease and handle table; verdicts from the kernel's exit notices and trace, the victims, budget_usage and the oracle, never from a hostile agent. Targets are responsiveness's own (sched-latency), judged by the post-check net of the checked build's audits, and the gate adds none; the bystander's share (R12) is the oracle's, of the CPU the kernel charged under `users` under both slots' leases (virtual time, checked build, one hart, tracing kernel)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -7,12 +7,17 @@ icount = "shift=3,sleep=off"
 # 16-seed sweep is recorded on docs/kernel/README.md#containment.
 qemu_seed = 13
 programs = ["kernel-containment"]
-# Test builds only: the trace ring and its dump (never in a default or production kernel).
-kernel_features = ["sched-trace"]
+# Test builds only: the trace ring and its dump (never in a default or production kernel), at
+# 192 MiB: at the 1 ms slice the run writes about ten records a slice, twice what 64 MiB holds.
+kernel_features = ["sched-trace-large"]
+memory_mib = 512
 # The rank oracle; R10's kernel time from the trace's X/Y records, p99 <= 30 ms; a lease's end (the
 # worst net decision-wake p99 plus R10's), <= 125 ms; and every latency target, judged on the
 # program's sample windows net of the checked build's audit time inside each (kernel/scheduling.md,
-# "Responsiveness"; the bounds are tests/sched-latency.toml's, and the gate adds none).
+# "Responsiveness"; the bounds are tests/sched-latency.toml's, and the gate adds none); and the
+# bystander's share of the CPU the kernel charged under `users`, in the window the steward opens
+# once both slots' leases run (the program's `CHARGED-SHARE`), against its weight's share among the
+# budgets charged in it, within R12's 50.
 post_check = "sched_oracle r10_p99_us=30000 lease_end_p99_us=125000 driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
 timeout_secs = 1800
 expect = [
@@ -26,15 +31,17 @@ expect = [
     "^\\[containment\\] ok: every process in a lease, its sub-agent included, was killed blaming nobody",
     "^\\[containment\\] ok: every hand destroy succeeded",
     "^\\[containment\\] ok: every lease filled its handle table to MAX_HANDLES before its pages ran out",
+    "^\\[containment\\] ok: the bystander's window opened under both slots' leases and closed before slot D's deadline",
     "^\\[containment\\] ok: every lease armed and was given its carried handle while it lived",
     "^\\[containment\\] ok: every handle the steward held to a lease was closed",
     "^\\[containment\\] ok: sessions' usage returned to what it was before each round",
     "^\\[containment\\] ok: every held call was abandoned once, its lend intact and its reply discarded \\(",
     "^\\[containment\\] ok: nothing sent through a lease's handles outlived it, and no queued message did",
     "^\\[containment\\] ok: the victim's usage returned to its start",
-    "^\\[containment\\] ok: the bystander kept its weight's share",
+    "^CHARGED-SHARE bystander \\d+ \\d+ 50 2 3$",
+    "^\\[containment\\] the bystander's count under both slots' leases: \\d+ of 1000 of the window \\(\\d+ µs\\), gross: its useful work; its share of the CPU charged under users is the post-check's",
     "^KERNEL-CONTAINMENT TEST PASSED$",
     "^SCHED-TRACE-END \\d+ dropped 0$",
 ]
-forbid = ['\\[containment\\] FAIL', 'PROGRAM HALT']
+forbid = ['\[containment\] FAIL', 'PROGRAM HALT']
 poweroff = true

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 207
+revision = 211
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1038,8 +1038,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by the train bench on main after SCHED1's merge (rv64, icount, seed 13, deterministic): '[containment] FAIL: the bystander kept its weight's share (share 758 of 1000, floor 783)'. The bystander's share is the gate program's own gross count (tests/programs/.../kernel-containment.rs:34, clause :247-256) against a floor of its weight's share less a tolerance; at the 1 ms slice ~24 % of the CPU is per-switch kernel time (scheduling.md:222-223, today's cost), so the gross count reads 758. Ruling (.wash/local/B15-ruling.md): the clause follows the five-cases ruling: R12's claim is relative; no verdict may come from a hostile agent and the competing counts are the agents', so the oracle judges the bystander's charged runtime over every users budget's charged runtime in the window, net of the checked build's audits, against its weight's share (100/120) within R12's 50 per thousand; the program prints its count as useful work, no verdict on it; window bounds printed by the program or taken as the bystander's first to last pick (the implementer says which). Page: docs/kernel/README.md:177's row as the ruling words it; SECURITY's row unchanged. Also: the bench reports a FAIL line followed by QEMU's exit 0 as 'guest exited while waiting'; report the FAIL it saw. Tier B, size S; not the kernel, not the slice. Gate: kernel-containment both widths, the oracle host tests."
-  state = "reported"
-  revision = 205
+  state = "done"
+  revision = 211
 
 [[node]]
   id = "B16"
@@ -1091,9 +1091,18 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "B18"
-  title = "model-host-tests runs the model's mutations in the debug profile and takes hours in a shared pool; build it release and bound its wall time"
+  title = "The model's mutations run as one job each in release, not one serial debug test for hours; rt-miri and the Elixir oracles fan out the same way"
   template = "package"
   parent = "M1"
-  body = "Train 3 (2026-10-06): the rv64 model-host-tests case ran 2 h 51 min and counting under `jobserver bounded` (RUST_TEST_THREADS=4) while the K19 handoff runs the same suite `--release` in about 45 min and the page's budget for the case says ~400 s. The mutations test builds and runs the kernel model per mutation; in debug under a shared pool it is the long pole that holds every exclusive tail behind it (today's 40-minute gate stall queued behind it). Tier B, size S: the case builds the model's tests in release (or the model crate sets opt-level for tests), the mutations test reports per-mutation times, and the case's timeout_secs is set from a measured release run with the usual margin; testbench.md's class note says it is bounded and about how long. Rerun alone, both widths (the case is host-only: one run)."
+  body = "Train 3 and 4 (2026-10-06): model-host-tests is one #[test] (mutations_are_caught) over 147 kernel mutations on one thread; the train's run was past 3 h in debug and K19's release run past 3 h too, so release alone is not the fix. rt-miri is one 133 s job; the three Elixir oracle cases each start a BEAM on the host (154/132/50 s). These are the whole wall of a train once the scheduler packs the rest. Tier B, size M: (1) the mutations become one cargo test per mutation (a generated test list or a `--mutation N` filter the case fans out as N jobs through scripts/jobs.mk), release build, each reporting its time; the case's verdict is the conjunction and names any mutation not caught; (2) rt-miri fans out per test file; (3) the Elixir oracles share one BEAM start or a cached compiled reference, measured; (4) timeout_secs of each from a measured run plus margin; testbench.md's class note says what each costs now. Acceptance: a whole train's tail (quiet set included) under 15 min wall on 24 cores, measured with `q log`."
+  state = "active"
+  revision = 209
+
+[[node]]
+  id = "B19"
+  title = "A bench case starts in a second, not ten: the bench built once per run, the kernel and programs reused; timer-driven boots move to icount"
+  template = "package"
+  parent = "M1"
+  body = "Measured on train 3 and 4 (2026-10-06): a case's start costs about 10 s beside other cases, mostly `cargo run -p testbench` contending on the build-directory lock and the bench's own per-run cargo builds (build.rs:313) of the kernel and programs; 500 case runs a train pay it in parallel but it is most of why a 0.6 s case takes 2.5 s and why the heavy tail's guests start late. Also: only 36 of 190 boot cases run under icount (shift=3,sleep=off); the rest pay every timeout, deadline and 20 s wait on the host's clock and are load-sensitive (11 scheduler-sensitive failures in train 4 beside work that train 3 did not see). Tier B, size M: (1) measure a case's start (cargo lock wait, the bench's builds, image packing, QEMU start) with timestamps; (2) build once: a run directory per train holds the bench binary and every built kernel/program/image, and `cargo testbench --prebuilt <dir> <case>` (or jobs.mk calling the binary directly) runs a case with no cargo at all; (3) audit the real-time boot cases: every case whose expectations and oracles do not read the host's clock moves to icount shift=3,sleep=off (a table in the report: case, what it measures, moved or why not), timeouts of 20 s waits that are bounds not measurements shortened; (4) testbench.md: the run directory, the prebuilt path, the class note updated. Gates: the moved cases both widths, cargo test -p testbench, docs/fmt/no-cruft/size. Acceptance: a light case's wall time under q within 1 s of its guest time; the light set (cases-rv64 + cases-rv32 without the heavy tail) under 5 min."
   state = "todo"
-  revision = 206
+  revision = 210
