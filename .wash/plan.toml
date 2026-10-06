@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 218
+revision = 219
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1014,13 +1014,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "B14"
-  title = "The share fixtures' calibrated CPU count runs over the work it measures: find the bias in the calibration"
+  title = "The share fixtures miss their targets at the 1 ms slice: rv32 sched-share, sched-exit-churn and sched-carve-return since SCHED1; rv64 sched-share within 1 of its tolerance"
   template = "package"
   parent = "M1"
   needs = ["B13"]
-  body = "Found by B13's review: the oracle's net share is cpu*1000/(window - credited audits); with the credit now capped at the window less the share's CPU (B13), the fact that the program's calibrated CPU count exceeds the work by >= 0.3 % on rv64 and >= 0.65 % on rv32 (sched-budget-churn's deadline variant: 1,960,670 counted of a 2,000,000 window with 46-49 ms of audits; rv32 71,097 us audits, 58,089 credited) is hidden behind the report's 'credited N' and biases every SHARE's cpu high by that much. Size S, Tier A bench. Find the source in the fixtures' calibration (tests/programs' share programs: the loop count per unit of time at startup under the 1 ms slice), correct it or state the bias as a measured constant the oracle subtracts, with a host test and the page sentence beside B5's and B13's."
+  body = "Bisected 2026-10-06 (.wash/local/bisect-main/summary.txt, summary-pre.txt): rv32 sched-share ('weight 300 got 543..544 of 1000, want 600 +- 50'), sched-exit-churn and sched-carve-return ('parent 31 lost its running turn at record 108') pass at a9f54ffcb and fail at 777bba164 (SCHED1, the 1 ms slice) and every merge after; train 3 never ran its rv32 scheduler cases. rv64 sched-share sits at 544..549 against a 550 floor and flips between merges (fails at 673be7afc and in B19's gate on 86c76a9f0, passes in the bisect at 992d447ce and 86c76a9f0). Earlier finding: the share fixtures' calibrated CPU count runs over the work it measures. Tier A (the scheduler's measurement), size M: find the bias in the calibration at the 1 ms slice (the per-switch cost SCHED1 recorded as a residual, 0.357/0.449 ms, is a third of a slice and is charged inside the measured work), make the fixtures' expected share account for it or measure net of it as B5 does for audits, so a share verdict is stable on both widths; carve-return's lost turn is a separate clause to explain. Rerun the sched-* cases both widths alone and in the light set. Needs nothing; RECON1 reduces the cost it accounts for."
   state = "todo"
-  revision = 179
+  revision = 219
 
 [[node]]
   id = "PACK1"
@@ -1125,3 +1125,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Measured by B18 (2026-10-06): in release on one thread, the model's steward_policy family costs 0.6 s/seed and steward_noninterference 0.94 s/seed (kernel families under 1 ms/seed); at 20,000 and 10,000 seeds the two are about 6 core-hours, which no fanout hides; and three mutations (PolicyDeclassifyUnfit caught at steward_policy seed 4,709 after 1,720 s; R2OneCursor and PolicyAgentOtherSet past 29 min) are caught only deep in the run. B18 splits the steward families into their own bounded case and bounds a mutation job. Tier A (the model), size M: (1) profile a steward seed and bring its cost down where the cost is accidental (allocation, cloning the steward core's state per step, the Elixir-shaped reference); (2) decide the seed counts from the coverage they buy, with a measurement (how many seeds until every rule and mutation is reached), not by habit; (3) the three late-caught mutations: a directed scenario each that catches them in seconds, or the finding that the model cannot distinguish them, written as a residual; (4) the model's page states the per-family cost and budget. Acceptance: the steward case under 10 min on 4 cores; every mutation caught inside the bench's bound."
   state = "todo"
   revision = 216
+
+[[node]]
+  id = "K25"
+  title = "SMP1's merge broke four cases: sched-exit-churn's threads-exit share, sum-clear's expected kernel failure, lend-untouched-page on four harts, sched-cluster-old-control on rv32"
+  template = "package"
+  parent = "M1"
+  body = "Bisected on 2026-10-06 over the merge points from 777bba164 (SCHED1) to 86c76a9f0 (B15), each case run alone through scripts/q (table: .wash/local/bisect-main/summary.txt): all four pass at 777bba164 and fail at 14aceaa63 (SMP1, the kernel on every hart under one big lock) and at every merge after. (1) rv64 sched-exit-churn: 'share threads-exit: net 426..445 of 1000: target missed (450 <= share)'; (2) rv64 sum-clear: 20 s timeout waiting for the expected '!!! KERNEL FAILURE !!!: CPU Exception ... Load page fault' line, so the fault is no longer raised or no longer printed; (3) rv64 lend-untouched-page smp=4: 'harts: FAIL: 4 in the tree, 4 started, 1 ran user code'; (4) rv32 sched-cluster-old-control: the control's stand-in driver_wake could not take attempt 2. Tier A (kernel), size M: find each cause in SMP1's change (the big lock's entry, per-hart idle, the timer on secondary harts, the trap path), fix with the model's rule where one applies, rerun the four both widths and the scheduler cases (sched-*), and add sched-exit-churn, sum-clear and lend-untouched-page smp=4 to the trains rule's smoke set (.wash/SWARM.md) so a merge cannot pass its short gate with them broken. Lands before SMP3."
+  state = "todo"
+  revision = 219
