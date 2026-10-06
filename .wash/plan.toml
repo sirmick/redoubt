@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 204
+revision = 207
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1029,8 +1029,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["BOOT1"]
   body = "Owner's package (text: .wash/local/PACK1-owner.md). Tier A (beamlet's platform, mkimage, the bench), size S. BOOT1's profile: 1,016 s guest to the prompt verified (535 s unverified), 99 % in the VM's 96 lazy module loads: 77,710 block reads of 673 distinct blocks, 97 % re-walking the root directory. mkimage emits one pack of the boot module set (raw .beam bytes behind an index of name, offset, length; deterministic, sorted by name); it lives inside the signed root (verified volume entry or bootfsd bundle entry: the Architect picks; trust unchanged, R75 holds, never written at run time); beamlet reads it once at VM start in one read into memory charged to the VM and locate_module consults it before the code path; a module not in the pack loads per file as today; no change to decoded representation, loader checks or lazy-load semantics; the pack's bytes released once decoded unless keeping them is shown cheaper (BEAM6's second-copy question: coordinate). Per VM: no page sharing, no steward cache, no snapshot, no per-profile pack (decided elsewhere; the docs say so). Orthogonal to EROFS1; rebases onto whichever merges first. Verdict: boot-profile and boot-profile-unverified with the pack, numbers and 9P/block counts on beamlet.md beside the baseline; target under 30 s guest verified on littlefs (floor ~16 s; exact figure at checkpoint 1); a module outside the pack still loads; a bad pack entry fails the VM's start cleanly; beamlet-footprint's scan rises by at most the pack's size. Checkpoint 1 after the placement decision with the measured floor; checkpoint 2 only if the target is missed."
-  state = "reported"
-  revision = 203
+  state = "done"
+  revision = 207
 
 [[node]]
   id = "B15"
@@ -1038,8 +1038,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by the train bench on main after SCHED1's merge (rv64, icount, seed 13, deterministic): '[containment] FAIL: the bystander kept its weight's share (share 758 of 1000, floor 783)'. The bystander's share is the gate program's own gross count (tests/programs/.../kernel-containment.rs:34, clause :247-256) against a floor of its weight's share less a tolerance; at the 1 ms slice ~24 % of the CPU is per-switch kernel time (scheduling.md:222-223, today's cost), so the gross count reads 758. Ruling (.wash/local/B15-ruling.md): the clause follows the five-cases ruling: R12's claim is relative; no verdict may come from a hostile agent and the competing counts are the agents', so the oracle judges the bystander's charged runtime over every users budget's charged runtime in the window, net of the checked build's audits, against its weight's share (100/120) within R12's 50 per thousand; the program prints its count as useful work, no verdict on it; window bounds printed by the program or taken as the bystander's first to last pick (the implementer says which). Page: docs/kernel/README.md:177's row as the ruling words it; SECURITY's row unchanged. Also: the bench reports a FAIL line followed by QEMU's exit 0 as 'guest exited while waiting'; report the FAIL it saw. Tier B, size S; not the kernel, not the slice. Gate: kernel-containment both widths, the oracle host tests."
-  state = "active"
-  revision = 197
+  state = "reported"
+  revision = 205
 
 [[node]]
   id = "B16"
@@ -1088,3 +1088,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Seen in train 3's whole bench on 777bba164 (SCHED1 merged), rv64 sched-timer-flood: 'share cancelled-waits: net 466, gross 431 of 1000 ... 0 finding another budget's wait ended early (none, but the case requires some): target met' and the case FAILs on that requirement alone. The clause was written when the 10 ms slice made a wait's early end common under a pending timer; at 1 ms the timer's interrupt comes before any wait is cancelled. Tier B, size S: either the fixture makes the event certain (a wait cancelled with its timer armed and due within the slice: state how), or the requirement becomes a count reported with no verdict, with testbench.md's clause table saying which and why. Rerun both widths alone; the oracle's other clauses unchanged."
   state = "todo"
   revision = 201
+
+[[node]]
+  id = "B18"
+  title = "model-host-tests runs the model's mutations in the debug profile and takes hours in a shared pool; build it release and bound its wall time"
+  template = "package"
+  parent = "M1"
+  body = "Train 3 (2026-10-06): the rv64 model-host-tests case ran 2 h 51 min and counting under `jobserver bounded` (RUST_TEST_THREADS=4) while the K19 handoff runs the same suite `--release` in about 45 min and the page's budget for the case says ~400 s. The mutations test builds and runs the kernel model per mutation; in debug under a shared pool it is the long pole that holds every exclusive tail behind it (today's 40-minute gate stall queued behind it). Tier B, size S: the case builds the model's tests in release (or the model crate sets opt-level for tests), the mutations test reports per-mutation times, and the case's timeout_secs is set from a measured release run with the usual margin; testbench.md's class note says it is bounded and about how long. Rerun alone, both widths (the case is host-only: one run)."
+  state = "todo"
+  revision = 206

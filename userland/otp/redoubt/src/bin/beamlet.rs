@@ -11,9 +11,10 @@
 //! returns. Its console is `/dev/cons` in its namespace; its threads are the runtime's. Its
 //! modules are the userland volume's files, each read whole by its name through the handle
 //! `endpoint=` names, the image's `erofsd:system`, an `erofsd` that reads the volume through its
-//! `verityd` ([`beamlet_redoubt::userland`]). A volume that does not attach, or a start module that cannot
-//! be read, parks it: it says why and waits, never exiting, so a tampered disk is not a restart
-//! loop that reboots the machine.
+//! `verityd` ([`beamlet_redoubt::userland`]), and before them the volume's boot pack, read whole
+//! once at start ([`beamlet_redoubt::pack`]). A volume that does not attach, a pack that cannot be
+//! read or is malformed, or a start module that cannot be read, parks it: it says why and waits,
+//! never exiting, so a tampered disk is not a restart loop that reboots the machine.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -26,6 +27,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec::Vec;
 
+use beamlet_redoubt::pack::{self, Pack};
 use beamlet_redoubt::userland::{Disk, Files, Unread, unread};
 use beamlet_redoubt::{Modules, Threads, Unloaded};
 use redoubt_client::console::Console;
@@ -85,13 +87,44 @@ fn start(startup: &Startup) -> u32 {
     };
     // A volume served as corrupt refuses every attach: it parks, as a start module that does
     // not load does.
-    let files = match System::attach(Endpoint::from_handle(system)) {
+    let mut files = match System::attach(Endpoint::from_handle(system)) {
         Ok(files) => files,
         Err(e) => park(startup, &format!("beamlet: {volume} did not attach: {e:?}; parked")),
     };
-    let mut modules = Disk::new(files);
-    // The start module, read before the VM runs anything: if it cannot load, the VM parks.
-    match modules.load(&format!("{module}.beam")) {
+    // The boot pack, read whole before anything else: a pack that cannot be read, or does not
+    // check, parks the VM as a start module that cannot load does.
+    let pack = match files.read_pack() {
+        Ok(bytes) => match Pack::parse(bytes) {
+            Ok(pack) => Some(pack),
+            Err(why) => park(startup, &format!("beamlet: {} refused: {why}; parked", pack::FILE)),
+        },
+        Err(Unread::Absent) => {
+            say(startup, &format!("beamlet: no {} on the userland volume", pack::FILE));
+            None
+        }
+        Err(Unread::Failed(why)) => {
+            park(startup, &format!("beamlet: {} not loaded: {why}; parked", pack::FILE))
+        }
+    };
+    #[cfg(feature = "boot-stats")]
+    if let Some(pack) = &pack {
+        say(
+            startup,
+            &format!(
+                "beamlet: boot pack read {} bytes, {} entries{}",
+                pack.size(),
+                pack.len(),
+                beamlet_redoubt::stamp()
+            ),
+        );
+    }
+    let mut modules = Disk::with_pack(files, pack);
+    // The start module, read before the VM runs anything, unless the pack holds it: if it cannot
+    // load, the VM parks.
+    let start_file = format!("{module}.beam");
+    let packed = modules.packs(&start_file);
+    let start = if packed { Ok(Vec::new()) } else { modules.load(&start_file) };
+    match start {
         Ok(_) => {}
         Err(Unloaded::Absent) => {
             say(startup, &format!("beamlet: {module} is not on the userland volume"));
@@ -99,11 +132,13 @@ fn start(startup: &Startup) -> u32 {
         }
         Err(Unloaded::Refused(why)) => park(startup, &format!("beamlet: {module} not loaded: {why}; parked")),
     }
+    // Where the start module is: the boot pack, or its own file on the volume.
+    let from = if packed { "the boot pack" } else { volume };
     #[cfg(not(feature = "boot-stats"))]
-    say(startup, &format!("beamlet: {module} read from {volume}"));
+    say(startup, &format!("beamlet: {module} read from {from}"));
     // Stamped only for the boot profile, so every other case sees the line as it was.
     #[cfg(feature = "boot-stats")]
-    say(startup, &format!("beamlet: {module} read from {volume}{}", beamlet_redoubt::stamp()));
+    say(startup, &format!("beamlet: {module} read from {from}{}", beamlet_redoubt::stamp()));
     let report_memory = report_memory.then_some(heap_pages as beamlet_vm::memory::HeapPages);
     beamlet_redoubt::run(
         startup,
@@ -170,6 +205,39 @@ impl System {
         Ok(System { server, lend })
     }
 }
+
+impl System {
+    /// The boot pack, read whole into one allocation of its size, in order, in reads of the most
+    /// the lend a module file is read through carries: a larger lend would take a larger buffer
+    /// in the file server than its heap is sized for.
+    fn read_pack(&mut self) -> Result<Vec<u8>, Unread> {
+        let lend = &mut self.lend;
+        let open = self.server.open(lend, pack::FILE, mode::OREAD).map_err(|e| unread(e, true))?;
+        let mut read = || -> Result<Vec<u8>, Unread> {
+            let length = open.stat(lend).map_err(|e| unread(e, false))?.length;
+            let length = usize::try_from(length).map_err(|_| Unread::Failed(TOO_LARGE))?;
+            let mut bytes = Vec::new();
+            bytes.try_reserve_exact(length).map_err(|_| Unread::Failed(TOO_LARGE))?;
+            bytes.resize(length, 0);
+            let mut at = 0;
+            while at < length {
+                match open.read_at(lend, at as u64, &mut bytes[at..]) {
+                    Ok(0) => return Err(Unread::Failed("its file ends before its length")),
+                    Ok(n) => at += n,
+                    Err(e) => return Err(unread(e, false)),
+                }
+            }
+            Ok(bytes)
+        };
+        let bytes = read();
+        // The fid goes back to the connection whether or not the read finished.
+        let closed = open.close(lend).map_err(|e| unread(e, false));
+        bytes.and_then(|bytes| closed.map(|()| bytes))
+    }
+}
+
+/// Why a boot pack too large to hold was not read.
+const TOO_LARGE: &str = "it is too large to hold";
 
 impl Files for System {
     /// A file the server answers `not_found` to at the open is absent; any other refusal, at the open

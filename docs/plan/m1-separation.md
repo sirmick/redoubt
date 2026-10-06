@@ -157,7 +157,9 @@ Built and attack-tested today:
   ([native programs](../userland/native.md#the-client-library)).
 - **beamlet** on the host and under `init` on Redoubt, with console, clock and randomness;
   its modules come from the userland disk, a volume `verityd` checks block by block against a
-  root the signed manifest pins ([beamlet](../userland/beamlet.md), [verityd](../servers/verityd.md)).
+  root the signed manifest pins, those the shell's prompt loads from one boot pack read whole
+  before the VM starts ([beamlet](../userland/beamlet.md#beamlet-on-redoubt),
+  [verityd](../servers/verityd.md)).
 - **The shell** on beamlet on the host: the loop, the commands, the file and text commands and
   help, with hostile text drawn visibly and the cell protocol held to its vectors
   ([the shell](../userland/shell.md#the-loop),

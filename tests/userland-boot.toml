@@ -12,7 +12,7 @@ timeout_secs = 450
 expect = [
     '^init: started verity:system, console [0-9a-f]{16}$',
     '^init: started beamlet, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from erofsd:system$',
+    '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from (erofsd:system|the boot pack)$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     'UndefinedFunctionError\) function NoSuch.call/0 is undefined',
     '^\[con [0-9a-f]{16}\] / \([0-9]+\)> 55$',

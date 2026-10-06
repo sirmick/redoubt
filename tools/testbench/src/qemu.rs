@@ -272,7 +272,13 @@ pub fn virtio_devices(
             if let Some(file) = &spec.flip {
                 let module = std::fs::read(staged.objects.join(file))
                     .with_context(|| format!("the userland disk has no {file}"))?;
-                crate::disk::flip_file(&mut bytes, verified, &module)?;
+                // A file the boot pack holds is on the volume twice: both copies are damaged.
+                let pack = staged.objects.join(crate::userland::PACK);
+                let packed = pack.exists()
+                    && crate::userland::pack_entries(&std::fs::read(&pack)?)?
+                        .iter()
+                        .any(|(name, _)| name == file);
+                crate::disk::flip_file(&mut bytes, verified, &module, 1 + usize::from(packed))?;
             }
             if spec.flip_tree {
                 crate::disk::flip_tree(&mut bytes, verified);

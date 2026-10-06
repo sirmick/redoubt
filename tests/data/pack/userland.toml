@@ -1,0 +1,13 @@
+# pack-outside-module's userland disk (tests/pack-outside-module.toml): beamlet-boot's module
+# and the two OTP modules it may load, packed unverified as tests/data/beamlet/userland.toml is,
+# with a boot pack that holds io and lists and not the start module, which loads from its file.
+size_kib = 2048
+
+[objects]
+modules = ["io", "lists"]
+erlang = ["userland/otp/redoubt/tests/erlang/beamlet_boot.erl"]
+pack = ["io.beam", "lists.beam"]
+
+[[partition]]
+name = "system"
+fs = "erofs"

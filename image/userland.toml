@@ -4,11 +4,13 @@
 # --pack-disk`), the one `disk.toml` goes through. First it stages the objects: each module of the
 # applications below, compiled by the pinned toolchain and stripped, as a plain file under the
 # name the VM asks for (`Elixir.Enum.beam`), and each application's resource the same way
-# (`elixir.app`). Then it packs the one partition as a verified volume: an EROFS volume holding
-# those files, written by Redoubt's own writer (docs/servers/erofsd.md), followed by its hash tree
-# (docs/servers/verityd.md). The bundle's manifest pins
-# the tree's root, so verityd serves the volume only in blocks the signed manifest covers
-# (docs/kernel/boot.md, R75; R76).
+# (`elixir.app`), and the boot pack, `boot.pack`: the objects `pack` names below, their bytes
+# again in one file behind an index, which beamlet reads whole at start in place of a lookup each
+# (docs/userland/beamlet.md, "beamlet on Redoubt"). Then it packs the one partition as a verified
+# volume: an EROFS volume holding those files, written by Redoubt's own writer
+# (docs/servers/erofsd.md), followed by its hash tree (docs/servers/verityd.md). The bundle's
+# manifest pins the tree's root, so verityd serves the volume, the pack with the rest, only in
+# blocks the signed manifest covers (docs/kernel/boot.md, R75; R76).
 
 # Whole disk, in KiB (a whole number of 512-byte sectors).
 size_kib = 16384
@@ -25,6 +27,40 @@ mix = ["userland/shell"]
 exclude = ["application.beam", "gen_tcp.beam", "ram_file.beam"]
 # The `Docs` chunk goes with the rest, so `h/1` says no documentation is available.
 docs = false
+# The boot pack's entries: what the shell loads to its prompt, every module and resource it looks
+# up, measured by logging the platform's lookups to the prompt (94 files, two of them asked for
+# twice: 96 lookups) and confirmed by boot-profile's count of loads the pack answered. A name the
+# prompt loads and this list lacks still loads, from its own file, at a lookup's cost; one it
+# lists and the prompt does not load keeps the pack held, at most the pack's size.
+pack = [
+    "Elixir.Access.beam", "Elixir.Application.beam", "Elixir.Code.beam", "Elixir.Enum.beam",
+    "Elixir.Enumerable.Redoubt.Util.Lines.beam", "Elixir.File.beam", "Elixir.IO.beam",
+    "Elixir.Inspect.Redoubt.Util.Lines.beam", "Elixir.Kernel.beam", "Elixir.Keyword.beam",
+    "Elixir.List.beam", "Elixir.Macro.Env.beam", "Elixir.Module.ParallelChecker.beam",
+    "Elixir.Range.beam", "Elixir.Redoubt.Commandlet.Param.beam",
+    "Elixir.Redoubt.Commandlet.Registry.beam", "Elixir.Redoubt.Commandlet.UsageError.beam",
+    "Elixir.Redoubt.Commandlet.beam", "Elixir.Redoubt.Shell.Control.beam",
+    "Elixir.Redoubt.Shell.Evaluator.beam", "Elixir.Redoubt.Shell.Help.beam",
+    "Elixir.Redoubt.Shell.Helpers.beam", "Elixir.Redoubt.Shell.Printer.beam",
+    "Elixir.Redoubt.Shell.Stat.beam", "Elixir.Redoubt.Shell.Table.beam",
+    "Elixir.Redoubt.Shell.Topics.beam", "Elixir.Redoubt.Shell.beam",
+    "Elixir.Redoubt.Term.Cells.beam", "Elixir.Redoubt.Term.Text.beam",
+    "Elixir.Redoubt.Term.Width.beam", "Elixir.Redoubt.Util.Lines.beam", "Elixir.Redoubt.Util.beam",
+    "Elixir.String.Chars.Integer.beam", "Elixir.String.Chars.beam", "Elixir.String.Tokenizer.beam",
+    "Elixir.String.beam", "Elixir.System.beam", "compiler.app", "crypto.app", "elixir.app",
+    "elixir.beam", "elixir_aliases.beam", "elixir_code_server.beam", "elixir_config.beam",
+    "elixir_dispatch.beam", "elixir_env.beam", "elixir_erl.beam", "elixir_erl_pass.beam",
+    "elixir_erl_var.beam", "elixir_expand.beam", "elixir_import.beam", "elixir_quote.beam",
+    "elixir_sup.beam", "elixir_utils.beam", "erl_anno.beam", "erl_eval.beam", "erl_features.beam",
+    "erl_parse.beam", "erl_scan.beam", "file.beam", "file_server.beam", "gen.beam",
+    "gen_event.beam", "gen_server.beam", "global.beam", "io.beam", "io_lib.beam",
+    "io_lib_format.beam", "kernel.app", "lists.beam", "logger.beam", "logger_config.beam",
+    "logger_formatter.beam", "logger_h_common.beam", "logger_handler_watcher.beam",
+    "logger_olp.beam", "logger_proxy.beam", "logger_server.beam", "logger_simple_h.beam",
+    "logger_std_h.beam", "logger_sup.beam", "maps.beam", "ordsets.beam", "prim_file.beam",
+    "proc_lib.beam", "proplists.beam", "queue.beam", "rand.beam", "re.beam", "redoubt_shell.app",
+    "string.beam", "supervisor.beam", "unicode.beam", "unicode_util.beam",
+]
 
 [[partition]]
 name = "system"

@@ -74,6 +74,15 @@ which devices, labels, weights, volumes and arguments, and which principals exis
 `/etc/fstab`, `/etc/inittab`, `/etc/passwd` and the service files, as one signed document.
 Defined in [init](servers/init.md#the-boot-manifest).
 
+### boot pack
+
+One file on the verified system volume, `boot.pack`, holding again the modules and resources the
+shell loads to its prompt, behind an index of name, offset and length. beamlet reads it whole
+before its VM starts and takes those names from it, in place of one lookup each; any other name is
+the volume's file. It is per VM and never written at run time. Unix: none close; a little like an
+initramfs that is only ever read whole. Defined in
+[beamlet on Redoubt](userland/beamlet.md#beamlet-on-redoubt).
+
 ### budget
 
 The kernel object that holds resources: page, process and CPU-weight limits, a class, a label

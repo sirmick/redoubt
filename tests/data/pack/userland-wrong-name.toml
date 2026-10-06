@@ -1,0 +1,14 @@
+# pack-bad-wrong-name's userland disk (tests/pack-bad-wrong-name.toml): beamlet-boot's, with a
+# boot pack whose first entry holds the second's module under its own name, packed unverified
+# so the pack reaches beamlet as written.
+size_kib = 2048
+
+[objects]
+modules = ["io", "lists"]
+erlang = ["userland/otp/redoubt/tests/erlang/beamlet_boot.erl"]
+pack = ["beamlet_boot.beam", "io.beam", "lists.beam"]
+pack_fault = "wrong-name"
+
+[[partition]]
+name = "system"
+fs = "erofs"
