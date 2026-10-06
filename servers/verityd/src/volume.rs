@@ -1,6 +1,11 @@
 //! The volume as `verityd` checks it (docs/servers/verityd.md, "Reading"): the start check, and
 //! each data block checked through the tree before any of it leaves.
 //!
+//! **A signed volume** ("The root block, and the two modes") gives its own N and root in its root
+//! block, the range's last whole block: the block is parsed, its signature verified under the
+//! manifest's key with the loader's Ed25519 (`ed25519-compact`), its version held to the floor,
+//! and only then are N and the root taken from it, as a pinned volume's come from the manifest.
+//!
 //! **Memory is fixed, whatever the volume's size:** the top tree block, pinned at start;
 //! [`TREE_CACHE`] tree blocks, each kept only once it was checked against the block above it; and
 //! [`DATA_CACHE`] checked data blocks, least recently used out first, so a block read again (a
@@ -14,9 +19,12 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use redoubt_verity::{BLOCK, DIGEST, Geometry, Hash, SECTORS_PER_BLOCK, leaf, node, root, slot};
+use ed25519_compact::{PublicKey, Signature};
+use redoubt_verity::{
+    BLOCK, DIGEST, Geometry, Hash, RootBlock, SECTORS_PER_BLOCK, leaf, node, root, root_block_at, slot,
+};
 
-use crate::Range;
+use crate::{Fault, Mode, Range, Size};
 
 /// Tree blocks kept after they were checked, beside the pinned top: 128 KiB.
 pub const TREE_CACHE: usize = 32;
@@ -38,6 +46,14 @@ pub enum Refusal {
     Unread,
     /// The top tree block does not hash to the root.
     Root,
+    /// A signed volume's root block could not be read.
+    RootBlockUnread,
+    /// A signed volume's root block is not one (`RootBlock::parse`).
+    Malformed,
+    /// A signed volume's root block's signature does not verify under the manifest's key.
+    Signature,
+    /// A signed volume's root block's version is below the manifest's floor: a rollback.
+    Version { version: u64, floor: u64 },
 }
 
 impl fmt::Display for Refusal {
@@ -48,6 +64,12 @@ impl fmt::Display for Refusal {
             Refusal::NoMemory => "no memory for its tree",
             Refusal::Unread => "its top tree block could not be read",
             Refusal::Root => "its top tree block does not match the root",
+            Refusal::RootBlockUnread => "its root block could not be read",
+            Refusal::Malformed => "its root block is malformed",
+            Refusal::Signature => "its root block's signature does not verify under its key",
+            Refusal::Version { version, floor } => {
+                return write!(f, "its root block's version {version} is below the floor {floor}");
+            }
         })
     }
 }
@@ -215,12 +237,58 @@ pub struct Volume<R> {
     data: Cache<DATA_CACHE>,
 }
 
+/// A signed volume's N and root, from the root block in the last whole block of the range
+/// `size` gives, and the sector it starts at, which the data and tree must end by. The block is
+/// parsed, its signature verified under `key`, and its version held to `floor`, in that order:
+/// nothing in it is used before the signature verifies. Refused, the sectors `info` answers: the
+/// whole blocks before the root block, the most the volume could be.
+fn signed<R: Range>(
+    range: &mut R,
+    size: Result<Size, Fault>,
+    key: &[u8; 32],
+    floor: u64,
+) -> Result<(Geometry, Hash, u64), (Refusal, u64)> {
+    let size = size.map_err(|_| (Refusal::NoInfo, 0))?;
+    let at = root_block_at(size.sectors).ok_or((Refusal::Truncated, 0))? * SECTORS_PER_BLOCK;
+    let mut block = zeroed(BLOCK).ok_or((Refusal::NoMemory, at))?;
+    range.read(at, &mut block).map_err(|_| (Refusal::RootBlockUnread, at))?;
+    let rb = RootBlock::parse(&block).map_err(|_| (Refusal::Malformed, at))?;
+    PublicKey::new(*key)
+        .verify(rb.signed(), &Signature::new(rb.signature))
+        .map_err(|_| (Refusal::Signature, at))?;
+    if rb.version < floor {
+        return Err((Refusal::Version { version: rb.version, floor }, at));
+    }
+    Ok((rb.geometry, rb.root, at))
+}
+
 impl<R: Range> Volume<R> {
-    /// Checks `range` at start: `info` sizes it no shorter than `geometry`'s data and tree, and
-    /// its top tree block hashes, with the block count, to `root`.
-    pub fn open(mut range: R, geometry: Geometry, root_: &Hash) -> Result<Volume<R>, Refusal> {
-        let size = range.info().map_err(|_| Refusal::NoInfo)?;
-        if size.sectors < geometry.total_sectors() {
+    /// Checks `range` at start against `mode`, and gives the volume's sectors, which `info`
+    /// answers whether the check passed or not. Pinned, the manifest gives N and the root; signed,
+    /// the root block does ([`signed`]). Then `info` must size the range no shorter than the
+    /// data and tree (for a signed volume, before its root block), and the top tree block must
+    /// hash, with N, to the root.
+    pub fn open(mut range: R, mode: &Mode) -> (Result<Volume<R>, Refusal>, u64) {
+        let size = range.info();
+        let (geometry, root_, end) = match *mode {
+            Mode::Pinned { root, geometry } => (geometry, root, size.map(|s| s.sectors)),
+            Mode::Signed { key, floor } => match signed(&mut range, size, &key, floor) {
+                Ok((geometry, root, at)) => (geometry, root, Ok(at)),
+                Err((why, sectors)) => return (Err(why), sectors),
+            },
+        };
+        (Volume::check(range, end, geometry, &root_), geometry.data_blocks() * SECTORS_PER_BLOCK)
+    }
+
+    /// The start check once N and the root are known: the data and tree end by `end`, and the
+    /// top tree block hashes to `root_`.
+    fn check(
+        mut range: R,
+        end: Result<u64, Fault>,
+        geometry: Geometry,
+        root_: &Hash,
+    ) -> Result<Volume<R>, Refusal> {
+        if end.map_err(|_| Refusal::NoInfo)? < geometry.total_sectors() {
             return Err(Refusal::Truncated);
         }
         let (Some(mut top), Some(blocks), Some(data)) =

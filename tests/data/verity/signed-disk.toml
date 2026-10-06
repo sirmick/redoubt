@@ -1,0 +1,12 @@
+# verity-signed's and verity-bad-signature's disk: one verified partition holding the littlefsd
+# cases' stage, its tree after it, and its root block last, signed at version 2 with the
+# development seed (tools/testbench/src/disk.rs; servers/verityd.md, "The root block, and the two
+# modes"). tests/data/verity/signed.json's floor is 2: the version equals the floor.
+size_kib = 4096
+
+[[partition]]
+name = "data"
+fs = "littlefs"
+stage = "tests/data/littlefsd/stage"
+verity = true
+sign = { key = "tests/data/verity/dev-seed", version = 2 }

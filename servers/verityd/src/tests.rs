@@ -7,10 +7,11 @@ extern crate std;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use ed25519_compact::{KeyPair, Seed};
 use redoubt_rt::abi::{Labels, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Words};
 use redoubt_rt::wire::proto::blkd::{ErrorCode, Flush, Info, Message, Read, Reply, Write};
-use redoubt_verity::{BLOCK, Geometry, Hash, SECTORS_PER_BLOCK, build};
+use redoubt_verity::{BLOCK, Geometry, Hash, RootBlock, SECTORS_PER_BLOCK, build};
 
 use super::*;
 use crate::server::{BADGE, MAX_SECTORS, Said, answer_with};
@@ -60,7 +61,29 @@ fn packed(n: u64, slack: usize) -> (Geometry, Vec<u8>, Hash) {
 }
 
 fn server(g: Geometry, bytes: Vec<u8>, root: &Hash, labels: &[u64]) -> Verityd<Fake> {
-    Verityd::new(Fake { bytes, reads: 0, fail: false }, g, root, labels.to_vec())
+    Verityd::new(
+        Fake { bytes, reads: 0, fail: false },
+        &Mode::Pinned { root: *root, geometry: g },
+        labels.to_vec(),
+    )
+}
+
+/// The development key pair, the bundle builder's seed (kernel/boot.md, "Verified boot").
+fn dev() -> KeyPair { KeyPair::from_seed(Seed::new([0x42; 32])) }
+
+/// [`packed`] with `slack` spare blocks and then a root block at `version` signed by `keys`, the
+/// range's last whole block, and half a block after it that is not part of any block.
+fn signed(n: u64, slack: usize, version: u64, keys: &KeyPair) -> (Geometry, Vec<u8>) {
+    let (g, mut bytes, root) = packed(n, slack);
+    let mut block = RootBlock { geometry: g, version, root, signature: [0; 64] };
+    block.signature = *keys.sk.sign(block.signed(), None);
+    bytes.extend_from_slice(&block.encode());
+    bytes.extend_from_slice(&[0xee; BLOCK / 2]);
+    (g, bytes)
+}
+
+fn signed_server(bytes: Vec<u8>, key: &KeyPair, floor: u64) -> Verityd<Fake> {
+    Verityd::new(Fake { bytes, reads: 0, fail: false }, &Mode::Signed { key: *key.pk, floor }, vec![])
 }
 
 fn caller(badge: u64, labels: &[u64]) -> Caller {
@@ -139,10 +162,10 @@ fn arguments_are_inits_and_nothing_else() {
         all.push(&r);
         all.push("blocks=129");
         all.extend_from_slice(extra);
-        parse_args(all.into_iter())
-            .map(|a| (std::string::String::from(a.endpoint), a.labels, a.root, a.geometry.data_blocks()))
+        parse_args(all.into_iter()).map(|a| (std::string::String::from(a.endpoint), a.labels, a.mode))
     };
-    assert_eq!(args(&[]), Ok(("verity:system".into(), vec![], [0xab; 32], 129)));
+    let pinned = Mode::Pinned { root: [0xab; 32], geometry: Geometry::new(129).unwrap() };
+    assert_eq!(args(&[]), Ok(("verity:system".into(), vec![], pinned)));
     assert_eq!(args(&["labels=3,1"]).map(|a| a.1), Ok(vec![3, 1]));
     for bad in [
         "labels=1,1",
@@ -166,6 +189,19 @@ fn arguments_are_inits_and_nothing_else() {
     let upper = std::format!("root={}", "AB".repeat(32));
     assert_eq!(parse(&["endpoint=v", &upper, "blocks=1"]), Err(BadArgs), "lowercase only");
     assert_eq!(parse(&["endpoint=v", &r, "blocks=1"]), Ok(()));
+    // Signed: a key and a floor, never beside a root or blocks, and neither alone.
+    let key = std::format!("key={}", "cd".repeat(32));
+    let signed = parse_args(["endpoint=v", &key, "floor=2"].into_iter()).map(|a| a.mode);
+    assert_eq!(signed, Ok(Mode::Signed { key: [0xcd; 32], floor: 2 }));
+    assert_eq!(parse(&["endpoint=v", &key, "floor=0"]), Ok(()));
+    assert_eq!(parse(&["endpoint=v", &key]), Err(BadArgs), "no floor");
+    assert_eq!(parse(&["endpoint=v", "floor=1"]), Err(BadArgs), "no key");
+    assert_eq!(parse(&["endpoint=v", &key, "floor=1", &r, "blocks=1"]), Err(BadArgs), "both modes");
+    assert_eq!(parse(&["endpoint=v", &key, "floor=1", "blocks=1"]), Err(BadArgs), "a part of the other");
+    assert_eq!(parse(&["endpoint=v", &key, "floor=01"]), Err(BadArgs), "a floor is canonical");
+    assert_eq!(parse(&["endpoint=v", &key, "floor=1", "floor=1"]), Err(BadArgs), "once");
+    assert_eq!(parse(&["endpoint=v", "key=cd", "floor=1"]), Err(BadArgs), "a key is 32 bytes");
+    assert_eq!(parse(&["endpoint=v"]), Err(BadArgs), "no mode");
 }
 
 // ---------------------------------------------------------------- the start check
@@ -201,12 +237,81 @@ fn a_wrong_root_or_top_is_refused() {
     // The root pins the block count: the same disk under a smaller count does not open.
     let fewer = Geometry::new(128).unwrap();
     assert_eq!(server(fewer, bytes.clone(), &root, &[]).refused(), Some(Refusal::Root));
-    let mut dead = Verityd::new(Fake { bytes, reads: 0, fail: true }, g, &root, vec![]);
+    let mut dead =
+        Verityd::new(Fake { bytes, reads: 0, fail: true }, &Mode::Pinned { root, geometry: g }, vec![]);
     assert_eq!(dead.refused(), Some(Refusal::NoInfo));
     assert_eq!(
         ask(&mut dead, &littlefsd(), &Message::Info(Info {})),
         Answered::Info { sectors: 129 * SECTORS_PER_BLOCK, read_only: 1 }
     );
+}
+
+/// A signed volume opens from its root block, at a version equal to the floor or above it: N and
+/// the root are the block's, `info` answers N, and the reads are the volume's.
+#[test]
+fn a_signed_volume_opens_from_its_root_block_at_or_above_its_floor() {
+    let (g, bytes) = signed(129, 3, 2, &dev());
+    for floor in [0, 1, 2] {
+        let mut s = signed_server(bytes.clone(), &dev(), floor);
+        assert_eq!((s.refused(), s.take_line()), (None, None), "floor {floor}");
+        assert_eq!(
+            ask(&mut s, &littlefsd(), &Message::Info(Info {})),
+            Answered::Info { sectors: g.data_blocks() * SECTORS_PER_BLOCK, read_only: 1 }
+        );
+        assert_eq!(ask(&mut s, &littlefsd(), &read(8 * 127, 16)), sectors(&bytes, 8 * 127, 16));
+    }
+    // With no slack, the tree ends where the root block starts.
+    let (_, tight) = signed(129, 0, 1, &dev());
+    assert_eq!(signed_server(tight, &dev(), 1).refused(), None);
+}
+
+/// The attack: a root block that does not verify under the manifest's key is refused, naming the
+/// signature, whether the key is another's or a signed byte changed after signing (the version,
+/// N, the root); a block that is not one is refused as malformed. Each answers `info` with the
+/// range's blocks before the root block, and fails every read.
+#[test]
+fn a_root_block_that_does_not_verify_is_refused_naming_the_signature() {
+    let (_, bytes) = signed(129, 3, 2, &dev());
+    let at = (bytes.len() / BLOCK - 1) * BLOCK;
+    let other = KeyPair::from_seed(Seed::new([0x43; 32]));
+    let mut s = signed_server(bytes.clone(), &other, 0);
+    assert_eq!(s.refused(), Some(Refusal::Signature));
+    let line = std::format!("{}", s.take_line().unwrap());
+    assert_eq!(
+        line,
+        "verityd: the volume is refused: its root block's signature does not verify under its key"
+    );
+    assert_eq!(
+        ask(&mut s, &littlefsd(), &Message::Info(Info {})),
+        Answered::Info { sectors: at as u64 / SECTOR as u64, read_only: 1 }
+    );
+    assert_eq!(ask(&mut s, &littlefsd(), &read(0, 8)), Answered::Err(ErrorCode::Failed));
+    // A byte of the version, of N (still with a geometry), of the root or of the signature.
+    for (byte, what) in [(16, "the version"), (8, "N"), (40, "the root"), (100, "the signature")] {
+        let mut flipped = bytes.clone();
+        flipped[at + byte] ^= 0x01;
+        assert_eq!(signed_server(flipped, &dev(), 0).refused(), Some(Refusal::Signature), "{what}");
+    }
+    let mut malformed = bytes.clone();
+    malformed[at] ^= 0x01;
+    assert_eq!(signed_server(malformed, &dev(), 0).refused(), Some(Refusal::Malformed));
+    // A signature over a block whose tree does not fit before it is the signer's mistake, still
+    // refused; and a range with no whole block holds no root block.
+    let (big, mut short) = signed(129, 0, 1, &dev());
+    short.drain(big.data_blocks() as usize * BLOCK..(big.data_blocks() as usize + 1) * BLOCK);
+    assert_eq!(signed_server(short, &dev(), 0).refused(), Some(Refusal::Truncated));
+    assert_eq!(signed_server(vec![0; BLOCK - 1], &dev(), 0).refused(), Some(Refusal::Truncated));
+}
+
+/// The attack: a volume signed at version 1 under a floor of 2, a rollback, is refused naming both.
+#[test]
+fn a_root_block_below_the_floor_is_refused_naming_the_version() {
+    let (_, bytes) = signed(129, 0, 1, &dev());
+    let mut s = signed_server(bytes, &dev(), 2);
+    assert_eq!(s.refused(), Some(Refusal::Version { version: 1, floor: 2 }));
+    let line = std::format!("{}", s.take_line().unwrap());
+    assert_eq!(line, "verityd: the volume is refused: its root block's version 1 is below the floor 2");
+    assert_eq!(ask(&mut s, &littlefsd(), &read(0, 8)), Answered::Err(ErrorCode::Failed));
 }
 
 // ---------------------------------------------------------------- reading

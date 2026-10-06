@@ -1,0 +1,10 @@
+# verity-rollback's disk: signed-disk.toml's volume signed at version 1, below the floor of 2
+# tests/data/verity/signed.json gives (servers/verityd.md, "The root block, and the two modes").
+size_kib = 4096
+
+[[partition]]
+name = "data"
+fs = "littlefs"
+stage = "tests/data/littlefsd/stage"
+verity = true
+sign = { key = "tests/data/verity/dev-seed", version = 1 }

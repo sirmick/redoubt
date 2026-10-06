@@ -62,7 +62,7 @@
       "devices": [ { "device": "disk1", "as": "disk" } ],
       "receives": ["blkd:system"], "args": ["endpoint=blkd:system"] },
     { "name": "verity:system", "program": "verityd",
-      "stack_pages": "4", "heap_pages": "100",
+      "stack_pages": "5", "heap_pages": "100",
       "budget": { "pages": "256", "processes": 1, "weight": 100 },
       "receives": ["verity:system"] },
     { "name": "erofsd:system", "program": "erofsd",

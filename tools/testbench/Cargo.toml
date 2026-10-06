@@ -20,7 +20,7 @@ redoubt-blkd = { path = "../../servers/blkd" }                           # a cas
 redoubt-littlefsd = { path = "../../servers/littlefsd" }                 # a disk recipe's volumes, packed by littlefsd's own code
 redoubt-stride = { path = "../../libs/stride" }                          # cluster pass spread from the scheduler's stride unit
 erofs = { path = "../../libs/erofs" }                                    # a disk recipe's read-only volumes, packed by Redoubt's own writer
-redoubt-verity = { path = "../../libs/verity" }                          # a verified volume's tree, as verityd checks it (disk.rs)
+redoubt-verity = { path = "../../libs/verity" }                          # a verified volume's tree and root block, as verityd checks them (disk.rs)
 sha2 = { version = "0.11", default-features = false }                    # a run directory's and a guest file's names
 
 stub = { path = "../../stub" } # the largest launched stack

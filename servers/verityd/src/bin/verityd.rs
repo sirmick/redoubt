@@ -1,5 +1,6 @@
-//! `verityd`, the program: check its range at `blkd` against the root `init` gave it, then serve
-//! the volume on `blkd`'s protocol until its endpoint is destroyed (docs/servers/verityd.md).
+//! `verityd`, the program: check its range at `blkd` against the root `init` gave it, or against
+//! the root its root block gives signed under the key `init` gave it, then serve the volume on
+//! `blkd`'s protocol until its endpoint is destroyed (docs/servers/verityd.md).
 //!
 //! Everything it can do is in `redoubt-verityd`'s library, so host tests drive the same code
 //! against a fake range.
@@ -30,11 +31,11 @@ const VOLUME: &str = "volume";
 
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
-    let Ok(Args { endpoint, labels, root, geometry }) = parse_args(startup.args()) else { return BAD_ARGS };
+    let Ok(Args { endpoint, labels, mode }) = parse_args(startup.args()) else { return BAD_ARGS };
     let Some(endpoint) = startup.handle(endpoint).map(Endpoint::from_handle) else { return BAD_ARGS };
     let Some(volume) = startup.handle(VOLUME) else { return NO_VOLUME };
     let Ok(range) = Blkd::new(Endpoint::from_handle(volume)) else { return NO_VOLUME };
-    let mut server = Verityd::new(range, geometry, &root, labels);
+    let mut server = Verityd::new(range, &mode, labels);
     let tell = |line: Said| say(startup, &alloc::format!("{line}\n"));
     if let Some(line) = server.take_line() {
         tell(line);
