@@ -513,8 +513,8 @@ walk of
 `Elixir.BootStats.beam`, a name no volume holds; and at the VM's first console read beamlet says
 `beamlet: first console read [t=N]` and what its lookups cost: their count and the guest time spent
 in them ([beamlet on Redoubt](userland/beamlet.md#beamlet-on-redoubt)). The feature needs no
-checked build. `boot-profile` and `boot-profile-unverified`, by name only, boot the image's
-programs with it under `icount` and a pinned seed: measurements, which assert no time.
+checked build. `boot-profile` and `boot-profile-unverified` boot the image's programs with it under `icount` and a pinned seed: measurements, which bound only the boot's time
+to its prompt ([the boot-time target](userland/beamlet.md#beamlet-on-redoubt)).
 
 ## Hostile inputs
 

@@ -374,14 +374,24 @@ In a `boot-stats` build ([checked builds](../testbench.md#checked-builds)) beaml
 first console read [t=N]` at the VM's first console read, with `time_now` in µs. For the shell that
 read is its prompt, drawn and waiting, so the line is the boot's time to its prompt; the line
 follows the prompt on the console's line. `boot-profile` and `boot-profile-unverified` measure it.
-Measured in that build on QEMU rv64 under `icount` (`shift=3`, sleep on) with seed 1, the image
-reaches its prompt in 1,016 s of guest time verified (1,014 to 1,034 s over seeds 1 to 5) and 536 s
-unverified (seed 1). 99 % of it is in the VM's 96 lookups, which spend 97 % of their block reads
-finding each file's name in the volume's root directory again
-([littlefsd](../servers/littlefsd.md#residual-risks)). They make 652 9P operations and 77,710 block
-reads of 673 distinct blocks; a block read costs 6.8 ms of guest time unverified (about 0.85 M
-instructions) and 13.0 ms verified, so reading takes 529 s of the unverified boot and 1,009 s of
-the verified one. The VM's own work and its console take 6.5 s either way.
+Measured in that build under `icount` (`shift=3`, sleep on) with seed 1, in guest time
+(bench:boot-profile, bench:boot-profile-unverified):
+
+| system volume | rv64 verified | rv64 unverified | rv32 verified | rv32 unverified |
+| --- | ---: | ---: | ---: | ---: |
+| littlefs (`littlefsd`, retired for this volume) | 1,016.7 s | 534.7 s | 1,044.2 s | 558.0 s |
+| EROFS (`erofsd`) | 16.0 s | 12.5 s | 15.7 s | 12.1 s |
+
+On littlefs 99 % of the boot was in the VM's 96 lookups: `littlefsd` found each file's name in the
+volume's root directory again two or three times for every 9P operation, 77,710 block reads of 673
+distinct blocks ([littlefsd](../servers/littlefsd.md#residual-risks)). On EROFS the same 96 loads
+make the same 652 9P operations, and `erofsd` reads the volume 641 times (112 inodes, 243
+directory blocks, 286 runs of a file's blocks) in 642 range calls of 3.35 MB; the loads take 7.1 s
+verified and 3.7 s unverified, and the VM's own work and its console about 6.5 s either way.
+
+**The boot-time target:** in this build, the prompt within 30 s of guest time verified and 20 s
+unverified, on both widths. `boot-profile` and `boot-profile-unverified` fail past it, and run in
+every whole run of the bench.
 
 If the volume does not attach, because `erofsd` serves it as corrupt, or the module it is told to
 start cannot load, it says why on its console and waits without exiting: a tampered disk must not

@@ -1,6 +1,5 @@
-description = "A measurement, not a verdict on time: the image's boot to its prompt through its verified userland volume, profiled (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/servers/verityd.md, \"Memory and cost\"). The image's programs and manifest, with init, blkd, verityd, littlefsd, erofsd and beamlet built with boot-stats (docs/testbench.md, \"Checked builds\"): init's lines and beamlet's first object carry [t=N], guest time under icount with sleep on (a disk case: docs/testbench.md) and a pinned seed, so a run repeats closely, its spread shown by a sweep; blkd, littlefsd and erofsd say their counts at each power of two of their requests from 2^12, verityd from 2^7; at the VM's first console read beamlet says `beamlet: first console read [t=N]` and what its lookups cost: for the shell that read is its prompt, drawn and waiting, so in this build the line is drawn after the prompt, on its line, and the line editor's first line is misdrawn, the stamp's known cost; and a call to BootStats, a module no volume holds, makes erofsd say its counts exactly before it answers not_found. A typed Enum.sum(1..10) prints 55. boot-profile-unverified is the same boot with the volume unverified"
+description = "A measurement, and the boot-time target (the prompt within 30 s of guest time): the image's boot to its prompt through its verified userland volume, profiled (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/servers/verityd.md, \"Memory and cost\"). The image's programs and manifest, with init, blkd, verityd, littlefsd, erofsd and beamlet built with boot-stats (docs/testbench.md, \"Checked builds\"): init's lines and beamlet's first object carry [t=N], guest time under icount with sleep on (a disk case: docs/testbench.md) and a pinned seed, so a run repeats closely, its spread shown by a sweep; blkd, littlefsd and erofsd say their counts at each power of two of their requests from 2^12, verityd from 2^7; at the VM's first console read beamlet says `beamlet: first console read [t=N]` and what its lookups cost: for the shell that read is its prompt, drawn and waiting, so in this build the line is drawn after the prompt, on its line, and the line editor's first line is misdrawn, the stamp's known cost; and a call to BootStats, a module no volume holds, makes erofsd say its counts exactly before it answers not_found. A typed Enum.sum(1..10) prints 55. boot-profile-unverified is the same boot with the volume unverified"
 arch = ["rv64", "rv32"]
-whole_run = false
 kind = "boot"
 programs = [
     { package = "redoubt-init", bin = "init", features = ["boot-stats"] },
@@ -29,7 +28,8 @@ expect = [
     '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from erofsd:system \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     # The shell's prompt has no newline: the line follows it on the console's line.
-    'beamlet: first console read \[t=[0-9]+\]$',
+    # The boot-time target: the prompt within 30 s: 1.5 times the 16.0 s measured on rv64 (15.7 s on rv32), rounded up to 10 s (docs/userland/beamlet.md).
+    'beamlet: first console read \[t=([0-9]{1,7}|[12][0-9]{7})\]$',
     '^\[con [0-9a-f]{16}\] beamlet: boot-stats: loads [0-9]+ ',
     '^\[con [0-9a-f]{16}\] 55$',
     '^\[con [0-9a-f]{16}\] erofsd: boot-stats: 9P [0-9]+ ',
