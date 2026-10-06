@@ -59,10 +59,36 @@ fn done(c: &mut Ctx, r: Result<(), FileError>) -> R {
     })
 }
 
-/// Run `f` on the platform's file system, with only the platform locked while it runs.
-fn with_files<T>(c: &Ctx, f: impl FnOnce(&mut dyn Files) -> Result<T, FileError>) -> Result<T, FileError> {
-    let mut platform = c.platform();
-    f(platform.files().ok_or(FileError::Enotsup)?)
+/// Run `f` on the platform's file system, as this process's call, with only the platform locked
+/// while it runs. An operation the platform finishes later parks the process until it has
+/// ([`Ctx::await_io`]): the native is then called again, the same call, and the platform answers
+/// it; what it builds from `Later` meanwhile is dropped.
+fn with_files<T>(
+    c: &mut Ctx,
+    f: impl FnOnce(&mut dyn Files) -> Result<T, FileError>,
+) -> Result<T, FileError> {
+    let asker = asker(c.p.pid);
+    let r = {
+        let mut platform = c.platform();
+        let files = platform.files().ok_or(FileError::Enotsup)?;
+        files.asker(Some(asker));
+        let r = f(files);
+        files.asker(None);
+        r
+    };
+    match r {
+        Err(FileError::Later) => c.await_io(),
+        _ => c.p.io = crate::process::Io::Idle,
+    }
+    r
+}
+
+/// The number the platform knows process `pid` by while it asks ([`Files::asker`]).
+pub(crate) fn asker(pid: crate::term::Pid) -> u64 { u64::from(pid.serial) << 32 | u64::from(pid.index) }
+
+/// The process an asker's number names.
+pub(crate) fn asker_pid(asker: u64) -> crate::term::Pid {
+    crate::term::Pid::process(asker as u32, (asker >> 32) as u32)
 }
 
 // ---- names ----
@@ -189,6 +215,8 @@ fn with_path(c: &mut Ctx, t: &Term, f: impl FnOnce(&mut Ctx, &str) -> R) -> R {
 
 // ---- file information ----
 
+/// A `#file_info{}`. Without Unix fields ([`FileInfo::unix`]), `access`, `mode`, `links`,
+/// `major_device`, `inode`, `uid` and `gid` are `undefined`.
 fn info_term(c: &mut Ctx, i: &FileInfo) -> Term {
     let kind = match i.kind {
         FileKind::Regular => "regular",
@@ -196,13 +224,16 @@ fn info_term(c: &mut Ctx, i: &FileInfo) -> Term {
         FileKind::Symlink => "symlink",
         FileKind::Other => "other",
     };
-    let access = match (i.readable, i.writable) {
-        (true, true) => "read_write",
-        (true, false) => "read",
-        (false, true) => "write",
-        (false, false) => "none",
+    let access = match (i.unix, i.readable, i.writable) {
+        (false, ..) => "undefined",
+        (true, true, true) => "read_write",
+        (true, true, false) => "read",
+        (true, false, true) => "write",
+        (true, false, false) => "none",
     };
     let int = |n: i64| Term::Int(n);
+    let undefined = c.atom("undefined");
+    let unix = |c: &mut Ctx, n: u64| if i.unix { c.big(n.into()) } else { undefined };
     {
         let e = [
             c.atom("file_info"),
@@ -215,19 +246,13 @@ fn info_term(c: &mut Ctx, i: &FileInfo) -> Term {
             int(i.atime),
             int(i.mtime),
             int(i.ctime),
-            int(i.mode as i64),
-            {
-                let v = i.links.into();
-                c.big(v)
-            },
+            unix(c, i.mode.into()),
+            unix(c, i.links),
+            unix(c, 0),
             int(0),
-            int(0),
-            {
-                let v = i.inode.into();
-                c.big(v)
-            },
-            int(i.uid as i64),
-            int(i.gid as i64),
+            unix(c, i.inode),
+            unix(c, i.uid.into()),
+            unix(c, i.gid.into()),
         ];
         c.tuple(&e)
     }
@@ -336,9 +361,9 @@ pub fn read_link(c: &mut Ctx, a: &[Term]) -> R {
 /// `get_cwd_nif()`: `{error, enoent}` if the directory has since been removed, as `getcwd` says.
 pub fn get_cwd(c: &mut Ctx, _a: &[Term]) -> R {
     let cwd = c.sys().cwd.clone();
-    let gone = c.platform().files().map(|f| f.info(&cwd, true));
-    if let Some(Err(e)) = gone {
-        return Ok(error(c, e));
+    match with_files(c, |f| f.info(&cwd, true)) {
+        Ok(_) | Err(FileError::Enotsup) => {}
+        Err(e) => return Ok(error(c, e)),
     }
     Ok({
         let v = cwd.as_bytes();
@@ -603,7 +628,7 @@ pub fn advise(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// The whole file at `path` (already resolved), if it is at most `max` bytes.
-pub fn read_whole_file(f: &mut dyn Files, path: &str, max: usize) -> Result<Vec<u8>, FileError> {
+pub fn read_whole_file<F: Files + ?Sized>(f: &mut F, path: &str, max: usize) -> Result<Vec<u8>, FileError> {
     let size = f.info(path, true)?.size;
     if size > max as u64 {
         return Err(FileError::Einval);
@@ -627,7 +652,7 @@ pub fn read_whole_file(f: &mut dyn Files, path: &str, max: usize) -> Result<Vec<
 pub fn read_file(c: &mut Ctx, a: &[Term]) -> R {
     let max = c.sys().limits.max_binary_bits / 8;
     with_path(c, &a[0], |c, p| {
-        let r = with_files(c, |f| read_whole_file(f, p, max));
+        let r = with_files(c, |f| f.read_file(p, max));
         Ok(match r {
             Ok(d) => {
                 let v = &d;

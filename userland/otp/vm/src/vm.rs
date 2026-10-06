@@ -15,7 +15,7 @@ use crate::interp::{self, Stop};
 use crate::loader::{self, LoadError};
 use crate::module::Module;
 use crate::platform::{ConsoleInput, Lookup, Platform};
-use crate::process::{Class, Cp, Exception, Process, State};
+use crate::process::{Class, Cp, Exception, Io, Process, State};
 use crate::sched::Sched;
 use crate::sync::{Lock, Sendable, Wakeup};
 use crate::term::{Heap, Literals, OwnedTerm, Pid, Ref, Term, copy};
@@ -119,6 +119,8 @@ pub struct System {
     pub(crate) cwd: String,
     /// Open files: platform handle, and the process that opened it.
     pub(crate) files: BTreeMap<u64, Pid>,
+    /// Processes waiting for a file operation the platform finishes later.
+    io_waits: usize,
     /// Open ports, by the pid of the port's process, and the port behind each program handle.
     pub(crate) ports: BTreeMap<Pid, crate::bif::port::PortState>,
     pub(crate) program_ports: BTreeMap<u64, Pid>,
@@ -549,6 +551,7 @@ impl Vm {
                 default_group_leader: None,
                 cwd: "/".into(),
                 files: BTreeMap::new(),
+                io_waits: 0,
                 ports: BTreeMap::new(),
                 program_ports: BTreeMap::new(),
                 halted: None,
@@ -1027,7 +1030,7 @@ impl System {
         }
         inbox.push_back(fragment);
         if let Some(p) = self.procs.get_mut(to) {
-            if p.state == State::Waiting {
+            if p.state == State::Waiting && p.io != Io::Waiting {
                 p.state = State::Runnable;
                 self.run_queue.push_back(to);
             }
@@ -1114,6 +1117,7 @@ impl System {
         self.fire_timers();
         self.poll_console();
         self.poll_programs();
+        self.poll_files();
         let Some(pid) = self.run_queue.pop_front() else {
             // Nothing runnable. While other schedulers run, wait for them: they may make work.
             if self.running > 0 {
@@ -1124,8 +1128,8 @@ impl System {
             if !self.results.is_empty() || self.halted.is_some() || self.stopping {
                 return Next::Again;
             }
-            // Nothing running either: sleep until the next timer or console input, or give up
-            // if nothing can ever arrive.
+            // Nothing running either: sleep until the next timer, console input or the end of a
+            // file operation, or give up if nothing can ever arrive.
             if self.console_reader.is_some() {
                 self.report_memory();
             }
@@ -1134,7 +1138,10 @@ impl System {
                     self.platform.lock().idle(Some(deadline));
                     Next::Again
                 }
-                None if self.console_reader.is_some() || !self.program_ports.is_empty() => {
+                None if self.console_reader.is_some()
+                    || !self.program_ports.is_empty()
+                    || self.io_waits > 0 =>
+                {
                     self.platform.lock().idle(None);
                     Next::Again
                 }
@@ -1174,6 +1181,13 @@ impl System {
             stop = Stop::Exit(Err(Exception::exit(Term::Atom(self.atoms.killed))));
         }
         match stop {
+            // A native answered `Later`: it waits for the platform's operation, not for a message.
+            Stop::Yield if p.io == Io::Asked => {
+                p.io = Io::Waiting;
+                p.state = State::Waiting;
+                self.io_waits += 1;
+                self.procs.put(p);
+            }
             Stop::Yield => {
                 self.procs.put(p);
                 self.run_queue.push_back(pid);
@@ -1310,6 +1324,31 @@ impl System {
         }
     }
 
+    /// Wake the processes whose file operations the platform has finished: a waiting one runs
+    /// again; one still running, which has not yet waited, does not wait. Asked only while some
+    /// process waits: one that has not waited yet is found once it does.
+    fn poll_files(&mut self) {
+        while self.io_waits > 0 {
+            let finished = self.platform.lock().files().and_then(|f| f.finished());
+            let Some(asker) = finished else { return };
+            let pid = bif::asker_pid(asker);
+            if let Some(p) = self.procs.get_mut(pid) {
+                if p.io == Io::Waiting {
+                    p.io = Io::Idle;
+                    p.state = State::Runnable;
+                    self.io_waits -= 1;
+                    self.run_queue.push_back(pid);
+                }
+            } else {
+                self.procs.update(pid, |p| {
+                    if p.io == Io::Asked {
+                        p.io = Io::Done;
+                    }
+                });
+            }
+        }
+    }
+
     fn terminate(&mut self, mut p: Box<Process>, result: Result<Term, Exception>) {
         let pid = p.pid;
         let h = &mut p.heap;
@@ -1327,6 +1366,15 @@ impl System {
         let reason = Arc::new(OwnedTerm::new(&p.heap, reason));
         if let Some(t) = p.timer {
             self.cancel_timer(pid, t);
+        }
+        // A file operation it began is dropped, with what it holds, when it ends.
+        if p.io != Io::Idle {
+            if p.io == Io::Waiting {
+                self.io_waits -= 1;
+            }
+            if let Some(f) = self.platform.lock().files() {
+                f.abandon(bif::asker(pid));
+            }
         }
         // An uncaught error (or throw) is reported to the logger, as BEAM's emulator does.
         if matches!(&result, Err(e) if e.class != Class::Exit) {
@@ -1600,6 +1648,7 @@ mod tests {
             self.operations.fetch_add(1, Ordering::Relaxed);
             let size = Home::file(path)?.len() as u64;
             Ok(FileInfo {
+                unix: true,
                 size,
                 kind: FileKind::Regular,
                 readable: true,

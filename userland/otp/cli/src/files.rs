@@ -178,6 +178,7 @@ fn info(m: &impl MetadataLike) -> FileInfo {
         _ => FileKind::Other,
     };
     FileInfo {
+        unix: true,
         size: m.size(),
         kind,
         // From the permission bits for the owner: good enough for a test platform.
