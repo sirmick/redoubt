@@ -1101,11 +1101,13 @@ fn the_steward_s_entry_alone_is_given_the_manifest_lines() {
             "keyd []".into(),
             format!("servers {STEWARD_SLOTS}"),
             "sizes session=512,1,10 agent=256,1,10 sub_agent=64,1,10 crossing=32,1,10 cost=1".into(),
+            "label \"alice-secrets\" id=7".into(),
         ]
     );
-    // The policy core reads them back as the manifest they came from.
+    // The policy core reads its own back as the manifest they came from.
     let lines = args(&m, steward, &BUNDLE_KEY);
-    let read = redoubt_steward::manifest::parse_lines(lines.iter().map(String::as_str)).unwrap();
+    let core = lines.iter().map(String::as_str).filter(|l| !l.starts_with("label "));
+    let read = redoubt_steward::manifest::parse_lines(core).unwrap();
     assert_eq!(read.principals[0].login_keys, [id]);
     for s in m.servers.iter().filter(|s| s.name != "steward") {
         assert!(!is_steward(&m, s));
@@ -1137,6 +1139,65 @@ fn the_steward_object_and_console_name_what_the_manifest_holds() {
     let mut m = with_steward();
     server(&mut m, "steward").args = vec!["buckets=4".into(), "principal \"eve\"".into()];
     refused_at(&m, "servers[7].args[1]", Why::Argument);
+}
+
+/// After the core's lines, the steward's own: each label's name, alice's home at the handle of
+/// her volume's server, her vault set's labelled volume, and her network scope; bob has none of
+/// them. A home or vault whose server the steward is not handed is refused.
+#[test]
+fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
+    let mut m = with_steward();
+    m.volumes.push(Volume {
+        name: "alice-secrets".into(),
+        partition: 1,
+        labels: vec!["alice-secrets".into()],
+        disk: None,
+        verity: None,
+    });
+    let base = server(&mut m, "walfsd:data").clone();
+    m.servers.push(Server {
+        name: "littlefsd:alice-secrets".into(),
+        program: "littlefsd".into(),
+        volume: Some("alice-secrets".into()),
+        receives: vec!["littlefsd:alice-secrets".into()],
+        args: vec!["endpoint=littlefsd:alice-secrets".into(), "buckets=4".into()],
+        ..base
+    });
+    m.principals[0].home = Some("data:/home/alice".into());
+    m.console = Some("alice".into());
+    m.principals[0].net = vec![
+        Net { prefix: "0.0.0.0/0".into(), ports: vec![22, 443] },
+        Net { prefix: "10.0.0.0/8".into(), ports: vec![] },
+    ];
+    for e in ["walfsd:data", "littlefsd:alice-secrets"] {
+        server(&mut m, "steward").handed.push(Handed { endpoint: e.into(), badge: 9 });
+    }
+    on_virt(&m).unwrap();
+    let steward = m.servers.iter().find(|s| s.name == "steward").unwrap();
+    let lines = args(&m, steward, &BUNDLE_KEY);
+    let own: Vec<&str> = lines.iter().map(String::as_str).skip_while(|l| !l.starts_with("label ")).collect();
+    assert_eq!(
+        own,
+        [
+            "label \"alice-secrets\" id=7",
+            "home \"alice\" handle=walfsd:data path=/home/alice",
+            "vault \"alice\" labels=[7] handle=littlefsd:alice-secrets",
+            "net \"alice\" 0.0.0.0/0:22,443 10.0.0.0/8:*",
+            "console \"alice\"",
+        ]
+    );
+    // A scope the steward cannot ask ipd for: IPv6, or more than ipd's eight rules.
+    let mut v6 = m.clone();
+    v6.principals[0].net = vec![Net { prefix: "::/0".into(), ports: vec![22] }];
+    refused_at(&v6, "principals[0].net", Why::Value);
+    let mut wide = m.clone();
+    wide.principals[0].net = vec![Net { prefix: "0.0.0.0/0".into(), ports: (1..=9).collect() }];
+    refused_at(&wide, "principals[0].net", Why::Value);
+    let mut unhanded = m.clone();
+    server(&mut unhanded, "steward").handed.retain(|h| h.endpoint != "walfsd:data");
+    refused_at(&unhanded, "principals[0].home", Why::Unknown);
+    server(&mut m, "steward").handed.retain(|h| h.endpoint != "littlefsd:alice-secrets");
+    refused_at(&m, "principals[0].label_sets[0]", Why::Unknown);
 }
 
 /// Every size a process can run in, and each within the smallest sub-budget the steward carves:

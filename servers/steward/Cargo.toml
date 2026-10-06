@@ -9,8 +9,9 @@ description = "The steward: embeds the policy core, carves the principals' budge
 name = "steward"
 path = "src/bin/steward.rs"
 
-# Only our own crates: the policy core and the runtime. The core is the one place the steward's
-# policy lives; this crate binds its effects.
+# Only our own crates: the policy core, the runtime and the client library. The core is the one
+# place the steward's policy lives; this crate binds its effects.
 [dependencies]
+redoubt-client = { path = "../../libs/client" }
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-steward = { path = "../../libs/steward" }
