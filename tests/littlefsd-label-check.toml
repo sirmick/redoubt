@@ -1,0 +1,40 @@
+description = "The label check in a boot, at littlefsd under init (servers/serving.md R25; servers/littlefsd.md, \"Volumes, connections and labels\"): an unconfined manifest whose volume carries alice-secrets, and its littlefsd, carrying the same labels, writing through blkd; a client under those labels writes a file; an unlabelled client handed a badge at the same endpoint is refused at its attach, a read of the root, so it never holds a fid to walk, stat or write through; then the labelled client's next start, which the outsider's attempt waits for and which waits in turn for the outsider's answer, reads the file back unchanged. The labelled client cannot write the unlabelled console, so its verdicts are exit codes init reports"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and two littlefsd-clients, one labelled.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+# No reporter: every verdict is init's bare line or the unlabelled outsider's. The writer's codes
+# are tests/littlefsd-programs/src/bin/littlefsd-client.rs's verdict: 10 wrote, 11 read back unchanged. The
+# order is events', not times': the outsider tries only when the writer's next start sends to it,
+# and that start reads back only when the outsider, refused, sends back.
+expect = [
+    '^init: the manifest is checked: 6 servers, bound \d+ pages$',
+    '^init: started littlefsd, console [0-9a-f]{16}$',
+    '^init: writer \(PID [0-9]+\) exited, code 10$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client without the labels was refused at attach$',
+    '^init: writer \(PID [0-9]+\) exited, code 11$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: writer \(PID [0-9]+\) exited, code ([0-9]|1[2-9]|[2-9][0-9]|[0-9]{3,})$',
+    '^init: .* (faulted|was killed)',
+    '^init: (keyd|consoled|blkd|littlefsd|outsider) .*exited',
+    'init: rebooting',
+    'littlefsd-client TEST FAILED',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/littlefsd/label-check.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1

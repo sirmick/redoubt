@@ -1,7 +1,7 @@
-description = "The attack: a program handed the userland fsd's endpoint tries to create a file on the userland disk and to write Elixir.Version.beam (servers/fsd.md, \"Read-only ranges\"; docs/kernel/boot.md, R75). verityd reports the volume read-only, so fsd serves it read-only and refuses the create and the writes itself, before they reach verityd, which refuses every write too, blkd, or the host, which attaches the disk read-only; the file reads back the same length. The verdict that the file did not change is the system's: the shell then calls Version, and beamlet loads it only because verityd served every block of it as hashing to the signed manifest's root (R76; rule F)"
+description = "The attack: a program handed the userland littlefsd's endpoint tries to create a file on the userland disk and to write Elixir.Version.beam (servers/littlefsd.md, \"Read-only ranges\"; docs/kernel/boot.md, R75). verityd reports the volume read-only, so littlefsd serves it read-only and refuses the create and the writes itself, before they reach verityd, which refuses every write too, blkd, or the host, which attaches the disk read-only; the file reads back the same length. The verdict that the file did not change is the system's: the shell then calls Version, and beamlet loads it only because verityd served every block of it as hashing to the signed manifest's root (R76; rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# The image's programs and fsd-client; the manifest is the image's with the client added.
+# The image's programs and littlefsd-client; the manifest is the image's with the client added.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
@@ -11,9 +11,9 @@ programs = [
     { package = "redoubt-verityd", bin = "verityd" },
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
-    { package = "redoubt-fsd", bin = "fsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
-    { package = "redoubt-fsd-programs", bin = "fsd-client" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
 ]
 # The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
 # the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
@@ -23,8 +23,8 @@ timeout_secs = 330
 # The client's lines come long before the shell's banner; they are expected first, so the call
 # to Version follows the attack.
 expect = [
-    '^\[con [0-9a-f]{16}\] fsd-client: a create and a write to Elixir.Version.beam refused$',
-    '^\[con [0-9a-f]{16}\] fsd-client TEST PASSED$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client: a create and a write to Elixir.Version.beam refused$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     '^\[con [0-9a-f]{16}\] / \(1\)> "1\.2\.3"$',
 ]
@@ -33,7 +33,7 @@ forbid = [
     '^init: .* (exited|faulted|was killed)',
     'init: restarted',
     'not loaded',
-    'fsd-client TEST FAILED',
+    'littlefsd-client TEST FAILED',
 ]
 
 [[input]]
@@ -47,16 +47,16 @@ verity = "image/userland.toml"
 
 [[file.servers]]
 name = "client"
-program = "fsd-client"
+program = "littlefsd-client"
 budget = { pages = "256", processes = 1, weight = 100 }
-handed = [{ endpoint = "fsd:system", badge = "8" }]
-args = ["readonly", "fsd:system", "Elixir.Version.beam"]
+handed = [{ endpoint = "littlefsd:system", badge = "8" }]
+args = ["readonly", "littlefsd:system", "Elixir.Version.beam"]
 
 [userland]
 recipe = "image/userland.toml"
 
 [disk]
 recipe = "image/disk.toml"
-stage = "tests/data/fsd/stage"
+stage = "tests/data/littlefsd/stage"
 
 [net]

@@ -965,7 +965,7 @@ mod tests {
             .collect();
         assert_eq!(
             bins,
-            ["init", "keyd", "consoled", "bootfsd", "blkd", "verityd", "netd", "ipd", "fsd", "beamlet"]
+            ["init", "keyd", "consoled", "bootfsd", "blkd", "verityd", "netd", "ipd", "littlefsd", "beamlet"]
         );
         assert!(programs[0].is_init());
         let otp = Path::new("userland/otp");
@@ -1004,10 +1004,10 @@ mod tests {
         let text = "name = \"manifest\"\nfrom = { path = \"m.json\" }\n\
                     servers = [{ name = \"client\", args = [\"read\", \"x\\n\"] }, { name = \"extra\" }]\n";
         let file: BundleFile = toml::from_str(text).unwrap();
-        let base = br#"{"servers": [{"name": "fsd", "args": ["a"]}, {"name": "client", "program": "c", "args": ["boot"]}]}"#;
+        let base = br#"{"servers": [{"name": "littlefsd", "args": ["a"]}, {"name": "client", "program": "c", "args": ["boot"]}]}"#;
         let merged: serde_json::Value = serde_json::from_slice(&file.merged(base).unwrap()).unwrap();
         let expected = serde_json::json!({"servers": [
-            {"name": "fsd", "args": ["a"]},
+            {"name": "littlefsd", "args": ["a"]},
             {"name": "client", "program": "c", "args": ["read", "x\n"]},
             {"name": "extra"},
         ]});

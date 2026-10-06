@@ -431,7 +431,7 @@ fn a_client_at_its_connection_cap_costs_the_server_no_walk() {
     t.connect(&mut k, &caller(2, 2002, &[]), "a/b", 0).unwrap();
 }
 
-/// Byte quotas are the file server's (servers/fsd.md, "Quotas"); the skeleton hands it every
+/// Byte quotas are the file server's (servers/littlefsd.md, "Quotas"); the skeleton hands it every
 /// grant and every disconnect.
 #[test]
 fn a_quota_is_the_file_servers_to_grant_and_a_disconnect_reaches_it() {

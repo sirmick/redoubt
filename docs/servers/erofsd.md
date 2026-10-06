@@ -5,10 +5,10 @@
 `erofsd` serves a **read-only volume** in EROFS, the Enhanced Read-Only File System, written
 once on the build host and read whole at every boot. The system volume (OTP, Elixir and the
 shell as objects) is one. Its clients see the same 9P face every file server shows
-([fsd](fsd.md)); what changes is underneath: a file is one sequential run of 4 KiB blocks,
+([littlefsd](littlefsd.md)); what changes is underneath: a file is one sequential run of 4 KiB blocks,
 found through one inode and one sorted directory, so a read of an object touches each of its
 blocks once, and a verifier's tree over the volume is read in order. It is named for the format
-it serves ([naming](README.md#naming)); writable volumes stay littlefs ([fsd](fsd.md)).
+it serves ([naming](README.md#naming)); writable volumes stay littlefs ([littlefsd](littlefsd.md)).
 
 ## Interface
 
@@ -37,12 +37,12 @@ Everything `erofsd` reads is bounded before it is used: the superblock's block c
 the range's size, every inode's offset against the inode area, every data block against the
 block count, every name offset against its block, and the entry count against the block size. A
 volume that fails any of these, or asks for a layout outside the subset, is **corrupt** and is
-served as `fsd` serves one
-([R49 (a hostile medium is corrupt, not a crash)](fsd.md#r49-a-hostile-medium-is-corrupt-not-a-crash)):
+served as `littlefsd` serves one
+([R49 (a hostile medium is corrupt, not a crash)](littlefsd.md#r49-a-hostile-medium-is-corrupt-not-a-crash)):
 every attach refused with `corrupt`, the server up. The parser is these checks, two inode
 sizes, two layouts and a sorted directory: the smallest thing that can stand between a hostile
 medium and a client, and under
-[R47 (one volume per instance)](fsd.md#r47-one-volume-per-instance) a client who exploits it
+[R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance) a client who exploits it
 reaches that volume's data and nothing else; there is less of it to exploit.
 
 `erofsd` does not hash a file as it serves it: integrity is the verifier's
@@ -56,7 +56,7 @@ against what was packed); `erofsd` skips it with every other attribute.
 
 Status: planned · M1 (separation and containment)
 
-`erofsd` is started by `init` as `fsd` is, one instance per read-only volume, with the same
+`erofsd` is started by `init` as `littlefsd` is, one instance per read-only volume, with the same
 arguments (`endpoint=`, `buckets=`) and the same range: a `blkd` range for an unverified
 volume, a `verityd` range for a verified one ([blkd](blkd.md), [verityd](verityd.md)). At
 start it reads the superblock and the root inode, then serves:
@@ -71,8 +71,8 @@ start it reads the superblock and the root inode, then serves:
 - `write`, `create`, `remove` and any open for writing are refused with `read-only`; there is
   no quota, since nothing is written, and attributes are not served.
 
-Each connection is rooted where the granting party chose with `new_connection`, as `fsd`'s are
-([fsd](fsd.md#volumes-connections-and-labels)); every node reports the volume's labels.
+Each connection is rooted where the granting party chose with `new_connection`, as `littlefsd`'s are
+([littlefsd](littlefsd.md#volumes-connections-and-labels)); every node reports the volume's labels.
 Memory is bounded: one block of scratch for directory and inode reads, and one inode per open
 fid.
 
@@ -87,7 +87,7 @@ disk recipe, in place of `fs = "littlefs"`), with Redoubt's own writer in `libs/
 plain and flat inline layouts only, no compression, sorted directories, the `user.sha256`
 attribute per file, deterministic (the same tree gives the same bytes; no timestamps but a
 fixed one). The build host's `mkfs.erofs` (erofs-utils, installed by the setup script) is a test
-oracle, as littlefs's C reference is ([fsd](fsd.md#littlefs)): a volume our writer packs is
+oracle, as littlefs's C reference is ([littlefsd](littlefsd.md#littlefs)): a volume our writer packs is
 checked by `fsck.erofs`, and one `mkfs.erofs` packs from the same tree is mounted and read by
 our parser with equal results. Nothing of erofs-utils runs on the target. The userland disk's
 recipe packs its objects this way. A verified volume is followed in its range by the verifier's
@@ -111,7 +111,7 @@ It parses one format's subset, bounded as above.
 
 Status: planned · M1 (separation and containment)
 
-`erofsd` claims no rule of its own. It keeps `fsd`'s R47 (one volume per instance), R49 (a
+`erofsd` claims no rule of its own. It keeps `littlefsd`'s R47 (one volume per instance), R49 (a
 hostile medium is corrupt, not a crash) and the serving library's R25 (the label check) and
 R26 (admission fairness), each stated on its owning page, and under a verifier the volume's
 R76 (verified volumes).

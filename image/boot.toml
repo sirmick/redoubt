@@ -48,8 +48,8 @@ name = "ipd"
 package = "redoubt-ipd"
 
 [[entry]]
-name = "fsd"
-package = "redoubt-fsd"
+name = "littlefsd"
+package = "redoubt-littlefsd"
 
 [[entry]]
 name = "beamlet"

@@ -1,6 +1,6 @@
 //! `verityd`: one verified volume (docs/servers/verityd.md). It holds a volume's range at `blkd`,
 //! checks every block it reads through the volume's hash tree up to a root the signed manifest
-//! pins, and serves the checked blocks on `blkd`'s own protocol to the volume's `fsd`
+//! pins, and serves the checked blocks on `blkd`'s own protocol to the volume's `littlefsd`
 //! (R76 (verified volumes)).
 //!
 //! It holds no MMIO, interrupt or DMA, and mints nothing. Everything it does is here, so host

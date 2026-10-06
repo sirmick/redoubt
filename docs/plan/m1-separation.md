@@ -34,7 +34,7 @@ Alice's leased agent, trying to get out.
 | Spoof the approval screen (control, bidi and format characters, swapped requests); send free text from a vault | [R38 (out-of-band approval)](../servers/steward.md#r38-out-of-band-approval) | not yet |
 | Use its sponsor's 9P connection instead of the fresh one it was given | R41 | not yet |
 | Slow Bob beyond its weight | [R12 (scheduling)](../kernel/scheduling.md#r12-scheduling) | `sched-share`, `sched-sleep-gaming`, `sched-timer-flood` |
-| Flood the steward and `fsd` until Alice cannot open a file or end its lease | [R26 (admission fairness)](../servers/serving.md#r26-admission-fairness) | not yet in a boot |
+| Flood the steward and `littlefsd` until Alice cannot open a file or end its lease | [R26 (admission fairness)](../servers/serving.md#r26-admission-fairness) | not yet in a boot |
 | Have `keyd` sign arbitrary bytes (an SSH user-auth blob relayed from its peer) | [R44 (one key, one purpose, keyd's own digest)](../servers/keyd.md#r44-one-key-one-purpose-keyds-own-digest) | not yet in a boot |
 
 ### A scripted hostile user
@@ -44,14 +44,14 @@ Bob, attacking Alice.
 | Attack | Rules | Bench case |
 | --- | --- | --- |
 | Call fuzzing: any arguments to any call get an error, never a kernel panic | [I14 (no call panics the kernel)](../kernel/invariants.md#i14-no-call-panics-the-kernel) | `budget-syscall-attack`, `budget-forge-attack`, `syscall-attack`, `legacy-gone` |
-| Endpoint flooding: 10,000 sender threads calling `fsd`, and Alice is still served in her turn | [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) | `redoubt-ipc` for the kernel's half (`WAIT_CAP` and turns per group); with `fsd` not yet |
+| Endpoint flooding: 10,000 sender threads calling `littlefsd`, and Alice is still served in her turn | [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) | `redoubt-ipc` for the kernel's half (`WAIT_CAP` and turns per group); with `littlefsd` not yet |
 | A vault session filling its `WAIT_CAP` on a shared server leaves its owner's unlabelled session's turn and cap unaffected | R2, [R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference) | not yet |
-| A lender destroyed while `fsd` holds its lent pages, and `fsd` survives | [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls) | `uaf-lent-page`, `process-lifecycle` for the kernel; with `fsd` not yet |
-| Crash blame: Bob crashes `fsd` three times while Alice is busy; every session and lease of Bob's with that label set ends and he cannot log straight back in; Alice is unaffected, also when `fsd` panics rather than faults and when the crashing thread holds her calls open too; a crash from a `send` while a bystander's call is parked blames nobody; a vault session's crashes do not end its owner's unlabelled session | [R21 (crash blame)](../kernel/processes.md#r21-crash-blame), [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `process`, `process-attack` for the kernel's blame; the steward's not yet |
+| A lender destroyed while `littlefsd` holds its lent pages, and `littlefsd` survives | [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls) | `uaf-lent-page`, `process-lifecycle` for the kernel; with `littlefsd` not yet |
+| Crash blame: Bob crashes `littlefsd` three times while Alice is busy; every session and lease of Bob's with that label set ends and he cannot log straight back in; Alice is unaffected, also when `littlefsd` panics rather than faults and when the crashing thread holds her calls open too; a crash from a `send` while a bystander's call is parked blames nobody; a vault session's crashes do not end its owner's unlabelled session | [R21 (crash blame)](../kernel/processes.md#r21-crash-blame), [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `process`, `process-attack` for the kernel's blame; the steward's not yet |
 | Pinned open calls: 64 lent calls parked at `ipd` with short timeouts, and `ipd` still takes `netd`'s frames and frees the abandoned calls; SSH sessions survive | [R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting), [R4a (open calls)](../kernel/ipc.md#r4a-open-calls) | `net-pinned`; with SSH not yet |
-| System fairness: a busy `fsd:data` does not fill `blkd`'s `WAIT_CAP` for `fsd:alice-secrets` | R2 | not yet |
+| System fairness: a busy `littlefsd:data` does not fill `blkd`'s `WAIT_CAP` for `littlefsd:alice-secrets` | R2 | not yet |
 | Server CPU: expensive requests to a server delay other users only by that server's weight | R12 | `sched-server-busy`, `sched-large-weight` |
-| Shared pools: filling the `data` volume does not fail Alice's saves; flooding `fsd` with handles does not grow its table | [R48 (a quota per attach root)](../servers/fsd.md#r48-a-quota-per-attach-root) | not yet |
+| Shared pools: filling the `data` volume does not fail Alice's saves; flooding `littlefsd` with handles does not grow its table | [R48 (a quota per attach root)](../servers/littlefsd.md#r48-a-quota-per-attach-root) | not yet |
 | Server authority: no server's startup block holds its budget, a manifest granting one is refused, and no server can destroy a session | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | `init-refuses-budget-handle`; that no server can destroy a session is the steward's, not yet |
 | `process_create` with a badged exit endpoint, to aim exit notices and blame at a server | R21 | `process-attack` |
 | A reused PID carries authority | [R20 (PID reuse)](../kernel/processes.md#r20-pid-reuse) | `pid-reuse-authority` |
@@ -102,7 +102,7 @@ page.
   [wire](../servers/wire.md#error-names)).
 - **The VM's remaining platform work.** The VM and shell boot on the UART console; asynchronous
    file operations and native launching remain to be connected to the VM
-   ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)). `fsd` runs under `init`; files over 9P
+   ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)). `littlefsd` runs under `init`; files over 9P
    from a session still need the VM's file operations ([files](../userland/files.md#files-over-9p)).
 - **The steward.** Principals from the manifest, fixed sub-budgets per label set, sessions,
    leases, the powerbox and approvals, declassification and push, crash blame
@@ -142,9 +142,9 @@ Built and attack-tested today:
   `blkd`, `netd` and `ipd` on the real kernel under `init` ([blkd](../servers/blkd.md),
   [netd](../servers/netd.md), [ipd](../servers/ipd.md)).
 - **The file system's core:** littlefs against a hostile medium and power loss
-  ([fsd](../servers/fsd.md#littlefs)).
-- **The file server:** `fsd` over `blkd`, placed by `init`, with one volume per instance, quotas
-  and typed operations ([fsd](../servers/fsd.md)).
+  ([littlefsd](../servers/littlefsd.md#littlefs)).
+- **The file server:** `littlefsd` over `blkd`, placed by `init`, with one volume per instance, quotas
+  and typed operations ([littlefsd](../servers/littlefsd.md)).
 - **`bootfsd`, `consoled` and `keyd`**, attacked in host tests and booted under `init`
   ([bootfsd](../servers/bootfsd.md), [consoled](../servers/consoled.md), [keyd](../servers/keyd.md)).
 - **Launching:** the startup block and the loader stub ([init](../servers/init.md#the-startup-block)).

@@ -37,18 +37,18 @@
       "receives": ["blkd"], "args": ["endpoint=blkd"]
     },
     {
-      "name": "fsd:system",
-      "program": "fsd",
+      "name": "littlefsd:system",
+      "program": "littlefsd",
       "budget": {"pages": "1024", "processes": 1, "weight": 100},
       "volume": "system",
-      "receives": ["fsd:system"],
-      "args": ["endpoint=fsd:system", "buckets=4"]
+      "receives": ["littlefsd:system"],
+      "args": ["endpoint=littlefsd:system", "buckets=4"]
     },
     {
       "name": "beamlet",
       "program": "beamlet",
       "budget": {"pages": "4096", "processes": 1, "weight": 100},
-      "handed": [{"endpoint": "fsd:system", "badge": "7"}],
+      "handed": [{"endpoint": "littlefsd:system", "badge": "7"}],
       "args": ["budget_pages=4096", "beamlet_budget_flood"]
     }
   ]

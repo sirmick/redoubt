@@ -326,7 +326,7 @@ Every one is also to build for rv32, where the vendored crates are checked too, 
 
 ### The client library
 
-<details><summary>Status: built · partly tested: `init-boot` exercises launching on the machine; `fsd`'s operations and `consol`'s `size` and `resize` remain tested against in-test servers until `fsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested (29)</summary>
+<details><summary>Status: built · partly tested: `init-boot` exercises launching on the machine; `littlefsd`'s operations and `consol`'s `size` and `resize` remain tested against in-test servers until `littlefsd` exists and `consoled` serves `consol` in M2 (usable shell); a partial reply is the runtime's accounting, attacked there, not here · tested (29)</summary>
 
 - bench:client-host-tests
 - bench:client-build
@@ -375,7 +375,7 @@ from its pool of I/O threads
 | `ns` | the namespace, built from the startup block: the longest matching prefix, `bind`, the listing |
 | `file` | files over 9P on a connection: walk, open, create, read, write, stat, read a directory, remove; one fid per open file |
 | `aio` | the hub: many 9P requests outstanding on multiplexed connections, their buffers in and out by value ([below](#many-requests-at-once)) |
-| `fsd` | the file server's typed operations that name open files' fids: `rename`, `copy_file`, `set_attr`, `get_attr` ([fsd](../servers/fsd.md#typed-operations)) |
+| `littlefsd` | the file server's typed operations that name open files' fids: `rename`, `copy_file`, `set_attr`, `get_attr` ([littlefsd](../servers/littlefsd.md#typed-operations)) |
 | `console` | `/dev/cons`: read, write, `size`, and the parked `resize` ([consoled](../servers/consoled.md#the-consol-protocol)) |
 | `launch` | the process builder: the image bytes the caller read, a budget the caller carved, the endpoint for the exit notice, namespace entries, named handles and arguments, written by the runtime's `StartupBuilder`; it returns a job, whose exit notice the caller waits for and whose budget ends it |
 | `grants` | the launcher's ledger of what servers granted a child, released and disconnected when the child's exit notice arrives ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)) |
@@ -389,7 +389,7 @@ zeroed.
 
 Time and randomness are the runtime's kernel calls, and raw `call`, `send` and `serve` are the
 runtime's `ipc`, which beamlet's natives use directly. `/net` is files, so `file` covers it. There
-is no module per typed server beyond `fsd`, whose operations name fids that live in Rust: for
+is no module per typed server beyond `littlefsd`, whose operations name fids that live in Rust: for
 every other server `typed` with the generated module is the binding, and a session binds the same
 tables through generated Elixir clients ([wire](../servers/wire.md#generated-clients)).
 

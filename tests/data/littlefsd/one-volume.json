@@ -1,0 +1,57 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "disk0", "base": "268468224", "irq": 8, "dma": true}
+  ],
+  "volumes": [
+    {"name": "a", "partition": 0},
+    {"name": "b", "partition": 1}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "blkd",
+      "program": "blkd",
+      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "devices": [{"device": "disk0", "as": "disk"}],
+      "receives": ["blkd"], "args": ["endpoint=blkd"]
+    },
+    {
+      "name": "littlefsd:a",
+      "program": "littlefsd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "volume": "a",
+      "receives": ["littlefsd:a"],
+      "args": ["endpoint=littlefsd:a", "buckets=4"]
+    },
+    {
+      "name": "littlefsd:b",
+      "program": "littlefsd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "volume": "b",
+      "receives": ["littlefsd:b"],
+      "args": ["endpoint=littlefsd:b", "buckets=4"]
+    },
+    {
+      "name": "client",
+      "program": "littlefsd-client",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "handed": [{"endpoint": "littlefsd:a", "badge": "7"}, {"endpoint": "littlefsd:b", "badge": "7"}],
+      "args": ["apart", "littlefsd:a", "littlefsd:b"]
+    }
+  ]
+}

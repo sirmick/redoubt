@@ -66,6 +66,6 @@ In this order, after [M4 (self-hosted development)](m4-self-hosted.md):
 ## Progress
 
 Nothing of this milestone is built. What it builds on: the signed bundle and its verification at
-boot ([boot](../kernel/boot.md)), `keyd`, and `fsd`'s power-loss guarantee
-([R50 (power loss leaves before or after)](../servers/fsd.md#r50-power-loss-leaves-before-or-after)),
+boot ([boot](../kernel/boot.md)), `keyd`, and `littlefsd`'s power-loss guarantee
+([R50 (power loss leaves before or after)](../servers/littlefsd.md#r50-power-loss-leaves-before-or-after)),
 all built and tested.

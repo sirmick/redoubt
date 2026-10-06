@@ -3,7 +3,7 @@ name = "redoubt-blkd"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "blkd: the virtio-blk driver, the partition table, and block ranges served to fsd"
+description = "blkd: the virtio-blk driver, the partition table, and block ranges served to littlefsd"
 
 [[bin]]
 name = "blkd"

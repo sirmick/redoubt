@@ -49,7 +49,7 @@ pub enum Refusal {
     NoFid,
     /// A multiplexed connection's tags are all in use (at most the skeleton's `MAX_TAGS`).
     NoTag,
-    /// Two open files on different connections, in one `fsd` operation: their fids name files on
+    /// Two open files on different connections, in one `littlefsd` operation: their fids name files on
     /// different servers, or other files entirely.
     OtherConnection,
     /// A launch naming more than `MAX_START_HANDLES` handles.

@@ -95,7 +95,7 @@ It is a steward record, not a file the principal can write.
 System code is not a package. OTP, Elixir and Redoubt's own Elixir live on the userland disk,
 whole applications, every module of each one the shell's prompt uses, one file per module,
 read-only and immutable, on a verified volume whose root the signed manifest pins, read through
-its own `verityd` and `fsd`, which a reader trusts in place of checking each file
+its own `verityd` and `littlefsd`, which a reader trusts in place of checking each file
 ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)): changing it is a new bundle
 and disk, never an install. Packages live apart from it, on the data disk, and a profile's modules
 resolve only after the system's.

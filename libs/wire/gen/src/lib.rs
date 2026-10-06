@@ -1142,7 +1142,7 @@ mod tests {
 
     /// servers/wire.md: a protocol served on a 9P endpoint is marked
     /// `<!-- wire: NAME ninep -->`, and its opcodes start at 16, since `ninep_common` reserves
-    /// 1-15 there; an unmarked table is unaffected and may start at 1. The `fsd`
+    /// 1-15 there; an unmarked table is unaffected and may start at 1. The `littlefsd`
     /// typed-operations table is marked (its opcodes start at 16); `ninep_common` is *not* — it
     /// owns the reserved 1-15 itself — so it keeps a plain marker.
     #[test]

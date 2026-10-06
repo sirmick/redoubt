@@ -13,7 +13,7 @@
 #                                 (target/image/userland/), followed by its hash tree
 #   target/image/stage/           the tree the disk's data volume holds; put files here first
 #   target/image/disk.img         raw virtio-blk disk: a GPT, then the data partition as a
-#                                 littlefs volume written by fsd's own code
+#                                 littlefs volume written by littlefsd's own code
 #
 # The image needs 1 GiB of RAM (QEMU -m 1G): the shell's beamlet is budgeted twice what its VM
 # uses at the prompt, which a smaller machine's system budget does not hold.
@@ -46,6 +46,6 @@ echo "==> boot bundle: target/image/redoubt.bundle"
 cargo run --quiet -p testbench -- --pack-disk image/userland.toml target/image/userland.img
 echo "==> userland disk: target/image/userland.img"
 
-# The same packer a case's `[disk] recipe` boots: the table by blkd's builder, each volume by fsd's.
+# The same packer a case's `[disk] recipe` boots: the table by blkd's builder, each volume by littlefsd's.
 cargo run --quiet -p testbench -- --pack-disk image/disk.toml target/image/disk.img
 echo "==> disk image: target/image/disk.img (the tree of target/image/stage)"

@@ -1,6 +1,6 @@
 //! What the client library's tests share: the real `bootfsd`, filled by `init`'s typed calls, and
 //! a small in-memory file server for what `bootfsd` does not do (directories, create, remove, a
-//! byte quota, fsd's typed operations), all on the runtime's fake kernel.
+//! byte quota, littlefsd's typed operations), all on the runtime's fake kernel.
 
 #![allow(dead_code)]
 

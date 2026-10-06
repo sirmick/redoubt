@@ -3,7 +3,7 @@
 //!
 //! Everything here runs on the kernel model. `init` creates the shared server's endpoint and the
 //! steward's own, and starts the steward in the `system` budget with the `users` and `system`
-//! budgets and both endpoints; the steward starts a **server** (a system-class process, an `fsd`
+//! budgets and both endpoints; the steward starts a **server** (a system-class process, a `littlefsd`
 //! stand-in, holding no budget) receiving on the shared one. Every principal's top budget and its
 //! fixed sub-budgets (one per label set) are a `budget_create` at boot.
 //!

@@ -43,7 +43,7 @@ pub const INIT_CALLS: [&str; 3] = ["keyd", "consoled", BOOTFSD];
 pub const BLKD: &str = "blkd";
 /// The startup-block name of a volume's range, handed to the server attaching it.
 pub const VOLUME: &str = "volume";
-/// The argument giving a volume's server its label ids (servers/fsd.md, "Volumes, connections
+/// The argument giving a volume's server its label ids (servers/littlefsd.md, "Volumes, connections
 /// and labels").
 pub const LABELS_ARG: &str = "labels=";
 /// The prefix of the arguments giving `blkd` each labelled range's ids, `labels.P=ID,...` for

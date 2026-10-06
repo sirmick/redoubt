@@ -17,7 +17,7 @@ ed25519-compact = { version = "2", default-features = false }
 libc = "0.2"                                                             # openpty for a session's terminal (pty.rs)
 redoubt-signing = { path = "../../libs/signing" }                        # the bundle signature's preimage
 redoubt-blkd = { path = "../../servers/blkd" }                           # a case disk's GPT, written by blkd's own builder
-redoubt-fsd = { path = "../../servers/fsd" }                             # a disk recipe's volumes, packed by fsd's own code
+redoubt-littlefsd = { path = "../../servers/littlefsd" }                 # a disk recipe's volumes, packed by littlefsd's own code
 redoubt-verity = { path = "../../libs/verity" }                          # a verified volume's tree, as verityd checks it (disk.rs)
 sha2 = { version = "0.11", default-features = false }                    # a run directory's and a guest file's names
 

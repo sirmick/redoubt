@@ -21,13 +21,13 @@ expect = [
     '^init: started blkd, console [0-9a-f]{16}$',
     '^init: started netd, console [0-9a-f]{16}$',
     '^init: started ipd, console [0-9a-f]{16}$',
-    '^init: started fsd:data, console [0-9a-f]{16}$',
+    '^init: started littlefsd:data, console [0-9a-f]{16}$',
     '^init: started blkd:system, console [0-9a-f]{16}$',
     '^init: started verity:system, console [0-9a-f]{16}$',
-    '^init: started fsd:system, console [0-9a-f]{16}$',
+    '^init: started littlefsd:system, console [0-9a-f]{16}$',
     '^init: started beamlet, console [0-9a-f]{16}$',
     '^init: 0 public entries pushed to bootfsd, and sealed$',
-    # The manifest's three handed items, the three volume ranges (fsd:data's, fsd:system's at
+    # The manifest's three handed items, the three volume ranges (littlefsd:data's, littlefsd:system's at
     # verity:system and verity:system's at blkd:system), and the nine consoles after consoled's,
     # each found gone.
     '^init: holds none of the 6 badges and 9 console connections it handed$',
@@ -35,11 +35,11 @@ expect = [
 ]
 forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed), code']
 
-# The image's disk recipe, holding the fsd cases' stage rather than target/image/stage, which a
+# The image's disk recipe, holding the littlefsd cases' stage rather than target/image/stage, which a
 # fresh checkout does not have.
 [disk]
 recipe = "image/disk.toml"
-stage = "tests/data/fsd/stage"
+stage = "tests/data/littlefsd/stage"
 
 [userland]
 recipe = "image/userland.toml"

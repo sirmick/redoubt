@@ -1,7 +1,7 @@
 # blkd
 
 `blkd` is the virtio-blk driver. It owns one disk, reads its GPT partition table once, and serves
-each partition to one [`fsd`](fsd.md) as a range of sectors, named by a badge. A client's sector
+each partition to one [`littlefsd`](littlefsd.md) as a range of sectors, named by a badge. A client's sector
 numbers are relative to its range, the device only ever sees `blkd`'s own DMA region, and a device
 that lies is refused for good rather than believed.
 
@@ -48,7 +48,7 @@ it asks the device to touch can be checked.
   request, so there is no admission to keep. A flood of requests is bounded by the kernel's fair
   waiting ([R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting)) and by `MAX_SECTORS` per request.
 - **A verified volume's range is held by its [`verityd`](verityd.md),** which serves the same
-  protocol to the volume's `fsd`, checking every block against the root the manifest pins.
+  protocol to the volume's `littlefsd`, checking every block against the root the manifest pins.
 - **Its endpoint.** `blkd` receives on the endpoint its argument `endpoint=NAME` names, the
   manifest's name for it (`blkd`, `blkd:system`). Without one it does not start: one `blkd` runs
   per disk, and it does not guess which is its own.
@@ -89,7 +89,7 @@ over the bound; `failed` for a device error or a broken device; `malformed` for 
 does not decode.
 
 This is the block-device contract littlefs's power-loss safety rests on
-([fsd](fsd.md#power-loss)): a write overwrites whole sectors; a write torn by power loss persists
+([littlefsd](littlefsd.md#power-loss)): a write overwrites whole sectors; a write torn by power loss persists
 a prefix of its sectors, never an arbitrary subset of them; requests complete in order (one is
 outstanding at a time); and `sync` is a `flush` that waits for the device. `blkd` keeps the order
 and the flush itself; the torn-write prefix is the device's behaviour, which `blkd` relies on and
@@ -214,13 +214,13 @@ The GPT (UEFI 2.10, section 5.3) is the one on-disk structure `blkd` parses, onc
 
 ### Started by `init`
 
-Status: built · tested: bench:init-boot, bench:fsd-boot, bench:fsd-one-volume
+Status: built · tested: bench:init-boot, bench:littlefsd-boot, bench:littlefsd-one-volume
 
 `init` starts `blkd` with two named handles in its startup block, `disk` (the virtio MMIO region,
 with DMA allowed) and `disk-irq` (its interrupt), placed from the boot manifest's `devices` list
 ([init](init.md#the-boot-manifest)). `blkd` parses no device tree and hardcodes no address;
-without both handles it does not start. `init` mints each `fsd`'s range badge from the manifest's
-`volumes` entry, and hands it to that `fsd` alone.
+without both handles it does not start. `init` mints each `littlefsd`'s range badge from the manifest's
+`volumes` entry, and hands it to that `littlefsd` alone.
 
 ## Authority
 

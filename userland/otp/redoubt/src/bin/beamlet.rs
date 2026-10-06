@@ -8,7 +8,7 @@
 //! it as `fake-redoubt` does on a host (`beamlet_redoubt::run`), and exits with the code that
 //! returns. Its console is `/dev/cons` in its namespace; its threads are the runtime's. Its
 //! modules are the userland volume's files, each read whole by its name through its handle
-//! `fsd:system`, an `fsd` that reads the volume through its `verityd`
+//! `littlefsd:system`, a `littlefsd` that reads the volume through its `verityd`
 //! ([`beamlet_redoubt::userland`]). A volume that does not attach, or a start module that cannot
 //! be read, parks it: it says why and waits, never exiting, so a tampered disk is not a restart
 //! loop that reboots the machine.
@@ -37,7 +37,7 @@ use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(start);
 
-/// The exit code for a startup block without a module to run or without `fsd:system`, or for a
+/// The exit code for a startup block without a module to run or without `littlefsd:system`, or for a
 /// start module the userland volume does not hold.
 const USAGE: u32 = 2;
 /// The exit code for a missing or malformed `budget_pages=N`, before the VM starts: without it
@@ -64,15 +64,15 @@ fn start(startup: &Startup) -> u32 {
         return USAGE;
     };
     let function = args.next().unwrap_or("start");
-    let Some(system) = startup.handle("fsd:system") else {
-        say(startup, "beamlet: no fsd:system handle");
+    let Some(system) = startup.handle("littlefsd:system") else {
+        say(startup, "beamlet: no littlefsd:system handle");
         return USAGE;
     };
     // A volume served as corrupt refuses every attach: it parks, as a start module that does
     // not load does.
     let files = match System::attach(Endpoint::from_handle(system)) {
         Ok(files) => files,
-        Err(e) => park(startup, &format!("beamlet: fsd:system did not attach: {e:?}; parked")),
+        Err(e) => park(startup, &format!("beamlet: littlefsd:system did not attach: {e:?}; parked")),
     };
     let mut modules = Disk::new(files);
     // The start module, read before the VM runs anything: if it cannot load, the VM parks.
@@ -84,7 +84,7 @@ fn start(startup: &Startup) -> u32 {
         }
         Err(Unloaded::Refused(why)) => park(startup, &format!("beamlet: {module} not loaded: {why}; parked")),
     }
-    say(startup, &format!("beamlet: {module} read from fsd:system"));
+    say(startup, &format!("beamlet: {module} read from littlefsd:system"));
     beamlet_redoubt::run(startup, Box::new(Machine), Box::new(modules), module, function, Some(budget_pages))
 }
 
@@ -118,26 +118,26 @@ impl Threads for Machine {
     }
 }
 
-/// The userland volume's files, at the root of its `fsd`'s volume.
+/// The userland volume's files, at the root of its `littlefsd`'s volume.
 struct System {
-    fsd: Connection,
+    littlefsd: Connection,
     lend: Lend,
 }
 
 impl System {
     fn attach(endpoint: Endpoint) -> Result<System, Error> {
         let mut lend = Lend::new(LEND_PAGES)?;
-        let fsd = Connection::attach(endpoint, &mut lend)?;
-        Ok(System { fsd, lend })
+        let littlefsd = Connection::attach(endpoint, &mut lend)?;
+        Ok(System { littlefsd, lend })
     }
 }
 
 impl Files for System {
-    /// A file `fsd` answers `not_found` to at the open is absent; any other refusal, at the open
+    /// A file `littlefsd` answers `not_found` to at the open is absent; any other refusal, at the open
     /// or on a read, failed.
     fn read(&mut self, name: &str) -> Result<Vec<u8>, Unread> {
         let lend = &mut self.lend;
-        let open = self.fsd.open(lend, name, mode::OREAD).map_err(|e| unread(e, true))?;
+        let open = self.littlefsd.open(lend, name, mode::OREAD).map_err(|e| unread(e, true))?;
         let mut bytes = Vec::new();
         let mut chunk = alloc::vec![0u8; lend.iounit()];
         let read = loop {

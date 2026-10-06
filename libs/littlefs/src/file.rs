@@ -21,7 +21,7 @@ use crate::{BlockDevice, Error, Filesystem, ctz};
 /// An open file. Handles are only meaningful to the filesystem that returned them.
 ///
 /// A closed handle's slot is reused by later opens; the generation number makes a stale
-/// handle fail with [`Error::Invalid`] rather than reach the new file. `fsd` still owns the
+/// handle fail with [`Error::Invalid`] rather than reach the new file. `littlefsd` still owns the
 /// map from 9P fids to handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileHandle {

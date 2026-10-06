@@ -179,7 +179,7 @@ pub fn note_console(startup: &Startup) {
 
 /// Says `line` on the console `init` gave this process, `/dev/cons` in its namespace, if it has
 /// one: an attach, an open, a write and a clunk on a lend of its own. A console that fails is not
-/// retried: for a server (`fsd`, `verityd`), serving matters more than the line.
+/// retried: for a server (`littlefsd`, `verityd`), serving matters more than the line.
 pub fn say(startup: &Startup, line: &str) {
     let Some((_, console)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") else { return };
     let Ok(mut lend) = Lend::new(1) else { return };

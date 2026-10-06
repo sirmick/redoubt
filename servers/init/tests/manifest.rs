@@ -22,12 +22,13 @@ const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0
 fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
 
 /// The image's manifest with one disk: without the userland disk (`disk1`, its `blkd`, its
-/// volume, its verifier and `fsd`, and `beamlet`, which reads it).
+/// volume, its verifier and `littlefsd`, and `beamlet`, which reads it).
 fn without_userland() -> Manifest {
     let mut m = image();
     m.volumes.retain(|v| v.name != "system");
-    m.servers
-        .retain(|s| !["beamlet", "blkd:system", "verity:system", "fsd:system"].contains(&s.name.as_str()));
+    m.servers.retain(|s| {
+        !["beamlet", "blkd:system", "verity:system", "littlefsd:system"].contains(&s.name.as_str())
+    });
     m.devices.retain(|d| d.name != "disk1");
     m
 }
@@ -93,8 +94,8 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert!(plan.placements[0].is_empty());
     // No principals: only the bundle key is asked about.
     assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
-    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; fsd:data: nobody's
-    // yet, a principal's connection being the steward's to grant; fsd:system: beamlet's.
+    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; littlefsd:data: nobody's
+    // yet, a principal's connection being the steward's to grant; littlefsd:system: beamlet's.
     assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0), (9, 1)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
     assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
@@ -182,7 +183,7 @@ fn the_image_manifest_s_bound() {
     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
     // batch of beamlet's image + 3, stack 17 + 3), the lend (2 + 3), and one handle-table page:
     // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 6 + 44 + 3 + 1 =
-    // 64 added (the three volume ranges, fsd:data's, fsd:system's at verity:system and
+    // 64 added (the three volume ranges, littlefsd:data's, littlefsd:system's at verity:system and
     // verity:system's at blkd:system, among the 6 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
@@ -281,7 +282,7 @@ fn references_name_what_the_manifest_and_bundle_hold() {
     m.servers[0].program = MANIFEST.into();
     refused_at(&m, "servers[0].program", Why::Unknown);
     let mut m = image();
-    server(&mut m, "ipd").handed[0].endpoint = "fsd".into();
+    server(&mut m, "ipd").handed[0].endpoint = "littlefsd".into();
     refused_at(&m, "servers[5].handed[0].endpoint", Why::Unknown);
     let mut m = image();
     m.servers[0].volume = Some("nowhere".into());
@@ -448,7 +449,7 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
     // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
-    // ipd 4096, fsd:data and fsd:system 1024 each, beamlet 24,576 pages, and a page each for the
+    // ipd 4096, littlefsd:data and littlefsd:system 1024 each, beamlet 24,576 pages, and a page each for the
     // budgets.
     let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 24_576 + 11;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
@@ -597,11 +598,11 @@ fn disk1(m: &mut Manifest) {
     m.devices.push(Device { name: "disk1".into(), base: Some(0x1000_6000), irq: Some(6), dma: true });
 }
 
-/// A second disk: its own `blkd` on `device`, and `fsd:system` attaching its volume `system`,
+/// A second disk: its own `blkd` on `device`, and `littlefsd:system` attaching its volume `system`,
 /// which names that `blkd` as its disk.
 fn second_disk(m: &mut Manifest, device: &str, suffix: &str, labels: Vec<String>) {
     let blkd = format!("blkd:system{suffix}");
-    let fsd = format!("fsd:system{suffix}");
+    let littlefsd = format!("littlefsd:system{suffix}");
     let volume = format!("system{suffix}");
     m.volumes.push(Volume {
         name: volume.clone(),
@@ -619,13 +620,13 @@ fn second_disk(m: &mut Manifest, device: &str, suffix: &str, labels: Vec<String>
         args: vec![format!("endpoint={blkd}")],
         ..base
     });
-    let base = server(&mut image(), "fsd:data").clone();
+    let base = server(&mut image(), "littlefsd:data").clone();
     m.servers.push(Server {
-        name: fsd.clone(),
+        name: littlefsd.clone(),
         labels,
         volume: Some(volume),
-        receives: vec![fsd.clone()],
-        args: vec![format!("endpoint={fsd}"), "buckets=4".into()],
+        receives: vec![littlefsd.clone()],
+        args: vec![format!("endpoint={littlefsd}"), "buckets=4".into()],
         ..base
     });
 }
@@ -871,7 +872,7 @@ fn confined_refuses_two_label_sets_on_one_disk() {
     for s in &mut m.servers {
         s.args.retain(|a| !a.starts_with("buckets="));
     }
-    // An fsd for each volume, each carrying its volume's set.
+    // A littlefsd for each volume, each carrying its volume's set.
     for (name, partition, label) in [("vault", 0, "alice-secrets"), ("other", 1, "alice-other")] {
         m.volumes.push(Volume {
             name: name.into(),
@@ -880,17 +881,17 @@ fn confined_refuses_two_label_sets_on_one_disk() {
             disk: None,
             verity: None,
         });
-        let endpoint = format!("fsd:{name}");
+        let endpoint = format!("littlefsd:{name}");
         m.servers.push(Server {
             name: endpoint.clone(),
-            program: "fsd".into(),
+            program: "littlefsd".into(),
             volume: Some(name.into()),
             labels: vec![label.into()],
             receives: vec![endpoint.clone()],
             handed: vec![],
             devices: vec![],
             args: vec![format!("endpoint={endpoint}")],
-            ..server(&mut image(), "fsd:data").clone()
+            ..server(&mut image(), "littlefsd:data").clone()
         });
     }
     assert_eq!(sharing(&m), Sharing::Device);
@@ -904,8 +905,8 @@ fn confined_refuses_two_label_sets_on_one_disk() {
 
 /// The userland disk in a confined boot (docs/userland/beamlet.md, "beamlet on Redoubt"): each
 /// label set running beamlet gets its own read-only attachment of the userland image, its own
-/// device, `blkd`, volume and `fsd`, all carrying that set, so nothing is shared and R34 passes as
-/// it stands. The {alice-secrets} beamlet handed the unlabelled `fsd:system` instead shares its
+/// device, `blkd`, volume and `littlefsd`, all carrying that set, so nothing is shared and R34 passes as
+/// it stands. The {alice-secrets} beamlet handed the unlabelled `littlefsd:system` instead shares its
 /// endpoint across two sets and is refused.
 #[test]
 fn confined_gives_each_label_set_its_own_userland_disk() {
@@ -918,8 +919,8 @@ fn confined_gives_each_label_set_its_own_userland_disk() {
     m.devices.push(Device { name: "disk2".into(), base: Some(0x1000_5000), irq: Some(5), dma: true });
     second_disk(&mut m, "disk1", "", vec![]);
     second_disk(&mut m, "disk2", "-l", secret());
-    // Each beamlet is handed its own set's `fsd:system`.
-    let beamlet = |name: &str, labels: Vec<String>, fsd: &str| Server {
+    // Each beamlet is handed its own set's `littlefsd:system`.
+    let beamlet = |name: &str, labels: Vec<String>, littlefsd: &str| Server {
         name: name.into(),
         program: "beamlet".into(),
         budget: budget(256),
@@ -929,24 +930,24 @@ fn confined_gives_each_label_set_its_own_userland_disk() {
         devices: vec![],
         volume: None,
         receives: vec![],
-        handed: vec![Handed { endpoint: fsd.into(), badge: 7 }],
+        handed: vec![Handed { endpoint: littlefsd.into(), badge: 7 }],
         args: vec!["budget_pages=256".into()],
     };
-    m.servers.push(beamlet("beamlet", vec![], "fsd:system"));
-    m.servers.push(beamlet("beamlet-l", secret(), "fsd:system-l"));
+    m.servers.push(beamlet("beamlet", vec![], "littlefsd:system"));
+    m.servers.push(beamlet("beamlet-l", secret(), "littlefsd:system-l"));
     let devices = virt_devices();
     let machine = machine(&devices, &ENTRIES);
     assert!(on(&m, &machine).is_ok());
-    m.servers.last_mut().unwrap().handed[0] = Handed { endpoint: "fsd:system".into(), badge: 8 };
-    let fsd = m.servers.iter().position(|s| s.name == "fsd:system").unwrap();
+    m.servers.last_mut().unwrap().handed[0] = Handed { endpoint: "littlefsd:system".into(), badge: 8 };
+    let littlefsd = m.servers.iter().position(|s| s.name == "littlefsd:system").unwrap();
     assert_eq!(
         on(&m, &machine).unwrap_err(),
-        Refusal::Confined { at: format!("servers[{fsd}].receives[0]"), sharing: Sharing::Endpoint }
+        Refusal::Confined { at: format!("servers[{littlefsd}].receives[0]"), sharing: Sharing::Endpoint }
     );
 }
 
 /// A `blkd` with no devices serving a labelled volume shares no endpoint, volume or device with
-/// its `fsd`, yet the volume's range at it puts two sets on the one instance.
+/// its `littlefsd`, yet the volume's range at it puts two sets on the one instance.
 #[test]
 fn confined_refuses_a_server_instance_serving_two_label_sets() {
     let mut m = without_volumes();
@@ -956,7 +957,7 @@ fn confined_refuses_a_server_instance_serving_two_label_sets() {
     let secret = || vec![String::from("alice-secrets")];
     m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: secret(), disk: None, verity: None });
     server(&mut m, "blkd").devices.clear();
-    let base = server(&mut image(), "fsd:data").clone();
+    let base = server(&mut image(), "littlefsd:data").clone();
     m.servers.push(Server { labels: secret(), volume: Some("vault".into()), ..base });
     let blkd = m.servers.iter().position(|s| s.program == "blkd").unwrap();
     assert_eq!(
@@ -969,8 +970,8 @@ fn confined_refuses_a_server_instance_serving_two_label_sets() {
 
 /// A shared server's users are the principal domains with its own label set, since only those
 /// may later be granted a connection there: alice working under {alice-secrets} beside unlabelled
-/// shared keyd and consoled, with a labelled blkd, fsd and client, boots; the client unlabelled
-/// shares fsd's endpoint across two sets and is refused.
+/// shared keyd and consoled, with a labelled blkd, littlefsd and client, boots; the client unlabelled
+/// shares littlefsd's endpoint across two sets and is refused.
 #[test]
 fn confined_counts_only_a_shared_servers_own_label_set() {
     let mut m = without_volumes();
@@ -983,23 +984,23 @@ fn confined_counts_only_a_shared_servers_own_label_set() {
     let secret = || vec![String::from("alice-secrets")];
     m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret(), disk: None, verity: None });
     server(&mut m, "blkd").labels = secret();
-    let base = server(&mut image(), "fsd:data").clone();
+    let base = server(&mut image(), "littlefsd:data").clone();
     m.servers.push(Server { labels: secret(), ..base.clone() });
     m.servers.push(Server {
         name: "client".into(),
         volume: None,
         labels: secret(),
         receives: vec!["client".into()],
-        handed: vec![Handed { endpoint: "fsd:data".into(), badge: 7 }],
+        handed: vec![Handed { endpoint: "littlefsd:data".into(), badge: 7 }],
         args: vec!["endpoint=client".into(), "buckets=4".into()],
         ..base
     });
     assert!(on_virt(&m).is_ok());
     m.servers.last_mut().unwrap().labels.clear();
-    let fsd = m.servers.len() - 2;
+    let littlefsd = m.servers.len() - 2;
     assert_eq!(
         on_virt(&m).unwrap_err(),
-        Refusal::Confined { at: format!("servers[{fsd}].receives[0]"), sharing: Sharing::Endpoint }
+        Refusal::Confined { at: format!("servers[{littlefsd}].receives[0]"), sharing: Sharing::Endpoint }
     );
 }
 
@@ -1025,7 +1026,7 @@ fn a_manifest_that_passes_every_other_check_but_costs_init_too_much_is_refused()
         let receives = (0..60).map(|e| format!("e{n}-{e}")).collect();
         m.servers.push(Server {
             name: format!("s{n}"),
-            program: "fsd".into(),
+            program: "littlefsd".into(),
             budget: budget(17),
             heap_pages: None,
             receives,
@@ -1058,7 +1059,7 @@ fn more_servers_than_init_has_threads_to_watch_are_refused() {
         let receives = vec![format!("e{n}")];
         m.servers.push(Server {
             name: format!("s{n}"),
-            program: "fsd".into(),
+            program: "littlefsd".into(),
             receives,
             budget: budget(17),
             heap_pages: None,
@@ -1108,7 +1109,7 @@ fn the_fuzz_corpus_still_passes() {
 const ROOT: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
 /// A verified volume `name` (servers/verityd.md): the volume on `disk`'s GPT entry `partition`,
-/// its `verityd` `verity:NAME` and its `fsd` `fsd:NAME`, all under `labels`.
+/// its `verityd` `verity:NAME` and its `littlefsd` `littlefsd:NAME`, all under `labels`.
 fn verified_volume(m: &mut Manifest, name: &str, partition: i64, labels: Vec<String>, disk: Option<&str>) {
     let verifier = format!("verity:{name}");
     m.volumes.push(Volume {
@@ -1125,14 +1126,14 @@ fn verified_volume(m: &mut Manifest, name: &str, partition: i64, labels: Vec<Str
         receives: vec![verifier],
         ..declared
     });
-    let base = server(&mut image(), "fsd:data").clone();
-    let fsd = format!("fsd:{name}");
+    let base = server(&mut image(), "littlefsd:data").clone();
+    let littlefsd = format!("littlefsd:{name}");
     m.servers.push(Server {
-        name: fsd.clone(),
+        name: littlefsd.clone(),
         labels,
         volume: Some(name.into()),
-        receives: vec![fsd.clone()],
-        args: vec![format!("endpoint={fsd}"), "buckets=4".into()],
+        receives: vec![littlefsd.clone()],
+        args: vec![format!("endpoint={littlefsd}"), "buckets=4".into()],
         ..base
     });
 }
@@ -1148,12 +1149,12 @@ fn a_verified_volume_s_server_reads_through_its_verifier() {
     let mut m = without_volumes();
     verified_volume(&mut m, "data", 2, vec![], None);
     assert!(on_virt(&m).is_ok());
-    assert_eq!(range(&m, named(&m, "fsd:data")), Some(("verity:data", 1)));
+    assert_eq!(range(&m, named(&m, "littlefsd:data")), Some(("verity:data", 1)));
     assert_eq!(range(&m, named(&m, "verity:data")), Some(("blkd", 3)));
     assert_eq!(range(&m, named(&m, "blkd")), None);
     let root = format!("root={ROOT}");
     assert_eq!(args(&m, named(&m, "verity:data")), ["endpoint=verity:data", root.as_str(), "blocks=100"]);
-    assert_eq!(args(&m, named(&m, "fsd:data")), ["endpoint=fsd:data", "buckets=4"]);
+    assert_eq!(args(&m, named(&m, "littlefsd:data")), ["endpoint=littlefsd:data", "buckets=4"]);
     // Labelled: the verifier, the server and blkd each get the volume's ids.
     let mut m = without_volumes();
     secrets(&mut m);
@@ -1162,7 +1163,7 @@ fn a_verified_volume_s_server_reads_through_its_verifier() {
     assert!(on_virt(&m).is_ok());
     let args_of = |name: &str| args(&m, named(&m, name));
     assert_eq!(args_of("verity:vault"), ["endpoint=verity:vault", "labels=7", root.as_str(), "blocks=100"]);
-    assert_eq!(args_of("fsd:vault").last().unwrap(), "labels=7");
+    assert_eq!(args_of("littlefsd:vault").last().unwrap(), "labels=7");
     assert_eq!(args_of("blkd"), ["endpoint=blkd", "labels.0=7"]);
     // Beside it, an unverified volume's server keeps its range at blkd.
     m.volumes.push(Volume { name: "plain".into(), partition: 1, labels: vec![], disk: None, verity: None });
@@ -1196,8 +1197,8 @@ fn a_verified_volume_s_key_and_verifier_are_refused_naming_the_field() {
         refused_at(&with(&|v| v.blocks = blocks), "volumes[0].verity.blocks", Why::Value);
     }
     refused_at(&with(&|v| v.server = "nobody".into()), "volumes[0].verity.server", Why::Unknown);
-    refused_at(&with(&|v| v.server = "fsd:data".into()), "volumes[0].verity.server", Why::NotVerityd);
-    // The servers here: keyd, consoled, bootfsd, blkd, netd, ipd, then verity:data and fsd:data.
+    refused_at(&with(&|v| v.server = "littlefsd:data".into()), "volumes[0].verity.server", Why::NotVerityd);
+    // The servers here: keyd, consoled, bootfsd, blkd, netd, ipd, then verity:data and littlefsd:data.
     let verifier = 6;
     assert_eq!(base().servers[verifier].name, "verity:data");
     // A verifier named by two volumes, and one named by none.
@@ -1253,7 +1254,7 @@ fn a_verifier_costs_init_one_server_and_its_range() {
         disk: None,
         verity: None,
     });
-    plain.servers.push(server(&mut image(), "fsd:data").clone());
+    plain.servers.push(server(&mut image(), "littlefsd:data").clone());
     let mut verified = without_volumes();
     verified_volume(&mut verified, "data", 0, vec![], None);
     let bound = |m: &Manifest| on_virt(m).unwrap().bound;
@@ -1262,7 +1263,7 @@ fn a_verifier_costs_init_one_server_and_its_range() {
 }
 
 /// R34 (confined placement) with verified volumes: each label set reads its own verified volume
-/// through its own disk, `blkd`, `verityd` and `fsd`, and boots; an {alice-secrets} `fsd` on the
+/// through its own disk, `blkd`, `verityd` and `littlefsd`, and boots; an {alice-secrets} `littlefsd` on the
 /// unlabelled verifier shares the verifier's endpoint across two sets, and is refused there.
 #[test]
 fn confined_gives_each_label_set_its_own_verifier() {
@@ -1289,7 +1290,7 @@ fn confined_gives_each_label_set_its_own_verifier() {
     let devices = virt_devices();
     let machine = machine(&devices, &ENTRIES);
     assert!(on(&m, &machine).is_ok());
-    server(&mut m, "fsd:system").labels = secret();
+    server(&mut m, "littlefsd:system").labels = secret();
     let verifier = m.servers.iter().position(|s| s.name == "verity:system").unwrap();
     assert_eq!(
         on(&m, &machine).unwrap_err(),

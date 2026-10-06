@@ -10,7 +10,7 @@ use redoubt_wire::ninep::{Body, IOHDRSZ, Message, NOFID, Names, Qid};
 
 use super::*;
 
-/// A tree of files, each with its own labels (a real `fsd` has one set per volume).
+/// A tree of files, each with its own labels (a real `littlefsd` has one set per volume).
 struct MemFs {
     nodes: Vec<MemNode>,
     /// Every node clunked, in order.

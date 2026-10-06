@@ -1,10 +1,10 @@
 //! `verityd`'s server: `blkd`'s own protocol (libs/wire/tables/blkd.md, unchanged), on one
-//! volume, to the badge `init` minted for the volume's `fsd` (docs/servers/verityd.md,
+//! volume, to the badge `init` minted for the volume's `littlefsd` (docs/servers/verityd.md,
 //! "Messages").
 //!
 //! - `info` gives the volume's data blocks in sectors, read-only, whether or not the start check passed: an
-//!   `fsd` that cannot size its range exits and would be restarted, while one whose mount fails serves the
-//!   volume as corrupt and stays up (servers/fsd.md R49).
+//!   `littlefsd` that cannot size its range exits and would be restarted, while one whose mount fails serves
+//!   the volume as corrupt and stays up (servers/littlefsd.md R49).
 //! - `read` works in whole blocks: each block the request touches is checked through the tree
 //!   ([`crate::volume`]) before any of its sectors is copied out. A block that does not check, or any read of
 //!   a volume refused at start, is `failed`, as `blkd` answers a device error.
@@ -31,7 +31,7 @@ use crate::{Range, SECTOR};
 
 /// The most sectors one `read` may ask for, as at `blkd` (servers/blkd.md, "Messages").
 pub const MAX_SECTORS: u32 = 64;
-/// The one badge `verityd` serves: the volume's, which `init` mints for its `fsd`.
+/// The one badge `verityd` serves: the volume's, which `init` mints for its `littlefsd`.
 pub const BADGE: u64 = 1;
 
 /// A line for `verityd`'s console.

@@ -1,5 +1,5 @@
 description = "littlefs on the host: its model, crash consistency under torn writes, and hostile volumes (corrupted bytes, noise, and hand-built images) that must read as corrupt, never crash"
 kind = "host-tests"
 # The differential run against the C library (libs/littlefs/diff) is its own workspace with a C
-# toolchain, and the fuzz targets need cargo-fuzz: neither is a host-tests package (fsd.md).
+# toolchain, and the fuzz targets need cargo-fuzz: neither is a host-tests package (littlefsd.md).
 packages = ["littlefs"]

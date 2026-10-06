@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 144
+revision = 152
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -764,9 +764,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["BEAM2", "MEM2"]
-  body = "Owner (2026-10-03): \"1gb for now then we'll need to send beam on diet.\" No code now; brief later (Architect). Size guess M: about half measurement, the rest one or two levers.\n\nToday: the shell's VM at an idle prompt is 11,877 pages (46 MiB) on rv64 and 7,554 (30 MiB) on rv32 (BEAM2 report). BEAM1's rule gives it a 24,576-page budget, so the image needs 1 GiB (BEAM2 ruling 5).\n\n1. Measure: break the idle VM into loaded code, the loader's copies of module bytes, atoms and literals, process heaps, ETS, and the allocator's free-but-held pages, on both widths. This rides on MEM2's heap accounting.\n2. Levers, each measured before and after:\n- load modules lazily from the disk, not the prompt's closure at start;\n- drop the loader's copy of a module's bytes once it is loaded;\n- smaller initial heaps and a GC that returns pages;\n- Docs and debug chunks are already stripped: confirm.\n- Later, once sessions exist (not here): share the stdlib's code pages between VMs.\n3. Target the owner can see, at the quarter split, with the image's other servers at today's 9,984 pages:\n- the image boots at 512 MiB, its budget rule met: the VM at or under about 10,000 pages (39 MiB) on rv64, a cut of about 16%;\n- stretch: QEMU's default 256 MiB, the VM at or under about 2,700 pages (10.5 MiB), a cut of about 4x.\nMEM1/MEM2's per-server stack and heap caps also shrink the other servers' 9,984, which loosens both targets. Report which target was met.\n\nAcceptance: the breakdown table in the report and on beamlet.md; the image's memory_mib lowered to the target met; budgets.md's and image/README.md's RAM lines updated."
-  state = "todo"
-  revision = 2
+  body = "Brief: .wash/local/BEAM6-implementer.md. Tier A (the VM, the shell's start, the image), size M, needs BEAM2 and MEM2 (merged): start from main. Today the VM's budget holds 11,877 pages (rv64) / 7,554 (rv32) at the prompt, its runtime heap 11,814 / 6,966: the heap is the footprint. Step 1 measures a breakdown the VM prints under an argument (code per module with size_of::<Instr>, atoms, literals, process heaps live and held, ETS, binaries, loader copies, runtime pages held vs accounted), on the host then in a case beamlet-footprint with the memory scan as the verdict; checkpoint 1 with the table and ranked levers. Step 2: lazy loading in the shell's start, no second copy of a module's chunks, compact code only if it is a third of the heap (else proposed as its own package), smaller heaps and a shrinking collector, free-but-held pages (libs/rt by permission). Step 3: the owner's targets, the image at 512 MiB (VM about 10,000 pages rv64) or 256 MiB (about 2,700); manifest, memory_mib lines, README, budgets.md, testbench.md's table and beamlet.md's new breakdown subsection move with the target met; checkpoint 2 if missed. Short gate plus the beamlet and verity cases at the new RAM. Code-page sharing between VMs is for sessions, not here."
+  state = "active"
+  revision = 151
+  overrides = ["2026-10-06: started by Orchestrator before M1 (reported): BEAM6's needs (BEAM2, MEM2) are merged; M1 is reported, not done, which is the plan's state for every active package"]
 
 [[node]]
   id = "FSD4"
@@ -792,9 +793,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["IPC3"]
-  body = "Owner (2026-10-03): \"pumps at the boundary\", the recommended option of .wash/local/destroy-simplify.md, goes after IPC3. Tier A (the kernel's destroy path: budget.rs destroy_subtree, message.rs budgets_dying/pump/end_thread/abandon/fail_all, process.rs died/settle_notice), size M (M+ with the chains below). No brief yet: the Architect re-cuts it against IPC3's per-endpoint lists once IPC3 merges. The brief must cover the rescan loop's removal (fail_all's quadratic rescan), the five checks it replaces, the to-pump list collected at the mark and pumped at the boundary, and R10 step 4 tightened to \"from the mark on, no message stamped with a dying budget is delivered\" (budgets.md), with the one mutation retired as unwritable and its reason. The gate's R10 p99 is the check.\n\nAdded (IPC3's finding, 2026-10-03; docs/todo/destruction-walks-every-process.md): at full occupancy a destruction walks every process object three times (process::budgets_dying, destroy_marked's PID pass, destroy_subtree's live PIDs; ~12 us each at 510), so worst-walk's R10 is over 30 ms (IPC3 measures it after its exit-notice list). K19 adds per-budget chains so each follows the dying subtree; done when worst-walk's R10 at full fill is within 30 ms, its must_fail flips back to must-pass, and the todo page and R10's residual bullet are deleted."
+  body = "Brief: .wash/local/K19-implementer.md. Tier A, size M+, needs IPC3 merged (start from main). Part A, pumps at the boundary: no delivery inside a destruction; pumps become entries on a bounded to-pump list of endpoints, drained once after step 9 and before the bill; the five dying/doomed checks deleted or made checked-build assertions; commit 1 is a model trace of the mid-kill delivery, and the model's destroy pumps last; R10 step 4 tightens to \"from the mark on, no message stamped with a dying budget is delivered\" with a new model mutation (no R4b doomed mutation exists to retire: say so). Part B, per-budget chains of process objects (charged: the creator's owner chain; counted: a chain keyed on counted_in) so destroy_subtree's kill, step 3's frees and step 8's migration follow the dying subtree. Done when worst-walk's R10 p99 at full fill is within 30 ms net on both widths, its must_fail and docs/todo/destruction-walks-every-process.md gone, the residual bullets rewritten. Short gate plus the R10/R4b case lists and worst-walk by name. IPC3 already removed fail_all's rescan."
   state = "todo"
-  revision = 2
+  revision = 150
 
 [[node]]
   id = "AIO1"
@@ -929,8 +930,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["VOL1"]
   body = "Brief: .wash/local/BOOT1-implementer.md (architect-15; refocused 2026-10-06: littlefs's read cache dropped, the system volume moves to EROFS in EROFS1; the profile is the before/after measurement). Tier A (verityd, fsd's stamps, the bench), size M. docs/servers/verityd.md (the cost paragraph, its Open item); docs/userland/beamlet.md#beamlet-on-redoubt (the boot-time target, bench:boot-profile); docs/testbench.md#checked-builds (boot-stats). Checkpoint after step 1's profile; the target is set from the profile on EROFS (EROFS1)."
-  state = "active"
-  revision = 109
+  state = "reported"
+  revision = 147
   overrides = ["2026-10-06: started by Orchestrator before VOL1 (active): owner's go (2026-10-06): the boot profile and the two caches start now on VOL1's head (its verityd and image); BOOT1 rebases onto main once VOL1 merges", "2026-10-06: started by Orchestrator before VOL1 (reported): BOOT1 runs ahead of VOL1's merge on the owner's go; it rebases onto VOL1's merge", "2026-10-06: started by Orchestrator before VOL1 (active): BOOT1 builds on VOL1's branch head and rebases onto VOL1's merge; its review and gates run on that base now so the merge follows VOL1's directly"]
 
 [[node]]
@@ -950,8 +951,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["VOL1", "MEM2"]
   body = "Owner (2026-10-06): name file servers carefully for multiple fs servers; rename fsd to fsd-littlefs or similar. Convention on docs/servers/README.md#naming; the name is littlefsd. Brief: .wash/local/FSN1-implementer.md (architect-15). Mechanical rename (crate, image manifest, 47 case files, 26 pages, 30 recipes; 1,285 occurrences), no behaviour change; size S; three commits. Lands before EROFS1."
-  state = "todo"
-  revision = 108
+  state = "done"
+  revision = 152
 
 [[node]]
   id = "RECON1"
@@ -962,3 +963,22 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "SCHED1's release measurement (.wash/local/evidence/SCHED1/five-cases/RESULTS.md): a slice end costs ~0.36 ms rv64 / ~0.45 ms rv32 of kernel time, linear in the queued budgets L (~28 us per budget in release), against docs/kernel/scheduling.md's claims (K22's reconcile visits only the budgets that changed; R12's kernel-time text). Attributed (reconcile-finding.md): Queue::raise_floor's unconditional walks reading every queued budget's 7-word State through checked frame reads, 4-9 walks per slice end; not settle/ready_count. Brief: .wash/local/RECON1-brief.md (architect-15). Tier A kernel (libs/stride's Queue, sched.rs's state cache), size S. Fix: raise_floor only when the floor can rise; (pass, tie) cached in the queue's slots, audited against the frame in the checked build. Gate: under 3 us per queued budget per slice end in release, the fixed L=0 term (100-155 us: traps, two SBI ecalls) unchanged and not this package's; sched-large-weight's useful work at 1 ms within 0.85 of 10 ms both widths. Needs SCHED1 (owner's option (b): SCHED1 merges first with the cost a residual; RECON1 next, replacing its sentence)."
   state = "todo"
   revision = 142
+
+[[node]]
+  id = "B11"
+  title = "The memory scan finds no heap record under load: init-boot rv32 fails beside other work and passes alone"
+  template = "package"
+  parent = "M1"
+  body = "Seen twice on 2026-10-06 (VOL1's shared run on f873f6a15, and the wave bench on bd6f768f6): rv32 init-boot fails with 'beamlet: no heap record found' when the host is loaded, and passes alone (7.2 s). The scan (tools/testbench/src/memory.rs, MEM2's heap record read over QMP after the boot) reads a record the guest may not have written yet, or reads it before the dump settles: a race the load exposes. A shared-host verdict rule depends on guest-time cases being load-independent (docs/testbench.md 'On a shared host'), so the scan must wait for the record (a console line the guest prints when the record is final, or a retry to the case's deadline), not sample once. Size S. Gate: init-boot rv32 passes 10/10 beside a build; the memory host tests."
+  state = "todo"
+  revision = 146
+
+[[node]]
+  id = "LIFT1"
+  title = "A fresh debt lift of about a round on a small shared parent, observed at the sibling's first run"
+  template = "package"
+  parent = "M1"
+  needs = ["SCHED1"]
+  body = "docs/kernel/scheduling.md states a derived bound: a lineage's debt, carried onto a sibling as the parent's lead, delays the sibling's first run by at most about a round when the parent is small and the lift fresh. No boot exercises it: under a parent as wide as `users` the lift is a few thousandths of a slice, and sched-debt-lift judges only that the sibling runs before any other budget is picked twice (its raw debt would cost ~6 rounds). Tier A bench/fixtures, size S. Build a construction that puts a fresh lift of about a round on a small shared parent and observes the sibling's first run on both widths, the oracle's check_lift beside it; if the one-round claim is false for small parents, the page changes to what the construction finds. A stated bound the pages carry is exercised or dropped. Ruling and arithmetic: .wash/local/SCHED1-five-cases-ruling.md 'debt-lift (red round 5, P1)'."
+  state = "todo"
+  revision = 149

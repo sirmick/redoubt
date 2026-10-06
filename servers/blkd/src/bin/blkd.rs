@@ -43,7 +43,7 @@ pub const DISK_IRQ: &str = "disk-irq";
 /// The device would not start, or is not a virtio-blk device (`redoubt_blkd::DeviceError`).
 pub const NO_DISK: u32 = 6;
 /// The disk has no usable partition table (`redoubt_blkd::TableError`). Fail closed and loudly:
-/// a partition `blkd` cannot read is a volume `fsd` cannot mount, and serving without it would
+/// a partition `blkd` cannot read is a volume `littlefsd` cannot mount, and serving without it would
 /// look like the volume simply not existing. `init` restarts `blkd`, which reads the same disk
 /// and exits again, so an unreadable disk is a reboot loop rather than a degraded boot
 /// (servers/blkd.md, "Failure and restart"; servers/init.md, "Restarts and reboots").

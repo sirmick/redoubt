@@ -278,7 +278,7 @@ fn create_with_attrs<D: BlockDevice>(fs: &mut Filesystem<D>) -> Result<(), Error
 }
 
 /// A create with attributes writes them in its creating commit: power failing at any write
-/// leaves each entry absent or present with every attribute, never present without them (fsd
+/// leaves each entry absent or present with every attribute, never present without them (littlefsd
 /// relies on it: no entry is ever without its id).
 #[test]
 fn a_create_with_attributes_is_never_seen_without_them() {

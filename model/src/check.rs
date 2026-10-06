@@ -353,7 +353,7 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
 const FLOOD_THREADS: u64 = 31;
 
 /// The flood (plan/m1-separation.md's attack case "endpoint flooding: 10,000 sender threads
-/// calling `fsd`, and Alice is still served in her turn"), on a boot big enough to hold it. A
+/// calling `littlefsd`, and Alice is still served in her turn"), on a boot big enough to hold it. A
 /// system server receives on one endpoint; Bob's processes (two label sets of one account, so two
 /// R2 groups) run up to `FLOOD_THREADS` threads each, every thread calling with no timeout; a
 /// crowd of up to eight other accounts queues `WAIT_CAP` calls each; Alice makes one call in the

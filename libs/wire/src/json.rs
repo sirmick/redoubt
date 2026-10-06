@@ -662,9 +662,9 @@ mod tests {
     #[test]
     fn unknown_members_are_errors() {
         // The manifest example from servers/init.md.
-        let text = br#"{ "name": "fsd:data", "program": "fsd", "volume": "data",
+        let text = br#"{ "name": "littlefsd:data", "program": "littlefsd", "volume": "data",
                          "budget": { "pages": "4096", "processes": 1, "weight": 100 },
-                         "receives": ["fsd:data"], "handed": ["blkd"] }"#;
+                         "receives": ["littlefsd:data"], "handed": ["blkd"] }"#;
         let v = parse(text).unwrap();
         let all = ["name", "program", "volume", "receives", "handed"];
         assert_eq!(server(&v, &all), Ok(Budget { pages: 4096, processes: 1, weight: 100 }));

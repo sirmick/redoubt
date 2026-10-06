@@ -290,7 +290,7 @@ connection; the client half is the client library's hub
   ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
 
 **Who runs it.** A 9P server runs `NineServer::run`: calls, sends, transfers of up to
-`MAX_LEND_PAGES`, abandoned-call notices and deadlines (`fsd`, `bootfsd`). One that keeps state
+`MAX_LEND_PAGES`, abandoned-call notices and deadlines (`littlefsd`, `bootfsd`). One that keeps state
 beside its files runs `run_around` with its `Around`, which is given the calls, the abandoned-call
 notices that are no completion call's, and a turn before each receive, after what the deadlines made
 due, for whatever moved since: `consoled` parks its own reads, and at each turn reads its UART and
@@ -541,7 +541,7 @@ or decoded again when it is served; which typed operations may park at all
 - host:redoubt-rt::labelled_metadata_does_not_flow_down
 - host:redoubt-rt::an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it
 - bench:net-attacks
-- bench:fsd-label-check
+- bench:littlefsd-label-check
 
 </details>
 
@@ -704,7 +704,7 @@ its `Rflush`, never after.
   counts against its own account and label set, never another's.
 - **Rollback ends at provisional state.** A client that abandons a request after the server
   performed a non-provisional effect (a file write) keeps the effect without learning of it.
-- **Admission counts objects, not bytes.** Bytes are the file server's to meter (`fsd`'s quotas);
+- **Admission counts objects, not bytes.** Bytes are the file server's to meter (`littlefsd`'s quotas);
   every other server keeps no byte count.
 
 ## Why

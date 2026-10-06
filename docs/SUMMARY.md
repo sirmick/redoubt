@@ -32,7 +32,7 @@
   - [The steward](servers/steward.md)
   - [keyd](servers/keyd.md)
   - [bootfsd](servers/bootfsd.md)
-  - [fsd](servers/fsd.md)
+  - [littlefsd](servers/littlefsd.md)
   - [erofsd](servers/erofsd.md)
   - [blkd](servers/blkd.md)
   - [verityd](servers/verityd.md)

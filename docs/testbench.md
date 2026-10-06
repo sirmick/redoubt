@@ -326,7 +326,7 @@ so they run a tester in `init`'s place instead.
 - bench:init-console-forgery
 - bench:bench-init-reporter-forged
 - bench:init-boot
-- bench:fsd-reboot
+- bench:littlefsd-reboot
 
 </details>
 
@@ -511,7 +511,7 @@ to launch, is a bundle file.
 
 ### Bundle files
 
-Status: built · tested: bench:bench-bundle-file, bench:programs-unknown-budget-attack, bench:fsd-reboot, host:testbench::a_file_s_servers_merge_into_its_manifest_by_name
+Status: built · tested: bench:bench-bundle-file, bench:programs-unknown-budget-attack, bench:littlefsd-reboot, host:testbench::a_file_s_servers_merge_into_its_manifest_by_name
 
 ```toml
 [[file]]                     # a data entry, after the programs
@@ -520,8 +520,8 @@ from = { path = "tests/data/bundle-file.txt" }   # or any `programs` form, corru
 
 [[file]]                     # a manifest, with entries merged into its `servers`
 name = "manifest"
-from = { path = "tests/data/fsd/boot.json" }
-servers = [{ name = "client", args = ["reboot", "fsd:data"] }]
+from = { path = "tests/data/littlefsd/boot.json" }
+servers = [{ name = "client", args = ["reboot", "littlefsd:data"] }]
 
 [[file]]                     # a manifest pinning the userland disk's root, from the run's pack
 name = "manifest"
@@ -590,7 +590,7 @@ size_kib = 4096
 partitions = 1               # optional: a GPT of this many equal partitions, by blkd's builder
 # or, instead of both: a disk recipe packed for every boot as ./mkimage packs it
 # recipe = "image/disk.toml"
-# stage = "tests/data/fsd/stage"   # optional: what every partition holds instead of its stage
+# stage = "tests/data/littlefsd/stage"   # optional: what every partition holds instead of its stage
 
 [userland]                   # the userland disk, attached read-only, packed once per run
 recipe = "image/userland.toml"
@@ -605,7 +605,7 @@ host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions ac
 
 A disk `recipe` (`image/disk.toml`) is packed by the code `./mkimage` runs (`testbench
 --pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as a littlefs
-volume holding its stage's tree, written through `fsd`'s own code, so a case boots the disk the
+volume holding its stage's tree, written through `littlefsd`'s own code, so a case boots the disk the
 image ships.
 
 A recipe's littlefs partition may also generate files, for a case that needs many and not their
@@ -1043,7 +1043,7 @@ heap cap in pages, from six later runs with the stacks as declared. The stack co
 the first runs' and the heap columns the later runs'. `beamlet`'s heap peak moves by a page between
 runs, so its cap is instead the most its budget holds beside its stack, 24,558 pages. The
 read-only case also scans its additional client from the merged manifest. `verity:system`'s row and
-`fsd:system`'s heap are from six runs with the userland volume read through `verity:system`.
+`littlefsd:system`'s heap are from six runs with the userland volume read through `verity:system`.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1053,10 +1053,10 @@ read-only case also scans its additional client from the merged manifest. `verit
 | `blkd` | 4,504 | 3 | 17 | 34 |
 | `netd` | 4,280 | 3 | 2 | 4 |
 | `ipd` | 8,040 | 4 | 4 | 8 |
-| `fsd:data` | 7,176 | 4 | 9 | 18 |
+| `littlefsd:data` | 7,176 | 4 | 9 | 18 |
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
 | `verity:system` | 7,864 | 4 | 47 | 94 |
-| `fsd:system` | 12,680 | 7 | 19 | 38 |
+| `littlefsd:system` | 12,680 | 7 | 19 | 38 |
 | `beamlet` | 33,240 | 17 | 11,814 | 24,558 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses

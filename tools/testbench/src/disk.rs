@@ -1,5 +1,5 @@
 //! Disks: a GPT of equal partitions for a case's `[disk]`, and a disk recipe (`image/disk.toml`)
-//! packed whole, its partition table by `blkd`'s builder and each littlefs partition by `fsd`'s
+//! packed whole, its partition table by `blkd`'s builder and each littlefs partition by `littlefsd`'s
 //! own packer (docs/testbench.md, "Disks and network cards"; image/README.md). A partition the
 //! recipe marks `verity` holds the largest volume that fits beside its hash tree, and the tree
 //! after it (docs/servers/verityd.md, "The tree"); its root and block count are what a manifest
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use redoubt_blkd::image::{Entry, FIRST_USABLE, Image};
-use redoubt_fsd::pack;
+use redoubt_littlefsd::pack;
 use redoubt_verity::{BLOCK, Geometry, Hash, SECTORS_PER_BLOCK};
 use serde::Deserialize;
 
@@ -154,7 +154,7 @@ pub fn gpt_disk(sectors: u64, partitions: u64) -> Vec<u8> {
     Image::new(sectors, &shares(sectors, partitions)).bytes
 }
 
-/// The tree under `stage`, parents first, in name order, as `fsd`'s packer takes it: each path
+/// The tree under `stage`, parents first, in name order, as `littlefsd`'s packer takes it: each path
 /// relative to `stage`, and each file's bytes.
 fn tree(stage: &Path) -> Result<Vec<(String, Option<Vec<u8>>)>> {
     let mut out = Vec::new();
@@ -285,7 +285,7 @@ pub fn flip_file(disk: &mut [u8], v: &Verified, file: &[u8]) -> Result<usize> {
 }
 
 /// Flips one bit of the first level-1 tree block of the verified volume `v` on `disk`: the block
-/// that covers the volume's first data blocks, which `fsd`'s mount reads.
+/// that covers the volume's first data blocks, which `littlefsd`'s mount reads.
 pub fn flip_tree(disk: &mut [u8], v: &Verified) -> usize {
     let at = v.start + v.geometry.data_blocks() as usize * BLOCK + 7;
     disk[at] ^= 0x10;

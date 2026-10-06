@@ -274,7 +274,7 @@ over the generated codec is the binding, one call per message
 - **No policy.** A generated function makes the call its message describes and nothing more;
   what a session may do is the server's check and the handle's reach.
 
-The hand-written layer above is thin: `fsd`'s operations, which name fids that live in Rust, and
+The hand-written layer above is thin: `littlefsd`'s operations, which name fids that live in Rust, and
 in Elixir the modules that make a server idiomatic, such as `Redoubt.Keys` over `keyd`.
 
 **Open:** none.
@@ -326,7 +326,7 @@ mints a fresh connection rooted at `root`, a path relative to the caller's own r
 climbs above it, and replies with the connection's endpoint handle and its id. `quota` is the
 byte quota asked for: the skeleton passes it to the file server's `minted` hook, which may refuse
 it (`refused`), and a server that meters no bytes ignores it. What a quota means is the file
-server's ([fsd](fsd.md#quotas)). `disconnect(id)` frees the connection with that id and
+server's ([littlefsd](littlefsd.md#quotas)). `disconnect(id)` frees the connection with that id and
 everything minted under it; an id the caller did not receive is `not_yours`, the same answer as
 an id that does not exist. Opcodes 1 and 4 to 15 are reserved and malformed. How the skeleton
 serves them is on [the serving library](serving.md#the-9p-server-skeleton).
