@@ -3,12 +3,14 @@
 //!
 //! It serves the console, the clock and randomness; the module source is the embedder's
 //! ([`Modules`]): the userland volume's files on the machine, read through a verified volume
-//! ([`userland`]), directories on a host; there are no programs yet. Its I/O is asynchronous
+//! ([`userland`]), directories on a host; files are the namespace's, over 9P ([`files`]); there
+//! are no programs yet. Its I/O is asynchronous
 //! underneath ([`io`]; beamlet.md, "Asynchronous underneath, synchronous on top"): a request goes
 //! through the client library's hub from the VM's own thread without waiting for its answer, a
 //! waiter thread per connection collects the answers, and [`Platform::idle`] is where the VM
-//! waits for them. The VM's thread waits for no server but in `idle`; the console's size, a typed
-//! call no hub carries, is the one call it still makes itself, which a live console answers at once.
+//! waits for them. The VM's thread waits for a server itself only for typed calls, which no hub
+//! carries (the console's size, `littlefsd`'s rename), and for module lookups, since loading code
+//! is synchronous in the VM.
 //!
 //! - **The console** is `/dev/cons` in the process's namespace, opened once. One read is out on the hub at a
 //!   time, parked by the server until there is typing, and one write: the bytes the VM writes wait here, in
@@ -25,6 +27,7 @@
 
 extern crate alloc;
 
+mod files;
 #[cfg(feature = "fake")]
 pub mod fixture;
 pub mod io;
@@ -39,14 +42,16 @@ use alloc::vec::Vec;
 
 use beamlet_vm::bif::NativeSpec;
 use beamlet_vm::memory::HeapPages;
-use beamlet_vm::platform::{ConsoleInput, Lookup, Platform, PlatformError};
+use beamlet_vm::platform::{ConsoleInput, Files, Lookup, Platform, PlatformError};
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
+pub use files::posix;
 use redoubt_client::aio::{Conn, Done, MAX_WRITE, Outcome};
 use redoubt_client::console::Console;
 use redoubt_client::ns::Namespace;
-use redoubt_client::{Error, Lend};
-use redoubt_rt::abi::{FOREVER, PAGE_SIZE};
+use redoubt_client::{Error, Lend, Refusal};
+use redoubt_rt::abi::{FOREVER, Handle, PAGE_SIZE};
+use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::startup::Startup;
 
@@ -85,6 +90,10 @@ pub struct Redoubt {
     console: Arc<Console>,
     io: Io,
     cons: ConsoleIo,
+    /// The namespace's files, open files and file operations.
+    files: files::Table,
+    /// Say what the I/O cost when the VM ends ([`REPORT_IO`]).
+    report_io: bool,
     modules: Box<dyn Modules>,
     /// What the lookups cost (`boot-stats`).
     #[cfg(feature = "boot-stats")]
@@ -114,9 +123,10 @@ struct ConsoleIo {
 }
 
 impl ConsoleIo {
-    /// Whether `done` is the console's, and if so takes it.
+    /// Takes `done` if it is the console's read or write; anything else, a file operation on
+    /// `/dev/cons` on the same connection among them, is handed back.
     fn take(&mut self, io: &mut Io, done: Done) -> Option<Done> {
-        if done.conn != self.conn {
+        if done.conn != self.conn || (self.reading != Some(done.tag) && self.writing != Some(done.tag)) {
             return Some(done);
         }
         if self.reading == Some(done.tag) {
@@ -158,7 +168,7 @@ impl ConsoleIo {
             Some(buffer) => Ok(buffer),
             None => Buffer::new(1).map_err(Error::from),
         };
-        match buffer.and_then(|buffer| io.hub().read(self.conn, self.fid, 0, buffer)) {
+        match buffer.and_then(|buffer| io.request().read(self.conn, self.fid, 0, buffer)) {
             Ok(tag) => self.reading = Some(tag),
             // With nothing to read into, or no way to ask, there is no input.
             Err(_) => self.ended = true,
@@ -179,7 +189,7 @@ impl ConsoleIo {
             for (slot, byte) in buffer[..n].iter_mut().zip(self.output.iter()) {
                 *slot = *byte;
             }
-            io.hub().write(self.conn, self.fid, 0, buffer, n)
+            io.request().write(self.conn, self.fid, 0, buffer, n)
         });
         match written {
             Ok(tag) => self.writing = Some(tag),
@@ -218,8 +228,14 @@ impl Redoubt {
     /// The platform of a process started with `startup`, whose namespace holds `/dev/cons`, which
     /// serves multiplexed sessions.
     pub fn new(startup: &Startup, modules: Box<dyn Modules>) -> Result<Redoubt, Error> {
+        // A bind it cannot make is refused before any server is asked anything.
+        let binds = binds(startup).map_err(|_| Refusal::BadPath)?;
         let mut lend = Lend::new(1)?;
-        let ns = Namespace::from_startup(startup, &mut lend)?;
+        let mut ns = Namespace::from_startup(startup, &mut lend)?;
+        for (prefix, handle) in binds {
+            let conn = redoubt_client::file::Connection::attach(Endpoint::from_handle(handle), &mut lend)?;
+            ns.bind(prefix, conn)?;
+        }
         let console = Arc::new(Console::open(&ns, &mut lend)?);
         let mut io = Io::new()?;
         let conn = io.connect(console.file().connection())?;
@@ -241,6 +257,8 @@ impl Redoubt {
             console,
             io,
             cons,
+            files: files::Table::new(ns),
+            report_io: startup.args().any(|arg| arg == REPORT_IO),
             modules,
             #[cfg(feature = "boot-stats")]
             loads: Loads { started: redoubt_rt::handle::time_now().unwrap_or(0), ..Loads::default() },
@@ -249,6 +267,9 @@ impl Redoubt {
 
     /// The waiter threads started so far: one per connection the VM has used.
     pub fn waiters(&self) -> usize { self.io.waiters() }
+
+    /// The requests handed to the hub so far.
+    pub fn requests(&self) -> u64 { self.io.requests() }
 
     /// Starts reading the console, the first time input is asked for. A `boot-stats` build says so,
     /// with the time and what the lookups cost: for the shell, its prompt is drawn and waiting.
@@ -307,8 +328,9 @@ impl Redoubt {
     /// Hands each completion to whoever's request it was.
     fn dispatch(&mut self) {
         while let Some(done) = self.io.completed() {
-            // Nothing but the console asks yet: anything else is dropped, with its buffer.
-            let _ = self.cons.take(&mut self.io, done);
+            let Some(done) = self.cons.take(&mut self.io, done) else { continue };
+            // Anything else is no one's: dropped, with its buffer.
+            self.files.take(&mut self.io, done);
         }
     }
 }
@@ -317,6 +339,14 @@ impl Redoubt {
 /// [`FLUSH_US`], so the VM's last words are not lost to its exit.
 impl Drop for Redoubt {
     fn drop(&mut self) {
+        if self.report_io {
+            let line = format!(
+                "beamlet: io: {} requests through the hub; threads: 1 scheduler, {} waiters\n",
+                self.io.requests(),
+                self.io.waiters()
+            );
+            self.console_write(line.as_bytes());
+        }
         let until = redoubt_rt::handle::time_now().unwrap_or(0).saturating_add(FLUSH_US);
         while self.cons.writes_pending() {
             let now = redoubt_rt::handle::time_now().unwrap_or(until);
@@ -367,7 +397,7 @@ impl Platform for Redoubt {
         let timeout = match deadline {
             Some(deadline) => deadline.saturating_sub(self.monotonic_us()),
             // Nothing will arrive, so nothing would wake the VM: return, and it gives up.
-            None if !self.cons.started || self.cons.ended => return,
+            None if (!self.cons.started || self.cons.ended) && !self.files.busy() => return,
             None => FOREVER,
         };
         self.io.wait(timeout);
@@ -409,12 +439,39 @@ impl Platform for Redoubt {
     fn load_module(&mut self, module: &str) -> Lookup { self.load(module, &format!("{module}.beam")) }
 
     fn load_app(&mut self, app: &str) -> Lookup { self.load(app, &format!("{app}.app")) }
+
+    /// The namespace's files over 9P ([`files`]).
+    fn files(&mut self) -> Option<&mut dyn Files> { Some(self) }
+}
+
+/// The argument that binds a named handle the VM was given at a prefix of its namespace,
+/// `bind=PREFIX=HANDLE` (`bind=/home/alice=littlefsd:data`): the `bind/2` a session performs for
+/// itself, for a VM `init` launches, whose namespace holds only `/dev/cons`. Under the steward the
+/// session's namespace does this. It creates no authority: the handle was handed already.
+pub const BIND: &str = "bind=";
+
+/// The `bind=PREFIX=HANDLE` arguments of `startup`, each prefix clean and absolute and each handle
+/// one the block names; otherwise the first argument that is not.
+pub fn binds<'a>(startup: &Startup<'a>) -> Result<Vec<(&'a str, Handle)>, &'a str> {
+    let mut out = Vec::new();
+    for arg in startup.args().filter(|arg| arg.starts_with(BIND)) {
+        let bound = arg[BIND.len()..].split_once('=').and_then(|(prefix, name)| {
+            let handle = startup.handle(name)?;
+            redoubt_rt::path::is_clean_absolute(prefix).then_some((prefix, handle))
+        });
+        out.push(bound.ok_or(arg)?);
+    }
+    Ok(out)
 }
 
 /// The argument that gives the VM its budget's pages, required on the machine: a program cannot
 /// read its own budget (it holds no budget handle), so the manifest that sets the budget says it
 /// again here.
 pub const BUDGET_PAGES: &str = "budget_pages=";
+
+/// The argument that has the platform say, when the VM ends, how many requests went through the
+/// hub and how many threads it ran: the scheduler and the waiters, and no thread per request.
+pub const REPORT_IO: &str = "report_io";
 
 /// The argument that has the VM print its memory breakdown at its first prompt
 /// ([`beamlet_vm::memory::footprint`]); absent, it prints none.

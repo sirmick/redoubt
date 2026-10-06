@@ -1,0 +1,72 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "disk1", "base": "268460032", "irq": 6, "dma": true},
+    {"name": "disk0", "base": "268468224", "irq": 8, "dma": true}
+  ],
+  "volumes": [
+    {"name": "system", "partition": 0, "disk": "blkd"},
+    {"name": "data", "partition": 0, "disk": "blkd:data"}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "audit,audit,2222222222222222222222222222222222222222222222222222222222222222", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "bootfsd",
+      "program": "bootfsd",
+      "budget": {"pages": "640", "processes": 1, "weight": 100},
+      "receives": ["bootfsd"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "blkd",
+      "program": "blkd",
+      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "devices": [{"device": "disk1", "as": "disk"}],
+      "receives": ["blkd"], "args": ["endpoint=blkd"]
+    },
+    {
+      "name": "blkd:data",
+      "program": "blkd",
+      "budget": {"pages": "512", "processes": 1, "weight": 1000},
+      "devices": [{"device": "disk0", "as": "disk"}],
+      "receives": ["blkd:data"], "args": ["endpoint=blkd:data"]
+    },
+    {
+      "name": "erofsd:system",
+      "program": "erofsd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "volume": "system",
+      "receives": ["erofsd:system"],
+      "args": ["endpoint=erofsd:system", "buckets=4"]
+    },
+    {
+      "name": "littlefsd:data",
+      "program": "littlefsd",
+      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "volume": "data",
+      "receives": ["littlefsd:data"],
+      "args": ["endpoint=littlefsd:data", "buckets=4"]
+    },
+    {
+      "name": "beamlet",
+      "program": "beamlet",
+      "budget": {"pages": "4096", "processes": 1, "weight": 100},
+      "handed": [{"endpoint": "erofsd:system", "badge": "7"}, {"endpoint": "littlefsd:data", "badge": "8"}],
+      "args": ["budget_pages=4096", "endpoint=erofsd:system", "report_io", "bind=/home/alice=littlefsd:data", "beamlet_files"]
+    }
+  ]
+}

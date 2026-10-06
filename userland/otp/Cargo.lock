@@ -112,6 +112,7 @@ dependencies = [
  "beamlet-vm",
  "redoubt-client",
  "redoubt-fake-kernel",
+ "redoubt-littlefsd",
  "redoubt-rt",
 ]
 
@@ -499,6 +500,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "littlefs"
+version = "0.1.0"
+
+[[package]]
 name = "log"
 version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -689,6 +694,14 @@ dependencies = [
 name = "redoubt-fake-kernel"
 version = "0.1.0"
 dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
+name = "redoubt-littlefsd"
+version = "0.1.0"
+dependencies = [
+ "littlefs",
  "redoubt-rt",
 ]
 

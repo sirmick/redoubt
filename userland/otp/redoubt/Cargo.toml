@@ -15,9 +15,11 @@ beamlet-re = { path = "../re" }
 # The host launcher, `fake-redoubt`: the platform run on the fake kernel. Host only; nothing that
 # runs on the machine has this feature.
 redoubt-fake-kernel = { path = "../../../libs/rt/fake", optional = true }
+# The host fixture's home volume: the real `littlefsd`, on the fake kernel. Host only, as above.
+redoubt-littlefsd = { path = "../../../servers/littlefsd", optional = true }
 
 [features]
-fake = ["dep:redoubt-fake-kernel"]
+fake = ["dep:redoubt-fake-kernel", "dep:redoubt-littlefsd"]
 # Test-only, for the bench's boot-profile cases, and off in every default build: the start
 # module's line carries `[t=N]`, and the VM's lookups are counted and said at the prompt.
 boot-stats = []
@@ -37,4 +39,8 @@ required-features = ["fake"]
 
 [[test]]
 name = "limits"
+required-features = ["fake"]
+
+[[test]]
+name = "files"
 required-features = ["fake"]

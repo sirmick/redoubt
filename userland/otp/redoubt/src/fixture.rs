@@ -1,6 +1,10 @@
 //! Running the platform on a host, on the fake kernel (`redoubt-fake-kernel`): a console server
-//! for it to reach, a session process to run it in, and the host's way to find its modules. Host
-//! only (the `fake` feature); nothing here runs on the machine.
+//! for it to reach, a home volume, a session process to run it in, and the host's way to find its
+//! modules. Host only (the `fake` feature); nothing here runs on the machine.
+//!
+//! **The home volume is the real `littlefsd`**, the program itself, on a fake `blkd` that serves
+//! sectors from memory over `blkd`'s protocol, as `littlefsd`'s own tests run it: its files, its
+//! label rule and its refusals are the machine's.
 //!
 //! **The console server is a fixture, not `consoled`.** `consoled` drives an ns16550, and the
 //! fake kernel's device is a page of plain memory: nothing clears "data ready" when a byte is
@@ -21,13 +25,18 @@ use std::thread::JoinHandle;
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::{Caller, Request};
+use redoubt_rt::ipc::{Caller, Event, Request, Words};
 use redoubt_rt::server::Limits;
 use redoubt_rt::server::ninep::{
     Around, FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, mode, refuse, refuse_malformed,
 };
 use redoubt_rt::server::parked::{NotParked, Parked};
+use redoubt_rt::server::typed::{Answer, Protocol, TypedServer, serve_call};
 use redoubt_rt::startup::{Startup, StartupBuilder};
+use redoubt_rt::wire::Error as WireError;
+use redoubt_rt::wire::proto::blkd::{
+    self, ErrorCode as BlkdError, FlushReply, InfoReply, Message as BlkdMessage, ReadReply, WriteReply,
+};
 
 use crate::{Modules, Unloaded};
 
@@ -53,13 +62,33 @@ pub fn console(input: Box<dyn std::io::Read + Send>, output: Box<dyn Write + Sen
 
 /// A new session process, with a connection to `console` bound at `/dev/cons`, and its startup
 /// block, as a launcher writes it.
-pub fn session(console: &ConsoleServer) -> (usize, Vec<u8>) {
+pub fn session(console: &ConsoleServer) -> (usize, Vec<u8>) { session_with(console, &[], &[]) }
+
+/// A new process with `/dev/cons`, a connection to each volume, and `args`, and its startup block:
+/// a volume named by a path is bound at that prefix of its namespace, as a session's are; one
+/// named otherwise is handed as a handle of that name, as `init` hands one.
+pub fn session_with(console: &ConsoleServer, volumes: &[(&str, &Volume)], args: &[&str]) -> (usize, Vec<u8>) {
     let f = fake();
     let pid = f.process(1001, &[]);
-    let conn = f.grant(console.pid, console.endpoint, pid, 0x20 + pid as u64);
-    let block =
-        StartupBuilder::new(conn.index()).namespace("/dev/cons", conn).finish().expect("a startup block");
-    (pid, block)
+    let cons = f.grant(console.pid, console.endpoint, pid, 0x20 + pid as u64);
+    let held: Vec<(&str, Handle)> = volumes
+        .iter()
+        .map(|(name, volume)| (*name, f.grant(volume.littlefsd, volume.endpoint, pid, 0x40 + pid as u64)))
+        .collect();
+    let highest = held.iter().map(|(_, h)| h.index()).fold(cons.index(), u32::max);
+    let mut builder = StartupBuilder::new(highest);
+    builder.namespace("/dev/cons", cons);
+    for (name, handle) in held {
+        if name.starts_with('/') {
+            builder.namespace(name, handle);
+        } else {
+            builder.handle(name, handle);
+        }
+    }
+    for arg in args {
+        builder.arg(arg);
+    }
+    (pid, builder.finish().expect("a startup block"))
 }
 
 /// Modules from host directories, the first that has a file of the name, as beamlet's `-pa`.
@@ -237,3 +266,119 @@ impl Around<Stream> for Readers {
 
 /// Parses a startup block as the fake process it was written for would.
 pub fn startup(block: &[u8]) -> Startup<'_> { Startup::parse(block).expect("a startup block") }
+
+// ---- the home volume ----
+
+#[path = "../../../../servers/littlefsd/src/bin/littlefsd.rs"]
+#[allow(dead_code)]
+mod littlefsd;
+
+/// Bytes of a sector of the fake `blkd`'s range.
+const SECTOR: usize = 512;
+
+/// `blkd`'s protocol, for the fake.
+struct Blkd;
+
+impl Protocol for Blkd {
+    type Error = BlkdError;
+    type Reply<'a> = blkd::Reply<'a>;
+    type Request<'a> = BlkdMessage<'a>;
+
+    fn decode<'a>(words: &Words, buf: &'a [u8], handles: usize) -> Result<BlkdMessage<'a>, WireError> {
+        BlkdMessage::decode(words, buf, handles)
+    }
+
+    fn encode_reply(reply: &blkd::Reply<'_>, buf: &mut [u8]) -> Result<Words, WireError> { reply.encode(buf) }
+
+    fn error_words(error: BlkdError) -> Words { error.encode() }
+}
+
+/// A range of sectors in memory behind `blkd`'s protocol.
+struct Sectors {
+    bytes: Vec<u8>,
+    out: Vec<u8>,
+}
+
+impl TypedServer<Blkd> for Sectors {
+    fn handle<'s>(
+        &'s mut self,
+        _: &Caller,
+        request: BlkdMessage<'_>,
+        _: &[Handle],
+    ) -> Result<Answer<blkd::Reply<'s>>, BlkdError> {
+        let len = self.bytes.len();
+        let span = |sector: u64, n: usize| {
+            let start = sector as usize * SECTOR;
+            (start + n <= len).then_some(start..start + n).ok_or(BlkdError::OutOfRange)
+        };
+        let reply = match request {
+            BlkdMessage::Info(_) => blkd::Reply::Info(InfoReply {
+                sectors: (len / SECTOR) as u64,
+                sector_size: SECTOR as u32,
+                read_only: 0,
+            }),
+            BlkdMessage::Read(r) => {
+                self.out = self.bytes[span(r.sector, r.count as usize * SECTOR)?].to_vec();
+                return Ok(Answer::new(blkd::Reply::Read(ReadReply { data: &self.out })));
+            }
+            BlkdMessage::Write(w) => {
+                let span = span(w.sector, w.data.len())?;
+                self.bytes[span].copy_from_slice(w.data);
+                blkd::Reply::Write(WriteReply {})
+            }
+            BlkdMessage::Flush(_) => blkd::Reply::Flush(FlushReply {}),
+        };
+        Ok(Answer::new(reply))
+    }
+}
+
+/// A `littlefsd` serving a blank volume of its own, labelled with its `labels=` argument if any.
+pub struct Volume {
+    pub littlefsd: usize,
+    /// Its receive endpoint, which a session is granted a connection to.
+    pub endpoint: Handle,
+    pub thread: JoinHandle<u32>,
+    blkd: (usize, Handle),
+}
+
+/// Starts `littlefsd` on a blank range of `sectors`, with `args` beside its endpoint's.
+pub fn volume(sectors: usize, args: &[&str]) -> Volume {
+    let f = fake();
+    let blkd = f.process(0, &[]);
+    let blkd_receive = f.endpoint(blkd);
+    f.run(blkd, move || {
+        let endpoint = Endpoint::from_handle(blkd_receive);
+        let mut range = Sectors { bytes: vec![0; sectors * SECTOR], out: Vec::new() };
+        loop {
+            match endpoint.receive(FOREVER, 0) {
+                Ok(Event::Call(request)) => {
+                    let _ = serve_call::<Blkd, _>(&mut range, request);
+                }
+                Ok(_) => {}
+                Err(_) => return 0,
+            }
+        }
+    });
+    let pid = f.process(0, &[]);
+    let receive = f.endpoint(pid);
+    let range = f.grant(blkd, blkd_receive, pid, 1);
+    let mut builder = StartupBuilder::new(receive.index().max(range.index()));
+    builder.handle("littlefsd:data", receive).handle("volume", range).arg("endpoint=littlefsd:data");
+    for arg in args {
+        builder.arg(arg);
+    }
+    let block = builder.finish().expect("littlefsd's block");
+    let thread = f.run(pid, move || littlefsd::serve(&Startup::parse(&block).expect("littlefsd's block")));
+    Volume { littlefsd: pid, endpoint: receive, thread, blkd: (blkd, blkd_receive) }
+}
+
+impl Volume {
+    /// Stops `littlefsd`, then its `blkd`, and returns `littlefsd`'s exit code.
+    pub fn stop(self) -> u32 {
+        let f = fake();
+        f.destroy(self.littlefsd, self.endpoint);
+        let code = self.thread.join().unwrap_or(1);
+        f.destroy(self.blkd.0, self.blkd.1);
+        code
+    }
+}

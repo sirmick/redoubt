@@ -19,29 +19,33 @@ use redoubt_client::file::Connection;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Event;
 
-/// The most waiter threads the VM starts: one per namespace binding a session is given (bootfsd,
-/// the home volume, a labelled volume, `ipd`, the console, the system volume), with room for a
-/// few binds. Each is a thread of the process, under the kernel's 255 a process.
-pub const MAX_WAITERS: usize = 8;
+/// The most waiter threads the VM starts: one per connection of a session's namespace (bootfsd,
+/// the home volume, a labelled volume, `ipd`, the console, the system volume); a bind is one of
+/// these connections again. Each is a thread of the process, under the kernel's 255 a process.
+pub const MAX_WAITERS: usize = 6;
 
 /// The hub, its connections, and the endpoint its waiters wake the VM on.
 pub struct Io {
     hub: Hub,
     wake: Endpoint,
-    /// Each hub connection, by the namespace connection it is a session on.
-    conns: Vec<(Connection, Conn)>,
+    /// Each hub connection, by the namespace connection it is a session on; or why its waiter could
+    /// not start, which stands: its session is not opened again.
+    conns: Vec<(Connection, Result<Conn, Error>)>,
+    /// Requests handed to the hub so far.
+    requests: u64,
 }
 
 impl Io {
     pub fn new() -> Result<Io, Error> {
-        Ok(Io { hub: Hub::new(), wake: Endpoint::create()?, conns: Vec::new() })
+        Ok(Io { hub: Hub::new(), wake: Endpoint::create()?, conns: Vec::new(), requests: 0 })
     }
 
     /// `conn`'s hub connection: the first time, a multiplexed session on it and its waiter. A server
-    /// that serves no multiplexed session refuses the first completion call, and that is the error.
+    /// that serves no multiplexed session refuses the first completion call, and that is the error;
+    /// a waiter that cannot start is one too, for good.
     pub fn connect(&mut self, conn: &Connection) -> Result<Conn, Error> {
         if let Some((_, c)) = self.conns.iter().find(|(known, _)| known.same(conn)) {
-            return Ok(*c);
+            return *c;
         }
         if self.conns.len() == MAX_WAITERS {
             return Err(Error::Sys(redoubt_rt::abi::Error::TooManyThreads));
@@ -49,12 +53,19 @@ impl Io {
         let c = self.hub.connect(Endpoint::from_handle(conn.endpoint().handle()))?;
         // Badges from 1: the waiter's wake-ups are told apart by them, and none is 0.
         let badge = NonZeroU64::new(self.conns.len() as u64 + 1).ok_or(Error::Unexpected)?;
-        self.hub.spawn_waiter(c, &self.wake, badge)?;
-        self.conns.push((conn.clone(), c));
-        Ok(c)
+        let started = self.hub.spawn_waiter(c, &self.wake, badge).map(|()| c);
+        self.conns.push((conn.clone(), started));
+        started
     }
 
-    pub fn hub(&mut self) -> &mut Hub { &mut self.hub }
+    /// The hub, for one request, which is counted.
+    pub fn request(&mut self) -> &mut Hub {
+        self.requests += 1;
+        &mut self.hub
+    }
+
+    /// Requests handed to the hub so far.
+    pub fn requests(&self) -> u64 { self.requests }
 
     /// The next completion, if any.
     pub fn completed(&mut self) -> Option<Done> { self.hub.completed() }

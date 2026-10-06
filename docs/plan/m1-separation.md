@@ -98,10 +98,12 @@ page.
   ([wire](../servers/wire.md#error-names)). Still planned: dropped files' fids that come back,
   calls by path, whole reads and writes, and generated Elixir clients
   ([native programs](../userland/native.md#dropped-files-calls-by-path-and-generated-calls)).
-- **The VM's remaining platform work.** The VM and shell boot on the UART console; asynchronous
-   file operations and native launching remain to be connected to the VM
-   ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)). `littlefsd` runs under `init`; files over 9P
-   from a session still need the VM's file operations ([files](../userland/files.md#files-over-9p)).
+- **The VM's remaining platform work.** The VM and shell boot on the UART console, and its I/O
+   is asynchronous through the client library's hub, files over 9P included
+   ([beamlet](../userland/beamlet.md#asynchronous-underneath-synchronous-on-top),
+   [files](../userland/files.md#files-over-9p)); native launching remains to be connected to the
+   VM ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)), and Elixir's `File` in a session
+   waits for the steward's sessions.
 - **The steward.** Principals from the manifest, fixed sub-budgets per label set, sessions,
    leases, the powerbox and approvals, declassification and push, crash blame
    ([the steward](../servers/steward.md)); the server graph, trust tiers and capability holdings
@@ -160,17 +162,20 @@ Built and attack-tested today:
   root the signed manifest pins, those the shell's prompt loads from one boot pack read whole
   before the VM starts ([beamlet](../userland/beamlet.md#beamlet-on-redoubt),
   [verityd](../servers/verityd.md)).
+  Its I/O is asynchronous through the client library's hub, and its files are 9P files in its
+  namespace ([files](../userland/files.md#files-over-9p)).
 - **The shell** on beamlet on the host: the loop, the commands, the file and text commands and
   help, with hostile text drawn visibly and the cell protocol held to its vectors
   ([the shell](../userland/shell.md#the-loop),
   [the cell protocol](../userland/shell.md#the-cell-protocol)).
-  The shell also boots on Redoubt's UART console; files and native launching there remain
-  planned ([the shell on the machine](../userland/shell.md#the-shell-in-a-session)).
+  The shell also boots on Redoubt's UART console; native launching there remains planned, and
+  its files wait for a session's namespace
+  ([the shell on the machine](../userland/shell.md#the-shell-in-a-session)).
 - **The steward's policy core**, tested on the host; the running server remains planned
   ([the policy core](../servers/steward.md#the-policy-core)).
 - **`sshd`'s core** on its host platform, which the bench's SSH sessions run against, with
   OpenSSH's server as the reference ([sshd](../servers/sshd.md#the-core-and-its-platforms),
   [SSH sessions](../testbench.md#sessions-and-the-loopback-server)).
 
-Not built: the VM's file operations and native launching on Redoubt, the steward server,
+Not built: native launching on Redoubt, the steward server,
 `sshd` on the box, sessions and the agent.

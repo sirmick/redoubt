@@ -1,20 +1,23 @@
 //! `beamlet`: the Elixir VM on Redoubt, a program `init` starts like any other
 //! (docs/userland/beamlet.md, "beamlet on Redoubt").
 //!
-//!     beamlet budget_pages=N endpoint=NAME [report_memory] MODULE [FUNCTION]
+//!     beamlet budget_pages=N endpoint=NAME [report_memory] [report_io] [bind=PREFIX=HANDLE]...
+//!             MODULE [FUNCTION]
 //!
 //! Its arguments, from its startup block, give its budget's pages, which size the VM's limits
 //! ([`beamlet_redoubt::limits`]), the handle its userland volume is reached by, ask for its memory
-//! breakdown at its first prompt ([`beamlet_redoubt::REPORT_MEMORY`]), and name the function it
-//! runs, `start` by default; it runs
-//! it as `fake-redoubt` does on a host (`beamlet_redoubt::run`), and exits with the code that
-//! returns. Its console is `/dev/cons` in its namespace; its threads are the runtime's. Its
-//! modules are the userland volume's files, each read whole by its name through the handle
-//! `endpoint=` names, the image's `erofsd:system`, an `erofsd` that reads the volume through its
-//! `verityd` ([`beamlet_redoubt::userland`]), and before them the volume's boot pack, read whole
-//! once at start ([`beamlet_redoubt::pack`]). A volume that does not attach, a pack that cannot be
-//! read or is malformed, or a start module that cannot be read, parks it: it says why and waits,
-//! never exiting, so a tampered disk is not a restart loop that reboots the machine.
+//! breakdown at its first prompt ([`beamlet_redoubt::REPORT_MEMORY`]), say what its I/O cost when
+//! it ends ([`beamlet_redoubt::REPORT_IO`]), bind handles it was handed at prefixes of its
+//! namespace ([`beamlet_redoubt::BIND`]: its home volume, `bind=/home/alice=littlefsd:data`), and
+//! name the function it runs, `start` by default; it runs it as `fake-redoubt` does on a host
+//! (`beamlet_redoubt::run`), and exits with the code that returns. Its console is `/dev/cons` in
+//! its namespace; its threads are the runtime's. Its modules are the userland volume's files, each
+//! read whole by its name through the handle `endpoint=` names, the image's `erofsd:system`, an
+//! `erofsd` that reads the volume through its `verityd` ([`beamlet_redoubt::userland`]), and before
+//! them the volume's boot pack, read whole once at start ([`beamlet_redoubt::pack`]). A volume that
+//! does not attach, a pack that cannot be read or is malformed, or a start module that cannot be
+//! read, parks it: it says why and waits, never exiting, so a tampered disk is not a restart loop
+//! that reboots the machine.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -65,10 +68,18 @@ fn start(startup: &Startup) -> u32 {
         return BAD_ARGS;
     };
     let report_memory = startup.args().any(|arg| arg == beamlet_redoubt::REPORT_MEMORY);
+    // `bind=PREFIX=HANDLE` binds a handle it was handed ([`beamlet_redoubt::BIND`]); one naming no
+    // handle, or a prefix that is not a clean absolute path, is refused before the VM starts.
+    if let Err(arg) = beamlet_redoubt::binds(startup) {
+        say(startup, &format!("beamlet: {arg} binds no handle it was given at a clean path"));
+        return BAD_ARGS;
+    }
     let mut args = startup.args().filter(|arg| {
         !arg.starts_with(beamlet_redoubt::BUDGET_PAGES)
             && !arg.starts_with(ENDPOINT)
+            && !arg.starts_with(beamlet_redoubt::BIND)
             && *arg != beamlet_redoubt::REPORT_MEMORY
+            && *arg != beamlet_redoubt::REPORT_IO
     });
     let Some(module) = args.next() else {
         say(startup, "beamlet: no module to run in its arguments");
