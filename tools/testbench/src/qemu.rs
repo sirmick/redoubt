@@ -3,17 +3,20 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
+use serde_json::{Value, json};
 
 use crate::case::{ALWAYS_FORBIDDEN, Boot, PASSED};
+use crate::memory;
 use crate::peer;
 use crate::ssh;
 use crate::target::Machine;
@@ -102,6 +105,13 @@ impl Drop for Reaped {
         self.0.kill().ok();
         self.0.wait().ok();
     }
+}
+
+/// A file QEMU made for the run, removed however the run ends.
+struct Removed(PathBuf);
+
+impl Drop for Removed {
+    fn drop(&mut self) { std::fs::remove_file(&self.0).ok(); }
 }
 
 /// What to boot: the same for a test run and for an interactive session.
@@ -490,6 +500,12 @@ pub fn run(
         .transpose()?;
 
     let mut qemu = image.qemu();
+    let qmp_path = qmp_socket();
+    // Declared before the guest, so dropped after QEMU is reaped.
+    let _qmp = boot.memory.then(|| Removed(qmp_path.clone()));
+    if boot.memory {
+        qemu.args(["-qmp", &format!("unix:{},server=on,wait=off", qmp_path.display())]);
+    }
     qemu.args(["-display", "none", "-monitor", "none", "-serial", "stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -573,7 +589,97 @@ pub fn run(
     if console.announced.is_some() && !console.passed_seen {
         return Ok(Verdict::Fail("ended without the reporter's PASSED".into()));
     }
+    if boot.memory {
+        if guest.0.try_wait()?.is_some() {
+            return Ok(Verdict::Fail("guest exited before its stack measurement".into()));
+        }
+        let measured = measure_stacks(image, boot, workspace, log, &qmp_path);
+        match measured {
+            Ok(measured) => {
+                for line in measured.lines {
+                    println!("{line}");
+                    writeln!(console.log, "{line}")?;
+                }
+                if !measured.failures.is_empty() {
+                    return Ok(Verdict::Fail(measured.failures.join("; ")));
+                }
+            }
+            Err(error) => return Ok(Verdict::Fail(format!("stack measurement: {error:#}"))),
+        }
+    }
     Ok(Verdict::Pass(console.captured))
+}
+
+/// Stop the running guest before QMP saves its physical RAM, beside the case's log. The dump is
+/// deleted once scanned; a scan that fails, as on a duplicate or out-of-range unit, keeps it as the
+/// evidence. Its errors are case failures, never guest verdicts.
+fn measure_stacks(
+    image: &Image,
+    boot: &Boot,
+    workspace: &Path,
+    log: &Path,
+    qmp_path: &Path,
+) -> Result<memory::Measurement> {
+    let stacks = memory::stacks(boot, workspace)?;
+    let stream =
+        UnixStream::connect(qmp_path).with_context(|| format!("connecting to {}", qmp_path.display()))?;
+    stream.set_read_timeout(Some(Duration::from_secs(60)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(60)))?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut writer = stream;
+    let mut greeting = String::new();
+    reader.read_line(&mut greeting)?;
+    if !greeting.contains("\"QMP\"") {
+        bail!("QMP did not greet the bench");
+    }
+    qmp_command(&mut reader, &mut writer, json!({"execute":"qmp_capabilities"}))?;
+    qmp_command(&mut reader, &mut writer, json!({"execute":"stop"}))?;
+    let dump = log.with_extension("ram");
+    let bytes = u64::from(image.memory_mib) * 1024 * 1024;
+    let result = (|| {
+        qmp_command(
+            &mut reader,
+            &mut writer,
+            json!({"execute":"pmemsave", "arguments":{
+                "val": 0x8000_0000u64, "size": bytes, "filename": dump.display().to_string()
+            }}),
+        )?;
+        let file = std::fs::File::open(&dump).with_context(|| format!("opening {}", dump.display()))?;
+        memory::scan(BufReader::new(file), bytes, &stacks)
+    })();
+    if result.is_ok() {
+        std::fs::remove_file(&dump).ok();
+    }
+    result
+}
+
+/// Where QEMU listens for QMP: a Unix socket's path must be under 108 bytes, which a run
+/// directory deep in a worktree can pass, so it goes in the temporary directory, named for this
+/// bench and the boot.
+fn qmp_socket() -> PathBuf {
+    static BOOTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let boot = BOOTS.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("redoubt-qmp-{}-{boot}.sock", std::process::id()))
+}
+
+/// QMP may send asynchronous events between a command and its reply; only `return` or `error`
+/// answers the command.
+fn qmp_command(reader: &mut BufReader<UnixStream>, writer: &mut UnixStream, command: Value) -> Result<()> {
+    writeln!(writer, "{command}")?;
+    writer.flush()?;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 {
+            bail!("QMP closed before replying to {command}");
+        }
+        let reply: Value = serde_json::from_str(&line).context("QMP reply is not JSON")?;
+        if let Some(error) = reply.get("error") {
+            bail!("QMP {command}: {error}");
+        }
+        if reply.get("return").is_some() {
+            return Ok(());
+        }
+    }
 }
 
 /// Run the case's SSH sessions while still watching the console, so that a panic or the guest
@@ -724,6 +830,14 @@ mod tests {
         }
         let why = probe("qemu-system-no-such-width", &[], "").expect_err("a missing binary");
         assert!(why.starts_with("`qemu-system-no-such-width` could not be run: "), "{why}");
+    }
+
+    /// Each boot's QMP socket is its own, and short enough to bind wherever the run directory is.
+    #[test]
+    fn a_qmp_socket_path_binds() {
+        let (a, b) = (qmp_socket(), qmp_socket());
+        assert_ne!(a, b);
+        assert!(a.as_os_str().len() < 108, "{}", a.display());
     }
 
     fn modern(args: &[String]) -> usize { args.windows(2).filter(|w| w == &MODERN_VIRTIO).count() }

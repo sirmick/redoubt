@@ -20,6 +20,10 @@ redoubt-blkd = { path = "../../servers/blkd" }                           # a cas
 redoubt-fsd = { path = "../../servers/fsd" }                             # a disk recipe's volumes, packed by fsd's own code
 sha2 = { version = "0.11", default-features = false }                    # the userland disk's object names (userland.rs)
 
+stub = { path = "../../stub" } # the largest launched stack
+redoubt-client = { path = "../../libs/client" } # the launcher's default stack size and paint format
+redoubt-sys = { path = "../../libs/sys" } # the shared page size
+
 [dev-dependencies]
 # The oracle's own evidence (sched_oracle.rs): traces from the executable model, with its tie
 # rules broken on purpose, must be rejected.
