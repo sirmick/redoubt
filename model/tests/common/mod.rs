@@ -1,4 +1,4 @@
-//! The property-test runner shared by the test files: runs a family's seeds on every core,
+//! The property-test runner shared by the test files: runs a family's seeds on several threads,
 //! turns a panic into a failure (I14), and reports a kernel failure as a shrunk trace.
 
 #![allow(dead_code)]
@@ -34,10 +34,29 @@ pub fn sequences(default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-/// Run seeds `0..n` of `f` on all cores. Returns the failure with the lowest seed found (the
-/// search stops early once one is found), counting a panic as a failure of I14.
+/// The threads `run` spawns. A bound on cargo's test threads is a bound on the whole binary, so:
+/// `MODEL_THREADS` if set (a positive integer, or the test fails naming it); else 1 if
+/// `RUST_TEST_THREADS` is set, so the binary runs cargo's count of threads and no more; else one
+/// per core, for an unbounded run.
+fn threads() -> u64 {
+    if let Ok(s) = std::env::var("MODEL_THREADS") {
+        // Said before the panic: `quiet_panics` silences the panic's own message.
+        return s.parse().ok().filter(|&n| n > 0).unwrap_or_else(|| {
+            let why = format!("MODEL_THREADS must be a positive integer, not {s:?}");
+            eprintln!("{why}");
+            panic!("{why}")
+        });
+    }
+    if std::env::var_os("RUST_TEST_THREADS").is_some() {
+        return 1;
+    }
+    std::thread::available_parallelism().map_or(4, |x| x.get()) as u64
+}
+
+/// Run seeds `0..n` of `f` on `threads()` threads. Returns the failure with the lowest seed found
+/// (the search stops early once one is found), counting a panic as a failure of I14.
 pub fn run(name: &'static str, f: Family, n: u64, mutation: Option<Mutation>) -> Option<Failure> {
-    let threads = std::thread::available_parallelism().map_or(4, |x| x.get()) as u64;
+    let threads = threads();
     let next = AtomicU64::new(0);
     let stop = AtomicBool::new(false);
     let found: Mutex<Option<Failure>> = Mutex::new(None);

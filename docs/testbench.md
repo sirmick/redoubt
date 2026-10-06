@@ -213,18 +213,15 @@ host can serve the kind, never a case's verdict. So a loopback case that asserts
 the 14) passes as a verdict, and a failure that is only its deadline is rerun alone. A case
 that measures with the host's clock is a verdict only alone: the rule asks that no other
 invocation and no build run beside it. Those are a `host-tests` case whose crates' tests assert
-a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd`, `redoubt-consoled` and
-`redoubt-model` do; `redoubt-ipd` and `testbench` only read the clock), which no tolerance
-would make load-proof; and a case whose expectation is a timeout (`bench-ssh-guest`, and
+a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
+`redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
+make load-proof; and a case whose expectation is a timeout (`bench-ssh-guest`, and
 `bench-ssh-loopback-deadlock`, whose `must_fail` is the mark it never gets). A
 `host-tests` case whose crates assert no bound measures nothing with the host's clock; it may
 run beside other work, and the rule asks that its test threads be bounded then
-(`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The model's property
-runs spawn a thread per host core inside
-each test (`model/tests/common/mod.rs`), on top of cargo's own parallelism: that case runs
-alone, and oversubscribes the host alone, until its runs take their thread count from the same
-bound. The kinds that boot nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets,
-the docs checker, the Elixir oracles) have no clock, and are verdicts anywhere.
+(`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The kinds that boot
+nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
+oracles) have no clock, and are verdicts anywhere.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by

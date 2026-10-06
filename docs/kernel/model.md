@@ -99,7 +99,7 @@ Status: built · partly tested: independence from the kernel's source and the em
 </details>
 
 A family is a function of one seed and an optional mutation. The runner
-(`model/tests/common/mod.rs`) runs seeds on every core, keeps the lowest failing seed, and
+(`model/tests/common/mod.rs`) runs seeds on several threads, keeps the lowest failing seed, and
 counts a panic as an I14 failure. A failing kernel sequence is shrunk to the steps that matter
 and printed as a trace. Rerunning the seed reproduces the failure exactly.
 
@@ -123,9 +123,11 @@ reached it.
 | `flood` | 20 scenarios of up to 10,000 senders | R2 (fair waiting), I11 (fair turns) and R4a (open calls) under a flood |
 
 A default run is 90,020 sequences; the bench case `model-host-tests` runs it.
-`REDOUBT_MODEL_SEQUENCES` sets the count per family. The test `million` runs 1,000,000
-sequences in each of the five non-flood families and 1,000 floods; it is marked ignored and runs
-only when asked for.
+`REDOUBT_MODEL_SEQUENCES` sets the count per family. A bound on cargo's test threads is a bound
+on the whole binary: each test's runner spawns `MODEL_THREADS` threads if it is set (a positive
+integer; anything else fails the test, naming it), else one if `RUST_TEST_THREADS` is set, else
+one per core. The test `million` runs 1,000,000 sequences in each of the five non-flood families
+and 1,000 floods; it is marked ignored and runs only when asked for.
 
 ### The checker
 
