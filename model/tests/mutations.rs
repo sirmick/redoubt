@@ -31,9 +31,17 @@ fn every_rule_has_a_mutation() {
 fn mutations_are_caught() {
     quiet_panics();
     let mut missed = Vec::new();
-    // `REDOUBT_MODEL_MUTATIONS=R10,Policy` checks only mutations whose name contains one of those.
+    // `REDOUBT_MODEL_MUTATIONS=R10,Policy` checks only mutations whose name contains one of those;
+    // a word that is a whole name takes that mutation alone (the bench's one job per mutation).
     let only = std::env::var("REDOUBT_MODEL_MUTATIONS").unwrap_or_default();
-    let wanted = |m: &Mutation| only.is_empty() || only.split(',').any(|s| format!("{m:?}").contains(s));
+    let names: Vec<String> = Mutation::ALL.iter().map(|m| format!("{m:?}")).collect();
+    let wanted = |m: &Mutation| {
+        let name = format!("{m:?}");
+        only.is_empty()
+            || only
+                .split(',')
+                .any(|s| if names.iter().any(|n| n == s) { name == s } else { name.contains(s) })
+    };
     for m in Mutation::ALL.into_iter().filter(wanted) {
         let mut caught = common::contracts::ipc_contracts(Some(m))
             .err()
@@ -51,9 +59,17 @@ fn mutations_are_caught() {
         // Try the rule's pressure family first, retaining every family and unchanged seed caps.
         let preferred = match m.rule() {
             "R12" => "scheduler_fairness",
-            // These breaks expose confidential work through shared state or audit reads.
-            // Try their paired-world oracle before spending full caps on unrelated families.
-            _ if matches!(m, Mutation::PolicySequentialIds | Mutation::PolicyAuditUnfiltered) => {
+            // These breaks expose confidential work through shared state, audit reads, another
+            // domain's records, or the order a server takes unlabelled calls in. Try their
+            // paired-world oracle before spending full caps on unrelated families.
+            _ if matches!(
+                m,
+                Mutation::PolicySequentialIds
+                    | Mutation::PolicyAuditUnfiltered
+                    | Mutation::PolicyAgentOtherSet
+                    | Mutation::R2OneCursor
+            ) =>
+            {
                 "steward_noninterference"
             }
             _ if m.is_policy() => "steward_policy",

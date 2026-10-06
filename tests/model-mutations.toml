@@ -1,0 +1,11 @@
+description = "The model's deliberate rule breaks (kernel/model.md, \"Mutations\"): each caught by some property, one job per mutation in release"
+kind = "host-tests"
+packages = ["redoubt-model"]
+tests = ["mutations"]
+profile = "release"
+# The few the steward families catch late search thousands of their seeds, up to a second a seed:
+# four threads apiece shorten them, and cost the quick ones nothing.
+fanout = { each = "value", env = "REDOUBT_MODEL_MUTATIONS", values = "cargo run --quiet --profile release -p redoubt-model --example mutations", cores = 4, vars = { MODEL_THREADS = "4" } }
+# PolicyDeclassifyUnfit's job is the longest, caught at steward_policy's seed 4709: 582 s on four
+# threads measured, and a third.
+timeout_secs = 776
