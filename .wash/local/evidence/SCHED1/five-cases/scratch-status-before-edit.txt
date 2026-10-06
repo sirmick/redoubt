@@ -1,0 +1,6 @@
+?? tests/diag-carve-inflation.toml
+?? tests/diag-debt-lift.toml
+?? tests/diag-large-weight.toml
+?? tests/diag-release.toml
+?? tests/diag-server-busy.toml
+?? tests/diag-walk.toml

@@ -1,0 +1,1 @@
+PASS  sched-carve-inflation [rv32, smp=1]   1.2s

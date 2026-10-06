@@ -1,0 +1,13 @@
+description = "SCRATCH, never committed: sched-ties without its forbid, so the trace ring dumps"
+arch = ["rv64"]
+whole_run = false
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-ties"]
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 120
+expect = ['^\[ties\] first runs', '^SCHED-TRACE-END \d+ dropped 0$']
+forbid = ['PROGRAM HALT']
+poweroff = true

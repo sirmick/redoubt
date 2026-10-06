@@ -1,0 +1,3 @@
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+FAIL  sched-cluster [rv64, smp=1]       16.8s  sched_oracle: cluster driver_wake positive-lead coverage [0, 0, 0, 0], total 0, needs >=25 and >=5 per offset
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-2344574-1791234070302434531

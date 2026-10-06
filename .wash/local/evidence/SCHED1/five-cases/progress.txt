@@ -1,0 +1,19 @@
+traced-large-weight rc=0
+traced-large-weight saved target/testbench/run-3834742-1791277159215020283/diag-large-weight-rv64-smp1.log
+traced-server-busy rc=0
+traced-server-busy saved target/testbench/run-3838676-1791277195105615996/diag-server-busy-rv64-smp1.log
+traced-carve-inflation rc=0
+traced-carve-inflation saved target/testbench/run-3845091-1791277392203340196/diag-carve-inflation-rv64-smp1.log
+traced-debt-lift rc=0
+traced-debt-lift saved target/testbench/run-3853543-1791277604994755734/diag-debt-lift-rv64-smp1.log
+walk-large-weight rc=0
+walk-large-weight saved target/testbench/run-3859918-1791277648098161610/diag-walk-rv64-smp1.log
+release-1ms-rv64 rc=0
+release-1ms-rv64 saved target/testbench/run-3869396-1791277834441890720/diag-release-rv64-smp1.log
+release-1ms-rv32 rc=0
+release-1ms-rv32 saved target/testbench/run-3870148-1791277835268336019/diag-release-rv32-smp1.log
+release-10ms-rv64 rc=0
+release-10ms-rv64 saved target/testbench/run-3870866-1791277836299372485/diag-release-rv64-smp1.log
+release-10ms-rv32 rc=0
+release-10ms-rv32 saved target/testbench/run-3871459-1791277839013571515/diag-release-rv32-smp1.log
+done

@@ -1,0 +1,143 @@
+diff --git a/kernel/src/sched.rs b/kernel/src/sched.rs
+index b337f2a25..5350f010f 100644
+--- a/kernel/src/sched.rs
++++ b/kernel/src/sched.rs
+@@ -849,7 +849,7 @@ pub mod trace {
+             for seq in 0..r.n {
+                 let (page, at) = (r.pages[seq / PER_PAGE], (seq % PER_PAGE) * 32);
+                 let w = |k: usize| crate::kframe::read(page, at + k * 8);
+-                println!("SCHED-TRACE {} {} {} {} {:x}", seq, w(1), w(3) as u8 as char, w(2), w(0));
++                println!("SCHED-TRACE {} {} {} {} {:x} {}", seq, w(1), w(3) as u8 as char, w(2), w(0), w(3) >> 8);
+             }
+             println!("SCHED-TRACE-END {} dropped {}", r.n, r.dropped);
+         });
+diff --git a/tools/testbench/src/sched_oracle.rs b/tools/testbench/src/sched_oracle.rs
+index b52e8ad33..f470a4e81 100644
+--- a/tools/testbench/src/sched_oracle.rs
++++ b/tools/testbench/src/sched_oracle.rs
+@@ -86,6 +86,8 @@ pub struct Record {
+     pub kind: char,
+     pub id: u64,
+     pub pass: u128,
++    /// The boot index of the hart that wrote it (0 on one hart; a sixth field the kernel prints).
++    pub hart: u64,
+ }
+ 
+ /// Where a queued budget ranks among those of equal pass: `(0, -entry)` for a wake, `(1, n)` for
+@@ -114,7 +116,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
+         }
+         let f: Vec<&str> = rest.split_whitespace().collect();
+         let bad = || format!("malformed record {line:?}");
+-        if f.len() != 5 {
++        if f.len() != 5 && f.len() != 6 {
+             return Err(bad());
+         }
+         let kind = f[2].chars().next().ok_or_else(bad)?;
+@@ -127,6 +129,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
+             kind,
+             id: f[3].parse().map_err(|_| bad())?,
+             pass: u128::from_str_radix(f[4], 16).map_err(|_| bad())?,
++            hart: f.get(5).map_or(Ok(0), |h| h.parse().map_err(|_| bad()))?,
+         });
+     }
+     let Some((n, dropped)) = end else {
+@@ -1704,6 +1707,11 @@ fn shares(log: &str) -> Result<Vec<Share<'_>>, String> {
+ /// or a share judges has the checked build's audit time inside it subtracted; R10's has none.
+ pub fn run(log: &str, args: &str) -> Result<String, String> {
+     let records = parse(log)?;
++    // R12's shares and the latency targets are judged on one hart until they are restated
++    // across harts (SMP2): a trace another hart wrote to is refused, not judged.
++    if let Some(r) = records.iter().find(|r| r.hart != 0) {
++        return Err(format!("record {}: written on hart {}; the oracle judges one-hart runs", r.seq, r.hart));
++    }
+     let mut sum = check(&records)?;
+     let samples = samples(log)?;
+     let n = sum.r10_us.len();
+@@ -2304,7 +2312,7 @@ mod tests {
+         let mut records = Vec::new();
+         let mut add = |kind: char, id: u64| {
+             let at = records.len() as u64;
+-            records.push(Record { seq: at, entry: at, kind, id, pass: 1 });
++            records.push(Record { seq: at, entry: at, kind, id, pass: 1, hart: 0 });
+         };
+         for child in 0..19 {
+             let id = 100 + child;
+@@ -2403,7 +2411,7 @@ mod tests {
+     fn cluster_go_protocol_distinguishes_readiness_from_window_and_release() {
+         fn add(records: &mut Vec<Record>, kind: char, id: u64) -> usize {
+             let at = records.len();
+-            records.push(Record { seq: at as u64, entry: at as u64, kind, id, pass: 1 });
++            records.push(Record { seq: at as u64, entry: at as u64, kind, id, pass: 1, hart: 0 });
+             at
+         }
+         fn mapped(records: &[Record]) -> Vec<(usize, u64)> {
+@@ -2485,6 +2493,7 @@ mod tests {
+                 kind,
+                 id: 17,
+                 pass: 1,
++                hart: 0,
+             });
+         };
+         push('W', &mut records); // The already validated go wake.
+@@ -2503,7 +2512,7 @@ mod tests {
+         immediate.remove(1 + 4 * 3 + 1); // No W for sample 4; later report W remains.
+         assert!(cluster_waits_before(&immediate, 17, 0, boundary - 1).is_err());
+         let mut extra = records.clone();
+-        extra.insert(4, Record { seq: 0, entry: 0, kind: 'W', id: 17, pass: 1 });
++        extra.insert(4, Record { seq: 0, entry: 0, kind: 'W', id: 17, pass: 1, hart: 0 });
+         assert!(cluster_waits_before(&extra, 17, 0, boundary + 1).is_err());
+         let mut reordered = records;
+         reordered.swap(1, 2);
+@@ -2512,7 +2521,7 @@ mod tests {
+ 
+     #[test]
+     fn cluster_fences_reject_missing_duplicate_and_wrong_callers() {
+-        let rec = |kind, id, time| Record { seq: 0, entry: 0, kind, id, pass: time };
++        let rec = |kind, id, time| Record { seq: 0, entry: 0, kind, id, pass: time, hart: 0 };
+         let good = vec![
+             rec('W', 17, 0),
+             rec('K', 17, 0),
+@@ -2559,7 +2568,7 @@ mod tests {
+             events
+                 .iter()
+                 .enumerate()
+-                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
++                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass, hart: 0 })
+                 .collect::<Vec<_>>()
+         };
+         assert!(check_wake_no_preempt(&records(&events), 1).is_ok());
+@@ -2588,7 +2597,7 @@ mod tests {
+             events
+                 .iter()
+                 .enumerate()
+-                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
++                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass, hart: 0 })
+                 .collect::<Vec<_>>()
+         };
+         assert!(check_carve_return("CARVE-OBS 900 950 12345\n", &records(&events)).is_ok());
+@@ -3104,6 +3113,16 @@ mod tests {
+         assert!(run(&log, "stale_waits_in=nobody").is_err_and(|e| e.contains("no such share")));
+     }
+ 
++    #[test]
++    fn a_record_carries_its_hart_and_a_trace_from_another_hart_is_not_judged() {
++        let five = "SCHED-TRACE 0 1 W 1 5\nSCHED-TRACE 1 1 K 1 5\nSCHED-TRACE-END 2 dropped 0\n";
++        let six = "SCHED-TRACE 0 1 W 1 5 0\nSCHED-TRACE 1 1 K 1 5 1\nSCHED-TRACE-END 2 dropped 0\n";
++        assert_eq!(parse(five).unwrap()[1].hart, 0);
++        assert_eq!(parse(six).unwrap()[1].hart, 1);
++        let refused = run(six, "").unwrap_err();
++        assert!(refused.contains("judges one-hart runs"), "{refused}");
++    }
++
+     #[test]
+     fn a_broken_trace_is_rejected() {
+         let one = "SCHED-TRACE 0 1 W 1 5\nSCHED-TRACE 1 1 K 1 5\n";
+@@ -3179,7 +3198,7 @@ mod model {
+         };
+         let mut push = |out: &mut Vec<Record>, entry: u64, kind: char, id: u64, pass: u128| {
+             let seq = out.len() as u64;
+-            out.push(Record { seq, entry, kind, id, pass });
++            out.push(Record { seq, entry, kind, id, pass, hart: 0 });
+         };
+         // What changed between two snapshots, as records; `requeued` names the budget a deschedule
+         // requeued, if any.

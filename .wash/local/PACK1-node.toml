@@ -1,0 +1,9 @@
+# plan_set node for PACK1 (owner's text: .wash/local/PACK1-owner.md)
+[[node]]
+id = "PACK1"
+parent = "M1"
+template = "package"
+state = "todo"
+needs = ["BOOT1"]
+title = "The system's boot modules in one pack: beamlet reads them in one sequential read, not 96 lookups"
+body = """Owner's package (2026-10-06; text: .wash/local/PACK1-owner.md). Tier A (beamlet's platform, mkimage, the bench), size S. BOOT1's profile: 1,016 s guest to the prompt verified (535 s unverified), 99 % in the VM's 96 lazy module loads: 77,710 block reads of 673 distinct blocks, 97 % re-walking the root directory. mkimage emits one pack of the boot module set (raw .beam bytes behind an index of name, offset, length; deterministic, sorted by name); it lives inside the signed root (verified volume entry or bootfsd bundle entry: the Architect picks; trust unchanged, R75 holds, never written at run time); beamlet reads it once at VM start in one read into memory charged to the VM and locate_module consults it before the code path; a module not in the pack loads per file as today; no change to decoded representation, loader checks or lazy-load semantics; the pack's bytes released once decoded unless keeping them is shown cheaper (BEAM6's second-copy question: coordinate). Per VM: no page sharing, no steward cache, no snapshot, no per-profile pack (decided elsewhere; the docs say so). Orthogonal to EROFS1; rebases onto whichever merges first. Verdict: boot-profile and boot-profile-unverified with the pack, numbers and 9P/block counts on beamlet.md beside the baseline; target under 30 s guest verified on littlefs (floor ~16 s; exact figure at checkpoint 1); a module outside the pack still loads; a bad pack entry fails the VM's start cleanly; beamlet-footprint's scan rises by at most the pack's size. Checkpoint 1 after the placement decision with the measured floor; checkpoint 2 only if the target is missed."""

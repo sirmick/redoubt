@@ -1,0 +1,1 @@
+PASS  sched-large-weight [rv32, smp=1]   1.0s

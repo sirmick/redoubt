@@ -76,7 +76,17 @@ latency targets on several harts, and running every case at 2 and 4 harts are SM
      shared between harts.
 4. **One big kernel lock.**
    - A ticket lock, so it is FIFO: a hart waits behind at most `MAX_HARTS` - 1 kernel sections,
-     never for ever.
+     never for ever. Two `AtomicU32` counters, wrapping: `next` and `serving`; acquire is a
+     Relaxed `fetch_add` on `next`, then a spin until `serving` reads the ticket (Acquire);
+     release is `serving + 1` (Release). Not reentrant; a `with(f)` API as the spike's
+     `SpinLock` has, with its SAFETY argument updated. Leave one marked hook where a Zawrs
+     `wrs.nto` wait goes later; emit no Zawrs now. Why FIFO is a rule, not a nicety: test-and-set
+     is unfair, so a hart can be starved of kernel entry indefinitely, which lets one budget's
+     harts gain share over another's; FIFO bounds the wait. State it in scheduling.md under R12
+     (page line below).
+   - Optional, a debug build only: a counter of `time` ticks spent holding the lock per call
+     site, reported in the review as hold-time evidence. Read the raw counter
+     (`riscv::register::time::read64`), never `now_ticks`: `BOOT_TICKS` is a `KernelCell`.
    - Every spin (for the lock, and the shootdown's wait for acknowledgements) runs the pause hint
      each time round: `core::hint::spin_loop()` with `zihintpause` enabled for the kernel's
      targets. Its encoding is a FENCE hint, which a core without the extension runs as a no-op.
@@ -182,6 +192,12 @@ latency targets on several harts, and running every case at 2 and 4 harts are SM
    - Every hart reaches the scheduler and runs user threads: one spinner per hart, each
      reporting its hart.
    - It replaces `smp-spike`.
+   - The lock's FIFO bound: in a checked build each acquisition records `ticket - serving` as
+     read at its draw, and the case fails if any exceeds `harts - 1` (a hart that has drawn a
+     ticket is passed by no other hart twice; strict alternation at 2 harts). A recorded
+     negative, a test-only feature that swaps in the old test-and-set, must fail. No `loom`
+     test: the kernel has no host tests (kernel/Cargo.toml), and moving the lock into a `libs/`
+     crate for one is not worth a TCB path; say so in the report.
 2. **`smp-evict`** (the shootdown at a destruction), at 2 harts, with `icount` and without.
    - A spinner in budget B writes its own page without end. Another hart destroys B, then a
      checker in a new budget maps pages until it gets B's freed frame (or many pages), and
@@ -211,6 +227,11 @@ pages), ask me rather than guess.
   runnable, each gets CPU in proportion to its weight.", add:
   > On several harts each hart picks the lowest-pass budget not running on another, so a budget
   > runs on at most one hart at a time and its stride state has one runner.
+- **scheduling.md**, R12, after the paragraph beginning "A system call's kernel time is bounded",
+  add:
+  > Kernel entry is fair across harts: the kernel lock is FIFO, so a hart waits behind at most
+  > `MAX_HARTS` - 1 kernel sections. A test-and-set lock could starve a hart of kernel entry for
+  > ever, and with it the budget running there (`bench:smp-boot`, its FIFO check).
 - **scheduling.md**, the residual "Measured on QEMU, on one hart": "The queue and its accounting
   drive one hart until M2 (usable shell)" becomes "The queue and its accounting are judged on
   one hart until R12 is restated across harts".
@@ -276,7 +297,109 @@ pages), ask me rather than guess.
 Report each command with its exit code. The report lists what was deleted (the `smp` feature,
 the spike and the per-cell spinlock).
 
+## Not here
+
+Per-hart free-frame magazines, with frames zeroed as they enter a magazine, are SMP4 (needs
+this package: its per-hart block and `--smp 2` bench). Do not split frame zeroing out of the
+lock here, and do not add per-hart state beyond rule 3.
+
 ## Checkpoint
 
 After step 1 (every hart running the scheduler at 2 harts, `smp-boot` green on one width), send
 one progress line with the branch.
+
+## 2026-10-05: the ticket lock is a rule, and the cell.rs comment (architect-15)
+
+The owner's hardware sketch (`.wash/local/fpga-platform-sketch-2026-10-05.md`) settles the big
+lock as the FIFO ticket lock rule 4 already describes. Two changes to what you write:
+
+- **scheduling.md.** The R12 page line above ("Kernel entry is fair across harts...") is
+  replaced: the rule now has its own section, **R78 (fair kernel entry)**, drafted after R12's
+  section as `planned · M2 (usable shell)` with one `**Open:**` line, and a planned row in
+  `docs/SECURITY.md`. When the lock is built, you turn R78's status to `built · tested` with
+  `bench:smp-boot` (its FIFO check: two harts entering the kernel in a loop are served in turn,
+  and no hart waits behind more than `MAX_HARTS` - 1 sections), drop the `**Open:**` line, and
+  fill the register row's code column (`kernel/src/cell.rs`). The mutation named on the page,
+  `sched-test-and-set-entry`, is a kernel Cargo feature that swaps the ticket lock for test-and-set
+  (the pattern of `sched-inject-tie-fault`), which `smp-boot`'s FIFO check must catch in a
+  recorded negative run; it is named in prose, not as a `mutation:` test, because the docs
+  checker reads `mutation:` names from `model/src/mutation.rs`.
+- **`kernel/src/cell.rs`.** Rewrite the doc comment's multi-hart paragraph: a token owned by the
+  big-lock guard (GhostCell / `LCell`-style, so every global becomes a token-guarded cell and a
+  compile-time lock order exists if the lock is ever split) is the *intended* multi-hart design,
+  deferred until lock hold time and contention are measured, not rejected. Today's text says the
+  branded-token approach "gives nothing for the multi-hart future"; that sentence goes. Describe
+  the `smp` form as the ticket lock, not "a minimal test-and-set spinlock".
+
+Note on the "Not here" section: it names magazines as "SMP4"; no such node exists. Zeroing
+outside the lock and per-hart magazines are SMP3's (m2-usable-shell.md, "Several harts", steps
+5 and 6). Nothing else in this brief changes.
+
+Editor's notes on the drafts (architect-15, same day): the mutation is the kebab-case kernel
+feature `sched-test-and-set-entry` (debug-only, like `sched-inject-tie-fault`), listed in
+scheduling.md's "Failure and restart" paragraph of diagnostic features. `MAX_HARTS` is the name
+R78 and the register use, as rule 1 already defines it (8).
+
+## 2026-10-05: rulings from the early checkpoint (architect-15, QA `SMP1-per-hart-runner`)
+
+**Q1, the runner: (a).** `libs/stride` is yours for this. `Queue::reconcile` (lib.rs:289) exempts
+one `running: Option<B>` from leaving on `lost`; with several harts a budget running on another
+hart whose runnable set is empty (its one thread is the one running) would be dequeued by this
+hart's reconcile and never picked again until a wake: an R12 hole no swapping of `cur`/`pending`
+at the lock can close, so (b) is refused. The shape:
+- `Queue::reconcile` takes the running set (a predicate `running: impl Fn(B) -> bool`, or the
+  per-hart runners' `cur`s); `Queue::pick` takes an exclusion predicate (running on another hart),
+  the one predicate rule 6 names, which SMP3 replaces.
+- `Cpu<B, N>` stays as the one-hart wrapper over the queue, passing its own `cur`, so the model
+  and `the_crate_and_the_model_agree` stand unchanged. Beside it a `Harts<B, N, H>` (or the kernel's
+  own array) holds one `Runner { cur, pending }` per boot index with `accrue`, `bill`, `settle`,
+  `switch` and `destroy` as `Cpu` has them, each touching only its hart's runner; `destroy` clears
+  the runner of whichever hart runs the child.
+- Stride unit tests: a budget running on hart B stays queued through hart A's reconcile that
+  lists it as lost; a pick on hart A skips budgets running on other harts; a switch on A leaves
+  B's pending untouched; `MIN_CHARGE` applies per runner.
+- The model gains no running set here. SMP2 owns R12 across harts and gets it: the model's
+  `Scheduler.current` becomes per hart, reconcile over the set, pick with the exclusion, and the
+  differential drives H harts against `Harts`. Say so in your report's follow-ups; do not start it.
+
+**Q2, the context pointer and the kernel's saved context: allowed, into the per-hart block.** The
+block (rule 3) holds the address of the running thread's saved context (what header slot 1 held),
+the hart's current PID and TID (`current_pid` reads the running hart's), and the hart's own saved
+context for when it runs the kernel's thread (what PID 1's "no thread" area held). Header slot 1,
+the scratch word and the "no thread" area go; the block is kernel data mapped in every address
+space, reached through `sscratch`. Page lines (memory-layout.md is yours for these two
+paragraphs; the status line of "`satp`" keeps "one hart is argued from the code" until SMP2):
+- **memory-layout.md**, "Per-process kernel data", first paragraph: "It holds the trap handler's
+  scratch word, the address of the running thread's saved context in slot 1, the process's
+  bookkeeping and thread masks, a context-sized "no thread" area, and the table from TID to each
+  thread's IPC page" becomes "It holds the process's bookkeeping and thread masks, and the table
+  from TID to each thread's IPC page".
+- Same section, second paragraph, from "Because every address space maps its own header": "The
+  trap handler finds the running thread's context through the hart's block, reached by `sscratch`
+  and mapped in every address space: it holds the address of the running thread's saved context,
+  the hart's current PID and thread, and the hart's own saved context for when it runs the
+  kernel's thread (PID 1, which has no budget and no IPC pages). Switching thread on a hart
+  writes that hart's block, never another's."
+- **memory-layout.md**, "`satp`": "The kernel's one record of the running PID is `current_pid`,
+  set whenever it switches address space (`set_current_pid`)" becomes "Each hart's record of the
+  PID it runs is in its per-hart block, read as `current_pid` and set whenever that hart switches
+  address space (`set_current_pid`)."
+
+**Q3, `--smp`:** a per-case `smp = [2]` in the case file is the step-1 form; the `--smp N` flag
+touches B7's `main.rs`, so ask B7's owner before adding it, as the hotspot says.
+
+**Owned paths, added:** `libs/stride/src/lib.rs` and `libs/stride/tests/**` (the running set, the
+exclusion, `Harts`; the one-runner `Cpu` API and the differential unchanged);
+`docs/kernel/memory-layout.md`, the two paragraphs above. **scheduling.md** "One flat stride
+queue" page line gains one sentence after the pick sentence: "A reconcile keeps a budget queued
+while any hart runs it."
+
+**Q4 (architect-15, same thread): per-hart stacks are (a), a `HART_STACKS` window with guard
+pages.** In `libs/layout`, both widths: `MAX_HARTS` slots of 18 pages (guard, 8 kernel-stack
+pages, guard, 8 trap-stack pages), compile-time asserts that the window sits inside the kernel
+area clear of the image, the PLIC and DMA windows and the process area, and fits Sv32's 1 MiB;
+`KERNEL_STACK_TOP` and `TRAP_STACK_TOP` become slot 0's tops, so the loader and the boot hart are
+unchanged and there is one definition; the kernel backs slots 1..n as it starts harts, never the
+guards. Page lines: memory-layout.md's two address maps replace the two stack rows with one
+"hart stacks" row each; `.wash/local/hardware-bounds.md` gains the `HART_STACKS` row. Owned paths
+gain `libs/layout` for these constants and asserts.

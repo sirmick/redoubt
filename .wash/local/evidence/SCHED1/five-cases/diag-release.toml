@@ -1,0 +1,11 @@
+description = "SCRATCH, never committed: sched-large-weight in a release build, for the per-switch cost"
+arch = ["rv64", "rv32"]
+whole_run = false
+kind = "boot"
+debug_assertions = false
+icount = "shift=3,sleep=off"
+programs = ["sched-large-weight"]
+timeout_secs = 600
+expect = ['^\[large-weight\] (ok|FAIL): the weight-1000 server got']
+forbid = ['PROGRAM HALT']
+poweroff = true

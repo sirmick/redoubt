@@ -1,0 +1,881 @@
+# wash-plan: written by Wash as the plan changes.
+# Owner's change of 2026-10-05 (SMP1 amended, SMP4 added), to load with plan_set {"from": ".wash/local/plan-2026-10-05-smp4.toml"} when the next workspace opens.
+# Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
+
+revision = 30
+legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
+
+[[node]]
+  id = "BL1"
+  title = "beamlet: the code path's search order"
+  template = "package"
+  parent = "M1"
+  needs = ["HIST1", "FMT1"]
+  body = "Closes docs/todo/module-search-order.md (deleted in the package); rule on docs/userland/packages.md#profiles-and-upgrades, built on docs/userland/beamlet.md#the-platform-boundary. Tier B since the owner's decision of 2026-09-29 (SWARM 23c497a38: the VM's interpreter and loader are one trust domain); it was reviewed by the full Tier A panel anyway."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "HIST1"
+  title = "Clean git history (reword and fold)"
+  template = "package"
+  parent = "M1"
+  body = ".wash/history-rewrite.md: the one rewrite of the history, and how to check it. Force-pushed; origin/main at e3141503b."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "IPC1"
+  title = "IPC call completion: one outcome per call"
+  template = "package"
+  parent = "M1"
+  body = "Built in cf445aa0c, accepted c25fdbaa6: docs/kernel/ipc.md#r13-one-outcome-per-call, docs/kernel/memory.md (a loan within one process). Cross-hart races: docs/todo/kernel-attack-gaps.md; model replay: node model-replay."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K7"
+  title = "Kernel follow-ups"
+  template = "package"
+  parent = "M1"
+  needs = ["FMT1"]
+  body = "docs/plan/m1-separation.md#remaining-work, the Kernel bullet: every docs/todo/ page it links, plus docs/todo/receive-output-late-invalid.md (rule: docs/kernel/ipc.md#a-bad-record-takes-nothing) and the IPC1 review's note (a dangling comment at kernel/src/arch/riscv/mem.rs map_into_with). Tier A."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "M1"
+  title = "M1 (separation and containment)"
+  template = "milestone"
+  body = "docs/plan/m1-separation.md"
+  state = "active"
+  revision = 2
+
+[[node]]
+  id = "M2"
+  title = "M2 (usable shell)"
+  template = "milestone"
+  needs = ["M1"]
+  body = "docs/plan/m2-usable-shell.md"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "M3"
+  title = "M3 (files in and out)"
+  template = "milestone"
+  needs = ["M2"]
+  body = "docs/plan/m3-files.md"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "M4"
+  title = "M4 (self-hosted development)"
+  template = "milestone"
+  needs = ["M3"]
+  body = "docs/plan/m4-self-hosted.md"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "M5"
+  title = "M5 (persist, install, share)"
+  template = "milestone"
+  needs = ["M4"]
+  body = "docs/plan/m5-persist.md"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "S2"
+  title = "Server follow-ups"
+  template = "package"
+  parent = "M1"
+  needs = ["HIST1", "FMT1"]
+  body = "docs/plan/m1-separation.md#remaining-work: the Servers bullet."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "agent-suite"
+  title = "The agent and the attack suite"
+  template = "step"
+  parent = "M1"
+  needs = ["sshd"]
+  body = "docs/userland/agents.md; docs/plan/m1-separation.md#attack-suite"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "beamlet-redoubt"
+  title = "beamlet on Redoubt; the shell on the console"
+  template = "step"
+  parent = "M1"
+  needs = ["init", "API1"]
+  body = "docs/userland/beamlet.md#beamlet-on-redoubt; docs/userland/shell.md#the-shell-in-a-session (Redoubt.Shell, not IEx). Packages BEAM1-BEAM5 under it; cut by architect-10, BEAM1's brief at .wash/local/BEAM1-implementer.md."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "fsd"
+  title = "The file server"
+  template = "step"
+  parent = "M1"
+  needs = ["init", "FSD3"]
+  body = "docs/servers/fsd.md (packages FSD1, FSD2, FSD3); docs/userland/files.md#files-over-9p (its beamlet half is beamlet-redoubt's)"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "gate"
+  title = "Kernel containment gate"
+  template = "step"
+  parent = "M1"
+  needs = ["K7", "K8", "S3", "BL1", "GATE1"]
+  body = "docs/plan/m1-separation.md#remaining-work: A kernel containment gate."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "host-shell-scripts"
+  title = "Does tenet 3 reach the build host?"
+  template = "note"
+  parent = "M1"
+  body = "Owner decision 2026-09-27: the build host may run shell scripts. Written on docs/TENETS.md#3-rust-and-assembly-only-where-rust-cannot-reach."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "init"
+  title = "init and the boot manifest"
+  template = "step"
+  parent = "M1"
+  needs = ["gate", "API1", "INIT4"]
+  body = "docs/plan/m1-separation.md#remaining-work; docs/servers/init.md"
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "model-replay"
+  title = "The model on the real kernel"
+  template = "step"
+  parent = "M1"
+  needs = ["agent-suite"]
+  body = "docs/kernel/model.md#replaying-traces-on-the-real-kernel; docs/todo/abi-model-disagreements.md"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "sshd"
+  title = "sshd"
+  template = "step"
+  parent = "M1"
+  needs = ["steward", "SSH1"]
+  body = "docs/servers/sshd.md (the box's platform, approve@box; the core is SSH1's); docs/userland/sessions.md"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "steward"
+  title = "The steward"
+  template = "step"
+  parent = "M1"
+  needs = ["fsd", "beamlet-redoubt", "STEWARD1"]
+  body = "docs/servers/steward.md; docs/todo/budget-destroy-cost.md (must restore the R10 30 ms and deadline-notice 40 ms targets relaxed in K7); docs/kernel/scheduling.md#responsiveness"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "FMT1"
+  title = "The tree formatted once with nightly rustfmt, and kept so"
+  template = "package"
+  parent = "M1"
+  needs = ["HIST1"]
+  body = "docs/todo/rustfmt-nightly-drift.md. Owner decision 2026-09-27: reformat once now, before K7, S2 and BL1 branch; a bench case keeps it. Tooling only: implementer plus the editor."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "B2"
+  title = "Bench and tools follow-ups"
+  template = "package"
+  parent = "M1"
+  needs = ["FMT1"]
+  body = "docs/plan/m1-separation.md#remaining-work, the bench and its tools bullet (bench-load-flakes, programs-build-rerun, ssh-loopback-host, write-only-mutation-split, miri-vendored-unsafe, doccheck-stale-paths, size-budget), the documentation switch-over (docs/todo/verdict-strings.md) and docs/todo/sched-latency-target.md. First goal: a green whole bench. Tier A (the bench)."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K8"
+  title = "Kernel and bench follow-ups after K7"
+  template = "package"
+  parent = "M1"
+  needs = ["K7"]
+  body = "Closed so far on wp-k8 (base fbc53ff4a): workspace-host-tests; size budget leaves out #[cfg(test)]; unsafe-budget reason lines on the merge-base range (unsafe-ratchet-reason); sched-rv64-decision-wake closed as a residual with new targets (p50 25, p99 95, lease end 134). Step 5, bench-load-flakes: wait fixes, then the loaded proof run, which waits on the owner's choice of scope. Implementer handed off; a fresh one continues. Rebase onto redoubt (SSH1, API1 merged) before the merge run. Tier A (the bench)."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "S3"
+  title = "Runtime follow-ups: no raw paths from safe code"
+  template = "package"
+  parent = "M1"
+  needs = ["S2"]
+  body = "Closes docs/todo/raw-abi-syscall.md, raw-thread-create.md, request-raw-reply.md (deleted in the package); claims on docs/userland/native.md#redoubt-rt-the-native-runtime and docs/servers/serving.md#authority. Tier A. Reviewed: red OK with notes (2 rounds), simplifier OK with notes, editor OK; whole bench green on c7ff5d6d8 (6 ssh-loopback skips). Rebasing onto the owner's docs commit f530a5f0c, then merged."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "SSH1"
+  title = "sshd's core on sunset, and its host platform for the bench"
+  template = "package"
+  parent = "M1"
+  body = "Builds docs/servers/sshd.md#the-core-and-its-platforms (core and host platform; the box platform stays planned for the sshd step), docs/testbench.md#against-redoubts-sshd and #patched-crates, vendor/README.md; narrows docs/todo/ssh-loopback-host.md to the OpenSSH reference case. Tier A, L. All steps done at 6c164962b: whole bench 207 PASS, 1 SKIP (the OpenSSH reference case, SELinux); the loopback self-checks now run on Redoubt's own sshd. Networked provenance.sh run by the orchestrator: every vendored crate is the published one. Review round 2 (red, simplifier, editor) in progress; then fold the patch commits into 59cf994a3, rebase and merge."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "smp"
+  title = "Several harts"
+  template = "step"
+  parent = "M2"
+  body = "docs/plan/m2-usable-shell.md#several-harts"
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "API1"
+  title = "The client library: one API for every userland"
+  template = "package"
+  parent = "M1"
+  body = "docs/userland/native.md#the-client-library; docs/userland/beamlet.md#beamlet-on-redoubt and #natives (the adapters' shape); docs/plan/m1-separation.md#remaining-work. Tier A, size M."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "GATE1"
+  title = "The kernel containment gate: one composite boot"
+  template = "package"
+  parent = "M1"
+  needs = ["K8", "K9", "K10", "K18"]
+  body = "Builds docs/kernel/README.md#containment (bench:kernel-containment). PARKED 2026-10-02 on a kernel finding: wp-gate1 e9ecc5ea5 (a WIP on the two-commit fold 555aeb6a5; the review's BLOCK findings applied: per-lease badges for held calls and progress, strict counts, fail bits, nine leases of each kind, two leases live at a deadline end as the page requires). With two full leases live, the deadline notice misses: net p99 57.1 ms rv64, 48.1 ms rv32 against 40 (every protocol row ok). The earlier green sweep (32/32, seed 4 pinned) was with one lease live at a deadline end. QA GATE1-notice-two-leases (Architect) decides the kernel package; GATE1 resumes on its merge: the sweep again, The run's per-width seed sentence, the whole bench, the fold, the red team's re-review. Detail: .wash/local/GATE1-miss.md, GATE1-progress.md, GATE1-sweep.md. INIT1 (accepted) waits on GATE1's merge. Tier A, size M."
+  state = "done"
+  revision = 2
+  overrides = ["2026-09-30: started by Orchestrator before K10 (active): Owner asked to run more at once (2026-09-30). K10 is in its final fold and bench; this step only rebases and measures GATE1 on a scratch branch with wp-k10, and wp-gate1 rebases onto K10's merge before any acceptance."]
+
+[[node]]
+  id = "INIT1"
+  title = "The loader loads only the kernel and init; kernel cases start from a tester in init's place"
+  template = "package"
+  parent = "M1"
+  needs = ["GATE1", "API1"]
+  body = "Builds docs/kernel/boot.md#the-loader-loads-only-the-kernel-and-init (the bundle mapped into init at 0x2000_0000, a0/a1), docs/kernel/devices.md#device_info (the 27th call), docs/kernel/budgets.md#the-tree-from-the-boot-manifest (root keeps init's charges plus INIT_PAGES), docs/testbench.md#starting-a-cases-programs (the tester in init's place; each program its own budget in slot 3, named budgets from 4) and #data-entries-for-init. Brief: .wash/local/INIT1-implementer.md. Design: QA INIT1-design, INIT1-root-pages (8074ecf59, 4ace1722d), INIT1-own-budget (908fb83c4). PARKED 2026-10-01: wp-init1 tip d0e385529; D1 done (device_info, device-info-attack, the model's check as a WIP commit to land last), D2 built (bundle-mapped passes both widths; IniE, grants, the boot and log endpoints gone), D3 nearly done (the tester starts programs from `programs`; TAKE_GIFTS gone; the 17 single-program cases moved behind the tester or kept in init's place with reasons, passing per case on both widths), D4 drafted, not run. Left: D4, the whole bench on the tip, the fold into clean commits (no commit leaving the bench red if possible, the model commit last), rebase onto GATE1's merge, review by the full panel. Three implementers; handoffs in .wash/local/INIT1-progress.md ('Handoff from init1-implementer-2' and '-3'). Tier A (loader, kernel ABI, bench builder), size L."
+  state = "done"
+  revision = 2
+  overrides = ["2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, confirming run), and only K15's bookkeeping is left; INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program. wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the checked build's audits excluded (QA GATE1-notice-late, resolved, dd862a390); only K15 is left before it is accepted. INIT1 touches the loader, the kernel ABI and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before any acceptance.", "2026-10-01: started by Orchestrator before GATE1 (reported): Owner asked to run more at once (2026-10-01). GATE1's gate passes with the audits excluded (QA GATE1-notice-late resolved, dd862a390); K15 is in review. INIT1 touches the loader, kernel ABI and bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance.", "2026-10-01: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01). GATE1 passes on rv64 with every net target met and is sweeping; INIT1 touches the loader, the kernel's boot functions and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02: continue the plan). GATE1 passes on rv64 seeds 1-12 net of audits and is finishing rv32 and the sweep; INIT1 touches the loader, the kernel's boot functions and the bench builder, not the gate's program; wp-init1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more at once (2026-10-01, renewed 2026-10-02). GATE1 is green on rv64 and finishing rv32 and its sweep; INIT1 rebases onto GATE1's merge before acceptance.", "2026-10-02: started by Orchestrator before GATE1 (active): Owner asked to run more in parallel (2026-10-02); this step only rebases the accepted branch onto main and reruns its gates, and the merge still follows GATE1's.", "2026-10-03: started by Orchestrator before GATE1 (reported): Owner asked to run more in parallel (2026-10-02); this rebases the accepted branch onto GATE1's final tip and reruns its gates; the merge still follows GATE1's."]
+
+[[node]]
+  id = "INIT2"
+  title = "init: the manifest, its checks and the boot"
+  template = "package"
+  parent = "M1"
+  needs = ["INIT1"]
+  body = "Builds docs/servers/init.md (the boot manifest, devices by register base and interrupt, confinement, starting the servers, key separation, fresh connections, authority, R33-R35), docs/kernel/devices.md#which-process-gets-which-device (placement matched with device_info), docs/servers/consoled.md#started-by-init (lines attributed by connection), docs/todo/server-bucket-counts.md (closed), docs/testbench.md#starting-a-cases-programs (the under-init half), image/boot.toml read by the builder for ./mkimage. Design: QA INIT1-design. Tier A, size L."
+  state = "done"
+  revision = 2
+  overrides = ["2026-10-02: started by Orchestrator before INIT1 (active): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1 within hours; INIT2 starts on INIT1's rebased tip d974e247c, touches none of K16's or GATE1's files, and rebases onto INIT1's merge before its first page commit and again before acceptance.", "2026-10-02: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 continues on INIT1's rebased tip d974e247c and rebases onto INIT1's merge before its first page commit and before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 continues on INIT1's rebased tip and rebases onto INIT1's merge before acceptance; the one kernel change (system_reset kind 3) is ruled and whoever merges second rebases.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 continues on INIT1's rebased tip and rebases onto INIT1's merge before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02). INIT1 is accepted and merges after GATE1; INIT2 reports on INIT1's rebased tip and rebases onto INIT1's merge before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02); INIT2 is built on INIT1's accepted tip and reviewed there; it rebases onto INIT1's merge before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02); INIT2 is reviewed on INIT1's accepted tip and rebases onto INIT1's merge before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02); INIT2 is reviewed on INIT1's accepted tip and rebases onto INIT1's merge before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (reported): Owner asked to run more in parallel (2026-10-02); INIT2 is reviewed on INIT1's accepted tip and rebases onto INIT1's merge before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (active): Owner asked to run more in parallel (2026-10-02); INIT2 is reviewed on INIT1's accepted tip and rebases onto INIT1's merge before acceptance.", "2026-10-03: started by Orchestrator before INIT1 (active): Owner asked to run more in parallel (2026-10-02); INIT2 is reviewed on INIT1's accepted tip and rebases onto INIT1's merge before acceptance."]
+
+[[node]]
+  id = "INIT3"
+  title = "init: restarts, and a launcher releases its children's grants"
+  template = "package"
+  parent = "M1"
+  needs = ["INIT2"]
+  body = "Brief: .wash/local/INIT3-implementer.md (rules, exact page lines, cases, owned paths, context rules).\n\nBuilds:\n- docs/servers/init.md#restarts-and-reboots: a fresh budget, the same endpoint, the boot's own steps repeated, exits during the boot counted, the reboot rule (more than 5 restarts in 60 s), a fault reported and blamed on nobody (blame itself waits for the steward step);\n- docs/servers/wire.md#a-launcher-releases-its-childs-grants: init releases through Grants; the launcher-orphan case;\n- docs/servers/serving.md#replies-and-rollback, in a boot: rollback against consoled, and the malformed fallback;\n- docs/kernel/devices.md: a driver restart, and a quarantined driver reboots (test driver, dma-reset-deaf).\n\nAlso, from INIT2's review:\n- a case that watches a child's console connection disconnected when the child exits;\n- a server that exits while the boot is starting falls under the reboot rule, consoled refusing a buckets=N among them.\n\nnetd's restart case moved to INIT4. Design: QA INIT1-design. Tier A, size M."
+  state = "done"
+  revision = 2
+  overrides = ["2026-10-03: started by Orchestrator before INIT2 (reported): Owner asked to run more in parallel (2026-10-02); INIT2 is reviewed on INIT1's merge and awaits only its merge-gate bench; INIT3 starts on INIT2's rebased tip 7135c5fed and rebases onto INIT2's merge before any page commit and before acceptance."]
+
+[[node]]
+  id = "INIT4"
+  title = "The servers' cases under init; the net rig goes"
+  template = "package"
+  parent = "M1"
+  needs = ["INIT3"]
+  body = "Brief: .wash/local/INIT4-implementer.md (order, manifests, owned paths, context rules, the init step's close).\n\nThe net rig's cases boot the real init with a case manifest, keeping their names and claims: net-tcp, bench-net-peer and its self-checks, net-pinned, net-attacks with bench-net-self-unrefused. bench-virtio-legacy-off moves to the tester (virtio-probe), and net-host-tests reads the manifests. The bench places the card and the disk on the fixed slots image/manifest.json names. Clients get their ipd scopes from scope= and handed badges; a judge program is the reporter; clients park. tests/net/src/rig.rs is deleted.\n\nMoved from INIT3: docs/servers/netd.md#started-by-init, netd-restart. A test-only netd feature (off in every default build, as dma-reset-deaf is) faults netd once, on an outside trigger; init restarts it, and ipd and a client are served again.\n\nkeyd, bootfsd and consoled are already under init (INIT2). blkd's use on target is the fsd step's. sshd's loopback stays on the host until the sshd step.\n\nDesign: QA INIT1-design. Tier A (the bench, and a test feature in netd), size L."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K9"
+  title = "Budget destruction's cost follows the dying subtree"
+  template = "package"
+  parent = "M1"
+  needs = ["K8"]
+  body = "docs/todo/budget-destroy-cost.md; pulled forward from the steward step by GATE1's R10 miss (133 ms vs 39 ms; owner rule in QA GATE1-design). Tier A (kernel), size L. Design: QA K9-design."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K10"
+  title = "Endpoint destruction no longer scans every thread"
+  template = "package"
+  parent = "M1"
+  needs = ["K9"]
+  body = "Endpoint destruction no longer scans every thread: GATE1's full-fill run found destroy_endpoint (message.rs:1580) calls fail_all three times per endpoint, each driving find_thread over MAX_PROCESS_COUNT x MAX_THREADS, so R10 is O(owned endpoints x processes x threads); a full lease (~1460 endpoints) destroys at p99 ~1.9 s vs 30 ms. The Architect's K9-design escape hatch ('reverse index ... reopen here rather than widen'). Tier A (kernel), size M. Design: QA K10-design."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "SHELL1"
+  title = "The owner's wp-SHELL1 branch: Redoubt's own shell, the cell protocol, beamlet's platform on the fake kernel, beamlet's crates vendored"
+  template = "package"
+  parent = "M1"
+  body = "Folds origin/wp-SHELL1 (11 commits on 5bad23c6e, owner-authored) into redoubt, cautiously: rebased onto redoubt as wp-shell1 (.worktrees/shell1), conflicts in docs/plan/m1-separation.md and vendor/README.md resolved, then the full Tier A panel. Pages: docs/userland/shell.md, beamlet.md, native.md (the cell protocol), docs/SECURITY.md (the session), vendor/README.md. Tier A: beamlet's platform boundary, crypto crate swaps (RSA 0.10 RC, ed25519-compact), the cell-protocol parser, vendor-check and doccheck. Size L (7.6K lines outside vendor/, 381K vendored). Merges after K10."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "ATK1"
+  title = "Attack cases for the address space and the memory calls"
+  template = "package"
+  parent = "M1"
+  body = "The memory.md, memory-layout.md and I9 lines of docs/todo/kernel-attack-gaps.md; docs/kernel/memory.md, docs/kernel/memory-layout.md. Brief: .wash/local/ATK1-implementer.md. Tier A (attack cases), size M."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K11"
+  title = "User mode runs no cache-block operation"
+  template = "package"
+  parent = "M1"
+  body = "Closes docs/todo/user-cache-invalidate.md; rule on docs/kernel/memory.md#r11-memory. Brief: .wash/local/K11-implementer.md. Tier A (kernel arch, firmware), size S."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "MOD1"
+  title = "The model checks in the kernel's order, and its mutations reach every rule"
+  template = "package"
+  parent = "M1"
+  body = "Closes docs/todo/abi-model-disagreements.md and the model.md lines of docs/todo/kernel-attack-gaps.md (not replay); docs/kernel/abi.md#errors-and-the-order-of-checks, docs/kernel/model.md. Brief: .wash/local/MOD1-implementer.md. Tier A (the model), size M."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "SSH2"
+  title = "sshd: the requests the bench cannot see, and its vendored crates under Miri"
+  template = "package"
+  parent = "M1"
+  body = "Closes docs/todo/sshd-unseen-requests.md, docs/todo/sshd-vendored-miri.md and docs/todo/ssh-loopback-host.md (the OpenSSH reference case in a container: owner's decision on QA ssh-reference-selinux, rule on docs/testbench.md#sessions-and-the-loopback-server, e95c6c099); docs/testbench.md#against-redoubts-sshd, docs/servers/sshd.md. Brief: .wash/local/SSH2-implementer.md. Tier A (sshd, the bench), size L."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K12"
+  title = "Destruction's cost at the gate's full fill: R10 within 30 ms for a full lease"
+  template = "package"
+  parent = "M1"
+  needs = ["GATE1-composed-r10"]
+  body = "Designed in docs/kernel/budgets.md Residual risks items 3-5 (QA GATE1-composed-r10, K12-full-fill-ring, K12-pump-once). PARKED 2026-09-30: wp-k12 tip 497d21496 on the cleaned redoubt a61a1917b; reviewed (red OK with notes, simplifier OK, editor OK), round 1 fixes folded; full fill rv32 23.6/20.5 ms, rv64 23.3/20.5; 16-seed sweep 32/32. Left: rebase over MOD1 (ca0d27e20; conflicts at the model's handle-slot constant and size-budget.toml's model line 10092), model host tests and mutation sweep, the whole bench, merge. Handoff: .wash/local/handoffs/k12-implementer-2.md. Tier A (kernel), size L."
+  state = "done"
+  revision = 2
+  overrides = ["2026-09-30: started by Orchestrator before QA GATE1-composed-r10 (open): Step 0 (the trace ring) is settled on QA GATE1-composed-r10 and may start before the design; everything past it waits for the thread."]
+
+[[node]]
+  id = "IPC2"
+  title = "Fair waiting serves the least recently served group"
+  template = "package"
+  parent = "M1"
+  needs = ["K12", "MOD1"]
+  body = "Closes docs/todo/r2-least-recently-served.md; rule on docs/kernel/ipc.md#r2-fair-waiting (9f0b47f38), for docs/servers/steward.md#r37-vault-non-interference. Design: QA MOD1-r2-cursor-blame. Brief: .wash/local/IPC2-implementer.md. Tier A (kernel IPC, the model), size M."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K13"
+  title = "An ending process pumps each endpoint once"
+  template = "package"
+  parent = "M1"
+  needs = ["K12", "IPC2"]
+  body = "Closes docs/todo/process-ending-pumps-once.md. Builds docs/kernel/ipc.md#r4b-a-server-dies, keeping #r3-lends-and-abandoned-calls and docs/kernel/invariants.md#i15-abandoned-calls-reported-once; remeasures docs/kernel/budgets.md#residual-risks for #r10-destruction. Design: QA K12-pump-once. Brief: .wash/local/K13-implementer.md. PARKED 2026-10-01: wp-k13 tip 59566c175 on main 4d42be45f holds the bug case ending-pumps-once alone, failing on main on both widths ('Q is still waiting after the kill (got 2)': Q gets Dead because a dying process's later receiving thread takes the queued call). No kernel change yet. Left: process_ending ends every thread gathering the endpoints their waits served, then pumps each once (a lone thread's exit still pumps at once); the remeasure at the full fill; the pages; the whole bench; review. Handoff: .wash/local/handoffs/k13-implementer.md; detail .wash/local/K13-progress.md. Tier A (kernel), size S."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K14"
+  title = "Kernel memory follow-ups: process_map backs after it can refuse, one boot stack reservation"
+  template = "package"
+  parent = "M1"
+  needs = ["K12"]
+  body = "Closes docs/todo/process-map-backs-before-refusing.md (docs/kernel/memory.md#failure-and-restart) and docs/todo/boot-stack-reservation.md (docs/kernel/memory-layout.md#regions). kernel/src/process.rs, mem.rs, arch/riscv/process.rs and the loader: no overlap with IPC2 or K13 in message.rs. Tier A (kernel, loader), size S."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "B3"
+  title = "The bench says why a guest died at once, and checks its QEMU"
+  template = "package"
+  parent = "M1"
+  body = "tools/testbench/src/qemu.rs: run() nulls QEMU's stderr, so a QEMU that exits before its first console line is reported as 'guest exited' with an empty log (seen 2026-10-01: QEMU 10.0 lacking -run-with exit-with-parent, docs/testbench.md); the option is never probed. Builds docs/testbench.md (the guest's early exit names QEMU's error; the bench names the QEMU version it needs, GETTING-STARTED.md prerequisites). Brief: .wash/local/B3-implementer.md. Tier A (the bench), size S."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K15"
+  title = "The latency targets exclude the checked build's audits"
+  template = "package"
+  parent = "M1"
+  needs = ["K12"]
+  body = "Closes docs/todo/latency-excludes-audits.md. Rule: docs/kernel/scheduling.md#responsiveness and docs/testbench.md#checked-builds (dd862a390), for docs/kernel/README.md#containment. Design: QA GATE1-notice-late (owner: exclude audits). Brief: .wash/local/K15-implementer.md. Tier A (kernel trace, the oracle), size S. Touches budget.rs destroy_subtree, process.rs index_process, sched.rs trace, tools/testbench sched_oracle; not message.rs. GATE1 resumes on it."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "B4"
+  title = "Three cases order on events, not on the host's clock"
+  template = "package"
+  parent = "M1"
+  body = "Closes docs/todo/wall-clock-flakes.md (378a67877): uaf-lent-page (the holder answers SYNC before it holds the lend: a test bug, the case can pass without testing reuse), touch-beyond-ram, libs/rt parked.rs; plus process-review's zero_entries window found by K14's dig (a thread created with entry 0 runs if a tick lands between thread_create and process_exit: InstructionPageFault at 0; give those threads a parked entry, or the case runs under icount). Done when each orders on events and passes 20 runs beside a loaded host. Tests and libs/rt's test only; red team at low (attack cases). Tier B-sized, size S."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K16"
+  title = "The kernel's tables grow: processes, threads and the per-object caps"
+  template = "package"
+  parent = "M1"
+  needs = ["GATE1", "INIT1", "K13", "K17"]
+  body = "Owner's values on QA K16-limits (2026-10-02): MAX_PROCESS_COUNT 512 with 16-bit PIDs; MAX_THREADS 255 with each thread's saved registers in its own IPC page; MAX_OPEN_CALLS 256, WAIT_CAP 32, MAX_DEPTH 16, MAX_LABELS 16, MAX_START_HANDLES 128. Brief: .wash/local/K16-implementer.md. Builds docs/kernel/processes.md (PIDs, threads), objects.md#what-objects-cost, memory-layout.md (per-process kernel data, satp without the PID), boot.md (the handoff record), abi.md (constants, record slots), budgets.md (MAX_DEPTH, MAX_LABELS, residual-risks for #r10-destruction), ipc.md (#r2-fair-waiting, #r4a-open-calls, residual risks), invariants.md, timer.md (residual risks), scheduling.md (R12 fixed terms). Needs GATE1 (its numbers are the baseline), INIT1 (budget.rs boot_*, setup_loader_process, the loader's handoff and process-area mapping) and K13 (message.rs, where the walks are). Tier A (kernel and loader), size L."
+  state = "done"
+  revision = 2
+  overrides = ["2026-10-02: started by Orchestrator before GATE1 (active), INIT1 (active): Owner asked to run more in parallel (2026-10-02). K16's first two commits touch neither INIT1's files (budget.rs boot_*, setup_loader_process, the loader) nor GATE1's; GATE1's merged numbers remain the baseline, and the branch rebases onto both merges before commit 3.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); an early read of commit 1 while K16 waits for INIT1's merge.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); this commit touches none of INIT1's or GATE1's files and changes no value.", "2026-10-03: started by Orchestrator before GATE1 (active), INIT1 (reported): Owner asked to run more in parallel (2026-10-02); commits 1 and 4 touch none of INIT1's or GATE1's files; the branch rebases onto both merges before commit 2."]
+
+[[node]]
+  id = "K17"
+  title = "A destruction feeds no receiver it is about to kill"
+  template = "package"
+  parent = "M1"
+  needs = ["K13"]
+  body = "Closes docs/todo/destruction-feeds-the-doomed.md. Builds docs/kernel/ipc.md#r4b-a-server-dies (the rule beside it: a thread of a process in a dying budget takes nothing from a pump) and docs/kernel/processes.md#exit-notices (delivery says the same); removes ipc.md's residual. Design: QA K13-doomed-takes-call. Needs K13 (message.rs). Tier A (kernel), size S."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "STEWARD0"
+  title = "The steward's policy core: one pure state machine, shared by the server and the model"
+  template = "package"
+  parent = "M1"
+  body = "Owner's ask 2026-10-02: the steward's policy as a pure Rust state machine in a no_std, unsafe-free crate, keyed by domain, shared by the steward server and the model, with an Elixir reference as a differential oracle (STEWARD1); design docs/servers/steward.md 'The policy core' (99d01496f, a61477f7f, 22ed434d9), QA STEWARD0-design and STEWARD0-tables resolved. PAUSED 2026-10-02: wp-steward0 f62b4da34, clean: the tables as ruled, the generator with drift and coverage checks, the core crate redoubt-steward (28 tests), the bench case steward-host-tests, the model embedder with the families green at 40k seeds and 26 of 28 Policy mutations caught (the two await QA STEWARD0-unreachable-mutations), the pages and the size budget; doccheck and fmt clean. Left: the whole-bench result, the final mutation sweep after the ruling, the autosquash of three fixup commits, the report, then review by the full panel. Two implementers so far; detail .wash/local/STEWARD0-progress.md. Tier A (the steward's policy), size L."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "STEWARD1"
+  title = "The steward core's Elixir reference, a differential oracle on beamlet in the bench"
+  template = "package"
+  parent = "M1"
+  needs = ["STEWARD0"]
+  body = "Builds docs/servers/steward.md#two-embedders-and-a-reference (the Elixir reference: decide/2 over defstruct state from generated clause skeletons, the half STEWARD0 left; a trace format both run, its encoding on the page; traces covering every table row plus traces recorded from the model's families; a bench case that runs Elixir on beamlet with the pinned toolchain in the dev container, never skipped), and brings libs/wire/elixir/run-vectors under the same case (docs/servers/wire.md's partly-tested line and residual go). Checkpoint 1: how the dev image gets the pinned OTP 28.5.0.6 and Elixir 1.20.4, reported before anything else (may go to the owner). Design: QA STEWARD0-design. Brief: .wash/local/STEWARD1-implementer.md. Tier A (the bench), size M."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K18"
+  title = "A checked build's audits do not move its schedule"
+  template = "package"
+  parent = "M1"
+  needs = ["K17"]
+  body = "Closes docs/todo/audits-billed.md. Builds docs/kernel/scheduling.md#responsiveness ('Targets exclude the checked build's audits': an audit neither fills a window nor moves the schedule; the residual 'A checked build's audits move its schedule' goes) and docs/testbench.md#checked-builds. In a checked build an audit's time is charged to no budget and does not count against the running slice (slice end and charge start move forward by its length); audits stay full; no target moves. Accepted on GATE1's two-lease run (wp-gate1 e9ecc5ea5 fixture, seed 4) meeting the deadline notice on both widths, no regression at seed 3 in sched-latency and kernel-containment, and a recorded negative run (feature audit-billed) that misses. Design: QA GATE1-notice-two-leases (owner's decision A applied in full). Evidence: .wash/local/GATE1-two-lease-split.md. Brief: .wash/local/K18-implementer.md. Tier A (kernel), size S."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "B5"
+  title = "Every scheduler share is judged net of the checked build's audits"
+  template = "package"
+  parent = "M1"
+  needs = ["K18"]
+  body = "Closes docs/todo/shares-judged-gross.md (added by K18's trim). Builds docs/kernel/scheduling.md#responsiveness and docs/testbench.md#checked-builds: every scheduler share is printed as a SHARE line and judged by sched_oracle net of audits, as K18 did for sched-budget-churn. Order: sched-exit-churn (margin ~40 over 450), sched-destroy-billing, deadline-flood-billed, then any other share judged in a program. No kernel change, no bound moves, no attacker weakened. Design: QA GATE1-notice-two-leases (K18's review). Brief: .wash/local/B5-implementer.md. Tier B (bench), size S."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K20"
+  title = "A timer entry is billed to the budget whose timeout it expired, not the one it interrupted"
+  template = "package"
+  parent = "M1"
+  body = "Kernel finding from QA K16-timer-flood-share. The trap handler bills a timer-interrupt entry's tail after expiry (on_interrupt, rearm, leave's runnable walk and reconcile) to the interrupted budget. That contradicts docs/kernel/timer.md 'R12 (scheduling) for timer work' and docs/kernel/scheduling.md#charging: a flooder spends its own share, not a neighbour's. The fix bills the rest of an entry that expired something to the last expired item's budget. Nothing expired: the running budget's at its slice end, otherwise nobody's. A self-check pads reconcile and requires sched-timer-flood's share to stay put. Brief and page lines: .wash/local/K20-timer-entry-billing.md. Tier A, size S. Goes before K16's commit 4."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "RT1"
+  title = "libs/rt's unsafe down to its floor, and what stays attacked"
+  template = "package"
+  parent = "M1"
+  needs = ["INIT2"]
+  body = "The owner's request. This is TCB hygiene, not a hole: a process is memory-safe from other processes whatever its runtime does. Tier A, size S. It needs INIT2, which adds the bundle view and the fixed arena's run words.\n\nThe ratchet goes from 14 (after INIT2) to a target of 10:\n- The panic hook is named in entry!, so the stored-address transmute goes. If no sound form exists, it stays with its reason.\n- The heap's four raw word accesses fold onto one private read/write pair.\n- The startup-page and bundle views fold onto one private premapped().\n\nThe floor: GlobalAlloc's three, the MMIO pair, and Mapping's two views.\n\nEvery remaining site gets a keeper. The heap's tests move out of tests/ipc.rs into rt-miri's list: today they are not under Miri in the bench. Registers gets a Miri test if the fake can map it.\n\nNo bitmap free lists, and no unsafe-fn slice_at (it counts more, not less).\n\nPages: native.md's runtime section and testbench.md's unsafe budget. Brief and exact lines: .wash/local/RT1-implementer.md."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "B7"
+  title = "A bench run packs the kernel it built, and keeps its files to itself"
+  template = "package"
+  parent = "M1"
+  body = "Bench bug. A fault-feature case sometimes boots another case's kernel when two bench processes share a worktree's target/: handle-chain-fault, endpoint-destroy-open-calls rv32 and process-chain-fault were each seen.\n\nCause, to confirm by reproduction first: prepare() packs target/<triple>/<profile>/redoubt-kernel, the same path for every feature set, and bundles and logs go to fixed paths under target/testbench/.\n\nFix by isolation, not a lock:\n- pack the executable cargo's JSON reports for this build, copied into the run's own directory;\n- every file a run writes goes under target/testbench/run-<pid>/, with a 'last' symlink.\n\nKeepers: host tests with interleaved feature builds, and two runs that share no file. A deterministic self-check if one can be written.\n\nPage lines: testbench.md 'How to use it' and GETTING-STARTED.md. Brief: .wash/local/B7-implementer.md. Tier B, size S, no needs. B6, if cut, builds on it."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K21"
+  title = "Taking or giving back a frame costs no term in RAM frames"
+  template = "package"
+  parent = "M1"
+  body = "Kernel finding from QA GATE1-trace-ring, against R12 (scheduling.md: 'A term linear in RAM frames ... is not [a constant]. Billing it to the caller does not excuse it').\n\nmem.rs scans RAM on call paths in three places:\n- alloc_frame is first fit from frame 0, for every page, page table and object frame;\n- alloc_contiguous (dma_alloc) runs a first-fit search;\n- release_owned_frames (process_create's rollback) scans all of RAM.\n\nGATE1 exposed the first: the trace ring's frames below everything moved sched-budget-churn's victim from 499 to 559.\n\nThe fix:\n- an O(1) free list (intrusive, through the physmap);\n- the rollback walks what the creation built;\n- dma_alloc gets a fixed-size boot pool, or a run allocator, whichever is decided.\n\nscan-bounds is extended, with a recorded negative (alloc-first-fit), and a checked-build audit proves the free list equals the table's free entries.\n\nPage lines: scheduling.md R12's paragraph and memory.md. Brief: .wash/local/K21-implementer.md. Tier A, size M, no needs."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "FSD1"
+  title = "fsd: one volume served over 9P, on the host"
+  template = "package"
+  parent = "M1"
+  body = "Brief: .wash/local/FSD1-implementer.md.\n\nBuilds docs/servers/fsd.md 'Volumes, connections and labels' (labels per volume, remove ends other fids with `removed`, mounting: blank formatted, unmountable served as corrupt) and 'Typed operations' (rename, copy_file, get_attr, set_attr, and the new `corrupt` error). Also one public fid resolver in the 9P skeleton.\n\nHost tests only (fsd-host-tests), with the client library unchanged against the real fsd. No init, no blkd change, no quotas.\n\nTier A, size M, no needs."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "FSD2"
+  title = "fsd: a byte quota per attach root"
+  template = "package"
+  parent = "M1"
+  needs = ["FSD1"]
+  body = "Builds docs/servers/fsd.md 'Quotas' and R48 (a quota per attach root). Brief: .wash/local/FSD2-implementer.md. A live root holds what lies under it less the live roots below (their quotas in reserve), counted by a walk at the first mint and kept in memory, nothing stored; carving from the nearest live root above; rewrites count littlefs's tail copy; renames never move a live root; the volume root's reserve derived from littlefs; typed no_space (row 9); and FSD1's hostile-image residual closed (a metadata pair named by two directories is corrupt at mount). Host tests only, R48's two attack tests among them. Tier A, size M."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "FSD3"
+  title = "fsd under init: the volume's range, its labels at blkd, the image's disk, restart"
+  template = "package"
+  parent = "M1"
+  needs = ["FSD2", "INIT4"]
+  body = "fsd under init. Brief: .wash/local/FSD3-implementer.md. init mints each fsd's range badge from `volumes` and passes the volume's labels (re-minted at a restart); blkd takes each range's labels as `labels.P=` arguments (NO_LABELS goes); a confined labelled volume starts and writes; mkimage packs image/disk.toml through fsd's own code (Rust-writes-C-reads oracle case, run by hand); a restarted fsd mounts and serves with no whole-volume check (fsd.md's Open item); files survive a reboot. Cases: fsd-boot, fsd-reboot, fsd-confined-labelled, fsd-one-volume (R47), fsd-quota (R48), fsd-restart, fsd-corrupt-volume, image-disk. Tier A, size L."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "SMP1"
+  title = "The kernel runs on every hart, under one big lock"
+  template = "package"
+  parent = "M2"
+  needs = ["K16", "K21", "SMP1-design", "IPC3", "K22", "ASID1"]
+  body = "Brief: .wash/local/SMP1-implementer.md (updated for the owner's answers on QA SMP1-design: many harts by design, built as SMP1, SMP3, then SMP2; no ASIDs).\n\nBuilds docs/plan/m2-usable-shell.md#several-harts steps 1-3, and of step 4 its first stage:\n- any boot hart, up to MAX_HARTS (8), started through SBI HSM; one build (the smp feature and the spike go);\n- per-hart state through sscratch, including the hart's current process;\n- a FIFO ticket lock at trap entry;\n- device interrupts on the boot hart;\n- reschedule IPIs;\n- a budget runs on at most one hart at a time (interim: one predicate in the pick, lifted by SMP3);\n- the shootdown, built for a set of harts (the other harts whose current process is the target, flushed and acknowledged without the lock); its one caller here is a destruction, plus kernel-half unmaps to every hart;\n- the trace ring with a hart field;\n- `cargo testbench --smp N`.\n\nOwner (2026-10-05): the lock is the ticket lock as specified (next/serving AtomicU32, pause hint, a Zawrs hook), FIFO stated under R12, its bound checked by smp-boot with a recorded negative; frame zeroing stays under the lock here (SMP4).\n\nCases: smp-boot (2 and 4 harts, with the FIFO check); smp-evict, with a recorded negative; the whole bench at --smp 2. Started ahead of M2 on the owner's word (2026-10-03). Tier A, size L."
+  state = "todo"
+  revision = 3
+
+[[node]]
+  id = "SMP2"
+  title = "Several harts: R12's shares and the targets across harts"
+  template = "package"
+  parent = "M2"
+  needs = ["SMP3"]
+  body = "docs/kernel/scheduling.md R12 restated across harts, once, with several runners per budget (after SMP3). Brief: .wash/local/SMP2-implementer.md. Tier A, size M-L.\n\n- R12: a budget gets its weight's share of the harts, at most one per runnable thread, what it cannot use going to the others by weight (water-filling); spreading gains nothing.\n- Architect's ruling: the floor leaves out capped budgets (weight share above their runnable threads, found by water-filling over the top H-1 by w/k); a budget leaving the cap is lifted to the floor. At one hart nothing is capped, so nothing changes.\n- Checkpoint before kernel work: four scenarios (late join, second cap, uncap, spread) in the model, under the old floor and the new rule, sent to the Architect.\n- The stride crate, the model (1, 2, 4 harts, independent water-filling) and five new mutations; the oracle judges multi-hart traces.\n- Cases: unpin SMP1's pins to [1, 2, 4]; sched-capped; sched-lock-contention (FIFO wait from the trace); sched-latency swept at 2 harts.\n- Targets (owner, QA SMP1-design): gated at 1 and 2 harts, recorded at 4.\n- The VM's two schedulers on two harts, once beamlet runs on Redoubt; else cut to its own node."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "RT2"
+  title = "redoubt_rt::server::serve: one receive loop for the servers that only take calls"
+  template = "package"
+  parent = "M1"
+  needs = ["FSD1"]
+  body = "Simplification, not a hole. Tier B, size S. The receive loop is copied in seven servers (bootfsd, keyd, blkd, fsd, consoled, netd, ipd, and libs/rt's echo-server), each with its own RECEIVE_FAILED = 3.\n\nBuild in libs/rt/src/server:\n- serve(endpoint, f) -> u32, for a server that takes only calls: each call to f (its result dropped, as now: the shared finish path answers a rejected reply); a send dropped and its handles closed; Interrupt, Exit and Abandoned ignored; Dead -> exit::OK; any other error -> exit::RECEIVE_FAILED.\n- close_delivery(&delivery), the handle-closing, for the loops that keep their own shape;\n- RECEIVE_FAILED moves to redoubt_rt::exit, still 3.\n\nbootfsd, keyd, blkd, fsd and echo-server call serve. consoled (abandoned parked reads), netd (meaningful sends, break_device on exit) and ipd (timeouts, two-word receive) keep their loops and use close_delivery and exit::RECEIVE_FAILED. No helper with hooks for their cases.\n\nKeepers: a host test of serve over the fake endpoint: a send's handles are closed, Dead exits OK, another error exits RECEIVE_FAILED. Every server's bench cases unchanged.\n\nPage line, serving.md, a bullet at the top of Interface: 'A server that takes only calls runs redoubt_rt::server::serve, the one receive loop: a send is dropped and what it brought closed, and the endpoint's death ends the server with OK.' Needs FSD1 (fsd's loop); start after INIT4 merges if INIT4 is still in netd's and ipd's bins."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "SMP3"
+  title = "Several harts: one process's threads on several harts at once"
+  template = "package"
+  parent = "M2"
+  needs = ["SMP1"]
+  body = "The owner's goal (QA SMP1-design): a beamlet VM's schedulers run on several harts at once. Brief: .wash/local/SMP3-implementer.md (design: .wash/local/SMP1-multihart.md). Tier A, size M.\n\n- The pick: a hart takes the lowest-pass budget with a runnable thread no hart is running (SMP1's one-runner predicate replaced). Stride arithmetic per budget unchanged; each hart charges its runner under the lock; the floor counts a budget with several runners once.\n- SMP1's shootdown gains its callers, before the call returns or the frame is reused: unmap, a narrowing set_flags, process_map's source, a lend or transfer sent, a reply returning a lend. Every site that clears or narrows a VALID user entry is listed.\n- fence.i: any call installing an executable entry shoots the process down (the shootdown fences). A thread that moves needs no fence of its own (Architect: one user entry per frame plus W^X).\n- Cases: smp-shootdown (unmap, lend returned, lend within one process; recorded negative smp-no-shootdown), smp-fence (verdict from a trace shootdown record), the whole bench at --smp 2.\n- Pages: scheduling.md's pick, cursor, floor and charging lines; memory.md's fence paragraph, lending status, several-harts residual (lend-within-one-process residual deleted); memory-layout.md's flush residual; m2 step 4 and Progress.\n\nR12 across harts is SMP2's, after this."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "SMP4"
+  title = "Per-hart free-frame magazines, zeroed on entry: frame zeroing leaves the kernel lock"
+  template = "package"
+  parent = "M2"
+  needs = ["SMP1"]
+  body = "Owner (2026-10-05). Brief: .wash/local/SMP4-implementer.md. Tier A (mem.rs, the per-hart block), size S-M. Needs SMP1 (the per-hart block, `--smp 2`).\n\n- `PerHart<T>` in SMP1's per-hart block, reached through `sscratch` (tp loaded from it in the kernel), accessed only through a `!Send` zero-sized `IrqsOff` token made at trap entry; `get(&self, &mut IrqsOff) -> &mut T`, no atomics.\n- A magazine of up to 16 free frames per hart in front of `MemoryManager`'s bitmap: pop locally, refill a batch under the lock; push locally, flush a batch when full. A frame is zeroed as it enters the magazine, lock released, so hand-out installs a zeroed frame: between its allocation and its zeroing no hart and no process can name it (memory.md R11, the invariant and the code that keeps it).\n- Magazine frames carry a sentinel owner (as DMA_OWNER does), so the bitmap stays exact and check_free_frames reads no magazine; they are uncharged; charging stays at hand-out. boot_budgets holds back MAX_HARTS x 16 frames from root so a budget's free pages stay backed by bitmap frames (map_fixed's assumption).\n- One hart: no magazine; allocation order and every existing case unchanged.\n- Lock order written at mem.rs's note; no new nested acquisition.\n- A design note in docs/beyond/scheduling-extensions.md: per-hart run queues with stealing against R12's one stride order, and whether it is worth it at 4-8 harts. The run queue is not split.\n\nCases: smp-magazine (a process destroyed while another hart holds its frames unmapped never gets the mapping; the audit passes); the whole bench at 1 hart unchanged and at --smp 2."
+  state = "todo"
+  revision = 1
+
+[[node]]
+  id = "BEAM1"
+  title = "beamlet runs on the machine under init: the console, the clock, randomness, modules from /boot"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["init", "API1"]
+  body = "Brief: .wash/local/BEAM1-implementer.md. Tier A, M-L. The `beamlet` program (beamlet-redoubt's machine binary) started by init with a console, a budget and bootfsd; one scheduler thread until several harts; redoubt_rt::thread::spawn; modules read whole from /boot by name; the bench builds a binary from userland/otp's workspace. Cases: beamlet-boot, beamlet-console, beamlet-heap-flood (rv64); rv32 attempted and reported. Pages: docs/userland/beamlet.md#beamlet-on-redoubt, docs/userland/native.md#the-client-library."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "BEAM2"
+  title = "The userland disk: OTP, Elixir and the shell as hash-checked objects, and the shell on the UART console"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM1", "FSD3"]
+  body = "Brief: .wash/local/BEAM2-implementer.md (architect-12, rechecked against main 75245a114; ready). Tier A, size L. Branch wp-beam2 from 75245a114, worktree .worktrees/beam2.\n\nThe userland disk: OTP, Elixir and the shell as hash-checked objects on a read-only volume (image/userland.toml packed by testbench --pack-disk, system.index in the staged /boot, named by `public`), served by an fsd handed to beamlet as the named handle fsd:system (endpoint=fsd:system); beamlet reads its modules from that fsd and sits in the image manifest with a budget_pages= at least twice the VM's measured use at the prompt (heap and ETS budget/16, BEAM1's rule); the shell on the UART console. New since FSD3: more than one disk (a volumes `disk` key, range minting at each blkd, every one-disk rule held per disk); a second bench disk on a fixed slot (disk1, bus 5, 0x10006000, irq 6), attached readonly=on; objects named by hash plus system.index, keyed by file name (<module>.beam, <app>.app); whole applications staged (seven, 577 modules). Cases merge over image/manifest.json with [[file]] servers. h/1 docs stripped by default.\n\nR34, ruled by the owner 2026-10-03: one read-only attachment of the userland image per label set (its own device, blkd, volume and fsd), R34 unchanged; one host test; beamlet.md states it as a rule."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "BEAM3"
+  title = "Asynchronous underneath: the VM's I/O threads, and files over 9P"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM2", "AIO1", "BEAM7"]
+  body = "Design assessment: .wash/local/BEAM3-brief.md. Owning pages: docs/userland/beamlet.md#asynchronous-underneath-synchronous-on-top; docs/userland/files.md#files-over-9p; docs/userland/native.md#dropped-files-error-names-and-generated-calls. Assessment complete, broad implementation not started. BEAM7 delivers terminal module/app refusal before files. Later client fid lifecycle, named errors, path/whole-file helpers and generated clients require explicit prerequisite nodes before file integration starts; ordering is in the brief. Build on accepted AIO1 hub/connection waiters and one M1 scheduler; do not implement stale fixed-pool prose literally. VM completion/cancellation/resource design, honest metadata and asynchronous console need bounded design checkpoints. BEAM7 completion does not complete this node."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "BEAM4"
+  title = "The natives: namespace, calls, serving, budgets, labels and launching; the shell launches a native program"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM3"]
+  body = "docs/userland/beamlet.md#natives: ns_lookup/bind/ns, call/send, serve/reply, budget_create/destroy/usage, labels, launch; handles as resource terms that no term format carries; generated clients from wire tables (docs/servers/wire.md#generated-clients) and Redoubt.Namespace/Budget/Process/Keys. The M1 shell's launch (docs/userland/shell.md#the-shell-in-a-session). Attacks: hostile native arguments, a decoded handle grants nothing. Brief to come."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "BEAM5"
+  title = "gen_tcp over /net"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM3"]
+  body = "docs/userland/beamlet.md#beamlet-on-redoubt: gen_tcp over a backend that opens /net/tcp/clone and reads and writes the data file, framing in Erlang. M1's attack suite needs a session's TCP (the loopback login row, R59). Brief to come."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "INIT5"
+  title = "A launch holds at most one batch of the image; INIT_PAGES returns to 1,024"
+  template = "package"
+  parent = "M1"
+  needs = ["BEAM1"]
+  body = "Brief: .wash/local/INIT5-implementer.md (architect-10). Tier A, S-M. libs/client's launch places the image and the stack in batches of PLACE_PAGES (64), each copied into fresh pages and moved into the unstarted child with process_map, so a launcher never holds a whole image; init's bound (servers/init/src/bound.rs) counts one batch, not the largest image; INIT_PAGES goes back from BEAM1's 2,048 to 1,024 if twice the bound fits. No kernel or stub change; each child still pays for its own copy (init.md's residual: no shared text). Pages: docs/kernel/budgets.md (INIT_PAGES bullet), docs/userland/native.md (launch step 3), docs/servers/init.md (launching through the loader stub, step 2). Cases: init-boot's printed bound, init-refuses-bound at 1,024, a client host test of batching and its failure path, beamlet-boot at 1,024."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "IPC3"
+  title = "Delivery follows the endpoint: per-endpoint receivers, R2 groups and notices, no walk of every thread"
+  template = "package"
+  parent = "M1"
+  needs = ["K16", "SCHED1"]
+  body = "Docs: docs/kernel/{ipc,timer,scheduling,budgets}.md. Brief/layout/rulings/report under .wash/local/IPC3*.md; use final implementer-5 report. wp-ipc3 a0fbbcab1 remains unmerged. Owner QA IPC3-wake-latency requires scheduler fix before merge with unchanged targets. SCHED1 explicit unmet prerequisite, no reverse dependency: experiment stacks on IPC3 then scheduler-only range replays onto main for independent tests/review/merge. Rebase and fully revalidate/review IPC3 afterward. QA remains blocking; initial1ms pinned success is not IPC3 acceptance. K19/SMP1 remain downstream."
+  state = "active"
+  revision = 2
+
+[[node]]
+  id = "HW1"
+  title = "Every constant held to the hardware field it mirrors: compile-time asserts, the loader refuses a 33rd device"
+  template = "package"
+  parent = "M1"
+  needs = ["K16"]
+  body = "Brief: .wash/local/HW1-implementer.md; sweep: .wash/local/hardware-bounds.md. Tier A (kernel constants, libs/layout, loader), size S. Needs K16 (the ASID assert, same lines).\n\nOwner (2026-10-03): be within hardware limits, and say where else. Adds: MAX_THREADS <= u8::MAX; USER_AREA_END within Sv39's 2^38 lower half and below rv32's kernel half; the rv64 kernel-half bases canonical; the loader refuses a 33rd MMIO region or interrupt instead of dropping it (three host tests). No value changes.\n\nBuilds docs/kernel/boot.md: a new 'Hardware bounds' section (the rule: an ISA-fixed field is a compile-time assert on each width; a platform-reported limit is checked at boot and a machine past it is refused, never truncated; and the table), and R17's test list. The hart bounds are SMP1's (its brief, item 1)."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K22"
+  title = "Reconcile follows the budgets that changed: marks, not a walk of every process"
+  template = "package"
+  parent = "M1"
+  needs = ["K16"]
+  body = "Brief: .wash/local/K22-implementer.md. Tier A (scheduler), size S-M. Needs K16 (its worst-walk case measured reconcile at 0.32 s with 250 wakers: Runnable::fill walks every live process each entry, and Queue::reconcile's wake loop is O(R^2 x N)).\n\nA budget is marked when a thread of its becomes or stops being ready (ptable.rs transitions); reconcile visits only marked budgets, wakes sorted by descending id once; Runnable::fill goes; a checked build audits the marks. The same events in the same order; the model, the oracle, the stride differential and every R12 mutation unchanged.\n\nAcceptance: reconcile at 250 wakers far below 0.32 s, both widths, the gate's targets not regressed. Builds docs/kernel/scheduling.md (reconcile), budgets.md (measured list). Runs beside IPC3 (message.rs); ahead of SMP1 (sched.rs's pick)."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "ASID1"
+  title = "Each process is its own ASID: satp carries the PID, flushes by address and ASID, a whole ASID on PID reuse"
+  template = "package"
+  parent = "M1"
+  needs = ["K16"]
+  body = "Owner (2026-10-03): build it, after K16 and before SMP1. Brief: .wash/local/ASID1-implementer.md (written against K16's c5/tip; recheck on main after K16 merges). Tier A (kernel memory core), size M.\n\nThe PID is satp's ASID (511 < 2^ASID_BITS); a switch flushes nothing; every page-table write flushes what it changed in the space it changed, running or not: a leaf by (address, ASID), a table pointer by whole ASID, a kernel-half leaf by (address, x0); G exactly on the shared kernel half, never on the per-process PROCESS_AREA path. A PID given out is flushed whole before its first map (MemoryMapping::allocate); a destruction moves satp off the dying space and flushes its ASID before freeing its frames (a garbage G leaf from a freed table would survive ASID flushes). The boot probes the ASID width (ones written to satp) and refuses one narrower than ASID_BITS (R17, HW1's table). A checked build logs unflushed page-table writes and stops at a return to user mode with one pending; it audits G.\n\nAcceptance: asid-reuse-stale and two recorded negatives (asid-no-reuse-flush, asid-no-leaf-flush) on both widths; asid-cost (round trip, switch, map/unmap) before and after on both widths. QEMU's TLB is not tagged by ASID (to confirm from its source), so the saving shows on the FPGA core, not QEMU; a regression is a finding. Whole bench; K16's worst walk and the gate's targets not regressed. Pages: memory-layout.md (satp, G row, residuals), memory.md, processes.md, fpga-platform.md (two bullets), m2-usable-shell.md item 4, boot.md hardware bounds row.\n\nOut: several harts. SMP1 (amended): shootdown flushes the target's ASID on the harts running it; harts that only ran it flush lazily through a per-PID stale mask before they next install it."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "ABI1"
+  title = "The system-call ABI apart from its transport: one Transport trait the ecall, the fake and any backend implement"
+  template = "package"
+  parent = "M1"
+  body = "Owner (2026-10-03). Brief: .wash/local/ABI1-implementer.md. Tier A (libs/sys, libs/rt's seam), size S. No needs.\n\nredoubt_sys::Transport (a Call in, a Return out, records and buffers by address) beside the ABI; Ecall implements it with today's one unsafe; redoubt_sys::syscall stays for the stub and tests/programs. libs/rt selects one installed transport (HostKernel becomes Transport, install_transport), the ecall by default on the machine, feature installed-transport otherwise; a no_std installed slot is the backend's own package. init's two direct DeviceInfo calls go through the runtime. Nothing above rt changes but the two renames.\n\nAcceptance: every host test and machine case unchanged, both widths; the unsafe count and the image sizes unchanged; a host test of a second transport seeing every call. Pages: libs/sys module doc, abi.md, native.md, and the owner's no-MMU direction as one line on docs/beyond/README.md."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "ABI2"
+  title = "Lends and transfers defined by ownership, not mapping; the fake kernel refuses given-up pages"
+  template = "package"
+  parent = "M1"
+  needs = ["ABI1"]
+  body = "Owner (2026-10-03). Brief: .wash/local/ABI2-implementer.md. Tier A (the IPC pages, the fake kernel), size S. Needs ABI1 (shared files: the fake, libs/sys docs).\n\nipc.md states lend and transfer as ownership: the caller gives a lend up for the whole call, the server may read and write it until its reply, the return says who owns it (returned / consumed); a transfer is given up at send and becomes the receiver's, owner and payer, at the take, or comes back if the send fails. One owner in every state. The MMU's remap is this kernel's enforcement (I9), stated once; a no-MMU backend may hand the buffer over. No kernel change (verified: take_buffer, give_buffer_back, move_buffer); a false rule is a stop-and-report. The fake refuses every call naming a given-up page. LendDisposition and Buffer docs say ownership; no type changes.\n\nAcceptance: the fake's new host tests; every host test and machine case unchanged, both widths."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "MEM1"
+  title = "Each server's stack declared in the manifest, painted by the launcher, measured by the bench"
+  template = "package"
+  parent = "M1"
+  needs = ["BEAM2"]
+  body = "Owner requested pause. Clean wp-MEM1 cd73175b5 includes scanner a1187eac3 plus final measured declarations/docs. All six FINAL full-workload scans (init-boot,userland-boot,userland-read-only rv64/rv32) PASS exit0, raw evidence archived before pruning in .wash/local/evidence/MEM1. Beamlet16pages,fsd:system6; standard bound507 vs merged521, doubling prose scoped to standard image. Focused host/size/unsafe/no-cruft/docs/format gates PASS. QEMU released, no new runs authorized during pause. target/MEM1-final-report.md records exact identities/peaks. Remaining on resume: full final-head bench on supported rootless reference environment, integration/sign-off, exact-head panel/acceptance. QA MEM1-runtime-stack stays blocking; no package merge/acceptance."
+  state = "reported"
+  revision = 2
+
+[[node]]
+  id = "MEM2"
+  title = "Each server's heap capped in the manifest, enforced by the runtime's allocator"
+  template = "package"
+  parent = "M1"
+  needs = ["MEM1", "ABI1"]
+  body = "Owner (2026-10-03; Redoubt-side seam for an outside no-MMU variant: keep small). Brief: .wash/local/MEM2-implementer.md. Size S+ (the startup block's version and the consumer sweep it forces). Needs MEM1 (scan, tag, manifest checks) and ABI1 (rt's seam).\n\nManifest key heap_pages (absent = no cap; refused 0, or heap + stack at/above the budget's pages). The startup block, version 2, gains heap_pages and tag; rt sets the cap before main. The cap is rt's ceiling below the kernel budget: pages the allocator holds, refused (null) before any map_anon, counted as mapped, not committed; the budget still bounds stacks, Buffers, lends, tables. Past the cap an infallible allocation panics (exit 101, init's restart rule); a fallible one sees the error. A heap record (magic, tag, cap, peak) in data, found by MEM1's scan; the bench fails a cap under twice the peak. Image servers get measured caps. beamlet's budget_pages= todo is not this package's.\n\nAcceptance: rt host tests over the fake (refusal with no map_anon), startup v2/v1, init tests; a tests/programs case capped low; heaps reported by MEM1's memory case both widths. Pages: init.md, budgets.md, native.md, testbench.md."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "VOL1"
+  title = "Verified volumes: verityd checks every block of a read-only volume against a hash tree whose root the signed manifest pins"
+  template = "package"
+  parent = "M1"
+  needs = ["BEAM2"]
+  body = "Brief: .wash/local/VOL1-implementer.md (architect-14). Tier A, size M+ (pinned root M, signed-root step +S). RULED by the owner 2026-10-03: verifier server; BEAM2 lands as built, then VOL1 deletes system.index and beamlet's check; decision 5 reversed (readers trust their verifying servers). Start from main after BEAM2 merges. QA: VOL1-verified-volumes.\n\nStep 1, pinned root: libs/verity (no_std, forbid(unsafe_code), sha2; dm-verity tree after the fs blocks; root = SHA-256(0x02||N||top)) pinned in the volume's manifest entry, signed with the bundle (R15). servers/verityd between blkd and fsd: serves blkd's protocol read-only to the volume's fsd, verifies each block first; mismatch = failed (fsd: corrupt); bad root/truncated: info answers, reads fail, stays up. fsd, littlefs, blkd untouched. init: volumes `verity`, fsd's badge at the verifier, confinement users gain it. Re-aims BEAM2 (plain files, R75 over new R76).\n\nStep 2, signed root: a root block at the range's end (N, version, root, Ed25519 under new domain redoubt.volume.v1 in libs/signing, ed25519-compact); manifest key (hex or \"bundle\") + floor instead of root; verityd refuses a bad signature or version < floor; the packer signs when the recipe names a key (build host only, R35). Image's userland volume stays pinned. SHA-256 tree already detects every bit error (CRC stays under it); no correction.\n\nAcceptance, both widths: verity-flipped-block, -flipped-tree, -wrong-root, userland-boot via verityd; verity-signed, -bad-signature, -rollback; host tests of verity, verityd, init, signing domain, packer determinism. Measured: extra calls, cache hits, boot-to-prompt with/without. Pages: verityd.md (R76), init.md, fsd.md, blkd.md, boot.md (R75, volume domain), beamlet.md, packages.md, testbench.md, SECURITY.md, image/README.md. Hotspot: MEM1."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "BEAM6"
+  title = "The shell's VM on a diet: its idle footprint measured, then cut until the image fits 512 MiB"
+  template = "package"
+  parent = "M2"
+  needs = ["BEAM2", "MEM2"]
+  body = "Owner (2026-10-03): \"1gb for now then we'll need to send beam on diet.\" No code now; brief later (Architect). Size guess M: about half measurement, the rest one or two levers.\n\nToday: the shell's VM at an idle prompt is 11,877 pages (46 MiB) on rv64 and 7,554 (30 MiB) on rv32 (BEAM2 report). BEAM1's rule gives it a 24,576-page budget, so the image needs 1 GiB (BEAM2 ruling 5).\n\n1. Measure: break the idle VM into loaded code, the loader's copies of module bytes, atoms and literals, process heaps, ETS, and the allocator's free-but-held pages, on both widths. This rides on MEM2's heap accounting.\n2. Levers, each measured before and after:\n- load modules lazily from the disk, not the prompt's closure at start;\n- drop the loader's copy of a module's bytes once it is loaded;\n- smaller initial heaps and a GC that returns pages;\n- Docs and debug chunks are already stripped: confirm.\n- Later, once sessions exist (not here): share the stdlib's code pages between VMs.\n3. Target the owner can see, at the quarter split, with the image's other servers at today's 9,984 pages:\n- the image boots at 512 MiB, its budget rule met: the VM at or under about 10,000 pages (39 MiB) on rv64, a cut of about 16%;\n- stretch: QEMU's default 256 MiB, the VM at or under about 2,700 pages (10.5 MiB), a cut of about 4x.\nMEM1/MEM2's per-server stack and heap caps also shrink the other servers' 9,984, which loosens both targets. Report which target was met.\n\nAcceptance: the breakdown table in the report and on beamlet.md; the image's memory_mib lowered to the target met; budgets.md's and image/README.md's RAM lines updated."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "FSD4"
+  title = "A directory listing reads the directory once per window, not once per entry"
+  template = "package"
+  parent = "M1"
+  body = "Brief: .wash/local/FSD4-implementer.md (architect-14). Tier A (servers/fsd), size S, needs nothing. Found by BEAM2 (2026-10-03): listing the userland root (587 files) was unfinished after 400 s, and fsd answered no one else meanwhile. Cause: entry_name (server.rs:426) walks the whole directory for each entry, and each entry is then looked up again by path (node_at, stat_of, qid).\n\nDesign: one listing window per fsd, up to 64 entries with their stats (name, id, kind, size, qid version from the DirEntry's metadata and attributes), filled by one pass and keyed by the directory and a change generation that every volume change moves. dir_entry answers from it and refills on a miss, finding the directory once (its id check stays). Memory bounded (try_reserve). Listing n entries costs about n/64 passes with no per-entry lookup; one request costs at most a bounded number of passes, fixed by msize. The skeleton and littlefs are unchanged.\n\nAcceptance: host tests (pass count for 600 entries, a change between reads refills, one reply's bound); machine case fsd-large-directory, both widths: 600 files packed, listed in under 2 s, a second client's read answered during the listing. Page: fsd.md, a bullet \"A directory is listed a window at a time\" and the residual \"a listing is linear in the directory\"."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "B6"
+  title = "A seed sweep runs its boots in parallel, when asked"
+  template = "package"
+  parent = "M1"
+  body = "Owner (2026-10-03): cut B6. Brief: .wash/local/B6-implementer.md (architect-14). Tier B, tools/testbench only, size S, needs nothing (B7's per-run directories are in). It launches when the host queue allows: its own proof boots QEMU.\n\nThe flags: --sweep SEEDS (A..B or a list; one case with qemu_seed), and --jobs J, which defaults to 1, is valid only with --sweep, and is capped at available_parallelism. Never the default. One build; each boot gets its seed directly (TESTBENCH_QEMU_SEED is refused with --sweep) and keeps its files in run-<pid>-<time>/seed-<N>-<arch>/. The join prints each seed's usual result in seed order, then a summary line (N seeds, passed, failed and which), and exits non-zero on any failure. A result under --jobs above 1 is a sweep datum, never a gate verdict; a timeout under --jobs is rerun alone. The merge gate stays serial.\n\nAcceptance: host tests (seed parsing and refusals, unique names, ordered join, summary and exit status); a machine proof of --sweep 1..4 --jobs 2 on the shortest seeded case, plus a serial replay of one seed matching. Page: testbench.md, after the qemu_seed paragraph, and the usage block."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "K19"
+  title = "A destruction's deliveries happen at its boundary: pumps after the mark, not in its middle"
+  template = "package"
+  parent = "M1"
+  needs = ["IPC3"]
+  body = "Owner (2026-10-03): \"pumps at the boundary\", the recommended option of .wash/local/destroy-simplify.md, goes after IPC3. Tier A (the kernel's destroy path: budget.rs destroy_subtree, message.rs budgets_dying/pump/end_thread/abandon/fail_all, process.rs died/settle_notice), size M (M+ with the chains below). No brief yet: the Architect re-cuts it against IPC3's per-endpoint lists once IPC3 merges. The brief must cover the rescan loop's removal (fail_all's quadratic rescan), the five checks it replaces, the to-pump list collected at the mark and pumped at the boundary, and R10 step 4 tightened to \"from the mark on, no message stamped with a dying budget is delivered\" (budgets.md), with the one mutation retired as unwritable and its reason. The gate's R10 p99 is the check.\n\nAdded (IPC3's finding, 2026-10-03; docs/todo/destruction-walks-every-process.md): at full occupancy a destruction walks every process object three times (process::budgets_dying, destroy_marked's PID pass, destroy_subtree's live PIDs; ~12 us each at 510), so worst-walk's R10 is over 30 ms (IPC3 measures it after its exit-notice list). K19 adds per-budget chains so each follows the dying subtree; done when worst-walk's R10 at full fill is within 30 ms, its must_fail flips back to must-pass, and the todo page and R10's residual bullet are deleted."
+  state = "todo"
+  revision = 2
+
+[[node]]
+  id = "AIO1"
+  title = "One I/O hub per process: many outstanding 9P requests on one thread, the kernel unchanged"
+  template = "package"
+  parent = "beamlet-redoubt"
+  body = "Owner (2026-10-03): one thread on the non-kernel side holds the buffers; AIO goes through it. Brief: .wash/local/AIO1-implementer.md (architect-14). Tier A (the serving library and the 9P skeleton; the client library), size M+, needs nothing. BEAM3 builds on it. Background: .wash/local/async-ipc-assessment.md.\n\nRuled: the completion side is one hub thread plus one thin waiter per server connection (a long-poll completion call each). Completions by send to a client endpoint are refused: the authority would match a reply's (R1), but the server's send blocks on the client's one thread, which can deadlock with that thread's own send, and any timeout drops a result and breaks R26. Exactly one thread needs a kernel notification object (AIO2, the owner's later choice, S-M, after IPC3); an endpoint set does not do it.\n\nDesign: the hub owns every buffer (by value in, by value out), sends tagged 9P requests (transfers for data; a short send timeout, retried, never lost), and dispatches completions. The serving library parks requests under the connection's admission share; undelivered completions count against it; over the share a request is answered busy; tags at most 256 per connection; Tflush answered once; the completion call's abandonment ends the connection.\n\nAcceptance: host attack tests (a never-polling client, death with requests parked, death between polls found at deadlines, a flush racing a completion, a send flood at WAIT_CAP, tag misuse); the machine case aio-many-reads (64 outstanding reads, 1 hub + 1 waiter, another client served meanwhile); today's one-call 9P unchanged. Pages: serving.md (Multiplexed connections, a new rule R7x, R26/R28 sentences), files.md, SECURITY.md."
+  state = "done"
+  revision = 2
+
+[[node]]
+  id = "SCHED1"
+  title = "Shorter scheduler slices drain clustered runnable budgets within existing wake targets"
+  template = "package"
+  parent = "M1"
+  needs = ["K22", "ASID1"]
+  body = "Go-boundary host fix fe3ae211 at HEAD7b23f5283 passed red dd2a73b1, guest unchanged. Corrected archived replay stops sample0: conservative L920616<release920644; clock bracket cannot prove real deadline early/inside. Independently E-gross audit interval starts27us before release, so timestamp witness alone cannot qualify archive. .wash/local/SCHED1-sample0-clock-ruling.md. Architect3382d196 preparing complete prospective time/window/measurement construction, including raw-counter go vs reported time_now mismatch; no clamp, dropped samples, margin tuning or silent gate changes. Source/machine held. All200 exact waits/fences/category/debt/latency gates, same candidate/control, old10ms qualification/failure, both widths and final costs/sweeps/fullTierA/docs/scheduler-only replay/review/merge remain. QA IPC3-wake-latency blocking; IPC3 follows accepted scheduler."
+  state = "active"
+  revision = 2
+
+[[node]]
+  id = "BEAM7"
+  title = "Preserve terminal refusal across module and app platform lookup"
+  template = "package"
+  parent = "beamlet-redoubt"
+  needs = ["BEAM2"]
+  body = "Clean head6a79d0e1356493f5307b2af19934b4f3d8515c79 on base9212f6f600591abb3ea78ef450e0d6f4d517ab92. Wholebench399PASS/1FAIL only missing-podman OpenSSH reference; all product/model/miri/both-width cases pass. Final panel completed: red95840c93 and simplifierd1527691 OK with notes; editor9fefa255 BLOCK solely known environment acceptance gate. NO source/docs findings; earlier routing/app_spec findings closed. Full rv32 builds and other gates PASS. Stable evidence .wash/local/evidence/BEAM7,427 verified checksums; source/report root .wash/local/BEAM7-report.md. Hold head unchanged, no redundant tests pending BENCHENV1. Supported reference environment and unfiltered final acceptance PASS required before merge; integration delta review if head changes. MEM1 currently owns QEMU; no async/files integration."
+  state = "active"
+  revision = 2
+
+[[node]]
+  id = "BENCHENV1"
+  title = "OpenSSH's reference server runs in a QEMU guest, not a container"
+  template = "package"
+  parent = "M1"
+  body = "Owner decision 2026-10-04 (orchestrator's session), superseding 'Keep rootless; supply runner': the reference sshd runs in a minimal Linux guest under the bench's own qemu-system-riscv64, one guest per SSH session as ssh's ProxyCommand. No container runtime, root or user namespaces; no port, no network, no host filesystem in the guest (the case's files ride in an appended initramfs cpio); the log is appended on the host by QEMU's file chardev; the recipe tests/ssh-reference/guest.toml pins Debian trixie riscv64 packages by snapshot.debian.org URL and sha256, replacing the Containerfile. Brief: .wash/local/BENCHENV1-implementer.md (design, checkpoint 1, deliverables, page lines in docs/testbench.md 'Sessions and the loopback server', gates). Unblocks BEAM7, MEM1 and SCHED1/IPC3's whole benches: the reference case must PASS, not skip. Tier A (the bench), size M, no needs. wp-BENCHENV1 from main 9212f6f60; implementer launched; panel at review time. QA BENCHENV1-container-permissions stays open until the case passes in a whole bench."
+  state = "done"
+  revision = 17
+
+[[node]]
+  id = "TOOL1"
+  title = "One prerequisites list, one install script, a dev image that is only that"
+  template = "package"
+  parent = "M1"
+  needs = ["BENCHENV1"]
+  body = "Owner 2026-10-04: minimal tooling, easy to install with scripts that work on Ubuntu; Debian stays the image's base; all agent tooling (Node, pi, Claude Code, Codex, sudo, git identity, SSH-key and host-key seeding, /config mount, scripts/pi-ensure.sh, scripts/ssh-key-ensure.sh) leaves the tree; the bench drops its QEMU 10.1 (-run-with exit-with-parent, replaced by PR_SET_PDEATHSIG from the bench) and OpenSSH 10.1 (WarnWeakCrypto, passed only when ssh takes it) requirements so stock Ubuntu 24.04 packages run it. Deliverables: scripts/setup.sh (Debian/Ubuntu, idempotent, --with-beam optional), Dockerfile = debian:trixie + user + that script, dev.sh = mount and run, pages (GETTING-STARTED prerequisites, testbench.md's two paragraphs). Brief: .wash/local/TOOL1-implementer.md. Tier B (tooling: implementer + editor), size S-M. Needs BENCHENV1 (ssh.rs, the guest's QEMU line). Launches after BENCHENV1 merges."
+  state = "done"
+  revision = 25
+  overrides = ["2026-10-05: started by Orchestrator before BENCHENV1 (active): Owner 2026-10-04: 'move TOOL1 forward, get that done and i'll do it immediately'. BENCHENV1 is in its merge-gate bench; TOOL1's script, Dockerfile, dev.sh and pages touch none of its files, and the two bench-flag edits (ssh.rs, ssh_guest.rs, qemu.rs) wait for BENCHENV1's merge and a rebase onto it."]
+
+[[node]]
+  id = "B8"
+  title = "aio-many-reads-two flakes on rv32: a reader's receive times out"
+  template = "package"
+  parent = "M1"
+  body = "Found by BENCHENV1's merge-gate bench 2026-10-04 and shown to predate it: on main 9212f6f60 the case fails 1 of 10 runs alone; on wp-BENCHENV1 f7a0cb1eb (no AIO, kernel or boot change) 4 of 15. rv32 only. First failing line: 'forbidden output /aio-reader TEST FAILED/: ... aio-reader TEST FAILED: receive: Timeout' at ~21 s. AIO1's case (tests/aio-many-reads-two, the hub keeping 64 reads outstanding on one thread). Find whether the case's timeout is too tight for rv32 under TCG or the hub drops a completion; the case must order on events or the bug is the hub's. Memory: AIO1's timeout tests also failed under host load before. Tier A if the hub changes (libs/client), Tier B if the case alone. Size S."
+  state = "todo"
+  revision = 10
+
+[[node]]
+  id = "B9"
+  title = "The keeper's host test races /proc under load"
+  template = "package"
+  parent = "M1"
+  body = "Found by TOOL1's gates 2026-10-05: tools/testbench ssh::tests::the_keeper_finds_what_names_the_case (BENCHENV1's keeper: a qemu-system-riscv64 naming the case directory after the sessions) failed once in a whole bench's host-tests case and once in cargo test -p testbench under load, 0 of 30 alone. Likely a /proc/*/cmdline scan racing a process that is starting or exiting. Make the test deterministic (spawn and wait for the stand-in to be visible before scanning; or order on an event) without weakening the keeper. Tier B (a host test), size S, no needs."
+  state = "todo"
+  revision = 23
+
+[[node]]
+  id = "DOC1"
+  title = "Getting started names the prerequisites for a machine without apt"
+  template = "package"
+  parent = "M1"
+  body = "Owner 2026-10-05: the page should list the dependencies too, for an OS that is not Debian-family. Docs only: one block under the script's paragraph in GETTING-STARTED.md naming the system tools (C toolchain, git, curl, xz, CA certificates, qemu-system-riscv64/32 >= 8.2, OpenSSH client >= 9.6, dpkg-deb, GDB with RISC-V optional), the rustup lines (1.99.0 from rust-toolchain.toml with its targets and components; nightly rustfmt/miri/rust-src; the four pinned cargo tools), and --with-beam's OTP/Elixir, pointing at the files that pin them. Written by the orchestrator, reviewed by an editor, doccheck. Tier: docs only, size XS."
+  state = "done"
+  revision = 30

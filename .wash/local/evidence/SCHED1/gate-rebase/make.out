@@ -1,0 +1,70 @@
+make: Entering directory '/home/mcloonan/redoubt/.worktrees/SCHED1'
+PASS  docs                               1.0s
+docs rc=0
+PASS  formatting                        10.9s
+rv64/formatting rc=0 (shared)
+PASS  unsafe-budget                   
+rv64/unsafe-budget rc=0 (shared)
+PASS  size-budget                     
+rv64/size-budget rc=0 (shared)
+PASS  no-cruft                        
+rv64/no-cruft rc=0 (shared)
+    Finished `release` profile [optimized] target(s) in 14.28s
+==> done
+build-rv64 rc=0
+    Finished `release` profile [optimized] target(s) in 25.00s
+==> done
+build-rv32 rc=0
+PASS  sched-large-weight [rv64, smp=1]   1.2s
+rv64/sched-large-weight rc=0 (shared)
+PASS  sched-debt-lift [rv64, smp=1]      3.5s
+rv64/sched-debt-lift rc=0 (shared)
+PASS  sched-debt-lift [rv32, smp=1]      3.0s
+rv32/sched-debt-lift rc=0 (shared)
+PASS  sched-large-weight [rv32, smp=1]   1.0s
+rv32/sched-large-weight rc=0 (shared)
+PASS  sched-carve-inflation [rv32, smp=1]   1.2s
+rv32/sched-carve-inflation rc=0 (shared)
+PASS  sched-server-busy [rv64, smp=1]    1.5s
+rv64/sched-server-busy rc=0 (shared)
+PASS  sched-server-busy [rv32, smp=1]    1.3s
+rv32/sched-server-busy rc=0 (shared)
+PASS  sched-carve-inflation [rv64, smp=1]   1.6s
+rv64/sched-carve-inflation rc=0 (shared)
+PASS  sched-ties [rv32, smp=1]           1.5s
+rv32/sched-ties rc=0 (shared)
+PASS  sched-ties [rv64, smp=1]           1.9s
+rv64/sched-ties rc=0 (shared)
+PASS  sched-cluster-old-control [rv64, smp=1]   6.5s
+rv64/sched-cluster-old-control rc=0 (shared)
+PASS  sched-cluster [rv32, smp=1]       15.3s
+rv32/sched-cluster rc=0 (shared)
+PASS  sched-cluster [rv64, smp=1]       17.7s
+rv64/sched-cluster rc=0 (shared)
+PASS  sched-cluster-old-control [rv32, smp=1]   4.8s
+rv32/sched-cluster-old-control rc=0 (shared)
+FAIL  init-boot [rv64, smp=1]            6.5s  beamlet: no heap record found
+rv64/init-boot rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:78: rv64/init-boot] Error 1
+FAIL  init-boot [rv32, smp=1]            6.7s  beamlet: no heap record found
+rv32/init-boot rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:78: rv32/init-boot] Error 1
+PASS  ipc-outcomes [rv64, smp=1]         1.9s
+rv64/ipc-outcomes rc=0 (shared)
+PASS  ipc-outcomes [rv32, smp=1]         1.8s
+rv32/ipc-outcomes rc=0 (shared)
+PASS  userland-boot [rv32, smp=1]       92.1s
+rv32/userland-boot rc=0 (shared)
+PASS  userland-boot [rv64, smp=1]      102.1s
+rv64/userland-boot rc=0 (shared)
+PASS  bench-net-peer-count [rv64, smp=1]   0.4s
+PASS  bench-net-peer-pcap-empty [rv64, smp=1]   0.4s
+PASS  bench-net-peer-twice [rv64, smp=1]   0.4s
+PASS  bench-net-peer [rv64, smp=1]       0.4s
+rv64/bench-net-peer rc=0 (net)
+PASS  bench-net-peer-count [rv32, smp=1]   0.6s
+PASS  bench-net-peer-pcap-empty [rv32, smp=1]   0.6s
+PASS  bench-net-peer-twice [rv32, smp=1]   0.6s
+PASS  bench-net-peer [rv32, smp=1]       0.6s
+rv32/bench-net-peer rc=0 (net)
+make: Leaving directory '/home/mcloonan/redoubt/.worktrees/SCHED1'

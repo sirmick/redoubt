@@ -67,8 +67,16 @@ the rest wake. Do not stagger the sixteen spinners to manufacture favorable pass
 
 Retain the proposed proof obligations: all sixteen distinct spinner wakes before the next
 pick, still queued there, and the stated <=100 us equivalent pass spread; floor/lead
-classified at each W using the independent replay; positive lead has >=8 spinners ranked
-ahead. Retain at least 25 zero-lead and 25 positive-lead samples per stand-in, with >=5
+classified at each W using the independent replay; positive lead is `W.pass` above the
+replayed floor. (Amended 2026-10-05 by the Architect's coverage ruling,
+`SCHED1-coverage-ruling.md`: the former ">=8 spinners ranked ahead" measured the slice, not
+the debt. Under a 1 ms slice a weight-1000 waker is picked within one own slice, 10 * 2^20,
+of the lowest spinner, while spinners space about 100 * 2^20 apart after release, so >=8
+ahead is unreachable at 1 ms whatever the waker owes; it is the 10 ms attack's signature.
+`ahead` stays a recorded witness, reported as min/median/max per category for candidate and
+control alike by the same oracle with no new parameter. The old control is non-vacuous only
+if at least 25 of its positive-lead wakes per stand-in show `ahead >= 8`.) Retain at least
+25 zero-lead and 25 positive-lead samples per stand-in, with >=5
 per category at each programmed offset. Offset coverage describes the programmed attempts;
 it is not proof of exact sub-slice timing. Failure to obtain these categories is a fixture
 failure to report, not evidence for or against the latency target by itself. Do not relabel

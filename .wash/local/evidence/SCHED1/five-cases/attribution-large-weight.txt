@@ -1,0 +1,11 @@
+window 332841..2350445 us = 2017604 us; audits inside 107288 us (5.3%)
+timer interrupts 1381; median gap 1451.0 us
+budget 31 w=1000: picks 763, charged runs 763, median charge 11619 ticks, one-tick charges 0, charged 8205123 ticks = 820512 us, share of charged 600/1000, of the window 407/1000, of the window net of audits 430/1000
+budget 34 w=100: picks 77, charged runs 77, median charge 8865 ticks, one-tick charges 0, charged 682619 ticks = 68262 us, share of charged 50/1000, of the window 34/1000, of the window net of audits 36/1000
+budget 37 w=100: picks 77, charged runs 77, median charge 8867 ticks, one-tick charges 0, charged 682611 ticks = 68261 us, share of charged 50/1000, of the window 34/1000, of the window net of audits 36/1000
+budget 40 w=100: picks 77, charged runs 77, median charge 8865 ticks, one-tick charges 0, charged 682552 ticks = 68255 us, share of charged 50/1000, of the window 34/1000, of the window net of audits 36/1000
+budget 43 w=100: picks 78, charged runs 78, median charge 8863.0 ticks, one-tick charges 0, charged 695216 ticks = 69522 us, share of charged 51/1000, of the window 34/1000, of the window net of audits 36/1000
+budget 46 w=100: picks 78, charged runs 77, median charge 8867 ticks, one-tick charges 0, charged 682693 ticks = 68269 us, share of charged 50/1000, of the window 34/1000, of the window net of audits 36/1000
+budget 49 w=100: picks 77, charged runs 77, median charge 8867 ticks, one-tick charges 0, charged 682703 ticks = 68270 us, share of charged 50/1000, of the window 34/1000, of the window net of audits 36/1000
+budget 52 w=100: picks 77, charged runs 77, median charge 8867 ticks, one-tick charges 0, charged 682761 ticks = 68276 us, share of charged 50/1000, of the window 34/1000, of the window net of audits 36/1000
+budget 55 w=100: picks 77, charged runs 77, median charge 8868 ticks, one-tick charges 0, charged 686894 ticks = 68689 us, share of charged 50/1000, of the window 34/1000, of the window net of audits 36/1000

@@ -1,0 +1,2 @@
+FAIL  sched-debt-lift [rv32, smp=1]      2.9s  sched_oracle: round: budget 87, woken at record 6593, was picked at record 6602 after 0 picks of other budgets, not the 16 a round needs: the round was not exercised
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-162392-1791288967676035353

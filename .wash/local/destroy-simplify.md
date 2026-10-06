@@ -44,6 +44,12 @@ One consequence of fact 1 that I read from the code and have not yet confirmed b
   kept finding. The first commit of the package below should confirm or refute it with a model
   trace.
 
+  **Refuted by that trace** (`.wash/local/K19-report.md`, checkpoint 1): pumps outside a
+  destruction are eager, so at the mark no endpoint holds a message a waiting receiver could
+  take, and a kill adds only notices and `Dead` wake-ups. What a mid-kill pump does allow is a
+  doomed receiver taking a notice owed to a survivor, which the `process_is_doomed` checks stop
+  today. The boundary design stands on that case and on the simplification.
+
 ## (1) One mechanism doing two jobs
 
 Yes: the pump (fact 1). The reverse direction, IPC walking budgets, is legitimate. R2 groups by

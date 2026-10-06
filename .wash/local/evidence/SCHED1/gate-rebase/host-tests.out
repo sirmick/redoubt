@@ -1,0 +1,262 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling redoubt-wire v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/libs/wire)
+   Compiling redoubt-model v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/model)
+   Compiling littlefs v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/libs/littlefs)
+   Compiling redoubt-verity v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/libs/verity)
+   Compiling redoubt-rt v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/libs/rt)
+   Compiling stub v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/stub)
+   Compiling redoubt-client v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/libs/client)
+   Compiling redoubt-blkd v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/servers/blkd)
+   Compiling redoubt-littlefsd v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/servers/littlefsd)
+   Compiling redoubt-stride v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/libs/stride)
+   Compiling testbench v0.1.0 (/home/mcloonan/redoubt/.worktrees/SCHED1/tools/testbench)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.79s
+     Running unittests src/lib.rs (target/debug/deps/loader-83720115c47cc521)
+
+running 7 tests
+test dt::tests::a_boot_hart_without_an_s_mode_context_is_refused - should panic ... ok
+test dt::tests::a_33rd_interrupt_is_refused - should panic ... ok
+test dt::tests::an_interrupt_two_devices_raise_takes_one_slot ... ok
+test dt::tests::hart_0_without_an_s_mode_context_does_not_stop_a_boot_on_hart_1 ... ok
+test dt::tests::a_33rd_mmio_region_is_refused - should panic ... ok
+test dt::tests::booting_on_hart_1_takes_hart_1s_s_mode_context ... ok
+test dt::tests::thirty_two_devices_are_kept ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/paging-3ad8589bcc621ef4)
+
+running 9 tests
+test tests::a_full_asid_leaves_the_root_and_mode_alone ... ok
+test tests::the_asid_width_decision ... ok
+test tests::satp_round_trips_on_both_layouts ... ok
+test tlb::tests::a_flush_empties_what_it_covers_and_keeps_the_rest_in_order ... ok
+test tests::an_asid_past_the_field_is_refused - should panic ... ok
+test tlb::tests::a_full_log_names_its_oldest_record ... ok
+test tlb::tests::each_flush_covers_what_the_spec_says ... ok
+test tlb::tests::each_record_names_the_narrowest_flush_that_covers_it ... ok
+test tlb::tests::records_print_what_they_name ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/redoubt_ipclist-2d840bd593f06351)
+
+running 10 tests
+test tests::a_full_receiver_skips_calls ... ok
+test tests::a_group_moves_on_a_take ... ok
+test tests::a_node_passes_to_its_next_sender ... ok
+test tests::a_timed_wait_leaves_by_every_path ... ok
+test tests::exit_notices_wait_in_the_order_they_came ... ok
+test tests::receivers_wait_in_arrival_order ... ok
+test tests::each_audit_trips_on_a_corrupted_link ... ok
+test tests::a_destruction_empties_every_list ... ok
+test tests::the_due_list_sorts_stably ... ok
+test tests::the_groups_follow_the_model ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+     Running unittests src/lib.rs (target/debug/deps/redoubt_layout-5b953da836d8d418)
+
+running 4 tests
+test tests::ram_ending_at_the_physmap_end_is_covered ... ok
+test tests::ram_one_page_past_the_physmap_end_is_refused ... ok
+test tests::the_sv32_physmap_ends_inside_32_bits ... ok
+test tests::the_link_scripts_put_the_kernel_text_at_kernel_text ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/redoubt_signing-32c02781d1c4ec88)
+
+running 2 tests
+test tests::domain_is_prefix_free ... ok
+test tests::preamble_is_the_documented_bytes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/redoubt_stride-86ba047e684f4b5e)
+
+running 16 tests
+test tests::a_churned_child_adds_to_a_leading_parent ... ok
+test tests::a_missed_mark_trips_the_audit ... ok
+test tests::a_reconcile_takes_budgets_out_in_place ... ok
+test tests::a_running_budget_stays_queued_and_counts_for_the_floor ... ok
+test tests::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran ... ok
+test tests::a_settle_moves_counts_between_budgets ... ok
+test tests::a_reconcile_visits_only_the_budgets_it_is_given ... ok
+test tests::a_wrong_reconcile_trips_its_own_check ... ok
+test tests::every_charge_counts_at_any_weight ... ok
+test tests::ranks_follow_all_four_clauses ... ok
+test tests::the_floor_survives_an_empty_queue ... ok
+test tests::the_inherited_wait_is_not_counted_again ... ok
+test tests::create_then_destroy_without_a_run_moves_nothing ... ok
+test tests::a_carve_and_its_return_leave_the_state ... ok
+test tests::a_split_charge_equals_the_whole ... ok
+test tests::the_marked_reconcile_matches_a_full_one ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/differential.rs (target/debug/deps/differential-5420fe15d122478c)
+
+running 2 tests
+test a_broken_model_disagrees ... ok
+test the_crate_and_the_model_agree ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s
+
+     Running unittests src/main.rs (target/debug/deps/testbench-c979bfe0b1413fe3)
+
+running 118 tests
+test budget::tests::broken_nested_symlink_is_not_silently_skipped ... ok
+test budget::tests::a_long_safety_block_directly_above_justifies ... ok
+test budget::tests::actual_source_counts_still_enforce_the_budget ... ok
+test budget::tests::empty_configuration_is_not_coverage ... ok
+test budget::tests::every_configured_root_must_contain_rust_source ... ok
+test budget::tests::unreadable_source_reports_its_path ... ok
+test budget::tests::missing_paths_fail_regardless_of_extension ... ok
+test budget::tests::every_on_target_source_is_in_a_budget ... ok
+test budget::tests::zero_unsafe_source_is_valid_as_a_file_or_nested_directory ... ok
+test build::tests::a_miri_case_runs_its_files_under_miri ... ok
+test build::tests::host_tests_route_only_to_a_requested_workspace_and_forward_features ... ok
+test build::tests::the_manifest_pins_the_packs_root ... ok
+test build::tests::the_signed_bytes_are_the_documented_preimage ... ok
+test build::tests::the_signing_seed_is_the_key_the_loader_trusts ... ok
+test build::tests::golden_signature_over_a_known_archive ... ok
+test build::tests::the_test_programs_rebuild_their_stub_on_every_input ... ok
+test build::tests::zeros_are_a_file_of_that_length_in_the_run ... ok
+test case::tests::a_case_out_of_the_whole_run_runs_only_by_name ... ok
+test case::tests::a_package_program_takes_features ... ok
+test case::tests::a_file_s_servers_merge_into_its_manifest_by_name ... ok
+test case::tests::a_program_may_come_from_another_workspace_or_from_erlang ... ok
+test case::tests::host_tests_default_to_root_and_accept_a_workspace_and_features ... ok
+test case::tests::resize_needs_a_pty ... ok
+test case::tests::the_image_recipe_packs_init_the_servers_and_the_manifest ... ok
+test case::tests::every_beamlet_is_told_its_own_budget ... ok
+test cruft::tests::a_rule_scoped_where_nothing_is_searched_fails ... ok
+test disk::tests::a_noise_partition_is_the_same_noise_every_time ... ok
+test disk::tests::a_recipe_can_generate_a_directory_of_files ... ok
+test disk::tests::a_stage_is_walked_parents_first_in_name_order ... ok
+test disk::tests::a_recipe_packs_a_table_and_a_volume_per_partition ... ok
+test budget::tests::a_raise_needs_its_unsafe_budget_line ... ok
+test fmt::tests::diff_headers_of_both_rustfmt_forms_name_the_file ... ok
+test fmt::tests::only_tracked_workspaces_are_reported ... ok
+test memory::tests::scanner_does_not_credit_a_partial_word_that_looks_out_of_range ... ok
+test memory::tests::scanner_ignores_a_paint_word_copied_to_another_stack_slot ... ok
+test memory::tests::scanner_measures_the_lowest_missing_unit ... ok
+test memory::tests::scanner_refuses_a_missing_or_duplicated_heap_record ... ok
+test memory::tests::scanner_refuses_a_page_congruent_out_of_range_marker ... ok
+test memory::tests::scanner_refuses_missing_duplicate_and_too_little_margin ... ok
+test memory::tests::scanner_reports_each_heap_and_holds_a_cap_to_twice_its_peak ... ok
+test peer::tests::a_capture_is_read_fail_closed ... ok
+test peer::tests::a_dial_needs_its_echo ... ok
+test build::tests::interleaved_builds_each_pack_their_own_binary ... ok
+test peer::tests::prefixes_and_peers_are_checked ... ok
+test peer::tests::records_are_counted_per_peer ... ok
+test peer::tests::what_the_guest_sends_is_checked ... ok
+test pty::tests::no_other_child_inherits_a_sessions_terminal ... ok
+test disk::tests::a_verified_partition_is_its_volume_then_its_tree ... ok
+test qemu::tests::a_poke_gets_a_udp_forward ... ok
+test qemu::tests::a_killed_bench_leaves_no_qemu ... ok
+test qemu::tests::a_qmp_socket_path_binds ... ok
+test qemu::tests::devices_sit_on_fixed_slots ... ok
+test qemu::tests::every_network_is_restricted ... ok
+test qemu::tests::peers_get_the_wider_network_and_a_capture ... ok
+test elixir::tests::another_version_is_refused ... ok
+test qemu::tests::virtio_devices_are_modern ... ok
+test run::tests::overlapping_runs_get_their_own_directories ... ok
+test qemu::tests::a_qemu_lacking_an_option_is_named ... ok
+test qemu::tests::the_userland_disk_sits_on_its_slot_read_only ... ok
+test sched_oracle::tests::a_broken_trace_is_rejected ... ok
+test sched_oracle::tests::a_budget_picked_twice_before_the_marked_one_fails ... ok
+test sched_oracle::tests::a_control_keeps_the_programs_own_gates ... ok
+test sched_oracle::tests::a_control_that_misses_its_slot_is_classified_net_of_audits ... ok
+test sched_oracle::tests::a_destructions_threads_ending_is_timed_inside_it ... ok
+test sched_oracle::tests::a_marked_wake_picked_within_one_round_passes ... ok
+test sched_oracle::tests::a_round_check_without_its_marker_or_new_budget_fails ... ok
+test sched_oracle::tests::a_timer_interrupt_bills_the_budgets_whose_items_it_expired ... ok
+test sched_oracle::tests::a_trace_that_keeps_every_clause_passes ... ok
+test sched_oracle::tests::a_walk_is_bounded_net_of_audits_before_r10 ... ok
+test sched_oracle::tests::an_unmatched_audit_fails ... ok
+test sched_oracle::tests::audits_are_subtracted_inside_each_window ... ok
+test sched_oracle::tests::carve_return_proof_requires_the_same_running_turn ... ok
+test sched_oracle::tests::cluster_credit_is_the_certified_interior_only ... ok
+test sched_oracle::tests::cluster_envelope_qualifies_where_the_old_rtc_interval_did_not ... ok
+test sched_oracle::tests::cluster_fences_reject_missing_duplicate_and_wrong_callers ... ok
+test sched_oracle::tests::cluster_go_protocol_distinguishes_readiness_from_window_and_release ... ok
+test sched_oracle::tests::cluster_lower_witness_counts_the_union_of_outer_bins ... ok
+test sched_oracle::tests::cluster_metadata_rejects_a_preparation_slip_it_cannot_sign ... ok
+test sched_oracle::tests::cluster_metadata_rejects_arming_and_containment_failures ... ok
+test sched_oracle::tests::cluster_metadata_rejects_bad_records_and_bounds ... ok
+test sched_oracle::tests::cluster_plan_rejects_the_old_construction ... ok
+test sched_oracle::tests::cluster_wait_boundary_rejects_report_substitution_and_extra_wakes ... ok
+test sched_oracle::tests::destructions_are_timed_and_bounded ... ok
+test sched_oracle::tests::each_broken_clause_is_caught ... ok
+test sched_oracle::tests::lifts_are_recomputed ... ok
+test sched_oracle::tests::shares_are_judged_net_of_audits ... ok
+test sched_oracle::tests::the_floor_and_the_passes_are_checked_on_their_own ... ok
+test sched_oracle::tests::the_old_control_must_fail_on_its_lower_witness ... ok
+test sched_oracle::tests::timeout_wake_proof_rejects_preemption_and_an_unframed_wake ... ok
+test sched_oracle::tests::walks_are_reported_net_of_audits_and_never_nested ... ok
+test sched_oracle::tests::weight_changes_are_recomputed ... ok
+test size::tests::a_deleted_budget_file_fails ... ok
+test size::tests::a_form_the_case_cannot_follow_fails ... ok
+Automatic merge went well; stopped before committing as requested
+test size::tests::a_merge_is_judged_against_its_first_parent ... ok
+test size::tests::a_new_budget_file_needs_every_reason ... ok
+test size::tests::a_raise_needs_its_reason ... ok
+test size::tests::a_shipped_file_always_counts ... ok
+test size::tests::a_test_module_does_not_count ... ok
+test size::tests::a_test_module_file_does_not_count ... ok
+test size::tests::merged_history_is_not_read_again ... ok
+test size::tests::only_code_lines_count ... ok
+test size::tests::the_ratchet_reads_the_commit_that_raised ... ok
+test ssh::tests::an_ssh_lacking_an_option_is_named ... ok
+test ssh::tests::the_keeper_finds_what_names_the_case ... ok
+test sched_oracle::model::the_models_own_ranks_pass ... ok
+test ssh::tests::the_reference_proxy_quotes_only_what_the_bench_chose ... ok
+test ssh_guest::tests::a_bad_package_is_broken_and_no_network_is_the_hosts ... ok
+test ssh_guest::tests::the_cpio_writer_writes_newc ... ok
+test ssh_guest::tests::the_guest_recipe_parses_and_hashes ... ok
+test tests::a_sweep_is_refused_before_anything_builds ... ok
+test tests::distinct_captures_differ_within_a_boot ... ok
+test tests::sweep_boots_have_their_own_files ... ok
+test tests::sweep_seeds_are_ranges_or_lists ... ok
+test tests::the_join_prints_in_seed_order_and_counts_failures ... ok
+test userland::tests::the_userland_pack_is_deterministic_and_stages_each_object_by_name ... ok
+test sched_oracle::model::the_models_broken_ties_are_caught ... ok
+test peer::tests::peers_are_judged_on_records_and_capture ... ok
+test ssh::tests::the_keeper_waits_to_the_deadline ... ok
+
+test result: ok. 118 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.65s
+
+   Doc-tests paging
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests redoubt_ipclist
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests redoubt_layout
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests redoubt_signing
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests redoubt_stride
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

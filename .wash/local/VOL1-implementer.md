@@ -252,6 +252,24 @@ cases.
   (`/Elixir.Enum.beam`, `/elixir.app`), and `load_module` and `load_app` read them by name.
 - A `corrupt` or missing file is a failed load, with one console line naming the file and the
   reason. The parked start (BEAM2 point 6) and the read-only case are kept.
+- **Ruling (architect-15, 2026-10-05; QA `VOL1-absent-vs-refused`): absent and refused are told
+  apart by the 9P error name, at the open and after it.** This is wire.md's planned "Error names"
+  design (`docs/servers/wire.md#error-names`), not a new rule; VOL1 builds the least of it that
+  the lookup needs. `libs/client` gives an `Rerror` its name: `Error::Rerror` becomes (or gains
+  beside it) a variant carrying the table's name, at minimum `not_found` (`file does not exist`,
+  and a walk that stopped short) against everything else; the text is never kept (native.md's
+  "An `Rerror` has a name" bullet already says so). beamlet maps `not_found` to `Absent`, silent,
+  as BEAM7 does (the VM's probes stay quiet); any other name at the open or on a read (`corrupt`
+  from a poisoned `fsd`, a short or long file, a device error) is `Refused`, terminal, with the
+  one console line naming the file and the name. So a verity refusal of a metadata block is a
+  diagnosis, never an `UndefinedFunctionError`. Option A (every open failure is absent) is not
+  acceptable even as an interim: it loses the line the verifier exists to give, and case 1's
+  expectation ("beamlet's failed load naming the module") must hold for a flipped metadata block
+  as for a data block. Option B is noise at the prompt. A host case in `libs/client` covers the
+  split (a server answering `file does not exist` against one answering `corrupt`), and a
+  `beamlet-redoubt` host case covers the mapping; the sweep of `Error::Rerror` matches
+  (`grants.rs`, `userland.rs`, the tests in `libs/client`, `servers/fsd`, `userland/otp`) is
+  yours. The full table and beamlet's `file` errors stay BEAM3's.
 - **R75** (boot.md) is restated: a module or application resource the system resolves by name, and
   a program it launches from the userland disk, comes only from a verified volume (R76). Its tests
   become VOL1's cases.
@@ -326,6 +344,14 @@ Every case that boots the image's manifest sets `memory_mib = 1024`.
     that volume's `fsd` and `verityd` (R76) in place of checking each object itself.
   - BEAM2's confined-boot limit line is replaced by the rule: each label set that runs beamlet
     reads its own attachment through its own `blkd`, `verityd` and `fsd`.
+  - BEAM7's lookup sentence ("a name missing from `system.index` is absent, while an indexed
+    object that fails verification is refused") becomes: a name the volume's `fsd` answers
+    `not_found` to is absent; any other refusal at the open or on the read (`corrupt`, a short or
+    long file, a device error) is refused, with one console line naming the file and the error
+    name. The `load_module` row says the same in short.
+- **native.md**, "An `Rerror` has a name": the status of that bullet moves from planned to
+  partly built (the name is kept; `not_found` against the rest; the full table is BEAM3's), and
+  the tests list gains the host case. **wire.md** "Error names": status line likewise.
 - **packages.md:** the userland-disk paragraph says the same.
 - **boot.md**, "Verified boot": the volume domain `"redoubt.volume.v1\0"` beside the bundle's,
   as one more domain built the same way, with `redoubt-signing`'s domain test extended.
@@ -342,6 +368,14 @@ Every case that boots the image's manifest sets `memory_mib = 1024`.
 - `image/**`: the recipe and the manifest's entries.
 - BEAM2's index code in `userland/otp/redoubt/**`, `image/` and
   `bootfsd`'s line.
+- `libs/client/src/error.rs` and the `Rerror` mapping in `libs/client`: the error name only
+  (the ruling above), and the consumers of `Error::Rerror` that the change breaks. Placement
+  (orchestrator, on the thread; the Architect agrees): `libs/rt/src/client.rs` `ClientError`
+  gains `NotFound` (an `Rerror` whose text is `NineError::NOT_FOUND`, or a walk that stopped
+  short); `Remote` stays for every other text; `libs/client` has `Error::Rerror(Name)` with
+  `Name { NotFound, Other }`, which BEAM3 grows to the table. The rt change is its own commit with
+  its tests; the runtime-change rule applies (every bin linking `redoubt_rt` built on both widths
+  before any bench). No other `libs/rt` file.
 - The pages above.
 
 **Not yours:** `servers/fsd`, `libs/littlefs`, `servers/blkd` (report anything a boot finds), the

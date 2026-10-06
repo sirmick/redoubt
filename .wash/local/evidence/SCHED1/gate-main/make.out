@@ -1,0 +1,41 @@
+make: Entering directory '/home/mcloonan/redoubt/.worktrees/SCHED1'
+      test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+      error: test failed, to rerun pass `-p redoubt-doccheck --test docs`
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-738728-1791302873663811365
+docs rc=1
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:71: docs] Error 1
+PASS  formatting                        11.0s
+rv64/formatting rc=0 (shared)
+PASS  init-boot [rv64, smp=1]            6.5s
+rv64/init-boot rc=0 (shared)
+PASS  init-boot [rv32, smp=1]           13.8s
+rv32/init-boot rc=0 (shared)
+PASS  userland-boot [rv64, smp=1]      100.0s
+rv64/userland-boot rc=0 (shared)
+PASS  userland-boot [rv32, smp=1]       89.5s
+rv32/userland-boot rc=0 (shared)
+PASS  ipc-outcomes [rv64, smp=1]         1.9s
+rv64/ipc-outcomes rc=0 (shared)
+PASS  ipc-outcomes [rv32, smp=1]         1.8s
+rv32/ipc-outcomes rc=0 (shared)
+PASS  sched-large-weight [rv64, smp=1]   1.2s
+rv64/sched-large-weight rc=0 (shared)
+PASS  sched-server-busy [rv64, smp=1]    1.5s
+rv64/sched-server-busy rc=0 (shared)
+PASS  sched-debt-lift [rv64, smp=1]      3.6s
+rv64/sched-debt-lift rc=0 (shared)
+PASS  sched-carve-inflation [rv64, smp=1]   1.5s
+rv64/sched-carve-inflation rc=0 (shared)
+PASS  sched-ties [rv64, smp=1]           1.8s
+rv64/sched-ties rc=0 (shared)
+PASS  bench-net-peer-count [rv64, smp=1]   0.4s
+PASS  bench-net-peer-pcap-empty [rv64, smp=1]   0.4s
+PASS  bench-net-peer-twice [rv64, smp=1]   0.4s
+PASS  bench-net-peer [rv64, smp=1]       0.4s
+rv64/bench-net-peer rc=0 (net)
+PASS  bench-net-peer-count [rv32, smp=1]   0.6s
+PASS  bench-net-peer-pcap-empty [rv32, smp=1]   0.6s
+PASS  bench-net-peer-twice [rv32, smp=1]   0.6s
+PASS  bench-net-peer [rv32, smp=1]       1.5s
+rv32/bench-net-peer rc=0 (net)
+make: Leaving directory '/home/mcloonan/redoubt/.worktrees/SCHED1'

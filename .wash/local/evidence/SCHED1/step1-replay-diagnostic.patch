@@ -1,0 +1,42 @@
+diff --git a/tools/testbench/src/sched_oracle.rs b/tools/testbench/src/sched_oracle.rs
+index 48e9bf547..524278ca2 100644
+--- a/tools/testbench/src/sched_oracle.rs
++++ b/tools/testbench/src/sched_oracle.rs
+@@ -1156,6 +1156,14 @@ fn check_cluster(
+                     }
+                     witnesses[standin].push((floor, lead, ahead, qualified));
+                     wakes[standin].push(i);
++                    if intended_positive && std::env::var_os("SCHED1_REPLAY_DIAG").is_some() {
++                        eprintln!(
++                            "SCHED1-DIAG {} sample {sample_index} offset {} floor {floor:#x} lead {lead:#x} lead/2^20 {} ahead {ahead}",
++                            ["driver_wake", "timer_wake"][standin],
++                            [100, 300, 600, 850][phase],
++                            lead >> 20
++                        );
++                    }
+                 }
+             }
+         }
+diff --git a/tools/testbench/tests/sched_oracle_replay.rs b/tools/testbench/tests/sched_oracle_replay.rs
+new file mode 100644
+index 000000000..d0f839f0c
+--- /dev/null
++++ b/tools/testbench/tests/sched_oracle_replay.rs
+@@ -0,0 +1,17 @@
++//! SCHED1 step-1 host replay (not committed): judge a saved cluster console with the oracle.
++#[path = "../src/sched_oracle.rs"]
++#[allow(dead_code)]
++mod sched_oracle;
++
++#[test]
++#[ignore]
++fn replay_saved_cluster_log() {
++    let path = std::env::var("SCHED1_REPLAY_LOG").expect("SCHED1_REPLAY_LOG names the console log");
++    let log = std::fs::read_to_string(&path).expect("the saved console log");
++    let args = "cluster driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 \
++                timer_wake_p99_us=50000";
++    match sched_oracle::run(&log, args) {
++        Ok(report) => println!("ORACLE PASS\n{report}"),
++        Err(why) => println!("ORACLE FAIL\n{why}"),
++    }
++}

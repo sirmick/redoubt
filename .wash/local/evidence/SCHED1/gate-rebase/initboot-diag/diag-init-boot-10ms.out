@@ -1,0 +1,23 @@
+stack keyd 5280 of 3 pages
+stack consoled 9144 of 5 pages
+stack bootfsd 5960 of 4 pages
+stack blkd 4520 of 3 pages
+stack netd 4296 of 3 pages
+stack ipd 8056 of 4 pages
+stack littlefsd:data 7192 of 4 pages
+stack blkd:system 4520 of 3 pages
+stack verity:system 5688 of 4 pages
+stack littlefsd:system 12280 of 7 pages
+stack beamlet 3896 of 17 pages
+heap keyd 4 of 8 pages
+heap consoled 8 of 18 pages
+heap bootfsd 2 of 56 pages
+heap blkd 17 of 34 pages
+heap netd 2 of 4 pages
+heap ipd 4 of 8 pages
+heap littlefsd:data 9 of 18 pages
+heap blkd:system 17 of 34 pages
+heap verity:system 44 of 94 pages
+heap littlefsd:system 16 of 38 pages
+heap beamlet 3 of 24558 pages
+PASS  diag-init-boot-10ms [rv64, smp=1]   8.0s

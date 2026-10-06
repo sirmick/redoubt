@@ -1,0 +1,4 @@
+host-tests rc=0
+make rc=2
+sweep1-rv64 rc=0
+sweep1-rv32 rc=0

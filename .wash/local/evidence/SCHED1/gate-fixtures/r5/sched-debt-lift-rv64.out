@@ -1,0 +1,2 @@
+FAIL  sched-debt-lift [rv64, smp=1]      3.5s  sched_oracle: round: the first wake after marker 85, record 6433, is budget 86's, which is not new
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-140686-1791288330981792132

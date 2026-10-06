@@ -1,0 +1,754 @@
+make: Entering directory '/home/mcloonan/redoubt/.worktrees/SCHED1'
+FAIL  aio-many-reads-two [rv64, smp=1]  20.8s  forbidden output /aio-reader TEST FAILED/: [con ab184a255b12a262] aio-reader TEST FAILED: receive: Timeout
+PASS  aio-many-reads [rv64, smp=1]       1.0s
+rv64/aio-many-reads rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/aio-many-reads] Error 1
+PASS  bench-console-after-expect [rv64, smp=1]   0.1s
+rv64/bench-console-after-expect rc=0 (shared)
+PASS  bench-debug-assertions-off [rv64, smp=1]   0.2s
+rv64/bench-debug-assertions-off rc=0 (shared)
+PASS  bench-bundle-file [rv64, smp=1]    0.1s
+rv64/bench-bundle-file rc=0 (shared)
+PASS  bench-attack-forgery [rv64, smp=1]   0.1s
+rv64/bench-attack-forgery rc=0 (shared)
+PASS  bench-cbo-self-unrefused [rv64, smp=1]   0.6s
+rv64/bench-cbo-self-unrefused rc=0 (shared)
+PASS  asid-reuse-stale [rv64, smp=1]     1.3s
+rv64/asid-reuse-stale rc=0 (shared)
+PASS  bench-debug-assertions-off [rv64, smp=1]   0.1s
+PASS  bench-debug-assertions [rv64, smp=1]   1.5s
+rv64/bench-debug-assertions rc=0 (shared)
+PASS  asid-cost-host [rv64, smp=1]       9.5s
+rv64/asid-cost-host rc=0 (shared)
+PASS  beamlet-lookup-cli-host           12.2s
+rv64/beamlet-lookup-cli-host rc=0 (bounded)
+PASS  all-together [rv64, smp=1]         2.5s
+PASS  all-together [rv64, smp=2]         2.5s
+rv64/all-together rc=0 (shared)
+PASS  asid-cost-host [rv64, smp=1]       9.4s
+PASS  asid-cost [rv64, smp=1]           11.0s
+rv64/asid-cost rc=0 (shared)
+PASS  bench-elixir-oracles-broken-guard  22.4s
+rv64/bench-elixir-oracles-broken-guard rc=0 (shared)
+FAIL  aio-many-reads-two [rv64, smp=1]  21.0s  forbidden output /aio-reader TEST FAILED/: [con 4765e1742a0dc6bd] aio-reader TEST FAILED: receive: Timeout
+rv64/aio-many-reads-two rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/aio-many-reads-two] Error 1
+PASS  beamlet-boot [rv64, smp=1]         0.5s
+rv64/beamlet-boot rc=0 (shared)
+PASS  beamlet-budget-flood [rv64, smp=1]   0.9s
+rv64/beamlet-budget-flood rc=0 (shared)
+PASS  beamlet-heap-flood [rv64, smp=1]   1.0s
+rv64/beamlet-heap-flood rc=0 (shared)
+PASS  beamlet-console [rv64, smp=1]      1.0s
+rv64/beamlet-console rc=0 (shared)
+PASS  beamlet-lookup-host               36.3s
+rv64/beamlet-lookup-host rc=0 (bounded)
+PASS  bench-init-reporter-forged [rv64, smp=1]   0.2s
+rv64/bench-init-reporter-forged rc=0 (shared)
+PASS  bench-net-peer-count [rv64, smp=1]   0.4s
+PASS  bench-net-peer-pcap-empty [rv64, smp=1]   0.4s
+PASS  bench-net-peer-twice [rv64, smp=1]   0.4s
+PASS  bench-net-peer [rv64, smp=1]       0.4s
+rv64/bench-net-peer rc=0 (net)
+PASS  bench-qemu-early-exit [rv64, smp=1]   0.0s
+rv64/bench-qemu-early-exit rc=0 (shared)
+PASS  bench-reporter-mismatch [rv64, smp=1]   0.1s
+rv64/bench-reporter-mismatch rc=0 (shared)
+PASS  bench-poweroff-missing [rv64, smp=1]   3.0s
+rv64/bench-poweroff-missing rc=0 (shared)
+PASS  bench-ssh-guest [rv64, smp=1]      1.2s
+rv64/bench-ssh-guest rc=0 (alone)
+PASS  bench-ssh-loopback-aborted-text    0.9s
+PASS  bench-ssh-loopback-deadlock        0.2s
+FAIL  bench-ssh-loopback-exit            0.1s  failed, but not with /^session mallory: at the end: ssh exited \(status 255\), expected 0; last output: .*Permission denied \(publickey\)\.$/: session mallory: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+PASS  bench-ssh-loopback-forbid          0.2s
+FAIL  bench-ssh-loopback-host-key        0.1s  failed, but not with /^session alice: at the end: ssh exited \(status 255\), expected 0; last output: Host key verification failed\.$/: session alice: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+PASS  bench-ssh-loopback-openssh        17.8s
+PASS  bench-ssh-loopback                 0.1s
+rv64/bench-ssh-loopback rc=1 (alone)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:81: rv64/bench-ssh-loopback] Error 1
+PASS  bench-ssh-loopback-aborted-text    0.1s
+rv64/bench-ssh-loopback-aborted-text rc=0 (alone)
+PASS  bench-ssh-loopback-deadlock        0.2s
+rv64/bench-ssh-loopback-deadlock rc=0 (alone)
+FAIL  bench-ssh-loopback-exit            0.1s  failed, but not with /^session mallory: at the end: ssh exited \(status 255\), expected 0; last output: .*Permission denied \(publickey\)\.$/: session mallory: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+rv64/bench-ssh-loopback-exit rc=1 (alone)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:81: rv64/bench-ssh-loopback-exit] Error 1
+PASS  bench-ssh-loopback-forbid          0.2s
+rv64/bench-ssh-loopback-forbid rc=0 (alone)
+PASS  bench-net-peer-count [rv64, smp=1]   0.4s
+rv64/bench-net-peer-count rc=0 (net)
+FAIL  bench-ssh-loopback-host-key        0.1s  failed, but not with /^session alice: at the end: ssh exited \(status 255\), expected 0; last output: Host key verification failed\.$/: session alice: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+rv64/bench-ssh-loopback-host-key rc=1 (alone)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:81: rv64/bench-ssh-loopback-host-key] Error 1
+PASS  bench-ssh-loopback-openssh         3.5s
+rv64/bench-ssh-loopback-openssh rc=0 (alone)
+PASS  blkd-build [rv64]                  0.1s
+rv64/blkd-build rc=0 (shared)
+PASS  bootfsd-build [rv64]               0.2s
+rv64/bootfsd-build rc=0 (shared)
+PASS  bench-virtio-devices [rv64, smp=1]   0.1s
+rv64/bench-virtio-devices rc=0 (shared)
+PASS  bench-virtio-legacy-off [rv64, smp=1]   0.1s
+rv64/bench-virtio-legacy-off rc=0 (shared)
+PASS  boot-stack-reservation [rv64, smp=1]   0.5s
+rv64/boot-stack-reservation rc=0 (shared)
+PASS  budget-carve-attack [rv64, smp=1]   0.1s
+rv64/budget-carve-attack rc=0 (shared)
+PASS  blkd-host-tests                    3.7s
+rv64/blkd-host-tests rc=0 (bounded)
+PASS  beamlet-budget-flood [rv64, smp=1]   0.9s
+PASS  budget-carve-attack [rv64, smp=1]   0.1s
+PASS  budget-deadline [rv64, smp=1]      0.9s
+PASS  budget-destroy-attack [rv64, smp=1]   0.2s
+PASS  budget-destroy-growth [rv64, smp=1]   0.4s
+PASS  budget-destroy-kills [rv64, smp=1]   0.2s
+PASS  budget-forge-attack [rv64, smp=1]   0.1s
+PASS  budget-mem-churn [rv64, smp=1]     0.2s
+PASS  budget-mem-churn [rv64, smp=2]     0.2s
+PASS  budget-syscall-attack [rv64, smp=1]   0.6s
+PASS  budget-table-attack [rv64, smp=1]   0.6s
+PASS  budget [rv64, smp=1]               2.4s
+PASS  init-refuses-budget-handle [rv64, smp=1]   0.1s
+PASS  programs-unknown-budget-attack [rv64, smp=1]   0.1s
+FAIL  sched-budget-churn [rv64, smp=1]   7.6s  sched_oracle: sched_oracle: 69448 records, 6226 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 133 lifts by the rule (41 with a leading parent and work to move); 399 weight changes by the rule; R10 131 destructions over up to 656 object frames, µs p50/p99/max 674/2245/2325, their threads' ending 0/59/59, no audit inside one; 6790 audits, 2805904 µs; 6175 timer interrupts billed by the rule (15 expiring, 0 finding a wait ended early, 8063 ticks after expiry to the budget billed last; 6160 ending a slice, 0 nobody's)
+PASS  size-budget                     
+PASS  unsafe-budget                   
+rv64/budget rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/budget] Error 1
+PASS  budget-destroy-attack [rv64, smp=1]   0.2s
+rv64/budget-destroy-attack rc=0 (shared)
+PASS  bench-net-peer-pcap-empty [rv64, smp=1]   0.4s
+rv64/bench-net-peer-pcap-empty rc=0 (net)
+PASS  budget-deadline [rv64, smp=1]      0.9s
+rv64/budget-deadline rc=0 (shared)
+PASS  client-build [rv64]                0.2s
+rv64/client-build rc=0 (shared)
+PASS  bundle-mapped [rv64, smp=1]        0.1s
+rv64/bundle-mapped rc=0 (shared)
+PASS  budget-forge-attack [rv64, smp=1]   0.1s
+rv64/budget-forge-attack rc=0 (shared)
+PASS  budget-destroy-kills [rv64, smp=1]   0.2s
+rv64/budget-destroy-kills rc=0 (shared)
+PASS  budget-destroy-growth [rv64, smp=1]   0.4s
+rv64/budget-destroy-growth rc=0 (shared)
+PASS  budget-mem-churn [rv64, smp=1]     0.2s
+PASS  budget-mem-churn [rv64, smp=2]     0.2s
+rv64/budget-mem-churn rc=0 (shared)
+PASS  cbo-user-fault [rv64, smp=1]       0.6s
+rv64/cbo-user-fault rc=0 (shared)
+PASS  budget-syscall-attack [rv64, smp=1]   0.6s
+rv64/budget-syscall-attack rc=0 (shared)
+PASS  budget-table-attack [rv64, smp=1]   0.6s
+rv64/budget-table-attack rc=0 (shared)
+PASS  client-host-tests                  4.2s
+rv64/client-host-tests rc=0 (alone)
+PASS  consoled-build [rv64]              0.0s
+rv64/consoled-build rc=0 (shared)
+PASS  deadline-flood-billed [rv64, smp=1]   0.8s
+rv64/deadline-flood-billed rc=0 (shared)
+PASS  bench-net-peer-twice [rv64, smp=1]   0.4s
+rv64/bench-net-peer-twice rc=0 (net)
+PASS  device-info-attack [rv64, smp=1]   0.5s
+rv64/device-info-attack rc=0 (shared)
+PASS  dma-destroy-quarantine [rv64, smp=1]   0.6s
+rv64/dma-destroy-quarantine rc=0 (shared)
+PASS  device-exec-refused [rv64, smp=1]   0.6s
+rv64/device-exec-refused rc=0 (shared)
+PASS  destroy-keeps-notices-creator [rv64, smp=1]   1.7s
+rv64/destroy-keeps-notices-creator rc=0 (shared)
+PASS  destroy-keeps-notices-creator [rv64, smp=1]   1.7s
+PASS  destroy-keeps-notices [rv64, smp=1]   0.7s
+rv64/destroy-keeps-notices rc=0 (shared)
+PASS  bench-virtio-devices [rv64, smp=1]   0.1s
+PASS  device-exec-refused [rv64, smp=1]   0.6s
+PASS  device-info-attack [rv64, smp=1]   0.5s
+PASS  device [rv64, smp=1]               0.5s
+PASS  init-refuses-device-dma [rv64, smp=1]   0.1s
+PASS  init-refuses-device-unmatched [rv64, smp=1]   0.1s
+rv64/device rc=0 (shared)
+PASS  dma-reset-reuse [rv64, smp=1]      0.6s
+rv64/dma-reset-reuse rc=0 (shared)
+PASS  dma-rules [rv64, smp=1]            0.5s
+rv64/dma-rules rc=0 (shared)
+PASS  dma-reset-quarantine [rv64, smp=1]   0.6s
+rv64/dma-reset-quarantine rc=0 (shared)
+PASS  docs                               1.1s
+rv64/docs rc=0 (bounded)
+PASS  ending-pumps-once [rv64, smp=1]    1.6s
+rv64/ending-pumps-once rc=0 (shared)
+PASS  bench-elixir-oracles-broken-guard   3.9s
+PASS  elixir-oracles                     4.4s
+rv64/elixir-oracles rc=0 (shared)
+PASS  bootfsd-build [rv64]               0.3s
+PASS  fsd-build [rv64]                   0.7s
+rv64/fsd-build rc=0 (shared)
+PASS  expiry-deadline-then-timeout [rv64, smp=1]   0.9s
+rv64/expiry-deadline-then-timeout rc=0 (shared)
+PASS  endpoint-destroy-open-calls [rv64, smp=1]   0.8s
+rv64/endpoint-destroy-open-calls rc=0 (shared)
+PASS  endpoint-destroy-full [rv64, smp=1]   2.7s
+rv64/endpoint-destroy-full rc=0 (shared)
+PASS  fsd-corrupt-volume [rv64, smp=1]   0.3s
+rv64/fsd-corrupt-volume rc=0 (shared)
+PASS  fsd-confined-labelled [rv64, smp=1]   0.5s
+rv64/fsd-confined-labelled rc=0 (shared)
+PASS  fsd-label-check [rv64, smp=1]      0.5s
+rv64/fsd-label-check rc=0 (shared)
+PASS  fsd-one-volume [rv64, smp=1]       0.6s
+rv64/fsd-one-volume rc=0 (shared)
+PASS  fsd-boot [rv64, smp=1]             0.7s
+rv64/fsd-boot rc=0 (shared)
+PASS  fsd-large-directory [rv64, smp=1]   1.6s
+rv64/fsd-large-directory rc=0 (shared)
+PASS  fsd-quota [rv64, smp=1]            1.9s
+rv64/fsd-quota rc=0 (shared)
+PASS  formatting                        10.9s
+rv64/formatting rc=0 (shared)
+PASS  fsd-host-tests                    15.8s
+rv64/fsd-host-tests rc=0 (bounded)
+PASS  fsd-reboot [rv64, smp=1]           1.9s
+rv64/fsd-reboot rc=0 (shared)
+PASS  init-build [rv64]                  0.1s
+rv64/init-build rc=0 (shared)
+PASS  init-console-forgery [rv64, smp=1]   0.3s
+rv64/init-console-forgery rc=0 (shared)
+PASS  fsd-restart [rv64, smp=1]          0.5s
+rv64/fsd-restart rc=0 (shared)
+PASS  handle-chain-fault [rv64, smp=1]   0.8s
+rv64/handle-chain-fault rc=0 (shared)
+PASS  handle-chain-attack [rv64, smp=1]   0.8s
+rv64/handle-chain-attack rc=0 (shared)
+PASS  init-boot [rv64, smp=1]            5.4s
+rv64/init-boot rc=0 (shared)
+PASS  image-disk [rv64, smp=1]           5.5s
+rv64/image-disk rc=0 (shared)
+PASS  blkd-host-tests                    3.6s
+PASS  client-host-tests                  4.2s
+PASS  fsd-host-tests                    15.0s
+PASS  host-tests                        32.2s
+PASS  init-host-tests                    0.1s
+PASS  ipd-host-tests                     3.3s
+PASS  littlefs-host-tests               17.5s
+PASS  model-host-tests                 3024.4s
+PASS  net-host-tests                     0.1s
+PASS  netd-host-tests                    0.5s
+PASS  r4-host-tests                      0.8s
+PASS  rt-host-tests                      7.7s
+PASS  sshd-host-tests                    0.2s
+PASS  steward-host-tests                 0.1s
+PASS  stride-host-tests                  3.1s
+PASS  wire-host-tests                    0.2s
+rv64/host-tests rc=0 (bounded)
+PASS  init-host-tests                    0.3s
+rv64/init-host-tests rc=0 (bounded)
+PASS  init-refuses-budget-handle [rv64, smp=1]   0.1s
+rv64/init-refuses-budget-handle rc=0 (shared)
+PASS  init-refuses-consoled-handed [rv64, smp=1]   0.2s
+rv64/init-refuses-consoled-handed rc=0 (shared)
+PASS  init-refuses-confined-server [rv64, smp=1]   0.2s
+rv64/init-refuses-confined-server rc=0 (shared)
+PASS  init-refuses-device-unmatched [rv64, smp=1]   0.1s
+rv64/init-refuses-device-unmatched rc=0 (shared)
+PASS  init-refuses-held-bundle-key [rv64, smp=1]   0.2s
+rv64/init-refuses-held-bundle-key rc=0 (shared)
+PASS  init-refuses-device-dma [rv64, smp=1]   0.1s
+rv64/init-refuses-device-dma rc=0 (shared)
+PASS  init-refuses-bound [rv64, smp=1]   0.2s
+rv64/init-refuses-bound rc=0 (shared)
+PASS  init-reboot [rv64, smp=1]          0.4s
+rv64/init-reboot rc=0 (shared)
+PASS  bench-net-self-unrefused [rv64, smp=1]   0.5s
+rv64/bench-net-self-unrefused rc=0 (net)
+PASS  init-quarantine-reboot [rv64, smp=1]   1.8s
+rv64/init-quarantine-reboot rc=0 (shared)
+PASS  init-driver-restart [rv64, smp=1]   1.8s
+rv64/init-driver-restart rc=0 (shared)
+PASS  init-handed-revoked [rv64, smp=1]   1.8s
+rv64/init-handed-revoked rc=0 (shared)
+PASS  ipd-build [rv64]                   0.1s
+rv64/ipd-build rc=0 (shared)
+PASS  irq-first-receive [rv64, smp=1]    0.6s
+rv64/irq-first-receive rc=0 (shared)
+PASS  init-refuses-public-manifest [rv64, smp=1]   0.2s
+rv64/init-refuses-public-manifest rc=0 (shared)
+PASS  ipc-fair-label-sets [rv64, smp=1]   1.1s
+rv64/ipc-fair-label-sets rc=0 (shared)
+PASS  irq-attack [rv64, smp=1]           1.6s
+rv64/irq-attack rc=0 (shared)
+PASS  ipc-outcomes [rv64, smp=1]         1.9s
+rv64/ipc-outcomes rc=0 (shared)
+PASS  init-refuses-second-keyd [rv64, smp=1]   0.1s
+rv64/init-refuses-second-keyd rc=0 (shared)
+PASS  init-refuses-held-login-key [rv64, smp=1]   0.2s
+rv64/init-refuses-held-login-key rc=0 (shared)
+PASS  ipd-host-tests                     3.7s
+rv64/ipd-host-tests rc=0 (bounded)
+PASS  init-servers [rv64, smp=1]         0.3s
+rv64/init-servers rc=0 (shared)
+PASS  init-refuses-system-fit [rv64, smp=1]   0.1s
+rv64/init-refuses-system-fit rc=0 (shared)
+PASS  init-rollback [rv64, smp=1]        2.0s
+rv64/init-rollback rc=0 (shared)
+PASS  init-restart [rv64, smp=1]         1.8s
+rv64/init-restart rc=0 (shared)
+PASS  ipc-fair-label-sets [rv64, smp=1]   1.0s
+PASS  ipc-outcomes [rv64, smp=1]         2.0s
+PASS  ipc [rv64, smp=1]                  2.3s
+PASS  ipc [rv64, smp=4]                  2.4s
+PASS  redoubt-ipc-attack [rv64, smp=1]   1.0s
+PASS  redoubt-ipc [rv64, smp=1]          6.2s
+rv64/ipc rc=0 (shared)
+PASS  keyd-build [rv64]                  0.4s
+rv64/keyd-build rc=0 (shared)
+PASS  loader-rejects-kernel-entry [rv64, smp=1]   0.1s
+rv64/loader-rejects-kernel-entry rc=0 (shared)
+PASS  kernel-wx [rv64, smp=1]            0.2s
+rv64/kernel-wx rc=0 (shared)
+PASS  loader-rejects-kernel-address [rv64, smp=1]   0.1s
+rv64/loader-rejects-kernel-address rc=0 (shared)
+PASS  logsrv-badge-forgery [rv64, smp=1]   0.5s
+rv64/logsrv-badge-forgery rc=0 (shared)
+PASS  map-anon-placement [rv64, smp=1]   0.5s
+rv64/map-anon-placement rc=0 (shared)
+rv64/map-fixed-tables-rv32 rc=0 (shared)
+PASS  lend-untouched-page [rv64, smp=1]   0.6s
+PASS  lend-untouched-page [rv64, smp=4]   0.6s
+rv64/lend-untouched-page rc=0 (shared)
+PASS  lender-touches-lent [rv64, smp=1]   0.6s
+rv64/lender-touches-lent rc=0 (shared)
+PASS  loader-rejects-truncated-elf [rv64, smp=1]   0.1s
+rv64/loader-rejects-truncated-elf rc=0 (shared)
+PASS  map-fixed-attack [rv64, smp=1]     0.5s
+rv64/map-fixed-attack rc=0 (shared)
+PASS  kernel-half-attack [rv64, smp=1]   0.6s
+rv64/kernel-half-attack rc=0 (shared)
+PASS  mem-attack [rv64, smp=1]           0.2s
+rv64/mem-attack rc=0 (shared)
+PASS  launcher-orphan [rv64, smp=1]      0.6s
+rv64/launcher-orphan rc=0 (shared)
+PASS  map-fixed-tables [rv64, smp=1]     1.8s
+rv64/map-fixed-tables rc=0 (shared)
+PASS  legacy-gone [rv64, smp=1]          2.6s
+rv64/legacy-gone rc=0 (shared)
+PASS  map-anon-search-bound [rv64, smp=1]   7.1s
+rv64/map-anon-search-bound rc=0 (shared)
+PASS  littlefs-host-tests               18.7s
+rv64/littlefs-host-tests rc=0 (bounded)
+FAIL  kernel-containment [rv64, smp=1] 247.7s  guest exited while waiting for /^\[containment\] ok: the bystander kept its weight's share/: QEMU exited with exit status: 0
+rv64/kernel-containment rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/kernel-containment] Error 1
+PASS  model-host-tests                 2998.4s
+rv64/model-host-tests rc=0 (alone)
+PASS  net-host-tests                     0.3s
+rv64/net-host-tests rc=0 (bounded)
+PASS  netd-build [rv64]                  0.1s
+rv64/netd-build rc=0 (shared)
+PASS  netd-host-tests                    0.7s
+rv64/netd-host-tests rc=0 (bounded)
+PASS  move-borrowed-page [rv64, smp=1]   0.2s
+rv64/move-borrowed-page rc=0 (shared)
+PASS  net-attacks [rv64, smp=1]          0.4s
+rv64/net-attacks rc=0 (net)
+PASS  no-cruft                        
+rv64/no-cruft rc=0 (shared)
+PASS  panic-in-print [rv64, smp=1]       0.5s
+rv64/panic-in-print rc=0 (shared)
+PASS  pages-exhaustion [rv64, smp=1]     0.8s
+rv64/pages-exhaustion rc=0 (shared)
+PASS  ninep-newconn-discard [rv64, smp=1]   0.9s
+rv64/ninep-newconn-discard rc=0 (shared)
+PASS  page-table-reclaim [rv64, smp=1]   2.6s
+rv64/page-table-reclaim rc=0 (shared)
+PASS  pid-pinning-attack [rv64, smp=1]   0.6s
+rv64/pid-pinning-attack rc=0 (shared)
+PASS  net-pinned [rv64, smp=1]           0.5s
+rv64/net-pinned rc=0 (net)
+PASS  net-tcp [rv64, smp=1]              0.4s
+rv64/net-tcp rc=0 (net)
+PASS  netd-restart [rv64, smp=1]         0.4s
+rv64/netd-restart rc=0 (net)
+PASS  pid-reuse-authority [rv64, smp=1]   4.5s
+rv64/pid-reuse-authority rc=0 (shared)
+PASS  process-attack [rv64, smp=1]       1.0s
+PASS  process-chain-fault [rv64, smp=1]   0.7s
+PASS  process-fill [rv64, smp=1]         5.1s
+PASS  process-lifecycle [rv64, smp=1]    2.3s
+PASS  process-map-untouched-attack [rv64, smp=1]   0.6s
+PASS  process-review [rv64, smp=1]       0.7s
+PASS  process [rv64, smp=1]              1.2s
+rv64/process rc=0 (shared)
+PASS  process-attack [rv64, smp=1]       1.1s
+rv64/process-attack rc=0 (shared)
+PASS  process-chain-fault [rv64, smp=1]   0.7s
+rv64/process-chain-fault rc=0 (shared)
+PASS  process-map-untouched-attack [rv64, smp=1]   0.6s
+rv64/process-map-untouched-attack rc=0 (shared)
+PASS  process-fill [rv64, smp=1]         6.4s
+rv64/process-fill rc=0 (shared)
+PASS  process-lifecycle [rv64, smp=1]    3.5s
+rv64/process-lifecycle rc=0 (shared)
+PASS  programs-unknown-budget-attack [rv64, smp=1]   0.1s
+rv64/programs-unknown-budget-attack rc=0 (shared)
+PASS  process-review [rv64, smp=1]       0.7s
+rv64/process-review rc=0 (shared)
+PASS  programs-unknown-program-attack [rv64, smp=1]   0.1s
+rv64/programs-unknown-program-attack rc=0 (shared)
+PASS  r4-host-tests                      0.8s
+rv64/r4-host-tests rc=0 (alone)
+PASS  receive-bad-record [rv64, smp=1]   0.9s
+rv64/receive-bad-record rc=0 (shared)
+PASS  redoubt-dead [rv64, smp=1]         1.5s
+rv64/redoubt-dead rc=0 (shared)
+PASS  redoubt-ipc-attack [rv64, smp=1]   1.1s
+rv64/redoubt-ipc-attack rc=0 (shared)
+PASS  redoubt-revoke [rv64, smp=1]       1.7s
+rv64/redoubt-revoke rc=0 (shared)
+PASS  redoubt-tight [rv64, smp=1]        1.7s
+rv64/redoubt-tight rc=0 (shared)
+PASS  redoubt-ipc-attack [rv64, smp=1]   1.1s
+PASS  redoubt-ipc [rv64, smp=1]          7.2s
+rv64/redoubt-ipc rc=0 (shared)
+PASS  rt-build [rv64]                    0.8s
+rv64/rt-build rc=0 (shared)
+PASS  rng [rv64, smp=1]                  0.3s
+rv64/rng rc=0 (shared)
+PASS  return-lent-unmapped [rv64, smp=1]   0.2s
+PASS  return-lent-unmapped [rv64, smp=4]   0.2s
+rv64/return-lent-unmapped rc=0 (shared)
+PASS  rt-host-tests                      7.7s
+rv64/rt-host-tests rc=0 (alone)
+PASS  rt-miri                           84.3s
+rv64/rt-miri rc=0 (alone)
+PASS  rustsbi-boot [rv64, smp=1]         0.6s
+rv64/rustsbi-boot rc=0 (shared)
+PASS  scan-bounds [rv64, smp=1]          1.6s
+rv64/scan-bounds rc=0 (shared)
+FAIL  sched-carve-inflation [rv64, smp=1]   2.6s  forbidden output /\[carve\] FAIL/: [carve] FAIL: a chain of 4 carves: the victim got 409 of 1000
+rv64/sched-carve-inflation rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/sched-carve-inflation] Error 1
+PASS  sched-carve-return [rv64, smp=1]   2.8s
+rv64/sched-carve-return rc=0 (shared)
+FAIL  sched-budget-churn [rv64, smp=1]  10.2s  sched_oracle: sched_oracle: 69459 records, 6224 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 133 lifts by the rule (42 with a leading parent and work to move); 399 weight changes by the rule; R10 131 destructions over up to 656 object frames, µs p50/p99/max 674/2245/2325, their threads' ending 0/60/60, no audit inside one; 6788 audits, 2806359 µs; 6173 timer interrupts billed by the rule (15 expiring, 0 finding a wait ended early, 8054 ticks after expiry to the budget billed last; 6158 ending a slice, 0 nobody's)
+rv64/sched-budget-churn rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/sched-budget-churn] Error 1
+PASS  sched-cluster [rv64, smp=1]       17.4s
+rv64/sched-cluster rc=0 (shared)
+PASS  sched-destroy-billing [rv64, smp=1]   1.0s
+rv64/sched-destroy-billing rc=0 (shared)
+FAIL  sched-debt-lift [rv64, smp=1]      1.5s  forbidden output /\[debt-lift\] FAIL/: [debt-lift] FAIL: the sibling first ran 31724 us after creation (one round is 19000 us)
+rv64/sched-debt-lift rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/sched-debt-lift] Error 1
+PASS  sched-cluster-old-control [rv64, smp=1]   6.3s
+rv64/sched-cluster-old-control rc=0 (shared)
+PASS  sched-exit-churn [rv64, smp=1]     6.2s
+rv64/sched-exit-churn rc=0 (shared)
+PASS  sched-idle-gap [rv64, smp=1]       1.4s
+rv64/sched-idle-gap rc=0 (shared)
+FAIL  sched-large-weight [rv64, smp=1]   1.2s  forbidden output /\[large-weight\] FAIL/: [large-weight] FAIL: the weight-1000 server got 411 of 1000, want 555
+rv64/sched-large-weight rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/sched-large-weight] Error 1
+FAIL  sched-server-busy [rv64, smp=1]    1.5s  forbidden output /\[server-busy\] FAIL/: [server-busy] FAIL: users B and C got 195 and 195 of 1000, at least a quarter each
+rv64/sched-server-busy rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/sched-server-busy] Error 1
+PASS  sched-share [rv64, smp=1]          1.1s
+rv64/sched-share rc=0 (shared)
+PASS  sched-sleep-gaming [rv64, smp=1]   1.9s
+rv64/sched-sleep-gaming rc=0 (shared)
+FAIL  sched-ties [rv64, smp=1]           1.6s  forbidden output /\[ties\] FAIL/: [ties] FAIL: a later entry's wakers ran first (clause 2)
+rv64/sched-ties rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/sched-ties] Error 1
+FAIL  sched-timer-flood [rv64, smp=1]    6.7s  sched_oracle: sched_oracle: 58568 records, 5044 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 70 lifts by the rule (0 with a leading parent and work to move); 212 weight changes by the rule; R10 70 destructions over up to 711 object frames, µs p50/p99/max 651/2370/2370, their threads' ending 0/59/59, no audit inside one; 5463 audits, 1549102 µs; 4609 timer interrupts billed by the rule (414 expiring, 0 finding a wait ended early, 220910 ticks after expiry to the budget billed last; 4195 ending a slice, 0 nobody's)
+rv64/sched-timer-flood rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/sched-timer-flood] Error 1
+PASS  sched-wake-no-preempt [rv64, smp=1]   1.8s
+rv64/sched-wake-no-preempt rc=0 (shared)
+PASS  size-budget                     
+rv64/size-budget rc=0 (shared)
+PASS  smp-spike [rv64, smp=2]            1.5s
+rv64/smp-spike rc=0 (shared)
+PASS  sshd-build [rv64]                  8.7s
+rv64/sshd-build rc=0 (shared)
+PASS  sshd-host-tests                    0.2s
+rv64/sshd-host-tests rc=0 (bounded)
+PASS  sched-latency-tcg [rv64, smp=1]   88.5s
+rv64/sched-latency-tcg rc=0 (shared)
+PASS  sched-latency-tcg [rv64, smp=1]   87.4s
+PASS  sched-latency [rv64, smp=1]       49.0s
+rv64/sched-latency rc=0 (shared)
+PASS  sshd-loopback-env-refused          1.4s
+rv64/sshd-loopback-env-refused rc=0 (alone)
+PASS  sshd-loopback-independent          0.4s
+rv64/sshd-loopback-independent rc=0 (alone)
+PASS  sshd-loopback-interrupt            0.1s
+rv64/sshd-loopback-interrupt rc=0 (alone)
+PASS  sshd-loopback-logins               0.1s
+rv64/sshd-loopback-logins rc=0 (alone)
+PASS  sshd-loopback-r67                  0.1s
+rv64/sshd-loopback-r67 rc=0 (alone)
+PASS  sshd-loopback-window-change-zero   0.1s
+PASS  sshd-loopback-window-change        0.1s
+rv64/sshd-loopback-window-change rc=0 (alone)
+PASS  sshd-loopback-window-change-zero   0.1s
+rv64/sshd-loopback-window-change-zero rc=0 (alone)
+PASS  steward-host-tests                 0.1s
+rv64/steward-host-tests rc=0 (bounded)
+PASS  stride-host-tests                  3.0s
+rv64/stride-host-tests rc=0 (bounded)
+PASS  stub-launch [rv64, smp=1]          0.8s
+rv64/stub-launch rc=0 (shared)
+PASS  budget-syscall-attack [rv64, smp=1]   0.6s
+PASS  syscall-attack [rv64, smp=1]       0.1s
+rv64/syscall-attack rc=0 (shared)
+PASS  sum-clear [rv64, smp=1]            1.6s
+rv64/sum-clear rc=0 (shared)
+PASS  thread-limit [rv64, smp=1]         1.7s
+rv64/thread-limit rc=0 (shared)
+PASS  touch-beyond-ram [rv64, smp=1]     0.2s
+rv64/touch-beyond-ram rc=0 (shared)
+PASS  uaf-lent-page [rv64, smp=1]        0.1s
+rv64/uaf-lent-page rc=0 (shared)
+PASS  unsafe-budget                   
+rv64/unsafe-budget rc=0 (shared)
+PASS  uart-irq [rv64, smp=1]             1.5s
+rv64/uart-irq rc=0 (shared)
+PASS  timeouts-tcg [rv64, smp=1]         6.5s
+rv64/timeouts-tcg rc=0 (shared)
+PASS  timeouts-tcg [rv64, smp=1]         6.2s
+PASS  timeouts [rv64, smp=1]             2.4s
+rv64/timeouts rc=0 (shared)
+PASS  vendor-build [rv64]                0.1s
+rv64/vendor-build rc=0 (shared)
+PASS  userland-bad-start [rv64, smp=1]   6.7s
+rv64/userland-bad-start rc=0 (shared)
+PASS  verified-boot-rejects-bare-archive [rv64, smp=1]   0.1s
+rv64/verified-boot-rejects-bare-archive rc=0 (shared)
+PASS  verified-boot-rejects-tamper [rv64, smp=1]   0.1s
+rv64/verified-boot-rejects-tamper rc=0 (shared)
+PASS  wire-host-tests                    0.2s
+rv64/wire-host-tests rc=0 (bounded)
+PASS  vendor-check                       3.7s
+rv64/vendor-check rc=0 (bounded)
+PASS  write-only-attack [rv64, smp=1]    0.5s
+rv64/write-only-attack rc=0 (shared)
+PASS  kernel-wx [rv64, smp=1]            0.2s
+PASS  wx [rv64, smp=1]                   0.6s
+rv64/wx rc=0 (shared)
+FAIL  aio-many-reads-two [rv32, smp=1]  20.9s  forbidden output /aio-reader TEST FAILED/: [con 37848718216d36b6] aio-reader TEST FAILED: receive: Timeout
+PASS  aio-many-reads [rv32, smp=1]       1.2s
+rv32/aio-many-reads rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv32/aio-many-reads] Error 1
+FAIL  aio-many-reads-two [rv32, smp=1]  20.9s  forbidden output /aio-reader TEST FAILED/: [con 43f8f1c04f22ad9f] aio-reader TEST FAILED: receive: Timeout
+rv32/aio-many-reads-two rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv32/aio-many-reads-two] Error 1
+PASS  userland-boot [rv64, smp=1]       99.5s
+rv64/userland-boot rc=0 (shared)
+rv32/all-together rc=0 (shared)
+PASS  userland-read-only [rv64, smp=1] 101.3s
+rv64/userland-read-only rc=0 (shared)
+PASS  asid-cost-host [rv32, smp=1]       7.8s
+rv32/asid-cost-host rc=0 (shared)
+PASS  asid-cost-host [rv32, smp=1]       7.9s
+PASS  asid-cost [rv32, smp=1]           10.1s
+rv32/asid-cost rc=0 (shared)
+PASS  asid-reuse-stale [rv32, smp=1]     3.7s
+rv32/asid-reuse-stale rc=0 (shared)
+PASS  beamlet-boot [rv32, smp=1]         0.8s
+rv32/beamlet-boot rc=0 (shared)
+PASS  beamlet-budget-flood [rv32, smp=1]   1.1s
+rv32/beamlet-budget-flood rc=0 (shared)
+PASS  beamlet-console [rv32, smp=1]      1.2s
+rv32/beamlet-console rc=0 (shared)
+PASS  beamlet-lookup-cli-host            0.1s
+rv32/beamlet-lookup-cli-host rc=0 (bounded)
+PASS  beamlet-heap-flood [rv32, smp=1]   1.3s
+rv32/beamlet-heap-flood rc=0 (shared)
+rv32/bench-attack-forgery rc=0 (shared)
+PASS  bench-bundle-file [rv32, smp=1]    0.2s
+rv32/bench-bundle-file rc=0 (shared)
+PASS  bench-cbo-self-unrefused [rv32, smp=1]   0.5s
+rv32/bench-cbo-self-unrefused rc=0 (shared)
+rv32/bench-console-after-expect rc=0 (shared)
+PASS  bench-debug-assertions [rv32, smp=1]   1.4s
+rv32/bench-debug-assertions rc=0 (shared)
+rv32/bench-debug-assertions-off rc=0 (shared)
+PASS  bench-elixir-oracles-broken-guard   3.8s
+rv32/bench-elixir-oracles-broken-guard rc=0 (shared)
+rv32/bench-init-reporter-forged rc=0 (shared)
+PASS  beamlet-lookup-host               14.8s
+rv32/beamlet-lookup-host rc=0 (bounded)
+PASS  bench-net-peer-count [rv32, smp=1]   0.7s
+PASS  bench-net-peer-pcap-empty [rv32, smp=1]   0.6s
+PASS  bench-net-peer-twice [rv32, smp=1]   0.6s
+PASS  bench-net-peer [rv32, smp=1]       0.6s
+rv32/bench-net-peer rc=0 (net)
+PASS  bench-net-peer-count [rv32, smp=1]   0.6s
+rv32/bench-net-peer-count rc=0 (net)
+PASS  bench-net-peer-pcap-empty [rv32, smp=1]   0.6s
+rv32/bench-net-peer-pcap-empty rc=0 (net)
+PASS  bench-net-peer-twice [rv32, smp=1]   0.6s
+rv32/bench-net-peer-twice rc=0 (net)
+rv32/bench-poweroff-missing rc=0 (shared)
+rv32/bench-qemu-early-exit rc=0 (shared)
+rv32/bench-reporter-mismatch rc=0 (shared)
+PASS  bench-net-self-unrefused [rv32, smp=1]   0.7s
+rv32/bench-net-self-unrefused rc=0 (net)
+FAIL  worst-walk [rv64, smp=1]         3600.0s  failed, but not with /^sched_oracle: R10.s p99 is \d+ µs over 2 destructions, above 30000$/: timed out waiting for /^\[worst-walk\] one holder destroyed, killed: true$/
+rv64/worst-walk rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv64/worst-walk] Error 1
+rv32/bench-ssh-guest rc=0 (alone)
+PASS  bench-ssh-loopback-aborted-text    0.1s
+PASS  bench-ssh-loopback-deadlock        0.2s
+FAIL  bench-ssh-loopback-exit            0.1s  failed, but not with /^session mallory: at the end: ssh exited \(status 255\), expected 0; last output: .*Permission denied \(publickey\)\.$/: session mallory: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+PASS  bench-ssh-loopback-forbid          0.2s
+FAIL  bench-ssh-loopback-host-key        0.1s  failed, but not with /^session alice: at the end: ssh exited \(status 255\), expected 0; last output: Host key verification failed\.$/: session alice: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+PASS  bench-ssh-loopback-openssh         3.4s
+PASS  bench-ssh-loopback                 0.1s
+rv32/bench-ssh-loopback rc=1 (alone)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:81: rv32/bench-ssh-loopback] Error 1
+PASS  bench-ssh-loopback-aborted-text    0.1s
+rv32/bench-ssh-loopback-aborted-text rc=0 (alone)
+PASS  bench-ssh-loopback-deadlock        0.2s
+rv32/bench-ssh-loopback-deadlock rc=0 (alone)
+FAIL  bench-ssh-loopback-exit            0.1s  failed, but not with /^session mallory: at the end: ssh exited \(status 255\), expected 0; last output: .*Permission denied \(publickey\)\.$/: session mallory: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+rv32/bench-ssh-loopback-exit rc=1 (alone)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:81: rv32/bench-ssh-loopback-exit] Error 1
+PASS  bench-ssh-loopback-forbid          0.2s
+rv32/bench-ssh-loopback-forbid rc=0 (alone)
+FAIL  bench-ssh-loopback-host-key        0.1s  failed, but not with /^session alice: at the end: ssh exited \(status 255\), expected 0; last output: Host key verification failed\.$/: session alice: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+rv32/bench-ssh-loopback-host-key rc=1 (alone)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:81: rv32/bench-ssh-loopback-host-key] Error 1
+PASS  bench-ssh-loopback-openssh         3.5s
+rv32/bench-ssh-loopback-openssh rc=0 (alone)
+rv32/bench-virtio-devices rc=0 (shared)
+PASS  blkd-build [rv32]                  0.1s
+rv32/blkd-build rc=0 (shared)
+PASS  bench-virtio-legacy-off [rv32, smp=1]   0.2s
+rv32/bench-virtio-legacy-off rc=0 (shared)
+PASS  blkd-host-tests                    3.7s
+rv32/blkd-host-tests rc=0 (bounded)
+PASS  boot-stack-reservation [rv32, smp=1]   0.4s
+rv32/boot-stack-reservation rc=0 (shared)
+PASS  bootfsd-build [rv32]               0.0s
+rv32/bootfsd-build rc=0 (shared)
+PASS  budget-carve-attack [rv32, smp=1]   0.3s
+rv32/budget-carve-attack rc=0 (shared)
+PASS  budget-destroy-attack [rv32, smp=1]   0.3s
+rv32/budget-destroy-attack rc=0 (shared)
+PASS  budget-deadline [rv32, smp=1]      1.7s
+rv32/budget-deadline rc=0 (shared)
+PASS  budget-destroy-growth [rv32, smp=1]   0.5s
+rv32/budget-destroy-growth rc=0 (shared)
+PASS  budget-destroy-kills [rv32, smp=1]   0.3s
+rv32/budget-destroy-kills rc=0 (shared)
+PASS  beamlet-budget-flood [rv32, smp=1]   1.1s
+PASS  budget-carve-attack [rv32, smp=1]   0.3s
+PASS  budget-deadline [rv32, smp=1]      0.8s
+PASS  budget-destroy-attack [rv32, smp=1]   0.3s
+PASS  budget-destroy-growth [rv32, smp=1]   0.6s
+PASS  budget-destroy-kills [rv32, smp=1]   1.3s
+PASS  budget-forge-attack [rv32, smp=1]   0.3s
+PASS  budget-mem-churn [rv32, smp=1]     0.3s
+PASS  budget-mem-churn [rv32, smp=2]     0.3s
+PASS  budget-syscall-attack [rv32, smp=1]   0.5s
+PASS  budget-table-attack [rv32, smp=1]   0.7s
+PASS  budget [rv32, smp=1]               2.2s
+PASS  init-refuses-budget-handle [rv32, smp=1]   0.3s
+PASS  programs-unknown-budget-attack [rv32, smp=1]   0.2s
+FAIL  sched-budget-churn [rv32, smp=1]   6.5s  sched_oracle: sched_oracle: 64493 records, 5806 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 118 lifts by the rule (37 with a leading parent and work to move); 354 weight changes by the rule; R10 116 destructions over up to 657 object frames, µs p50/p99/max 764/2348/2349, their threads' ending 0/66/66, no audit inside one; 6334 audits, 3049387 µs; 5756 timer interrupts billed by the rule (13 expiring, 0 finding a wait ended early, 9652 ticks after expiry to the budget billed last; 5743 ending a slice, 0 nobody's)
+PASS  size-budget                     
+PASS  unsafe-budget                   
+rv32/budget rc=1 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv32/budget] Error 1
+PASS  budget-forge-attack [rv32, smp=1]   0.3s
+rv32/budget-forge-attack rc=0 (shared)
+PASS  budget-mem-churn [rv32, smp=1]     0.4s
+PASS  budget-mem-churn [rv32, smp=2]     0.3s
+rv32/budget-mem-churn rc=0 (shared)
+PASS  budget-syscall-attack [rv32, smp=1]   0.6s
+rv32/budget-syscall-attack rc=0 (shared)
+PASS  budget-table-attack [rv32, smp=1]   0.8s
+rv32/budget-table-attack rc=0 (shared)
+PASS  bundle-mapped [rv32, smp=1]        0.3s
+rv32/bundle-mapped rc=0 (shared)
+PASS  cbo-user-fault [rv32, smp=1]       0.5s
+rv32/cbo-user-fault rc=0 (shared)
+PASS  client-build [rv32]                0.0s
+rv32/client-build rc=0 (shared)
+PASS  client-host-tests                  4.2s
+rv32/client-host-tests rc=0 (alone)
+PASS  consoled-build [rv32]              0.1s
+rv32/consoled-build rc=0 (shared)
+PASS  deadline-flood-billed [rv32, smp=1]   0.9s
+rv32/deadline-flood-billed rc=0 (shared)
+PASS  destroy-keeps-notices-creator [rv32, smp=1]   1.6s
+rv32/destroy-keeps-notices-creator rc=0 (shared)
+PASS  destroy-keeps-notices-creator [rv32, smp=1]   1.7s
+PASS  destroy-keeps-notices [rv32, smp=1]   0.6s
+rv32/destroy-keeps-notices rc=0 (shared)
+PASS  device-exec-refused [rv32, smp=1]   0.5s
+rv32/device-exec-refused rc=0 (shared)
+PASS  device-exec-refused [rv32, smp=1]   0.5s
+PASS  device-info-attack [rv32, smp=1]   0.4s
+PASS  device [rv32, smp=1]               0.5s
+PASS  init-refuses-device-dma [rv32, smp=1]   0.3s
+PASS  init-refuses-device-unmatched [rv32, smp=1]   0.3s
+rv32/device rc=0 (shared)
+PASS  device-info-attack [rv32, smp=1]   0.4s
+rv32/device-info-attack rc=0 (shared)
+PASS  dma-reset-reuse [rv32, smp=1]      0.5s
+rv32/dma-reset-reuse rc=0 (shared)
+PASS  dma-reset-quarantine [rv32, smp=1]   0.5s
+rv32/dma-reset-quarantine rc=0 (shared)
+PASS  dma-destroy-quarantine [rv32, smp=1]   0.5s
+rv32/dma-destroy-quarantine rc=0 (shared)
+PASS  dma-rules [rv32, smp=1]            0.5s
+rv32/dma-rules rc=0 (shared)
+PASS  docs                               1.0s
+rv32/docs rc=0 (bounded)
+PASS  ending-pumps-once [rv32, smp=1]    1.5s
+rv32/ending-pumps-once rc=0 (shared)
+PASS  endpoint-destroy-full [rv32, smp=1]   3.6s
+rv32/endpoint-destroy-full rc=0 (shared)
+PASS  endpoint-destroy-open-calls [rv32, smp=1]   0.6s
+rv32/endpoint-destroy-open-calls rc=0 (shared)
+PASS  expiry-deadline-then-timeout [rv32, smp=1]   0.7s
+rv32/expiry-deadline-then-timeout rc=0 (shared)
+PASS  fsd-boot [rv32, smp=1]             0.8s
+rv32/fsd-boot rc=0 (shared)
+PASS  bootfsd-build [rv32]               0.0s
+PASS  fsd-build [rv32]                   0.0s
+rv32/fsd-build rc=0 (shared)
+PASS  bench-elixir-oracles-broken-guard   4.9s
+PASS  elixir-oracles                     4.7s
+rv32/elixir-oracles rc=0 (shared)
+PASS  fsd-confined-labelled [rv32, smp=1]   0.6s
+rv32/fsd-confined-labelled rc=0 (shared)
+PASS  fsd-corrupt-volume [rv32, smp=1]   0.5s
+rv32/fsd-corrupt-volume rc=0 (shared)
+PASS  fsd-label-check [rv32, smp=1]      0.7s
+rv32/fsd-label-check rc=0 (shared)
+PASS  fsd-large-directory [rv32, smp=1]   1.7s
+rv32/fsd-large-directory rc=0 (shared)
+PASS  fsd-one-volume [rv32, smp=1]       0.7s
+rv32/fsd-one-volume rc=0 (shared)
+PASS  formatting                        10.8s
+rv32/formatting rc=0 (shared)
+PASS  fsd-quota [rv32, smp=1]            1.9s
+rv32/fsd-quota rc=0 (shared)
+PASS  fsd-reboot [rv32, smp=1]           2.2s
+rv32/fsd-reboot rc=0 (shared)
+PASS  handle-chain-attack [rv32, smp=1]   1.5s
+rv32/handle-chain-attack rc=0 (shared)
+PASS  fsd-restart [rv32, smp=1]          1.7s
+rv32/fsd-restart rc=0 (shared)
+PASS  fsd-host-tests                    16.5s
+rv32/fsd-host-tests rc=0 (bounded)
+PASS  handle-chain-fault [rv32, smp=1]   0.6s
+rv32/handle-chain-fault rc=0 (shared)
+PASS  image-disk [rv32, smp=1]           5.8s
+rv32/image-disk rc=0 (shared)
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:93: rv32/host-tests] Terminated
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv32/init-boot] Terminated
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv32/init-build] Terminated
+make: *** [/home/mcloonan/redoubt/.wash/local/jobs.mk:75: rv32/init-console-forgery] Terminated

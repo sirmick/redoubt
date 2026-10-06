@@ -1,0 +1,42 @@
+#!/bin/sh
+# machine: run a command in one of this host's work slots, blocking until a slot is free.
+#
+#   machine qemu <cmd...>   the one QEMU slot (a bench or any guest case); cores 0-7
+#   machine host <cmd...>   one of $MACHINE_HOST_SLOTS (default 2) host slots for builds
+#                           and host tests; cores 8-23, nice 10
+#
+# Locks are files under /tmp/redoubt-machine, taken with flock(1); a slot is released when
+# the command exits, however it exits. Nothing else to run or clean up. Status: `machine who`.
+set -eu
+dir=/tmp/redoubt-machine
+mkdir -p "$dir"
+kind=${1:?usage: machine qemu|host|who <cmd...>}
+shift
+case $kind in
+qemu)
+    exec flock "$dir/qemu" taskset -c 0-7 "$@"
+    ;;
+host)
+    n=${MACHINE_HOST_SLOTS:-2}
+    i=0
+    while [ $i -lt "$n" ]; do
+        # take the first free host slot without waiting
+        if flock -n "$dir/host.$i" true 2>/dev/null; then
+            exec flock "$dir/host.$i" taskset -c 8-23 nice -n 10 "$@"
+        fi
+        i=$((i + 1))
+    done
+    # all busy: queue on slot 0
+    exec flock "$dir/host.0" taskset -c 8-23 nice -n 10 "$@"
+    ;;
+who)
+    for f in "$dir"/*; do
+        [ -e "$f" ] || continue
+        if flock -n "$f" true 2>/dev/null; then echo "$(basename "$f"): free"; else echo "$(basename "$f"): busy"; fi
+    done
+    ;;
+*)
+    echo "machine: unknown slot kind '$kind'" >&2
+    exit 2
+    ;;
+esac

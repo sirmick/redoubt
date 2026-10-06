@@ -1,0 +1,13 @@
+description = "SCRATCH, never committed: sched-large-weight with the trace, for the audit-share diagnosis"
+arch = ["rv64"]
+whole_run = false
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-large-weight"]
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 600
+expect = ['^\[large-weight\] (ok|FAIL): the weight-1000 server got', '^SCHED-TRACE-END \d+ dropped 0$']
+forbid = ['PROGRAM HALT']
+poweroff = true
