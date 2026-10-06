@@ -32,6 +32,7 @@ set -euo pipefail
 # An older one may work; nothing has shown it.
 QEMU_MIN=8.2
 OPENSSH_MIN=9.6
+EROFS_UTILS_MIN=1.9    # mkfs.erofs's uncompressed layout the reader is written against
 
 CARGO_TOOLS=(cargo-binutils@0.4.0 mdbook@0.5.4 mdbook-mermaid@0.17.1 mdbook-svgbob@0.3.1)
 
@@ -45,8 +46,9 @@ ELIXIR_SHA256=ea7ff98bc1ed76c663a5d034c863c6fd37e65c9c855b6bbf6ccb2034d806673c
 # or qemu-system-misc (chosen below). curl and xz-utils, with dpkg's dpkg-deb: the bench builds
 # OpenSSH's reference server guest from Debian's packages. openssh-client: the bench's ssh.
 # gdb-multiarch: a GDB that knows RISC-V, for QEMU's GDB stub. No openssh-server: the bench
-# runs OpenSSH's server only in that guest, never the host's.
-APT_PACKAGES=(build-essential ca-certificates curl git xz-utils openssh-client gdb-multiarch)
+# runs OpenSSH's server only in that guest, never the host's. erofs-utils: mkfs.erofs and
+# fsck.erofs, the oracle the bench holds Redoubt's own EROFS writer and reader against.
+APT_PACKAGES=(build-essential ca-certificates curl git xz-utils openssh-client gdb-multiarch erofs-utils)
 # OTP's build: its crypto app (libssl-dev), its terminal (libncurses-dev) and zlib; unzip for
 # Elixir's release zip; pkg-config, which beamlet's pcre2-sys tries before its bundled copy.
 APT_PACKAGES_BEAM=(pkg-config libssl-dev libncurses-dev zlib1g-dev unzip)
@@ -308,6 +310,11 @@ v="$(ssh -V 2>&1 | sed -n '1s/^OpenSSH_\([0-9][0-9.]*\).*/\1/p')"
 [ -n "$v" ] || fail "ssh -V printed no OpenSSH version"
 ver_ge "$v" "$OPENSSH_MIN" || fail "ssh is OpenSSH $v; the bench needs OpenSSH $OPENSSH_MIN or later"
 note "ssh: OpenSSH $v"
+command -v mkfs.erofs >/dev/null 2>&1 || fail "mkfs.erofs not found (erofs-utils: the EROFS oracle)"
+v="$(mkfs.erofs --version 2>&1 | sed -n '1s/.*erofs-utils) \([0-9][0-9.]*\).*/\1/p')"
+[ -n "$v" ] || fail "mkfs.erofs --version printed no version"
+ver_ge "$v" "$EROFS_UTILS_MIN" || fail "erofs-utils is $v; the bench needs $EROFS_UTILS_MIN or later"
+note "mkfs.erofs: erofs-utils $v"
 for t in curl xz dpkg-deb; do
     command -v "$t" >/dev/null 2>&1 || fail "$t not found (the bench builds its reference guest with it)"
 done

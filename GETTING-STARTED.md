@@ -40,8 +40,10 @@ the bench names a QEMU too old when it first boots one.
 - From your package manager: a C compiler and linker (host binaries, and the few crates that
   build C; none links a system library), `git`, `curl`, `xz`, CA certificates,
   `qemu-system-riscv64` and `qemu-system-riscv32` (QEMU 8.2 or later), OpenSSH's client (9.6 or
-  later; no server), and `dpkg-deb`, which unpacks the Debian packages the reference server's
-  guest is built from. A GDB that knows RISC-V (`gdb-multiarch`) is for [debugging](#debug) only.
+  later; no server), `dpkg-deb`, which unpacks the Debian packages the reference server's
+  guest is built from, and `erofs-utils` (1.9 or later), the oracle the bench holds Redoubt's
+  EROFS writer and reader against. A GDB that knows RISC-V (`gdb-multiarch`) is for
+  [debugging](#debug) only.
 - With `rustup`: `rustup toolchain install` of the version
   [`rust-toolchain.toml`](rust-toolchain.toml) names, with the targets and components it lists;
   nightly with `rustfmt`, `miri` and `rust-src`; and `cargo install --locked` of
