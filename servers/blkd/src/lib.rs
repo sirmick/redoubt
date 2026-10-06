@@ -1,5 +1,5 @@
 //! `blkd`: the virtio-blk driver. It owns one disk, reads its partition table once, and serves
-//! each partition to one `fsd` as a range of sectors (servers/blkd.md).
+//! each partition to one `littlefsd` as a range of sectors (servers/blkd.md).
 //!
 //! # What this is trusted for
 //! On QEMU no hardware confines DMA, so `blkd` is inside the TCB (TENETS.md 7): it programs a

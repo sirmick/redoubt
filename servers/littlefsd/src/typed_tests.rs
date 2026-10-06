@@ -123,7 +123,7 @@ fn copy_file_copies_and_counts_the_bytes() {
 }
 
 #[test]
-fn attributes_set_and_get_with_fsds_own_types_refused() {
+fn attributes_set_and_get_with_littlefsds_own_types_refused() {
     let who = caller(1, &[]);
     let mut t = volume(&[], &who);
     t.walk(&who, 0, 1, &["notes"]).unwrap();

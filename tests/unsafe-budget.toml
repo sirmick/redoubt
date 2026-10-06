@@ -164,9 +164,9 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-# fsd forbids unsafe code: littlefs and the runtime do all it needs.
-name = "fsd (the file server; parses one volume's medium)"
-paths = ["servers/fsd/src"]
+# littlefsd forbids unsafe code: littlefs and the runtime do all it needs.
+name = "littlefsd (the file server; parses one volume's medium)"
+paths = ["servers/littlefsd/src"]
 max_unsafe = 0
 max_undocumented = 0
 

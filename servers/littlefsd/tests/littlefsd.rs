@@ -1,4 +1,4 @@
-//! `fsd`, the whole program, as a fake process on the runtime's fake kernel: its range is a
+//! `littlefsd`, the whole program, as a fake process on the runtime's fake kernel: its range is a
 //! fake `blkd` serving sectors from memory over the real protocol, its startup block is written
 //! as a launcher would, and clients reach it through the client library, unchanged, as API1's
 //! tests reached in-test servers.
@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use redoubt_client::file::Connection;
-use redoubt_client::{Error, Lend, Name, fsd};
+use redoubt_client::{Error, Lend, Name, littlefsd};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle, MAX_LABELS};
 use redoubt_rt::handle::Endpoint;
@@ -20,9 +20,9 @@ use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::blkd::{
     self, ErrorCode as BlkdError, InfoReply, Message as BlkdMessage, ReadReply,
 };
-use redoubt_rt::wire::proto::fsd::ErrorCode;
+use redoubt_rt::wire::proto::littlefsd::ErrorCode;
 
-#[path = "../src/bin/fsd.rs"]
+#[path = "../src/bin/littlefsd.rs"]
 mod program;
 
 const SECTOR: usize = 512;
@@ -100,10 +100,10 @@ impl TypedServer<Blkd> for FakeBlkd {
     }
 }
 
-/// A running `fsd` on a fake `blkd`, and `init`, which holds the founding connection.
+/// A running `littlefsd` on a fake `blkd`, and `init`, which holds the founding connection.
 struct Volume {
     disk: Shared,
-    fsd: usize,
+    littlefsd: usize,
     receive: Handle,
     init: usize,
     founding: Handle,
@@ -111,24 +111,24 @@ struct Volume {
     thread: std::thread::JoinHandle<u32>,
 }
 
-/// The endpoint the tests' `fsd` receives on, and the argument naming it.
-const ENDPOINT: &str = "fsd:data";
-const ENDPOINT_ARG: &str = "endpoint=fsd:data";
+/// The endpoint the tests' `littlefsd` receives on, and the argument naming it.
+const ENDPOINT: &str = "littlefsd:data";
+const ENDPOINT_ARG: &str = "endpoint=littlefsd:data";
 
 impl Volume {
-    /// `fsd` started with `args` on a range holding `bytes`.
+    /// `littlefsd` started with `args` on a range holding `bytes`.
     fn start(bytes: Vec<u8>, args: &[&str]) -> Volume { Volume::start_with(bytes, args, false) }
 
-    /// `fsd` on a read-only range holding `bytes`.
+    /// `littlefsd` on a read-only range holding `bytes`.
     fn start_read_only(bytes: Vec<u8>) -> Volume { Volume::start_with(bytes, &["buckets=4"], true) }
 
-    /// `fsd` receiving on `fsd:data`, its `endpoint=` argument first, then `args`.
+    /// `littlefsd` receiving on `littlefsd:data`, its `endpoint=` argument first, then `args`.
     fn start_with(bytes: Vec<u8>, args: &[&str], read_only: bool) -> Volume {
         let args: Vec<&str> = [ENDPOINT_ARG].iter().chain(args).copied().collect();
         Volume::start_raw(bytes, &args, read_only)
     }
 
-    /// `fsd` receiving on `fsd:data`, with exactly `args`.
+    /// `littlefsd` receiving on `littlefsd:data`, with exactly `args`.
     fn start_raw(bytes: Vec<u8>, args: &[&str], read_only: bool) -> Volume {
         let f = fake();
         let disk: Shared = Arc::new(Mutex::new(Disk { bytes, failing: false, read_only }));
@@ -148,19 +148,20 @@ impl Volume {
                 }
             }
         });
-        let fsd = f.process(0, &[]);
-        let receive = f.endpoint(fsd);
-        let volume = f.grant(blkd, blkd_receive, fsd, 1);
+        let littlefsd = f.process(0, &[]);
+        let receive = f.endpoint(littlefsd);
+        let volume = f.grant(blkd, blkd_receive, littlefsd, 1);
         let mut builder = StartupBuilder::new(receive.index().max(volume.index()));
         builder.handle(ENDPOINT, receive).handle("volume", volume);
         for arg in args {
             builder.arg(arg);
         }
         let block = builder.finish().expect("the block");
-        let thread = f.run(fsd, move || program::serve(&Startup::parse(&block).expect("the block parses")));
+        let thread =
+            f.run(littlefsd, move || program::serve(&Startup::parse(&block).expect("the block parses")));
         let init = f.process(0, &[]);
-        let founding = f.grant(fsd, receive, init, 1);
-        Volume { disk, fsd, receive, init, founding, blkd: (blkd, blkd_receive), thread }
+        let founding = f.grant(littlefsd, receive, init, 1);
+        Volume { disk, littlefsd, receive, init, founding, blkd: (blkd, blkd_receive), thread }
     }
 
     fn blank(sectors: usize, args: &[&str]) -> Volume { Volume::start(vec![0; sectors * SECTOR], args) }
@@ -179,22 +180,22 @@ impl Volume {
         (session, f.copy(self.init, conn.handle(), session), id)
     }
 
-    /// Stops `fsd` once it is serving (a `Tversion` answered: mounting is over), then `blkd`.
+    /// Stops `littlefsd` once it is serving (a `Tversion` answered: mounting is over), then `blkd`.
     fn stop(self) -> u32 {
         let f = fake();
         let nine = redoubt_rt::client::Connection::new(Endpoint::from_handle(self.founding));
-        f.as_process(self.init, || nine.version(&mut Lend::new(1).unwrap()).expect("fsd is serving"));
-        f.destroy(self.fsd, self.receive);
+        f.as_process(self.init, || nine.version(&mut Lend::new(1).unwrap()).expect("littlefsd is serving"));
+        f.destroy(self.littlefsd, self.receive);
         let code = self.thread.join().unwrap();
         f.destroy(self.blkd.0, self.blkd.1);
         code
     }
 }
 
-/// The client library, unchanged, against the real `fsd`: files over 9P and every typed
+/// The client library, unchanged, against the real `littlefsd`: files over 9P and every typed
 /// operation, each answer decoded from the wire.
 #[test]
-fn the_client_library_works_against_fsd() {
+fn the_client_library_works_against_littlefsd() {
     let volume = Volume::blank(1024, &["buckets=4"]);
     let (session, conn, _) = volume.session(1001, &[]);
     fake().as_process(session, || {
@@ -210,27 +211,27 @@ fn the_client_library_works_against_fsd() {
 
         let root = c.open(&mut lend, "", mode::OREAD).unwrap();
         let dir = c.open(&mut lend, "d", mode::OREAD).unwrap();
-        fsd::set_attr(&mut lend, &file, 16, b"blue").unwrap();
-        assert_eq!(fsd::get_attr(&mut lend, &file, 16).unwrap(), b"blue");
+        littlefsd::set_attr(&mut lend, &file, 16, b"blue").unwrap();
+        assert_eq!(littlefsd::get_attr(&mut lend, &file, 16).unwrap(), b"blue");
         assert_eq!(
-            fsd::set_attr(&mut lend, &file, 2, b"forged"),
+            littlefsd::set_attr(&mut lend, &file, 2, b"forged"),
             Err(Error::Server(ErrorCode::Refused.code()))
         );
         assert_eq!(
-            fsd::set_attr(&mut lend, &file, 16, &[0; 1023]),
+            littlefsd::set_attr(&mut lend, &file, 16, &[0; 1023]),
             Err(Error::Server(ErrorCode::TooLarge.code()))
         );
-        assert_eq!(fsd::copy_file(&mut lend, &file, &dir, "copy").unwrap(), 12);
-        fsd::rename(&mut lend, &root, "notes", &dir, "moved").unwrap();
+        assert_eq!(littlefsd::copy_file(&mut lend, &file, &dir, "copy").unwrap(), 12);
+        littlefsd::rename(&mut lend, &root, "notes", &dir, "moved").unwrap();
         assert_eq!(
-            fsd::rename(&mut lend, &root, "d", &dir, "self"),
+            littlefsd::rename(&mut lend, &root, "d", &dir, "self"),
             Err(Error::Server(ErrorCode::Refused.code()))
         );
         // The handle on the renamed file now names nothing at its path.
         assert_eq!(file.read_at(&mut lend, 0, &mut out), Err(Error::Rerror(Name::Other)));
-        assert_eq!(fsd::get_attr(&mut lend, &file, 16), Err(Error::Server(ErrorCode::Removed.code())));
+        assert_eq!(littlefsd::get_attr(&mut lend, &file, 16), Err(Error::Server(ErrorCode::Removed.code())));
         let moved = c.open(&mut lend, "d/moved", mode::OREAD).unwrap();
-        assert_eq!(fsd::get_attr(&mut lend, &moved, 16).unwrap(), b"blue");
+        assert_eq!(littlefsd::get_attr(&mut lend, &moved, 16).unwrap(), b"blue");
         let copy = c.open(&mut lend, "d/copy", mode::OREAD).unwrap();
         assert_eq!(copy.read_at(&mut lend, 0, &mut out).unwrap(), 12);
         c.remove(&mut lend, "d/copy").unwrap();
@@ -240,7 +241,7 @@ fn the_client_library_works_against_fsd() {
     assert_eq!(volume.stop(), redoubt_rt::exit::OK);
 }
 
-/// Files survive the server: a second `fsd` on the same range finds them.
+/// Files survive the server: a second `littlefsd` on the same range finds them.
 #[test]
 fn files_survive_a_restart() {
     let volume = Volume::blank(512, &["buckets=4"]);
@@ -267,7 +268,7 @@ fn files_survive_a_restart() {
     assert_eq!(volume.stop(), redoubt_rt::exit::OK);
 }
 
-/// Arguments are parsed strictly: anything `fsd` does not understand stops it before it serves.
+/// Arguments are parsed strictly: anything `littlefsd` does not understand stops it before it serves.
 #[test]
 fn arguments_it_does_not_understand_stop_it_before_serving() {
     // One label more than a set holds.
@@ -294,8 +295,8 @@ fn arguments_it_does_not_understand_stop_it_before_serving() {
     for args in [
         &["buckets=4"][..],
         &["endpoint=", "buckets=4"],
-        &["endpoint=fsd:other", "buckets=4"],
-        &["endpoint=Fsd", "buckets=4"],
+        &["endpoint=littlefsd:other", "buckets=4"],
+        &["endpoint=Littlefsd", "buckets=4"],
         &[ENDPOINT_ARG, ENDPOINT_ARG, "buckets=4"],
     ] {
         let volume = Volume::start_raw(vec![0; 512 * SECTOR], args, false);
@@ -310,7 +311,7 @@ fn a_range_too_small_is_no_volume() {
     assert_eq!(volume.thread.join().unwrap(), program::NO_VOLUME);
 }
 
-/// Noise on the range: `fsd` stays up and answers every attach `corrupt`, rather than exiting
+/// Noise on the range: `littlefsd` stays up and answers every attach `corrupt`, rather than exiting
 /// into a restart loop.
 #[test]
 fn a_range_of_noise_is_served_as_corrupt() {
@@ -338,9 +339,12 @@ fn a_failing_range_answers_corrupt() {
         let c = Connection::attach(Endpoint::from_handle(conn), &mut lend).unwrap();
         let file = c.create(&mut lend, "", "f", 0o644, mode::ORDWR).unwrap();
         disk.lock().unwrap().failing = true;
-        assert_eq!(fsd::set_attr(&mut lend, &file, 16, b"x"), Err(Error::Server(ErrorCode::Corrupt.code())));
+        assert_eq!(
+            littlefsd::set_attr(&mut lend, &file, 16, b"x"),
+            Err(Error::Server(ErrorCode::Corrupt.code()))
+        );
         disk.lock().unwrap().failing = false;
-        assert_eq!(fsd::get_attr(&mut lend, &file, 16), Err(Error::Server(ErrorCode::Corrupt.code())));
+        assert_eq!(littlefsd::get_attr(&mut lend, &file, 16), Err(Error::Server(ErrorCode::Corrupt.code())));
     });
     assert_eq!(volume.stop(), redoubt_rt::exit::OK);
 }
@@ -396,7 +400,7 @@ fn fids_are_bounded_and_disconnect_frees_them() {
     assert_eq!(volume.stop(), redoubt_rt::exit::OK);
 }
 
-/// A range `blkd` says is read-only: `fsd` refuses every change before `blkd` sees it, keeps
+/// A range `blkd` says is read-only: `littlefsd` refuses every change before `blkd` sees it, keeps
 /// serving reads to every client, and changes not one byte. A blank one is never formatted.
 #[test]
 fn a_read_only_range_is_served_read_only() {
@@ -422,7 +426,10 @@ fn a_read_only_range_is_served_read_only() {
         );
         assert_eq!(c.remove(&mut lend, "kept"), Err(Error::Rerror(Name::Other)));
         let file = c.open(&mut lend, "kept", mode::OREAD).unwrap();
-        assert_eq!(fsd::set_attr(&mut lend, &file, 16, b"x"), Err(Error::Server(ErrorCode::Refused.code())));
+        assert_eq!(
+            littlefsd::set_attr(&mut lend, &file, 16, b"x"),
+            Err(Error::Server(ErrorCode::Refused.code()))
+        );
         let mut out = [0u8; 8];
         assert_eq!(file.read_at(&mut lend, 0, &mut out).unwrap(), 3, "nothing refused poisoned the volume");
     });

@@ -121,8 +121,8 @@ paths = ["servers/init/src"]
 max_lines = 2097
 
 [[crate]]
-name = "servers/fsd"
-paths = ["servers/fsd/src"]
+name = "servers/littlefsd"
+paths = ["servers/littlefsd/src"]
 max_lines = 1395
 
 [[crate]]

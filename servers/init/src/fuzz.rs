@@ -55,7 +55,7 @@ pub const ENTRIES: [(&str, usize); 11] = [
     ("verityd", 100_000),
     ("netd", 150_000),
     ("ipd", 600_000),
-    ("fsd", 300_000),
+    ("littlefsd", 300_000),
     ("beamlet", 4_000_000),
     ("trace", 100),
 ];

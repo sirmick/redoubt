@@ -12,7 +12,7 @@ use redoubt_rt::server::ninep::{
     DMDIR, FileServer, FileStat, NineError, QTDIR, Qid, REQUEST_STATE, Read, mode,
 };
 use redoubt_rt::server::{Cost, Limits};
-use redoubt_rt::wire::proto::fsd::ErrorCode;
+use redoubt_rt::wire::proto::littlefsd::ErrorCode;
 
 use crate::quota::{Ledger, Refusal};
 use crate::volume::{BLOCK, Blocks, Mounted, Range};
@@ -35,16 +35,16 @@ pub const COST: Cost =
 /// and 32 pages at 4 KiB: 364 544 bytes, so the manifests' 4 buckets take 1 458 176, and 5 fit.
 pub const BUDGET: u64 = 2 * 1024 * 1024;
 
-/// Test-only, for the bench's `fsd-restart` (feature `restart-probe`, off in every default build,
+/// Test-only, for the bench's `littlefsd-restart` (feature `restart-probe`, off in every default build,
 /// as netd's is): a walk to this name ends the instance with [`PROBE_EXIT`] while it holds the
-/// call, so its caller gets `Dead` and `init` restarts `fsd`. Only the client that walks there
+/// call, so its caller gets `Dead` and `init` restarts `littlefsd`. Only the client that walks there
 /// triggers it, and it walks there once.
 #[cfg(feature = "restart-probe")]
-pub const PROBE: &str = "fsd-restart-probe";
+pub const PROBE: &str = "littlefsd-restart-probe";
 #[cfg(feature = "restart-probe")]
 pub const PROBE_EXIT: u32 = 9;
 
-/// `fsd`'s own attribute types, 0 to 15 (servers/fsd.md, "Attributes"): a client's `set_attr`
+/// `littlefsd`'s own attribute types, 0 to 15 (servers/littlefsd.md, "Attributes"): a client's `set_attr`
 /// cannot touch them.
 pub const OWN_ATTRS: u8 = 16;
 /// A file's or directory's id, a little-endian `u64`: its qid path, and how a fid tells the file
@@ -64,11 +64,11 @@ const SUPERBLOCK: u32 = 2;
 /// A metadata pair's bytes.
 const PAIR: u64 = 2 * BLOCK as u64;
 
-/// The `Rerror` texts `fsd` adds to the skeleton's fixed set.
+/// The `Rerror` texts `littlefsd` adds to the skeleton's fixed set.
 pub mod text {
     use redoubt_rt::server::ninep::NineError;
 
-    /// The volume is damaged or its device failed (fsd's `corrupt`).
+    /// The volume is damaged or its device failed (littlefsd's `corrupt`).
     pub const CORRUPT: NineError = NineError("corrupt");
     /// The file was removed, or another took its place, since the fid was walked to it.
     pub const REMOVED: NineError = NineError("removed");
@@ -86,10 +86,10 @@ pub mod text {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BadArgs;
 
-/// What `fsd`'s arguments other than `buckets=` say.
+/// What `littlefsd`'s arguments other than `buckets=` say.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Args<'a> {
-    /// The manifest name of the endpoint it receives on (`fsd:data`): its startup block holds
+    /// The manifest name of the endpoint it receives on (`littlefsd:data`): its startup block holds
     /// that endpoint under this name.
     pub endpoint: &'a str,
     /// The volume's label set; empty when `labels=` is absent.
@@ -99,7 +99,7 @@ pub struct Args<'a> {
 /// The arguments other than `buckets=`: `endpoint=NAME` exactly once, a name under the
 /// manifest's rule, never defaulted; and `labels=ID[,ID...]` at most once, each ID decimal
 /// without leading zeros, at most `MAX_LABELS`, absent for an empty set. Anything else is refused,
-/// so `fsd` never serves under an endpoint or labels it misread.
+/// so `littlefsd` never serves under an endpoint or labels it misread.
 pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, BadArgs> {
     let (mut endpoint, mut labels) = (None, None);
     for arg in args {
@@ -168,7 +168,7 @@ fn join(dir: &str, name: &str) -> Result<String, NineError> {
     Ok(path)
 }
 
-/// The most entries a listing window holds (servers/fsd.md, "A directory is listed a window at a
+/// The most entries a listing window holds (servers/littlefsd.md, "A directory is listed a window at a
 /// time"). One `read` reply holds at most E = 1310 entries: the most a reply carries at the
 /// largest msize, `MSIZE - IOHDRSZ` = 65512 bytes, over the shortest stat, 50 bytes (41 fixed,
 /// a one-byte name and three empty strings). So one request costs at most
@@ -243,7 +243,7 @@ impl Window {
 }
 
 /// One volume's files.
-pub struct Fsd<R: Range> {
+pub struct Littlefsd<R: Range> {
     /// `None`: the volume did not mount, or its device failed since; every request is corrupt.
     fs: Option<Filesystem<Blocks<R>>>,
     /// The range refuses writes: every change is refused here, before littlefs is asked.
@@ -253,7 +253,7 @@ pub struct Fsd<R: Range> {
     attr: Vec<u8>,
     /// The volume's blocks.
     blocks: u32,
-    /// What each live root holds (servers/fsd.md, "Quotas").
+    /// What each live root holds (servers/littlefsd.md, "Quotas").
     pub(crate) ledger: Ledger,
     /// The change generation: moved by every change to the volume, so a window filled before
     /// it is never served after it.
@@ -261,7 +261,7 @@ pub struct Fsd<R: Range> {
     /// The one listing window, whoever lists.
     window: Window,
     /// How many times littlefs itself ran out of room: a quota that kept its promise never
-    /// lets it (servers/fsd.md, "Quotas").
+    /// lets it (servers/littlefsd.md, "Quotas").
     #[cfg(test)]
     pub(crate) out_of_room: u32,
     /// How many passes over a directory listings made.
@@ -269,16 +269,16 @@ pub struct Fsd<R: Range> {
     pub(crate) passes: u32,
 }
 
-impl<R: Range> Fsd<R> {
+impl<R: Range> Littlefsd<R> {
     /// The server for what [`crate::volume::mount`] found, under `labels`. A volume whose ids do
     /// not hold together ([`ids_are_sound`]) is served as corrupt.
     ///
     /// The volume root's quota is the volume's blocks less [`SUPERBLOCK`], and it holds what the
     /// volume holds beyond the superblock pair.
-    pub fn new(mounted: Mounted<R>, labels: Vec<u64>) -> Fsd<R> {
+    pub fn new(mounted: Mounted<R>, labels: Vec<u64>) -> Littlefsd<R> {
         let (fs, read_only, blocks, held) = match mounted {
             Mounted::Files { mut fs, read_only, blocks } => {
-                // No pair is made but in the room a change's root has ([`Fsd::recounted`]).
+                // No pair is made but in the room a change's root has ([`Littlefsd::recounted`]).
                 fs.set_pair_room(0);
                 let root = fs.root_dir();
                 match ids_are_sound(&mut fs, blocks).and_then(|()| tally(&mut fs, root, blocks, &[])) {
@@ -290,16 +290,16 @@ impl<R: Range> Fsd<R> {
             }
             Mounted::Corrupt(_) => (None, false, 0, 0),
         };
-        // No reserve beyond the superblock (servers/fsd.md, "Quotas", no promise the disk cannot
+        // No reserve beyond the superblock (servers/littlefsd.md, "Quotas", no promise the disk cannot
         // keep): littlefs takes no block outside a root in one operation. Its only allocations
         // are a file's blocks, which the room check counts (a rewrite's whole new tail, a copy in
         // full) before they are taken, and new metadata pairs, which it makes only within the
-        // pair room the charged root has ([`Fsd::recounted`]); every other commit (the id
+        // pair room the charged root has ([`Littlefsd::recounted`]); every other commit (the id
         // counter's, a rename's source, an orphan repair, a removed directory's list link) gets
         // none, and compaction keeps such a directory in the pairs it has. littlefs never grows
         // the superblock chain or relocates a pair.
         let room = u64::from(blocks.saturating_sub(SUPERBLOCK)) * u64::from(BLOCK);
-        Fsd {
+        Littlefsd {
             fs,
             read_only,
             labels,
@@ -339,7 +339,7 @@ impl<R: Range> Fsd<R> {
     }
 
     /// Runs `op` on the filesystem. An I/O error poisons the volume until it is mounted again
-    /// (servers/fsd.md, "Failure and restart"): from then on every request is corrupt.
+    /// (servers/littlefsd.md, "Failure and restart"): from then on every request is corrupt.
     pub(crate) fn with<T>(
         &mut self,
         op: impl FnOnce(&mut Filesystem<Blocks<R>>) -> Result<T, FsError>,
@@ -400,7 +400,7 @@ impl<R: Range> Fsd<R> {
     }
 
     /// The root holding the directory `dir`, if it can grow by `need`; otherwise `no space`
-    /// (servers/fsd.md, "Quotas").
+    /// (servers/littlefsd.md, "Quotas").
     pub(crate) fn room(&self, dir: &str, need: u64) -> Result<usize, Failure> {
         let i = self.ledger.holder(dir);
         if self.ledger.fits(i, need) { Ok(i) } else { Err(Failure::Fs(FsError::NoSpace)) }
@@ -410,7 +410,7 @@ impl<R: Range> Fsd<R> {
     /// each for the metadata pairs the directory gained or lost, whether or not the change
     /// succeeded: littlefs splits a directory when a commit to it compacts, and drops a pair
     /// that empties. It splits one, or makes a new directory's pair, only into the room `root`
-    /// has beyond `need`, whole pairs of it (servers/fsd.md, "Quotas"); short of a pair,
+    /// has beyond `need`, whole pairs of it (servers/littlefsd.md, "Quotas"); short of a pair,
     /// compaction keeps a directory in the pairs it has.
     pub(crate) fn recounted<T, const N: usize>(
         &mut self,
@@ -602,7 +602,7 @@ fn cost<D: BlockDevice>(fs: &Filesystem<D>, size: u32) -> u64 {
 
 /// The room a write that leaves a file of `old` bytes `new` bytes long, from byte `from`,
 /// needs until it commits: littlefs rewrites the file from the block holding `from` to its
-/// end before the commit frees the old blocks (servers/fsd.md, "Quotas": a rewrite counts what
+/// end before the commit frees the old blocks (servers/littlefsd.md, "Quotas": a rewrite counts what
 /// it writes), and the file may grow.
 fn rewrite<D: BlockDevice>(fs: &Filesystem<D>, old: u32, from: u32, new: u32) -> u64 {
     // The blocks before the one holding `from` are kept: as many as a file of `from + 1` bytes
@@ -631,7 +631,7 @@ fn dir_ref<D: BlockDevice>(fs: &mut Filesystem<D>, path: &str) -> Result<DirRef,
 }
 
 /// What the directory `top` holds, walked by its pairs and bounded by the volume's pairs as
-/// the mount walk is (servers/fsd.md, "Quotas"): its pairs and those of every directory under
+/// the mount walk is (servers/littlefsd.md, "Quotas"): its pairs and those of every directory under
 /// it, whole blocks for a file in blocks and the length of an inline one; for a live root
 /// below it (`live`: id and charge), that root's charge in reserve instead of what lies under
 /// it. Returns (held, reserve).
@@ -686,7 +686,7 @@ fn repeats<T: Ord>(v: &mut [T]) -> bool {
     v.windows(2).any(|w| w[0] == w[1])
 }
 
-/// Whether the volume is one `fsd` wrote, checked without writing: every file and directory
+/// Whether the volume is one `littlefsd` wrote, checked without writing: every file and directory
 /// has a name a client could have created and an id, no two ids are the same, no metadata pair
 /// is named twice, within one directory's chain or across two, and the root's counter is above
 /// every id, so no create gives an id already in use. An image that breaks any of these
@@ -778,7 +778,7 @@ pub(crate) fn nine(e: Failure) -> NineError {
     }
 }
 
-/// The same failure as the typed operations' error (libs/wire/tables/fsd.md).
+/// The same failure as the typed operations' error (libs/wire/tables/littlefsd.md).
 pub(crate) fn code(e: Failure) -> ErrorCode {
     match e {
         Failure::Removed => ErrorCode::Removed,
@@ -795,7 +795,7 @@ pub(crate) fn code(e: Failure) -> ErrorCode {
     }
 }
 
-impl<R: Range> FileServer for Fsd<R> {
+impl<R: Range> FileServer for Littlefsd<R> {
     type Node = Node;
 
     /// Every badge of the founding kind attaches at the volume's root; `aname` is ignored. A
@@ -810,7 +810,7 @@ impl<R: Range> FileServer for Fsd<R> {
     }
 
     /// Records the connection's quota, carved from the room of the live root above `root`
-    /// (servers/fsd.md, "Quotas"). A directory going live is counted here, once.
+    /// (servers/littlefsd.md, "Quotas"). A directory going live is counted here, once.
     fn minted(
         &mut self,
         caller: &Caller,
@@ -840,7 +840,7 @@ impl<R: Range> FileServer for Fsd<R> {
     /// Gives the connection's quota back to the root it was carved from.
     fn disconnected(&mut self, badge: u64) { self.ledger.disconnect(badge) }
 
-    /// The volume's labels, for every node (servers/fsd.md: labels are per volume).
+    /// The volume's labels, for every node (servers/littlefsd.md: labels are per volume).
     fn labels(&self, _: &Node) -> &[u64] { &self.labels }
 
     fn walk(&mut self, _: &Caller, dir: &Node, name: &str) -> Result<(Node, Qid), NineError> {
@@ -863,11 +863,11 @@ impl<R: Range> FileServer for Fsd<R> {
             // A truncation only gives back, and needs no room.
             let held = self.holds(&node.path).map_err(nine)?;
             let i = self.ledger.holder(parent(&node.path));
-            self.recounted(i, 0, [parent(&node.path)], |fsd| {
-                fsd.bump(node)?;
+            self.recounted(i, 0, [parent(&node.path)], |littlefsd| {
+                littlefsd.bump(node)?;
                 let truncate = OpenOptions { write: true, truncate: true, ..OpenOptions::default() };
-                fsd.on_file(node, truncate, |_, _| Ok(()))?;
-                fsd.ledger.change(i, 0, held);
+                littlefsd.on_file(node, truncate, |_, _| Ok(()))?;
+                littlefsd.ledger.change(i, 0, held);
                 Ok(())
             })
             .map_err(nine)?;
@@ -901,14 +901,14 @@ impl<R: Range> FileServer for Fsd<R> {
             |fs: &Filesystem<_>| (rewrite(fs, old, offset.min(old), new), cost(fs, new), cost(fs, old));
         let (need, more, less) = self.fs.as_ref().map_or((0, 0, 0), costs);
         let i = self.room(parent(&node.path), need).map_err(nine)?;
-        self.recounted(i, need, [parent(&node.path)], |fsd| {
-            fsd.bump(node)?;
+        self.recounted(i, need, [parent(&node.path)], |littlefsd| {
+            littlefsd.bump(node)?;
             let write = OpenOptions { write: true, ..OpenOptions::default() };
-            let written = fsd.on_file(node, write, |fs, h| {
+            let written = littlefsd.on_file(node, write, |fs, h| {
                 fs.seek(h, offset)?;
                 fs.write(h, data)
             })?;
-            fsd.ledger.change(i, more, less);
+            littlefsd.ledger.change(i, more, less);
             Ok(written)
         })
         .map_err(nine)
@@ -951,18 +951,18 @@ impl<R: Range> FileServer for Fsd<R> {
         // has any pair room, so it makes no pair.
         let id = self.next_id().map_err(nine)?;
         // A new directory's own pair comes out of the room the check found.
-        self.recounted(i, 0, [&dir.path], |fsd| {
+        self.recounted(i, 0, [&dir.path], |littlefsd| {
             let attrs: [(u8, &[u8]); 1] = [(ATTR_ID, &id.to_le_bytes())];
             if mkdir {
-                fsd.with(|fs| fs.mkdir_with_attrs(&path, &attrs))?;
+                littlefsd.with(|fs| fs.mkdir_with_attrs(&path, &attrs))?;
             } else {
                 let new = OpenOptions { write: true, create_new: true, ..OpenOptions::default() };
-                fsd.with(|fs| {
+                littlefsd.with(|fs| {
                     let h = fs.open_with_attrs(&path, new, &attrs)?;
                     fs.close(h)
                 })?;
             }
-            fsd.ledger.change(i, need, 0);
+            littlefsd.ledger.change(i, need, 0);
             Ok(())
         })
         .map_err(nine)?;
@@ -983,9 +983,9 @@ impl<R: Range> FileServer for Fsd<R> {
         self.find(node).map_err(nine)?;
         let held = self.holds(&node.path).map_err(nine)?;
         let i = self.ledger.holder(parent(&node.path));
-        self.recounted(i, 0, [parent(&node.path)], |fsd| {
-            fsd.with(|fs| fs.remove(&node.path))?;
-            fsd.ledger.change(i, 0, held);
+        self.recounted(i, 0, [parent(&node.path)], |littlefsd| {
+            littlefsd.with(|fs| fs.remove(&node.path))?;
+            littlefsd.ledger.change(i, 0, held);
             Ok(())
         })
         .map_err(nine)

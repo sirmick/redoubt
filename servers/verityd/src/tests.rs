@@ -126,7 +126,7 @@ fn sectors(bytes: &[u8], sector: u64, count: u32) -> Answered {
     Answered::Data(bytes[at..at + count as usize * SECTOR as usize].to_vec())
 }
 
-fn fsd() -> Caller { caller(BADGE, &[]) }
+fn littlefsd() -> Caller { caller(BADGE, &[]) }
 
 // ---------------------------------------------------------------- arguments
 
@@ -179,12 +179,12 @@ fn a_truncated_range_is_refused_and_still_sized() {
     let line = std::format!("{}", s.take_line().unwrap());
     assert_eq!(line, "verityd: the volume is refused: its range is shorter than its blocks and their tree");
     assert_eq!(s.take_line(), None, "said once");
-    // `info` answers what the manifest says, so `fsd` mounts, fails, and serves corrupt.
+    // `info` answers what the manifest says, so `littlefsd` mounts, fails, and serves corrupt.
     assert_eq!(
-        ask(&mut s, &fsd(), &Message::Info(Info {})),
+        ask(&mut s, &littlefsd(), &Message::Info(Info {})),
         Answered::Info { sectors: 129 * SECTORS_PER_BLOCK, read_only: 1 }
     );
-    assert_eq!(ask(&mut s, &fsd(), &read(0, 8)), Answered::Err(ErrorCode::Failed));
+    assert_eq!(ask(&mut s, &littlefsd(), &read(0, 8)), Answered::Err(ErrorCode::Failed));
 }
 
 #[test]
@@ -194,7 +194,7 @@ fn a_wrong_root_or_top_is_refused() {
     wrong[0] ^= 0x10;
     let mut s = server(g, bytes.clone(), &wrong, &[]);
     assert_eq!(s.refused(), Some(Refusal::Root));
-    assert_eq!(ask(&mut s, &fsd(), &read(0, 1)), Answered::Err(ErrorCode::Failed));
+    assert_eq!(ask(&mut s, &littlefsd(), &read(0, 1)), Answered::Err(ErrorCode::Failed));
     let mut flipped = bytes.clone();
     flipped[g.top() as usize * BLOCK + 100] ^= 1;
     assert_eq!(server(g, flipped, &root, &[]).refused(), Some(Refusal::Root));
@@ -204,7 +204,7 @@ fn a_wrong_root_or_top_is_refused() {
     let mut dead = Verityd::new(Fake { bytes, reads: 0, fail: true }, g, &root, vec![]);
     assert_eq!(dead.refused(), Some(Refusal::NoInfo));
     assert_eq!(
-        ask(&mut dead, &fsd(), &Message::Info(Info {})),
+        ask(&mut dead, &littlefsd(), &Message::Info(Info {})),
         Answered::Info { sectors: 129 * SECTORS_PER_BLOCK, read_only: 1 }
     );
 }
@@ -220,22 +220,25 @@ fn sub_block_and_multi_block_reads_return_the_volume() {
         [(0, 1), (3, 2), (7, 1), (7, 2), (8, 8), (5, 20), (0, MAX_SECTORS), (300 * SECTORS_PER_BLOCK - 1, 1)]
     {
         assert_eq!(
-            ask(&mut s, &fsd(), &read(sector, count)),
+            ask(&mut s, &littlefsd(), &read(sector, count)),
             sectors(&bytes, sector, count),
             "{sector}+{count}"
         );
     }
     assert_eq!(
-        ask(&mut s, &fsd(), &read(300 * SECTORS_PER_BLOCK - 1, 2)),
+        ask(&mut s, &littlefsd(), &read(300 * SECTORS_PER_BLOCK - 1, 2)),
         Answered::Err(ErrorCode::OutOfRange),
         "the tree is not the volume's"
     );
-    assert_eq!(ask(&mut s, &fsd(), &read(300 * SECTORS_PER_BLOCK, 1)), Answered::Err(ErrorCode::OutOfRange));
-    assert_eq!(ask(&mut s, &fsd(), &read(u64::MAX, 1)), Answered::Err(ErrorCode::OutOfRange));
-    assert_eq!(ask(&mut s, &fsd(), &read(0, 0)), Answered::Malformed);
-    assert_eq!(ask(&mut s, &fsd(), &read(0, MAX_SECTORS + 1)), Answered::Err(ErrorCode::TooMany));
     assert_eq!(
-        ask_with_lend(&mut s, &fsd(), &read(0, 8), 4096),
+        ask(&mut s, &littlefsd(), &read(300 * SECTORS_PER_BLOCK, 1)),
+        Answered::Err(ErrorCode::OutOfRange)
+    );
+    assert_eq!(ask(&mut s, &littlefsd(), &read(u64::MAX, 1)), Answered::Err(ErrorCode::OutOfRange));
+    assert_eq!(ask(&mut s, &littlefsd(), &read(0, 0)), Answered::Malformed);
+    assert_eq!(ask(&mut s, &littlefsd(), &read(0, MAX_SECTORS + 1)), Answered::Err(ErrorCode::TooMany));
+    assert_eq!(
+        ask_with_lend(&mut s, &littlefsd(), &read(0, 8), 4096),
         Answered::Err(ErrorCode::TooMany),
         "no room for the length"
     );
@@ -250,22 +253,22 @@ fn the_last_block_and_the_tree_cache_save_reads() {
     assert_eq!(g.levels(), 3);
     let mut s = server(g, bytes, &root, &[]);
     for sector in 0..SECTORS_PER_BLOCK {
-        ask(&mut s, &fsd(), &read(sector, 1));
+        ask(&mut s, &littlefsd(), &read(sector, 1));
     }
     let c = s.counts().unwrap();
     // The top at start, then block 0, its level-1 and level-2 blocks.
     assert_eq!((c.reads, c.checked, c.hits), (4, 1, 0));
-    ask(&mut s, &fsd(), &read(SECTORS_PER_BLOCK, 1));
+    ask(&mut s, &littlefsd(), &read(SECTORS_PER_BLOCK, 1));
     assert_eq!((s.counts().unwrap().reads, s.counts().unwrap().hits), (5, 1));
     // Block 128 is under another level-1 block, but the same level-2 block.
-    ask(&mut s, &fsd(), &read(128 * SECTORS_PER_BLOCK, 1));
+    ask(&mut s, &littlefsd(), &read(128 * SECTORS_PER_BLOCK, 1));
     assert_eq!(s.counts().unwrap().reads, 7);
     // More level-1 blocks than the cache holds: the oldest goes, and comes back by a read.
     for k in 0..=TREE_CACHE as u64 {
-        ask(&mut s, &fsd(), &read(k * 128 * SECTORS_PER_BLOCK, 1));
+        ask(&mut s, &littlefsd(), &read(k * 128 * SECTORS_PER_BLOCK, 1));
     }
     let before = s.counts().unwrap().reads;
-    ask(&mut s, &fsd(), &read(2 * SECTORS_PER_BLOCK, 1));
+    ask(&mut s, &littlefsd(), &read(2 * SECTORS_PER_BLOCK, 1));
     assert!(s.counts().unwrap().reads >= before + 2, "block 0's level-1 block was evicted");
 }
 
@@ -285,19 +288,19 @@ fn a_mismatch_is_failed_and_said_naming_the_block() {
         flipped[at] ^= 0x40;
         let mut s = server(g, flipped, &root, &[]);
         assert_eq!(
-            ask(&mut s, &fsd(), &read(block * SECTORS_PER_BLOCK + 1, 1)),
+            ask(&mut s, &littlefsd(), &read(block * SECTORS_PER_BLOCK + 1, 1)),
             Answered::Err(ErrorCode::Failed),
             "{bad:?}"
         );
         assert_eq!(s.take_line(), Some(Said::Bad(bad)));
         // Asked again: failed again, and not said again.
         assert_eq!(
-            ask(&mut s, &fsd(), &read(block * SECTORS_PER_BLOCK, 8)),
+            ask(&mut s, &littlefsd(), &read(block * SECTORS_PER_BLOCK, 8)),
             Answered::Err(ErrorCode::Failed)
         );
         assert_eq!(s.take_line(), None);
         // A block whose path does not cross the damage still reads.
-        assert_eq!(ask(&mut s, &fsd(), &read(0, 1)), sectors(&bytes, 0, 1));
+        assert_eq!(ask(&mut s, &littlefsd(), &read(0, 1)), sectors(&bytes, 0, 1));
     }
     let line = std::format!("{}", Said::Bad(Bad::Tree(16_513)));
     assert_eq!(line, "verityd: tree block 16513 does not match the tree");
@@ -310,8 +313,8 @@ fn a_failed_block_is_never_kept() {
     let (g, mut bytes, root) = packed(4, 0);
     bytes[2 * BLOCK] ^= 1;
     let mut s = server(g, bytes, &root, &[]);
-    assert_eq!(ask(&mut s, &fsd(), &read(16, 1)), Answered::Err(ErrorCode::Failed));
-    assert_eq!(ask(&mut s, &fsd(), &read(17, 1)), Answered::Err(ErrorCode::Failed));
+    assert_eq!(ask(&mut s, &littlefsd(), &read(16, 1)), Answered::Err(ErrorCode::Failed));
+    assert_eq!(ask(&mut s, &littlefsd(), &read(17, 1)), Answered::Err(ErrorCode::Failed));
 }
 
 // ---------------------------------------------------------------- refusals
@@ -322,10 +325,10 @@ fn writes_are_refused_and_flush_answers_at_once() {
     let mut s = server(g, bytes, &root, &[]);
     let data = [0u8; 512];
     assert_eq!(
-        ask(&mut s, &fsd(), &Message::Write(Write { sector: 0, data: &data })),
+        ask(&mut s, &littlefsd(), &Message::Write(Write { sector: 0, data: &data })),
         Answered::Err(ErrorCode::NotPermitted)
     );
-    assert_eq!(ask(&mut s, &fsd(), &Message::Flush(Flush {})), Answered::Flushed);
+    assert_eq!(ask(&mut s, &littlefsd(), &Message::Flush(Flush {})), Answered::Flushed);
 }
 
 #[test]
@@ -387,7 +390,7 @@ fn arbitrary_media_never_panic() {
             noise(&mut seed, &mut q);
             let sector = u64::from_le_bytes(q[..8].try_into().unwrap()) % (n * SECTORS_PER_BLOCK + 16);
             let count = u32::from_le_bytes(q[8..].try_into().unwrap()) % (MAX_SECTORS + 2);
-            let _ = ask(&mut s, &fsd(), &read(sector, count));
+            let _ = ask(&mut s, &littlefsd(), &read(sector, count));
             let _ = s.take_line();
         }
     }

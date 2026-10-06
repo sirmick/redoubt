@@ -13,7 +13,7 @@ pub const DEFAULT_SOCKETS: u32 = 8;
 /// Connections one default bucket may mint (`new_connection`, `grant`).
 pub const DEFAULT_STATE: u32 = 4;
 /// Multiplexed requests one bucket may hold (servers/serving.md, `admit`), and the pages their
-/// transfers may hold: as `fsd`'s. Overrides keep them.
+/// transfers may hold: as `littlefsd`'s. Overrides keep them.
 pub const REQUESTS: u32 = 128;
 pub const PAGES: u32 = 32;
 /// The bytes `ipd` is sized to fit: every bucket at its cap, and the stack itself.

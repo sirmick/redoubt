@@ -1,4 +1,4 @@
-//! `fsd-client`: a `servers` entry that uses an `fsd` started by `init` through the root badges
+//! `littlefsd-client`: a `servers` entry that uses a `littlefsd` started by `init` through the root badges
 //! its entry is handed, and prints its verdict on its console. Its first argument names what it
 //! checks, and the next the endpoints of the badges it uses:
 //!
@@ -9,14 +9,14 @@
 //!   reads both back, with the same qid paths.
 //! - `read ENDPOINT PATH TEXT...`: each path holds exactly the text after it.
 //! - `apart ENDPOINT ENDPOINT`: writes a file of the same name through each, and reads each back.
-//! - `corrupt ENDPOINT`: every attach is refused, and `fsd` still answers the next.
+//! - `corrupt ENDPOINT`: every attach is refused, and `littlefsd` still answers the next.
 //! - `quota ENDPOINT`: mints two roots with a quota each; one fills its quota, and the other still writes.
-//! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends an `fsd` built with its test-only
-//!   feature `restart-probe`, and reads the file back through a fresh connection.
-//! - `readonly ENDPOINT FILE`: on a volume `fsd` serves read-only (the userland disk), a create, and a write
-//!   to the file `FILE`, are each refused. Its case takes the system's word that the file did not change from
-//!   beamlet, which loads it through the volume's `verityd`, which serves only blocks that hash to the signed
-//!   manifest's root.
+//! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends a `littlefsd` built with its
+//!   test-only feature `restart-probe`, and reads the file back through a fresh connection.
+//! - `readonly ENDPOINT FILE`: on a volume `littlefsd` serves read-only (the userland disk), a create, and a
+//!   write to the file `FILE`, are each refused. Its case takes the system's word that the file did not
+//!   change from beamlet, which loads it through the volume's `verityd`, which serves only blocks that hash
+//!   to the signed manifest's root.
 //! - `labelled ENDPOINT [OWN PEER]`, `outsider ENDPOINT OWN PEER`: under the volume's labels a file is
 //!   written, and read back unchanged by the next start; without them the attach is refused. With `OWN` and
 //!   `PEER`, the endpoints each receives on and is handed at the other's, the next start sends on `PEER` and
@@ -38,7 +38,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use redoubt_client::file::{Connection, File};
-use redoubt_client::fsd::rename;
+use redoubt_client::littlefsd::rename;
 use redoubt_client::{Error, Lend};
 use redoubt_init_programs::Out;
 use redoubt_rt::abi::FOREVER;
@@ -92,8 +92,8 @@ fn run(startup: &Startup) -> u32 {
     let line = match checked {
         Ok(Ends::Exit(code)) => return code,
         Ok(Ends::Said) => redoubt_init_programs::park(),
-        Ok(Ends::Passed) => String::from("fsd-client TEST PASSED\n"),
-        Err(why) => format!("fsd-client TEST FAILED: {why}\n"),
+        Ok(Ends::Passed) => String::from("littlefsd-client TEST PASSED\n"),
+        Err(why) => format!("littlefsd-client TEST FAILED: {why}\n"),
     };
     match out.say(&line) {
         Ok(()) => redoubt_init_programs::park(),
@@ -151,11 +151,11 @@ fn dir(conn: &Connection, out: &mut Out, path: &str) -> Result<File, String> {
     conn.open(&mut out.lend, path, mode::OREAD).map_err(|e| format!("open {path}: {e:?}"))
 }
 
-/// `fsd-boot`: the volume `fsd` formatted takes a file and a directory, the file reads back, is
+/// `littlefsd-boot`: the volume `littlefsd` formatted takes a file and a directory, the file reads back, is
 /// renamed into the directory and reads back there, and both are removed.
 fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> {
     let conn = attach(startup, out, endpoint)?;
-    let text = b"written through fsd under init\n";
+    let text = b"written through littlefsd under init\n";
     write_file(&conn, out, "/", "hello", text)?;
     if read_file(&conn, &mut out.lend, "/hello")? != text {
         return Err("hello does not read back".into());
@@ -179,7 +179,7 @@ fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> 
     if conn.stat(&mut out.lend, "/d").is_ok() {
         return Err("d is still there after its remove".into());
     }
-    out.say("fsd-client wrote, read, renamed and removed\n").map_err(|e| format!("say: {e:?}"))
+    out.say("littlefsd-client wrote, read, renamed and removed\n").map_err(|e| format!("say: {e:?}"))
 }
 
 /// `userland-read-only`: on a read-only volume a create is refused, and so is a write to `file`,
@@ -205,11 +205,11 @@ fn readonly(startup: &Startup, out: &mut Out, endpoint: &str, file: Option<&str>
     if read_file(&conn, &mut out.lend, &object)?.len() != before.len() {
         return Err(format!("{object} reads back another length"));
     }
-    out.say(&format!("fsd-client: a create and a write to {file} refused\n"))
+    out.say(&format!("littlefsd-client: a create and a write to {file} refused\n"))
         .map_err(|e| format!("say: {e:?}"))
 }
 
-/// `fsd-reboot`: what the first boot writes is there after the reboot, with the same qid paths.
+/// `littlefsd-reboot`: what the first boot writes is there after the reboot, with the same qid paths.
 fn reboot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Ends, String> {
     let conn = attach(startup, out, endpoint)?;
     let starts = match read_file(&conn, &mut out.lend, "/starts") {
@@ -230,8 +230,10 @@ fn reboot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Ends, Stri
         if read_file(&conn, &mut out.lend, "/kept/notes")? != notes {
             return Err("kept/notes does not read back".into());
         }
-        out.say(&format!("fsd-client read back kept and kept/notes after the reboot, qid paths {now}\n"))
-            .map_err(|e| format!("say: {e:?}"))?;
+        out.say(&format!(
+            "littlefsd-client read back kept and kept/notes after the reboot, qid paths {now}\n"
+        ))
+        .map_err(|e| format!("say: {e:?}"))?;
         return Ok(Ends::Passed);
     }
     if starts == 0 {
@@ -243,7 +245,7 @@ fn reboot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<Ends, Stri
         let file = conn.stat(&mut out.lend, "/kept/notes").map_err(|e| format!("stat kept/notes: {e:?}"))?;
         let qids = format!("{} {}", kept.qid.path, file.qid.path);
         write_file(&conn, out, "/", "qids", qids.as_bytes())?;
-        out.say(&format!("fsd-client wrote kept and kept/notes, qid paths {qids}\n"))
+        out.say(&format!("littlefsd-client wrote kept and kept/notes, qid paths {qids}\n"))
             .map_err(|e| format!("say: {e:?}"))?;
     }
     put(&conn, out, "/", "starts", format!("{}", starts + 1).as_bytes())?;
@@ -267,10 +269,10 @@ fn read<'a>(
         }
         read += 1;
     }
-    out.say(&format!("fsd-client read {read} files\n")).map_err(|e| format!("say: {e:?}"))
+    out.say(&format!("littlefsd-client read {read} files\n")).map_err(|e| format!("say: {e:?}"))
 }
 
-/// `fsd-one-volume`: two `fsd`s, each on a volume of its own, hold a file of the same name
+/// `littlefsd-one-volume`: two `littlefsd`s, each on a volume of its own, hold a file of the same name
 /// apart.
 fn apart(startup: &Startup, out: &mut Out, first: &str, second: Option<&str>) -> Result<(), String> {
     let second = second.ok_or("no second endpoint")?;
@@ -285,11 +287,11 @@ fn apart(startup: &Startup, out: &mut Out, first: &str, second: Option<&str>) ->
             return Err(format!("{at}'s which does not read back"));
         }
     }
-    out.say(&format!("fsd-client read {first}'s which and {second}'s apart\n"))
+    out.say(&format!("littlefsd-client read {first}'s which and {second}'s apart\n"))
         .map_err(|e| format!("say: {e:?}"))
 }
 
-/// `fsd-corrupt-volume`: a volume served as corrupt refuses each attach with an `Rerror`, and
+/// `littlefsd-corrupt-volume`: a volume served as corrupt refuses each attach with an `Rerror`, and
 /// the same instance answers again.
 fn corrupt(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> {
     let handle = startup.handle(endpoint).ok_or_else(|| format!("no {endpoint} handle"))?;
@@ -300,13 +302,13 @@ fn corrupt(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), Strin
             Ok(_) => return Err("a corrupt volume was attached".into()),
         }
     }
-    out.say("fsd-client was refused at each of 3 attaches\n").map_err(|e| format!("say: {e:?}"))
+    out.say("littlefsd-client was refused at each of 3 attaches\n").map_err(|e| format!("say: {e:?}"))
 }
 
 /// Each root's quota in `quota`, in bytes.
 const QUOTA: u64 = 64 * 1024;
 
-/// `fsd-quota` (R48): two roots minted at one volume with [`QUOTA`] each; one writes until a
+/// `littlefsd-quota` (R48): two roots minted at one volume with [`QUOTA`] each; one writes until a
 /// write is refused, within its quota, and the other still writes half a quota.
 fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> {
     let base = attach(startup, out, endpoint)?;
@@ -352,18 +354,18 @@ fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String>
         }
     }
     out.say(&format!(
-        "fsd-client filled one root at {filled} bytes, and the other still wrote {}\n",
+        "littlefsd-client filled one root at {filled} bytes, and the other still wrote {}\n",
         QUOTA / 2
     ))
     .map_err(|e| format!("say: {e:?}"))
 }
 
-/// `fsd-restart`: a file written, then a walk to `probe` ends `fsd` with the call held, so the
+/// `littlefsd-restart`: a file written, then a walk to `probe` ends `littlefsd` with the call held, so the
 /// call gets `Dead`; a fresh connection, to the instance `init` restarts on the same endpoint,
 /// reads the file back.
 fn restart(startup: &Startup, out: &mut Out, endpoint: &str, probe: Option<&str>) -> Result<(), String> {
     let probe = probe.ok_or("no probe name")?;
-    let text = b"written before fsd's restart\n";
+    let text = b"written before littlefsd's restart\n";
     let old = attach(startup, out, endpoint)?;
     write_file(&old, out, "/", "kept", text)?;
     match old.stat(&mut out.lend, &format!("/{probe}")) {
@@ -375,11 +377,11 @@ fn restart(startup: &Startup, out: &mut Out, endpoint: &str, probe: Option<&str>
         return Err("kept does not read back after the restart".into());
     }
     // One line, after the new instance answered: init's lines on the exit come before it.
-    out.say("fsd-client's call got Dead, and a fresh connection read kept back\n")
+    out.say("littlefsd-client's call got Dead, and a fresh connection read kept back\n")
         .map_err(|e| format!("say: {e:?}"))
 }
 
-/// `fsd-label-check`: a caller without the volume's labels is refused at its attach, a read of
+/// `littlefsd-label-check`: a caller without the volume's labels is refused at its attach, a read of
 /// the root, so it never holds a fid to walk, stat or write through. It tries once the labelled
 /// client's next start, which found its file written, sends on `own`, and sends on `peer` after.
 fn outsider(
@@ -397,7 +399,8 @@ fn outsider(
         Err(e) => return Err(format!("attach: {e:?}, not Rerror")),
         Ok(_) => return Err("attached without the volume's labels".into()),
     }
-    out.say("fsd-client without the labels was refused at attach\n").map_err(|e| format!("say: {e:?}"))?;
+    out.say("littlefsd-client without the labels was refused at attach\n")
+        .map_err(|e| format!("say: {e:?}"))?;
     peer.send(&[0; 4], &[], None, FOREVER).map_err(|(e, _)| format!("send: {e:?}"))
 }
 
@@ -410,7 +413,7 @@ fn handed(startup: &Startup, name: Option<&str>) -> Result<Endpoint, String> {
 /// Microseconds since boot.
 fn now() -> Result<u64, String> { time_now().map_err(|e| format!("time: {e:?}")) }
 
-/// `fsd-large-directory`: the root, holding `count` entries, lists each once, in one listing
+/// `littlefsd-large-directory`: the root, holding `count` entries, lists each once, in one listing
 /// timed from its first read to its last; between its first and second reads the reader's read is
 /// answered.
 fn list<'a>(
@@ -444,11 +447,11 @@ fn list<'a>(
     if listed != count || names.len() != count {
         return Err(format!("listed {listed} entries, {} apart, of {count}", names.len()));
     }
-    out.say(&format!("fsd-client listed {listed} in {took} us, in {reads} reads\n"))
+    out.say(&format!("littlefsd-client listed {listed} in {took} us, in {reads} reads\n"))
         .map_err(|e| format!("say: {e:?}"))
 }
 
-/// `fsd-large-directory`: once the lister has begun, `path` reads back as the text after it, and
+/// `littlefsd-large-directory`: once the lister has begun, `path` reads back as the text after it, and
 /// the lister is told.
 fn reader<'a>(
     startup: &Startup,
@@ -466,7 +469,7 @@ fn reader<'a>(
     if got != text.as_bytes() {
         return Err(format!("{path} holds {:?}, not {text:?}", String::from_utf8_lossy(&got)));
     }
-    out.say(&format!("fsd-client read {path} during the listing in {took} us\n"))
+    out.say(&format!("littlefsd-client read {path} during the listing in {took} us\n"))
         .map_err(|e| format!("say: {e:?}"))?;
     peer.send(&[0; 4], &[], None, FOREVER).map_err(|(e, _)| format!("send: {e:?}"))
 }
@@ -486,7 +489,7 @@ mod verdict {
     pub const OUTSIDER: u32 = 24;
 }
 
-/// `fsd-label-check`, `fsd-confined-labelled`: a caller whose labels equal the volume's writes a
+/// `littlefsd-label-check`, `littlefsd-confined-labelled`: a caller whose labels equal the volume's writes a
 /// file and exits; its next start reads the file back unchanged and exits again, with `ends` only
 /// once the outsider was refused.
 fn labelled_run(startup: &Startup, endpoint: &str, ends: Option<(&str, &str)>) -> u32 {

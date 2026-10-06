@@ -57,8 +57,8 @@ fn reads_through(m: &Manifest, s: &Server, t: &Server) -> bool {
 }
 
 /// The label sets that use server `i`: its own, every server handed one of its endpoints or a
-/// volume's range at it (an `fsd`, or a verified volume's `verityd`, on that `blkd`'s disk; an
-/// `fsd` at its volume's `verityd`), and, if it is shared, every principal domain with its own
+/// volume's range at it (a `littlefsd`, or a verified volume's `verityd`, on that `blkd`'s disk; an
+/// `littlefsd` at its volume's `verityd`), and, if it is shared, every principal domain with its own
 /// set.
 fn users<'a>(m: &'a Manifest, i: usize) -> Vec<Set<'a>> {
     let s = &m.servers[i];

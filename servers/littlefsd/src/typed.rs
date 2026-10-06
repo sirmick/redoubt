@@ -1,5 +1,5 @@
-//! `fsd`'s typed operations (servers/fsd.md, "Typed operations"; the table is
-//! libs/wire/tables/fsd.md). They name the caller's fids, which live in the skeleton, so they are
+//! `littlefsd`'s typed operations (servers/littlefsd.md, "Typed operations"; the table is
+//! libs/wire/tables/littlefsd.md). They name the caller's fids, which live in the skeleton, so they are
 //! served with the whole [`NineServer`] in hand: [`NineServer::fid_node`] finds a fid exactly as a
 //! 9P request does, and a fid of any other connection is `not_found`.
 
@@ -11,12 +11,12 @@ use redoubt_rt::server::ninep::{NineServer, QTDIR};
 use redoubt_rt::server::typed::{Answer, Protocol, TypedServer};
 use redoubt_rt::server::{Access, check};
 use redoubt_rt::wire::Error as WireError;
-use redoubt_rt::wire::proto::fsd::{
+use redoubt_rt::wire::proto::littlefsd::{
     CopyFile, CopyFileReply, ErrorCode, GetAttr, GetAttrReply, Message, Rename, RenameReply, Reply, SetAttr,
     SetAttrReply,
 };
 
-use crate::server::{ATTR_ID, Failure, Fsd, Node, OWN_ATTRS, code, parent};
+use crate::server::{ATTR_ID, Failure, Littlefsd, Node, OWN_ATTRS, code, parent};
 use crate::volume::Range;
 
 /// The most bytes an attribute holds: littlefs's `attr_max`.
@@ -24,10 +24,10 @@ pub const ATTR_MAX: usize = 1022;
 /// How much `copy_file` moves at a time.
 const CHUNK: usize = 4096;
 
-/// The `fsd` protocol, named once for [`redoubt_rt::server::typed`].
-pub struct Fsds;
+/// The `littlefsd` protocol, named once for [`redoubt_rt::server::typed`].
+pub struct Littlefsds;
 
-impl Protocol for Fsds {
+impl Protocol for Littlefsds {
     type Error = ErrorCode;
     type Reply<'a> = Reply<'a>;
     type Request<'a> = Message<'a>;
@@ -42,7 +42,7 @@ impl Protocol for Fsds {
 }
 
 /// The server a typed call is answered by: the skeleton, for the caller's fids, and the files.
-pub struct Typed<'a, R: Range>(pub &'a mut NineServer<Fsd<R>>);
+pub struct Typed<'a, R: Range>(pub &'a mut NineServer<Littlefsd<R>>);
 
 impl<R: Range> Typed<'_, R> {
     /// The node `fid` rests on, the caller's own, after the label check for `access`: the same
@@ -73,7 +73,7 @@ impl<R: Range> Typed<'_, R> {
             return fs.with(|fs| fs.stat(&from)).map(|_| ()).map_err(code);
         }
         // Moving a live root or a directory holding one, or renaming over a live root's
-        // directory, would end its connections (servers/fsd.md, "Quotas").
+        // directory, would end its connections (servers/littlefsd.md, "Quotas").
         if fs.ledger.holds_live(&from) || fs.ledger.holds_live(&to) {
             return Err(ErrorCode::Refused);
         }
@@ -119,8 +119,8 @@ impl<R: Range> Typed<'_, R> {
         // root directory takes a commit too, before the copy has any pair room.
         let id = fs.next_id().map_err(code)?;
         let mut made = false;
-        let copy = |fsd: &mut Fsd<R>| {
-            fsd.with(|fs| {
+        let copy = |littlefsd: &mut Littlefsd<R>| {
+            littlefsd.with(|fs| {
                 let from = fs.open(src.path(), OpenOptions { read: true, ..OpenOptions::default() })?;
                 let new = OpenOptions { write: true, create_new: true, ..OpenOptions::default() };
                 let into = match fs.open_with_attrs(&to, new, &[(ATTR_ID, &id.to_le_bytes())]) {
@@ -177,7 +177,7 @@ impl<R: Range> Typed<'_, R> {
         fs.find(&node).map_err(code)?;
         // The attribute lives in the directory holding the entry, which grows.
         let root = fs.room(parent(node.path()), 0).map_err(code)?;
-        let set = |fs: &mut Fsd<R>| fs.with(|fs| fs.set_attr(node.path(), s.attr, s.value));
+        let set = |fs: &mut Littlefsd<R>| fs.with(|fs| fs.set_attr(node.path(), s.attr, s.value));
         fs.recounted(root, 0, [parent(node.path())], set).map_err(code)
     }
 
@@ -190,7 +190,7 @@ impl<R: Range> Typed<'_, R> {
     }
 }
 
-impl<R: Range> TypedServer<Fsds> for Typed<'_, R> {
+impl<R: Range> TypedServer<Littlefsds> for Typed<'_, R> {
     fn handle<'s>(
         &'s mut self,
         caller: &Caller,

@@ -2,20 +2,20 @@
 //!
 //! This implements the littlefs on-disk format, **version 2.1** (`SPEC.md` of
 //! littlefs-project/littlefs, vendored with `DESIGN.md` in `diff/c/`, checked against the C
-//! reference v2.11.3), for `fsd`: one filesystem server per volume
-//! (docs/servers/fsd.md). Images this crate writes mount in the C reference and the
+//! reference v2.11.3), for `littlefsd`: one filesystem server per volume
+//! (docs/servers/littlefsd.md). Images this crate writes mount in the C reference and the
 //! other way round; the C code runs only on the host, as a test oracle (`diff/`).
 //!
 //! # Shape
 //! - [`BlockDevice`]: the four operations littlefs needs from storage, and the contract power-loss safety
 //!   relies on.
-//! - [`Filesystem`]: format, mount, and every operation `fsd` needs: files (open, read, write, seek,
+//! - [`Filesystem`]: format, mount, and every operation `littlefsd` needs: files (open, read, write, seek,
 //!   truncate, sync, close), directories (mkdir, remove, rename, read_dir), stat, user attributes (the
 //!   reference's "custom attributes") on files and directories, and a volume check.
 //! - Paths are `/`-separated names relative to the root; `.` and `..` are refused, and a trailing slash names
 //!   a directory. Names read back from the medium are opaque bytes: nothing forces them to be UTF-8, or to be
-//!   names a path could name (the check reports those). `fsd` must never join such a name into a path it then
-//!   resolves.
+//!   names a path could name (the check reports those). `littlefsd` must never join such a name into a path
+//!   it then resolves.
 //!
 //! # Terms
 //! A *pair* is a metadata pair: two blocks, one holding the current log of commits. Every
@@ -59,10 +59,10 @@
 //!   is compacted in the pairs it has instead of split, which the reference does only when a split finds no
 //!   free block.
 //! - Only on-disk version 2.1: 2.0 images, which the reference upgrades in place, are refused with
-//!   [`Error::Invalid`]; `fsd` formats its own volumes.
+//!   [`Error::Invalid`]; `littlefsd` formats its own volumes.
 //!
 //! # Left out on purpose
-//! Wear levelling and bad-block relocation (`block_cycles`): `fsd` sits on a virtio disk,
+//! Wear levelling and bad-block relocation (`block_cycles`): `littlefsd` sits on a virtio disk,
 //! whose device handles both; a failed program or erase is reported, not worked around. As a
 //! consequence this crate never relocates metadata or grows the superblock chain, but it
 //! reads images where the C reference did. No v1 migration, no `fs_grow`, no directory
@@ -107,7 +107,7 @@ pub use file::{FileHandle, OpenOptions};
 pub use fs::Filesystem;
 
 /// The on-disk version this crate reads and writes: major 2, minor 1. Older images (2.0) are
-/// refused rather than upgraded as the reference does; `fsd` formats its own volumes.
+/// refused rather than upgraded as the reference does; `littlefsd` formats its own volumes.
 pub const DISK_VERSION: u32 = 0x0002_0001;
 
 /// Storage as littlefs sees it: `block_count` blocks of `block_size` bytes.

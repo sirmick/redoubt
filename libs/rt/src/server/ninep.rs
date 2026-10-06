@@ -38,9 +38,9 @@
 //! every connection counts in the bucket of the root badge its chain was minted through, whoever
 //! holds it ([`super::minted::Minted::key`]).
 //!
-//! **Byte quotas** (servers/fsd.md, "Quotas") are the file server's. The skeleton only carries
+//! **Byte quotas** (servers/littlefsd.md, "Quotas") are the file server's. The skeleton only carries
 //! `new_connection`'s `quota` to [`FileServer::minted`], which may refuse the grant, and tells the
-//! server when the connection goes ([`FileServer::disconnected`]). Only `fsd` meters bytes, and it
+//! server when the connection goes ([`FileServer::disconnected`]). Only `littlefsd` meters bytes, and it
 //! knows what a file costs on its medium; the skeleton does not.
 //!
 //! **What the skeleton guarantees a [`FileServer`]**, whatever the client sends:
@@ -266,7 +266,7 @@ pub trait FileServer {
     /// or its minting failed after `minted` accepted it.
     fn disconnected(&mut self, _badge: u64) {}
 
-    /// The labels of the object `node` belongs to (for `fsd`, its volume's).
+    /// The labels of the object `node` belongs to (for `littlefsd`, its volume's).
     fn labels(&self, node: &Self::Node) -> &[u64];
 
     /// The entry `name` (a valid component, never `.` or `..`) of the directory `dir`.
@@ -456,7 +456,7 @@ impl<S: FileServer> NineServer<S> {
     }
 
     /// The node `caller`'s `fid` rests on, and its qid: the lookup every 9P request makes, for a
-    /// typed operation that names the caller's fids (`fsd`'s). A fid of another connection is
+    /// typed operation that names the caller's fids (`littlefsd`'s). A fid of another connection is
     /// [`NineError::UNKNOWN_FID`], as one that was never made is.
     pub fn fid_node(&self, caller: &Caller, fid: u32) -> Result<(S::Node, Qid), NineError> {
         self.fid(&self.conn_key(caller), fid).map(|f| f.here().clone())

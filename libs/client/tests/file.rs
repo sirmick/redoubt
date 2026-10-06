@@ -265,7 +265,7 @@ fn a_gone_server_is_disconnected_every_time() {
 /// An `Rerror` keeps its name, never its text (servers/wire.md, "Error names"): a name that is
 /// not there, whether the server answers `file does not exist` or walks only part of the path, is
 /// `not_found`; any other refusal is `Other`. A reader tells a missing file from a refused one by
-/// this alone (fsd's `corrupt` is `Other`: servers/fsd/tests/fsd.rs).
+/// this alone (littlefsd's `corrupt` is `Other`: servers/littlefsd/tests/littlefsd.rs).
 #[test]
 fn an_rerror_keeps_its_name_not_found_against_the_rest() {
     let served = Served::start(|_, request| {

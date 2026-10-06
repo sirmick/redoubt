@@ -9,7 +9,7 @@ use beamlet_redoubt::userland::{Disk, Files, Unread, unread, valid_name};
 use beamlet_redoubt::{Modules, Unloaded};
 use redoubt_client::{Error, Name};
 
-/// Files by name, as the userland volume's `fsd` serves them, counting reads; a file named in
+/// Files by name, as the userland volume's `littlefsd` serves them, counting reads; a file named in
 /// `failing` is refused with a name other than `not_found`, as a block `verityd` fails is.
 #[derive(Default)]
 struct Volume {

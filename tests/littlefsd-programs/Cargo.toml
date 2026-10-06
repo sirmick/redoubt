@@ -1,15 +1,15 @@
 [package]
-name = "redoubt-fsd-programs"
+name = "redoubt-littlefsd-programs"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "The client fsd's cases start under the real init, a servers entry of their manifests (docs/testbench.md)"
+description = "The client littlefsd's cases start under the real init, a servers entry of their manifests (docs/testbench.md)"
 
 # A program like a server: the runtime's start-up, its handles by name from the block init
 # writes, and its lines through the /dev/cons connection init minted for it.
 [[bin]]
-name = "fsd-client"
-path = "src/bin/fsd-client.rs"
+name = "littlefsd-client"
+path = "src/bin/littlefsd-client.rs"
 test = false
 
 [[bin]]

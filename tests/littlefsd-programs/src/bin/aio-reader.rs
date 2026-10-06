@@ -1,6 +1,6 @@
 //! `aio-reader`: the client of `aio-many-reads` (servers/serving.md, "Multiplexed connections";
 //! userland/native.md, "Many requests at once"), a `servers` entry under the real `init` that
-//! reads an `fsd` file through the client library's hub. Its first argument names its part:
+//! reads a `littlefsd` file through the client library's hub. Its first argument names its part:
 //!
 //! - `burst ENDPOINT OWN PEER [two]`: writes `/aio`, then keeps 64 reads of it outstanding on one thread,
 //!   sent in one batch and left uncollected while it tells the second program (a send on `PEER`) and waits on
@@ -9,7 +9,7 @@
 //!   completion call is always parked, so they are answered as they come, and the thread idles in `receive`
 //!   on `OWN`; without, it has one connection and waits in its completion call itself.
 //! - `second ENDPOINT OWN PEER`: waits on `OWN` for the burst, reads `/aio` by one call per request while the
-//!   burst's 64 reads are held at `fsd`, and sends its result to `PEER`.
+//!   burst's 64 reads are held at `littlefsd`, and sends its result to `PEER`.
 //!
 //! Each prints its verdict on its console, and the burst, the case's reporter, `TEST PASSED`; it
 //! prints how many threads it ran: itself and its waiters.
@@ -151,7 +151,7 @@ fn burst(
         }
         Ok(())
     })?;
-    // The second program reads while all 64 are held at `fsd`.
+    // The second program reads while all 64 are held at `littlefsd`.
     peer.send(&[GO, 0, 0, 0], &[], None, FOREVER).map_err(|(e, _)| format!("go: {e:?}"))?;
     let second_read = loop {
         match own.receive(SECOND_WAIT, COMPLETION_PAGES) {

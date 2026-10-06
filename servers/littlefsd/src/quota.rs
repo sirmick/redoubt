@@ -1,4 +1,4 @@
-//! The byte quotas per attach root (servers/fsd.md, "Quotas"; R48): what each live root holds
+//! The byte quotas per attach root (servers/littlefsd.md, "Quotas"; R48): what each live root holds
 //! and keeps in reserve, in bytes. Nothing here reads the medium: the server counts a root's
 //! directory when it first goes live and tells the ledger every change, and nothing is stored.
 
@@ -158,7 +158,7 @@ impl Ledger {
     }
 
     /// Records the connection `badge`, minted through `granter`'s at the directory `id` at
-    /// `path` with `quota` bytes (servers/fsd.md, "Quotas"). A directory not yet live is
+    /// `path` with `quota` bytes (servers/littlefsd.md, "Quotas"). A directory not yet live is
     /// counted with `count`: what it holds and its reserve, the live roots below it skipped.
     /// The parent must have room for what the root's charge adds to it.
     pub fn mint<E>(

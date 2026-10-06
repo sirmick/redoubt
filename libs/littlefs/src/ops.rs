@@ -562,7 +562,7 @@ impl<D: BlockDevice> Filesystem<D> {
 fn sorted(p: Pair) -> Pair { [p[0].min(p[1]), p[0].max(p[1])] }
 
 /// Whether some path can name an entry: not empty, not `.` or `..`, no `/` and no NUL.
-/// Names read back from the medium may be anything; `fsd` must treat them as opaque bytes.
+/// Names read back from the medium may be anything; `littlefsd` must treat them as opaque bytes.
 fn nameable(name: &[u8]) -> bool {
     !(name.is_empty() || name == b"." || name == b".." || name.contains(&b'/') || name.contains(&0))
 }

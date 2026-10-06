@@ -1,8 +1,8 @@
-//! `fsd`, the program: size and mount its range at `blkd`, then serve the volume over 9P, with
+//! `littlefsd`, the program: size and mount its range at `blkd`, then serve the volume over 9P, with
 //! its typed operations, until its endpoint is destroyed.
 //!
-//! Everything it can do is in `redoubt-fsd`'s library, so host tests drive the same code against
-//! the runtime's fake kernel (`tests/fsd.rs`).
+//! Everything it can do is in `redoubt-littlefsd`'s library, so host tests drive the same code against
+//! the runtime's fake kernel (`tests/littlefsd.rs`).
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
@@ -10,9 +10,9 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use redoubt_fsd::blkd::Blkd;
-use redoubt_fsd::typed::{Fsds, Typed};
-use redoubt_fsd::{Args, BUDGET, COST, Fsd, limits, mount, parse_args};
+use redoubt_littlefsd::blkd::Blkd;
+use redoubt_littlefsd::typed::{Littlefsds, Typed};
+use redoubt_littlefsd::{Args, BUDGET, COST, Littlefsd, limits, mount, parse_args};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::NineServer;
 use redoubt_rt::server::own_args;
@@ -23,7 +23,7 @@ use redoubt_rt::startup::Startup;
 redoubt_rt::entry!(serve);
 
 /// No `buckets=N`, one whose buckets at their caps do not fit the budget, no `endpoint=NAME` or
-/// none the startup block holds a handle by, or an argument `fsd` does not understand (`labels=`
+/// none the startup block holds a handle by, or an argument `littlefsd` does not understand (`labels=`
 /// malformed, or anything else): it does not guess.
 pub const BAD_ARGS: u32 = 4;
 /// No `volume` handle, a range `blkd` would not size, or one of fewer than four blocks.
@@ -32,10 +32,10 @@ pub const NO_VOLUME: u32 = 5;
 /// unpredictable (servers/serving.md R27).
 pub const NO_RANDOM: u32 = 6;
 
-/// The line `fsd` says when it serves its volume as corrupt.
-pub const CORRUPT: &str = "fsd: the volume does not mount, and is served as corrupt\n";
+/// The line `littlefsd` says when it serves its volume as corrupt.
+pub const CORRUPT: &str = "littlefsd: the volume does not mount, and is served as corrupt\n";
 
-/// The endpoint `fsd` receives on: the startup block's handle `endpoint=` names. One place, so
+/// The endpoint `littlefsd` receives on: the startup block's handle `endpoint=` names. One place, so
 /// where the name comes from can change without touching the rest.
 fn receive_endpoint(startup: &Startup, name: &str) -> Option<Endpoint> {
     startup.handle(name).map(Endpoint::from_handle)
@@ -57,19 +57,19 @@ pub fn serve(startup: &Startup) -> u32 {
     #[cfg(feature = "one-volume-probe")]
     let range = {
         let mut range = range;
-        say(startup, &redoubt_fsd::one_volume::verdict(startup, name, &mut range));
+        say(startup, &redoubt_littlefsd::one_volume::verdict(startup, name, &mut range));
         range
     };
     let Ok(mounted) = mount(range) else { return NO_VOLUME };
     // A range that does not mount is served as corrupt, not exited on: a damaged medium must
     // not become a restart loop.
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
-    let fsd = Fsd::new(mounted, labels);
-    if fsd.is_corrupt() {
+    let littlefsd = Littlefsd::new(mounted, labels);
+    if littlefsd.is_corrupt() {
         say(startup, CORRUPT);
     }
-    let Ok(mut server) = NineServer::new(fsd, limits, random) else { return BAD_ARGS };
+    let Ok(mut server) = NineServer::new(littlefsd, limits, random) else { return BAD_ARGS };
     // 9P, multiplexed 9P and `ninep_common` in the skeleton's loop; the four typed operations
     // are ours.
-    server.run(&endpoint, |s, request| serve_call::<Fsds, _>(&mut Typed(s), request))
+    server.run(&endpoint, |s, request| serve_call::<Littlefsds, _>(&mut Typed(s), request))
 }

@@ -1,14 +1,14 @@
-//! `fsd`: the file server for one volume, a range at `blkd` holding a littlefs filesystem,
-//! served over 9P (servers/fsd.md).
+//! `littlefsd`: the file server for one volume, a range at `blkd` holding a littlefs filesystem,
+//! served over 9P (servers/littlefsd.md).
 //!
-//! **One volume, one label set.** An `fsd` holds one range badge at `blkd` and nothing else, so
+//! **One volume, one label set.** A `littlefsd` holds one range badge at `blkd` and nothing else, so
 //! a parser exploit reaches that medium alone (R47). Every node reports the volume's labels, so
 //! the skeleton's label check runs on every request; there are no per-file labels, owners or
 //! permission bits.
 //!
 //! **Mounting.** A range whose superblock pair reads all zero has never been written and is
 //! formatted; any other range that does not mount is served as corrupt, every attach refused
-//! with `corrupt`, and `fsd` stays up, so a damaged or hostile medium never becomes a restart
+//! with `corrupt`, and `littlefsd` stays up, so a damaged or hostile medium never becomes a restart
 //! loop ([`volume::mount`]). An I/O error from `blkd` later makes the volume corrupt until it is
 //! mounted again.
 //!
@@ -43,5 +43,5 @@ pub mod server;
 pub mod typed;
 pub mod volume;
 
-pub use server::{Args, BUDGET, BadArgs, COST, Fsd, limits, parse_args};
+pub use server::{Args, BUDGET, BadArgs, COST, Littlefsd, limits, parse_args};
 pub use volume::{Mounted, NoVolume, Range, mount};

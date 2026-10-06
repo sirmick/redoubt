@@ -27,7 +27,7 @@ impl Write for Screen {
 }
 
 /// The volume's files by name; a name in `failing` is refused with a name other than
-/// `not_found`, as a file `fsd` serves from a volume whose block `verityd` refused is.
+/// `not_found`, as a file `littlefsd` serves from a volume whose block `verityd` refused is.
 struct Volume {
     files: HashMap<String, Vec<u8>>,
     failing: Vec<&'static str>,

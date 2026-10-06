@@ -1,5 +1,5 @@
 //! The volume under the files: `blkd`'s range as littlefs blocks, and the mounting rule
-//! (servers/fsd.md, "Volumes, connections and labels").
+//! (servers/littlefsd.md, "Volumes, connections and labels").
 
 use alloc::vec::Vec;
 
@@ -22,11 +22,11 @@ pub struct Fault;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Geometry {
     pub sectors: u64,
-    /// The range refuses writes: `fsd` then writes nothing at all.
+    /// The range refuses writes: `littlefsd` then writes nothing at all.
     pub read_only: bool,
 }
 
-/// `blkd`'s range as `fsd` uses it (libs/wire/tables/blkd.md): its size, and whole sectors read,
+/// `blkd`'s range as `littlefsd` uses it (libs/wire/tables/blkd.md): its size, and whole sectors read,
 /// written and flushed, at most one block of them at a time.
 pub trait Range {
     /// The range's length in sectors and whether it may be written (`info`).
@@ -44,7 +44,7 @@ pub trait Range {
 pub struct Blocks<R> {
     range: R,
     count: u32,
-    /// `fsd` asks for no write on a read-only range; one that reached here anyway is refused
+    /// `littlefsd` asks for no write on a read-only range; one that reached here anyway is refused
     /// before `blkd` sees it.
     read_only: bool,
     /// One block of sectors, for reads that start or end inside one.
@@ -95,7 +95,7 @@ impl<R: Range> BlockDevice for Blocks<R> {
     fn sync(&mut self) -> Result<(), Error> { self.range.flush().map_err(|_| Error::Io) }
 }
 
-/// Why there is no volume to serve: `fsd` exits before serving.
+/// Why there is no volume to serve: `littlefsd` exits before serving.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoVolume {
     /// `info` failed: the range cannot even be sized.

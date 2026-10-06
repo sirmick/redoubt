@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn handle_names_follow_the_manifest_rule() {
-        for good in ["keys", "budget", "fsd:data", "alice+secrets", "a-b_c9", &"a".repeat(MAX_NAME)] {
+        for good in ["keys", "budget", "littlefsd:data", "alice+secrets", "a-b_c9", &"a".repeat(MAX_NAME)] {
             assert!(valid_name(good), "{good:?}");
         }
         let long = "a".repeat(MAX_NAME + 1);

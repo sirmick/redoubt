@@ -1,13 +1,13 @@
 [package]
-name = "redoubt-fsd"
+name = "redoubt-littlefsd"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "fsd: one littlefs volume, a range at blkd, served over 9P with its label set and fsd's typed operations"
+description = "littlefsd: one littlefs volume, a range at blkd, served over 9P with its label set and littlefsd's typed operations"
 
 [[bin]]
-name = "fsd"
-path = "src/bin/fsd.rs"
+name = "littlefsd"
+path = "src/bin/littlefsd.rs"
 
 # The runtime, and littlefs for the medium; nothing else parses what the volume holds
 # (TENETS.md 5).
@@ -16,11 +16,11 @@ redoubt-rt = { path = "../../libs/rt" }
 littlefs = { path = "../../libs/littlefs" }
 
 [features]
-# Test-only, for the bench's fsd-restart case, and off in every default build, as netd's
+# Test-only, for the bench's littlefsd-restart case, and off in every default build, as netd's
 # restart-probe is: a walk to one name ends the instance (src/server.rs, PROBE).
 restart-probe = []
-# Test-only, for the bench's fsd-one-volume case, and off in every default build: before
-# serving, fsd tries to reach past its endpoint and its range and says what it found
+# Test-only, for the bench's littlefsd-one-volume case, and off in every default build: before
+# serving, littlefsd tries to reach past its endpoint and its range and says what it found
 # (src/one_volume.rs).
 one-volume-probe = []
 

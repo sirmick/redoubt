@@ -644,25 +644,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redoubt-fsd"
-version = "0.1.0"
-dependencies = [
- "littlefs",
- "redoubt-client",
- "redoubt-fake-kernel",
- "redoubt-rt",
-]
-
-[[package]]
-name = "redoubt-fsd-programs"
-version = "0.1.0"
-dependencies = [
- "redoubt-client",
- "redoubt-init-programs",
- "redoubt-rt",
-]
-
-[[package]]
 name = "redoubt-init"
 version = "0.1.0"
 dependencies = [
@@ -720,6 +701,25 @@ name = "redoubt-layout"
 version = "0.1.0"
 dependencies = [
  "redoubt-sys",
+]
+
+[[package]]
+name = "redoubt-littlefsd"
+version = "0.1.0"
+dependencies = [
+ "littlefs",
+ "redoubt-client",
+ "redoubt-fake-kernel",
+ "redoubt-rt",
+]
+
+[[package]]
+name = "redoubt-littlefsd-programs"
+version = "0.1.0"
+dependencies = [
+ "redoubt-client",
+ "redoubt-init-programs",
+ "redoubt-rt",
 ]
 
 [[package]]
@@ -1182,7 +1182,7 @@ dependencies = [
  "libc",
  "redoubt-blkd",
  "redoubt-client",
- "redoubt-fsd",
+ "redoubt-littlefsd",
  "redoubt-model",
  "redoubt-rt",
  "redoubt-signing",

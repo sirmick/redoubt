@@ -1,7 +1,7 @@
-The `fsd` protocol's message and error tables, included by its owning page, [servers/fsd.md](../../../docs/servers/fsd.md).
+The `littlefsd` protocol's message and error tables, included by its owning page, [servers/littlefsd.md](../../../docs/servers/littlefsd.md).
 
 <!-- ANCHOR: tables -->
-<!-- wire: fsd ninep -->
+<!-- wire: littlefsd ninep -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
 | 16 | `rename` | `old_dir: u32`, `old_name: string`, `new_dir: u32`, `new_name: string` | - |
@@ -9,7 +9,7 @@ The `fsd` protocol's message and error tables, included by its owning page, [ser
 | 18 | `set_attr` | `fid: u32`, `attr: u8`, `value: bytes` | - |
 | 19 | `get_attr` | `fid: u32`, `attr: u8` | `value: bytes` |
 
-<!-- wire-errors: fsd -->
+<!-- wire-errors: littlefsd -->
 | Code | Error |
 | --- | --- |
 | 2 | `not_found` |

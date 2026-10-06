@@ -1,5 +1,5 @@
 //! One call for any typed protocol, over the module the generator wrote from its table
-//! (servers/wire.md, "Wire tables and the generator"): for every server but `fsd` this and the
+//! (servers/wire.md, "Wire tables and the generator"): for every server but `littlefsd` this and the
 //! generated module are the binding.
 //!
 //! The generated codec does all the encoding and decoding, and the protocol's layout says whether

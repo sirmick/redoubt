@@ -85,7 +85,7 @@ pub const SECTOR_SIZE: u32 = 512;
 
 /// The most sectors one `read` or `write` may carry (servers/blkd.md, "Messages"). 64 sectors is
 /// 32 KiB: comfortably inside one `MAX_LEND_PAGES` lend with its encoding, and a whole number of
-/// littlefs blocks at every block size `fsd` uses.
+/// littlefs blocks at every block size `littlefsd` uses.
 pub const MAX_SECTORS: u32 = 64;
 
 /// The bytes of the data buffer: [`MAX_SECTORS`] sectors.
@@ -172,7 +172,7 @@ pub struct Features {
 ///
 /// `blkd` accepts exactly three bits and offers no others: `VERSION_1`, without which the queue
 /// layout is not the one below; `BLK_FLUSH`, without which `sync` could not be honoured and the
-/// contract `fsd` rests on would be a lie (servers/blkd.md); and `BLK_RO`, which is not needed
+/// contract `littlefsd` rests on would be a lie (servers/blkd.md); and `BLK_RO`, which is not needed
 /// but is accepted so that a read-only device is refused at the door rather than per write.
 /// Everything else — indirect descriptors, event indices, discard, write zeroes, multiqueue — is
 /// left unaccepted, so the device may not use any of it and the ring stays the one described in

@@ -1,5 +1,5 @@
-//! Test-only, for the bench's `fsd-one-volume` (feature `one-volume-probe`, off in every default
-//! build): R47 (one volume per instance) tried from inside `fsd` before it serves, as a parser
+//! Test-only, for the bench's `littlefsd-one-volume` (feature `one-volume-probe`, off in every default
+//! build): R47 (one volume per instance) tried from inside `littlefsd` before it serves, as a parser
 //! exploit would try it. Each answer is the kernel's or `blkd`'s, never this code's opinion: a
 //! handle index other than its own is empty, its range's badge mints nothing, and the sector past
 //! its range is `out_of_range`.

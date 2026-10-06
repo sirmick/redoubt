@@ -10,7 +10,7 @@ use redoubt_rt::wire::proto::blkd::{Info, Message, Read, Reply};
 
 use crate::{Fault, Range, SECTOR, Size};
 
-/// Pages lent to each call: a block of data and the message around it, as `fsd` lends.
+/// Pages lent to each call: a block of data and the message around it, as `littlefsd` lends.
 const LEND_PAGES: usize = 2;
 
 /// `verityd`'s range at `blkd`.

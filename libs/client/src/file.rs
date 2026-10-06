@@ -184,7 +184,7 @@ pub struct File {
 impl File {
     pub fn connection(&self) -> &Connection { &self.conn }
 
-    /// The fid it rests on: what `fsd`'s typed operations name.
+    /// The fid it rests on: what `littlefsd`'s typed operations name.
     pub fn fid(&self) -> u32 { self.fid }
 
     pub fn qid(&self) -> Qid { self.qid }

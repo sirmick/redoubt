@@ -7,8 +7,8 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   manifest. `./mkimage` packs it with the bench's builder into `target/image/redoubt.bundle`, and
   the `init-boot` case boots the same bundle. The builder writes the userland volume's root and
   block count into the manifest it packs, from its own pack of `userland.toml`.
-- `manifest.json`: the boot manifest `init` reads, with eleven servers, including `fsd:data` for
-  the disk's `data` volume, the userland disk's `blkd:system`, `verity:system` and `fsd:system`,
+- `manifest.json`: the boot manifest `init` reads, with eleven servers, including `littlefsd:data` for
+  the disk's `data` volume, the userland disk's `blkd:system`, `verity:system` and `littlefsd:system`,
   and `beamlet` running the shell, `Redoubt.Shell`, on the UART console. The userland volume is
   verified: its entry's `verity` names `verity:system`, and the root and block count in this file
   are placeholders the builder replaces with the pack's ([verityd](../docs/servers/verityd.md)),
@@ -16,7 +16,7 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   budget, twice what its VM uses at the prompt, does not fit the `system` budget of a smaller
   machine ([budgets](../docs/kernel/budgets.md)).
 - `disk.toml`: the disk image. `./mkimage` packs it into `target/image/disk.img`: a GPT, then the
-  `data` partition as a littlefs volume holding `target/image/stage/`, written through `fsd`'s own
+  `data` partition as a littlefs volume holding `target/image/stage/`, written through `littlefsd`'s own
   code, and the `image-disk` case boots a disk packed the same way.
 - `userland.toml`: the userland disk, attached read-only. `./mkimage` packs it with the same
   packer into `target/image/userland.img`: each module of the applications it names, compiled by

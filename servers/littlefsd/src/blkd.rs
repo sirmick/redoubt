@@ -15,7 +15,7 @@ use crate::volume::{Fault, Geometry, Range, SECTOR};
 /// Pages lent to each call: a block of data and the message around it.
 const LEND_PAGES: usize = 2;
 
-/// `fsd`'s range at `blkd`.
+/// `littlefsd`'s range at `blkd`.
 pub struct Blkd {
     endpoint: Endpoint,
     lend: Lend,
@@ -61,7 +61,7 @@ impl Blkd {
 
 #[cfg(feature = "one-volume-probe")]
 impl Blkd {
-    /// Test-only, for the bench's `fsd-one-volume` (feature `one-volume-probe`): `blkd`'s answer
+    /// Test-only, for the bench's `littlefsd-one-volume` (feature `one-volume-probe`): `blkd`'s answer
     /// to a one-sector read at `sector`, its error code if it refuses.
     pub fn read_one(&mut self, sector: u64) -> Result<Result<(), ErrorCode>, Fault> {
         let words = Message::Read(Read { sector, count: 1 }).encode(self.lend.pages().map_err(|_| Fault)?);

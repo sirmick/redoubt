@@ -1,13 +1,13 @@
 //! The userland disk, as plain files (docs/kernel/boot.md, R75 (verified userland);
 //! docs/userland/beamlet.md, "beamlet on Redoubt"). Each module and application resource the
 //! system resolves by name is the file of that name at the root of the userland volume
-//! (`Elixir.Enum.beam`, `elixir.app`), read through the volume's `fsd`, which reads it through
+//! (`Elixir.Enum.beam`, `elixir.app`), read through the volume's `littlefsd`, which reads it through
 //! its `verityd` (docs/servers/verityd.md, R76 (verified volumes)). beamlet checks nothing itself:
-//! a block that does not hash to the root the signed manifest pins never reaches `fsd`, which
+//! a block that does not hash to the root the signed manifest pins never reaches `littlefsd`, which
 //! then serves the volume as corrupt.
 //!
-//! A name the volume's `fsd` answers `not_found` to is absent, and the VM's lookup goes on as for
-//! any name it lacks. Any other refusal, at the open or on a read (`corrupt` from a volume `fsd`
+//! A name the volume's `littlefsd` answers `not_found` to is absent, and the VM's lookup goes on as for
+//! any name it lacks. Any other refusal, at the open or on a read (`corrupt` from a volume `littlefsd`
 //! serves as corrupt, a block `verityd` failed, a device error), loads nothing, is said once on the
 //! console naming the file and the error's name, and is never looked for anywhere else.
 
@@ -23,13 +23,13 @@ const MAX_NAME: usize = 260;
 /// Why a file gave nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unread {
-    /// The volume's `fsd` answered `not_found` at the open: there is no such file.
+    /// The volume's `littlefsd` answered `not_found` at the open: there is no such file.
     Absent,
     /// Any other refusal, at the open or on a read, and why, naming the error.
     Failed(&'static str),
 }
 
-/// What a refusal by the volume's `fsd` means for a lookup, by the error's name
+/// What a refusal by the volume's `littlefsd` means for a lookup, by the error's name
 /// (servers/wire.md, "Error names"): `not_found` at the open is absent; any other refusal, and any
 /// on a read, failed, with the reason beamlet says, naming the error.
 pub fn unread(e: Error, at_open: bool) -> Unread {
@@ -42,7 +42,7 @@ pub fn unread(e: Error, at_open: bool) -> Unread {
     })
 }
 
-/// Where the files are: the userland volume's `fsd` on the machine.
+/// Where the files are: the userland volume's `littlefsd` on the machine.
 pub trait Files: Send {
     /// The bytes of the file `name` at the volume's root, read whole.
     fn read(&mut self, name: &str) -> Result<Vec<u8>, Unread>;

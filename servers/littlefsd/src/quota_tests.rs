@@ -1,4 +1,4 @@
-//! Quotas per attach root (servers/fsd.md, "Quotas"; R48), over the skeleton: connections are
+//! Quotas per attach root (servers/littlefsd.md, "Quotas"; R48), over the skeleton: connections are
 //! minted with `new_connection` through `answer_common`, and every change is made over 9P.
 
 use alloc::vec;
@@ -9,7 +9,7 @@ use redoubt_rt::abi::{Error, Handle, Handles};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{DMDIR, Minter, mode, ninep_common};
 use redoubt_rt::server::typed::TypedServer;
-use redoubt_rt::wire::proto::fsd::{CopyFile, ErrorCode, Message, Rename};
+use redoubt_rt::wire::proto::littlefsd::{CopyFile, ErrorCode, Message, Rename};
 
 use crate::server::tests::{Memory, SECTORS, T, caller};
 use crate::typed::Typed;
@@ -127,7 +127,7 @@ fn fill(t: &mut T, who: &Caller, fid: u32) -> u64 {
 }
 
 /// R48's attack: Bob fills his root to its quota and is refused, and Alice, on another root of
-/// the same volume, still writes, as does the volume's root. The refusal is fsd's, by the
+/// the same volume, still writes, as does the volume's root. The refusal is littlefsd's, by the
 /// quota it recorded at the mint, not anything Bob reports.
 #[test]
 fn a_write_past_one_roots_quota_is_refused_while_another_still_writes() {

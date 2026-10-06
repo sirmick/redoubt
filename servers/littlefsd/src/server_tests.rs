@@ -1,4 +1,4 @@
-//! `fsd`'s files through the 9P skeleton, as a client sends them, on a block device in memory
+//! `littlefsd`'s files through the 9P skeleton, as a client sends them, on a block device in memory
 //! standing in for `blkd`'s range. The whole program against a fake kernel and a fake `blkd`,
 //! and the client library against it, are in `tests/`.
 
@@ -143,14 +143,14 @@ pub(crate) fn caller(badge: u64, labels: &[u64]) -> Caller {
 
 /// A server on `disk` under `labels`, and the 9P a client would send it.
 pub(crate) struct T {
-    pub server: NineServer<Fsd<Memory>>,
+    pub server: NineServer<Littlefsd<Memory>>,
     pub buf: Vec<u8>,
 }
 
 impl T {
     pub fn on(disk: &Memory, labels: &[u64]) -> T {
         let mounted = mount(disk.clone()).expect("a volume");
-        let server = NineServer::new(Fsd::new(mounted, labels.to_vec()), limits(4), 0).unwrap();
+        let server = NineServer::new(Littlefsd::new(mounted, labels.to_vec()), limits(4), 0).unwrap();
         T { server, buf: vec![0; MSIZE] }
     }
 
@@ -377,7 +377,7 @@ fn files_and_directories_survive_a_remount() {
     assert_eq!(t.list(&alice, 2).unwrap(), ["dir", "notes"]);
 }
 
-/// fsd.md's attack test: after a remove, the file's other fids get `removed` on read, write and
+/// littlefsd.md's attack test: after a remove, the file's other fids get `removed` on read, write and
 /// stat, and only a clunk succeeds; a file made in its place under the same name is not theirs.
 #[test]
 fn a_removed_files_other_fids_get_removed() {
@@ -408,7 +408,7 @@ fn a_removed_files_other_fids_get_removed() {
     assert_eq!(t.read(&bob, 1, 0, 10).unwrap(), b"new");
 }
 
-/// Labels are the volume's (fsd.md): with `labels=7`, {7} reads and writes, {7, 9} reads but
+/// Labels are the volume's (littlefsd.md): with `labels=7`, {7} reads and writes, {7, 9} reads but
 /// cannot write, and {} reaches nothing, not even the root or a listing.
 #[test]
 fn the_volumes_labels_are_checked_on_every_request() {
@@ -445,7 +445,7 @@ fn a_blank_range_is_formatted_and_only_a_blank_one() {
     assert!(formatted.iter().any(|b| *b != 0), "a blank range is formatted");
     assert!(matches!(mount(disk.clone()), Ok(Mounted::Files { .. })));
     assert!(disk.bytes() == formatted, "a formatted range is mounted, not formatted again");
-    assert!(!Fsd::new(mount(disk.clone()).unwrap(), vec![]).is_corrupt());
+    assert!(!Littlefsd::new(mount(disk.clone()).unwrap(), vec![]).is_corrupt());
     assert_eq!(mount(Memory::blank(3 * 8 + 7)).err(), Some(crate::volume::NoVolume::TooSmall));
     assert!(matches!(mount(Memory::blank(4 * 8)), Ok(Mounted::Files { .. })));
 }
@@ -476,7 +476,7 @@ fn noise_is_never_formatted_and_never_mounted() {
     }
     assert!(disk.bytes() == noise, "a range that holds anything is never formatted");
     assert!(
-        Fsd::new(mount(disk.clone()).unwrap(), vec![]).is_corrupt(),
+        Littlefsd::new(mount(disk.clone()).unwrap(), vec![]).is_corrupt(),
         "the program says so on its console"
     );
     // A superblock pair with one byte set is not blank either.
@@ -529,10 +529,10 @@ fn writes_and_truncations_move_the_qid_version() {
     assert_eq!(t.stat(&who, 1).unwrap().1, 0);
 }
 
-/// The 9P2000 conformance vectors (libs/wire/vectors/9p.txt) against `fsd`: whatever they
+/// The 9P2000 conformance vectors (libs/wire/vectors/9p.txt) against `littlefsd`: whatever they
 /// send, every answer decodes and carries its tag, and the volume still mounts afterwards.
 #[test]
-fn the_conformance_vectors_run_against_fsd() {
+fn the_conformance_vectors_run_against_littlefsd() {
     let disk = Memory::blank(SECTORS);
     let mut t = T::on(&disk, &[]);
     let who = caller(1, &[]);
@@ -581,9 +581,9 @@ fn a_read_only_range_is_never_written() {
     assert!(disk.bytes() == before, "not one byte of a read-only range changed");
 }
 
-/// The mount serves only volumes `fsd` wrote: an entry without an id, two entries with one id,
+/// The mount serves only volumes `littlefsd` wrote: an entry without an id, two entries with one id,
 /// or a counter at or below a live id (any of which could let a fid on one file reach another)
-/// is a corrupt volume; what `fsd` wrote mounts.
+/// is a corrupt volume; what `littlefsd` wrote mounts.
 #[test]
 fn a_volume_whose_ids_do_not_hold_together_is_corrupt() {
     let who = caller(1, &[]);

@@ -3,7 +3,7 @@ name = "redoubt-client"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "The client API every Redoubt userland binds to: the namespace, files over 9P, fsd's operations, the console, launching, a launcher's grants and one typed call, over redoubt-rt"
+description = "The client API every Redoubt userland binds to: the namespace, files over 9P, littlefsd's operations, the console, launching, a launcher's grants and one typed call, over redoubt-rt"
 
 # Only our own crates (TENETS.md 5): the runtime, which re-exports the wire codecs, and the stub
 # crate for the launching convention (where a launcher maps a child).

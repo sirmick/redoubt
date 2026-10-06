@@ -24,9 +24,9 @@ pub mod aio;
 pub mod console;
 mod error;
 pub mod file;
-pub mod fsd;
 pub mod grants;
 pub mod launch;
+pub mod littlefsd;
 pub mod ns;
 pub mod typed;
 

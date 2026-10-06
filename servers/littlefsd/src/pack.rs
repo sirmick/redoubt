@@ -1,10 +1,10 @@
-//! Packing a volume on the host: a tree of files written through `fsd`'s own code into the bytes
+//! Packing a volume on the host: a tree of files written through `littlefsd`'s own code into the bytes
 //! of a range, for a disk image (image/disk.toml).
 //!
-//! **One writer.** Every directory and file is created and written through [`Fsd`]'s own
+//! **One writer.** Every directory and file is created and written through [`Littlefsd`]'s own
 //! `create` and `write`, the code that serves the volume, so every entry carries its id and the
-//! id counter is above the highest, and the packed volume is one `fsd` mounts as its own
-//! (servers/fsd.md, "Volumes, connections and labels"). A second writer would have to keep that
+//! id counter is above the highest, and the packed volume is one `littlefsd` mounts as its own
+//! (servers/littlefsd.md, "Volumes, connections and labels"). A second writer would have to keep that
 //! rule in step by hand.
 
 use alloc::rc::Rc;
@@ -17,7 +17,7 @@ use redoubt_rt::abi::Labels;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{DMDIR, FileServer};
 
-use crate::server::{Fsd, Node};
+use crate::server::{Littlefsd, Node};
 use crate::volume::{Fault, Geometry, Mounted, Range, SECTOR, mount};
 
 /// One entry of the tree, by its path from the volume's root (`a/b`, no leading `/`). A
@@ -28,7 +28,7 @@ pub enum Entry<'a> {
     File(&'a str, &'a [u8]),
 }
 
-/// Why a tree was not packed: the path, and what `fsd` answered.
+/// Why a tree was not packed: the path, and what `littlefsd` answered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackError {
     pub path: String,
@@ -70,7 +70,7 @@ impl Range for Memory {
     fn flush(&mut self) -> Result<(), Fault> { Ok(()) }
 }
 
-/// A volume of `sectors` sectors holding `tree`, formatted and written by `fsd`'s own code.
+/// A volume of `sectors` sectors holding `tree`, formatted and written by `littlefsd`'s own code.
 pub fn pack(sectors: u64, tree: &[Entry]) -> Result<Vec<u8>, PackError> {
     let fail = |path: &str, why: &str| PackError { path: path.into(), why: why.into() };
     let len = usize::try_from(sectors).ok().and_then(|s| s.checked_mul(SECTOR as usize));
@@ -79,9 +79,9 @@ pub fn pack(sectors: u64, tree: &[Entry]) -> Result<Vec<u8>, PackError> {
     if let Mounted::Corrupt(e) = mounted {
         return Err(fail("", &alloc::format!("{e:?}")));
     }
-    let mut fsd = Fsd::new(mounted, Vec::new());
+    let mut littlefsd = Littlefsd::new(mounted, Vec::new());
     let packer = Caller { badge: 1, account: 0, labels: Labels::new() };
-    let (root, _) = fsd.attach(&packer, "").map_err(|e| fail("", e.0))?;
+    let (root, _) = littlefsd.attach(&packer, "").map_err(|e| fail("", e.0))?;
     for entry in tree {
         let (path, perm, data) = match *entry {
             Entry::Dir(path) => (path, DMDIR | 0o755, None),
@@ -91,17 +91,17 @@ pub fn pack(sectors: u64, tree: &[Entry]) -> Result<Vec<u8>, PackError> {
         let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
         let mut parent: Node = root.clone();
         for step in dir.split('/').filter(|s| !s.is_empty()) {
-            parent = fsd.walk(&packer, &parent, step).map_err(at)?.0;
+            parent = littlefsd.walk(&packer, &parent, step).map_err(at)?.0;
         }
-        let (node, _) = fsd.create(&packer, &parent, name, perm, 0).map_err(at)?;
+        let (node, _) = littlefsd.create(&packer, &parent, name, perm, 0).map_err(at)?;
         if let Some(data) = data.filter(|d| !d.is_empty()) {
-            let written = fsd.write(&packer, &node, 0, data).map_err(at)?;
+            let written = littlefsd.write(&packer, &node, 0, data).map_err(at)?;
             if written != data.len() {
                 return Err(fail(path, "short write"));
             }
         }
     }
-    drop(fsd);
+    drop(littlefsd);
     Ok(memory.0.take())
 }
 
@@ -112,10 +112,10 @@ mod tests {
     use super::*;
     use crate::server::tests::{Memory as Disk, T, caller};
 
-    /// A packed tree mounts in `fsd` as a volume it wrote (the mount's id check passes), reads
+    /// A packed tree mounts in `littlefsd` as a volume it wrote (the mount's id check passes), reads
     /// back whole, and takes a new file whose id is above every packed one.
     #[test]
-    fn a_packed_tree_mounts_and_reads_back_in_fsd() {
+    fn a_packed_tree_mounts_and_reads_back_in_littlefsd() {
         let big: Vec<u8> = (0..20_000u32).map(|i| i as u8).collect();
         let tree = [
             Entry::Dir("etc"),
