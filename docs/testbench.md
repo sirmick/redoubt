@@ -225,7 +225,7 @@ oracles) have no clock, and are verdicts anywhere.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
-name only". It has one reason: a measurement too long to repeat at every merge. `worst-walk`
+name only". It has one reason: a measurement too long to repeat at every train. `worst-walk`
 is one: every thread the limits allow, about 22 minutes, a residual it checks with `must_fail`
 until delivery stops walking every thread
 ([delivery walks every thread](todo/delivery-walks-every-thread.md)).

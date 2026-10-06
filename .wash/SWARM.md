@@ -121,8 +121,8 @@ Builds exactly one package and nothing else, and does not break these rules:
     WIP, fix-round or review-label commits reach the main history.
 
 It reports: what was delivered and the paths changed; the tests run, with exit codes, and each new
-attack case with why its verdict comes from the system; the tier-required gates (including the
-`unsafe` count, rv32 build and whole bench for Tier A), explicitly identifying checks not run;
+attack case with why its verdict comes from the system; the tier-required gates (for Tier A, the short gate,
+including the `unsafe` count, both builds and the smoke set), explicitly identifying checks not run;
 the documentation check; design problems found; open risks; the branch and state; the next step.
 
 ### Reviewers
@@ -230,11 +230,12 @@ changes only through its tables and the generator.
    reviewers see the writer's diff.
 2. **Design first.** If the package raises an open design question, the Architect settles it (or
    the owner decides) before any code is written.
-3. **Implement,** gated on the package's acceptance commands from its tier. Tier A runs the full
-   bench; Tier B runs its cases and the docs checker. A documentation-only change runs the docs
-   checker through `cargo testbench docs` and `git diff --check`, and renders the book if its
-   pages changed. Test or tooling changes also run the cases that exercise them. A narrower
-   gate does not waive a security-sensitive change's Tier A requirements.
+3. **Implement,** gated on its tier's acceptance commands: Tier A runs the **short gate**
+   ([integration trains](#integration-trains)); Tier B runs its cases and the docs checker. A documentation-only change runs the docs checker through
+   `cargo testbench docs` and `git diff --check`, and renders the book if its pages changed. Test
+   or tooling changes also run the cases that exercise them. A narrower gate does not waive a
+   security-sensitive change's Tier A requirements. The whole bench runs once per train, on the
+   train's tip, not per package.
 4. **Review** in rounds. The panel is the package's tier ([two tiers](#two-tiers)); tests, docs,
    comments or tooling configuration alone take one reviewer, the red team for tests or the editor
    for documentation, adding the others only if the findings show more risk.
@@ -245,7 +246,7 @@ changes only through its tables and the generator.
    and the evidence; retained context is not evidence.
 5. **Fix and re-review** until the verdicts are OK, or the remaining findings are recorded as
    follow-ups in `docs/todo/`.
-6. **Accept and merge** ([acceptance](#acceptance)).
+6. **Accept** ([acceptance](#acceptance)), then **merge in a train** ([integration trains](#integration-trains)).
 
 The whole path of a Tier A package, the kernel's and the rest of the trusted computing base's,
 with every place it can be sent back:
@@ -259,7 +260,7 @@ flowchart TB
         ROUND["review round: three assignments,\nresults in one turn"]
         FIX["one fix assignment, findings\ncited by reviewer and number"]
         ACCEPT["plan_accept: gates and verdicts\nbecome the merge's trailers"]
-        MERGE["merge --no-ff, stage plan and threads,\nverify reviewed content, end members;\ncheck outgoing range before publishing"]
+        MERGE["train: merge --no-ff in acceptance order,\nwhole bench on the tip, stage plan and threads,\nverify reviewed content, end members;\ncheck outgoing range, then push"]
     end
     subgraph ARCH["Architect (resident)"]
         DESIGN["design question on a QA thread:\npage, rule, contradiction, options"]
@@ -267,7 +268,7 @@ flowchart TB
     end
     subgraph PKG["package worktree"]
         IMPL["implementer builds exactly one package:\ncode, attack cases with system verdicts,\npages in the same commit as their tests"]
-        GATES{"gates: whole bench both widths,\nrv32 compiles, unsafe ratchet,\nsize budget, docs checker"}
+        GATES{"short gate: both builds, touched crates'\nhost tests, own cases both widths, smoke set,\nunsafe ratchet, size budget, docs checker"}
         RED["red team: a rule or invariant\nviolated, a label boundary crossed,\na verdict the attacker could forge"]
         SIMP["simplifier: what can be deleted,\nwhat duplicates, the one obvious way"]
         ED["editor: pages say what the code\ndoes, SAFETY comments true, names agree,\nno process leftovers"]
@@ -348,7 +349,8 @@ Simplicity is a gate, not a suggestion. The measures:
 A package is done only when:
 - its tier's acceptance tests and attack cases pass in `cargo testbench`, each attack verdict
   from the system; the scope for documentation-only changes is in [running a package](#running-a-package);
-- the docs checker finds nothing; Tier A also passes the whole bench and rv32 still compiles;
+- the docs checker finds nothing; Tier A also passes the short gate; the whole bench runs in the
+  package's train ([integration trains](#integration-trains));
 - no `unsafe` is undocumented and no ratchet rose without a stated reason;
 - every reviewer's finding is fixed or recorded as a follow-up;
 - the owning pages and affected summaries say what the code now does, with status lines naming
@@ -363,18 +365,46 @@ documentation edits all count. A rewrite changing only commit metadata may retai
 test evidence only after the orchestrator records that the base and resulting trees are
 unchanged, with the old and new commit IDs.
 
-The orchestrator calls `plan_accept` with the reviewed head and each gate's command and exit code
-in its evidence. Wash sets the node done and returns the trailer block and the `.wash/` files to
-stage; the orchestrator merges with the trailers as the message's last paragraph and stages those
-files in the merge. If `main` moved, rebase and repeat the affected gates and reviews first.
-Verify that the merge contains the reviewed content, with only the returned plan and QA records
-added; any other edit returns to review. End the package's members after this check.
+The orchestrator calls `plan_accept` with the reviewed head and each short-gate command and exit
+code in its evidence. Wash sets the node done and returns the trailer block and the `.wash/` files
+to stage; the orchestrator merges in the next train with the trailers as the message's last
+paragraph and stages those files in the merge. A package whose rebase onto the train changes any
+hunk of its diff returns to review first; a clean rebase keeps its review and gate evidence, and
+the train's bench covers the rebased head. Verify that the merge contains the reviewed content,
+with only the returned plan and QA records added; any other edit returns to review. End the
+package's members after this check.
+
+## Integration trains
+
+The whole bench on both widths runs once per **train**, not once per package, so its cost is shared and
+the pool stays free for packages being built and reviewed.
+
+- **The short gate** is a package's evidence during implementation, for review and for
+  `plan_accept`: both builds (rv64 and rv32); the host tests of every crate the package touches;
+  the docs checker, `cargo fmt --check`, the size budget, the `unsafe` ratchet and the no-cruft
+  gate; the package's own cases on both widths; and the **smoke set**, fixed for every package:
+  `userland-boot`, `init-boot`, `bench-net-peer` and `ipc-outcomes`, on both widths. The smoke
+  set stays under fifteen minutes of pool time; changing it means changing this page. Reviewers rule on the short gate's evidence.
+- **A train** is the accepted packages merged `--no-ff` onto `main` in order of acceptance, oldest
+  first, each rebased onto the one before it, with the whole bench run once on the train's tip
+  under the shared-host rule (docs/testbench.md, "On a shared host"). A train cuts when three
+  packages are accepted or six hours have passed since the first, whichever comes first; one
+  train runs at a time. The train's bench, sweeps included, runs every case the plan names as a gate.
+- **A train failure** that no short gate caught: the orchestrator attributes it by bisecting the
+  train's merge commits (`git bisect --first-parent` over the train's merges only). The train is not yet
+  published, so the offending package's merge is dropped from it, not reverted on top of it:
+  the orchestrator rebuilds the train without that package and reruns its bench, and the package
+  goes back to its branch for its implementer to fix and the next train to carry. A failure that depends on the host
+  clock, such as a missed deadline, follows the shared-host rule: rerun alone before it counts.
+- **The push** is the train's ([publishing](#publishing)); its report names the
+  train, its packages in order, the cases that ran shared, and anything dropped.
 
 ## Publishing
 
-Only the orchestrator has standing permission to push. A session instruction restricting pushes
-overrides it; saving then leaves local commits and handoffs and reports what is not backed up.
-Implementers and reviewers never push.
+Only the orchestrator has standing permission to push, and it pushes a train after the train's
+bench ([integration trains](#integration-trains)), never a package's merge alone. A session
+instruction restricting pushes overrides it; saving then leaves local commits and handoffs and
+reports what is not backed up. Implementers and reviewers never push.
 
 Before pushing `main`, fetch and inspect the complete outgoing range `origin/main..main`:
 - every package merge has acceptance evidence and review covering its final content;
@@ -408,7 +438,7 @@ checking nobody else's work is on it. Never use that exception for `main`.
 - `.wash/plan.toml` and `.wash/qa/` are committed only with a package's merge, or in one `plan:`
   commit when the work is saved ([saving and resuming](#saving-and-resuming)), parked or ended.
   Nothing else commits them.
-- **Push after a merge or a saved `plan:` commit** only after the [publishing](#publishing) check.
+- **Push after a train's bench or a saved `plan:` commit** only after the [publishing](#publishing) check.
   Save unfinished work on its `wp-` branch, with WIP commits if mid-step; fold them before final
   review. Follow the same publishing rules for branch cleanup and rebased branches.
 - **Handoff** at `context_warn` of the member's reported context capacity (currently 70%; never
