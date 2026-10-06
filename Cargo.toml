@@ -28,6 +28,7 @@ members = [
   "libs/wire/gen",
   "servers/keyd",
   "servers/sshd",
+  "servers/steward",
   "servers/bootfsd",
   "servers/consoled",
   "servers/blkd",

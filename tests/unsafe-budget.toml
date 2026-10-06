@@ -221,6 +221,14 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# The steward server: the principals' carve, the protocol and the sessions' batches. Its library
+# says `#![forbid(unsafe_code)]`, and its program holds none, so this can only stay at 0.
+name = "redoubt-steward-server (the steward)"
+paths = ["servers/steward/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # init, the most privileged process after the kernel. Its library and its program both say
 # `#![forbid(unsafe_code)]`: the runtime views the bundle for it (`first_entry!`).
 name = "redoubt-init (init)"
