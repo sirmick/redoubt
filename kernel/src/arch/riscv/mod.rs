@@ -5,14 +5,13 @@ use riscv::register::{senvcfg, sie, sstatus};
 
 mod asm;
 pub mod exception;
+pub mod hart;
 pub mod irq;
 pub mod mem;
 mod mmu_flags;
 pub mod panic;
 mod physmap;
 pub mod process;
-#[cfg(feature = "smp")]
-pub mod smp;
 pub mod syscall;
 
 /// The running PID: the kernel's own record of it (kernel/memory-layout.md, "`satp`").
@@ -43,9 +42,14 @@ pub fn init() {
 /// Put the core to sleep until an interrupt hits. Returns `true` to indicate the kernel
 /// should not exit.
 pub fn idle() -> bool {
-    // Park the hart until an interrupt is pending.
+    // Park the hart until an interrupt is pending, without the kernel lock: another hart's wake
+    // sends this one the reschedule interrupt while it is marked idle (`hart::wake_idle`).
+    hart::set_idle(true);
+    crate::cell::KERNEL_LOCK.release();
     // SAFETY: `wfi` has no memory effect.
     unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+    crate::cell::KERNEL_LOCK.acquire();
+    hart::set_idle(false);
 
     // Briefly enable interrupts in Supervisor mode so any pending one drains into its
     // userspace handler; otherwise interrupts stay disabled while in Supervisor mode.

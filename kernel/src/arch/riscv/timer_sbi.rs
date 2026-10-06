@@ -28,14 +28,20 @@ pub fn init() {
     // Fail closed: without a timebase no timeout, slice or deadline means anything.
     assert!(timebase() != 0, "boot: the loader reported no timebase (`Time`)");
     BOOT_TICKS.with(|t| *t = riscv::register::time::read64());
-    // Nothing is due yet.
+    init_hart();
+}
+
+/// This hart's timer, at boot and on each hart started (`hart::hart_main`): nothing due yet, the
+/// timer and the reschedule interrupt on, and `time` readable from U-mode.
+pub fn init_hart() {
     sbi_rt::set_timer(u64::MAX);
     // SAFETY: these only choose which interrupts reach the trap handler. The kernel itself runs
-    // with `sstatus.SIE` clear, so the timer interrupt is taken from U-mode or in `idle`, where
-    // the trap handler is ready for it; `scounteren.TM` exposes the read-only `time` counter to
-    // U-mode (`rdtime`), with no memory effect.
+    // with `sstatus.SIE` clear, so the timer and the reschedule interrupt (`hart.rs`) are taken
+    // from U-mode or in `idle`, where the trap handler is ready for them; `scounteren.TM` exposes
+    // the read-only `time` counter to U-mode (`rdtime`), with no memory effect.
     unsafe {
         sie::set_stimer();
+        sie::set_ssoft();
         scounteren::set_tm();
     }
 }

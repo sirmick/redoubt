@@ -5,8 +5,8 @@
 //!
 //! Ported from the original `asm.S` to `global_asm!` so the build needs no C toolchain and
 //! no prebuilt blobs. The two widths differ only mechanically: a saved context is
-//! `32 x size_of::<usize>()` bytes (256 on rv64, 128 on rv32), at the address slot 1 of the
-//! header at `PROCESS_AREA` holds; the load/store width and the reservation-clear
+//! `32 x size_of::<usize>()` bytes (256 on rv64, 128 on rv32), at the address the hart's block
+//! holds (`hart.rs`, reached through `sscratch`); the load/store width and the reservation-clear
 //! instruction change with the register width. All of that is confined to the small,
 //! `cfg`-gated preamble below; the entry paths are shared. Addresses come from
 //! `redoubt_layout` rather than being repeated as literals. There is no suspend/resume
@@ -14,7 +14,7 @@
 
 use core::arch::global_asm;
 
-use redoubt_layout::{PROCESS_AREA, TRAP_STACK_TOP};
+use super::hart;
 
 // Width-specific macros. The register width sets the load/store and the reservation clear;
 // everything else is shared below. These persist into the following `global_asm!` block.
@@ -148,6 +148,10 @@ _start:
     // by number for assemblers that predate it; a hart without it (privileged spec before 1.12)
     // traps here and the boot stops.
     csrw    0x10a, zero
+    // The boot hart's block (`hart.rs`), which the trap entry and every per-hart read find
+    // through `sscratch`.
+    la      t0, HART_BLOCKS
+    csrw    sscratch, t0
     call    init
 .if {plant_senvcfg}
     // The `plant-senvcfg` test build: user cbo.inval flushes, cbo.clean, cbo.flush and cbo.zero
@@ -158,34 +162,35 @@ _start:
     j       kmain
 
 /*
-    Trap entry point. Saves the full context of the interrupted thread at the address the
-    header names (in the thread's IPC page), switches to the exception stack and enters Rust.
+    Trap entry point. Saves the full context of the interrupted thread at the address the hart's
+    block names (in the thread's IPC page, or the block's own area for the kernel's thread),
+    switches to the hart's trap stack and enters Rust. `sscratch` holds the block throughout,
+    but for the swap at the top, which the end undoes.
 */
 .section .trap, "ax"
 .global _start_trap
 .balign 4
 _start_trap:
-    csrw    sscratch, sp
-    li      sp, {context_area}
-    SAVE    x1, 0                   // Stash x1 in the header's scratch field
-    RESTORE sp, 1                   // sp = the current context's address (header slot 1)
+    csrrw   sp, sscratch, sp        // sp = the hart's block, sscratch = the interrupted sp
+    SAVE    x1, {scratch}           // Stash x1 in the block's scratch word
+    mv      x1, sp                  // x1 = the block
+    LOADR   sp, {context}, x1       // sp = the running thread's context
 
     SAVE_X3_TO_X31
 
     csrr    t0, sepc
     SAVE    t0, 31
 
-    // Save the real x1, which was stashed in the header
-    li      t0, {context_area}
-    LOADR   t1, 0, t0              // t1 = header slot 0 (stashed x1)
+    // Save the real x1, which was stashed in the block
+    LOADR   t1, {scratch}, x1
     SAVE    t1, 0
 
-    // Save the real sp
-    csrr    t0, sscratch
+    // Save the real sp, and give `sscratch` the block again
+    csrrw   t0, sscratch, x1
     SAVE    t0, 1
 
     // Note that a0-a7 still contain the syscall arguments
-    li      sp, {exception_sp}
+    LOADR   sp, {trap_sp}, x1
     j       _start_trap_rust
 
 /*
@@ -255,7 +260,50 @@ flush_page_global:
     sfence.vma a0, zero
     ret
 "#,
-    context_area = const PROCESS_AREA,
-    exception_sp = const TRAP_STACK_TOP - 16,
+    scratch = const hart::BLOCK_SCRATCH,
+    context = const hart::BLOCK_CONTEXT,
+    trap_sp = const hart::BLOCK_TRAP_SP,
     plant_senvcfg = const cfg!(feature = "plant-senvcfg") as usize,
+);
+
+// A started hart's way in (`hart::start_others`). The firmware starts it at `_hart_start`'s
+// *physical* address with the MMU off, `a0` its hart id and `a1` its block's physical address.
+// The trampoline is position-independent (only `a1`-relative loads): it loads `satp`, `sp`, the
+// virtual landing address and the block's virtual address, and turns paging on with the same
+// `stvec`-trap handoff the loader uses: after `csrw satp` the next physical fetch faults and
+// traps straight to `_hart_land`, with every register but the program counter intact.
+global_asm!(
+    r#"
+    .section .text
+    .global _hart_start
+    .balign 4
+_hart_start:
+    LOADR   t0, {satp}, a1
+    LOADR   sp, {sp}, a1
+    LOADR   t1, {entry}, a1
+    LOADR   t2, {block}, a1
+    csrw    stvec, t1
+    sfence.vma
+    csrw    satp, t0
+    unimp
+
+    // Virtual, MMU on; `stvec`'s low two bits are its mode, so this is 4-byte aligned, which a
+    // Rust function under the C extension is not. It sets the hart up as `_start` does the boot
+    // hart: the trap vector, SUM and MXR clear (R24), `senvcfg` 0 (R11), and `sscratch` its
+    // block.
+    .global _hart_land
+    .balign 4
+_hart_land:
+    la      t0, _start_trap
+    csrw    stvec, t0
+    li      t0, (1 << 18) | (1 << 19)
+    csrc    sstatus, t0
+    csrw    0x10a, zero
+    csrw    sscratch, t2
+    tail    hart_main
+"#,
+    satp = const hart::BLOCK_START_SATP,
+    sp = const hart::BLOCK_START_SP,
+    entry = const hart::BLOCK_START_ENTRY,
+    block = const hart::BLOCK_START_BLOCK,
 );

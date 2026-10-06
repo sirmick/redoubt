@@ -40,10 +40,19 @@ extern "C" {
     fn flush_page_global(virt: usize);
 }
 
-/// Drop what `flush` covers from this hart's cached translations.
+/// Drop what `flush` covers from this hart's cached translations. Every other hart that may hold
+/// the same ASID's translations owes the same flush, and makes it before it next installs that
+/// ASID ([`stale`]).
 fn flush(flush: Flush) {
     #[cfg(debug_assertions)]
     audit::flushed(flush);
+    stale::flushed(flush);
+    flush_here(flush);
+}
+
+/// `flush` on this hart only, with no record: the stale mask's own flush, and a hart serving a
+/// shootdown, which does not hold the kernel lock ([`shot_down`]).
+fn flush_here(flush: Flush) {
     // SAFETY: each routine (asm.rs) is one `sfence.vma` and a `ret`. Dropping cached translations
     // is always sound; at worst it costs page-table walks.
     unsafe {
@@ -125,6 +134,9 @@ impl Space {
 /// destruction moves to before it frees the dying one's frames.
 static KERNEL_SATP: AtomicUsize = AtomicUsize::new(0);
 
+/// The kernel's own `satp`, which a started hart enters with (`hart.rs`).
+pub fn kernel_satp() -> usize { KERNEL_SATP.load(Ordering::Relaxed) }
+
 /// The boot's ASID step, before anything else writes `satp`: write the kernel's `satp` with its
 /// ASID field all ones, read it back and restore it, and return what was read, for the decision
 /// (`process::check_asid_field`).
@@ -148,6 +160,85 @@ pub fn enter_kernel_asid() {
     audit::check_globals();
 }
 
+/// A hart serving a shootdown of `asid` (`hart.rs`), before it takes the kernel lock: it leaves for
+/// the kernel's own space, with no flush, drops `asid`'s translations, and fences its instruction
+/// fetches. It reads no kernel cell.
+pub fn shot_down(asid: usize) {
+    write_satp(KERNEL_SATP.load(Ordering::Relaxed));
+    flush_here(Flush::Asid(asid));
+    sync_icache();
+}
+
+/// The stale mask (kernel/memory.md, "Residual risks"): per PID, the harts that must flush its
+/// ASID, `(x0, pid)`, before they next install it. A flush of an ASID's entries on one hart marks
+/// every other hart started; so does a PID given out (its whole-ASID flush) and a destruction (its
+/// space's flush). On one hart the mask is always empty.
+mod stale {
+    use super::super::physmap::tlb::Flush;
+    use super::super::process::MAX_PROCESS_COUNT;
+    use crate::arch::hart;
+    use crate::cell::KernelCell;
+
+    static MASK: KernelCell<[u8; MAX_PROCESS_COUNT]> = KernelCell::new([0; MAX_PROCESS_COUNT]);
+
+    /// The checked build's own record of the same debts, kept apart from the mask so that a
+    /// mask that is not kept (`smp-no-stale-mask`) is caught: cleared only by a whole-ASID flush
+    /// this hart makes.
+    #[cfg(debug_assertions)]
+    static DEBT: KernelCell<[u8; MAX_PROCESS_COUNT]> = KernelCell::new([0; MAX_PROCESS_COUNT]);
+
+    /// The other harts started, as a mask.
+    fn others() -> u8 { (((1u32 << hart::started()) - 1) as u8) & !(1 << hart::index()) }
+
+    /// `flush` was made on this hart: the others owe it.
+    pub(super) fn flushed(flush: Flush) {
+        #[cfg(debug_assertions)]
+        {
+            let me = 1 << hart::index();
+            DEBT.with(|d| match flush {
+                Flush::Asid(asid) if asid > 0 => d[asid - 1] &= !me,
+                Flush::All => d.iter_mut().for_each(|b| *b &= !me),
+                _ => {}
+            });
+        }
+        let asid = match flush {
+            Flush::Asid(asid) | Flush::Page { asid, .. } if asid > 0 => asid,
+            // A kernel-half leaf: none is removed after boot, so none needs another hart's flush.
+            _ => return,
+        };
+        let others = others();
+        if others == 0 {
+            return;
+        }
+        MASK.with(|m| m[asid - 1] |= others);
+        #[cfg(debug_assertions)]
+        DEBT.with(|d| d[asid - 1] |= others);
+    }
+
+    /// This hart is about to install `asid`: if it owes that ASID a flush, it makes it now.
+    pub(super) fn installing(asid: usize) {
+        let me = 1 << hart::index();
+        let owed = MASK.with(|m| {
+            let owed = m[asid - 1] & me != 0;
+            m[asid - 1] &= !me;
+            owed
+        });
+        // Debug only, never in a bench build but one recorded negative run: the flush is skipped.
+        if owed && !cfg!(feature = "smp-no-stale-mask") {
+            super::flush_here(Flush::Asid(asid));
+            #[cfg(debug_assertions)]
+            DEBT.with(|d| d[asid - 1] &= !me);
+        }
+        #[cfg(debug_assertions)]
+        assert!(
+            DEBT.with(|d| d[asid - 1] & me == 0),
+            "ASID audit: hart {} installs ASID {} with a flush owed and not made (stale mask)",
+            hart::index(),
+            asid
+        );
+    }
+}
+
 /// Before a dying address space's frames are freed (`release_owned_frames`): leave it if it is
 /// this hart's, for the kernel's own, and then flush its ASID. A walker reading a freed table
 /// through a live `satp` could cache a garbage leaf, and a garbage global leaf survives every ASID
@@ -163,29 +254,31 @@ pub fn leave(space: &MemoryMapping) {
 /// The checked build's audit of flushes (kernel/memory-layout.md, "`satp`"): a log of the page-
 /// table writes this hart has not flushed, which must be empty whenever the kernel returns to
 /// user mode, and a walk of the current root that checks `G` is exactly on the shared kernel
-/// half. It is the checked build's only, and outside the latency targets. One hart: with
-/// several, each needs its own log (SMP1).
+/// half. It is the checked build's only, and outside the latency targets. Each hart keeps its own
+/// log: a write is flushed on the hart that makes it, and the stale mask covers the others.
 #[cfg(debug_assertions)]
 pub mod audit {
     use super::super::physmap::tlb::{Flush, Stale, Unflushed};
     use super::super::physmap::{self, PteFlags};
     use super::{ROOT_KERNEL_START, ROOT_PROCESS_AREA, current_root, for_each_entry};
+    use crate::arch::hart::{self, MAX_HARTS};
     use crate::cell::KernelCell;
 
-    static LOG: KernelCell<Unflushed<16>> = KernelCell::new(Unflushed::new());
+    static LOG: KernelCell<[Unflushed<16>; MAX_HARTS]> =
+        KernelCell::new([const { Unflushed::new() }; MAX_HARTS]);
 
     pub(super) fn wrote(stale: Stale) {
-        if let Err(first) = LOG.with(|log| log.wrote(stale)) {
+        if let Err(first) = LOG.with(|log| log[hart::index()].wrote(stale)) {
             panic!("ASID audit: more page-table writes unflushed than the log holds, the first: {}", first);
         }
     }
 
-    pub(super) fn flushed(flush: Flush) { LOG.with(|log| log.flushed(flush)) }
+    pub(super) fn flushed(flush: Flush) { LOG.with(|log| log[hart::index()].flushed(flush)) }
 
-    /// At every return from the trap handler, to user mode or to `kmain`: every write is
-    /// flushed, or the kernel stops naming one.
+    /// At every return from the trap handler, to user mode or to `kmain`: every write this hart
+    /// made is flushed, or the kernel stops naming one.
     pub fn returning() {
-        if let Some(stale) = LOG.with(|log| log.first()) {
+        if let Some(stale) = LOG.with(|log| log[hart::index()].first()) {
             panic!("ASID audit: a page-table write is unflushed at a return from the kernel: {}", stale);
         }
     }
@@ -226,8 +319,9 @@ pub mod audit {
 /// Make this hart's instruction fetches see every store it made before (RISC-V `fence.i`,
 /// Zifencei). Called after anything that makes memory executable for userspace: an image moved in
 /// by `process_map`, and `map_anon`, `map_fixed`, `set_flags` or a demand-paged fault installing
-/// X, and once at boot before the first user dispatch. Single hart: another hart would need its
-/// own fence (beyond/smp.md).
+/// X, and once at boot before the first user dispatch. It acts on this hart only: a hart also runs
+/// it before it runs a process after the kernel's own thread (`sched.rs`), and a hart shot down
+/// before it acknowledges ([`shot_down`]).
 pub fn sync_icache() {
     // SAFETY: `fence.i` takes no operands, touches no memory the compiler tracks and changes no
     // register; it only orders this hart's later instruction fetches after its earlier stores.
@@ -568,7 +662,11 @@ impl MemoryMapping {
     ///
     /// It flushes nothing: the space's cached translations carry its ASID, and every change to
     /// its tables was flushed when it was made.
-    pub fn activate(self) { write_satp(self.satp); }
+    /// Install this space on this hart, flushing its ASID first if the hart owes it a flush.
+    pub fn activate(self) {
+        stale::installing(physmap::SATP.asid(self.satp));
+        write_satp(self.satp);
+    }
 
     /// Call `f(virt, pte)` for every valid or shared 4 KiB leaf in the user half.
     fn for_each_user_leaf(&self, mut f: impl FnMut(usize, Pte)) {
@@ -1053,6 +1151,38 @@ pub fn user_mapping(virt: usize) -> Option<usize> {
 /// page would resume the faulting instruction, fault again, and spin for ever with the process
 /// making no progress and the kernel printing nothing.
 pub fn is_mapped(virt: usize) -> bool { walk(current_root(), virt).is_ok_and(|slot| slot.get().is_valid()) }
+
+/// The last address this hart retried as a stale translation ([`retry_stale`]).
+static RETRIED: crate::cell::KernelCell<[usize; crate::arch::hart::MAX_HARTS]> =
+    crate::cell::KernelCell::new([usize::MAX; crate::arch::hart::MAX_HARTS]);
+
+/// A user load (`write` false) or store at `virt` faulted, yet the current space's leaf for it is
+/// valid, a user page and allows the access: this hart cached an older entry another hart has
+/// since changed (kernel/memory.md, "Residual risks"). Flush that address in this ASID and say to
+/// retry the instruction; but not twice running for one address on this hart, so a fault the
+/// flush does not cure ends as an ordinary fault.
+pub fn retry_stale(virt: usize, write: bool) -> bool {
+    let need = if write { PteFlags::W } else { PteFlags::R };
+    let allowed = walk(current_root(), virt).is_ok_and(|slot| {
+        let pte = slot.get();
+        pte.is_valid() && pte.has(PteFlags::USER) && pte.has(need)
+    });
+    let page = virt & !(PAGE_SIZE - 1);
+    let again = RETRIED.with(|r| {
+        let last = &mut r[crate::arch::hart::index()];
+        let again = *last == page;
+        *last = if allowed && !again { page } else { usize::MAX };
+        again
+    });
+    if !allowed || again {
+        return false;
+    }
+    Space::current().flush_leaf(page);
+    true
+}
+
+/// This hart entered the kernel for anything but a page fault: it made progress since any retry.
+pub fn retry_reset() { RETRIED.with(|r| r[crate::arch::hart::index()] = usize::MAX) }
 
 /// The permissions of the page at `virt`, a page-aligned address: `None` if it has none or is
 /// either alias of a loan.

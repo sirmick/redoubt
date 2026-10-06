@@ -181,7 +181,5 @@ and `table`), and help, tested by the shell's own suite on beamlet and on the BE
 one set of vectors. On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
-([budgets](../kernel/budgets.md#r10-destruction)). For several harts: a two-hart spike, in which a
-second hart started through SBI's hart management contends with the first on the kernel lock
-without losing updates (`bench:smp-spike`, a checked build), and a few cases booted with two or
-four harts, where the extra harts stay parked.
+([budgets](../kernel/budgets.md#r10-destruction)). For several harts: every hart runs user code under one FIFO kernel lock, and a destruction's
+shootdown is attacked (`bench:smp-boot`, `bench:smp-evict`).

@@ -1,0 +1,22 @@
+description = "Several harts add no reach: a process destroyed while another hart runs it is shot down before its frames go to the next budget, and a hart that ran a process flushes its ASID before it runs it again after an unmap elsewhere (checked build, 2 harts, icount: the harts round-robin in one host thread)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The program's own checks (the checker's pages, P's faulting read, Q's page) hold on QEMU even
+# without the shootdown or the stale mask: QEMU empties a hart's TLB at every `satp` write, and the
+# writer's hart traps at its slice's end before the checker reads. So the verdict of the recorded
+# negatives (`smp-no-evict`, `smp-no-stale-mask`) is the checked kernel's audit: a hart still running
+# the process as its frames are about to be freed, a hart installing an ASID it owes a flush. The
+# interleaving in which a hart acknowledges a shootdown and the PID is given out again before it
+# takes the lock is not driven by a case (it needs 3+ harts and a creation queued ahead of the
+# shot-down hart); the kernel tests the hart's own mark, not the process table, and a checked
+# build stops if a shot-down hart would resume user mode.
+# Built with the checks on (docs/testbench.md, "Checked builds"): the free-list audit and the
+# stale mask's audit are the checked kernel's.
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["smp-evict"]
+smp = [2]
+timeout_secs = 300
+expect = ['^shootdown: PID \d+ stopped on hart', '^SMP-EVICT TEST PASSED$']
+forbid = ['\[smp-evict\] FAIL', 'ASID audit']
+poweroff = true

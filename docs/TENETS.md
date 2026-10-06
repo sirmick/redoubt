@@ -420,9 +420,8 @@ A configuration the bench does not boot is not supported.
 - **Widths.** Every milestone, M1 (separation and containment) to M5 (persist, install, share),
   requires rv64 boots and rv32 compilation. Most kernel cases boot on rv32 as well; a full rv32
   system is [beyond M5](beyond/rv32.md).
-- **Harts.** Through M1 (separation and containment) Redoubt runs on one hart; the others stay
-  parked in the firmware. A checked-build case starts a second hart to test the kernel lock, and a
-  few cases boot with two or four harts to show the extra harts change nothing. M2 (usable shell)
+- **Harts.** The kernel runs user code on every hart, up to 8, under one big lock, with a budget on
+  one hart at a time until one process's threads may run on several. M2 (usable shell)
   brings several harts: the kernel runs user code on every hart, first under one big lock, and
   one process's threads on several harts at once, so a beamlet VM's schedulers run in parallel
   ([several harts](plan/m2-usable-shell.md#several-harts)). The reason: the FPGA platform's cores

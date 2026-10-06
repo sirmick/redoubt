@@ -33,6 +33,7 @@
 //! Microseconds are the ABI's unit (kernel/timer.md, "Time"): deadlines are kept in them, and
 //! converted to timer ticks rounding up, so an interrupt never comes before its deadline.
 
+use crate::arch::hart::{self, MAX_HARTS};
 use crate::arch::irq::timer;
 use crate::cell::KernelCell;
 use crate::handle::BudgetRef;
@@ -47,14 +48,19 @@ struct Timer {
     threads: u64,
     /// No budget's deadline is earlier than this.
     budgets: u64,
-    /// When the running thread's slice ends (`sched.rs`); `NEVER` while `kmain` runs.
-    slice: u64,
-    /// What the hardware is armed for, in microseconds.
-    armed: u64,
+    /// When each hart's running thread's slice ends (`sched.rs`), by boot index; `NEVER` while
+    /// `kmain` runs there.
+    slice: [u64; MAX_HARTS],
+    /// What each hart's timer is armed for, in microseconds.
+    armed: [u64; MAX_HARTS],
 }
 
-static TIMER: KernelCell<Timer> =
-    KernelCell::new(Timer { threads: NEVER, budgets: NEVER, slice: NEVER, armed: NEVER });
+static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
+    threads: NEVER,
+    budgets: NEVER,
+    slice: [NEVER; MAX_HARTS],
+    armed: [NEVER; MAX_HARTS],
+});
 
 /// Monotonic microseconds since boot.
 pub fn now_us() -> u64 { timer::now_us() }
@@ -72,21 +78,23 @@ pub fn note_budget_deadline(deadline: u64) {
     rearm();
 }
 
-/// The running thread's slice ends at `at` (`NEVER` for none).
+/// This hart's running thread's slice ends at `at` (`NEVER` for none).
 pub fn set_slice_end(at: u64) {
-    TIMER.with(|t| t.slice = at);
+    TIMER.with(|t| t.slice[hart::index()] = at);
     rearm();
 }
 
-/// When the running thread's slice ends.
-pub fn slice_end() -> u64 { TIMER.with(|t| t.slice) }
+/// When this hart's running thread's slice ends.
+pub fn slice_end() -> u64 { TIMER.with(|t| t.slice[hart::index()]) }
 
-/// Arm the timer for the earliest thing due, if that changed.
+/// Arm this hart's timer for the earliest thing due, if that changed: its own slice's end, or the
+/// earliest timeout or deadline, which every hart's timer comes by.
 pub fn rearm() {
+    let h = hart::index();
     TIMER.with(|t| {
-        let target = t.threads.min(t.budgets).min(t.slice);
-        if target != t.armed {
-            t.armed = target;
+        let target = t.threads.min(t.budgets).min(t.slice[h]);
+        if target != t.armed[h] {
+            t.armed[h] = target;
             timer::set(if target == NEVER { u64::MAX } else { timer::us_to_ticks(target) });
         }
     });
@@ -201,8 +209,8 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     TIMER.with(|t| {
         t.threads = walk.next;
         t.budgets = next_budget;
-        // The hardware fired (or will, for what just passed); arm afresh.
-        t.armed = 0;
+        // This hart's timer fired (or will, for what just passed); arm afresh.
+        t.armed[hart::index()] = 0;
     });
     rearm();
     MemoryManager::with_mut(|mm| {
@@ -223,7 +231,7 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
 /// A timer interrupt arrived. The trap handler has already expired what is due at its entry;
 /// all that is left is to arm for the next thing (a stale early hint lands here too).
 pub fn on_interrupt() {
-    TIMER.with(|t| t.armed = 0);
+    TIMER.with(|t| t.armed[hart::index()] = 0);
     rearm();
 }
 

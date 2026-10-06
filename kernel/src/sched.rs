@@ -3,9 +3,9 @@
 //! The scheduler: one stride queue over every runnable budget (kernel/scheduling.md; R7, R12).
 //! The rules themselves (charging with an exact remainder, the floor, ranks, inheritance) and
 //! their wiring to a CPU (when runtime is folded, what a deschedule, a pick, a weight change and a
-//! destruction do, in what order) are `redoubt-stride`'s ([`Cpu`]), checked there against the
-//! executable model; this module keeps their state in the budgets' frames and drives them from the
-//! trap boundary.
+//! destruction do, in what order) are `redoubt-stride`'s ([`Harts`], a runner per hart), checked there
+//! against the executable model; this module keeps their state in the budgets' frames and drives them from
+//! the trap boundary.
 //!
 //! # Accounting at the trap boundary
 //! There are exactly two ways into user mode (`arch::syscall::resume` and the syscall return) and
@@ -47,8 +47,9 @@
 //! `ecall` with it is an unknown number (`InvalidArgument`) like any other.
 
 use redoubt_layout::{KERNEL_PID, Pid};
-use redoubt_stride::{Budgets, Cpu, Marks, Ready, State};
+use redoubt_stride::{Budgets, Harts, Marks, Ready, State};
 
+use crate::arch::hart::MAX_HARTS;
 use crate::arch::process::MAX_PROCESS_COUNT;
 use crate::arch::process::{TID, TidMask};
 use crate::budget::BudgetFrame;
@@ -63,27 +64,35 @@ use crate::ptable::{ArchProcess, ProcessTable};
 pub const SLICE_US: u64 = if cfg!(feature = "slice-10ms") { 10_000 } else { 1_000 };
 
 struct Sched {
-    /// The queue, the budget whose runtime is accruing (on the CPU, or in the kernel on its
-    /// behalf) and the ticks it has run and not yet been charged.
-    cpu: Cpu<BudgetRef, MAX_PROCESS_COUNT>,
-    /// When `cur` last went to user mode, in ticks.
-    user_since: Option<u64>,
-    /// Kernel time since this tick is billed to this budget.
-    billing: Option<(u64, BudgetRef)>,
-    /// Billing paused while `kmain` expires deadlines (the walk is nobody's), to resume after.
-    paused: Option<BudgetRef>,
+    /// The queue and, for each hart, the budget whose runtime is accruing there (on the hart, or
+    /// in the kernel on its behalf) and the ticks it has run and not yet been charged.
+    cpu: Harts<BudgetRef, MAX_PROCESS_COUNT, MAX_HARTS>,
+    /// Each hart's billing, by boot index.
+    harts: [Billing; MAX_HARTS],
     /// The processes whose ready threads changed since the last reconcile, and what each was
     /// counted as: a reconcile visits only the budgets they moved.
     marks: Marks<BudgetRef, MAX_PROCESS_COUNT>,
 }
 
+/// One hart's side of the accounting at the trap boundary.
+#[derive(Clone, Copy)]
+struct Billing {
+    /// When the hart's `cur` last went to user mode, in ticks.
+    user_since: Option<u64>,
+    /// Kernel time since this tick is billed to this budget.
+    billing: Option<(u64, BudgetRef)>,
+    /// Billing paused while `kmain` expires deadlines (the walk is nobody's), to resume after.
+    paused: Option<BudgetRef>,
+}
+
 static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
-    cpu: Cpu::new(),
-    user_since: None,
-    billing: None,
-    paused: None,
+    cpu: Harts::new(),
+    harts: [Billing { user_since: None, billing: None, paused: None }; MAX_HARTS],
     marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
 });
+
+/// This hart's boot index: its runner in the queue's wiring, and its [`Billing`].
+fn here() -> usize { crate::arch::hart::index() }
 
 fn ticks() -> u64 { crate::arch::irq::timer::now_ticks() }
 
@@ -140,15 +149,18 @@ fn budget_ref(mm: &MemoryManager, frame: BudgetFrame) -> BudgetRef {
 }
 
 impl Sched {
+    /// This hart's billing.
+    fn b(&mut self) -> &mut Billing { &mut self.harts[here()] }
+
     /// Close the kernel-time billing interval at `now`: `cur`'s joins its pending runtime, anyone
     /// else's is charged at once.
     fn close_billing(&mut self, mm: &mut MemoryManager, now: u64) {
-        if let Some((since, b)) = self.billing.take() {
+        if let Some((since, b)) = self.b().billing.take() {
             self.bill(mm, b, now.saturating_sub(since));
         }
     }
 
-    /// Charge `ticks` of kernel time to `b` (`Cpu::bill`), and say so in the trace.
+    /// Charge `ticks` of kernel time to `b` (`Harts::bill`), and say so in the trace.
     fn bill(&mut self, mm: &mut MemoryManager, b: BudgetRef, ticks: u64) {
         #[cfg(feature = "sched-trace")]
         trace::charge(b.id, ticks);
@@ -158,10 +170,10 @@ impl Sched {
     /// If kernel time is being billed to `b`, close the interval and reopen it: what `b` is
     /// worth is about to change (a weight change, a creation under it, its destruction).
     fn settle_billing(&mut self, mm: &mut MemoryManager, b: BudgetRef) {
-        if self.billing.is_some_and(|(_, payer)| payer == b) {
+        if self.b().billing.is_some_and(|(_, payer)| payer == b) {
             let now = ticks();
             self.close_billing(mm, now);
-            self.billing = Some((now, b));
+            self.b().billing = Some((now, b));
         }
     }
 
@@ -179,8 +191,8 @@ impl Sched {
         self.cpu.reconcile(mm, lost, gained, |mm, b| mm.ready(b) > 0);
         #[cfg(debug_assertions)]
         {
-            let running = self.cpu.cur.filter(|c| mm.is_live_budget(*c));
-            if let Err(e) = self.marks.check_visited(mm, running) {
+            let cpu = &self.cpu;
+            if let Err(e) = self.marks.check_visited(mm, |b| cpu.running(b)) {
                 panic!("the scheduler's marks: {:?}", e);
             }
         }
@@ -209,10 +221,10 @@ fn ready_now(ss: &ProcessTable, mm: &MemoryManager, i: usize) -> (u32, Option<Bu
 fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
     audit(AUDIT_MARKS, || {
         SCHED.with(|s| {
-            let running = s.cpu.cur.filter(|c| mm.is_live_budget(*c));
             // A process with no account is in no budget, so has nothing counted.
             let live = mm.live_pids().map(|pid| usize::from(pid.get()) - 1);
-            if let Err(e) = s.marks.audit(mm, &s.cpu.q, running, live, |mm, i| ready_now(ss, mm, i)) {
+            let Sched { cpu, marks, .. } = s;
+            if let Err(e) = marks.audit(mm, &cpu.q, |b| cpu.running(b), live, |mm, i| ready_now(ss, mm, i)) {
                 panic!("the scheduler's marks: {:?}", e);
             }
         })
@@ -223,21 +235,21 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
 pub fn from_user() {
     let now = ticks();
     SCHED.with(|s| {
-        if let Some(since) = s.user_since.take() {
-            s.cpu.accrue(now.saturating_sub(since));
+        if let Some(since) = s.b().user_since.take() {
+            s.cpu.accrue(here(), now.saturating_sub(since));
         }
     });
 }
 
 /// The entry's expiry is done: from here, kernel time is `cur`'s (a system call's is its
 /// caller's).
-pub fn begin_billing() { bill_from_now(SCHED.with(|s| s.cpu.cur)); }
+pub fn begin_billing() { bill_from_now(SCHED.with(|s| s.cpu.cur(here()))); }
 
 /// From here, kernel time is `payer`'s (nobody's for `None`): the rest of an entry whose expiry
 /// billed `payer` last (`time::Expired`).
 pub fn bill_from_now(payer: Option<BudgetRef>) {
     let now = ticks();
-    SCHED.with(|s| s.billing = payer.map(|b| (now, b)));
+    SCHED.with(|s| s.b().billing = payer.map(|b| (now, b)));
 }
 
 /// Kernel time since billing began goes to nobody: it was spent for someone else (an interrupt
@@ -245,8 +257,8 @@ pub fn bill_from_now(payer: Option<BudgetRef>) {
 pub fn restart_billing() {
     let now = ticks();
     SCHED.with(|s| {
-        if let Some((_, b)) = s.billing {
-            s.billing = Some((now, b));
+        if let Some((_, b)) = s.b().billing {
+            s.b().billing = Some((now, b));
         }
     });
 }
@@ -257,7 +269,7 @@ pub fn pause_billing() {
     let now = ticks();
     MemoryManager::with_mut(|mm| {
         SCHED.with(|s| {
-            s.paused = s.billing.map(|(_, b)| b);
+            s.b().paused = s.b().billing.map(|(_, b)| b);
             s.close_billing(mm, now);
         })
     });
@@ -265,7 +277,7 @@ pub fn pause_billing() {
 
 pub fn resume_billing() {
     let now = ticks();
-    SCHED.with(|s| s.billing = s.paused.take().map(|b| (now, b)));
+    SCHED.with(|s| s.b().billing = s.b().paused.take().map(|b| (now, b)));
 }
 
 /// `kmain` idles: nobody's work.
@@ -328,8 +340,8 @@ pub fn audit(which: u64, check: impl FnOnce()) {
     {
         let ended = ticks();
         SCHED.with(|s| {
-            if let Some((since, b)) = s.billing {
-                s.billing = Some((since.saturating_add(ended.saturating_sub(started)), b));
+            if let Some((since, b)) = s.b().billing {
+                s.b().billing = Some((since.saturating_add(ended.saturating_sub(started)), b));
             }
         });
         let length =
@@ -346,35 +358,41 @@ pub fn leave(pid: Pid) {
     let to_user = ProcessTable::with(|ss| {
         MemoryManager::with_mut(|mm| {
             SCHED.with(|s| {
-                let payer = s.billing.map(|(_, b)| b);
+                let payer = s.b().billing.map(|(_, b)| b);
                 s.close_billing(mm, now);
                 let next = if pid.get() == 1 { None } else { mm.budget_of(pid).map(|f| budget_ref(mm, f)) };
                 #[cfg(feature = "walk-trace")]
                 let _walk = trace::walk(trace::RECONCILE);
                 s.settle(ss, mm);
-                if next != s.cpu.cur {
-                    let left = s.cpu.switch(mm, next, |mm, b| mm.ready(b) > 0);
-                    s.user_since = None;
+                if next != s.cpu.cur(here()) {
+                    let left = s.cpu.switch(here(), mm, next, |mm, b| mm.ready(b) > 0);
+                    s.b().user_since = None;
                     // `kmain`'s pick and switch after a deschedule are the descheduled budget's
                     // work (it blocked, exited or was preempted): billed to it, as a deschedule's
                     // cost, until the next budget runs.
                     if next.is_none() {
-                        s.billing = left.filter(|b| mm.is_live_budget(*b)).map(|b| (now, b));
+                        s.b().billing = left.filter(|b| mm.is_live_budget(*b)).map(|b| (now, b));
                     }
                 }
                 // Debug only, never in a bench build but one recorded negative run (feature
                 // `timer-tail-billed`): user time starts here, so the rest is the next budget's.
                 if cfg!(feature = "timer-tail-billed") {
-                    s.user_since = next.map(|_| now);
+                    s.b().user_since = next.map(|_| now);
                 } else {
-                    s.user_since = None;
+                    s.b().user_since = None;
                     // Billing closed above, so the deschedule folds what `cur` ran; it reopens for
                     // the entry's payer, who pays for the rest, and closes again at the return.
                     if next.is_some() {
-                        s.billing = payer.map(|b| (now, b));
+                        s.b().billing = payer.map(|b| (now, b));
                     }
                 }
                 s.reconcile(mm);
+                // A budget no hart runs is waiting: an idle hart picks it (the one this hart leaves
+                // for `kmain` to pick does not count).
+                let waiting = s.cpu.q.queued().filter(|b| !s.cpu.running(*b)).count();
+                if waiting > usize::from(next.is_none()) {
+                    crate::arch::hart::wake_idle();
+                }
                 next.is_some()
             })
         })
@@ -392,7 +410,7 @@ pub fn leave(pid: Pid) {
         MemoryManager::with_mut(|mm| {
             SCHED.with(|s| {
                 s.close_billing(mm, back);
-                s.user_since = Some(back);
+                s.b().user_since = Some(back);
             })
         });
     }
@@ -409,7 +427,7 @@ pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
         s.settle(ss, mm);
         s.reconcile(mm);
     });
-    let chosen = SCHED.with(|s| s.cpu.pick(mm, |mm, b| next_thread(ss, mm, b)));
+    let chosen = SCHED.with(|s| s.cpu.pick(here(), mm, |mm, b| next_thread(ss, mm, b)));
     #[cfg(debug_assertions)]
     if SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, chosen.is_none())) {
         audit_marks(ss, mm);
@@ -483,14 +501,17 @@ pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame, weight_returned: bool
     let limit = mm.budget(frame).weight_limit;
     SCHED.with(|s| {
         s.settle_billing(mm, child);
-        if s.billing.is_some_and(|(_, b)| b == child) {
-            s.billing = None;
+        for h in s.harts.iter_mut().filter(|h| h.billing.is_some_and(|(_, b)| b == child)) {
+            h.billing = None;
         }
         if let Some(p) = parent {
             s.settle_billing(mm, p);
         }
-        if s.cpu.cur == Some(child) {
-            s.user_since = None;
+        // Whichever hart runs it counts no more user time for it.
+        for (i, h) in s.harts.iter_mut().enumerate() {
+            if s.cpu.cur(i) == Some(child) {
+                h.user_since = None;
+            }
         }
         s.cpu.destroy(mm, child, parent, |mm| {
             if let (false, Some(p)) = (weight_returned, parent_frame) {
@@ -548,6 +569,10 @@ pub fn switch(ss: &mut ProcessTable, tag: usize, pid: usize, tid: TID) {
     ss.set_redoubt_result(KERNEL_PID, kmain, &[RAN, 0, 0, 0, 0, 0, 0, 0]).expect("kmain exists");
     if ss.activate_process_thread(kmain, pid, tid, true).is_err() {
         ss.set_redoubt_result(KERNEL_PID, kmain, &[NOT_RUNNABLE, 0, 0, 0, 0, 0, 0, 0]).expect("kmain exists");
+    } else {
+        // Another hart may have written code this one is about to fetch (an image moved in, a
+        // page made executable): fence before running a process (kernel/memory.md).
+        crate::arch::mem::sync_icache();
     }
 }
 
@@ -608,11 +633,15 @@ pub mod trace {
     /// A reconcile begins: the records that follow belong to a new kernel entry.
     pub fn entry() { RING.with(|r| r.entry += 1); }
 
+    /// Record an event. The ring has one writer at a time, the hart holding the kernel lock; each
+    /// record's kind word carries that hart's boot index above the kind's byte (0 on one hart, so
+    /// a one-hart trace is as it was).
     pub fn record(kind: u8, id: u64, pass: u128) {
+        let kind = u64::from(kind) | (crate::arch::hart::index() as u64) << 8;
         RING.with(|r| {
             if r.n < CAP && r.pages[0] != 0 {
                 let (page, at) = (r.pages[r.n / PER_PAGE], (r.n % PER_PAGE) * 32);
-                for (k, word) in [pass as u64, r.entry, id, u64::from(kind)].iter().enumerate() {
+                for (k, word) in [pass as u64, r.entry, id, kind].iter().enumerate() {
                     crate::kframe::write(page, at + k * 8, *word);
                 }
                 r.n += 1;
@@ -636,7 +665,7 @@ pub mod trace {
 
     /// A timer interrupt from user mode began (after its user time was accrued).
     pub fn timer_entry() {
-        let cur = super::SCHED.with(|s| s.cpu.cur);
+        let cur = super::SCHED.with(|s| s.cpu.cur(super::here()));
         RING.with(|r| r.timer = true);
         record(TIMER_ENTRY, cur.map_or(0, |b| b.id), u128::from(crate::time::now_us()));
     }

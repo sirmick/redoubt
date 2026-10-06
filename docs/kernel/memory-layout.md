@@ -120,10 +120,9 @@ Inside the kernel area:
 | --- | --- |
 | `0xffff_ffff_f000_0000` | PLIC window (`KERNEL_PLIC_BASE`), up to 64 MiB |
 | `0xffff_ffff_f400_0000` | DMA register window (`KERNEL_DMA_REGS`): `KERNEL_DMA_PAGES` (16) pages, one per DMA device |
+| `0xffff_ffff_ffc0_0000` | hart stacks (`HART_STACKS`): `MAX_HARTS` (8) slots of 18 pages, each an unmapped guard page, the kernel stack (8 pages), a guard page and the trap stack (8 pages), by boot index; slot 0 is the boot hart's (`KERNEL_STACK_TOP`, `TRAP_STACK_TOP`), which the loader maps, and the kernel maps a slot when it starts its hart |
 | `0xffff_ffff_ffd0_0000` | kernel code and constants (512 KiB) |
 | `0xffff_ffff_ffd8_0000` | kernel data (1 MiB) |
-| `0xffff_ffff_fff8_0000` | top of the kernel stack (`KERNEL_STACK_TOP`), 8 pages below it |
-| `0xffff_ffff_ffff_0000` | top of the trap stack (`TRAP_STACK_TOP`), 8 pages below it |
 
 ```memmap
 top 0xffff_ffff_ffff_ffff
@@ -148,7 +147,7 @@ Root entries are 4 MiB each, 1024 of them. Every 32-bit address is canonical.
 | 1020..=1021 | `0xff00_0000` | PLIC window, up to 8 MiB less the DMA window | yes |
 | 1021, last 64 KiB | `0xff7f_0000` | DMA register window: 16 pages | yes |
 | 1022 | `0xff80_0000` | per-process kernel data (`PROCESS_AREA`) | no |
-| 1023 | `0xffc0_0000` | kernel area: code at `0xffd0_0000`, data at `0xffd8_0000` (1 MiB), kernel stack top `0xfff8_0000`, trap stack top `0xffff_0000` (8 pages each) | yes |
+| 1023 | `0xffc0_0000` | kernel area: hart stacks at `0xffc0_0000` (`HART_STACKS`: `MAX_HARTS` slots of kernel and trap stack with guard pages, slot 0 the boot hart's, as on Sv39), code at `0xffd0_0000`, data at `0xffd8_0000` (1 MiB) | yes |
 
 A QEMU `virt` PLIC is 6 MiB, which is why the PLIC window takes two root entries.
 
@@ -167,18 +166,18 @@ columns root entries | sharing
 ### Per-process kernel data
 
 `PROCESS_AREA` holds the current process's header: one page on both widths, the process's own,
-charged to its budget, with no `U` bit. It holds the trap handler's scratch word, the address of
-the running thread's saved context in slot 1, the process's bookkeeping and thread masks, a
-context-sized "no thread" area, and the table from TID to each thread's IPC page (`MAX_THREADS` + 1
+charged to its budget, with no `U` bit. It holds the process's bookkeeping and thread masks, and
+the table from TID to each thread's IPC page (`MAX_THREADS` + 1
 entries of 4 bytes). The kernel asserts that this fits in the page.
 
 A thread's saved registers, 32 machine words, are the last bytes of its IPC page, the page a
 thread costs its budget ([objects](objects.md#what-objects-cost)), which the kernel reaches through
-the physmap. So a process pays for the threads it has, not for `MAX_THREADS`. Because every
-address space maps its own header at the same address, the trap handler loads slot 1 and saves
-the interrupted thread's registers there, whichever process was running; switching thread writes
-that address. The kernel's own thread (PID 1, which has no budget and no IPC pages) saves into the
-"no thread" area.
+the physmap. So a process pays for the threads it has, not for `MAX_THREADS`. The trap handler finds
+the running thread's context through the hart's block, reached by `sscratch` and mapped in every
+address space: it holds the address of the running thread's saved context, the hart's current PID
+and thread, and the hart's own saved context for when it runs the kernel's thread (PID 1, which
+has no budget and no IPC pages). Switching thread on a hart writes that hart's block, never
+another's.
 
 The rest of the per-process entry is never mapped. A new thread's return address is
 `EXIT_THREAD`, an address there (`0xffff_ffff_8080_3000` on Sv39, `0xff80_3000` on Sv32): a thread
@@ -318,7 +317,7 @@ question does not arise.
 
 ### `satp`
 
-Status: built · partly tested: QEMU's TLB is not tagged by ASID, so a missing flush shows only through the checked build's audit; one hart is argued from the code · tested: bench:asid-reuse-stale, bench:pid-reuse-authority, bench:uaf-lent-page, host:paging::satp_round_trips_on_both_layouts, host:paging::each_flush_covers_what_the_spec_says
+Status: built · partly tested: QEMU's TLB is not tagged by ASID, so a missing flush shows only through the checked build's audit; one hart is argued from the code · tested: bench:asid-reuse-stale, bench:pid-reuse-authority, bench:smp-evict, bench:uaf-lent-page, host:paging::satp_round_trips_on_both_layouts, host:paging::each_flush_covers_what_the_spec_says
 
 `satp` holds the mode, the root table's physical page number and the ASID (`SatpLayout::make`), and
 a process's ASID is its PID. `MAX_PROCESS_COUNT` is below 2 to the power of `ASID_BITS`, 9 in
@@ -326,9 +325,9 @@ Sv32 and 16 in Sv39, and PID 0 is never a process, so every PID fits the field w
 between them. A compile-time assert holds it on each width, and the boot refuses a hart whose
 field is narrower, found by writing ones to it. The kernel is PID 1; the loader numbers boot
 processes from 2 and names each one's PID in a field of its own in the handoff record
-([boot](boot.md)), and the kernel writes each one's ASID when it takes them over. The kernel's
-one record of the running PID is `current_pid`, set whenever it switches address space
-(`set_current_pid`).
+([boot](boot.md)), and the kernel writes each one's ASID when it takes them over. Each hart's
+record of the PID it runs is in its per-hart block, read as `current_pid` and set whenever that
+hart switches address space (`set_current_pid`).
 
 The kernel runs in whichever address space was current when it trapped, because every address
 space maps the kernel half. The kernel half's shared leaves are global (`G`), so no ASID flush
@@ -435,8 +434,9 @@ user address, and the load faults as a kernel failure.
   device registers sit, as ordinary kernel read-write memory; the kernel never uses those
   addresses, but a stray write through them reaches a device.
 - **A flush acts on this hart only.** Each change flushes its address or its ASID on the hart
-  that makes it; with more than one hart, another hart's cached translations would survive an
-  unmap (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
+  that makes it. Another hart that ran the process flushes that ASID before it runs the
+  process again, and one running it now is shot down first at a destruction
+  ([memory](memory.md#residual-risks)).
 - **QEMU cannot show a missing flush.** Its TLB is not tagged by ASID, and it empties it on every
   `sfence.vma`, whatever its operands, and every `satp` change, so the bench finds a missing
   flush only through the checked build's audit.

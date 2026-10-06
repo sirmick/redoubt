@@ -144,12 +144,13 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             let (addr, phys) = mm.dma_alloc(pid, device.index(), npages)?;
             Ok(Some(Return::Dma { addr, phys }))
         }),
-        // On success this does not return: the machine powers off or reboots. The memory
-        // manager is let go of first -- the firmware call never comes back, and a kernel cell
-        // held for ever is, with `smp`, a spinlock held for ever.
+        // On success this does not return: the machine powers off or reboots, every hart with it.
+        // The memory manager is let go of first: the firmware call never comes back.
         Call::SystemReset { device, kind } => {
             MemoryManager::with(|mm| mm.check_reset(pid, device.index()))?;
             println!("system_reset: {:?} asked for by PID {}", kind, pid.get());
+            #[cfg(debug_assertions)]
+            crate::arch::hart::report();
             #[cfg(feature = "sched-trace")]
             crate::sched::trace::dump();
             crate::platform::reset(kind)

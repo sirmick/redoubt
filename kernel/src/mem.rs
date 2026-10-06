@@ -384,11 +384,10 @@ impl MemoryManager {
         Ok(index)
     }
 
-    /// A frame for the kernel itself (the test-only trace ring), taken at boot before the budget
-    /// tree counts what the kernel keeps: the highest free frame. It comes from the top of RAM,
-    /// under the DMA pool, so that the frames below it, every object's and process's, sit where a
-    /// release kernel's do.
-    #[cfg(feature = "sched-trace")]
+    /// A frame for the kernel itself (the other harts' stacks, the test-only trace ring), taken at
+    /// boot before the budget tree counts what the kernel keeps: the highest free frame. It comes
+    /// from the top of RAM, under the DMA pool, so that the frames below it, every object's and
+    /// process's, sit where a one-hart kernel's do.
     pub fn kernel_frame(&mut self) -> Result<usize, PageError> {
         let index = self.find_free(true).ok_or(PageError::NoFrame)?;
         self.set_owner(index, Some(redoubt_layout::KERNEL_PID));
@@ -426,9 +425,9 @@ impl MemoryManager {
         }
     }
 
-    /// The lowest free frame, or with `highest` the highest (only for the sched-trace build's
-    /// `kernel_frame`): down from the top word, one word a level, by its lowest or highest set
-    /// bit. Only the top word can be zero, since a summary bit is set only over a non-zero word.
+    /// The lowest free frame, or with `highest` the highest (only for `kernel_frame`): down from
+    /// the top word, one word a level, by its lowest or highest set bit. Only the top word can be
+    /// zero, since a summary bit is set only over a non-zero word.
     fn find_free(&self, highest: bool) -> Option<usize> {
         let mut entry = 0;
         for level in (0..LEVELS).rev() {

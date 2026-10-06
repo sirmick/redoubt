@@ -20,13 +20,16 @@ serves the steward.
 
 ### One flat stride queue
 
-<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (8)</summary>
+<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (11)</summary>
 
 - bench:sched-share
 - bench:sched-large-weight
 - bench:sched-server-busy
 - bench:sched-carve-inflation
+- bench:smp-boot
 - host:redoubt-stride::the_crate_and_the_model_agree
+- host:redoubt-stride::a_pick_skips_budgets_running_on_other_harts
+- host:redoubt-stride::a_budget_running_on_another_hart_stays_queued_through_this_harts_reconcile
 - mutation:R12PriorityById
 - mutation:R12IgnoreWeight
 - mutation:R12StrideWeightIsLimit
@@ -37,6 +40,9 @@ Every budget with a runnable thread is in one queue, whatever its class. There i
 no second queue and no flag that jumps it. The kernel runs the queued budget with the lowest
 pass, and running raises its pass by its runtime times `STRIDE` (2^20) divided by its weight. So
 over any stretch in which budgets stay runnable, each gets CPU in proportion to its weight.
+On several harts each hart picks the lowest-pass budget not running on another, so a budget
+runs on at most one hart at a time and its stride state has one runner. A reconcile keeps a
+budget queued while any hart runs it.
 
 The weight the queue uses is the budget's **free weight**: its weight limit less what its
 children carved ([R7 (carving)](budgets.md#r7-carving)). Carving moves share to the child and
@@ -1036,8 +1042,9 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   ([TENETS](../TENETS.md#threat-model)).
 - **Measured on QEMU, on one hart.** The targets are guest instructions under `icount`; no hardware
   run is measured, and a hardware run will characterise in cycles, not gate. A target set from a
-  sweep holds for the seeds swept, not for every seed. The queue and its accounting drive one hart
-  until M2 (usable shell) ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases
+  sweep holds for the seeds swept, not for every seed. The queue and its accounting are judged on
+  one hart until R12 is restated across harts
+  ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases
   that read the trace run a kernel built with it, which has a record at every queue event and 64
   MiB less RAM for the budget tree, taken from the top of RAM below the DMA pool so the frames
   below sit where a release kernel's do.
