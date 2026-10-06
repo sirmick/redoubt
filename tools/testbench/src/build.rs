@@ -224,8 +224,7 @@ impl Builder {
         if let Some((_, done)) = staged.iter().find(|(r, _)| r == recipe) {
             return Ok(done.clone());
         }
-        let stem = recipe.file_stem().context("a recipe with no name")?.to_string_lossy();
-        let dir = self.run.join("userland").join(&*stem);
+        let dir = self.userland_dir(recipe);
         let (objects, image) = (dir.join("objects"), dir.join("userland.img"));
         let loaded = crate::disk::Recipe::load(&self.workspace.join(recipe))?;
         let wanted = loaded.objects.as_ref().with_context(|| format!("{}: no objects", recipe.display()))?;
@@ -235,6 +234,13 @@ impl Builder {
         let done = Staged { objects, image, verified };
         staged.push((recipe.to_path_buf(), done.clone()));
         Ok(done)
+    }
+
+    /// Where this run stages the userland disk of `recipe`: named for the recipe's whole path, as
+    /// two recipes may share a file name (`image/userland.toml`, `tests/data/pack/userland.toml`)
+    /// and a run that stages both keeps each apart.
+    fn userland_dir(&self, recipe: &Path) -> PathBuf {
+        self.run.join("userland").join(recipe.with_extension("").to_string_lossy().replace('/', "_"))
     }
 
     /// A file of `len` zero bytes in this run, named for its length.
@@ -668,6 +674,21 @@ mod tests {
         assert!(builder.host_test_workspace(Some(Path::new("userland/./otp"))).is_err());
         assert!(builder.host_test_workspace(Some(Path::new("userland//otp"))).is_err());
         assert!(builder.host_test_workspace(Some(Path::new("/tmp"))).is_err());
+    }
+
+    /// Recipes of one file name in different directories stage apart, within the run.
+    #[test]
+    fn userland_recipes_of_one_name_stage_apart() {
+        let builder = Builder {
+            workspace: PathBuf::from("/w"),
+            run: PathBuf::from("/w/run"),
+            verbose: false,
+            staged: Default::default(),
+        };
+        let image = builder.userland_dir(Path::new("image/userland.toml"));
+        let pack = builder.userland_dir(Path::new("tests/data/pack/userland.toml"));
+        assert_ne!(image, pack);
+        assert!(image.starts_with("/w/run/userland") && pack.starts_with("/w/run/userland"));
     }
 
     /// A run of zeros is a file of exactly that many zero bytes, in the run's own directory.
