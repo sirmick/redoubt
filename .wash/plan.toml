@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 190
+revision = 193
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -633,9 +633,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "beamlet-redoubt"
   needs = ["BEAM2", "AIO1", "BEAM7"]
-  body = "Asynchronous underneath: the VM's I/O threads, and files over 9P. Also owed to STEWARD2: the steward's SSH-session cases take their file verdicts (File.write/read/ls under /home/<principal>, /vault, /net, and their refusals across principals and labels) only once the VM has a `files` platform over the namespace; until then those cases verify prompts, VMs, budgets and the binding table, and the namespace/label checks are host tests (steward.md says which)."
-  state = "todo"
-  revision = 159
+  body = "Brief: .wash/local/BEAM3-implementer.md. Tier A, size M+, start from main. In M1 scope by the owner's decision (with aio). The hub (AIO1) is the mechanism: every native call on a multiplexed connection goes through it with no VM thread held, completions become messages to the asking process, idle wakes on them; a thread per waiting call only for a server with no multiplexed session (reported). Files: the Redoubt `Files` over libs/client's file and ns, a fid per handle with the position in the VM, pieces of MSIZE; files.md's error Open ruled: Redoubt atoms everywhere, one POSIX mapping table at the File boundary; stat's undefined fields and the enotsup list pinned by host tests. Cases: host suite on fake-redoubt; beamlet-files both widths (write/read/ls/rm under /home/alice, bob's path :enoent). STEWARD2's SSH-session cases take their file verdicts (File.write/read/ls under /home/<principal>, /vault, /net and their refusals across principals and labels) once both are on main. Pages: beamlet.md's asynchronous section rewritten to what is built, files.md to built. Not here: /net (BEAM5), launching (BEAM4), screen, transfer."
+  state = "active"
+  revision = 192
 
 [[node]]
   id = "BEAM4"
@@ -941,8 +941,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["VOL1", "BOOT1", "FSN1"]
   body = "Owner (2026-10-06): the read-only system volume stops using littlefs; a read-only EROFS replaces it, built now; littlefs stays for writable volumes. Design: docs/servers/erofsd.md (the uncompressed subset: flat plain and flat inline layouts, sorted dirents, xattrs skipped; its own small server on bootfsd's pattern; Redoubt's own deterministic writer with erofs-utils as a host oracle). Brief: .wash/local/EROFS1-implementer.md (architect-15). Tier A, size M. Needs VOL1, FSN1 (final names) and BOOT1's step-1 profile (the littlefs baseline)."
-  state = "active"
-  revision = 163
+  state = "reported"
+  revision = 193
 
 [[node]]
   id = "FSN1"
