@@ -122,3 +122,17 @@ it), and testbench.md's memory row 6,248/4 plus one sentence), ff5e2c96b verityd
   rv64 userland-boot PASS 149.3 s (6248), rv32 userland-boot PASS 146.7 s (5760). These ran on a
   head whose tree differed only in the boot-profile copy, which neither case reads.
 - cargo test -p redoubt-init -p testbench: rc 0, 191 passed (after the copy). docs rc 0.
+
+## On main bac001578, head 7ff5c894c (final)
+
+- Full rerun on 6818a9447: host init+verityd 84 rc0; docs, formatting, size-budget, no-cruft rc0;
+  build-rv64/rv32 rc0; verity-signed, verity-bad-signature, verity-rollback and init-boot PASS on
+  both widths; rv64 userland-boot FAIL "verity:system: stack needs 5 pages for twice its 8264-byte
+  peak, declared 4".
+- Fold (7ff5c894c): the image's verity:system is declared stack_pages 5; testbench.md row 8,264/5,
+  with the reason; noted in the verityd commit message. No layout tuning (an #[inline(never)] try
+  gave 8,088 and was dropped).
+- Reruns on 7ff5c894c: init host 69 rc0, docs rc0. PASS: rv64 and rv32 userland-boot, rv64 and rv32
+  init-boot, and a second rv64 userland-boot.
+- verity:system peaks: rv64 userland-boot 8,264 (twice), rv32 userland-boot 7,456, rv64 init-boot
+  6,088, rv32 init-boot 5,376. keyd peaks: 6,248 rv64, 5,760 rv32.

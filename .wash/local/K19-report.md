@@ -253,3 +253,56 @@ wp-K19, base a9f54ffcb:
   all 0.
 - **Final tree** = the pre-fold head (k19-prefold, a local ref I will delete) except two ipclist
   tests swapped in order and the recounted ceilings.
+
+## worst-walk hang on 0795e6b54 (k19-implementer-2, 2026-10-06; stopped at the pool checkpoint)
+
+**Cause: a scheduler livelock after the deadline wake, not the destruction.** Found with gdb on
+the failing rv64 image (target/k19-final/worst-walk-rv64-run, QEMU started by hand with
+`-gdb tcp::1241`):
+
+- Every sample after '250 holders waited' is in the kernel: `sched::leave` -> `Sched::reconcile`
+  -> `Queue::raise_floor` (reads every queued budget's sched_state), `sched::audit_marks`, kmain's
+  pick. Trap cause is the timer interrupt from U-mode with sepc = 0x1a7b6, the instruction right
+  after init's `ecall` (redoubt_sys::ecall): the thread is preempted before it runs one user
+  instruction. A breakpoint on `redoubt::dispatch` saw no system call in 5 minutes.
+- TIMER: threads = budgets = NEVER (no timed wait armed), slice[0] = armed[0], which tracks `now`.
+- So: kmain's `pick` sets slice_end = now + SLICE_US (1 ms; sched.rs, end of `pick`), and the
+  rest of the exit path that is *not* an audit (settle, switch, reconcile and several
+  raise_floor walks over ~250 queued budgets, SMP1's `waiting` walk of the queue in `leave`,
+  checked kframe reads) costs more than 1 ms of icount guest time (shift=3: ~125k instructions).
+  The timer is due at the return; the thread is preempted; the next pick does the same. No user
+  progress, ever. `audit()` moves the slice end by its own length, but nothing else does.
+- rv32 (the orchestrator's run-1345249) stuck at the same line.
+- K19's commits do not touch this path (sched.rs, stride, irq.rs unchanged by K19); the case
+  passed before the rebase onto SMP1 (14aceaa63), which added per-exit work (Harts wiring, the
+  `waiting` count in `leave`, `elsewhere` in pick, sync_icache, per-hart KernelCell asserts).
+  Inference: SMP1 pushed the exit path at 250 queued budgets over the 1 ms slice.
+- **Not yet confirmed: whether main 14aceaa63 alone hangs.** A run from a git-archive export
+  (/tmp/k19-main, log /tmp/k19-main-rv64.log) had reached '250 holders waited' at 13:36 and was
+  killed at the pool checkpoint before the verdict. Next step: rerun it; if it hangs, this is an
+  SMP1/R12 defect, not K19's.
+- Fix options (design questions for the orchestrator/Architect, kernel/scheduling.md R12; not
+  improvised): (a) start the slice at the return to user (set the slice end in `leave`'s to_user
+  path), so a slice is always 1 ms of user time; (b) guarantee forward progress, e.g. a pick
+  whose slice is already over at the return still runs; (c) make the exit path O(changed) (no
+  raise_floor/queued walks per exit). Each changes R12 traces the model/oracle compare.
+
+Model: R10DeliveredMidDestruction, R10ExitNoticesOutlivePayer, R10CreatorDeathSparesProcess run
+alone in the release mutations test: rc 0 each, ~1 s. The full suite was not run. The
+predecessor's stale release run (3.5 h) was killed. The orchestrator's /tmp/k19-model*.sh debug
+runs (pid 1095538 has a thread spinning since about 11:00) are still running and were left alone.
+
+### Confirmed (after the q resume, before the second checkpoint)
+
+- **main 14aceaa63 alone hangs the same way.** Its rv64 worst-walk run (from the git-archive
+  export /tmp/k19-main, through `q run --cores 1`) printed '250 holders waited' at 13:54:36. By
+  14:11, 17 minutes later, there was no 'one holder destroyed', and I killed it at the checkpoint.
+  Without the hang the destruction follows within about a minute. So SMP1 introduced the
+  livelock, and K19 only inherits it.
+- **The slice is the cause.** K19's head (0795e6b54, exported to /tmp/k19-exp) with
+  `slice-10ms` added to worst-walk's kernel_features: PASS worst-walk [rv64, smp=1] 468.6 s, rc 0.
+  'one holder destroyed, killed: true' and WORST-WALK DONE. R10 2 destructions, p50/p99/max
+  16371/16383/16383 µs, threads' ending 13111/13126/13126; pump p99 1028 µs, expiry p99
+  28072 µs. These are the same numbers as the pre-rebase pass.
+- redoubt-model release suite: interrupted at the checkpoint inside mutations_are_caught. Every
+  test binary before it was ok (7, 8, 1, 17, 3, 5, 10 tests). Not a verdict.

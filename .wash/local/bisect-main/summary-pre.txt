@@ -1,0 +1,5 @@
+a9f54ffcb a9f54ffcb-rv32-sched-carve-return: PASS  sched-carve-return [rv32, smp=1]   1.5s
+a9f54ffcb a9f54ffcb-rv32-sched-cluster-old-control: 
+a9f54ffcb a9f54ffcb-rv32-sched-exit-churn: PASS  sched-exit-churn [rv32, smp=1]     5.5s
+a9f54ffcb a9f54ffcb-rv32-sched-share: PASS  sched-share [rv32, smp=1]          0.7s
+pre end

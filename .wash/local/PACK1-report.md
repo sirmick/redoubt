@@ -133,3 +133,59 @@ exactly as a file read's bytes do (BEAM6: no loader copy kept). The transient is
 module's size; the held figure is unchanged (scan 9,369 / 5,511) and the prompt peak +343 /
 +397 pages, under the pack's own 459. Decoding from a borrowed slice needs `Lookup` to carry
 one: a VM change (BEAM8's area), not made here.
+
+## Rebased onto EROFS1 (main bac001578): final, head 03789e9ba
+
+BEAM8 had not landed: d391de2a5 kept, now 636870328 (beamlet-redoubt: the limits tests).
+Commits: 67debaeac testbench (pack; flip both copies; resolved onto EROFS's packer), 636870328,
+1c2e3832d beamlet (reader; 16 KiB reads: erofsd:system's heap 12 of 24 pages leaves no room
+for a 64 KiB buffer either), c93722baa tests (pack cases on erofsd/EROFS), 03789e9ba docs (pack,
+order, target 15 s; boot-profile(-unverified) bounds tightened to 15 s). Backup of the
+pre-rebase branch: local branch pack1-pre-erofs-backup (delete after merge).
+
+| boot-profile, seed 1 | rv64 verified | rv64 unverified | rv32 verified | rv32 unverified |
+| --- | ---: | ---: | ---: | ---: |
+| EROFS (main) | 16.0 s | 12.5 s | 15.7 s | 12.1 s |
+| EROFS + pack | 12.38 s | 9.90 s | 12.03 s | 9.56 s |
+| pack read done | 4.38 s | 1.90 s | 4.68 s | 2.22 s |
+
+rv64 verified over seeds 1-5: 12.38, 12.35, 12.32, 12.34, 12.38 s. Reading the pack: 3.6 s
+verified, 1.2 s unverified (from beamlet's start); VM after the read (decode + console): 8.0 s.
+Counts (erofsd's line at the BootStats call): 9P 208 (walk 16, open 15, read 161, clunk 15,
+stat 1), 2,242,815 bytes; volume reads 208 (inodes 16, directory blocks 35, data 157), range
+calls 209, 2,463,232 bytes; main without the pack: 652 9P ops, 641 volume reads, 642 range
+calls, 3.35 MB. Target by the rule: 12.38 x 1.1 = 13.6 -> 15 s verified; 9.90 x 1.1 = 10.9 ->
+15 s unverified; both cases now bound the prompt's stamp below 15,000,000 us (regex checked
+against 14,999,999 / 15,000,000).
+
+Gates on 03789e9ba (make -f .wash/local/jobs.mk, all rc 0): rv64+rv32 pack-outside-module,
+pack-bad-truncated, pack-bad-wrong-length, pack-bad-wrong-name, boot-profile,
+boot-profile-unverified, beamlet-footprint (scan 9,369 / 5,511 unchanged; erofsd:system heap
+12 of 24 both), userland-bad-start, beamlet-boot; rv64 userland-boot; formatting, no-cruft,
+size-budget, unsafe-budget, docs, beamlet-lookup-host; `jobserver bounded cargo test -p
+testbench` 132 passed. Builds: both widths built by the cases. Not run: the whole bench (the
+train's).
+
+## Panel folds and rebase onto main bd1b90fe6: head e2e845c9a
+
+Editor (OK with notes): edits 1, 2, 4, 5, 6 folded into the docs commit; edit 3 overruled by
+the orchestrator, the sentence rephrased ("The boot pack is per VM and read-only: no sharing of
+its pages between VMs, no byte cache in the steward, no decoded snapshot, no pack per
+profile."). Red team (OK with notes): (1) beamlet says `{module} read from the boot pack` when
+the start module came from the pack; boot-profile, boot-profile-unverified and userland-boot
+accept either line (beamlet commit); (3) testbench.md beamlet stack peak 33,240 -> 33,768, the
+largest measured (beamlet-footprint rv64 on EROFS; 33,736 earlier), 2x = 67,536 < 17 pages
+(69,632): no manifest change (docs commit); (4) R75: a volume without a pack is not a refusal,
+beamlet says so once and its modules load from their files (docs commit). Note 2: nothing.
+
+Rebased onto bd1b90fe6 (signed volumes); one conflict each in tools/testbench/src/disk.rs
+(flip_file beside the new root-block helpers) and docs/testbench.md (both sentences kept).
+BEAM8 not on main: the limits commit stays (877f7f482).
+
+Reruns on e2e845c9a, rv64, all PASS: boot-profile (bound 15 s), boot-profile-unverified,
+pack-outside-module, pack-bad-truncated, pack-bad-wrong-length, pack-bad-wrong-name,
+userland-boot (console: `beamlet: Elixir.Redoubt.Shell read from the boot pack`),
+userland-bad-start, beamlet-boot, docs, formatting, size-budget, no-cruft, beamlet-lookup-host;
+`cargo test -p testbench` 134 passed. The rerun's profile consoles rotated before copying; the
+timing code is unchanged since the 12.38 s / 9.90 s measurement, and the case's bound holds the
+prompt under 15 s.
