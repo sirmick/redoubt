@@ -1,0 +1,27 @@
+description = "erofsd serves a read-only volume (servers/erofsd.md, \"Serving\"): a create, an open for writing, reading and writing, or truncating, and a remove are each refused read-only volume by erofsd; a directory lists exactly its children, in order; .. sent from the root stays at the root; and a file whose last block is inline reads whole and byte-equal to what was staged"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-erofsd-programs", bin = "erofsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^\[con [0-9a-f]{16}\] erofsd-client: write, read-write, truncate, create, remove: read-only volume, read-only volume, read-only volume, read-only volume, read-only volume$',
+    '^\[con [0-9a-f]{16}\] erofsd-client: lib lists: a\.beam b\.beam c\.beam; \.\. from the root stays at the root; tail\.txt read 5460 bytes, byte-equal$',
+    '^\[con [0-9a-f]{16}\] erofsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'erofsd-client TEST FAILED', 'served as corrupt']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/erofsd/read-only.json" }
+
+[disk]
+recipe = "tests/data/erofsd/read-only-disk.toml"

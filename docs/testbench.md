@@ -598,10 +598,12 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (19)</summary>
+<details><summary>Status: built · tested (22)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
+- bench:erofs-corrupt
+- bench:erofs-read-only
 - bench:image-disk
 - bench:init-boot
 - bench:net-tcp
@@ -618,6 +620,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::the_userland_disk_sits_on_its_slot_read_only
 - host:testbench::the_userland_pack_is_deterministic_and_stages_each_object_by_name
 - host:testbench::a_verified_partition_is_its_volume_then_its_tree
+- host:testbench::an_erofs_partition_is_its_stage_and_each_damage_is_corrupt_where_it_is
 - host:testbench::the_manifest_pins_the_packs_root
 
 </details>
@@ -642,18 +645,27 @@ host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions ac
 ```
 
 A disk `recipe` (`image/disk.toml`) is packed by the code `./mkimage` runs (`testbench
---pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as a littlefs
-volume holding its stage's tree, written through `littlefsd`'s own code, so a case boots the disk the
-image ships.
+--pack-disk`): a GPT of equal partitions by `blkd`'s builder, then each partition as its `fs`
+says, holding its stage's tree: `littlefs`, a writable volume written through `littlefsd`'s own
+code, or `erofs`, a read-only volume written by `libs/erofs`'s writer
+([erofsd](servers/erofsd.md#the-packer)), so a case boots the disk the image ships.
 
-A recipe's littlefs partition may also generate files, for a case that needs many and not their
+A recipe's littlefs or erofs partition may also generate files, for a case that needs many and not their
 contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in the volume's root
 (as many digits as the last needs), all empty except `read`, which holds its own name and a
 newline. They sit beside the stage's tree, if there is one, and a name in both is refused.
 
-A littlefs partition may be verified, `verity = true`: it holds the largest volume that fits
-beside its hash tree, then the tree ([verityd](servers/verityd.md#the-tree)), and the pack says
-its root and data blocks.
+A littlefs or erofs partition may be verified, `verity = true`: it holds the largest volume that
+fits beside its hash tree, then the tree ([verityd](servers/verityd.md#the-tree)), and the pack
+says its root and data blocks. An erofs volume is followed in its range by zeros, which the tree
+covers too.
+
+For `erofs-corrupt`, an erofs partition may be damaged after its pack, through the parser
+`erofsd` uses to find the place: `damage = { what = "magic" }` flips a bit of the superblock's
+magic; `{ what = "block-past-count", path = "tail.txt" }` starts that file's blocks at the
+volume's block count; `{ what = "compressed", path = "motd" }` lays that file out compressed;
+`{ what = "name-offset", path = "lib" }` starts the last name of that directory's first block past
+the block's end.
 
 The userland disk (`image/userland.toml`) is packed by the same code: first its objects are
 staged, each module of the applications the recipe names, compiled by the pinned toolchain and

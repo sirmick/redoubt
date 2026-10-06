@@ -361,16 +361,18 @@ volume's labels and its root's quota.
 
 ### R47 (one volume per instance)
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
 - bench:littlefsd-one-volume
+- host:redoubt-init::an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is
 - host:redoubt-init::no_server_is_handed_a_badge_at_blkd
 
 </details>
 
 Each `littlefsd` instance serves one volume and holds only that volume's block range. A client who
 exploits the filesystem parser through a crafted volume or request reaches that volume's data and
-nothing else: no other volume, no other partition, no device.
+nothing else: no other volume, no other partition, no device. A read-only volume's
+[`erofsd`](erofsd.md) is placed the same way.
 
 ### R48 (a quota per attach root)
 
@@ -389,8 +391,10 @@ quota's.)
 
 ### R49 (a hostile medium is corrupt, not a crash)
 
-<details><summary>Status: built · tested (8)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
+- bench:erofs-corrupt
+- fuzz:erofs/image
 - fuzz:littlefs/image
 - fuzz:littlefs/mutate
 - host:littlefs::corrupted_bytes_never_panic
@@ -405,7 +409,9 @@ quota's.)
 Whatever bytes the medium holds, littlefs refuses them as corrupt rather than panicking, looping
 or allocating beyond the volume's size, and a stale handle never touches another file's metadata
 or data. So a hostile disk image can make its own volume unreadable, never crash or hang its
-`littlefsd` in the parser.
+`littlefsd` in the parser. [`erofsd`](erofsd.md) keeps the rule for a read-only volume: whatever
+bytes it holds, `libs/erofs` refuses them as corrupt, and a range that fails makes the volume
+corrupt until `erofsd` starts again.
 
 ### R50 (power loss leaves before or after)
 

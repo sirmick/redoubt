@@ -1,0 +1,27 @@
+# erofs-corrupt's disk: four EROFS volumes of one stage, each damaged after its pack in one way
+# erofsd must serve as corrupt (tools/testbench/src/disk.rs, Damage).
+size_kib = 4096
+
+[[partition]]
+name = "magic"
+fs = "erofs"
+stage = "tests/data/erofsd/stage"
+damage = { what = "magic" }
+
+[[partition]]
+name = "past"
+fs = "erofs"
+stage = "tests/data/erofsd/stage"
+damage = { what = "block-past-count", path = "tail.txt" }
+
+[[partition]]
+name = "compressed"
+fs = "erofs"
+stage = "tests/data/erofsd/stage"
+damage = { what = "compressed", path = "motd" }
+
+[[partition]]
+name = "names"
+fs = "erofs"
+stage = "tests/data/erofsd/stage"
+damage = { what = "name-offset", path = "lib" }

@@ -53,7 +53,7 @@ and `init`'s only input. Its entries:
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it), and for a verified volume `verity`: its verifier (the `servers` entry of a [`verityd`](verityd.md)) and the root it pins, `{ "server", "root": 64 lowercase hex digits, "blocks": a decimal string }` |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`; a volume's server has `program` `littlefsd`, or `erofsd` for a read-only volume, and no other key says the format), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -105,7 +105,7 @@ and `init`'s only input. Its entries:
   carries the smallest badge from 1 that no `handed` item there uses. A manifest names each of
   these programs at most once, `keyd` exactly once: a second would run beside the one `init`
   calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35). A program
-  that may run more than once (`blkd`, one per disk; `littlefsd`, one per volume) is told the endpoint
+  that may run more than once (`blkd`, one per disk; `littlefsd` or `erofsd`, one per volume) is told the endpoint
   it receives on by its argument `endpoint=NAME`, which the manifest gives it; a `blkd`'s must
   name the endpoint it receives on first, where `init` mints its volumes' ranges.
 - **Volumes.** A `volumes` entry is one GPT entry of its disk, which no other entry names on
@@ -289,7 +289,7 @@ Reset right. The loader maps the bundle into it, read-only
    any server an endpoint `consoled` receives on: a root badge there writes bare lines, and only
    `init` holds one. Without a `consoled` entry, `init` keeps the UART;
 5. starts the rest of the drivers and the servers below the steward: `bootfsd`, `blkd`, `littlefsd`
-   (one per volume), `netd` and `ipd`, then pushes the `public` entries to `bootfsd`;
+   and `erofsd` (one per volume), `netd` and `ipd`, then pushes the `public` entries to `bootfsd`;
 6. starts the steward, handing it the `users` budget, and `sshd`.
 
 Each server runs in a budget of its own, carved from `system`, and is started through the loader

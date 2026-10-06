@@ -34,7 +34,8 @@ flowchart TD
     I -.-> BF[bootfsd<br/>/boot]
     I -.-> BL[blkd<br/>the disk]
     I -.-> VD[verityd<br/>one per verified volume]
-    I -.-> FS[littlefsd:volume<br/>one per volume]
+    I -.-> FS[littlefsd:volume<br/>one per writable volume]
+    I -.-> EF[erofsd:volume<br/>one per read-only volume]
     I -.-> ND[netd<br/>the network card]
     I -.-> IP[ipd:network<br/>TCP/IP]
     I -.-> KD[keyd<br/>keys]
@@ -47,7 +48,8 @@ flowchart TD
 M1 (separation and containment).*
 
 `init` starts the drivers and the servers that need no principal first (`consoled`, `bootfsd`,
-`blkd`, each `verityd`, each `littlefsd`, `netd`, each `ipd`, `keyd`), then the steward and `sshd`.
+`blkd`, each `verityd`, each `littlefsd` and `erofsd`, `netd`, each `ipd`, `keyd`), then the steward
+and `sshd`.
 It keeps each server's receive right, so a restarted server receives on the same endpoint (Restarts
 and crash blame, below). The servers planned for later milestones join the same graph:
 the [resolver](resolver.md) and [`gatewayd`](gatewayd.md) in M4 (self-hosted development), and
@@ -65,7 +67,7 @@ Status: planned · M1 (separation and containment)
 | --- | --- | --- | --- |
 | TCB | firmware, loader, kernel; `blkd` and `netd` while there is no IOMMU | everything | the whole machine |
 | Trusted system servers | `init`, the steward, `keyd`, `sshd` | crossing principals: logins, keys, approvals, launching | every principal |
-| Shared servers | `consoled`, `bootfsd`, each `littlefsd`, each `ipd`; later the resolver and `gatewayd` | serving many principals and keeping them apart by badge and label | the principals that server serves |
+| Shared servers | `consoled`, `bootfsd`, each `littlefsd` and `erofsd`, each `ipd`; later the resolver and `gatewayd` | serving many principals and keeping them apart by badge and label | the principals that server serves |
 | Per-principal code | sessions, agents, native programs | nothing beyond their own capabilities | that principal's own capabilities |
 
 - **The DMA drivers are TCB.** A driver that holds a DMA-flagged device handle can point a bus
@@ -76,7 +78,7 @@ Status: planned · M1 (separation and containment)
   userland: a compromised session VM holds exactly its principal's capabilities, like a native
   program.
 - **A shared server is split by network or medium,** so one parser bug does not reach every
-  principal: one `littlefsd` per volume, one `ipd` per network or trust domain.
+  principal: one `littlefsd` or `erofsd` per volume, one `ipd` per network or trust domain.
 - **Server work is paid by the server's weight,** not the caller's; no time is donated. Each
   shared server therefore bounds the work one request can cause and admits by caps
   ([scheduling](../kernel/scheduling.md#residual-risks), [serving](serving.md)).
@@ -252,6 +254,7 @@ flowchart LR
     I -. pushes public entries .-> BF[bootfsd]
     I -. passes seeds .-> KD[keyd]
     FS[littlefsd:volume] -. range badge .-> BL
+    EF[erofsd:volume] -. range badge .-> BL
     IP[ipd:network] -. netif connection .-> ND
     ST -. audit grant .-> KD
     SS[sshd] -. host-key badge .-> KD

@@ -39,6 +39,7 @@ members = [
   "stub",
   "tests/programs",
   "tests/init-programs",
+  "tests/erofsd-programs",
   "tests/littlefsd-programs",
   "tests/net",
   "tests/net/client",

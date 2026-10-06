@@ -654,6 +654,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-erofsd-programs"
+version = "0.1.0"
+dependencies = [
+ "redoubt-init-programs",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-fake-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1201,6 +1209,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ed25519-compact",
+ "erofs",
  "libc",
  "redoubt-blkd",
  "redoubt-client",
