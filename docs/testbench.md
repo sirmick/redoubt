@@ -646,6 +646,12 @@ matches and no capture twice, such as a restarted program's new console. A hosti
 ordinary `programs` entry; hostile data for a program to use, such as a malformed ELF for a parent
 to launch, is a bundle file.
 
+The file systems' parsers are also fuzzed, by hand with `cargo fuzz` and outside the bench, each
+from its crate's own `fuzz/` workspace: littlefs's `image` and `mutate`
+([littlefsd](servers/littlefsd.md#the-medium-is-hostile)), and beside them walfs's `image`, arbitrary
+bytes mounted, walked and written, and `mutate`, a valid volume with bytes changed and its hashes
+forged or not ([walfsd](servers/walfsd.md#the-oracle)).
+
 ## Files in the bundle
 
 ### Bundle files

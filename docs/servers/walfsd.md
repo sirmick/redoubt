@@ -15,7 +15,44 @@ top rather than by the format.
 
 ### The format
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (34)</summary>
+
+- bench:walfs-host-tests
+- fuzz:walfs/image
+- fuzz:walfs/mutate
+- host:walfs::a_damaged_hash_block_is_refused_as_itself
+- host:walfs::a_directory_sized_as_the_largest_file_is_corrupt_at_its_first_hole
+- host:walfs::a_forged_log_header_is_corrupt
+- host:walfs::a_forged_orphan_list_ends
+- host:walfs::a_forged_size_reads_as_holes_and_allocates_nothing
+- host:walfs::an_indirect_entry_outside_the_data_region_is_corrupt
+- host:walfs::an_orphan_open_at_unmount_is_freed_at_mount
+- host:walfs::a_reserved_bitmap_bit_clear_fails_the_mount
+- host:walfs::a_torn_log_is_dropped_or_replayed_never_half_applied
+- host:walfs::bad_arguments
+- host:walfs::crash_at_every_write_fixed_workload
+- host:walfs::crash_at_every_write_random_workloads
+- host:walfs::crash_during_recovery
+- host:walfs::crash_inside_a_write_of_many_transactions_leaves_a_prefix
+- host:walfs::crash_while_freeing_a_large_file
+- host:walfs::cycles_and_shared_blocks_are_found
+- host:walfs::directories_grow_past_their_direct_blocks
+- host:walfs::every_bad_attribute_area_is_corrupt
+- host:walfs::every_bad_directory_entry_is_corrupt
+- host:walfs::every_flipped_bit_is_corrupt_where_it_is_read
+- host:walfs::every_inode_field_out_of_range_is_corrupt
+- host:walfs::every_superblock_field_out_of_range_is_corrupt
+- host:walfs::full_volume
+- host:walfs::generations_and_mtimes
+- host:walfs::handles_follow_renames_and_outlive_removal
+- host:walfs::large_and_sparse_files_free_every_block
+- host:walfs::noise_never_panics
+- host:walfs::random_operations_crowded_small_volume
+- host:walfs::random_operations_large_volume
+- host:walfs::random_operations_small_volume
+- host:walfs::the_records_are_the_pages_tables
+
+</details>
 
 `libs/walfs` implements this section and nothing beyond it: a field this page does not have is
 a field the crate does not have. Its shape is xv6's (the MIT xv6-riscv tree, `kernel/fs.h` and
