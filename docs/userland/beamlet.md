@@ -284,7 +284,7 @@ clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: files, programs, `/net` and the system natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
+Status: built · partly tested: files, programs, `/net` and the system natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:boot-profile, bench:boot-profile-unverified, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console and verified code lookup,
@@ -313,6 +313,19 @@ On the machine, beamlet is the program `beamlet`, started like any other with a 
 budget, and a connection to the userland disk's `littlefsd`, a named handle (`littlefsd:system`). It runs one scheduler thread until several harts
 ([several harts](../plan/m2-usable-shell.md#several-harts)), and starts its threads with the
 runtime's `thread::spawn`.
+
+In a `boot-stats` build ([checked builds](../testbench.md#checked-builds)) beamlet says `beamlet:
+first console read [t=N]` at the VM's first console read, with `time_now` in µs. For the shell that
+read is its prompt, drawn and waiting, so the line is the boot's time to its prompt; the line
+follows the prompt on the console's line. `boot-profile` and `boot-profile-unverified` measure it.
+Measured in that build on QEMU rv64 under `icount` (`shift=3`, sleep on) with seed 1, the image
+reaches its prompt in 1,016 s of guest time verified (1,014 to 1,034 s over seeds 1 to 5) and 536 s
+unverified (seed 1). 99 % of it is in the VM's 96 lookups, which spend 97 % of their block reads
+finding each file's name in the volume's root directory again
+([littlefsd](../servers/littlefsd.md#residual-risks)). They make 652 9P operations and 77,710 block
+reads of 673 distinct blocks; a block read costs 6.8 ms of guest time unverified (about 0.85 M
+instructions) and 13.0 ms verified, so reading takes 529 s of the unverified boot and 1,009 s of
+the verified one. The VM's own work and its console take 6.5 s either way.
 
 If the volume does not attach, because `littlefsd` serves it as corrupt, or the module it is told to
 start cannot load, it says why on its console and waits without exiting: a tampered disk must not

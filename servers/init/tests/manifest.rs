@@ -1297,3 +1297,27 @@ fn confined_gives_each_label_set_its_own_verifier() {
         Refusal::Confined { at: format!("servers[{verifier}].receives[0]"), sharing: Sharing::Endpoint }
     );
 }
+
+/// `boot-profile-unverified` boots the image less its verification
+/// (tests/boot-profile-unverified.toml), from copies: the image's manifest without each volume's
+/// `verity` and the verifiers it names, and its userland recipe without `verity = true`. Every
+/// other entry must stay the image's, so a change to the image either reaches the copies or
+/// fails here, rather than the case measuring another image.
+#[test]
+fn the_boot_profiles_unverified_copies_are_the_image_less_its_verification() {
+    let copy = include_str!("../../../tests/data/boot-profile/manifest-unverified.json");
+    let copy = read(copy.as_bytes(), ARENA_PAGES).expect("the copy decodes");
+    let mut m = image();
+    let verifiers: Vec<String> =
+        m.volumes.iter_mut().filter_map(|v| v.verity.take()).map(|v| v.server).collect();
+    assert!(!verifiers.is_empty(), "the image verifies a volume");
+    m.servers.retain(|s| !verifiers.contains(&s.name));
+    assert_eq!(copy, m);
+
+    // The recipe's own header differs; everything from the disk's size on is the image's.
+    let body = |recipe: &'static str| &recipe[recipe.find("# Whole disk").expect("the disk's size")..];
+    let image = body(include_str!("../../../image/userland.toml"));
+    assert!(image.contains("\nverity = true\n"), "the image's userland volume is verified");
+    let copy = body(include_str!("../../../tests/data/boot-profile/userland-unverified.toml"));
+    assert_eq!(copy, image.replace("\nverity = true\n", "\n"));
+}

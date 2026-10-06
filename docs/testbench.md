@@ -178,17 +178,20 @@ system failure, which a rejection case asks for).
 With `icount`, QEMU runs the guest at a fixed instruction rate, skips idle time to the next timer
 deadline and puts the RTC on the same clock (`-rtc clock=vm`). A time a case asserts is then a
 count of guest instructions (at `shift=3`, 1 ms is 125,000), the same on any host however loaded.
-It does not make a run repeat on its own: QEMU fills the guest's boot RNG seed from host entropy
-on every boot, the kernel draws PIDs from it, and that moves every later event. `qemu_seed = N`
-pins it (QEMU `-seed N`, which fills the device tree's `/chosen/rng-seed`), and with `icount` a
-run then repeats exactly. The bench prints the seed before the result, and
-`TESTBENCH_QEMU_SEED=M` replaces the pinned seed of every case that has one, to replay a run or
-to sweep. `--sweep SEEDS` runs one case once per seed (`1..20`, or `3,5,9`), from one build, and
-prints each seed's result in seed order and a summary line; each boot keeps its files in
-`seed-<N>-<arch>/` inside the run's directory. `--jobs J` boots up to J seeds at once. It is
-never the default; what a result under it is worth is the shared-host rule below. A timing
-gate runs one pinned seed and states its target from a sweep of seeds
-([responsiveness](kernel/scheduling.md#responsiveness)).
+It does not make a run repeat on its own: QEMU fills the guest's boot RNG seed from host entropy on
+every boot, the kernel draws PIDs from it, and that moves every later event. `qemu_seed = N` pins
+it (QEMU `-seed N`, which fills the device tree's `/chosen/rng-seed`), and with `icount` a run then
+repeats exactly. The bench prints the seed before the result, and `TESTBENCH_QEMU_SEED=M` replaces
+the pinned seed of every case that has one, to replay a run or to sweep. A case with a disk keeps
+`sleep` on (`icount = "shift=3"`): with `sleep=off` an idle guest's clock jumps to the next
+deadline, which while `blkd` waits for the host's virtio completion is its own 10 s request
+timeout, so the read fails and the volume is poisoned; with `sleep` on, idle time is the host's, so
+such a run repeats closely, not exactly; a time a case is held to comes with a sweep's spread.
+`--sweep SEEDS` runs one case once per seed (`1..20`, or `3,5,9`), from one build, and prints each
+seed's result in seed order and a summary line; each boot keeps its files in `seed-<N>-<arch>/`
+inside the run's directory. `--jobs J` boots up to J seeds at once. It is never the default; what a
+result under it is worth is the shared-host rule below. A timing gate runs one pinned seed and
+states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **On a shared host.** `cargo testbench` runs its cases one after another; what may run beside
 the invocation, another invocation in its own run directory, a seed under `--jobs`, a build, is
@@ -405,10 +408,12 @@ builds both on your own machine.
 
 ## Checked builds
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (12)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
+- bench:boot-profile
+- bench:boot-profile-unverified
 - bench:sched-latency
 - bench:sched-budget-churn
 - bench:sched-exit-churn
@@ -476,6 +481,20 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECK
 ```
 
 That run fails `bench-debug-assertions-off`, as it should; everything else must pass.
+
+`boot-stats` is a diagnostic feature like `sched-trace` and `walk-trace`, but of programs, not the
+kernel: a Cargo feature of `init`, `blkd`, `verityd`, `littlefsd` and `beamlet-redoubt`, off by
+default and never in the image's build. Without it the release binaries of `init`, `blkd`,
+`verityd`, `littlefsd` and `beamlet` have the section sizes they had before it, on rv64 and rv32
+(measured with `llvm-size` against the commit before it, both built from the same path: `beamlet`'s
+sizes move with its build path). With it, `init`'s lines and beamlet's line for its first object
+carry `[t=N]`, `time_now` in µs; `blkd`, `verityd` and `littlefsd` say their counts at each power
+of two of their requests from 2^12, and `littlefsd` once more, exactly, on a walk of
+`Elixir.BootStats.beam`, a name no volume holds; and at the VM's first console read beamlet says
+`beamlet: first console read [t=N]` and what its lookups cost: their count and the guest time spent
+in them ([beamlet on Redoubt](userland/beamlet.md#beamlet-on-redoubt)). The feature needs no
+checked build. `boot-profile` and `boot-profile-unverified`, by name only, boot the image's
+programs with it under `icount` and a pinned seed: measurements, which assert no time.
 
 ## Hostile inputs
 
