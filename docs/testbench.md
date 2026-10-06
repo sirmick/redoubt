@@ -15,6 +15,9 @@ cargo testbench timer           # cases whose name contains "timer"
 cargo testbench --arch rv64     # one target
 cargo testbench --list          # names and descriptions, those run only by name marked
 cargo testbench sched-latency --sweep 1..20 --jobs 4   # one case, a seed sweep, 4 boots at a time
+cargo testbench --exact sched-latency   # that case alone, not sched-latency-tcg too
+cargo testbench --prebuild target/prebuilt   # build every case's pieces once, both widths
+target/prebuilt/testbench --prebuilt target/prebuilt --exact --arch rv64 timer   # run from them
 ./test                          # the same, from the repository root
 ```
 
@@ -34,6 +37,51 @@ fallback to QEMU's own firmware.
 | `tests/*.toml` | the cases, one per file (`tests/data/`: files they read; `tests/keys/`: SSH test keys) |
 | `tests/programs/` | `no_std` programs that run inside Redoubt: the log server, victims, attackers, checkers |
 | `tests/net/` | the network clients and the judge that the net cases start under `init`, and the host test that checks each net case's manifest against its case file |
+
+A filter takes every case whose name contains it, so `cargo testbench timeouts` runs
+`timeouts-tcg` too; `--exact` takes the one case it names, run only by name or not, and refuses a
+name no case has. A run stages each userland disk it boots in a directory named for the recipe's
+whole path, as two recipes may share a file name.
+
+### Building once
+
+Status: built · tested: host:testbench::an_index_survives_its_rename_and_names_its_tree, host:testbench::the_fingerprint_follows_the_trees_changes, host:testbench::an_exact_filter_runs_one_case, host:testbench::userland_recipes_of_one_name_stage_apart
+
+A run builds what it boots: `cargo run` of the bench, then a cargo build of the kernel, the loader
+and each program, a check that costs about 30 ms when nothing changed and waits on the build
+directory's lock while another run compiles, then the bundle and any userland disk. Alone that is
+a quarter of a second before QEMU starts; beside a train of other runs, each waiting on the
+others' compiles, it was most of a case's time. `--prebuild DIR` does it once for every case:
+
+```text
+DIR/testbench            the bench, copied from the --prebuild that made the directory
+DIR/redoubt-sshd-host    Redoubt's sshd on its host platform, for the loopback cases against it
+DIR/<arch>/index.json    the tree's fingerprint; each case's pieces, or its build's results
+DIR/<arch>/...           cargo's copies, the bundles, the userland disks
+```
+
+Every `boot` and `build` case is built for each of its targets (`--arch` for one; a filter for
+some), the widths one after the other in one process: two userland stages at once would compile
+the same Mix project in its one build directory. A build that fails is kept as the case's
+result, printed by the prebuild and again by each run of the case, as is a `build` case's
+verdict. Each width is built in a directory of its own and renamed into place when done, so a
+run reading the old pieces never sees a half-written one.
+
+`DIR/testbench --prebuilt DIR` then runs cases as `cargo testbench` does, but takes each boot
+case's bundle, loader and userland disk from `DIR` and runs no cargo and packs nothing; what
+stays per boot is what each boot must have afresh: the QEMU probe, its disk (a disk recipe is
+still packed for every boot) and its devices. A case starts in about the time QEMU takes to
+start. The index names the workspace that made it and the tree's fingerprint: its commit, its
+uncommitted changes and its untracked files that git does not ignore, taken when the prebuild
+starts and again before each width is put in place, which a change in between refuses. A run
+from a directory another workspace made is refused naming it, and so is one from this tree
+before a change, never a silent test of old code, so the directory is made again after any
+change. What git ignores is not in the fingerprint: the pinned toolchains (`toolchains/`, or
+where `BEAMLET_TOOLCHAINS` points) and a Mix project's `_build` (`userland/shell/_build/`); a
+change to those needs a prebuild by hand. The other kinds run as
+always, with their own cargo where they have one (`host-tests`). `scripts/jobs.mk` makes the
+directory (`prebuilt`) and runs every case target from it when it is there ("On a shared host"
+under [the case file](#the-case-file)).
 
 ## Verdicts
 
