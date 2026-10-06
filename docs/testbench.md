@@ -407,7 +407,7 @@ builds both on your own machine.
 
 ## Checked builds
 
-<details><summary>Status: built · tested (12)</summary>
+<details><summary>Status: built · tested (14)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
@@ -421,6 +421,8 @@ builds both on your own machine.
 - host:testbench::audits_are_subtracted_inside_each_window
 - host:testbench::shares_are_judged_net_of_audits
 - host:testbench::an_unmatched_audit_fails
+- host:testbench::cluster_credit_is_the_certified_interior_only
+- host:testbench::cluster_lower_witness_counts_the_union_of_outer_bins
 
 </details>
 
@@ -461,8 +463,15 @@ in its program has no audit inside its window. An audit that never ends, ends wi
 or runs inside a destruction fails the check. The oracle subtracts only what the trace shows it: a
 kernel built with `audit-unstamped`, which leaves the audit after a destruction unstamped, misses
 the containment gate's deadline notice, in a recorded negative run. The audits themselves stay
-full. The same trace records each timer interrupt from user mode with every charge inside it, and
-`sched_oracle` checks that the budget it interrupted pays only for its own items or its slice's end
+full. The cluster's envelopes ([responsiveness](kernel/scheduling.md#responsiveness)) are credited
+more strictly: a stamp is a floored microsecond, so an audit stamped u and v ran from somewhere in
+`[u, u + 1)` to somewhere in `[v, v + 1)`, and only its **certified interior** `[u + 1, v)` (empty
+unless v > u + 1) is subtracted, where it meets the envelope. The uncertain edge bins stay counted
+as elapsed time, so the credit is never more than the audit time inside, and an audit outside an
+envelope lowers nothing. The credit is summed with checked arithmetic and may not exceed the
+envelope. The other cases keep the whole-stamp subtraction above. The same trace records each
+timer interrupt from user mode with every charge inside it, and `sched_oracle` checks that the
+budget it interrupted pays only for its own items or its slice's end
 ([charging](kernel/scheduling.md#charging)); a kernel built with `timer-tail-billed`, which keeps
 the old billing, fails that check in a recorded negative run. A kernel built with
 `alloc-first-fit`, which takes each frame by the first-fit scan of RAM the bitmap replaced,

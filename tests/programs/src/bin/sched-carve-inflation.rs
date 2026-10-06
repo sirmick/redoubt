@@ -1,6 +1,9 @@
 //! Carving moves share, never duplicates it (stride weight is free weight; kernel/scheduling.md,
 //! "Running while carved down"): U (weight 200) spins and carves C (100), which spins too,
-//! against a victim V of weight 200; then a nested chain. U's subtree gets at most half. And the
+//! against a victim V of weight 200; then a nested chain. U's subtree gets at most half: the
+//! victim's count over all the phase's counts (R12's relative claim) is at least half, and its
+//! count over what the window would give one loop alone is printed beside, as the useful work the
+//! kernel's per-slice time leaves. And the
 //! refusals: a carve that would leave a budget holding a process with no free weight, and a
 //! process in a budget whose weight is all carved (R7).
 
@@ -31,8 +34,17 @@ pub extern "C" fn _start() -> ! {
         let vi = b.start(v, Role::Spin, &[], &[]);
         let (start, end) = b.go(50_000, WINDOW);
         let counts = b.collect(depth + 2);
-        let vs = b.share(counts[vi], end - start);
-        b.check(vs + TOL >= 500, format_args!("a chain of {} carves: the victim got {} of 1000", depth, vs));
+        let all: u64 = counts[vi - depth - 1..=vi].iter().sum();
+        let vs = counts[vi] * 1000 / all.max(1);
+        b.check(
+            vs + TOL >= 500,
+            format_args!("a chain of {} carves: the victim got {} of 1000 of all counts", depth, vs),
+        );
+        b.note(format_args!(
+            "a chain of {} carves: useful work, the victim {} of 1000 of the window",
+            depth,
+            b.share(counts[vi], end - start)
+        ));
         rd::destroy(u).unwrap();
         rd::destroy(v).unwrap();
     }

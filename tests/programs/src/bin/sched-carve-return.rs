@@ -1,5 +1,5 @@
 //! The lead follows the weight (kernel/scheduling.md, "The lead follows the weight"): U (weight
-//! 1000) carves 999 away to an empty child, runs on the 1 it kept until 9 ms into its slice, and
+//! 1000) carves 999 away to an empty child, runs on the 1 it kept until 9/10 into its slice, and
 //! destroys the child, so its weight comes back. What it ran is restated at the restored weight,
 //! so from then on it gets its half against an equal victim V. Kept at weight 1, its lead would
 //! hold it off the CPU for seconds. U sleeps first, so that the carve begins a slice and the
@@ -8,6 +8,8 @@
 
 #![no_std]
 #![no_main]
+
+use core::fmt::Write;
 
 use test_programs::rd;
 use test_programs::sched::{Bench, Role, join};
@@ -24,10 +26,13 @@ pub extern "C" fn _start() -> ! {
     let ui = b.start(u, Role::CarveSpin, &[999], &[u]);
     let vi = b.start(v, Role::Spin, &[], &[]);
     let (start, end) = b.go(50_000, WINDOW);
-    // U reports when its carve returned, then its count; V its count.
-    let w = b.collect_words(3);
-    let returned = join(w[ui][0][0], w[ui][0][1]);
-    let (uc, vc) = (join(w[ui][1][0], w[ui][1][1]), join(w[vi][0][0], w[vi][0][1]));
+    // U reports create and return offsets (µs from its wake), absolute return, then count.
+    let w = b.collect_words(5);
+    let (create_us, return_us) = (join(w[ui][0][0], w[ui][0][1]), join(w[ui][1][0], w[ui][1][1]));
+    let returned = join(w[ui][2][0], w[ui][2][1]);
+    let (uc, vc) = (join(w[ui][3][0], w[ui][3][1]), join(w[vi][0][0], w[vi][0][1]));
+    b.check(create_us > 0 && return_us >= create_us, format_args!("the create and return were measured"));
+    let _ = writeln!(test_programs::console::Console, "CARVE-OBS {create_us} {return_us} {returned}");
     // U's share from its carve's return; the post-check judges it net of the checked build's
     // audits inside that window, which a release build does not run.
     let us = b.judged_share("u-after-return", uc, (returned, end), (500 - TOL, 1000));

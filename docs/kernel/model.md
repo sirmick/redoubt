@@ -25,7 +25,7 @@ Status: built · partly tested: independence from the kernel's source and the em
   `[dependencies]` table is empty: it links no kernel crate, not `redoubt-sys`, nothing from
   crates.io. It states its constants itself, with the kernel's names and values: `WORDS` (4),
   `MAX_MSG_HANDLES` (4), `MAX_HANDLES` (4096), `MAX_LEND_PAGES` (16), `MAX_THREADS` (255),
-  `WAIT_CAP` (32), `MAX_OPEN_CALLS` (256), `SLICE` (10,000 µs), `STRIDE` (2^20). Two crates
+  `WAIT_CAP` (32), `MAX_OPEN_CALLS` (256), `SLICE` (1,000 µs), `STRIDE` (2^20). Two crates
   use the model, each as a dev-dependency: `redoubt-stride`, for its differential test
   ([below](#where-the-model-meets-the-kernels-code)), and the test bench, whose scheduling
   oracle must reject traces from the model's scheduler with its tie rules broken.

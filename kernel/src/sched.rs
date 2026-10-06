@@ -57,8 +57,10 @@ use crate::handle::BudgetRef;
 use crate::mem::MemoryManager;
 use crate::ptable::{ArchProcess, ProcessTable};
 
-/// Time slice, in microseconds (kernel/timer.md, "The hart timer").
-pub const SLICE_US: u64 = 10_000;
+/// Time slice, in microseconds (kernel/timer.md, "The hart timer"). The test-only `slice-10ms`
+/// keeps the old 10 ms, for the cluster's known-bad control (kernel/scheduling.md,
+/// "Responsiveness").
+pub const SLICE_US: u64 = if cfg!(feature = "slice-10ms") { 10_000 } else { 1_000 };
 
 struct Sched {
     /// The queue, the budget whose runtime is accruing (on the CPU, or in the kernel on its

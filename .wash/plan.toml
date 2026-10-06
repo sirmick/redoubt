@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 166
+revision = 168
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -794,8 +794,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["IPC3"]
   body = "Brief: .wash/local/K19-implementer.md. Tier A, size M+, needs IPC3 merged (start from main). Part A, pumps at the boundary: no delivery inside a destruction; pumps become entries on a bounded to-pump list of endpoints, drained once after step 9 and before the bill; the five dying/doomed checks deleted or made checked-build assertions; commit 1 is a model trace of the mid-kill delivery, and the model's destroy pumps last; R10 step 4 tightens to \"from the mark on, no message stamped with a dying budget is delivered\" with a new model mutation (no R4b doomed mutation exists to retire: say so). Part B, per-budget chains of process objects (charged: the creator's owner chain; counted: a chain keyed on counted_in) so destroy_subtree's kill, step 3's frees and step 8's migration follow the dying subtree. Done when worst-walk's R10 p99 at full fill is within 30 ms net on both widths, its must_fail and docs/todo/destruction-walks-every-process.md gone, the residual bullets rewritten. Short gate plus the R10/R4b case lists and worst-walk by name. IPC3 already removed fail_all's rescan."
-  state = "active"
-  revision = 158
+  state = "reported"
+  revision = 167
 
 [[node]]
   id = "AIO1"
@@ -813,8 +813,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K22", "ASID1"]
   body = "Go-boundary host fix fe3ae211 at HEAD7b23f5283 passed red dd2a73b1, guest unchanged. Corrected archived replay stops sample0: conservative L920616<release920644; clock bracket cannot prove real deadline early/inside. Independently E-gross audit interval starts27us before release, so timestamp witness alone cannot qualify archive. .wash/local/SCHED1-sample0-clock-ruling.md. Architect3382d196 preparing complete prospective time/window/measurement construction, including raw-counter go vs reported time_now mismatch; no clamp, dropped samples, margin tuning or silent gate changes. Source/machine held. All200 exact waits/fences/category/debt/latency gates, same candidate/control, old10ms qualification/failure, both widths and final costs/sweeps/fullTierA/docs/scheduler-only replay/review/merge remain. QA IPC3-wake-latency blocking; IPC3 follows accepted scheduler."
-  state = "reported"
-  revision = 140
+  state = "done"
+  revision = 168
 
 [[node]]
   id = "BEAM7"

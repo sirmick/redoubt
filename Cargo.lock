@@ -1191,6 +1191,7 @@ dependencies = [
  "redoubt-model",
  "redoubt-rt",
  "redoubt-signing",
+ "redoubt-stride",
  "redoubt-sys",
  "redoubt-verity",
  "regex",

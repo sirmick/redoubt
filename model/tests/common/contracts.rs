@@ -453,23 +453,23 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
         w.op(Op::Sys {
             pid: pb,
             tid: tb,
-            call: Syscall::Receive { h: None, timeout: 5_000, max_transfer: 0 },
+            call: Syscall::Receive { h: None, timeout: 500, max_transfer: 0 },
         })?;
         w.sys(1, Syscall::Receive { h: None, timeout: FOREVER, max_transfer: 0 })?;
-        w.op(Op::Tick { dt: 1_000 })?;
+        w.op(Op::Tick { dt: 100 })?;
         expect(w.k.sched.current.is_some_and(|c| c.thread == (pa, ta)), "the spinner runs")?;
-        let s = w.op(Op::Tick { dt: 4_500 })?;
+        let s = w.op(Op::Tick { dt: 450 })?;
         expect(
             s.wakes.iter().any(|x| x.tid == tb && x.result == Err(Error::Timeout)),
             "the sleeper timed out",
         )?;
-        expect(w.k.now == now + 5_500, "time")?;
+        expect(w.k.now == now + 550, "time")?;
         expect(
             w.k.sched.current.is_some_and(|c| c.thread == (pa, ta)),
             "a timeout wake preempted the running thread",
         )?;
         // At its slice end the woken sleeper, ranked ahead of the spinner (wake-first), runs.
-        w.op(Op::Tick { dt: 4_500 })?;
+        w.op(Op::Tick { dt: 450 })?;
         w.op(Op::Tick { dt: 1 })?;
         expect(w.k.sched.current.is_some_and(|c| c.thread == (pb, tb)), "the woken sleeper runs next")?;
     }
