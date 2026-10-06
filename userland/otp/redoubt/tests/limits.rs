@@ -82,7 +82,7 @@ fn run_limits(function: &'static str, budget_pages: u64) -> (u32, String) {
     let session = f.run(pid, move || {
         let startup = fixture::startup(&block);
         let threads = Box::new(HostThreads { pid });
-        run(&startup, threads, Box::new(Dirs(vec![fixtures])), "limits", function, Some(budget_pages))
+        run(&startup, threads, Box::new(Dirs(vec![fixtures])), "limits", function, Some(budget_pages), None)
     });
     let code = session.join().unwrap();
     f.destroy(console.pid, console.endpoint);
