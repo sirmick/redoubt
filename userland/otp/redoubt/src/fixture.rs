@@ -1,6 +1,6 @@
 //! Running the platform on a host, on the fake kernel (`redoubt-fake-kernel`): a console server
-//! for it to reach, a session process to run it in, and the host's ways to start its threads and
-//! find its modules. Host only (the `fake` feature); nothing here runs on the machine.
+//! for it to reach, a session process to run it in, and the host's way to find its modules. Host
+//! only (the `fake` feature); nothing here runs on the machine.
 //!
 //! **The console server is a fixture, not `consoled`.** `consoled` drives an ns16550, and the
 //! fake kernel's device is a page of plain memory: nothing clears "data ready" when a byte is
@@ -15,27 +15,24 @@ use std::collections::VecDeque;
 use std::io::{Read as _, Write};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::{Caller, Event, Request};
+use redoubt_rt::ipc::{Caller, Request};
 use redoubt_rt::server::Limits;
 use redoubt_rt::server::ninep::{
-    FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, mode, refuse, refuse_malformed,
+    Around, FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, mode, refuse, refuse_malformed,
 };
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::startup::{Startup, StartupBuilder};
 
-use crate::{Modules, Threads, Unloaded};
+use crate::{Modules, Unloaded};
 
-/// The badge the input thread's messages come with, as `consoled`'s interrupt thread's do.
+/// The badge of the input thread's wake-ups, as `consoled`'s interrupt thread's are.
 const INPUT: u64 = 1;
-/// Word 0 of an input message: bytes follow (word 1 their count, words 2 and 3 them).
-const BYTES: u64 = 1;
-/// Word 0 of an input message: the input has ended.
-const END: u64 = 2;
 
 /// A console server running as a fake process.
 pub struct ConsoleServer {
@@ -65,19 +62,6 @@ pub fn session(console: &ConsoleServer) -> (usize, Vec<u8>) {
     (pid, block)
 }
 
-/// Threads on a host: host threads that the fake kernel counts as process `pid`.
-pub struct HostThreads {
-    pub pid: usize,
-}
-
-impl Threads for HostThreads {
-    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>) -> Result<(), redoubt_client::Error> {
-        let pid = self.pid;
-        std::thread::spawn(move || fake().as_process(pid, body));
-        Ok(())
-    }
-}
-
 /// Modules from host directories, the first that has a file of the name, as beamlet's `-pa`.
 pub struct Dirs(pub Vec<PathBuf>);
 
@@ -95,11 +79,26 @@ impl Modules for Dirs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Cons;
 
-/// The console: what was typed and nobody has read yet, and the screen.
-struct Stream {
-    input: VecDeque<u8>,
+/// What was typed and nobody has read yet, and whether the typing has ended: the device's
+/// buffer, filled by the input thread.
+#[derive(Default)]
+struct Input {
+    bytes: VecDeque<u8>,
     ended: bool,
+}
+
+/// The console: its input, shared with the input thread, and the screen.
+struct Stream {
+    input: Arc<Mutex<Input>>,
     output: Box<dyn Write + Send>,
+}
+
+impl Stream {
+    /// Whether a parked read can be answered: there is input, or its end.
+    fn has_input(&self) -> bool {
+        let input = self.input.lock().expect("the input");
+        !input.bytes.is_empty() || input.ended
+    }
 }
 
 fn qid() -> Qid { Qid { kind: 0, version: 0, path: 0 } }
@@ -129,11 +128,12 @@ impl FileServer for Stream {
         if out.is_empty() {
             return Ok(Read::Done(0));
         }
-        if self.input.is_empty() {
-            return Ok(if self.ended { Read::Done(0) } else { Read::Wait });
+        let mut input = self.input.lock().expect("the input");
+        if input.bytes.is_empty() {
+            return Ok(if input.ended { Read::Done(0) } else { Read::Wait });
         }
-        let n = out.len().min(self.input.len());
-        for (slot, byte) in out[..n].iter_mut().zip(self.input.drain(..n)) {
+        let n = out.len().min(input.bytes.len());
+        for (slot, byte) in out[..n].iter_mut().zip(input.bytes.drain(..n)) {
             *slot = byte;
         }
         Ok(Read::Done(n))
@@ -153,8 +153,9 @@ impl FileServer for Stream {
     }
 }
 
-/// Serves `/dev/cons` on `endpoint` until the endpoint is destroyed, as `consoled` does, with
-/// an input thread in place of its interrupt thread.
+/// Serves `/dev/cons` on `endpoint` until the endpoint is destroyed, as `consoled` does: calls
+/// and multiplexed sessions on the skeleton's loop, with an input thread in place of its interrupt
+/// thread.
 fn serve(
     endpoint: Handle,
     pid: usize,
@@ -162,65 +163,35 @@ fn serve(
     output: Box<dyn Write + Send>,
 ) -> u32 {
     let endpoint = Endpoint::from_handle(endpoint);
-    let limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4, requests: 0, pages: 0 };
+    // `consoled`'s shares: a page a badge for writes, and requests to spare for a parked read.
+    let limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4, requests: 80, pages: 2 };
     let random = redoubt_rt::handle::random_u64().unwrap_or(1);
-    let stream = Stream { input: VecDeque::new(), ended: false, output };
+    let typed = Arc::new(Mutex::new(Input::default()));
+    let stream = Stream { input: Arc::clone(&typed), output };
     let Ok(mut server) = NineServer::new(stream, limits, random) else { return 1 };
-    let mut parked: Parked<()> = Parked::new(FOREVER);
+    // A console read waits on a person, so it has no deadline.
+    server.requests_wait(FOREVER);
     let Ok(wake) = endpoint.mint(NonZeroU64::new(INPUT).expect("non-zero"), None) else { return 2 };
-    std::thread::spawn(move || fake().as_process(pid, move || feed(input, &wake)));
-    loop {
-        let now = redoubt_rt::handle::time_now().unwrap_or(0);
-        wake_readers(&mut server, &mut parked, now);
-        match endpoint.receive(FOREVER, 0) {
-            Ok(Event::Call(request)) => {
-                let _ = serve_or_park(&mut server, &mut parked, request, now);
-            }
-            Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice().iter().flatten() {
-                    let _ = redoubt_rt::handle::close(*handle);
-                }
-                if delivery.caller.badge == INPUT {
-                    let w = delivery.words;
-                    match w[0] {
-                        BYTES => {
-                            let mut bytes = [0u8; 16];
-                            bytes[..8].copy_from_slice(&w[2].to_le_bytes());
-                            bytes[8..].copy_from_slice(&w[3].to_le_bytes());
-                            server.fs.input.extend(&bytes[..(w[1] as usize).min(16)]);
-                        }
-                        END => server.fs.ended = true,
-                        _ => {}
-                    }
-                }
-            }
-            Ok(Event::Abandoned(id)) => {
-                parked.abandoned(server.admission_mut(), id, &WORDS_9P);
-            }
-            Ok(Event::Interrupt | Event::Exit(_)) => {}
-            Err(Error::Dead) => return redoubt_rt::exit::OK,
-            Err(_) => return 3,
-        }
-    }
+    std::thread::spawn(move || fake().as_process(pid, move || feed(input, &typed, &wake)));
+    server.run_around(&endpoint, Readers(Parked::new(FOREVER)))
 }
 
-/// The input thread: reads the device, and sends what it reads to the serving thread, then the end.
-fn feed(mut input: Box<dyn std::io::Read + Send>, to: &Endpoint) {
+/// The input thread: reads the device into the console's input, waking the server after each
+/// read, then marks the end.
+fn feed(mut input: Box<dyn std::io::Read + Send>, typed: &Mutex<Input>, wake: &Endpoint) {
     let mut buf = [0u8; 16];
     loop {
         let n = match input.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
-        let mut chunk = [0u8; 16];
-        chunk[..n].copy_from_slice(&buf[..n]);
-        let low = u64::from_le_bytes(chunk[..8].try_into().expect("8 bytes"));
-        let high = u64::from_le_bytes(chunk[8..].try_into().expect("8 bytes"));
-        if to.send(&[BYTES, n as u64, low, high], &[], None, FOREVER).is_err() {
+        typed.lock().expect("the input").bytes.extend(&buf[..n]);
+        if wake.send(&[0; 4], &[], None, FOREVER).is_err() {
             return;
         }
     }
-    let _ = to.send(&[END, 0, 0, 0], &[], None, FOREVER);
+    typed.lock().expect("the input").ended = true;
+    let _ = wake.send(&[0; 4], &[], None, FOREVER);
 }
 
 fn serve_or_park(
@@ -238,12 +209,29 @@ fn serve_or_park(
     }
 }
 
-/// Answers the parked reads there is input for, or that the end of input answers.
-fn wake_readers(server: &mut NineServer<Stream>, parked: &mut Parked<()>, now: u64) {
-    while !server.fs.input.is_empty() || server.fs.ended {
-        let Some(call) = parked.resume_first(server.admission_mut(), |_| true) else { return };
-        let Ok((request, ())) = call else { continue };
-        let _ = serve_or_park(server, parked, request, now);
+/// The parked console reads beside the skeleton's loop, as `consoled`'s: an input thread's
+/// wake-up is a send the skeleton drops, and the turn after it answers what the input satisfies.
+struct Readers(Parked<()>);
+
+impl Around<Stream> for Readers {
+    fn call(&mut self, server: &mut NineServer<Stream>, request: Request, now: u64) {
+        let _ = serve_or_park(server, &mut self.0, request, now);
+    }
+
+    /// Answers the parked calls the input satisfies, then the multiplexed reads waiting for it.
+    fn turn(&mut self, server: &mut NineServer<Stream>, now: u64) {
+        while server.fs.has_input() {
+            let Some(call) = self.0.resume_first(server.admission_mut(), |_| true) else { break };
+            let Ok((request, ())) = call else { continue };
+            let _ = serve_or_park(server, &mut self.0, request, now);
+        }
+        if server.fs.has_input() {
+            server.wake(now);
+        }
+    }
+
+    fn abandoned(&mut self, server: &mut NineServer<Stream>, id: NonZeroU64) {
+        self.0.abandoned(server.admission_mut(), id, &WORDS_9P);
     }
 }
 

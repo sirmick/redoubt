@@ -29,7 +29,7 @@ use alloc::vec::Vec;
 
 use beamlet_redoubt::pack::{self, Pack};
 use beamlet_redoubt::userland::{Disk, Files, Unread, unread};
-use beamlet_redoubt::{Modules, Threads, Unloaded};
+use beamlet_redoubt::{Modules, Unloaded};
 use redoubt_client::console::Console;
 use redoubt_client::file::Connection;
 use redoubt_client::ns::Namespace;
@@ -47,12 +47,6 @@ const USAGE: u32 = 2;
 /// The exit code for a missing or malformed `budget_pages=N`, before the VM starts: without it
 /// the VM's limits would be its defaults, far above any budget; or for no `endpoint=NAME`.
 const BAD_ARGS: u32 = 4;
-/// The pages of each thread's stack. The reader thread, the only one, reached 2,832 bytes on rv64
-/// and 2,240 on rv32 in beamlet-console, and 5,600 and 4,720 when made to panic at the bottom of
-/// its read, the system call, so that the panic's report ran on it too (measured by filling its
-/// stack with a pattern); 16 KiB is near three times the deepest, and the stack has no guard page
-/// below it.
-const STACK_PAGES: usize = 4;
 /// The argument naming the handle the userland volume is reached by.
 const ENDPOINT: &str = "endpoint=";
 /// The pages of each lend a file is read through: what one read asks for.
@@ -140,15 +134,7 @@ fn start(startup: &Startup) -> u32 {
     #[cfg(feature = "boot-stats")]
     say(startup, &format!("beamlet: {module} read from {from}{}", beamlet_redoubt::stamp()));
     let report_memory = report_memory.then_some(heap_pages as beamlet_vm::memory::HeapPages);
-    beamlet_redoubt::run(
-        startup,
-        Box::new(Machine),
-        Box::new(modules),
-        module,
-        function,
-        Some(budget_pages),
-        report_memory,
-    )
+    beamlet_redoubt::run(startup, Box::new(modules), module, function, Some(budget_pages), report_memory)
 }
 
 /// The runtime heap's pages, held now and at its peak.
@@ -179,16 +165,6 @@ fn say(startup: &Startup, line: &str) {
     };
     if let Ok(console) = open() {
         beamlet_redoubt::say(&console, line);
-    }
-}
-
-/// Threads on the machine: the runtime's.
-struct Machine;
-
-impl Threads for Machine {
-    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>) -> Result<(), Error> {
-        redoubt_rt::thread::spawn(body, STACK_PAGES)?;
-        Ok(())
     }
 }
 

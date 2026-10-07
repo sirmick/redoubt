@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use beamlet_redoubt::Redoubt;
-use beamlet_redoubt::fixture::{self, HostThreads};
+use beamlet_redoubt::fixture;
 use beamlet_redoubt::userland::{Disk, Files, Unread};
 use beamlet_vm::platform::{Lookup, Platform};
 use redoubt_fake_kernel::fake;
@@ -63,7 +63,7 @@ fn with_platform(test: impl FnOnce(&mut Redoubt, &AtomicUsize) + Send + 'static)
     let (modules, reads) = source();
     let session = f.run(pid, move || {
         let startup = fixture::startup(&block);
-        let mut platform = Redoubt::new(&startup, Box::new(HostThreads { pid }), Box::new(modules)).unwrap();
+        let mut platform = Redoubt::new(&startup, Box::new(modules)).unwrap();
         test(&mut platform, &reads);
         0
     });

@@ -313,9 +313,11 @@ interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
-<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (7)</summary>
+<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (9)</summary>
 
 - host:beamlet-redoubt::writes_reach_the_screen
+- host:beamlet-redoubt::a_long_write_reaches_the_screen_whole_and_in_order
+- host:beamlet-redoubt::the_console_is_one_hub_connection_with_one_waiter
 - host:beamlet-redoubt::typing_reaches_the_vm_then_its_end
 - host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm
 - host:beamlet-redoubt::a_console_without_consol_has_no_size
@@ -327,14 +329,18 @@ interrupt key with it, from the driver.
 
 The first part of beamlet's platform on Redoubt, `beamlet-redoubt`
 ([`userland/otp/redoubt`](../../userland/otp/redoubt/src/lib.rs)), serves the console, the clock
-and randomness over the client library and the runtime's calls. `/dev/cons` is opened once. The
-VM's thread writes to it and asks its size; a reader thread of its own, with its own lend, reads
-it and hands what it read to the VM's thread as messages, so a read that waits never holds the
-VM's thread. After the console's end, `idle` still sleeps until its deadline. There is no wall
-clock, so `system_time_us` is `None`. `./shell --fake` runs the shell on it.
-- **Writes are still the VM's own calls.** A console that stops answering a write or a size query
-  stops the VM, until those calls move to the I/O threads
-  ([asynchronous underneath](#asynchronous-underneath-synchronous-on-top)).
+and randomness over the client library and the runtime's calls. `/dev/cons` is opened once, and
+its reads and writes go through the VM's hub
+([asynchronous underneath](#asynchronous-underneath-synchronous-on-top)): one read is out at a
+time, held by the server until there is typing, and one write, a page at most, with what the VM
+wrote after it waiting in order behind it, since the console's share is a page a badge. So
+neither a read that waits nor a slow console holds the VM's thread, until 64 KiB wait unwritten,
+when a write waits in place as one to a slow terminal does. When the VM ends, what it wrote
+reaches the console before its last line, waiting at most 2 s. After the console's end, `idle`
+still sleeps until its deadline. There is no wall clock, so `system_time_us` is `None`.
+`./shell --fake` runs the shell on it.
+- **The size is still the VM's own call.** It is a typed call, which no hub carries, so a console
+  that stops answering a size query stops the VM.
 - **Randomness is the kernel's.** On the fake kernel it is seeded from the host for a person's
   run, and fixed for a test's, so a test repeats. On the machine it is the kernel's own.
 
@@ -531,42 +537,49 @@ over cells; widgets, layout and focus are Elixir ([the shell](shell.md#full-scre
 
 ### Asynchronous underneath, synchronous on top
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the console runs on it, on the host and in a boot; files over it are planned ([files](files.md#files-over-9p)) · tested (3)</summary>
+
+- host:beamlet-redoubt::the_console_is_one_hub_connection_with_one_waiter
+- host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm
+- bench:beamlet-console
+
+</details>
 
 The VM is one trust domain on a few scheduler threads, so a blocking call would stop every Erlang
-process on that thread. So every native call is asynchronous: the VM submits it and keeps
-running, and the completion arrives later as a message to the Erlang process that asked;
-`Platform::idle` returns on a timer deadline or a completion. The kernel has no queued sends (a
-message occupies its sender's thread until taken: [IPC](../kernel/ipc.md)), so on Redoubt the
-asynchrony comes from a small pool of I/O threads in the VM's process, each making one blocking
-`call`.
+process on that thread. So the VM's I/O is asynchronous underneath: a request is submitted and
+the VM keeps running, its answer comes back later to whoever asked, and `Platform::idle` returns
+on a timer deadline or an answer. The kernel has no queued sends (a message occupies its sender's
+thread until taken: [IPC](../kernel/ipc.md)), so on Redoubt the asynchrony is the client
+library's hub ([native programs](native.md#many-requests-at-once)) over the servers' multiplexed
+connections ([the serving library](../servers/serving.md#multiplexed-connections)),
+in `beamlet-redoubt` ([`userland/otp/redoubt/src/io.rs`](../../userland/otp/redoubt/src/io.rs)):
+- **One hub per VM**, owned by the platform and run by whichever scheduler holds it. A request is
+  sent from the scheduler's own thread, waiting at most 1 ms for its server to take it, and its
+  buffer is the hub's until its answer.
+- **One waiter thread per connection**, started the first time the VM uses the connection, blocked
+  in its completion call; it hands each batch of answers to the VM's own endpoint with one send.
+- **`idle` is a `receive`** on that endpoint until the next timer deadline, and the platform hands
+  each answer to whoever asked: the console's to its reader, a file's to the Erlang process whose
+  call it was.
 
-Above that, Elixir is ordinary synchronous code: `File.read/1` blocks the calling Erlang process
-in `receive`, not the scheduler. Concurrency is bounded by the pool and by each server's
-admission limits per (account, label set); at the limit a call waits its turn
-([the serving library](../servers/serving.md)).
+Above that, Elixir is ordinary synchronous code: `File.read/1` blocks the calling Erlang process,
+not the scheduler. Concurrency is bounded by each server's shares of requests and pages per
+connection ([R77 (multiplexed requests)](../servers/serving.md#r77-multiplexed-requests)); over
+them, a request is answered `busy` and asked again.
 
-A call that waits holds its thread for as long as it waits, and a process has at most 255 threads
-([processes](../kernel/processes.md)). Most calls are short, but some wait on a person or a peer
-for as long as nothing happens: the console read, the parked `resize`, a read on a TCP
-connection's data file, a `serve` loop, a job's exit notice. A read on `/dev/cons` and a read on a
-file are the same 9P message, so what makes a call a waiting one is where it goes, never its
-message: the console, a `/net` connection's data file, a served endpoint and an exit notice wait;
-every other call is short.
+**Threads.** A process has at most 255 threads ([processes](../kernel/processes.md)). The VM's are
+its schedulers (one until several harts) and its waiters, one per connection it uses, at most 8:
+a session's bindings (`bootfsd`, the home volume, a labelled volume, `ipd`, the console, the system
+volume) and a few binds. No call holds a thread while it waits: a console read, a file read and a
+read on a `/net` connection's data file are each one request on the hub, so what a person or a
+peer takes to answer costs nothing but the request. Every 9P server in the image serves
+multiplexed sessions, so no call needs a thread of its own. A typed call, which no hub carries,
+is made on the scheduler's thread: the console's `size` is the one the VM makes, and a console
+that stops answering it stops the VM. The serving natives and a job's exit notice are
+[launching's](#natives) (planned).
 
-So the threads are split. Two run the schedulers. Four take short calls, which never queue behind
-a waiting one, and each short call has a timeout, so a hung server costs its caller an error, not
-the session its short calls. Three are reserved for the session's own waiting calls (the console
-read, the parked `resize`, and the loop that serves the session's pipes), so no user code can take
-them. The rest, 246, take user code's waiting calls, one each. A waiting call past that is
-refused (`system_limit`), not queued, so a session with too many open sockets learns it at once.
-A job's exit notice takes its thread when the job is launched, before `process_create`, and a
-launch with none free is refused, so no job ever runs with nobody waiting to reap it. Each
-server's admission limits are separate: a call a server has not admitted yet waits its turn there
-([the serving library](../servers/serving.md)).
-
-**Open:** whether one thread should one day wait on several endpoints at once, which is kernel
-work ([IPC](../kernel/ipc.md)).
+Residual: each connection costs its waiter thread, since a thread waits on one endpoint at a time;
+one thread waiting on several at once would be kernel work ([IPC](../kernel/ipc.md)).
 
 ## Why
 

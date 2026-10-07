@@ -1,26 +1,24 @@
 //! beamlet's `Platform` on Redoubt (docs/userland/beamlet.md, "beamlet on Redoubt"): the VM's
 //! one boundary, answered by the client library (`redoubt-client`) and the runtime's kernel calls.
 //!
-//! This first part serves the console, the clock and randomness; the module source is the
-//! embedder's ([`Modules`]): the userland volume's files on the machine, read through a verified
-//! volume ([`userland`]), directories on a host; there are no files and no programs
-//! yet. What it proves is the shape the rest will take: a call that waits, here a console read,
-//! is made by a thread of its own, never by the thread the VM runs on, and its result reaches the
-//! VM as a message, which [`Platform::idle`] waits for (beamlet.md,
-//! "Asynchronous underneath, synchronous on top"). The VM's thread never waits for input. It does
-//! write to the console and ask its size itself, calls a live console answers at once; a console
-//! that stops answering them stops the VM until those calls move to the I/O threads.
+//! It serves the console, the clock and randomness; the module source is the embedder's
+//! ([`Modules`]): the userland volume's files on the machine, read through a verified volume
+//! ([`userland`]), directories on a host; there are no programs yet. Its I/O is asynchronous
+//! underneath ([`io`]; beamlet.md, "Asynchronous underneath, synchronous on top"): a request goes
+//! through the client library's hub from the VM's own thread without waiting for its answer, a
+//! waiter thread per connection collects the answers, and [`Platform::idle`] is where the VM
+//! waits for them. The VM's thread waits for no server but in `idle`; the console's size, a typed
+//! call no hub carries, is the one call it still makes itself, which a live console answers at once.
 //!
-//! - **The console** is `/dev/cons` in the process's namespace, opened once. The VM's thread writes to it and
-//!   asks its size; a reader thread, with its own lend, reads it, and sends what it read to the VM's thread,
-//!   eight bytes to a message, on an endpoint of the VM's own, then its end. The two threads share the open
-//!   file and nothing else: a second open would take more fids than `consoled` allows one session.
+//! - **The console** is `/dev/cons` in the process's namespace, opened once. One read is out on the hub at a
+//!   time, parked by the server until there is typing, and one write: the bytes the VM writes wait here, in
+//!   order, for the write before them, since the console's share is a page a badge and a write is a page.
 //! - **Time** is the kernel's microseconds since boot, and `system_time_us` is `None`: there is no wall clock
 //!   until M5 (persist, install, share) brings one. **Randomness** is the kernel's.
 //!
-//! The same code runs on the machine and, on a host, on the fake kernel: only how a thread is
-//! started and where modules come from differ ([`Threads`], [`Modules`]). [`run`] is the program
-//! both run: the machine's `beamlet` and the host's `fake-redoubt`.
+//! The same code runs on the machine and, on a host, on the fake kernel: only where modules come
+//! from differs ([`Modules`]). [`run`] is the program both run: the machine's `beamlet` and the
+//! host's `fake-redoubt`.
 
 #![cfg_attr(not(feature = "fake"), no_std)]
 #![forbid(unsafe_code)]
@@ -29,6 +27,7 @@ extern crate alloc;
 
 #[cfg(feature = "fake")]
 pub mod fixture;
+pub mod io;
 pub mod pack;
 pub mod userland;
 
@@ -37,31 +36,24 @@ use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::num::NonZeroU64;
 
 use beamlet_vm::bif::NativeSpec;
 use beamlet_vm::memory::HeapPages;
 use beamlet_vm::platform::{ConsoleInput, Lookup, Platform, PlatformError};
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
+use redoubt_client::aio::{Conn, Done, MAX_WRITE, Outcome};
 use redoubt_client::console::Console;
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend};
 use redoubt_rt::abi::{FOREVER, PAGE_SIZE};
-use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::{Delivery, Event};
+use redoubt_rt::ipc::Buffer;
 use redoubt_rt::startup::Startup;
 
-/// Starting a thread that runs as this process: on the machine, the runtime's `thread::spawn`;
-/// on a host, a host thread the fake kernel counts as this process. `Send`, as the platform is:
-/// the VM's schedulers may share it.
-pub trait Threads: Send {
-    /// Runs `body` on a new thread; if none can be started, `body` is dropped unrun.
-    fn spawn(&self, body: Box<dyn FnOnce() + Send + 'static>) -> Result<(), Error>;
-}
+use crate::io::Io;
 
 /// Where the VM's modules and applications come from, by file name (`lists.beam`, `kernel.app`).
-/// `Send`, as [`Threads`] is.
+/// `Send`, as the platform is: the VM's schedulers may share it.
 pub trait Modules: Send {
     fn load(&mut self, file: &str) -> Result<Vec<u8>, Unloaded>;
 
@@ -80,32 +72,128 @@ pub enum Unloaded {
     Refused(&'static str),
 }
 
-/// The badge the reader thread's messages come with: the VM thread's own mint off its endpoint.
-const READER: u64 = 1;
-/// Word 0 of a message from the reader: bytes follow (word 1 their count, words 2 and 3 them, four
-/// each: a word is 32 bits on rv32, and the kernel refuses a wider one).
-const BYTES: u64 = 1;
-/// Word 0 of a message from the reader: the console has no more input.
-const END: u64 = 2;
-/// The most bytes one message holds.
-const CHUNK: usize = 8;
+/// The most bytes the VM may have written that the console has not yet taken: past it, a write
+/// waits for the console in place, as a write to a slow terminal does.
+const MAX_OUTPUT: usize = 64 * 1024;
+/// How long the platform's end waits for the console to take what is still to write (µs).
+const FLUSH_US: u64 = 2_000_000;
 
 /// The platform of one VM, on Redoubt.
 pub struct Redoubt {
     lend: Lend,
-    /// Shared with the reader thread, which reads while this thread writes.
+    /// The console's open file, for its size; its I/O goes through [`Redoubt::io`].
     console: Arc<Console>,
-    /// Where the reader thread's messages arrive.
-    inbox: Endpoint,
-    /// What the reader sent and the VM has not taken yet.
-    input: VecDeque<u8>,
-    reading: bool,
-    ended: bool,
-    threads: Box<dyn Threads>,
+    io: Io,
+    cons: ConsoleIo,
     modules: Box<dyn Modules>,
     /// What the lookups cost (`boot-stats`).
     #[cfg(feature = "boot-stats")]
     loads: Loads,
+}
+
+/// The console on the hub: at most one read out, parked by the server until there is typing, and at
+/// most one write out, with the bytes after it waiting here in order.
+struct ConsoleIo {
+    conn: Conn,
+    fid: u32,
+    /// The read out, by its tag; and a read's buffer while none is.
+    reading: Option<u16>,
+    read_buffer: Option<Buffer>,
+    /// What was read and the VM has not taken yet.
+    input: VecDeque<u8>,
+    /// Whether reading has begun, and whether the input has ended.
+    started: bool,
+    ended: bool,
+    /// The write out, by its tag; and a write's buffer while none is.
+    writing: Option<u16>,
+    write_buffer: Option<Buffer>,
+    /// What the VM wrote that the console has not taken, the write out's bytes first.
+    output: VecDeque<u8>,
+    /// The console took nothing, or has gone: nothing more is written.
+    gone: bool,
+}
+
+impl ConsoleIo {
+    /// Whether `done` is the console's, and if so takes it.
+    fn take(&mut self, io: &mut Io, done: Done) -> Option<Done> {
+        if done.conn != self.conn {
+            return Some(done);
+        }
+        if self.reading == Some(done.tag) {
+            self.reading = None;
+            match done.outcome {
+                Outcome::Read(0) => self.ended = true,
+                Outcome::Read(n) => {
+                    if let Some(buffer) = &done.buffer {
+                        self.input.extend(&buffer[..n.min(buffer.len())]);
+                    }
+                }
+                // Over the console's share for a moment: asked again below.
+                Outcome::Busy => {}
+                // Refused, flushed, or the console has gone: there is no more input.
+                _ => self.ended = true,
+            }
+            self.read_buffer = done.buffer;
+            self.read(io);
+        } else if self.writing == Some(done.tag) {
+            self.writing = None;
+            match done.outcome {
+                Outcome::Wrote(n) if n > 0 => drop(self.output.drain(..(n as usize).min(self.output.len()))),
+                Outcome::Busy => {}
+                // A console that takes nothing, or has gone, gets no more.
+                _ => self.stop_writing(),
+            }
+            self.write_buffer = done.buffer;
+            self.write(io);
+        }
+        None
+    }
+
+    /// Puts a read out, unless one is or the input has ended.
+    fn read(&mut self, io: &mut Io) {
+        if self.reading.is_some() || self.ended {
+            return;
+        }
+        let buffer = match self.read_buffer.take() {
+            Some(buffer) => Ok(buffer),
+            None => Buffer::new(1).map_err(Error::from),
+        };
+        match buffer.and_then(|buffer| io.hub().read(self.conn, self.fid, 0, buffer)) {
+            Ok(tag) => self.reading = Some(tag),
+            // With nothing to read into, or no way to ask, there is no input.
+            Err(_) => self.ended = true,
+        }
+    }
+
+    /// Puts the next write out, unless one is or there is nothing to write.
+    fn write(&mut self, io: &mut Io) {
+        if self.writing.is_some() || self.output.is_empty() || self.gone {
+            return;
+        }
+        let buffer = match self.write_buffer.take() {
+            Some(buffer) => Ok(buffer),
+            None => Buffer::new(1).map_err(Error::from),
+        };
+        let written = buffer.and_then(|mut buffer| {
+            let n = self.output.len().min(MAX_WRITE).min(buffer.len());
+            for (slot, byte) in buffer[..n].iter_mut().zip(self.output.iter()) {
+                *slot = *byte;
+            }
+            io.hub().write(self.conn, self.fid, 0, buffer, n)
+        });
+        match written {
+            Ok(tag) => self.writing = Some(tag),
+            Err(_) => self.stop_writing(),
+        }
+    }
+
+    fn stop_writing(&mut self) {
+        self.gone = true;
+        self.output.clear();
+    }
+
+    /// Whether anything written is still to reach the console.
+    fn writes_pending(&self) -> bool { !self.gone && (self.writing.is_some() || !self.output.is_empty()) }
 }
 
 /// What the VM's lookups cost, said at its first console read (`boot-stats`, test-only, for the
@@ -127,62 +215,61 @@ struct Loads {
 pub fn stamp() -> alloc::string::String { format!(" [t={}]", redoubt_rt::handle::time_now().unwrap_or(0)) }
 
 impl Redoubt {
-    /// The platform of a process started with `startup`, whose namespace holds `/dev/cons`.
-    pub fn new(
-        startup: &Startup,
-        threads: Box<dyn Threads>,
-        modules: Box<dyn Modules>,
-    ) -> Result<Redoubt, Error> {
+    /// The platform of a process started with `startup`, whose namespace holds `/dev/cons`, which
+    /// serves multiplexed sessions.
+    pub fn new(startup: &Startup, modules: Box<dyn Modules>) -> Result<Redoubt, Error> {
         let mut lend = Lend::new(1)?;
         let ns = Namespace::from_startup(startup, &mut lend)?;
         let console = Arc::new(Console::open(&ns, &mut lend)?);
-        let inbox = Endpoint::create()?;
+        let mut io = Io::new()?;
+        let conn = io.connect(console.file().connection())?;
+        let cons = ConsoleIo {
+            conn,
+            fid: console.file().fid(),
+            reading: None,
+            read_buffer: None,
+            input: VecDeque::new(),
+            started: false,
+            ended: false,
+            writing: None,
+            write_buffer: None,
+            output: VecDeque::new(),
+            gone: false,
+        };
         Ok(Redoubt {
             lend,
             console,
-            inbox,
-            input: VecDeque::new(),
-            reading: false,
-            ended: false,
-            threads,
+            io,
+            cons,
             modules,
             #[cfg(feature = "boot-stats")]
             loads: Loads { started: redoubt_rt::handle::time_now().unwrap_or(0), ..Loads::default() },
         })
     }
 
-    /// Starts the reader thread, the first time input is asked for. A `boot-stats` build says so,
+    /// The waiter threads started so far: one per connection the VM has used.
+    pub fn waiters(&self) -> usize { self.io.waiters() }
+
+    /// Starts reading the console, the first time input is asked for. A `boot-stats` build says so,
     /// with the time and what the lookups cost: for the shell, its prompt is drawn and waiting.
-    fn start_reader(&mut self) {
+    fn start_reading(&mut self) {
         #[cfg(feature = "boot-stats")]
         {
-            say(&self.console, &format!("beamlet: first console read{}", stamp()));
+            self.console_write(format!("beamlet: first console read{}\n", stamp()).as_bytes());
             let Loads { found, absent, refused, bytes, us, started } = self.loads;
             let since = redoubt_rt::handle::time_now().unwrap_or(0).saturating_sub(started);
             let packed = self.modules.packed();
-            say(
-                &self.console,
-                &format!(
+            self.console_write(
+                format!(
                     "beamlet: boot-stats: loads {} (found {found}, of them {packed} from the pack, absent {absent}, \
-                     refused {refused}), {bytes} bytes, {us} us in loads, {since} us since the platform started",
+                     refused {refused}), {bytes} bytes, {us} us in loads, {since} us since the platform started\n",
                     found + absent + refused
-                ),
+                )
+                .as_bytes(),
             );
         }
-        self.reading = true;
-        let console = Arc::clone(&self.console);
-        let to = NonZeroU64::new(READER)
-            .ok_or(redoubt_rt::abi::Error::InvalidArgument)
-            .and_then(|b| self.inbox.mint(b, None));
-        let Ok(to) = to else {
-            // With nowhere to send input, there is none.
-            self.ended = true;
-            return;
-        };
-        // With no thread to read it, there is no input either.
-        if self.threads.spawn(Box::new(move || read_console(&console, &to))).is_err() {
-            self.ended = true;
-        }
+        self.cons.started = true;
+        self.cons.read(&mut self.io);
     }
 
     /// `file` from the module source, for `name`: one the source refuses is said on the console,
@@ -205,38 +292,39 @@ impl Redoubt {
             Ok(bytes) => Lookup::Found(bytes),
             Err(Unloaded::Absent) => Lookup::Absent,
             Err(Unloaded::Refused(why)) => {
-                say(&self.console, &format!("beamlet: {name} not loaded: {why}"));
+                self.console_write(format!("beamlet: {name} not loaded: {why}\n").as_bytes());
                 Lookup::Refused
             }
         }
     }
 
-    /// Takes every message the reader has sent, without waiting.
-    fn take_waiting(&mut self) {
-        while let Ok(event) = self.inbox.receive(0, 0) {
-            self.take(event);
-        }
+    /// Takes what the hub has completed, without waiting.
+    fn take_completed(&mut self) {
+        self.io.take_waiting();
+        self.dispatch();
     }
 
-    fn take(&mut self, event: Event) {
-        let Event::Send(Delivery { caller, words, handles, .. }) = event else { return };
-        // Nothing the reader sends carries a handle; anything that came is closed.
-        for handle in handles.as_slice().iter().flatten() {
-            let _ = redoubt_rt::handle::close(*handle);
+    /// Hands each completion to whoever's request it was.
+    fn dispatch(&mut self) {
+        while let Some(done) = self.io.completed() {
+            // Nothing but the console asks yet: anything else is dropped, with its buffer.
+            let _ = self.cons.take(&mut self.io, done);
         }
-        if caller.badge != READER {
-            return;
-        }
-        match words[0] {
-            BYTES => {
-                let n = (words[1] as usize).min(CHUNK);
-                let mut bytes = [0u8; CHUNK];
-                bytes[..4].copy_from_slice(&(words[2] as u32).to_le_bytes());
-                bytes[4..].copy_from_slice(&(words[3] as u32).to_le_bytes());
-                self.input.extend(&bytes[..n]);
+    }
+}
+
+/// The platform's end: what the VM wrote reaches the console first, waiting for it at most
+/// [`FLUSH_US`], so the VM's last words are not lost to its exit.
+impl Drop for Redoubt {
+    fn drop(&mut self) {
+        let until = redoubt_rt::handle::time_now().unwrap_or(0).saturating_add(FLUSH_US);
+        while self.cons.writes_pending() {
+            let now = redoubt_rt::handle::time_now().unwrap_or(until);
+            if now >= until {
+                return;
             }
-            END => self.ended = true,
-            _ => {}
+            self.io.wait(until - now);
+            self.dispatch();
         }
     }
 }
@@ -254,35 +342,12 @@ fn write_all(console: &Console, lend: &mut Lend, bytes: &[u8]) {
 }
 
 /// Writes `line` and a newline to `console`, as best it can: a console that does not answer
-/// leaves nobody to tell. `beamlet` says with it why it exits, and `run` how the VM ended.
+/// leaves nobody to tell. `beamlet` says with it why it exits before there is a VM, and `run` how
+/// the VM ended, once the VM's own writes have reached it.
 pub fn say(console: &Console, line: &str) {
     if let Ok(mut lend) = Lend::new(1) {
         write_all(console, &mut lend, format!("{line}\n").as_bytes());
     }
-}
-
-/// The reader thread: reads the console until its input ends, and sends what it reads to `to`.
-fn read_console(console: &Console, to: &Endpoint) {
-    let read = || -> Result<(), Error> {
-        let mut lend = Lend::new(1)?;
-        let mut buf = [0u8; CHUNK];
-        loop {
-            let n = console.read(&mut lend, &mut buf)?;
-            if n == 0 {
-                return Ok(());
-            }
-            let mut chunk = [0u8; CHUNK];
-            chunk[..n].copy_from_slice(&buf[..n]);
-            let low = u32::from_le_bytes(chunk[..4].try_into().expect("4 bytes"));
-            let high = u32::from_le_bytes(chunk[4..].try_into().expect("4 bytes"));
-            // Waits until the VM's thread takes it: a VM that is busy slows the reader down.
-            to.send(&[BYTES, n as u64, u64::from(low), u64::from(high)], &[], None, FOREVER)
-                .map_err(|(e, _)| Error::from(e))?;
-        }
-    };
-    // Whatever ended the reading, the VM is told there is no more.
-    let _ = read();
-    let _ = to.send(&[END, 0, 0, 0], &[], None, FOREVER);
 }
 
 impl Platform for Redoubt {
@@ -291,38 +356,50 @@ impl Platform for Redoubt {
     /// No wall clock exists until time sync does, in M5 (persist, install, share).
     fn system_time_us(&mut self) -> Option<u64> { None }
 
+    /// Waits on the VM's own endpoint, where the waiters' wake-ups arrive, until a completion or
+    /// `deadline`. After the console's end a timer still wants its deadline: the wait then sleeps
+    /// until it, rather than returning at once and spinning.
     fn idle(&mut self, deadline: Option<u64>) {
-        self.take_waiting();
-        if !self.input.is_empty() {
+        self.take_completed();
+        if !self.cons.input.is_empty() {
             return;
         }
-        // After the console's end nothing more arrives, but a timer still wants its deadline: the
-        // wait below then sleeps until it, rather than returning at once and spinning.
         let timeout = match deadline {
             Some(deadline) => deadline.saturating_sub(self.monotonic_us()),
             // Nothing will arrive, so nothing would wake the VM: return, and it gives up.
-            None if !self.reading || self.ended => return,
+            None if !self.cons.started || self.cons.ended => return,
             None => FOREVER,
         };
-        if let Ok(event) = self.inbox.receive(timeout, 0) {
-            self.take(event);
-        }
+        self.io.wait(timeout);
+        self.dispatch();
     }
 
-    fn console_write(&mut self, bytes: &[u8]) { write_all(&self.console, &mut self.lend, bytes) }
+    /// Queues `bytes` behind what is already queued, and sends what the console will take; past
+    /// [`MAX_OUTPUT`] waiting, waits in place for the console to take some.
+    fn console_write(&mut self, bytes: &[u8]) {
+        if self.cons.gone {
+            return;
+        }
+        self.cons.output.extend(bytes);
+        self.cons.write(&mut self.io);
+        while self.cons.output.len() > MAX_OUTPUT && self.cons.writes_pending() {
+            self.io.wait(FOREVER);
+            self.dispatch();
+        }
+    }
 
     /// Asked afresh each time, never cached: the console's size can change.
     fn console_size(&mut self) -> Option<(u16, u16)> { self.console.size(&mut self.lend).ok().flatten() }
 
     fn console_read(&mut self) -> ConsoleInput {
-        if !self.reading {
-            self.start_reader();
+        if !self.cons.started {
+            self.start_reading();
         }
-        self.take_waiting();
-        if !self.input.is_empty() {
-            return ConsoleInput::Data(self.input.drain(..).collect());
+        self.take_completed();
+        if !self.cons.input.is_empty() {
+            return ConsoleInput::Data(self.cons.input.drain(..).collect());
         }
-        if self.ended { ConsoleInput::Eof } else { ConsoleInput::Nothing }
+        if self.cons.ended { ConsoleInput::Eof } else { ConsoleInput::Nothing }
     }
 
     fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError> {
@@ -383,7 +460,6 @@ pub fn limits(budget_pages: Option<u64>) -> Limits {
 /// `report_memory`, the VM prints its memory breakdown when it first waits for console input.
 pub fn run(
     startup: &Startup,
-    threads: Box<dyn Threads>,
     modules: Box<dyn Modules>,
     module: &str,
     function: &str,
@@ -391,36 +467,29 @@ pub fn run(
     report_memory: Option<HeapPages>,
 ) -> u32 {
     // Without a console there is nowhere to say why.
-    let Ok(platform) = Redoubt::new(startup, threads, modules) else { return 1 };
+    let Ok(platform) = Redoubt::new(startup, modules) else { return 1 };
     let console = Arc::clone(&platform.console);
     let natives: &'static [NativeSpec] =
         Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
     let mut vm =
         Vm::with_config(Box::new(platform), Config { natives, limits: limits(budget_pages), report_memory });
-    let first = match vm.spawn(module, function, |_| Vec::new()) {
-        Ok(pid) => pid,
-        Err(e) => {
-            say(&console, &format!("beamlet: {module}:{function} did not start: {:?} {}", e.class, e.reason));
-            return 1;
-        }
+    let (line, code) = match vm.spawn(module, function, |_| Vec::new()) {
+        Err(e) => (format!("beamlet: {module}:{function} did not start: {:?} {}", e.class, e.reason), 1),
+        Ok(first) => match vm.run(first) {
+            Ok(Ok(value)) => (format!("{value}"), 0),
+            Ok(Err(e)) => {
+                let class = match e.class {
+                    Class::Error => "error",
+                    Class::Exit => "exit",
+                    Class::Throw => "throw",
+                };
+                (format!("{{'EXCEPTION',{class},{}}}", e.reason), 0)
+            }
+            Err(e) => (format!("beamlet: {e:?}"), 1),
+        },
     };
-    match vm.run(first) {
-        Ok(Ok(value)) => {
-            say(&console, &format!("{value}"));
-            0
-        }
-        Ok(Err(e)) => {
-            let class = match e.class {
-                Class::Error => "error",
-                Class::Exit => "exit",
-                Class::Throw => "throw",
-            };
-            say(&console, &format!("{{'EXCEPTION',{class},{}}}", e.reason));
-            0
-        }
-        Err(e) => {
-            say(&console, &format!("beamlet: {e:?}"));
-            1
-        }
-    }
+    // The platform's end sends what the VM wrote first, so the line comes after it.
+    drop(vm);
+    say(&console, &line);
+    code
 }

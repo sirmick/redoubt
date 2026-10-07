@@ -18,7 +18,7 @@
                "audit,audit,2222222222222222222222222222222222222222222222222222222222222222",
                "buckets=4"] },
     { "name": "consoled", "program": "consoled",
-      "stack_pages": "5", "heap_pages": "18",
+      "stack_pages": "6", "heap_pages": "22",
       "budget": { "pages": "1024", "processes": 1, "weight": 1000 },
       "devices": [ { "device": "uart0", "as": "uart" } ],
       "receives": ["consoled"],
@@ -65,7 +65,7 @@
       "receives": ["erofsd:system"],
       "args": ["endpoint=erofsd:system", "buckets=4"] },
     { "name": "beamlet", "program": "beamlet",
-      "stack_pages": "17", "heap_pages": "10862",
+      "stack_pages": "18", "heap_pages": "10861",
       "budget": { "pages": "10880", "processes": 1, "weight": 100 },
       "handed": [ { "endpoint": "erofsd:system", "badge": "7" } ],
       "args": ["budget_pages=10880", "endpoint=erofsd:system", "Elixir.Redoubt.Shell"] }

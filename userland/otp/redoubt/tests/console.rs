@@ -1,12 +1,13 @@
-//! The platform's console, over the client library, against the fixture's console server, on the
-//! fake kernel: what the VM writes reaches the screen, what is typed reaches the VM, a read with
-//! nothing typed yet waits without holding the VM's thread, and the end of the input is the end.
+//! The platform's console, over the client library's hub, against the fixture's console server, on
+//! the fake kernel: what the VM writes reaches the screen, whole and in order, what is typed
+//! reaches the VM, a read with nothing typed yet waits without holding the VM's thread, the end of
+//! the input is the end, and the console costs one waiter thread and no other.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use beamlet_redoubt::Redoubt;
-use beamlet_redoubt::fixture::{self, ConsoleServer, Dirs, HostThreads};
+use beamlet_redoubt::fixture::{self, ConsoleServer, Dirs};
 use beamlet_vm::platform::{ConsoleInput, Platform};
 use redoubt_fake_kernel::fake;
 
@@ -35,8 +36,7 @@ fn with_platform(
     let (pid, block) = fixture::session(&console);
     let session = f.run(pid, move || {
         let startup = fixture::startup(&block);
-        let mut platform = Redoubt::new(&startup, Box::new(HostThreads { pid }), Box::new(Dirs(Vec::new())))
-            .expect("a platform");
+        let mut platform = Redoubt::new(&startup, Box::new(Dirs(Vec::new()))).expect("a platform");
         test(&mut platform);
         0
     });
@@ -66,8 +66,35 @@ fn writes_reach_the_screen() {
 }
 
 #[test]
+fn a_long_write_reaches_the_screen_whole_and_in_order() {
+    // Several of the hub's writes, a page each, one out at a time.
+    let long: Vec<u8> = (0..20_000u32).map(|i| b'a' + (i % 26) as u8).collect();
+    let expected = long.clone();
+    let screen = with_platform(std::io::empty(), move |p| {
+        p.console_write(&long[..7]);
+        p.console_write(&long[7..]);
+    });
+    assert_eq!(screen, expected);
+}
+
+#[test]
+fn the_console_is_one_hub_connection_with_one_waiter() {
+    let (keyboard, mut keys) = std::io::pipe().unwrap();
+    with_platform(keyboard, move |p| {
+        // The waiter is the console connection's, started with the platform: no thread per read.
+        assert_eq!(p.waiters(), 1);
+        assert_eq!(p.console_read(), ConsoleInput::Nothing);
+        p.console_write(b"> ");
+        keys.write_all(b"x\n").unwrap();
+        drop(keys);
+        assert_eq!(read_to_end(p), b"x\n");
+        assert_eq!(p.waiters(), 1);
+    });
+}
+
+#[test]
 fn typing_reaches_the_vm_then_its_end() {
-    // Longer than one message from the reader, so it comes in pieces.
+    // Longer than one of the fixture's device reads, so it comes in pieces.
     let typed = b"Enum.map([1, 2, 3], &(&1 * 10))\n1 + 2\n".to_vec();
     let expected = typed.clone();
     with_platform(std::io::Cursor::new(typed), move |p| assert_eq!(read_to_end(p), expected));

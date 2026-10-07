@@ -366,8 +366,7 @@ adapters over it ([beamlet](beamlet.md#beamlet-on-redoubt)), and `init` launches
 servers through it.
 It is `no_std` with `alloc`, has no `unsafe`, and sits on the runtime and the wire codecs, adding
 what is more than one typed call. Its calls block, one per thread, or a hub keeps many 9P requests
-outstanding on as few threads as one ([below](#many-requests-at-once)); beamlet makes its calls
-from its pool of I/O threads
+outstanding on as few threads as one ([below](#many-requests-at-once)); beamlet's VM owns a hub
 ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)).
 
 | Module | What it gives |
@@ -471,7 +470,9 @@ reaping by one timeout, no more.
 A call holds its thread until its reply, so a thread per call is a thread per outstanding
 request. `aio`'s **hub** is the client half of a multiplexed connection
 ([the serving library](../servers/serving.md#multiplexed-connections)): many 9P requests
-outstanding on a connection, and as few threads as one.
+outstanding on a connection, and as few threads as one. beamlet's VM is a hub owner: its
+schedulers submit, and a waiter per connection wakes it
+([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)).
 
 - **The hub owns; it does not run.** One `Hub` value holds every connection's tags, its queue and
   its completion buffer, and every buffer a request was submitted with. A buffer goes in by value
