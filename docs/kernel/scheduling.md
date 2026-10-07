@@ -120,7 +120,8 @@ can have moved (a budget at it was charged or left, or wakes filled an empty que
 queue keeps beside its slots, each written where the queue changes a queued budget's pass or tie;
 the pick compares the same ranks. Neither reads a budget's frame, which stays the record: a checked
 kernel audits the ranks against the frames with the marks' audit. So a slice end's scheduler work
-is under a microsecond per queued budget, the frame reads it makes being the running budget's own.
+is under 3 µs per queued budget (2.4 µs measured in a checked build, "Charging"), the frame reads
+it makes being the running budget's own.
 
 A pick takes the lowest **rank**, `(pass, tie, id)`. At an equal pass:
 1. a waker ranks ahead of a budget that was requeued;
@@ -231,19 +232,21 @@ Kernel time is billed as well:
   next pick owing it; a pick of nothing is nobody's);
 - idle time is nobody's.
 
-A slice end costs about 0.36 ms of kernel time on rv64 and 0.45 ms on rv32 in the release build
-under QEMU (about 45,000 and 56,000 instructions), most of it the reconcile that follows the entry;
-at a 1 ms slice under nine runnable budgets that is about a quarter of the CPU, billed to the
-budgets picked after each slice's end, so relative shares hold while useful work falls to about three quarters
-of the 10 ms build's (0.762 on rv64 and 0.718 on rv32, both in the release build). The reconcile's
-cost is above its loop bounds. This is today's cost; a later measurement replaces it. A count of
-user work therefore falls short of the window: in the checked build, `bench:sched-share`'s three
-spinners count 938 (rv64) and 929 (rv32) of 1000 of what the loop's rate alone would fill, the
+A slice end costs about 0.12 ms of kernel time on rv64 and 0.17 ms on rv32 in the release build
+under QEMU (about 15,000 and 22,000 instructions) under nine runnable budgets, billed to the budget
+picked after it: the trap, two SBI timer calls, the deschedule, the reconcile, the pick and the
+switch, with under 3 µs of it per queued budget (the checked, traced build measures 2.4 µs per
+queued budget per slice end from three to seventeen queued, net of its audits, over a fixed
+175 µs). At a 1 ms slice the nine spinners of `bench:sched-large-weight-release` do 0.91 (rv64)
+and 0.87 (rv32) of the useful work the 10 ms build does; the case requires 0.85, the fixed part
+being the rest. A count of user work still falls short of the window: in the checked build, `bench:sched-share`'s three
+spinners count 975 (rv64) and 964 (rv32) of 1000 of what the loop's rate alone would fill, the
 rest being what a slice end that switches budgets costs over a lone spinner's, the checked
-build's audits among it (the marks' audit after about every slice end: 49 ms of the 2 s window
-on rv64 and 71 ms on rv32, in a traced run), so the case judges each spinner's share of what the
-three counted (599 and 600 of 1000 for the weight-300 spinner, against its 600; 563 and 558 of
-the window), not of the window. It reports the sum beside, with no verdict.
+build's audits among it (the marks' audit after about every slice end, the queue's ranks audited
+with it), so the case judges each spinner's share of what the three counted (600 of 1000 for the
+weight-300 spinner on both widths, against its 600; 585 and 578 of the window), not of the
+window. It reports the sum beside, with no verdict; `bench:sched-share-release` requires the
+release build's sum to reach 960.
 
 The top of a destruction returns its carve to its parent before any of the destruction's work is
 billed. So the parent, often the caller of `budget_destroy`, pays for the destruction at the
@@ -546,11 +549,11 @@ In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 30 ms is 3,750,000, 40 
 50 ms is 6,250,000, 95 ms is 11,875,000, 125 ms is 15,625,000, and one 1 ms slice is 125,000.
 
 A slice end adds its own kernel time ([charging](#charging)). In the release build that is about
-45,000 instructions on rv64 and 56,000 on rv32, so a 1 ms slice takes about 1.36 ms and 1.45 ms
-on the hart under nine runnable budgets. The checked, traced build takes longer, and its slice end
-grows with the queued budgets: the median gap between slice ends is about 1.26 ms under three,
-1.45 ms under nine and 1.68 ms under seventeen (rv64). A round of N budgets' slices is N such
-periods, not N ms.
+15,000 instructions on rv64 and 22,000 on rv32, so a 1 ms slice takes about 1.12 ms and 1.17 ms
+on the hart under nine runnable budgets. The checked, traced build takes longer, its slice end
+growing by 2.4 µs per queued budget net of its audits: the median gap between slice ends, the
+marks' audit included, is about 1.22 ms under three, 1.30 ms under nine and 1.39 ms under
+seventeen (rv64). A round of N budgets' slices is N such periods, not N ms.
 
 The decision wake is measured by the stand-in itself (`time_now` against its own deadline), and
 the post-check reads its sample windows, net of audits, while R10's time comes from the kernel's
@@ -832,9 +835,10 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (47)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.1 ms on rv64, 8.1 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (49)</summary>
 
 - bench:sched-share
+- bench:sched-share-release
 - bench:sched-sleep-gaming
 - bench:sched-idle-gap
 - bench:sched-exit-churn
@@ -845,6 +849,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:sched-timer-flood
 - bench:sched-server-busy
 - bench:sched-large-weight
+- bench:sched-large-weight-release
 - bench:deadline-flood-billed
 - bench:sched-carve-return
 - bench:map-anon-search-bound
@@ -1084,14 +1089,6 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
-- **A slice end's kernel time grows with the queued budgets.** The slice is user time, so the
-  kernel's work around it (the deschedule, the reconcile, the pick and the exit path back to user
-  mode) lengthens each round instead of shortening the slice. That work reads every queued budget
-  ([charging](#charging): the reconcile's cost is above its loop bounds). In `bench:worst-walk`'s
-  checked, traced build, with about 250 budgets queued after one deadline wakes them, the exit
-  work after a pick took more than a 1 ms slice. While the slice started at the pick, the picked
-  thread was preempted at its first instruction, every time, and the case never reached its
-  destruction. Now the round grows by that work until the reconcile is held to its loop bounds.
 - **A destroyed lineage's debt is carried onto its siblings as the parent's lead.** Debt lifted onto
   a shared parent is normalized to the parent's weight, and a sibling created under it enters at the
   parent's pass; the oracle recomputes every lift. A fresh lift delays the sibling by the child's
