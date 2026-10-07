@@ -2,10 +2,12 @@ use redoubt_model::{
     invariants::Checker,
     kernel::{Boot, DeviceKind, Kernel, Note, Object, Step},
     mutation::Mutation,
+    policy::{self, HashRef, PolicyOp, ReqRef, Run},
     spec::*,
     syscall::*,
     trace,
 };
+use redoubt_steward::{consts::DECLASSIFY_MAX, event::Content};
 
 pub struct World {
     pub k: Kernel,
@@ -688,4 +690,117 @@ fn expiry_order(mutation: Option<Mutation>) -> Result<(), String> { expiry_order
 pub fn expiry_order_trace() -> String {
     let w = expiry_order_world(None).expect("the specified model keeps the expiry order");
     trace::record(&Boot::default(), &w.ops, None).unwrap()
+}
+
+// -------------------------------------------------------------------------------------------------
+// The steward's directed scenarios: each builds in a few ops the state that one break needs, which
+// the random families reach only after hundreds or thousands of seeds (kernel/model.md,
+// "Mutations"). Sessions are named by the id the steward drew, read back after each login.
+
+/// The directed steward scenario that catches `m`, if it has one, run on `m`. A panic is a
+/// failure of I14, as in the families' runner.
+pub fn steward_scenario(m: Mutation) -> Option<Result<(), String>> {
+    let scenario: fn(Option<Mutation>) -> Result<(), String> = match m {
+        Mutation::PolicyDeclassifyUnfit => declassify_unfit,
+        Mutation::R2OneCursor => one_cursor,
+        Mutation::PolicyAgentOtherSet => agent_other_set,
+        _ => return None,
+    };
+    Some(std::panic::catch_unwind(|| scenario(Some(m))).unwrap_or_else(|p| {
+        let what =
+            p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()));
+        Err(format!("I14: the model panicked: {}", what.unwrap_or_default()))
+    }))
+}
+
+/// The session or agent of `principal` with exactly `labels` (the scenarios start one of each).
+fn session_of(run: &Run, principal: usize, labels: &[u64]) -> u64 {
+    run.st
+        .callers()
+        .iter()
+        .find(|c| c.principal == principal && c.domain.labels().as_slice() == labels)
+        .map_or(0, |c| c.id)
+}
+
+/// R42 (`PolicyDeclassifyUnfit`): alice's {7} session writes an item that does not fit a
+/// declassification (over `DECLASSIFY_MAX`, or not printable), asks to declassify it, and alice
+/// approves it on her channel. The steward refuses the request; with the item's check gone, P6
+/// sees the item copied out.
+pub fn declassify_unfit(mutation: Option<Mutation>) -> Result<(), String> {
+    UNFIT.iter().try_for_each(|item| declassify_unfit_item(mutation, item))
+}
+
+/// The items that do not fit a declassification: one byte over `DECLASSIFY_MAX`, and one with a
+/// control character.
+pub const UNFIT: [&[u8]; 2] = [&[b'a'; DECLASSIFY_MAX + 1], b"ring\x07"];
+
+/// [`declassify_unfit`] for one item.
+pub fn declassify_unfit_item(mutation: Option<Mutation>, item: &[u8]) -> Result<(), String> {
+    let mut run = Run::new(mutation, 0);
+    run.apply(&PolicyOp::Login { principal: 0, labels: vec![7], key: 11 })?;
+    let session = session_of(&run, 0, &[7]);
+    run.apply(&PolicyOp::WriteItem { session, labels: vec![7], item: 0, bytes: item.to_vec() })?;
+    let content = Content::Declassify { labels: vec![7], item: 0 };
+    run.apply(&PolicyOp::Submit { session, content, reason: String::from("report") })?;
+    run.apply(&PolicyOp::Open { principal: 0, key: 12 })?;
+    run.apply(&PolicyOp::Pending { channel: 0 })?;
+    let request = ReqRef { session, nth: 0 };
+    run.apply(&PolicyOp::Approve { channel: 0, request, hash: HashRef::Own })?;
+    Ok(())
+}
+
+/// R2 (`R2OneCursor`): alice's and bob's unlabelled sessions and bob's {9} session call the
+/// server. The server takes alice's call; then, with the vault's work, bob's {9} call; then bob's
+/// unlabelled call and alice's second. One cursor over every group starts the last round after
+/// the {9} group with the vault's work and after alice's without, so the unlabelled calls are
+/// taken in another order (P10).
+pub fn one_cursor(mutation: Option<Mutation>) -> Result<(), String> {
+    let mut step = 0;
+    let mut next = |run: &Run| {
+        step += 1;
+        let (alice, bob, vault) =
+            (session_of(run, 0, &[]), session_of(run, 1, &[]), session_of(run, 1, &[9]));
+        Some(match step {
+            1 => PolicyOp::Login { principal: 0, labels: vec![], key: 11 },
+            2 => PolicyOp::Login { principal: 1, labels: vec![], key: 21 },
+            3 => PolicyOp::Login { principal: 1, labels: vec![9], key: 21 },
+            4 => PolicyOp::Work { session: alice },
+            5 | 7 | 10 => PolicyOp::Serve,
+            6 => PolicyOp::Work { session: vault },
+            8 => PolicyOp::Work { session: bob },
+            9 => PolicyOp::Work { session: alice },
+            _ => return None,
+        })
+    };
+    policy::steward_noninterference_script(mutation, &mut next).map_err(|f| f.message)
+}
+
+/// R37 (`PolicyAgentOtherSet`): alice's {7} session asks for an unlabelled agent and alice
+/// approves it. The steward refuses the request; with the own-set check gone, it is taken into
+/// the unlabelled set, and its record shows in the audit an unlabelled reader reads (P10).
+pub fn agent_other_set(mutation: Option<Mutation>) -> Result<(), String> {
+    let mut step = 0;
+    let mut next = |run: &Run| {
+        step += 1;
+        let vault = session_of(run, 0, &[7]);
+        Some(match step {
+            1 => PolicyOp::Login { principal: 0, labels: vec![], key: 11 },
+            2 => PolicyOp::Login { principal: 0, labels: vec![7], key: 11 },
+            3 => PolicyOp::Open { principal: 0, key: 12 },
+            4 => PolicyOp::Submit {
+                session: vault,
+                content: Content::Agent { labels: vec![], lease: 100 * SLICE },
+                reason: String::from("index"),
+            },
+            5 => PolicyOp::Pending { channel: 0 },
+            6 => PolicyOp::Approve {
+                channel: 0,
+                request: ReqRef { session: vault, nth: 0 },
+                hash: HashRef::Own,
+            },
+            7 => PolicyOp::Usage { principal: 0 },
+            _ => return None,
+        })
+    };
+    policy::steward_noninterference_script(mutation, &mut next).map_err(|f| f.message)
 }

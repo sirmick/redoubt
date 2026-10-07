@@ -280,11 +280,12 @@ exiting budget to the owner of the exit endpoint; one that fails the rule is dro
 
 ### R2 (fair waiting)
 
-<details><summary>Status: built · partly tested: how groups are keyed (account, label set, and budget for account 0) is attacked only in the model, and turns between groups on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting; the IPC case fills one group's cap · tested (9)</summary>
+<details><summary>Status: built · partly tested: how groups are keyed (account, label set, and budget for account 0) is attacked only in the model, and turns between groups on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting; the IPC case fills one group's cap · tested (10)</summary>
 
 - bench:redoubt-ipc
 - bench:ipc-fair-label-sets
 - host:redoubt-model::steward_noninterference
+- host:redoubt-model::one_cursor_scenario
 - mutation:R2FifoAcrossAccounts
 - mutation:R2NoWaitCap
 - mutation:R2KeyByAccountOnly

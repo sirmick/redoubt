@@ -242,18 +242,20 @@ from the completion table, not from the model's output. They cover:
   (`model/tests/dma_contracts.rs`);
 - `map_fixed`'s ranges, flags, overlap and cost checks (`model/tests/map_fixed_contracts.rs`).
 
-The mutation check runs the IPC and scheduling contracts first, for every variant.
+The mutation check runs the IPC and scheduling contracts first, for every variant, and a
+steward scenario for each of the three breaks the steward families catch only after many seeds
+([mutations](#mutations)).
 
 ## Mutations
 
-Status: built · tested: host:redoubt-model::every_rule_has_a_mutation, host:redoubt-model::mutations_are_caught
+Status: built · tested: host:redoubt-model::every_rule_has_a_mutation, host:redoubt-model::mutations_are_caught, host:redoubt-model::declassify_unfit_scenario, host:redoubt-model::one_cursor_scenario, host:redoubt-model::agent_other_set_scenario
 
 A **mutation** is one deliberate break planted in the model. Each variant of `enum Mutation`
 (`model/src/mutation.rs`) breaks one rule, at the sites in the model marked
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 148 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 153 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -262,8 +264,8 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 - `every_rule_has_a_mutation` requires at least one variant for every kernel rule the model
   holds (each R row of the table below, before the steward's) and for I16.
 - `mutations_are_caught` plants each variant in turn. It runs the scripted IPC and scheduling
-  contracts, then every property family, the one that pressures the rule first
-  (`scheduler_fairness` for R12, the steward families for the `Policy` variants, `flood` for the open-call
+  contracts, the variant's steward scenario if it has one (below), then every property family,
+  the one that pressures the rule first (`scheduler_fairness` for R12, the steward families for the `Policy` variants, `flood` for the open-call
   limit, `steward_noninterference` for the breaks that show as one domain's work in another's
   view, `R2OneCursor`'s turns among them), up to 20,000 seeds each (20 for the flood) but 500
   in each steward family. A variant not caught within those caps fails it, by name: one the
@@ -273,11 +275,23 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
   names whole. The bench case `model-mutations` runs it once per variant, each a job of its own
   in release, the names coming from `cargo run --example mutations`
   ([fanout](../testbench.md#the-case-file)); `model-host-tests` skips it. Every variant is
-  caught within the caps but `PolicyDeclassifyUnfit`, which `steward_policy` catches at seed
-  4709, about half an hour on one thread ([residual risks](#residual-risks)): the case names it
-  as known to be late, so its job searches the steward families to 20,000 seeds and passes
-  reported as late, while any other late variant, this one no longer caught at all, and this one
-  caught within the caps, whose entry has then outlived its need, fail it.
+  caught within the caps, each job in under 20 seconds on one core.
+- Three variants the steward families' random search catches only after many seeds have a
+  **directed scenario** each (`model/tests/common/contracts.rs`), a few operations that build
+  the state the break needs, tried before any family. Each is a named test that holds on the
+  specified model and catches its variant with the property it names, so these catches are
+  deterministic and the random search is the backstop:
+  - `declassify_unfit_scenario`: a {7} session writes an item one byte over `DECLASSIFY_MAX`, or
+    one with a control character, asks to declassify it and its owner approves; without the
+    item's check, P6 sees it copied out. The random search: `steward_policy`'s seed 4709.
+  - `one_cursor_scenario`: alice's and bob's unlabelled sessions and bob's {9} session call the
+    server, which takes alice's call, then the {9} call, then bob's and alice's next; with one
+    cursor over every group the last round starts after the {9} group with the vault's work and
+    after alice's without, so P10 sees the unlabelled calls taken in another order. The random
+    search: `steward_noninterference`'s seed 345.
+  - `agent_other_set_scenario`: a {7} session asks for an unlabelled agent and its owner
+    approves; without the own-set check, P10 sees the request in the unlabelled audit view. The
+    random search: `steward_noninterference`'s seed 96.
 
 | ID | Variants | What they break |
 | --- | --- | --- |
@@ -561,13 +575,12 @@ Replay is what turns the model from a reference into evidence about the kernel.
   non-interference comparison leaves out a server crash on its own and one a vault's call causes:
   which call such a crash blames, and when the server takes the calls before it, is service timing,
   a stated residual of [R37 (vault non-interference)](../servers/steward.md#residual-risks).
-- **The steward families are slow, and catch one break late.** A steward seed costs most of a
-  second in the model's own code, a thousand times a kernel family's, so their 30,000 default
-  seeds are six to seven core-hours, a bench case of their own. `PolicyDeclassifyUnfit` (an
-  over-long or unprintable declassified item) is caught only at `steward_policy`'s seed 4709, past
-  the mutations' cap, so `model-mutations` lists it as known to be late. Open, for a follow-up
-  on the steward model, which removes that entry: making a seed cheaper, and whether that catch
-  depth is a coverage weakness of the family's generator.
+- **The steward families are slow.** A steward seed costs most of a second in the model's own
+  code, a thousand times a kernel family's, so their 30,000 default seeds are six to seven
+  core-hours, a bench case of their own. The three breaks their random search catches only after
+  many seeds (`PolicyDeclassifyUnfit` at `steward_policy`'s seed 4709) are caught first by
+  directed scenarios ([mutations](#mutations)), which pin the state each break needs rather than
+  show that the generator finds it.
 - **Rules outside the model** (R15, R16, R17, R19, R23, R24) have no model check at all; their
   boot cases are their only attack.
 

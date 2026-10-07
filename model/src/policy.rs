@@ -1025,6 +1025,31 @@ pub fn steward_noninterference_events(seed: u64) -> Result<[Vec<Event>; 2], Fail
 fn noninterference_runs(seed: u64, mutation: Option<Mutation>, record: bool) -> Result<(Run, Run), Failure> {
     let mut rng = Rng::new(seed);
     let secret = rng.next_u64();
+    let mut left = rng.range(20, 100);
+    let mut next = |first: &Run| {
+        left = left.checked_sub(1)?;
+        Some(random_op(first, &mut rng))
+    };
+    paired_runs(seed, secret, mutation, record, &mut next)
+}
+
+/// P10 on a scripted sequence (a directed scenario, model/tests/common/contracts.rs): `next`
+/// gives each op from the state of the run with the vault's work so far, until it gives none.
+pub fn steward_noninterference_script(
+    mutation: Option<Mutation>,
+    next: &mut dyn FnMut(&Run) -> Option<PolicyOp>,
+) -> Result<(), Failure> {
+    paired_runs(0, 0, mutation, false, next).map(|_| ())
+}
+
+/// The two runs of P10: the sequence `next` gives, with the vault's work and without it.
+fn paired_runs(
+    seed: u64,
+    secret: u64,
+    mutation: Option<Mutation>,
+    record: bool,
+    next: &mut dyn FnMut(&Run) -> Option<PolicyOp>,
+) -> Result<(Run, Run), Failure> {
     let fail =
         |message: String| Failure { family: "steward_noninterference", seed, message, ops: Vec::new() };
     // Build the sequence on a first run, recording which ops are vault work.
@@ -1035,8 +1060,7 @@ fn noninterference_runs(seed: u64, mutation: Option<Mutation>, record: bool) -> 
     // that names one is vault work too.
     let mut vault_made: BTreeSet<u64> = BTreeSet::new();
     let mut owners: BTreeSet<usize> = BTreeSet::new();
-    for _ in 0..rng.range(20, 100) {
-        let op = random_op(&first, &mut rng);
+    while let Some(op) = next(&first) {
         let vault = match &op {
             PolicyOp::WriteItem { session, .. }
             | PolicyOp::Submit { session, .. }

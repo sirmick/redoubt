@@ -315,7 +315,7 @@ the core map and the queue; `q log` the recent jobs with the time each waited an
 
 | Case | Its cost | `timeout_secs` |
 | --- | --- | --- |
-| `model-mutations` | 148 jobs, one per mutation, in release, one core each; a mutation's steward families stop at 500 seeds ([mutations](kernel/model.md#mutations)) but for the one the case names as late, `PolicyDeclassifyUnfit`, whose full search to `steward_policy`'s seed 4709, on four cores of its own, is the longest job, 582 s. On one core of a full machine: `R2OneCursor` (`steward_noninterference`'s seed 345) 398 s, the rest at most 147 s | per job, 776 |
+| `model-mutations` | 153 jobs, one per mutation, in release, one core each; a mutation's steward families stop at 500 seeds, and the three they catch only after many seeds are caught first by directed scenarios ([mutations](kernel/model.md#mutations)). About two and a half minutes of wall, the build included; the longest job `R2NoWaitCap`'s, 18.7 s | per job, 25 |
 | `model-host-tests` | one `cargo test` on four cores, every model test but the mutations and the steward families: about two minutes, the build included | none |
 | `steward-model-host-tests` | the two steward families, each a job on eight cores and threads: about 30 min of wall, 1,777 s for `steward_policy` and 1,469 s for `steward_noninterference`. A seed costs 0.6 s and 0.94 s on one thread in the model's own code, in release and dev alike: six to seven core-hours at their default counts | per job, 2369 |
 | `rt-miri` | 12 jobs, one per file, about 100 s of wall: `heap`'s 60 to 96 s; `connection` 25 s; the rest under 10 s | per job, 128 |
@@ -375,8 +375,8 @@ known" in the result and as `LATE` in the log, never hidden; any other value pas
 entry that names no job, and one whose test now passes within the bound fail the case.
 `late_cores` gives a late value's job, the long search, its own count of cores; a `{cores}` in a
 `vars` value becomes the count each job is granted, which `q` may lower from its ask once it has
-waited, so `model-mutations`' late job runs one thread per core it holds, and every other job
-one, until the follow-up on the steward model removes both.
+waited, so a test that spawns its threads runs one per core it holds (the model's
+`MODEL_THREADS`, in `model-mutations`). No case names a late value now.
 
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
