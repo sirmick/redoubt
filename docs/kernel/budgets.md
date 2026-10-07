@@ -206,17 +206,15 @@ and its kernel objects.
 
   With `beamlet` and the userland disk's `blkd` and `littlefsd`, the image manifest's bound is 508 pages
   on both widths (`init-boot` prints it), and the fixed 1,024-page limit more than doubles it.
-  The image's `beamlet` is budgeted 20,864 pages: a heap cap of twice the largest peak of its
-  runtime heap across the image's memory cases (10,387 pages on rv64, 6,048 on rv32) plus its
+  The image's `beamlet` is budgeted 10,880 pages: a heap cap of twice the largest peak of its
+  runtime heap across the image's memory cases (5,429 pages on rv64, 5,231 on rv32) plus its
   stack, rounded up to 128 ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)).
-  So the image's servers need 31,243 of `system`'s pages; at 512 MiB `system` has 31,626 free on
-  rv32 and 31,672 on rv64, and the image boots there with 383 pages to spare on rv32, and 126 for
-  a case that adds a 256-page client, which costs 257 with its budget's own page. The bench and
-  `mkimage`'s instructions give it 512 MiB; at 256 MiB it does not boot. The margins are narrow,
-  and the scan's cap rule breaks first: an rv64 peak of 10,424 pages puts the cap under twice the
-  peak, and the next step of 128 would leave the client cases two pages short on rv32. The budget
-  must stay between 20,792 pages (a cap of twice today's peak) and 20,990 (the client cases still
-  fit). The bound is a fixed count, not a share
+  So the image's servers need 21,259 of `system`'s pages; at 512 MiB `system` has 31,610 free on
+  rv32 and 31,652 on rv64, and the image boots there with 10,351 pages to spare on rv32, and
+  10,094 for a case that adds a 256-page client, which costs 257 with its budget's own page. The
+  bench and `mkimage`'s instructions give it 512 MiB; at 256 MiB it does not boot. The scan's cap
+  rule is the narrow margin: an rv64 peak of 5,432 pages puts the cap under twice the peak, and
+  the budget then moves up a step of 128. The bound is a fixed count, not a share
   of RAM, because `init`'s needs do not grow with the machine, nor with the size of a program it
   starts, and a share of a large machine would sit idle in `root`. The manifest cannot change it,
   because the kernel reads no manifest. `init` works in a fixed arena, and before it creates
