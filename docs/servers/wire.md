@@ -150,7 +150,7 @@ stated in the table's page.
 
 ### Error names
 
-Status: built · partly tested: the table is `libs/wire`'s and both client paths read names by it; servers still send their texts from constants of their own, and the drift check that would hold them to the table is not built (M1 (separation and containment)) · tested: host:redoubt-wire::every_text_reads_back_to_its_name_and_any_other_is_other, host:redoubt-client::an_rerror_keeps_its_name_not_found_against_the_rest, host:redoubt-client::an_rerror_through_the_hub_keeps_its_name, host:beamlet-redoubt::every_row_of_the_error_table_maps_to_its_posix_error, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name
+Status: built · partly tested: the table is `libs/wire`'s and both client paths read names by it; servers still send their texts from constants of their own, and the drift check that would hold them to the table is not built (M1 (sessions over SSH, kept apart)) · tested: host:redoubt-wire::every_text_reads_back_to_its_name_and_any_other_is_other, host:redoubt-client::an_rerror_keeps_its_name_not_found_against_the_rest, host:redoubt-client::an_rerror_through_the_hub_keeps_its_name, host:beamlet-redoubt::every_row_of_the_error_table_maps_to_its_posix_error, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name
 
 A 9P `Rerror` carries one of a fixed set of texts, so a hostile request cannot choose it
 ([serving](serving.md#the-9p-server-skeleton)). The set is one table in `libs/wire`

@@ -105,7 +105,7 @@ it; the shell's `exec` is one launch and its wait ([the shell](shell.md#the-shel
 The namespace, the handles and the budget come from the Elixir caller, so every authority the
 child gets is on that one call.
 - **The launcher reads the program.** There is no kernel path lookup: a session that cannot read
-  a program's file cannot run it. In M1 (separation and containment) programs come from the boot
+  a program's file cannot run it. In M1 (sessions over SSH, kept apart) programs come from the boot
   bundle, `/boot`.
 - **No signature is needed to run code within one's own authority.** A session can already run
   any Elixir it writes, so a program it launches with a subset of its own handles gains nothing.
@@ -159,7 +159,7 @@ What follows from pipes being served files:
 - **A pipe is readable as a file.** A zero-copy alternative, stages sending pages to each other
   over an endpoint, is not 9P, so a program could not read its input as a file; it is not taken.
 
-**What is built in M1 (separation and containment):** a program the shell's `exec` launches gets
+**What is built in M1 (sessions over SSH, kept apart):** a program the shell's `exec` launches gets
 one stream, a connection of its own to the session's console as `/dev/cons`, which the console
 mints for it with `new_connection` and which is disconnected when the program ends; its lines
 carry that connection's id. It reads that console as well as writes it, so until pipes exist a
@@ -541,7 +541,7 @@ schedulers submit, and a waiter per connection wakes it
 
 ### Dropped files, calls by path and generated calls
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 What the client library adds before beamlet's files run on it, each keeping the rules above:
 - **A dropped file's fid comes back.** A fid is put on its connection's list to clunk only when
@@ -599,7 +599,7 @@ console with the name ([R75 (verified userland)](../kernel/boot.md#r75-verified-
 
 ### The Rust `std` target
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 For Redoubt to be developed on Redoubt, native programs need more of the client library: modules
 for servers whose use is more than one typed call (the steward's sessions and leases, `ipd`'s

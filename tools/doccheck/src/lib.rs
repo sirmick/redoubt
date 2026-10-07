@@ -34,12 +34,13 @@ impl fmt::Display for Finding {
     }
 }
 
-const MILESTONES: [(&str, &str); 5] = [
-    ("M1", "separation and containment"),
+const MILESTONES: [(&str, &str); 6] = [
+    ("M1", "sessions over SSH, kept apart"),
     ("M2", "usable shell"),
-    ("M3", "files in and out"),
-    ("M4", "self-hosted development"),
-    ("M5", "persist, install, share"),
+    ("M3", "agents, approvals and the attack suite"),
+    ("M4", "files in and out"),
+    ("M5", "self-hosted development"),
+    ("M6", "persist, install, share"),
 ];
 const EXEMPT: [&str; 4] = ["Purpose", "Residual risks", "Why", "How to use it"];
 const ROOT_PAGES: [&str; 3] = ["README.md", "GETTING-STARTED.md", "CONTRIBUTING.md"];
@@ -721,7 +722,7 @@ fn milestones_and_process(c: &mut Ctx, p: &Page) {
         for (at, w) in words(l) {
             let Some(m) = MILESTONES.iter().position(|(id, _)| *id == w) else { continue };
             let before = &l[..at];
-            let beyond = w == "M5" && (before.ends_with("beyond ") || before.ends_with("Beyond "));
+            let beyond = w == "M6" && (before.ends_with("beyond ") || before.ends_with("Beyond "));
             if !beyond && !l[at + 2..].starts_with(&format!(" ({})", MILESTONES[m].1)) {
                 c.err(3, &p.path, i + 1, format!("`{w}` must read `{}`", milestone(m)));
             }

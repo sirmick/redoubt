@@ -1,4 +1,4 @@
-# M1 (separation and containment)
+# M1 (sessions over SSH, kept apart)
 
 ## Goal
 Separation.

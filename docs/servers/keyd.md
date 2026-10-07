@@ -188,7 +188,7 @@ arguments and gives each root badge the same key, and every earlier grant names 
 
 ### Sealed keys, labelled keys and keys in leases
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - **Sealed keys generated at first boot.** `keyd` generates its keys on the box at first boot and
   seals them to the machine, so no seed is in a manifest or the bundle.

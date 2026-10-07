@@ -1,7 +1,7 @@
-# Beyond M5
+# Beyond M6
 
-Ideas past the plan. None is a goal: the hard goals are M1 (separation and containment) through
-M5 (persist, install, share), and nothing here is built toward until the owner makes it one. Each
+Ideas past the plan. None is a goal: the hard goals are M1 (sessions over SSH, kept apart) through
+M6 (persist, install, share), and nothing here is built toward until the owner makes it one. Each
 page says what the idea is, why it is not a goal, and what it would need, including the attack
 cases it would have to pass. Some are kept so they are not redesigned from scratch; some are
 recorded as ruled out, with the reason, so they are not proposed again without one.

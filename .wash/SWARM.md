@@ -57,7 +57,7 @@ work exceeds that slot's capability. The launch report names the resolved settin
 
 - Owns the plan graph: the packages, their order (`needs`) and their state, cut from the
   milestone's remaining work on its plan page, starting with
-  [M1 (separation and containment)](../docs/plan/m1-separation.md#remaining-work).
+  [M1 (sessions over SSH, kept apart)](../docs/plan/m1-separation.md#remaining-work).
 - Once the owner has asked for development, starts a package when every node it needs is done,
   in its own worktree
   (`.worktrees/<package>`) and branch (`wp-<package>`). Wash refuses an earlier start unless the

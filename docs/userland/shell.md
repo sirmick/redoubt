@@ -55,11 +55,11 @@ Status: built · partly tested: built for the UART console only; launching a pro
 
 Every session starts `Redoubt.Shell` over the session's console connection, `/dev/cons`
 ([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH channel).
-In M1 (separation and containment) the shell is what the attack suite needs and no more: the
-console, reading and writing files through OTP's `File`, and launching a native program through
-the launch natives ([beamlet](beamlet.md#natives)): `exec("name", args)` runs `/boot/name` in a
-budget carved from the session's, with a connection of its own to the session's console, waits
-for it to end, and returns how it ended and what its budget held
+In M1 (sessions over SSH, kept apart) the shell is what the milestone's sessions need and no more:
+the console, reading and writing files through OTP's `File`, and launching a native program
+through the launch natives ([beamlet](beamlet.md#natives)): `exec("name", args)` runs `/boot/name`
+in a budget carved from the session's, with a connection of its own to the session's console,
+waits for it to end, and returns how it ended and what its budget held
 ([native programs](native.md#launching-from-a-session)). `ns()`, `ns_lookup/1` and `bind/2` are the
 session's namespace ([sessions](sessions.md#namespaces)). The shell's modules come from the userland
 disk, checked against the signed bundle
@@ -187,7 +187,7 @@ Status: planned · M2 (usable shell)
 | `clear()` | clear the screen |
 | `out(value)` | print without the pager |
 | `follow(path)` | the lines added to a file, as they come, until Ctrl+C |
-| `now()`, `today()`, `ago(time)` | wall-clock time, which a session has from M5 (persist, install, share) |
+| `now()`, `today()`, `ago(time)` | wall-clock time, which a session has from M6 (persist, install, share) |
 
 The **pager** shows a long value a screen at a time (space, `b`, `/search`, `q`); a `%Lines{}`
 that is the value at the prompt goes through it, and `help`'s pages and topics are drawn in it
@@ -593,7 +593,7 @@ narrower grants is there for whoever wants one.
 **The terminal is the only front end.** A web interface for administration would be an inbound
 service and a GUI, both non-goals ([the tenets](../TENETS.md#non-goals)), and it would render
 agent-written text in the most privileged person's browser. The design it would need is recorded
-beyond M5 ([a browser GUI](../beyond/browser-gui.md)).
+beyond M6 ([a browser GUI](../beyond/browser-gui.md)).
 
 **No resize callback.** IPC is caller-initiated, so a server tells a client something by
 answering a call the client made and the server parked. A callback would need the console server

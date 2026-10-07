@@ -35,7 +35,7 @@ protocol) and `sftp alice+tax@box` (a vault session) are refused.
 
 ### Transfers inside SSH
 
-Status: planned · M3 (files in and out)
+Status: planned · M4 (files in and out)
 
 SFTP runs inside an SSH connection to `sshd` (the SSH server), authenticated like a login, with the
 person's own key, which never lives in `keyd` ([sshd](../servers/sshd.md)).
@@ -57,7 +57,7 @@ person's own key, which never lives in `keyd` ([sshd](../servers/sshd.md)).
 
 ### Confined to the session's files
 
-Status: planned · M3 (files in and out)
+Status: planned · M4 (files in and out)
 
 The transfer server holds the session's file binds and one connection to the steward's audit path
 ([Audited](#audited)), and nothing else: no `/net`, no `/dev/cons`, no powerbox connection, no
@@ -79,7 +79,7 @@ budget or process handles. That is narrower than the session, as a launch always
 
 ### No transfers in a vault session
 
-Status: planned · M3 (files in and out)
+Status: planned · M4 (files in and out)
 
 A vault session gets no SFTP and no SCP: `sshd` refuses a subsystem request on a labelled channel.
 `sshd` is a sink cleared for a label only on its owner's terminal channel, with no forwarding, no
@@ -92,16 +92,16 @@ labelled data to leave, and it is not part of the design.
 
 ### Audited
 
-Status: planned · M3 (files in and out)
+Status: planned · M4 (files in and out)
 
 Every operation a transfer performs is one record in the audit log: each open (for reading and for
 writing, since files go out as well as in), each close with its byte count, and each remove,
 rename, mkdir, rmdir and setstat. The log that holds them comes with transfers: written by the
 steward, append-only, recording transfers, with each record signed through `keyd`'s audit purpose
 over `redoubt.audit.v1`, the record's length and the record ([keyd](../servers/keyd.md)). The same
-log grows to every steward action in M4 (self-hosted development), and chaining (which catches
+log grows to every steward action in M5 (self-hosted development), and chaining (which catches
 dropped or reordered records) and the offline verifier come with log retention in
-M5 (persist, install, share) ([the steward](../servers/steward.md)). The principal
+M6 (persist, install, share) ([the steward](../servers/steward.md)). The principal
 and labels in a record come from the badge the steward minted for the transfer server, never from
 the server's own claim, so the server cannot forge whose transfer it was.
 

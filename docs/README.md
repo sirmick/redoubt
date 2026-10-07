@@ -75,13 +75,14 @@ A milestone is always written with its name.
 
 | Milestone | Goal |
 | --- | --- |
-| [M1 (separation and containment)](plan/m1-separation.md) | Alice and Bob log in over SSH into Elixir sessions and are kept apart; Alice's agent runs contained under a lease; the attack suite passes. |
+| [M1 (sessions over SSH, kept apart)](plan/m1-separation.md) | Alice and Bob log in over SSH and on the console into Elixir sessions, kept apart in fixed sub-budgets per label set, with files; a dead steward restarts without a reboot. |
 | [M2 (usable shell)](plan/m2-usable-shell.md) | The Elixir shell is a working environment: commands, file operations, native programs and pipes, jobs, line editing, screens, the editor. |
-| [M3 (files in and out)](plan/m3-files.md) | SFTP and SCP inside SSH, confined to the session's capabilities and audited. |
-| [M4 (self-hosted development)](plan/m4-self-hosted.md) | Redoubt is developed on Redoubt: compilers, `git` and a model provider through gateways, the agent harness, the audit log and the escape room. |
-| [M5 (persist, install, share)](plan/m5-persist.md) | The steward's state survives reboots; signed packages, trust lists and shared projects; A/B updates; the supervisor; wall-clock time; log retention. |
+| [M3 (agents, approvals and the attack suite)](plan/m3-agents.md) | Alice's agent runs contained under a lease; approvals come only from `approve@box`; declassification, crash blame, and the scripted hostile agent and user. |
+| [M4 (files in and out)](plan/m4-files.md) | SFTP and SCP inside SSH, confined to the session's capabilities and audited. |
+| [M5 (self-hosted development)](plan/m5-self-hosted.md) | Redoubt is developed on Redoubt: compilers, `git` and a model provider through gateways, the agent harness, the audit log and the escape room. |
+| [M6 (persist, install, share)](plan/m6-persist.md) | The steward's state survives reboots; signed packages, trust lists and shared projects; A/B updates; the supervisor; wall-clock time; log retention. |
 
-Anything past M5 (persist, install, share) is **beyond M5**: an idea, not a goal, one page each
+Anything past M6 (persist, install, share) is **beyond M6**: an idea, not a goal, one page each
 under [beyond/](beyond/README.md).
 
 ## Rule IDs

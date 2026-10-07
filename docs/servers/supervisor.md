@@ -17,7 +17,7 @@ launch: the loader stub, fresh connections, and grants no wider than their owner
 
 ### Services
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - **A service record** names an installed package's program, its owner, the grants its
   owner made for it from the package's requests, a budget carved from the owner's, and a restart
@@ -37,7 +37,7 @@ form; where logs live and how they are bounded.
 
 ## Authority
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - A service holds exactly the grants its record names, never its owner's whole set.
 - Whatever the supervisor holds to launch, it holds no `system`-class budget handle: only `init` and
@@ -51,7 +51,7 @@ each launch.
 
 ### R73 (a restart never widens)
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 Every start of a service, first or restarted, gets exactly the grants and budget its record names,
 through fresh connections; nothing a previous run held is handed to the next. So a service that was
@@ -61,7 +61,7 @@ compromised and crashed comes back with its recorded authority, not more.
 
 ## Failure and restart
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - **A service crash-loops:** past its restart limit it stays stopped, and a crash blamed on another
   principal is the steward's to judge ([steward](steward.md#crash-blame)).

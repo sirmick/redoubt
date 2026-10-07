@@ -270,7 +270,7 @@ same: one `scope=` and one handed badge for each client.
 
 ### Name-scoped connections
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 A person's session connects by name, never by address: its connection's rule names the domains
 it may reach, and it writes `connect(name, port)` to a socket's `ctl`.

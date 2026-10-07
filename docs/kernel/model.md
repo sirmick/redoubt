@@ -570,7 +570,7 @@ it.
 
 ## Replaying traces on the real kernel
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 A bench case boots the real kernel with a replayer program and a set of model traces as files
 in the bundle ([test bench](../testbench.md)). The replayer reads each trace with

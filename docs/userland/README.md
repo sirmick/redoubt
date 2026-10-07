@@ -31,7 +31,7 @@ The mechanisms underneath belong to other pages: handles, IPC, budgets and proce
 
 ## What a person sees
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 Alice runs `ssh alice@box`. `sshd` and the steward authenticate her with her own key, the steward
 starts her session, and she is at the shell's prompt. The session is one beamlet VM in one budget carved
@@ -57,17 +57,17 @@ her labelled data and cannot send it anywhere unlabelled
 ([R1 (flow)](../kernel/ipc.md#r1-flow)). `ssh approve@box` is the one place Alice answers
 requests for authority nobody has granted; only the steward talks to that terminal.
 
-In M1 (separation and containment) the session is the shell with what the attack suite needs:
+In M1 (sessions over SSH, kept apart) the session is the shell with what the milestone needs:
 the console, files, and launching native programs. The working shell (commands, file
 operations, pipes, jobs, line editing, completion, help and the editor) is
 [the shell](shell.md)'s, for M2 (usable shell). Files in and out over SFTP and SCP are
-[file transfer](transfer.md)'s, for M3 (files in and out).
+[file transfer](transfer.md)'s, for M4 (files in and out).
 
 **Open:** none.
 
 ## What an agent sees
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 An agent is its own principal with a **sponsor**, the principal who answers for it. It runs in
 its own beamlet VM, under a **lease**: a budget with a kernel deadline, placed under its
@@ -77,7 +77,7 @@ lease ends, everything in it ends, sub-agents included. The design assumes every
 hijacked by something it read: it can do what its capabilities allow, until its lease ends, and
 nothing more ([agents](agents.md)).
 
-An agent never inherits network access. From M4 (self-hosted development) it reaches a model
+An agent never inherits network access. From M5 (self-hosted development) it reaches a model
 provider through a `gatewayd` capability that holds the API key, never through a socket
 ([gatewayd](../servers/gatewayd.md)).
 
@@ -85,20 +85,20 @@ provider through a `gatewayd` capability that holds the API key, never through a
 
 ## What a developer sees
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 Redoubt is developed on Redoubt. A developer works in a session like any other: `git` reaches its
 remotes through a `gatewayd` git capability, the Elixir and Erlang compilers run on the box in
 beamlet, and Rust is built off the box. System code arrives in the signed boot bundle; a
 developer's own program arrives by SFTP and runs, unsigned, with the developer's own authority
 ([development](development.md)). Programs and libraries reach other principals as signed packages
-from M5 (persist, install, share) ([packages](packages.md)).
+from M6 (persist, install, share) ([packages](packages.md)).
 
 **Open:** none.
 
 ## The layers
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 ```mermaid
 flowchart TB

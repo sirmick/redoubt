@@ -20,7 +20,7 @@ Status: built · tested: bench:x
 
 Double.
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 **Open:** stray.
 

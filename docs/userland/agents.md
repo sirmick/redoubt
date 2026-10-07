@@ -43,7 +43,7 @@ Alice at `ssh approve@box` ([sessions](sessions.md#approve)).
 
 ### An agent is a principal with a sponsor
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 Humans, agents and projects are the same kind of principal to the steward: a named, accountable
 identity with a way to authenticate, a set of capabilities and an audit identity. They differ in
@@ -64,7 +64,7 @@ authentication and default policy, not mechanism ([the steward](../servers/stewa
 
 ### Leases
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 A **lease** is a budget with a deadline, made by the steward for an agent or a session. When the
 deadline passes, the kernel destroys the budget and everything in it; the sponsor can end it
@@ -81,7 +81,7 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   ([crash blame](../servers/steward.md#crash-blame)). An agent shares its sponsor's account, so the
   sponsor answers for its agents, and a crash loop is stopped at the sponsor.
 - **When a lease ends**, the launcher disconnects the agent's connections and releases what typed
-  servers granted it; everything is recorded in the audit log from M4 (self-hosted development).
+  servers granted it; everything is recorded in the audit log from M5 (self-hosted development).
 
 **Open:** none.
 
@@ -111,7 +111,7 @@ side ([`libs/rt/src/server/admit.rs`](../../libs/rt/src/server/admit.rs),
 
 ### Delegation only narrows
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 ```mermaid
 flowchart TB
@@ -139,14 +139,14 @@ Person to agent to sub-agent, each step is narrower, and the chain is recorded.
   it was started with, and a budget with more labels, or a new durable principal, needs the
   steward and an approval.
 - **Never network by default.** An agent inherits no network access. From
-  M4 (self-hosted development) it reaches a model through a `gatewayd` capability that holds the
+  M5 (self-hosted development) it reaches a model through a `gatewayd` capability that holds the
   API key; only people get name-scoped TCP ([gatewayd](../servers/gatewayd.md)).
 
 **Open:** none.
 
 ### Labels and vaults
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 Capabilities bound what an agent can **do**; labels bound what it can **leak**. The unit of
 isolation is the label set, not the capability set: a budget with a label can read that label's
@@ -174,14 +174,14 @@ Two stated residuals:
 
 ### No credentials in agent memory
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 An agent never holds a key or an API token. It uses keys through `keyd` (the key server), and,
-from M4 (self-hosted development), models through `gatewayd`, which holds the API keys. In
-M1 (separation and containment) no session and no lease holds `keyd` capabilities at all.
+from M5 (self-hosted development), models through `gatewayd`, which holds the API keys. Until
+M6 (persist, install, share) no session and no lease holds `keyd` capabilities at all.
 
 A lease holds no key until principals' signing keys exist, which the plan places with keys in leases
-in M5 (persist, install, share). Then a lease carries only a key its approval named, and a `keyd`
+in M6 (persist, install, share). Then a lease carries only a key its approval named, and a `keyd`
 capability names one key and one purpose, with the one message shape it may sign (for SSH, a
 signature over a session identifier `keyd` computed itself), never arbitrary bytes. Otherwise a
 hijacked agent would be a signature oracle, and its peer could log in as its sponsor elsewhere
@@ -191,7 +191,7 @@ hijacked agent would be a signature oracle, and its peer could log in as its spo
 
 ### The agent harness
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 `Redoubt.Agent` starts and drives an agent from a session. The harness runs in the launcher's VM;
 the agent runs in a VM of its own, in its lease, with its own label set, and the model loop runs
@@ -258,7 +258,7 @@ What the harness cannot be made to do:
 
 ### The agent loop
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 The model loop that runs in an agent's VM is small by design, after Mario Zechner's `pi`: a system
 prompt under 1,000 tokens, four tools, and nothing else in the loop.
@@ -291,7 +291,7 @@ prompt under 1,000 tokens, four tools, and nothing else in the loop.
 
 ### The escape room
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 The bench tests properties someone already thought of. The escape room (the game) tests the ones
 nobody did, against real agents told to get out, and it runs continuously. Its scenarios:

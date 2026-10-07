@@ -18,7 +18,7 @@ asks for.
 
 ### Resolving a name
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 - **Name rules.** A caller's badge names an allowlist of domain names and suffixes and a blocklist
   that subtracts from it and always wins. A suffix matches only at a label boundary: `example.com`
@@ -48,7 +48,7 @@ The attack test: a disallowed name never reaches upstream (the test upstream see
 
 ### Connections by name, pinned
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 `ipd` resolves at connect time: it checks the name against the connecting connection's rule, asks
 the resolver, drops every always-forbidden address from the answer, connects to one of the rest,
@@ -63,7 +63,7 @@ through `gatewayd` ([gatewayd](gatewayd.md)).
 
 ### Caching
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 The cache is keyed by the connection a query arrives on, its own badge, never by anything in the
 query and never by the connection's admission share: the account-0 fold of
@@ -81,7 +81,7 @@ keys the cache by rule or name alone fails it.
 
 ## Authority
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 - The resolver holds its endpoint, one `ipd` connection scoped to its upstream resolvers' addresses
   and port.
@@ -94,7 +94,7 @@ Status: planned · M4 (self-hosted development)
 
 ### R63 (only allowed names)
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 The resolver sends upstream, and answers, only names its caller's rules allow and its blocklist does
 not; a refused name causes no query. So a client cannot use DNS queries to carry data to a resolver
@@ -104,7 +104,7 @@ it chose, or to learn names outside its rules.
 
 ### R64 (connections by name are pinned)
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 A connection made by name reaches exactly one address, one the resolver answered for that name
 at connect time and that is not always-forbidden, on a port its rule allows, for its whole life.
@@ -113,7 +113,7 @@ at connect time and that is not always-forbidden, on a port its rule allows, for
 
 ## Failure and restart
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 - **The resolver restarts:** its cache is gone; connections by name made meanwhile fail and are
   asked again. Connections already open are `ipd`'s, pinned, and stay.

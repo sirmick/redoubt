@@ -20,7 +20,7 @@ that can reach only one principal's packages.
 
 ### What is signed
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - **A package is signed as a whole**: a ustar archive with a manifest, in the boot bundle's
   signature container ([boot](../kernel/boot.md)). `.beam` archives and native programs are package
@@ -43,7 +43,7 @@ the verifier.
 
 ### The pkg server
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 `pkg` (the command, over the `Redoubt.Pkg` module) talks to the pkg server; the steward never
 parses an archive, as `init` and the steward never parse an ELF.
@@ -70,7 +70,7 @@ outside its principal's package directory.
 
 ### Signer trust and granted authority
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - **The steward launches code for a principal only if the principal trusts the signer**, and with at
   most what the principal grants: at install or run time the principal grants the manifest's
@@ -99,7 +99,7 @@ unchanged.
 
 ### Per-principal packages and profiles
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - `pkg add` has the pkg server write a package into
   `/system/pkgs/<principal>/<name>-<version>-<hash>/`. A principal's **profile** (the versions it
@@ -134,7 +134,7 @@ home is never loaded by name.
 
 ### System updates
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - **A/B bundle slots.** `sys update` writes the new signed bundle to the inactive slot; the loader
   verifies it on the next boot. The new system is **healthy** once `init` reaches a steady state,
@@ -154,7 +154,7 @@ keys.
 
 ## Authority
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - The steward keeps the profile, trust and grant records; it does not write packages or parse them.
 - Each pkg server instance holds one archive, a write handle to one principal's package directory,
@@ -170,7 +170,7 @@ Status: planned · M5 (persist, install, share)
 
 ### R71 (no new authority without trust)
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 The steward launches code with grants a principal makes only if a key on that principal's trust list
 signed it, and with at most those grants. Code a principal or its agent wrote runs, but never with
@@ -180,7 +180,7 @@ more authority than its author already holds.
 
 ### R72 (no rollback below the counter)
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 The loader refuses a system bundle whose version is below the counter kept outside both slots, so a
 validly signed but older, vulnerable system cannot be booted in place of a newer one, as long as the
@@ -190,7 +190,7 @@ counter's storage cannot be reset (Residual risks).
 
 ### R74 (a hostile package stays in its principal's packages)
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 No archive reaches the package parser unless a key on the installing principal's trust list signed
 it, and the parser runs in a pkg server holding only that archive, that principal's package
@@ -201,7 +201,7 @@ hostile archive, even one a trusted key signed, can write only its own principal
 
 ## Failure and restart
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 - **An update fails to boot or to become healthy:** the next boot uses the other slot.
 - **An install is interrupted:** the new version's directory is incomplete and unused; the profile

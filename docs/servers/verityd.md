@@ -274,7 +274,7 @@ Status: built · partly tested: the exits on bad arguments and on no `volume` ha
   manifest, so an older bundle brings its older volume, or a lower floor, back with it;
   [boot](../kernel/boot.md) has no rollback protection, and this is no worse. Nothing on the box
   raises a floor: a higher one arrives with a new bundle, and a monotonic store belongs to
-  [M5 (persist, install, share)](../plan/m5-persist.md).
+  [M6 (persist, install, share)](../plan/m6-persist.md).
 - **A root block names no volume.** Its signature covers N, the version and the root, not which
   volume it is, so two volumes signed under one key at versions over the floor can stand in for
   each other on a disk. A deployment gives each signed volume a key of its own, until a later

@@ -6,7 +6,7 @@ A page that states a rule the code does not yet keep links the item from its res
 
 Items marked "fixed in the kernel follow-up package", "the servers follow-up package" or "the
 beamlet follow-up package" are the first work of
-[M1 (separation and containment)](../plan/m1-separation.md#remaining-work), ahead of `init` and
+[M1 (sessions over SSH, kept apart)](../plan/m1-separation.md#remaining-work), ahead of `init` and
 the manifest. The rest are placed by the plan pages or wait for an owner decision, which the
 page names.
 

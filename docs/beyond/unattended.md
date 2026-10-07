@@ -10,7 +10,7 @@ when the system does not come up.
 
 Every milestone assumes a person nearby: the first owner is enrolled on the physical console, a
 failed update falls back to the other slot at the next boot, and a crash is reported on the
-console and to the steward. M5 (persist, install, share) keeps state across reboots and restarts
+console and to the steward. M6 (persist, install, share) keeps state across reboots and restarts
 services, which is the base for all of this, but none of it is needed to meet the hard goals.
 
 ## What it would need

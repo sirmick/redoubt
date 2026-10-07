@@ -19,7 +19,7 @@ one take one server each; this page states what they share.
 
 ## The server graph
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 The loader starts only the kernel and `init` ([boot](../kernel/boot.md)). `init` reads the boot
 manifest and starts every system server from the bundle, through the loader stub
@@ -46,23 +46,23 @@ flowchart TD
     ST -.-> AG[agents<br/>under leases]
 ```
 *Figure: who starts whom. Solid arrows are built; dashed are planned for
-M1 (separation and containment).*
+M1 (sessions over SSH, kept apart), and agents for M3 (agents, approvals and the attack suite).*
 
 `init` starts the drivers and the servers that need no principal first (`consoled`, `bootfsd`,
 `blkd`, each `verityd`, each `littlefsd`, `erofsd` and `walfsd`, `netd`, each `ipd`, `keyd`), then the steward
 and `sshd`.
 It keeps each server's receive right, so a restarted server receives on the same endpoint (Restarts
 and crash blame, below). The servers planned for later milestones join the same graph:
-the [resolver](resolver.md) and [`gatewayd`](gatewayd.md) in M4 (self-hosted development), and
+the [resolver](resolver.md) and [`gatewayd`](gatewayd.md) in M5 (self-hosted development), and
 the [package server](pkg.md) and the [supervisor](supervisor.md) in
-M5 (persist, install, share).
+M6 (persist, install, share).
 
-**Open:** whether the supervisor of M5 (persist, install, share) takes over restarting from
+**Open:** whether the supervisor of M6 (persist, install, share) takes over restarting from
 `init` or runs beside it ([supervisor](supervisor.md)).
 
 ## Trust tiers
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 | Tier | Members | Trusted for | A compromise reaches |
 | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ Status: built · partly tested: only `ipd`'s refusal of labelled callers is atta
 
 ### Labels on the running system
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 The steward creates every labelled budget, after an approval, and a child inherits its parent's
 labels ([budgets](../kernel/budgets.md#labels-on-budgets)). A volume has one label set, fixed by
@@ -191,7 +191,7 @@ The serving library implements all of it once ([serving](serving.md#minted-conne
 
 ## Cleaning up after a child
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 A launcher disconnects a child's connections, and releases its grants from typed servers, when it
 receives the child's exit notice ([processes](../kernel/processes.md#exit-notices)); the steward
@@ -203,7 +203,7 @@ does the same at logout and at a lease's end. A child's grants never outlive its
 
 ## Restarts and crash blame
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 - **`init` restarts every server** that ends, on the same endpoint. Calls the server had taken
   get `Dead`, and clients retry; senders still queued wait and are served by the restarted server
@@ -224,7 +224,7 @@ Status: planned · M1 (separation and containment)
 
 ## Capability holdings
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 | Server | Receives on | Holds | Never holds |
 | --- | --- | --- | --- |
@@ -270,7 +270,7 @@ flowchart LR
 ```
 *Figure: the capabilities each server holds. An edge from `init` is a handle it places; any other
 edge runs from a holder to the server its handle reaches. All are planned for
-M1 (separation and containment).*
+M1 (sessions over SSH, kept apart).*
 
 **Open:** whether `init` keeps a copy of each device handle it places, so it can restart a driver,
 and so stays a co-holder ([devices](../kernel/devices.md#which-process-gets-which-device)).
@@ -311,11 +311,11 @@ flowchart LR
     N --> V[virtio-net]
 ```
 *Figure: the network path. Solid is built; dashed is planned: the resolver and `gatewayd`
-for M4 (self-hosted development), `tlsd` beyond M5.*
+for M5 (self-hosted development), `tlsd` beyond M6.*
 
 ### The path for people and agents
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 Agents never get sockets. An agent holds gateway capabilities to `gatewayd`, which makes the
 request itself, over TLS, to one allowed service, checks it and logs it
@@ -324,8 +324,8 @@ names in the caller's allowlist, and a connection is made by name and pinned to 
 resolved to ([resolver](resolver.md)). The host's and the cloud metadata addresses, the box's
 own services from inside, and inbound traffic other than SSH are always refused.
 
-**Open:** whether TLS for `gatewayd` runs in a separate `tlsd` in M4 (self-hosted development) or
-inside `gatewayd` until the web stack needs `tlsd` beyond M5.
+**Open:** whether TLS for `gatewayd` runs in a separate `tlsd` in M5 (self-hosted development) or
+inside `gatewayd` until the web stack needs `tlsd` beyond M6.
 
 ## Residual risks
 

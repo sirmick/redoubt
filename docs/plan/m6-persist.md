@@ -1,4 +1,4 @@
-# M5 (persist, install, share)
+# M6 (persist, install, share)
 
 ## Goal
 
@@ -44,7 +44,7 @@ The box keeps running and changing without losing what it is:
 
 ## Remaining work
 
-In this order, after [M4 (self-hosted development)](m4-self-hosted.md):
+In this order, after [M5 (self-hosted development)](m5-self-hosted.md):
 
 1. **The steward's persistence**, run-time principals and first-owner enrolment
    ([the steward](../servers/steward.md#persistence-run-time-principals-and-enrolment)), with

@@ -435,7 +435,7 @@ compiles its public half in instead ([getting started](../../GETTING-STARTED.md)
 - the loader itself: on QEMU the host loads it with `-kernel`, unchecked; on hardware a boot ROM
   or the firmware would verify it ([FPGA platform](../beyond/fpga-platform.md));
 - M-of-N signatures, rollback protection and key rotation ([packages](../servers/pkg.md),
-  M5 (persist, install, share));
+  M6 (persist, install, share));
 - **confidentiality**: the bundle is signed, never encrypted. Verified boot gives integrity and
   authenticity. Whoever can read the bundle image reads all of it, including any key seeds the
   boot manifest carries for `keyd` ([keyd](../servers/keyd.md)).
@@ -607,7 +607,7 @@ naming both ranges.
   rotation and no M-of-N.
 - **No rollback protection.** An older bundle, correctly signed, boots as readily as the
   latest. The rollback counter belongs to system updates ([packages](../servers/pkg.md),
-  M5 (persist, install, share)).
+  M6 (persist, install, share)).
 - **Integrity, not confidentiality.** Seeds and anything else in the bundle are readable by
   whoever reads the bundle image; `keyd`'s seeds are the stated case ([keyd](../servers/keyd.md)).
   Bundle confidentiality is not claimed ([TENETS](../TENETS.md#threat-model)).

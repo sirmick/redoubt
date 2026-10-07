@@ -10,7 +10,7 @@ write code. Preserve running Wash.
 
 [The tenets](../docs/TENETS.md), [reading the book](../docs/README.md),
 [how Redoubt is built](SWARM.md), and the plan page of the current milestone, starting with
-[M1 (separation and containment)](../docs/plan/m1-separation.md). Consult the
+[M1 (sessions over SSH, kept apart)](../docs/plan/m1-separation.md). Consult the
 [security register](../docs/SECURITY.md) and the pages a package names. The owner's instructions
 govern the session; the tenets govern the pages. Read them fresh: merged does not mean accepted.
 

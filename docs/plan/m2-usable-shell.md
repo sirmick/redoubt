@@ -82,16 +82,19 @@ party's own output.
 
 ## Remaining work
 
-Two tracks, after [M1 (separation and containment)](m1-separation.md). They touch different code,
-the userland and the kernel, so they run side by side from the milestone's start, with the
-several-harts track begun first: the kernel has no other work in this milestone, and every shell
-case built after it then runs on several harts too. The milestone is done only when the bench's
-cases pass booted with several harts as well as with one.
+Two tracks: the shell and several harts. They touch different code, the userland and the kernel,
+so they run side by side. The shell's host steps need nothing
+[M1 (sessions over SSH, kept apart)](m1-separation.md) builds, so they start ahead of it, as the
+kernel on every hart under one lock does (below). The shell's steps on Redoubt and the rest of
+several harts follow M1 (sessions over SSH, kept apart), the several-harts steps first: the kernel
+has no other work in this milestone, and every shell case built after them then runs on several
+harts too. The milestone is done only when the bench's cases pass booted with several harts as
+well as with one.
 
 ### The shell
 
-Two tracks, side by side. The shell itself is built on a host first, where each step is one a
-person can use, in this order:
+The shell itself is built on a host first, ahead of M1 (sessions over SSH, kept apart), where each
+step is one a person can use, in this order:
 
 1. **The terminal:** the host console, the terminal library, the shell's driver under `group` and
    `edlin`, line editing and history, and the interrupt ending a line
@@ -109,7 +112,7 @@ person can use, in this order:
 5. **The editor**, then **the file manager** ([the shell](../userland/shell.md#the-editor)).
 6. **Resource use** ([the shell](../userland/shell.md#resource-use)).
 
-On Redoubt, in this order:
+On Redoubt, after M1 (sessions over SSH, kept apart), in this order:
 
 1. **Parking a typed call** in the serving library, then the console's `consol` protocol (`size`,
    `resize`) on it ([serving](../servers/serving.md#parking-a-typed-call),

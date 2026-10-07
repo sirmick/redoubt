@@ -133,8 +133,10 @@ One boot, `bench:kernel-containment`, shows that the kernel's primitives alone c
 code before `init`, the steward or any server is built on them. Hostile code in a lease is
 preempted, then ended at its deadline or revoked by hand while its messages and lends are in
 flight, and its victims stay responsive the whole time. The boot is evidence for the kernel only.
-The steward's leases, approvals, the network and sessions have their own cases
-([M1 (separation and containment)](../plan/m1-separation.md#attack-suite)).
+Sessions have their own cases
+([M1 (sessions over SSH, kept apart)](../plan/m1-separation.md#attack-suite)), and the steward's
+leases, approvals and the network theirs
+([M3 (agents, approvals and the attack suite)](../plan/m3-agents.md#attack-suite)).
 
 **What runs.** The loader starts one program. It holds `root`, `system`, `users`, the console
 and the Reset right. It builds the budget tree at the weights `init` gives
@@ -338,7 +340,7 @@ two, where a file serves two mechanisms).
   seed. It shows that the kernel's primitives hold together for that workload. It does not bound
   every workload, and it says nothing about the real steward. The steward reruns the
   responsiveness measures with its real servers
-  ([M1 (separation and containment)](../plan/m1-separation.md#remaining-work)).
+  ([M3 (agents, approvals and the attack suite)](../plan/m3-agents.md#remaining-work)).
 - **The kernel trusts the loader's handoff.** It reads the argument block through a pointer the
   loader passed and trusts the memory map in it. It checks the device list itself (no device may
   overlap RAM or an interrupt controller), and it checks its own mappings are W^X before the
