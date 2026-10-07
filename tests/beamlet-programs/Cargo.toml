@@ -5,9 +5,14 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "The native programs beamlet's system natives' cases start (docs/userland/beamlet.md, \"Natives\")"
 
-# A session the tester starts in the steward's place launches `beamlet-hello` from /boot; the
-# serving case's second program calls the endpoint the VM serves. Each says its lines through the
-# /dev/cons connection its launcher gave it.
+# `beamlet-session`, in the steward's place, starts each case's session; a session launches
+# `beamlet-hello` from /boot; the serving case's second program calls the endpoint the VM serves.
+# Each says its lines through the /dev/cons connection its launcher gave it.
+[[bin]]
+name = "beamlet-session"
+path = "src/bin/beamlet-session.rs"
+test = false
+
 [[bin]]
 name = "beamlet-hello"
 path = "src/bin/beamlet-hello.rs"

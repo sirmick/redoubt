@@ -1,0 +1,56 @@
+description = "The system natives on the machine (docs/userland/beamlet.md, \"Natives\"): a session's VM, launched by the cases' tester in the steward's place in a session budget carved as the steward carves one (the principal's account, her unlabelled sub-budget), prints its namespace, binds its home volume at a second path and reads back through the home what it wrote through the bind, carves a child budget with a deadline whose use it reads before the deadline and is refused after it, prints its label set, and asks keyd for its public key through the generated client"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init and servers; the tester `beamlet-session` is the manifest's steward, so init hands
+# it `users`, and it launches beamlet with a carved `budget`, as the steward launches a session.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-hello" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-caller" },
+]
+timeout_secs = 180
+expect = [
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_natives:start, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] natives: ns: /dev/cons /boot /home/alice budget bootfsd erofsd:system keyd$',
+    '^\[con [0-9a-f]{16}\] natives: bind: ok$',
+    '^\[con [0-9a-f]{16}\] natives: write through the bind: ok$',
+    '^\[con [0-9a-f]{16}\] natives: read through the home: \{ok,<<"buy milk\\n">>\}$',
+    '^\[con [0-9a-f]{16}\] natives: child: 16 pages, 1 process$',
+    '^\[con [0-9a-f]{16}\] natives: child after its deadline: \{error,[a-z_]+\}$',
+    '^\[con [0-9a-f]{16}\] natives: labels: \[\]$',
+    '^\[con [0-9a-f]{16}\] natives: keyd public key: [0-9]+ bytes$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_natives:start ended: Exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd|beamlet-session)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'FAIL',
+    'beamlet: .* not loaded',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/natives.json" }
+
+# What the tester runs: one `vm=MODULE:FUNCTION` a line, and `serve` for the serving case, read
+# from /boot, since `init` passes the steward no arguments of a manifest's.
+[[file]]
+name = "beamlet-session.args"
+from = { path = "tests/data/beamlet/session-natives.args" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/natives-userland.toml"

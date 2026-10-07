@@ -92,17 +92,17 @@ page.
   userland binds to, tested on the host against real servers
   ([native programs](../userland/native.md#the-client-library)). `init` and beamlet's platform are
   built on it, and an `Rerror` keeps its name by one table
-  ([wire](../servers/wire.md#error-names)). Still planned: dropped files' fids that come back,
-  calls by path, and whole reads and writes
-  ([native programs](../userland/native.md#dropped-files-calls-by-path-and-generated-calls)); the
-  generated Elixir clients are built ([wire](../servers/wire.md#generated-clients)).
+  ([wire](../servers/wire.md#error-names)); a session binds each typed server through a
+  generated Elixir client ([wire](../servers/wire.md#generated-clients)). Still planned: dropped
+  files' fids that come back, calls by path, and whole reads and writes
+  ([native programs](../userland/native.md#dropped-files-calls-by-path-and-generated-calls)).
 - **The VM's remaining platform work.** The VM and shell boot on the UART console, and its I/O
    is asynchronous through the client library's hub, files over 9P included
    ([beamlet](../userland/beamlet.md#asynchronous-underneath-synchronous-on-top),
-   [files](../userland/files.md#files-over-9p)). Its system natives (the namespace, typed calls,
-   serving, budgets, labels and launching) are built and tested on the host; no boot runs them
-   ([beamlet](../userland/beamlet.md#natives)). Elixir's `File` in a session waits for the
-   session's namespace to reach its VM.
+   [files](../userland/files.md#files-over-9p)), and its system natives (the namespace, typed
+   calls, serving, budgets, labels and launching) run on the machine in a session a tester starts
+   in the steward's place ([beamlet](../userland/beamlet.md#natives)); Elixir's `File` in a
+   steward's session waits for the session's namespace to reach its VM.
 - **The steward.** Leases, the powerbox and approvals, declassification and push, crash blame,
    on the principals, sub-budgets and sessions it runs today ([the steward](../servers/steward.md)); the server graph, trust tiers and capability holdings
    it runs on ([the servers](../servers/README.md)). The cost of destroying a budget follows the
@@ -170,9 +170,9 @@ Built and attack-tested today:
   help, with hostile text drawn visibly and the cell protocol held to its vectors
   ([the shell](../userland/shell.md#the-loop),
   [the cell protocol](../userland/shell.md#the-cell-protocol)).
-  The shell also boots on Redoubt's UART console; its `exec` launches a native program, tested
-  on the host ([native programs](../userland/native.md#launching-from-a-session)), and its files
-  wait for a session's namespace
+  The shell also boots on Redoubt's UART console, and in a session its `exec` launches a native
+  program from `/boot` ([native programs](../userland/native.md#launching-from-a-session)); its
+  files wait for a session's namespace
   ([the shell on the machine](../userland/shell.md#the-shell-in-a-session)).
 - **The steward**: its policy core, tested on the host, and the server, which carves the
   principals from the manifest, logs in `sshd`'s users and starts each session as a beamlet VM in
