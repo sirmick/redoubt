@@ -152,7 +152,7 @@ impl Number {
                 OutOfProcesses,
             ])
             .with(ADDS_HANDLE),
-            Number::BudgetDestroy => set(&[BadHandle, WrongObject]),
+            Number::BudgetDestroy | Number::BudgetReap => set(&[BadHandle, WrongObject]),
             Number::BudgetUsage => set(&[BadHandle, WrongObject, LabelDenied]),
             Number::TimeNow | Number::Random => set(&[]),
             Number::SystemReset => set(&[BadHandle, InvalidArgument, WrongObject]),

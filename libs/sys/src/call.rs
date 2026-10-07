@@ -334,4 +334,8 @@ calls! {
     /// -> `Device`: which device the handle names, in the form of its `Devs` entry
     /// (kernel/devices.md, `device_info`). Maps nothing and changes nothing.
     DeviceInfo = 27 "device_info" { device: Handle };
+    /// -> `Remaining`: destroys the first child of the budget, its whole subtree, and keeps the
+    /// budget (kernel/budgets.md, R10); the count is the children it still has. Does not return
+    /// if the caller runs in that child's subtree or its process object is charged there.
+    BudgetReap = 28 "budget_reap" { budget: Handle };
 }

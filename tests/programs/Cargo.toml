@@ -13,6 +13,7 @@ bin = [
     { name = "budget-destroy-system", test = false },
     { name = "budget-forge-attack", test = false },
     { name = "budget-mem-churn", test = false },
+    { name = "budget-reap", test = false },
     { name = "budget-syscall-attack", test = false },
     { name = "budget-table-attack", test = false },
     { name = "budget-test", test = false },

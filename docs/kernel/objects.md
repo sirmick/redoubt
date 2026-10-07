@@ -346,7 +346,7 @@ What each handle lets its holder do:
 
 | Handle | Its holder may |
 | --- | --- |
-| budget | carve a child from it (`budget_create`), destroy it and everything below it (`budget_destroy`), read its usage (`budget_usage`, subject to [R1 (flow)](ipc.md#r1-flow)), run a process in it (`process_create`), and name it to narrow a `mint` |
+| budget | carve a child from it (`budget_create`), destroy it and everything below it (`budget_destroy`), destroy its children one at a time and keep it (`budget_reap`), read its usage (`budget_usage`, subject to [R1 (flow)](ipc.md#r1-flow)), run a process in it (`process_create`), and name it to narrow a `mint` |
 | endpoint, badge 0 (the receive right) | `receive` on it, `mint` handles to it, `call` and `send` through it, and name it as a new process's exit endpoint |
 | endpoint, any other badge | `call` and `send` through it; the server sees the badge |
 | process | `process_map` into it and `process_start` it, both only before it starts |

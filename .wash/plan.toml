@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 245
+revision = 252
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -644,8 +644,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "beamlet-redoubt"
   needs = ["BEAM3"]
   body = "docs/userland/beamlet.md#natives: ns_lookup/bind/ns, call/send, serve/reply, budget_create/destroy/usage, labels, launch; handles as resource terms that no term format carries; generated clients from wire tables (docs/servers/wire.md#generated-clients) and Redoubt.Namespace/Budget/Process/Keys. The M1 shell's launch (docs/userland/shell.md#the-shell-in-a-session). Attacks: hostile native arguments, a decoded handle grants nothing. Brief to come."
-  state = "active"
-  revision = 237
+  state = "reported"
+  revision = 248
 
 [[node]]
   id = "BEAM5"
@@ -794,8 +794,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K24"]
   body = "Brief: .wash/local/K19-implementer.md. Tier A, size M+, needs IPC3 merged (start from main). Part A, pumps at the boundary: no delivery inside a destruction; pumps become entries on a bounded to-pump list of endpoints, drained once after step 9 and before the bill; the five dying/doomed checks deleted or made checked-build assertions; commit 1 is a model trace of the mid-kill delivery, and the model's destroy pumps last; R10 step 4 tightens to \"from the mark on, no message stamped with a dying budget is delivered\" with a new model mutation (no R4b doomed mutation exists to retire: say so). Part B, per-budget chains of process objects (charged: the creator's owner chain; counted: a chain keyed on counted_in) so destroy_subtree's kill, step 3's frees and step 8's migration follow the dying subtree. Done when worst-walk's R10 p99 at full fill is within 30 ms net on both widths, its must_fail and docs/todo/destruction-walks-every-process.md gone, the residual bullets rewritten. Short gate plus the R10/R4b case lists and worst-walk by name. IPC3 already removed fail_all's rescan."
-  state = "active"
-  revision = 239
+  state = "reported"
+  revision = 251
 
 [[node]]
   id = "AIO1"
@@ -1057,8 +1057,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["STEWARD2"]
   body = "Owner (2026-10-06): \"a crash should restart it\": a dead steward's restart must be a logout, not a reboot. Brief: .wash/local/K23-implementer.md (architect-16). Tier A, size M. A kernel call budget_reap(handle) -> remaining destroys one child subtree of the budget as R10 does and keeps the budget (limits, class, labels, account, deadline), returning the children left, so each kernel entry is one destruction within R10's bound; authority is the handle, as budget_destroy's; a child handle cannot reap its parent; the model gets reap_budget and three mutations. init, on the steward's exit: settles the dead steward's carve (sessions' process objects and notices go with it), reaps users in a loop, restarts the steward, which finds users empty and starts the console session again; its users-not-empty check stays as the guard. steward-restart's verdict becomes: emptied, restarted, prompt back, no reboot. Pages: budgets.md (the call, R10's paragraph, the lost-budget residual), init.md, steward.md, abi.md, SECURITY.md; docs/todo/empty-a-budget.md deleted."
-  state = "active"
-  revision = 232
+  state = "done"
+  revision = 252
   overrides = ["2026-10-07: started by Orchestrator before STEWARD2 (reported): STEWARD2 is rebasing onto main and lands within hours; K23's kernel call, model rule, init's reap loop and pages need only main, and the steward-restart case's new verdict is written against wp-STEWARD2 and rebased at its merge (the brief names the split)"]
 
 [[node]]
@@ -1077,9 +1077,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["WFS1", "STEWARD2"]
-  body = "servers/walfsd on the file-server skeleton serving walfs volumes one instance per volume (R47, R48, R49, R50 rows); the image's data and labelled volumes on walfs, init's volumes and the steward's home and vault lines on walfsd: handles; machine cases: power loss before-or-after, hostile medium corrupt, quota, the steward's session cases on the new volumes. littlefs stays in the image (owner's decision 4e1539fe: kept for a flash medium); littlefsd keeps its cases and pages, serving no volume of the default image unless a case asks. Tier A, size M. Brief by the Architect at launch."
-  state = "done"
-  revision = 245
+  body = "servers/walfsd on the file-server skeleton serving walfs volumes one instance per volume (R47, R48, R49, R50 rows); the image's data volume on walfs (merged); the labelled vault volume, init's volumes and the steward's home and vault lines on walfsd: handles; machine cases: power loss before-or-after, hostile medium corrupt, quota, the steward's session cases on the new volumes. littlefs stays in the image (owner's decision 4e1539fe: kept for a flash medium); littlefsd keeps its cases and pages, serving no volume of the default image unless a case asks. Tier A, size M. Commits 1-4 merged (the server, init, the data volume, the cases); commit 5 (the vault on walfs, the steward's lines) is on branch wfs2-on-steward2 and lands after STEWARD2 with its own short review; the node closes then."
+  state = "reported"
+  revision = 246
   overrides = ["2026-10-07: started by Orchestrator before STEWARD2 (reported): STEWARD2 is rebasing onto main and lands within hours; WFS2's commits 1-4 (walfsd, init, the data volume, walfsd's own cases) need only WFS1, which is merged; commit 5 (the labelled volume, home/vault names, the steward's session cases) is written against wp-STEWARD2 and rebased at its merge, as the brief says"]
 
 [[node]]
@@ -1184,3 +1184,21 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by K23 (2026-10-07): after a steward crash, init reaps the sessions' budgets and restarts the steward (K23), but an SSH channel whose session was reaped stays open: sshd ends a channel only on the steward's `ended` on the console it gave the session, that endpoint is sshd's own so a reap reaches it with no Dead, and a dead steward sends no `ended`; alice's terminal hangs until she kills ssh. Tier A (sshd, the steward protocol, the wire table), size S: at start the steward tells sshd that every session from before its start is over (one steward-protocol message with a wire.md row; sshd ends every channel it holds for them with the usual close), and sshd's channel also ends when its session's console write fails; steward-restart's verdict gets alice's channel closing back (the K23 residual on steward.md and sshd.md goes); sshd's host test for the message; the login-latency and session cases unchanged."
   state = "todo"
   revision = 244
+
+[[node]]
+  id = "K27"
+  title = "A process that carves all of its budget's weight ends silently: exit 0, no line"
+  template = "package"
+  parent = "M1"
+  body = "Found by BEAM4 (2026-10-07): when the shell VM carved a child budget taking all of its own budget's weight, the VM ended with exit 0 and no console line; BEAM4's report names it as the kernel's question. Tier A (the budget calls' rules), size S: find whether the kernel kills or starves a budget left with zero weight (R12: a budget with no weight never runs; the carve should be refused, or the parent keeps a floor), state the rule on budgets.md with a model rule and mutation, make the carve refuse with a named error at the ABI, and add a case (a carve of the whole weight is refused; the parent keeps running). The VM's handling of a refused carve is BEAM4's: the native returns the error name."
+  state = "todo"
+  revision = 249
+
+[[node]]
+  id = "B22"
+  title = "bench-ssh-loopback-host-key's must_fail reads the last output line, which is the ProxyCommand's broken pipe, not ssh's refusal"
+  template = "package"
+  parent = "M1"
+  body = "Trains 4 and 5 (2026-10-07), both widths, deterministic: the case expects '... ssh exited (status 255), expected 0; last output: Host key verification failed.' and gets '... last output: Error: Broken pipe (os error 32)': ssh refuses the pinned key and exits 255 as intended, but the loopback sshd's ProxyCommand side writes its broken-pipe error after ssh's own last line, so the bench's 'last output' is the wrong process's. Tier B, size S: the session runner's failure text names ssh's exit status and the last line ssh itself wrote (stderr of the ssh process, not the ProxyCommand's), or must_fail matches the host-key line anywhere in the session's output; the bench's own test for the runner's text; rerun the case both widths and the 13 other loopback cases."
+  state = "todo"
+  revision = 250

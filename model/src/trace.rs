@@ -220,7 +220,10 @@ impl Names {
             }
             S::Reply { msg_id, words: w, handles } => format!("m:{msg_id} {} {}", words(w), hs(handles)),
             S::Serve { msg_id } => format!("m:{msg_id}"),
-            S::HandleClose { h: x } | S::BudgetDestroy { h: x } | S::BudgetUsage { h: x } => h(*x),
+            S::HandleClose { h: x }
+            | S::BudgetDestroy { h: x }
+            | S::BudgetReap { h: x }
+            | S::BudgetUsage { h: x } => h(*x),
             S::BudgetCreate { parent, pages, processes, weight, labels, account, deadline } => {
                 format!(
                     "{} {pages} {processes} {weight} {} {account} {}",
@@ -326,6 +329,7 @@ impl Names {
                     c.weight_usage
                 )
             }
+            Ret::Remaining(n) => format!("ok remaining {n}"),
             Ret::Time(t) => format!("ok time tm:{t}"),
             Ret::Random => "ok random".into(),
             Ret::Device { kind, a, b, flags } => format!("ok device {kind} {a:#x} {b:#x} {flags}"),
@@ -557,6 +561,7 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
             deadline: v(6)?,
         },
         "budget_destroy" => S::BudgetDestroy { h: v(0)? },
+        "budget_reap" => S::BudgetReap { h: v(0)? },
         "budget_usage" => S::BudgetUsage { h: v(0)? },
         "time_now" => S::TimeNow,
         "random" => S::Random,

@@ -72,13 +72,15 @@ handle to it does not destroy it: its carve stays out of its parent (see Residua
 
 ### The calls
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - bench:budget
 - bench:budget-syscall-attack
 - bench:budget-forge-attack
+- bench:budget-reap
 - host:redoubt-sys::every_call_round_trips
 - host:redoubt-sys::malformed_calls_are_refused
+- host:redoubt-model::a_reap_destroys_one_child_and_keeps_the_budget
 
 </details>
 
@@ -86,6 +88,7 @@ handle to it does not destroy it: its carve stays out of its parent (see Residua
 | --- | --- | --- |
 | `budget_create` | parent budget handle, spec record -> budget handle | Carve a child from the parent. The spec is `(pages, processes, weight, labels, account, deadline)` in `BUDGET_SPEC_SLOTS` (22) slots: three limits, a label count and `MAX_LABELS` label slots, the account and the deadline. |
 | `budget_destroy` | budget handle | Destroy the budget and everything below it ([R10](#r10-destruction)). If the caller runs in that subtree, or its process object is charged to a budget in it, the call never returns. |
+| `budget_reap` | budget handle -> remaining | Destroy the budget's first child and everything below it ([R10](#r10-destruction)), keep the budget, and return how many children it still has. If the caller runs in that child's subtree, or its process object is charged to a budget in it, the call never returns. |
 | `budget_usage` | budget handle, usage record | Write the budget's limits and usage ([`budget_usage`](#budget_usage)). |
 
 The spec has no class and no scheduling flag: a child's class is its parent's, and what runs
@@ -96,15 +99,15 @@ labels (`LabelDenied`, then `ClassDenied`); pages, counting the child's own page
 The new handle is stamped with the caller's budget (R9 (stamps)). If the caller's handle table
 cannot take it (`TooLarge` at `MAX_HANDLES`, or `OutOfMemory` for a new table page), the child is
 undone and the parent is as it was.
-`budget_destroy` fails only on its handle (`BadHandle`, `WrongObject`). Record checks come first
-for every call; the full rows are in the
+`budget_destroy` and `budget_reap` fail only on their handle (`BadHandle`, `WrongObject`). Record
+checks come first for every call; the full rows are in the
 [ABI reference](abi.md#errors-and-the-order-of-checks).
 
 The kernel itself (PID 1) has no budget and makes no calls. A call from it would get
 `InvalidArgument` from a call that passes a record (the record check comes first, and no user
-page is the kernel's), `NotPermitted` from most others, `BadHandle` from `handle_close` and
-`budget_destroy`, and an answer from `time_now` and `random`; none of them panics, so a bug
-there cannot become one.
+page is the kernel's), `NotPermitted` from most others, `BadHandle` from `handle_close`,
+`budget_destroy` and `budget_reap`, and an answer from `time_now` and `random`; none of them
+panics, so a bug there cannot become one.
 
 ### Root, system and users
 
@@ -506,7 +509,7 @@ by itself.
 
 ### R10 (destruction)
 
-<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; that the caller is killed last is not pinned by a case: the kernel's kill lines, the only ones in kill order, carry the PIDs it draws, the tester's lines that name each program come in no defined order, and the bench has no check across lines (`budget-destroy-kills` checks that both die); the equal-instant order of timeouts before deadlines is attacked only in the model · tested (29)</summary>
+<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; that the caller is killed last is not pinned by a case: the kernel's kill lines, the only ones in kill order, carry the PIDs it draws, the tester's lines that name each program come in no defined order, and the bench has no check across lines (`budget-destroy-kills` checks that both die); the equal-instant order of timeouts before deadlines is attacked only in the model · tested (34)</summary>
 
 - bench:budget
 - bench:budget-destroy-attack
@@ -525,7 +528,9 @@ by itself.
 - bench:sched-destroy-billing
 - bench:dma-reset-quarantine
 - bench:dma-destroy-quarantine
+- bench:budget-reap
 - host:redoubt-model::budget_lifecycles
+- host:redoubt-model::a_reap_destroys_one_child_and_keeps_the_budget
 - host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit
 - mutation:R10KeepForeignHandles
 - mutation:R10KeepCarvedLimits
@@ -536,6 +541,9 @@ by itself.
 - mutation:R10SweptHandlesDropped
 - mutation:R10CreatorDeathSparesProcess
 - mutation:R10HeldPidsDropped
+- mutation:R10ReapDestroysParent
+- mutation:R10ReapKeepsCarve
+- mutation:R10ReapSkipsGrandchildren
 - mutation:ExpireBudgetsFirst
 
 </details>
@@ -578,6 +586,18 @@ this order:
    inside it, so the parent never goes over its limit.
 9. **Free.** The dying budgets' pages are freed and they leave the deadline list.
 
+A budget is emptied one child at a time by `budget_reap`, each child destroyed as above (B is
+the child: its processes killed, the calls its servers held failing their callers with `Dead`,
+what was sent through handles stamped with it failed) and the budget kept with its limits,
+class, labels, account and deadline. The call returns how many children remain, so one call is
+one destruction, and the caller loops until the count is 0. The child reaped is the first on the
+budget's child list, the one created last; the call takes no child handle, so the caller cannot
+choose, and the order is not a promise. Its authority is the handle, as for `budget_destroy`: a handle
+to a child reaches only below that child, never its parent. Once the last child is gone the
+budget's usage is what it was before any child was carved (I10, per child). Its class is
+untouched: it is not made again, which `budget_create`, taking no class, could not do for
+`users`.
+
 `root` has no parent, so destroying it (init holds its handle) destroys the whole tree: every
 process ends, and what step 8 would move goes with the tree. The kernel keeps running with nothing
 to run.
@@ -595,18 +615,18 @@ entering process. At an equal instant, timeouts expire before deadlines, so a ca
 a server took, and whose timeout falls with the server budget's deadline, gets `Timeout` with
 its lend consumed, not `Dead` with it returned ([timer](timer.md#expiry)).
 
-Every destruction's whole cost is billed to someone. For `budget_destroy` that is the caller, as
-the call's own kernel time. For a deadline it is B's parent, after its carve returns, or the
-nearest ancestor with free weight above 0 if the parent has none; `root` always has. No part of a
-destruction is billed to nobody. On a deadline the kernel names the payer once step 1 has
-returned B's carve, and after step 9 bills it for everything from the expiry walk that found the
-deadline on, whatever B's own free weight (`bench:deadline-flood-billed`).
+Every destruction's whole cost is billed to someone. For `budget_destroy` and `budget_reap` that
+is the caller, as the call's own kernel time. For a deadline it is B's parent, after its carve
+returns, or the nearest ancestor with free weight above 0 if the parent has none; `root` always
+has. No part of a destruction is billed to nobody. On a deadline the kernel names the payer once
+step 1 has returned B's carve, and after step 9 bills it for everything from the expiry walk that
+found the deadline on, whatever B's own free weight (`bench:deadline-flood-billed`).
 
 ```mermaid
 stateDiagram-v2
     [*] --> Live: budget_create, or boot
     Live --> Live: handle_close<br/>(the budget stays)
-    Live --> Dying: budget_destroy on it<br/>or on an ancestor
+    Live --> Dying: budget_destroy on it<br/>or on an ancestor;<br/>budget_reap on an ancestor
     Live --> Dying: its deadline, or an<br/>ancestor's, passes
     Dying --> Destroyed: kill, free process objects,<br/>fail messages, lift, sweep,<br/>return carve, free
     Destroyed --> [*]
@@ -795,10 +815,11 @@ without preemption.*
 - **A budget handle is a destroy right.** Whoever holds a copy can end the budget and everything
   in it. A server given a budget that holds processes could end them; servers are given only
   revocation scopes ([init](../servers/init.md)).
-- **A lost budget is carved until its parent goes.** Closing the last handle to a budget leaves it
-  alive, its limits still carved from its parent, with no way to reach it until
-  [`budget_children`](#budget_children) exists. The loss is the closer's own tree's, never another
-  budget's.
+- **A lost budget is carved until its parent is reaped.** Closing the last handle to a budget
+  leaves it alive, its limits still carved from its parent, with no handle to it until
+  [`budget_children`](#budget_children) exists. A holder of the parent can take it back only with
+  the rest: `budget_reap` destroys the parent's children one at a time, the lost one among them,
+  with no way to pick it out. The loss is the closer's own tree's, never another budget's.
 - **Quarantined DMA pages stay charged.** A DMA run whose device did not confirm its reset is held
   until reboot. When its budget is destroyed, the charge moves to the parent, which keeps paying
   for those pages until it too is destroyed or the machine reboots

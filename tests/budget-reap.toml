@@ -1,0 +1,26 @@
+description = "budget_reap destroys one child of a budget per call, with its whole subtree, and keeps the budget (R10): a child's handle reaches only below it; the reaped grandchild's server is killed and the caller outside gets Dead with its lend back (R4b); a send stamped with the reaped child fails Dead and arrives nowhere; emptied, the budget's usage is as before its first carve (I10), and an empty budget returns 0 (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+debug_assertions = true
+# The program runs first and judges from the kernel's results: the reap counts, the usage
+# records, the handles' errors, the exit notice, the caller's and sender's call results, and the
+# kernel's checked build, which audits every destruction.
+programs = ["budget-reap"]
+timeout_secs = 10
+expect = [
+    '^\[budget-reap\] ok: a reap through a child.s handle reaches only below it: Ok\(0\), the child kept$',
+    '^\[budget-reap\] ok: the first reap takes the newest child, one left: Ok\(1\)$',
+    '^\[budget-reap\] ok: the reaped child.s and grandchild.s handles, and those stamped with them, are closed$',
+    '^\[budget-reap\] ok: the other child is untouched$',
+    '^\[budget-reap\] ok: the server in the grandchild is killed$',
+    '^\[budget-reap\] ok: the caller outside gets Dead with its lend back intact$',
+    '^\[budget-reap\] ok: the send stamped with the reaped child fails Dead$',
+    '^\[budget-reap\] ok: nothing sent through the stamped handle arrives: Err\(Timeout\)$',
+    '^\[budget-reap\] ok: the last reap leaves the budget.s usage as before its first carve: Ok\(0\)$',
+    '^\[budget-reap\] ok: a budget with no children returns 0 and nothing changes: Ok\(0\)$',
+    '^\[budget-reap\] ok: an endpoint is WrongObject, an empty slot BadHandle: Err\(WrongObject\), Err\(BadHandle\)$',
+    '^BUDGET-REAP TEST PASSED$',
+]
+forbid = ['\[budget-reap\] FAIL', 'PANIC']
+poweroff = true
