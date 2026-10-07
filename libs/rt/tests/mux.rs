@@ -15,12 +15,13 @@ use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Caller, Request, Words};
 use redoubt_rt::server::ninep::{
     Around, COLLECT_WAIT, ENDED, FileServer, FileStat, IN_WORDS, MALFORMED, NineError, NineServer, OPENED,
-    Qid, Read, collect_words, mode, refuse_malformed,
+    Qid, Read, Write, collect_words, mode, refuse_malformed,
 };
 use redoubt_rt::server::{AdmitKey, Limits, Resource};
 use redoubt_rt::wire::ninep::{Body, Message, message_size};
 
-/// A root holding `now`, whose reads are answered at once, and `wait`, whose reads always wait.
+/// A root holding `now`, whose reads and writes are answered at once, and `wait`, whose reads
+/// and writes always wait.
 struct Files;
 
 const ROOT: u8 = 0;
@@ -59,6 +60,13 @@ impl FileServer for Files {
 
     fn write(&mut self, _: &Caller, _: &u8, _: u64, data: &[u8]) -> Result<usize, NineError> {
         Ok(data.len())
+    }
+
+    fn write_or_wait(&mut self, _: &Caller, node: &u8, _: u64, data: &[u8]) -> Result<Write, NineError> {
+        if *node == WAIT {
+            return Ok(Write::Wait);
+        }
+        Ok(Write::Done(data.len()))
     }
 
     fn stat(&mut self, _: &Caller, node: &u8) -> Result<FileStat, NineError> {
@@ -148,7 +156,7 @@ fn open_files(ep: Handle) {
     c.attach(&mut lend, 0, "").unwrap();
     for (fid, name) in [(NOW_FID, "now"), (WAIT_FID, "wait")] {
         c.walk(&mut lend, 0, fid, name).unwrap();
-        c.open(&mut lend, fid, mode::OREAD).unwrap();
+        c.open(&mut lend, fid, mode::ORDWR).unwrap();
     }
 }
 
@@ -175,6 +183,7 @@ fn open_session(ep: Handle) {
 #[derive(Debug, PartialEq, Eq)]
 enum Got {
     Data(Vec<u8>),
+    Wrote(u32),
     Error(String),
     Flushed,
 }
@@ -188,6 +197,7 @@ fn answers(bytes: &[u8]) -> Vec<(u16, Got)> {
         let message = Message::decode(&bytes[at..at + size]).expect("an R-message decodes");
         let got = match message.body {
             Body::Rread { data } => Got::Data(data.to_vec()),
+            Body::Rwrite { count } => Got::Wrote(count),
             Body::Rerror { ename } => Got::Error(ename.to_string()),
             Body::Rflush => Got::Flushed,
             other => panic!("unexpected answer {other:?}"),
@@ -224,6 +234,31 @@ fn send(ep: Handle, tag: u16, body: Body<'_>) {
 }
 
 fn read(ep: Handle, tag: u16, fid: u32) { send(ep, tag, Body::Tread { fid, offset: 0, count: 64 }) }
+
+/// Data longer than the words carry, so a write of it never fits them and goes in a page.
+const LONG: &[u8; 32] = b"a write too long for the words..";
+
+/// Sends a write of [`LONG`] to `fid`, in a page of its own.
+fn write(ep: Handle, tag: u16, fid: u32) { send(ep, tag, Body::Twrite { fid, offset: 0, data: LONG }) }
+
+/// Sends writes of [`LONG`] to `fids`, tagged in step with them, end to end in one page.
+fn writes_in_one_transfer(ep: Handle, tags: &[u16], fids: &[u32]) { writes_in_pages(ep, tags, fids, 1) }
+
+/// Sends writes of [`LONG`] to `fids`, tagged in step with them, end to end in one transfer of
+/// `npages` pages.
+fn writes_in_pages(ep: Handle, tags: &[u16], fids: &[u32], npages: usize) {
+    let mut pages = Buffer::new(npages).unwrap();
+    let mut n = 0;
+    for (tag, fid) in tags.iter().zip(fids) {
+        n += Message { tag: *tag, body: Body::Twrite { fid: *fid, offset: 0, data: LONG } }
+            .encode(&mut pages[n..])
+            .unwrap();
+    }
+    Endpoint::from_handle(ep)
+        .send(&[0, n as u64, 0, 0], &[], Some(pages), FOREVER)
+        .map_err(|(e, _)| e)
+        .unwrap();
+}
 
 /// Sends reads of `fid` tagged `tags`, end to end in one transfer of one page.
 fn reads_in_one_transfer(ep: Handle, tags: &[u16], fid: u32) { reads_in_pages(ep, tags, fid, 1) }
@@ -549,18 +584,55 @@ fn a_sends_pages_count_once_and_go_back_with_its_last_request() {
     let hello = || Got::Data(b"hello".to_vec());
     f.as_process(a, || {
         open_session(ha);
-        // Two reads in one page: two requests and a page, each within its share.
+        // Two reads in one page: each fits the words, so each is copied out of the page as it is
+        // taken, and the page goes back at once; the two requests are held.
         reads_in_one_transfer(ha, &[0, 1], NOW_FID);
     });
-    until("the page and both reads are held", || w.seen.held(1011) == 1 + 3);
+    until("both reads are held and the page went back at once", || w.seen.held(1011) == 1 + 2);
     f.as_process(a, || assert_eq!(collect(ha), vec![(0, hello()), (1, hello())]));
-    until("the page went back with the last read", || w.seen.held(1011) == 1);
-    // Two pages are more than the share of one: the read they brought is answered busy, and
+    until("the reads went", || w.seen.held(1011) == 1);
+    // Two writes too long for the words in one page: two requests and a page, each within its
+    // share. The page stays with the write that waits after the other is answered, and goes
+    // back with it.
+    f.as_process(a, || writes_in_one_transfer(ha, &[0, 1], &[NOW_FID, WAIT_FID]));
+    until("the page and both writes are held", || w.seen.held(1011) == 1 + 3);
+    f.as_process(a, || assert_eq!(collect(ha), vec![(0, Got::Wrote(LONG.len() as u32))]));
+    until("the page stays with the waiting write", || w.seen.held(1011) == 1 + 2);
+    f.as_process(a, || {
+        send(ha, 2, Body::Tflush { oldtag: 1 });
+        assert_eq!(collect(ha), vec![(2, Got::Flushed)]);
+    });
+    until("the page went back with the last write", || w.seen.held(1011) == 1);
+    // Two pages are more than the share of one: the write they brought is answered busy, and
     // nothing of it is held.
     f.as_process(a, || {
-        reads_in_pages(ha, &[2], NOW_FID, 2);
+        writes_in_pages(ha, &[2], &[NOW_FID], 2);
         assert_eq!(collect(ha), vec![(2, busy())]);
     });
     until("nothing of the refused send is held", || w.seen.held(1011) == 1);
+    w.end();
+}
+
+/// A read that waits (a console's, for typing) sent in a page, as every request is on rv32, where
+/// the words carry 12 bytes: it fits the words, so it is copied out and the page goes back at
+/// once, and a write in a page of its own, beside it, is served within the share's one page. With
+/// the page pinned by the parked read, every write would be refused busy for as long as it waited:
+/// a console session on rv32 that reads its typing and prints nothing.
+#[test]
+fn a_parked_read_sent_in_a_page_leaves_the_page_to_a_write() {
+    let w = World::new();
+    let f = fake();
+    let (a, ha) = w.client(1012);
+    f.as_process(a, || {
+        open_session(ha);
+        reads_in_one_transfer(ha, &[0], WAIT_FID);
+    });
+    until("the read waits, holding no page", || w.seen.held(1012) == 1 + 1);
+    f.as_process(a, || {
+        write(ha, 1, NOW_FID);
+        assert_eq!(collect(ha), vec![(1, Got::Wrote(LONG.len() as u32))]);
+    });
+    assert_eq!(w.seen.peak(1012), 1 + 2 + 1, "the read, the write and the write's page");
+    until("the write and its page went", || w.seen.held(1012) == 1 + 1);
     w.end();
 }

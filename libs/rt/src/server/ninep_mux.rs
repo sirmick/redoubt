@@ -23,10 +23,11 @@
 //! - **Admission** (servers/serving.md R26, R28, R77). The session holds one `InFlight` of the connection's
 //!   bucket and share: its completion call's, the one open call. Each request holds one `Requests`, and the
 //!   pages a send brought one `Pages` each, counted once for the send and given back with the last of its
-//!   requests, until the answer is delivered; each resource has its own share. Over either share a request is
-//!   not served: its tag goes into the session's refused set, a bitmap, answered `Rerror` [`NineError::BUSY`]
-//!   first in the next completion call; pages the share cannot pay for refuse every request they came with,
-//!   and go at once.
+//!   requests too long for the words (one that fits them is copied out of the page as it is taken, so a
+//!   request that waits pins no page), until the answer is delivered; each resource has its own share. Over
+//!   either share a request is not served: its tag goes into the session's refused set, a bitmap, answered
+//!   `Rerror` [`NineError::BUSY`] first in the next completion call; pages the share cannot pay for refuse
+//!   every request they came with, and go at once.
 //! - **Flush.** `Tflush(oldtag)` drops oldtag's request (or its pending `busy`) when it arrives, and is
 //!   answered `Rflush` in turn: an answer delivered before it is the only one oldtag gets (intro(5), flush).
 //! - **The end.** The completion call's abandonment (kernel/ipc.md R3: its caller died or gave up), a reply
@@ -113,12 +114,18 @@ fn set(tags: &mut Tags, tag: u16, on: bool) {
     *word = if on { *word | bit } else { *word & !bit };
 }
 
-/// Where a request's T-message is: the words' bytes, or at an offset in transferred pages now
-/// ours, shared by the requests they brought and freed with the last of them.
+/// Where a request's T-message is: in the record itself, when it fits what the words carry on
+/// the widest machine (from the words, or copied out of its page), or at an offset in
+/// transferred pages now ours, shared by the requests of theirs too long for that and freed with
+/// the last of them.
 enum Stored {
-    Words([u8; 3 * 8]),
+    Words([u8; WORDS_BYTES]),
     Pages(Arc<Buffer>, usize),
 }
+
+/// The most a T-message in the words can be: three 64-bit words. A request's record keeps a
+/// message up to this long, whichever width it came on and however it came.
+const WORDS_BYTES: usize = 3 * 8;
 
 /// A request not yet answered, or answered and not yet delivered: they are the same thing here.
 struct Pending {
@@ -248,12 +255,22 @@ fn stored(delivery: Delivery) -> Option<Vec<(Stored, usize)>> {
             while at < end {
                 let len = message_size(&pages[at..end]).ok()?;
                 messages.try_reserve(1).ok()?;
-                messages.push((Stored::Pages(pages.clone(), at), len));
+                // One that fits the words is kept as if it had come in them, so the page is held
+                // only by requests too long for them: a read that waits pins no page on either
+                // width (on rv32 the words carry 12 bytes, and every read comes in a page).
+                let message = if len <= WORDS_BYTES {
+                    let mut bytes = [0; WORDS_BYTES];
+                    bytes[..len].copy_from_slice(&pages[at..at + len]);
+                    Stored::Words(bytes)
+                } else {
+                    Stored::Pages(pages.clone(), at)
+                };
+                messages.push((message, len));
                 at += len;
             }
         }
         None => {
-            let mut bytes = [0; 3 * 8];
+            let mut bytes = [0; WORDS_BYTES];
             for (chunk, word) in bytes.chunks_mut(WORD).zip(&delivery.words[1..]) {
                 chunk.copy_from_slice(&usize::try_from(*word).ok()?.to_le_bytes());
             }
@@ -366,12 +383,12 @@ impl<S: FileServer> NineServer<S> {
     fn take_all(&mut self, s: usize, messages: Option<Vec<(Stored, usize)>>, now: u64) {
         let Some(messages) = messages else { return self.end_session(s) };
         let charge = self.mux.sessions[s].charge;
-        // The pages a send brought count once, before its requests: refused, every request in it
-        // is answered busy, and the pages go now.
-        let batch = match messages.first() {
-            Some((Stored::Pages(pages, _), _)) => Some(pages.clone()),
-            _ => None,
-        };
+        // The pages a send brought count once, before its requests, if any request still lives
+        // in them: refused, every request in it is answered busy, and the pages go now.
+        let batch = messages.iter().find_map(|(message, _)| match message {
+            Stored::Pages(pages, _) => Some(pages.clone()),
+            Stored::Words(_) => None,
+        });
         let paid =
             batch.as_ref().is_none_or(|pages| admit_pages(&mut self.admission, charge, pages.npages()));
         let mut alive = true;

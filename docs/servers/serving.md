@@ -63,7 +63,7 @@ per kind of resource:
 | `Files` | open files, or 9P fids |
 | `State` | any other per-client state: connections and grants minted for the client |
 | `Requests` | a multiplexed connection's requests, each held until its answer is delivered ([multiplexed connections](#multiplexed-connections)) |
-| `Pages` | the pages their transfers brought, one per page however many requests it carries, held until the last of them is answered |
+| `Pages` | the pages their transfers brought, one per page however many requests it carries, held until the last of its requests too long for the words is answered: one that fits them is copied out as it is taken |
 
 `Requests` and `Pages` are both outside the open-call headroom, since a request is a send, not an
 open call, and each has its own share ([R26](#r26-admission-fairness)).
@@ -214,11 +214,12 @@ stateDiagram-v2
 
 ### Multiplexed connections
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (13)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (14)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
 - host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
+- host:redoubt-rt::a_parked_read_sent_in_a_page_leaves_the_page_to_a_write
 - host:redoubt-rt::a_completion_call_is_held_at_most_its_hold_and_the_servers_bound
 - host:redoubt-rt::a_never_polling_client_holds_only_its_share
 - host:redoubt-rt::death_with_requests_parked_frees_the_connection
@@ -243,7 +244,10 @@ connection; the client half is the client library's hub
 - **A request** is a `send` on the connection's badge with word 0 = 0: one T-message, packed into
   words 1 to 3 (three machine words: 24 bytes on rv64, 12 on rv32), or one or more T-messages end
   to end at the start of a transfer, word 1 their length, so 64 reads cost one page on either
-  width. A send is never an open call, so the server takes requests even while it holds
+  width. A T-message that fits the words (24 bytes, three 64-bit words, on either width) is kept
+  in the request's own record whichever way it came, copied out of its page as it is taken, so a
+  page is held only by requests too long for that: on rv32, where every read comes in a page, a
+  read that waits (a console's, for typing) pins no page. A send is never an open call, so the server takes requests even while it holds
   `MAX_OPEN_CALLS` ([R4a (open calls)](../kernel/ipc.md#r4a-open-calls)), and it never waits on
   the client: everything it says goes back as a reply.
 - **The completion call** is a 9P call with words `[0, COLLECT, hold, 0]` (`COLLECT` is 1) and a
@@ -273,7 +277,8 @@ connection; the client half is the client library's hub
 - **Admission** ([R77 (multiplexed requests)](#r77-multiplexed-requests)). The session holds one
   `InFlight` of the connection's bucket and share for its completion call, its one open call. Each
   request holds one `Requests`, and the pages a send brought one `Pages` each, counted once for the
-  send and held until the last of its requests is answered or dropped; each resource has its own
+  send and held until the last of its requests too long for the words is answered or dropped (a
+  send whose requests all fit them holds no page past its taking); each resource has its own
   share. A request that would take its badge past either share is not served: its tag joins the
   session's refused set, a 256-bit map, answered `Rerror` "busy" first in the next completion
   call. Pages the share cannot pay for refuse every request they came with, and go at once; a
@@ -706,6 +711,11 @@ its `Rflush`, never after.
   performed a non-provisional effect (a file write) keeps the effect without learning of it.
 - **Admission counts objects, not bytes.** Bytes are the file server's to meter (`littlefsd`'s quotas);
   every other server keeps no byte count.
+- **A share of two pages is one page.** At a server whose cap is 2 `Pages` (`consoled`, `erofsd`,
+  `bootfsd`) a badge of a non-zero account may hold one page at a time
+  ([R26](#r26-admission-fairness): less than half, and at least one), so of two requests too long
+  for the words outstanding at once (two writes) the second is answered `busy`, and is its
+  caller's to send again. beamlet's console keeps one write out at a time.
 
 ## Why
 
