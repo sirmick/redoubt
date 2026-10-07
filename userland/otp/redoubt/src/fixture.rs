@@ -19,6 +19,7 @@ use std::collections::VecDeque;
 use std::io::{Read as _, Write};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -237,6 +238,150 @@ impl FileServer for Stream {
 
     fn dir_entry(&mut self, _: &Caller, _: &Cons, _: u64) -> Result<Option<(Cons, FileStat)>, NineError> {
         Ok(None)
+    }
+}
+
+/// A file server of one writable file, `out`, under its root, with a share of one page a badge
+/// (`consoled`'s page limits): what a write to it brought is kept, and the first `busy` writes
+/// are answered `busy`, as a server over its share answers. Bound in a session's namespace, it
+/// is a server for the files' own retries.
+pub struct SinkServer {
+    pub pid: usize,
+    pub endpoint: Handle,
+    pub thread: JoinHandle<u32>,
+    /// When each write reached it (`time_now`, µs), answered or refused.
+    pub writes: Arc<Mutex<Vec<u64>>>,
+    /// What the writes it took brought, in order.
+    pub taken: Arc<Mutex<Vec<u8>>>,
+    /// While set, a read of `out` waits (the request stays pending at the server, holding the
+    /// share's one request), so a test can make the next request on the connection `busy`.
+    pub hold_reads: Arc<AtomicBool>,
+    /// When each clunk was served (`time_now`, µs): a fid the server let go of.
+    pub clunks: Arc<Mutex<Vec<u64>>>,
+}
+
+/// Starts a [`SinkServer`] answering the first `busy` writes `busy`.
+pub fn sink(busy: u32) -> SinkServer {
+    let f = fake();
+    let pid = f.process(0, &[]);
+    let endpoint = f.endpoint(pid);
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let taken = Arc::new(Mutex::new(Vec::new()));
+    let hold_reads = Arc::new(AtomicBool::new(false));
+    let clunks = Arc::new(Mutex::new(Vec::new()));
+    let sink = Sink {
+        busy,
+        writes: Arc::clone(&writes),
+        taken: Arc::clone(&taken),
+        hold_reads: Arc::clone(&hold_reads),
+        clunks: Arc::clone(&clunks),
+    };
+    let thread = f.run(pid, move || {
+        // `consoled`'s page share, and a share of one request: a second request outstanding on
+        // the connection is `busy`.
+        let limits = Limits { buckets: 4, in_flight: 2, files: 8, state: 4, requests: 2, pages: 2 };
+        let random = redoubt_rt::handle::random_u64().unwrap_or(1);
+        let Ok(mut server) = NineServer::new(sink, limits, random) else { return 1 };
+        server.run(&Endpoint::from_handle(endpoint), |_, request| refuse_malformed(request))
+    });
+    SinkServer { pid, endpoint, thread, writes, taken, hold_reads, clunks }
+}
+
+/// The sink's nodes: its root directory, and `out`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Node {
+    Root,
+    Out,
+}
+
+struct Sink {
+    busy: u32,
+    writes: Arc<Mutex<Vec<u64>>>,
+    taken: Arc<Mutex<Vec<u8>>>,
+    hold_reads: Arc<AtomicBool>,
+    clunks: Arc<Mutex<Vec<u64>>>,
+}
+
+fn sink_qid(node: Node) -> Qid {
+    match node {
+        Node::Root => Qid { kind: 0x80, version: 0, path: 0 },
+        Node::Out => Qid { kind: 0, version: 0, path: 1 },
+    }
+}
+
+impl FileServer for Sink {
+    type Node = Node;
+
+    fn attach(&mut self, _: &Caller, _aname: &str) -> Result<(Node, Qid), NineError> {
+        Ok((Node::Root, sink_qid(Node::Root)))
+    }
+
+    fn labels(&self, _: &Node) -> &[u64] { &[] }
+
+    fn walk(&mut self, _: &Caller, dir: &Node, name: &str) -> Result<(Node, Qid), NineError> {
+        match (dir, name) {
+            (Node::Root, "out") => Ok((Node::Out, sink_qid(Node::Out))),
+            (Node::Root, _) => Err(NineError::NOT_FOUND),
+            (Node::Out, _) => Err(NineError::NOT_DIR),
+        }
+    }
+
+    fn open(&mut self, _: &Caller, node: &Node, _open_mode: u8) -> Result<Qid, NineError> {
+        Ok(sink_qid(*node))
+    }
+
+    /// Nothing to read: the sink keeps what it takes for the test, not for a reader. While the
+    /// test holds reads, a read waits instead.
+    fn read(&mut self, _: &Caller, node: &Node, _offset: u64, _out: &mut [u8]) -> Result<Read, NineError> {
+        if *node == Node::Out && self.hold_reads.load(Ordering::SeqCst) {
+            return Ok(Read::Wait);
+        }
+        Ok(Read::Done(0))
+    }
+
+    fn clunk(&mut self, _: &Node) {
+        self.clunks.lock().expect("the clunks").push(redoubt_rt::handle::time_now().unwrap_or(0));
+    }
+
+    /// Output; `busy` while the fixture is told to be, as a server over its share answers.
+    fn write(&mut self, _: &Caller, node: &Node, _offset: u64, data: &[u8]) -> Result<usize, NineError> {
+        if *node != Node::Out {
+            return Err(NineError::NOT_DIR);
+        }
+        self.writes.lock().expect("the writes").push(redoubt_rt::handle::time_now().unwrap_or(0));
+        if self.busy > 0 {
+            self.busy -= 1;
+            return Err(NineError::BUSY);
+        }
+        self.taken.lock().expect("the bytes").extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn stat(&mut self, _: &Caller, node: &Node) -> Result<FileStat, NineError> {
+        let (mode, name) = match node {
+            Node::Root => (0o040_755, "/"),
+            Node::Out => (0o644, "out"),
+        };
+        Ok(FileStat { qid: sink_qid(*node), mode, mtime: 0, length: 0, name: String::from(name) })
+    }
+
+    fn dir_entry(
+        &mut self,
+        _: &Caller,
+        dir: &Node,
+        index: u64,
+    ) -> Result<Option<(Node, FileStat)>, NineError> {
+        if *dir != Node::Root || index != 0 {
+            return Ok(None);
+        }
+        let stat = FileStat {
+            qid: sink_qid(Node::Out),
+            mode: 0o644,
+            mtime: 0,
+            length: 0,
+            name: String::from("out"),
+        };
+        Ok(Some((Node::Out, stat)))
     }
 }
 

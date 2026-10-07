@@ -714,8 +714,8 @@ out as each answer comes. A process that dies while it waits has its operation d
 it holds, and an operation that opened a file closes it. The VM's own code loading reads files
 waiting in place. Concurrency is bounded by each server's shares of requests and pages per
 connection ([R77 (multiplexed requests)](../servers/serving.md#r77-multiplexed-requests)); over
-them, a request is answered `busy` and asked again: a console write `RETRY_US` (10 ms) later, a
-file operation's request at once.
+them, a request is answered `busy` and asked again `RETRY_US` (10 ms) later, a console write and
+a file operation's request alike; the answers are counted, and said with the I/O report.
 
 **Threads.** A process has at most 255 threads ([processes](../kernel/processes.md)). The VM's are
 its schedulers (one until several harts) and its waiters, one per connection it uses, at most 6:

@@ -9,15 +9,22 @@ use beamlet_redoubt::fixture::{self, Dirs};
 use beamlet_redoubt::{Redoubt, binds, posix};
 use beamlet_vm::platform::{FileError, FileKind, Files, OpenMode, Platform, SeekFrom};
 use redoubt_client::Name;
+use redoubt_client::aio::RETRY_US;
 use redoubt_fake_kernel::fake;
 
 /// Runs `test` on a platform whose namespace has `/dev/cons` and a blank volume at `/home/alice`.
-fn with_home(test: impl FnOnce(&mut Redoubt) + Send + 'static) {
+fn with_home(test: impl FnOnce(&mut Redoubt) + Send + 'static) { with_home_and(None, test); }
+
+/// As [`with_home`], with the fixture's sink server at `/sink` as well when one is given.
+fn with_home_and(sink: Option<&fixture::SinkServer>, test: impl FnOnce(&mut Redoubt) + Send + 'static) {
     let f = fake();
     let screen = Arc::new(Mutex::new(Vec::new()));
     let console = fixture::console(Box::new(std::io::empty()), Box::new(Screen(Arc::clone(&screen))));
     let volume = fixture::volume(2048, &["buckets=4"]);
-    let (pid, block) = fixture::session_with(&console, &[("/home/alice", &volume)], &[]);
+    let sink = sink.map(|s| (s.pid, s.endpoint));
+    let (pid, block) = fixture::session_built(&console, &[("/home/alice", &volume)], &[], &[], move |pid| {
+        sink.map_or_else(Vec::new, |(server, endpoint)| vec![("/sink", f.grant(server, endpoint, pid, 0x60))])
+    });
     let session = f.run(pid, move || {
         let startup = fixture::startup(&block);
         let mut platform = Redoubt::new(&startup, Box::new(Dirs(Vec::new()))).expect("a platform");
@@ -267,6 +274,66 @@ fn an_abandoned_operation_stops_at_its_next_answer() {
 /// `/dev/cons` is a file of the namespace like any other: an operation on it shares the console's
 /// connection with the console's own read and write, and its answer reaches its asker, not the
 /// console. (The fixture's console gives a connection one fid, the console's, so it is `emfile`.)
+/// A server over its share answers a write `busy`; the write goes again `RETRY_US` later, as the
+/// hub's rule for a queued request has it and as the console's does, not at once: a server that
+/// stays busy costs the VM a request every retry interval, never a spin against its one page.
+#[test]
+fn a_write_answered_busy_goes_again_after_the_retry_interval() {
+    let sink = fixture::sink(2);
+    let (writes, taken) = (Arc::clone(&sink.writes), Arc::clone(&sink.taken));
+    with_home_and(Some(&sink), |p| put(p, "/sink/out", b"third time lucky"));
+    assert_eq!(taken.lock().unwrap().as_slice(), b"third time lucky");
+    let writes = writes.lock().unwrap().clone();
+    assert_eq!(writes.len(), 3, "two refused, then taken: {writes:?}");
+    for pair in writes.windows(2) {
+        assert!(pair[1] - pair[0] >= RETRY_US, "a retry went early: {writes:?}");
+    }
+    fake().destroy(sink.pid, sink.endpoint);
+    let _ = sink.thread.join();
+}
+
+/// A closed file's clunk the server answers `busy` goes again after the retry interval, and its
+/// fid is the server's until the clunk is served: freed on the `busy` answer, the number would be
+/// walked again while the server still held it, and the server would refuse that walk.
+#[test]
+fn a_close_answered_busy_is_retried_and_its_fid_is_kept_until_the_clunk_is_served() {
+    let sink = fixture::sink(0);
+    let (hold, clunks) = (Arc::clone(&sink.hold_reads), Arc::clone(&sink.clunks));
+    with_home_and(Some(&sink), move |p| {
+        let how = OpenMode { write: true, ..OpenMode::default() };
+        let held = ask(p, |p| p.open("/sink/out", OpenMode::default())).unwrap();
+        let closed = ask(p, |p| p.open("/sink/out", how)).unwrap();
+        // A read the sink holds: the connection's one request is out until it is released.
+        hold.store(true, std::sync::atomic::Ordering::SeqCst);
+        p.asker(Some(ME + 1));
+        assert_eq!(p.read(held, 16), Err(FileError::Later));
+        p.asker(None);
+        // The close's clunk is the second request: `busy`.
+        p.close(closed);
+        hold.store(false, std::sync::atomic::Ordering::SeqCst);
+        // The read ends once the sink serves it again, which the clunk's retry brings about.
+        while p.finished() != Some(ME + 1) {
+            p.idle(None);
+        }
+        p.asker(Some(ME + 1));
+        assert_eq!(p.read(held, 16), Ok(Vec::new()));
+        p.asker(None);
+        // A new open walks a fresh fid: with the closed one freed at the `busy` answer, its number
+        // would be reused while the server still held it, and the server would refuse the walk.
+        let again = ask(p, |p| p.open("/sink/out", how)).unwrap();
+        let until = p.monotonic_us() + 500_000;
+        while clunks.lock().unwrap().is_empty() && p.monotonic_us() < until {
+            let step = p.monotonic_us() + 20_000;
+            p.idle(Some(step));
+        }
+        assert_eq!(clunks.lock().unwrap().len(), 1, "the server served the closed file's clunk once");
+        p.close(held);
+        p.close(again);
+    });
+    fake().destroy(sink.pid, sink.endpoint);
+    let _ = sink.thread.join();
+}
+
 #[test]
 fn a_file_operation_on_the_consoles_connection_is_answered() {
     with_home(|p| {
