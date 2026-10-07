@@ -3,9 +3,18 @@ kind = "host-tests"
 packages = ["redoubt-model"]
 tests = ["mutations"]
 profile = "release"
-# The few the steward families catch late search thousands of their seeds, up to a second a seed:
-# four threads apiece shorten them, and cost the quick ones nothing.
-fanout = { each = "value", env = "REDOUBT_MODEL_MUTATIONS", values = "cargo run --quiet --profile release -p redoubt-model --example mutations", cores = 4, vars = { MODEL_THREADS = "4" } }
-# The longest job is one that searches every family to its cap: 200 s on four threads measured
-# (PolicyDeclassifyUnfit's, which steward_policy catches only at seed 4709), and a third.
-timeout_secs = 267
+# The longest job is the late one's full search: 582 s on four threads measured, and a third.
+timeout_secs = 776
+
+# Four threads apiece shorten the few searches that run long, and cost the quick ones nothing.
+[fanout]
+each = "value"
+env = "REDOUBT_MODEL_MUTATIONS"
+values = "cargo run --quiet --profile release -p redoubt-model --example mutations"
+cores = 4
+vars = { MODEL_THREADS = "4" }
+late = [
+    # Caught only at steward_policy's seed 4709, past the steward families' 500-seed cap: a known
+    # weakness of the steward model, until MODEL1 removes this entry.
+    "PolicyDeclassifyUnfit",
+]

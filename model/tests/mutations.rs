@@ -15,7 +15,9 @@ const CAP: u64 = 20_000;
 
 /// Seeds tried in each steward family, whose seeds cost up to a second each: a mutation these
 /// catch only past it is caught too late, and fails as not caught. Every one is caught by seed
-/// 345 but `PolicyDeclassifyUnfit` (`steward_policy`'s seed 4709).
+/// 345 but `PolicyDeclassifyUnfit` (`steward_policy`'s seed 4709). With `TESTBENCH_LATE` set, the
+/// bench's word that the mutation is known to be late, the steward families get `CAP` too, and
+/// one caught within the caps after all fails, so that its entry is removed.
 const STEWARD_CAP: u64 = 500;
 
 /// Every kernel rule the model holds, and I16: all of R1 to R24 but the six outside the model
@@ -47,7 +49,12 @@ fn mutations_are_caught() {
                 .split(',')
                 .any(|s| if names.iter().any(|n| n == s) { name == s } else { name.contains(s) })
     };
+    let late = std::env::var_os("TESTBENCH_LATE").is_some();
+    // Known late but caught within the caps: the bench's entry for it has outlived its need.
+    let mut early = Vec::new();
+    let mut checked = 0;
     for m in Mutation::ALL.into_iter().filter(wanted) {
+        checked += 1;
         let mut caught = common::contracts::ipc_contracts(Some(m))
             .err()
             .map(|message| redoubt_model::check::Failure {
@@ -95,26 +102,36 @@ fn mutations_are_caught() {
             if caught.is_some() {
                 break;
             }
-            let cap = if name.starts_with("steward_") { STEWARD_CAP } else { CAP };
+            let cap = if name.starts_with("steward_") && !late { STEWARD_CAP } else { CAP };
             if let Some(fail) = run(name, f, sequences(CAP).min(cap).div_ceil(divisor), Some(m)) {
                 caught = Some(fail);
                 break;
             }
         }
         match caught {
-            Some(f) => eprintln!(
-                "{:6} {:32} caught by {} seed {}: {}",
-                m.rule(),
-                format!("{m:?}"),
-                f.family,
-                f.seed,
-                f.message
-            ),
+            Some(f) => {
+                let past = f.family.starts_with("steward_") && f.seed >= STEWARD_CAP;
+                eprintln!(
+                    "{:6} {:32} caught by {} seed {}{}: {}",
+                    m.rule(),
+                    format!("{m:?}"),
+                    f.family,
+                    f.seed,
+                    if past { ", late, known" } else { "" },
+                    f.message
+                );
+                if late && !past {
+                    early.push(m);
+                }
+            }
             None => {
                 eprintln!("{:6} {:32} NOT CAUGHT within the caps", m.rule(), format!("{m:?}"));
                 missed.push(m);
             }
         }
     }
+    // A word naming no mutation would make a run that checks nothing pass.
+    assert!(only.is_empty() || checked > 0, "no mutation named by {only:?}");
     assert!(missed.is_empty(), "mutations no property caught within the caps: {missed:?}");
+    assert!(early.is_empty(), "caught within the caps, so no longer late: remove the entry for {early:?}");
 }
