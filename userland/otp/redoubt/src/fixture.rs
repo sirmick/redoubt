@@ -53,10 +53,21 @@ pub struct ConsoleServer {
 
 /// Starts the console server, with `input` as what is typed and `output` as the screen.
 pub fn console(input: Box<dyn std::io::Read + Send>, output: Box<dyn Write + Send>) -> ConsoleServer {
+    console_labelled(input, output, &[])
+}
+
+/// As [`console`], run with `labels`: the console of a session of that label set, which a
+/// labelled process may write.
+pub fn console_labelled(
+    input: Box<dyn std::io::Read + Send>,
+    output: Box<dyn Write + Send>,
+    labels: &[u64],
+) -> ConsoleServer {
     let f = fake();
-    let pid = f.process(0, &[]);
+    let pid = f.process(0, labels);
     let endpoint = f.endpoint(pid);
-    let thread = f.run(pid, move || serve(endpoint, pid, input, output));
+    let labels = labels.to_vec();
+    let thread = f.run(pid, move || serve(endpoint, pid, input, output, labels));
     ConsoleServer { pid, endpoint, thread }
 }
 
@@ -68,13 +79,26 @@ pub fn session(console: &ConsoleServer) -> (usize, Vec<u8>) { session_with(conso
 /// a volume named by a path is bound at that prefix of its namespace, as a session's are; one
 /// named otherwise is handed as a handle of that name, as `init` hands one.
 pub fn session_with(console: &ConsoleServer, volumes: &[(&str, &Volume)], args: &[&str]) -> (usize, Vec<u8>) {
+    session_built(console, volumes, args, &[], |_| Vec::new())
+}
+
+/// As [`session_with`], for a process of `labels`, also handed what `extra` makes for it once it
+/// exists (a budget, an endpoint of its own, a grant), each under its name.
+pub fn session_built(
+    console: &ConsoleServer,
+    volumes: &[(&str, &Volume)],
+    args: &[&str],
+    labels: &[u64],
+    extra: impl FnOnce(usize) -> Vec<(&'static str, Handle)>,
+) -> (usize, Vec<u8>) {
     let f = fake();
-    let pid = f.process(1001, &[]);
+    let pid = f.process(1001, labels);
     let cons = f.grant(console.pid, console.endpoint, pid, 0x20 + pid as u64);
-    let held: Vec<(&str, Handle)> = volumes
+    let mut held: Vec<(&str, Handle)> = volumes
         .iter()
         .map(|(name, volume)| (*name, f.grant(volume.littlefsd, volume.endpoint, pid, 0x40 + pid as u64)))
         .collect();
+    held.extend(extra(pid));
     let highest = held.iter().map(|(_, h)| h.index()).fold(cons.index(), u32::max);
     let mut builder = StartupBuilder::new(highest);
     builder.namespace("/dev/cons", cons);
@@ -116,10 +140,11 @@ struct Input {
     ended: bool,
 }
 
-/// The console: its input, shared with the input thread, and the screen.
+/// The console: its input, shared with the input thread, the screen, and its file's labels.
 struct Stream {
     input: Arc<Mutex<Input>>,
     output: Box<dyn Write + Send>,
+    labels: Vec<u64>,
 }
 
 impl Stream {
@@ -137,7 +162,7 @@ impl FileServer for Stream {
 
     fn attach(&mut self, _: &Caller, _aname: &str) -> Result<(Cons, Qid), NineError> { Ok((Cons, qid())) }
 
-    fn labels(&self, _: &Cons) -> &[u64] { &[] }
+    fn labels(&self, _: &Cons) -> &[u64] { &self.labels }
 
     fn walk(&mut self, _: &Caller, _: &Cons, _name: &str) -> Result<(Cons, Qid), NineError> {
         Err(NineError::NOT_DIR)
@@ -190,13 +215,14 @@ fn serve(
     pid: usize,
     input: Box<dyn std::io::Read + Send>,
     output: Box<dyn Write + Send>,
+    labels: Vec<u64>,
 ) -> u32 {
     let endpoint = Endpoint::from_handle(endpoint);
     // `consoled`'s shares: a page a badge for writes, and requests to spare for a parked read.
     let limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4, requests: 80, pages: 2 };
     let random = redoubt_rt::handle::random_u64().unwrap_or(1);
     let typed = Arc::new(Mutex::new(Input::default()));
-    let stream = Stream { input: Arc::clone(&typed), output };
+    let stream = Stream { input: Arc::clone(&typed), output, labels };
     let Ok(mut server) = NineServer::new(stream, limits, random) else { return 1 };
     // A console read waits on a person, so it has no deadline.
     server.requests_wait(FOREVER);
