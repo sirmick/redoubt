@@ -941,24 +941,45 @@ item's labels.
 
 ## Failure and restart
 
-Status: built · tested: bench:steward-restart, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session · tested: bench:steward-restart, bench:steward-restart-reboot, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve
 
-- **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` restarts it
-  ([init](init.md#restarts-and-reboots)); a steward that finds `users` not empty exits, and its
-  restarts end in a reboot, which logs every session out and ends every lease. It checks at its
-  start: a `users` holding any pages, process or child is a start failure, said once (`users not
-  empty`), never a second set of carves beside the first.
+- **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
+  `users`, which logs every session out and ends every lease, and restarts the steward; the
+  console session starts again ([init](init.md#restarts-and-reboots)). The steward says what
+  `users` holds as it starts (`users holds N pages, M processes`), and checks it: a `users`
+  holding any pages, process or child is a start failure, said once (`users not empty`), never a
+  second set of carves beside the first. A steward that dies the same way at every start ends in
+  `init`'s reboot.
 - **A session crashes:** the steward destroys its budget and tells its console `ended`; `sshd`
   closes its channel; nobody else is affected.
 - **A reader or writer budget** outlives nothing: it has a deadline, and the steward destroys it
   when its one item is done.
 
+**What a dead steward held at the shared servers goes with it.** `init` hands the steward a
+fresh connection at each server it is handed (`bootfsd`, the volumes' file servers, `ipd`), not
+the server's badge, and disconnects it at the steward's exit
+([init](init.md#fresh-connections-per-child)). Every connection the steward minted for a
+session's namespace hangs under one of these, so the disconnect frees them all, at every depth
+([releasing grants](wire.md#a-launcher-releases-its-childs-grants)): a steward that dies over
+and over leaves no session's connections holding the servers' admission. Revoking the handles
+alone would not do it: a server tracks no exits and keeps a connection whose holders are gone
+until it is disconnected.
+
+**The restart probe** is a test-only feature, `restart-probe` (`src/bin/steward.rs`,
+`PROBE_EXIT`), off in every default build; the bench's `steward-restart` builds the steward with
+it. Every instance then exits 14 seconds after it starts the console session, so the case
+restarts it thirteen times, each time with that session and its connections live, without meeting
+`init`'s reboot rule.
+
 ## Residual risks
 
-- **A steward crash ends in a reboot:** `users` cannot be destroyed and made again, which its
-  class forbids, and `init` does not empty it of a dead steward's carves with `budget_reap` before
-  the restart; doing so would make the restart a logout instead
-  ([a dead steward's carves](../todo/empty-a-budget.md)).
+- **An `sshd` channel outlives its reaped session.** When `init` empties `users` after the
+  steward's death, every session's VM ends with its budget, but `sshd` ends a channel only on the
+  steward's `ended`, which a dead steward never sends; the channel stays open, its input going
+  nowhere, until its client closes it. Until the restarted steward tells `sshd` that every earlier
+  session is over, the restart logs every session out but leaves their SSH connections open,
+  and a login the dying steward never answered keeps its `sshd` slot
+  ([sshd](sshd.md#residual-risks)).
 - **An approved text can carry a hidden message.** Text an agent wrote and a person approved for
   declassification can still hide one; no rule on the item's form prevents that.
 - **A push is one human action,** so a confined domain's input rate is a person's approval rate.

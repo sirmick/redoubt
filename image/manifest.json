@@ -58,7 +58,7 @@
       "receives": ["walfsd:data"],
       "args": ["endpoint=walfsd:data", "buckets=5"] },
     { "name": "littlefsd:alice-secrets", "program": "littlefsd",
-      "stack_pages": "4", "heap_pages": "18",
+      "stack_pages": "5", "heap_pages": "18",
       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
       "volume": "alice-secrets", "labels": ["alice-secrets"],
       "receives": ["littlefsd:alice-secrets"],

@@ -330,6 +330,11 @@ Status: planned · M1 (sessions over SSH, kept apart)
 
 ## Residual risks
 
+- **A channel outlives a session the steward did not end.** `sshd` closes a channel only on the
+  steward's `ended`. When the steward dies and `init` empties `users`, the sessions end with their
+  budgets and nobody says so: each channel stays open until its client closes it
+  ([steward](steward.md#residual-risks)). A connection whose login the dying steward never
+  answered keeps its slot as well, so four such logins leave every slot busy.
 - **`approve@` shares `sshd` with the most hostile input.** A `sunset` bug reached from any channel,
   before or after login, controls every channel and the approval screen, and a network flood delays
   approvals. A separate `sshd` instance for `approve@`, or the physical console, is planned for

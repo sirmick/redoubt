@@ -45,7 +45,7 @@ mod machine {
         BudgetSpec, Cause, Error, FOREVER, Handle, Labels, MAX_LABELS, MAX_THREADS, PAGE_SIZE, ResetKind,
         Usage,
     };
-    use redoubt_rt::client::Lend;
+    use redoubt_rt::client::{Connection as Nine, Lend};
     use redoubt_rt::handle::{Budget, Endpoint, Mmio, Registers, Reset};
     use redoubt_rt::ipc::{Buffer, Event};
     use redoubt_rt::server::close_delivery;
@@ -198,6 +198,10 @@ mod machine {
         /// Its console connection's id at `consoled`, and `consoled`'s `ENDED` when it was
         /// minted: disconnected at the exit, unless that `consoled` has ended and taken it.
         console: Option<(u64, u32)>,
+        /// The steward's: the fresh connection `init` made for it at each server it is handed, as
+        /// (the server's endpoint, the badge it was made through, its id). Disconnected at the
+        /// exit, which frees every connection the steward minted under it for its sessions.
+        fresh: Vec<(String, NonZeroU64, u64)>,
         /// Kept, never waited on: the server's watching thread receives its exit notice and
         /// destroys its budget, which sweeps the job's handles.
         _job: Job,
@@ -456,6 +460,7 @@ mod machine {
                 }
             }
             let mut handed = Vec::new();
+            let mut fresh = Vec::new();
             for item in &s.handed {
                 let badge = NonZeroU64::new(item.badge).expect("the check refused badge 0");
                 // Stamped with the instance's budget, as `init`'s own handle is: a copy the server
@@ -465,7 +470,20 @@ mod machine {
                 else {
                     self.failed(&s.name, "mint a handed badge for")
                 };
-                handed.push((item.endpoint.as_str(), minted.handle()));
+                if !is_steward(m, s) {
+                    handed.push((item.endpoint.as_str(), minted.handle()));
+                    continue;
+                }
+                // The steward is handed a fresh connection made through the badge, not the
+                // badge: every connection it mints for a session hangs under it, and `init`
+                // disconnecting it at the steward's exit frees them all at that server
+                // ([`Boot::release_fresh`]). The badge itself goes once it is made.
+                let server = Nine::within(Endpoint::from_handle(minted.handle()), RELEASE_TIMEOUT);
+                let made = server.new_connection(&mut self.lend, "", 0);
+                let _ = redoubt_rt::handle::close(minted.handle());
+                let Ok((connection, id)) = made else { self.failed(&s.name, "make a fresh connection for") };
+                fresh.push((item.endpoint.clone(), badge, id));
+                handed.push((item.endpoint.as_str(), connection.handle()));
             }
             // A volume's range ([`range`]): at its disk's `blkd`, or at its verifier's endpoint
             // for a verified volume's server, minted again at every start, stamped as the handed
@@ -542,7 +560,7 @@ mod machine {
                 None => {}
             }
             let console = id.map(|id| (id, self.consoled.map_or(0, |c| ENDED[c].load(Ordering::SeqCst))));
-            self.started[i] = Some(Started { ended_at, console, _job: job });
+            self.started[i] = Some(Started { ended_at, console, fresh, _job: job });
         }
 
         /// What the boot did after starting server `i`, done again for each new instance.
@@ -625,6 +643,9 @@ mod machine {
                 let cause = if cause == Cause::Exited as u64 { "exited" } else { "was killed" };
                 self.say(format_args!("init: {name} (PID {pid}) {cause}, code {code}"));
             }
+            if let Some(fresh) = ended.as_ref().map(|s| s.fresh.as_slice()) {
+                self.release_fresh(fresh);
+            }
             if let Some((id, at)) = ended.and_then(|s| s.console) {
                 if let (Some(c), Some(console)) = (self.consoled, &self.console) {
                     if ENDED[c].load(Ordering::SeqCst) == at {
@@ -655,8 +676,42 @@ mod machine {
                 ));
             }
             self.restarting = true;
+            // The dead steward's carves outlive it under `users`: every principal's budgets, their
+            // sessions and leases. They go before it starts again, so the new instance finds
+            // `users` empty; a reap that fails is a restart `init` cannot make.
+            if is_steward(m, &m.servers[i]) {
+                self.empty_users();
+            }
             self.start(i);
             self.restarting = false;
+        }
+
+        /// Disconnects the fresh connections `init` made for a dead steward
+        /// ([`Started::fresh`]), each through a badge minted again for the call and closed after
+        /// it: the server frees the connection and everything minted under it, so a dead
+        /// steward's sessions hold nothing at the shared servers. A server that restarted
+        /// meanwhile has forgotten them already, and says so; nothing more is asked of it.
+        fn release_fresh(&mut self, fresh: &[(String, NonZeroU64, u64)]) {
+            for (endpoint, badge, id) in fresh {
+                let Ok(badge) = Endpoint::from_handle(self.endpoint(endpoint)).mint(*badge, None) else {
+                    continue;
+                };
+                let _ = Nine::within(Endpoint::from_handle(badge.handle()), RELEASE_TIMEOUT)
+                    .disconnect(*id, RELEASE_TIMEOUT);
+                let _ = redoubt_rt::handle::close(badge.handle());
+            }
+        }
+
+        /// Reaps `users` to empty, one principal's subtree per kernel entry, the work billed to
+        /// `init` (kernel/budgets.md, R10), and says how many went. Any budget holds its own page
+        /// in its parent's usage, so a `users` whose usage is 0 has no children.
+        fn empty_users(&mut self) {
+            let users = Budget::from_handle(h(USERS_BUDGET));
+            let occupied = users.usage().map(|u| u.pages_usage > 0 || u.processes_usage > 0);
+            match occupied.and_then(|occupied| restarts::empty(occupied, || users.reap())) {
+                Ok(n) => self.say(format_args!("init: emptied users: {n} budgets reaped")),
+                Err(e) => self.reboot(format_args!("users cannot be emptied: {e:?}")),
+            }
         }
 
         /// Step 3: asks `keyd` whether it holds any key the box is authenticated by; a yes refuses

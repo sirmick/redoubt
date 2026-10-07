@@ -65,6 +65,15 @@ mod machine {
     pub const NOT_STARTED: u32 = 3;
     /// The core exited on an event its embedder's guarantee excludes: `init` restarts the steward.
     pub const CORE_EXITED: u32 = 4;
+    /// Test-only, for the bench's `steward-restart` (feature `restart-probe`, off in every
+    /// default build, as `littlefsd`'s and `netd`'s are): every instance exits with this code
+    /// [`PROBE_DELAY`] µs after it starts its console session, so `init` empties `users` and
+    /// restarts it again and again, each restart far enough from the last to stay under the
+    /// reboot rule (more than 5 within 60 seconds).
+    #[cfg(feature = "restart-probe")]
+    pub const PROBE_EXIT: u32 = 9;
+    #[cfg(feature = "restart-probe")]
+    const PROBE_DELAY: u64 = 14_000_000;
 
     /// The program a session runs, on `/boot`, and its start module.
     const PROGRAM: &str = "beamlet";
@@ -497,6 +506,14 @@ mod machine {
             work_send,
             watchers: Watchers::default(),
         };
+        // The kernel's count of what `users` holds as this instance starts: 0, at boot and after
+        // `init` emptied a dead steward's carves.
+        if let Ok(u) = Budget::from_handle(users).usage() {
+            say(
+                startup,
+                &format!("steward: users holds {} pages, {} processes\n", u.pages_usage, u.processes_usage),
+            );
+        }
         let mut steward: Steward<Handle, Handle> = match start(&lines, users, &mut machine) {
             Ok(s) => s,
             Err(e) => {
@@ -533,6 +550,10 @@ mod machine {
         let outputs = steward.open_console(&mut machine).ok();
         if !after(startup, &mut steward, &mut usage, outputs) {
             return core_exited(startup);
+        }
+        #[cfg(feature = "restart-probe")]
+        if redoubt_rt::handle::sleep(PROBE_DELAY).is_ok() {
+            return PROBE_EXIT;
         }
         loop {
             match own.receive(FOREVER, 0) {
