@@ -20,7 +20,22 @@ const IMAGE: &str = include_str!("../../../image/manifest.json");
 /// An OpenSSH Ed25519 key whose 32 bytes are 1 to 32.
 const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g";
 
-fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
+/// The image's manifest whole: its servers, the steward and its principals.
+fn full_image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
+
+/// The image's servers and devices without the steward and `sshd`, which calls it, its
+/// principals, labels, alice's labelled volume and its `littlefsd`, and console: the base each test
+/// below changes in one way.
+fn image() -> Manifest {
+    let mut m = full_image();
+    m.principals.clear();
+    m.labels.clear();
+    m.steward = None;
+    m.console = None;
+    m.volumes.retain(|v| v.labels.is_empty());
+    m.servers.retain(|s| !["steward", "sshd", "littlefsd:alice-secrets"].contains(&s.name.as_str()));
+    m
+}
 
 /// The image's manifest with one disk: without the userland disk (`disk1`, its `blkd`, its
 /// volume, its verifier and `erofsd`, and `beamlet`, which reads it).
@@ -82,7 +97,7 @@ fn secrets(m: &mut Manifest) {
 
 #[test]
 fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
-    let plan = on_virt(&image()).unwrap();
+    let plan = on_virt(&full_image()).unwrap();
     let h = |n| redoubt_rt::abi::Handle::new(n).unwrap();
     // virt's handles: the console in 5 and 6, slots 0x1000_1000 on from 7, their interrupts
     // (1 to 8) from 15.
@@ -90,15 +105,19 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert_eq!(plan.placements[3], vec![("disk".into(), h(14)), ("disk-irq".into(), h(22))]);
     assert_eq!(plan.placements[4], vec![("net".into(), h(13)), ("net-irq".into(), h(21))]);
     // The userland disk's blkd: slot 0x1000_6000, interrupt 6.
-    assert_eq!(plan.placements[7], vec![("disk".into(), h(12)), ("disk-irq".into(), h(20))]);
+    assert_eq!(plan.placements[8], vec![("disk".into(), h(12)), ("disk-irq".into(), h(20))]);
     assert!(plan.placements[0].is_empty());
-    // No principals: only the bundle key is asked about.
-    assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
-    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; walfsd:data: nobody's
-    // yet, a principal's connection being the steward's to grant; erofsd:system: beamlet's.
-    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0), (9, 1)]);
-    // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
-    assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
+    // Alice's and bob's login keys, then the bundle key.
+    let asked: Vec<&str> = plan.keys.iter().map(|(at, _)| at.as_str()).collect();
+    assert_eq!(asked, ["principals[0].ssh_keys[0]", "principals[1].ssh_keys[0]", "bundle key"]);
+    // Three domains (alice's {} and {alice-secrets}, bob's {}) at every shared server, beside its
+    // system callers: init and sshd at keyd; init at consoled; init and the steward at bootfsd;
+    // netd, the steward and sshd at ipd; the steward at walfsd:data, littlefsd:alice-secrets and
+    // erofsd.
+    assert_eq!(plan.buckets, vec![(0, 5), (1, 4), (2, 5), (5, 6), (6, 4), (7, 4), (10, 4)]);
+    // No handed item names consoled or bootfsd: init's own badge at each is 1. sshd is handed
+    // keyd's 1, the host key's, so init's there is 2.
+    assert_eq!(plan.init_badges, vec![(0, 2), (1, 1), (2, 1)]);
 }
 
 #[test]
@@ -178,17 +197,17 @@ fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
 #[test]
 fn the_image_manifest_s_bound() {
     let plan = on_virt(&image()).unwrap();
-    // The arena (256 + 3 tables), 10 receive and 11 exit endpoints and init's reports endpoint
-    // (beamlet receives on none), 11 process objects, 11 blocks with 3 tables each, 11 watching
-    // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
-    // batch of beamlet's image + 3, stack 18 + 3), the lend (2 + 3), and one handle-table page:
-    // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 6 + 44 + 3 + 1 =
-    // 64 added (the three volume ranges, walfsd:data's, erofsd:system's at verity:system and
-    // verity:system's at blkd:system, among the 6 badges) pass page 0's 64.
+    // The arena (256 + 3 tables), 10 receive and 10 exit endpoints and init's reports endpoint,
+    // 10 process objects, 10 blocks with 3 tables each, 10 watching threads (an IPC page, 4 stack
+    // pages and 3 tables each), one launch (stub 4 + 3, one 64-page batch of ipd's image + 3,
+    // the largest stack, walfsd:data's 14 + 3), the lend (2 + 3), and one handle-table page: 22
+    // handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 5 + 40 + 3 + 1 = 59
+    // added (the three volume ranges, walfsd:data's, erofsd:system's at verity:system and
+    // verity:system's at blkd:system, among the 5 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 22 + 11 + 44 + 88 + (4 + 3 + 64 + 3 + 18 + 3) + 1 + 5);
+    assert_eq!(plan.bound, 259 + 21 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 14 + 3) + 1 + 5);
 }
 
 /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
@@ -276,7 +295,7 @@ fn names_follow_the_rule_and_differ() {
 #[test]
 fn references_name_what_the_manifest_and_bundle_hold() {
     let mut m = image();
-    m.servers[0].program = "sshd".into();
+    m.servers[0].program = "nosuch".into();
     refused_at(&m, "servers[0].program", Why::Unknown);
     let mut m = image();
     m.servers[0].program = MANIFEST.into();
@@ -448,10 +467,9 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let devices = virt_devices();
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
-    // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
-    // ipd 4096, walfsd:data and erofsd:system 1024 each, beamlet 11,008 pages, and a page each for the
-    // budgets.
-    let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 11_008 + 11;
+    // keyd 256, consoled 1024, bootfsd 4096, the two blkds 512 each, verity:system 256, netd
+    // 1024, ipd 4096, walfsd:data and erofsd:system 1024 each, and a page each for the budgets.
+    let pages = 256 + 1024 + 4096 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 10;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),
@@ -459,11 +477,11 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     );
     machine.system.pages_limit += 1;
     assert!(on(&m, &machine).is_ok());
-    machine.system.processes_usage = machine.system.processes_limit - 10;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 11, free: 10 });
+    machine.system.processes_usage = machine.system.processes_limit - 9;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 10, free: 9 });
     machine.system.processes_usage = 0;
-    machine.system.weight_carved = machine.system.weight_limit - 4699;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 4700, free: 4699 });
+    machine.system.weight_carved = machine.system.weight_limit - 4599;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 4600, free: 4599 });
 }
 
 // ---- public ----
@@ -490,7 +508,7 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
     let mut m = image();
     m.public = vec!["trace".into()];
     let bootfsd = &m.servers[2];
-    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY), ["buckets=4", "trace"]);
+    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY), ["buckets=5", "trace"]);
     assert_eq!(redoubt_init::check::args(&m, &m.servers[0], &BUNDLE_KEY).len(), 3, "only bootfsd gets it");
     // The names bootfsd serves come from public alone.
     server(&mut m, "bootfsd").args.push("trace".into());
@@ -532,7 +550,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
         redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap(), &BUNDLE_KEY)
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=4"]);
+    assert_eq!(args(&m, "bootfsd"), ["buckets=5", "beamlet"]);
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 
@@ -801,8 +819,10 @@ fn a_key_in_two_roles_across_principals_is_refused() {
 
 #[test]
 fn a_shared_server_needs_a_bucket_per_declared_domain_and_root_badge() {
-    // Without beamlet, a fifth caller at bootfsd beside the three domains and init.
+    // Without beamlet, a fifth caller at bootfsd beside the three domains and init; keyd at the
+    // four buckets this counts against.
     let mut m = without_userland();
+    *server(&mut m, "keyd").args.last_mut().unwrap() = "buckets=4".into();
     secrets(&mut m);
     m.principals.push(Principal {
         label_sets: vec![
@@ -1650,7 +1670,7 @@ fn a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
     let data = |m: &Manifest| range(m, named(m, "walfsd:data")).map(|(at, badge)| (at.to_string(), badge));
     assert_eq!(data(&walfs).as_ref().map(|(at, _)| at.as_str()), Some("blkd"));
     assert_eq!(data(&walfs), data(&littlefs));
-    assert_eq!(args(&walfs, named(&walfs, "walfsd:data")), ["endpoint=walfsd:data", "buckets=4"]);
+    assert_eq!(args(&walfs, named(&walfs, "walfsd:data")), ["endpoint=walfsd:data", "buckets=5"]);
 }
 
 /// `boot-profile-unverified` boots the image less its verification
@@ -1662,7 +1682,7 @@ fn a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
 fn the_boot_profiles_unverified_copies_are_the_image_less_its_verification() {
     let copy = include_str!("../../../tests/data/boot-profile/manifest-unverified.json");
     let copy = read(copy.as_bytes(), ARENA_PAGES).expect("the copy decodes");
-    let mut m = image();
+    let mut m = full_image();
     let verifiers: Vec<String> =
         m.volumes.iter_mut().filter_map(|v| v.verity.take()).map(|v| v.server).collect();
     assert!(!verifiers.is_empty(), "the image verifies a volume");

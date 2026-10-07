@@ -1,0 +1,66 @@
+description = "The steward's restart fails closed (docs/servers/init.md, \"Restarts and reboots\"; docs/servers/steward.md, \"Failure and restart\"): a steward whose heap cap holds its boot's carve but not its console session's launch dies after carving; init restarts it, the new instance finds users not empty, says so and exits NOT_STARTED (3) rather than carve a second set beside the first; after five restarts init reboots, and the next boot's steward carves a fresh users. The verdicts are the steward's own line on users and init's exit, restart and reboot lines (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs; the manifest is the image's with the steward's heap capped.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+]
+memory_mib = 1024
+timeout_secs = 400
+expect = [
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^init: steward \(PID [0-9]+\) (exited|faulted), code [0-9]+',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users not empty$',
+    '^init: steward \(PID [0-9]+\) exited, code 3$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users not empty$',
+    '^init: steward \(PID [0-9]+\) exited, code 3$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users not empty$',
+    '^init: steward \(PID [0-9]+\) exited, code 3$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users not empty$',
+    '^init: steward \(PID [0-9]+\) exited, code 3$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users not empty$',
+    '^init: steward \(PID [0-9]+\) exited, code 3$',
+    '^init: rebooting: steward was restarted 5 times within 60 seconds$',
+    # The reboot's steward carves a fresh users: every session logged out.
+    '^loader: Redoubt rv(64|32) loader, boot hart 0$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+]
+forbid = ['init: refused the boot', 'Redoubt shell, on Elixir']
+
+# The steward's heap capped below what its console session's launch needs (its boot's carve
+# fits): the one instance that carves dies after. The carve takes at most 9 pages and the launch
+# 10 (rv32) or 12 (rv64), from the memory scans (docs/testbench.md, "The memory budget").
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
+
+[[file.servers]]
+name = "steward"
+heap_pages = "9"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

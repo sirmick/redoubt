@@ -18,7 +18,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-<details><summary>Status: built · tested (27)</summary>
+<details><summary>Status: built · tested (28)</summary>
 
 - bench:init-boot
 - bench:init-refuses-public-manifest
@@ -187,7 +187,7 @@ M6 (persist, install, share).
 
 ### The confinement check
 
-<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the steward's, not built · tested (10)</summary>
+<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the policy core's guards, which the model and host tests attack, never a confined boot · tested (10)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
@@ -251,7 +251,7 @@ multi-tenancy and the serving library's residual risks apply.
 
 ### Starting the servers
 
-<details><summary>Status: built · partly tested: step 6, the steward and `sshd` are not built · tested (17)</summary>
+<details><summary>Status: built · tested (19)</summary>
 
 - bench:init-boot
 - bench:init-servers
@@ -270,6 +270,8 @@ multi-tenancy and the serving library's residual risks apply.
 - host:redoubt-init::a_volume_is_one_entry_for_one_server_at_one_blkd
 - host:redoubt-init::no_server_is_handed_a_badge_at_blkd
 - host:redoubt-init::a_verifier_costs_init_one_server_and_its_range
+- bench:steward-boot
+- bench:steward-ssh-two-principals
 
 </details>
 
@@ -299,11 +301,13 @@ Reset right. The loader maps the bundle into it, read-only
    any server an endpoint `consoled` receives on: a root badge there writes bare lines, and only
    `init` holds one. Without a `consoled` entry, `init` keeps the UART;
 5. starts the rest of the drivers and the servers below the steward: `bootfsd`, `blkd`, each
-   volume's `walfsd`, `littlefsd` or `erofsd`, `netd` and `ipd`, then pushes the `public` entries to
-   `bootfsd`;
-6. starts the steward, the entry `steward.server` names, handing it the `users` budget (that entry
-   alone, by name in its startup block; no `handed` item names a budget) and the manifest lines
-   as its arguments, after its entry's own; and `sshd`.
+   volume's `walfsd`, `littlefsd` or `erofsd`, `netd`, `ipd` and `sshd`, then pushes the `public`
+   entries to `bootfsd`;
+6. starts the steward, the entry `steward.server` names, after the public entries, since it
+   starts sessions from `/boot`: handing it the `users` budget (that entry alone, by name in its
+   startup block; no `handed` item names a budget), its `handed` badges at `bootfsd`, each
+   volume's server and `ipd`, through which it asks each server for a session's fresh
+   connections, and the manifest lines as its arguments, after its entry's own.
 
 Each server runs in a budget of its own, carved from `system`, and is started through the loader
 stub straight from the bundle's pages, so no file server is needed to start anything. `init`
@@ -510,7 +514,7 @@ launcher could not free the child's state without losing its own.
 
 ### Restarts and reboots
 
-<details><summary>Status: built · partly tested: blame, `blame`'s badge, a wedged steward and the steward's restart are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked · tested (10)</summary>
+<details><summary>Status: built · partly tested: blame, `blame`'s badge and a wedged steward are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked · tested (11)</summary>
 
 - bench:init-restart
 - bench:init-handed-revoked
@@ -522,6 +526,7 @@ launcher could not free the child's state without losing its own.
 - host:redoubt-init::a_restart_older_than_the_window_is_dropped_from_the_count
 - host:redoubt-init::restarts_spread_wider_than_the_window_never_reboot
 - host:redoubt-init::a_clock_that_reads_earlier_counts_the_restart_as_recent
+- bench:steward-restart
 
 </details>
 
@@ -572,8 +577,9 @@ launcher could not free the child's state without losing its own.
   the machine: failing closed beats a server that cannot stay up. So does a restart `init`
   cannot make: a budget it cannot carve, a badge or console connection it cannot mint, or a
   launch the kernel refuses.
-- **The steward** is part of the trusted base; its crash is a bug. If it dies, `init` destroys and
-  recreates the `users` budget, which logs every session out, and starts it again.
+- **The steward** is part of the trusted base; its crash is a bug. If it dies, `init` restarts it;
+  a steward that finds `users` not empty exits, and its restarts end in a reboot, which logs every
+  session out.
 
 ```mermaid
 stateDiagram-v2
@@ -635,12 +641,13 @@ kernel
 
 ## Authority
 
-<details><summary>Status: built · partly tested: the steward's `users` budget is not exercised; `init-boot` shows each copy `init` closed gone from the kernel's side, but no call lists a handle table, so a copy `init` never closed would not be caught · tested (4)</summary>
+<details><summary>Status: built · partly tested: `init-boot` shows each copy `init` closed gone from the kernel's side, but no call lists a handle table, so a copy `init` never closed would not be caught · tested (5)</summary>
 
 - bench:init-boot
 - bench:init-restart
 - bench:init-driver-restart
 - host:redoubt-init::a_server_handed_a_budget_is_refused
+- bench:steward-boot
 
 </details>
 
@@ -713,10 +720,11 @@ stub's host tests.
 
 ### R33 (no server holds a system budget)
 
-<details><summary>Status: built · partly tested: the steward's half is the steward's, not built · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
 - bench:init-refuses-budget-handle
 - host:redoubt-init::a_server_handed_a_budget_is_refused
+- bench:steward-boot
 
 </details>
 
@@ -728,7 +736,7 @@ server from a manifest that grants it a budget and expects the boot refused.
 
 ### R34 (confined placement)
 
-<details><summary>Status: built · partly tested: the control plane's exception is the steward's and `sshd`'s, not built · tested (10)</summary>
+<details><summary>Status: built · partly tested: the steward's and `sshd`'s exception runs only in the unconfined image, never in a confined boot · tested (10)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint

@@ -510,3 +510,24 @@ fn the_console_session_opens_at_the_start_and_again_when_it_ends() {
     assert_eq!(launches(&k), 2, "reopened");
     assert!(s.exited(pid).is_none() && s.exited(k.made as u64).is_some());
 }
+
+/// From `init`'s writer to the steward's parser over the image's own manifest: every line `init`
+/// hands the steward reads, the steward starts on them, and its own lines say what the manifest
+/// does (servers/steward.md, "The manifest lines").
+#[test]
+fn the_image_s_lines_round_trip_from_init_to_the_steward() {
+    let image = include_str!("../../../image/manifest.json");
+    let m = redoubt_init::read(image.as_bytes(), redoubt_init::ARENA_PAGES).unwrap();
+    let entry = m.servers.iter().find(|s| s.name == "steward").unwrap();
+    // The bundle key reaches only a signed volume's server; the steward's lines do not use it.
+    let args = redoubt_init::check::args(&m, entry, &[0; 32]);
+    let lines: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("buckets=")).collect();
+    let mut k = Recorder::default();
+    let s = start(&lines, USERS, &mut k).unwrap();
+    let names: Vec<&str> = s.carved.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["alice", "bob"]);
+    assert_eq!(s.own.labels, [("alice-secrets".to_string(), 7)]);
+    assert_eq!(s.own.console.as_deref(), Some("alice"));
+    assert_eq!(s.own.net("alice").unwrap().rules, ["0.0.0.0/0:80,443"]);
+    assert!(s.label("alice-secrets").is_some());
+}

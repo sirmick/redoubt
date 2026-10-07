@@ -64,19 +64,17 @@ page.
    [files](../userland/files.md#files-over-9p)). Its system natives (the namespace, typed calls,
    serving, budgets, labels and launching) are built and tested on the host; no boot runs them
    ([beamlet](../userland/beamlet.md#natives)). Elixir's `File` in a session waits for the
-   steward's sessions.
+   session's namespace to reach its VM.
 - **The steward.** Principals from the manifest, fixed sub-budgets per label set, and sessions
-   on the console and over SSH ([the steward](../servers/steward.md#principals),
+   on the console and over SSH run ([the steward](../servers/steward.md#principals),
    [sub-budgets](../servers/steward.md#fixed-sub-budgets-per-label-set),
-   [sessions](../servers/steward.md#authentication-and-sessions)); the server graph, trust tiers
-   and capability holdings it runs on ([the servers](../servers/README.md)). A dead steward
-   restarts without a reboot: `init` empties the `users` budget, which ends every session, and
-   relaunches the steward ([the steward](../servers/steward.md#failure-and-restart),
+   [sessions](../servers/steward.md#authentication-and-sessions)), on the server graph, trust
+   tiers and capability holdings ([the servers](../servers/README.md)). Still to come: a dead
+   steward restarts without a reboot: `init` empties the `users` budget, which ends every session,
+   and relaunches the steward ([the steward](../servers/steward.md#failure-and-restart),
    [init](../servers/init.md#restarts-and-reboots)).
 - **Files.** The system volume read-only, and `/home` writable, served by `walfsd`
    ([walfsd](../servers/walfsd.md#serving)).
-- **`sshd`.** Sessions over SSH as beamlet VMs running the shell
-   ([sshd](../servers/sshd.md#sessions-over-ssh), [sessions](../userland/sessions.md)).
 
 Every follow-up page is placed above.
 
@@ -131,11 +129,13 @@ Built and attack-tested today:
   on the host ([native programs](../userland/native.md#launching-from-a-session)), and its files
   wait for a session's namespace
   ([the shell on the machine](../userland/shell.md#the-shell-in-a-session)).
-- **The steward's policy core**, tested on the host; the running server remains planned
-  ([the policy core](../servers/steward.md#the-policy-core)).
+- **The steward**: its policy core, tested on the host, and the server, which carves the
+  principals from the manifest, logs in `sshd`'s users and starts each session as a beamlet VM in
+  its label set's sub-budget, and the console principal's on the UART
+  ([the steward](../servers/steward.md#authentication-and-sessions)).
 - **`sshd`'s core** on its host platform, which the bench's SSH sessions run against, with
   OpenSSH's server as the reference ([sshd](../servers/sshd.md#the-core-and-its-platforms),
-  [SSH sessions](../testbench.md#sessions-and-the-loopback-server)).
+  [SSH sessions](../testbench.md#sessions-and-the-loopback-server)), and on the box's, logins
+  through the steward ([sessions over SSH](../servers/sshd.md#sessions-over-ssh)).
 
-Not built: the steward server,
-`sshd` on the box and sessions.
+Not built: a session's files, and a steward restart without a reboot.

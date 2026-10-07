@@ -31,7 +31,9 @@ while (($#)); do
     esac
 done
 
-mkdir -p target/image/stage
+# The manifest's principals' homes (image/manifest.json): the steward roots each session's home
+# connection there, and a home that is not on the volume fails the session.
+mkdir -p target/image/stage/home/alice target/image/stage/home/bob target/image/vault
 
 # The bench's builder packs the recipe, the same bundle the `init-boot` case boots: `--run
 # --print-only` builds and signs it, then stops before booting. The archive lands at

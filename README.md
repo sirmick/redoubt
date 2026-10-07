@@ -16,9 +16,10 @@ that tests it.
 **Today** the kernel runs and is attack-tested on QEMU, on rv64 and rv32. `init` boots the
 drivers, file, network, key and console servers, and the Elixir shell runs on the UART console
 with its modules read from a verified userland volume, and the VM's file operations run over 9P
-in a boot. Native launching, the steward server and SSH sessions remain to be integrated
-([the plan](docs/plan/m1-separation.md)); agents follow
-([M3 (agents, approvals and the attack suite)](docs/plan/m3-agents.md)).
+in a boot. The steward starts that shell as the console principal's session, and Alice and Bob log
+in over SSH to sessions of their own, each a VM in a budget carved from its principal's label set.
+Native launching and a session's files remain to be integrated ([the plan](docs/plan/m1-separation.md));
+agents follow ([M3 (agents, approvals and the attack suite)](docs/plan/m3-agents.md)).
 
 ## Goals
 
@@ -27,8 +28,9 @@ in a boot. Native launching, the steward server and SSH sessions remain to be in
   per label set, with files; a dead steward restarts without a reboot.
   How far along: the kernel, the serving library, the drivers and the network server, the file
   system, `bootfsd`, `consoled`, `keyd`, the loader stub and `init` are built and attack-tested.
-  beamlet boots the shell on the UART; the steward's policy core and `sshd`'s core are tested on
-  the host. The running steward and SSH sessions are still planned.
+  The steward runs the shell on the UART as the console principal's session and starts each SSH
+  login's session through `sshd`, Alice's and Bob's apart. A session's files and a steward
+  restart without a reboot are still planned.
 - [M2 (usable shell)](docs/plan/m2-usable-shell.md), **planned**: the Elixir shell is a working
   environment, with a command mode, file operations, native programs and pipes, jobs, line editing
   and the editor. Its host shell track starts ahead of M1 (sessions over SSH, kept apart).

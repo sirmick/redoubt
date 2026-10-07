@@ -15,3 +15,8 @@ path = "src/bin/steward.rs"
 redoubt-client = { path = "../../libs/client" }
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-steward = { path = "../../libs/steward" }
+
+[dev-dependencies]
+# init's manifest reading and its writer of the steward's lines, for the round trip over the image's
+# manifest in tests/steward.rs.
+redoubt-init = { path = "../init" }
