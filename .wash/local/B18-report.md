@@ -202,7 +202,7 @@ Commits 7–9:
 - `model-host-tests` runs every model test except `mutations_are_caught` and the two steward
   families. It is one cargo test in the bounded class (4 cores): PASS in 139.4 s, the build
   included, so it has no deadline.
-- `model-steward-host-tests` is new and runs only `properties::steward_policy` and
+- `steward-model-host-tests` is new and runs only `properties::steward_policy` and
   `properties::steward_noninterference` (`tests = ["properties"]`, `filter`).
   - It is a fanout of each test, 8 cores and `MODEL_THREADS=8` per job, so it is in the fanned
     class, not the bounded one: a non-fanned case cannot set the model's thread count.
@@ -250,7 +250,51 @@ All times are with the old family order and one core, from the first measurement
 - Everything except the model's mutation and steward cases ends in about 2 min 5 s.
 - model-host-tests takes 139 s.
 - model-mutations takes about 12 min with the machine to itself, and fails on PolicyDeclassifyUnfit.
-- model-steward-host-tests takes about 25–30 min of run time with its own 8-core leases; it is
+- steward-model-host-tests takes about 25–30 min of run time with its own 8-core leases; it is
   the one case past 15 min.
 
-**Gates at the new head (9e596306d), all rc 0:** cargo test -p testbench (138 passed); docs; formatting; no-cruft; size-budget; unsafe-budget; model-host-tests and model-steward-host-tests as jobs.mk targets. model-mutations rc 1 by design (PolicyDeclassifyUnfit caught too late).
+**Gates at the new head (9e596306d), all rc 0:** cargo test -p testbench (138 passed); docs; formatting; no-cruft; size-budget; unsafe-budget; model-host-tests and steward-model-host-tests as jobs.mk targets. model-mutations rc 1 by design (PolicyDeclassifyUnfit caught too late).
+
+## Third round: rebase onto main, one --exact, the steward case by name only
+
+- **Rebase:** onto main `ec902d464`, which includes B19 (`fdafcf2cb`), the plan commit
+  (`f7ce1e9b6`), BEAM8 and BEAM3.
+- **`--exact`:** B19's survived (`Args::exact` plus `selected()` in main.rs, and its usage line in
+  testbench.md). Mine was dropped from the bench commit: it had the same meaning.
+- **jobs.mk** has one shape: B19's recipe (target/prebuilt when it is there, else cargo testbench,
+  always `--exact`) plus my fanned and Elixir classes and the arch-less cases run once.
+- **The steward case is renamed** `steward-model-host-tests`, as asked, with `whole_run = false`.
+  The bench page says it runs only by name until a cheaper steward seed brings it under 10 min.
+- **New commit** `scripts: jobs.mk's train targets leave out the cases run only by name`.
+  jobs.mk ran every case by its exact name, so `cases-*` and `quiet-*` ignored `whole_run`:
+  worst-walk and sched-cluster-old-control ran in trains, and the steward case would have too.
+  The aggregate targets now leave such cases out; each keeps its own target.
+- **Head** and gate results: see the result message.
+
+## Final: known-late list, one core a job, head de588ed49 (16 commits on main 29238720c)
+
+- **Known-late list.** `late = ["PolicyDeclassifyUnfit"]` is in model-mutations, with its seed
+  (4709) and MODEL1 in a comment.
+  - Its job runs with TESTBENCH_LATE=1, which lifts the steward cap.
+  - A pass is reported "caught late, known" in the result and as LATE in the log.
+  - Any other late mutation fails by name, and so does a known one no longer caught at all.
+  - An entry that names no job fails the case.
+- **Cores.**
+  - Every mutation job asks 1 core.
+  - The late job asks `late_cores = 4`, and `MODEL_THREADS = "{cores}"`; the bench substitutes each
+    job's own core count for `{cores}`.
+  - Its deadline is 1,552 s: 582 s on 4 cores, doubled because q may grant half the ask after a
+    minute, plus a third. A run at 776 s got 2 cores and expired.
+- **model-mutations (Q_PRIO=8): PASS, rc 0, 692 s of wall, 148 jobs.**
+  - PolicyDeclassifyUnfit: LATE, 598 s on 4 cores.
+  - R2OneCursor: 340 s; PolicyEndLeaseAdmitted: 130 s; PolicyAgentOtherSet: 101 s.
+- **The steward case** is renamed steward-model-host-tests, with `whole_run = false`. It was not
+  rerun on this head, as instructed: its measurement stands (1,473 s and 1,435 s of run time;
+  deadline 2,369 s per job).
+- **jobs.mk.** The `cases-*` and `quiet-*` targets leave out `whole_run = false` cases. It keeps
+  B19's prebuilt recipe and `--exact`, which survived; mine was dropped.
+- **Gates at this head, all rc 0:**
+  - `cargo test -p testbench`: 146 passed.
+  - docs, formatting, no-cruft, size-budget, model-host-tests and model-mutations.
+  - The quiet set, both widths: 32 s of wall. All six passed, bench-ssh-loopback-deadlock and
+    client-host-tests included.

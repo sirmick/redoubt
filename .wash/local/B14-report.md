@@ -1,7 +1,7 @@
 # B14 report: the share fixtures at the 1 ms slice
 
 Branch wp-B14, worktree /home/mcloonan/redoubt/.worktrees/B14, from main fdafcf2cb.
-Head 3a5c213dc `tests: sched-share judges each spinner's share of what the three counted`.
+Head 7855c341c `tests: sched-share judges each spinner's share of what the three counted`.
 State: sched-share is fixed and committed. sched-carve-return needs no fixture change: it passes on
 K24's kernel on both widths (section 2). sched-exit-churn threads-exit goes to K25 as a kernel
 charge, by the orchestrator's decision (A); its clause is unchanged (section 3). Analysis scripts and the rv32 logs are in /home/mcloonan/redoubt/.wash/local/B14/.
@@ -176,3 +176,27 @@ figures are matched to the latest runs: 603 counted on both widths, 550 and 543 
 The commit body is updated to match.
 
 Head 3a5c213dc; only docs/kernel/scheduling.md differs from 19f847c43. docs rc=0.
+
+## Round 4: rebased onto main with K24 (2151b2aa4)
+
+The rebase was clean. Fresh prebuilt rc=0 (206 / 192 cases). All runs are on 9cc004f30, which
+has the same code as head 7855c341c; the head differs only in the page's figures.
+
+| | before K24 (fdafcf2cb + B14) | after K24 (2151b2aa4 + B14) |
+| --- | --- | --- |
+| sched-share rv64: counted N of the calibrated 1000 | 912 | 921 |
+| sched-share rv32: counted N of the calibrated 1000 | 899 | 910 |
+| rv64 weight 300, of what was counted (of the window) | 603 (550) | 602 (555) |
+| rv32 weight 300, of what was counted (of the window) | 603 (543) | 603 (549) |
+| marks audits in the window, traced, rv64 | 1,595, 50.3 ms | 1,511, 47.6 ms |
+| marks audits in the window, traced, rv32 | 1,517, 72.5 ms | 1,427, 68.2 ms |
+| sched-carve-return rv32 | FAIL (lost turn at 1084) | PASS: K 1031 through both changes, net 480 (gross 466) |
+| sched-carve-return rv64 | PASS | PASS: K 1073, net 480 (gross 471) |
+
+- Under the old test, sched-share would now pass on rv64 too (555 of the window, floor 550), but
+  rv32 would still fail (549).
+- K24 recovers about 1 point of the efficiency on each width.
+- The page and the commit body now give the after-K24 figures.
+- Gates on 7855c341c: docs rc=0. sched-share rv64 and rv32 rc=0, and carve-return rv32 and rv64
+  rc=0 (on 9cc004f30).
+- The whole sched-* set waits for K25.

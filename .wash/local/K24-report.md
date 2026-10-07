@@ -95,3 +95,51 @@ Environment: /tmp/k24env.sh, with q=/home/mcloonan/redoubt/scripts/q.
 - Not run: rv64/model-host-tests (the debug suite). Stopped after 62 min because one mutations
   thread spun for an hour; it is the known late-caught set (MODEL1), and its 4 cores were blocking
   q's head of queue. The release suite above replaces it.
+- Model, as the orchestrator scoped it (the full suite is B18's and the train's). The full
+  release run and the old serial rv64/model-host-tests were both stopped.
+  - `$q run --cores 8 -- cargo test -q -p redoubt-model --release -- --skip steward --skip mutations_are_caught`:
+    rc 0, every binary ok. The run also skips `mutations_are_caught`, which alone runs all 148
+    mutations for hours; the next command covers the ones for this rule.
+  - `REDOUBT_MODEL_MUTATIONS=R12 $q run --cores 4 -- cargo test -q -p redoubt-model --release --test mutations`:
+    rc 0 in 11.7 s. Every R12 mutation is caught, R12SliceCountsExitWork included.
+
+## Risks
+
+- Each round now runs one full slice of user time plus the kernel's work around it. Before, the
+  pick-to-return work came out of the slice. Shares hold, because everyone's slice grows alike;
+  latency per round grows by the exit work. sched-latency on rv64 still passes. Not rerun: rv32
+  sched-latency and the full scheduling set.
+- A thread switched to directly (not through kmain) keeps the running slice, as before.
+
+## Rebased onto main 0e83afe41: head 54c5eacb0
+
+- `git rebase 0e83afe41`: clean, no conflicts. 11 files, +76/-26 against main.
+- Four kernel builds (release and checked, rv64 and rv32): rc 0, 0 warnings.
+- `make -f scripts/jobs.mk prebuilt`: rc 0. Then:
+  - rv64/sched-share: PASS, 1.9 s;
+  - rv64/sched-latency: PASS, 96.3 s;
+  - rv64/size-budget: PASS;
+  - rv64/docs: PASS.
+- worst-walk on both widths is the run on 2f9a6ec31 above, not rerun after the rebase. Main's
+  new commits do not touch kernel/src/sched.rs.
+
+## Red round (OK with notes, no P1): both folded; head af114beb5 on main ec902d464
+
+- (1) testbench.md: two cases build `sched-trace-large`, the containment gate and worst-walk,
+  with worst-walk's record counts.
+- (2) A picked thread "runs its slice unless a budget deadline fires at the return": in the
+  scheduling.md R12 sentence, the comment at kernel/src/sched.rs's slice start, and the commit
+  message.
+- Gates on af114beb5:
+  - four kernel builds rc 0, 0 warnings;
+  - `cargo +nightly fmt --all -- --check` rc 0;
+  - rv64/docs PASS;
+  - prebuilt rc 0, on the second try: the first got rc 3, "Q: the daemon went away before the
+    lease", when q restarted.
+- **rv32/sched-share FAILs, on main too.**
+  - On af114beb5: weight 300 got 549 of 1000, want 600 ± 50 (0.8 s, guest time).
+  - On main ec902d464 alone (git archive in /tmp/k24-main,
+    `q run --cores 2 -- cargo testbench --arch rv32 --exact sched-share`): weight 300 got 543
+    of 1000, the same failure.
+  - So the failure is not from K24; K24 moves it 6 per thousand toward the target. Its cause is
+    outside this package (rv32 slice-end cost under the 1 ms slice, likely SCHED1's).

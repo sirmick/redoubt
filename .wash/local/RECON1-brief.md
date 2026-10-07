@@ -1,11 +1,23 @@
 # RECON1: the reconcile's cost bounded by its stated loop bounds
 
-Tier A (the kernel's scheduler). Size S. Needs SCHED1 (merged: the owner's decision, 2026-10-06:
-keep the 1 ms slice, merge SCHED1 with the loss a stated residual, this package next), SMP1
-(merged: `libs/stride` now has per-hart runners over the one queue) and K19 (merging: the
-budget frame's words 107 and 108 are its chain heads). Start from `main` once K19 is on it. The
-attribution is in this brief's last-but-one section. Re-cut against `main` fa08fe2c8 and
-wp-K19 0795e6b54 (architect-16): the code map below is that tip's.
+Tier A (the kernel's scheduler). Size S. Needs, all merged before it starts: SCHED1 (the owner's
+decision, 2026-10-06: keep the 1 ms slice, this package next), SMP1 (`libs/stride`'s per-hart
+runners over the one queue), **K24** (a slice starts at the return to user), **K25** (SMP1's
+regressions, in `sched.rs`'s exit path too) and **K19** (the budget frame's words 107 and 108 are
+its chain heads; lands after K24). Start from `main` once the last of them is on it. The
+attribution is in this brief's last-but-one section; the evening refresh (below, "Refresh") has
+the day's findings and the acceptance as oracle numbers. Code map: `main` fa08fe2c8 and wp-K19
+0795e6b54 (architect-16); recheck line numbers after K24 and K25 (`leave` moved the slice start).
+
+## What RECON1 must not reopen
+
+- **The slice start** (K24): a slice is the picked thread's user time, from its return to user
+  mode after the pick; `pick` sets no slice end. R12's sentence and timer.md's definition are
+  settled; RECON1 changes neither.
+- **The billing rule** (SCHED1's five-cases ruling, "Charging"; B14's decision A): a slice end's
+  work is billed as the page says; thread-churn cost goes to the budget that caused it, not to
+  the victim and not to nobody by design. RECON1 lowers the work; it does not move who pays.
+- **The 1 ms slice** (the owner's (b)); the marks' rule; the pick's rank.
 
 **Why:** SCHED1's release measurement (`.wash/local/evidence/SCHED1/five-cases/RESULTS.md`): a
 slice end costs about 0.357 ms of kernel time on rv64 (about 44,600 instructions at icount shift
@@ -159,9 +171,10 @@ charging arithmetic, `Runner`/`Harts`/the per-hart billing (SMP1's), the budget 
 
 The short gate (.wash/SWARM.md "Integration trains"): both builds; the kernel's and
 `libs/stride`'s host tests; its own cases (`sched-large-weight`, `sched-large-weight-release`,
-`sched-share`, `sched-ties`, `sched-server-busy`, `sched-carve-inflation`, `sched-debt-lift`,
-`sched-cluster`, `sched-destroy-billing`, `kernel-containment`) on both widths, each timing
-case alone; the smoke set; fmt, the unsafe ratchet, the size budget, the no-cruft gate,
+`sched-share` and its release sibling, `sched-exit-churn`, `sched-ties`, `sched-server-busy`,
+`sched-carve-inflation`, `sched-carve-return`, `sched-debt-lift`, `sched-cluster`,
+`sched-destroy-billing`, `worst-walk` by name, `kernel-containment`) on both widths, each timing
+case alone through `q run`; the smoke set; fmt, the unsafe ratchet, the size budget, the no-cruft gate,
 doccheck. The whole bench in its train. Report each command with its exit code and the
 before/after table.
 
@@ -176,6 +189,47 @@ queue per hart.
 
 After the attribution is confirmed by your own measurement (the instruction count per step,
 before any change): one progress line with the branch and the table.
+
+## Refresh (architect-16, 2026-10-06 evening): the day's findings, and the acceptance as oracle numbers
+
+What the day measured about the same cost (read these reports' named sections, nothing else):
+- **K24** (`.wash/local/K24-report.md`, "The change"; K19's report, "worst-walk hang"): at 250
+  queued budgets the exit path's work (settle, switch, reconcile with several `raise_floor`
+  walks over the queue, SMP1's `waiting` walk in `leave`, checked kframe reads) outran the 1 ms
+  slice, so a thread was preempted before its first user instruction, forever. K24 starts the
+  slice at the return to user, so that work is outside the slice; the page now carries the
+  residual "A slice end's kernel time grows with the queued budgets", which is this package's
+  to remove. The work itself is unchanged by K24: it is RECON1's.
+- **B14** (`.wash/local/B14-report.md`, sections 1 and 3, round 3): in `sched-share`'s 100 ms
+  window the three spinners counted 912 (rv64) and 899 (rv32) of a calibrated 1,000; the rest is
+  slice ends plus the checked build's marks audit (about once a slice, ~35 µs; ~50 ms of audits
+  in a 2 s window). In `sched-exit-churn`'s threads-exit window, 7.5 % of 1,942 ms went to
+  nobody (1.9 % beside an honest spinner), and a thread-churn cycle costs 100–150 µs of kernel
+  time. The fixture now judges each share of what the three counted (R12's relative claim); the
+  window figure is printed beside and is RECON1's measure.
+- **K25** (`.wash/local/K25-report.md`): in the checked build SMP1 added +22 % to `map`/`unmap`
+  per page, the KernelCell lock-holder assert alone ~28 % of it. Lesson for this package: the
+  checked build's cost is not the release's; the cache's audit against the frames runs inside
+  `sched::audit` (off the measured walk, proportional), never on the exit path itself, and
+  every acceptance number below is from a release build unless it says otherwise.
+- **SCHED1**: the per-switch cost in release, 0.357 ms rv64 / 0.449 ms rv32 under nine runnable
+  budgets (`RESULTS.md`), two-thirds of it `raise_floor`'s walks.
+
+**Acceptance, as numbers the oracle or the fixtures already print** (both widths, release where
+the build is named; the checked figure reported beside each):
+
+| Line | Today | Target |
+| --- | ---: | ---: |
+| `sched-share`'s "the three counted N of 1000" (release sibling case, as `sched-large-weight-release`) | 912 rv64 / 899 rv32 (checked, B14) | ≥ 960 both widths, release; the checked figure reported |
+| `sched-large-weight-release`'s useful work against the 10 ms build | 0.762 / 0.718 | ≥ 0.85 (unchanged target) |
+| `worst-walk`'s reconcile that wakes 250 budgets (the oracle's reconcile figure, net of audits; its `reconcile_max_us` bound) | 7.6 ms rv64 / 8.7 ms rv32 | ≤ 3.5 ms rv64 / ≤ 4.0 ms rv32: the wakes' own cost without the queue walks; the bound in the toml follows the measurement plus a tenth |
+| `sched-exit-churn` threads-exit: the window's share charged to nobody (add the figure to the oracle's `share` line as "nobody N of 1000", report-only; today B14's `charges.py` computes it) | 75 of 1000 (7.5 %) | ≤ 25 of 1000, against the honest spinner's 19 |
+| the slice-end gap method (SCHED1's), kernel time per slice end under nine budgets | 0.357 / 0.449 ms | the fixed 100–155 µs plus under 30 µs: ≤ 0.19 ms rv64 / ≤ 0.22 ms rv32 |
+
+A miss on any line is a finding, reported with the trace, not a target moved. The oracle's
+`share` line gaining the "nobody" figure is the one `sched_oracle.rs` change allowed, report-only,
+with its host test; the bounds (`reconcile_max_us`) move only to the measured value plus a
+tenth.
 
 ## The attribution (SCHED1's successor, 2026-10-06)
 

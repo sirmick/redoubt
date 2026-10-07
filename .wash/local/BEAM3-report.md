@@ -1,6 +1,6 @@
 # BEAM3 report: asynchronous underneath, and files over 9P
 
-Branch wp-BEAM3, base main 8f51851d9 (BEAM8's merge), head a8fb9d349, tree clean.
+Branch wp-BEAM3, base main 8f51851d9 (BEAM8's merge), head 489c740b7 after the panel's folds, tree clean.
 
 ## Summary (for the result)
 
@@ -146,3 +146,25 @@ connection remains the cost of waiting on several endpoints.
 - The start stretch (7.93 s guest) will grow with the shell; fix B makes it harmless for the
   sessions, but the console's echo still waits for the VM.
 - aio-many-reads-two fails before and after this branch (seen on train 3's worktree too).
+
+## Panel folds (head 489c740b7; commits now 15bb1ebec, 7ff193504, 56e623aec, ace33b08b, caa94b5f8, 489c740b7)
+
+- Red P1: ConsoleIo::take hands back any completion on the console's connection that is not its
+  read's or write's, so a file operation on /dev/cons is answered (host test
+  a_file_operation_on_the_consoles_connection_is_answered; without the fix it hangs: checked).
+  Red P2: an abandoned operation stops at its next answer (an_abandoned_operation_stops_at_its_next_answer);
+  a waiter that cannot start is recorded and its connection refused for good (io.rs); the
+  testbench row's beamlet stack is 35,288 B, from beamlet-footprint/userland-* rv64 on BEAM8's VM;
+  below() cleans its path (/home/. lists alice). (5) not mine (table stands).
+- Simplifier 1-7: posix is beamlet-redoubt's exhaustive match on ErrorName (out of the VM); the row
+  test reads docs/servers/wire.md's table and holds every text -> name -> atom to the code; Busy is
+  in the one table and aio reads it so; ErrorName::text gone; Table::take -> (); one plain()
+  FileInfo; Kind::HandleInfo merged; one fixture::session_with. #8 declined.
+- Editor: README.md and GETTING-STARTED.md say file operations run on the machine; budgets.md sums
+  21,264 / 10,346 / 10,089 and the bound 524 (init-boot prints 524 on both widths; the page's 508
+  was stale); files.md links wire.md's column, mtime sentence, Follow-up line gone; beamlet.md
+  wording; files.md status 19.
+- Evidence on 1eedb90c9 (the last full run): host beamlet/init/wire/client/rt exit 0; fmt clean;
+  24 build cases and 24 cases PASS both widths. Then on 489c740b7: beamlet-redoubt exit 0,
+  redoubt-client exit 0, docs/size-budget/unsafe/no-cruft PASS, prebuilt 0, beamlet-files and
+  beamlet-console rv64 PASS, userland-boot rv64 and rv32 PASS.

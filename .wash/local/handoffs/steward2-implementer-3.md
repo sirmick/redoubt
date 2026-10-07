@@ -1,26 +1,30 @@
-# STEWARD2 handoff (steward2-implementer-3, second checkpoint, B18/B19 pause), 2026-10-06
+# STEWARD2 handoff (steward2-implementer-3 -> next, ~85 %), 2026-10-06
 
 ## Branch state FIRST
-- wp-STEWARD2 HEAD 9ae9ff6a8 = cbaa5b900 (14 logical commits on main bd6f768f6) + ONE fixup commit "fixup! image: ..." (tests/steward-sub-budget-flood.toml sequencing). Fold it into the image commit (last commit) before review: `git reset --soft HEAD~2 && git commit -C cbaa5b900` works since both are the last two commits. Tree clean, nothing pushed, no runs of mine alive. Local backup ref s2-wip-backup (old WIP head; delete when done).
-- Not rebased onto FSN1 (littlefsd); waits for the orchestrator's word.
-- Commit list and re-fold method: see .wash/local/handoffs/steward2-implementer-3.md (previous handoff) and .wash/local/STEWARD2-report.md section "steward2-implementer-3".
+- wp-STEWARD2 HEAD d9627acc8: 14 logical commits on c8cd27ba9 (the orchestrator's rebase target; main has moved on since: keep folding with `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash c8cd27ba9`, never onto newer main without the orchestrator). No fixups pending, tree clean, nothing pushed. Local ref s2-wip-backup is the pre-rebase WIP head (delete when accepted).
+- Rebase hunk log (every resolution + post-rebase adaptations): .wash/local/STEWARD2-rebase.md. Report detail: .wash/local/STEWARD2-report.md (pre-rebase results; needs the post-rebase section).
+- Two commit MESSAGES still to reword (replay method: temp worktree at parent, `cherry-pick -n`, `commit -F`, cherry-pick the rest, `git diff --quiet old new`, `reset --hard new`): bootfsd commit (also erofsd 1.5 MiB; retitle) and the image commit (alice 43,528 / sessions 10,881 per BEAM8's 10,880; littlefsd/erofsd names; endpoint=; buckets=5 at littlefsd:data and erofsd:system; erofsd heap 26; main's image cases re-aimed; new peaks; latency 4.5/3.1 s rv64, 2.5/3.5 s rv32; flood via heap lists). Its Size budget lines stay.
+
+## Gate status at d9627acc8 (prebuilt index current; run cases with `make -k -f /home/mcloonan/redoubt/scripts/jobs.mk -C <wt> rv64/<case>`; env /tmp/s2env.sh; after ANY edit run `$MK prebuilt` again)
+PASS (rv64 and rv32 unless noted): steward-boot, init-boot, userland-boot, userland-read-only, userland-bad-start, verity-flipped-tree, verity-wrong-root, verity-signed, verity-bad-signature, verity-rollback, image-disk, beamlet-footprint, bench-net-peer, ipc-outcomes (smoke set complete), steward-restart, steward-login-refused, steward-session-ends, steward-vault-session, steward-ssh-two-principals, steward-sub-budget-flood rv64; boot-profile-unverified rv64; elixir-oracles, steward/init/sshd/wire host-tests, docs, unsafe-budget, size-budget, formatting. Host tests (cargo test -p steward-server, steward, init, sshd, sha256, testbench, erofsd): pass.
+FAIL:
+1. steward-sub-budget-flood rv32: the flooding process's collector asks one 10.4 MB block (about 4x the 680-page process limit) and the session VM (10,880 pages, heap cap 10,862, shell loaded) lacks it -> VM ends (`memory allocation of 10420992 bytes failed`). rv64 passes. Options to put to the orchestrator: raise sizes.session (e.g. 16,384; then alice's top 4 x 16,386 = 65,544, and re-measure), or accept on rv32 with a residual, or BEAM's sizing. Not decided.
+2. boot-profile rv64, rv32 and boot-profile-unverified rv32: the 15 s prompt target. Measured rv64 first console read 15.075 s: init's push of beamlet's public entry 0.6->3.0 s, the steward's carve + streamed launch 3.0->7.6 s, the shell 7.6->15.1 s. QUESTION SENT to the orchestrator (msg c4a92806): (a) restate the target to the steward path, (b) keep 15 s + follow-up, (c) both (recommended). Awaiting answer.
+
+## Memory (post-rebase scans, all within 2x; table updated in docs/testbench.md)
+keyd stack 7,368; erofsd heap 13 (cap 26); verity 8,264/50; sshd heap 56 (cap 384); steward 13,224/14; rest as table.
+
+## Latency (in sshd.md, image commit): ssh start -> VM's first line 3.4/2.1 s rv64, 1.4/2.4 s rv32; -> prompt 4.5/3.1 s rv64, 2.5/3.5 s rv32 (alice/bob), host clock.
+
+## Next
+1. Orchestrator's answers on the flood size and boot-profile target; apply; prebuilt; rerun the failing ones both widths (+ ssh-two-principals rv64 for scan if session size changes, and the memory cases).
+2. Reword the two messages; final short gate (docs, formatting, unsafe-budget, size-budget); append post-rebase results to STEWARD2-report.md; report the head to the orchestrator (who launches the panel).
 
 ## TRAPS
-- Machine is scheduled by q now (scripts/q, scripts/jobs.mk; RESUME-q.md); the B18/B19 resume note will change how cases run again: read it. /tmp/s2env.sh: MK now points at scripts/jobs.mk, jobserver line removed.
-- A malformed tests/*.toml (e.g. a probe waiting on a mark nobody sets) breaks EVERY case run from the worktree. Probe file tests/zz-flood-probe.toml is deleted; don't commit probes.
-- Changing image/manifest.json while a case runs fails its memory scan (artefact).
-- Run dirs are cleaned by later runs: copy logs right after each case (/tmp/s2-run.sh does this per case; reuse it).
-- Kill by PID/process group, never pkill a pattern from your own command line.
-
-## Finding this session: case 4 (flood) was starvation, not a crash
-Probe (logs /tmp/s2-keep/probe/): console session + three SSH logins booting VMs at once on one hart: in 700 s alice and bob reached only the shell banner, the vault session only beamlet's first line ("read from" matched 15.4 s after ssh started). The earlier "closed by remote host" was in the same overload. Fix (the fixup commit): logins sequenced with leading waits: bob -> prompt (mark bob-up) -> alice (wait bob-up) -> prompt (mark alice-up) -> vault (wait alice-up) floods, marks flooded -> bob and alice answer Enum.sum. timeout 2400. Not yet run. Worth telling the orchestrator: four VMs booting at once on smp1 get nowhere in 700 s (idle/booting VM CPU cost; beamlet is not ours).
-
-## Next, in order
-1. Clean reruns (copy logs per case): rv64 flood, two-principals, session-ends; rv32 flood, two-principals, vault-session. (Already passing: rv64 login-refused, vault-session, restart, image cases, steward-boot, elixir-oracles, host-tests cases, docs; rv32 login-refused, session-ends, restart, image cases, steward-boot.) A case failing beside other work is rerun with `q run --quiet -- cargo testbench --arch W case` before it counts; say so in the report.
-2. Latency (orchestrator ask): case 2's session logs carry "[/read from/ matched X s ...]" and "[/\([0-9]+\)> / matched Y s ...]" for alice and bob, both widths: numbers in the report + one sentence (build, width) on sshd.md or steward.md (into the image commit), and reword the testbench commit message to mention the session log's timing note (replay method in previous handoff).
-3. Fold the fixup; rerun unsafe-budget, size-budget, doccheck, fmt (all green at cbaa5b900).
-4. Report via member_update (<=1900 bytes) with detail in .wash/local/STEWARD2-report.md: add K23 note (owner: K23 replaces the restart case's reboot with a restart that logs every session out), the flood starvation finding, case results with exit codes, latency.
-5. FSN1 rebase on the orchestrator's word.
+- Never `git add -A`; stage by path.
+- Tree edits stale the prebuilt index (cases then report stale); hold edits while a run is queued.
+- q daemon restarts kill waiting jobs (rc=3, 'daemon went away'): rerun those.
+- Copy run dirs right after a case (they are cleaned).
 
 ## What consumed my context
-Bench waits, three fold passes, the sshd/steward/R25 debugging chain, memory scans, doc fixes, two checkpoints.
+The rebase and its adaptations, the gate runs, earlier debugging.

@@ -141,3 +141,39 @@ work: updated), GETTING-STARTED.md (no claim), image/README.md (updated), server
 and edges; section status restored to planned: its device-handle Open item is not ours),
 sessions.md (statuses partly tested, naming host tests), sshd.md (Open questions moved to
 residuals), steward.md, init.md, SECURITY.md (R25, R33, R36, R37, R45, R67), todo pages.
+
+### Final state (after the q/B19 resume), head d930a7409
+14 logical commits on bd6f768f6, no WIP or fixups. Not rebased onto main (FSN1 littlefsd, B19):
+waits for the orchestrator's word. Local ref s2-wip-backup (old WIP head) may be deleted.
+
+Runner: scripts/jobs.mk now passes --exact/--prebuilt, which this pre-B19 branch's testbench lacks
+(prebuilt rc=2), so cases ran as `scripts/q run --cores 1 --lock net -- cargo testbench --arch W
+case` (boot cases the same without the lock). Real-time QEMU (no icount on this base), beside
+other members' work.
+
+Cases, exit 0 unless noted: steward-ssh-two-principals rv64 0 (709.9 s, memory scan) rv32 0
+(909.2 s); steward-vault-session rv64 0 (863.1 s) rv32 0 (907.3 s); steward-sub-budget-flood rv64
+0 (935.1 s) rv32 0 (1076.8 s); steward-login-refused rv64 0 rv32 0; steward-session-ends rv64 0
+(673.1 s, memory scan) rv32 0; steward-restart rv64 0 rv32 0; steward-boot, init-boot,
+userland-boot, userland-read-only, userland-bad-start, verity-flipped-tree, verity-wrong-root
+both widths 0; elixir-oracles 0; steward/init/sshd/wire host-tests cases 0; docs 0.
+Short gate at d930a7409: doccheck 0, cargo +nightly fmt --all --check 0, unsafe-budget 0,
+size-budget 0. Host tests (cargo test -p): redoubt-steward-server 19, redoubt-steward 36,
+redoubt-init 71, redoubt-sshd 25, redoubt-sha256 2, testbench 101, redoubt-rt all: 0 failed.
+Not run: the whole bench (the train's).
+
+Case 4, re-aimed: one flooding evaluation in the vault session meets beamlet's process limit (a
+sixteenth of the budget) and is killed (`:killed`), the session answers on (1001), bob and
+alice's unlabelled session print 55. The kernel's refusal of the sub-budget is reachable only by
+several flooders at once, which hits the VM's backstop and ends the VM (beamlet-budget-flood's
+case), so the brief's "kernel's refusal as the VM reports it" is not this case's verdict. Logins
+are sequenced: the console session plus three logins booting VMs at once on one hart reached no
+prompt in 700 s (probe; finding for the orchestrator: idle and booting VMs share one hart badly).
+
+Login latency (steward-ssh-two-principals, release, one hart, shared host; alice / bob beside
+her): ssh start to the VM's first line 3.4 / 5.3 s rv64, 6.2 / 7.6 s rv32; to the prompt 281 /
+235 s rv64, 336 / 327 s rv32. Key exchange, login and the steward's batch are the first seconds;
+the rest is the shell starting in the VM. In sshd.md "Sessions over SSH".
+
+K23 (owner): replaces steward-restart's reboot with a restart that logs every session out; the
+case and the page residual stay as today until then.
