@@ -317,7 +317,7 @@ impl Gen {
             22 => S::Random,
             23 => S::MapFixed { addr: self.any(), len: self.any(), flags: self.any() },
             24 => S::DeviceInfo { h: self.any() },
-            _ => S::ThreadCreate { entry: 0, sp: 0, arg: 0 },
+            _ => S::BudgetReap { h: self.any() },
         }
     }
 
@@ -904,9 +904,9 @@ impl Gen {
             75..=76 => Syscall::HandleClose { h: self.handle(k, pid, |_| true) },
             77..=86 => self.budget_create(k, pid),
             87..=89 => {
-                // Destroying `root` ends the world; keep it rare.
+                // Destroying `root` ends the world, and reaping it all but `init`; keep both rare.
                 let h = self.handle(k, pid, |h| is_budget(h) && (h.object != Object::Budget(ROOT)));
-                Syscall::BudgetDestroy { h }
+                if self.rng.pct(30) { Syscall::BudgetReap { h } } else { Syscall::BudgetDestroy { h } }
             }
             90..=92 => Syscall::BudgetUsage { h: self.handle(k, pid, is_budget) },
             93..=94 => Syscall::Random,

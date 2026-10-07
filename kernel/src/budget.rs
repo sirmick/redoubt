@@ -955,6 +955,29 @@ impl MemoryManager {
         Ok(top)
     }
 
+    /// First step of `budget_reap(h)`: check the handle and mark the first child on the budget's
+    /// child list, and everything below it, dying (`None`: it has no children). The budget the
+    /// handle names is kept; the caller finishes as `budget_destroy` does, from the child.
+    pub fn reap_begin(&mut self, pid: Pid, h: u32) -> Result<(BudgetFrame, Option<BudgetFrame>), Error> {
+        let parent = self.budget_handle(pid, h)?;
+        let child = self.budget(parent).first_child;
+        if let Some(child) = child {
+            self.mark_dying(child);
+        }
+        Ok((parent, child))
+    }
+
+    /// How many children `frame` has: `budget_reap`'s result, a walk of its child list.
+    pub fn children(&self, frame: BudgetFrame) -> u32 {
+        let mut n = 0;
+        let mut cur = self.budget(frame).first_child;
+        while let Some(c) = cur {
+            n += 1;
+            cur = self.budget(c).next_sibling;
+        }
+        n
+    }
+
     /// Mark `top` and everything below it dying (R10's first step, for `budget_destroy` and for
     /// a deadline alike). Before anything else, `top`'s carve comes back to its parent and `top`
     /// leaves its parent's child list, so the subtree the walk starts from is exactly the one

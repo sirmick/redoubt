@@ -137,6 +137,12 @@ pub enum Mutation {
     /// Destroying a budget drops the count of the PIDs still held for its processes instead of
     /// moving it to the parent.
     R10HeldPidsDropped,
+    /// `budget_reap` destroys the budget it names too, not only its first child.
+    R10ReapDestroysParent,
+    /// `budget_reap` does not return the reaped child's carve to the budget it keeps.
+    R10ReapKeepsCarve,
+    /// `budget_reap` spares the reaped child's own children.
+    R10ReapSkipsGrandchildren,
     // R11. Memory.
     /// Reused pages are not zeroed.
     R11NoZeroing,
@@ -367,7 +373,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 148] = {
+    pub const ALL: [Mutation; 151] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -422,6 +428,9 @@ impl Mutation {
             R10SweptHandlesDropped,
             R10CreatorDeathSparesProcess,
             R10HeldPidsDropped,
+            R10ReapDestroysParent,
+            R10ReapKeepsCarve,
+            R10ReapSkipsGrandchildren,
             R11NoZeroing,
             R11SetFlagsAllowsWx,
             R11SetFlagsAllowsWriteOnly,
@@ -575,6 +584,9 @@ impl Mutation {
             | R10SweptHandlesDropped
             | R10CreatorDeathSparesProcess
             | R10HeldPidsDropped
+            | R10ReapDestroysParent
+            | R10ReapKeepsCarve
+            | R10ReapSkipsGrandchildren
             | BudgetDeadlineIgnored => "R10",
             R11NoZeroing
             | R11SetFlagsAllowsWx

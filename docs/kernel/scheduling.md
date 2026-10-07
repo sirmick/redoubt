@@ -230,15 +230,15 @@ In `bench:sched-destroy-billing` a parent that kept 10 of 1000 destroys the chil
 is back on the CPU within twice the destruction's cost and four slices; billed at 10, it would wait
 for seconds.
 
-Every destruction's whole cost is billed to someone. For `budget_destroy` that is the caller, as
-the call's own kernel time. For a deadline it is the top's parent, after its carve returns, or the
-nearest ancestor with free weight above 0 if the parent has none; `root` always has. No part of a
-destruction is billed to nobody ([R10 (destruction)](budgets.md#r10-destruction)). On a
-deadline the kernel names the payer once the carve is back, and bills it after the subtree is
-gone for everything from the walk that found the deadline. In `bench:deadline-flood-billed` a
-creator floods its own budget with empty weight-0 budgets on short deadlines: its count falls as
-the flood grows from 16 to 64 a round, and an equal-weight victim keeps its half. With the bill
-planted out, the victim fell to 137 of 1000.
+Every destruction's whole cost is billed to someone. For `budget_destroy` and `budget_reap` that is
+the caller, as the call's own kernel time. For a deadline it is the top's parent, after its carve
+returns, or the nearest ancestor with free weight above 0 if the parent has none; `root` always
+has. No part of a destruction is billed to nobody
+([R10 (destruction)](budgets.md#r10-destruction)). On a deadline the kernel names the payer once the
+carve is back, and bills it after the subtree is gone for everything from the walk that found the
+deadline. In `bench:deadline-flood-billed` a creator floods its own budget with empty weight-0
+budgets on short deadlines: its count falls as the flood grows from 16 to 64 a round, and an
+equal-weight victim keeps its half. With the bill planted out, the victim fell to 137 of 1000.
 
 The trace checks every timer interrupt from user mode (`bench:sched-timer-flood`): after its
 expiry it charges only the budget it found last, an expired item's or a wait's that ended before

@@ -30,9 +30,9 @@ Status: built · partly tested: that no driver, file system or policy sits in th
 Budgets pay for all five: every object, page, process and share of the CPU is charged to one,
 and destroying one revokes everything under it ([budgets](budgets.md),
 [R10 (destruction)](budgets.md#r10-destruction)). The budget calls are `budget_create`,
-`budget_destroy` and `budget_usage`. Two calls sit outside the five jobs. `random` returns 64
-bits from the kernel's ChaCha8 generator, keyed from the loader's `Seed` argument; the kernel
-also draws PIDs from it. `system_reset` powers the machine off or reboots it through the
+`budget_destroy`, `budget_reap` (destroy one child, keep the budget) and `budget_usage`. Two
+calls sit outside the five jobs. `random` returns 64 bits from the kernel's ChaCha8 generator,
+keyed from the loader's `Seed` argument; the kernel also draws PIDs from it. `system_reset` powers the machine off or reboots it through the
 firmware, and only a holder of the Reset device object can call it.
 
 The kernel holds nothing else:
@@ -88,7 +88,7 @@ and a **stamp** (the budget whose destruction closes the handle everywhere,
 
 | Object | What it is | Made by | Charged | Ends when |
 | --- | --- | --- | --- | --- |
-| budget | limits on pages, processes and CPU weight; a class, a label set, an account, an optional deadline | `budget_create`; `root`, `system` and `users` at boot | one page to its parent | `budget_destroy`, its deadline, or the destruction of a budget above it |
+| budget | limits on pages, processes and CPU weight; a class, a label set, an account, an optional deadline | `budget_create`; `root`, `system` and `users` at boot | one page to its parent | `budget_destroy`, its deadline, `budget_reap` on its parent, or the destruction of a budget above it |
 | endpoint | what clients call and servers receive on; it holds no queue | `endpoint_create` | one page to its owner, the creating process's budget | its owner is destroyed |
 | process | an address space, a handle table and threads; its object page holds the one exit notice | `process_create` | the object page to the creator's budget; its header, page tables and memory to the budget it runs in | it exits, faults or is killed; the page stays until the notice is taken or dropped |
 | device | an MMIO range (with a DMA flag), an IRQ line, or the Reset right | only at boot, from the loader's device list | one page to its owner (`system` at boot) | its owner is destroyed, or its DMA reset is never confirmed |

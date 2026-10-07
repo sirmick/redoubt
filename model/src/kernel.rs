@@ -2243,6 +2243,31 @@ impl Kernel {
         }
     }
 
+    /// R10 over one child: destroy the first child of `b` (the newest: the kernel links a new
+    /// child at the head of its parent's list) and everything below it, and keep `b`. Returns how
+    /// many children `b` has left.
+    fn reap_budget(&mut self, b: u64) -> u64 {
+        let Some(c) = self.children(b).into_iter().max() else { return 0 };
+        if self.broken(Mutation::R10ReapDestroysParent) {
+            self.destroy_budget(b);
+            return 0;
+        }
+        if self.broken(Mutation::R10ReapSkipsGrandchildren) {
+            // The child's own children are spared: lifted out of the subtree to `b`.
+            for g in self.children(c) {
+                self.budgets.get_mut(&g).unwrap().parent = Some(b);
+            }
+        }
+        let carve = self.budgets[&c].clone();
+        self.destroy_budget(c);
+        if self.broken(Mutation::R10ReapKeepsCarve) {
+            let bx = self.budgets.get_mut(&b).unwrap();
+            bx.pages_used += carve.pages_limit + self.costs.budget;
+            bx.processes_used += carve.processes_limit;
+        }
+        self.children(b).len() as u64
+    }
+
     // ---------------------------------------------------------------------------------------
     // Time.
 
@@ -2620,6 +2645,10 @@ impl Kernel {
             S::BudgetDestroy { h } => match self.budget_destroy(pid, *h) {
                 Ok(()) if !self.threads.contains_key(&tid) => Outcome::Gone,
                 r => done(r.map(|_| Ret::Unit)),
+            },
+            S::BudgetReap { h } => match self.budget_reap(pid, *h) {
+                Ok(_) if !self.threads.contains_key(&tid) => Outcome::Gone,
+                r => done(r.map(Ret::Remaining)),
             },
             S::BudgetUsage { h } => done(self.budget_usage(pid, *h).map(Ret::Usage)),
             S::TimeNow => done(Ok(Ret::Time(self.time_now()))),
@@ -3780,6 +3809,13 @@ impl Kernel {
         let b = self.lookup_budget(pid, h)?;
         self.destroy_budget(b);
         Ok(())
+    }
+
+    /// `budget_reap(h(budget)) -> remaining`: always allowed to a holder, as `budget_destroy`.
+    pub fn budget_reap(&mut self, pid: u64, h: u64) -> R<u64> {
+        let h = decode_handle(h)?;
+        let b = self.lookup_budget(pid, h)?;
+        Ok(self.reap_budget(b))
     }
 
     /// `budget_usage(h(budget)) -> counters`: R1, a flow from the target to the caller's budget:

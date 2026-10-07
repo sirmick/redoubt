@@ -148,11 +148,16 @@ pub enum Syscall {
     DeviceInfo {
         h: u64,
     },
+    /// Destroys the budget's first child and everything below it, and keeps the budget
+    /// (kernel/budgets.md, R10); the result is how many children it still has.
+    BudgetReap {
+        h: u64,
+    },
 }
 
 /// The calls' names, in kernel/abi.md's table order (the order of `redoubt-sys`'s numbers, from 1).
 /// The one list of them: [`Syscall::name`], the trace and the tests use it.
-pub const CALL_NAMES: [&str; 27] = [
+pub const CALL_NAMES: [&str; 28] = [
     "map_anon",
     "unmap",
     "set_flags",
@@ -180,6 +185,7 @@ pub const CALL_NAMES: [&str; 27] = [
     "system_reset",
     "map_fixed",
     "device_info",
+    "budget_reap",
 ];
 
 impl Syscall {
@@ -213,6 +219,7 @@ impl Syscall {
             Syscall::SystemReset { .. } => 25,
             Syscall::MapFixed { .. } => 26,
             Syscall::DeviceInfo { .. } => 27,
+            Syscall::BudgetReap { .. } => 28,
         }
     }
 
@@ -334,6 +341,8 @@ pub enum Ret {
         msg_id: u64,
     },
     Usage(Counters),
+    /// `budget_reap`: how many children the budget still has.
+    Remaining(u64),
     Time(u64),
     /// A user load (not a system call): the word read.
     Word(u64),

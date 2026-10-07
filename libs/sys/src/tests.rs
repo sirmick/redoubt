@@ -79,6 +79,7 @@ fn sample_calls() -> Vec<Call> {
         Call::SystemReset { device: h(12), kind: ResetKind::PowerOffFailure },
         Call::MapFixed { addr: 0x2000_0000, len: 0x1000, flags: rw },
         Call::DeviceInfo { device: h(5) },
+        Call::BudgetReap { budget: h(13) },
     ]
 }
 
@@ -113,6 +114,7 @@ fn sample_returns(number: Number) -> Vec<Return> {
             Return::Device(DeviceInfo::Irq(u32::MAX)),
             Return::Device(DeviceInfo::Reset),
         ],
+        Number::BudgetReap => std::vec![Return::Remaining(0), Return::Remaining(u32::MAX)],
         _ => std::vec![Return::Nothing],
     }
 }
@@ -517,6 +519,11 @@ fn malformed_calls_are_refused() {
     let reset = Number::SystemReset as u64;
     assert_eq!(decode([reset, 1, 4, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown reset kind");
     assert_eq!(decode([reset, 1, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reset kind 0");
+    let reap = Number::BudgetReap as u64;
+    assert_eq!(decode([reap, 0, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "reap handle 0");
+    assert_eq!(decode([reap, wide, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "reap wide handle");
+    assert_eq!(decode([reap, 1, 1, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reap, a2");
+    assert_eq!(decode([reap, 1, 0, 0, 0, 0, 0, 0]), Ok(Call::BudgetReap { budget: h(1) }));
 }
 
 #[test]
@@ -771,6 +778,9 @@ fn error_rows() {
     // `device_info` maps nothing and changes nothing (kernel/devices.md).
     assert!(has(Number::DeviceInfo, &[BadHandle, WrongObject]));
     assert!(lacks(Number::DeviceInfo, &[OutOfMemory, NotPermitted, TooLarge]));
+    // `budget_reap` fails only on its handle, as `budget_destroy` (kernel/budgets.md).
+    assert!(has(Number::BudgetReap, &[BadHandle, WrongObject]));
+    assert!(lacks(Number::BudgetReap, &[OutOfMemory, NotPermitted, LabelDenied, ClassDenied]));
     // Every call that adds a handle to its caller's table (`MAX_HANDLES`).
     for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate] {
         assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");

@@ -80,6 +80,8 @@ pub enum Return {
     Random(u64),
     /// `device_info`.
     Device(DeviceInfo),
+    /// `budget_reap`: how many children the budget still has.
+    Remaining(u32),
 }
 
 /// Which device a handle names: `device_info`'s result, in the form of the `Devs` entry the
@@ -169,6 +171,7 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
                 Return::Time(time) => w.u64(time),
                 Return::Random(value) => w.u64(value),
                 Return::Device(info) => info.write(w),
+                Return::Remaining(n) => w.u32(n),
             }
         }
     }
@@ -230,6 +233,7 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         Number::TimeNow => Return::Time(r.u64()?),
         Number::Random => Return::Random(r.u64()?),
         Number::DeviceInfo => Return::Device(DeviceInfo::read(&mut r)?),
+        Number::BudgetReap => Return::Remaining(r.u32()?),
         Number::Unmap
         | Number::SetFlags
         | Number::ThreadExit

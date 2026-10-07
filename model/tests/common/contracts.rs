@@ -144,9 +144,58 @@ fn bad_record_interrupt(mutation: Option<Mutation>) -> Result<World, String> {
     Ok(w)
 }
 
+/// `budget_reap` (kernel/budgets.md, R10): each call destroys one child of the budget, with
+/// everything below it, and says how many are left; the budget stays, and once the last child is
+/// gone its usage is what it was before the first carve (I10 per child). A child's handle reaps
+/// only below that child. Budgets are made from `root` (`init`'s handle 1).
+pub fn reap_empties_and_keeps(mutation: Option<Mutation>) -> Result<(), String> {
+    let mut w = World::new(mutation);
+    let create = |w: &mut World, parent: u64, pages: u64| -> Result<u64, String> {
+        let spec = Syscall::BudgetCreate {
+            parent,
+            pages,
+            processes: 0,
+            weight: 0,
+            labels: vec![],
+            account: 0,
+            deadline: FOREVER,
+        };
+        match w.value(1, spec)? {
+            Ret::Handle(h) => Ok(h),
+            r => Err(format!("budget_create: {r:?}")),
+        }
+    };
+    let usage = |w: &mut World, h: u64| w.result(1, Syscall::BudgetUsage { h });
+    let p = create(&mut w, 1, 12)?;
+    let empty = usage(&mut w, p)?;
+    let a = create(&mut w, p, 1)?;
+    let b = create(&mut w, p, 6)?;
+    let g = create(&mut w, b, 2)?;
+    let gg = create(&mut w, g, 0)?;
+    // The first child is the newest, `b`: it goes with its subtree, and `a` stays.
+    expect(w.result(1, Syscall::BudgetReap { h: p })? == Ok(Ret::Remaining(1)), "one child left")?;
+    for (h, what) in [(b, "the reaped child"), (g, "a grandchild"), (gg, "a great-grandchild")] {
+        expect(usage(&mut w, h)? == Err(Error::BadHandle), &format!("{what} is gone"))?;
+    }
+    expect(usage(&mut w, p)?.is_ok() && usage(&mut w, a)?.is_ok(), "the budget and its other child stay")?;
+    // A child's handle reaches only below it: `a` has no children, and its parent keeps it.
+    expect(w.result(1, Syscall::BudgetReap { h: a })? == Ok(Ret::Remaining(0)), "a leaf has none")?;
+    expect(usage(&mut w, a)?.is_ok(), "a reap keeps the budget it names")?;
+    expect(w.result(1, Syscall::BudgetReap { h: p })? == Ok(Ret::Remaining(0)), "the last child")?;
+    expect(usage(&mut w, p)? == empty, "emptied, the budget's usage is as before its first carve")?;
+    expect(w.result(1, Syscall::BudgetReap { h: p })? == Ok(Ret::Remaining(0)), "an empty budget")?;
+    expect(usage(&mut w, p)? == empty, "reaping an empty budget changes nothing")?;
+    expect(w.result(1, Syscall::BudgetReap { h: 1 << 20 })? == Err(Error::BadHandle), "no such handle")?;
+    expect(w.result(1, Syscall::BudgetReap { h: 0 })? == Err(Error::BadHandle), "handle 0")?;
+    let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+    expect(w.result(1, Syscall::BudgetReap { h: ep })? == Err(Error::WrongObject), "not a budget")?;
+    trace_roundtrip(&w, mutation)
+}
+
 /// Independent examples from the completion table, not kernel-derived expectations.
 pub fn ipc_contracts(mutation: Option<Mutation>) -> Result<(), String> {
     bad_record_takes_nothing(mutation)?;
+    reap_empties_and_keeps(mutation)?;
     for taken in [false, true] {
         let mut w = World::new(mutation);
         let (ep, h, server) = w.setup()?;

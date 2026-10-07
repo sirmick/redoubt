@@ -10,7 +10,7 @@
 //! (alignment, then lying in the caller's own memory, then their slots); then the call's own
 //! checks, which live with the objects (`budget.rs`, `handle.rs`).
 //!
-//! Implemented calls: `handle_close`, `budget_create`, `budget_destroy`,
+//! Implemented calls: `handle_close`, `budget_create`, `budget_destroy`, `budget_reap`,
 //! `budget_usage`, `time_now`, `random`, `endpoint_create`, `mint`, `call`, `send`, `receive`,
 //! `reply`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`, `dma_alloc`,
 //! `system_reset` and the `process_*` and `thread_*` families.
@@ -87,6 +87,7 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
         }),
         Call::BudgetDestroy { budget } => budget_destroy(pid, tid, budget.index()),
+        Call::BudgetReap { budget } => budget_reap(pid, budget.index()),
         Call::BudgetUsage { budget, usage_rec } => MemoryManager::with_mut(|mm| {
             let frames = record_frames::<USAGE_SLOTS>(mm, usage_rec, true)?;
             let usage = mm.budget_usage(pid, budget.index())?;
@@ -201,6 +202,21 @@ fn budget_destroy(pid: Pid, _tid: TID, h: u32) -> Result<Option<Return>, Error> 
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
         let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid), None);
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })
+    })
+}
+
+/// `budget_reap(h) -> remaining` (R10): destroy the first child of the budget `h` names, as
+/// `budget_destroy` destroys a subtree, keep the budget, and count the children left. One
+/// destruction per call keeps the kernel entry within R10's bound.
+fn budget_reap(pid: Pid, h: u32) -> Result<Option<Return>, Error> {
+    ProcessTable::with_mut(|ss| {
+        let (parent, child) = MemoryManager::with_mut(|mm| mm.reap_begin(pid, h))?;
+        if let Some(child) = child {
+            if crate::budget::destroy_subtree(ss, child, Some(pid), None) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(Return::Remaining(MemoryManager::with(|mm| mm.children(parent)))))
     })
 }
 
