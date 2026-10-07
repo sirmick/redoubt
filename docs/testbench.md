@@ -632,7 +632,14 @@ envelope. The other cases keep the whole-stamp subtraction above. The same trace
 timer interrupt from user mode with every charge inside it, and `sched_oracle` checks that the
 budget it interrupted pays only for its own items or its slice's end
 ([charging](kernel/scheduling.md#charging)); a kernel built with `timer-tail-billed`, which keeps
-the old billing, fails that check in a recorded negative run. A kernel built with
+the old billing, fails that check in a recorded negative run. The trace ends with one record of
+the kernel's time (`C`): every hart's ticks in the kernel, from a trap's entry or `kmain`'s loop
+to the return to user mode or the idle, in its id; the ticks charged to budgets in its pass; and
+in its entry field, which it alone uses so, the ticks the checked build's audits took.
+`sched_oracle` reports `nobody N of 1000 (kernel K ticks, audits A, charged C)`, the share of
+the kernel's time net of audits that no budget was charged, and judges nothing by it
+([residual risks](kernel/scheduling.md#residual-risks)). The counters read the billing's clock
+and move no schedule, and a kernel without `sched-trace` compiles none of them. A kernel built with
 `alloc-first-fit`, which takes each frame by the first-fit scan of RAM the bitmap replaced,
 fails `scan-bounds` on both widths in a recorded negative run
 ([R12 (scheduling)](kernel/scheduling.md#r12-scheduling)).

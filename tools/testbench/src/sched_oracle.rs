@@ -72,6 +72,12 @@
 //! a case can require some of the latter in a share's window (`stale_waits_in=<share>`), so the
 //! check it runs cannot pass for want of the interrupts it is about.
 //!
+//! **The kernel's time nobody pays for** (kernel/scheduling.md, "Residual risks") closes the
+//! trace, one `C` record: the kernel's ticks on every hart in its id, the ticks charged to budgets
+//! in its pass, and the checked build's audits' ticks in its entry field. The summary reports the
+//! share of the kernel's time net of audits that no budget was charged, `nobody N of 1000`, with
+//! the three numbers it divides, and judges nothing by it.
+//!
 //! **The cluster** (`post_check = "sched_oracle cluster ..."`, kernel/scheduling.md,
 //! "Responsiveness") is judged on conservative kernel-clock envelopes, plan `v3-kernel-envelope`.
 //! Each stand-in attempt reports B (a kernel reading before arming), its delay, L = B + delay, P (a
@@ -134,7 +140,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMm".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmC".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -158,7 +164,11 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
         if r.seq != i as u64 {
             return Err(format!("record {i} is numbered {}", r.seq));
         }
-        if i > 0 && r.entry < records[i - 1].entry {
+        // The kernel's time (`C`) closes the trace, its entry field the audits' ticks.
+        if r.kind == 'C' && i + 1 != records.len() {
+            return Err(format!("record {i}: the kernel's time before the trace's end"));
+        }
+        if i > 0 && r.kind != 'C' && r.entry < records[i - 1].entry {
             return Err(format!("record {i} goes back to kernel entry {}", r.entry));
         }
     }
@@ -361,6 +371,10 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
         sum.floor.resize(i + 1, floor);
         let r = &records[i];
         i += 1;
+        // The kernel's time (`C`) is reported in the summary ([`nobody`]); it judges nothing.
+        if r.kind == 'C' {
+            continue;
+        }
         // A budget's pass never falls (the records that carry one).
         if "WRDPK".contains(r.kind) {
             if last_pass.get(&r.id).is_some_and(|p| r.pass < *p) {
@@ -2084,6 +2098,15 @@ fn shares(log: &str) -> Result<Vec<Share<'_>>, String> {
     Ok(out)
 }
 
+/// The kernel's time a `C` record states, and the share of it, net of the checked build's audits,
+/// that no budget was charged: report-only (kernel/scheduling.md, "Residual risks").
+fn nobody(r: &Record) -> String {
+    let (kernel, audits, charged) = (r.id, r.entry, r.pass as u64);
+    let net = kernel.saturating_sub(audits);
+    let per_mille = net.saturating_sub(charged).saturating_mul(1000) / net.max(1);
+    format!("nobody {per_mille} of 1000 (kernel {kernel} ticks, audits {audits}, charged {charged})")
+}
+
 /// The bench's post-check: parse the case's console log and check it. `args` may bound the p99
 /// of R10's durations, `r10_p99_us=N`; each measure's p50 and p99 net of audits,
 /// `<measure>_p50_us=N` and `<measure>_p99_us=N`, in each group the program printed; and a
@@ -2341,8 +2364,10 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         );
     }
     let audit_total: u64 = sum.audits.iter().map(|(b, e)| e - b).sum();
+    let kernel_time =
+        records.last().filter(|r| r.kind == 'C').map_or(String::new(), |r| format!("; {}", nobody(r)));
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's){lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's){kernel_time}{lease_end}",
         records.len(),
         sum.picks,
         sum.lifts,
@@ -3222,6 +3247,18 @@ mod tests {
 
     fn verdict(records: &[(u64, char, u64, u128)]) -> Result<String, String> { run(&trace(records), "") }
 
+    /// The kernel's time closes the trace (`C`): the share of it, net of audits, charged to no
+    /// budget is reported with the numbers it divides, whatever its entry field, and judges nothing.
+    #[test]
+    fn the_kernel_time_nobody_paid_is_reported_per_mille() {
+        let ok = verdict(&[(1, 'W', 5, 0x10), (1, 'K', 5, 0x10), (300, 'C', 10_300, 9_900)]).unwrap();
+        assert!(ok.contains("; nobody 10 of 1000 (kernel 10300 ticks, audits 300, charged 9900)"), "{ok}");
+        let none = verdict(&[(1, 'W', 5, 0x10), (1, 'K', 5, 0x10), (0, 'C', 0, 0)]).unwrap();
+        assert!(none.contains("; nobody 0 of 1000 (kernel 0 ticks, audits 0, charged 0)"), "{none}");
+        let without = verdict(&[(1, 'W', 5, 0x10), (1, 'K', 5, 0x10)]).unwrap();
+        assert!(!without.contains("nobody 0 of 1000"), "{without}");
+    }
+
     #[test]
     fn walks_are_reported_net_of_audits_and_never_nested() {
         let ok = verdict(&[
@@ -3966,6 +4003,10 @@ mod tests {
                 "SCHED-TRACE 0 1 W 1 5\nSCHED-TRACE 2 1 K 1 5\nSCHED-TRACE-END 2 dropped 0\n".to_string(),
             ),
             ("an unknown kind", "SCHED-TRACE 0 1 X 1 5\nSCHED-TRACE-END 1 dropped 0\n".to_string()),
+            (
+                "the kernel's time before the end",
+                "SCHED-TRACE 0 0 C 9 1\nSCHED-TRACE 1 1 W 1 5\nSCHED-TRACE-END 2 dropped 0\n".to_string(),
+            ),
             ("a bad pass", "SCHED-TRACE 0 1 W 1 zz\nSCHED-TRACE-END 1 dropped 0\n".to_string()),
             (
                 "entries going back",

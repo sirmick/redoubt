@@ -1054,7 +1054,17 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   billed to its device's owner, and then the interrupted budget's billing restarts, so the bill's
   own work is between the two; and a deadline's destruction is billed to its payer inside the
   destruction, so what follows that bill until the expiry's next interval is nobody's. Each is a
-  bill's own handling, about 25 µs in a checked rv64 build, once per interrupt or destruction.
+  bill's own handling, about 25 µs in a checked rv64 build, once per interrupt or destruction. A
+  traced kernel measures all the kernel time no budget is charged, these two and what the rules
+  leave to nobody (a walk that finds nothing, a pick of nothing, a timer interrupt that ends no
+  slice), as a share of its time net of audits (`nobody N of 1000`,
+  [checked builds](../testbench.md#checked-builds)); an interrupt's bill leaves out an audit its
+  handling runs, as billing does. Of 1000, rv64 then rv32: 14 and 26 in `sched-exit-churn`, which
+  has neither an interrupt's bill nor a deadline's destruction, so that is all time the rules
+  leave to nobody; 27 and 44 in `sched-latency`, which can also show the interrupt's gap; and 17
+  and 35 in `sched-timer-flood`, 29 and 47 in `sched-budget-churn` and 61 and 84 in
+  `kernel-containment`, which can also show the destruction's. The two gaps are at most that. The
+  counters read the billing's clock and decide nothing: like the audits, they move no schedule.
 - **Server work is paid by the server's weight.** Work a server does for a user is paid by the
   server's weight, not the requester's; the steward's work, by the steward. No time is donated, so
   a user who floods a server takes that server's share away from the server's other callers,

@@ -142,6 +142,12 @@ pub extern "C" fn trap_handler(
             resume_current();
         }
     }
+    // A trap in `kmain`'s idle window enters the kernel here (one from user mode, at
+    // `sched::from_user`); `kmain`'s own switch is in it already.
+    #[cfg(feature = "sched-trace")]
+    if !from_user {
+        crate::sched::trace::kernel_from(crate::sched::now_ticks());
+    }
     let sc = scause::read();
 
     // If we were previously in Supervisor mode and we've just tried to write to
@@ -248,6 +254,8 @@ pub extern "C" fn trap_handler(
             let pending = intc::pending();
 
             if let Some(irq) = pending {
+                #[cfg(debug_assertions)]
+                crate::sched::irq_audits_open();
                 // R5: an interrupt with a device object is the kernel's to record: it masks the
                 // source, sets `fired` and wakes whoever is in `receive` on the handle. One with no
                 // device object has nobody to tell: complete the claim, then mask the source so it
