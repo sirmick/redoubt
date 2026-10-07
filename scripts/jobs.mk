@@ -10,7 +10,8 @@
 #   rv64/<case>  rv32/<case>   that one case on that width; log target/jobs/<w>-<case>.log: from
 #                              target/prebuilt with no cargo when its <w>/index.json exists
 #                              (`target/prebuilt/testbench --prebuilt target/prebuilt`), else
-#                              `cargo testbench`
+#                              `cargo testbench`; a case with no `arch` (it boots nothing)
+#                              runs under rv64 only
 #   prebuilt                   every case's pieces for both widths built once into
 #                              target/prebuilt (8 cores; one job, the widths in turn: their
 #                              userland disks compile the same Mix projects). Make it again after
@@ -23,12 +24,14 @@
 #   list / list-classes        the case names; every class's members
 #
 # Classes (docs/testbench.md "On a shared host"):
-#   quiet   host-clock cases: crates asserting wall-clock bounds (rt, client, r4, rt-miri),
-#           bench-ssh-guest and the loopback deadline case (they expect a timeout), and the
-#           host-tests case (every crate's tests, the quiet ones included): `q run --quiet`,
-#           one at a time on the reserved cores while the rest of the machine keeps running
+#   quiet   host-clock cases: crates asserting wall-clock bounds (rt, client, r4),
+#           bench-ssh-guest and the loopback deadline case (they expect a timeout): `q run
+#           --quiet`, one at a time on the reserved cores while the rest of the machine keeps
+#           running
 #   net     a [net] table opening host sockets: one at a time among themselves (`--lock net`)
-#   bounded other host-tests cases: 4 cores (RUST_TEST_THREADS follows the lease)
+#   fanned  a host-tests case with a `fanout`: 2 cores to build, and each job asks q for its own
+#   bounded other host-tests cases and the Elixir oracles (they build beamlet): 4 cores
+#           (RUST_TEST_THREADS follows the lease)
 #   boot    everything else: one core per guest hart (the case's largest smp), icount-pinned,
 #           a verdict beside anything; a timeout_secs expiry beside other work is rerun alone
 
@@ -39,11 +42,14 @@ MAKEFLAGS += -j64 --no-print-directory
 here := $(dir $(lastword $(MAKEFILE_LIST)))
 q := $(here)q
 cases := $(sort $(basename $(notdir $(wildcard tests/*.toml))))
-quiet := rt-host-tests client-host-tests r4-host-tests rt-miri bench-ssh-guest bench-ssh-loopback-deadlock host-tests
+quiet := rt-host-tests client-host-tests r4-host-tests bench-ssh-guest bench-ssh-loopback-deadlock
 quiet := $(filter $(cases),$(quiet))
 net := $(filter-out $(quiet),$(sort $(basename $(notdir $(shell grep -lE '^(forward *=|\[\[?net\.(peer|dial|poke))' $$(grep -lE '^\[net\]' tests/*.toml))))))
-bounded := $(filter-out $(quiet) $(net),$(sort $(basename $(notdir $(shell grep -lE '^kind *= *"host-tests"' tests/*.toml)))))
-boot := $(filter-out $(quiet) $(net) $(bounded),$(cases))
+fanned := $(filter-out $(quiet) $(net),$(sort $(basename $(notdir $(shell grep -lE '^(fanout *=|\[fanout\])' tests/*.toml)))))
+bounded := $(filter-out $(quiet) $(net) $(fanned),$(sort $(basename $(notdir $(shell grep -lE '^kind *= *"(host-tests|elixir)"' tests/*.toml)))))
+boot := $(filter-out $(quiet) $(net) $(fanned) $(bounded),$(cases))
+# cases with no target: one run, under rv64
+hostonly := $(sort $(basename $(notdir $(shell grep -LE '^arch *=' tests/*.toml))))
 logs := target/jobs
 prebuilt := target/prebuilt
 # cores for a boot case: its largest smp value (default 1)
@@ -56,7 +62,7 @@ list:
 	@printf '%s\n' $(cases)
 
 list-classes:
-	@printf 'quiet: %s\n' "$(quiet)"; printf 'net: %s\n' "$(net)"; printf 'bounded: %s\n' "$(bounded)"; printf 'boot: %s cases\n' "$(words $(boot))"
+	@printf 'quiet: %s\n' "$(quiet)"; printf 'net: %s\n' "$(net)"; printf 'fanned: %s\n' "$(fanned)"; printf 'bounded: %s\n' "$(bounded)"; printf 'boot: %s cases\n' "$(words $(boot))"; printf 'rv64 only: %s cases\n' "$(words $(hostonly))"
 
 docs:
 	@mkdir -p $(logs); $(q) run --cores 2 --name docs -- cargo testbench docs > $(logs)/docs.log 2>&1; rc=$$?; tail -3 $(logs)/docs.log; echo "docs rc=$$rc"; exit $$rc
@@ -75,17 +81,23 @@ grep -E '^(PASS|FAIL|SKIP)' $(logs)/$$w-$$c.log || tail -5 $(logs)/$$w-$$c.log
 echo "$@ rc=$$rc ($(2))"; exit $$rc
 endef
 
-$(addprefix rv64/,$(boot)) $(addprefix rv32/,$(boot)): %:
+$(addprefix rv64/,$(boot)) $(addprefix rv32/,$(filter-out $(hostonly),$(boot))): %:
 	$(call case_recipe,--cores $(call smp,$(@F)),boot)
 
-$(addprefix rv64/,$(quiet)) $(addprefix rv32/,$(quiet)): %:
+$(addprefix rv64/,$(quiet)) $(addprefix rv32/,$(filter-out $(hostonly),$(quiet))): %:
 	$(call case_recipe,--quiet,quiet)
 
-$(addprefix rv64/,$(net)) $(addprefix rv32/,$(net)): %:
+$(addprefix rv64/,$(net)) $(addprefix rv32/,$(filter-out $(hostonly),$(net))): %:
 	$(call case_recipe,--cores $(call smp,$(@F)) --lock net,net)
 
-$(addprefix rv64/,$(bounded)) $(addprefix rv32/,$(bounded)): %:
+$(addprefix rv64/,$(fanned)) $(addprefix rv32/,$(filter-out $(hostonly),$(fanned))): %:
+	$(call case_recipe,--cores 2,fanned)
+
+$(addprefix rv64/,$(bounded)) $(addprefix rv32/,$(filter-out $(hostonly),$(bounded))): %:
 	$(call case_recipe,--cores 4,bounded)
+
+$(addprefix rv32/,$(hostonly)): %:
+	@echo "$@: no target; rv64/$(@F) runs it"
 
 cases-rv64: $(addprefix rv64/,$(filter-out $(quiet),$(cases)))
 cases-rv32: $(addprefix rv32/,$(filter-out $(quiet),$(cases)))
