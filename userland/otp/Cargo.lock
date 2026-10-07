@@ -60,6 +60,8 @@ dependencies = [
  "beamlet-vm",
  "cap-std",
  "fs-set-times",
+ "libc",
+ "rustix",
 ]
 
 [[package]]

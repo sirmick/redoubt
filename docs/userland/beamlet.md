@@ -305,15 +305,20 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
 
 ### The console on a host
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: host only; a change of the terminal's size is not delivered yet · tested: host:beamlet::the_terminal_is_raw_while_the_vm_reads_it_and_restored_at_a_normal_end, host:beamlet::the_terminal_is_restored_when_the_run_ends_in_an_exception, host:beamlet::the_terminal_is_restored_when_the_vm_halts, host:beamlet::the_terminal_is_restored_when_a_signal_ends_beamlet, host:beamlet::a_panic_restores_the_terminal
 
-On a host, beamlet's command line puts the terminal in raw mode for as long as the VM runs and
-restores it on every exit, a panic included. `console_size` is the terminal's size, and a change
-of size reaches the shell as the message `{:console_resize, cols, rows}`, as the console's parked
-`resize` delivers it on Redoubt ([the shell](shell.md#the-terminal-library)). Console input goes
-to one Erlang process, the shell's driver, which takes it with `beamlet:console_subscribe/0`; a
-second subscription is refused, so no code run at the prompt can take the keyboard, or the
-interrupt key with it, from the driver.
+On a host, beamlet's command line puts the terminal in raw mode from the moment a process of the
+VM first reads the console, so that every byte typed reaches the VM as it is (Ctrl+C included),
+and restores it on every exit: a result, an exception, a halt, a signal, a panic included
+([`userland/otp/cli/src/tty.rs`](../../userland/otp/cli/src/tty.rs)). Output processing stays
+on, so a line written past the shell's encoder still lands where a line does on a host; the
+encoder ends its lines with CR LF itself, as it must on Redoubt. `console_size` is the
+terminal's size, read afresh at each call. A change of size is to reach the shell as the message
+`{:console_resize, cols, rows}`, as the console's parked `resize` delivers it on Redoubt
+([the shell](shell.md#the-terminal-library)); until then the shell reads the size at each prompt.
+Console input goes to one Erlang process, the shell's driver, which takes it with
+`beamlet:console_subscribe/0`; a second subscription is refused, so no code run at the prompt
+can take the keyboard, or the interrupt key with it, from the driver.
 
 **Open:** none.
 
