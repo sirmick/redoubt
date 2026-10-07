@@ -542,7 +542,8 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   ([wire](../servers/wire.md#generated-clients)).
 - **`serve(Endpoint)`** serves a receive right the VM holds, on a thread of its own, which keeps
   the endpoint open and serves it for the VM's life (at most `MAX_SERVED` endpoints; one served
-  already is `already_served`): each call is admitted by the serving library's admission, per (account,
+  already, by the same handle, is `already_served`; a second handle to the same receive right is
+  not told apart): each call is admitted by the serving library's admission, per (account,
   label set) with a share per badge
   ([R26 (admission fairness)](../servers/serving.md#r26-admission-fairness)), and parked with the
   library's deadline, `REQUEST_WAIT_US`
@@ -568,7 +569,8 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   entries and named handles (at most `MAX_START_HANDLES` together), and arguments; the platform
   adds the loader stub, which it carries as `init` does, and the job's own exit endpoint
   ([native programs](native.md#launching-from-a-session)). At most `MAX_JOBS` run at once, each
-  watched by a thread that waits for its exit notice.
+  watched by a thread that waits for its exit notice; a job no thread takes to watch is killed,
+  its budget destroyed, since nothing would hear its end.
 
 Every refusal is a Redoubt name: a term of the wrong type is `badarg`, as for any native, and a
 well-formed request the platform refuses is `{error, Name}`, the kernel's error by its name in the
