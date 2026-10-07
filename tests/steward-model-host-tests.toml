@@ -1,11 +1,8 @@
-description = "The model's two steward families at their default counts (kernel/model.md): up to a second a seed, so a case of their own, each family a job on eight threads"
+description = "The model's two steward families at their counts (kernel/model.md), each a job on four cores, and the check that their coverage table is reproduced"
 kind = "host-tests"
-# Half an hour of wall: out of the whole run until the steward model's seeds are cheap enough to
-# bring it under ten minutes.
-whole_run = false
 packages = ["redoubt-model"]
-tests = ["properties"]
-filter = ["steward_policy", "steward_noninterference"]
-fanout = { each = "test", cores = 8, vars = { MODEL_THREADS = "8" } }
-# steward_policy's job is the longer: 1,777 s on eight threads measured, and a third.
-timeout_secs = 2369
+tests = ["properties", "steward_reach"]
+filter = ["steward_policy", "steward_noninterference", "the_reach_table_is_reproduced"]
+fanout = { each = "test", cores = 4, vars = { MODEL_THREADS = "{cores}" } }
+# steward_noninterference is the longer job: 70 s on four cores measured, and a third.
+timeout_secs = 94

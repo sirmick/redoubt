@@ -38,7 +38,7 @@ pub fn sequences(default: u64) -> u64 {
 /// `MODEL_THREADS` if set (a positive integer, or the test fails naming it); else 1 if
 /// `RUST_TEST_THREADS` is set, so the binary runs cargo's count of threads and no more; else one
 /// per core, for an unbounded run.
-fn threads() -> u64 {
+pub fn threads() -> u64 {
     if let Ok(s) = std::env::var("MODEL_THREADS") {
         // Said before the panic: `quiet_panics` silences the panic's own message.
         return s.parse().ok().filter(|&n| n > 0).unwrap_or_else(|| {
