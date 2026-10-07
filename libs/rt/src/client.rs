@@ -119,8 +119,11 @@ pub struct Connection {
 
 impl Connection {
     /// A connection on `endpoint`, with no timeout.
-    pub fn new(endpoint: Endpoint) -> Connection {
-        Connection { endpoint, tag: AtomicU16::new(0), timeout: redoubt_sys::FOREVER }
+    pub fn new(endpoint: Endpoint) -> Connection { Connection::within(endpoint, redoubt_sys::FOREVER) }
+
+    /// A connection on `endpoint` whose every call waits at most `timeout` µs for its reply.
+    pub fn within(endpoint: Endpoint, timeout: u64) -> Connection {
+        Connection { endpoint, tag: AtomicU16::new(0), timeout }
     }
 
     pub fn endpoint(&self) -> &Endpoint { &self.endpoint }
