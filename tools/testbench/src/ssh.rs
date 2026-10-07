@@ -532,7 +532,8 @@ fn leftover(program: &str, named: &str, deadline: Instant) -> Option<String> {
 }
 
 /// The processes running `program` with an argument containing `named`. One that has exited and
-/// not been reaped has no command line, and is not running.
+/// not been reaped has no command line, and is not running; nor has one in the middle of its
+/// `execve`, briefly, which the keeper never meets: it looks long after its guests started.
 fn processes_naming(program: &str, named: &str) -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
     entries
@@ -873,6 +874,21 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Waits until `pid` shows in `/proc` as `program` with an argument containing `named`. A
+    /// spawn returns while the child's `execve` is still under way (glibc's `posix_spawn` lets the
+    /// parent go once the new address space is in, before its arguments are), and until then the
+    /// child's command line reads empty; on a loaded host a scan can land in that window.
+    fn exec_done(program: &str, named: &str, pid: u32) {
+        let started = Instant::now();
+        while !processes_naming(program, named).contains(&pid) {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "pid {pid} never ran {program} naming {named}"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// The keeper finds a process by its program and an argument naming the case's directory,
     /// and only while it runs.
     #[test]
@@ -880,6 +896,7 @@ mod tests {
         let named = format!("/keeper-test-{}/", std::process::id());
         let mut child = Command::new("sh").args(["-c", "sleep 30", &format!("{named}x")]).spawn().unwrap();
         let pid = child.id();
+        exec_done("sh", &named, pid);
         assert_eq!(processes_naming("sh", &named), [pid]);
         assert_eq!(processes_naming("sleep", &named), [] as [u32; 0]);
         assert_eq!(processes_naming("sh", "/keeper-test-other/"), [] as [u32; 0]);
@@ -894,15 +911,28 @@ mod tests {
     #[test]
     fn the_keeper_waits_to_the_deadline() {
         let named = format!("/keeper-wait-{}/", std::process::id());
-        let mut late = Command::new("sh").args(["-c", "sleep 1", &format!("{named}late")]).spawn().unwrap();
+        // It goes when its input closes, which a thread does a little after the keeper starts
+        // watching: the verdict is the same if it goes first, but then the wait is not tried.
+        let mut late = Command::new("sh")
+            .args(["-c", "read _", &format!("{named}late")])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        exec_done("sh", &named, late.id());
         assert_eq!(processes_naming("sh", &named), [late.id()]);
+        let input = late.stdin.take().unwrap();
         // Reaped as it exits, as ssh reaps its proxy.
-        let reaper = std::thread::spawn(move || late.wait().unwrap());
+        let reaper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(input);
+            late.wait().unwrap()
+        });
         assert_eq!(leftover("sh", &named, Instant::now() + Duration::from_secs(60)), None);
         reaper.join().unwrap();
 
         let mut stuck =
             Command::new("sh").args(["-c", "sleep 30", &format!("{named}stuck")]).spawn().unwrap();
+        exec_done("sh", &named, stuck.id());
         let ended = Instant::now();
         let why = leftover("sh", &named, ended).expect("still running");
         assert!(ended.elapsed() >= GUESTS_GO, "killed after {:?}", ended.elapsed());

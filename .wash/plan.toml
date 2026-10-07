@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 290
+revision = 299
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -861,8 +861,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by TOOL1's gates 2026-10-05: tools/testbench ssh::tests::the_keeper_finds_what_names_the_case (BENCHENV1's keeper: a qemu-system-riscv64 naming the case directory after the sessions) failed once in a whole bench's host-tests case and once in cargo test -p testbench under load, 0 of 30 alone. Likely a /proc/*/cmdline scan racing a process that is starting or exiting. Make the test deterministic (spawn and wait for the stand-in to be visible before scanning; or order on an event) without weakening the keeper. Tier B (a host test), size S, no needs."
-  state = "active"
-  revision = 288
+  state = "done"
+  revision = 299
 
 [[node]]
   id = "DOC1"
@@ -961,8 +961,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["SCHED1"]
   body = "SCHED1's release measurement (.wash/local/evidence/SCHED1/five-cases/RESULTS.md): a slice end costs ~0.36 ms rv64 / ~0.45 ms rv32 of kernel time, linear in the queued budgets L (~28 us per budget in release), against docs/kernel/scheduling.md's claims (K22's reconcile visits only the budgets that changed; R12's kernel-time text). Attributed (reconcile-finding.md): Queue::raise_floor's unconditional walks reading every queued budget's 7-word State through checked frame reads, 4-9 walks per slice end; not settle/ready_count. Brief: .wash/local/RECON1-brief.md (architect-15). Tier A kernel (libs/stride's Queue, sched.rs's state cache), size S. Fix: raise_floor only when the floor can rise; (pass, tie) cached in the queue's slots, audited against the frame in the checked build. Gate: under 3 us per queued budget per slice end in release, the fixed L=0 term (100-155 us: traps, two SBI ecalls) unchanged and not this package's; sched-large-weight's useful work at 1 ms within 0.85 of 10 ms both widths. Needs SCHED1 (owner's option (b): SCHED1 merges first with the cost a residual; RECON1 next, replacing its sentence)."
-  state = "active"
-  revision = 277
+  state = "reported"
+  revision = 291
 
 [[node]]
   id = "B11"
@@ -1209,8 +1209,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by STEWARD2's gate on rv32 only: the console session's VM reads and evaluates every typed line (verityd's expected block-mismatch line appears, so the reads and the evaluation ran) but nothing it writes after its first prompt reaches the UART; ConsoleIo instrumented: no write is refused, short or ended; a write is put out on the hub and its completion never comes back, while the console's read completions do. Ruled out: beamlet's limit change, erofsd budget/buckets, the VM's erofsd connection, RAM, consoled heap, the steward's own console lines. What is left: the connection: the session's /dev/cons is a consoled connection the steward mints (new_connection, root \"\") through its own /dev/cons, which init minted; main's VM gets init's minted console directly; SSH sessions are fine on rv32; rv64 is fine. Cases: rv32 userland-boot, userland-read-only, boot-profile, boot-profile-unverified on wp-STEWARD2. Probe notes: .wash/local/STEWARD2-rv32-probe.md. Suspects: the hub's completion matching (libs/client aio.rs, BEAM3) or consoled's handling of a minted connection's writes under 32-bit tags/offsets; the kernel is not suspected. Tier A if libs/client or consoled changes. Size S-M. Blocks STEWARD2's merge."
-  state = "active"
-  revision = 284
+  state = "reported"
+  revision = 293
 
 [[node]]
   id = "B23"
@@ -1227,8 +1227,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM4's final gate on a4e57aaf9 under `q run --quiet -- cargo test -p beamlet-redoubt --features fake --test system`: 46 pass / 1 fail in one run, the rerun hung in the system binary and was killed; the binary run directly is 30/30; which test fails varies. One run showed a request the serve thread handed over (BEAM4's HAND_US hand-off) that never surfaced in the VM, so it may be a real platform bug in the hand-off, not only a host bound too tight under load. Suspects and how to debug (ptrace is blocked on this host) are in .wash/local/handoffs/beam4-implementer.md. Reproduce under load (q --quiet beside other jobs, or RUST_TEST_THREADS high) 30 times, name the failing tests, find the lost request. Tier A if userland/otp/redoubt/src/{serve,jobs,system}.rs changes. Size S-M. After B23 and BEAM9."
-  state = "todo"
-  revision = 282
+  state = "active"
+  revision = 294
 
 [[node]]
   id = "K28"
@@ -1238,3 +1238,30 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by RECON1 on main f4d3b41d9 (K19's merge, after train 8's tip, never under a train bench): sched_oracle fails 'record N: an audit inside a destruction' on sched-latency (rv64, rv32), sched-latency-tcg (both) and kernel-containment (both, seed 13); reproduced on an untouched export (/tmp/recon1-main/sched-latency-rv64.log). The record is `U 2` (AUDIT_PROCESS_INDEX) between the destruction's `D` and its `Y`: process.rs index_process runs that audit when !self.objects.deferring, and K19 moved a process free ('frees and PID moves follow the dying subtree') to after deferring is cleared and before the destruction's end record. Fix: the free (or the audit's guard) sits inside the deferring window, or the audit is skipped on the destruction path with the oracle's rule unchanged (K18: a checked build's audits do not move its schedule; checked-audit-cost: one-word skip checks on destruction paths). The model's rule must still match. Tier A kernel, size S. Blocks train 9's bench. Handoff: .wash/local/handoffs/k19-implementer-2.md."
   state = "active"
   revision = 286
+
+[[node]]
+  id = "K29"
+  title = "K19 moved a destruction's pumps and frees after its walk, and R10's p99 over 20 destructions grew by about 6 ms: rv32 kernel-containment reads 30,576 µs against 30,000"
+  template = "package"
+  parent = "M1"
+  body = "Found by K28 (its audit fix made the oracle judge R10 again): kernel-containment's R10 p99 over 20 destructions (~9,338 object frames) was rv64 23,394 / rv32 24,104 µs on main bdb38430e before K19 and is rv64 29,500 / rv32 30,576 µs with K19 + K28's audit fix; rv32 fails the 30,000 µs bound. Threads' ending fell 3.5 -> 2.5 ms, so the growth (~+7 ms) is at the destruction's end: the pumps and frees K19 moved after the walk, inside the D..Y window. K19's gates never ran kernel-containment (its 21 cases + worst-walk, where R10 is 16-18 ms). Measure from the trace where the ~7 ms goes (pump_listed over the listed endpoints? the frees? the index moves?), then cut it within K19's rule (deliveries at the boundary, none inside) and K9/K12's (destruction's cost follows the dying subtree; R10 within 30 ms for a full lease). Tier A kernel, size S-M. Gates: kernel-containment both widths (seed 13 and default) with R10 p99 back near 24 ms, worst-walk both, the 21 K19 cases + budget-reap, sched-latency(-tcg), model unchanged or following, both builds, host tests, mutations, docs, formatting, budgets."
+  state = "todo"
+  revision = 292
+
+[[node]]
+  id = "BEAM11"
+  title = "beamlet's files.rs re-sends a request answered busy at once; a busy answer waits the retry interval, as the console's does"
+  template = "package"
+  parent = "M1"
+  body = "Found by BEAM9: after the console's ConsoleIo learned to wait RETRY_US before re-sending a write refused `busy` (and to count it), userland/otp's files.rs (the namespace's files over the hub) still re-sends a busy answer at once, which spins against a one-page share (serving.md R26, the Residual-risks line BEAM9 added). Make every busy answer in files.rs wait the retry interval and count, like ConsoleIo; a host test on the fake kernel with a one-page share whose verdict is the write stamps. beamlet.md's sentence saying files.rs re-sends at once goes. Tier B (userland/otp only). Size S."
+  state = "todo"
+  revision = 295
+
+[[node]]
+  id = "B24"
+  title = "The scheduler oracle reports 'nobody N of 1000': the share of a slice end's kernel time billed to no budget, measured per case"
+  template = "package"
+  parent = "M1"
+  body = "RECON1's acceptance named an oracle line reporting how much of a slice end's kernel work is billed to nobody (K25's billing rule leaves two named gaps of ~250 ticks: bill_irq's bill then restart, a deadline destruction's bill inside destroy_subtree; scheduling.md Residual risks). RECON1 left it undone; its red ruled it report-only, not a gate, but the acceptance line is otherwise unmeasured. Add the report line to tools/testbench/src/sched_oracle.rs from the trace's billing records (the oracle already bills timer interrupts by the rule and prints 'N nobody's'): 'nobody N of 1000' = ticks billed to no budget over the case's kernel ticks, per case, in the oracle's summary; no verdict. testbench.md's oracle paragraph names the line. Size S, Tier B (bench only)."
+  state = "active"
+  revision = 298
