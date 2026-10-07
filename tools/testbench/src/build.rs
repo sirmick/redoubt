@@ -357,11 +357,9 @@ impl Builder {
             cargo.args(["--profile", profile]);
         }
         cargo.args(args);
-        if !host.skip.is_empty() {
-            cargo.arg("--");
-            for name in &host.skip {
-                cargo.args(["--skip", name]);
-            }
+        let libtest = libtest_args(host);
+        if !libtest.is_empty() {
+            cargo.arg("--").args(libtest);
         }
         cargo
     }
@@ -423,6 +421,13 @@ impl Builder {
         let err = String::from_utf8_lossy(&output.stderr);
         Ok(Some(last_lines(&[out.trim(), err.trim()].join("\n"), 12)))
     }
+}
+
+/// What a host-tests case tells its test binaries: its `filter`s, then a `--skip` for each of its
+/// `skip`s.
+pub fn libtest_args(host: &HostTests) -> Vec<String> {
+    let skips = host.skip.iter().flat_map(|skip| ["--skip".to_string(), skip.clone()]);
+    host.filter.iter().cloned().chain(skips).collect()
 }
 
 /// The last `n` lines of `text`, indented as a result's continuation lines.
@@ -683,10 +688,12 @@ mod tests {
         );
         let native: HostTests = toml::from_str("packages = ['p']").unwrap();
         assert_eq!(args(&native), ("test -p p --quiet".into(), None));
-        // Cargo's own arguments all come before the test binaries' `--skip`s.
-        let release: HostTests =
-            toml::from_str("packages = ['p']\nprofile = 'release'\nskip = ['slow', 'slower']").unwrap();
-        assert_eq!(args(&release).0, "test -p p --profile release --quiet -- --skip slow --skip slower");
+        // Cargo's own arguments all come before the test binaries' filters and `--skip`s.
+        let release: HostTests = toml::from_str(
+            "packages = ['p']\nprofile = 'release'\nfilter = ['f']\nskip = ['slow', 'slower']",
+        )
+        .unwrap();
+        assert_eq!(args(&release).0, "test -p p --profile release --quiet -- f --skip slow --skip slower");
     }
 
     /// A tool the oracle needs is found on the path only as an executable file; the first

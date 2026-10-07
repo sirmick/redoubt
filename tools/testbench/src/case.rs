@@ -221,6 +221,10 @@ pub struct HostTests {
     /// case is something the host lacks, a skip only with `--allow-skip`.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Only the tests whose names contain one of these (libtest's filters, `-- NAME`); every test
+    /// when empty.
+    #[serde(default)]
+    pub filter: Vec<String>,
     /// Tests left out of every target (`-- --skip NAME`: any whose name contains it), ones another
     /// case runs.
     #[serde(default)]

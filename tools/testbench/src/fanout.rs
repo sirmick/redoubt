@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 
-use crate::build::{Builder, TestBinary, last_lines};
+use crate::build::{Builder, TestBinary, last_lines, libtest_args};
 use crate::case::{Each, Fanout, HostTests};
 
 /// The exit statuses of a command `timeout` ended, here and for an Elixir case: by TERM, or by
@@ -128,9 +128,11 @@ fn jobs(
                     Ok(tests) => tests,
                     Err(why) => return Ok(Err(why)),
                 };
-                for test in
-                    tests.into_iter().filter(|t| !host.skip.iter().any(|skip| t.contains(skip.as_str())))
-                {
+                let wanted = |t: &String| {
+                    (host.filter.is_empty() || host.filter.iter().any(|f| t.contains(f.as_str())))
+                        && !host.skip.iter().any(|skip| t.contains(skip.as_str()))
+                };
+                for test in tests.into_iter().filter(wanted) {
                     let value = format!("{}::{test}", binary.name);
                     jobs.push(native(binary, value, vec![test, "--exact".into()], vars.clone()));
                 }
@@ -143,7 +145,7 @@ fn jobs(
             Err(why) => return Ok(Err(why)),
         },
     };
-    let skips: Vec<String> = host.skip.iter().flat_map(|skip| ["--skip".into(), skip.clone()]).collect();
+    let libtest = libtest_args(host);
     for value in values {
         let mut vars = vars.clone();
         vars.extend(fanout.env.iter().map(|env| (env.clone(), value.clone())));
@@ -163,7 +165,7 @@ fn jobs(
         let Some(binary) = binaries.iter().find(|b| &b.name == file) else {
             return Ok(Err(format!("cargo built no test binary {file}")));
         };
-        jobs.push(native(binary, value, skips.clone(), vars));
+        jobs.push(native(binary, value, libtest.clone(), vars));
     }
     Ok(Ok(jobs))
 }
