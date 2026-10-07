@@ -941,7 +941,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (16)</summary>
+<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (18)</summary>
 
 - bench:bench-ssh-loopback
 - bench:bench-ssh-loopback-openssh
@@ -951,6 +951,7 @@ The guest's own claims about the network are never trusted.
 - bench:bench-ssh-loopback-host-key
 - bench:bench-ssh-loopback-aborted-text
 - bench:bench-ssh-guest
+- host:testbench::expect_after_matches_in_order_and_names_the_first_miss
 - host:testbench::the_reference_proxy_quotes_only_what_the_bench_chose
 - host:testbench::the_cpio_writer_writes_newc
 - host:testbench::the_guest_recipe_parses_and_hashes
@@ -958,13 +959,19 @@ The guest's own claims about the network are never trusted.
 - host:testbench::the_keeper_finds_what_names_the_case
 - host:testbench::the_keeper_waits_to_the_deadline
 - host:testbench::resize_needs_a_pty
+- host:testbench::only_marks_follow_exit
 - host:testbench::no_other_child_inherits_a_sessions_terminal
 
 </details>
 
 Sessions need `net.forward = [22]`. They start once every `expect` has matched and run concurrently
-while the bench keeps watching the console. Each drives the host's OpenSSH `ssh`, an implementation
-independent of the box's, to the guest's port 22 with a test key.
+while the bench keeps watching the console; a session whose first steps are `wait`s starts its
+`ssh` only once those marks are set, so its login follows what they mark. Each drives the host's
+OpenSSH `ssh`, an implementation independent of the box's, to the guest's port 22 with a test key.
+What the box says about them, a login it refused or a session's budget given back, is asked for
+with the case's `expect_after`: console patterns matched in order from the sessions' start to the
+case's deadline, a miss failing the case with the first pattern unmatched. `expect` cannot ask for
+those lines, since the sessions start only once it has all matched.
 
 ```toml
 [[session]]
@@ -979,13 +986,15 @@ steps = [
     { wait = "bob-ready" },      # wait for another session's mark
     { resize = [132, 43] },      # with `pty = true`: resize ssh's terminal
     { exit = 0 },                # close input, read until ssh exits, require this status
+    { mark = "alice-gone" },     # only marks follow `exit`: this session's ssh is gone
 ]
 ssh_args = ["-W", "host:9"]  # optional: more ssh arguments, before the host
 command = "echo hi"          # optional: a command (with `-s`, a subsystem) in place of a shell
 ```
 
 Every session's exit status is checked and all of its output passes `forbid`; a session that fails
-stops the others. A `pty = true` session's `ssh` reads its input from a pseudo-terminal the bench
+stops the others. Its log notes each `expect` that matched and when, in seconds after its `ssh`
+started: a login's latency to its first prompt. A `pty = true` session's `ssh` reads its input from a pseudo-terminal the bench
 opens at 80x24, so that `ssh` reports a size change as OpenSSH does for a user; its output stays on
 pipes. `resize` sets that terminal's size and signals `ssh` (`SIGWINCH`), which then sends a
 `window-change` if the size changed. The terminal is the client's input and never a verdict. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in

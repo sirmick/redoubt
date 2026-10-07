@@ -751,8 +751,32 @@ fn qmp_command(reader: &mut BufReader<UnixStream>, writer: &mut UnixStream, comm
     }
 }
 
+/// A case's `expect_after`: patterns each matching a console line, in order, from the sessions'
+/// start on.
+struct After {
+    patterns: Vec<Regex>,
+    next: usize,
+}
+
+impl After {
+    fn new(patterns: &[String]) -> Result<After> {
+        Ok(After { patterns: patterns.iter().map(|p| Regex::new(p)).collect::<Result<_, _>>()?, next: 0 })
+    }
+
+    /// Takes one console line: the next pattern, if it matches.
+    fn see(&mut self, line: &str) {
+        if self.patterns.get(self.next).is_some_and(|p| p.is_match(line)) {
+            self.next += 1;
+        }
+    }
+
+    /// The first pattern not yet matched, if any.
+    fn missing(&self) -> Option<&str> { self.patterns.get(self.next).map(Regex::as_str) }
+}
+
 /// Run the case's SSH sessions while still watching the console, so that a panic or the guest
-/// dying during a session fails the case. Returns why it failed, if it did.
+/// dying during a session fails the case, then read on until every `expect_after` pattern has
+/// matched or the deadline passes. Returns why it failed, if it did.
 fn run_sessions(
     watched: &mut Console,
     boot: &Boot,
@@ -766,13 +790,18 @@ fn run_sessions(
     let host_key = boot.net.as_ref().and_then(|net| net.host_key.as_deref());
     let server = ssh::Server::Guest { forwards, host_key };
     let abort = AtomicBool::new(false);
-    std::thread::scope(|scope| {
+    let mut after = After::new(&boot.expect_after)?;
+    let failed: Option<String> = std::thread::scope(|scope| -> Result<Option<String>> {
         let sessions =
             scope.spawn(|| ssh::run(workspace, &boot.session, &server, logs, &prefix, deadline, &abort));
         let mut console: Result<Option<String>> = Ok(None);
         while !sessions.is_finished() && matches!(console, Ok(None)) {
             console = match watched.next(Instant::now() + Duration::from_millis(50)) {
-                Ok(Line::Text(_) | Line::Timeout) => Ok(None),
+                Ok(Line::Text(line)) => {
+                    after.see(&line);
+                    Ok(None)
+                }
+                Ok(Line::Timeout) => Ok(None),
                 Ok(Line::Forbidden(why)) => Ok(Some(why)),
                 Ok(Line::Exited) => Ok(Some("guest exited during the SSH sessions".to_string())),
                 Err(e) => Err(e),
@@ -783,12 +812,45 @@ fn run_sessions(
         }
         let session_failure = sessions.join().expect("session runner panicked")?;
         Ok(console?.or(session_failure))
-    })
+    })?;
+    if failed.is_some() {
+        return Ok(failed);
+    }
+    while let Some(pattern) = after.missing() {
+        let pattern = pattern.to_string();
+        match watched.next(deadline)? {
+            Line::Text(line) => after.see(&line),
+            Line::Forbidden(why) => return Ok(Some(why)),
+            Line::Timeout => {
+                return Ok(Some(format!("timed out waiting for /{pattern}/ after the sessions")));
+            }
+            Line::Exited => {
+                return Ok(Some(format!("guest exited while waiting for /{pattern}/ after the sessions")));
+            }
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `expect_after` matches in order: a line that matches a later pattern first does not count
+    /// for it, and the first pattern unmatched is the one a miss names.
+    #[test]
+    fn expect_after_matches_in_order_and_names_the_first_miss() {
+        let mut after = After::new(&["^b$".into(), "^c$".into()]).unwrap();
+        assert_eq!(after.missing(), Some("^b$"));
+        after.see("c");
+        after.see("a");
+        assert_eq!(after.missing(), Some("^b$"), "a later pattern's line before the first's");
+        after.see("b");
+        assert_eq!(after.missing(), Some("^c$"));
+        after.see("c");
+        assert_eq!(after.missing(), None, "every pattern matched, in order");
+        assert_eq!(After::new(&[]).unwrap().missing(), None);
+    }
 
     fn boot(devices: &str) -> Boot {
         toml::from_str(&format!("programs = []\nexpect = []\n{devices}")).expect("a test case's TOML")
