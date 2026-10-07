@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 313
+revision = 317
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1254,8 +1254,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM9: after the console's ConsoleIo learned to wait RETRY_US before re-sending a write refused `busy` (and to count it), userland/otp's files.rs (the namespace's files over the hub) still re-sends a busy answer at once, which spins against a one-page share (serving.md R26, the Residual-risks line BEAM9 added). Make every busy answer in files.rs wait the retry interval and count, like ConsoleIo; a host test on the fake kernel with a one-page share whose verdict is the write stamps. beamlet.md's sentence saying files.rs re-sends at once goes. Tier B (userland/otp only). Size S."
-  state = "todo"
-  revision = 295
+  state = "done"
+  revision = 317
 
 [[node]]
   id = "B24"
@@ -1263,8 +1263,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "RECON1's acceptance named an oracle line reporting how much of a slice end's kernel work is billed to nobody (K25's billing rule leaves two named gaps of ~250 ticks: bill_irq's bill then restart, a deadline destruction's bill inside destroy_subtree; scheduling.md Residual risks). RECON1 left it undone; its red ruled it report-only, not a gate, but the acceptance line is otherwise unmeasured. Add the report line to tools/testbench/src/sched_oracle.rs from the trace's billing records (the oracle already bills timer interrupts by the rule and prints 'N nobody's'): 'nobody N of 1000' = ticks billed to no budget over the case's kernel ticks, per case, in the oracle's summary; no verdict. testbench.md's oracle paragraph names the line. Size S, Tier B (bench only)."
-  state = "active"
-  revision = 298
+  state = "reported"
+  revision = 314
 
 [[node]]
   id = "BEAM12"
@@ -1283,3 +1283,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by BEAM10's red: vm.rs:1394 clears console_reader when the reading process exits; poll_console then returns without draining, cons.input stays non-empty, and idle's 'something is there' return fires on every pass: a hot loop burning the session's budget until some process reads the console again. Fix: with no reader, input is drained (or held in a bounded buffer the next reader gets) and does not count as 'something there'; a host test on the fake kernel: the reader exits with input queued, the scheduler idles (idle's wait is entered), a later reader gets the bounded buffer or nothing, as the page says. beamlet.md's console paragraph says which. Tier B. Size S."
   state = "todo"
   revision = 308
+
+[[node]]
+  id = "B25"
+  title = "bench-ssh-loopback-deadlock fails on main 26f79ed08: the server's log is never created, so the bench errors reading it instead of judging the expected timeout"
+  template = "package"
+  parent = "M1"
+  body = "Found by the whole bench for trains 9-11 on 26f79ed08: rv64 bench-ssh-loopback-deadlock (timeout_secs 0.2; must_fail '^session (alice|bob): step 1: timed out waiting for mark \"(alice|bob)-ready\"$') FAILS deterministically, 3/3 alone through q and 1/1 outside q: 'bench error: reading the server's log .../ssh/bench-ssh-loopback-deadlock/sshd.log: No such file or directory'; the run directory is empty. Its siblings (bench-ssh-loopback, -exit) pass. It PASSED in trains 7 (ef2ab5a94, after B22's stderr-to-log change) and 8 (bdb38430e). Merges since: K19, B8, B23, B20, B9 (tools/testbench/src/ssh.rs tests module + a doc sentence), BEAM9 (libs/rt ninep_mux copy-out), BEAM10, K28, RECON1. Bisect over those merge points with one prebuilt each (the case takes 1.5 s), name the commit, then fix: either the bench treats a missing server log as empty when the case expects a timeout before the server starts (the case's claim is ssh's timeout, not the server's log), or the cause the bisect finds. Gates: the 14 loopback cases rv64, cargo test -p testbench, docs, formatting, size/unsafe/no-cruft. Size S."
+  state = "active"
+  revision = 316

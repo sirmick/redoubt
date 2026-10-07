@@ -20,7 +20,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use beamlet_vm::platform::{FileError, FileInfo, FileKind, Files, OpenMode, SeekFrom};
-use redoubt_client::aio::{COMPLETION_PAGES, Conn, Done, MAX_WRITE, Outcome};
+use redoubt_client::aio::{COMPLETION_PAGES, Conn, Done, MAX_WRITE, Outcome, RETRY_US};
 use redoubt_client::file::{Connection, ROOT};
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend, Name, littlefsd};
@@ -141,6 +141,10 @@ struct Op {
     walked: bool,
     /// The request out, and its tag.
     out: Option<(Ask, u16)>,
+    /// The server answered the request `busy` (over the connection's share for a moment): when
+    /// it goes again, [`RETRY_US`] later rather than at once, as the hub's rule for a queued
+    /// request has it.
+    retry_at: Option<u64>,
     result: Option<Result<Answer, FileError>>,
     abandoned: bool,
 }
@@ -148,8 +152,17 @@ struct Op {
 /// Whose answer a request's is.
 enum Owner {
     Op(u64),
-    /// A closed file's clunk: its fid goes back on the answer.
-    Close(Connection, u32),
+    /// A closed file's clunk, on its hub connection: its fid goes back on the answer.
+    Close(Connection, Conn, u32),
+}
+
+/// A closed file's clunk the server answered `busy`: sent again when its retry is due, the fid
+/// kept until the clunk is answered, since the server still holds it.
+struct PendingClose {
+    conn: Connection,
+    hub: Conn,
+    fid: u32,
+    retry_at: u64,
 }
 
 /// The VM's files: the namespace, the open files, and each asker's operation.
@@ -161,6 +174,10 @@ pub(crate) struct Table {
     ops: BTreeMap<u64, Op>,
     requests: Vec<(Conn, u16, Owner)>,
     finished: VecDeque<u64>,
+    /// Clunks answered `busy`, waiting to go again.
+    closes: Vec<PendingClose>,
+    /// How many requests the servers have answered `busy`.
+    busy: u64,
 }
 
 impl Table {
@@ -173,8 +190,53 @@ impl Table {
             ops: BTreeMap::new(),
             requests: Vec::new(),
             finished: VecDeque::new(),
+            closes: Vec::new(),
+            busy: 0,
         }
     }
+
+    /// Sends every request whose retry has come due; an abandoned operation waiting to retry ends
+    /// instead, asking nothing more.
+    pub(crate) fn pump(&mut self, io: &mut Io) {
+        let now = crate::now();
+        let mut i = 0;
+        while i < self.closes.len() {
+            if self.closes[i].retry_at > now {
+                i += 1;
+                continue;
+            }
+            let close = self.closes.remove(i);
+            // Not sent: the fid stays in use until the connection ends, as `close_handle` leaves it.
+            if let Ok(tag) = send(io, close.hub, close.fid, &Ask::Clunk) {
+                self.requests.push((close.hub, tag, Owner::Close(close.conn, close.hub, close.fid)));
+            }
+        }
+        let due: Vec<u64> = self
+            .ops
+            .iter()
+            .filter(|(_, op)| op.retry_at.is_some_and(|at| at <= now))
+            .map(|(a, _)| *a)
+            .collect();
+        for asker in due {
+            let Some(mut op) = self.ops.remove(&asker) else { continue };
+            op.retry_at = None;
+            if op.abandoned {
+                op.out = None;
+                op.result = Some(Err(FileError::Eio));
+            }
+            self.go_on(io, asker, op);
+        }
+    }
+
+    /// How long until a request answered `busy` goes again, if one waits to: a bound on any wait
+    /// meanwhile, so nothing else need wake the VM for it.
+    pub(crate) fn retry_in(&self, now: u64) -> Option<u64> {
+        let ops = self.ops.values().filter_map(|op| op.retry_at);
+        ops.chain(self.closes.iter().map(|c| c.retry_at)).map(|at| at.saturating_sub(now)).min()
+    }
+
+    /// How many requests the servers have answered `busy`.
+    pub(crate) fn busy_answers(&self) -> u64 { self.busy }
 
     /// Takes a completion if it is this table's.
     pub(crate) fn take(&mut self, io: &mut Io, done: Done) {
@@ -183,11 +245,17 @@ impl Table {
         };
         let (_, _, owner) = self.requests.swap_remove(at);
         match owner {
-            Owner::Close(conn, fid) => {
-                if !matches!(done.outcome, Outcome::Ended | Outcome::Flushed) {
-                    conn.free_fid(fid);
+            Owner::Close(conn, hub, fid) => match done.outcome {
+                // Over the connection's share for a moment: the server still holds the fid, so it
+                // is clunked again after the retry interval, and freed here only then.
+                Outcome::Busy => {
+                    self.busy += 1;
+                    let retry_at = crate::now().saturating_add(RETRY_US);
+                    self.closes.push(PendingClose { conn, hub, fid, retry_at });
                 }
-            }
+                Outcome::Ended | Outcome::Flushed => {}
+                _ => conn.free_fid(fid),
+            },
             Owner::Op(asker) => {
                 if let Some(mut op) = self.ops.remove(&asker) {
                     let reply = op.out.take().map(|(ask, _)| (reply(&ask, done), ask));
@@ -205,8 +273,12 @@ impl Table {
         }
     }
 
-    /// Whether any request is out.
-    pub(crate) fn busy(&self) -> bool { !self.requests.is_empty() }
+    /// Whether any request is out, or waits to go again.
+    pub(crate) fn busy(&self) -> bool {
+        !self.requests.is_empty()
+            || !self.closes.is_empty()
+            || self.ops.values().any(|op| op.retry_at.is_some())
+    }
 
     /// Whether an operation has ended and its asker has not been told.
     pub(crate) fn has_finished(&self) -> bool { !self.finished.is_empty() }
@@ -215,6 +287,9 @@ impl Table {
     fn answer(&mut self, op: &mut Op, ask: Ask, reply: Reply) {
         match (&ask, &reply) {
             (_, Reply::Busy) => {
+                // Over the connection's share for a moment: asked again after the retry interval.
+                self.busy += 1;
+                op.retry_at = Some(crate::now().saturating_add(RETRY_US));
                 op.out = Some((ask, 0));
                 return;
             }
@@ -393,11 +468,16 @@ impl Table {
         op.result = Some(Ok(Answer::Done));
     }
 
-    /// Sends what `op` asks next, or ends it: its result, then a clunk of the fid it walked.
+    /// Sends what `op` asks next, or ends it: its result, then a clunk of the fid it walked. An ask
+    /// answered `busy` waits here until its retry is due, and [`Table::pump`] sends it.
     fn go_on(&mut self, io: &mut Io, asker: u64, mut op: Op) {
         loop {
             if op.out.is_none() && op.result.is_some() && op.walked {
                 op.out = Some((Ask::Clunk, 0));
+            }
+            if op.out.is_some() && op.retry_at.is_some_and(|at| crate::now() < at) {
+                self.ops.insert(asker, op);
+                return;
             }
             let Some((ask, _)) = op.out.take() else {
                 return self.end(io, asker, op);
@@ -471,6 +551,7 @@ impl Table {
             fid,
             walked: false,
             out: Some((Ask::Walk(names), 0)),
+            retry_at: None,
             result: None,
             abandoned: false,
         };
@@ -495,6 +576,7 @@ impl Table {
             fid: open.fid,
             walked: false,
             out: Some((first, 0)),
+            retry_at: None,
             result: None,
             abandoned: false,
         };
@@ -507,7 +589,7 @@ impl Table {
         let Some(open) = self.open.remove(&handle) else { return };
         // Not sent: the fid stays in use until the connection ends, as a dropped file's does.
         if let Ok(tag) = send(io, open.hub, open.fid, &Ask::Clunk) {
-            self.requests.push((open.hub, tag, Owner::Close(open.conn, open.fid)));
+            self.requests.push((open.hub, tag, Owner::Close(open.conn, open.hub, open.fid)));
         }
     }
 

@@ -45,7 +45,7 @@ per-file metadata.
 
 ### Files over 9P
 
-<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (20)</summary>
+<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (22)</summary>
 
 - host:beamlet-redoubt::files_are_written_read_listed_renamed_and_removed
 - host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
@@ -59,6 +59,8 @@ per-file metadata.
 - host:beamlet-redoubt::closed_files_give_their_fids_back
 - host:beamlet-redoubt::an_abandoned_operation_stops_at_its_next_answer
 - host:beamlet-redoubt::a_file_operation_on_the_consoles_connection_is_answered
+- host:beamlet-redoubt::a_write_answered_busy_goes_again_after_the_retry_interval
+- host:beamlet-redoubt::a_close_answered_busy_is_retried_and_its_fid_is_kept_until_the_clunk_is_served
 - host:beamlet-redoubt::a_stat_reports_only_what_9p_has
 - host:beamlet-redoubt::what_has_no_9p_field_is_refused_visibly
 - host:beamlet-redoubt::every_row_of_the_error_table_maps_to_its_posix_error

@@ -379,6 +379,7 @@ impl Redoubt {
             self.files.take(&mut self.io, done);
         }
         self.cons.write(&mut self.io);
+        self.files.pump(&mut self.io);
         while let Some(delivery) = self.io.other() {
             // A wake-up of no thread of the platform's: what it brought is closed.
             if let Some(other) = self.sys.deliver(self.io.wake(), delivery) {
@@ -404,6 +405,11 @@ impl Drop for Redoubt {
             self.console_write(line.as_bytes());
             if self.cons.busy > 0 {
                 let line = format!("beamlet: io: the console answered busy {} times\n", self.cons.busy);
+                self.console_write(line.as_bytes());
+            }
+            if self.files.busy_answers() > 0 {
+                let line =
+                    format!("beamlet: io: the files answered busy {} times\n", self.files.busy_answers());
                 self.console_write(line.as_bytes());
             }
         }
@@ -463,7 +469,7 @@ impl Platform for Redoubt {
             return;
         }
         let now = self.monotonic_us();
-        let retry = self.cons.retry_in(now);
+        let retry = [self.cons.retry_in(now), self.files.retry_in(now)].into_iter().flatten().min();
         let timeout = match deadline {
             Some(deadline) => deadline.saturating_sub(now),
             // Nothing will arrive, so nothing would wake the VM: return, and it gives up.
