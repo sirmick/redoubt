@@ -23,8 +23,11 @@ use redoubt_layout::{KERNEL_PID, Pid};
 use super::process::{INITIAL_TID, Thread};
 
 /// One hart's kernel state. `repr(C)`: the trap entry and the start trampoline (`asm.rs`) read it
-/// by word offset, the `BLOCK_*` constants.
-#[repr(C)]
+/// by word offset, the `BLOCK_*` constants. Aligned to a power of two above its size, so that
+/// [`index`], which every per-hart read and the kernel lock's checked-build holder test make,
+/// is a shift and not a division.
+#[cfg_attr(target_pointer_width = "64", repr(C, align(512)))]
+#[cfg_attr(target_pointer_width = "32", repr(C, align(256)))]
 pub struct Block {
     /// Where the trap entry stashes `x1` while it finds the context.
     scratch: AtomicUsize,
@@ -77,6 +80,7 @@ const _: () = {
     assert!(core::mem::offset_of!(Block, start_block) == BLOCK_START_BLOCK * WORD);
     assert!(core::mem::size_of::<[AtomicUsize; 32]>() == core::mem::size_of::<Thread>());
     assert!(core::mem::align_of::<Block>() >= core::mem::align_of::<Thread>());
+    assert!(core::mem::size_of::<Block>().is_power_of_two());
 };
 
 impl Block {
