@@ -245,6 +245,12 @@ pub struct Objects {
     /// Whether a destruction is running, so object-frame frees defer and the per-object handle
     /// sweeps fold into its single pass (`destroy_marked`).
     pub(crate) deferring: bool,
+    /// Whether a destruction is running, from its begin to its end record: longer than `deferring`,
+    /// which clears before the destruction pumps what it listed. The checked build's per-change
+    /// audits do nothing in this window (`MemoryManager::index_process`): the destruction audits
+    /// once, after its end, and the oracle refuses an audit inside one (`sched_oracle`).
+    #[cfg(debug_assertions)]
+    pub(crate) destroying: bool,
 }
 
 impl Objects {
@@ -261,6 +267,8 @@ impl Objects {
             irqs: [None; crate::device::MAX_IRQS],
             deferred: None,
             deferring: false,
+            #[cfg(debug_assertions)]
+            destroying: false,
         }
     }
 }
@@ -1206,11 +1214,26 @@ impl MemoryManager {
     /// One destruction begins: object frames freed while it runs are deferred to
     /// [`MemoryManager::destroy_marked`]'s single handle sweep, and the per-object sweeps fold
     /// into it (I1, I2).
-    pub fn begin_destruction(&mut self) { self.objects.deferring = true; }
+    pub fn begin_destruction(&mut self) {
+        self.objects.deferring = true;
+        #[cfg(debug_assertions)]
+        {
+            self.objects.destroying = true;
+        }
+    }
 
-    /// The destruction is over. The deferred frames are already freed; the flag that folded the
-    /// per-object sweeps into the one pass goes.
+    /// The destruction's walk is over. The deferred frames are already freed; the flag that folded
+    /// the per-object sweeps into the one pass goes, so what the destruction listed can be pumped.
+    /// The destruction itself is still running until [`MemoryManager::destroyed`].
     pub fn end_destruction(&mut self) { self.objects.deferring = false; }
+
+    /// The destruction is over, pumps included: the checked build's per-change audits resume.
+    pub fn destroyed(&mut self) {
+        #[cfg(debug_assertions)]
+        {
+            self.objects.destroying = false;
+        }
+    }
 
     // --- Deadlines ---------------------------------------------------------------------------------
 
@@ -1381,6 +1404,7 @@ pub fn destroy_subtree(
         if let (Some(started), Some(payer)) = (deadline_since, payer) {
             crate::sched::bill(mm, payer, crate::sched::now_ticks().saturating_sub(started));
         }
+        mm.destroyed();
     });
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);
