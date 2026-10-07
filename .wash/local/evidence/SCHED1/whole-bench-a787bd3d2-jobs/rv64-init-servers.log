@@ -1,0 +1,1 @@
+PASS  init-servers [rv64, smp=1]         0.3s

@@ -1,0 +1,3 @@
+hart 1 (boot index 1) runs the scheduler
+hart 2 (boot index 2) runs the scheduler
+PANIC in PID 1: panicked at kernel/src/cell.rs:124:13:

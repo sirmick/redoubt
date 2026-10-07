@@ -1,0 +1,1 @@
+PASS  image-disk [rv64, smp=1]           5.5s

@@ -1,0 +1,553 @@
+sudo: unable to resolve host f8b9c9bbd140: Temporary failure in name resolution
+sudo: unable to resolve host f8b9c9bbd140: Temporary failure in name resolution
+PASS  aio-many-reads-two [rv64, smp=1]   1.4s
+PASS  aio-many-reads-two [rv32, smp=1]   1.5s
+PASS  aio-many-reads [rv64, smp=1]       1.2s
+PASS  aio-many-reads [rv32, smp=1]       1.6s
+PASS  all-together [rv64, smp=1]         2.5s
+PASS  all-together [rv64, smp=2]         2.5s
+PASS  asid-cost-host [rv64, smp=1]       9.5s
+PASS  asid-cost-host [rv32, smp=1]       9.4s
+PASS  asid-cost [rv64, smp=1]           11.6s
+PASS  asid-cost [rv32, smp=1]           12.1s
+PASS  asid-reuse-stale [rv64, smp=1]     5.5s
+PASS  asid-reuse-stale [rv32, smp=1]     0.8s
+PASS  beamlet-boot [rv64, smp=1]         0.6s
+PASS  beamlet-boot [rv32, smp=1]         0.9s
+PASS  beamlet-budget-flood [rv64, smp=1]   1.0s
+PASS  beamlet-budget-flood [rv32, smp=1]   1.3s
+PASS  beamlet-console [rv64, smp=1]      1.2s
+PASS  beamlet-console [rv32, smp=1]      1.5s
+PASS  beamlet-heap-flood [rv64, smp=1]   1.1s
+PASS  beamlet-heap-flood [rv32, smp=1]   1.7s
+PASS  beamlet-lookup-cli-host            0.6s
+PASS  beamlet-lookup-host               15.0s
+PASS  bench-attack-forgery [rv64, smp=1]   0.1s
+PASS  bench-bundle-file [rv64, smp=1]    0.1s
+PASS  bench-bundle-file [rv32, smp=1]    0.2s
+PASS  bench-cbo-self-unrefused [rv64, smp=1]   0.5s
+PASS  bench-cbo-self-unrefused [rv32, smp=1]   0.5s
+PASS  bench-console-after-expect [rv64, smp=1]   0.1s
+PASS  bench-debug-assertions-off [rv64, smp=1]   0.1s
+PASS  bench-debug-assertions [rv64, smp=1]   1.4s
+PASS  bench-debug-assertions [rv32, smp=1]   1.5s
+PASS  bench-elixir-oracles-broken-guard   7.3s
+PASS  bench-init-reporter-forged [rv64, smp=1]   0.2s
+PASS  bench-net-peer-count [rv64, smp=1]   0.4s
+PASS  bench-net-peer-count [rv32, smp=1]   0.6s
+PASS  bench-net-peer-pcap-empty [rv64, smp=1]   0.4s
+PASS  bench-net-peer-pcap-empty [rv32, smp=1]   0.6s
+PASS  bench-net-peer-twice [rv64, smp=1]   0.4s
+PASS  bench-net-peer-twice [rv32, smp=1]   0.6s
+PASS  bench-net-peer [rv64, smp=1]       0.4s
+PASS  bench-net-peer [rv32, smp=1]       0.6s
+PASS  bench-net-self-unrefused [rv64, smp=1]   0.6s
+PASS  bench-net-self-unrefused [rv32, smp=1]   0.8s
+PASS  bench-poweroff-missing [rv64, smp=1]   3.0s
+PASS  bench-qemu-early-exit [rv64, smp=1]   0.0s
+PASS  bench-reporter-mismatch [rv64, smp=1]   0.1s
+PASS  bench-ssh-guest [rv64, smp=1]      1.2s
+PASS  bench-ssh-loopback-aborted-text    2.4s
+PASS  bench-ssh-loopback-deadlock        0.2s
+PASS  bench-ssh-loopback-exit            0.1s
+PASS  bench-ssh-loopback-forbid          0.2s
+PASS  bench-ssh-loopback-host-key        0.1s
+FAIL  bench-ssh-loopback-openssh         0.0s  the reference sshd's container: podman is not installed (--allow-skip to skip)
+PASS  bench-ssh-loopback                 0.1s
+PASS  bench-virtio-devices [rv64, smp=1]   0.1s
+PASS  bench-virtio-legacy-off [rv64, smp=1]   0.1s
+PASS  bench-virtio-legacy-off [rv32, smp=1]   0.2s
+PASS  blkd-build [rv64]                  0.0s
+PASS  blkd-build [rv32]                  0.0s
+PASS  blkd-host-tests                    3.4s
+PASS  boot-stack-reservation [rv64, smp=1]   0.4s
+PASS  boot-stack-reservation [rv32, smp=1]   0.5s
+PASS  bootfsd-build [rv64]               0.0s
+PASS  bootfsd-build [rv32]               0.0s
+PASS  budget-carve-attack [rv64, smp=1]   0.2s
+PASS  budget-carve-attack [rv32, smp=1]   0.3s
+PASS  budget-deadline [rv64, smp=1]      0.8s
+PASS  budget-deadline [rv32, smp=1]      0.8s
+PASS  budget-destroy-attack [rv64, smp=1]   0.2s
+PASS  budget-destroy-attack [rv32, smp=1]   0.3s
+PASS  budget-destroy-growth [rv64, smp=1]   0.3s
+PASS  budget-destroy-growth [rv32, smp=1]   0.5s
+PASS  budget-destroy-kills [rv64, smp=1]   0.2s
+PASS  budget-destroy-kills [rv32, smp=1]   0.3s
+PASS  budget-forge-attack [rv64, smp=1]   0.1s
+PASS  budget-forge-attack [rv32, smp=1]   0.3s
+PASS  budget-mem-churn [rv64, smp=1]     0.2s
+PASS  budget-mem-churn [rv64, smp=2]     0.2s
+PASS  budget-mem-churn [rv32, smp=1]     0.3s
+PASS  budget-mem-churn [rv32, smp=2]     0.3s
+PASS  budget-syscall-attack [rv64, smp=1]   0.5s
+PASS  budget-syscall-attack [rv32, smp=1]   0.6s
+PASS  budget-table-attack [rv64, smp=1]   0.5s
+PASS  budget-table-attack [rv32, smp=1]   0.7s
+PASS  budget [rv64, smp=1]               2.1s
+PASS  budget [rv32, smp=1]               2.2s
+PASS  bundle-mapped [rv64, smp=1]        0.2s
+PASS  bundle-mapped [rv32, smp=1]        0.3s
+PASS  cbo-user-fault [rv64, smp=1]       0.5s
+PASS  cbo-user-fault [rv32, smp=1]       0.5s
+PASS  client-build [rv64]                0.0s
+PASS  client-build [rv32]                0.0s
+PASS  client-host-tests                  4.2s
+PASS  consoled-build [rv64]              0.0s
+PASS  consoled-build [rv32]              0.0s
+PASS  deadline-flood-billed [rv64, smp=1]   0.7s
+PASS  deadline-flood-billed [rv32, smp=1]   0.7s
+PASS  destroy-keeps-notices-creator [rv64, smp=1]   1.6s
+PASS  destroy-keeps-notices-creator [rv32, smp=1]   1.7s
+PASS  destroy-keeps-notices [rv64, smp=1]   0.6s
+PASS  destroy-keeps-notices [rv32, smp=1]   0.7s
+PASS  device-exec-refused [rv64, smp=1]   0.5s
+PASS  device-exec-refused [rv32, smp=1]   0.5s
+PASS  device-info-attack [rv64, smp=1]   0.4s
+PASS  device-info-attack [rv32, smp=1]   0.6s
+PASS  device [rv64, smp=1]               0.4s
+PASS  device [rv32, smp=1]               0.5s
+PASS  dma-destroy-quarantine [rv64, smp=1]   0.5s
+PASS  dma-destroy-quarantine [rv32, smp=1]   0.5s
+PASS  dma-reset-quarantine [rv64, smp=1]   0.5s
+PASS  dma-reset-quarantine [rv32, smp=1]   0.6s
+PASS  dma-reset-reuse [rv64, smp=1]      0.5s
+PASS  dma-reset-reuse [rv32, smp=1]      0.5s
+PASS  dma-rules [rv64, smp=1]            0.4s
+PASS  dma-rules [rv32, smp=1]            0.5s
+PASS  docs                               1.0s
+PASS  elixir-oracles                     2.3s
+PASS  ending-pumps-once [rv64, smp=1]    1.5s
+PASS  ending-pumps-once [rv32, smp=1]    1.5s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 1712 records, 168 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 5 weight changes by the rule; R10 1 destructions over up to 4738 object frames, µs p50/p99/max 11969/11969/11969, their threads' ending 44/44/44, no audit inside one; 170 audits, 26375 µs; 164 timer interrupts billed by the rule (0 expiring, 0 finding a wait ended early, 0 ticks after expiry to the budget billed last; 164 ending a slice, 0 nobody's)
+PASS  endpoint-destroy-full [rv64, smp=1]   1.6s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 1910 records, 188 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 5 weight changes by the rule; R10 1 destructions over up to 4737 object frames, µs p50/p99/max 12674/12674/12674, their threads' ending 50/50/50, no audit inside one; 189 audits, 32551 µs; 184 timer interrupts billed by the rule (0 expiring, 0 finding a wait ended early, 0 ticks after expiry to the budget billed last; 184 ending a slice, 0 nobody's)
+PASS  endpoint-destroy-full [rv32, smp=1]   1.7s
+PASS  endpoint-destroy-open-calls [rv64, smp=1]   0.6s
+PASS  endpoint-destroy-open-calls [rv32, smp=1]   0.7s
+PASS  formatting                        10.4s
+PASS  fsd-boot [rv64, smp=1]             0.9s
+PASS  fsd-boot [rv32, smp=1]             1.0s
+PASS  fsd-build [rv64]                   0.0s
+PASS  fsd-build [rv32]                   0.0s
+PASS  fsd-confined-labelled [rv64, smp=1]   0.5s
+PASS  fsd-confined-labelled [rv32, smp=1]   0.7s
+PASS  fsd-corrupt-volume [rv64, smp=1]   0.3s
+PASS  fsd-corrupt-volume [rv32, smp=1]   0.5s
+PASS  fsd-host-tests                    15.1s
+PASS  fsd-label-check [rv64, smp=1]      0.6s
+PASS  fsd-label-check [rv32, smp=1]      0.8s
+PASS  fsd-large-directory [rv64, smp=1]   1.8s
+PASS  fsd-large-directory [rv32, smp=1]   2.0s
+PASS  fsd-one-volume [rv64, smp=1]       0.7s
+PASS  fsd-one-volume [rv32, smp=1]       0.9s
+PASS  fsd-quota [rv64, smp=1]            2.3s
+PASS  fsd-quota [rv32, smp=1]            2.5s
+PASS  fsd-reboot [rv64, smp=1]           2.3s
+PASS  fsd-reboot [rv32, smp=1]           2.8s
+PASS  fsd-restart [rv64, smp=1]          0.5s
+PASS  fsd-restart [rv32, smp=1]          0.7s
+PASS  handle-chain-attack [rv64, smp=1]   0.6s
+PASS  handle-chain-attack [rv32, smp=1]   0.7s
+PASS  handle-chain-fault [rv64, smp=1]   0.6s
+PASS  handle-chain-fault [rv32, smp=1]   0.7s
+PASS  host-tests                         4.9s
+PASS  image-disk [rv64, smp=1]           5.9s
+PASS  image-disk [rv32, smp=1]           6.3s
+PASS  init-boot [rv64, smp=1]            5.4s
+PASS  init-boot [rv32, smp=1]            5.7s
+PASS  init-build [rv64]                  0.0s
+PASS  init-build [rv32]                  0.0s
+PASS  init-console-forgery [rv64, smp=1]   0.3s
+PASS  init-console-forgery [rv32, smp=1]   0.5s
+PASS  init-driver-restart [rv64, smp=1]   1.6s
+PASS  init-driver-restart [rv32, smp=1]   1.7s
+PASS  init-handed-revoked [rv64, smp=1]   1.6s
+PASS  init-handed-revoked [rv32, smp=1]   1.7s
+PASS  init-host-tests                    0.1s
+PASS  init-quarantine-reboot [rv64, smp=1]   1.6s
+PASS  init-quarantine-reboot [rv32, smp=1]   1.7s
+PASS  init-reboot [rv64, smp=1]          0.3s
+PASS  init-reboot [rv32, smp=1]          0.6s
+PASS  init-refuses-bound [rv64, smp=1]   0.1s
+PASS  init-refuses-bound [rv32, smp=1]   0.3s
+PASS  init-refuses-budget-handle [rv64, smp=1]   0.1s
+PASS  init-refuses-budget-handle [rv32, smp=1]   0.3s
+PASS  init-refuses-confined-server [rv64, smp=1]   0.1s
+PASS  init-refuses-confined-server [rv32, smp=1]   0.3s
+PASS  init-refuses-consoled-handed [rv64, smp=1]   0.1s
+PASS  init-refuses-consoled-handed [rv32, smp=1]   0.3s
+PASS  init-refuses-device-dma [rv64, smp=1]   0.1s
+PASS  init-refuses-device-dma [rv32, smp=1]   0.3s
+PASS  init-refuses-device-unmatched [rv64, smp=1]   0.1s
+PASS  init-refuses-device-unmatched [rv32, smp=1]   0.3s
+PASS  init-refuses-held-bundle-key [rv64, smp=1]   0.2s
+PASS  init-refuses-held-bundle-key [rv32, smp=1]   0.4s
+PASS  init-refuses-held-login-key [rv64, smp=1]   0.2s
+PASS  init-refuses-held-login-key [rv32, smp=1]   0.4s
+PASS  init-refuses-public-manifest [rv64, smp=1]   0.1s
+PASS  init-refuses-public-manifest [rv32, smp=1]   0.3s
+PASS  init-refuses-second-keyd [rv64, smp=1]   0.1s
+PASS  init-refuses-second-keyd [rv32, smp=1]   0.3s
+PASS  init-refuses-system-fit [rv64, smp=1]   0.1s
+PASS  init-refuses-system-fit [rv32, smp=1]   0.3s
+PASS  init-restart [rv64, smp=1]         1.6s
+PASS  init-restart [rv32, smp=1]         1.9s
+PASS  init-rollback [rv64, smp=1]        1.9s
+PASS  init-rollback [rv32, smp=1]        2.0s
+PASS  init-servers [rv64, smp=1]         0.3s
+PASS  init-servers [rv32, smp=1]         0.5s
+PASS  ipc-fair-label-sets [rv64, smp=1]   0.8s
+PASS  ipc-fair-label-sets [rv32, smp=1]   0.7s
+PASS  ipc-outcomes [rv64, smp=1]         1.7s
+PASS  ipc-outcomes [rv32, smp=1]         1.8s
+PASS  ipc [rv64, smp=1]                  2.2s
+PASS  ipc [rv64, smp=4]                  2.2s
+PASS  ipc [rv32, smp=1]                  2.2s
+PASS  ipc [rv32, smp=4]                  2.2s
+PASS  ipd-build [rv64]                   0.0s
+PASS  ipd-build [rv32]                   0.0s
+PASS  ipd-host-tests                     3.3s
+PASS  irq-attack [rv64, smp=1]           1.5s
+PASS  irq-attack [rv32, smp=1]           1.5s
+PASS  irq-first-receive [rv64, smp=1]    0.6s
+PASS  irq-first-receive [rv32, smp=1]    0.7s
+      qemu seed 13 (TESTBENCH_QEMU_SEED=13 replays it)
+      sched_oracle: 561866 records, 50949 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (15 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 9335 object frames, µs p50/p99/max 20771/25323/25323, their threads' ending 3528/4337/4337, no audit inside one; 44709 audits, 4108228 µs; 49812 timer interrupts billed by the rule (5583 expiring, 56 finding a wait ended early, 9510405 ticks after expiry to the budget billed last; 44173 ending a slice, 0 nobody's); lease end p99, net decision wake 7758 + R10 25323 = 33081 µs: target met (<= 125000)
+      gate driver_wake (200): net p50/p99/max 8631/10885/21114 µs, gross 8662/10925/21897, audits 8122 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate timer_wake (64): net p50/p99/max 7770/8850/8850 µs, gross 7801/8859/8859, audits 1924 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate decision_wake (9): net p50/p99/max 7724/7758/7758 µs, gross 7759/7793/7793, audits 316 µs: target met (p50 <= 25000, p99 <= 95000)
+      gate deadline_notice (18): net p50/p99/max 26104/28818/28818 µs, gross 90356/102096/102096, audits 1237689 µs: target met (p99 <= 40000)
+PASS  kernel-containment [rv64, smp=1] 103.4s
+      qemu seed 13 (TESTBENCH_QEMU_SEED=13 replays it)
+      sched_oracle: 623859 records, 56619 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (17 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 9320 object frames, µs p50/p99/max 21639/26171/26171, their threads' ending 3638/4576/4576, no audit inside one; 49738 audits, 5508519 µs; 55494 timer interrupts billed by the rule (6225 expiring, 54 finding a wait ended early, 12434370 ticks after expiry to the budget billed last; 49215 ending a slice, 0 nobody's); lease end p99, net decision wake 7915 + R10 26171 = 34086 µs: target met (<= 125000)
+      gate driver_wake (200): net p50/p99/max 8727/11079/21568 µs, gross 8776/11547/22400, audits 12000 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate timer_wake (64): net p50/p99/max 7868/9023/9023 µs, gross 7917/9066/9066, audits 3058 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate decision_wake (9): net p50/p99/max 7912/7915/7915 µs, gross 7967/7970/7970, audits 498 µs: target met (p50 <= 25000, p99 <= 95000)
+      gate deadline_notice (18): net p50/p99/max 27205/29894/29894 µs, gross 97960/109687/109687, audits 1354820 µs: target met (p99 <= 40000)
+PASS  kernel-containment [rv32, smp=1]  91.9s
+PASS  kernel-half-attack [rv64, smp=1]   0.5s
+PASS  kernel-half-attack [rv32, smp=1]   0.6s
+PASS  kernel-wx [rv64, smp=1]            0.2s
+PASS  kernel-wx [rv32, smp=1]            0.3s
+PASS  keyd-build [rv64]                  0.0s
+PASS  keyd-build [rv32]                  0.0s
+PASS  launcher-orphan [rv64, smp=1]      0.5s
+PASS  launcher-orphan [rv32, smp=1]      0.6s
+PASS  legacy-gone [rv64, smp=1]          2.5s
+PASS  legacy-gone [rv32, smp=1]          2.5s
+PASS  lend-untouched-page [rv64, smp=1]   0.5s
+PASS  lend-untouched-page [rv64, smp=4]   0.5s
+PASS  lend-untouched-page [rv32, smp=1]   0.6s
+PASS  lend-untouched-page [rv32, smp=4]   0.6s
+PASS  lender-touches-lent [rv64, smp=1]   0.5s
+PASS  lender-touches-lent [rv32, smp=1]   0.6s
+PASS  littlefs-host-tests               17.5s
+PASS  loader-rejects-kernel-address [rv64, smp=1]   0.1s
+PASS  loader-rejects-kernel-address [rv32, smp=1]   0.2s
+PASS  loader-rejects-kernel-entry [rv64, smp=1]   0.1s
+PASS  loader-rejects-kernel-entry [rv32, smp=1]   0.2s
+PASS  loader-rejects-truncated-elf [rv64, smp=1]   0.1s
+PASS  logsrv-badge-forgery [rv64, smp=1]   0.5s
+PASS  logsrv-badge-forgery [rv32, smp=1]   0.5s
+PASS  map-anon-placement [rv64, smp=1]   0.4s
+PASS  map-anon-placement [rv32, smp=1]   0.5s
+PASS  map-anon-search-bound [rv64, smp=1]   6.0s
+PASS  map-anon-search-bound [rv32, smp=1]   6.1s
+PASS  map-fixed-attack [rv64, smp=1]     0.5s
+PASS  map-fixed-attack [rv32, smp=1]     0.6s
+PASS  map-fixed-tables-rv32 [rv32, smp=1]   1.0s
+PASS  map-fixed-tables [rv64, smp=1]     1.6s
+PASS  mem-attack [rv64, smp=1]           0.2s
+PASS  mem-attack [rv32, smp=1]           0.4s
+PASS  model-host-tests                 388.9s
+PASS  move-borrowed-page [rv64, smp=1]   0.2s
+PASS  move-borrowed-page [rv32, smp=1]   0.3s
+PASS  net-attacks [rv64, smp=1]          0.5s
+PASS  net-attacks [rv32, smp=1]          0.7s
+PASS  net-host-tests                     0.1s
+PASS  net-pinned [rv64, smp=1]           0.5s
+PASS  net-pinned [rv32, smp=1]           0.7s
+PASS  net-tcp [rv64, smp=1]              0.4s
+PASS  net-tcp [rv32, smp=1]              0.7s
+PASS  netd-build [rv64]                  0.0s
+PASS  netd-build [rv32]                  0.0s
+PASS  netd-host-tests                    0.5s
+PASS  netd-restart [rv64, smp=1]         0.4s
+PASS  netd-restart [rv32, smp=1]         0.6s
+PASS  ninep-newconn-discard [rv64, smp=1]   0.7s
+PASS  ninep-newconn-discard [rv32, smp=1]   0.8s
+PASS  no-cruft                        
+PASS  page-table-reclaim [rv64, smp=1]   2.2s
+PASS  page-table-reclaim [rv32, smp=1]   3.2s
+PASS  pages-exhaustion [rv64, smp=1]     0.6s
+PASS  pages-exhaustion [rv32, smp=1]     0.7s
+PASS  panic-in-print [rv64, smp=1]       0.4s
+PASS  panic-in-print [rv32, smp=1]       0.5s
+PASS  pid-pinning-attack [rv64, smp=1]   0.5s
+PASS  pid-pinning-attack [rv32, smp=1]   0.5s
+PASS  pid-reuse-authority [rv64, smp=1]   8.0s
+PASS  pid-reuse-authority [rv32, smp=1]   2.7s
+PASS  process-attack [rv64, smp=1]       0.9s
+PASS  process-attack [rv32, smp=1]       1.0s
+PASS  process-chain-fault [rv64, smp=1]   0.6s
+PASS  process-chain-fault [rv32, smp=1]   0.7s
+PASS  process-fill [rv64, smp=1]         4.3s
+PASS  process-fill [rv32, smp=1]         4.1s
+PASS  process-lifecycle [rv64, smp=1]    1.9s
+PASS  process-lifecycle [rv32, smp=1]    2.0s
+PASS  process-map-untouched-attack [rv64, smp=1]   0.5s
+PASS  process-map-untouched-attack [rv32, smp=1]   0.6s
+PASS  process-review [rv64, smp=1]       0.6s
+PASS  process-review [rv32, smp=1]       0.6s
+PASS  process [rv64, smp=1]              1.1s
+PASS  process [rv32, smp=1]              1.1s
+PASS  programs-unknown-budget-attack [rv64, smp=1]   0.1s
+PASS  programs-unknown-budget-attack [rv32, smp=1]   0.2s
+PASS  programs-unknown-program-attack [rv64, smp=1]   0.1s
+PASS  programs-unknown-program-attack [rv32, smp=1]   0.2s
+PASS  r4-host-tests                      0.8s
+PASS  receive-bad-record [rv64, smp=1]   0.8s
+PASS  receive-bad-record [rv32, smp=1]   0.8s
+PASS  redoubt-dead [rv64, smp=1]         1.5s
+PASS  redoubt-dead [rv32, smp=1]         1.6s
+PASS  redoubt-ipc-attack [rv64, smp=1]   0.7s
+PASS  redoubt-ipc-attack [rv32, smp=1]   0.8s
+PASS  redoubt-ipc [rv64, smp=1]          8.9s
+PASS  redoubt-ipc [rv32, smp=1]          8.4s
+PASS  redoubt-revoke [rv64, smp=1]       1.7s
+PASS  redoubt-revoke [rv32, smp=1]       1.7s
+PASS  redoubt-tight [rv64, smp=1]        1.5s
+PASS  redoubt-tight [rv32, smp=1]        1.6s
+PASS  return-lent-unmapped [rv64, smp=1]   0.2s
+PASS  return-lent-unmapped [rv64, smp=4]   0.2s
+PASS  return-lent-unmapped [rv32, smp=1]   0.4s
+PASS  return-lent-unmapped [rv32, smp=4]   0.4s
+PASS  rng [rv64, smp=1]                  0.3s
+PASS  rng [rv32, smp=1]                  0.6s
+PASS  rt-build [rv64]                    0.6s
+PASS  rt-build [rv32]                    0.0s
+PASS  rt-host-tests                      7.7s
+PASS  rt-miri                           95.0s
+PASS  rustsbi-boot [rv32, smp=1]         0.8s
+PASS  rustsbi-boot [rv64, smp=1]         0.7s
+PASS  scan-bounds [rv64, smp=1]          1.1s
+PASS  scan-bounds [rv32, smp=1]          1.4s
+      sched_oracle: 12941 records, 895 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 97 lifts by the rule (9 with a leading parent and work to move); 291 weight changes by the rule; R10 95 destructions over up to 655 object frames, µs p50/p99/max 835/2592/2592, their threads' ending 0/41/41, no audit inside one; 1049 audits, 1773118 µs; 845 timer interrupts billed by the rule (12 expiring, 0 finding a wait ended early, 9429 ticks after expiry to the budget billed last; 833 ending a slice, 0 nobody's)
+      share blocking: net 965, gross 954 of 1000, audits 24232 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share spinning-parent: net 494, gross 380 of 1000, audits 463011 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share deadline: net 986, gross 975 of 1000, audits 21787 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 964, gross 953 of 1000, audits 24416 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share shell: net 575, gross 287 of 1000, audits 1000630 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+PASS  sched-budget-churn [rv64, smp=1]   3.3s
+      sched_oracle: 12551 records, 865 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 95 lifts by the rule (12 with a leading parent and work to move); 285 weight changes by the rule; R10 93 destructions over up to 656 object frames, µs p50/p99/max 939/2735/2735, their threads' ending 0/46/46, no audit inside one; 1013 audits, 2114393 µs; 815 timer interrupts billed by the rule (12 expiring, 0 finding a wait ended early, 11885 ticks after expiry to the budget billed last; 803 ending a slice, 0 nobody's)
+      share blocking: net 963, gross 948 of 1000, audits 31199 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share spinning-parent: net 495, gross 367 of 1000, audits 517820 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share deadline: net 986, gross 972 of 1000, audits 28155 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 962, gross 947 of 1000, audits 31406 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share shell: net 498, gross 212 of 1000, audits 1147549 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+PASS  sched-budget-churn [rv32, smp=1]   2.8s
+PASS  sched-carve-inflation [rv64, smp=1]   1.2s
+PASS  sched-carve-inflation [rv32, smp=1]   1.0s
+      sched_oracle: 2384 records, 216 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 7 weight changes by the rule; R10 1 destructions over up to 617 object frames, µs p50/p99/max 798/798/798, their threads' ending 0/0/0, no audit inside one; 215 audits, 24063 µs; 206 timer interrupts billed by the rule (1 expiring, 0 finding a wait ended early, 701 ticks after expiry to the budget billed last; 205 ending a slice, 0 nobody's)
+      share u-after-return: net 498, gross 497 of 1000, audits 4370 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+PASS  sched-carve-return [rv64, smp=1]   1.6s
+      sched_oracle: 2287 records, 215 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 7 weight changes by the rule; R10 1 destructions over up to 615 object frames, µs p50/p99/max 902/902/902, their threads' ending 0/0/0, no audit inside one; 213 audits, 30877 µs; 205 timer interrupts billed by the rule (1 expiring, 0 finding a wait ended early, 893 ticks after expiry to the budget billed last; 204 ending a slice, 0 nobody's)
+      share u-after-return: net 502, gross 500 of 1000, audits 6951 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+PASS  sched-carve-return [rv32, smp=1]   1.5s
+PASS  sched-debt-lift [rv64, smp=1]      1.2s
+PASS  sched-debt-lift [rv32, smp=1]      1.0s
+PASS  sched-destroy-billing [rv64, smp=1]   0.8s
+PASS  sched-destroy-billing [rv32, smp=1]   0.8s
+      sched_oracle: 6947 records, 556 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 6 lifts by the rule (2 with a leading parent and work to move); 20 weight changes by the rule; R10 6 destructions over up to 640 object frames, µs p50/p99/max 465/2414/2414, their threads' ending 0/45/45, no audit inside one; 687 audits, 183805 µs; 407 timer interrupts billed by the rule (100 expiring, 0 finding a wait ended early, 83968 ticks after expiry to the budget billed last; 307 ending a slice, 0 nobody's)
+      share threads-exit: net 494, gross 493 of 1000, audits 4281 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share processes-exit: net 493, gross 483 of 1000, audits 38185 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share processes-fault: net 497, gross 489 of 1000, audits 31234 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+PASS  sched-exit-churn [rv64, smp=1]     2.5s
+      sched_oracle: 7148 records, 607 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 6 lifts by the rule (2 with a leading parent and work to move); 20 weight changes by the rule; R10 6 destructions over up to 648 object frames, µs p50/p99/max 538/2313/2313, their threads' ending 0/50/50, no audit inside one; 644 audits, 213763 µs; 464 timer interrupts billed by the rule (99 expiring, 0 finding a wait ended early, 98175 ticks after expiry to the budget billed last; 365 ending a slice, 0 nobody's)
+      share threads-exit: net 491, gross 489 of 1000, audits 6054 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share processes-exit: net 493, gross 484 of 1000, audits 39475 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share processes-fault: net 495, gross 487 of 1000, audits 33096 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+PASS  sched-exit-churn [rv32, smp=1]     2.4s
+PASS  sched-idle-gap [rv64, smp=1]       1.1s
+PASS  sched-idle-gap [rv32, smp=1]       0.9s
+PASS  sched-large-weight [rv64, smp=1]   1.0s
+PASS  sched-large-weight [rv32, smp=1]   0.9s
+      sched_oracle: 91842 records, 8514 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (43 with a leading parent and work to move); 996 weight changes by the rule; R10 331 destructions over up to 1285 object frames, µs p50/p99/max 701/1307/2433, their threads' ending 10/14/72, no audit inside one; 6170 audits, 646599 µs; 6222 timer interrupts billed by the rule (900 expiring, 111 finding a wait ended early, 306423 ticks after expiry to the budget billed last; 5211 ending a slice, 0 nobody's)
+      N=1 driver_wake (200): net p50/p99/max 7823/8416/23122 µs, gross 7832/8424/23219, audits 1738 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 8105/18859/152167 µs, gross 8128/18910/152517, audits 5306 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 7852/17648/29790 µs, gross 7863/17671/29829, audits 2427 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 6819/7409/7674 µs, gross 6827/7417/7685, audits 1649 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 7152/18046/150446 µs, gross 7175/18147/150796, audits 5538 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 6879/16694/17628 µs, gross 6891/16717/17655, audits 2319 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 5194/8039/8039 µs, gross 5202/8050/8050, audits 474 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 5385/108036/108036 µs, gross 5406/108294/108294, audits 2398 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 5215/18229/18229 µs, gross 5229/18256/18256, audits 716 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 873/1101/1101 µs, gross 2116/2348/2348, audits 62525 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1554/1691/1691 µs, gross 3899/4078/4078, audits 108173 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 1013/1145/1145 µs, gross 2512/2610/2610, audits 72650 µs: no target
+PASS  sched-latency-tcg [rv64, smp=1]   63.1s
+      sched_oracle: 91485 records, 8485 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (47 with a leading parent and work to move); 996 weight changes by the rule; R10 331 destructions over up to 1270 object frames, µs p50/p99/max 683/1225/3117, their threads' ending 9/16/92, no audit inside one; 6151 audits, 656822 µs; 6194 timer interrupts billed by the rule (898 expiring, 112 finding a wait ended early, 315548 ticks after expiry to the budget billed last; 5184 ending a slice, 0 nobody's)
+      N=1 driver_wake (200): net p50/p99/max 7855/8411/28179 µs, gross 7866/8422/28282, audits 2401 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 8090/38739/121254 µs, gross 8119/38852/121602, audits 6347 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 7880/8481/19876 µs, gross 7895/8496/19912, audits 3052 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 6839/7352/8984 µs, gross 6850/7363/8999, audits 2309 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 7134/48012/109314 µs, gross 7164/48154/109633, audits 6433 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 6872/9675/17179 µs, gross 6887/9690/17209, audits 3071 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 5205/8392/8392 µs, gross 5220/8410/8410, audits 719 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 5354/97045/97045 µs, gross 5381/97330/97330, audits 2567 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 5238/26367/26367 µs, gross 5256/26415/26415, audits 1017 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 868/1220/1220 µs, gross 2099/2492/2492, audits 61530 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1457/1642/1642 µs, gross 3747/3980/3980, audits 106874 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 994/1095/1095 µs, gross 2443/2566/2566, audits 71134 µs: no target
+PASS  sched-latency-tcg [rv32, smp=1]   62.8s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 96143 records, 8898 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (40 with a leading parent and work to move); 996 weight changes by the rule; R10 331 destructions over up to 1285 object frames, µs p50/p99/max 3732/7791/7925, their threads' ending 41/41/41, no audit inside one; 7010 audits, 8371885 µs; 6635 timer interrupts billed by the rule (901 expiring, 124 finding a wait ended early, 1257168 ticks after expiry to the budget billed last; 5610 ending a slice, 0 nobody's); lease end p99, net decision wake 28069 + R10 7791 = 35860 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 8795/9783/9805 µs, gross 8826/9814/9836, audits 6200 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 10701/21590/32037 µs, gross 10862/21913/32520, audits 35301 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 9157/10253/19623 µs, gross 9210/10306/19729, audits 10663 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 7771/8828/13644 µs, gross 7802/8859/13675, audits 6200 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 9622/22672/32519 µs, gross 9783/23000/33002, audits 37342 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 8108/9255/18935 µs, gross 8161/9308/19041, audits 10663 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 5745/5748/5748 µs, gross 5778/5779/5779, audits 1651 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 6826/28069/28069 µs, gross 6988/28556/28556, audits 9590 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 5946/16249/16249 µs, gross 6001/16358/16358, audits 3169 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 4338/4341/4341 µs, gross 25135/25138/25138, audits 1033994 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 5895/9092/9092 µs, gross 28795/38251/38251, audits 1261704 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 5151/5152/5152 µs, gross 27628/27629/27629, audits 1097394 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv64, smp=1]       17.2s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 95158 records, 8817 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (32 with a leading parent and work to move); 996 weight changes by the rule; R10 331 destructions over up to 1270 object frames, µs p50/p99/max 3922/8207/8399, their threads' ending 45/46/46, no audit inside one; 6931 audits, 9916629 µs; 6547 timer interrupts billed by the rule (901 expiring, 116 finding a wait ended early, 1505882 ticks after expiry to the budget billed last; 5530 ending a slice, 0 nobody's); lease end p99, net decision wake 49934 + R10 8207 = 58141 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 8917/9922/9932 µs, gross 8966/9971/9980, audits 9767 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 10989/22100/32375 µs, gross 11199/22523/33010, audits 45570 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 9310/10445/19387 µs, gross 9385/10521/19540, audits 15281 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 7860/8935/13894 µs, gross 7909/8985/13943, audits 9767 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 9955/31279/31659 µs, gross 10167/31908/32293, audits 49886 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 8270/15353/19141 µs, gross 8345/15427/19293, audits 15358 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 5812/5816/5816 µs, gross 5863/5869/5869, audits 2575 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 7025/49934/49934 µs, gross 7239/51010/51010, audits 18786 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 6037/16410/16410 µs, gross 6115/16569/16569, audits 4454 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 4516/4521/4521 µs, gross 29477/29485/29485, audits 1241431 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 6197/9746/9746 µs, gross 33365/43591/43591, audits 1465226 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 5409/5419/5419 µs, gross 32150/32161/32161, audits 1307386 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv32, smp=1]       14.3s
+PASS  sched-server-busy [rv64, smp=1]    1.1s
+PASS  sched-server-busy [rv32, smp=1]    1.0s
+PASS  sched-share [rv64, smp=1]          0.9s
+PASS  sched-share [rv32, smp=1]          0.8s
+PASS  sched-sleep-gaming [rv64, smp=1]   1.4s
+PASS  sched-sleep-gaming [rv32, smp=1]   1.1s
+      sched_oracle: 793 records, 79 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 12 weight changes by the rule; R10 1 destructions over up to 792 object frames, µs p50/p99/max 2186/2186/2186, their threads' ending 0/0/0, no audit inside one; 69 audits, 28786 µs; 50 timer interrupts billed by the rule (2 expiring, 0 finding a wait ended early, 2232 ticks after expiry to the budget billed last; 48 ending a slice, 0 nobody's)
+PASS  sched-ties [rv64, smp=1]           1.3s
+      sched_oracle: 819 records, 83 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 12 weight changes by the rule; R10 1 destructions over up to 792 object frames, µs p50/p99/max 2416/2416/2416, their threads' ending 0/0/0, no audit inside one; 70 audits, 34475 µs; 49 timer interrupts billed by the rule (2 expiring, 0 finding a wait ended early, 3557 ticks after expiry to the budget billed last; 47 ending a slice, 0 nobody's)
+PASS  sched-ties [rv32, smp=1]           1.3s
+      sched_oracle: 11955 records, 930 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 70 lifts by the rule (2 with a leading parent and work to move); 212 weight changes by the rule; R10 70 destructions over up to 710 object frames, µs p50/p99/max 733/1935/1935, their threads' ending 0/0/0, no audit inside one; 727 audits, 1267710 µs; 709 timer interrupts billed by the rule (68 expiring, 76 finding a wait ended early, 72946 ticks after expiry to the budget billed last; 565 ending a slice, 0 nobody's)
+      share sleepers: net 494, gross 492 of 1000, audits 4590 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share sleepers-and-deadlines: net 495, gross 476 of 1000, audits 77240 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share cancelled-waits: net 491, gross 490 of 1000, audits 3997 µs, 0 timer interrupts nobody's, 59 finding another budget's wait ended early: target met (450 <= share <= 1000)
+PASS  sched-timer-flood [rv64, smp=1]    3.1s
+      sched_oracle: 11643 records, 893 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 70 lifts by the rule (1 with a leading parent and work to move); 212 weight changes by the rule; R10 70 destructions over up to 710 object frames, µs p50/p99/max 908/2188/2188, their threads' ending 0/50/50, no audit inside one; 717 audits, 1552424 µs; 699 timer interrupts billed by the rule (69 expiring, 72 finding a wait ended early, 93043 ticks after expiry to the budget billed last; 558 ending a slice, 0 nobody's)
+      share sleepers: net 489, gross 487 of 1000, audits 7436 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share sleepers-and-deadlines: net 490, gross 467 of 1000, audits 95822 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
+      share cancelled-waits: net 491, gross 490 of 1000, audits 6322 µs, 0 timer interrupts nobody's, 51 finding another budget's wait ended early: target met (450 <= share <= 1000)
+PASS  sched-timer-flood [rv32, smp=1]    2.9s
+PASS  sched-wake-no-preempt [rv64, smp=1]   0.7s
+PASS  sched-wake-no-preempt [rv32, smp=1]   0.7s
+PASS  size-budget                     
+      kernel: 8361 of 8361 lines
+      loader: 868 of 868 lines
+      stub: 361 of 361 lines
+      libs/sys: 1017 of 1017 lines
+      libs/layout: 83 of 83 lines
+      libs/paging: 257 of 257 lines
+      libs/stride: 522 of 522 lines
+      libs/signing: 15 of 15 lines
+      libs/client: 965 of 966 lines
+      libs/rt: 3434 of 3434 lines
+      libs/wire: 3073 of 3073 lines
+      libs/steward: 3160 of 3160 lines
+      libs/littlefs: 2033 of 2033 lines
+      model: 10240 of 10240 lines
+      servers/keyd: 541 of 541 lines
+      servers/sshd: 388 of 388 lines
+      servers/bootfsd: 228 of 229 lines
+      servers/consoled: 338 of 338 lines
+      servers/blkd: 1627 of 1627 lines
+      servers/netd: 1590 of 1590 lines
+      servers/ipd: 2928 of 2928 lines
+      servers/init: 1949 of 1952 lines
+      servers/fsd: 1405 of 1405 lines
+PASS  smp-spike [rv64, smp=2]            1.4s
+PASS  smp-spike [rv32, smp=2]            1.5s
+PASS  sshd-build [rv64]                  2.6s
+PASS  sshd-build [rv32]                  0.1s
+PASS  sshd-host-tests                    0.5s
+PASS  sshd-loopback-env-refused          0.1s
+PASS  sshd-loopback-independent          0.4s
+PASS  sshd-loopback-interrupt            0.1s
+PASS  sshd-loopback-logins               0.1s
+PASS  sshd-loopback-r67                  0.1s
+PASS  sshd-loopback-window-change-zero   0.1s
+PASS  sshd-loopback-window-change        0.1s
+PASS  steward-host-tests                 0.5s
+PASS  stride-host-tests                  3.3s
+PASS  stub-launch [rv64, smp=1]          0.6s
+PASS  stub-launch [rv32, smp=1]          0.7s
+PASS  sum-clear [rv64, smp=1]            1.4s
+PASS  sum-clear [rv32, smp=1]            1.5s
+PASS  syscall-attack [rv64, smp=1]       0.2s
+PASS  syscall-attack [rv32, smp=1]       0.3s
+PASS  thread-limit [rv64, smp=1]         1.5s
+PASS  thread-limit [rv32, smp=1]         1.6s
+PASS  timeouts-tcg [rv64, smp=1]         6.2s
+PASS  timeouts-tcg [rv32, smp=1]         6.0s
+PASS  timeouts [rv64, smp=1]             2.2s
+PASS  timeouts [rv32, smp=1]             2.2s
+PASS  touch-beyond-ram [rv64, smp=1]     0.2s
+PASS  touch-beyond-ram [rv32, smp=1]     0.3s
+PASS  uaf-lent-page [rv64, smp=1]        0.1s
+PASS  uart-irq [rv64, smp=1]             1.4s
+PASS  uart-irq [rv32, smp=1]             1.5s
+PASS  unsafe-budget                   
+      paging crate (Sv32/Sv39 page tables): 12 unsafe, 0 undocumented
+      redoubt-stride (scheduler rules): 0 unsafe, 0 undocumented
+      loader: 18 unsafe, 0 undocumented
+      redoubt-signing (signature preimages): 0 unsafe, 0 undocumented
+      kernel: Sv39, SBI and PLIC backends: 13 unsafe, 0 undocumented
+      kernel: RISC-V arch (shared with rv32): 13 unsafe, 0 undocumented
+      kernel: core: 18 unsafe, 0 undocumented
+      redoubt-sys (system call ABI): the ecall stub: 3 unsafe, 0 undocumented
+      redoubt-client (the userland client API): 0 unsafe, 0 undocumented
+      redoubt-rt (native runtime): the allocator's trait, the heap's two words of a free block, a page buffer's two views, the device registers' read and write, the pages mapped before the first instruction, a spawned thread's closure taken back in its entry: 11 unsafe, 0 undocumented
+      keyd (holds every private key; signs, never exports): 0 unsafe, 0 undocumented
+      sshd (the network's first parser; carries every channel): 0 unsafe, 0 undocumented
+      blkd (virtio-blk driver; DMA, so TCB): 4 unsafe, 0 undocumented
+      netd (virtio-net driver; DMA, so TCB): 8 unsafe, 0 undocumented
+      ipd (the TCP/IP stack; /net over 9P): 0 unsafe, 0 undocumented
+      fsd (the file server; parses one volume's medium): 0 unsafe, 0 undocumented
+      bootfsd and consoled (the first two 9P servers): 0 unsafe, 0 undocumented
+      redoubt-wire (protocol codecs): 0 unsafe, 0 undocumented
+      redoubt-steward (the steward's policy core): 0 unsafe, 0 undocumented
+      redoubt-init (init): 0 unsafe, 0 undocumented
+      redoubt-layout (kernel-half map): 0 unsafe, 0 undocumented
+      stub (the loader stub): 7 unsafe, 0 undocumented
+      redoubt-littlefs: 0 unsafe, 0 undocumented
+PASS  userland-bad-start [rv64, smp=1]   7.2s
+PASS  userland-bad-start [rv32, smp=1]   7.4s
+PASS  userland-boot [rv64, smp=1]      155.4s
+PASS  userland-boot [rv32, smp=1]      153.2s
+PASS  userland-read-only [rv64, smp=1] 163.4s
+PASS  userland-read-only [rv32, smp=1] 165.5s
+PASS  vendor-build [rv64]                0.1s
+PASS  vendor-build [rv32]                0.1s
+PASS  vendor-check                       1.7s
+PASS  verified-boot-rejects-bare-archive [rv64, smp=1]   0.1s
+PASS  verified-boot-rejects-tamper [rv64, smp=1]   0.1s
+PASS  wire-host-tests                    0.7s
+PASS  write-only-attack [rv64, smp=1]    0.4s
+PASS  write-only-attack [rv32, smp=1]    0.5s
+PASS  wx [rv64, smp=1]                   0.4s
+PASS  wx [rv32, smp=1]                   0.5s
+Error: 1 test(s) failed; console logs are in /work/.worktrees/BEAM7/target/testbench/run-1-1791159626245169437

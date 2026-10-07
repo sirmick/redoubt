@@ -1,0 +1,3 @@
+train-9 open 2026-10-07T10:03:41Z: K19 f4d3b41d9
+B8 b60c7cc5c
+B23 33289919e -> train 9 cut (K19, B8, B23); bench waits on K28 (main oracle regression from K19)

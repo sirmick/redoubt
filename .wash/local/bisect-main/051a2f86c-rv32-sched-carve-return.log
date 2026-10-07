@@ -1,0 +1,2 @@
+FAIL  sched-carve-return [rv32, smp=1]   3.5s  sched_oracle: carve-return: parent 31 lost its running turn at record 1084 (R)
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/bisect-051a2f86c/target/testbench/run-2257646-1791326604608668534

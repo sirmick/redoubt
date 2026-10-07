@@ -298,3 +298,20 @@ All times are with the old family order and one core, from the first measurement
   - docs, formatting, no-cruft, size-budget, model-host-tests and model-mutations.
   - The quiet set, both widths: 32 s of wall. All six passed, bench-ssh-loopback-deadlock and
     client-host-tests included.
+
+## Red team fold-ins (head 35dd7b236, 16 commits on main 425a0d71c)
+
+- **`{cores}`** now resolves inside the lease: a shell exports each such variable from
+  RUST_TEST_THREADS, the count q actually granted, or from the ask without q. The late job's
+  deadline is back to 776 s (582 s on four cores, plus a third). Variable names in `vars` must be
+  plain names.
+- **Test fanouts:** a `late` value's job in a fanout of each test gets TESTBENCH_LATE too.
+- **Stale late entries:** a known-late mutation caught within the caps fails ("no longer late:
+  remove the entry"), so the list cannot go stale.
+- **Vacuous filter:** a REDOUBT_MODEL_MUTATIONS word that names no mutation fails, never a
+  vacuous pass. Both new failure paths were exercised by hand and fail.
+- **No package ID on the bench page:** "the follow-up on the steward model".
+- **Coverage, for the acceptance evidence:** steward_policy and steward_noninterference ran in
+  every whole run on main, inside model-host-tests. From this merge they run in no train:
+  steward-model-host-tests is `whole_run = false` until the steward follow-up (MODEL1) brings
+  that case under 10 min. Both pages say so.

@@ -1,0 +1,1 @@
+PASS  handle-chain-fault [rv64, smp=1]   0.8s

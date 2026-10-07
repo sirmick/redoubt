@@ -1,0 +1,1 @@
+PASS  bench-bundle-file [rv32, smp=1]    0.2s

@@ -1,0 +1,17 @@
+keyd signed the exchange
+keyd signed the exchange
+keyd signed the exchange
+keyd signed the exchange
+keyd signed the exchange
+keyd signed the exchange
+login alice+env: labels {alice-env}
+request env refused
+request shell-without-pty refused
+login alice+sftp: labels {alice-sftp}
+login alice+remote: labels {alice-remote}
+request subsystem refused
+login alice+exec: labels {alice-exec}
+request exec refused
+login alice+local: labels {alice-local}
+login alice+secrets: labels {alice-secrets}
+request shell-without-pty refused

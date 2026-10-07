@@ -1,0 +1,8 @@
+dev
+dev
+dev:x:1447391350:1447391350::/home/dev:/bin/bash
+dev:x:1447391350:
+/usr/bin/podman
+/usr/bin/newuidmap
+/usr/bin/newgidmap
+unshare: write failed /proc/self/uid_map: Operation not permitted

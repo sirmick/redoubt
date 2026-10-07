@@ -1,0 +1,14 @@
+sudo: unable to resolve host 876440b0f719: Temporary failure in name resolution
+sudo: unable to resolve host 876440b0f719: Temporary failure in name resolution
+PASS  blkd-build [rv32]                  0.0s
+PASS  bootfsd-build [rv32]               0.0s
+PASS  client-build [rv32]                0.0s
+PASS  consoled-build [rv32]              0.0s
+PASS  fsd-build [rv32]                   0.0s
+PASS  init-build [rv32]                  0.0s
+PASS  ipd-build [rv32]                   0.1s
+PASS  keyd-build [rv32]                  0.0s
+PASS  netd-build [rv32]                  0.0s
+PASS  rt-build [rv32]                    0.6s
+PASS  sshd-build [rv32]                  3.7s
+PASS  vendor-build [rv32]                0.1s

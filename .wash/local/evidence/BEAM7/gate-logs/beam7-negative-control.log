@@ -1,0 +1,121 @@
+sudo: unable to resolve host 32c4793fbf3d: Temporary failure in name resolution
+sudo: unable to resolve host 32c4793fbf3d: Temporary failure in name resolution
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 7 tests
+test writes_reach_the_screen ... ok
+test there_is_no_wall_clock ... ok
+test a_console_without_consol_has_no_size ... ok
+test a_read_waits_for_typing_without_holding_the_vm ... ok
+test typing_reaches_the_vm_then_its_end ... ok
+test idling_with_a_deadline_returns_by_it ... ok
+test after_the_console_ends_idling_still_waits_for_its_deadline ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 7 tests
+test a_huge_budget_saturates_rather_than_wraps ... ok
+test a_sixteenth_of_the_budget_goes_to_each_limit ... ok
+test a_missing_or_malformed_budget_is_none ... ok
+test the_budget_is_one_decimal_argument_anywhere ... ok
+test without_a_budget_the_defaults_stand ... ok
+test run_refuses_tables_past_a_sixteenth_of_the_budget ... ok
+test run_kills_a_process_at_a_sixteenth_of_the_budget ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 2 tests
+test verified_module_lookup_propagates_found_absent_and_refused ... ok
+test verified_application_lookup_propagates_found_absent_and_refused ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test an_application_resource_is_checked_as_a_module_is ... ok
+test the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole ... ok
+test a_module_loads_only_if_its_object_hashes_to_its_entry ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 37 tests
+test atom::tests::length_limit_counts_characters ... ok
+test atom::tests::interning_gives_identity ... ok
+test bif::file::tests::names_resolve_inside_the_root ... ok
+test bif::info::tests::civil_dates ... ok
+test bif::phash::tests::block_hash_handles_every_tail_length ... ok
+test bits::tests::floats ... ok
+test bits::tests::integers ... ok
+test bif::info::tests::crc32_matches_zlib ... ok
+test bits::tests::integers_round_trip ... ok
+test etf::tests::decodes_otp_output ... ok
+test etf::tests::encodes_like_otp ... ok
+test etf::tests::local_pids_and_refs_round_trip ... ok
+test etf::tests::rejects_hostile_input ... ok
+test float::tests::matches_otp ... ok
+test platform::tests::the_wall_clock_is_the_system_time ... ok
+test platform::tests::without_a_wall_clock_the_epoch_is_boot ... ok
+test term::map::tests::exact_keys ... ok
+test term::tests::copying_between_heaps ... ok
+test term::tests::collection_keeps_what_is_reachable_and_sharing ... ok
+test etf::tests::safe_mode_creates_no_atoms ... ok
+test term::tests::owned_terms_order_exactly ... ok
+test term::tests::printing_matches_otp ... ok
+test term::tests::term_is_two_words ... ok
+test term::tests::literals_are_shared_not_copied ... ok
+test term::tests::absorbed_fragments_read_the_same ... ok
+test term::tests::iodata ... ok
+test etf::tests::compressed_terms_round_trip ... ok
+test term::tests::slices_share_one_offheap_entry ... ok
+test vm::tests::app_spec_uses_one_source_attempt_and_keeps_its_erlang_result ... ok
+test vm::tests::a_refused_system_module_never_touches_the_code_path ... FAILED
+test etf::tests::nesting_is_bounded ... ok
+test vm::tests::the_bundle_wins_over_a_front_directory ... ok
+test vm::tests::a_name_the_bundle_lacks_is_found_on_the_path ... ok
+test term::map::tests::behaves_like_btreemap_and_versions_are_independent ... ok
+test etf::tests::long_lists_do_not_recurse ... ok
+test term::map::tests::sequential_keys_stay_balanced ... ok
+test term::tests::deep_terms_are_handled_iteratively ... ok
+
+failures:
+
+---- vm::tests::a_refused_system_module_never_touches_the_code_path stdout ----
+
+thread 'vm::tests::a_refused_system_module_never_touches_the_code_path' (1831) panicked at vm/src/vm.rs:1690:9:
+assertion `left == right` failed
+  left: 6
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    vm::tests::a_refused_system_module_never_touches_the_code_path
+
+test result: FAILED. 36 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.95s
+
+FAIL  beamlet-lookup-host               11.0s  host tests failed:
+         Compiling beamlet-crypto v0.1.0 (/work/.worktrees/BEAM7/userland/otp/crypto)
+         Compiling beamlet-re v0.1.0 (/work/.worktrees/BEAM7/userland/otp/re)
+         Compiling beamlet-redoubt v0.1.0 (/work/.worktrees/BEAM7/userland/otp/redoubt)
+          Finished `test` profile [unoptimized + debuginfo] target(s) in 0.97s
+           Running unittests src/lib.rs (target/debug/deps/beamlet_redoubt-e6021a67911fb478)
+           Running unittests src/bin/fake-redoubt.rs (target/debug/deps/fake_redoubt-4b60e89c1be0afbf)
+           Running tests/console.rs (target/debug/deps/console-2c522d0c4555620f)
+           Running tests/limits.rs (target/debug/deps/limits-9e31ff0180d25032)
+           Running tests/lookup.rs (target/debug/deps/lookup-ae5dea80575536e8)
+           Running tests/userland.rs (target/debug/deps/userland-41b0d64bc721d0c2)
+           Running unittests src/lib.rs (target/debug/deps/beamlet_vm-62c624270ecb6906)
+      error: test failed, to rerun pass `-p beamlet-vm --lib`
+Error: 1 test(s) failed; console logs are in /work/.worktrees/BEAM7/target/testbench/run-1-1791153846971376054

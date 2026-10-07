@@ -1,0 +1,1 @@
+PASS  bench-net-self-unrefused [rv32, smp=1]   0.7s

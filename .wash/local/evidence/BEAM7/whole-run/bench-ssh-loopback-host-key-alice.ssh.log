@@ -1,0 +1,16 @@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
+Someone could be eavesdropping on you right now (man-in-the-middle attack)!
+It is also possible that a host key has just been changed.
+The fingerprint for the ED25519 key sent by the remote host is
+SHA256:tcUvYmK8ZcB2yrgc/CuK9nGXVOOxVeijNO4ZnXR1S6c.
+Please contact your system administrator.
+Add correct host key in /work/.worktrees/BEAM7/target/testbench/run-1-1791159626245169437/ssh/bench-ssh-loopback-host-key-kn to get rid of this message.
+Offending ED25519 key in /work/.worktrees/BEAM7/target/testbench/run-1-1791159626245169437/ssh/bench-ssh-loopback-host-key-known_hosts:1
+  remove with:
+  ssh-keygen -f '/work/.worktrees/BEAM7/target/testbench/run-1-1791159626245169437/ssh/bench-ssh-loopback-host-key-known_hosts' -R 'redoubt'
+Host key for redoubt has changed and you have requested strict checking.
+Host key verification failed.
+[ssh exited (status 255)]

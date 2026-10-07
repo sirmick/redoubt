@@ -1,0 +1,12 @@
+
+loader: Redoubt rv64 loader, boot hart 0
+  1 hart(s), timebase 10000000 Hz
+  ram: 0x80000000..0x90000000 (256 MiB)
+  bundle: 0x88200000..0x88268240
+  devices: 14 mmio (8 dma), 10 irq, console 0x10000000
+  plic: 0xc000000, S-mode context 1
+  rng-seed: 32 bytes
+  bundle signature ok (426496 bytes)
+  PID 1: kernel -> 0xffffffffffd00000
+loader PANIC: panicked at loader/src/image.rs:29:62:
+invalid ELF: SliceReadError((62064, 63088))

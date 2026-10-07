@@ -1,0 +1,13 @@
+description = "SCRATCH, never committed: sched-large-weight with the trace, for the slice-end gap method"
+arch = ["rv64", "rv32"]
+whole_run = false
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-large-weight"]
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 600
+expect = ['^SCHED-TRACE-END \d+ dropped 0$']
+forbid = ['PROGRAM HALT']
+poweroff = true

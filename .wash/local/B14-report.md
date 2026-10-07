@@ -1,7 +1,7 @@
 # B14 report: the share fixtures at the 1 ms slice
 
 Branch wp-B14, worktree /home/mcloonan/redoubt/.worktrees/B14, from main fdafcf2cb.
-Head 7855c341c `tests: sched-share judges each spinner's share of what the three counted`.
+Head 67746b417 `tests: sched-share judges each spinner's share of what the three counted`.
 State: sched-share is fixed and committed. sched-carve-return needs no fixture change: it passes on
 K24's kernel on both widths (section 2). sched-exit-churn threads-exit goes to K25 as a kernel
 charge, by the orchestrator's decision (A); its clause is unchanged (section 3). Analysis scripts and the rv32 logs are in /home/mcloonan/redoubt/.wash/local/B14/.
@@ -200,3 +200,67 @@ has the same code as head 7855c341c; the head differs only in the page's figures
 - Gates on 7855c341c: docs rc=0. sched-share rv64 and rv32 rc=0, and carve-return rv32 and rv64
   rc=0 (on 9cc004f30).
 - The whole sched-* set waits for K25.
+
+## Round 5: rebased onto main f820b6ba3 (B18 merged)
+
+The rebase was clean; head is 34afe5d19. Fresh prebuilt rc=0 (216 / 202 cases). Runs are on
+54e501e6e, which has the same code as the head; the head only changes the page's rv32 figure from
+910 to 909.
+
+- sched-share rv64 rc=0: weight 300 got 602 of what was counted (555 of the window); counted 921
+  of the calibrated 1000.
+- sched-share rv32 rc=0: weight 300 got 603 (549 of the window); counted 909 of the calibrated
+  1000.
+- sched-carve-return rv32 rc=0: K 1033 through both weight changes, u-after-return net 480
+  (gross 466).
+- docs rc=0 on 34afe5d19.
+
+Still holding for K25 before the whole sched-* set.
+
+## Merge report: rebased onto main ba4aabd8b (K25 merged)
+
+Head 67746b417, one commit: `tests: sched-share judges each spinner's share of what the three
+counted`.
+
+The range-diff against 34afe5d19 shows no change to any hunk of mine. The only difference is
+context: K25 rewrote the line just before my scheduling.md hunk (the slice end's cost is now
+"billed to the budgets picked after each slice's end"). After the gate I amended the figures in
+the page and the commit body to this main's measurements. That is the only difference between
+the head and 42a411fd7, the commit the gate ran on.
+
+The short gate on 42a411fd7, all through jobs.mk, every exit 0:
+- build-rv64 rc=0, build-rv32 rc=0, prebuilt rc=0.
+- docs, formatting, size-budget, unsafe-budget and no-cruft: rc=0 each.
+- All 19 sched-* cases on rv64 and rv32: rc=0 each, sched-exit-churn and sched-timer-flood
+  included.
+- The smoke set on rv64 and rv32: userland-boot, init-boot, bench-net-peer, ipc-outcomes,
+  sum-clear and lend-untouched-page (smp=1 and smp=4), rc=0 each.
+- Host tests: none of the touched crates has any. The test programs and the docs have no host
+  tests, and testbench is untouched; its last run, on 8927bbae6, was rc=0 with 141 passed.
+
+Then on 67746b417: docs rc=0.
+
+The efficiency line (sched-share, rerun on 42a411fd7, since the bench keeps only the newest run
+directories):
+
+| | fdafcf2cb | + K24 | + K25 (now) |
+| --- | --- | --- | --- |
+| rv64: counted N of the calibrated 1000 | 912 | 921 | **938** |
+| rv32: counted N of the calibrated 1000 | 899 | 909-910 | **929** |
+| rv64 weight 300, of what was counted (of the window) | 603 (550) | 602 (555) | 599 (563) |
+| rv32 weight 300, of what was counted (of the window) | 603 (543) | 603 (549) | 600 (558) |
+| traced marks audits, rv64 / rv32 | 50 / 73 ms | 48 / 68 ms | 49 / 71 ms |
+
+The now column of the efficiency line is from the untraced run; the traced run counted 940 and
+931.
+
+Other shares in the set:
+
+| share | rv64 net (gross) | rv32 net (gross) |
+| --- | --- | --- |
+| exit-churn threads-exit | 492 (484) | 487 (475) |
+| exit-churn processes-exit | 494 | 494 |
+| exit-churn processes-fault | 494 | 495 |
+| carve-return u-after-return | 493 | 495 |
+
+Before K25, threads-exit was 439 on rv64 and 426 on rv32.

@@ -1,0 +1,1 @@
+PASS  budget-destroy-attack [rv64, smp=1]   0.2s

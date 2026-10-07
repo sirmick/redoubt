@@ -1,0 +1,4 @@
+PASS  bench-net-peer-count [rv64, smp=1]   0.4s
+PASS  bench-net-peer-pcap-empty [rv64, smp=1]   0.4s
+PASS  bench-net-peer-twice [rv64, smp=1]   0.4s
+PASS  bench-net-peer [rv64, smp=1]       0.4s

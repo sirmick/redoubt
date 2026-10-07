@@ -1,0 +1,387 @@
+
+loader: Redoubt rv64 loader, boot hart 0
+  1 hart(s), timebase 10000000 Hz
+  ram: 0x80000000..0x90000000 (256 MiB)
+  bundle: 0x88200000..0x882b0640
+  devices: 14 mmio (8 dma), 10 irq, console 0x10000000
+  plic: 0xc000000, S-mode context 1
+  rng-seed: 32 bytes
+  bundle signature ok (722432 bytes)
+  PID 1: kernel -> 0xffffffffffd00000
+  PID 2: proc-test -> 0x15822
+  bundle mapped read-only at 0x20000000 (722496 bytes)
+  252 MiB free, entering kernel
+Kernel arguments:
+    XArg (67724158, 28 bytes): 00000123 00000002 80000000 00000000 10000000 00000000 6d617273
+    MREx (7845524d, 384 bytes): 10100000 00000000 00001000 00000000 632d7766 00000000 20000000 00000000 02000000 00000000 73616c66 00000000 00101000 00000000 00001000 00000000 40637472 00000000 10000000 00000000 00001000 00000000 69726573 00000000 00100000 00000000 00001000 00000000 74736574 00000000 10008000 00000000 00001000 00000000 74726976 00000000 10007000 00000000 00001000 00000000 74726976 00000000 10006000 00000000 00001000 00000000 74726976 00000000 10005000 00000000 00001000 00000000 74726976 00000000 10004000 00000000 00001000 00000000 74726976 00000000 10003000 00000000 00001000 00000000 74726976 00000000 10002000 00000000 00001000 00000000 74726976 00000000 10001000 00000000 00001000 00000000 74726976 00000000 0c000000 00000000 00600000 00000000 63696c70 00000000 02000000 00000000 00010000 00000000 6e696c63 00000000 30000000 00000000 10000000 00000000 40696370 00000000
+    Ctrl (6c727443, 32 bytes): 0c000000 00000000 00600000 00000000 02000000 00000000 00010000 00000000
+    Devs (73766544, 600 bytes): 00000003 00000000 00000000 00000000 00000000 00000000 00000001 10000000 00000000 00001000 00000000 00000000 00000002 0000000a 00000000 00000000 00000000 00000000 00000001 10100000 00000000 00001000 00000000 00000000 00000001 20000000 00000000 02000000 00000000 00000000 00000001 00101000 00000000 00001000 00000000 00000000 00000001 00100000 00000000 00001000 00000000 00000000 00000001 10008000 00000000 00001000 00000000 00000001 00000001 10007000 00000000 00001000 00000000 00000001 00000001 10006000 00000000 00001000 00000000 00000001 00000001 10005000 00000000 00001000 00000000 00000001 00000001 10004000 00000000 00001000 00000000 00000001 00000001 10003000 00000000 00001000 00000000 00000001 00000001 10002000 00000000 00001000 00000000 00000001 00000001 10001000 00000000 00001000 00000000 00000001 00000001 30000000 00000000 10000000 00000000 00000000 00000002 00000001 00000000 00000000 00000000 00000000 00000002 00000002 00000000 00000000 00000000 00000000 00000002 00000003 00000000 00000000 00000000 00000000 00000002 00000004 00000000 00000000 00000000 00000000 00000002 00000005 00000000 00000000 00000000 00000000 00000002 00000006 00000000 00000000 00000000 00000000 00000002 00000007 00000000 00000000 00000000 00000000 00000002 00000008 00000000 00000000 00000000 00000000 00000002 0000000b 00000000 00000000 00000000 00000000
+    Plic (63696c50, 24 bytes): 0c000000 00000000 00600000 00000000 00000001 00000000
+    Seed (64656553, 32 bytes): 7416bb48 afa6c1e8 b426a8e9 c57fd2c7 4b336fc8 adcb1b63 5d1c2763 59c351cb
+    Time (656d6954, 8 bytes): 00989680 00000000
+asid: 16 bits
+Devices: 25 objects, all held by init
+Budgets: root 63726 pages (1224 kept for init), system 15625, users 46875
+W^X verified: 36 executable kernel pages, none writable under any alias
+Kernel RNG seeded from the loader (32 bytes)
+KMAIN (clean boot): Supervisor mode started...
+kernel: checks on (debug assertions, overflow checks)
+
+[proc] mapped the console
+[proc] image is 12 pages
+[proc] ok: a child budget starts with no processes
+terminate_process: 197
+[!] Terminating process with PID 197
+[proc] exited: pid 197 cause Exited code 7 account 0 labels 0
+[proc] ok: process_exit(7) -> exited, code 7, nobody blamed
+[proc] ok: the process handle is closed once its notice is taken
+PROGRAM HALT: CPU Exception on PID 70: Store page fault of 0x00000000 at 0x00017afe
+Current thread 1:
+Thread 1:
+PC:00017afe   SP:0ffffb70   RA:00017716
+GP:00000000   TP:00000000
+T0:00000000   T1:00000000   T2:00000000
+T3:00000000   T4:00000000   T5:00000000   T6:00000000
+S0:00000002   S1:0f000000   S2:00000000   S3:00000000
+S4:00000000   S5:00000000   S6:00000000   S7:00000000
+S8:00000000   S9:00000000  S10:00000000  S11:00000000
+A0:00000001   A1:000101f0   A2:00000000   A3:00000000
+A4:00000000   A5:00000000   A6:00000000   A7:00000000
+Memory Maps for satp 0x8004600000080227:
+    0000000000010000 -> 008022c000 (PteFlags(VALID | R | USER | A | D))
+    0000000000011000 -> 008022d000 (PteFlags(VALID | R | USER | A | D))
+    0000000000012000 -> 008022e000 (PteFlags(VALID | R | USER | A | D))
+    0000000000013000 -> 008022f000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000014000 -> 0080230000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000015000 -> 0080231000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000016000 -> 0080232000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000017000 -> 0080233000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000018000 -> 0080234000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000019000 -> 0080235000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001a000 -> 0080236000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001b000 -> 0080237000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000f000000 -> 0080243000 (PteFlags(VALID | R | USER | A | D))
+    000000000fff8000 -> 008023a000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fff9000 -> 008023b000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffa000 -> 008023c000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffb000 -> 008023d000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffc000 -> 008023e000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffd000 -> 008023f000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffe000 -> 0080240000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000ffff000 -> 0080241000 (PteFlags(VALID | R | W | USER | A | D))
+End of map
+terminate_process: 70
+[!] Terminating process with PID 70
+[proc] faulted: pid 70 cause Faulted code 15 account 0 labels 0
+[proc] ok: a store to a page it has not got -> faulted, nobody blamed
+[!] Terminating process with PID 321
+[proc] killed: pid 321 cause Killed code 0 account 0 labels 0
+[proc] ok: budget_destroy -> killed, code 0, nobody blamed
+terminate_process: 477
+[!] Terminating process with PID 477
+[proc] ok: the final thread exits its empty process with code zero
+terminate_process: 8
+[!] Terminating process with PID 8
+[proc] ok: returning final worker exits its empty process with code zero
+terminate_process: 361
+[!] Terminating process with PID 361
+[proc] labelled: pid 361 cause Exited code 9 account 0 labels 0
+[proc] ok: a labelled process's notice reaches a system-class reader (R1)
+PROGRAM HALT: CPU Exception on PID 480: Store page fault of 0x00000000 at 0x00017afe
+Current thread 1:
+Thread 1:
+PC:00017afe   SP:0ffffb70   RA:0001785a
+GP:00000000   TP:00000000
+T0:00000038   T1:00000000   T2:00000000
+T3:00000000   T4:0ffffb68   T5:00000000   T6:00000000
+S0:00000006   S1:0f000000   S2:00000000   S3:00000000
+S4:00000000   S5:00000000   S6:00000000   S7:00000000
+S8:00000000   S9:00000000  S10:00000000  S11:00000000
+A0:00000001   A1:00000002   A2:00000000   A3:0ffffb68
+A4:0ffffb68   A5:00000000   A6:00000038   A7:0ffff8f8
+Memory Maps for satp 0x801e00000008022d:
+    0000000000010000 -> 0080232000 (PteFlags(VALID | R | USER | A | D))
+    0000000000011000 -> 0080233000 (PteFlags(VALID | R | USER | A | D))
+    0000000000012000 -> 0080234000 (PteFlags(VALID | R | USER | A | D))
+    0000000000013000 -> 0080235000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000014000 -> 0080236000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000015000 -> 0080237000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000016000 -> 0080238000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000017000 -> 0080239000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000018000 -> 008023a000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000019000 -> 008023b000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001a000 -> 008023c000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001b000 -> 008023d000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000f000000 -> 0080249000 (PteFlags(VALID | R | USER | A | D))
+    000000000fff8000 -> 0080240000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fff9000 -> 0080241000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffa000 -> 0080242000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffb000 -> 0080243000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffc000 -> 0080244000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffd000 -> 0080245000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffe000 -> 0080246000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000ffff000 -> 0080247000 (PteFlags(VALID | R | W | USER | A | D))
+End of map
+terminate_process: 480
+[!] Terminating process with PID 480
+terminate_process: 475
+[!] Terminating process with PID 475
+[proc] blame-server-fault: pid 480 cause Faulted code 15 account 42 labels 1
+[proc] ok: a server that faults blames the account and labels of its current call's sender
+terminate_process: 294
+[!] Terminating process with PID 294
+terminate_process: 446
+[!] Terminating process with PID 446
+[proc] blame-exit-open: pid 294 cause Faulted code 9 account 42 labels 1
+[proc] ok: process_exit holding an open call is faulted, blamed on that call
+PROGRAM HALT: CPU Exception on PID 220: Store page fault of 0x00000000 at 0x00017afe
+Current thread 1:
+Thread 1:
+PC:00017afe   SP:0ffffb70   RA:00017716
+GP:00000000   TP:00000000
+T0:00000038   T1:00019e08   T2:00000000
+T3:00000000   T4:0ffffb68   T5:00000000   T6:00000000
+S0:0000000a   S1:00000001   S2:00000000   S3:00000000
+S4:00000000   S5:00000000   S6:00000000   S7:00000000
+S8:00000000   S9:00000000  S10:00000000  S11:00000000
+A0:00000001   A1:00000000   A2:00000000   A3:00000000
+A4:00000005   A5:00000000   A6:00000000   A7:00000000
+Memory Maps for satp 0x800dc00000080231:
+    0000000000010000 -> 0080236000 (PteFlags(VALID | R | USER | A | D))
+    0000000000011000 -> 0080237000 (PteFlags(VALID | R | USER | A | D))
+    0000000000012000 -> 0080238000 (PteFlags(VALID | R | USER | A | D))
+    0000000000013000 -> 0080239000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000014000 -> 008023a000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000015000 -> 008023b000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000016000 -> 008023c000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000017000 -> 008023d000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000018000 -> 008023e000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000019000 -> 008023f000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001a000 -> 0080240000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001b000 -> 0080241000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000f000000 -> 008024e000 (PteFlags(VALID | R | USER | A | D))
+    000000000fff8000 -> 0080244000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fff9000 -> 0080245000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffa000 -> 0080246000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffb000 -> 0080247000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffc000 -> 0080248000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffd000 -> 0080249000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffe000 -> 008024a000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000ffff000 -> 008024b000 (PteFlags(VALID | R | W | USER | A | D))
+End of map
+terminate_process: 220
+[!] Terminating process with PID 220
+terminate_process: 91
+[!] Terminating process with PID 91
+terminate_process: 409
+[!] Terminating process with PID 409
+[proc] blame-serve: pid 220 cause Faulted code 15 account 42 labels 1
+[proc] ok: a thread holding two callers' calls blames the one `serve` named, not the other
+PROGRAM HALT: CPU Exception on PID 82: Store page fault of 0x00000000 at 0x00017afe
+Current thread 1:
+Thread 1:
+PC:00017afe   SP:0ffffb70   RA:000177fa
+GP:00000000   TP:00000000
+T0:100000000   T1:00019e08   T2:00000000
+T3:00000000   T4:0ffffaf0   T5:00000000   T6:00000000
+S0:00000008   S1:0f000000   S2:00000000   S3:00000000
+S4:00000000   S5:00000000   S6:00000000   S7:00000000
+S8:00000000   S9:00000000  S10:00000000  S11:00000000
+A0:00000001   A1:00000001   A2:200000000   A3:00000001
+A4:00000004   A5:00000000   A6:00000000   A7:00000000
+Memory Maps for satp 0x8005200000080233:
+    0000000000010000 -> 0080238000 (PteFlags(VALID | R | USER | A | D))
+    0000000000011000 -> 0080239000 (PteFlags(VALID | R | USER | A | D))
+    0000000000012000 -> 008023a000 (PteFlags(VALID | R | USER | A | D))
+    0000000000013000 -> 008023b000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000014000 -> 008023c000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000015000 -> 008023d000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000016000 -> 008023e000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000017000 -> 008023f000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000018000 -> 0080240000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000019000 -> 0080241000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001a000 -> 0080242000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001b000 -> 0080243000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000f000000 -> 0080251000 (PteFlags(VALID | R | USER | A | D))
+    000000000fff8000 -> 0080246000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fff9000 -> 0080247000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffa000 -> 0080248000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffb000 -> 0080249000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffc000 -> 008024a000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffd000 -> 008024b000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffe000 -> 008024c000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000ffff000 -> 008024e000 (PteFlags(VALID | R | W | USER | A | D))
+End of map
+terminate_process: 82
+[!] Terminating process with PID 82
+terminate_process: 12
+[!] Terminating process with PID 12
+[proc] blame-after-reply: pid 82 cause Faulted code 15 account 0 labels 0
+[proc] ok: a crash after replying blames nobody: the reply cleared the current call
+terminate_process: 415
+[!] Terminating process with PID 415
+PROGRAM HALT: CPU Exception on PID 447: Store page fault of 0x00000000 at 0x00017afe
+Current thread 1:
+Thread 1:
+PC:00017afe   SP:0ffffb70   RA:00017818
+GP:00000000   TP:00000000
+T0:00000038   T1:00000000   T2:00000000
+T3:00000000   T4:0ffffca8   T5:00000000   T6:00000000
+S0:00000009   S1:0f000000   S2:00000000   S3:00000000
+S4:00000000   S5:00000000   S6:00000000   S7:00000000
+S8:00000000   S9:00000000  S10:00000000  S11:00000000
+A0:00000001   A1:0ffffa30   A2:00000000   A3:0ffffca8
+A4:0ffffca8   A5:00000000   A6:00000038   A7:0ffff9f8
+Memory Maps for satp 0x801bf00000080235:
+    0000000000010000 -> 008023a000 (PteFlags(VALID | R | USER | A | D))
+    0000000000011000 -> 008023b000 (PteFlags(VALID | R | USER | A | D))
+    0000000000012000 -> 008023c000 (PteFlags(VALID | R | USER | A | D))
+    0000000000013000 -> 008023d000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000014000 -> 008023e000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000015000 -> 008023f000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000016000 -> 0080240000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000017000 -> 0080241000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000018000 -> 0080242000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000019000 -> 0080243000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001a000 -> 0080244000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001b000 -> 0080245000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000f000000 -> 0080254000 (PteFlags(VALID | R | USER | A | D))
+    000000000fff8000 -> 0080248000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fff9000 -> 0080249000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffa000 -> 008024a000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffb000 -> 008024b000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffc000 -> 008024c000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffd000 -> 008024e000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffe000 -> 008024f000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000ffff000 -> 0080251000 (PteFlags(VALID | R | W | USER | A | D))
+End of map
+terminate_process: 447
+[!] Terminating process with PID 447
+[proc] blame-send: pid 447 cause Faulted code 15 account 0 labels 0
+[proc] ok: a send is never an open call, so a crash after taking one blames nobody
+PROGRAM HALT: CPU Exception on PID 215: Store page fault of 0x00000000 at 0x00017afe
+Current thread 2:
+Thread 2:
+PC:00017afe   SP:60003ff0   RA:00017b1c
+GP:00000000   TP:00000000
+T0:00000000   T1:00000000   T2:00000000
+T3:00000000   T4:00000000   T5:00000000   T6:00000000
+S0:00000000   S1:00000000   S2:00000000   S3:00000000
+S4:00000000   S5:00000000   S6:00000000   S7:00000000
+S8:00000000   S9:00000000  S10:00000000  S11:00000000
+A0:00000001   A1:00000000   A2:00000000   A3:00000000
+A4:00000000   A5:00000000   A6:00000000   A7:00000000
+Memory Maps for satp 0x800d700000080237:
+    0000000000010000 -> 008023c000 (PteFlags(VALID | R | USER | A | D))
+    0000000000011000 -> 008023d000 (PteFlags(VALID | R | USER | A | D))
+    0000000000012000 -> 008023e000 (PteFlags(VALID | R | USER | A | D))
+    0000000000013000 -> 008023f000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000014000 -> 0080240000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000015000 -> 0080241000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000016000 -> 0080242000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000017000 -> 0080243000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000018000 -> 0080244000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000019000 -> 0080245000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001a000 -> 0080246000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001b000 -> 0080247000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000f000000 -> 0080257000 (PteFlags(VALID | R | USER | A | D))
+    000000000fff8000 -> 008024a000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fff9000 -> 008024b000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffa000 -> 008024c000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffb000 -> 008024e000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffc000 -> 008024f000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffd000 -> 0080251000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffe000 -> 0080252000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000ffff000 -> 0080254000 (PteFlags(VALID | R | W | USER | A | D))
+    0000000060000000 -> 008027f000 (PteFlags(VALID | R | W | USER | A | D))
+    0000000060001000 -> 0080282000 (PteFlags(VALID | R | W | USER | A | D))
+    0000000060002000 -> 0080283000 (PteFlags(VALID | R | W | USER | A | D))
+    0000000060003000 -> 0080284000 (PteFlags(VALID | R | W | USER | A | D))
+End of map
+terminate_process: 215
+[!] Terminating process with PID 215
+terminate_process: 194
+[!] Terminating process with PID 194
+[proc] blame-other-thread: pid 215 cause Faulted code 15 account 0 labels 0
+[proc] ok: a thread with no current call blames nobody, though another thread holds one
+terminate_process: 472
+[!] Terminating process with PID 472
+terminate_process: 79
+[!] Terminating process with PID 79
+terminate_process: 86
+[!] Terminating process with PID 86
+[proc] ok: process_exit with multiple calls blames only the call selected by serve
+terminate_process: 315
+[!] Terminating process with PID 315
+terminate_process: 406
+[!] Terminating process with PID 406
+[proc] ok: process_exit without a current call blames nobody while a sibling holds calls
+terminate_process: 343
+[!] Terminating process with PID 343
+terminate_process: 49
+[!] Terminating process with PID 49
+[proc] ok: final thread_exit snapshots current-call blame before cleanup
+terminate_process: 507
+[!] Terminating process with PID 507
+terminate_process: 180
+[!] Terminating process with PID 180
+[proc] ok: final thread_exit with open calls and no current call blames nobody
+terminate_process: 376
+[!] Terminating process with PID 376
+terminate_process: 367
+[!] Terminating process with PID 367
+[proc] ok: returning final worker snapshots current-call blame before cleanup
+terminate_process: 105
+[!] Terminating process with PID 105
+[proc] startup: pid 105 cause Exited code 55 account 0 labels 0
+[proc] ok: a child finds its startup block through arg, at the address its parent chose
+PROGRAM HALT: CPU Exception on PID 61: Store page fault of 0x0f000000 at 0x00017748
+Current thread 1:
+Thread 1:
+PC:00017748   SP:0ffffb70   RA:0001768c
+GP:00000000   TP:00000000
+T0:00000000   T1:00000000   T2:00000000
+T3:00000000   T4:00000000   T5:00000000   T6:00000000
+S0:0000000d   S1:0f000000   S2:00000000   S3:00000000
+S4:00000000   S5:00000000   S6:00000000   S7:00000000
+S8:00000000   S9:00000000  S10:00000000  S11:00000000
+A0:ffffffffffffffff   A1:000101f0   A2:00000000   A3:00000000
+A4:00000000   A5:00000000   A6:00000000   A7:00000000
+Memory Maps for satp 0x8003d00000080244:
+    0000000000010000 -> 0080249000 (PteFlags(VALID | R | USER | A | D))
+    0000000000011000 -> 008024a000 (PteFlags(VALID | R | USER | A | D))
+    0000000000012000 -> 008024b000 (PteFlags(VALID | R | USER | A | D))
+    0000000000013000 -> 008024c000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000014000 -> 008024e000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000015000 -> 008024f000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000016000 -> 0080251000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000017000 -> 0080252000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000018000 -> 0080254000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000000019000 -> 0080255000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001a000 -> 0080257000 (PteFlags(VALID | R | X | USER | A | D))
+    000000000001b000 -> 0080258000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000f000000 -> 008026a000 (PteFlags(VALID | R | USER | A | D))
+    000000000fff8000 -> 008025d000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fff9000 -> 008025e000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffa000 -> 008025f000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffb000 -> 0080261000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffc000 -> 0080262000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffd000 -> 0080264000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000fffe000 -> 0080265000 (PteFlags(VALID | R | W | USER | A | D))
+    000000000ffff000 -> 0080267000 (PteFlags(VALID | R | W | USER | A | D))
+End of map
+terminate_process: 61
+[!] Terminating process with PID 61
+[proc] startup-write: pid 61 cause Faulted code 15 account 0 labels 0
+[proc] ok: the startup page is read-only: writing it faults
+[proc] ok: the launcher's budget holds the launcher and its child
+[!] Terminating process with PID 333
+[!] Terminating process with PID 342
+[proc] no-notice: pid 342 cause Killed code 0 account 0 labels 0
+[proc] ok: the launcher itself is reported killed
+[proc] ok: a process whose object died with its creator's budget produces no notice
+[proc] ok: thread_create returns a thread id
+[proc] ok: thread 256 past the limit -> TooManyThreads
+[proc] ok: made 255 threads before the limit
+[proc] PROC TEST PASSED
+system_reset: PowerOff asked for by PID 2

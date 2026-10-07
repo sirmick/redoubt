@@ -1,0 +1,8 @@
+keyd signed the exchange
+keyd signed the exchange
+login bob: labels {}
+console started without a pty
+login alice: labels {}
+console started without a pty
+connection failed: Ssh(SessionEOF)
+connection failed: Ssh(SessionEOF)

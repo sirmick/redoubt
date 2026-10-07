@@ -1,0 +1,3 @@
+train-7 open 2026-10-07T08:48Z: B22 5218d0219, K25 ba4aabd8b; third candidate BEAM4; cut at 3 packages or 14:40Z
+train-7 third package: B14 ef2ab5a94 -> train cuts; bench to follow
+train-7 judged 2026-10-07T09:42:23Z: 471 pass / 3 fail; aio-many-reads-two x2 = B8 (fix in review); bench-elixir-oracles-broken-guard rv64 past its 46 s deadline under load, PASS alone in 4.9 s -> void under sharing. No new regression from B22, K25, B14.

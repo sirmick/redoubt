@@ -1,0 +1,1 @@
+PASS  bench-debug-assertions-off [rv64, smp=1]   0.2s

@@ -1,0 +1,29 @@
+      sched_oracle: 502538 records, 45919 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (31 with a leading parent and work to move); 996 weight changes by the rule; R10 331 destructions over up to 1285 object frames, µs p50/p99/max 697/8271/8326, their threads' ending 14/188/205, no audit inside one; 49850 audits, 2129795 µs; 43427 timer interrupts billed by the rule (821 expiring, 65 finding a wait ended early, 291094 ticks after expiry to the budget billed last; 42541 ending a slice, 0 nobody's)
+      N=1 driver_wake (200): net p50/p99/max 742/2963/3357 µs, gross 791/3012/3419, audits 10810 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 728/3545/9584 µs, gross 871/3744/9906, audits 31143 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 749/1275/1387 µs, gross 822/1369/1462, audits 13939 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 616/1576/2027 µs, gross 626/1669/2077, audits 5434 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 805/3314/12967 µs, gross 870/3765/13488, audits 20284 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 603/1434/2494 µs, gross 656/1579/2569, audits 6659 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 498/2338/2338 µs, gross 507/2352/2352, audits 486 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 976/3216/3216 µs, gross 999/3287/3287, audits 1355 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 581/2853/2853 µs, gross 593/2864/2864, audits 591 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 968/10624/10624 µs, gross 2846/34568/34568, audits 278834 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1274/2841/2841 µs, gross 4926/6527/6527, audits 176890 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 985/3133/3133 µs, gross 3189/5916/5916, audits 110918 µs: no target
+PASS  sched-latency-tcg [rv64, smp=1]   87.4s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 483065 records, 44963 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (0 with a leading parent and work to move); 996 weight changes by the rule; R10 331 destructions over up to 1285 object frames, µs p50/p99/max 2856/4132/4132, their threads' ending 54/54/60, no audit inside one; 49535 audits, 12711794 µs; 42195 timer interrupts billed by the rule (647 expiring, 62 finding a wait ended early, 501296 ticks after expiry to the budget billed last; 41486 ending a slice, 0 nobody's); lease end p99, net decision wake 6463 + R10 4132 = 10595 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 1211/1701/1702 µs, gross 1428/1944/1944, audits 44416 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 4077/17871/21204 µs, gross 5380/21328/23963, audits 263790 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 1626/2410/2430 µs, gross 1970/2788/2808, audits 70234 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 807/2557/3144 µs, gross 951/2998/3736, audits 30683 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 4463/21075/26858 µs, gross 6198/24791/32644, audits 320368 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 1212/2322/3270 µs, gross 1473/3039/3988, audits 55357 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 642/644/644 µs, gross 670/672/672, audits 1400 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 1600/6463/6463 µs, gross 1764/7119/7119, audits 14225 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 1023/1024/1024 µs, gross 1078/1078/1078, audits 2744 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 3424/3465/3465 µs, gross 25726/25754/25754, audits 1110116 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 4370/9798/9798 µs, gross 30833/42262/42262, audits 1444334 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 3832/3985/3985 µs, gross 28219/28370/28370, audits 1198296 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv64, smp=1]       49.0s

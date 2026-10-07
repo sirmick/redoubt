@@ -38,3 +38,5 @@ The case targets run from target/prebuilt when it is there and current (the inde
 fingerprinted on the tree: after any edit, run `prebuilt` again, or the case target reports a
 stale index). `cargo testbench --exact <case>` names one case; a bare name is still a substring.
 98 boot cases now run in guest time (icount): their verdicts hold beside anything.
+
+- Export BEAMLET_TOOLCHAINS, both RUSTSBI_PROTOTYPER vars and ~/.cargo/bin on PATH BEFORE `make prebuilt`: a prebuilt index built without them records 20 toolchain failures and every userland case replays them. Never write a log or scratch file in the worktree root (the index fingerprints the tree); use target/ or /tmp.

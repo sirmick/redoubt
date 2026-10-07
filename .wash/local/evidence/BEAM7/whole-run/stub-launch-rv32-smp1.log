@@ -1,0 +1,168 @@
+
+loader: Redoubt rv32 loader, boot hart 0
+  1 hart(s), timebase 10000000 Hz
+  ram: 0x80000000..0x90000000 (256 MiB)
+  bundle: 0x88200000..0x88288040
+  devices: 14 mmio (8 dma), 10 irq, console 0x10000000
+  plic: 0xc000000, S-mode context 1
+  rng-seed: 32 bytes
+  bundle signature ok (557056 bytes)
+  PID 1: kernel -> 0xffd00000
+  PID 2: stub-launch -> 0x1659a
+  bundle mapped read-only at 0x20000000 (557120 bytes)
+  252 MiB free, entering kernel
+Kernel arguments:
+    XArg (67724158, 28 bytes): 00000123 00000002 80000000 00000000 10000000 00000000 6d617273
+    MREx (7845524d, 384 bytes): 10100000 00000000 00001000 00000000 632d7766 00000000 20000000 00000000 02000000 00000000 73616c66 00000000 00101000 00000000 00001000 00000000 40637472 00000000 10000000 00000000 00001000 00000000 69726573 00000000 00100000 00000000 00001000 00000000 74736574 00000000 10008000 00000000 00001000 00000000 74726976 00000000 10007000 00000000 00001000 00000000 74726976 00000000 10006000 00000000 00001000 00000000 74726976 00000000 10005000 00000000 00001000 00000000 74726976 00000000 10004000 00000000 00001000 00000000 74726976 00000000 10003000 00000000 00001000 00000000 74726976 00000000 10002000 00000000 00001000 00000000 74726976 00000000 10001000 00000000 00001000 00000000 74726976 00000000 0c000000 00000000 00600000 00000000 63696c70 00000000 02000000 00000000 00010000 00000000 6e696c63 00000000 30000000 00000000 10000000 00000000 40696370 00000000
+    Ctrl (6c727443, 32 bytes): 0c000000 00000000 00600000 00000000 02000000 00000000 00010000 00000000
+    Devs (73766544, 600 bytes): 00000003 00000000 00000000 00000000 00000000 00000000 00000001 10000000 00000000 00001000 00000000 00000000 00000002 0000000a 00000000 00000000 00000000 00000000 00000001 10100000 00000000 00001000 00000000 00000000 00000001 20000000 00000000 02000000 00000000 00000000 00000001 00101000 00000000 00001000 00000000 00000000 00000001 00100000 00000000 00001000 00000000 00000000 00000001 10008000 00000000 00001000 00000000 00000001 00000001 10007000 00000000 00001000 00000000 00000001 00000001 10006000 00000000 00001000 00000000 00000001 00000001 10005000 00000000 00001000 00000000 00000001 00000001 10004000 00000000 00001000 00000000 00000001 00000001 10003000 00000000 00001000 00000000 00000001 00000001 10002000 00000000 00001000 00000000 00000001 00000001 10001000 00000000 00001000 00000000 00000001 00000001 30000000 00000000 10000000 00000000 00000000 00000002 00000001 00000000 00000000 00000000 00000000 00000002 00000002 00000000 00000000 00000000 00000000 00000002 00000003 00000000 00000000 00000000 00000000 00000002 00000004 00000000 00000000 00000000 00000000 00000002 00000005 00000000 00000000 00000000 00000000 00000002 00000006 00000000 00000000 00000000 00000000 00000002 00000007 00000000 00000000 00000000 00000000 00000002 00000008 00000000 00000000 00000000 00000000 00000002 0000000b 00000000 00000000 00000000 00000000
+    Plic (63696c50, 24 bytes): 0c000000 00000000 00600000 00000000 00000001 00000000
+    Seed (64656553, 32 bytes): bf19f44c 853057be 784a6fe7 257691fc ffb53e91 f4baa020 61b0ab2a c3289e6e
+    Time (656d6954, 8 bytes): 00989680 00000000
+asid: 9 bits
+Devices: 25 objects, all held by init
+Budgets: root 63732 pages (1181 kept for init), system 15637, users 46912
+W^X verified: 41 executable kernel pages, none writable under any alias
+Kernel RNG seeded from the loader (32 bytes)
+KMAIN (clean boot): Supervisor mode started...
+kernel: checks on (debug assertions, overflow checks)
+
+[stub-launch] starting
+terminate_process: 110
+[!] Terminating process with PID 110
+[stub-launch] ok: well-formed child: exited 77
+terminate_process: 403
+[!] Terminating process with PID 403
+[stub-launch] ok: overlapping segments: exited 111
+terminate_process: 456
+[!] Terminating process with PID 456
+[stub-launch] ok: segment over the stub: exited 111
+terminate_process: 328
+[!] Terminating process with PID 328
+[stub-launch] ok: segment over the startup page: exited 111
+terminate_process: 483
+[!] Terminating process with PID 483
+[stub-launch] ok: segment over the stack: exited 111
+terminate_process: 417
+[!] Terminating process with PID 417
+[stub-launch] ok: entry in a read-only segment: exited 111
+terminate_process: 96
+[!] Terminating process with PID 96
+[stub-launch] ok: entry outside every segment: exited 111
+terminate_process: 422
+[!] Terminating process with PID 422
+[stub-launch] ok: truncated file header: exited 111
+terminate_process: 403
+[!] Terminating process with PID 403
+[stub-launch] ok: truncated program headers: exited 111
+terminate_process: 433
+[!] Terminating process with PID 433
+[stub-launch] ok: huge image_len: exited 110
+PROGRAM HALT: CPU Exception on PID 169: Load page fault of 0x41000378 at 0x1ff02026
+Current thread 1:
+Thread 1:
+PC:1ff02026   SP:7ffffe50   RA:1ff017ae
+GP:00000000   TP:00000000
+T0:41000378   T1:00000000   T2:00010000
+T3:00000000   T4:00011000   T5:00011378   T6:fffff000
+S0:00000003   S1:7fffff18   S2:00011000   S3:00001000
+S4:7fffff20   S5:00000001   S6:00000005   S7:41000378
+S8:00000000   S9:00000fff  S10:0000005e  S11:00012000
+A0:00011378   A1:41000378   A2:0000095e   A3:00011cd4
+A4:00000000   A5:7ffffdd8   A6:0000095e   A7:0000095c
+Memory Maps for satp 0xaa480231:
+    0000000000010000 -> 0080248000 (PteFlags(VALID | R | USER | A | D))
+    0000000000011000 -> 0080249000 (PteFlags(VALID | R | W | USER | A | D))
+    000000001ff00000 -> 0080235000 (PteFlags(VALID | R | X | USER | A | D))
+    000000001ff01000 -> 0080236000 (PteFlags(VALID | R | X | USER | A | D))
+    000000001ff02000 -> 0080237000 (PteFlags(VALID | R | X | USER | A | D))
+    0000000040000000 -> 0080239000 (PteFlags(VALID | R | W | USER | A | D))
+    000000007ff00000 -> 0080245000 (PteFlags(VALID | R | USER | A | D))
+    000000007fff8000 -> 008023b000 (PteFlags(VALID | R | W | USER | A | D))
+    000000007fff9000 -> 008023c000 (PteFlags(VALID | R | W | USER | A | D))
+    000000007fffa000 -> 008023d000 (PteFlags(VALID | R | W | USER | A | D))
+    000000007fffb000 -> 008023e000 (PteFlags(VALID | R | W | USER | A | D))
+    000000007fffc000 -> 008023f000 (PteFlags(VALID | R | W | USER | A | D))
+    000000007fffd000 -> 0080240000 (PteFlags(VALID | R | W | USER | A | D))
+    000000007fffe000 -> 0080241000 (PteFlags(VALID | R | W | USER | A | D))
+    000000007ffff000 -> 0080242000 (PteFlags(VALID | R | W | USER | A | D))
+End of map
+terminate_process: 169
+[!] Terminating process with PID 169
+[stub-launch] ok: segment bytes past the mapped image: faulted 13
+terminate_process: 6
+[!] Terminating process with PID 6
+[stub-launch] ok: segment over the budget: exited 112
+terminate_process: 72
+[!] Terminating process with PID 72
+[stub-launch] ok: the same segment in a budget that holds it: exited 77
+terminate_process: 75
+[!] Terminating process with PID 75
+terminate_process: 83
+[!] Terminating process with PID 83
+terminate_process: 470
+[!] Terminating process with PID 470
+terminate_process: 248
+[!] Terminating process with PID 248
+terminate_process: 491
+[!] Terminating process with PID 491
+terminate_process: 64
+[!] Terminating process with PID 64
+terminate_process: 422
+[!] Terminating process with PID 422
+terminate_process: 401
+[!] Terminating process with PID 401
+terminate_process: 89
+[!] Terminating process with PID 89
+terminate_process: 49
+[!] Terminating process with PID 49
+terminate_process: 352
+[!] Terminating process with PID 352
+terminate_process: 177
+[!] Terminating process with PID 177
+terminate_process: 311
+[!] Terminating process with PID 311
+terminate_process: 102
+[!] Terminating process with PID 102
+terminate_process: 65
+[!] Terminating process with PID 65
+terminate_process: 41
+[!] Terminating process with PID 41
+terminate_process: 182
+[!] Terminating process with PID 182
+terminate_process: 400
+[!] Terminating process with PID 400
+terminate_process: 177
+[!] Terminating process with PID 177
+terminate_process: 252
+[!] Terminating process with PID 252
+terminate_process: 182
+[!] Terminating process with PID 182
+terminate_process: 161
+[!] Terminating process with PID 161
+terminate_process: 456
+[!] Terminating process with PID 456
+terminate_process: 176
+[!] Terminating process with PID 176
+terminate_process: 107
+[!] Terminating process with PID 107
+terminate_process: 179
+[!] Terminating process with PID 179
+terminate_process: 186
+[!] Terminating process with PID 186
+terminate_process: 427
+[!] Terminating process with PID 427
+terminate_process: 129
+[!] Terminating process with PID 129
+terminate_process: 354
+[!] Terminating process with PID 354
+terminate_process: 485
+[!] Terminating process with PID 485
+terminate_process: 327
+[!] Terminating process with PID 327
+[stub-launch] fuzz: 32 images, 32 exited, 0 faulted
+terminate_process: 158
+[!] Terminating process with PID 158
+[stub-launch] ok: well-formed child after the attacks: exited 77
+[stub-launch] STUB LAUNCH TEST PASSED
+system_reset: PowerOff asked for by PID 2

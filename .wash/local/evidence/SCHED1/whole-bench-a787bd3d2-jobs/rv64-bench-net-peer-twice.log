@@ -1,0 +1,1 @@
+PASS  bench-net-peer-twice [rv64, smp=1]   0.4s

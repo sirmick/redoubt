@@ -1,0 +1,6 @@
+keyd signed the exchange
+login alice: labels {}
+console started without a pty
+console input ended
+session alice ended
+connection failed: Ssh(SessionEOF)

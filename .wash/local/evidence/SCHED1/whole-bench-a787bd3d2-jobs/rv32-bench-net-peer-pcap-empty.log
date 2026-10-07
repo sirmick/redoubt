@@ -1,0 +1,1 @@
+PASS  bench-net-peer-pcap-empty [rv32, smp=1]   0.6s

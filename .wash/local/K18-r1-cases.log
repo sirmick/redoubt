@@ -1,0 +1,96 @@
+      sched_oracle: 54397 records, 8520 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (52 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9444 object frames, µs p50/p99/max 566/966/2037, their threads' ending 7/12/72, no audit inside one; 837 audits, 718687 µs
+      N=1 driver_wake (200): net p50/p99/max 7812/8379/22961 µs, gross 7812/8379/23325, audits 364 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 8075/28373/151865 µs, gross 8075/28373/151865, audits 0 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 7858/8434/22896 µs, gross 7858/8434/23283, audits 1391 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 6801/7355/7535 µs, gross 6801/7355/7535, audits 0 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 7029/27145/139957 µs, gross 7029/27145/139957, audits 0 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 6846/7412/7568 µs, gross 6846/7412/7568, audits 0 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 5175/7586/7586 µs, gross 5175/7586/7586, audits 0 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 5324/87581/87581 µs, gross 5324/87581/87581, audits 0 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 5226/25735/25735 µs, gross 5226/25735/25735, audits 0 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 728/962/962 µs, gross 1989/2240/2240, audits 62262 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1166/1366/1366 µs, gross 3401/3626/3626, audits 103927 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 821/959/959 µs, gross 2275/2413/2413, audits 71174 µs: no target
+PASS  sched-latency-tcg [rv64, smp=1]   60.6s
+      sched_oracle: 54355 records, 8513 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (50 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9409 object frames, µs p50/p99/max 553/955/2657, their threads' ending 7/13/98, no audit inside one; 837 audits, 679772 µs
+      N=1 driver_wake (200): net p50/p99/max 7821/8621/23551 µs, gross 7821/8621/23915, audits 364 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 8117/38707/151322 µs, gross 8117/38707/151322, audits 416 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 7881/8414/40325 µs, gross 7881/8414/40325, audits 370 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 6806/7367/7614 µs, gross 6806/7367/7614, audits 0 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 7102/48168/119085 µs, gross 7102/48168/119085, audits 0 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 6854/7433/27936 µs, gross 6854/7433/27936, audits 0 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 5257/8355/8355 µs, gross 5257/8355/8355, audits 0 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 5342/91232/91232 µs, gross 5342/91232/91232, audits 0 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 5208/28930/28930 µs, gross 5208/28930/28930, audits 0 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 747/1119/1119 µs, gross 1931/2300/2300, audits 59393 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1139/1262/1262 µs, gross 3207/3598/3598, audits 97710 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 797/892/892 µs, gross 2158/2312/2312, audits 67065 µs: no target
+PASS  sched-latency-tcg [rv32, smp=1]   60.4s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 57339 records, 9182 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (46 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9444 object frames, µs p50/p99/max 3627/6366/6367, their threads' ending 31/32/32, no audit inside one; 837 audits, 7523515 µs; lease end p99, net decision wake 39449 + R10 6366 = 45815 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 9139/9632/25143 µs, gross 9139/9632/28499, audits 3356 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 11286/32350/33146 µs, gross 11286/32350/33146, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 9840/10816/29534 µs, gross 9840/10816/29534, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 8049/8543/8551 µs, gross 8049/8543/8551, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 10092/31740/42787 µs, gross 10092/31740/42787, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 8107/9674/30057 µs, gross 8107/9674/30057, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 5931/5931/5931 µs, gross 5931/5931/5931, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 7155/39449/39449 µs, gross 7155/39449/39449, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 6142/6143/6143 µs, gross 6142/6143/6143, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 4231/4233/4233 µs, gross 19753/19754/19754, audits 770364 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 5352/13863/13863 µs, gross 22451/33503/33503, audits 921057 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 4884/5050/5050 µs, gross 21826/21993/21993, audits 820444 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv64, smp=1]       15.2s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 57365 records, 9187 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (47 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9409 object frames, µs p50/p99/max 3661/6576/6594, their threads' ending 35/36/36, no audit inside one; 837 audits, 7254767 µs; lease end p99, net decision wake 40424 + R10 6576 = 47000 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 9556/10044/25860 µs, gross 9556/10044/28945, audits 3085 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 12177/33938/34371 µs, gross 12177/33938/34371, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 10514/11483/30003 µs, gross 10514/11483/30003, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 8425/8916/8928 µs, gross 8425/8916/8928, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 10969/32834/43422 µs, gross 10969/32834/43422, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 8369/10273/30843 µs, gross 8369/10273/30843, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 6167/6170/6170 µs, gross 6167/6170/6170, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 7611/40424/40424 µs, gross 7611/40424/40424, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 6407/6409/6409 µs, gross 6407/6409/6409, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 4429/4435/4435 µs, gross 19518/19525/19525, audits 748511 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 5609/14911/14911 µs, gross 22322/34957/34957, audits 894538 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 5134/5144/5144 µs, gross 21708/21719/21719, audits 799398 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv32, smp=1]       12.4s
+exit 0
+      sched_oracle: 8377 records, 902 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 99 lifts by the rule (8 with a leading parent and work to move); 297 weight changes by the rule; R10 97 destructions over up to 8848 object frames, µs p50/p99/max 975/2864/2864, their threads' ending 0/32/32, no audit inside one; 160 audits, 1692668 µs
+      share blocking: net 948, gross 936 of 1000, audits 25206 µs: target met (450 <= share <= 1000)
+      share spinning-parent: net 494, gross 403 of 1000, audits 369645 µs: target met (450 <= share <= 1000)
+      share deadline: net 982, gross 973 of 1000, audits 18615 µs: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 947, gross 935 of 1000, audits 25375 µs: target met (450 <= share <= 1000)
+      share shell: net 500, gross 264 of 1000, audits 942449 µs: target met (450 <= share <= 550)
+PASS  sched-budget-churn [rv64, smp=1]   2.6s
+      sched_oracle: 8064 records, 928 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 88 lifts by the rule (9 with a leading parent and work to move); 264 weight changes by the rule; R10 86 destructions over up to 8843 object frames, µs p50/p99/max 1067/2979/2979, their threads' ending 0/35/35, no audit inside one; 147 audits, 1462951 µs
+      share blocking: net 946, gross 935 of 1000, audits 23952 µs: target met (450 <= share <= 1000)
+      share spinning-parent: net 495, gross 416 of 1000, audits 317055 µs: target met (450 <= share <= 1000)
+      share deadline: net 981, gross 972 of 1000, audits 17907 µs: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 945, gross 934 of 1000, audits 24135 µs: target met (450 <= share <= 1000)
+      share shell: net 499, gross 293 of 1000, audits 826113 µs: target met (450 <= share <= 550)
+PASS  sched-budget-churn [rv32, smp=1]   2.3s
+exit 0
+cc9a8a1ef WIP: GATE1 fix round 1 (red B1 B2 M1 M2 L1 L2, simplifier, editor)
+33b13867a tests: the kernel containment gate contains a full hostile fill
+819cf8555 tests: a scheduling child's panic names where it was
+16073f4c6 kernel: a checked build's audits do not move its schedule
+      qemu seed 4 (TESTBENCH_QEMU_SEED=4 replays it)
+      sched_oracle: 537130 records, 106987 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (14 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 17533 object frames, µs p50/p99/max 18685/22128/22128, their threads' ending 2981/3527/3527, no audit inside one; 230 audits, 2554930 µs; lease end p99, net decision wake 7943 + R10 22128 = 30071 µs: target met (<= 125000)
+      gate driver_wake (200): net p50/p99/max 8741/11017/29783 µs, gross 8741/11017/33205, audits 3422 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate timer_wake (64): net p50/p99/max 8055/9771/9771 µs, gross 8055/9771/9771, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate decision_wake (9): net p50/p99/max 7943/7943/7943 µs, gross 7943/7943/7943, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      gate deadline_notice (18): net p50/p99/max 22839/25292/25292 µs, gross 81743/95077/95077, audits 1158119 µs: target met (p99 <= 40000)
+PASS  kernel-containment [rv64, smp=1] 164.2s
+      qemu seed 4 (TESTBENCH_QEMU_SEED=4 replays it)
+      sched_oracle: 578170 records, 115199 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (14 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 17501 object frames, µs p50/p99/max 18749/22172/22172, their threads' ending 3083/3708/3708, no audit inside one; 230 audits, 2482621 µs; lease end p99, net decision wake 8333 + R10 22172 = 30505 µs: target met (<= 125000)
+      gate driver_wake (200): net p50/p99/max 9110/11113/30853 µs, gross 9110/11113/34001, audits 3148 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate timer_wake (64): net p50/p99/max 8419/9907/9907 µs, gross 8419/9907/9907, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      gate decision_wake (9): net p50/p99/max 8269/8333/8333 µs, gross 8269/8333/8333, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      gate deadline_notice (18): net p50/p99/max 23168/25863/25863 µs, gross 84075/97364/97364, audits 1191597 µs: target met (p99 <= 40000)
+PASS  kernel-containment [rv32, smp=1] 131.5s
+exit 0
+Deleted branch k18-scratch-before (was cb8f6d365).
+Deleted branch k18-scratch-after (was cc9a8a1ef).
+16073f4c6 kernel: a checked build's audits do not move its schedule

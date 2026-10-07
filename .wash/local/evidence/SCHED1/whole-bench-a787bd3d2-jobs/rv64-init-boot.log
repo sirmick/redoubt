@@ -1,0 +1,1 @@
+PASS  init-boot [rv64, smp=1]            5.4s

@@ -1,0 +1,1 @@
+PASS  rng [rv64, smp=1]                  0.3s

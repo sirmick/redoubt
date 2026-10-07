@@ -306,3 +306,130 @@ runs (pid 1095538 has a thread spinning since about 11:00) are still running and
   28072 µs. These are the same numbers as the pre-rebase pass.
 - redoubt-model release suite: interrupted at the checkpoint inside mutations_are_caught. Every
   test binary before it was ok (7, 8, 1, 17, 3, 5, 10 tests). Not a verdict.
+
+## Rebased over K24 (main 2151b2aa4): head 6986a2c5a (k19-implementer-2, 2026-10-07)
+
+Commits:
+- b7d557e0c model: a destruction delivers nothing until its end
+- e5344683c kernel: a destruction delivers nothing until its end
+- 22fcdf243 kernel: a destruction's kills, frees and PID moves follow the dying subtree
+- 6986a2c5a tests, docs: a destruction at full occupancy is within R10's 30 ms
+
+**Hunks resolved.**
+- docs/SECURITY.md: K19's R10 row and main's R12 row.
+- tests/size-budget.toml: main's side, then recounted at each commit: model 10253; kernel 9200
+  (A) and 9292 (B); ipclist 516 (A) and 532 (B).
+- tests/budget-table-attack.toml: main's guest-time file plus K19's `debug_assertions` and
+  `timeout_secs = 30`.
+- docs/SUMMARY.md: the todo entry dropped; main's file-server entry kept.
+- docs/kernel/scheduling.md: K19's R12 status prose with main's count (43). In the residuals only
+  "A destruction walks every process" is dropped; K24's slice bullet is kept.
+
+**Two problems the rebase exposed, fixed in the owning commits.**
+1. `Mutation::ALL` was left at 148 by a clean merge. K19 and K24 each add one mutation, so it
+   must be 149; the model did not compile. Folded into the model commit.
+2. rv32 worst-walk's expiry walk went over R12's 30 ms: 30,191 µs against main's 29,338 µs.
+   - A Part-A-only run gave 30,183 µs, so the cause is Part A.
+   - Part A's fourth member kind made `List::page` build a `Page::Endpoint(u32)` from the link
+     word, a conversion inside every link read and write of the collect walk and its sort.
+   - `#[inline(always)]` did not help (30,306 µs).
+   - What did: a page kind of its own for listed endpoints, `Page::Pumped(frame + 1)`, so every
+     member's page holds its link word unchanged; only the kernel's `Frames::at` converts it.
+   - rv32 expiry is now 29,297 µs (main 29,338); rv64 27,142.
+   - Folded into Part A, whose message now says so.
+
+**Pages corrected.** R10 at full occupancy after K24's slice change: p99 17,098 µs on rv64 and
+18,207 µs on rv32, threads' ending 13,097 and 13,796 µs. The run's two destructions take 16.4 and
+17.1 ms (rv64) and 17.4 and 18.2 ms (rv32). Updated in budgets.md, the R12 status line,
+worst-walk.toml's comment and the docs commit's message. The "near empty" comparison now names
+the pair without saying which destruction is which, since the trace does not show that.
+
+**Gates.**
+- Per commit (four builds, release and checked, rv64 and rv32, 0 warnings; ipclist tests;
+  doccheck; `cargo +nightly fmt --check`): all rc 0. Checked at 79834a893, 8abba09e5 and
+  9d2e7902c, and again at Part A and the head after each fix.
+- On the head tree (fresh prebuilt, through jobs.mk): the 21 cases on both widths, smp-evict
+  rv64, size-budget and docs: 47 PASS, 0 FAIL.
+- worst-walk at the 1 ms slice: rv64 PASS 663.6 s, rv32 PASS 729.8 s. Run on 7106a644f; the head
+  differs only in pages, a toml comment and commit messages.
+- Model, on 06bb72397 (the model is unchanged since):
+  - `q run --cores 8 -- cargo test -q -p redoubt-model --release -- --skip steward --skip mutations_are_caught`: rc 0;
+  - `REDOUBT_MODEL_MUTATIONS=R10 q run --cores 4 -- cargo test -q -p redoubt-model --release --test mutations`: rc 0.
+
+## Rebased onto 678cdb205 (K23 reap, B18, K25, B14, B21): head d07a4309a (2026-10-07)
+
+- **Resolutions.** In order of the passes onto 158bcaa22, f820b6ba3, ba4aabd8b and 678cdb205:
+  - mutation.rs: both sides' variants; ALL 154 (main 153 + R10DeliveredMidDestruction), counted
+    from the array entries;
+  - contracts.rs: rebuilt as main's file plus K19's own hunk (59 lines, identical to the
+    original), after a block-union had cut `reap_empties_and_keeps`;
+  - model.md and SECURITY.md R10 rows: main's reap entries plus K19's mutation and test;
+    SECURITY.md R12 row: main's, with K25's two mutations;
+  - budgets.md: the R10 status lists unioned (36); K19's "nothing delivered" paragraphs, then
+    main's budget_reap paragraph;
+  - scheduling.md: K19's R12 status prose with main's count (45);
+  - SUMMARY.md: the todo entry dropped.
+- **budget_reap needs no code change.** It calls the same `destroy_subtree(ss, child, Some(pid),
+  None)` that `budget_destroy` uses, so it gets K19's deferral, chain walks, and pump drain at the
+  end.
+- **Range-diff 99eec6be6 -> head is clean.** Only ALL (153 -> 154), the size ceilings and the
+  R12 status count differ.
+- **Size.**
+  - K19 raises only its own crates: model 10325 -> 10331, kernel 9259 -> 9268 (A) -> 9360 (B),
+    ipclist 499 -> 516 (A) -> 532 (B).
+  - size-budget still fails on libs/wire (3170 against 3153), and main 678cdb205 alone fails the
+    same way, so it is main's. The recount script had also raised wire, littlefsd and walfsd in
+    the model commit; I took those raises back out.
+- **Gates on the rebased head** (code identical to the head):
+  - per commit: four builds 0 warnings, ipclist, docs, fmt: rc 0;
+  - build-rv64 and build-rv32: rc 0; prebuilt: rc 0;
+  - the 21 cases + budget-reap on both widths, smp-evict, docs, model-host-tests (116.9 s):
+    49 PASS + docs + model-host-tests PASS.
+  - Carried from 99eec6be6 (clean range-diff): worst-walk rv64 713.6 s and rv32 784.1 s (rv32
+    expiry 29,320 µs, R10 p99 18,210 µs); model-mutations 2835.6 s, every mutation caught.
+
+## Rebased onto c425bf4d7 (MODEL1): head 806d6785c
+
+- **Conflicts.** Only tests/size-budget.toml (the model ceiling). The range-diff against
+  9c299d743: three commits '='; the model commit differs only in its ceiling, model 10509 -> 10515
+  (+6, as before). ALL stays 154: MODEL1 added no mutation.
+- **MODEL1's batch and K19's rule do not interact.** Both batch paths in the model's tick
+  (`run_slices`, `run_queue_slices`) run only when the next event (timeout or budget deadline) is
+  past the batch and `to_pump` is empty. A destruction, by call or by deadline, runs at an instant
+  outside a batch, and K19's end-of-destruction pump drains `to_pump` before the tick goes on. So a
+  batch never spans a destruction or a deferred pump.
+- **Gates through q:**
+  - `cargo test -p redoubt-model --release --lib`: rc 0 (8 passed, the tick differential
+    included);
+  - rv64/model-host-tests: PASS 76.4 s;
+  - rv64/model-mutations: PASS 32.6 s, fanned; the q log shows 154 jobs, R10DeliveredMidDestruction
+    and R12SliceCountsExitWork among them;
+  - size-budget: PASS.
+
+## Red round on 806d6785c: OK with notes, two model P2s folded; head 21eda8acf on bdb38430e
+
+1. **Kill order.** The model's `destroy_budget` killed post-order (children first); the kernel's
+   walk is pre-order (the top's chain, then `subtree_next`: first child, the newest, then
+   siblings). The model now kills in that order. It keeps the post-order only for the
+   scheduler's bottom-up teardown, which is the kernel's too.
+   - The contract changed with it: K is in B (the top) and reports to E; S is in C, waits on E
+     before R, and reports to F.
+   - K's notice is then the only one owed on E. The specified outcome (R takes it) holds for any
+     kill order, and R10DeliveredMidDestruction is still caught: S, killed after K, takes K's
+     notice ("caught by ipc_contracts seed 0: the notice owed on E goes to the receiver that
+     survives").
+2. **Settle per destruction.** `destroy_budget` ends with `settle()`, as the kernel drains
+   `pump_listed` at the end of each `destroy_subtree`. So of two deadlines due in one expiry, the
+   second finds the first's deliveries made.
+
+The model commit's message says both; its Size budget line now covers the walk and the settle:
+model 10515 -> 10522. docs/kernel/model.md's contract line is order-neutral and unchanged.
+
+**Gates:**
+- model lib release (the tick differential): rc 0;
+- current_contracts: rc 0 (17);
+- model-host-tests: PASS 55.3 s;
+- model-mutations: PASS 46.1 s, fanned;
+- docs: PASS; size-budget: PASS.
+- Range-diff against 806d6785c: the model commit changed; commits 2 and 3 '='; commit 4 differs
+  only by main's R13 context row in SECURITY.md.

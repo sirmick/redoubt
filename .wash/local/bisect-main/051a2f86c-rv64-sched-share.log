@@ -1,0 +1,1 @@
+PASS  sched-share [rv64, smp=1]          1.1s

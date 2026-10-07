@@ -1,0 +1,1 @@
+PASS  beamlet-console [rv32, smp=1]      1.2s

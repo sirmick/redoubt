@@ -177,3 +177,30 @@ the rest is the shell starting in the VM. In sshd.md "Sessions over SSH".
 
 K23 (owner): replaces steward-restart's reboot with a restart that logs every session out; the
 case and the page residual stay as today until then.
+
+## steward2-implementer-4 (2026-10-07): rebased onto b60c7cc5c, gate, head 10bda633a
+
+### Branch
+wp-STEWARD2 at 10bda633a: 15 logical commits on main b60c7cc5c, no fixups, nothing pushed. Rebase hunk logs (second to fifth rebase): .wash/local/STEWARD2-rebase.md. range-diff s2-pre-rebase5 (on f820b6ba3) -> head: commits 1-14 "=" except consol (+ ended is a `send`, regenerated) and wire (+ the generated Elixir client steward.ex), image "!" (m1-separation, shell.md status, size ceilings; the pages and messages below).
+
+### What changed since the handoff
+- sshd: ipd's wait ending (`Rerror(Timeout)`, main's one error table) no longer ends the accept loop or a reader: `servers/sshd/src/listener.rs` asks again; NOT_STARTED renumbered 4 (3 is rt's RECEIVE_FAILED). Host test `host:redoubt-sshd::an_accept_ipd_s_wait_ran_out_on_is_asked_again` against the real ipd on the fake kernel; with the old `Remote` match it fails (the listener stops asking). sshd.md Listening paragraph + status.
+- beamlet (own commit, orchestrator's (a)): `limits()` divides by the VM's 8-byte word (`VM_WORD_BYTES`), not usize: rv32's process limit was twice rv64's in bytes, so the list flood's heap doubled to 651,312 terms (10,420,992 bytes) before the kill and the VM died. Host test limits.rs; beamlet.md sentence. The flood case now passes rv32 most runs (see open risks).
+- consol `ended` declared a `send` in its table (it is sent one way; consoled reads it in its send hook), regenerated: rust `is_send`, Elixir client sends it. steward.ex generated for main's Elixir client generator. libs/client/tests/console.rs (BEAM3's) answers `ended` as refused.
+- boot-profile targets by the rule as written: verified 20 s (15.4 s measured rv64), unverified 15 s (13.2 s); rv32 not measured (blocked, below). Breakdown on beamlet.md (0.6-3.1 s init pushes beamlet's 4 MB entry; 3.1-7.7 s carve + streamed launch + pack read; 7.7-15.4 s the shell; unverified 3.1/5.6/13.2 s) and a table row.
+- sshd.md latency: a login reaches its prompt 2 to 4 s after ssh starts (first line 1.1/1.1 s rv64, 1.8/2.0 s rv32; prompt 2.1/2.1 s rv64, 3.9/4.0 s rv32, alice/bob).
+- budgets.md: the image paragraph rewritten for the steward image (bound 550 pages both widths; servers 16,909 system pages; sessions carved under users; 1 GiB); the steward-carving status gap closed (+ bench:steward-boot); residual + todo/empty-a-budget.md updated for budget_reap (the call exists; init's use remains, K23's).
+- Pages: init.md duplicate `console` row merged; steward.md and sessions.md package IDs removed; shell.md "The shell in a session" status; README/m1 summaries merged with BEAM3/BEAM4/WFS2.
+- Commit messages: bootfsd -> "bootfsd, erofsd: client budgets with room for every session's domain"; image commit rewritten (names, sizes 43,528 / 10,881, buckets, peaks, latency, targets).
+
+### Gate at 10bda633a (jobs.mk, one case each; exit 0 = PASS)
+PASS both widths: steward-boot, steward-restart, steward-login-refused, steward-session-ends, steward-vault-session, steward-ssh-two-principals, init-boot, bench-net-peer, ipc-outcomes, sum-clear, lend-untouched-page (smp 1 and 4), image-disk, beamlet-heap-flood. PASS rv64: steward-sub-budget-flood, userland-boot, userland-read-only, boot-profile (20 s), boot-profile-unverified (15 s), elixir-oracles, steward/init/sshd/wire/client/r4 host-tests, host-tests, docs, formatting, unsafe-budget, size-budget.
+At 28cfb0c0a (same commits before the wire regen and page edits), additionally PASS both widths: userland-bad-start, verity-flipped-tree, verity-wrong-root, verity-signed, verity-bad-signature, verity-rollback, beamlet-footprint, beamlet-budget-flood; rv64 rt-host-tests; and the rv32 flood PASSED there.
+Host: cargo test -p redoubt-sha256 (2), beamlet-redoubt --features fake (38), redoubt-init, redoubt-wire(-gen), redoubt-client, redoubt-sshd: 0 failed.
+FAIL:
+- rv32 userland-boot, userland-read-only, boot-profile, boot-profile-unverified: BLOCKED on BEAM9 (merging): the console session's writes refused busy behind a parked read pinning consoled's one-page share (rt ninep_mux stored()). Probe write-up .wash/local/STEWARD2-rv32-probe.md. To rerun after the rebase over BEAM9, plus the rv32 boot-profile figures for beamlet.md's row.
+- rv32 steward-sub-budget-flood: intermittent (passed at 28cfb0c0a, failed at f820b6ba3-base and at 10bda633a): bob's VM, idle at its prompt, is terminated (kernel "terminate_process", no fault line) right after alice's vault login, during or just before her flood; the steward then reports users/bob/{} empty and sshd ends bob's channel. The orchestrator links the symptom to K27 (a refused carve ending the VM silently). Not diagnosed further; it is this case's own R37 verdict on rv32, so it stays open until K27 or a diagnosis.
+Not run: the whole bench (the train's).
+
+### Summaries checked
+README.md "Today" (updated: steward and SSH sessions; native launching, leases, agents remain), docs/plan/m1-separation.md (VM bullet, steward bullet, built list, not built), docs/servers/README.md (holdings row, graph), docs/servers/init.md (steps 5-6, table), docs/kernel/budgets.md (image paragraph, status, residuals), docs/userland/shell.md and sessions.md (statuses), docs/servers/steward.md, sshd.md, beamlet.md, image/README.md, image/disk.toml header, docs/testbench.md memory table. GETTING-STARTED.md: no steward/sshd/1 GiB claims found to change (checked by grep).

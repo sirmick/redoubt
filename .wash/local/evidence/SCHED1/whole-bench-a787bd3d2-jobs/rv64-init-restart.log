@@ -1,0 +1,1 @@
+PASS  init-restart [rv64, smp=1]         1.8s

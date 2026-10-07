@@ -1,0 +1,11 @@
+description = "SCRATCH, never committed: sched-share in the checked build, for what the three counted of the calibrated window"
+arch = ["rv64", "rv32"]
+whole_run = false
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-share"]
+timeout_secs = 600
+expect = ['^\[share\] counted \d+ of the calibrated 1000$']
+forbid = ['PROGRAM HALT']
+poweroff = true

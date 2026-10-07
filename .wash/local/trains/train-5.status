@@ -1,0 +1,8 @@
+train-5 start 2026-10-07T03:22:55Z head ec902d464
+prebuilt rc=0 03:36:31
+cases rc=2 06:21:53
+train-5 cases end 2026-10-07T06:21:53Z
+rerun of 67 targets lost to the daemon restart: 06:22:29
+rerun rc=2 07:22:35
+train-5 rerun end 2026-10-07T07:22:35Z
+train-5 verdict (ec902d464, pre-K24): 471 PASS, 17 FAIL, all accounted: aio-many-reads-two x2 (B8), ssh-loopback-host-key x2 (B22: last-output race), lend-untouched-page x2 + sum-clear x2 + sched-exit-churn x2 + cluster-old-control rv32 (K25), sched-timer-flood x2 (B17), worst-walk x2 (K24, merged after this tip), sched-carve-return rv32 + sched-share rv32 (B14/K24); model-host-tests x2 killed (serial; B18 next). No new regression from BEAM3/WFS1/BEAM8/B15/B19.

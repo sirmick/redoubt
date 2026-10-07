@@ -1,0 +1,14 @@
+sudo: unable to resolve host f6a21e68610d: Temporary failure in name resolution
+sudo: unable to resolve host f6a21e68610d: Temporary failure in name resolution
+PASS  blkd-host-tests                    6.7s
+PASS  client-host-tests                  5.3s
+PASS  fsd-host-tests                    21.8s
+PASS  host-tests                        20.6s
+PASS  init-host-tests                    1.3s
+PASS  ipd-host-tests                     7.1s
+PASS  littlefs-host-tests               24.0s
+PASS  model-host-tests                 659.0s
+PASS  net-host-tests                     2.2s
+PASS  netd-host-tests                    0.7s
+PASS  r4-host-tests                      1.2s
+PASS  rt-host-tests                      8.7s

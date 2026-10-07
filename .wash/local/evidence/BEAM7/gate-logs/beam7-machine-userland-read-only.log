@@ -1,0 +1,4 @@
+sudo: unable to resolve host 0cabfa55dcc1: Temporary failure in name resolution
+sudo: unable to resolve host 0cabfa55dcc1: Temporary failure in name resolution
+PASS  userland-read-only [rv64, smp=1] 165.5s
+PASS  userland-read-only [rv32, smp=1] 159.8s

@@ -1,0 +1,5 @@
+train-8 open 2026-10-07T09:13:30Z: B21 678cdb205
+MODEL1 c425bf4d7
+BEAM4 bdb38430e -> train 8 cut (B21, MODEL1, BEAM4)
+train-8 bench start on bdb38430e
+train-8 bench done 2026-10-07T10:25:18Z on bdb38430e: 472 pass / 3 fail; aio-many-reads-two x2 = B8 (merged after the tip); rv64 userland-read-only FAILS alone too: beamlet heap needs 10950 pages for twice its 5475-page peak, capped at 10861 -> B23 filed; attribution run on c425bf4d7 (pre-BEAM4) in flight.

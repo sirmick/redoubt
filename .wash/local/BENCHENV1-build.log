@@ -1,0 +1,218 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Containerfile
+#1 transferring dockerfile: 419B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/redoubt-dev:latest
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/2] FROM docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274
+#4 resolve docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274 0.0s done
+#4 DONE 0.1s
+
+#4 [1/2] FROM docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274
+#4 extracting sha256:6eefb2f5d3e91a6cfc577476bbec26bb63f0d0fc31f904493f400833783aa2c2
+#4 extracting sha256:6eefb2f5d3e91a6cfc577476bbec26bb63f0d0fc31f904493f400833783aa2c2 3.0s done
+#4 DONE 3.1s
+
+#4 [1/2] FROM docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274
+#4 extracting sha256:e3f14f93c474c31ff935e41f014d98867285295b9b8fd0b35f22a226a31afe7b
+#4 extracting sha256:e3f14f93c474c31ff935e41f014d98867285295b9b8fd0b35f22a226a31afe7b 5.2s done
+#4 DONE 8.3s
+
+#4 [1/2] FROM docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274
+#4 extracting sha256:ade9b193925d3f92ea035120f96bd5933ea68bee0c7d2d9ae6d57337b979a388
+#4 extracting sha256:ade9b193925d3f92ea035120f96bd5933ea68bee0c7d2d9ae6d57337b979a388 1.0s done
+#4 DONE 9.3s
+
+#4 [1/2] FROM docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274
+#4 extracting sha256:a19b12c78912f2c934e410effdceae3f37bfa867e08b2ae259b11e30c64315d8
+#4 extracting sha256:a19b12c78912f2c934e410effdceae3f37bfa867e08b2ae259b11e30c64315d8 4.8s done
+#4 DONE 14.1s
+
+#4 [1/2] FROM docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274
+#4 extracting sha256:928f5ae47cb66ea520eebd2129e0143ab1788eb0041bdbfbf810128638845ebb
+#4 extracting sha256:928f5ae47cb66ea520eebd2129e0143ab1788eb0041bdbfbf810128638845ebb 6.1s done
+#4 DONE 20.2s
+
+#4 [1/2] FROM docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274
+#4 extracting sha256:88ee849ee251e5dee1d1ea10b4a5d1ccf72c26634f0d8a4e1fd4eb015694ed78 0.0s done
+#4 extracting sha256:90d69bfdc1b7fe4176a15788418f1ad34e3958900b67dbbafbffe160c8f11dcd
+#4 extracting sha256:90d69bfdc1b7fe4176a15788418f1ad34e3958900b67dbbafbffe160c8f11dcd 0.5s done
+#4 DONE 20.7s
+
+#4 [1/2] FROM docker.io/library/redoubt-dev:latest@sha256:064514eb4f86e249eb7f165331af4accc52804d2431081fa90a243aff5bd5274
+#4 extracting sha256:515aece76374b9ca49359240d34dc35688aa94315c5bbf0b9de9b3afb83a6895 done
+#4 extracting sha256:5f3ff9986988746836e2351c01d64ddc4aab100f21fd316346c303ec0140de6b done
+#4 extracting sha256:399d885801952ae2709785194fdd39008905b34c43f178fed87d12a0c922bbf9 0.1s done
+#4 DONE 20.9s
+
+#5 [2/2] RUN apt-get update     && apt-get install -y --no-install-recommends podman uidmap     && rm -rf /var/lib/apt/lists/*     && printf 'dev:3713496320:65536\n' > /etc/subuid     && printf 'dev:3713496320:65536\n' > /etc/subgid     && printf '[storage]\ndriver = "vfs"\n' > /etc/containers/storage.conf
+#5 0.133 Get:1 http://deb.debian.org/debian trixie-backports InRelease [54.0 kB]
+#5 0.141 Get:2 http://deb.debian.org/debian trixie InRelease [140 kB]
+#5 0.144 Get:3 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#5 0.147 Get:4 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+#5 0.151 Get:5 http://deb.debian.org/debian trixie-backports/main amd64 Packages [270 kB]
+#5 0.163 Get:6 http://deb.debian.org/debian trixie/main amd64 Packages [9678 kB]
+#5 0.205 Get:7 https://deb.nodesource.com/node_22.x nodistro InRelease [12.1 kB]
+#5 0.222 Get:8 https://deb.nodesource.com/node_22.x nodistro/main amd64 Packages [12.5 kB]
+#5 0.250 Get:9 http://deb.debian.org/debian trixie-updates/main amd64 Packages [4412 B]
+#5 0.250 Get:10 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [264 kB]
+#5 0.653 Fetched 10.5 MB in 1s (20.0 MB/s)
+#5 0.653 Reading package lists...
+#5 0.942 Reading package lists...
+#5 1.236 Building dependency tree...
+#5 1.308 Reading state information...
+#5 1.404 The following additional packages will be installed:
+#5 1.404   conmon containernetworking-plugins crun golang-github-containers-common
+#5 1.404   golang-github-containers-image iptables libgpgme11t64 libip4tc2 libip6tc2
+#5 1.405   libmnl0 libnetfilter-conntrack3 libnfnetlink0 libnftnl11 libsubid5
+#5 1.405   libxtables12 libyajl2 netavark
+#5 1.405 Suggested packages:
+#5 1.405   libwasmedge0 firewalld kmod docker-compose
+#5 1.405 Recommended packages:
+#5 1.405   libcriu2 nftables aardvark-dns buildah catatonit | tini | dumb-init
+#5 1.405   containers-storage criu dbus-user-session passt slirp4netns
+#5 1.475 The following NEW packages will be installed:
+#5 1.475   conmon containernetworking-plugins crun golang-github-containers-common
+#5 1.476   golang-github-containers-image iptables libgpgme11t64 libip4tc2 libip6tc2
+#5 1.476   libmnl0 libnetfilter-conntrack3 libnfnetlink0 libnftnl11 libsubid5
+#5 1.476   libxtables12 libyajl2 netavark podman uidmap
+#5 1.519 0 upgraded, 19 newly installed, 0 to remove and 1 not upgraded.
+#5 1.519 Need to get 39.6 MB of archives.
+#5 1.519 After this operation, 169 MB of additional disk space will be used.
+#5 1.519 Get:1 http://deb.debian.org/debian trixie/main amd64 conmon amd64 2.1.12-4 [39.5 kB]
+#5 1.537 Get:2 http://deb.debian.org/debian trixie/main amd64 libip4tc2 amd64 1.8.11-2 [20.0 kB]
+#5 1.539 Get:3 http://deb.debian.org/debian trixie/main amd64 libip6tc2 amd64 1.8.11-2 [20.3 kB]
+#5 1.540 Get:4 http://deb.debian.org/debian trixie/main amd64 libxtables12 amd64 1.8.11-2 [31.9 kB]
+#5 1.542 Get:5 http://deb.debian.org/debian trixie/main amd64 libmnl0 amd64 1.0.5-3 [11.9 kB]
+#5 1.560 Get:6 http://deb.debian.org/debian trixie/main amd64 libnfnetlink0 amd64 1.0.2-3 [14.4 kB]
+#5 1.562 Get:7 http://deb.debian.org/debian trixie/main amd64 libnetfilter-conntrack3 amd64 1.1.0-1 [42.1 kB]
+#5 1.563 Get:8 http://deb.debian.org/debian trixie/main amd64 libnftnl11 amd64 1.2.9-1 [65.0 kB]
+#5 1.577 Get:9 http://deb.debian.org/debian trixie/main amd64 iptables amd64 1.8.11-2 [361 kB]
+#5 1.603 Get:10 http://deb.debian.org/debian trixie/main amd64 containernetworking-plugins amd64 1.1.1+ds1-3+b17 [9135 kB]
+#5 1.705 Get:11 http://deb.debian.org/debian trixie/main amd64 libyajl2 amd64 2.1.0-5+b2 [23.3 kB]
+#5 1.759 Get:12 http://deb.debian.org/debian trixie/main amd64 crun amd64 1.21-1 [369 kB]
+#5 1.776 Get:13 http://deb.debian.org/debian trixie/main amd64 netavark amd64 1.14.0-2 [3958 kB]
+#5 1.833 Get:14 http://deb.debian.org/debian trixie/main amd64 golang-github-containers-image all 5.34.2-1 [37.9 kB]
+#5 1.834 Get:15 http://deb.debian.org/debian trixie/main amd64 golang-github-containers-common all 0.62.2+ds1-2 [46.9 kB]
+#5 1.847 Get:16 http://deb.debian.org/debian trixie/main amd64 libgpgme11t64 amd64 1.24.2-3 [346 kB]
+#5 1.864 Get:17 http://deb.debian.org/debian trixie/main amd64 libsubid5 amd64 1:4.17.4-2 [222 kB]
+#5 1.879 Get:18 http://deb.debian.org/debian trixie/main amd64 podman amd64 5.4.2+ds1-2+b2 [24.7 MB]
+#5 4.063 Get:19 http://deb.debian.org/debian trixie/main amd64 uidmap amd64 1:4.17.4-2 [194 kB]
+#5 4.164 debconf: unable to initialize frontend: Dialog
+#5 4.164 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#5 4.164 debconf: falling back to frontend: Readline
+#5 4.170 debconf: unable to initialize frontend: Readline
+#5 4.170 debconf: (This frontend requires a controlling tty.)
+#5 4.170 debconf: falling back to frontend: Teletype
+#5 4.174 debconf: unable to initialize frontend: Teletype
+#5 4.174 debconf: (This frontend requires a controlling tty.)
+#5 4.174 debconf: falling back to frontend: Noninteractive
+#5 4.510 Fetched 39.6 MB in 3s (15.2 MB/s)
+#5 4.526 Selecting previously unselected package conmon.
+#5 4.526 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 24471 files and directories currently installed.)
+#5 4.537 Preparing to unpack .../00-conmon_2.1.12-4_amd64.deb ...
+#5 4.542 Unpacking conmon (2.1.12-4) ...
+#5 4.561 Selecting previously unselected package libip4tc2:amd64.
+#5 4.563 Preparing to unpack .../01-libip4tc2_1.8.11-2_amd64.deb ...
+#5 4.566 Unpacking libip4tc2:amd64 (1.8.11-2) ...
+#5 4.584 Selecting previously unselected package libip6tc2:amd64.
+#5 4.585 Preparing to unpack .../02-libip6tc2_1.8.11-2_amd64.deb ...
+#5 4.586 Unpacking libip6tc2:amd64 (1.8.11-2) ...
+#5 4.601 Selecting previously unselected package libxtables12:amd64.
+#5 4.602 Preparing to unpack .../03-libxtables12_1.8.11-2_amd64.deb ...
+#5 4.604 Unpacking libxtables12:amd64 (1.8.11-2) ...
+#5 4.624 Selecting previously unselected package libmnl0:amd64.
+#5 4.626 Preparing to unpack .../04-libmnl0_1.0.5-3_amd64.deb ...
+#5 4.628 Unpacking libmnl0:amd64 (1.0.5-3) ...
+#5 4.644 Selecting previously unselected package libnfnetlink0:amd64.
+#5 4.646 Preparing to unpack .../05-libnfnetlink0_1.0.2-3_amd64.deb ...
+#5 4.647 Unpacking libnfnetlink0:amd64 (1.0.2-3) ...
+#5 4.663 Selecting previously unselected package libnetfilter-conntrack3:amd64.
+#5 4.664 Preparing to unpack .../06-libnetfilter-conntrack3_1.1.0-1_amd64.deb ...
+#5 4.666 Unpacking libnetfilter-conntrack3:amd64 (1.1.0-1) ...
+#5 4.686 Selecting previously unselected package libnftnl11:amd64.
+#5 4.687 Preparing to unpack .../07-libnftnl11_1.2.9-1_amd64.deb ...
+#5 4.689 Unpacking libnftnl11:amd64 (1.2.9-1) ...
+#5 4.713 Selecting previously unselected package iptables.
+#5 4.715 Preparing to unpack .../08-iptables_1.8.11-2_amd64.deb ...
+#5 4.717 Unpacking iptables (1.8.11-2) ...
+#5 4.756 Selecting previously unselected package containernetworking-plugins.
+#5 4.758 Preparing to unpack .../09-containernetworking-plugins_1.1.1+ds1-3+b17_amd64.deb ...
+#5 4.761 Unpacking containernetworking-plugins (1.1.1+ds1-3+b17) ...
+#5 5.020 Selecting previously unselected package libyajl2:amd64.
+#5 5.022 Preparing to unpack .../10-libyajl2_2.1.0-5+b2_amd64.deb ...
+#5 5.024 Unpacking libyajl2:amd64 (2.1.0-5+b2) ...
+#5 5.040 Selecting previously unselected package crun.
+#5 5.041 Preparing to unpack .../11-crun_1.21-1_amd64.deb ...
+#5 5.044 Unpacking crun (1.21-1) ...
+#5 5.103 Selecting previously unselected package netavark.
+#5 5.105 Preparing to unpack .../12-netavark_1.14.0-2_amd64.deb ...
+#5 5.107 Unpacking netavark (1.14.0-2) ...
+#5 5.240 Selecting previously unselected package golang-github-containers-image.
+#5 5.241 Preparing to unpack .../13-golang-github-containers-image_5.34.2-1_all.deb ...
+#5 5.243 Unpacking golang-github-containers-image (5.34.2-1) ...
+#5 5.264 Selecting previously unselected package golang-github-containers-common.
+#5 5.265 Preparing to unpack .../14-golang-github-containers-common_0.62.2+ds1-2_all.deb ...
+#5 5.267 Unpacking golang-github-containers-common (0.62.2+ds1-2) ...
+#5 5.290 Selecting previously unselected package libgpgme11t64:amd64.
+#5 5.292 Preparing to unpack .../15-libgpgme11t64_1.24.2-3_amd64.deb ...
+#5 5.294 Unpacking libgpgme11t64:amd64 (1.24.2-3) ...
+#5 5.320 Selecting previously unselected package libsubid5:amd64.
+#5 5.322 Preparing to unpack .../16-libsubid5_1%3a4.17.4-2_amd64.deb ...
+#5 5.324 Unpacking libsubid5:amd64 (1:4.17.4-2) ...
+#5 5.351 Selecting previously unselected package podman.
+#5 5.353 Preparing to unpack .../17-podman_5.4.2+ds1-2+b2_amd64.deb ...
+#5 5.366 Unpacking podman (5.4.2+ds1-2+b2) ...
+#5 5.691 Selecting previously unselected package uidmap.
+#5 5.693 Preparing to unpack .../18-uidmap_1%3a4.17.4-2_amd64.deb ...
+#5 5.694 Unpacking uidmap (1:4.17.4-2) ...
+#5 5.724 Setting up libip4tc2:amd64 (1.8.11-2) ...
+#5 5.729 Setting up libip6tc2:amd64 (1.8.11-2) ...
+#5 5.733 Setting up libyajl2:amd64 (2.1.0-5+b2) ...
+#5 5.738 Setting up libsubid5:amd64 (1:4.17.4-2) ...
+#5 5.744 Setting up golang-github-containers-image (5.34.2-1) ...
+#5 5.749 Setting up conmon (2.1.12-4) ...
+#5 5.753 Setting up netavark (1.14.0-2) ...
+#5 5.832 Created symlink '/etc/systemd/system/default.target.wants/netavark-dhcp-proxy.service' → '/usr/lib/systemd/system/netavark-dhcp-proxy.service'.
+#5 5.901 Created symlink '/etc/systemd/system/sockets.target.wants/netavark-dhcp-proxy.socket' → '/usr/lib/systemd/system/netavark-dhcp-proxy.socket'.
+#5 5.971 Created symlink '/etc/systemd/system/firewalld.service.wants/netavark-firewalld-reload.service' → '/usr/lib/systemd/system/netavark-firewalld-reload.service'.
+#5 5.971 Unit /usr/lib/systemd/system/netavark-firewalld-reload.service is added as a dependency to a non-existent unit firewalld.service.
+#5 5.975 Setting up libmnl0:amd64 (1.0.5-3) ...
+#5 5.980 Setting up libxtables12:amd64 (1.8.11-2) ...
+#5 5.985 Setting up libnfnetlink0:amd64 (1.0.2-3) ...
+#5 5.990 Setting up libgpgme11t64:amd64 (1.24.2-3) ...
+#5 5.993 Setting up golang-github-containers-common (0.62.2+ds1-2) ...
+#5 6.001 Setting up crun (1.21-1) ...
+#5 6.005 Setting up uidmap (1:4.17.4-2) ...
+#5 6.011 Setting up podman (5.4.2+ds1-2+b2) ...
+#5 6.618 Setting up libnftnl11:amd64 (1.2.9-1) ...
+#5 6.625 Setting up libnetfilter-conntrack3:amd64 (1.1.0-1) ...
+#5 6.628 Setting up iptables (1.8.11-2) ...
+#5 6.635 update-alternatives: using /usr/sbin/iptables-legacy to provide /usr/sbin/iptables (iptables) in auto mode
+#5 6.638 update-alternatives: using /usr/sbin/ip6tables-legacy to provide /usr/sbin/ip6tables (ip6tables) in auto mode
+#5 6.641 update-alternatives: using /usr/sbin/iptables-nft to provide /usr/sbin/iptables (iptables) in auto mode
+#5 6.643 update-alternatives: using /usr/sbin/ip6tables-nft to provide /usr/sbin/ip6tables (ip6tables) in auto mode
+#5 6.646 update-alternatives: using /usr/sbin/arptables-nft to provide /usr/sbin/arptables (arptables) in auto mode
+#5 6.648 update-alternatives: using /usr/sbin/ebtables-nft to provide /usr/sbin/ebtables (ebtables) in auto mode
+#5 6.651 Setting up containernetworking-plugins (1.1.1+ds1-3+b17) ...
+#5 6.752 Processing triggers for libc-bin (2.41-12+deb13u4) ...
+#5 DONE 7.4s
+
+#6 exporting to image
+#6 exporting layers
+#6 exporting layers 5.0s done
+#6 exporting manifest sha256:0e16696d5215711dbba3a038e91df4cb3d6d2d2fc4f2a5e11e28d863d7694c92 done
+#6 exporting config sha256:a54fb4ce4e2f6cfc23604d0dacd9a13d3725e199e5f495d5b422fae894b65064 done
+#6 exporting attestation manifest sha256:b93e2c4bf73553556af5a240852d5595aeaa50646d18310989eed30d0aeeb6c1 done
+#6 exporting manifest list sha256:fd04016ea9206bf839f6bdf28f3f30ab88a8ac1f6f262b2eb177a63d820cffc4 done
+#6 naming to docker.io/library/redoubt-bench-env:preflight done
+#6 unpacking to docker.io/library/redoubt-bench-env:preflight
+#6 unpacking to docker.io/library/redoubt-bench-env:preflight 0.7s done
+#6 DONE 5.7s

@@ -1,0 +1,1 @@
+PASS  dma-rules [rv32, smp=1]            0.5s

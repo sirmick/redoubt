@@ -1,0 +1,11 @@
+description = "SCRATCH, never committed: sched-large-weight in a release build at the 10 ms slice, the reference for the useful-work ratio"
+arch = ["rv64", "rv32"]
+whole_run = false
+kind = "boot"
+debug_assertions = false
+icount = "shift=3,sleep=off"
+programs = ["sched-large-weight"]
+timeout_secs = 600
+expect = ['^\[large-weight\] useful work: the server \d+ and all nine \d+ of 1000 of the window$']
+forbid = ['PROGRAM HALT']
+poweroff = true

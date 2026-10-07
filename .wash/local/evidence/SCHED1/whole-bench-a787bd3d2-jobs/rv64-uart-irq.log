@@ -1,0 +1,1 @@
+PASS  uart-irq [rv64, smp=1]             1.5s

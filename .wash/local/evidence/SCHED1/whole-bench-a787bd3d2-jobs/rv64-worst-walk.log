@@ -1,0 +1,3 @@
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+FAIL  worst-walk [rv64, smp=1]         3600.0s  failed, but not with /^sched_oracle: R10.s p99 is \d+ µs over 2 destructions, above 30000$/: timed out waiting for /^\[worst-walk\] one holder destroyed, killed: true$/
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-3547643-1791266614470351432

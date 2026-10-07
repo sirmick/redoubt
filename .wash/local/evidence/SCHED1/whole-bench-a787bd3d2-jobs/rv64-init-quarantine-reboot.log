@@ -1,0 +1,1 @@
+PASS  init-quarantine-reboot [rv64, smp=1]   1.8s

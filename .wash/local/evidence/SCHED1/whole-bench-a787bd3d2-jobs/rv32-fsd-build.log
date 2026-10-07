@@ -1,0 +1,2 @@
+PASS  bootfsd-build [rv32]               0.0s
+PASS  fsd-build [rv32]                   0.0s

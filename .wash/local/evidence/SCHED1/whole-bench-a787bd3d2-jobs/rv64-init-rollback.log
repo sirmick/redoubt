@@ -1,0 +1,1 @@
+PASS  init-rollback [rv64, smp=1]        2.0s

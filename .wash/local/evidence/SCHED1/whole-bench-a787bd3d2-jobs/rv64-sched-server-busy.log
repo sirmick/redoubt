@@ -1,0 +1,2 @@
+FAIL  sched-server-busy [rv64, smp=1]    1.5s  forbidden output /\[server-busy\] FAIL/: [server-busy] FAIL: users B and C got 195 and 195 of 1000, at least a quarter each
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-3523014-1791266232565828763

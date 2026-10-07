@@ -1,0 +1,643 @@
+$ libs/steward/elixir/run-traces
+ok blame.trace: 42 events
+ok channel.trace: 13 events
+ok crossing.trace: 44 events
+ok lease.trace: 29 events
+ok model-noninterference-1-with.trace: 37 events
+ok model-noninterference-1-without.trace: 37 events
+ok model-policy-1.trace: 108 events
+ok model-policy-2.trace: 112 events
+ok model-policy-3.trace: 123 events
+ok model-policy-4.trace: 99 events
+ok request.trace: 56 events
+ok session.trace: 23 events
+ok unreachable-crossing-closing.trace: 5 events
+ok unreachable-crossing-open.trace: 4 events
+ok unreachable-lease-ending.trace: 6 events
+ok unreachable-lease-running.trace: 5 events
+ok unreachable-request.trace: 4 events
+ok unreachable-session-ending.trace: 4 events
+ok unreachable-session-running.trace: 4 events
+never reached by the model's traces: approval_channel (libs/steward/tables/approval_channel.md:13)
+never reached by the model's traces: blame (libs/steward/tables/blame.md:14)
+never reached by the model's traces: blame (libs/steward/tables/blame.md:15)
+never reached by the model's traces: blame (libs/steward/tables/blame.md:16)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:14)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:15)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:17)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:18)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:19)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:20)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:21)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:22)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:23)
+never reached by the model's traces: crossing (libs/steward/tables/crossing.md:24)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:15)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:18)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:19)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:22)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:24)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:25)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:29)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:31)
+never reached by the model's traces: lease (libs/steward/tables/lease.md:32)
+never reached by the model's traces: request (libs/steward/tables/request.md:23)
+never reached by the model's traces: request (libs/steward/tables/request.md:27)
+never reached by the model's traces: request (libs/steward/tables/request.md:29)
+never reached by the model's traces: request (libs/steward/tables/request.md:30)
+never reached by the model's traces: request (libs/steward/tables/request.md:31)
+never reached by the model's traces: request (libs/steward/tables/request.md:32)
+never reached by the model's traces: request (libs/steward/tables/request.md:36)
+never reached by the model's traces: request (libs/steward/tables/request.md:39)
+never reached by the model's traces: request (libs/steward/tables/request.md:40)
+never reached by the model's traces: request (libs/steward/tables/request.md:42)
+never reached by the model's traces: request (libs/steward/tables/request.md:43)
+never reached by the model's traces: request (libs/steward/tables/request.md:45)
+never reached by the model's traces: request (libs/steward/tables/request.md:46)
+never reached by the model's traces: session (libs/steward/tables/session.md:14)
+never reached by the model's traces: session (libs/steward/tables/session.md:17)
+never reached by the model's traces: session (libs/steward/tables/session.md:18)
+never reached by the model's traces: session (libs/steward/tables/session.md:21)
+never reached by the model's traces: session (libs/steward/tables/session.md:23)
+never reached by the model's traces: session (libs/steward/tables/session.md:24)
+warning: a method with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/big.rs:200:14
+    |
+200 |         self.widen()
+    |              ^^^^^
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:232:68
+    |
+232 |               const NEG_NAN: Self = $from_bits($to_bits(Self::NAN) | Self::SIGN_MASK);
+    |                                                                      ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::SIGN_MASK`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:248:48
+    |
+248 |               const SIGN_MASK: Self::Int = 1 << (Self::BITS - 1);
+    |                                                  ^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::BITS`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:250:43
+    |
+250 |               const EXP_MASK: Self::Int = !(Self::SIGN_MASK | Self::SIG_MASK);
+    |                                             ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::SIGN_MASK`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:232:68
+    |
+232 |               const NEG_NAN: Self = $from_bits($to_bits(Self::NAN) | Self::SIGN_MASK);
+    |                                                                      ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:248:48
+    |
+248 |               const SIGN_MASK: Self::Int = 1 << (Self::BITS - 1);
+    |                                                  ^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::BITS`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:250:43
+    |
+250 |               const EXP_MASK: Self::Int = !(Self::SIGN_MASK | Self::SIG_MASK);
+    |                                             ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+75 | impl_narrowing_div_primitive!(u16);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+75 | impl_narrowing_div_primitive!(u16);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+76 | impl_narrowing_div_primitive!(u32);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+76 | impl_narrowing_div_primitive!(u32);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+77 | impl_narrowing_div_primitive!(u64);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+77 | impl_narrowing_div_primitive!(u64);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+78 | impl_narrowing_div_primitive!(u128);
+   | ----------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+78 | impl_narrowing_div_primitive!(u128);
+   | ----------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits.rs:382:26
+    |
+382 |                       self.widen().wrapping_mul(rhs.widen())
+    |                            ^^^^^
+...
+393 | / impl_h_int!(
+394 | |     u8 u8 u16,
+395 | |     u16 u16 u32,
+396 | |     u32 u32 u64,
+...   |
+401 | |     i64 u64 i128
+402 | | );
+    | |_- in this macro invocation
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `impl_h_int` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits.rs:382:51
+    |
+382 |                       self.widen().wrapping_mul(rhs.widen())
+    |                                                     ^^^^^
+...
+393 | / impl_h_int!(
+394 | |     u8 u8 u16,
+395 | |     u16 u16 u32,
+396 | |     u32 u32 u64,
+...   |
+401 | |     i64 u64 i128
+402 | | );
+    | |_- in this macro invocation
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `impl_h_int` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/cbrt.rs:49:29
+   |
+49 |         let ix: u64 = hx & !f64::SIGN_MASK;
+   |                             ^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+   |
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+
+
+$ libs/wire/elixir/run-vectors
+BEAM:    vectors example.txt: bad=24 badfile=7 badreply=12 failed=5 file=6 ok=14 reply=9 failures=0
+BEAM:    vectors example-generated.txt: bad=1339 badfile=359 badreply=583 failed=174 file=141 ok=661 reply=243 failures=0
+BEAM:    vectors hostile encodes: 13 failures=0
+BEAM:    ok
+beamlet: identical
+PASS
+warning: a method with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/big.rs:200:14
+    |
+200 |         self.widen()
+    |              ^^^^^
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:232:68
+    |
+232 |               const NEG_NAN: Self = $from_bits($to_bits(Self::NAN) | Self::SIGN_MASK);
+    |                                                                      ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::SIGN_MASK`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:248:48
+    |
+248 |               const SIGN_MASK: Self::Int = 1 << (Self::BITS - 1);
+    |                                                  ^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::BITS`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:250:43
+    |
+250 |               const EXP_MASK: Self::Int = !(Self::SIGN_MASK | Self::SIG_MASK);
+    |                                             ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f32 as float_traits::Float>::SIGN_MASK`
+...
+324 | / float_impl!(
+325 | |     f32,
+326 | |     u32,
+327 | |     i32,
+...   |
+333 | |     fmaf32
+334 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:232:68
+    |
+232 |               const NEG_NAN: Self = $from_bits($to_bits(Self::NAN) | Self::SIGN_MASK);
+    |                                                                      ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:248:48
+    |
+248 |               const SIGN_MASK: Self::Int = 1 << (Self::BITS - 1);
+    |                                                  ^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::BITS`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/float_traits.rs:250:43
+    |
+250 |               const EXP_MASK: Self::Int = !(Self::SIGN_MASK | Self::SIG_MASK);
+    |                                             ^^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+...
+335 | / float_impl!(
+336 | |     f64,
+337 | |     u64,
+338 | |     i64,
+...   |
+344 | |     fmaf64
+345 | | );
+    | |_- in this macro invocation
+    |
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `float_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+75 | impl_narrowing_div_primitive!(u16);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+75 | impl_narrowing_div_primitive!(u16);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+76 | impl_narrowing_div_primitive!(u32);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+76 | impl_narrowing_div_primitive!(u32);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+77 | impl_narrowing_div_primitive!(u64);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+77 | impl_narrowing_div_primitive!(u64);
+   | ---------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:28
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                            ^^^^^
+...
+78 | impl_narrowing_div_primitive!(u128);
+   | ----------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits/narrowing_div.rs:37:55
+   |
+37 |                 ((self / n.widen()).cast(), (self % n.widen()).cast())
+   |                                                       ^^^^^
+...
+78 | impl_narrowing_div_primitive!(u128);
+   | ----------------------------------- in this macro invocation
+   |
+   = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+   = note: this warning originates in the macro `impl_narrowing_div_primitive` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits.rs:382:26
+    |
+382 |                       self.widen().wrapping_mul(rhs.widen())
+    |                            ^^^^^
+...
+393 | / impl_h_int!(
+394 | |     u8 u8 u16,
+395 | |     u16 u16 u32,
+396 | |     u32 u32 u64,
+...   |
+401 | |     i64 u64 i128
+402 | | );
+    | |_- in this macro invocation
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `impl_h_int` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: a method with this name may be added to the standard library in the future
+   --> /work/.worktrees/BEAM7/vendor/libm/src/math/support/int_traits.rs:382:51
+    |
+382 |                       self.widen().wrapping_mul(rhs.widen())
+    |                                                     ^^^^^
+...
+393 | / impl_h_int!(
+394 | |     u8 u8 u16,
+395 | |     u16 u16 u32,
+396 | |     u32 u32 u64,
+...   |
+401 | |     i64 u64 i128
+402 | | );
+    | |_- in this macro invocation
+    |
+    = help: call with fully qualified syntax `HInt::widen(...)` to keep using the current method
+    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+    = note: this warning originates in the macro `impl_h_int` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: an associated constant with this name may be added to the standard library in the future
+  --> /work/.worktrees/BEAM7/vendor/libm/src/math/cbrt.rs:49:29
+   |
+49 |         let ix: u64 = hx & !f64::SIGN_MASK;
+   |                             ^^^^^^^^^^^^^^ help: use the fully qualified path to the associated const: `<f64 as float_traits::Float>::SIGN_MASK`
+   |
+   = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!
+   = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>
+
+

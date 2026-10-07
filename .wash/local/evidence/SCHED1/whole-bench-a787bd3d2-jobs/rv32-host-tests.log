@@ -1,0 +1,7 @@
+PASS  blkd-host-tests                    3.5s
+PASS  client-host-tests                  4.2s
+PASS  fsd-host-tests                    15.3s
+PASS  host-tests                        32.2s
+PASS  init-host-tests                    0.1s
+PASS  ipd-host-tests                     3.3s
+PASS  littlefs-host-tests               17.8s

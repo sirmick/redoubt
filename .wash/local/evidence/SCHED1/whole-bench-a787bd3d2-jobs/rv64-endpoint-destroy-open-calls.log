@@ -1,0 +1,1 @@
+PASS  endpoint-destroy-open-calls [rv64, smp=1]   0.8s

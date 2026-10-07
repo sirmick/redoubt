@@ -1,0 +1,2 @@
+FAIL  sched-carve-inflation [rv64, smp=1]   2.6s  forbidden output /\[carve\] FAIL/: [carve] FAIL: a chain of 4 carves: the victim got 409 of 1000
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-3361037-1791261670495659159

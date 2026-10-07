@@ -1,0 +1,13 @@
+diff --git a/kernel/src/sched.rs b/kernel/src/sched.rs
+index 6de5afe71..5417f5282 100644
+--- a/kernel/src/sched.rs
++++ b/kernel/src/sched.rs
+@@ -61,7 +61,7 @@ use crate::ptable::{ArchProcess, ProcessTable};
+ /// Time slice, in microseconds (kernel/timer.md, "The hart timer"). The test-only `slice-10ms`
+ /// keeps the old 10 ms, for the cluster's known-bad control (kernel/scheduling.md,
+ /// "Responsiveness").
+-pub const SLICE_US: u64 = if cfg!(feature = "slice-10ms") { 10_000 } else { 1_000 };
++pub const SLICE_US: u64 = if cfg!(feature = "slice-10ms") { 10_000 } else { 10_000 };
+ 
+ struct Sched {
+     /// The queue and, for each hart, the budget whose runtime is accruing there (on the hart, or

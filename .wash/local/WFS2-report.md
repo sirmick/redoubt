@@ -979,3 +979,50 @@ index 507789587..e7cd0cd6e 100644
    packer into `target/image/userland.img`: each module of the applications it names, compiled by
    the pinned toolchain and stripped, as a plain file under its own name (`Elixir.Enum.beam`,
 ```
+
+## After review (head bc425fc4e on main 29238720c)
+Commits: 410c76d80 walfs accessors + test; 7885274c4 walfsd (Size budget: 1149); 5e9f10ca5 image;
+bc425fc4e cases and pages. (The hashes above are superseded.)
+
+Folded:
+- Red P1 (Rerror names after BEAM3's table): the client-library test expects Removed; the other
+  two cited tests were dropped as duplicates (simplifier 7). Red P2: minted() finds the root
+  again first (test a_mint_at_a_stale_root_records_nothing, listed in Quotas); power-loss's
+  description says it proves a crash with every prior write completed, not a lost volatile cache;
+  SECURITY R49 residual reads "littlefs does not checksum data".
+- Simplifier 5: littlefsd-client's quota takes an optional byte quota (default 64 KiB, so
+  littlefsd-quota is unchanged); walfsd-quota runs it with 262144; walfsd-client's quota mode
+  gone. 6: walfsd-restart and the restart-probe feature dropped; the cut checks the call in flight
+  gets Dead and the old connection's next call is refused (the restarted instance answers it, so it
+  is not Dead), then a fresh one reads. 7: program-level noise, read-only, failing-range and
+  restart tests and the server-level arguments test dropped; walfsd-host-tests case added.
+  1-4: walfsd added to docs/todo/file-server-arguments-and-range-client.md (title "four times
+  over", SUMMARY), a residual on walfsd.md links it; quota.rs's header corrected.
+- Editor: walfsd.md's density, read cost and share stated once and linked; beamlet.md,
+  steward.md, sessions.md, init.md's worked configuration and m1's R2 row name walfsd; m1's
+  littlefsd bullet "The flash file server". These now land in commit 3 (were commit 5's).
+
+Gates on bc425fc4e (content; the last change only rewrapped commit 4's message): cargo test
+-p redoubt-walfsd -p redoubt-init -p testbench 0 (walfsd 34); size 0, unsafe 0, no-cruft 0,
+formatting 0, docs 0, build-rv64 0, build-rv32 0; prebuilt 0; 72 case runs, both widths (every
+walfsd-* and littlefsd-* case, init-boot, image-disk, userland-boot, userland-read-only,
+beamlet-footprint, beamlet-files, boot-profile(s), userland-bad-start, ipc-outcomes,
+bench-net-peer, verity-signed/rollback/bad-signature, aio-many-reads): 70 at once, the two
+walfsd-power-loss runs after the old-connection fix; walfsd-power-loss sweep 1..10: rv64 10/10,
+rv32 10/10.
+
+wfs2-on-steward2 is not rebuilt yet: it waits for the STEWARD2 tip the orchestrator announces.
+
+## The "38 pass" claim (red's question) and the final head
+The 38 walfsd host tests I reported passing (30 lib + 8 program) ran on the tree based on
+0e83afe41, before I rebased onto main with BEAM3 (ec902d464), whose one error table decodes
+`corrupt`, `removed` and `read-only` into their own names. After the rebase I reran init's,
+testbench's and walfs's host tests and the bench cases, but not `cargo test -p redoubt-walfsd`
+(no walfsd-host-tests case existed then), so the reported head 97cb5ddb3 failed 3 of the 8 program
+tests. Fixed and the crate rerun each fold since.
+
+Final head f08aa79ab (410c76d80 walfs, 1de65063c walfsd, 6f59d299e image, f08aa79ab cases): the
+stale-mint test now also mints the new directory fresh and checks a second stale mint adds no
+second root; SECURITY R49's residual reads "littlefs's data is not checksummed". Reruns on it:
+cargo test -p redoubt-walfsd 0 (34), docs 0, prebuilt 0, every walfsd-* case on rv64 0 (10 runs,
+walfsd-host-tests among them).

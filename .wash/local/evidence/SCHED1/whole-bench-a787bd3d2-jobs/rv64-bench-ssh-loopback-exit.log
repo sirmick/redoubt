@@ -1,0 +1,2 @@
+FAIL  bench-ssh-loopback-exit            0.1s  failed, but not with /^session mallory: at the end: ssh exited \(status 255\), expected 0; last output: .*Permission denied \(publickey\)\.$/: session mallory: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
+Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-2954083-1791249976640248308

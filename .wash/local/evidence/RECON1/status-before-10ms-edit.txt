@@ -1,0 +1,4 @@
+?? tests/diag-recon-10ms.toml
+?? tests/diag-recon-trace.toml
+?? tests/diag-recon-walk.toml
+?? tests/sched-large-weight-release.toml

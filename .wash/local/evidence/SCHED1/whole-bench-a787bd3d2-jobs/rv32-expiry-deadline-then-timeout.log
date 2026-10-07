@@ -1,0 +1,1 @@
+PASS  expiry-deadline-then-timeout [rv32, smp=1]   0.7s

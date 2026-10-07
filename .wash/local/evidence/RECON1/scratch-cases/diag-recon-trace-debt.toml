@@ -1,0 +1,13 @@
+description = "SCRATCH, never committed: sched-debt-lift with the trace, for the slice-end gap at seventeen queued budgets"
+arch = ["rv64"]
+whole_run = false
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-debt-lift"]
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 600
+expect = ['^SCHED-TRACE-END \d+ dropped 0$']
+forbid = ['PROGRAM HALT']
+poweroff = true

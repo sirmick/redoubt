@@ -1,0 +1,393 @@
+a22ac66b2 kernel: a checked build's audits do not move its schedule
+PASS  all-together [rv64, smp=1]         1.9s
+PASS  all-together [rv64, smp=2]         1.9s
+PASS  bench-attack-forgery [rv64, smp=1]   0.1s
+PASS  bench-bundle-file [rv64, smp=1]    0.1s
+PASS  bench-cbo-self-unrefused [rv64, smp=1]   0.1s
+PASS  bench-cbo-self-unrefused [rv32, smp=1]   0.3s
+PASS  bench-console-after-expect [rv64, smp=1]   0.1s
+PASS  bench-debug-assertions-off [rv64, smp=1]   0.2s
+PASS  bench-debug-assertions [rv64, smp=1]   1.1s
+PASS  bench-debug-assertions [rv32, smp=1]   1.2s
+PASS  bench-net-peer-count [rv64, smp=1]   0.3s
+PASS  bench-net-peer-pcap-empty [rv64, smp=1]   0.3s
+PASS  bench-net-peer-twice [rv64, smp=1]   0.3s
+PASS  bench-net-peer [rv64, smp=1]       0.3s
+PASS  bench-net-self-unrefused [rv64, smp=1]   0.4s
+PASS  bench-poweroff-missing [rv64, smp=1]   3.0s
+PASS  bench-qemu-early-exit [rv64, smp=1]   0.0s
+PASS  bench-reporter-mismatch [rv64, smp=1]   0.1s
+PASS  bench-ssh-guest [rv64, smp=1]      1.2s
+PASS  bench-ssh-loopback-aborted-text    0.1s
+PASS  bench-ssh-loopback-deadlock        0.2s
+PASS  bench-ssh-loopback-exit            0.1s
+PASS  bench-ssh-loopback-forbid          0.2s
+PASS  bench-ssh-loopback-host-key        0.1s
+SKIP  bench-ssh-loopback-openssh              the reference sshd's container: podman is not installed
+PASS  bench-ssh-loopback                 0.1s
+PASS  bench-virtio-devices [rv64, smp=1]   0.1s
+PASS  bench-virtio-legacy-off [rv64, smp=1]   0.1s
+PASS  blkd-build [rv64]                  0.0s
+PASS  blkd-build [rv32]                  0.0s
+PASS  blkd-host-tests                    3.5s
+PASS  boot-stack-reservation [rv64, smp=1]   0.1s
+PASS  boot-stack-reservation [rv32, smp=1]   0.2s
+PASS  bootfsd-build [rv64]               0.0s
+PASS  bootfsd-build [rv32]               0.0s
+PASS  budget-carve-attack [rv64, smp=1]   0.2s
+PASS  budget-carve-attack [rv32, smp=1]   0.3s
+PASS  budget-deadline [rv64, smp=1]      0.2s
+PASS  budget-deadline [rv32, smp=1]      0.4s
+PASS  budget-destroy-attack [rv64, smp=1]   0.2s
+PASS  budget-destroy-attack [rv32, smp=1]   0.3s
+PASS  budget-destroy-growth [rv64, smp=1]   0.4s
+PASS  budget-destroy-growth [rv32, smp=1]   0.6s
+PASS  budget-destroy-kills [rv64, smp=1]   0.9s
+PASS  budget-destroy-kills [rv32, smp=1]   0.3s
+PASS  budget-forge-attack [rv64, smp=1]   0.1s
+PASS  budget-forge-attack [rv32, smp=1]   0.3s
+PASS  budget-mem-churn [rv64, smp=1]     0.2s
+PASS  budget-mem-churn [rv64, smp=2]     0.2s
+PASS  budget-mem-churn [rv32, smp=1]     0.3s
+PASS  budget-mem-churn [rv32, smp=2]     0.4s
+PASS  budget-syscall-attack [rv64, smp=1]   1.1s
+PASS  budget-syscall-attack [rv32, smp=1]   0.3s
+PASS  budget-table-attack [rv64, smp=1]   0.5s
+PASS  budget-table-attack [rv32, smp=1]   0.9s
+PASS  budget [rv64, smp=1]               1.6s
+PASS  budget [rv32, smp=1]               1.7s
+PASS  cbo-user-fault [rv64, smp=1]       0.2s
+PASS  cbo-user-fault [rv32, smp=1]       0.3s
+PASS  client-build [rv64]                0.0s
+PASS  client-build [rv32]                0.0s
+PASS  client-host-tests                  3.1s
+PASS  consoled-build [rv64]              0.0s
+PASS  consoled-build [rv32]              0.0s
+PASS  deadline-flood-billed [rv64, smp=1]   0.8s
+PASS  deadline-flood-billed [rv32, smp=1]   0.8s
+PASS  destroy-keeps-notices-creator [rv64, smp=1]   1.3s
+PASS  destroy-keeps-notices-creator [rv32, smp=1]   1.4s
+PASS  destroy-keeps-notices [rv64, smp=1]   0.3s
+PASS  destroy-keeps-notices [rv32, smp=1]   0.4s
+PASS  device-exec-refused [rv64, smp=1]   0.1s
+PASS  device-exec-refused [rv32, smp=1]   0.3s
+PASS  device [rv64, smp=1]               0.1s
+PASS  device [rv32, smp=1]               0.3s
+PASS  dma-destroy-quarantine [rv64, smp=1]   0.2s
+PASS  dma-destroy-quarantine [rv32, smp=1]   1.2s
+PASS  dma-reset-quarantine [rv64, smp=1]   2.1s
+PASS  dma-reset-quarantine [rv32, smp=1]   3.0s
+PASS  dma-reset-reuse [rv64, smp=1]      0.2s
+PASS  dma-reset-reuse [rv32, smp=1]      0.3s
+PASS  dma-rules [rv64, smp=1]            0.1s
+PASS  dma-rules [rv32, smp=1]            0.3s
+PASS  docs                               0.9s
+PASS  ending-pumps-once [rv64, smp=1]    0.6s
+PASS  ending-pumps-once [rv32, smp=1]    0.8s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 1801 records, 351 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 5 weight changes by the rule; R10 1 destructions over up to 12925 object frames, µs p50/p99/max 11082/11082/11082, their threads' ending 34/34/34, no audit inside one; 3 audits, 25485 µs
+PASS  endpoint-destroy-full [rv64, smp=1]   1.6s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 1946 records, 380 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 5 weight changes by the rule; R10 1 destructions over up to 12922 object frames, µs p50/p99/max 11106/11106/11106, their threads' ending 37/37/37, no audit inside one; 3 audits, 24061 µs
+PASS  endpoint-destroy-full [rv32, smp=1]   1.8s
+PASS  endpoint-destroy-open-calls [rv64, smp=1]   0.3s
+PASS  endpoint-destroy-open-calls [rv32, smp=1]   0.4s
+PASS  formatting                         9.9s
+PASS  handle-chain-attack [rv64, smp=1]   1.1s
+PASS  handle-chain-attack [rv32, smp=1]   0.4s
+PASS  handle-chain-fault [rv64, smp=1]   0.3s
+PASS  handle-chain-fault [rv32, smp=1]   0.4s
+PASS  host-tests                         4.7s
+PASS  ipc-fair-label-sets [rv64, smp=1]   0.2s
+PASS  ipc-fair-label-sets [rv32, smp=1]   0.4s
+PASS  ipc-outcomes [rv64, smp=1]         1.5s
+PASS  ipc-outcomes [rv32, smp=1]         1.6s
+PASS  ipc [rv64, smp=1]                  1.8s
+PASS  ipc [rv64, smp=4]                  2.8s
+PASS  ipc [rv32, smp=1]                  2.0s
+PASS  ipc [rv32, smp=4]                  2.9s
+PASS  ipd-build [rv64]                   0.1s
+PASS  ipd-build [rv32]                   0.0s
+PASS  ipd-host-tests                     4.0s
+PASS  irq-attack [rv64, smp=1]           1.1s
+PASS  irq-attack [rv32, smp=1]           1.3s
+PASS  irq-first-receive [rv64, smp=1]    0.6s
+PASS  irq-first-receive [rv32, smp=1]    0.8s
+PASS  kernel-half-attack [rv64, smp=1]   0.2s
+PASS  kernel-half-attack [rv32, smp=1]   0.3s
+PASS  kernel-wx [rv64, smp=1]            0.2s
+PASS  kernel-wx [rv32, smp=1]            0.3s
+PASS  keyd-build [rv64]                  0.0s
+PASS  keyd-build [rv32]                  0.0s
+PASS  legacy-gone [rv64, smp=1]          2.5s
+PASS  legacy-gone [rv32, smp=1]          2.3s
+PASS  lend-untouched-page [rv64, smp=1]   0.2s
+PASS  lend-untouched-page [rv64, smp=4]   0.2s
+PASS  lend-untouched-page [rv32, smp=1]   0.4s
+PASS  lend-untouched-page [rv32, smp=4]   0.4s
+PASS  lender-touches-lent [rv64, smp=1]   0.2s
+PASS  lender-touches-lent [rv32, smp=1]   0.3s
+PASS  littlefs-host-tests               23.6s
+PASS  loader-rejects-grants [rv64, smp=1]   0.1s
+PASS  loader-rejects-grants [rv32, smp=1]   0.2s
+PASS  loader-rejects-kernel-address [rv64, smp=1]   0.1s
+PASS  loader-rejects-kernel-address [rv32, smp=1]   0.2s
+PASS  loader-rejects-kernel-entry [rv64, smp=1]   0.1s
+PASS  loader-rejects-kernel-entry [rv32, smp=1]   0.2s
+PASS  loader-rejects-truncated-elf [rv64, smp=1]   0.1s
+PASS  logsrv-badge-forgery [rv64, smp=1]   0.1s
+PASS  logsrv-badge-forgery [rv32, smp=1]   0.3s
+PASS  map-anon-placement [rv64, smp=1]   0.2s
+PASS  map-anon-placement [rv32, smp=1]   0.3s
+PASS  map-anon-search-bound [rv64, smp=1]  33.5s
+PASS  map-anon-search-bound [rv32, smp=1]  34.7s
+PASS  map-fixed-attack [rv64, smp=1]     2.0s
+PASS  map-fixed-attack [rv32, smp=1]     1.2s
+PASS  map-fixed-tables-rv32 [rv32, smp=1]   1.0s
+PASS  map-fixed-tables [rv64, smp=1]     3.3s
+PASS  mem-attack [rv64, smp=1]           0.2s
+PASS  mem-attack [rv32, smp=1]           0.4s
+PASS  model-host-tests                 278.9s
+PASS  move-borrowed-page [rv64, smp=1]   0.2s
+PASS  move-borrowed-page [rv32, smp=1]   0.3s
+PASS  net-attacks [rv64, smp=1]          0.4s
+PASS  net-host-tests                     0.1s
+PASS  net-pinned [rv64, smp=1]           0.4s
+PASS  net-tcp [rv64, smp=1]              0.3s
+PASS  netd-build [rv64]                  0.0s
+PASS  netd-build [rv32]                  0.0s
+PASS  netd-host-tests                    0.5s
+PASS  ninep-newconn-discard [rv64, smp=1]   0.4s
+PASS  ninep-newconn-discard [rv32, smp=1]   0.5s
+PASS  no-cruft                        
+PASS  page-table-reclaim [rv64, smp=1]   2.0s
+PASS  page-table-reclaim [rv32, smp=1]   3.0s
+PASS  pages-exhaustion [rv64, smp=1]     0.4s
+PASS  pages-exhaustion [rv32, smp=1]     0.5s
+PASS  panic-in-print [rv64, smp=1]       0.1s
+PASS  panic-in-print [rv32, smp=1]       0.2s
+PASS  pid-pinning-attack [rv64, smp=1]   0.1s
+PASS  pid-pinning-attack [rv32, smp=1]   0.3s
+PASS  pid-reuse-authority [rv64, smp=1]   0.8s
+PASS  pid-reuse-authority [rv32, smp=1]   2.4s
+PASS  process-attack [rv64, smp=1]       0.6s
+PASS  process-attack [rv32, smp=1]       0.7s
+PASS  process-chain-fault [rv64, smp=1]   0.3s
+PASS  process-chain-fault [rv32, smp=1]   0.4s
+PASS  process-lifecycle [rv64, smp=1]    0.9s
+PASS  process-lifecycle [rv32, smp=1]    1.0s
+PASS  process-map-untouched-attack [rv64, smp=1]   0.9s
+PASS  process-map-untouched-attack [rv32, smp=1]   1.1s
+PASS  process-review [rv64, smp=1]       0.3s
+PASS  process-review [rv32, smp=1]       0.4s
+PASS  process [rv64, smp=1]              0.7s
+PASS  process [rv32, smp=1]              0.8s
+PASS  r4-host-tests                      0.8s
+PASS  receive-bad-record [rv64, smp=1]   0.4s
+PASS  receive-bad-record [rv32, smp=1]   0.5s
+PASS  redoubt-dead [rv64, smp=1]         1.2s
+PASS  redoubt-dead [rv32, smp=1]         1.3s
+PASS  redoubt-ipc-attack [rv64, smp=1]   0.5s
+PASS  redoubt-ipc-attack [rv32, smp=1]   1.0s
+PASS  redoubt-ipc [rv64, smp=1]          2.2s
+PASS  redoubt-ipc [rv32, smp=1]          2.4s
+PASS  redoubt-revoke [rv64, smp=1]       1.4s
+PASS  redoubt-revoke [rv32, smp=1]       1.4s
+PASS  redoubt-tight [rv64, smp=1]        1.2s
+PASS  redoubt-tight [rv32, smp=1]        1.3s
+PASS  return-lent-unmapped [rv64, smp=1]   0.2s
+PASS  return-lent-unmapped [rv64, smp=4]   0.3s
+PASS  return-lent-unmapped [rv32, smp=1]   0.3s
+PASS  return-lent-unmapped [rv32, smp=4]   0.5s
+PASS  rng [rv64, smp=1]                  0.3s
+PASS  rng [rv32, smp=1]                  0.6s
+PASS  rt-build [rv64]                    0.0s
+PASS  rt-build [rv32]                    0.1s
+PASS  rt-host-tests                      3.0s
+PASS  rt-miri                           51.9s
+PASS  rustsbi-boot [rv32, smp=1]         0.8s
+PASS  rustsbi-boot [rv64, smp=1]         0.7s
+PASS  scan-bounds [rv64, smp=1]          5.0s
+      sched_oracle: 8380 records, 902 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 99 lifts by the rule (9 with a leading parent and work to move); 297 weight changes by the rule; R10 97 destructions over up to 8848 object frames, µs p50/p99/max 975/2864/2864, their threads' ending 0/32/32, no audit inside one; 160 audits, 1692676 µs
+      share blocking: net 948, gross 936 of 1000, audits 25207 µs: target met (450 <= share <= 1000)
+      share spinning-parent: net 494, gross 403 of 1000, audits 369217 µs: target met (450 <= share <= 1000)
+      share deadline: net 982, gross 973 of 1000, audits 18615 µs: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 947, gross 935 of 1000, audits 25375 µs: target met (450 <= share <= 1000)
+      share shell: net 500, gross 264 of 1000, audits 942446 µs: target met (450 <= share <= 550)
+PASS  sched-budget-churn [rv64, smp=1]   2.7s
+      sched_oracle: 8063 records, 927 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 88 lifts by the rule (9 with a leading parent and work to move); 264 weight changes by the rule; R10 86 destructions over up to 8843 object frames, µs p50/p99/max 1067/2979/2979, their threads' ending 0/36/36, no audit inside one; 147 audits, 1462937 µs
+      share blocking: net 946, gross 935 of 1000, audits 23952 µs: target met (450 <= share <= 1000)
+      share spinning-parent: net 495, gross 416 of 1000, audits 317048 µs: target met (450 <= share <= 1000)
+      share deadline: net 981, gross 972 of 1000, audits 17908 µs: target met (450 <= share <= 1000)
+      share fresh-intermediates: net 945, gross 934 of 1000, audits 24134 µs: target met (450 <= share <= 1000)
+      share shell: net 499, gross 293 of 1000, audits 826105 µs: target met (450 <= share <= 550)
+PASS  sched-budget-churn [rv32, smp=1]   2.3s
+PASS  sched-carve-inflation [rv64, smp=1]   0.7s
+PASS  sched-carve-inflation [rv32, smp=1]   0.6s
+PASS  sched-carve-return [rv64, smp=1]   0.4s
+PASS  sched-carve-return [rv32, smp=1]   0.4s
+PASS  sched-debt-lift [rv64, smp=1]      0.6s
+PASS  sched-debt-lift [rv32, smp=1]      0.6s
+PASS  sched-destroy-billing [rv64, smp=1]   0.3s
+PASS  sched-destroy-billing [rv32, smp=1]   0.4s
+PASS  sched-exit-churn [rv64, smp=1]     1.1s
+PASS  sched-exit-churn [rv32, smp=1]     1.0s
+PASS  sched-idle-gap [rv64, smp=1]       0.6s
+PASS  sched-idle-gap [rv32, smp=1]       0.5s
+PASS  sched-large-weight [rv64, smp=1]   0.4s
+PASS  sched-large-weight [rv32, smp=1]   0.5s
+      sched_oracle: 53944 records, 8421 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (42 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9444 object frames, µs p50/p99/max 641/12817/13355, their threads' ending 7/120/192, no audit inside one; 837 audits, 1433998 µs
+      N=1 driver_wake (200): net p50/p99/max 7790/8623/23209 µs, gross 7790/8623/23603, audits 394 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 8164/38169/100739 µs, gross 8164/38169/100739, audits 0 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 7887/10847/22668 µs, gross 7887/10847/23064, audits 1409 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 6788/7399/7614 µs, gross 6788/7399/7614, audits 0 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 7122/37796/58503 µs, gross 7122/37796/58503, audits 0 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 6872/7743/10442 µs, gross 6872/7743/10442, audits 0 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 5179/7698/7698 µs, gross 5179/7698/7698, audits 0 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 5430/57100/57100 µs, gross 5430/57100/57100, audits 0 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 5207/7554/7554 µs, gross 5207/7554/7554, audits 0 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 816/13319/13319 µs, gross 2098/30860/30860, audits 206110 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1286/18720/18720 µs, gross 3649/49315/49315, audits 332040 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 870/11707/11707 µs, gross 2358/32478/32478, audits 130685 µs: no target
+PASS  sched-latency-tcg [rv64, smp=1]   64.5s
+      sched_oracle: 53753 records, 8385 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (38 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9409 object frames, µs p50/p99/max 677/12285/51920, their threads' ending 8/112/128, no audit inside one; 837 audits, 1683218 µs
+      N=1 driver_wake (200): net p50/p99/max 8133/13755/122285 µs, gross 8133/13755/122285, audits 4768 µs: no target
+      N=16 driver_wake (200): net p50/p99/max 8146/48942/153166 µs, gross 8146/48942/153166, audits 454 µs: no target
+      N=4 driver_wake (200): net p50/p99/max 7979/14385/30139 µs, gross 7979/14385/30139, audits 0 µs: no target
+      N=1 timer_wake (200): net p50/p99/max 7086/13061/94672 µs, gross 7086/13061/94672, audits 0 µs: no target
+      N=16 timer_wake (200): net p50/p99/max 7113/57834/140597 µs, gross 7113/57834/140597, audits 0 µs: no target
+      N=4 timer_wake (200): net p50/p99/max 6974/13196/29139 µs, gross 6974/13196/29139, audits 0 µs: no target
+      N=1 decision_wake (50): net p50/p99/max 5193/11274/11274 µs, gross 5193/11274/11274, audits 0 µs: no target
+      N=16 decision_wake (50): net p50/p99/max 5347/85920/85920 µs, gross 5347/85920/85920, audits 0 µs: no target
+      N=4 decision_wake (50): net p50/p99/max 5217/8347/8347 µs, gross 5217/8347/8347, audits 0 µs: no target
+      N=1 deadline_notice (50): net p50/p99/max 870/22270/22270 µs, gross 2148/29118/29118, audits 197078 µs: no target
+      N=16 deadline_notice (50): net p50/p99/max 1617/65693/65693 µs, gross 3856/182056/182056, audits 387657 µs: no target
+      N=4 deadline_notice (50): net p50/p99/max 953/11073/11073 µs, gross 2432/29906/29906, audits 222552 µs: no target
+PASS  sched-latency-tcg [rv32, smp=1]   64.8s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 57339 records, 9182 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (46 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9444 object frames, µs p50/p99/max 3627/6366/6367, their threads' ending 31/32/32, no audit inside one; 837 audits, 7523526 µs; lease end p99, net decision wake 39449 + R10 6366 = 45815 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 9139/9632/25143 µs, gross 9139/9632/28499, audits 3356 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 11286/32350/33146 µs, gross 11286/32350/33146, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 9839/10817/29535 µs, gross 9839/10817/29535, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 8049/8543/8551 µs, gross 8049/8543/8551, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 10092/31740/42787 µs, gross 10092/31740/42787, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 8108/9674/30059 µs, gross 8108/9674/30059, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 5931/5931/5931 µs, gross 5931/5931/5931, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 7155/39449/39449 µs, gross 7155/39449/39449, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 6143/6143/6143 µs, gross 6143/6143/6143, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 4231/4233/4233 µs, gross 19753/19754/19754, audits 770362 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 5352/13865/13865 µs, gross 22451/33504/33504, audits 921055 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 4884/5052/5052 µs, gross 21826/21994/21994, audits 820448 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv64, smp=1]       19.0s
+      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
+      sched_oracle: 57414 records, 9195 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 331 lifts by the rule (47 with a leading parent and work to move); 995 weight changes by the rule; R10 331 destructions over up to 9409 object frames, µs p50/p99/max 3661/6577/6610, their threads' ending 35/36/36, no audit inside one; 837 audits, 7253108 µs; lease end p99, net decision wake 29490 + R10 6577 = 36067 µs: target met (<= 125000)
+      N=1 driver_wake (200): net p50/p99/max 9556/10045/25860 µs, gross 9556/10045/28945, audits 3085 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 driver_wake (200): net p50/p99/max 12214/33939/34369 µs, gross 12214/33939/34369, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 driver_wake (200): net p50/p99/max 10513/11482/30003 µs, gross 10513/11482/30003, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 timer_wake (200): net p50/p99/max 8425/8917/8928 µs, gross 8425/8917/8928, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=16 timer_wake (200): net p50/p99/max 11011/32964/43423 µs, gross 11011/32964/43423, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=4 timer_wake (200): net p50/p99/max 8369/10274/30843 µs, gross 8369/10274/30843, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
+      N=1 decision_wake (50): net p50/p99/max 6167/6169/6169 µs, gross 6167/6169/6169, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=16 decision_wake (50): net p50/p99/max 7611/29490/29490 µs, gross 7611/29490/29490, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=4 decision_wake (50): net p50/p99/max 6407/6409/6409 µs, gross 6407/6409/6409, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
+      N=1 deadline_notice (50): net p50/p99/max 4429/4435/4435 µs, gross 19519/19526/19526, audits 748517 µs: target met (p99 <= 40000)
+      N=16 deadline_notice (50): net p50/p99/max 5610/13055/13055 µs, gross 22323/31435/31435, audits 892880 µs: target met (p99 <= 40000)
+      N=4 deadline_notice (50): net p50/p99/max 5133/5143/5143 µs, gross 21708/21718/21718, audits 799404 µs: target met (p99 <= 40000)
+PASS  sched-latency [rv32, smp=1]       19.6s
+PASS  sched-server-busy [rv64, smp=1]    0.7s
+PASS  sched-server-busy [rv32, smp=1]    1.1s
+PASS  sched-share [rv64, smp=1]          0.4s
+PASS  sched-share [rv32, smp=1]          0.4s
+PASS  sched-sleep-gaming [rv64, smp=1]   1.0s
+PASS  sched-sleep-gaming [rv32, smp=1]   0.8s
+      sched_oracle: 545 records, 86 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 12 weight changes by the rule; R10 1 destructions over up to 8982 object frames, µs p50/p99/max 2174/2174/2174, their threads' ending 0/0/0, no audit inside one; 15 audits, 64857 µs
+PASS  sched-ties [rv64, smp=1]           0.9s
+      sched_oracle: 535 records, 84 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 12 weight changes by the rule; R10 1 destructions over up to 8974 object frames, µs p50/p99/max 2344/2344/2344, their threads' ending 0/0/0, no audit inside one; 15 audits, 60709 µs
+PASS  sched-ties [rv32, smp=1]           1.8s
+PASS  sched-timer-flood [rv64, smp=1]    1.0s
+PASS  sched-timer-flood [rv32, smp=1]    1.0s
+PASS  sched-wake-no-preempt [rv64, smp=1]   0.2s
+PASS  sched-wake-no-preempt [rv32, smp=1]   0.3s
+PASS  size-budget                     
+      kernel: 7740 of 7752 lines
+      loader: 841 of 841 lines
+      stub: 361 of 361 lines
+      libs/sys: 966 of 966 lines
+      libs/layout: 60 of 60 lines
+      libs/paging: 158 of 158 lines
+      libs/stride: 328 of 328 lines
+      libs/signing: 11 of 11 lines
+      libs/client: 626 of 626 lines
+      libs/rt: 2824 of 2824 lines
+      libs/wire: 3067 of 3067 lines
+      libs/littlefs: 1941 of 1941 lines
+      model: 10179 of 10179 lines
+      servers/keyd: 556 of 556 lines
+      servers/sshd: 388 of 388 lines
+      servers/bootfsd: 242 of 242 lines
+      servers/consoled: 254 of 254 lines
+      servers/blkd: 1579 of 1579 lines
+      servers/netd: 1552 of 1552 lines
+      servers/ipd: 2883 of 2883 lines
+PASS  smp-spike [rv64, smp=2]            1.1s
+PASS  smp-spike [rv32, smp=2]            1.3s
+PASS  sshd-build [rv64]                  0.1s
+PASS  sshd-build [rv32]                  0.0s
+PASS  sshd-host-tests                    0.2s
+PASS  sshd-loopback-env-refused          0.1s
+PASS  sshd-loopback-independent          0.4s
+PASS  sshd-loopback-interrupt            0.1s
+PASS  sshd-loopback-logins               0.1s
+PASS  sshd-loopback-r67                  0.1s
+PASS  sshd-loopback-window-change-zero   0.1s
+PASS  sshd-loopback-window-change        0.1s
+PASS  stride-host-tests                  5.5s
+PASS  stub-launch [rv64, smp=1]          1.3s
+PASS  stub-launch [rv32, smp=1]          0.6s
+PASS  sum-clear [rv64, smp=1]            1.3s
+PASS  sum-clear [rv32, smp=1]            1.3s
+PASS  syscall-attack [rv64, smp=1]       1.1s
+PASS  syscall-attack [rv32, smp=1]       0.3s
+PASS  thread-limit [rv64, smp=1]         1.1s
+PASS  thread-limit [rv32, smp=1]         1.3s
+PASS  timeouts-tcg [rv64, smp=1]         6.2s
+PASS  timeouts-tcg [rv32, smp=1]         6.6s
+PASS  timeouts [rv64, smp=1]             2.8s
+PASS  timeouts [rv32, smp=1]             2.0s
+PASS  touch-beyond-ram [rv64, smp=1]     0.2s
+PASS  touch-beyond-ram [rv32, smp=1]     0.4s
+PASS  uaf-lent-page [rv64, smp=1]        0.1s
+PASS  uart-irq [rv64, smp=1]             1.1s
+PASS  uart-irq [rv32, smp=1]             1.3s
+PASS  unsafe-budget                   
+      paging crate (Sv32/Sv39 page tables): 12 unsafe, 0 undocumented
+      redoubt-stride (scheduler rules): 0 unsafe, 0 undocumented
+      loader: 18 unsafe, 0 undocumented
+      redoubt-signing (signature preimages): 0 unsafe, 0 undocumented
+      kernel: Sv39, SBI and PLIC backends: 13 unsafe, 0 undocumented
+      kernel: RISC-V arch (shared with rv32): 13 unsafe, 0 undocumented
+      kernel: core: 19 unsafe, 0 undocumented
+      redoubt-sys (system call ABI): the ecall stub: 1 unsafe, 0 undocumented
+      redoubt-client (the userland client API): 0 unsafe, 0 undocumented
+      redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page: 11 unsafe, 0 undocumented
+      keyd (holds every private key; signs, never exports): 0 unsafe, 0 undocumented
+      sshd (the network's first parser; carries every channel): 0 unsafe, 0 undocumented
+      blkd (virtio-blk driver; DMA, so TCB): 4 unsafe, 0 undocumented
+      netd (virtio-net driver; DMA, so TCB): 7 unsafe, 0 undocumented
+      ipd (the TCP/IP stack; /net over 9P): 0 unsafe, 0 undocumented
+      bootfsd and consoled (the first two 9P servers): 0 unsafe, 0 undocumented
+      redoubt-wire (protocol codecs): 0 unsafe, 0 undocumented
+      redoubt-layout (kernel-half map): 0 unsafe, 0 undocumented
+      stub (the loader stub): 7 unsafe, 0 undocumented
+      redoubt-littlefs: 0 unsafe, 0 undocumented
+PASS  vendor-build [rv64]                0.3s
+PASS  vendor-build [rv32]                0.0s
+PASS  vendor-check                       2.7s
+PASS  verified-boot-rejects-bare-archive [rv64, smp=1]   0.1s
+PASS  verified-boot-rejects-tamper [rv64, smp=1]   0.1s
+PASS  wire-host-tests                    0.2s
+PASS  write-only-attack [rv64, smp=1]    0.1s
+PASS  write-only-attack [rv32, smp=1]    1.2s
+PASS  wx [rv64, smp=1]                   0.1s
+PASS  wx [rv32, smp=1]                   0.3s
+exit 0

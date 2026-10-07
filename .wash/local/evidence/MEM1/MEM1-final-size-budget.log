@@ -1,0 +1,26 @@
+sudo: unable to resolve host 24a832fe9c23: Temporary failure in name resolution
+sudo: unable to resolve host 24a832fe9c23: Temporary failure in name resolution
+PASS  size-budget                     
+      kernel: 8361 of 8361 lines
+      loader: 868 of 868 lines
+      stub: 366 of 366 lines
+      libs/sys: 1017 of 1017 lines
+      libs/layout: 83 of 83 lines
+      libs/paging: 257 of 257 lines
+      libs/stride: 522 of 522 lines
+      libs/signing: 15 of 15 lines
+      libs/client: 987 of 987 lines
+      libs/rt: 3434 of 3434 lines
+      libs/wire: 3073 of 3073 lines
+      libs/steward: 3160 of 3160 lines
+      libs/littlefs: 2033 of 2033 lines
+      model: 10240 of 10240 lines
+      servers/keyd: 541 of 541 lines
+      servers/sshd: 388 of 388 lines
+      servers/bootfsd: 228 of 229 lines
+      servers/consoled: 338 of 338 lines
+      servers/blkd: 1627 of 1627 lines
+      servers/netd: 1590 of 1590 lines
+      servers/ipd: 2928 of 2928 lines
+      servers/init: 1957 of 1957 lines
+      servers/fsd: 1405 of 1405 lines

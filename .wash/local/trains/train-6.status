@@ -1,0 +1,1 @@
+train-6 judged 2026-10-07T08:30Z: 464 pass / 10 fail; 9 on filed nodes (B8 aio-many-reads-two x2, K25 sum-clear x2 + lend-untouched-page x2, 5b4068035 sched-timer-flood x2, B14 rv32 sched-share); rt-miri rv64 (heap past 128 s deadline, connection) PASSED alone in 83.4 s -> void under sharing. No new regression from B18.

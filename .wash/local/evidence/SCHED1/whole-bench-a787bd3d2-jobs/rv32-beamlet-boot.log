@@ -1,0 +1,1 @@
+PASS  beamlet-boot [rv32, smp=1]         0.8s

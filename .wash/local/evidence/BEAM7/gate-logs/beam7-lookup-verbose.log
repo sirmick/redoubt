@@ -1,0 +1,139 @@
+
+running 3 tests
+test files::tests::mounts_are_separate_and_may_be_read_only ... ok
+test files::tests::files_round_trip ... ok
+test files::tests::symlinks_cannot_leave_the_root ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+PASS  beamlet-lookup-cli-host            0.0s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 7 tests
+test a_read_waits_for_typing_without_holding_the_vm ... ok
+test there_is_no_wall_clock ... ok
+test writes_reach_the_screen ... ok
+test a_console_without_consol_has_no_size ... ok
+test typing_reaches_the_vm_then_its_end ... ok
+test after_the_console_ends_idling_still_waits_for_its_deadline ... ok
+test idling_with_a_deadline_returns_by_it ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 7 tests
+test a_missing_or_malformed_budget_is_none ... ok
+test a_huge_budget_saturates_rather_than_wraps ... ok
+test the_budget_is_one_decimal_argument_anywhere ... ok
+test without_a_budget_the_defaults_stand ... ok
+test a_sixteenth_of_the_budget_goes_to_each_limit ... ok
+test run_kills_a_process_at_a_sixteenth_of_the_budget ... ok
+test run_refuses_tables_past_a_sixteenth_of_the_budget ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 2 tests
+test verified_module_lookup_propagates_found_absent_and_refused ... ok
+test verified_application_lookup_propagates_found_absent_and_refused ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 3 tests
+test a_module_loads_only_if_its_object_hashes_to_its_entry ... ok
+test the_index_is_sorted_one_line_per_module_and_a_malformed_line_is_refused_whole ... ok
+test an_application_resource_is_checked_as_a_module_is ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 37 tests
+test atom::tests::length_limit_counts_characters ... ok
+test atom::tests::interning_gives_identity ... ok
+test bif::info::tests::civil_dates ... ok
+test bif::phash::tests::block_hash_handles_every_tail_length ... ok
+test bits::tests::integers_round_trip ... ok
+test etf::tests::rejects_hostile_input ... ok
+test term::tests::owned_terms_order_exactly ... ok
+test etf::tests::compressed_terms_round_trip ... ok
+test bif::info::tests::crc32_matches_zlib ... ok
+test term::map::tests::exact_keys ... ok
+test etf::tests::local_pids_and_refs_round_trip ... ok
+test bits::tests::floats ... ok
+test term::tests::term_is_two_words ... ok
+test term::tests::collection_keeps_what_is_reachable_and_sharing ... ok
+test bif::file::tests::names_resolve_inside_the_root ... ok
+test term::tests::copying_between_heaps ... ok
+test term::tests::iodata ... ok
+test bits::tests::integers ... ok
+test term::tests::slices_share_one_offheap_entry ... ok
+test etf::tests::encodes_like_otp ... ok
+test vm::tests::a_refused_system_module_never_touches_the_code_path ... ok
+test vm::tests::the_bundle_wins_over_a_front_directory ... ok
+test float::tests::matches_otp ... ok
+test vm::tests::app_spec_uses_one_source_attempt_and_keeps_its_erlang_result ... ok
+test vm::tests::a_name_the_bundle_lacks_is_found_on_the_path ... ok
+test term::tests::absorbed_fragments_read_the_same ... ok
+test etf::tests::decodes_otp_output ... ok
+test term::tests::literals_are_shared_not_copied ... ok
+test platform::tests::without_a_wall_clock_the_epoch_is_boot ... ok
+test etf::tests::safe_mode_creates_no_atoms ... ok
+test platform::tests::the_wall_clock_is_the_system_time ... ok
+test term::tests::printing_matches_otp ... ok
+test etf::tests::nesting_is_bounded ... ok
+test term::map::tests::behaves_like_btreemap_and_versions_are_independent ... ok
+test etf::tests::long_lists_do_not_recurse ... ok
+test term::map::tests::sequential_keys_stay_balanced ... ok
+test term::tests::deep_terms_are_handled_iteratively ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.02s
+
+
+running 6 tests
+test wrong_formats_are_named ... ok
+test every_truncation_is_rejected ... ok
+test fixtures_load ... ok
+test jump_loops_are_preempted ... ok
+test empty_frames_count_against_the_stack ... ok
+test mutants_never_panic ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.90s
+
+
+running 12 tests
+test full_own_mailbox_kills_the_sender ... ok
+test programs_need_the_platform_to_grant_them ... ok
+test memory_is_reported ... ok
+test spawn_opt_sets_a_limit ... ok
+test full_mailbox_kills_the_receiver ... ok
+test a_process_can_lower_its_own_limit ... ok
+test under_the_limit_nothing_happens ... ok
+test a_roomy_mailbox_is_not_a_limit ... ok
+test unreferenced_binaries_are_freed ... ok
+test ets_inserts_past_the_limit_raise ... ok
+test the_vm_heap_limit_kills ... ok
+test garbage_is_collected_and_live_data_survives ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.81s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+PASS  beamlet-lookup-host               23.1s

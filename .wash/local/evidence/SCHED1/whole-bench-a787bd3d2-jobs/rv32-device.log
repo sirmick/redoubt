@@ -1,0 +1,5 @@
+PASS  device-exec-refused [rv32, smp=1]   0.5s
+PASS  device-info-attack [rv32, smp=1]   0.4s
+PASS  device [rv32, smp=1]               0.5s
+PASS  init-refuses-device-dma [rv32, smp=1]   0.3s
+PASS  init-refuses-device-unmatched [rv32, smp=1]   0.3s

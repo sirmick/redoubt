@@ -1,0 +1,1090 @@
+
+loader: Redoubt rv32 loader, boot hart 0
+  1 hart(s), timebase 10000000 Hz
+  ram: 0x80000000..0x90000000 (256 MiB)
+  bundle: 0x88200000..0x88293a40
+  devices: 14 mmio (8 dma), 10 irq, console 0x10000000
+  plic: 0xc000000, S-mode context 1
+  rng-seed: 32 bytes
+  bundle signature ok (604672 bytes)
+  PID 1: kernel -> 0xffd00000
+  PID 2: proc-lifecycle -> 0x14d5e
+  bundle mapped read-only at 0x20000000 (604736 bytes)
+  252 MiB free, entering kernel
+Kernel arguments:
+    XArg (67724158, 28 bytes): 00000123 00000002 80000000 00000000 10000000 00000000 6d617273
+    MREx (7845524d, 384 bytes): 10100000 00000000 00001000 00000000 632d7766 00000000 20000000 00000000 02000000 00000000 73616c66 00000000 00101000 00000000 00001000 00000000 40637472 00000000 10000000 00000000 00001000 00000000 69726573 00000000 00100000 00000000 00001000 00000000 74736574 00000000 10008000 00000000 00001000 00000000 74726976 00000000 10007000 00000000 00001000 00000000 74726976 00000000 10006000 00000000 00001000 00000000 74726976 00000000 10005000 00000000 00001000 00000000 74726976 00000000 10004000 00000000 00001000 00000000 74726976 00000000 10003000 00000000 00001000 00000000 74726976 00000000 10002000 00000000 00001000 00000000 74726976 00000000 10001000 00000000 00001000 00000000 74726976 00000000 0c000000 00000000 00600000 00000000 63696c70 00000000 02000000 00000000 00010000 00000000 6e696c63 00000000 30000000 00000000 10000000 00000000 40696370 00000000
+    Ctrl (6c727443, 32 bytes): 0c000000 00000000 00600000 00000000 02000000 00000000 00010000 00000000
+    Devs (73766544, 600 bytes): 00000003 00000000 00000000 00000000 00000000 00000000 00000001 10000000 00000000 00001000 00000000 00000000 00000002 0000000a 00000000 00000000 00000000 00000000 00000001 10100000 00000000 00001000 00000000 00000000 00000001 20000000 00000000 02000000 00000000 00000000 00000001 00101000 00000000 00001000 00000000 00000000 00000001 00100000 00000000 00001000 00000000 00000000 00000001 10008000 00000000 00001000 00000000 00000001 00000001 10007000 00000000 00001000 00000000 00000001 00000001 10006000 00000000 00001000 00000000 00000001 00000001 10005000 00000000 00001000 00000000 00000001 00000001 10004000 00000000 00001000 00000000 00000001 00000001 10003000 00000000 00001000 00000000 00000001 00000001 10002000 00000000 00001000 00000000 00000001 00000001 10001000 00000000 00001000 00000000 00000001 00000001 30000000 00000000 10000000 00000000 00000000 00000002 00000001 00000000 00000000 00000000 00000000 00000002 00000002 00000000 00000000 00000000 00000000 00000002 00000003 00000000 00000000 00000000 00000000 00000002 00000004 00000000 00000000 00000000 00000000 00000002 00000005 00000000 00000000 00000000 00000000 00000002 00000006 00000000 00000000 00000000 00000000 00000002 00000007 00000000 00000000 00000000 00000000 00000002 00000008 00000000 00000000 00000000 00000000 00000002 0000000b 00000000 00000000 00000000 00000000
+    Plic (63696c50, 24 bytes): 0c000000 00000000 00600000 00000000 00000001 00000000
+    Seed (64656553, 32 bytes): 0aacc3b3 3bf46ee0 dd33a5aa 48f5badf 6b944dfe a51006fe 51688d9e b97b28f7
+    Time (656d6954, 8 bytes): 00989680 00000000
+asid: 9 bits
+Devices: 25 objects, all held by init
+Budgets: root 63732 pages (1193 kept for init), system 15634, users 46903
+W^X verified: 41 executable kernel pages, none writable under any alias
+Kernel RNG seeded from the loader (32 bytes)
+KMAIN (clean boot): Supervisor mode started...
+kernel: checks on (debug assertions, overflow checks)
+terminate_process: 376
+[!] Terminating process with PID 376
+[lifecycle] native server exit returns live lend and all child resources
+terminate_process: 418
+[!] Terminating process with PID 418
+[lifecycle] final thread_exit returns live lend and all child resources
+terminate_process: 35
+[!] Terminating process with PID 35
+[lifecycle] returning final worker returns live lend and all child resources
+[!] Terminating process with PID 337
+[lifecycle] caller death abandons once and discarded reply frees loan and call
+terminate_process: 267
+[!] Terminating process with PID 267
+[lifecycle] native caller process_exit abandons live lend without a stale PID
+[lifecycle] thread exit preserves siblings and returns same-process lend exactly
+terminate_process: 405
+[!] Terminating process with PID 405
+[lifecycle] whole-process exit cleans both sides of same-process loan
+terminate_process: 425
+[!] Terminating process with PID 425
+terminate_process: 463
+[!] Terminating process with PID 463
+terminate_process: 282
+[!] Terminating process with PID 282
+terminate_process: 508
+[!] Terminating process with PID 508
+terminate_process: 28
+[!] Terminating process with PID 28
+terminate_process: 231
+[!] Terminating process with PID 231
+terminate_process: 112
+[!] Terminating process with PID 112
+terminate_process: 5
+[!] Terminating process with PID 5
+terminate_process: 186
+[!] Terminating process with PID 186
+terminate_process: 168
+[!] Terminating process with PID 168
+terminate_process: 377
+[!] Terminating process with PID 377
+terminate_process: 223
+[!] Terminating process with PID 223
+terminate_process: 254
+[!] Terminating process with PID 254
+terminate_process: 373
+[!] Terminating process with PID 373
+terminate_process: 221
+[!] Terminating process with PID 221
+terminate_process: 408
+[!] Terminating process with PID 408
+terminate_process: 63
+[!] Terminating process with PID 63
+terminate_process: 375
+[!] Terminating process with PID 375
+terminate_process: 339
+[!] Terminating process with PID 339
+terminate_process: 282
+[!] Terminating process with PID 282
+terminate_process: 415
+[!] Terminating process with PID 415
+terminate_process: 170
+[!] Terminating process with PID 170
+terminate_process: 127
+[!] Terminating process with PID 127
+terminate_process: 13
+[!] Terminating process with PID 13
+terminate_process: 114
+[!] Terminating process with PID 114
+terminate_process: 460
+[!] Terminating process with PID 460
+terminate_process: 221
+[!] Terminating process with PID 221
+terminate_process: 511
+[!] Terminating process with PID 511
+terminate_process: 450
+[!] Terminating process with PID 450
+terminate_process: 285
+[!] Terminating process with PID 285
+terminate_process: 16
+[!] Terminating process with PID 16
+terminate_process: 484
+[!] Terminating process with PID 484
+terminate_process: 394
+[!] Terminating process with PID 394
+terminate_process: 267
+[!] Terminating process with PID 267
+terminate_process: 82
+[!] Terminating process with PID 82
+terminate_process: 256
+[!] Terminating process with PID 256
+terminate_process: 206
+[!] Terminating process with PID 206
+terminate_process: 134
+[!] Terminating process with PID 134
+terminate_process: 143
+[!] Terminating process with PID 143
+terminate_process: 411
+[!] Terminating process with PID 411
+terminate_process: 61
+[!] Terminating process with PID 61
+terminate_process: 496
+[!] Terminating process with PID 496
+terminate_process: 209
+[!] Terminating process with PID 209
+terminate_process: 232
+[!] Terminating process with PID 232
+terminate_process: 447
+[!] Terminating process with PID 447
+terminate_process: 386
+[!] Terminating process with PID 386
+terminate_process: 249
+[!] Terminating process with PID 249
+terminate_process: 235
+[!] Terminating process with PID 235
+terminate_process: 251
+[!] Terminating process with PID 251
+terminate_process: 328
+[!] Terminating process with PID 328
+terminate_process: 375
+[!] Terminating process with PID 375
+terminate_process: 233
+[!] Terminating process with PID 233
+terminate_process: 329
+[!] Terminating process with PID 329
+terminate_process: 34
+[!] Terminating process with PID 34
+terminate_process: 272
+[!] Terminating process with PID 272
+terminate_process: 89
+[!] Terminating process with PID 89
+terminate_process: 204
+[!] Terminating process with PID 204
+terminate_process: 7
+[!] Terminating process with PID 7
+terminate_process: 148
+[!] Terminating process with PID 148
+terminate_process: 342
+[!] Terminating process with PID 342
+terminate_process: 39
+[!] Terminating process with PID 39
+terminate_process: 443
+[!] Terminating process with PID 443
+terminate_process: 54
+[!] Terminating process with PID 54
+terminate_process: 241
+[!] Terminating process with PID 241
+terminate_process: 91
+[!] Terminating process with PID 91
+terminate_process: 434
+[!] Terminating process with PID 434
+terminate_process: 303
+[!] Terminating process with PID 303
+terminate_process: 396
+[!] Terminating process with PID 396
+terminate_process: 457
+[!] Terminating process with PID 457
+terminate_process: 265
+[!] Terminating process with PID 265
+terminate_process: 271
+[!] Terminating process with PID 271
+terminate_process: 266
+[!] Terminating process with PID 266
+terminate_process: 42
+[!] Terminating process with PID 42
+terminate_process: 418
+[!] Terminating process with PID 418
+terminate_process: 3
+[!] Terminating process with PID 3
+terminate_process: 73
+[!] Terminating process with PID 73
+terminate_process: 257
+[!] Terminating process with PID 257
+terminate_process: 155
+[!] Terminating process with PID 155
+terminate_process: 55
+[!] Terminating process with PID 55
+terminate_process: 497
+[!] Terminating process with PID 497
+terminate_process: 23
+[!] Terminating process with PID 23
+terminate_process: 210
+[!] Terminating process with PID 210
+terminate_process: 202
+[!] Terminating process with PID 202
+terminate_process: 167
+[!] Terminating process with PID 167
+terminate_process: 234
+[!] Terminating process with PID 234
+terminate_process: 59
+[!] Terminating process with PID 59
+terminate_process: 451
+[!] Terminating process with PID 451
+terminate_process: 401
+[!] Terminating process with PID 401
+terminate_process: 501
+[!] Terminating process with PID 501
+terminate_process: 93
+[!] Terminating process with PID 93
+terminate_process: 150
+[!] Terminating process with PID 150
+terminate_process: 31
+[!] Terminating process with PID 31
+terminate_process: 10
+[!] Terminating process with PID 10
+terminate_process: 3
+[!] Terminating process with PID 3
+terminate_process: 275
+[!] Terminating process with PID 275
+terminate_process: 149
+[!] Terminating process with PID 149
+terminate_process: 395
+[!] Terminating process with PID 395
+terminate_process: 347
+[!] Terminating process with PID 347
+terminate_process: 160
+[!] Terminating process with PID 160
+terminate_process: 152
+[!] Terminating process with PID 152
+terminate_process: 262
+[!] Terminating process with PID 262
+terminate_process: 360
+[!] Terminating process with PID 360
+terminate_process: 509
+[!] Terminating process with PID 509
+terminate_process: 442
+[!] Terminating process with PID 442
+terminate_process: 271
+[!] Terminating process with PID 271
+terminate_process: 352
+[!] Terminating process with PID 352
+terminate_process: 169
+[!] Terminating process with PID 169
+terminate_process: 113
+[!] Terminating process with PID 113
+terminate_process: 75
+[!] Terminating process with PID 75
+terminate_process: 224
+[!] Terminating process with PID 224
+terminate_process: 36
+[!] Terminating process with PID 36
+terminate_process: 117
+[!] Terminating process with PID 117
+terminate_process: 329
+[!] Terminating process with PID 329
+terminate_process: 503
+[!] Terminating process with PID 503
+terminate_process: 105
+[!] Terminating process with PID 105
+terminate_process: 341
+[!] Terminating process with PID 341
+terminate_process: 3
+[!] Terminating process with PID 3
+terminate_process: 496
+[!] Terminating process with PID 496
+terminate_process: 29
+[!] Terminating process with PID 29
+terminate_process: 65
+[!] Terminating process with PID 65
+terminate_process: 372
+[!] Terminating process with PID 372
+terminate_process: 361
+[!] Terminating process with PID 361
+terminate_process: 97
+[!] Terminating process with PID 97
+terminate_process: 460
+[!] Terminating process with PID 460
+terminate_process: 470
+[!] Terminating process with PID 470
+terminate_process: 467
+[!] Terminating process with PID 467
+terminate_process: 321
+[!] Terminating process with PID 321
+terminate_process: 328
+[!] Terminating process with PID 328
+terminate_process: 177
+[!] Terminating process with PID 177
+terminate_process: 8
+[!] Terminating process with PID 8
+terminate_process: 504
+[!] Terminating process with PID 504
+terminate_process: 151
+[!] Terminating process with PID 151
+terminate_process: 347
+[!] Terminating process with PID 347
+terminate_process: 469
+[!] Terminating process with PID 469
+terminate_process: 44
+[!] Terminating process with PID 44
+terminate_process: 439
+[!] Terminating process with PID 439
+terminate_process: 328
+[!] Terminating process with PID 328
+terminate_process: 50
+[!] Terminating process with PID 50
+terminate_process: 294
+[!] Terminating process with PID 294
+terminate_process: 44
+[!] Terminating process with PID 44
+terminate_process: 46
+[!] Terminating process with PID 46
+terminate_process: 484
+[!] Terminating process with PID 484
+terminate_process: 353
+[!] Terminating process with PID 353
+terminate_process: 193
+[!] Terminating process with PID 193
+terminate_process: 259
+[!] Terminating process with PID 259
+terminate_process: 6
+[!] Terminating process with PID 6
+terminate_process: 472
+[!] Terminating process with PID 472
+terminate_process: 171
+[!] Terminating process with PID 171
+terminate_process: 464
+[!] Terminating process with PID 464
+terminate_process: 84
+[!] Terminating process with PID 84
+terminate_process: 495
+[!] Terminating process with PID 495
+terminate_process: 81
+[!] Terminating process with PID 81
+terminate_process: 231
+[!] Terminating process with PID 231
+terminate_process: 198
+[!] Terminating process with PID 198
+terminate_process: 429
+[!] Terminating process with PID 429
+terminate_process: 334
+[!] Terminating process with PID 334
+terminate_process: 283
+[!] Terminating process with PID 283
+terminate_process: 261
+[!] Terminating process with PID 261
+terminate_process: 350
+[!] Terminating process with PID 350
+terminate_process: 308
+[!] Terminating process with PID 308
+terminate_process: 18
+[!] Terminating process with PID 18
+terminate_process: 280
+[!] Terminating process with PID 280
+terminate_process: 281
+[!] Terminating process with PID 281
+terminate_process: 387
+[!] Terminating process with PID 387
+terminate_process: 204
+[!] Terminating process with PID 204
+terminate_process: 307
+[!] Terminating process with PID 307
+terminate_process: 209
+[!] Terminating process with PID 209
+terminate_process: 410
+[!] Terminating process with PID 410
+terminate_process: 451
+[!] Terminating process with PID 451
+terminate_process: 66
+[!] Terminating process with PID 66
+terminate_process: 143
+[!] Terminating process with PID 143
+terminate_process: 223
+[!] Terminating process with PID 223
+terminate_process: 477
+[!] Terminating process with PID 477
+terminate_process: 191
+[!] Terminating process with PID 191
+terminate_process: 223
+[!] Terminating process with PID 223
+terminate_process: 461
+[!] Terminating process with PID 461
+terminate_process: 209
+[!] Terminating process with PID 209
+terminate_process: 217
+[!] Terminating process with PID 217
+terminate_process: 327
+[!] Terminating process with PID 327
+terminate_process: 171
+[!] Terminating process with PID 171
+terminate_process: 174
+[!] Terminating process with PID 174
+terminate_process: 405
+[!] Terminating process with PID 405
+terminate_process: 113
+[!] Terminating process with PID 113
+terminate_process: 301
+[!] Terminating process with PID 301
+terminate_process: 289
+[!] Terminating process with PID 289
+terminate_process: 289
+[!] Terminating process with PID 289
+terminate_process: 169
+[!] Terminating process with PID 169
+terminate_process: 251
+[!] Terminating process with PID 251
+terminate_process: 227
+[!] Terminating process with PID 227
+terminate_process: 304
+[!] Terminating process with PID 304
+terminate_process: 344
+[!] Terminating process with PID 344
+terminate_process: 483
+[!] Terminating process with PID 483
+terminate_process: 440
+[!] Terminating process with PID 440
+terminate_process: 394
+[!] Terminating process with PID 394
+terminate_process: 36
+[!] Terminating process with PID 36
+terminate_process: 364
+[!] Terminating process with PID 364
+terminate_process: 351
+[!] Terminating process with PID 351
+terminate_process: 430
+[!] Terminating process with PID 430
+terminate_process: 196
+[!] Terminating process with PID 196
+terminate_process: 126
+[!] Terminating process with PID 126
+terminate_process: 232
+[!] Terminating process with PID 232
+terminate_process: 58
+[!] Terminating process with PID 58
+terminate_process: 206
+[!] Terminating process with PID 206
+terminate_process: 285
+[!] Terminating process with PID 285
+terminate_process: 295
+[!] Terminating process with PID 295
+terminate_process: 50
+[!] Terminating process with PID 50
+terminate_process: 423
+[!] Terminating process with PID 423
+terminate_process: 467
+[!] Terminating process with PID 467
+terminate_process: 84
+[!] Terminating process with PID 84
+terminate_process: 508
+[!] Terminating process with PID 508
+terminate_process: 64
+[!] Terminating process with PID 64
+terminate_process: 47
+[!] Terminating process with PID 47
+terminate_process: 293
+[!] Terminating process with PID 293
+terminate_process: 94
+[!] Terminating process with PID 94
+terminate_process: 148
+[!] Terminating process with PID 148
+terminate_process: 267
+[!] Terminating process with PID 267
+terminate_process: 123
+[!] Terminating process with PID 123
+terminate_process: 32
+[!] Terminating process with PID 32
+terminate_process: 362
+[!] Terminating process with PID 362
+terminate_process: 82
+[!] Terminating process with PID 82
+terminate_process: 55
+[!] Terminating process with PID 55
+terminate_process: 32
+[!] Terminating process with PID 32
+terminate_process: 191
+[!] Terminating process with PID 191
+terminate_process: 126
+[!] Terminating process with PID 126
+terminate_process: 288
+[!] Terminating process with PID 288
+terminate_process: 238
+[!] Terminating process with PID 238
+terminate_process: 331
+[!] Terminating process with PID 331
+terminate_process: 188
+[!] Terminating process with PID 188
+terminate_process: 137
+[!] Terminating process with PID 137
+terminate_process: 473
+[!] Terminating process with PID 473
+terminate_process: 137
+[!] Terminating process with PID 137
+terminate_process: 196
+[!] Terminating process with PID 196
+terminate_process: 252
+[!] Terminating process with PID 252
+terminate_process: 496
+[!] Terminating process with PID 496
+terminate_process: 168
+[!] Terminating process with PID 168
+terminate_process: 400
+[!] Terminating process with PID 400
+terminate_process: 440
+[!] Terminating process with PID 440
+terminate_process: 288
+[!] Terminating process with PID 288
+terminate_process: 146
+[!] Terminating process with PID 146
+terminate_process: 346
+[!] Terminating process with PID 346
+terminate_process: 327
+[!] Terminating process with PID 327
+terminate_process: 495
+[!] Terminating process with PID 495
+terminate_process: 481
+[!] Terminating process with PID 481
+terminate_process: 463
+[!] Terminating process with PID 463
+terminate_process: 327
+[!] Terminating process with PID 327
+terminate_process: 94
+[!] Terminating process with PID 94
+terminate_process: 18
+[!] Terminating process with PID 18
+terminate_process: 470
+[!] Terminating process with PID 470
+terminate_process: 396
+[!] Terminating process with PID 396
+terminate_process: 151
+[!] Terminating process with PID 151
+terminate_process: 430
+[!] Terminating process with PID 430
+terminate_process: 15
+[!] Terminating process with PID 15
+terminate_process: 381
+[!] Terminating process with PID 381
+terminate_process: 186
+[!] Terminating process with PID 186
+terminate_process: 101
+[!] Terminating process with PID 101
+terminate_process: 213
+[!] Terminating process with PID 213
+terminate_process: 315
+[!] Terminating process with PID 315
+terminate_process: 441
+[!] Terminating process with PID 441
+terminate_process: 23
+[!] Terminating process with PID 23
+terminate_process: 390
+[!] Terminating process with PID 390
+terminate_process: 90
+[!] Terminating process with PID 90
+terminate_process: 369
+[!] Terminating process with PID 369
+terminate_process: 285
+[!] Terminating process with PID 285
+terminate_process: 341
+[!] Terminating process with PID 341
+terminate_process: 88
+[!] Terminating process with PID 88
+terminate_process: 164
+[!] Terminating process with PID 164
+terminate_process: 202
+[!] Terminating process with PID 202
+terminate_process: 52
+[!] Terminating process with PID 52
+terminate_process: 119
+[!] Terminating process with PID 119
+terminate_process: 34
+[!] Terminating process with PID 34
+terminate_process: 433
+[!] Terminating process with PID 433
+terminate_process: 492
+[!] Terminating process with PID 492
+terminate_process: 463
+[!] Terminating process with PID 463
+terminate_process: 289
+[!] Terminating process with PID 289
+terminate_process: 193
+[!] Terminating process with PID 193
+terminate_process: 55
+[!] Terminating process with PID 55
+terminate_process: 173
+[!] Terminating process with PID 173
+terminate_process: 117
+[!] Terminating process with PID 117
+terminate_process: 253
+[!] Terminating process with PID 253
+terminate_process: 508
+[!] Terminating process with PID 508
+terminate_process: 72
+[!] Terminating process with PID 72
+terminate_process: 271
+[!] Terminating process with PID 271
+terminate_process: 8
+[!] Terminating process with PID 8
+terminate_process: 234
+[!] Terminating process with PID 234
+terminate_process: 4
+[!] Terminating process with PID 4
+terminate_process: 268
+[!] Terminating process with PID 268
+terminate_process: 396
+[!] Terminating process with PID 396
+terminate_process: 307
+[!] Terminating process with PID 307
+terminate_process: 225
+[!] Terminating process with PID 225
+terminate_process: 418
+[!] Terminating process with PID 418
+terminate_process: 386
+[!] Terminating process with PID 386
+terminate_process: 499
+[!] Terminating process with PID 499
+terminate_process: 203
+[!] Terminating process with PID 203
+terminate_process: 134
+[!] Terminating process with PID 134
+terminate_process: 115
+[!] Terminating process with PID 115
+terminate_process: 205
+[!] Terminating process with PID 205
+terminate_process: 6
+[!] Terminating process with PID 6
+terminate_process: 450
+[!] Terminating process with PID 450
+terminate_process: 457
+[!] Terminating process with PID 457
+terminate_process: 266
+[!] Terminating process with PID 266
+terminate_process: 507
+[!] Terminating process with PID 507
+terminate_process: 260
+[!] Terminating process with PID 260
+terminate_process: 485
+[!] Terminating process with PID 485
+terminate_process: 321
+[!] Terminating process with PID 321
+terminate_process: 224
+[!] Terminating process with PID 224
+terminate_process: 176
+[!] Terminating process with PID 176
+terminate_process: 498
+[!] Terminating process with PID 498
+terminate_process: 344
+[!] Terminating process with PID 344
+terminate_process: 485
+[!] Terminating process with PID 485
+terminate_process: 57
+[!] Terminating process with PID 57
+terminate_process: 235
+[!] Terminating process with PID 235
+terminate_process: 370
+[!] Terminating process with PID 370
+terminate_process: 104
+[!] Terminating process with PID 104
+terminate_process: 314
+[!] Terminating process with PID 314
+terminate_process: 492
+[!] Terminating process with PID 492
+terminate_process: 89
+[!] Terminating process with PID 89
+terminate_process: 410
+[!] Terminating process with PID 410
+terminate_process: 9
+[!] Terminating process with PID 9
+terminate_process: 169
+[!] Terminating process with PID 169
+terminate_process: 370
+[!] Terminating process with PID 370
+terminate_process: 56
+[!] Terminating process with PID 56
+terminate_process: 273
+[!] Terminating process with PID 273
+terminate_process: 162
+[!] Terminating process with PID 162
+terminate_process: 291
+[!] Terminating process with PID 291
+terminate_process: 360
+[!] Terminating process with PID 360
+terminate_process: 139
+[!] Terminating process with PID 139
+terminate_process: 114
+[!] Terminating process with PID 114
+terminate_process: 185
+[!] Terminating process with PID 185
+terminate_process: 75
+[!] Terminating process with PID 75
+terminate_process: 114
+[!] Terminating process with PID 114
+terminate_process: 363
+[!] Terminating process with PID 363
+terminate_process: 155
+[!] Terminating process with PID 155
+terminate_process: 127
+[!] Terminating process with PID 127
+terminate_process: 94
+[!] Terminating process with PID 94
+terminate_process: 27
+[!] Terminating process with PID 27
+terminate_process: 290
+[!] Terminating process with PID 290
+terminate_process: 378
+[!] Terminating process with PID 378
+terminate_process: 354
+[!] Terminating process with PID 354
+terminate_process: 176
+[!] Terminating process with PID 176
+terminate_process: 504
+[!] Terminating process with PID 504
+terminate_process: 356
+[!] Terminating process with PID 356
+terminate_process: 396
+[!] Terminating process with PID 396
+terminate_process: 126
+[!] Terminating process with PID 126
+terminate_process: 159
+[!] Terminating process with PID 159
+terminate_process: 306
+[!] Terminating process with PID 306
+terminate_process: 53
+[!] Terminating process with PID 53
+terminate_process: 79
+[!] Terminating process with PID 79
+terminate_process: 348
+[!] Terminating process with PID 348
+terminate_process: 343
+[!] Terminating process with PID 343
+terminate_process: 225
+[!] Terminating process with PID 225
+terminate_process: 117
+[!] Terminating process with PID 117
+terminate_process: 121
+[!] Terminating process with PID 121
+terminate_process: 293
+[!] Terminating process with PID 293
+terminate_process: 98
+[!] Terminating process with PID 98
+terminate_process: 41
+[!] Terminating process with PID 41
+terminate_process: 39
+[!] Terminating process with PID 39
+terminate_process: 43
+[!] Terminating process with PID 43
+terminate_process: 364
+[!] Terminating process with PID 364
+terminate_process: 269
+[!] Terminating process with PID 269
+terminate_process: 259
+[!] Terminating process with PID 259
+terminate_process: 507
+[!] Terminating process with PID 507
+terminate_process: 69
+[!] Terminating process with PID 69
+terminate_process: 366
+[!] Terminating process with PID 366
+terminate_process: 55
+[!] Terminating process with PID 55
+terminate_process: 120
+[!] Terminating process with PID 120
+terminate_process: 449
+[!] Terminating process with PID 449
+terminate_process: 57
+[!] Terminating process with PID 57
+terminate_process: 460
+[!] Terminating process with PID 460
+terminate_process: 375
+[!] Terminating process with PID 375
+terminate_process: 426
+[!] Terminating process with PID 426
+terminate_process: 254
+[!] Terminating process with PID 254
+terminate_process: 73
+[!] Terminating process with PID 73
+terminate_process: 154
+[!] Terminating process with PID 154
+terminate_process: 436
+[!] Terminating process with PID 436
+terminate_process: 155
+[!] Terminating process with PID 155
+terminate_process: 270
+[!] Terminating process with PID 270
+terminate_process: 492
+[!] Terminating process with PID 492
+terminate_process: 83
+[!] Terminating process with PID 83
+terminate_process: 226
+[!] Terminating process with PID 226
+terminate_process: 258
+[!] Terminating process with PID 258
+terminate_process: 292
+[!] Terminating process with PID 292
+terminate_process: 186
+[!] Terminating process with PID 186
+terminate_process: 502
+[!] Terminating process with PID 502
+terminate_process: 158
+[!] Terminating process with PID 158
+terminate_process: 261
+[!] Terminating process with PID 261
+terminate_process: 91
+[!] Terminating process with PID 91
+terminate_process: 307
+[!] Terminating process with PID 307
+terminate_process: 310
+[!] Terminating process with PID 310
+terminate_process: 307
+[!] Terminating process with PID 307
+terminate_process: 166
+[!] Terminating process with PID 166
+terminate_process: 400
+[!] Terminating process with PID 400
+terminate_process: 264
+[!] Terminating process with PID 264
+terminate_process: 95
+[!] Terminating process with PID 95
+terminate_process: 390
+[!] Terminating process with PID 390
+terminate_process: 437
+[!] Terminating process with PID 437
+terminate_process: 321
+[!] Terminating process with PID 321
+terminate_process: 186
+[!] Terminating process with PID 186
+terminate_process: 363
+[!] Terminating process with PID 363
+terminate_process: 344
+[!] Terminating process with PID 344
+terminate_process: 295
+[!] Terminating process with PID 295
+terminate_process: 5
+[!] Terminating process with PID 5
+terminate_process: 40
+[!] Terminating process with PID 40
+terminate_process: 286
+[!] Terminating process with PID 286
+terminate_process: 78
+[!] Terminating process with PID 78
+terminate_process: 428
+[!] Terminating process with PID 428
+terminate_process: 174
+[!] Terminating process with PID 174
+terminate_process: 130
+[!] Terminating process with PID 130
+terminate_process: 384
+[!] Terminating process with PID 384
+terminate_process: 290
+[!] Terminating process with PID 290
+terminate_process: 109
+[!] Terminating process with PID 109
+terminate_process: 303
+[!] Terminating process with PID 303
+terminate_process: 468
+[!] Terminating process with PID 468
+terminate_process: 290
+[!] Terminating process with PID 290
+terminate_process: 452
+[!] Terminating process with PID 452
+terminate_process: 483
+[!] Terminating process with PID 483
+terminate_process: 397
+[!] Terminating process with PID 397
+terminate_process: 34
+[!] Terminating process with PID 34
+terminate_process: 344
+[!] Terminating process with PID 344
+terminate_process: 17
+[!] Terminating process with PID 17
+terminate_process: 172
+[!] Terminating process with PID 172
+terminate_process: 380
+[!] Terminating process with PID 380
+terminate_process: 3
+[!] Terminating process with PID 3
+terminate_process: 238
+[!] Terminating process with PID 238
+terminate_process: 478
+[!] Terminating process with PID 478
+terminate_process: 245
+[!] Terminating process with PID 245
+terminate_process: 260
+[!] Terminating process with PID 260
+terminate_process: 168
+[!] Terminating process with PID 168
+terminate_process: 7
+[!] Terminating process with PID 7
+terminate_process: 132
+[!] Terminating process with PID 132
+terminate_process: 413
+[!] Terminating process with PID 413
+terminate_process: 136
+[!] Terminating process with PID 136
+terminate_process: 132
+[!] Terminating process with PID 132
+terminate_process: 248
+[!] Terminating process with PID 248
+terminate_process: 194
+[!] Terminating process with PID 194
+terminate_process: 278
+[!] Terminating process with PID 278
+terminate_process: 67
+[!] Terminating process with PID 67
+terminate_process: 67
+[!] Terminating process with PID 67
+terminate_process: 460
+[!] Terminating process with PID 460
+terminate_process: 509
+[!] Terminating process with PID 509
+terminate_process: 500
+[!] Terminating process with PID 500
+terminate_process: 315
+[!] Terminating process with PID 315
+terminate_process: 408
+[!] Terminating process with PID 408
+terminate_process: 206
+[!] Terminating process with PID 206
+terminate_process: 82
+[!] Terminating process with PID 82
+terminate_process: 148
+[!] Terminating process with PID 148
+terminate_process: 303
+[!] Terminating process with PID 303
+terminate_process: 136
+[!] Terminating process with PID 136
+terminate_process: 248
+[!] Terminating process with PID 248
+terminate_process: 208
+[!] Terminating process with PID 208
+terminate_process: 221
+[!] Terminating process with PID 221
+terminate_process: 244
+[!] Terminating process with PID 244
+terminate_process: 511
+[!] Terminating process with PID 511
+terminate_process: 457
+[!] Terminating process with PID 457
+terminate_process: 447
+[!] Terminating process with PID 447
+terminate_process: 383
+[!] Terminating process with PID 383
+terminate_process: 477
+[!] Terminating process with PID 477
+terminate_process: 129
+[!] Terminating process with PID 129
+terminate_process: 476
+[!] Terminating process with PID 476
+terminate_process: 256
+[!] Terminating process with PID 256
+terminate_process: 288
+[!] Terminating process with PID 288
+terminate_process: 295
+[!] Terminating process with PID 295
+terminate_process: 286
+[!] Terminating process with PID 286
+terminate_process: 349
+[!] Terminating process with PID 349
+terminate_process: 455
+[!] Terminating process with PID 455
+terminate_process: 446
+[!] Terminating process with PID 446
+terminate_process: 340
+[!] Terminating process with PID 340
+terminate_process: 382
+[!] Terminating process with PID 382
+terminate_process: 347
+[!] Terminating process with PID 347
+terminate_process: 108
+[!] Terminating process with PID 108
+terminate_process: 267
+[!] Terminating process with PID 267
+terminate_process: 264
+[!] Terminating process with PID 264
+terminate_process: 228
+[!] Terminating process with PID 228
+terminate_process: 118
+[!] Terminating process with PID 118
+terminate_process: 316
+[!] Terminating process with PID 316
+terminate_process: 338
+[!] Terminating process with PID 338
+terminate_process: 431
+[!] Terminating process with PID 431
+terminate_process: 185
+[!] Terminating process with PID 185
+terminate_process: 301
+[!] Terminating process with PID 301
+terminate_process: 442
+[!] Terminating process with PID 442
+terminate_process: 436
+[!] Terminating process with PID 436
+terminate_process: 229
+[!] Terminating process with PID 229
+terminate_process: 66
+[!] Terminating process with PID 66
+terminate_process: 104
+[!] Terminating process with PID 104
+terminate_process: 217
+[!] Terminating process with PID 217
+terminate_process: 410
+[!] Terminating process with PID 410
+terminate_process: 352
+[!] Terminating process with PID 352
+terminate_process: 93
+[!] Terminating process with PID 93
+terminate_process: 422
+[!] Terminating process with PID 422
+terminate_process: 470
+[!] Terminating process with PID 470
+terminate_process: 75
+[!] Terminating process with PID 75
+terminate_process: 72
+[!] Terminating process with PID 72
+terminate_process: 338
+[!] Terminating process with PID 338
+terminate_process: 374
+[!] Terminating process with PID 374
+terminate_process: 35
+[!] Terminating process with PID 35
+terminate_process: 403
+[!] Terminating process with PID 403
+terminate_process: 412
+[!] Terminating process with PID 412
+terminate_process: 505
+[!] Terminating process with PID 505
+terminate_process: 93
+[!] Terminating process with PID 93
+terminate_process: 466
+[!] Terminating process with PID 466
+terminate_process: 364
+[!] Terminating process with PID 364
+terminate_process: 46
+[!] Terminating process with PID 46
+terminate_process: 209
+[!] Terminating process with PID 209
+terminate_process: 456
+[!] Terminating process with PID 456
+terminate_process: 222
+[!] Terminating process with PID 222
+terminate_process: 226
+[!] Terminating process with PID 226
+terminate_process: 15
+[!] Terminating process with PID 15
+terminate_process: 171
+[!] Terminating process with PID 171
+terminate_process: 449
+[!] Terminating process with PID 449
+terminate_process: 507
+[!] Terminating process with PID 507
+terminate_process: 101
+[!] Terminating process with PID 101
+terminate_process: 177
+[!] Terminating process with PID 177
+terminate_process: 422
+[!] Terminating process with PID 422
+terminate_process: 131
+[!] Terminating process with PID 131
+terminate_process: 385
+[!] Terminating process with PID 385
+terminate_process: 5
+[!] Terminating process with PID 5
+terminate_process: 13
+[!] Terminating process with PID 13
+terminate_process: 206
+[!] Terminating process with PID 206
+terminate_process: 419
+[!] Terminating process with PID 419
+terminate_process: 50
+[!] Terminating process with PID 50
+terminate_process: 164
+[!] Terminating process with PID 164
+terminate_process: 141
+[!] Terminating process with PID 141
+[lifecycle] 520 exits restore exact budgets and reuse freed PIDs
+system_reset: PowerOff asked for by PID 2

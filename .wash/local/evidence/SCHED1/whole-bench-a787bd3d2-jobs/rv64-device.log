@@ -1,0 +1,6 @@
+PASS  bench-virtio-devices [rv64, smp=1]   0.1s
+PASS  device-exec-refused [rv64, smp=1]   0.6s
+PASS  device-info-attack [rv64, smp=1]   0.5s
+PASS  device [rv64, smp=1]               0.5s
+PASS  init-refuses-device-dma [rv64, smp=1]   0.1s
+PASS  init-refuses-device-unmatched [rv64, smp=1]   0.1s

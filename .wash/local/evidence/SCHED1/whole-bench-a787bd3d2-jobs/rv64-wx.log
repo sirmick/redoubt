@@ -1,0 +1,2 @@
+PASS  kernel-wx [rv64, smp=1]            0.2s
+PASS  wx [rv64, smp=1]                   0.6s
