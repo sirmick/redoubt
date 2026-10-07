@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 312
+revision = 313
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -961,8 +961,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["SCHED1"]
   body = "SCHED1's release measurement (.wash/local/evidence/SCHED1/five-cases/RESULTS.md): a slice end costs ~0.36 ms rv64 / ~0.45 ms rv32 of kernel time, linear in the queued budgets L (~28 us per budget in release), against docs/kernel/scheduling.md's claims (K22's reconcile visits only the budgets that changed; R12's kernel-time text). Attributed (reconcile-finding.md): Queue::raise_floor's unconditional walks reading every queued budget's 7-word State through checked frame reads, 4-9 walks per slice end; not settle/ready_count. Brief: .wash/local/RECON1-brief.md (architect-15). Tier A kernel (libs/stride's Queue, sched.rs's state cache), size S. Fix: raise_floor only when the floor can rise; (pass, tie) cached in the queue's slots, audited against the frame in the checked build. Gate: under 3 us per queued budget per slice end in release, the fixed L=0 term (100-155 us: traps, two SBI ecalls) unchanged and not this package's; sched-large-weight's useful work at 1 ms within 0.85 of 10 ms both widths. Needs SCHED1 (owner's option (b): SCHED1 merges first with the cost a residual; RECON1 next, replacing its sentence)."
-  state = "reported"
-  revision = 291
+  state = "done"
+  revision = 313
 
 [[node]]
   id = "B11"

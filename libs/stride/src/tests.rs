@@ -206,14 +206,14 @@ fn ranks_follow_all_four_clauses() {
     let mut q: Queue<u64, 8> = Queue::new();
     // Clause 3: wakes in one reconcile run lowest id first.
     reconcile(&mut q, &mut bs, None, &[3, 1, 2]);
-    assert_eq!(q.pick(&bs, |_| false), Some(1));
+    assert_eq!(q.pick(|_| false), Some(1));
     // Budget 1 runs a slice and is requeued; its pass is now higher, so 2 is next.
     q.fold(&mut bs, 1, 100);
     q.deschedule(&mut bs, 1, true);
-    assert_eq!(q.pick(&bs, |_| false), Some(2));
+    assert_eq!(q.pick(|_| false), Some(2));
     // Clause 2: a later reconcile's wake at the same pass (the floor) goes ahead of earlier ones.
     reconcile(&mut q, &mut bs, None, &[1, 2, 3, 4]);
-    assert_eq!(q.pick(&bs, |_| false), Some(4));
+    assert_eq!(q.pick(|_| false), Some(4));
     // Clause 1 and 4: requeued budgets at an equal pass go behind wakers, in FIFO order.
     q.fold(&mut bs, 4, 0);
     q.deschedule(&mut bs, 4, true);
@@ -225,7 +225,7 @@ fn ranks_follow_all_four_clauses() {
     reconcile(&mut q, &mut bs, None, &[1, 2, 3, 4, 5]);
     let order: Vec<u64> = (0..4)
         .map(|_| {
-            let b = q.pick(&bs, |_| false).unwrap();
+            let b = q.pick(|_| false).unwrap();
             q.fold(&mut bs, b, 1000);
             q.deschedule(&mut bs, b, true);
             b
@@ -397,6 +397,98 @@ fn a_reconcile_visits_only_the_budgets_it_is_given() {
     assert!(!q.contains(1) && q.contains(2));
 }
 
+/// A [`Map`] that counts its state reads: what the kernel's checked frame reads cost.
+#[derive(Default)]
+struct Reads(Map, core::cell::Cell<u64>);
+
+impl Reads {
+    fn taken(&self) -> u64 { self.1.take() }
+}
+
+impl Budgets<u64> for Reads {
+    fn state(&self, b: u64) -> State {
+        self.1.set(self.1.get() + 1);
+        self.0.state(b)
+    }
+
+    fn set_state(&mut self, b: u64, s: State) { self.0.set_state(b, s) }
+
+    fn id(&self, b: u64) -> u64 { b }
+
+    fn weight(&self, b: u64) -> u64 { self.0.weight(b) }
+}
+
+/// A queue of `n` budgets, 1 to `n`, all woken in one reconcile, with budget 1 ahead.
+fn woken(n: u64) -> (Reads, Queue<u64, 64>) {
+    let ids: Vec<u64> = (1..=n).collect();
+    let mut bs = Reads(map(&ids), Default::default());
+    let mut q: Queue<u64, 64> = Queue::new();
+    reconcile(&mut q, &mut bs, None, &ids);
+    bs.taken();
+    (bs, q)
+}
+
+#[test]
+fn a_slice_end_reads_no_more_states_for_a_longer_queue() {
+    // The floor and the pick read the ranks the queue keeps beside its slots, so a slice end (a
+    // fold and a requeue of the running budget, a reconcile that moved nothing, a pick) reads one
+    // state for the fold and one for the requeue, whatever the queue holds. The floor moves only
+    // when the budget at it is charged or leaves, and then from the ranks: no state read.
+    let reads = |n: u64| {
+        let (mut bs, mut q) = woken(n);
+        let b = q.pick(|_| false).unwrap();
+        assert_eq!(bs.taken(), 0, "pick");
+        q.fold(&mut bs, b, 100);
+        let fold = bs.taken();
+        q.deschedule(&mut bs, b, true);
+        let requeue = bs.taken();
+        q.reconcile(&mut bs, |_| false, &[], &mut [], |_, _| true);
+        let reconcile = bs.taken();
+        q.pick(|_| false).unwrap();
+        assert_eq!(bs.taken(), 0, "pick");
+        assert!(q.floor > 0 || n > 1, "the floor rose with the one budget's charge");
+        (fold, requeue, reconcile)
+    };
+    assert_eq!(reads(1), (1, 1, 0));
+    assert_eq!(reads(40), reads(1));
+    // A budget that leaves at the floor raises it from the ranks, with its own state read only.
+    let (mut bs, mut q) = woken(40);
+    let b = q.pick(|_| false).unwrap();
+    q.deschedule(&mut bs, b, false);
+    assert_eq!(bs.taken(), 1);
+    assert!(!q.contains(b));
+}
+
+#[test]
+fn a_rank_out_of_step_with_its_frame_trips_the_audit() {
+    let (mut bs, mut q) = woken(3);
+    for b in 1..=3 {
+        q.fold(&mut bs, b, 10 * b);
+        q.deschedule(&mut bs, b, true);
+    }
+    assert_eq!(q.audit(&bs), Ok(()));
+    // A frame written behind the queue's back: its pass, then its tie, then its queued flag.
+    let mut s = bs.state(2);
+    s.pass += 1;
+    bs.set_state(2, s);
+    assert_eq!(q.audit(&bs), Err(2));
+    s.pass -= 1;
+    s.tie += 1;
+    bs.set_state(2, s);
+    assert_eq!(q.audit(&bs), Err(2));
+    s.tie -= 1;
+    s.queued = false;
+    bs.set_state(2, s);
+    assert_eq!(q.audit(&bs), Err(2));
+    s.queued = true;
+    bs.set_state(2, s);
+    assert_eq!(q.audit(&bs), Ok(()));
+    // A floor left below the minimum (budget 1, charged least): a raise missed.
+    assert_eq!(q.floor, bs.state(1).pass);
+    q.floor -= 1;
+    assert_eq!(q.audit(&bs), Err(1));
+}
+
 /// Budgets with their ready-thread counts, and the processes (slots) in them: `(ready threads,
 /// budget)`.
 #[derive(Default)]
@@ -474,7 +566,7 @@ fn a_missed_mark_trips_the_audit() {
         q.reconcile(bs, |_| false, lost, gained, |bs, b| bs.ready(b) > 0);
         assert_eq!(marks.check_visited(bs, |_| false), Ok(()));
         marks.clear();
-        let idle = q.pick(bs, |_| false).is_none();
+        let idle = q.pick(|_| false).is_none();
         marks.audit_due(t, EVERY, idle).then(|| marks.audit(bs, q, |_| false, 0..4, now))
     };
     bs.slots[0] = (1, Some(1));
@@ -597,6 +689,7 @@ fn the_marked_reconcile_matches_a_full_one() {
                     .collect();
                 reconcile(&mut fq, &mut full, None, &runnable);
                 assert_eq!(marks.audit(&bs, &q, |_| false, 0..8, now), Ok(()), "step {step}");
+                assert_eq!((q.audit(&bs), fq.audit(&full)), (Ok(()), Ok(())), "step {step} ranks");
                 for b in ids {
                     assert_eq!(bs.state(b), full.state(b), "step {step} budget {b}");
                 }
@@ -604,14 +697,18 @@ fn the_marked_reconcile_matches_a_full_one() {
             }
             _ => {
                 // The lowest-ranked runs and is requeued if it still has a ready thread.
-                if let Some(b) = q.pick(&bs, |_| false) {
-                    assert_eq!(fq.pick(&full, |_| false), Some(b), "step {step}");
+                if let Some(b) = q.pick(|_| false) {
+                    assert_eq!(fq.pick(|_| false), Some(b), "step {step}");
                     let t = rng.range(1, 1000);
                     let still = bs.ready(b) > 0;
                     q.fold(&mut bs, b, t);
+                    assert_eq!(q.audit(&bs), Ok(()), "step {step} fold");
                     q.deschedule(&mut bs, b, still);
+                    assert_eq!(q.audit(&bs), Ok(()), "step {step} deschedule");
                     fq.fold(&mut full, b, t);
+                    assert_eq!(fq.audit(&full), Ok(()), "step {step} full fold");
                     fq.deschedule(&mut full, b, still);
+                    assert_eq!(fq.audit(&full), Ok(()), "step {step} full deschedule");
                 }
             }
         }

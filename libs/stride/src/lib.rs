@@ -187,7 +187,17 @@ pub struct Queue<B, const N: usize> {
     /// the last into the gap, so every scan visits only queued budgets. The pick is a minimum over
     /// a total order, so no order is needed.
     slots: [Option<B>; N],
+    /// Beside each slot, the budget's rank as its frame holds it: what the floor and the pick read,
+    /// so neither reads a frame. Written wherever the queue changes a queued budget's pass or tie
+    /// (a charge, a requeue, a wake, a rescale, a lift). The frame stays the authority: a checked
+    /// kernel audits the ranks against it ([`Queue::audit`]).
+    ranks: [Rank; N],
     len: usize,
+    /// Whether the minimum queued pass may have risen above the floor since it was last raised: a
+    /// budget at the floor left or its pass rose. The floor is raised at the end of the next
+    /// charge, deschedule, reconcile or destruction, as the rules have it (a weight change alone
+    /// does not raise it), and only then.
+    pending: bool,
 }
 
 impl<B: Copy + PartialEq, const N: usize> Default for Queue<B, N> {
@@ -195,42 +205,54 @@ impl<B: Copy + PartialEq, const N: usize> Default for Queue<B, N> {
 }
 
 impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
-    pub const fn new() -> Self { Queue { floor: 0, front: 0, back: 0, slots: [None; N], len: 0 } }
+    pub const fn new() -> Self {
+        Queue {
+            floor: 0,
+            front: 0,
+            back: 0,
+            slots: [None; N],
+            ranks: [Rank { pass: 0, tie: 0, id: 0 }; N],
+            len: 0,
+            pending: false,
+        }
+    }
 
     /// The queued budgets, in no order.
     pub fn queued(&self) -> impl Iterator<Item = B> + '_ { self.slots[..self.len].iter().flatten().copied() }
 
-    pub fn contains(&self, b: B) -> bool { self.slots[..self.len].contains(&Some(b)) }
+    pub fn contains(&self, b: B) -> bool { self.slot_of(b).is_some() }
 
     pub fn is_empty(&self) -> bool { self.len == 0 }
 
-    /// Whether `b` is queued now. A queued budget has a runnable thread, so there are never more
-    /// than there are processes, and `N` is the process count: a full queue is a broken invariant,
-    /// and `b` is then left out rather than anything stopping.
-    fn insert(&mut self, b: B) -> bool { self.contains(b) || self.push(b) }
+    /// `b`'s slot, if it is queued: a scan of the slots, no frame read.
+    fn slot_of(&self, b: B) -> Option<usize> { self.slots[..self.len].iter().position(|s| *s == Some(b)) }
 
-    /// Queue `b`, known not to be queued (its state says so: a reconcile's wakes, with no search).
-    /// False for a full queue, as [`Queue::insert`].
-    fn push(&mut self, b: B) -> bool {
+    /// Queue `b` with `id`, known not to be queued (its state says so: a reconcile's wakes, with
+    /// no search), at the slot returned; its rank is the caller's to write. A queued budget has a
+    /// runnable thread, so there are never more than there are processes, and `N` is the process
+    /// count: a full queue is a broken invariant, and `b` is then left out (`None`) rather than
+    /// anything stopping.
+    fn push(&mut self, b: B, id: u64) -> Option<usize> {
         if self.len == N {
             debug_assert!(false, "stride queue full");
-            return false;
+            return None;
         }
-        self.slots[self.len] = Some(b);
+        let i = self.len;
+        self.slots[i] = Some(b);
+        self.ranks[i] = Rank { pass: 0, tie: 0, id };
         self.len += 1;
-        true
+        Some(i)
     }
 
-    fn take_out(&mut self, b: B) {
-        if let Some(i) = self.slots[..self.len].iter().position(|s| *s == Some(b)) {
-            self.remove_at(i);
-        }
-    }
-
-    /// Take out the budget at `slots[i]`, moving the last into its place.
+    /// Take out the budget at `slots[i]`, moving the last into its place. One at the floor may
+    /// have held the minimum: the floor is raised at the end of the operation (a reconcile's
+    /// leaves are one step, and the floor is their result, whatever their order: when they empty
+    /// the queue it holds).
     fn remove_at(&mut self, i: usize) {
+        self.pending |= self.at_floor(i);
         self.len -= 1;
         self.slots[i] = self.slots[self.len];
+        self.ranks[i] = self.ranks[self.len];
         self.slots[self.len] = None;
     }
 
@@ -241,10 +263,35 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         }
     }
 
-    /// Raise the floor to the queue's minimum pass. It never falls.
-    pub fn raise_floor(&mut self, bs: &impl Budgets<B>) {
-        if let Some(min) = self.queued().map(|b| bs.state(b).pass).min() {
+    /// Whether the budget at `slots[i]` may hold the minimum pass: the floor is the minimum queued
+    /// pass once raised, and a pass is never set below the floor, so a budget above the floor is
+    /// not the minimum, and only one at the floor can move it by leaving or being charged.
+    fn at_floor(&self, i: usize) -> bool { self.ranks[i].pass <= self.floor }
+
+    /// Raise the floor to the queue's minimum pass, from the ranks, if the minimum may have risen
+    /// since it was last raised. It never falls. A slice end at which no budget at the floor left
+    /// or was charged compares nothing.
+    fn raise_floor(&mut self) {
+        if !self.pending {
+            return;
+        }
+        self.pending = false;
+        if let Some(min) = self.ranks[..self.len].iter().map(|r| r.pass).min() {
             self.floor = self.floor.max(min);
+        }
+    }
+
+    /// `b`'s pass or tie is now `s`'s (its frame already written): a queued budget's rank follows,
+    /// and a pass risen from the floor leaves the floor to be raised. Nothing for a budget not
+    /// queued.
+    fn recorded(&mut self, b: B, s: &State) {
+        if !s.queued {
+            return;
+        }
+        if let Some(i) = self.slot_of(b) {
+            self.pending |= self.at_floor(i) && s.pass > self.ranks[i].pass;
+            self.ranks[i].pass = s.pass;
+            self.ranks[i].tie = s.tie;
         }
     }
 
@@ -253,30 +300,34 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         let mut s = bs.state(b);
         charge(&mut s, bs.weight(b), runtime);
         bs.set_state(b, s);
-        self.raise_floor(bs);
+        self.recorded(b, &s);
+        self.raise_floor();
     }
 
     /// `b` was taken off the CPU (its runtime already folded). Still runnable, it is requeued
     /// behind its equals; otherwise it leaves the queue.
     pub fn deschedule(&mut self, bs: &mut impl Budgets<B>, b: B, still_runnable: bool) {
         let mut s = bs.state(b);
-        let was = self.contains(b);
-        let requeued = still_runnable && self.insert(b);
-        if requeued {
+        let was = self.slot_of(b);
+        let requeued = if still_runnable { was.or_else(|| self.push(b, bs.id(b))) } else { None };
+        if let Some(i) = requeued {
             self.back = self.back.saturating_add(1);
             s.tie = self.back;
             s.queued = true;
+            self.ranks[i] = Rank { pass: s.pass, tie: s.tie, id: bs.id(b) };
         } else {
             s.queued = false;
-            self.take_out(b);
+            if let Some(i) = was {
+                self.remove_at(i);
+            }
         }
         bs.set_state(b, s);
-        if requeued {
+        if requeued.is_some() {
             bs.requeued(b);
-        } else if was {
+        } else if was.is_some() {
             bs.left(b);
         }
-        self.raise_floor(bs);
+        self.raise_floor();
         self.reset_if_empty();
     }
 
@@ -296,7 +347,6 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         gained: &mut [B],
         runnable: impl Fn(&S, B) -> bool,
     ) {
-        let mut left = false;
         for &b in lost {
             if running(b) || !bs.live(b) {
                 continue;
@@ -308,20 +358,17 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             s.queued = false;
             bs.set_state(b, s);
             bs.left(b);
-            left = true;
-        }
-        // Out of the slots in one pass, in place: `N` is the process count, and a copy would be
-        // that big on the kernel stack. Taking a budget out moves the last into its slot, which is
-        // then read again.
-        let mut i = 0;
-        while left && i < self.len {
-            match self.slots[i] {
-                Some(b) if !bs.state(b).queued => self.remove_at(i),
-                _ => i += 1,
+            // Its slot is found by a scan of the slots, never by a read of every queued budget's
+            // state.
+            if let Some(i) = self.slot_of(b) {
+                self.remove_at(i);
             }
         }
-        self.raise_floor(bs);
+        self.raise_floor();
         self.reset_if_empty();
+        // A wake into a non-empty queue is at or above the floor, the minimum: the floor can rise
+        // only when the wakes fill an empty queue.
+        self.pending |= self.is_empty();
         gained.sort_unstable_by_key(|b| core::cmp::Reverse(bs.id(*b)));
         for &b in gained.iter() {
             if !bs.live(b) || !runnable(bs, b) {
@@ -332,27 +379,28 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
                 continue;
             }
             // A full queue (never expected) ends it.
-            if !self.push(b) {
-                break;
-            }
+            let Some(i) = self.push(b, bs.id(b)) else { break };
             self.front = self.front.saturating_sub(1);
             s.pass = s.pass.max(self.floor);
             s.tie = self.front;
             s.queued = true;
+            self.ranks[i].pass = s.pass;
+            self.ranks[i].tie = s.tie;
             bs.set_state(b, s);
             bs.woke(b);
         }
-        self.raise_floor(bs);
+        self.raise_floor();
     }
 
     /// The queued budget with the lowest rank, of those `elsewhere` does not rule out: a budget
     /// running on another hart, so that a budget runs on at most one hart at a time and its stride
-    /// state has one runner (`kernel/scheduling.md`, "One flat stride queue").
-    pub fn pick(&self, bs: &impl Budgets<B>, elsewhere: impl Fn(B) -> bool) -> Option<B> {
-        self.queued().filter(|b| !elsewhere(*b)).min_by_key(|b| {
-            let s = bs.state(*b);
-            Rank { pass: s.pass, tie: s.tie, id: bs.id(*b) }
-        })
+    /// state has one runner (`kernel/scheduling.md`, "One flat stride queue"). A compare of the
+    /// ranks beside the slots: no frame is read.
+    pub fn pick(&self, elsewhere: impl Fn(B) -> bool) -> Option<B> {
+        (0..self.len)
+            .filter(|i| self.slots[*i].is_some_and(|b| !elsewhere(b)))
+            .min_by_key(|i| self.ranks[*i])
+            .and_then(|i| self.slots[i])
     }
 
     /// `b`'s stride weight changed from `old` to `new` (its runtime already folded at `old`): its
@@ -363,6 +411,30 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         rescale(&mut s, old, new, self.floor);
         bs.reweighed(b, &Reweigh { before, after: s, old, new, floor: self.floor });
         bs.set_state(b, s);
+        self.recorded(b, &s);
+    }
+
+    /// The checked kernel's audit of the ranks against the frames: each queued budget's cached
+    /// pass and tie are its state's and its state says queued, and the floor is not below the
+    /// minimum queued pass unless a raise is pending (a raise missed would leave it there).
+    /// Returns the budget out of step: one whose rank is not its frame's, or the one holding a
+    /// minimum above the floor. A walk of the queue, off the exit path.
+    pub fn audit(&self, bs: &impl Budgets<B>) -> Result<(), B> {
+        let mut min: Option<(u128, B)> = None;
+        for (b, r) in self.slots[..self.len].iter().zip(&self.ranks[..self.len]) {
+            let Some(b) = *b else { continue };
+            let s = bs.state(b);
+            if !s.queued || (s.pass, s.tie, bs.id(b)) != (r.pass, r.tie, r.id) {
+                return Err(b);
+            }
+            if min.map_or(true, |(p, _)| r.pass < p) {
+                min = Some((r.pass, b));
+            }
+        }
+        match min {
+            Some((p, b)) if p > self.floor && !self.pending => Err(b),
+            _ => Ok(()),
+        }
     }
 
     /// A new budget `child` under `parent` (whose runtime is already folded, and whose carve and
@@ -392,12 +464,13 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             bs.set_state(p, s);
             let l = Lift { parent: before, after: s, child: c, w_child, w_parent, floor: self.floor };
             bs.lifted(p, child, &l);
+            self.recorded(p, &s);
         }
-        if self.contains(child) {
-            self.take_out(child);
+        if let Some(i) = self.slot_of(child) {
+            self.remove_at(i);
             bs.left(child);
         }
-        self.raise_floor(bs);
+        self.raise_floor();
         self.reset_if_empty();
     }
 }
@@ -503,7 +576,7 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
         let runners = &*self.runners;
         let elsewhere = |b| runners.iter().enumerate().any(|(i, r)| i != h && r.cur == Some(b));
         loop {
-            let b = self.q.pick(bs, elsewhere)?;
+            let b = self.q.pick(elsewhere)?;
             if let Some(t) = next(bs, b) {
                 return Some((b, t));
             }

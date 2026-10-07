@@ -221,6 +221,8 @@ fn compare(m: &Scheduler, k: &Kernel, step: usize, seed: u64) {
     }
     let q = &k.cpu.q;
     assert_eq!((m.floor, m.front, m.back), (q.floor, q.front, q.back), "{} floor and counters", at());
+    // The ranks the queue keeps beside its slots are the stored states' after every step.
+    assert_eq!(q.audit(&k.bs), Ok(()), "{} ranks", at());
     assert_eq!(m.current, k.current(), "{} running thread", at());
 }
 

@@ -239,6 +239,10 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
             if let Err(e) = marks.audit(mm, &cpu.q, |b| cpu.running(b), live, |mm, i| ready_now(ss, mm, i)) {
                 panic!("the scheduler's marks: {:?}", e);
             }
+            // The ranks the queue keeps beside its slots against the frames, the authority.
+            if let Err(b) = cpu.q.audit(mm) {
+                panic!("the scheduler's ranks: budget {} is out of step with its frame", b.id);
+            }
         })
     });
 }
