@@ -130,7 +130,7 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 - **Listening.** `sshd` is the sole holder of an `ipd` scope that listens on TCP port 22.
 - **The host key.** `sshd` holds `keyd`'s `ssh_host` root badge, handed to it by the manifest, and
@@ -200,7 +200,7 @@ exchange (`mlkem768x25519-sha256`), which changes the transcript `keyd` signs. T
 
 ### `approve@box`
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 `ssh approve@box` authenticates with the person's own approval key, one of their own SSH keys that
 the manifest lists for approval, and on that connection only the
@@ -217,7 +217,7 @@ session that reaches `approve@box` that way still has no key to sign with.
 
 ### Files in and out
 
-Status: planned · M3 (files in and out)
+Status: planned · M4 (files in and out)
 
 File transfer is SFTP, for unlabelled sessions only
 ([transfer](../userland/transfer.md) has the operation table).
@@ -256,7 +256,7 @@ a compromised transfer server.
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 - `sshd` holds its `ipd` listen scope for port 22, `keyd`'s `ssh_host` root badge, a connection to the
   steward, and the `/dev/cons` endpoints it serves to sessions.
@@ -272,7 +272,7 @@ Status: planned · M1 (separation and containment)
 
 ### R67 (a channel keeps its labels)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 Each SSH channel carries its session's labels, and a labelled session's output reaches only its own
 pty channel, authenticated by the label's owner, with no forwarding, subsystem or `exec`. So vault
@@ -282,7 +282,7 @@ data leaves the box over SSH only to the person who owns the label, on the chann
 
 ### R68 (only the steward on approve@box)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 On an `approve@box` connection, authenticated with the person's own approval key, every byte shown
 comes from the steward and every answer goes to it; no session, agent or other channel can write to
@@ -294,7 +294,7 @@ so such a session still cannot authenticate there with a `keyd` key.
 
 ## Failure and restart
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 - **`sshd` crashes:** every SSH connection drops; sessions lose their channel and are ended by the
   steward. `init` restarts `sshd` ([init](init.md#restarts-and-reboots)).
@@ -307,7 +307,7 @@ Status: planned · M1 (separation and containment)
 - **`approve@` shares `sshd` with the most hostile input.** A `sunset` bug reached from any channel,
   before or after login, controls every channel and the approval screen, and a network flood delays
   approvals. A separate `sshd` instance for `approve@`, or the physical console, is planned for
-  M5 (persist, install, share).
+  M6 (persist, install, share).
 - **`sshd` is trusted across labels.** As one of the confinement check's named mediators it carries
   every session's channel; a bug in it reaches all of them.
 - **The transfer audit is accountability, not a wall.** A principal who compromises their own

@@ -326,7 +326,7 @@ both sets; `--break GUARD` holds one of the reference's guards always, the negat
 
 ### Principals
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 - A **principal** is a named, accountable identity: a way to authenticate, a set of capabilities
   (a namespace and service grants), and an audit identity. People, agents and projects are the same
@@ -344,7 +344,7 @@ Status: planned · M1 (separation and containment)
 
 ### Fixed sub-budgets per label set
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 At boot the steward splits each principal's top budget into fixed sub-budgets, one per label set
 the manifest names for it (`users/alice/{}`, `users/alice/{alice-secrets}`), each with its own
@@ -360,7 +360,7 @@ no mutation ([guards and effects](#guards-and-effects)).
 
 ### Authentication and sessions
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 - **Login.** `sshd` runs SSH and asks the steward whose key a login used. The steward accepts only
   one of that principal's login keys, never a key `keyd` holds, and `sshd` itself refuses any key
@@ -420,12 +420,11 @@ sequenceDiagram
 
 ### The steward's protocol
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 The steward serves one typed protocol, its table `libs/wire/tables/steward.md`, included by this
-page: `login` (from `sshd`), `submit` (from sessions and agents), `approve` and `deny` (from the
-approval channel), `end_lease` (from a sponsor), and `blame(account: u64, labels: bytes,
-server: string)` (from `init`, [init](init.md#restarts-and-reboots)).
+page. Its sessions' operation is `login` (from `sshd`); the operations for leases, approvals and
+crash blame are below ([the lease and approval operations](#the-lease-and-approval-operations)).
 
 **Each operation is accepted only through the badge class it belongs to.** The steward gives a
 root badge per caller role (`sshd`, `init`, the approval channel), and sessions get minted badges.
@@ -434,9 +433,20 @@ cannot send `login`, `approve` or `blame`.
 
 **Open:** the table's other operations' fields; it is written with the steward.
 
+### The lease and approval operations
+
+Status: planned · M3 (agents, approvals and the attack suite)
+
+The steward's protocol adds `submit` (from sessions and agents), `approve` and `deny` (from the
+approval channel), `end_lease` (from a sponsor), and `blame(account: u64, labels: bytes,
+server: string)` (from `init`, [init](init.md#restarts-and-reboots)), each accepted only through
+its badge class, as above.
+
+**Open:** these operations' fields; they are written with the steward's second half.
+
 ### Leases
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 An agent is its own principal, never an impersonation, with an accountable **sponsor**: a person,
 or an agent with a person at the top of the chain.
@@ -472,9 +482,9 @@ or an agent with a person at the top of the chain.
   that holds processes, which would let a compromised server end every session
   ([R41 (narrowing by revocation scope)](#r41-narrowing-by-revocation-scope)).
 - **An agent holds no credentials.** It uses keys through `keyd` and, from
-  M4 (self-hosted development), models through `gatewayd`. In M1 (separation and containment) no
-  session or lease holds a `keyd` grant, since `keyd`'s purposes are the host key and audit
-  signing; keys in leases come in M5 (persist, install, share) ([keyd](keyd.md)).
+  M5 (self-hosted development), models through `gatewayd`. Until M6 (persist, install, share),
+  which brings keys in leases, no session or lease holds a `keyd` grant, since `keyd`'s purposes
+  are the host key and audit signing ([keyd](keyd.md)).
 - **Assume every agent is compromised** by something it read: it can do what its capabilities
   allow until its lease ends, and nothing more.
 - **Each agent runs in its own VM**; sub-agents with different authority are separate VMs.
@@ -488,7 +498,7 @@ machine's, whose table and generated diagram are [above](#the-lease).
 
 ### The powerbox and approvals
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 The **powerbox** grants authority a principal lacks and confirms a principal's own high-stakes
 steps: an agent asking its sponsor, a principal asking the holder of a shared resource, a new
@@ -522,7 +532,7 @@ trusted key, a declassification. Most things need none.
 - **An approval grants no more than the approver holds.** A request reaches only its own
   principal's approval channels, and that principal owns every label the request carries or asks
   for, checked when it entered and when it was submitted. A project's requests, which several
-  members may approve from M5 (persist, install, share), bring a check of their own.
+  members may approve from M6 (persist, install, share), bring a check of their own.
 
 ```mermaid
 sequenceDiagram
@@ -562,7 +572,7 @@ The attack test: a field full of ANSI escapes renders inert.
 
 ### Declassification and push
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 **Declassification** moves one item from a label down to an unlabelled volume. Only the label's
 owner declassifies, from a session carrying that label, one item at a time, after a high-stakes
@@ -626,7 +636,7 @@ exception: each carries exactly one label set and dies after one item
 
 ### Crash blame
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 A server that faults, or exits holding open calls, names in its exit notice the account and
 labels of the current call of the thread that failed
@@ -648,7 +658,7 @@ would need a second domain, which no handler can borrow.
 
 ### The transfer audit log
 
-Status: planned · M3 (files in and out)
+Status: planned · M4 (files in and out)
 
 The audit log begins with file transfers. On `sshd`'s request the steward starts a transfer server
 for an unlabelled session's channel, in a budget carved from the session's, with the session's file
@@ -661,7 +671,7 @@ through `keyd`'s `audit` purpose exactly as [below](#the-audit-log).
 
 ### The audit log
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 The same log extends to every steward action: the steward appends a record for every mint,
 delegation, revocation, approval, denial, lease end, blame and lockout, with the principal chain, to
@@ -682,7 +692,7 @@ purpose, signer, domain, length and every byte (`PolicyAuditUnfiltered`,
 
 ### Retention, chaining and the verifier
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 Records are chained, each naming the one before, so a record dropped or reordered is found as
 well as one edited; an operator tool verifies the chain and the signatures; and the log is kept
@@ -692,7 +702,7 @@ for a set time and rotated without breaking the chain.
 
 ### Persistence, run-time principals and enrolment
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 The steward keeps its state across boots: principals, their keys and label sets can be added and
 removed at run time, and the capabilities it minted are re-minted after a restart from its
@@ -706,7 +716,7 @@ reach sessions that held the old ones; how a key is enrolled and revoked at run 
 
 ### Packages and trust
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 The steward keeps each principal's package records and never parses a package
 ([packages](pkg.md)):
@@ -724,7 +734,7 @@ The steward keeps each principal's package records and never parses a package
 
 ### Projects and sharing
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 A **project** is a principal sponsored by several members, with its own budget, volume
 (`littlefsd:project-x`), package directory and profile, and optionally a label. Membership is
@@ -736,7 +746,7 @@ declassifying one of its items needs a project owner's approval. No kernel mecha
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 - The steward holds the `users` budget and a `system`-class budget of its own, the only process
   besides `init` that holds a `system`-class budget handle
@@ -761,7 +771,7 @@ Status: planned · M1 (separation and containment)
 
 ### R36 (unpredictable ids)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 Every id the steward hands out (session, request, connection) is a random 64-bit word from a keyed
 generator, never a counter. So no principal learns how many sessions or requests another started.
@@ -771,7 +781,7 @@ The model found the leak with sequential ids and checks the rule (`PolicySequent
 
 ### R37 (vault non-interference)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 A vault session's work (item writes, requests, calls to a shared server) changes nothing an
 unlabelled session observes: its results, the usage of `users`, of every principal's budget and
@@ -791,7 +801,7 @@ before, is service timing.
 
 ### R38 (out-of-band approval)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 An approval takes effect only if it came through `approve@box` with the approver's own approval
 key, named the frozen request's id and content hash, and grants no label or authority the approver
@@ -802,7 +812,7 @@ text.
 
 ### R39 (leases end)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 Every lease's budget has a deadline at most `MAX_LEASE` away, every sub-agent sits inside its
 agent's budget and ends no later, an expired lease is gone, and its sponsor can always end it,
@@ -812,7 +822,7 @@ ahead of admission, however hard the agent floods the servers they share.
 
 ### R40 (blame by label set)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 An (account, label set)'s sessions and leases are ended exactly when three server crashes blamed
 on it fall within ten minutes, no new session of it starts for the next ten minutes, and no other
@@ -822,7 +832,7 @@ on it fall within ten minutes, no new session of it starts for the next ten minu
 
 ### R41 (narrowing by revocation scope)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 A server that narrows a session's connection to that session's life holds a revocation scope made
 for it, never a budget holding processes. So a compromised server can revoke what it minted,
@@ -835,7 +845,7 @@ expects it refused.
 
 ### R42 (one approved item)
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 Data crosses a label only as one item per owner-approved request: declassification copies out
 exactly the snapshot taken at submission, read through a reader budget with exactly the item's
@@ -847,7 +857,7 @@ item's labels.
 
 ## Failure and restart
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` destroys and
   recreates the `users` budget, which logs every session out and ends every lease, and restarts the

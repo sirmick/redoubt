@@ -92,7 +92,7 @@ gap: the page's section, the claim, and what no case attacks.
 ### abi.md
 - The kernel keeps every register outside a0-a7 across an `ecall`: no case attacks it.
 - The order of checks after decoding: pinned by a case only for the first checks of `budget_create`, `budget_usage` (records before the handle: `budget-syscall-attack`), `call` (record before endpoint lookup: `ipc-outcomes`), `receive` (`WrongObject`), `serve`, `process_start` (count before record: `process-attack`). The rest of each row (stages 2 to 5) is not attacked.
-- The kernel's order against the model's: no trace replay (planned for M1 (separation and containment)), so the rows that differ were found by reading only.
+- The kernel's order against the model's: no trace replay (planned for M3 (agents, approvals and the attack suite)), so the rows that differ were found by reading only.
 - A valid call number with bit 32 set on rv64: not attacked (`legacy-gone` does it for 0..=46 only).
 
 ### invariants.md

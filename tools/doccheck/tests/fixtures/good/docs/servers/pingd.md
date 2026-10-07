@@ -8,7 +8,7 @@ Answers pings.
 
 ## Interface
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 Takes pings.
 
@@ -16,7 +16,7 @@ Takes pings.
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 ### Callers
 

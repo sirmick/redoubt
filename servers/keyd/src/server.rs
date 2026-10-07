@@ -193,7 +193,7 @@ impl KeyServer {
                 // question `sshd` has: is this login key one of `keyd`'s? The answer is about a
                 // public key the asker already holds, and public keys are published, so it
                 // tells nobody anything they could not learn by connecting. When keys carry
-                // labels (planned for M5) this needs a `check` per key, not the badge's alone.
+                // labels (planned for M6) this needs a `check` per key, not the badge's alone.
                 let held = u32::from(self.keys.holds(key));
                 Ok(Answer::new(Reply::Holds(HoldsReply { held })))
             }

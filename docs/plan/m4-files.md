@@ -1,4 +1,4 @@
-# M3 (files in and out)
+# M4 (files in and out)
 
 ## Goal
 
@@ -31,7 +31,7 @@ capabilities and audited. There is no other inbound service and no other way in.
 
 ## Remaining work
 
-In this order, after [M2 (usable shell)](m2-usable-shell.md):
+In this order, after [M3 (agents, approvals and the attack suite)](m3-agents.md):
 
 1. **The transfer audit log**: the steward's append-only file of signed records
    ([the steward](../servers/steward.md#the-transfer-audit-log)).
@@ -43,5 +43,5 @@ In this order, after [M2 (usable shell)](m2-usable-shell.md):
 ## Progress
 
 Nothing of this milestone is built. What it builds on: `sshd`'s sessions and channels and the
-steward, from [M1 (separation and containment)](m1-separation.md), and `keyd`'s `audit` purpose,
+steward, from [M1 (sessions over SSH, kept apart)](m1-separation.md), and `keyd`'s `audit` purpose,
 which is built and tested in host tests ([keyd](../servers/keyd.md#keys-and-purposes)).

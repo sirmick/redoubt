@@ -24,7 +24,7 @@ and most malicious agents can run on it, do real work, and not get out.
 - **Residual risks are stated, never hidden.** Every guarantee below names the walls it rests on
   and the test that attacks each one. No page says "impossible".
 
-Every page is written as if M1 (separation and containment) through M5 (persist, install, share)
+Every page is written as if M1 (sessions over SSH, kept apart) through M6 (persist, install, share)
 were complete; each section's status line says what is built today ([reading this book](README.md)).
 
 ## Threat model
@@ -270,7 +270,7 @@ close:
 A confined deployment removes the shared servers, endpoints and devices. What is left is the
 kernel's and the hardware's: every label set shares the one kernel and its cores, because the
 kernel is the trusted base and a core's timing is no more partitioned than the caches around it.
-Hardware placement is [beyond M5](beyond/fpga-platform.md).
+Hardware placement is [beyond M6](beyond/fpga-platform.md).
 
 Constant time is claimed for one thing: `keyd`'s signing, whatever the key and the nonce
 ([R45 (constant-time signing)](servers/keyd.md#r45-constant-time-signing)). That claim is partly
@@ -417,16 +417,17 @@ reserved cores and lets Linux run the hardware and serve virtio to it, and there
 
 A configuration the bench does not boot is not supported.
 
-- **Widths.** Every milestone, M1 (separation and containment) to M5 (persist, install, share),
+- **Widths.** Every milestone, M1 (sessions over SSH, kept apart) to M6 (persist, install, share),
   requires rv64 boots and rv32 compilation. Most kernel cases boot on rv32 as well; a full rv32
-  system is [beyond M5](beyond/rv32.md).
+  system is [beyond M6](beyond/rv32.md).
 - **Harts.** The kernel runs user code on every hart, up to 8, under one big lock, with a budget on
   one hart at a time until one process's threads may run on several. M2 (usable shell)
   brings several harts: the kernel runs user code on every hart, first under one big lock, and
   one process's threads on several harts at once, so a beamlet VM's schedulers run in parallel
   ([several harts](plan/m2-usable-shell.md#several-harts)). The reason: the FPGA platform's cores
-  have two hardware threads each, and by the end of M1 (separation and containment) the kernel's rules are attacked on one
-  hart, so a second hart multiplies what can go wrong only in rules already attacked.
+  have two hardware threads each, and by the end of M1 (sessions over SSH, kept apart) the
+  kernel's rules are attacked on one hart, so a second hart multiplies what can go wrong only in
+  rules already attacked.
 - **Firmware.** RustSBI's prototyper, built from source, on both widths.
 - **Machine.** QEMU's `virt` machine, with virtio block, network and console devices.
 

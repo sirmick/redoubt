@@ -61,11 +61,12 @@
 
 # The plan
 
-- [M1 (separation and containment)](plan/m1-separation.md)
+- [M1 (sessions over SSH, kept apart)](plan/m1-separation.md)
 - [M2 (usable shell)](plan/m2-usable-shell.md)
-- [M3 (files in and out)](plan/m3-files.md)
-- [M4 (self-hosted development)](plan/m4-self-hosted.md)
-- [M5 (persist, install, share)](plan/m5-persist.md)
+- [M3 (agents, approvals and the attack suite)](plan/m3-agents.md)
+- [M4 (files in and out)](plan/m4-files.md)
+- [M5 (self-hosted development)](plan/m5-self-hosted.md)
+- [M6 (persist, install, share)](plan/m6-persist.md)
 - [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
   - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
@@ -74,7 +75,7 @@
   - [beamlet is told its budget by an argument the manifest keeps equal by hand](todo/beamlet-budget-from-startup.md)
   - [A private directory for the QMP socket](todo/qmp-socket-private-dir.md)
   - [The file servers parse their arguments and call their range four times over](todo/file-server-arguments-and-range-client.md)
-- [Beyond M5](beyond/README.md)
+- [Beyond M6](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [The card's host backend](beyond/card-host.md)
   - [rv32](beyond/rv32.md)

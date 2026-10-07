@@ -16,27 +16,31 @@ that tests it.
 **Today** the kernel runs and is attack-tested on QEMU, on rv64 and rv32. `init` boots the
 drivers, file, network, key and console servers, and the Elixir shell runs on the UART console
 with its modules read from a verified userland volume, and the VM's file operations run over 9P
-in a boot. Native launching, the steward server, SSH sessions and agents remain to be integrated
-([the plan](docs/plan/m1-separation.md)).
+in a boot. Native launching, the steward server and SSH sessions remain to be integrated
+([the plan](docs/plan/m1-separation.md)); agents follow
+([M3 (agents, approvals and the attack suite)](docs/plan/m3-agents.md)).
 
 ## Goals
 
-- [M1 (separation and containment)](docs/plan/m1-separation.md), **in progress**: Alice and Bob log
-  in over SSH into Elixir sessions and are kept apart; Alice's agent runs contained under a lease;
-  the attack suite passes.
+- [M1 (sessions over SSH, kept apart)](docs/plan/m1-separation.md), **in progress**: Alice and
+  Bob log in over SSH and on the console into Elixir sessions, kept apart in fixed sub-budgets
+  per label set, with files; a dead steward restarts without a reboot.
   How far along: the kernel, the serving library, the drivers and the network server, the file
   system, `bootfsd`, `consoled`, `keyd`, the loader stub and `init` are built and attack-tested.
   beamlet boots the shell on the UART; the steward's policy core and `sshd`'s core are tested on
-  the host. The running steward, SSH sessions and leased agents are still planned.
+  the host. The running steward and SSH sessions are still planned.
 - [M2 (usable shell)](docs/plan/m2-usable-shell.md), **planned**: the Elixir shell is a working
   environment, with a command mode, file operations, native programs and pipes, jobs, line editing
-  and the editor.
-- [M3 (files in and out)](docs/plan/m3-files.md), **planned**: SFTP and SCP inside SSH, confined
+  and the editor. Its host shell track starts ahead of M1 (sessions over SSH, kept apart).
+- [M3 (agents, approvals and the attack suite)](docs/plan/m3-agents.md), **planned**: Alice's
+  agent runs contained under a lease, approvals come only from `approve@box`, and the attack
+  suite of a scripted hostile agent and user passes.
+- [M4 (files in and out)](docs/plan/m4-files.md), **planned**: SFTP and SCP inside SSH, confined
   to the session's capabilities and audited.
-- [M4 (self-hosted development)](docs/plan/m4-self-hosted.md), **planned**: Redoubt is developed
+- [M5 (self-hosted development)](docs/plan/m5-self-hosted.md), **planned**: Redoubt is developed
   on Redoubt, with compilers, `git` and a model provider through gateways, and agents doing part of
   the work. How far along: the Elixir and Erlang compilers run on beamlet, on the host.
-- [M5 (persist, install, share)](docs/plan/m5-persist.md), **planned**: the steward's state
+- [M6 (persist, install, share)](docs/plan/m6-persist.md), **planned**: the steward's state
   survives reboots; signed packages, trust lists and shared projects; A/B updates.
 
 | Start here | |

@@ -128,7 +128,7 @@ fields, so nothing is invented. This is the one statement of the rule; file tran
 ([file transfer](transfer.md#confined-to-the-sessions-files)). Standard-library code that does
 arithmetic on a mode (the mode preservation in `File.cp` and `File.cp_r`, Mix's check that a file
 is executable) is adjusted in beamlet's platform layer to skip the mode, never fed a fake one; the
-M4 (self-hosted development) case that compiles a Mix project on the box catches any caller that
+M5 (self-hosted development) case that compiles a Mix project on the box catches any caller that
 breaks. The host tests above hold the undefined fields and the four `:enotsup`s, and
 bench:beamlet-files sees `mode` undefined in a boot.
 
@@ -163,7 +163,7 @@ into its startup block, so a session's binds reach a child only if the session p
 
 ### Labels on files
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 Labels are per volume: each volume has its own file server instance and its own label set, fixed
 when the volume is set up ([the file server](../servers/walfsd.md)). The file server checks every
@@ -182,7 +182,7 @@ request against the caller's label set, which the kernel stamps on the message
 
 ### Sharing a directory
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 Alice shares a directory with Bob through the steward. The only delegation primitive is
 `new_connection(root, quota)`: it mints a connection rooted at a subdirectory, with its own byte

@@ -29,8 +29,9 @@ flowchart TB
     classDef planned stroke-dasharray: 5 5
     class INIT,ST,SSHD,SE,AG,P,H planned
 ```
-*Figure: the prison walls. `init`'s manifest handling, the steward, `sshd`, sessions and agents are
-planned for M1 (separation and containment); the servers drawn solid are built and attacked in host
+*Figure: the prison walls. `init`'s manifest handling, the steward, `sshd` and sessions are
+planned for M1 (sessions over SSH, kept apart), agents and approvals for
+M3 (agents, approvals and the attack suite); the servers drawn solid are built and attacked in host
 tests or on the kernel.*
 
 Detail: [the walls](TENETS.md#the-walls)
@@ -113,23 +114,25 @@ Detail: [agents, leases and labels](userland/agents.md#delegation-only-narrows)
 
 ## The road
 
-The plan is five milestones, each a whole working system. M1 (separation and containment) is in
+The plan is six milestones, each a whole working system. M1 (sessions over SSH, kept apart) is in
 progress: the kernel, the drivers, the network server and the serving library are built and
-attack-tested, and the steward, SSH logins and the contained agent are next.
+attack-tested, and the steward and SSH logins are next; the contained agent is
+M3 (agents, approvals and the attack suite)'s.
 
 ```mermaid
 flowchart LR
-    m1["M1 (separation and containment)<br/>in progress"]
+    m1["M1 (sessions over SSH, kept apart)<br/>in progress"]
     m2["M2 (usable shell)"]
-    m3["M3 (files in and out)"]
-    m4["M4 (self-hosted development)"]
-    m5["M5 (persist, install, share)"]
-    m1 -.-> m2 -.-> m3 -.-> m4 -.-> m5
+    m3["M3 (agents, approvals and the attack suite)"]
+    m4["M4 (files in and out)"]
+    m5["M5 (self-hosted development)"]
+    m6["M6 (persist, install, share)"]
+    m1 -.-> m2 -.-> m3 -.-> m4 -.-> m5 -.-> m6
     classDef planned stroke-dasharray: 5 5
-    class m2,m3,m4,m5 planned
+    class m2,m3,m4,m5,m6 planned
 ```
-*Figure: the road. M1 (separation and containment) is part built (solid box); the rest are
+*Figure: the road. M1 (sessions over SSH, kept apart) is part built (solid box); the rest are
 planned.*
 
-Detail: [M1 (separation and containment)](plan/m1-separation.md),
+Detail: [M1 (sessions over SSH, kept apart)](plan/m1-separation.md),
 [the milestones](README.md#the-milestones)

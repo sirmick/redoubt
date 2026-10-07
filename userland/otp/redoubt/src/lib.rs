@@ -17,7 +17,7 @@
 //!   order, for the write before them, since the console's share is a page a badge and a write is a page. A
 //!   write the console answers `busy` goes again `RETRY_US` later, not at once.
 //! - **Time** is the kernel's microseconds since boot, and `system_time_us` is `None`: there is no wall clock
-//!   until M5 (persist, install, share) brings one. **Randomness** is the kernel's.
+//!   until M6 (persist, install, share) brings one. **Randomness** is the kernel's.
 //!
 //! The same code runs on the machine and, on a host, on the fake kernel: only where modules come
 //! from differs ([`Modules`]). [`run`] is the program both run: the machine's `beamlet` and the
@@ -455,7 +455,7 @@ pub fn say(console: &Console, line: &str) {
 impl Platform for Redoubt {
     fn monotonic_us(&mut self) -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
 
-    /// No wall clock exists until time sync does, in M5 (persist, install, share).
+    /// No wall clock exists until time sync does, in M6 (persist, install, share).
     fn system_time_us(&mut self) -> Option<u64> { None }
 
     /// Waits on the VM's own endpoint, where the waiters' wake-ups arrive, until a completion or

@@ -71,7 +71,7 @@ fn c1_reports_each_failure() {
     assert_eq!(lines, BTreeSet::from([3, 7, 9, 17, 23, 25, 27, 29]));
 }
 
-/// `beyond` excuses only M5 (C3); a part of a rule must repeat its name (C5); generated and
+/// `beyond` excuses only M6 (C3); a part of a rule must repeat its name (C5); generated and
 /// hand-written Elixir, module docs included, is code (C11); an anchor-only SUMMARY link names no
 /// page (C12).
 #[test]

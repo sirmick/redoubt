@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 327
+revision = 330
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -64,27 +64,27 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "M4 (files in and out)"
   template = "milestone"
   needs = ["AGENTS"]
-  body = "docs/plan/m3-files.md"
+  body = "docs/plan/m4-files.md"
   state = "todo"
-  revision = 323
+  revision = 329
 
 [[node]]
   id = "M4"
   title = "M5 (self-hosted development)"
   template = "milestone"
   needs = ["M3"]
-  body = "docs/plan/m4-self-hosted.md"
+  body = "docs/plan/m5-self-hosted.md"
   state = "todo"
-  revision = 323
+  revision = 329
 
 [[node]]
   id = "M5"
   title = "M6 (persist, install, share)"
   template = "milestone"
   needs = ["M4"]
-  body = "docs/plan/m5-persist.md"
+  body = "docs/plan/m6-persist.md"
   state = "todo"
-  revision = 323
+  revision = 329
 
 [[node]]
   id = "S2"
@@ -102,9 +102,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "step"
   parent = "AGENTS"
   needs = ["sshd"]
-  body = "docs/userland/agents.md; docs/plan/m1-separation.md#attack-suite"
+  body = "docs/userland/agents.md; docs/plan/m3-agents.md#attack-suite"
   state = "todo"
-  revision = 323
+  revision = 329
 
 [[node]]
   id = "beamlet-redoubt"
@@ -1298,9 +1298,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "M3 (agents, approvals and the attack suite)"
   template = "milestone"
   needs = ["M2"]
-  body = "Moved out of M1 on the owner's word (2026-10-07), to run after M2: the steward's second half (leases and agents, the powerbox at approve@box, crash blame: STEWARD3; declassification and push, the responsiveness targets with the real steward: STEWARD4), sshd's vault sessions and approve@box, gen_tcp (BEAM5), Alice's agent under a lease and the scripted hostile agent and user (the attack suite), and the model's traces replayed on the real kernel. Page: docs/plan/m3-agents.md (to be split out of m1-separation.md). Node ids M3, M4, M5 keep their ids; their titles are M4, M5, M6."
+  body = "docs/plan/m3-agents.md. Moved out of M1 on the owner's word (2026-10-07), to run after M2: the steward's second half (leases and agents, the powerbox at approve@box, crash blame: STEWARD3; declassification and push, the responsiveness targets with the real steward: STEWARD4), sshd's vault sessions and approve@box, gen_tcp (BEAM5), Alice's agent under a lease and the scripted hostile agent and user (the attack suite), and the model's traces replayed on the real kernel. Node ids M3, M4, M5 keep their ids; their titles are M4, M5, M6."
   state = "todo"
-  revision = 323
+  revision = 329
 
 [[node]]
   id = "PLAN2"
@@ -1308,8 +1308,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Docs only. docs/plan/m1-separation.md keeps the SSH slice (goal, its attack cases, remaining work, progress); the agents, approvals, attack-suite, approve@box, vault-over-SSH, gen_tcp and model-replay parts move to a new docs/plan/m3-agents.md placed after M2; m3-files.md, m4-self-hosted.md, m5-persist.md become M4, M5, M6 (file names may stay; titles, cross-links and every 'M3'/'M4'/'M5' reference in the book follow); docs/SUMMARY.md, README.md, GETTING-STARTED.md and every page citing a milestone by number updated; m2-usable-shell.md says the host shell track starts ahead of M1. The docs check passes. Size S-M."
-  state = "active"
-  revision = 324
+  state = "done"
+  revision = 330
 
 [[node]]
   id = "SHELL2"

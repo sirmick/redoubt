@@ -755,7 +755,7 @@ fn a_grant_that_fails_gives_its_admission_back() {
 /// milestone 1, so a labelled caller may read a public key (no read up: ∅ ⊆ anything) and may
 /// not sign, grant or release (no write down). That is a stated consequence (servers/keyd.md,
 /// "Bounds and errors"): a vault session that must sign needs a labelled key, which is planned
-/// for M5 (servers/keyd.md, "Sealed keys, labelled keys and keys in leases").
+/// for M6 (servers/keyd.md, "Sealed keys, labelled keys and keys in leases").
 #[test]
 fn a_labelled_caller_reads_but_does_not_sign() {
     let (mut s, mut k) = (server(), FakeKernel::new());

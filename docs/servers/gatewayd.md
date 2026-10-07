@@ -19,7 +19,7 @@ record.
 
 ### Gateway capabilities
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 - A **gateway capability** is a connection to `gatewayd` whose badge names a grant by name (the
   `model` gateway, say), optionally narrowed to some of its hosts, with a **meter**: tokens and
@@ -43,7 +43,7 @@ Status: planned · M4 (self-hosted development)
   meter is refused
   ([R65 (a request only within its capability)](#r65-a-request-only-within-its-capability)).
 - **Metering.** The steward owns the meters, so they survive a `gatewayd` restart, and reboots
-  once the steward keeps state in M5 (persist, install, share). Before sending,
+  once the steward keeps state in M6 (persist, install, share). Before sending,
   `gatewayd` checks the principal's spend cap against the steward's figure, and refuses a request
   over it; after each response it reports the usage the provider gave.
 - **Logging.** Every call is recorded with the principal chain, the capability, the operation and
@@ -76,7 +76,7 @@ priced from usage; the finer checks on `git` requests beyond remote, operation, 
 
 ### Keys and TLS
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 - **API keys** are bearer secrets, not signing keys, so `keyd` cannot hold them: `gatewayd` holds
   them itself, from its arguments, and no operation returns one
@@ -85,7 +85,7 @@ Status: planned · M4 (self-hosted development)
   against roots `gatewayd` is configured with. `gatewayd` connects by name, as a person does
   ([ipd](ipd.md#name-scoped-connections)), on its own `ipd` connection whose rule names only the
   services it serves.
-- **Where the keys come from.** In M4 (self-hosted development) the API keys arrive as
+- **Where the keys come from.** In M5 (self-hosted development) the API keys arrive as
   `gatewayd`'s arguments in the boot manifest, which is never public, at the bundle's trust, as
   `keyd`'s seeds do.
 - A git host's SSH or token credentials are held the same way.
@@ -96,7 +96,7 @@ reboot once the steward keeps state.
 
 ### A label sink
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 `gatewayd` refuses every labelled caller, like `ipd`: whatever it forwards leaves the box. A model
 that runs on the box can be a server cleared for a label, one instance per label set; `gatewayd` is
@@ -106,7 +106,7 @@ for services outside.
 
 ## Authority
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 - `gatewayd` holds its endpoint, the API keys and credentials of the services it serves, one `ipd`
   connection whose name rule names those services, and a way to append to the audit log.
@@ -119,7 +119,7 @@ Status: planned · M4 (self-hosted development)
 
 ### R65 (a request only within its capability)
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 Every request `gatewayd` sends is built by `gatewayd` from fields it checked against the caller's
 capability: the capability's service, one of its operations, within its meter. So a hijacked agent
@@ -130,7 +130,7 @@ with the key.
 
 ### R66 (no credential leaves gatewayd)
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 No operation returns an API key or credential, and none is ever sent to anything but the service it
 belongs to, over TLS to that service's name. So no session, agent or lease holds a credential it
@@ -140,7 +140,7 @@ could send elsewhere.
 
 ## Failure and restart
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 - **`gatewayd` restarts:** requests in flight fail and are asked again; the meters are the
   steward's and survive.

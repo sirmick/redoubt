@@ -1,4 +1,4 @@
-# M4 (self-hosted development)
+# M5 (self-hosted development)
 
 ## Goal
 
@@ -62,7 +62,7 @@ scripted bench case.
 
 ## Remaining work
 
-In this order, after [M3 (files in and out)](m3-files.md):
+In this order, after [M4 (files in and out)](m4-files.md):
 
 1. **The resolver**, then name-scoped connections in `ipd` for people
    ([the resolver](../servers/resolver.md), [ipd](../servers/ipd.md#name-scoped-connections)).

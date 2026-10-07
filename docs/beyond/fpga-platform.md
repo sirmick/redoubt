@@ -29,7 +29,7 @@ software.
 ## Why it is not a goal
 
 Every milestone runs on QEMU's `virt` machine, which is also the bench, and none of
-M1 (separation and containment) through M5 (persist, install, share) needs hardware. The card's
+M1 (sessions over SSH, kept apart) through M6 (persist, install, share) needs hardware. The card's
 gains are confinement of drivers' DMA, a verified loader, and an entropy source; all three
 are stated today as residual risks.
 

@@ -167,7 +167,7 @@ and re-arms.
 
 ### Wall-clock time and time sync
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 The kernel keeps no date: `time_now`, timeouts, slices and deadlines stay monotonic time
 since boot. Wall-clock time (dates, time zones) is a user-space offset over
@@ -181,7 +181,7 @@ files but cannot lengthen a lease or a timeout.
 
 **Open:** which server owns the offset (the steward, the RTC driver or a server of its own);
 which authenticated source syncs it (NTS, Roughtime) and what happens with no network; whether
-TLS certificate checks in `gatewayd` (M4 (self-hosted development)) need wall time earlier;
+TLS certificate checks in `gatewayd` (M5 (self-hosted development)) need wall time earlier;
 whether a correction may step the offset backwards or only slews it; how the offset persists
 across reboots and how a clock set backwards is detected; how audit records bind monotonic and
 wall time.

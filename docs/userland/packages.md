@@ -33,7 +33,7 @@ Adding a signer to the trust list is a high-stakes step, answered at `ssh approv
 
 ### Installing a package
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 A package is a ustar archive with a manifest, signed as a whole, the way the boot bundle is: the
 boot bundle is the system's first package, and boot, system updates and user packages share one
@@ -67,7 +67,7 @@ bundle signature, and the reverse.
 
 ### Profiles and upgrades
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 A principal's **profile** is the set of package versions it runs and the `/bin` its sessions see.
 It is a steward record, not a file the principal can write.
@@ -104,7 +104,7 @@ resolve only after the system's.
 
 ### Trust lists
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 A principal's **trust list** is the signing keys whose code it runs. The steward launches code on
 a principal's behalf only if the principal trusts the signer, and with at most what the principal
@@ -129,7 +129,7 @@ grants.
 
 ### What signatures do not do
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 A hijacked agent can run code it wrote: any process can create a child and map pages into it
 (the launcher needs exactly that), and the shell evaluates any Elixir. What holds is that such code

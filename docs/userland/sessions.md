@@ -65,10 +65,10 @@ session's budget, and every process in it ends with it.
 
 ### Logging in
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 `sshd` (the SSH server) accepts a connection, and `sshd` and the steward authenticate the person
-with the principal's login key. In M1 (separation and containment) the principals and their keys
+with the principal's login key. In M1 (sessions over SSH, kept apart) the principals and their keys
 come from the boot manifest ([init](../servers/init.md)). A login key is the person's own: it stays
 on their machine or security key and never lives in `keyd` (the key server). `sshd` refuses
 authentication with any public key `keyd` holds, so a hijacked session that can sign with `keyd`
@@ -84,7 +84,7 @@ label set cannot starve another.
 
 ### A session is a VM in a budget
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 One session is one beamlet VM, in one budget of class `user`, under the principal's budget
 ([budgets](../kernel/budgets.md#root-system-and-users)). What that gives:
@@ -111,7 +111,7 @@ and a session holds only what its principal was granted.
 
 ### Vault sessions
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 A **vault session** carries one of its principal's labels: `ssh alice+tax@box` starts a session
 whose budget has Alice's `tax` label. A budget's labels are fixed when it is created and only grow
@@ -137,7 +137,7 @@ steward](../servers/steward.md)).
 
 ### Namespaces
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 A namespace is a table inside the process: path prefixes, each naming a capability (a 9P
 connection) the process holds. The launcher writes it into the child's startup block before the
@@ -229,7 +229,7 @@ startup block and resolves paths against it
 
 ### `approve@`
 
-Status: planned · M1 (separation and containment)
+Status: planned · M3 (agents, approvals and the attack suite)
 
 `ssh approve@box` is the approval terminal. When an agent asks its sponsor for more authority, or
 a session asks for a declassification, the request goes to the steward, and the requester's own
@@ -246,12 +246,12 @@ from ([the steward](../servers/steward.md)).
 - **What is approved** is bound: each request has a random 64-bit id and a hash of its exact
   content, and approving confirms both. An approval grants no more than the approver holds.
 
-In M1 (separation and containment) `approve@` is served by the same `sshd` as every other
-channel. That is a stated residual: a bug in the SSH code reached from any channel could control
-the approval screen, and a network flood can delay approvals ([sshd](../servers/sshd.md)). The
-design protects the approval channel from the requester; it does not protect the person's
-judgment, and an approval that grants more than the person intended is a wall the design names,
-not one it closes ([agents](agents.md)).
+In M3 (agents, approvals and the attack suite) `approve@` is served by the same `sshd` as every
+other channel. That is a stated residual: a bug in the SSH code reached from any channel could
+control the approval screen, and a network flood can delay approvals ([sshd](../servers/sshd.md)).
+The design protects the approval channel from the requester; it does not protect the person's
+judgment, and an approval that grants more than the person intended is a wall the design names, not
+one it closes ([agents](agents.md)).
 
 **Open:** none.
 

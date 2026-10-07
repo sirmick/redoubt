@@ -177,7 +177,7 @@ The attack tests: a manifest that splits a device between two entries, or names 
 in `-irq`, is refused; a manifest giving a server fewer buckets than it serves refuses the boot.
 
 Sizing a server when principals are added at run time is the steward's, in
-M5 (persist, install, share).
+M6 (persist, install, share).
 
 ### The confinement check
 
@@ -587,7 +587,7 @@ machine.
 
 ### A worked configuration
 
-Status: planned · M1 (separation and containment)
+Status: planned · M1 (sessions over SSH, kept apart)
 
 Alice and Bob each log in over SSH; Alice has a vault label `alice-secrets` and an agent,
 `alice/researcher`, on a two-hour lease.
@@ -618,8 +618,8 @@ kernel
   own channel.
 - The agent has its own principal, `/work` only and no `/net`; its escalations wait for Alice's
   approval, and the lease's end destroys its budget and everything it passed on.
-- No session or lease holds a `keyd` grant in M1 (separation and containment): `keyd`'s purposes are
-  the host key and audit signing.
+- No session or lease holds a `keyd` grant until M6 (persist, install, share): `keyd`'s purposes
+  are the host key and audit signing.
 - Bob crashing `walfsd:data` three times is blamed on his account each time: his sessions end and he
   is locked out for a while; Alice is not affected.
 
@@ -779,8 +779,8 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   a system server that hands one across label sets breaks confinement without the kernel noticing.
 - **Every child pays for a copy of its image.** There is no shared text: a launcher copies the ELF
   into pages charged to the child, and the stub copies each segment again. This is decided, for
-  M1 (separation and containment) and after. A read-only image-page cache shared between principals
-  is not planned: it would be a cross-principal timing surface
+  M1 (sessions over SSH, kept apart) and after. A read-only image-page cache shared between
+  principals is not planned: it would be a cross-principal timing surface
   ([a shared image cache](../beyond/image-cache.md)). The steward may still cache an image's
   bytes, to avoid reading them again, because each child still gets its own copy.
 - **A blame can be lost.** If the steward does not take `init`'s blame within its timeout, the

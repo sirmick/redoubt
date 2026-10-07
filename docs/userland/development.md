@@ -31,7 +31,7 @@ $ ssh alice@box
 
 Rust is built on the developer's own machine. A program for one's own use arrives by SFTP and runs
 unsigned, then and later. A program the steward is to launch with new grants, for another
-principal, arrives from M5 (persist, install, share) as a signed package:
+principal, arrives from M6 (persist, install, share) as a signed package:
 
 ```text
 laptop$ cargo build --release --target riscv64gc-unknown-redoubt-elf
@@ -57,7 +57,7 @@ handler, which Elixir's parallel compiler uses to wait for modules.
 
 ### Compiling on the box
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 `mix compile` and `mix test` run in the developer's session, in its VM, with its authority. Source
 and build output are files in the developer's volumes; the `.beam` files a build writes load into
@@ -75,7 +75,7 @@ run with authority the steward grants (for another principal, or as a package) i
 
 ### `git` through a gateway
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 `git` reaches its remotes through a gateway: a `gatewayd` capability for `git`, the documented path
 for people and agents alike ([gatewayd](../servers/gatewayd.md)).
@@ -97,7 +97,7 @@ for people and agents alike ([gatewayd](../servers/gatewayd.md)).
 
 ### Rust built off the box
 
-Status: planned · M4 (self-hosted development)
+Status: planned · M5 (self-hosted development)
 
 The Rust compiler is not ported, so native programs, servers and the kernel are built off the box
 with the `riscv64gc-unknown-redoubt-elf` target, against the client library ([native
@@ -111,13 +111,13 @@ signature gates something:
   oneself buys nothing enforceable ([native programs](native.md#launching-from-a-session)).
 - **A program the steward launches with new grants**, for another principal or as a package,
   needs a signature the principal trusts. That, with trust lists and packages, is
-  M5 (persist, install, share) ([packages](packages.md)).
+  M6 (persist, install, share) ([packages](packages.md)).
 
 **Open:** none.
 
 ### Signing keys
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 The box only checks signatures against trust lists; it does not care where a private key lives.
 - **A person may sign off the box** with their own key, and that is always valid.

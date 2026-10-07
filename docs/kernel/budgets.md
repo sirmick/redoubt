@@ -355,7 +355,7 @@ the caller's budget, not the handle's stamp.
 
 ### `budget_children`
 
-Status: planned · M5 (persist, install, share)
+Status: planned · M6 (persist, install, share)
 
 `budget_children(h) -> [h]` returns a handle to each child of the budget `h` names, so a restarted
 steward can find, and destroy, the budgets it created before it stopped. With it, a budget whose
