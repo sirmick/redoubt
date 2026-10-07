@@ -120,6 +120,10 @@ struct ConsoleIo {
     /// Whether reading has begun, and whether the input has ended.
     started: bool,
     ended: bool,
+    /// Whether a process of the VM reads the console, until the VM says none does
+    /// ([`Platform::console_listening`]). With none, no read goes out: typing waits at the
+    /// console, and what came before stays in `input` for the next reader.
+    listening: bool,
     /// The input's end has come and the VM has not read it yet: an idle returns with it, as with
     /// input (`ended` itself stays, so it is not what the early return tests, or an idle after
     /// the end would spin).
@@ -186,9 +190,9 @@ impl ConsoleIo {
         None
     }
 
-    /// Puts a read out, unless one is or the input has ended.
+    /// Puts a read out, unless one is, the input has ended, or nobody listens.
     fn read(&mut self, io: &mut Io) {
-        if self.reading.is_some() || self.ended {
+        if self.reading.is_some() || self.ended || !self.listening {
             return;
         }
         let buffer = match self.read_buffer.take() {
@@ -288,6 +292,7 @@ impl Redoubt {
             input: VecDeque::new(),
             started: false,
             ended: false,
+            listening: true,
             eof_pending: false,
             writing: None,
             write_buffer: None,
@@ -460,12 +465,10 @@ impl Platform for Redoubt {
     fn idle(&mut self, deadline: Option<u64>) {
         self.take_completed();
         // Anything that arrived before this idle is handed over now: a wait would sleep on it
-        // until some other wake-up came, if one ever did.
-        if !self.cons.input.is_empty()
-            || self.cons.eof_pending
-            || self.files.has_finished()
-            || self.sys.has_events()
-        {
+        // until some other wake-up came, if one ever did. Console input counts only while a
+        // process reads it: with none, the VM would spin on what nobody takes.
+        let console = self.cons.listening && (!self.cons.input.is_empty() || self.cons.eof_pending);
+        if console || self.files.has_finished() || self.sys.has_events() {
             return;
         }
         let now = self.monotonic_us();
@@ -502,6 +505,14 @@ impl Platform for Redoubt {
 
     /// Asked afresh each time, never cached: the console's size can change.
     fn console_size(&mut self) -> Option<(u16, u16)> { self.console.size(&mut self.lend).ok().flatten() }
+
+    /// A reader again: the read that waited for one goes out (it may be the first).
+    fn console_listening(&mut self, listening: bool) {
+        self.cons.listening = listening;
+        if listening && self.cons.started {
+            self.cons.read(&mut self.io);
+        }
+    }
 
     fn console_read(&mut self) -> ConsoleInput {
         if !self.cons.started {

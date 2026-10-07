@@ -1271,17 +1271,28 @@ impl System {
         }
     }
 
+    /// Make `reader` the process console input goes to (none for `None`), and tell the platform
+    /// whether anyone listens: with nobody, input it holds is no reason to wake the VM.
+    pub(crate) fn set_console_reader(&mut self, reader: Option<Pid>) {
+        if self.console_reader.is_some() != reader.is_some() {
+            self.platform.lock().console_listening(reader.is_some());
+        }
+        self.console_reader = reader;
+    }
+
     /// End process `p`: tell its links and monitors, then free its slot.
     /// Pass console input, if any has arrived, to the process reading it.
     fn poll_console(&mut self) {
         let Some(reader) = self.console_reader else {
             return;
         };
-        let input = match self.platform.lock().console_read() {
+        // The platform's lock goes before the match: an end tells the platform nobody listens.
+        let read = self.platform.lock().console_read();
+        let input = match read {
             ConsoleInput::Nothing => return,
             ConsoleInput::Data(bytes) => Some(bytes),
             ConsoleInput::Eof => {
-                self.console_reader = None;
+                self.set_console_reader(None);
                 None
             }
         };
@@ -1391,7 +1402,7 @@ impl System {
             self.port_ended(pid);
         }
         if self.console_reader == Some(pid) {
-            self.console_reader = None;
+            self.set_console_reader(None);
         }
         if let Some(name) = &p.registered_name {
             self.registered.remove(name.as_str());
@@ -1613,6 +1624,8 @@ mod tests {
     struct Bundle {
         files: Home,
         app_attempts: Arc<AtomicUsize>,
+        /// What the VM said of the console's reader, in order: 1 for listening, 2 for not.
+        listening: Arc<AtomicUsize>,
     }
 
     struct Home {
@@ -1705,6 +1718,11 @@ mod tests {
 
         fn console_write(&mut self, _bytes: &[u8]) {}
 
+        fn console_listening(&mut self, listening: bool) {
+            let said = self.listening.load(Ordering::Relaxed);
+            self.listening.store(said * 10 + if listening { 1 } else { 2 }, Ordering::Relaxed);
+        }
+
         fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
 
         fn load_module(&mut self, module: &str) -> Lookup {
@@ -1738,11 +1756,32 @@ mod tests {
         let mut vm = Vm::new(Box::new(Bundle {
             files: Home { reading: None, operations: Arc::clone(&operations) },
             app_attempts: Arc::clone(&app_attempts),
+            listening: Arc::new(AtomicUsize::new(0)),
         }));
         let sys = vm.sys.get_mut();
         assert!(sys.add_code_path("/lib".into(), false));
         assert!(sys.add_code_path("/home/p".into(), true));
         (vm, operations, app_attempts)
+    }
+
+    /// The platform hears when the console gets a reader and when it has none (the reader's
+    /// exit or the input's end), once each: with nobody reading, input it holds must not wake the
+    /// VM. A second reader in place of the first changes nothing it is told.
+    #[test]
+    fn the_platform_hears_the_console_reader_come_and_go() {
+        let listening = Arc::new(AtomicUsize::new(0));
+        let mut vm = Vm::new(Box::new(Bundle {
+            files: Home { reading: None, operations: Arc::new(AtomicUsize::new(0)) },
+            app_attempts: Arc::new(AtomicUsize::new(0)),
+            listening: Arc::clone(&listening),
+        }));
+        let sys = vm.sys.get_mut();
+        let (first, second) =
+            (Pid { serial: 1, index: 1, port: false }, Pid { serial: 1, index: 2, port: false });
+        sys.set_console_reader(Some(first));
+        sys.set_console_reader(Some(second));
+        sys.set_console_reader(None);
+        assert_eq!(listening.load(Ordering::Relaxed), 12, "listening once, then not once");
     }
 
     #[test]

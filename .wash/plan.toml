@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 321
+revision = 327
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -44,47 +44,47 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "M1"
-  title = "M1 (separation and containment)"
+  title = "M1 (sessions over SSH, kept apart)"
   template = "milestone"
-  body = "docs/plan/m1-separation.md"
+  body = "docs/plan/m1-separation.md. Alice and Bob log in over SSH (and on the console) into Elixir sessions on QEMU, each in fixed sub-budgets per label set, with files (read-only system, writable /home and /vault), kept apart and attack-tested; a dead steward restarts without a reboot; the scheduler's targets hold. The steward's second half (leases, agents, the powerbox, approvals, declassification, crash blame), the agent and the attack suite, approve@box and vault sessions over SSH, gen_tcp and the model on the real kernel moved to M3 (agents, approvals and the attack suite), after M2, on the owner's word (2026-10-07). Remaining: STEWARD2, K23, K26, WFS2, BOOT2, BEAM4's cases, K27, K29, BEAM12, BEAM13."
   state = "reported"
-  revision = 105
+  revision = 323
 
 [[node]]
   id = "M2"
   title = "M2 (usable shell)"
   template = "milestone"
   needs = ["M1"]
-  body = "docs/plan/m2-usable-shell.md"
+  body = "docs/plan/m2-usable-shell.md. The near-term goal (owner, 2026-10-07). Two tracks: the shell (built on the host first, then on Redoubt) and several harts (SMP3, then SMP2). The host shell track (shell-host) starts now, ahead of M1, on the owner's word; the on-Redoubt shell steps follow M1."
   state = "todo"
-  revision = 2
+  revision = 323
 
 [[node]]
   id = "M3"
-  title = "M3 (files in and out)"
+  title = "M4 (files in and out)"
   template = "milestone"
-  needs = ["M2"]
+  needs = ["AGENTS"]
   body = "docs/plan/m3-files.md"
   state = "todo"
-  revision = 2
+  revision = 323
 
 [[node]]
   id = "M4"
-  title = "M4 (self-hosted development)"
+  title = "M5 (self-hosted development)"
   template = "milestone"
   needs = ["M3"]
   body = "docs/plan/m4-self-hosted.md"
   state = "todo"
-  revision = 2
+  revision = 323
 
 [[node]]
   id = "M5"
-  title = "M5 (persist, install, share)"
+  title = "M6 (persist, install, share)"
   template = "milestone"
   needs = ["M4"]
   body = "docs/plan/m5-persist.md"
   state = "todo"
-  revision = 2
+  revision = 323
 
 [[node]]
   id = "S2"
@@ -100,11 +100,11 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   id = "agent-suite"
   title = "The agent and the attack suite"
   template = "step"
-  parent = "M1"
+  parent = "AGENTS"
   needs = ["sshd"]
   body = "docs/userland/agents.md; docs/plan/m1-separation.md#attack-suite"
   state = "todo"
-  revision = 2
+  revision = 323
 
 [[node]]
   id = "beamlet-redoubt"
@@ -159,31 +159,31 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   id = "model-replay"
   title = "The model on the real kernel"
   template = "step"
-  parent = "M1"
+  parent = "AGENTS"
   needs = ["agent-suite"]
   body = "docs/kernel/model.md#replaying-traces-on-the-real-kernel; docs/todo/abi-model-disagreements.md"
   state = "todo"
-  revision = 2
+  revision = 323
 
 [[node]]
   id = "sshd"
-  title = "sshd"
+  title = "sshd: vault sessions and approve@box"
   template = "step"
-  parent = "M1"
+  parent = "AGENTS"
   needs = ["steward", "SSH1"]
   body = "docs/servers/sshd.md (the box's platform, approve@box; the core is SSH1's); docs/userland/sessions.md"
   state = "todo"
-  revision = 2
+  revision = 323
 
 [[node]]
   id = "steward"
-  title = "The steward"
+  title = "The steward: principals, sub-budgets per label set, sessions, restart"
   template = "step"
   parent = "M1"
   needs = ["STEWARD1", "FSD3", "BEAM2", "INIT3", "SSH1"]
-  body = "docs/servers/steward.md; docs/userland/sessions.md; docs/servers/sshd.md#sessions-over-ssh. The server in four packages: STEWARD2 (principals, sub-budgets, sessions on the console and over SSH), STEWARD3 (leases, approve@box, blame), STEWARD4 (declassification and push; the responsiveness targets with the real steward, docs/kernel/scheduling.md#responsiveness, R10 30 ms and the deadline notice 40 ms already restored). Sessions are M1's by docs/userland/sessions.md."
+  body = "docs/servers/steward.md; docs/userland/sessions.md; docs/servers/sshd.md#sessions-over-ssh. M1's half of the steward: STEWARD2 (principals, sub-budgets, sessions on the console and over SSH), K23 (restart), K26 (sshd after a restart). STEWARD3 and STEWARD4 moved to M3 (agents, approvals and the attack suite)."
   state = "todo"
-  revision = 86
+  revision = 323
 
 [[node]]
   id = "FMT1"
@@ -651,11 +651,11 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   id = "BEAM5"
   title = "gen_tcp over /net"
   template = "package"
-  parent = "beamlet-redoubt"
+  parent = "AGENTS"
   needs = ["BEAM3"]
   body = "docs/userland/beamlet.md#beamlet-on-redoubt: gen_tcp over a backend that opens /net/tcp/clone and reads and writes the data file, framing in Erlang. M1's attack suite needs a session's TCP (the loopback login row, R59). Brief to come."
   state = "todo"
-  revision = 2
+  revision = 323
 
 [[node]]
   id = "INIT5"
@@ -888,21 +888,21 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   id = "STEWARD3"
   title = "The steward server: leases and agents, the powerbox at approve@box, crash blame"
   template = "package"
-  parent = "steward"
+  parent = "AGENTS"
   needs = ["STEWARD2", "BEAM4", "IPC3", "SCHED1"]
   body = "Brief: .wash/local/STEWARD3-implementer.md (architect-15). Tier A, size L. docs/servers/steward.md#leases, #the-powerbox-and-approvals, #crash-blame, R38-R41; docs/userland/sessions.md#approve; docs/userland/agents.md; docs/servers/init.md#restarts-and-reboots; docs/servers/serving.md#admit."
   state = "todo"
-  revision = 86
+  revision = 323
 
 [[node]]
   id = "STEWARD4"
   title = "The steward server: declassification and push; the responsiveness targets measured with the real steward"
   template = "package"
-  parent = "steward"
+  parent = "AGENTS"
   needs = ["STEWARD3", "K19"]
   body = "Brief: .wash/local/STEWARD4-implementer.md (architect-15). Tier A, size M. docs/servers/steward.md#declassification-and-push, R42; docs/servers/init.md#the-confinement-check; docs/kernel/scheduling.md#responsiveness (targets unchanged; a new case steward-latency beside sched-latency; a miss is a finding, not a tuning)."
   state = "todo"
-  revision = 86
+  revision = 323
 
 [[node]]
   id = "VOL2"
@@ -1169,11 +1169,11 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   id = "SRV1"
   title = "The three file servers share one argument parser, one blkd range client, one quota ledger and one volume module"
   template = "package"
-  parent = "M1"
+  parent = "M2"
   needs = ["WFS2"]
   body = "Found by EROFS1's and WFS2's simplifiers (2026-10-06/07): littlefsd, erofsd and walfsd each carry their own copy of parse_args (endpoint=, labels=, buckets=), the blkd range client (MAX_SECTORS 64, call(), Fault/Geometry/Range/SECTOR), the quota ledger (quota.rs, 222 lines, differing in VOLUME and spare()) and one_volume.rs; about 310 of walfsd's 1,156 lines are littlefsd's verbatim; docs/todo/file-server-arguments-and-range-client.md records the first two. Tier A (servers' trusted code shrinks), size M: lift the four into redoubt_rt::server (or a libs/fileserver crate on the skeleton) with one set of tests, the three servers calling them; size-budget lines fall per server and rise once in the shared crate; the todo page is deleted; servers/README.md's skeleton section names the shared pieces. Gates: every file server's host tests and cases both widths, the smoke set."
   state = "todo"
-  revision = 243
+  revision = 323
 
 [[node]]
   id = "K26"
@@ -1281,8 +1281,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM10's red: vm.rs:1394 clears console_reader when the reading process exits; poll_console then returns without draining, cons.input stays non-empty, and idle's 'something is there' return fires on every pass: a hot loop burning the session's budget until some process reads the console again. Fix: with no reader, input is drained (or held in a bounded buffer the next reader gets) and does not count as 'something there'; a host test on the fake kernel: the reader exits with input queued, the scheduler idles (idle's wait is entered), a later reader gets the bounded buffer or nothing, as the page says. beamlet.md's console paragraph says which. Tier B. Size S."
-  state = "todo"
-  revision = 308
+  state = "done"
+  revision = 327
 
 [[node]]
   id = "B25"
@@ -1292,3 +1292,90 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by the whole bench for trains 9-11 on 26f79ed08: rv64 bench-ssh-loopback-deadlock (timeout_secs 0.2; must_fail '^session (alice|bob): step 1: timed out waiting for mark \"(alice|bob)-ready\"$') FAILS deterministically, 3/3 alone through q and 1/1 outside q: 'bench error: reading the server's log .../ssh/bench-ssh-loopback-deadlock/sshd.log: No such file or directory'; the run directory is empty. Its siblings (bench-ssh-loopback, -exit) pass. It PASSED in trains 7 (ef2ab5a94, after B22's stderr-to-log change) and 8 (bdb38430e). Merges since: K19, B8, B23, B20, B9 (tools/testbench/src/ssh.rs tests module + a doc sentence), BEAM9 (libs/rt ninep_mux copy-out), BEAM10, K28, RECON1. Bisect over those merge points with one prebuilt each (the case takes 1.5 s), name the commit, then fix: either the bench treats a missing server log as empty when the case expects a timeout before the server starts (the case's claim is ssh's timeout, not the server's log), or the cause the bisect finds. Gates: the 14 loopback cases rv64, cargo test -p testbench, docs, formatting, size/unsafe/no-cruft. Size S."
   state = "done"
   revision = 320
+
+[[node]]
+  id = "AGENTS"
+  title = "M3 (agents, approvals and the attack suite)"
+  template = "milestone"
+  needs = ["M2"]
+  body = "Moved out of M1 on the owner's word (2026-10-07), to run after M2: the steward's second half (leases and agents, the powerbox at approve@box, crash blame: STEWARD3; declassification and push, the responsiveness targets with the real steward: STEWARD4), sshd's vault sessions and approve@box, gen_tcp (BEAM5), Alice's agent under a lease and the scripted hostile agent and user (the attack suite), and the model's traces replayed on the real kernel. Page: docs/plan/m3-agents.md (to be split out of m1-separation.md). Node ids M3, M4, M5 keep their ids; their titles are M4, M5, M6."
+  state = "todo"
+  revision = 323
+
+[[node]]
+  id = "PLAN2"
+  title = "The milestone pages follow the split: M1 is the SSH slice, a new M3 page holds agents, approvals and the attack suite, the later pages renumber"
+  template = "package"
+  parent = "M1"
+  body = "Docs only. docs/plan/m1-separation.md keeps the SSH slice (goal, its attack cases, remaining work, progress); the agents, approvals, attack-suite, approve@box, vault-over-SSH, gen_tcp and model-replay parts move to a new docs/plan/m3-agents.md placed after M2; m3-files.md, m4-self-hosted.md, m5-persist.md become M4, M5, M6 (file names may stay; titles, cross-links and every 'M3'/'M4'/'M5' reference in the book follow); docs/SUMMARY.md, README.md, GETTING-STARTED.md and every page citing a milestone by number updated; m2-usable-shell.md says the host shell track starts ahead of M1. The docs check passes. Size S-M."
+  state = "active"
+  revision = 324
+
+[[node]]
+  id = "SHELL2"
+  title = "The terminal on the host: the raw console, the shell's driver under group and edlin, Redoubt.Term, line editing and history, the interrupt"
+  template = "package"
+  parent = "shell-host"
+  body = "M2 host step 1 (docs/plan/m2-usable-shell.md#the-shell): docs/userland/beamlet.md#the-console-on-a-host; docs/userland/shell.md#the-terminal-library, #line-editing-and-history, #hostile-text-never-drives-the-terminal; shell plan phases G1 (the CLI puts the tty in raw mode and restores it on every exit) and G2 (group's requests drawn through the encoder; Redoubt.Term). Host only; ./test-shell on beamlet and the BEAM; the pages' status lines move from planned to built, host-tested. Size M-L."
+  state = "active"
+  revision = 325
+  overrides = ["2026-10-07: started by Orchestrator before M1 (reported): Owner (2026-10-07): M2 is the near-term goal; its host shell track starts now, ahead of M1. SHELL2 is host-only (userland/shell, beamlet's host CLI), touches no kernel, server or machine path, and is tested by the shell's own suite."]
+
+[[node]]
+  id = "SHELL3"
+  title = "Screens on the host: beamlet-screen's natives over cells, Redoubt.Screen and its layout, pick first"
+  template = "package"
+  parent = "shell-host"
+  needs = ["SHELL2"]
+  body = "M2 host step 2: docs/userland/beamlet.md#screen-natives; docs/userland/shell.md#full-screen-programs; shell plan section 4 (natives are primitives over cells, never widgets; one Erlang process per screen). Size M."
+  state = "todo"
+  revision = 323
+
+[[node]]
+  id = "SHELL4"
+  title = "The pager, help drawn in it, and completion, on the host"
+  template = "package"
+  parent = "shell-host"
+  needs = ["SHELL3"]
+  body = "M2 host step 3: docs/userland/shell.md#session-commands-and-the-pager, #completion, #help. Size M."
+  state = "todo"
+  revision = 323
+
+[[node]]
+  id = "SHELL5"
+  title = "The widgets on the host: menu bar, dialogs, input, lists, table, canvas"
+  template = "package"
+  parent = "shell-host"
+  needs = ["SHELL3"]
+  body = "M2 host step 4: docs/userland/shell.md#full-screen-programs. Size M."
+  state = "todo"
+  revision = 323
+
+[[node]]
+  id = "SHELL6"
+  title = "The editor, then the file manager, on the host"
+  template = "package"
+  parent = "shell-host"
+  needs = ["SHELL5"]
+  body = "M2 host step 5: docs/userland/shell.md#the-editor (an Erlang process with session authority: never turns file content into action). Size L."
+  state = "todo"
+  revision = 323
+
+[[node]]
+  id = "SHELL7"
+  title = "Resource use on the host"
+  template = "package"
+  parent = "shell-host"
+  needs = ["SHELL2"]
+  body = "M2 host step 6: docs/userland/shell.md#resource-use. Size S-M."
+  state = "todo"
+  revision = 323
+
+[[node]]
+  id = "shell-host"
+  title = "The shell on the host: terminal, screens, pager, widgets, editor, file manager, resource use"
+  template = "step"
+  parent = "M2"
+  body = "docs/plan/m2-usable-shell.md#the-shell (the host steps 1-6); docs/userland/shell.md; the owner's signed-off shell plan (.wash/local/shell-plan.md, phases G1-G5). Starts now, ahead of M1, on the owner's word (2026-10-07): every package here runs on the host (beamlet and the BEAM), no kernel or server change, tested by the shell's ExUnit suite through ./test-shell."
+  state = "todo"
+  revision = 323
