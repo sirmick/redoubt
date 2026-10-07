@@ -135,7 +135,10 @@ pub struct Expired {
 /// re-arm, and any share left over (a wait whose thread a deadline's destruction ended), go to
 /// the budget billed last. With no wait due, the walk goes with the first deadline, or to the
 /// budget of a wait the walk found ended before its timeout (it left the timer early), or with
-/// neither to nobody.
+/// neither to nobody. The intervals are contiguous: each bill closes at a tick that opens the
+/// next, so a bill's own handling is in the interval after it, and the last bill opens the budget
+/// billed last's billing (`sched::bill_from`), which the entry's next payer closes. No part of
+/// the expiry falls between two intervals, to nobody.
 pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     let now = now_us();
     if TIMER.with(|t| t.threads > now && t.budgets > now) {
@@ -171,7 +174,7 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
         };
         expired = true;
         if let (true, Some((_, pid, tid))) = (timeout_first, timeout) {
-            last = MemoryManager::with_mut(|mm| {
+            let billed = MemoryManager::with_mut(|mm| {
                 if crate::message::pop_due(mm, pid, tid) {
                     crate::message::time_out(ss, mm, pid, tid);
                 }
@@ -179,9 +182,13 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
                 pool -= take;
                 let frame = mm.budget_of(pid)?;
                 let b = BudgetRef { frame, id: mm.budget(frame).id };
-                crate::sched::bill(mm, b, take + crate::sched::now_ticks().saturating_sub(started));
-                Some(b)
+                let at = crate::sched::now_ticks();
+                crate::sched::bill(mm, b, take + at.saturating_sub(started));
+                Some((b, at))
             });
+            last = billed.map(|(b, _)| b);
+            // The next interval opens where this bill closed, so the bill's own handling is in it.
+            started = billed.map_or_else(crate::sched::now_ticks, |(_, at)| at);
         } else if let Some((_, _, frame)) = budget {
             // The payer `destroy_subtree` names, asked as it asks: after `mark_dying`.
             last = MemoryManager::with_mut(|mm| {
@@ -190,8 +197,8 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
             });
             crate::budget::destroy_subtree(ss, frame, running(), Some(started));
             destroyed = true;
+            started = crate::sched::now_ticks();
         }
-        started = crate::sched::now_ticks();
     }
     // Nothing expired: the walk found a wait that ended before its timeout.
     let stale = !expired && walk.stale.is_some();
@@ -213,12 +220,14 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
         t.armed[hart::index()] = 0;
     });
     rearm();
-    MemoryManager::with_mut(|mm| {
-        if let Some(b) = last {
-            crate::sched::bill(mm, b, pool + crate::sched::now_ticks().saturating_sub(started));
-        }
-        crate::message::audit(mm);
-    });
+    let at = crate::sched::now_ticks();
+    if let Some(b) = last {
+        MemoryManager::with_mut(|mm| crate::sched::bill(mm, b, pool + at.saturating_sub(started)));
+    }
+    // From the last bill on, the rest of the entry is the budget billed last's (none with nothing
+    // expired), the bill's own handling included; an audit below is charged to no one.
+    crate::sched::bill_from(last, at);
+    MemoryManager::with(crate::message::audit);
     // The deadlines' destructions audit once, here: inside the loop, a wait due later than one
     // was still on the due list.
     #[cfg(debug_assertions)]

@@ -242,7 +242,7 @@ deadline itself. The only delay is the kernel work already in progress when the 
 
 ### R12 (scheduling) for timer work
 
-Status: built · tested: bench:sched-timer-flood, bench:deadline-flood-billed
+Status: built · tested: bench:sched-timer-flood, bench:deadline-flood-billed, bench:sched-exit-churn, mutation:R12TimerWorkUnbilled
 
 R12 is owned by [scheduling](scheduling.md#r12-scheduling); this is how its charging applies to
 the timer's work. Each expired item's work is billed under it: a timeout to its thread's budget, a deadline's
@@ -254,7 +254,10 @@ neighbour's. The timer is armed for a timeout only when its thread blocks, so a 
 has passed, or that is answered at once, arms nothing. A wait that ends before its timeout leaves
 the timer early; the walk that finds it gone is billed to the waiting thread's budget. The rest of
 the entry, the timer's own handling, goes to the budget whose item or wait it found last, so the
-budget the timer interrupted pays for none of it. So a process that arms many timers a
+budget the timer interrupted pays for none of it. Each bill closes its interval at the tick that
+opens the next, and the last opens the rest of the entry's, so a timeout's bill never leaves its
+own handling between two intervals, nobody's; a deadline's destruction still does
+([scheduling](scheduling.md#residual-risks)). So a process that arms many timers a
 microsecond apart, or creates many budgets with staggered deadlines, spends its own CPU share, not
 a neighbour's.
 

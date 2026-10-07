@@ -605,6 +605,33 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
             "ten zero-length runs charged less than the minimum each (a sub-tick run was free)",
         )?;
     }
+    // The pick and switch into a budget are paid by the budget picked, whatever ended the run
+    // before: here a block, whose budget pays for the block alone.
+    {
+        use redoubt_model::sched::Scheduler;
+        let mut s = Scheduler { mutation, ..Scheduler::default() };
+        s.add_budget(1, None, 1 << 31);
+        let w = 10;
+        for b in [2, 3] {
+            s.add_budget(b, Some(1), w);
+            s.thread_runnable(b, (b, 0));
+        }
+        s.reconcile();
+        let a = s.pick().map(|c| c.budget).ok_or("nothing picked")?;
+        s.run(100);
+        s.thread_blocked(a, (a, 0));
+        s.reconcile();
+        let b = s.pick().map(|c| c.budget).ok_or("nothing picked after the block")?;
+        let (pa, pb) = (s.budgets[&a].pass, s.budgets[&b].pass);
+        let work = 1_000;
+        s.bill_switch(a, b, work);
+        expect(s.budgets[&a].pass == pa, "the budget that blocked paid for the switch into another")?;
+        s.run(1);
+        s.thread_blocked(b, (b, 0));
+        s.reconcile();
+        let want = u128::from(work * redoubt_model::spec::STRIDE / w);
+        expect(s.budgets[&b].pass >= pb + want, "the budget picked did not pay for the switch into it")?;
+    }
     Ok(())
 }
 

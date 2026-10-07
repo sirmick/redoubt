@@ -231,6 +231,11 @@ pub enum Mutation {
     /// The kernel's work between a pick and the thread's return to user mode comes out of its
     /// slice.
     R12SliceCountsExitWork,
+    /// A timer interrupt's work for the timeouts it expires is billed to no budget.
+    R12TimerWorkUnbilled,
+    /// The pick and switch into a budget are billed to the budget that ran before it, not the
+    /// one picked.
+    R12SwitchBilledToPrevious,
     // kernel/ipc.md, Messages: what the kernel attaches, and notices.
     /// Messages carry no labels.
     MsgNoLabels,
@@ -373,7 +378,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 151] = {
+    pub const ALL: [Mutation; 153] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -470,6 +475,8 @@ impl Mutation {
             R12RescaleOnlyOnReturn,
             R12DeadlineWorkUnbilled,
             R12SliceCountsExitWork,
+            R12TimerWorkUnbilled,
+            R12SwitchBilledToPrevious,
             MsgNoLabels,
             MsgBadgeZero,
             MsgAccountZero,
@@ -620,7 +627,9 @@ impl Mutation {
             | R12NoMinimumCharge
             | R12RescaleOnlyOnReturn
             | R12DeadlineWorkUnbilled
-            | R12SliceCountsExitWork => "R12",
+            | R12SliceCountsExitWork
+            | R12TimerWorkUnbilled
+            | R12SwitchBilledToPrevious => "R12",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "R13",
             MsgNoLabels | MsgBadgeZero | MsgAccountZero | MsgIdsGlobal => "R14",
             BlameNobody
