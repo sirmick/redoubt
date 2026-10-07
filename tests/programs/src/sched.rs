@@ -841,6 +841,11 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
                 thread(flood_waiter, i);
             }
             thread(flood_answerer, threads - 1);
+            // One timed wait for the window, not a nap each millisecond: a nap that times out is
+            // a wait due at every expiry walk of this process, and each such walk recomputes its
+            // timer hint from the waits still blocked, so a hint a cancelled wait left behind,
+            // 15 ms ahead, would never be reached.
+            sleep_until(end, tpu);
             await_done(threads);
             TOTAL.load(SeqCst) as u64
         }

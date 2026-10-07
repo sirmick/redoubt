@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 254
+revision = 260
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1088,8 +1088,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Seen in train 3's whole bench on 777bba164 (SCHED1 merged), rv64 sched-timer-flood: 'share cancelled-waits: net 466, gross 431 of 1000 ... 0 finding another budget's wait ended early (none, but the case requires some): target met' and the case FAILs on that requirement alone. The clause was written when the 10 ms slice made a wait's early end common under a pending timer; at 1 ms the timer's interrupt comes before any wait is cancelled. Tier B, size S: either the fixture makes the event certain (a wait cancelled with its timer armed and due within the slice: state how), or the requirement becomes a count reported with no verdict, with testbench.md's clause table saying which and why. Rerun both widths alone; the oracle's other clauses unchanged."
-  state = "todo"
-  revision = 201
+  state = "done"
+  revision = 260
 
 [[node]]
   id = "B18"
@@ -1125,8 +1125,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["B18"]
   body = "Measured by B18 (2026-10-06): in release on one thread, the model's steward_policy family costs 0.6 s/seed and steward_noninterference 0.94 s/seed (kernel families under 1 ms/seed); at 20,000 and 10,000 seeds the two are about 6 core-hours, which no fanout hides; and three mutations (PolicyDeclassifyUnfit caught at steward_policy seed 4,709 after 1,720 s; R2OneCursor and PolicyAgentOtherSet past 29 min) are caught only deep in the run. B18 splits the steward families into their own bounded case and bounds a mutation job. Tier A (the model), size M: (1) profile a steward seed and bring its cost down where the cost is accidental (allocation, cloning the steward core's state per step, the Elixir-shaped reference); (2) decide the seed counts from the coverage they buy, with a measurement (how many seeds until every rule and mutation is reached), not by habit; (3) the three late-caught mutations: a directed scenario each that catches them in seconds, or the finding that the model cannot distinguish them, written as a residual; (4) the model's page states the per-family cost and budget. Acceptance: the steward case under 10 min on 4 cores; every mutation caught inside the bench's bound."
-  state = "todo"
-  revision = 216
+  state = "active"
+  revision = 255
 
 [[node]]
   id = "K25"
@@ -1187,12 +1187,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "K27"
-  title = "A process that carves all of its budget's weight ends silently: exit 0, no line"
+  title = "The shell VM ends silently when a budget carve is refused; the kernel's refusal is right and the VM's handling is not"
   template = "package"
   parent = "M1"
-  body = "Found by BEAM4 (2026-10-07): when the shell VM carved a child budget taking all of its own budget's weight, the VM ended with exit 0 and no console line; BEAM4's report names it as the kernel's question. Tier A (the budget calls' rules), size S: find whether the kernel kills or starves a budget left with zero weight (R12: a budget with no weight never runs; the carve should be refused, or the parent keeps a floor), state the rule on budgets.md with a model rule and mutation, make the carve refuse with a named error at the ABI, and add a case (a carve of the whole weight is refused; the parent keeps running). The VM's handling of a refused carve is BEAM4's: the native returns the error name."
+  body = "Found by BEAM4 (2026-10-07), judged by its red: when the shell VM carved a child budget taking all of its own budget's weight, the VM ended with exit 0 and no console line. The kernel is right: budget.rs:880-885 refuses carving all of a parent's free weight when the parent holds a process (invalid_argument), and process.rs:366 refuses process_create into free weight 0; the silent exit is the VM's handling of that error (an unmatched {error,_}, or idle(None) giving up). BEAM4 fixes the handling in its fold (the shell prints the refusal and stays). Tier B, size S, remaining: a case that carves the whole weight from a session and expects the refusal line and the prompt back; budgets.md's carve paragraph states the floor rule in one sentence if it does not; close when the case passes both widths."
   state = "todo"
-  revision = 249
+  revision = 257
 
 [[node]]
   id = "B22"
@@ -1200,5 +1200,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Trains 4 and 5 (2026-10-07), both widths, deterministic: the case expects '... ssh exited (status 255), expected 0; last output: Host key verification failed.' and gets '... last output: Error: Broken pipe (os error 32)': ssh refuses the pinned key and exits 255 as intended, but the loopback sshd's ProxyCommand side writes its broken-pipe error after ssh's own last line, so the bench's 'last output' is the wrong process's. Tier B, size S: the session runner's failure text names ssh's exit status and the last line ssh itself wrote (stderr of the ssh process, not the ProxyCommand's), or must_fail matches the host-key line anywhere in the session's output; the bench's own test for the runner's text; rerun the case both widths and the 13 other loopback cases."
-  state = "todo"
-  revision = 250
+  state = "active"
+  revision = 259

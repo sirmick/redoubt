@@ -244,14 +244,16 @@ The trace checks every timer interrupt from user mode (`bench:sched-timer-flood`
 expiry it charges only the budget it found last, an expired item's or a wait's that ended before
 its timeout, and with neither, only the budget it interrupted, when it ends that budget's slice.
 Against 30 sleepers a microsecond apart, the same with 64 staggered budget deadlines, and two
-waits answered at once 15 ms before their timeouts, the victim gets 494, 492 and 493 of 1000 net
-on rv64 and 491, 490 and 492 on rv32, and no timer interrupt is nobody's. The last case requires
+waits answered at once 15 ms before their timeouts, the victim gets 473, 473 and 477 of 1000 net
+on rv64 and 468, 469 and 481 on rv32, and no timer interrupt is nobody's. The last case requires
 interrupts that found the attacker's waits ended early inside the victim's window, so the check
-cannot pass for want of them: 55 on rv64 and 48 on rv32. A sleep of a microsecond
-has passed before its call would block, so it arms nothing; when every call armed the timer,
-each such sleep made an interrupt that found nothing. With the rest of each timer interrupt
-billed to the budget it interrupted (`timer-tail-billed`, the recorded negative run), the check
-fails on both widths: the victim pays for the attacker's waits that ended early.
+cannot pass for want of them: 73 on rv64 and 19 to 20 on rv32. Its attacker holds no other
+timed wait that times out within the window: one due at every expiry walk of its process would
+reset the timer's hint each slice, and a hint 15 ms ahead would never come. A sleep of a
+microsecond has passed before its call would block, so it arms nothing; when every call armed
+the timer, each such sleep made an interrupt that found nothing. With the rest of each timer
+interrupt billed to the budget it interrupted (`timer-tail-billed`, the recorded negative run),
+the check fails on both widths: the victim pays for the attacker's waits that ended early.
 
 A server that works for a caller spends its own budget's CPU: no time is donated
 ([Residual risks](#residual-risks)). CPU charging is separate from page charging
@@ -472,8 +474,8 @@ victim 580 (391) and 497 (316).
 `sched-exit-churn` and `sched-timer-flood` are judged the same way, since a process's start and
 end and a deadline's destruction each run an audit: against processes that exit, the victim gets
 495 of 1000 net on rv64 (459 gross) and 492 on rv32 (459); against processes that fault, 497
-(464) and 498 (468); against sleepers, 494 (494) and 491 (491); against sleepers and staggered
-budget deadlines, 492 (484) and 490 (487); against waits ended early, 493 (493) and 492 (492). So
+(464) and 498 (468); against sleepers, 473 (465) and 468 (455); against sleepers and staggered
+budget deadlines, 473 (429) and 469 (408); against waits ended early, 477 (432) and 481 (425). So
 is `sched-carve-return`'s, from its carve's return, whose destruction and audit come before it: 496
 and 497, net and gross. The other shares stay in their programs. `sched-large-weight`,
 `sched-server-busy` and `sched-carve-inflation` judge a ratio of counts: what each budget ran,
