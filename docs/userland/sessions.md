@@ -29,15 +29,24 @@ At the prompt, the session's namespace is a table you can print:
 
 ```elixir
 /home/alice (1)> ns()
-/home/alice  walfsd:data       (Alice's home volume)
-/dev/cons    sshd         (this SSH channel)
-/boot        bootfsd      (the boot bundle, read-only)
-/net         ipd          (the hosts and ports this session may reach)
+/boot          bootfsd
+/home/alice
+/net
+/dev/cons
+steward
+budget
+bootfsd
+erofsd:system
 /home/alice (2)> File.ls!("/home/alice")
 ["notes.txt", "src"]
 /home/alice (3)> File.read("/home/bob/notes.txt")
 {:error, :enoent}
 ```
+
+A line with a `/` is a path the session reaches, with the handle's name beside it when the same
+handle was also handed by name (`/boot` is `bootfsd`); a line without one is a named handle: the
+steward's grant to this session, the session's own `budget`, and the system volume beamlet loads
+its modules from.
 
 `bind/2` makes a connection the session already holds appear at another prefix. It creates no
 authority, only a name:

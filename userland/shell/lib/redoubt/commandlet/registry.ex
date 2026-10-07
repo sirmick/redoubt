@@ -20,7 +20,10 @@ defmodule Redoubt.Commandlet.Registry do
     # started it, as under a test runner.
     _ = Application.load(@app)
 
+    # The wire's codecs and clients, compiled into the application, declare none: they are not
+    # loaded to be asked, so the prompt does not hold them until a session calls a server.
     for module <- Enum.sort(Application.spec(@app, :modules) || []),
+        not String.starts_with?(Atom.to_string(module), "Elixir.Redoubt.Wire."),
         Code.ensure_loaded?(module),
         function_exported?(module, :__commandlets__, 0),
         do: module
