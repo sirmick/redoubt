@@ -1,16 +1,17 @@
-description = "The attack: one bit flipped, after the pack, in the userland volume's first level-1 tree block, the one over the blocks erofsd reads first at its start, while the signed manifest pins the pack's root (docs/servers/verityd.md, R76 (verified volumes)). verityd checks the top block against the root at start and passes; at erofsd's first read it fetches the level-1 block, finds it does not hash to its slot in the top, and says so naming the tree block; the read fails, and erofsd serves the volume as corrupt; beamlet's attach is refused and it parks. Nobody exits, restarts or reboots. The verdict is the system's: verityd's line, erofsd's and init's (rule F)"
+description = "The attack: one bit flipped, after the pack, in the userland volume's first level-1 tree block, the one over the blocks erofsd reads first at its start, while the signed manifest pins the pack's root (docs/servers/verityd.md, R76 (verified volumes)). verityd checks the top block against the root at start and passes; at erofsd's first read it fetches the level-1 block, finds it does not hash to its slot in the top, and says so naming the tree block; the read fails, and erofsd serves the volume as corrupt; it refuses the steward's connection for the console session, whose batch stops there, so no shell starts. Nobody exits, restarts or reboots. The verdict is the system's: verityd's line, erofsd's, the steward's and init's (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
-# The image needs 512 MiB: beamlet's budget, twice the shell VM's largest peak, does not fit the
-# system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
-memory_mib = 512
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
 timeout_secs = 120
 # No prompt to wait for: the volume fails at erofsd's start.
 expect = [
     '^\[con [0-9a-f]{16}\] verityd: tree block [0-9]+ does not match the tree$',
     '^\[con [0-9a-f]{16}\] erofsd: the volume does not read as EROFS, and is served as corrupt$',
-    '^\[con [0-9a-f]{16}\] beamlet: erofsd:system did not attach: .*; parked$',
+    '^\[con [0-9a-f]{16}\] steward: a step failed \(Refused\): Connect \{',
+    '^\[con [0-9a-f]{16}\] steward: the console session did not open: Refused\(Failed\)$',
 ]
 forbid = [
     'init: refused the boot',
@@ -27,6 +28,6 @@ flip_tree = true
 
 [disk]
 recipe = "image/disk.toml"
-stage = "tests/data/littlefsd/stage"
+stage = "tests/data/steward/stage"
 
 [net]

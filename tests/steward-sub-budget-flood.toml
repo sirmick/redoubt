@@ -1,0 +1,76 @@
+description = "A flood inside one label set's budget reaches no other session (docs/servers/steward.md, \"Fixed sub-budgets per label set\", R37): bob and alice log in, then alice's vault session, carved from users/alice/{alice-secrets}, allocates binaries without end; the VM's process limit, a sixteenth of its budget (docs/userland/beamlet.md, \"Limits inside one VM\"), kills the flooding evaluation and the session still answers at its prompt, not ended; bob's session and alice's unlabelled one, carved from other sub-budgets, then each print Enum.sum(1..10) as 55. Several processes flooding at once reach the budget's backstop instead, which ends the VM: beamlet-budget-flood's case. The verdicts are the flooding VM's own report of the kill and the sessions' output (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Three logins one after the other, each booting a shell VM beside the console session's: four
+# VMs booting at once on one hart reach no prompt in 700 s.
+timeout_secs = 2400
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+
+[[session]]
+user = "alice+alice-secrets"
+pty = true
+steps = [
+    { wait = "alice-up" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "Enum.reduce(1..100_000_000, [], fn _, acc -> [Enum.to_list(1..1000) | acc] end) |> length()\n" },
+    { expect = 'the evaluation ended: :killed' },
+    { mark = "flooded" },
+    { send = "1 + 1000\n" },
+    { expect = '1001' },
+    { wait = "bob-done" },
+    { wait = "alice-done" },
+]
+
+[[session]]
+user = "bob"
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bob-up" },
+    { wait = "flooded" },
+    { send = "Enum.sum(1..10)\n" },
+    { expect = '^55\r?$' },
+    { mark = "bob-done" },
+    { wait = "alice-done" },
+]
+
+[[session]]
+user = "alice"
+steps = [
+    { wait = "bob-up" },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-up" },
+    { wait = "flooded" },
+    { send = "Enum.sum(1..10)\n" },
+    { expect = '^55\r?$' },
+    { mark = "alice-done" },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

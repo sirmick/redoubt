@@ -285,8 +285,10 @@ so the steward still holds no key.
   child finds the first and last also under beamlet's handle names, `bootfsd` and
   `erofsd:system`, the latter named by its `endpoint=` argument. Every
   random word it hands the core has its top bit set, so every id and badge the core draws is in
-  the minted range ([R27](serving.md#r27-badge-allocation)) and no session's badge is a root
-  badge.
+  the minted range ([R27 (badge allocation)](serving.md#r27-badge-allocation)) and no session's
+  badge is a root badge. It says on its console each audit record, each step that failed with the
+  kernel's error, and each sub-budget's usage when it changes, before it answers the call that
+  caused them.
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
   policy, so the property families (P1 to P16) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
@@ -379,7 +381,7 @@ both sets; `--break GUARD` holds one of the reference's guards always, the negat
 
 ### Principals
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:steward-boot, bench:steward-ssh-two-principals, host:redoubt-steward-server::each_principal_gets_a_top_budget_under_users_and_a_sub_budget_per_label_set
 
 - A **principal** is a named, accountable identity: a way to authenticate, a set of capabilities
   (a namespace and service grants), and an audit identity. People, agents and projects are the same
@@ -393,11 +395,9 @@ Status: planned · M1 (separation and containment)
 - **Nesting.** Every principal has its own space, and its sponsor can destroy its budget.
   Principals can run their own servers and delegate into them.
 
-**Open:** none.
-
 ### Fixed sub-budgets per label set
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:steward-boot, bench:steward-vault-session, bench:steward-sub-budget-flood, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
 
 At boot the steward splits each principal's top budget into fixed sub-budgets, one per label set
 the manifest names for it (`users/alice/{}`, `users/alice/{alice-secrets}`), each an equal share
@@ -415,15 +415,27 @@ The steward carves at its start: for each principal a top budget under `users` w
 and under it a sub-budget per label set with that set's labels; a carve the kernel refuses is a
 start failure, and the box has no users.
 
-**Open:** none.
-
 ### Authentication and sessions
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: a session's badge sending `login` is refused in a host test only (a session runs only beamlet) · tested (9)</summary>
+
+- bench:userland-boot
+- bench:steward-ssh-two-principals
+- bench:steward-vault-session
+- bench:steward-login-refused
+- bench:steward-session-ends
+- host:redoubt-steward-server::a_login_runs_the_session_batch_and_answers_the_session
+- host:redoubt-steward-server::a_refused_login_makes_nothing
+- host:redoubt-steward-server::the_console_session_opens_at_the_start_and_again_when_it_ends
+- host:redoubt-steward-server::sessions_coming_and_going_reuse_the_watchers
+
+</details>
 
 - **Login.** `sshd` runs SSH and asks the steward whose key a login used. The steward accepts only
   one of that principal's login keys, never a key `keyd` holds, and `sshd` itself refuses any key
   `keyd` holds ([keyd](keyd.md)). The model checks both (its P2; `PolicyLoginWithKeydKey`).
+  When the session ends, the steward tells its console with one `ended` message on the
+  connection the login carried, then releases it.
 - **A session** is processes started with capabilities derived from the principal's set, never
   more. The steward carves the session budget from the right sub-budget, with the principal's
   account and the session's labels, gives it a namespace of fresh connections it asked each server
@@ -466,26 +478,23 @@ sequenceDiagram
     participant ST as steward
     participant F as littlefsd, ipd, consoled
     participant S as session
-    Note over C,S: planned
-    C-->>SH: SSH, user alice+secrets, key K
-    SH-->>KD: sign the exchange (host key)
-    SH-->>KD: holds(K)?
-    KD-->>SH: no
-    SH-->>ST: login(alice, secrets, K)
-    ST-->>ST: K is a login key of alice,<br/>alice owns secrets
-    ST-->>ST: carve users/alice/{alice-secrets}/session-1
-    ST-->>F: new_connection for the session's namespace
-    ST-->>S: launch through the stub with the namespace
-    ST-->>SH: session id, the channel's labels
-    SH-->>C: the session on its labelled channel
+    C->>SH: SSH, user alice+secrets, key K
+    SH->>KD: sign the exchange (host key)
+    SH->>KD: holds(K)?
+    KD->>SH: no
+    SH->>ST: login(alice, secrets, K)
+    ST->>ST: K is a login key of alice,<br/>alice owns secrets
+    ST->>ST: carve users/alice/{alice-secrets}/session-1
+    ST->>F: new_connection for the session's namespace
+    ST->>S: launch through the stub with the namespace
+    ST->>SH: session id, the channel's labels
+    SH->>C: the session on its labelled channel
 ```
-*Figure: a vault login. All of it is planned.*
-
-**Open:** none.
+*Figure: a vault login.*
 
 ### The steward's protocol
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:steward-login-refused, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::closing_the_channel_destroys_the_session_and_its_exit_is_late
 
 The steward serves one typed protocol, its table `libs/wire/tables/steward.md`, included by this
 page: `login` (from `sshd`), `submit` (from sessions and agents), `approve` and `deny` (from the
@@ -510,8 +519,6 @@ same answer as an unknown one, so a session cannot send `login`, `approve` or `b
 The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
 {{#include ../../libs/wire/tables/steward.md:tables}}
-
-**Open:** none.
 
 ### Leases
 
@@ -815,7 +822,7 @@ declassifying one of its items needs a project owner's approval. No kernel mecha
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: the `keyd` grant for `audit` comes with the audit file in M3 (files in and out) · tested: bench:steward-boot
 
 - The steward holds the `users` budget and a `system`-class budget of its own, the only process
   besides `init` that holds a `system`-class budget handle
@@ -834,23 +841,19 @@ Status: planned · M1 (separation and containment)
   lease-ending supervision ([init](init.md#the-confinement-check)). The steward enforces the same
   rule for every budget and grant it creates.
 
-**Open:** none.
-
 ## Security properties
 
 ### R36 (unpredictable ids)
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:steward-session-ends, host:redoubt-steward-server::a_login_runs_the_session_batch_and_answers_the_session
 
 Every id the steward hands out (session, request, connection) is a random 64-bit word from a keyed
 generator, never a counter. So no principal learns how many sessions or requests another started.
 The model found the leak with sequential ids and checks the rule (`PolicySequentialIds`).
 
-**Open:** none.
-
 ### R37 (vault non-interference)
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
 
 A vault session's work (item writes, requests, calls to a shared server) changes nothing an
 unlabelled session observes: its results, the usage of `users`, of every principal's budget and
@@ -865,8 +868,6 @@ vault sends. The crashes P10 replays are ones an unlabelled session's call cause
 crashes on its own, or on a vault's call, is a stated residual
 ([residual risks](#residual-risks)): which call it holds, and when it takes the calls queued
 before, is service timing.
-
-**Open:** none.
 
 ### R38 (out-of-band approval)
 
@@ -930,23 +931,24 @@ item's labels.
 
 ## Failure and restart
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:steward-restart, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve
 
-- **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` destroys and
-  recreates the `users` budget, which logs every session out and ends every lease, and restarts the
-  steward ([init](init.md#restarts-and-reboots)). So the steward always carves into an empty
-  `users`, and it checks that it is: at its start, a `users` holding any pages, process or child
-  is a start failure, said once (`users not empty`), never a second set of carves beside the
-  first.
-- **A session crashes:** the steward destroys its budget; `sshd` closes its channel; nobody else is
-  affected.
+- **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` restarts it
+  ([init](init.md#restarts-and-reboots)); a steward that finds `users` not empty exits, and its
+  restarts end in a reboot, which logs every session out and ends every lease. It checks at its
+  start: a `users` holding any pages, process or child is a start failure, said once (`users not
+  empty`), never a second set of carves beside the first.
+- **A session crashes:** the steward destroys its budget and tells its console `ended`; `sshd`
+  closes its channel; nobody else is affected.
 - **A reader or writer budget** outlives nothing: it has a deadline, and the steward destroys it
   when its one item is done.
 
-**Open:** none.
-
 ## Residual risks
 
+- **A steward crash ends in a reboot:** `users` cannot be destroyed and made again, which its
+  class forbids, and `init` does not empty it of a dead steward's carves with `budget_reap` before
+  the restart; doing so would make the restart a logout instead
+  ([a dead steward's carves](../todo/empty-a-budget.md)).
 - **An approved text can carry a hidden message.** Text an agent wrote and a person approved for
   declassification can still hide one; no rule on the item's form prevents that.
 - **A push is one human action,** so a confined domain's input rate is a person's approval rate.

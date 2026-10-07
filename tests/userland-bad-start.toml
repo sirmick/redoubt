@@ -2,20 +2,20 @@ description = "The attack: one bit flipped, after the pack, in the userland volu
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
-# The image needs 512 MiB: beamlet's budget, twice the shell VM's largest peak, does not fit the
-# system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
-memory_mib = 512
+# The image needs 1 GiB: the principals' budgets, each holding the shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
 timeout_secs = 400
 # verityd says its line before it fails the read, so it comes before beamlet's.
 expect = [
-    '^init: started beamlet, console [0-9a-f]{16}$',
+    '^init: started steward, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] verityd: block [0-9]+ does not match the tree$',
     '^\[con [0-9a-f]{16}\] beamlet: boot.pack not loaded: its file could not be read: corrupt; parked$',
 ]
 forbid = [
     'init: refused the boot',
     '^init: .* (exited|faulted|was killed)',
-    'init: restarted beamlet',
+    'init: restarted steward',
     'init: rebooting',
     'Redoubt shell, on Elixir',
     'verityd: the volume is refused',
@@ -27,6 +27,6 @@ flip = "Elixir.Redoubt.Shell.beam"
 
 [disk]
 recipe = "image/disk.toml"
-stage = "tests/data/littlefsd/stage"
+stage = "tests/data/steward/stage"
 
 [net]

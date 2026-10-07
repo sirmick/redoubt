@@ -65,7 +65,7 @@ session's budget, and every process in it ends with it.
 
 ### Logging in
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:steward-ssh-two-principals, bench:steward-login-refused, bench:userland-boot
 
 `sshd` (the SSH server) accepts a connection, and `sshd` and the steward authenticate the person
 with the principal's login key. In M1 (separation and containment) the principals and their keys
@@ -80,11 +80,9 @@ builds its namespace from the principal's capabilities, and launches a beamlet V
 and sessions are carved from the one that matches their labels, so a flood of sessions in one
 label set cannot starve another.
 
-**Open:** none.
-
 ### A session is a VM in a budget
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:steward-ssh-two-principals, bench:steward-session-ends, bench:steward-sub-budget-flood
 
 One session is one beamlet VM, in one budget of class `user`, under the principal's budget
 ([budgets](../kernel/budgets.md#root-system-and-users)). What that gives:
@@ -107,11 +105,9 @@ One session is one beamlet VM, in one budget of class `user`, under the principa
 There is no root and no `sudo`. "Admin" means holding specific capabilities over shared things,
 and a session holds only what its principal was granted.
 
-**Open:** none.
-
 ### Vault sessions
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: a vault session's own reads and writes wait for its namespace to reach the VM; the label check they meet at `littlefsd` is attacked on its own · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:littlefsd-label-check, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
 
 A **vault session** carries one of its principal's labels: `ssh alice+tax@box` starts a session
 whose budget has Alice's `tax` label. A budget's labels are fixed when it is created and only grow
@@ -133,11 +129,9 @@ no file transfer: [file transfer](transfer.md)) and no `exec`. Data leaves the l
 **declassification**: a request to the steward, approved by the label's owner at `approve@` ([the
 steward](../servers/steward.md)).
 
-**Open:** none.
-
 ### Namespaces
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: on the box the cases show which connections the steward made and in which budget, and a session's paths are walked once its namespace reaches the VM; the binding table, slot by slot, is host-tested · tested: bench:steward-ssh-two-principals, bench:steward-vault-session, host:redoubt-steward-server::a_login_runs_the_session_batch_and_answers_the_session, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
 
 A namespace is a table inside the process: path prefixes, each naming a capability (a 9P
 connection) the process holds. The launcher writes it into the child's startup block before the
@@ -158,17 +152,18 @@ flowchart LR
         subgraph NH["named handles"]
             st["steward"]
             bu["budget: the session's own budget"]
+            sy["erofsd:system"]
         end
     end
-    h -.-> FS["walfsd, Alice's home volume"]
-    c -.-> SH["sshd, this SSH channel"]
-    b -.-> BF["bootfsd, read-only"]
-    n -.-> IP["ipd, a scope of hosts and ports"]
-    st -.-> ST["the steward, this session's grant"]
+    h --> FS["walfsd, Alice's home volume"]
+    c --> SH["sshd, this SSH channel"]
+    b --> BF["bootfsd, read-only"]
+    n --> IP["ipd, a scope of hosts and ports"]
+    st --> ST["the steward, this session's grant"]
+    sy --> SY["erofsd, the system volume, read-only"]
 ```
-*Figure: a session's namespace. Every part is planned (dashed). Each entry is a connection the
-session holds; a path reaches only what an entry names, so `/home/bob/notes.txt`, which no entry
-is a prefix of, is enoent.*
+*Figure: a session's namespace. Each entry is a connection the session holds; a path reaches
+only what an entry names, so `/home/bob/notes.txt`, which no entry is a prefix of, is enoent.*
 
 What follows from a table of capabilities:
 - **A path resolves by its longest matching prefix**, and the rest of the path is walked on that
@@ -192,8 +187,6 @@ What follows from a table of capabilities:
 server and creates no authority. A namespace is the session's own: binding in it changes nothing
 for any other process, and a child sees only the table its launcher wrote for it
 ([files and binds](files.md)).
-
-**Open:** none.
 
 ### How a program reads its namespace
 

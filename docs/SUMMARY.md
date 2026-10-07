@@ -74,6 +74,7 @@
   - [beamlet is told its budget by an argument the manifest keeps equal by hand](todo/beamlet-budget-from-startup.md)
   - [A private directory for the QMP socket](todo/qmp-socket-private-dir.md)
   - [The file servers parse their arguments and call their range four times over](todo/file-server-arguments-and-range-client.md)
+  - [A dead steward's carves are emptied before its restart](todo/empty-a-budget.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [The card's host backend](beyond/card-host.md)

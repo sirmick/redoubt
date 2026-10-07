@@ -934,7 +934,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-<details><summary>Status: built · partly tested: no guest `sshd` exists yet to log in to · tested (18)</summary>
+<details><summary>Status: built · tested (19)</summary>
 
 - bench:bench-ssh-loopback
 - bench:bench-ssh-loopback-openssh
@@ -944,6 +944,7 @@ The guest's own claims about the network are never trusted.
 - bench:bench-ssh-loopback-host-key
 - bench:bench-ssh-loopback-aborted-text
 - bench:bench-ssh-guest
+- bench:steward-ssh-two-principals
 - host:testbench::expect_after_matches_in_order_and_names_the_first_miss
 - host:testbench::the_reference_proxy_quotes_only_what_the_bench_chose
 - host:testbench::the_cpio_writer_writes_newc
@@ -1073,7 +1074,9 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 platform, `redoubt-sshd-host` ([the core and its platforms](servers/sshd.md#the-core-and-its-platforms)),
 which the bench builds and `ssh` starts as its `ProxyCommand`. Its host key is `loopback-host`,
 and each of the case's `authorized` keys is a principal of the same name. Nothing there needs a
-shell, a login context or a guest.
+shell, a login context or a guest. The box's platform, on the guest's port 22 with the steward's
+logins and real sessions, is the `steward-*` boot cases' (`steward-ssh-two-principals` and the
+rest, [sshd](servers/sshd.md#sessions-over-ssh)).
 
 - **The self-checks run on it,** their steps written for its scripted console, and their
   `server_log` patterns for its log.
@@ -1250,7 +1253,7 @@ part of the trusted computing base
 
 ## The memory budget
 
-Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:beamlet-footprint, bench:init-refuses-stack, bench:memory-host-tests
+Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:beamlet-footprint, bench:steward-session-ends, bench:steward-ssh-two-principals, bench:init-refuses-stack, bench:memory-host-tests
 
 A boot case under `init` can set `memory = true`. After its console verdict the bench stops
 QEMU over QMP and dumps the guest's physical RAM beside the case's log, as
@@ -1287,47 +1290,45 @@ none. The same scan finds each server's record by its magic word and tag and pri
 duplicated record, a record whose cap is not the manifest's `heap_pages`, and a capped server
 whose cap is less than twice its peak; an uncapped server is reported only.
 
-The standard image is scanned after `init-boot`, `userland-boot`, `userland-read-only` and
-`beamlet-footprint` on both widths. Its server declarations use twice the largest peak across six
-such runs: each stack rounded up to pages, from the runs that sized the stacks, before the heap
-caps existed; and each heap cap in pages, from six later runs with the stacks as declared. The
-stack columns below are the first runs' and the heap columns the later runs'. `beamlet`'s heap peak
-moves by a page between runs, so its cap is instead the most its budget holds beside its stack,
-10,989 pages: at least twice its largest peak across six runs of each memory case on each width,
-`beamlet-footprint` included, 39 pages over twice it. Its budget, 11,008 pages, is that cap and its
-stack rounded up to 128 ([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The
-read-only case also scans its additional client from the merged manifest. `beamlet`'s stack peak is from `beamlet-footprint` on
-rv64 with the boot pack read before its VM starts and its console on the hub; twice it needs its
-18 pages. `consoled`'s row is from the runs once it serves beamlet's console as a multiplexed
-session: its stack peak from rv64 `userland-read-only`, its heap peak from rv32
-`beamlet-footprint`. `walfsd:data`'s row is from six runs of `walfsd-quota`, three on each width,
-which writes through it, as the image's memory cases do not (their boots peak at 16,040 bytes of
-stack and 9 heap pages); its heap cap is also above what a transaction of the format's 32 blocks
-adds to that case's peak, 32 pages, since no case writes that many at once
-([walfsd](servers/walfsd.md#memory)).
-`erofsd:system`'s row and `verity:system`'s heap, which holds 4 checked data blocks, are from the
-six runs with the userland volume on EROFS. `verity:system`'s stack is from rv64 `userland-boot`
-once it also checks a signed volume's root block, which it does not use there but whose code lies
-in its start path.
+The standard image is scanned after `init-boot`, `userland-boot` and `userland-read-only` on both
+widths, and after `steward-session-ends` and `steward-ssh-two-principals`, whose SSH logins are the
+most its servers do. Its declarations are twice the largest peak across those runs: each stack
+rounded up to pages, each heap cap in pages. `sshd` is sized for its four slots busy at once: its
+heap held 8 pages at boot, 54 with one login (rv32, before the boot pack) and 56 with two at once,
+so at most 46 a connection, and its cap is twice 8 pages and four connections, 384. Its declared
+stack is a page over twice its peak. `consoled`'s row is from the runs once it serves each
+session's console as a multiplexed session. `walfsd:data`'s row is from six runs of
+`walfsd-quota`, three on each width, which writes through it, as the image's memory cases do not
+(their boots peak at 16,040 bytes of stack and 9 heap pages); its heap cap is also above what a
+transaction of the format's 32 blocks adds to that case's peak, 32 pages, since no case writes
+that many at once ([walfsd](servers/walfsd.md#memory)). The read-only case also scans its
+additional client from the merged manifest.
 
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
-| `keyd` | 6,248 | 4 | 4 | 8 |
+| `keyd` | 7,368 | 4 | 4 | 8 |
 | `consoled` | 10,384 | 6 | 11 | 22 |
-| `bootfsd` | 7,304 | 4 | 28 | 56 |
-| `blkd` | 4,504 | 3 | 17 | 34 |
-| `netd` | 4,280 | 3 | 2 | 4 |
-| `ipd` | 8,040 | 4 | 4 | 8 |
+| `bootfsd` | 7,320 | 4 | 1,540 | 3,080 |
+| `blkd` | 4,520 | 3 | 19 | 38 |
+| `netd` | 4,296 | 3 | 2 | 4 |
+| `ipd` | 13,672 | 7 | 37 | 74 |
 | `walfsd:data` | 28,616 | 14 | 15 | 64 |
-| `blkd:system` | 4,504 | 3 | 17 | 34 |
+| `littlefsd:alice-secrets` | 7,192 | 4 | 9 | 18 |
+| `blkd:system` | 4,520 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
-| `erofsd:system` | 9,704 | 5 | 12 | 24 |
-| `beamlet` | 35,288 | 18 | 5,475 | 10,989 |
+| `erofsd:system` | 9,704 | 5 | 13 | 26 |
+| `steward` | 13,224 | 7 | 14 | 28 |
+| `sshd` | 5,256 | 4 | 56 | 384 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
-the 16-page stack default and no cap. `beamlet`'s heap peak is the shell after the commands
-`userland-read-only` types (5,274 pages on rv32), above what its prompt holds
-([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)); its cap leaves its process heap
+the 16-page stack default and no cap. A session's beamlet is no manifest server: the steward
+launches it with an 18-page stack, twice beamlet's stack peak of 35,288 bytes (`beamlet-footprint`
+on rv64, with the boot pack read before its VM starts and its console on the hub), and a heap cap
+of what its budget holds beside the stack, 10,989 pages of the 11,008 `sizes` gives a session
+([the steward](servers/steward.md#authentication-and-sessions)): 39 pages over twice its heap's
+largest peak across the memory cases on each width, 5,475 pages, above what its prompt
+holds ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)). `beamlet-footprint` scans
+the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap
 and ETS limits, a sixteenth of its budget each (688 pages), reachable: a flooding process, about
 four times its limit, still fits under the cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
 
