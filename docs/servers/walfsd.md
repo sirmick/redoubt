@@ -15,7 +15,7 @@ top rather than by the format.
 
 ### The format
 
-<details><summary>Status: built · tested (34)</summary>
+<details><summary>Status: built · tested (35)</summary>
 
 - bench:walfs-host-tests
 - fuzz:walfs/image
@@ -29,6 +29,7 @@ top rather than by the format.
 - host:walfs::an_orphan_open_at_unmount_is_freed_at_mount
 - host:walfs::a_reserved_bitmap_bit_clear_fails_the_mount
 - host:walfs::a_torn_log_is_dropped_or_replayed_never_half_applied
+- host:walfs::a_volume_reports_its_data_blocks_and_inode_count
 - host:walfs::bad_arguments
 - host:walfs::crash_at_every_write_fixed_workload
 - host:walfs::crash_at_every_write_random_workloads

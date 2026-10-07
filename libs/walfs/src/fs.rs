@@ -160,6 +160,12 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Data blocks free.
     pub fn free_blocks(&self) -> u32 { self.free }
 
+    /// Data blocks in all: the data region's.
+    pub fn data_blocks(&self) -> u32 { self.l.block_count - self.l.data_start }
+
+    /// Inodes in all, inode 0 and the root among them.
+    pub fn inode_count(&self) -> u32 { self.l.inode_count }
+
     /// Runs one operation: refused once poisoned; what it left in the transaction committed if it
     /// succeeded, dropped if not; an I/O error poisons.
     pub(crate) fn op<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, Error>) -> Result<T, Error> {

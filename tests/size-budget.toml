@@ -86,7 +86,7 @@ max_lines = 2033
 [[crate]]
 name = "libs/walfs"
 paths = ["libs/walfs/src"]
-max_lines = 1689
+max_lines = 1691
 
 [[crate]]
 name = "model"

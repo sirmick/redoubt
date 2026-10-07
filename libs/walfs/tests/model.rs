@@ -277,6 +277,23 @@ fn full_volume() {
     sound(&mut fs, "full volume");
 }
 
+/// A volume reports its geometry as formatted: the data region's blocks and the inodes, every data
+/// block free on a fresh volume (servers/walfsd.md, "Geometry").
+#[test]
+fn a_volume_reports_its_data_blocks_and_inode_count() {
+    // 128 blocks: the superblock, the log's 33, one block of 32 inodes, two of their attributes, a
+    // hash block and a bitmap block come before the data region.
+    let mut ram = Ram::formatted(128);
+    let fs = Filesystem::mount(&mut ram).unwrap();
+    assert_eq!((fs.data_blocks(), fs.inode_count()), (128 - 39, 32));
+    assert_eq!(fs.free_blocks(), fs.data_blocks());
+    // 96 inodes: three inode blocks and six of attributes; 991 slots, eight hash blocks.
+    let mut ram = Ram::new(1024);
+    Filesystem::format(&mut ram, Geometry { block_count: 1024, inode_count: 96 }).unwrap();
+    let fs = Filesystem::mount(&mut ram).unwrap();
+    assert_eq!((fs.data_blocks(), fs.inode_count()), (1024 - (1 + 33 + 3 + 6 + 8 + 1), 96));
+}
+
 /// Open handles follow renames, and a removed file stays readable and writable through them until
 /// the last closes, which frees its blocks.
 #[test]
