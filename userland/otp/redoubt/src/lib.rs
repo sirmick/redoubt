@@ -437,11 +437,14 @@ impl Platform for Redoubt {
     fn system_time_us(&mut self) -> Option<u64> { None }
 
     /// Waits on the VM's own endpoint, where the waiters' wake-ups arrive, until a completion or
-    /// `deadline`. After the console's end a timer still wants its deadline: the wait then sleeps
-    /// until it, rather than returning at once and spinning.
+    /// `deadline`; at once, if anything arrived before it was called. After the console's end a
+    /// timer still wants its deadline: the wait then sleeps until it, rather than returning at
+    /// once and spinning.
     fn idle(&mut self, deadline: Option<u64>) {
         self.take_completed();
-        if !self.cons.input.is_empty() {
+        // Anything that arrived before this idle is handed over now: a wait would sleep on it
+        // until some other wake-up came, if one ever did.
+        if !self.cons.input.is_empty() || self.files.has_finished() || self.sys.has_events() {
             return;
         }
         let now = self.monotonic_us();
