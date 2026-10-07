@@ -122,7 +122,10 @@ reached it.
 | `steward_policy`, `steward_noninterference` | 20,000 and 10,000 | [the steward model](#the-steward-model) |
 | `flood` | 20 scenarios of up to 10,000 senders | R2 (fair waiting), I11 (fair turns) and R4a (open calls) under a flood |
 
-A default run is 90,020 sequences; the bench case `model-host-tests` runs it.
+A default run is 90,020 sequences; the bench case `model-host-tests` runs it, each test a job of
+its own on eight threads ([fanout](../testbench.md#the-case-file)). The steward families are
+nearly all of its time: about 0.6 s a seed for `steward_policy` and 0.94 s for
+`steward_noninterference` on one thread, against under a millisecond for the kernel's.
 `REDOUBT_MODEL_SEQUENCES` sets the count per family. A bound on cargo's test threads is a bound
 on the whole binary: each test's runner spawns `MODEL_THREADS` threads if it is set (a positive
 integer; anything else fails the test, naming it), else one if `RUST_TEST_THREADS` is set, else
@@ -242,7 +245,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 146 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 147 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -253,9 +256,13 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 - `mutations_are_caught` plants each variant in turn. It runs the scripted IPC and scheduling
   contracts, then every property family, the one that pressures the rule first
   (`scheduler_fairness` for R12, the steward families for the `Policy` variants, `flood` for the open-call
-  limit), up to 20,000 seeds each (20 for the flood). It fails if any variant survives, and
-  prints the property and seed that caught each one. `REDOUBT_MODEL_MUTATIONS` narrows the run
-  to matching variants, for diagnosis only.
+  limit, `steward_noninterference` for the breaks that show as one domain's work in another's
+  view, `R2OneCursor`'s turns among them), up to 20,000 seeds each (20 for the flood). It fails
+  if any variant survives, and prints the property and seed that caught each one. `REDOUBT_MODEL_MUTATIONS` narrows the run
+  to the variants whose names contain one of its comma-separated words, or to the one a word
+  names whole. The bench case `model-mutations` runs it once per variant, each a job of its own
+  in release, the names coming from `cargo run --example mutations`
+  ([fanout](../testbench.md#the-case-file)); `model-host-tests` skips it.
 
 | ID | Variants | What they break |
 | --- | --- | --- |
