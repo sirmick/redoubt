@@ -402,6 +402,7 @@ Measured in that build under `icount` (`shift=3`, sleep on) with seed 1, in gues
 | littlefs (`littlefsd`, retired for this volume) | 1,016.7 s | 534.7 s | 1,044.2 s | 558.0 s |
 | EROFS (`erofsd`) | 16.0 s | 12.5 s | 15.7 s | 12.1 s |
 | EROFS, with the boot pack | 12.4 s | 9.9 s | 12.0 s | 9.6 s |
+| EROFS, with the boot pack, the shell the steward's console session | 15.4 s | 13.2 s | not measured | not measured |
 
 On littlefs 99 % of the boot was in the VM's 96 lookups: `littlefsd` found each file's name in the
 volume's root directory again two or three times for every 9P operation, 77,710 block reads of 673
@@ -416,8 +417,17 @@ verified and 1.2 s unverified, and the VM's work after it, decoding the modules 
 called, 8.0 s; the verified prompt is the same across seeds 1 to 5. On littlefs the prompt with
 the boot pack is at 152 s verified, since `littlefsd` finds the file again for each read.
 
-**The boot-time target:** in this build, the prompt within 15 s of guest time, verified and
-unverified, on both widths: the slowest measured prompt plus a tenth, rounded up to 5 s.
+Since the steward starts the shell as the console principal's session
+([the steward](../servers/steward.md#authentication-and-sessions)), the verified prompt on rv64
+comes at 15.4 s: `init` has started its servers by 0.6 s, and pushes beamlet's 4 MB public entry
+to `bootfsd` until 3.1 s, when it starts the steward; from 3.1 to 7.7 s the steward carves the
+session's budget, streams its image from `bootfsd` into the new process in 64-page batches, and the
+VM reads its boot pack; from 7.7 to 15.4 s the shell starts. Unverified the same points are at
+3.1, 5.6 and 13.2 s. The rv32 prompts are not measured: on rv32 the console session's VM writes
+nothing after its first prompt, so the line that stamps it never comes.
+
+**The boot-time target:** in this build, the prompt within 20 s of guest time verified and within
+15 s unverified, on both widths: the slowest measured prompt plus a tenth, rounded up to 5 s.
 `boot-profile` and `boot-profile-unverified` fail past it, and run in every whole run of the bench.
 
 Before its VM starts, beamlet reads the volume's boot pack, `boot.pack`, whole: one open, one `stat`

@@ -163,9 +163,10 @@ principals' budgets.*
 
 ### The tree from the boot manifest
 
-<details><summary>Status: built · partly tested: the steward's carving of `users` is not built · tested (10)</summary>
+<details><summary>Status: built · tested (11)</summary>
 
 - bench:init-boot
+- bench:steward-boot
 - bench:init-servers
 - bench:init-refuses-system-fit
 - bench:init-refuses-bound
@@ -207,17 +208,18 @@ and its kernel objects.
   Each child's first-thread stack is charged to that server's own budget, at the manifest's
   `stack_pages` size ([the boot manifest](../servers/init.md#the-boot-manifest)).
 
-  With `beamlet` and the userland disk's `blkd` and `littlefsd`, the image manifest's bound is 524 pages
-  on both widths (`init-boot` prints it), and the fixed 1,024-page limit more than doubles it.
-  The image's `beamlet` is budgeted 10,880 pages: a heap cap of twice the largest peak of its
-  runtime heap across the image's memory cases (5,429 pages on rv64, 5,231 on rv32) plus its
-  stack, rounded up to 128 ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)).
-  So the image's servers need 21,264 of `system`'s pages; at 512 MiB `system` has 31,610 free on
-  rv32 and 31,652 on rv64, and the image boots there with 10,346 pages to spare on rv32, and
-  10,089 for a case that adds a 256-page client, which costs 257 with its budget's own page. The
-  bench and `mkimage`'s instructions give it 512 MiB; at 256 MiB it does not boot. The scan's cap
-  rule is the narrow margin: an rv64 peak of 5,432 pages puts the cap under twice the peak, and
-  the budget then moves up a step of 128. The bound is a fixed count, not a share
+  With the steward, `sshd` and the userland disk's `blkd`, `verity` and `erofsd`, the image
+  manifest's bound is 550 pages on both widths (`init-boot` prints it), and the fixed 1,024-page
+  limit is nearly twice it. The image's servers need 16,909 of `system`'s pages, each
+  budget and its own page. The shell's VMs are not among them: the steward carves each session
+  from its principal's sub-budget under `users`, from the top budgets the manifest names, 43,528
+  pages for Alice and 32,768 for Bob ([the steward](../servers/steward.md#fixed-sub-budgets-per-label-set)).
+  A session is 10,880 pages: a heap cap of twice the largest peak of beamlet's runtime heap
+  across the memory cases (5,429 pages on rv64, 5,231 on rv32) plus its stack, rounded up to 128
+  ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)). The scan's cap rule is the
+  narrow margin: an rv64 peak of 5,432 pages puts the cap under twice the peak, and the size then
+  moves up a step of 128. The bench and `mkimage`'s instructions give the image 1 GiB
+  ([the image](../../image/README.md)). The bound is a fixed count, not a share
   of RAM, because `init`'s needs do not grow with the machine, nor with the size of a program it
   starts, and a share of a large machine would sit idle in `root`. The manifest cannot change it,
   because the kernel reads no manifest. `init` works in a fixed arena, and before it creates
@@ -845,6 +847,10 @@ without preemption.*
   [`budget_children`](#budget_children) exists. A holder of the parent can take it back only with
   the rest: `budget_reap` destroys the parent's children one at a time, the lost one among them,
   with no way to pick it out. The loss is the closer's own tree's, never another budget's.
+- **A dead steward's carves cost a reboot.** `budget_reap` can empty `users` of them, but `init`
+  does not call it before it starts the steward again, so a restarted steward finds `users` not
+  empty and exits, and the restart rule ends in a reboot
+  ([a dead steward's carves](../todo/empty-a-budget.md)).
 - **Quarantined DMA pages stay charged.** A DMA run whose device did not confirm its reset is held
   until reboot. When its budget is destroyed, the charge moves to the parent, which keeps paying
   for those pages until it too is destroyed or the machine reboots

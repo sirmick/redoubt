@@ -54,24 +54,29 @@ paths = ["libs/signing/src"]
 max_lines = 31
 
 [[crate]]
+name = "libs/sha256"
+paths = ["libs/sha256/src"]
+max_lines = 93
+
+[[crate]]
 name = "libs/client"
 paths = ["libs/client/src"]
-max_lines = 1030
+max_lines = 1078
 
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 3522
+max_lines = 3528
 
 [[crate]]
 name = "libs/wire"
 paths = ["libs/wire/src"]
-max_lines = 3170
+max_lines = 3626
 
 [[crate]]
 name = "libs/steward"
 paths = ["libs/steward/src"]
-max_lines = 3160
+max_lines = 3465
 
 [[crate]]
 name = "libs/erofs"
@@ -96,22 +101,27 @@ max_lines = 10522
 [[crate]]
 name = "servers/keyd"
 paths = ["servers/keyd/src"]
-max_lines = 541
+max_lines = 450
 
 [[crate]]
 name = "servers/sshd"
 paths = ["servers/sshd/src"]
-max_lines = 388
+max_lines = 1102
+
+[[crate]]
+name = "servers/steward"
+paths = ["servers/steward/src"]
+max_lines = 1097
 
 [[crate]]
 name = "servers/bootfsd"
 paths = ["servers/bootfsd/src"]
-max_lines = 229
+max_lines = 228
 
 [[crate]]
 name = "servers/consoled"
 paths = ["servers/consoled/src"]
-max_lines = 338
+max_lines = 349
 
 [[crate]]
 name = "servers/blkd"
@@ -133,7 +143,7 @@ max_lines = 2928
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 2143
+max_lines = 2372
 
 [[crate]]
 name = "servers/erofsd"

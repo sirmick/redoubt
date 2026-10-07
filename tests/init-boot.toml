@@ -1,21 +1,21 @@
 description = "The image's bundle, packed from image/boot.toml as ./mkimage packs it, on the image's disk, packed from image/disk.toml as ./mkimage packs it, and its read-only userland disk, packed from image/userland.toml, boots to init's last line (servers/init.md, \"Starting the servers\"): init checks the manifest whole, starts keyd and finds it holds none of the keys the box is authenticated by, gives the UART up to consoled and writes through it, starts the rest with a console connection each, pushes the public entries to bootfsd and seals it, holds no more of root than its bound, and no server exits"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# The recipe's bundle: the kernel, the real init, the servers' images and beamlet's, and the
-# image's manifest, which pins the userland volume's root. Every verdict is init's own line, on
+# The recipe's bundle: the kernel, the real init, the servers' images, the steward's and beamlet's,
+# and the image's manifest, which pins the userland volume's root. Every verdict is init's own line, on
 # the UART it maps and then through consoled; a refusal would be init's line and a power-off
 # reporting a system failure.
 recipe = "image/boot.toml"
-# The image needs 512 MiB: beamlet's budget, twice the shell VM's largest peak, does not fit the
-# system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
-memory_mib = 512
+# The image needs 1 GiB: the principals' budgets, each holding the shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
 memory = true
 timeout_secs = 60
 expect = [
     '^init: up$',
-    '^init: the manifest is checked: 11 servers, bound \d+ pages$',
+    '^init: the manifest is checked: 13 servers, bound \d+ pages$',
     '^init: started keyd$',
-    '^init: keyd holds none of the 1 keys$',
+    '^init: keyd holds none of the 3 keys$',
     '^init: started consoled, and writes through it$',
     '^init: started bootfsd, console [0-9a-f]{16}$',
     '^init: started blkd, console [0-9a-f]{16}$',
@@ -25,21 +25,21 @@ expect = [
     '^init: started blkd:system, console [0-9a-f]{16}$',
     '^init: started verity:system, console [0-9a-f]{16}$',
     '^init: started erofsd:system, console [0-9a-f]{16}$',
-    '^init: started beamlet, console [0-9a-f]{16}$',
-    '^init: 0 public entries pushed to bootfsd, and sealed$',
-    # The manifest's three handed items, the three volume ranges (walfsd:data's, erofsd:system's at
-    # verity:system and verity:system's at blkd:system), and the nine consoles after consoled's,
-    # each found gone.
-    '^init: holds none of the 6 badges and 9 console connections it handed$',
-    '^init: the boot is done: 11 servers, root holds \d+ pages for it, within the bound of \d+$',
+    '^init: 1 public entries pushed to bootfsd, and sealed$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    # The manifest's handed items, its volume ranges (walfsd:data's and littlefsd:alice-secrets's
+    # on the data disk, erofsd:system's at verity:system and verity:system's at blkd:system), and
+    # the consoles of every server after consoled, each found gone.
+    '^init: holds none of the 14 badges and 11 console connections it handed$',
+    '^init: the boot is done: 13 servers, root holds \d+ pages for it, within the bound of \d+$',
 ]
 forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed), code']
 
-# The image's disk recipe, holding the littlefsd cases' stage rather than target/image/stage, which a
-# fresh checkout does not have.
+# The image's disk recipe, holding the principals' homes (tests/data/steward/stage) rather than
+# target/image/stage, which a fresh checkout does not have.
 [disk]
 recipe = "image/disk.toml"
-stage = "tests/data/littlefsd/stage"
+stage = "tests/data/steward/stage"
 
 [userland]
 recipe = "image/userland.toml"

@@ -335,8 +335,8 @@ mod machine {
             }
         }
 
-        /// Steps 2 to 5: the endpoints, `keyd` and the key check, `consoled`, the rest, and the
-        /// public entries, restarting any server that ends meanwhile; then the exits.
+        /// Steps 2 to 6: the endpoints, `keyd` and the key check, `consoled`, the rest, the public
+        /// entries and the steward, restarting any server that ends meanwhile; then the exits.
         fn run(&mut self) -> ! {
             let m = self.manifest;
             for s in &m.servers {
@@ -358,13 +358,20 @@ mod machine {
                 self.settle(i, false);
             }
             let consoled = self.consoled;
-            for i in (0..m.servers.len()).filter(|&i| i != keyd && Some(i) != consoled) {
+            // The steward starts sessions from `/boot`, so it comes after the public entries.
+            let steward = m.servers.iter().position(|s| is_steward(m, s));
+            for i in (0..m.servers.len()).filter(|&i| i != keyd && Some(i) != consoled && Some(i) != steward)
+            {
                 self.start(i);
                 self.drain();
             }
             if let Some(i) = self.bootfsd {
                 self.public = true;
                 self.settle(i, false);
+            }
+            if let Some(i) = steward {
+                self.start(i);
+                self.drain();
             }
             // What the boot cost `root`, against the bound the check passed it on: more is a bug
             // in the bound, and the boot is refused rather than kept on a bound that lied.

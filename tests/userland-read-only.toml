@@ -11,14 +11,17 @@ programs = [
     { package = "redoubt-verityd", bin = "verityd" },
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
     { package = "redoubt-walfsd", bin = "walfsd" },
     { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
     { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
 ]
-# The image needs 512 MiB: beamlet's budget, twice the shell VM's largest peak, does not fit the
-# system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
-memory_mib = 512
+# The image needs 1 GiB: the principals' budgets, each holding the shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
 memory = true
 timeout_secs = 330
 # The client's lines come long before the shell's banner; they are expected first, so the call
@@ -58,6 +61,6 @@ recipe = "image/userland.toml"
 
 [disk]
 recipe = "image/disk.toml"
-stage = "tests/data/littlefsd/stage"
+stage = "tests/data/steward/stage"
 
 [net]

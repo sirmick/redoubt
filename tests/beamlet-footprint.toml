@@ -1,7 +1,9 @@
-description = "The shell's VM prints what it holds at its prompt (docs/userland/beamlet.md, \"What the VM holds at its prompt\"): the image boots with beamlet's arguments given report_memory, and when the shell first waits for input the VM prints its breakdown, one line a row (loaded code, its operands and tables, atoms, the literal table, process heaps before and after a collection, binaries, ETS, the total, and beamlet's runtime heap pages held then and at their peak), then the shell still answers. The verdict on the total is the bench's memory scan, from the guest's RAM: its line heap beamlet PEAK of CAP pages, independent of the VM's own report, which is evidence (docs/testbench.md, \"The memory budget\")"
+description = "The shell's VM prints what it holds at its prompt (docs/userland/beamlet.md, \"What the VM holds at its prompt\"): the image's servers boot with beamlet started by init (the image's manifest before the steward started the shell, kept in tests/data/beamlet-footprint) and its arguments given report_memory, and when the shell first waits for input the VM prints its breakdown, one line a row (loaded code, its operands and tables, atoms, the literal table, process heaps before and after a collection, binaries, ETS, the total, and beamlet's runtime heap pages held then and at their peak), then the shell still answers. The verdict on the total is the bench's memory scan, from the guest's RAM: its line heap beamlet PEAK of CAP pages, independent of the VM's own report, which is evidence (docs/testbench.md, \"The memory budget\")"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# The image's programs; the manifest is the image's with beamlet's arguments given report_memory.
+# The image's programs; the manifest is the image's servers with beamlet started by init, as the
+# image was before the steward started the shell (tests/data/beamlet-footprint/manifest.json), with
+# beamlet's arguments given report_memory: the VM measured is the one a session runs.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
@@ -48,7 +50,7 @@ send = "1 + 1\n"
 
 [[file]]
 name = "manifest"
-from = { path = "image/manifest.json" }
+from = { path = "tests/data/beamlet-footprint/manifest.json" }
 verity = "image/userland.toml"
 
 [[file.servers]]

@@ -40,9 +40,9 @@ flowchart TD
     I -.-> ND[netd<br/>the network card]
     I -.-> IP[ipd:network<br/>TCP/IP]
     I -.-> KD[keyd<br/>keys]
-    I -.-> ST[steward<br/>principals and policy]
-    I -.-> SS[sshd<br/>logins]
-    ST -.-> SE[sessions<br/>Elixir VMs]
+    I --> ST[steward<br/>principals and policy]
+    I --> SS[sshd<br/>logins]
+    ST --> SE[sessions<br/>Elixir VMs]
     ST -.-> AG[agents<br/>under leases]
 ```
 *Figure: who starts whom. Solid arrows are built; dashed are planned for
@@ -229,7 +229,7 @@ Status: planned · M1 (separation and containment)
 | Server | Receives on | Holds | Never holds |
 | --- | --- | --- | --- |
 | `init` | the exit endpoint of every server | `root`, `system` and `users`; every device object and the Reset right; every server's receive right; the bundle's pages | network, user data, keys |
-| steward | its own endpoint | `users`; a connection to each writable volume's server and each `ipd`; a `keyd` grant for the `audit` purpose | any key; a budget of a server |
+| steward | its own endpoint | `users`; a badge at `bootfsd`, each volume's `walfsd` or `littlefsd`, `erofsd` and `ipd`, through which it asks for each session's connections; a `keyd` grant for the `audit` purpose, from M3 (files in and out) | any key; a budget of a server |
 | `keyd` | its own endpoint | the keys the manifest names | a key a person logs in or approves with; the bundle key |
 | `sshd` | its own endpoint | the network through `ipd`; a `keyd` badge for the host key; the steward's endpoint | any login key |
 | `consoled` | its own endpoint | the UART's MMIO and IRQ handles | anything else |
@@ -253,7 +253,7 @@ flowchart LR
     I[init<br/>root, system, users,<br/>Reset, receive rights] -. places disk handles .-> BL[blkd]
     I -. places NIC handles .-> ND[netd]
     I -. places UART handles .-> CO[consoled]
-    I -. hands users .-> ST[steward]
+    I -- hands users --> ST[steward]
     I -. pushes public entries .-> BF[bootfsd]
     I -. passes seeds .-> KD[keyd]
     FS[littlefsd:volume] -. range badge .-> BL
@@ -262,15 +262,15 @@ flowchart LR
     IP[ipd:network] -. netif connection .-> ND
     ST -. audit grant .-> KD
     SS[sshd] -. host-key badge .-> KD
-    SS -. login and sessions .-> ST
-    SS -. connections .-> IP
-    ST -. connections .-> FS
-    ST -. connections .-> WF
-    ST -. scoped grants .-> IP
+    SS -- login and sessions --> ST
+    SS -- connections --> IP
+    ST -- connections --> FS
+    ST -- connections --> WF
+    ST -- scoped grants --> IP
 ```
 *Figure: the capabilities each server holds. An edge from `init` is a handle it places; any other
-edge runs from a holder to the server its handle reaches. All are planned for
-M1 (separation and containment).*
+edge runs from a holder to the server its handle reaches. Solid edges are built; dashed ones are
+planned for M1 (separation and containment).*
 
 **Open:** whether `init` keeps a copy of each device handle it places, so it can restart a driver,
 and so stays a co-holder ([devices](../kernel/devices.md#which-process-gets-which-device)).

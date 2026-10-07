@@ -218,6 +218,13 @@ sequenceDiagram
 The operations `sshd` sends the steward are in the steward's table
 ([steward](steward.md#the-stewards-protocol)).
 
+Measured in `steward-ssh-two-principals` (QEMU, one hart, release build, seconds on the host's
+clock beside other work), a login reaches its shell's prompt 2 to 4 s after `ssh` starts: the
+session's VM writes its first line after 1.1 and 1.1 s on rv64 and 1.8 and 2.0 s on rv32 (alice,
+then bob beside her), and the prompt comes at 2.1 and 2.1 s on rv64 and 3.9 and 4.0 s on rv32. The
+key exchange, the login and the steward's batch, which streams the VM's image from `/boot`, are
+the first part; the shell's start from the boot pack the rest.
+
 ### `approve@box`
 
 Status: planned · M1 (separation and containment)
