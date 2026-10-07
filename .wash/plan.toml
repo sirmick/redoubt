@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 238
+revision = 242
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -794,8 +794,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K24"]
   body = "Brief: .wash/local/K19-implementer.md. Tier A, size M+, needs IPC3 merged (start from main). Part A, pumps at the boundary: no delivery inside a destruction; pumps become entries on a bounded to-pump list of endpoints, drained once after step 9 and before the bill; the five dying/doomed checks deleted or made checked-build assertions; commit 1 is a model trace of the mid-kill delivery, and the model's destroy pumps last; R10 step 4 tightens to \"from the mark on, no message stamped with a dying budget is delivered\" with a new model mutation (no R4b doomed mutation exists to retire: say so). Part B, per-budget chains of process objects (charged: the creator's owner chain; counted: a chain keyed on counted_in) so destroy_subtree's kill, step 3's frees and step 8's migration follow the dying subtree. Done when worst-walk's R10 p99 at full fill is within 30 ms net on both widths, its must_fail and docs/todo/destruction-walks-every-process.md gone, the residual bullets rewritten. Short gate plus the R10/R4b case lists and worst-walk by name. IPC3 already removed fail_all's rescan."
-  state = "reported"
-  revision = 215
+  state = "active"
+  revision = 239
 
 [[node]]
   id = "AIO1"
@@ -880,8 +880,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "steward"
   needs = ["STEWARD1", "FSD3", "BEAM2", "SSH1", "INIT3", "MEM2"]
   body = "Brief: .wash/local/STEWARD2-implementer.md (architect-15). Tier A, size L. docs/servers/steward.md#principals, #fixed-sub-budgets-per-label-set, #authentication-and-sessions (the console is one principal's session: owner's decision on QA steward-console-principal), #the-stewards-protocol; docs/userland/sessions.md#logging-in, #a-session-is-a-vm-in-a-budget, #vault-sessions, #namespaces; docs/servers/sshd.md#sessions-over-ssh; docs/servers/init.md#the-boot-manifest."
-  state = "reported"
-  revision = 231
+  state = "active"
+  revision = 241
   overrides = ["2026-10-06: started by Orchestrator before MEM2 (active): owner's go (2026-10-06): the steward server starts now; MEM2 merges within hours and STEWARD2 rebases onto it (heap_pages for the sub-budgets' servers is the one dependency)", "2026-10-06: started by Orchestrator before MEM2 (active): STEWARD2 runs ahead of MEM2's merge on the owner's go; it rebases onto MEM2's merge when told"]
 
 [[node]]
@@ -1078,8 +1078,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["WFS1", "STEWARD2"]
   body = "servers/walfsd on the file-server skeleton serving walfs volumes one instance per volume (R47, R48, R49, R50 rows); the image's data and labelled volumes on walfs, init's volumes and the steward's home and vault lines on walfsd: handles; machine cases: power loss before-or-after, hostile medium corrupt, quota, the steward's session cases on the new volumes. littlefs stays in the image (owner's decision 4e1539fe: kept for a flash medium); littlefsd keeps its cases and pages, serving no volume of the default image unless a case asks. Tier A, size M. Brief by the Architect at launch."
-  state = "active"
-  revision = 234
+  state = "reported"
+  revision = 242
   overrides = ["2026-10-07: started by Orchestrator before STEWARD2 (reported): STEWARD2 is rebasing onto main and lands within hours; WFS2's commits 1-4 (walfsd, init, the data volume, walfsd's own cases) need only WFS1, which is merged; commit 5 (the labelled volume, home/vault names, the steward's session cases) is written against wp-STEWARD2 and rebased at its merge, as the brief says"]
 
 [[node]]
@@ -1154,3 +1154,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by BEAM3's red (2026-10-07): servers/littlefsd/src/server.rs:813-821 answers `refused` for its typed rename and copy refusals; wire.md's table maps refused to econnrefused (a connection refusal, ipd's word), so File.rename into littlefsd's own subtree reads {:error, :econnrefused} in the shell. Tier B, size S: littlefsd (and any other file server with the same habit: grep the servers) answers the table's name for what it means, not_permitted for a refusal by label or policy, not_supported for an operation it does not do, with the wire.md table unchanged (one table); littlefsd's host tests and the beamlet-files case assert the names; littlefsd.md's refusal sentences say which name. Needs BEAM3 (the one decoder)."
   state = "todo"
   revision = 230
+
+[[node]]
+  id = "BOOT2"
+  title = "The steward's session image is streamed once, not pushed to bootfsd and read back: the prompt returns to 15 s"
+  template = "package"
+  parent = "M1"
+  needs = ["STEWARD2"]
+  body = "Measured by STEWARD2 after its rebase (2026-10-07): with the steward starting the shell, the first console read is at 15.1 s on rv64 against main's 12.4 s: init pushes beamlet's 4 MB public entry to bootfsd (0.6 to 3.0 s; the steward starts after it), the steward carves and streams the session's image from /boot in 64-page batches (3.0 to 7.6 s), then the shell starts as on main (7.6 to 15.1 s). STEWARD2 restates the boot-profile targets from that path (17 s verified by the cases' rule) with the breakdown on the page. Tier A, size S: stream the public entry once (the steward launches from bootfsd's copy, or init hands the steward what it already read) without the 64-page batches; measure the three spans again; the targets return to 15 s / the unverified figure by the same rule; beamlet.md and steward.md carry the new breakdown. Not here: the shell's own start (PACK1's pack already covers it)."
+  state = "todo"
+  revision = 240
