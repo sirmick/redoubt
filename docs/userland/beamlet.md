@@ -317,7 +317,7 @@ interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
-<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (10)</summary>
+<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (11)</summary>
 
 - host:beamlet-redoubt::writes_reach_the_screen
 - host:beamlet-redoubt::a_long_write_reaches_the_screen_whole_and_in_order
@@ -325,6 +325,7 @@ interrupt key with it, from the driver.
 - host:beamlet-redoubt::the_console_is_one_hub_connection_with_one_waiter
 - host:beamlet-redoubt::typing_reaches_the_vm_then_its_end
 - host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm
+- host:beamlet-redoubt::an_end_of_input_already_waiting_ends_the_idle_that_takes_it
 - host:beamlet-redoubt::a_console_without_consol_has_no_size
 - host:beamlet-redoubt::idling_with_a_deadline_returns_by_it
 - host:beamlet-redoubt::after_the_console_ends_idling_still_waits_for_its_deadline
@@ -457,7 +458,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 
 ### Natives
 
-<details><summary>Status: built · partly tested: on the host only, on the fake kernel and against a test platform; no boot runs the natives · tested (25)</summary>
+<details><summary>Status: built · partly tested: on the host only, on the fake kernel and against a test platform; no boot runs the natives · tested (26)</summary>
 
 - host:beamlet-vm::a_lookup_gives_the_prefixs_connection_and_the_rest_and_refuses_by_name
 - host:beamlet-vm::a_bind_names_a_connection_and_refuses_anything_else
@@ -482,6 +483,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 - host:beamlet-redoubt::a_typed_call_goes_out_on_a_pool_thread_and_its_reply_is_an_event
 - host:beamlet-redoubt::requests_arrive_with_badge_account_and_labels_and_an_answer_reaches_the_caller
 - host:beamlet-redoubt::a_request_never_answered_is_answered_by_the_serve_thread_at_its_deadline
+- host:beamlet-redoubt::a_request_already_waiting_ends_the_idle_that_takes_it
 - host:beamlet-redoubt::an_endpoint_served_stays_open_when_its_term_is_dropped
 - host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
 
@@ -699,7 +701,9 @@ in `beamlet-redoubt` ([`userland/otp/redoubt/src/io.rs`](../../userland/otp/redo
   in its completion call; it hands each batch of answers to the VM's own endpoint with one send.
 - **`idle` is a `receive`** on that endpoint until the next timer deadline, and the platform hands
   each answer to whoever asked: the console's to its reader, a file's to the Erlang process whose
-  call it was.
+  call it was. An answer, request, input or the input's end that arrived before the VM idled
+  returns the idle at once: the `receive` is entered only with nothing to hand over, so nothing
+  taken waits for the next wake-up to be looked at.
 
 Above that, Elixir is ordinary synchronous code: `File.read/1` blocks the calling Erlang process,
 not the scheduler. OTP's `prim_file` runs unchanged: a file native whose operation the platform

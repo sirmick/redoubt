@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 304
+revision = 309
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1191,8 +1191,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "BEAM4's Q6: the shell VM ends silently when a budget carve is refused; the kernel's refusal (budget.rs) is right and the VM's handling is not. Confirmed by STEWARD2's red from the code on the rv32 steward-sub-budget-flood intermittency (1 pass of 3): 'terminate_process: 509' is printed only on the self-end path (kernel process.rs:746-757, died -> end_process with the current pid); the steward's budget_destroy goes through kill_process, which prints nothing; no 'a step failed' line; alice's carve is from users/alice/{7}; the steward then reaped bob's budget (0 pages, 0 processes). So bob's idle VM ended itself around alice's vault flood: the VM/console side, not the steward's carve. Make the refusal (or whatever the VM meets under a neighbour's flood: a refused carve, a refused page, a busy share) surface to the session as an error with the VM alive; the shell's exec returns {:error, :invalid_argument} today and stays; a case (or sub-budget-flood's R37 verdict on rv32, deterministic) proves a refused carve or a neighbour's flood leaves bob's prompt usable. Tier B unless libs/client changes. Size S-M. Evidence: /tmp/s2runs rv32 flood log (STEWARD2's red), .wash/local/STEWARD2-report.md."
-  state = "todo"
-  revision = 302
+  state = "active"
+  revision = 307
 
 [[node]]
   id = "B22"
@@ -1227,8 +1227,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM4's final gate on a4e57aaf9 under `q run --quiet -- cargo test -p beamlet-redoubt --features fake --test system`: 46 pass / 1 fail in one run, the rerun hung in the system binary and was killed; the binary run directly is 30/30; which test fails varies. One run showed a request the serve thread handed over (BEAM4's HAND_US hand-off) that never surfaced in the VM, so it may be a real platform bug in the hand-off, not only a host bound too tight under load. Suspects and how to debug (ptrace is blocked on this host) are in .wash/local/handoffs/beam4-implementer.md. Reproduce under load (q --quiet beside other jobs, or RUST_TEST_THREADS high) 30 times, name the failing tests, find the lost request. Tier A if userland/otp/redoubt/src/{serve,jobs,system}.rs changes. Size S-M. After B23 and BEAM9."
-  state = "active"
-  revision = 294
+  state = "done"
+  revision = 309
 
 [[node]]
   id = "K28"
@@ -1265,3 +1265,21 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "RECON1's acceptance named an oracle line reporting how much of a slice end's kernel work is billed to nobody (K25's billing rule leaves two named gaps of ~250 ticks: bill_irq's bill then restart, a deadline destruction's bill inside destroy_subtree; scheduling.md Residual risks). RECON1 left it undone; its red ruled it report-only, not a gate, but the acceptance line is otherwise unmeasured. Add the report line to tools/testbench/src/sched_oracle.rs from the trace's billing records (the oracle already bills timer interrupts by the rule and prints 'N nobody's'): 'nobody N of 1000' = ticks billed to no budget over the case's kernel ticks, per case, in the oracle's summary; no verdict. testbench.md's oracle paragraph names the line. Size S, Tier B (bench only)."
   state = "active"
   revision = 298
+
+[[node]]
+  id = "BEAM12"
+  title = "budget_create without labels passes an empty set, so a labelled session's every child carve is label_denied; the shell's child budgets inherit the session's labels unless narrowed"
+  template = "package"
+  parent = "M1"
+  body = "Found by BEAM4's cases branch once the tester carved sessions as the steward does (a sub-budget per label set with its labels): beamlet's budget_create without `labels` passes an empty set to the kernel, and a labelled session's every child carve is refused label_denied, so a labelled principal's shell can launch nothing. Decide the rule with the Architect's page (budgets.md / labels): a child carve defaults to the parent's labels (narrowing allowed, widening refused) or the VM must always pass labels; implement in userland/otp's natives (Budget module, budget_create path), a host test on the fake kernel and the beamlet-launch case under a labelled session. Tier B unless the kernel's carve rule changes (it should not). Size S."
+  state = "todo"
+  revision = 305
+
+[[node]]
+  id = "BEAM13"
+  title = "A console reader that exits leaves input queued with no reader, and the VM's idle returns at once every pass: a hot loop"
+  template = "package"
+  parent = "M1"
+  body = "Found by BEAM10's red: vm.rs:1394 clears console_reader when the reading process exits; poll_console then returns without draining, cons.input stays non-empty, and idle's 'something is there' return fires on every pass: a hot loop burning the session's budget until some process reads the console again. Fix: with no reader, input is drained (or held in a bounded buffer the next reader gets) and does not count as 'something there'; a host test on the fake kernel: the reader exits with input queued, the scheduler idles (idle's wait is entered), a later reader gets the bounded buffer or nothing, as the page says. beamlet.md's console paragraph says which. Tier B. Size S."
+  state = "todo"
+  revision = 308

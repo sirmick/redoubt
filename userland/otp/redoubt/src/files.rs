@@ -208,6 +208,9 @@ impl Table {
     /// Whether any request is out.
     pub(crate) fn busy(&self) -> bool { !self.requests.is_empty() }
 
+    /// Whether an operation has ended and its asker has not been told.
+    pub(crate) fn has_finished(&self) -> bool { !self.finished.is_empty() }
+
     /// Takes `reply` to `ask` into `op`.
     fn answer(&mut self, op: &mut Op, ask: Ask, reply: Reply) {
         match (&ask, &reply) {

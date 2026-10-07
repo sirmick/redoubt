@@ -320,6 +320,48 @@ fn an_endpoint_served_stays_open_when_its_term_is_dropped() {
     );
 }
 
+/// A request that reaches the VM's endpoint before the VM idles is handed over by that idle, not by
+/// the one after the next wake-up: idling takes what is already there and returns with it. (The
+/// VM slept on such a request until something else woke it; with nothing else to come, for good.)
+#[test]
+fn a_request_already_waiting_ends_the_idle_that_takes_it() {
+    let f = fake();
+    let client = f.process(2002, &[5]);
+    let served = Arc::new(Mutex::new(None));
+    let given = Arc::clone(&served);
+    with_session(
+        move |pid| {
+            let receive = f.endpoint(pid);
+            *given.lock().unwrap() = Some(f.grant(pid, receive, client, 33));
+            vec![("service", receive)]
+        },
+        move |p, _| {
+            let (service, _) = p.lookup("service").unwrap();
+            p.serve(ME, &service).unwrap();
+            let to = served.lock().unwrap().unwrap();
+            let caller = f.run(client, move || {
+                let (reply, _) =
+                    Endpoint::from_handle(to).call(&[3, 0, 0, 0], &[], None, FOREVER).into_result().unwrap();
+                reply.words[1] as u32
+            });
+            // The request is parked and its wake-up queued at the VM's endpoint before the VM
+            // idles: long enough for the serve thread on any host; too short, and the wake-up
+            // arrives during the idle instead, which is the easy case.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let deadline = p.monotonic_us() + 10_000_000;
+            p.idle(Some(deadline));
+            let left = deadline.saturating_sub(p.monotonic_us());
+            let (_, Event::Request { request, .. }) = p.poll().expect("the idle handed the request over")
+            else {
+                panic!("not a request")
+            };
+            assert!(left > 5_000_000, "the idle slept on the request it had taken");
+            p.reply(&request.unwrap(), message([0, 5, 0, 0], None)).unwrap();
+            assert_eq!(caller.join().unwrap(), 5);
+        },
+    );
+}
+
 #[test]
 fn a_request_never_answered_is_answered_by_the_serve_thread_at_its_deadline() {
     let f = fake();

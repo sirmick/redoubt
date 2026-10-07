@@ -183,6 +183,30 @@ fn a_write_answered_busy_goes_again_after_the_retry_interval() {
     }
 }
 
+/// The input's end that reaches the VM's endpoint before the VM idles is handed over by that idle,
+/// as input is: the VM is not left waiting until its deadline, or for ever while it serves, with
+/// the end already taken.
+#[test]
+fn an_end_of_input_already_waiting_ends_the_idle_that_takes_it() {
+    with_platform(std::io::empty(), |p| {
+        // The first read goes out; with no input ever, its answer is the end, queued at the VM's
+        // endpoint while the VM is away.
+        assert_eq!(p.console_read(), ConsoleInput::Nothing);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let deadline = p.monotonic_us() + 10_000_000;
+        p.idle(Some(deadline));
+        assert!(
+            deadline.saturating_sub(p.monotonic_us()) > 5_000_000,
+            "the idle slept on the end it had taken"
+        );
+        assert_eq!(p.console_read(), ConsoleInput::Eof);
+        // Read once, the end is no longer news: an idle after it sleeps to its deadline.
+        let deadline = p.monotonic_us() + 20_000;
+        p.idle(Some(deadline));
+        assert!(p.monotonic_us() >= deadline);
+    });
+}
+
 #[test]
 fn a_console_without_consol_has_no_size() {
     with_platform(std::io::empty(), |p| assert_eq!(p.console_size(), None));
