@@ -316,10 +316,14 @@ the core map and the queue; `q log` the recent jobs with the time each waited an
 
 | Case | Its cost | `timeout_secs` |
 | --- | --- | --- |
-| `model-mutations` | 147 jobs, one per mutation, in release, four cores and threads each: about 12 min of wall, all of it the few the steward families catch late, which search thousands of their seeds (`PolicyDeclassifyUnfit`, caught at `steward_policy`'s seed 4709, 582 s; the next 181 s); the rest take under a minute each | per job, 776 |
-| `model-host-tests` | 69 jobs, one per test, eight cores and threads each: about 33 min of wall, all of it the steward families, which cost 0.6 s (`steward_policy`) and 0.94 s (`steward_noninterference`) a seed in the model's own code, in release and dev alike: six to seven core-hours at their default counts (1,777 s and 1,469 s on eight threads); every other test under 80 s | per job, 2369 |
+| `model-mutations` | 147 jobs, one per mutation, in release, four cores and threads each; a mutation's steward families stop at 500 seeds ([mutations](kernel/model.md#mutations)). A job that searches every family to its cap takes 200 s, the longest; the slowest that catch, `R2OneCursor` (`steward_noninterference`'s seed 345) 164 s and `PolicyAgentOtherSet` (seed 96) 64 s; the rest under a minute. About 12 min of wall with the machine to itself | per job, 267 |
+| `model-host-tests` | one `cargo test` on four cores, every model test but the mutations and the steward families: about two minutes, the build included | none |
+| `steward-model-host-tests` | the two steward families, each a job on eight cores and threads: about 30 min of wall, 1,777 s for `steward_policy` and 1,469 s for `steward_noninterference`. A seed costs 0.6 s and 0.94 s on one thread in the model's own code, in release and dev alike: six to seven core-hours at their default counts | per job, 2369 |
 | `rt-miri` | 12 jobs, one per file, about 100 s of wall: `heap`'s 60 to 96 s; `connection` 25 s; the rest under 10 s | per job, 128 |
 | `elixir-oracles`, `bench-elixir-oracles-broken-guard` | 33 to 35 s each from a cold build on four cores, both at once; the oracles themselves run in under a second | 46 |
+
+`steward-model-host-tests` runs only by name (`whole_run = false`) until a cheaper steward seed
+brings it under ten minutes.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
@@ -331,7 +335,7 @@ The kinds, and the fields each takes besides `description`, `arch` and `whole_ru
 | --- | --- | --- |
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
-| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features`, `tools`, `skip` (tests left out, by part of their name), `profile` (Cargo's, such as `release`), `fanout` (`each`, `env`, `values`, `cores`, `vars`), `timeout_secs` (each fanned job's deadline) |
+| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features`, `tools`, `filter` (only the tests whose names contain one of these), `skip` (tests left out, by part of their name), `profile` (Cargo's, such as `release`), `fanout` (`each`, `env`, `values`, `cores`, `vars`), `timeout_secs` (each fanned job's deadline) |
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
@@ -354,10 +358,10 @@ A `fanout` runs a long case as many jobs instead of one `cargo test`, one per `e
 with that line in the variable `env` (`model-mutations`, one job per mutation, the names
 `cargo run --example mutations` prints, in `REDOUBT_MODEL_MUTATIONS`); `"file"`, one per entry of
 `tests` (`rt-miri`); `"test"`, one per test of every test binary the case builds, by libtest's own
-list, each run alone, but those `skip` names (`model-host-tests`). The bench builds the tests
-once, first, with no deadline; then each job runs its test binary as `cargo test` would, from its
-package's directory (under Miri, which runs no binary by itself, `cargo miri test` of the one
-file), through `scripts/q` on `cores` cores of its own (default one), as many at once as the
+list, each run alone, those `filter` takes and `skip` does not (`steward-model-host-tests`). The
+bench builds the tests once, first, with no deadline; then each job runs its test binary as
+`cargo test` would, from its package's directory (under Miri, which runs no binary by itself,
+`cargo miri test` of the one file), through `scripts/q` on `cores` cores of its own (default one), as many at once as the
 machine has room for. `vars` are set for every job: a test that spawns its own threads is told how
 many it has (the model's `MODEL_THREADS`), since under `q` its `RUST_TEST_THREADS` is the lease's.
 Where `q` does not answer, the jobs run one after another. Each job's output is a file in
