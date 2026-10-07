@@ -25,7 +25,10 @@ Classes are flags, not names to learn:
               members' gates go first; a sweep too)
   Fairness: tenants are served round-robin by running cores, and while another tenant waits no
   tenant grows past half the general cores, so a long train or a big suite cannot hold the
-  machine against everyone's gates.
+  machine against everyone's gates. A job that cannot fit for 60 s takes the free cores if they
+  are at least half its ask (it only runs slower); below that the free cores are held for it.
+  A restarted daemon adopts the jobs still running under the old one (their taskset pins) and
+  frees their cores as they exit, so a restart never double-books the machine.
   --tenant T  who is asking (default: the worktree, from cwd); tenants share the machine
               round-robin so one cannot starve the rest
 
@@ -44,7 +47,8 @@ import time
 
 SOCK = os.environ.get("REDOUBT_Q", "/tmp/redoubt-q.sock")
 LOG = SOCK + ".log"
-STARVE_S = 60.0  # a job that cannot fit for this long blocks smaller ones behind it
+STARVE_S = 60.0  # a job that cannot fit for this long takes what is free, or holds it
+RETRY_S = 600.0  # a client waits this long for a daemon to answer (across a restart)
 
 
 def parse_cores(spec):
@@ -116,6 +120,7 @@ class Daemon:
         self.waiting = []  # Job, in arrival order
         self.running = {}  # conn -> Job
         self.bufs = {}  # conn -> partial line
+        self.adopted = {}  # pid -> cores of a job inherited from a previous daemon
         self.seq = 0
         self.sel = selectors.DefaultSelector()
         self.log = open(LOG, "a", buffering=1)
@@ -162,8 +167,14 @@ class Daemon:
                 cores = sorted(self.free)[:n]
                 self.start(job, cores)
             elif not (job.lock and job.lock in self.locks) and now - job.t_in > STARVE_S:
-                # the head job has waited long enough: hold the cores for it
-                blocked_general = True
+                # the head job has waited long enough: it takes what is free if that is at
+                # least half its ask (a build or a test suite only runs slower), else the
+                # free cores are held for it and nothing smaller starts
+                want = min(job.want, len(self.general))
+                if len(self.free) >= max(1, want // 2):
+                    self.start(job, sorted(self.free))
+                else:
+                    blocked_general = True
 
     def start(self, job, cores):
         self.waiting.remove(job)
@@ -215,6 +226,9 @@ class Daemon:
         lines = [f"general cores {fmt_cores(self.general)}: {len(self.free)} free ({fmt_cores(self.free)});"
                  f" quiet cores {fmt_cores(self.quiet_set)}: {'busy' if self.quiet_busy else 'free'};"
                  f" up {int(now - self.t0)}s"]
+        if self.adopted:
+            lines.append(f"adopted from the previous daemon: {len(self.adopted)} jobs on "
+                         f"{fmt_cores(c for cs in self.adopted.values() for c in cs)}")
         lines.append(f"running {len(self.running)}:")
         for j in sorted(self.running.values(), key=lambda j: j.t_start):
             lines.append(f"  {fmt_cores(j.cores):>6}  {int(now - j.t_start):>5}s  {j.tenant:<18} {j.name}"
@@ -284,6 +298,49 @@ class Daemon:
         else:
             self.finish(conn)
 
+    def adopt(self):
+        """Mark the cores of jobs still running under a previous daemon as busy until they exit:
+        the children of every `q run` client, by their CPU affinity (taskset execs the command,
+        so the pin is read from /proc, not from a cmdline)."""
+        import glob
+        runners = set()
+        for pid_dir in glob.glob("/proc/[0-9]*"):
+            try:
+                with open(pid_dir + "/cmdline", "rb") as f:
+                    argv = f.read().split(b"\0")
+            except OSError:
+                continue
+            if len(argv) >= 3 and (argv[1].endswith(b"/q") or argv[1] == b"q") and argv[2] == b"run":
+                runners.add(int(pid_dir.rsplit("/", 1)[1]))
+        if not runners:
+            return
+        for pid_dir in glob.glob("/proc/[0-9]*"):
+            try:
+                with open(pid_dir + "/stat") as f:
+                    ppid = int(f.read().split(")")[-1].split()[1])
+                if ppid not in runners:
+                    continue
+                with open(pid_dir + "/status") as f:
+                    allowed = [l for l in f if l.startswith("Cpus_allowed_list:")][0].split(":")[1].strip()
+                with open(pid_dir + "/cmdline", "rb") as f:
+                    argv = f.read().split(b"\0")
+            except (OSError, ValueError, IndexError):
+                continue
+            cores = [c for c in parse_cores(allowed) if c in self.general]
+            if not cores or len(cores) == len(self.general):
+                continue  # unpinned or the whole machine: not one of ours
+            pid = int(pid_dir.rsplit("/", 1)[1])
+            self.free -= set(cores)
+            self.adopted[pid] = cores
+            self.logline(f"adopt  pid {pid} cores={fmt_cores(cores)} {b' '.join(argv[:3]).decode(errors='replace')[:60]!r}")
+
+    def reap_adopted(self):
+        for pid, cores in list(self.adopted.items()):
+            if not os.path.exists(f"/proc/{pid}"):
+                self.free |= set(cores)
+                del self.adopted[pid]
+                self.logline(f"freed  pid {pid} cores={fmt_cores(cores)} (adopted job ended)")
+
     def serve(self):
         if os.path.exists(SOCK):
             try:
@@ -304,6 +361,7 @@ class Daemon:
         srv.setblocking(False)
         self.sel.register(srv, selectors.EVENT_READ, "srv")
         self.logline(f"daemon general={fmt_cores(self.general)} quiet={fmt_cores(self.quiet_set)}")
+        self.adopt()
         def on_term(*_):
             raise SystemExit(0)
 
@@ -317,6 +375,8 @@ class Daemon:
                         self.sel.register(conn, selectors.EVENT_READ, "conn")
                     else:
                         self.handle(key.fileobj)
+                if self.adopted:
+                    self.reap_adopted()
                 self.schedule()
         finally:
             self.logline("daemon stop")
@@ -354,20 +414,25 @@ def cmd_run(a, cmd):
     req = {"op": "run", "cores": a.cores, "quiet": a.quiet, "lock": a.lock, "prio": a.prio,
            "tenant": a.tenant or default_tenant(cwd), "name": a.name, "pid": os.getpid(),
            "cwd": cwd, "cmd": cmd}
-    try:
-        s = connect()
-    except OSError as e:
-        print(f"q: no daemon at {SOCK} ({e}); start one with `q daemon`", file=sys.stderr)
-        return 3
-    s.sendall((json.dumps(req) + "\n").encode())
-    buf = b""
-    while b"\n" not in buf:
-        chunk = s.recv(4096)
-        if not chunk:
-            print("q: the daemon went away before the lease", file=sys.stderr)
-            return 3
-        buf += chunk
-    lease = json.loads(buf.partition(b"\n")[0])
+    # A lease request survives a daemon restart: resubmit until one answers (up to RETRY_S).
+    deadline = time.time() + RETRY_S
+    lease = None
+    while lease is None:
+        try:
+            s = connect()
+            s.sendall((json.dumps(req) + "\n").encode())
+            buf = b""
+            while b"\n" not in buf:
+                chunk = s.recv(4096)
+                if not chunk:
+                    raise ConnectionResetError("the daemon went away before the lease")
+                buf += chunk
+            lease = json.loads(buf.partition(b"\n")[0])
+        except OSError as e:
+            if time.time() > deadline:
+                print(f"q: no daemon at {SOCK} ({e}); start one with `q daemon`", file=sys.stderr)
+                return 3
+            time.sleep(2)
     cores = lease["cores"]
     n = len(cores)
     env = dict(os.environ)
