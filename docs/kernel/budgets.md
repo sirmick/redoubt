@@ -204,14 +204,14 @@ and its kernel objects.
   Each child's first-thread stack is charged to that server's own budget, at the manifest's
   `stack_pages` size ([the boot manifest](../servers/init.md#the-boot-manifest)).
 
-  With `beamlet` and the userland disk's `blkd` and `littlefsd`, the image manifest's bound is 508 pages
+  With `beamlet` and the userland disk's `blkd` and `littlefsd`, the image manifest's bound is 524 pages
   on both widths (`init-boot` prints it), and the fixed 1,024-page limit more than doubles it.
   The image's `beamlet` is budgeted 10,880 pages: a heap cap of twice the largest peak of its
   runtime heap across the image's memory cases (5,429 pages on rv64, 5,231 on rv32) plus its
   stack, rounded up to 128 ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)).
-  So the image's servers need 21,259 of `system`'s pages; at 512 MiB `system` has 31,610 free on
-  rv32 and 31,652 on rv64, and the image boots there with 10,351 pages to spare on rv32, and
-  10,094 for a case that adds a 256-page client, which costs 257 with its budget's own page. The
+  So the image's servers need 21,264 of `system`'s pages; at 512 MiB `system` has 31,610 free on
+  rv32 and 31,652 on rv64, and the image boots there with 10,346 pages to spare on rv32, and
+  10,089 for a case that adds a 256-page client, which costs 257 with its budget's own page. The
   bench and `mkimage`'s instructions give it 512 MiB; at 256 MiB it does not boot. The scan's cap
   rule is the narrow margin: an rv64 peak of 5,432 pages puts the cap under twice the peak, and
   the budget then moves up a step of 128. The bound is a fixed count, not a share

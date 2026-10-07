@@ -377,9 +377,111 @@ messages! {
     Rwstat = 127,
 }
 
+/// An `Rerror`'s name: the one table of the texts a 9P server answers with (servers/wire.md,
+/// "Error names"). A server sends a text of the table; a client reads it back to its name and
+/// never keeps the text. Where two texts share a name, the first is the one servers send from
+/// now on; a text outside the table is [`ErrorName::Other`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorName {
+    NotFound,
+    NotPermitted,
+    Exists,
+    NotDir,
+    IsDir,
+    NotEmpty,
+    NoSpace,
+    ReadOnly,
+    /// A fid whose file was removed under it.
+    Removed,
+    TooMany,
+    NoMemory,
+    NotSupported,
+    BadName,
+    TooLarge,
+    Corrupt,
+    Refused,
+    Timeout,
+    Unreachable,
+    InUse,
+    State,
+    /// The protocol broken: a fid, a mode, an offset or a message the server could not take.
+    Protocol,
+    /// Over the connection's share: not served, for its sender to ask again.
+    Busy,
+    Other,
+}
+
+/// Each name and its texts, the first the one a server sends.
+const ERROR_NAMES: &[(ErrorName, &str, &[&str])] = &[
+    (ErrorName::NotFound, "not_found", &["file does not exist"]),
+    (ErrorName::NotPermitted, "not_permitted", &["permission denied", "not_permitted"]),
+    (ErrorName::Exists, "exists", &["file exists"]),
+    (ErrorName::NotDir, "not_dir", &["not a directory"]),
+    (ErrorName::IsDir, "is_dir", &["is a directory"]),
+    (ErrorName::NotEmpty, "not_empty", &["directory not empty"]),
+    (ErrorName::NoSpace, "no_space", &["no space", "quota refused"]),
+    (ErrorName::ReadOnly, "read_only", &["read-only", "read-only volume"]),
+    (ErrorName::Removed, "removed", &["removed"]),
+    (ErrorName::TooMany, "too_many", &["too many open files", "too_many"]),
+    (ErrorName::NoMemory, "no_memory", &["out of memory", "no charge"]),
+    (ErrorName::NotSupported, "not_supported", &["not supported"]),
+    (ErrorName::BadName, "bad_name", &["bad file name", "path too deep"]),
+    (ErrorName::TooLarge, "too_large", &["file too large"]),
+    (ErrorName::Corrupt, "corrupt", &["corrupt"]),
+    (ErrorName::Refused, "refused", &["refused"]),
+    (ErrorName::Timeout, "timeout", &["timeout"]),
+    (ErrorName::Unreachable, "unreachable", &["unreachable"]),
+    (ErrorName::InUse, "in_use", &["in_use"]),
+    (ErrorName::State, "state", &["state"]),
+    (ErrorName::Busy, "busy", &["busy"]),
+    (
+        ErrorName::Protocol,
+        "protocol",
+        &[
+            "malformed message",
+            "unknown fid",
+            "fid already in use",
+            "fid is open",
+            "fid not open for this",
+            "bad open mode",
+            "bad offset",
+            "count too small",
+            "reply too large",
+            "no such connection",
+            "no connection id",
+            "authentication not required",
+        ],
+    ),
+];
+
+impl ErrorName {
+    /// The name of `text`: [`ErrorName::Other`] for a text outside the table.
+    pub fn of(text: &str) -> ErrorName {
+        ERROR_NAMES.iter().find(|(_, _, texts)| texts.contains(&text)).map_or(ErrorName::Other, |(n, ..)| *n)
+    }
+
+    /// The name as the table writes it (`not_found`, `other`).
+    pub fn as_str(self) -> &'static str {
+        ERROR_NAMES.iter().find(|(n, ..)| *n == self).map_or("other", |(_, name, _)| name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_text_reads_back_to_its_name_and_any_other_is_other() {
+        for (name, written, texts) in ERROR_NAMES {
+            assert_eq!(name.as_str(), *written);
+            for text in *texts {
+                assert_eq!(ErrorName::of(text), *name, "{text}");
+            }
+        }
+        assert_eq!(ErrorName::of("file does not exist "), ErrorName::Other);
+        assert_eq!(ErrorName::of("a server's own words"), ErrorName::Other);
+        assert_eq!(ErrorName::Other.as_str(), "other");
+    }
 
     fn round_trip(m: &Message<'_>, bytes: &[u8]) {
         let mut out = [0u8; 256];

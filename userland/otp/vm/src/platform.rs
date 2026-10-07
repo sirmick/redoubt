@@ -145,8 +145,12 @@ pub enum ProgramEvent {
 /// symbolic link pointing out of it. Handles are the platform's own numbers; the VM closes a
 /// handle when the process that opened it exits.
 ///
-/// Calls are synchronous for now. On redoubt64 this becomes a 9P client
-/// (docs/userland/beamlet.md), and the same operations map onto walk/open/read/write/stat/clunk.
+/// **An operation may finish later.** While the VM has named who asks ([`Files::asker`]), a
+/// platform whose operations go to servers (Redoubt's, over 9P) may answer [`FileError::Later`]:
+/// it has begun the operation, the VM parks the asking Erlang process, and when
+/// [`Files::finished`] names the asker the VM makes the same call again and gets the result. With
+/// no asker named (the VM's own code loading) every call finishes before it returns. A host's
+/// calls always do.
 pub trait Files {
     fn open(&mut self, path: &str, mode: OpenMode) -> Result<u64, FileError>;
     fn close(&mut self, handle: u64);
@@ -197,6 +201,18 @@ pub trait Files {
         let _ = (existing, new);
         Err(FileError::Enotsup)
     }
+    /// The whole file at `path`, if it is at most `max` bytes (else `Einval`, reading nothing):
+    /// by default through `info`, `open`, `read` and `close`, one operation where those are many.
+    fn read_file(&mut self, path: &str, max: usize) -> Result<Vec<u8>, FileError> {
+        crate::bif::read_whole_file(self, path, max)
+    }
+    /// Who asks the calls that follow, until the next `asker`: a number the VM gives each Erlang
+    /// process; `None` for the VM itself, whose calls finish before they return.
+    fn asker(&mut self, asker: Option<u64>) { let _ = asker; }
+    /// An asker whose operation, answered [`FileError::Later`], has finished since.
+    fn finished(&mut self) -> Option<u64> { None }
+    /// The asker has gone: its operation's result, when it comes, is dropped with what it holds.
+    fn abandon(&mut self, asker: u64) { let _ = asker; }
 }
 
 /// How to open a file, from Erlang's modes (`read`, `write`, `append`, `exclusive`).
@@ -231,6 +247,10 @@ pub enum FileKind {
 /// What `file:read_file_info/1` reports. Times are seconds since the Unix epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileInfo {
+    /// Whether `mode`, `links`, `inode`, `uid`, `gid`, the device and the access bits are the file's.
+    /// A platform with no such fields says `false`, and `file` sees `undefined` for each
+    /// (docs/userland/files.md, "Refuse visibly; report only real fields").
+    pub unix: bool,
     pub size: u64,
     pub kind: FileKind,
     pub readable: bool,
@@ -266,6 +286,17 @@ pub enum FileError {
     Eperm,
     Erofs,
     Exdev,
+    Estale,
+    Enomem,
+    Efbig,
+    Econnrefused,
+    Etimedout,
+    Ehostunreach,
+    Eaddrinuse,
+    Enotconn,
+    /// Not an error: the operation has begun and finishes later ([`Files`]). It never reaches
+    /// Erlang code.
+    Later,
 }
 
 impl FileError {
@@ -288,6 +319,15 @@ impl FileError {
             FileError::Eperm => "eperm",
             FileError::Erofs => "erofs",
             FileError::Exdev => "exdev",
+            FileError::Estale => "estale",
+            FileError::Enomem => "enomem",
+            FileError::Efbig => "efbig",
+            FileError::Econnrefused => "econnrefused",
+            FileError::Etimedout => "etimedout",
+            FileError::Ehostunreach => "ehostunreach",
+            FileError::Eaddrinuse => "eaddrinuse",
+            FileError::Enotconn => "enotconn",
+            FileError::Later => "eagain",
         }
     }
 }

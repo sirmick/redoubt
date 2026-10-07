@@ -191,6 +191,20 @@ pub const MIN_HEAP_CELLS: usize = 1024;
 /// cost the heap only a cell or two, so they get a budget of their own (BEAM's virtual heap).
 pub const MIN_BINARY_BYTES: usize = 1 << 20;
 
+/// A process's file operation that the platform finishes later ([`crate::platform::Files`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Io {
+    /// None.
+    #[default]
+    Idle,
+    /// A native has just been answered `Later`: at the end of its time slice the process waits.
+    Asked,
+    /// Waiting for the operation's end: a message does not wake it.
+    Waiting,
+    /// The operation ended before the process waited: it runs again at once.
+    Done,
+}
+
 pub struct Process {
     pub pid: Pid,
     /// Every term this process holds is on this heap (or a literal).
@@ -227,6 +241,8 @@ pub struct Process {
     pub retry: bool,
     /// The native call to make again, with its arguments still in the x registers.
     pub resume: Option<crate::interp::Resume>,
+    /// Where it stands with a file operation the platform finishes later.
+    pub io: Io,
     /// Processes this one spawned during its time slice, which join the run queue when the
     /// slice ends (with several schedulers; see [`crate::vm::System::hold_back`]).
     pub spawned: Vec<Pid>,
@@ -286,6 +302,7 @@ impl Process {
             timed_out: false,
             retry: false,
             resume: None,
+            io: Io::Idle,
             spawned: Vec::new(),
             links: BTreeSet::new(),
             monitors: BTreeMap::new(),

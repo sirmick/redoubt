@@ -61,12 +61,15 @@ fn a_refusal_is_the_servers_and_costs_no_fid() {
                 conn.open(&mut lend, "manifest.json", mode::OREAD).err(),
                 Some(Error::Rerror(Name::NotFound))
             );
-            assert_eq!(conn.open(&mut lend, "keyd", mode::OWRITE).err(), Some(Error::Rerror(Name::Other)));
+            assert_eq!(
+                conn.open(&mut lend, "keyd", mode::OWRITE).err(),
+                Some(Error::Rerror(Name::NotPermitted))
+            );
             assert_eq!(
                 conn.create(&mut lend, "", "new", 0o644, mode::OWRITE).err(),
-                Some(Error::Rerror(Name::Other))
+                Some(Error::Rerror(Name::NotSupported))
             );
-            assert_eq!(conn.remove(&mut lend, "keyd"), Err(Error::Rerror(Name::Other)));
+            assert_eq!(conn.remove(&mut lend, "keyd"), Err(Error::Rerror(Name::NotSupported)));
         }
         // `..` never climbs above the connection's root: it cleans away, here and in the server.
         let file = conn.open(&mut lend, "../../keyd", mode::OREAD).unwrap();
@@ -281,7 +284,7 @@ fn an_rerror_keeps_its_name_not_found_against_the_rest() {
         // The walk stops after `home`: a short `Rwalk`, not an `Rerror`, and the same name.
         assert_eq!(conn.stat(&mut lend, "home/nobody").err(), Some(Error::Rerror(Name::NotFound)));
         // `home` is there but not empty: the server's `permission denied`.
-        assert_eq!(conn.remove(&mut lend, "home"), Err(Error::Rerror(Name::Other)));
+        assert_eq!(conn.remove(&mut lend, "home"), Err(Error::Rerror(Name::NotPermitted)));
         conn.open(&mut lend, "home/a/note", mode::OREAD).unwrap().close(&mut lend).unwrap();
     });
     served.stop();

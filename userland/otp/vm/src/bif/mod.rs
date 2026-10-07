@@ -19,7 +19,7 @@ mod code;
 mod erlang;
 mod ets;
 mod file;
-pub(crate) use file::read_whole_file;
+pub(crate) use file::{asker, asker_pid, read_whole_file};
 pub(crate) use info::load_binary;
 mod info;
 mod lists;
@@ -769,6 +769,15 @@ impl Ctx<'_> {
     pub fn retry(&mut self) -> Result<Term, Exception> {
         self.p.retry = true;
         Ok(Term::Nil)
+    }
+
+    /// Finish this call when the platform's file operation has: as [`Ctx::retry`], but the process
+    /// waits rather than yields, and only the operation's end (or an exit signal) wakes it.
+    pub fn await_io(&mut self) {
+        self.p.retry = true;
+        if self.p.io != crate::process::Io::Done {
+            self.p.io = crate::process::Io::Asked;
+        }
     }
 
     /// A new resource holding `value`, with a fresh id.

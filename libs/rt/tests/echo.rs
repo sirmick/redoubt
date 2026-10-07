@@ -16,7 +16,7 @@ use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::MALFORMED;
 use redoubt_rt::server::ninep::WORDS_9P;
 use redoubt_rt::startup::{Startup, StartupBuilder};
-use redoubt_rt::wire::ninep::{Body, Message};
+use redoubt_rt::wire::ninep::{Body, ErrorName, Message};
 
 /// Runs `main` as `pid` with a startup block naming `handles`.
 fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread::JoinHandle<u32> {
@@ -164,8 +164,11 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
         // A name that is not there is NotFound, whether the first name misses (the server's
         // `file does not exist`) or a later one (a walk that stops short).
         client.attach(&mut lend, 90, "").unwrap();
-        assert_eq!(client.walk(&mut lend, 90, 91, "nope"), Err(ClientError::NotFound));
-        assert_eq!(client.walk(&mut lend, 90, 91, "echo/nope"), Err(ClientError::NotFound));
+        assert_eq!(client.walk(&mut lend, 90, 91, "nope"), Err(ClientError::Rerror(ErrorName::NotFound)));
+        assert_eq!(
+            client.walk(&mut lend, 90, 91, "echo/nope"),
+            Err(ClientError::Rerror(ErrorName::NotFound))
+        );
         client.clunk(&mut lend, 90).unwrap();
         let (fresh, id) = client.new_connection(&mut lend, "", 0).unwrap();
         // Rooted below the launcher's root; a file that is not there is refused.
@@ -199,7 +202,7 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
     f.as_process(child, || {
         let client = Connection::new(Endpoint::from_handle(fresh));
         let mut lend = Lend::new(1).unwrap();
-        assert_eq!(client.attach(&mut lend, 1, ""), Err(ClientError::Remote));
+        assert!(matches!(client.attach(&mut lend, 1, ""), Err(ClientError::Rerror(_))));
         // A ninep_common call bringing handles it did not ask for: malformed, and closed.
         let junk = Endpoint::create().unwrap();
         let ep = Endpoint::from_handle(fresh);

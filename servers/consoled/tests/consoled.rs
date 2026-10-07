@@ -21,7 +21,7 @@ use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::ninep::{COLLECT_WAIT, IN_WORDS, OPENED, collect_words, mode};
 use redoubt_rt::startup::{Startup, StartupBuilder};
-use redoubt_rt::wire::ninep::{Body, Message};
+use redoubt_rt::wire::ninep::{Body, ErrorName, Message};
 
 #[path = "../src/bin/consoled.rs"]
 mod consoled;
@@ -360,7 +360,10 @@ fn a_flood_of_input_keeps_what_was_typed_first() {
             // Two answered calls, with the server's drain between them. Refused walks, not
             // writes: a write would put its byte in the same register.
             for _ in 0..8 {
-                assert_eq!(c.walk(&mut lend, 0, 1, "anything").unwrap_err(), ClientError::Remote);
+                assert_eq!(
+                    c.walk(&mut lend, 0, 1, "anything").unwrap_err(),
+                    ClientError::Rerror(ErrorName::NotDir)
+                );
             }
         }
         b.line_quiet();
@@ -399,15 +402,19 @@ fn the_console_refuses_what_it_is_not() {
         let mut lend = Lend::new(4).unwrap();
         c.attach(&mut lend, 0, "").unwrap();
         for bad in [mode::OEXEC, mode::OREAD | mode::OTRUNC, mode::OWRITE | mode::OTRUNC] {
-            assert_eq!(c.open(&mut lend, 0, bad).unwrap_err(), ClientError::Remote, "{bad:#x}");
+            assert_eq!(
+                c.open(&mut lend, 0, bad).unwrap_err(),
+                ClientError::Rerror(ErrorName::Protocol),
+                "{bad:#x}"
+            );
         }
         // There is nothing below /dev/cons.
-        assert_eq!(c.walk(&mut lend, 0, 1, "anything").unwrap_err(), ClientError::Remote);
+        assert_eq!(c.walk(&mut lend, 0, 1, "anything").unwrap_err(), ClientError::Rerror(ErrorName::NotDir));
         // A read of an unopened fid, and a write to one opened for reading.
         let mut got = [0u8; 4];
-        assert_eq!(c.read(&mut lend, 0, 0, &mut got).unwrap_err(), ClientError::Remote);
+        assert_eq!(c.read(&mut lend, 0, 0, &mut got).unwrap_err(), ClientError::Rerror(ErrorName::Protocol));
         c.open(&mut lend, 0, mode::OREAD).unwrap();
-        assert_eq!(c.write(&mut lend, 0, 0, b"x").unwrap_err(), ClientError::Remote);
+        assert_eq!(c.write(&mut lend, 0, 0, b"x").unwrap_err(), ClientError::Rerror(ErrorName::Protocol));
     });
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
@@ -458,7 +465,10 @@ fn every_console_init_mints_attaches_and_opens_in_its_one_bucket() {
             c.walk(&mut lend, 0, 1, "").unwrap_or_else(|e| panic!("console {i} walks: {e:?}"));
             c.open(&mut lend, 1, mode::ORDWR).unwrap_or_else(|e| panic!("console {i} opens: {e:?}"));
         }
-        assert_eq!(consoles[0].walk(&mut lend, 0, 2, "").unwrap_err(), ClientError::Remote);
+        assert_eq!(
+            consoles[0].walk(&mut lend, 0, 2, "").unwrap_err(),
+            ClientError::Rerror(ErrorName::TooMany)
+        );
     });
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }

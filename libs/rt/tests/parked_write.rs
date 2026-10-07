@@ -14,6 +14,7 @@ use redoubt_rt::server::ninep::{
     FileServer, FileStat, MALFORMED, NineError, NineServer, Qid, Read, Write, mode, refuse, refuse_malformed,
 };
 use redoubt_rt::server::parked::{NotParked, Parked};
+use redoubt_rt::wire::ninep::ErrorName;
 
 /// One file whose every write waits: a socket whose send buffer never empties.
 struct Full;
@@ -117,7 +118,7 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
         // This one waits it out: the server's deadline answers it, with an Rerror.
         c.timeout = FOREVER;
         let started = Instant::now();
-        assert_eq!(c.write(&mut lend, 0, 0, b"late"), Err(ClientError::Remote));
+        assert_eq!(c.write(&mut lend, 0, 0, b"late"), Err(ClientError::Rerror(ErrorName::Timeout)));
         assert!(started.elapsed() >= Duration::from_micros(LONGEST), "answered before its deadline");
     });
     f.destroy(server, receive);

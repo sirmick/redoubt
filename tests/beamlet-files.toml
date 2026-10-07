@@ -1,0 +1,47 @@
+description = "Files over 9P from a VM (docs/userland/files.md, \"Files over 9P\"): under init, beamlet is handed a home volume (littlefsd:data) and binds it at /home/alice; through OTP's prim_file it writes a file, reads it back, lists the directory, removes the file, reads a file larger than one 9P answer from eight processes at once, finds /home/bob/x is enoent (no binding holds it), and sees an undefined mode. Its report_io line shows every request went through the hub on the scheduler and two waiter threads, the console's and the volume's: no thread per read"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-console, with a second disk for the home volume, its blkd and littlefsd, and the
+# case's own userland disk (the module, erts's prim_file and what io:format needs).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+]
+timeout_secs = 120
+expect = [
+    '^init: started beamlet, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] files: wrote: ok$',
+    '^\[con [0-9a-f]{16}\] files: read back: <<"buy milk\\n">>$',
+    '^\[con [0-9a-f]{16}\] files: listed: \{ok,\["notes\.txt"\]\}$',
+    '^\[con [0-9a-f]{16}\] files: removed: ok$',
+    '^\[con [0-9a-f]{16}\] files: listed after: \{ok,\[\]\}$',
+    '^\[con [0-9a-f]{16}\] files: eight readers of 70000 bytes at once: true$',
+    '^\[con [0-9a-f]{16}\] files: bob.s file: \{error,enoent\}$',
+    '^\[con [0-9a-f]{16}\] files: mode: undefined$',
+    '^\[con [0-9a-f]{16}\] beamlet: io: [0-9]+ requests through the hub; threads: 1 scheduler, 2 waiters$',
+    '^init: beamlet \(PID [0-9]+\) exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'beamlet: .* not loaded',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/files.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/files-userland.toml"

@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use beamlet_redoubt::fixture::{self, ConsoleServer, Dirs, HostThreads};
+use beamlet_redoubt::fixture::{self, ConsoleServer, Dirs};
 use beamlet_redoubt::{budget_pages, limits, run};
 use beamlet_vm::vm::Limits;
 use redoubt_fake_kernel::fake;
@@ -81,8 +81,7 @@ fn run_limits(function: &'static str, budget_pages: u64) -> (u32, String) {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vm/tests/fixtures");
     let session = f.run(pid, move || {
         let startup = fixture::startup(&block);
-        let threads = Box::new(HostThreads { pid });
-        run(&startup, threads, Box::new(Dirs(vec![fixtures])), "limits", function, Some(budget_pages), None)
+        run(&startup, Box::new(Dirs(vec![fixtures])), "limits", function, Some(budget_pages), None)
     });
     let code = session.join().unwrap();
     f.destroy(console.pid, console.endpoint);

@@ -25,6 +25,7 @@ use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::server::ninep::mode;
 use redoubt_rt::server::typed::{Outcome, finish};
 use redoubt_rt::startup::{Startup, StartupBuilder};
+use redoubt_rt::wire::ninep::ErrorName;
 use redoubt_rt::wire::proto::{ipd, net_ctl, netif};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{self, Device, DeviceCapabilities, Medium};
@@ -468,7 +469,11 @@ fn parked_calls_are_freed_when_abandoned_and_capped_by_the_share() {
         // Refused (an `Rerror`), not held: a held read would end in the client's own timeout
         // instead, so the error alone shows it, however slow the machine.
         c.timeout = 2_000_000;
-        assert_eq!(c.read(&mut lend, 3, 0, &mut got), Err(ClientError::Remote), "a third parked read");
+        assert_eq!(
+            c.read(&mut lend, 3, 0, &mut got),
+            Err(ClientError::Rerror(ErrorName::TooMany)),
+            "a third parked read"
+        );
         assert_eq!(f.open_calls(net.ipd), 2);
     });
     for r in readers {

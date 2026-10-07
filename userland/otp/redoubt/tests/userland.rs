@@ -59,8 +59,8 @@ fn a_module_is_its_file_and_a_failed_read_is_refused() {
 }
 
 /// The error's name decides: `not_found` at the open is absent, and silent; `not_found` on a
-/// read, `corrupt` and every other name (`Other`), a server gone, or anything else is refused,
-/// naming it.
+/// read, `corrupt` (a block its verifier refused), a name outside the table (`other`), a server
+/// gone, or anything else is refused, naming it.
 #[test]
 fn not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name() {
     assert_eq!(unread(Error::Rerror(Name::NotFound), true), Unread::Absent);
@@ -69,6 +69,10 @@ fn not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name() {
         Unread::Failed("its file could not be read: not_found")
     );
     for at_open in [true, false] {
+        assert_eq!(
+            unread(Error::Rerror(Name::Corrupt), at_open),
+            Unread::Failed("its file could not be read: corrupt")
+        );
         assert_eq!(
             unread(Error::Rerror(Name::Other), at_open),
             Unread::Failed("its file could not be read: other")

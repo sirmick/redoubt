@@ -64,7 +64,7 @@ fn an_accept_nobody_answers_ends_with_the_ctl_deadline() {
     let conn = f.grant(pid, ep, client, ANY);
     let mut ipd = ipd();
     let listener = f.run(client, move || match accept_nobody(conn) {
-        Err(ClientError::Remote) => 0,
+        Err(ClientError::Rerror(_)) => 0,
         Ok(_) => 1,
         Err(_) => 2,
     });

@@ -45,7 +45,29 @@ per-file metadata.
 
 ### Files over 9P
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (19)</summary>
+
+- host:beamlet-redoubt::files_are_written_read_listed_renamed_and_removed
+- host:beamlet-redoubt::opening_to_write_replaces_and_appending_adds
+- host:beamlet-redoubt::a_read_past_one_answer_comes_in_pieces
+- host:beamlet-redoubt::the_position_lives_in_the_vm_and_moves_with_reads_and_seeks
+- host:beamlet-redoubt::a_path_under_no_binding_is_enoent
+- host:beamlet-redoubt::a_path_above_a_binding_is_a_directory_the_namespace_answers
+- host:beamlet-redoubt::two_askers_wait_at_once_and_each_gets_its_own_answer
+- host:beamlet-redoubt::the_vms_own_calls_wait_in_place
+- host:beamlet-redoubt::closed_files_give_their_fids_back
+- host:beamlet-redoubt::an_abandoned_operation_stops_at_its_next_answer
+- host:beamlet-redoubt::a_file_operation_on_the_consoles_connection_is_answered
+- host:beamlet-redoubt::a_stat_reports_only_what_9p_has
+- host:beamlet-redoubt::what_has_no_9p_field_is_refused_visibly
+- host:beamlet-redoubt::every_row_of_the_error_table_maps_to_its_posix_error
+- host:beamlet-redoubt::a_bind_argument_puts_a_handed_volume_in_the_namespace
+- host:beamlet-vm::a_completion_reaches_the_process_that_asked_and_no_other
+- host:beamlet-vm::a_message_does_not_end_a_wait_for_a_file
+- host:beamlet-vm::a_process_killed_while_it_waits_has_its_operation_dropped
+- bench:beamlet-files
+
+</details>
 
 ```mermaid
 flowchart LR
@@ -57,32 +79,43 @@ flowchart LR
     LFS -.->|"typed calls"| B["blkd"]
     B -.-> D["virtio block device"]
 ```
-*Figure: the file I/O path from `File` to the block device. Every link is planned (dashed). The
-servers are [the file server](../servers/littlefsd.md)'s and [blkd](../servers/blkd.md)'s pages.*
+*Figure: the file I/O path from `File` to the block device. The links are built; they are drawn
+dashed until Elixir's `File` runs over them in a session. The servers are
+[the file server](../servers/littlefsd.md)'s and [blkd](../servers/blkd.md)'s pages.*
 
 `File.read!/1` becomes OTP's `file` module, whose `prim_file` calls beamlet implements over its
-9P client ([beamlet](beamlet.md#the-platform-boundary)). The client resolves the path in the
-session's namespace, walks the rest of it on that connection, and reads.
+9P client ([beamlet](beamlet.md#the-platform-boundary);
+[`userland/otp/redoubt/src/files.rs`](../../userland/otp/redoubt/src/files.rs)). The client
+resolves the path in the session's namespace, walks the rest of it on that connection, and reads.
+A path above a binding, such as `/`, is a directory the namespace answers itself; a path
+neither inside nor above one is `:enoent` ([sessions](sessions.md#namespaces)).
 - **A fid is the file descriptor**, and a directory fid is a capability. The file position lives
-  in the VM, because 9P reads and writes carry explicit offsets.
-- **Everything moves in pieces** of at most the 64 KiB `msize`, each one call with a lend
-  ([IPC](../kernel/ipc.md#messages)).
+  in the VM, because 9P reads and writes carry explicit offsets; nothing else is kept between
+  calls. A closed file's fid is clunked, and comes back when the server has let it go.
+- **Everything moves in pieces**: a read asks at most what one answer carries (the 64 KiB `msize`
+  less its header), a write at most a page, each one request on the VM's hub
+  ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)), so only the
+  Erlang process that asked waits for it. `littlefsd`'s `rename` is a typed call, which no hub
+  carries: it is made on the VM's thread.
 - **Plain 9P2000**, with no Unix extensions: a `stat` has a name, a length, a modification time
   and a qid (the server's identity and version for the file), and nothing else. Custom
   per-file metadata is the file server's typed `set_attr` and `get_attr`, kept in littlefs
   attributes.
 - **An error is a Redoubt error first.** The file server refuses with its own reasons
   (`not_found`, `refused`, `exists`, `not_dir`, `removed` for a fid whose file was removed,
-  `too_large` for an attribute over its limit), and labels and budgets add theirs.
+  `too_large` for an attribute over its limit), and labels and budgets add theirs, each a name of
+  the one table ([wire](../servers/wire.md#error-names)). Everywhere but the `File` boundary a
+  Redoubt error keeps its name; there, beamlet's platform maps each name to the POSIX error OTP's
+  `file` expects, by [the table's last column](../servers/wire.md#error-names).
 
 | Operation | What happens |
 | --- | --- |
-| `File.stat`, `:file.read_file_info` | what 9P and the file server have: the type (from the qid), the size, the modification time if the server stores it, and `access` when the server says what this connection may do; `mode`, `uid`, `gid`, `links`, `inode` and `major_device` are `:undefined`; attributes through `get_attr` |
+| `File.stat`, `:file.read_file_info` | what 9P and the file server have: the type (from the qid), the size and the modification time (0 until `littlefsd` keeps one: the residual below); `access`, `mode`, `uid`, `gid`, `links`, `inode` and `major_device` are `:undefined`, since no server says what a connection may do; attributes through `get_attr` |
 | `File.ls` | a read of a directory fid; entries the caller may not read are left out |
 | `File.rm` of an open file | succeeds: an "in use" refusal would tell one client about another |
 | `File.chmod`, `File.chown` | `{:error, :enotsup}`: there are no mode or owner bits, and access is by capability |
 | `File.ln_s`, `File.ln` | `{:error, :enotsup}`: 9P2000 has no links, and binds do their job |
-| `File.write_stat` | applies the modification and access times only; `{:error, :enotsup}` if it carries a mode, a user or a group |
+| `File.write_stat` | applies the modification and access times only; `{:error, :enotsup}` if it carries a mode, a user or a group (times are refused for now: the residual below) |
 
 **Refuse visibly; report only real fields.** The `File` API does not emulate POSIX: no program
 should rely on a permission bit that no server enforces, because authority on Redoubt is the
@@ -92,14 +125,13 @@ fields, so nothing is invented. This is the one statement of the rule; file tran
 arithmetic on a mode (the mode preservation in `File.cp` and `File.cp_r`, Mix's check that a file
 is executable) is adjusted in beamlet's platform layer to skip the mode, never fed a fake one; the
 M4 (self-hosted development) case that compiles a Mix project on the box catches any caller that
-breaks. Planned cases: a host or bench test asserts that `File.stat` gives `:undefined` for `mode`,
-`uid`, `gid`, `links`, `inode` and `major_device`, and that `File.chmod`, `File.chown`, `File.ln_s`
-and `File.ln` each return `{:error, :enotsup}`.
+breaks. The host tests above hold the undefined fields and the four `:enotsup`s, and
+bench:beamlet-files sees `mode` undefined in a boot.
 
-**Open:** error vocabularies. `File` expects POSIX atoms (`:enoent`, `:eacces`) and Redoubt has its
-own (`:refused`, `:not_yours`, a label or budget refusal). Recommended: Redoubt errors keep their
-own atoms everywhere, and the `File` boundary maps them to POSIX atoms only there, so OTP code sees
-what it expects and new code sees the truth.
+Residuals, each a departure from the table, until the file server serves what it needs:
+- **No times are set and none is stored.** The 9P skeleton refuses `Twstat`, so `File.write_stat`
+  with times, and a cut at a position (`:file.truncate/1`) other than an open's, are
+  `{:error, :enotsup}`; and `littlefsd` keeps no modification time, so it reads as 0 (1970).
 
 ### Copying, moving, removing and binds
 

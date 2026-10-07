@@ -25,8 +25,12 @@
 //!   - With more, each has a waiter thread ([`Hub::spawn_waiter`]) blocked in it, calling again at once; the
 //!     waiter hands its filled buffer to the caller as the transfer of a one-word wake-up `send` to the
 //!     caller's own endpoint, where the caller idles in `receive` with a `max_transfer` of
-//!     [`COMPLETION_PAGES`], and the caller hands it to the hub ([`Hub::deliver`]). A waiter owns no other
-//!     buffer and talks to no other server.
+//!     [`COMPLETION_PAGES`], and the caller hands it to the hub ([`Hub::deliver`]). A waiter talks to no
+//!     other server. A caller busy elsewhere does not cost its sessions: a hand-over not taken within
+//!     [`HAND_OVER_US`] is held, in its answers' own pages, while the waiter keeps calling, up to
+//!     [`MAX_HELD`] of them.
+//! - **An `Rerror` keeps its name** ([`Outcome::Rerror`]), read by the one table's decoder as the blocking
+//!   client reads it; `busy`, over the connection's share, is [`Outcome::Busy`].
 //! - **The server is not trusted.** An answer must frame, decode and carry a tag outstanding on its
 //!   connection; anything else ends the connection, as the server's own end does: every request still
 //!   outstanding comes back [`Outcome::Ended`], with its buffer, its fate unknown.
@@ -41,11 +45,11 @@ use core::num::NonZeroU64;
 use redoubt_rt::abi::{Error as SysError, FOREVER, MAX_LEND_PAGES, PAGE_SIZE};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Delivery, Words};
-use redoubt_rt::server::ninep::{COLLECT_WAIT, IN_WORDS, MAX_TAGS, NineError, OPENED, collect_words};
+use redoubt_rt::server::ninep::{COLLECT_WAIT, IN_WORDS, MAX_TAGS, OPENED, collect_words};
 use redoubt_rt::wire::MSIZE;
 use redoubt_rt::wire::ninep::{Body, IOHDRSZ, Message, message_size};
 
-use crate::error::{Error, Refusal};
+use crate::error::{Error, Name, Refusal};
 
 /// How long a submit waits for its server to take the request (µs) before it is queued instead.
 pub const SUBMIT_TIMEOUT_US: u64 = 1_000;
@@ -66,6 +70,13 @@ pub const WAKE: u64 = 0xa10;
 /// Word 2 of a wake-up whose completion call failed rather than being answered: no status a
 /// reply carries, and a word on both widths.
 const FAILED: u64 = u32::MAX as u64;
+/// How long a waiter's hand-over waits for its caller to take it (µs) before the waiter calls
+/// again, so a caller away from its endpoint for longer than a session bound keeps its session.
+pub const HAND_OVER_US: u64 = COLLECT_WAIT / 4;
+/// The most hand-overs a waiter holds for a caller that has not taken them, each in its answers'
+/// own pages: with this many it reads no more and waits for the caller without bound, and the
+/// server may end the session at its bound.
+pub const MAX_HELD: usize = 4;
 /// A waiter thread's stack, in pages.
 const WAITER_STACK_PAGES: usize = 8;
 const WORD: usize = core::mem::size_of::<usize>();
@@ -85,8 +96,9 @@ pub enum Outcome {
     Flushed,
     /// Over the connection's share at the server: not served.
     Busy,
-    /// Any other `Rerror` (its text is not kept).
-    Rerror,
+    /// Any other `Rerror`, by its text's name in the one table (servers/wire.md, "Error names"); the
+    /// text is not kept.
+    Rerror(Name),
     /// Any other R-message, whole.
     Reply(Vec<u8>),
     /// The connection ended with the request outstanding: whether it happened is unknown.
@@ -349,8 +361,8 @@ impl Hub {
                     None => Outcome::Reply(bytes[..size].to_vec()),
                 },
                 Body::Rwrite { count } => Outcome::Wrote(count),
-                Body::Rerror { ename } if ename == NineError::BUSY.0 => Outcome::Busy,
-                Body::Rerror { .. } => Outcome::Rerror,
+                Body::Rerror { ename } if Name::of(ename) == Name::Busy => Outcome::Busy,
+                Body::Rerror { ename } => Outcome::Rerror(Name::of(ename)),
                 Body::Rflush => {
                     // The flushed request, if its answer did not come first: it ends here, once.
                     let old =
@@ -445,16 +457,39 @@ fn in_words(message: &[u8]) -> Words {
 }
 
 /// A waiter's whole life: the completion call, again and again, each filled buffer handed to the
-/// caller with a wake-up, until the connection or the caller is gone.
+/// caller with a wake-up, until the connection or the caller is gone. A hand-over the caller does
+/// not take within [`HAND_OVER_US`] is held, in its answers' own pages, while the waiter calls
+/// again with a hold of 0, which keeps the session and takes what is ready; at [`MAX_HELD`] it
+/// waits for the caller without bound.
 fn waiter(endpoint: Endpoint, wake: Endpoint, index: u64, lend: Buffer) {
     let mut lend = Some(lend);
+    // Hand-overs not yet taken, oldest first: the reply's words 0 and 1, and the answers.
+    let mut held: VecDeque<([u64; 2], Option<Buffer>)> = VecDeque::new();
     loop {
-        let Some(buffer) = lend.take().or_else(|| Buffer::new(COMPLETION_PAGES).ok()) else {
-            let _ = wake.send(&[WAKE, index, FAILED, 0], &[], None, FOREVER);
+        // Once the connection is over nothing more is read, so what is left waits without bound.
+        let ended = held.back().is_some_and(|(words, _)| words[0] != 0);
+        while let Some((words, buffer)) = held.pop_front() {
+            let wait = if ended || held.len() + 1 >= MAX_HELD { FOREVER } else { HAND_OVER_US };
+            match wake.send(&[WAKE, index, words[0], words[1]], &[], buffer, wait) {
+                Ok(()) => {}
+                Err((SysError::Timeout, buffer)) => {
+                    let (buffer, spare) = compact(words, buffer);
+                    lend = lend.or(spare);
+                    held.push_front((words, buffer));
+                    break;
+                }
+                Err(_) => return,
+            }
+        }
+        if ended {
             return;
+        }
+        let Some(buffer) = lend.take().or_else(|| Buffer::new(COMPLETION_PAGES).ok()) else {
+            held.push_back(([FAILED, 0], None));
+            continue;
         };
-        let timeout = COLLECT_WAIT + COLLECT_MARGIN_US;
-        let mut outcome = endpoint.call(&collect_words(COLLECT_WAIT), &[], Some(buffer), timeout);
+        let hold = if held.is_empty() { COLLECT_WAIT } else { 0 };
+        let mut outcome = endpoint.call(&collect_words(hold), &[], Some(buffer), hold + COLLECT_MARGIN_US);
         // A session the server opened afresh (word 2) is as good as an end: what was outstanding
         // is gone.
         let words = match (&outcome.status, &outcome.reply) {
@@ -466,10 +501,19 @@ fn waiter(endpoint: Endpoint, wake: Endpoint, index: u64, lend: Buffer) {
             lend = outcome.buffer.take();
             continue;
         }
-        let over = words[0] != 0;
-        if wake.send(&[WAKE, index, words[0], words[1]], &[], outcome.buffer.take(), FOREVER).is_err() || over
-        {
-            return;
-        }
+        held.push_back((words, outcome.buffer.take()));
     }
+}
+
+/// A held hand-over's answers moved into pages of their own length, and the completion buffer
+/// they leave free; as it was if it carries no answers or no smaller pages are to be had.
+fn compact(words: [u64; 2], buffer: Option<Buffer>) -> (Option<Buffer>, Option<Buffer>) {
+    let Some(full) = buffer else { return (None, None) };
+    let n = usize::try_from(words[1]).unwrap_or(usize::MAX);
+    if words[0] != 0 || n > full.len() || n.div_ceil(PAGE_SIZE) >= full.len() / PAGE_SIZE {
+        return (Some(full), None);
+    }
+    let Ok(mut own) = Buffer::new(n.div_ceil(PAGE_SIZE).max(1)) else { return (Some(full), None) };
+    own[..n].copy_from_slice(&full[..n]);
+    (Some(own), Some(full))
 }

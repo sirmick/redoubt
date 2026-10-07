@@ -10,7 +10,7 @@ timeout_secs = 400
 expect = [
     '^init: started beamlet, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] verityd: block [0-9]+ does not match the tree$',
-    '^\[con [0-9a-f]{16}\] beamlet: boot.pack not loaded: its file could not be read: other; parked$',
+    '^\[con [0-9a-f]{16}\] beamlet: boot.pack not loaded: its file could not be read: corrupt; parked$',
 ]
 forbid = [
     'init: refused the boot',

@@ -7,18 +7,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use redoubt_client::Name;
 use redoubt_client::aio::{COLLECT_MARGIN_US, Conn, Done, Hub, MAX_WRITE, Outcome, SUBMIT_TIMEOUT_US};
 use redoubt_fake_kernel::fake;
-use redoubt_rt::abi::{Error, FOREVER, Handle, MAX_LEND_PAGES};
+use redoubt_rt::abi::{Error, FOREVER, Handle, MAX_LEND_PAGES, PAGE_SIZE};
 use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::{self, Endpoint};
 use redoubt_rt::ipc::{Buffer, Caller, Event, Request};
 use redoubt_rt::server::Limits;
 use redoubt_rt::server::close_delivery;
 use redoubt_rt::server::ninep::{
-    FileServer, FileStat, NineError, NineServer, Qid, Read, mode, refuse_malformed,
+    COLLECT_WAIT, FileServer, FileStat, NineError, NineServer, Qid, Read, mode, refuse_malformed,
 };
-use redoubt_rt::wire::ninep::Body;
+use redoubt_rt::wire::ninep::{Body, Names};
 
 /// A root holding `now`, read at once, and `gate`, whose reads wait until the gate opens.
 struct Files {
@@ -215,6 +216,25 @@ fn an_inline_submit_to_a_busy_server_returns_and_goes_at_the_next_poll() {
         let done = next(&mut hub, conn);
         assert_eq!((done.tag, data(&done)), (tag, &b"hello"[..]));
         assert_eq!(done.buffer.as_ref().unwrap().as_ptr() as usize, at);
+    });
+    w.end();
+}
+
+#[test]
+fn an_rerror_through_the_hub_keeps_its_name() {
+    let w = World::new();
+    let ep = w.connection(9);
+    fake().as_process(w.client, || {
+        let mut hub = Hub::new();
+        let conn = hub.connect(Endpoint::from_handle(ep)).unwrap();
+        // The server answers `file does not exist`, and an open of an open fid `fid is open`.
+        let wnames = Names::new(&["missing"]).unwrap();
+        let walk = hub.submit(conn, Body::Twalk { fid: 0, newfid: 40, wnames }, None).unwrap();
+        let open = hub.submit(conn, Body::Topen { fid: NOW_FID, mode: mode::OREAD }, None).unwrap();
+        let mut got = [next(&mut hub, conn), next(&mut hub, conn)];
+        got.sort_by_key(|d| d.tag);
+        assert_eq!((got[0].tag, &got[0].outcome), (walk, &Outcome::Rerror(Name::NotFound)));
+        assert_eq!((got[1].tag, &got[1].outcome), (open, &Outcome::Rerror(Name::Protocol)));
     });
     w.end();
 }
@@ -471,6 +491,43 @@ fn two_connections_have_a_waiter_each_and_the_caller_idles_in_receive() {
         let Event::Send(delivery) = receive.receive(FOREVER, 0).unwrap() else { panic!() };
         assert!(hub.deliver(delivery).is_some());
         assert_eq!(sender.join().unwrap(), 1);
+    });
+    w.end();
+}
+
+/// A caller away from its endpoint for longer than the session bound keeps its session: the
+/// waiter holds the answer it could not hand over, in the answer's own page, and keeps calling.
+#[test]
+fn a_caller_busy_past_the_session_bound_keeps_its_session() {
+    let w = World::new();
+    let ep = w.connection(12);
+    fake().as_process(w.client, || {
+        let mut hub = Hub::new();
+        let receive = Endpoint::create().unwrap();
+        let conn = hub.connect(Endpoint::from_handle(ep)).unwrap();
+        hub.spawn_waiter(conn, &receive, NonZeroU64::new(100).unwrap()).unwrap();
+        let take = |hub: &mut Hub| loop {
+            if let Some(done) = hub.completed() {
+                return done;
+            }
+            let Event::Send(delivery) = receive.receive(10_000_000, MAX_LEND_PAGES).unwrap() else {
+                panic!()
+            };
+            assert!(hub.deliver(delivery).is_none());
+        };
+        // Busy elsewhere, past the session bound, with an answer ready.
+        let first = hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
+        std::thread::sleep(Duration::from_micros(COLLECT_WAIT + 2_000_000));
+        let Event::Send(delivery) = receive.receive(10_000_000, MAX_LEND_PAGES).unwrap() else { panic!() };
+        let held = delivery.transfer.as_ref().unwrap().len();
+        assert_eq!(held, PAGE_SIZE, "the held answer kept the whole completion buffer");
+        assert!(hub.deliver(delivery).is_none());
+        let done = take(&mut hub);
+        assert_eq!((done.tag, data(&done)), (first, &b"hello"[..]));
+        // The session lives on: a new request is answered, not ended.
+        let second = hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
+        let done = take(&mut hub);
+        assert_eq!((done.tag, data(&done)), (second, &b"hello"[..]));
     });
     w.end();
 }

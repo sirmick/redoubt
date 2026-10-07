@@ -1224,11 +1224,14 @@ such runs: each stack rounded up to pages, from the runs that sized the stacks, 
 caps existed; and each heap cap in pages, from six later runs with the stacks as declared. The
 stack columns below are the first runs' and the heap columns the later runs'. `beamlet`'s heap peak
 moves by a page between runs, so its cap is instead the most its budget holds beside its stack,
-10,862 pages: at least twice its largest peak across six runs of each memory case on each width,
-`beamlet-footprint` included, 4 pages over twice it. Its budget, 10,880 pages, is that cap and its
+10,861 pages: at least twice its largest peak across six runs of each memory case on each width,
+`beamlet-footprint` included, 3 pages over twice it. Its budget, 10,880 pages, is that cap and its
 stack rounded up to 128 ([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The
 read-only case also scans its additional client from the merged manifest. `beamlet`'s stack peak is from `beamlet-footprint` on
-rv64 with the boot pack read before its VM starts; twice it still fits its 17 pages.
+rv64 with the boot pack read before its VM starts and its console on the hub; twice it needs its
+18 pages. `consoled`'s row is from the runs once it serves beamlet's console as a multiplexed
+session: its stack peak from rv64 `userland-read-only`, its heap peak from rv32
+`beamlet-footprint`.
 `erofsd:system`'s row and `verity:system`'s heap, which holds 4 checked data blocks, are from the
 six runs with the userland volume on EROFS. `verity:system`'s stack is from rv64 `userland-boot`
 once it also checks a signed volume's root block, which it does not use there but whose code lies
@@ -1237,7 +1240,7 @@ in its start path.
 | Image server | Largest stack peak (bytes) | Declared stack (pages) | Largest heap peak (pages) | Heap cap (pages) |
 | --- | ---: | ---: | ---: | ---: |
 | `keyd` | 6,248 | 4 | 4 | 8 |
-| `consoled` | 9,112 | 5 | 9 | 18 |
+| `consoled` | 10,384 | 6 | 11 | 22 |
 | `bootfsd` | 7,304 | 4 | 28 | 56 |
 | `blkd` | 4,504 | 3 | 17 | 34 |
 | `netd` | 4,280 | 3 | 2 | 4 |
@@ -1246,7 +1249,7 @@ in its start path.
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 12 | 24 |
-| `beamlet` | 33,768 | 17 | 5,429 | 10,862 |
+| `beamlet` | 35,288 | 18 | 5,429 | 10,861 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
 the 16-page stack default and no cap. `beamlet`'s heap peak is the shell after the commands

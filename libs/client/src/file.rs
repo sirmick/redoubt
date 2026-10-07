@@ -25,8 +25,8 @@ use redoubt_rt::wire::ninep::{self, Qid};
 
 use crate::error::{Error, Refusal};
 
-/// The root's fid, attached when the connection is made.
-const ROOT: u32 = 0;
+/// The root's fid, attached when the connection is made: where a walk through a hub starts.
+pub const ROOT: u32 = 0;
 /// Words of the fid bitmap: 32-bit, so rv32 has the atomics.
 const WORDS: usize = MAX_FIDS.div_ceil(32);
 
@@ -86,6 +86,14 @@ impl Connection {
 
     /// Whether `other` is this same connection.
     pub fn same(&self, other: &Connection) -> bool { Arc::ptr_eq(&self.0, &other.0) }
+
+    /// A free fid, now in use, for requests the caller sends itself (through a hub). It goes back
+    /// with [`Connection::free_fid`] once the server has let it go, and only then.
+    pub fn take_fid(&self) -> Result<u32, Error> { self.0.fids.take() }
+
+    /// Gives back a fid taken with [`Connection::take_fid`] that the server has let go: its clunk's
+    /// or remove's answer, a walk to it that failed, or a request for it never sent.
+    pub fn free_fid(&self, fid: u32) { self.0.fids.free(fid) }
 
     /// Opens `path` (from the root; `..` never climbs above it) with `mode`.
     pub fn open(&self, lend: &mut Lend, path: &str, mode: u8) -> Result<File, Error> {
@@ -165,7 +173,9 @@ impl Connection {
     /// drain the connection's fids. Anything else leaves it in use for good.
     fn settle<T>(&self, fid: u32, result: &Result<T, client::ClientError>) {
         match result {
-            Ok(_) | Err(client::ClientError::Remote | client::ClientError::NotFound) => self.0.fids.free(fid),
+            Ok(_) | Err(client::ClientError::Remote | client::ClientError::Rerror(_)) => {
+                self.0.fids.free(fid)
+            }
             Err(e) if e.unsent() => self.0.fids.free(fid),
             Err(_) => {}
         }

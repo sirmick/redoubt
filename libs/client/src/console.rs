@@ -50,6 +50,9 @@ impl Console {
 
     pub fn close(self, lend: &mut Lend) -> Result<(), Error> { self.file.close(lend) }
 
+    /// The open file: its fid, for requests on the console's connection through a hub.
+    pub fn file(&self) -> &File { &self.file }
+
     fn ask(&self, lend: &mut Lend, message: Message) -> Result<(u16, u16), Error> {
         let endpoint = self.file.connection().endpoint();
         typed::call::<consol::Protocol, _>(endpoint, lend, &message, &[], |reply, _| match reply {

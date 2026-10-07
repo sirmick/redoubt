@@ -1,0 +1,14 @@
+# beamlet-files' userland disk (docs/testbench.md, "Disks and network cards"): the case's module,
+# the few OTP modules it prints with, and erts, whose `prim_file` is the layer beamlet's file
+# natives serve. Unverified, as the other beamlet cases' disks are: the case is about files on
+# the home volume, not the system volume.
+size_kib = 4096
+
+[objects]
+applications = ["erts"]
+modules = ["io", "io_lib", "io_lib_format", "unicode", "lists"]
+erlang = ["userland/otp/redoubt/tests/erlang/beamlet_files.erl"]
+
+[[partition]]
+name = "system"
+fs = "erofs"

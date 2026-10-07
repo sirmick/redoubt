@@ -366,8 +366,7 @@ adapters over it ([beamlet](beamlet.md#beamlet-on-redoubt)), and `init` launches
 servers through it.
 It is `no_std` with `alloc`, has no `unsafe`, and sits on the runtime and the wire codecs, adding
 what is more than one typed call. Its calls block, one per thread, or a hub keeps many 9P requests
-outstanding on as few threads as one ([below](#many-requests-at-once)); beamlet makes its calls
-from its pool of I/O threads
+outstanding on as few threads as one ([below](#many-requests-at-once)); beamlet's VM owns a hub
 ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)).
 
 | Module | What it gives |
@@ -411,7 +410,7 @@ tables through generated Elixir clients ([wire](../servers/wire.md#generated-cli
   drain a shared connection's fids. A file dropped without `close` makes no call from its drop,
   and one whose clunk timed out stays in use: a fid is never reused while the server may still
   hold it. How a dropped file's fid comes back is
-  [below](#dropped-files-error-names-and-generated-calls).
+  [below](#dropped-files-calls-by-path-and-generated-calls).
 - **Policy is the servers'.** The library holds none and makes no check a server does not make:
   the label check is the server's ([R25 (the label check)](../servers/serving.md#r25-the-label-check)).
 - **One error type** tells apart the kernel's error, a reply that does not decode, the server's
@@ -452,7 +451,7 @@ reaping by one timeout, no more.
 
 ### Many requests at once
 
-<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (11)</summary>
+<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (12)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
@@ -464,6 +463,7 @@ reaping by one timeout, no more.
 - host:redoubt-client::a_batch_goes_a_page_at_a_time
 - host:redoubt-client::a_write_is_at_most_one_page
 - host:redoubt-client::two_connections_have_a_waiter_each_and_the_caller_idles_in_receive
+- host:redoubt-client::a_caller_busy_past_the_session_bound_keeps_its_session
 - host:redoubt-client::a_server_that_breaks_its_hold_loses_the_session_at_the_margin
 
 </details>
@@ -471,7 +471,9 @@ reaping by one timeout, no more.
 A call holds its thread until its reply, so a thread per call is a thread per outstanding
 request. `aio`'s **hub** is the client half of a multiplexed connection
 ([the serving library](../servers/serving.md#multiplexed-connections)): many 9P requests
-outstanding on a connection, and as few threads as one.
+outstanding on a connection, and as few threads as one. beamlet's VM is a hub owner: its
+schedulers submit, and a waiter per connection wakes it
+([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)).
 
 - **The hub owns; it does not run.** One `Hub` value holds every connection's tags, its queue and
   its completion buffer, and every buffer a request was submitted with. A buffer goes in by value
@@ -501,16 +503,24 @@ outstanding on a connection, and as few threads as one.
 - **More connections have a waiter each**, a thread blocked in that connection's completion call.
   The caller idles in `receive` on an endpoint of its own, taking transfers of a completion
   buffer's size; a waiter hands its filled buffer over as the transfer of a one-word wake-up
-  `send` there, and calls again at once with a fresh one. A waiter
-  owns no other buffer and talks to no other server, and the hub takes a wake-up only from the
-  badge it minted for that waiter.
+  `send` there, and calls again at once with a fresh one. A waiter talks to no other server, and
+  the hub takes a wake-up only from the badge it minted for that waiter.
+- **A busy caller keeps its sessions.** A wake-up the caller does not take within `HAND_OVER_US`
+  (2.5 s, a quarter of `COLLECT_WAIT`) is held by its waiter, moved into the answers' own pages,
+  while the waiter calls again with a hold of 0, which keeps the session and takes what is
+  ready, and offers the oldest again. It holds at most `MAX_HELD` (4) such wake-ups; with that
+  many it reads no more and waits for the caller without bound, and the server may end the
+  session at its bound.
+- **An `Rerror` keeps its name**, read by the same table as a blocking call's
+  ([an `Rerror` has a name](#an-rerror-has-a-name)); `busy`, over the connection's share, is
+  `Busy`, for its submitter to ask again.
 - **The server is not trusted.** An answer must frame, decode, carry a tag outstanding on its
   connection and, for a read, fit its buffer; anything else ends the connection, as the server's
   own end does, and every request outstanding comes back ended, with its buffer, its fate
   unknown. A request flushed before it was sent comes back flushed at once; one already sent
   comes back with its answer, or flushed with the `Rflush`.
 
-### Dropped files, error names and generated calls
+### Dropped files, calls by path and generated calls
 
 Status: planned · M1 (separation and containment)
 
@@ -524,10 +534,6 @@ What the client library adds before beamlet's files run on it, each keeping the 
   mapped or called from a drop, each fid is clunked once, a fid is never reused while the server
   may hold it, and a program whose files are dropped (beamlet's belong to Erlang processes, which
   can be killed mid-read) does not run out of fids for them.
-- **Every error name.** The library tells `not_found` from the rest already
-  ([an `Rerror` has a name](#an-rerror-has-a-name)); it keeps every other name of the table
-  (`not_permitted`, `exists` and the rest) the same way, and beamlet's files adapter turns the name
-  into the POSIX error OTP's `file` expects (`enoent`, `eacces`, `eexist`).
 - **Calls by path.** `Namespace` opens, creates, stats and removes by a full path: the lookup, then
   the call on the connection it found, so a caller cannot take one connection and use another's
   rest of the path.
@@ -545,23 +551,29 @@ thread is mid-read on it is clunked only after that read's reply, and once; a se
 answers a clunk delays one later call by one timeout, and fails none; a server that answers with a
 text outside the table is `other`, and the text reaches no caller.
 
-**Open:** a walk that stops short after the first name is `not_found` whatever refused it, a
-label check or a failed read included, since 9P keeps no reason; whether the library walks a
-path one name at a time, or keeps how far a walk got, so a caller can tell a refusal mid-path
-from absence, is BEAM3's, with the rest of the table.
+**Open:** none.
 
 ### An `Rerror` has a name
 
-Status: built · partly tested: only `not_found` is told apart from `other`; the other names of the table are planned with the section above · tested: host:redoubt-client::an_rerror_keeps_its_name_not_found_against_the_rest, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name
+<details><summary>Status: built · tested (4)</summary>
+
+- host:redoubt-wire::every_text_reads_back_to_its_name_and_any_other_is_other
+- host:redoubt-client::an_rerror_keeps_its_name_not_found_against_the_rest
+- host:redoubt-client::an_rerror_through_the_hub_keeps_its_name
+- host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name
+
+</details>
 
 A 9P server answers with one of a fixed set of texts, one table the serving library and this
 library share ([wire](../servers/wire.md#error-names)); the library keeps the name, never the
-text, and a text not in the table is `other`. Today the name is `not_found`, for `file does not
-exist` and for a walk that stopped short, or `other` for every other text
-(`Error::Rerror(Name::NotFound)` and `Error::Rerror(Name::Other)`). A walk of several names stops
-short on any refusal after the first, a label check or a failed read among them, and 9P drops
-the reason, so that is `not_found` too: a caller that must tell a refusal from absence walks one
-name at a time, as beamlet's lookup does.
+text, and a text not in the table is `other` (`Error::Rerror(Name::NotFound)`,
+`Error::Rerror(Name::Exists)`, ...). A blocking call and the hub read it alike: a hub's
+completion is `Outcome::Rerror(Name)`. A walk is one `Twalk` of the whole path, and a walk of
+several names that stops short says only how far it got, so a refusal after the first name (a
+label check, a failed read) is `not_found` too. That is deliberate: a caller told "refused" where
+it was told "absent" would learn that a name it may not read exists, which the label rule's
+"metadata follows the data" forbids ([files](files.md#labels-on-files)); a caller that must
+tell the two apart for a path it may read walks one name at a time, as beamlet's lookup does.
 That is what a lookup needs: beamlet's module lookup takes `not_found` at the open as a name the
 system lacks, and silently goes on, and any other refusal as a file it may not load, said on its
 console with the name ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)).

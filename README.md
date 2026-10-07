@@ -15,8 +15,8 @@ that tests it.
 
 **Today** the kernel runs and is attack-tested on QEMU, on rv64 and rv32. `init` boots the
 drivers, file, network, key and console servers, and the Elixir shell runs on the UART console
-with its modules read from a verified userland volume. The VM's file operations and native launching, the
-steward server, SSH sessions and agents remain to be integrated
+with its modules read from a verified userland volume, and the VM's file operations run over 9P
+in a boot. Native launching, the steward server, SSH sessions and agents remain to be integrated
 ([the plan](docs/plan/m1-separation.md)).
 
 ## Goals

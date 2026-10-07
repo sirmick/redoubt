@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use beamlet_redoubt::fixture::{self, Dirs, HostThreads};
+use beamlet_redoubt::fixture::{self, Dirs};
 use redoubt_fake_kernel::fake;
 
 /// Eight bytes from this machine's random source.
@@ -67,15 +67,7 @@ fn main() -> ExitCode {
     let (pid, block) = fixture::session(&console);
     let vm = f.run(pid, move || {
         let startup = fixture::startup(&block);
-        beamlet_redoubt::run(
-            &startup,
-            Box::new(HostThreads { pid }),
-            Box::new(Dirs(dirs)),
-            &module,
-            &function,
-            None,
-            report_memory,
-        )
+        beamlet_redoubt::run(&startup, Box::new(Dirs(dirs)), &module, &function, None, report_memory)
     });
     let status = vm.join().unwrap_or(1);
     // Ending the console's endpoint ends its server.
