@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 309
+revision = 312
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1236,8 +1236,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by RECON1 on main f4d3b41d9 (K19's merge, after train 8's tip, never under a train bench): sched_oracle fails 'record N: an audit inside a destruction' on sched-latency (rv64, rv32), sched-latency-tcg (both) and kernel-containment (both, seed 13); reproduced on an untouched export (/tmp/recon1-main/sched-latency-rv64.log). The record is `U 2` (AUDIT_PROCESS_INDEX) between the destruction's `D` and its `Y`: process.rs index_process runs that audit when !self.objects.deferring, and K19 moved a process free ('frees and PID moves follow the dying subtree') to after deferring is cleared and before the destruction's end record. Fix: the free (or the audit's guard) sits inside the deferring window, or the audit is skipped on the destruction path with the oracle's rule unchanged (K18: a checked build's audits do not move its schedule; checked-audit-cost: one-word skip checks on destruction paths). The model's rule must still match. Tier A kernel, size S. Blocks train 9's bench. Handoff: .wash/local/handoffs/k19-implementer-2.md."
-  state = "active"
-  revision = 286
+  state = "done"
+  revision = 312
 
 [[node]]
   id = "K29"
@@ -1245,8 +1245,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by K28 (its audit fix made the oracle judge R10 again): kernel-containment's R10 p99 over 20 destructions (~9,338 object frames) was rv64 23,394 / rv32 24,104 µs on main bdb38430e before K19 and is rv64 29,500 / rv32 30,576 µs with K19 + K28's audit fix; rv32 fails the 30,000 µs bound. Threads' ending fell 3.5 -> 2.5 ms, so the growth (~+7 ms) is at the destruction's end: the pumps and frees K19 moved after the walk, inside the D..Y window. K19's gates never ran kernel-containment (its 21 cases + worst-walk, where R10 is 16-18 ms). Measure from the trace where the ~7 ms goes (pump_listed over the listed endpoints? the frees? the index moves?), then cut it within K19's rule (deliveries at the boundary, none inside) and K9/K12's (destruction's cost follows the dying subtree; R10 within 30 ms for a full lease). Tier A kernel, size S-M. Gates: kernel-containment both widths (seed 13 and default) with R10 p99 back near 24 ms, worst-walk both, the 21 K19 cases + budget-reap, sched-latency(-tcg), model unchanged or following, both builds, host tests, mutations, docs, formatting, budgets."
-  state = "todo"
-  revision = 292
+  state = "active"
+  revision = 310
 
 [[node]]
   id = "BEAM11"

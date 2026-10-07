@@ -238,9 +238,10 @@ impl MemoryManager {
             self.objects.process_pids.without(i)
         };
         // The audit neither moves the schedule nor counts in a latency target (`sched::audit`).
-        // Inside a destruction it does nothing: the destruction audits once, after its walk.
+        // Inside a destruction, the pumps at its end included (a notice delivered there frees its
+        // object), it does nothing: the destruction audits once, after its end record.
         #[cfg(debug_assertions)]
-        if !self.objects.deferring {
+        if !self.objects.destroying {
             crate::sched::audit(crate::sched::AUDIT_PROCESS_INDEX, || {
                 self.check_process_index();
                 // A process object's free is a full-audit point for the IPC lists too.
