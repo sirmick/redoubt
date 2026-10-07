@@ -11,6 +11,7 @@ mod case;
 mod cruft;
 mod disk;
 mod elixir;
+mod fanout;
 mod fmt;
 mod memory;
 mod peer;
@@ -373,7 +374,7 @@ fn main() -> Result<()> {
             let available = if host.miri { build::miri_available() } else { Ok(()) };
             let path = std::env::var_os("PATH");
             let available = available.and_then(|()| build::tools_available(&host.tools, path.as_deref()));
-            let outcome = match available.map(|()| builder.cargo_test(host)) {
+            let outcome = match available.map(|()| builder.cargo_test(&case.name, host)) {
                 Err(why) => missing(why),
                 Ok(Ok(None)) => Outcome::Pass,
                 Ok(Ok(Some(why))) => Outcome::Fail(format!("host tests failed:\n      {why}")),
