@@ -146,7 +146,9 @@ static RAN_USER: AtomicUsize = AtomicUsize::new(0);
 
 /// A checked build's account at `system_reset`, for `smp-boot`: whether every hart in the device
 /// tree was started and ran a process, and the kernel lock's FIFO evidence, the most kernel
-/// sections any acquisition waited behind (cell.rs; at most the harts less one, R78).
+/// sections any acquisition waited behind (cell.rs; at most the harts less one, R78). A short
+/// count is a fact, not a failure: a boot with fewer runnable processes than harts leaves some
+/// idle, and only `smp-boot`, whose work fills every hart, judges it.
 #[cfg(debug_assertions)]
 pub fn report() {
     let (ran, started, found) =
@@ -154,7 +156,7 @@ pub fn report() {
     if ran == started && started == found {
         println!("harts: all {} in the tree ran user code", found);
     } else {
-        println!("harts: FAIL: {} in the tree, {} started, {} ran user code", found, started, ran);
+        println!("harts: {} in the tree, {} started, {} ran user code", found, started, ran);
     }
     println!(
         "kernel lock: most waited {} section(s), {} hart(s)",

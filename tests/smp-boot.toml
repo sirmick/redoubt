@@ -12,5 +12,5 @@ expect = [
     '^harts: all [24] in the tree ran user code',
     '^kernel lock: most waited',
 ]
-forbid = ['\[smp\] FAIL', 'the kernel lock: waited behind', 'harts: FAIL']
+forbid = ['\[smp\] FAIL', 'the kernel lock: waited behind', '^harts: [0-9]+ in the tree']
 poweroff = true
