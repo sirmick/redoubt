@@ -8,12 +8,14 @@ debug_assertions = true
 icount = "shift=3,sleep=off"
 qemu_seed = 3
 # The most rv32's physmap maps (kernel/memory-layout.md), and enough on both widths: 509 holders
-# of ~540 pages each, the trace ring's 64 MiB and the boot's own.
+# of ~540 pages each, the trace ring's 192 MiB and the boot's own.
 memory_mib = 2032
 # init alone; what it checks is that the threads all existed. The numbers are the trace's.
 programs = ["worst-walk"]
-# Test builds only: the trace ring, with each pump, expiry and reconcile bracketed.
-kernel_features = ["sched-trace", "walk-trace"]
+# Test builds only: the trace ring, with each pump, expiry and reconcile bracketed. The large ring:
+# at the 1 ms slice the run writes about 2.6 million records on rv64 and 2.9 million on rv32, past
+# the usual ring's 2.1 million.
+kernel_features = ["sched-trace-large", "walk-trace"]
 # A pump takes about 1 ms at most at either fill, so 2 ms catches any walk of every process; the
 # expiry's own walk is within R12's 30 ms (about 27 ms on rv64 and 29 ms on rv32).
 post_check = "sched_oracle pump_max_us=2000 expiry_max_us=30000 r10_p99_us=30000"

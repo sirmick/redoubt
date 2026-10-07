@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 236
+revision = 238
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -644,8 +644,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "beamlet-redoubt"
   needs = ["BEAM3"]
   body = "docs/userland/beamlet.md#natives: ns_lookup/bind/ns, call/send, serve/reply, budget_create/destroy/usage, labels, launch; handles as resource terms that no term format carries; generated clients from wire tables (docs/servers/wire.md#generated-clients) and Redoubt.Namespace/Budget/Process/Keys. The M1 shell's launch (docs/userland/shell.md#the-shell-in-a-session). Attacks: hostile native arguments, a decoded handle grants nothing. Brief to come."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 237
 
 [[node]]
   id = "BEAM5"
@@ -1115,8 +1115,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by K19's follow-up (report .wash/local/K19-report.md, last two sections; handoff k19-implementer-2): on main (14aceaa63 alone reproduces; train 4's worst-walk on 992d447ce hung the same way) kmain's pick sets slice_end = now + 1 ms before the exit path runs; with ~250 budgets queued the non-audit exit work (reconcile, raise_floor, the queue walk in leave) takes more than 1 ms of guest time, so the picked thread is timer-preempted at its first user instruction (gdb: sepc after the ecall, scause timer from U), forever; worst-walk never reaches its destroy. With slice-10ms it passes (rv64 468.6 s, R10 p50/p99 16,371/16,383 us). Tier A, size S: the slice is the thread's user time: start it at the return to user (or guarantee one user slice to a pick whose slice is already over at the return); kernel/scheduling.md R12 says so in one sentence and the residual names the exit cost RECON1 bounds; the model gets the rule and a mutation; a regression case (worst-walk's queue depth with the 1 ms slice, or worst-walk itself both widths) and sched-latency/sched-budget-churn rerun to show the targets stand. Lands before K19, which rebases over it. Not here: the exit path's cost (RECON1)."
-  state = "reported"
-  revision = 235
+  state = "done"
+  revision = 238
 
 [[node]]
   id = "MODEL1"

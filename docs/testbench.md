@@ -597,9 +597,11 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECK
 That run fails `bench-debug-assertions-off`, as it should; everything else must pass.
 
 `sched-trace` keeps the trace in a 64 MiB ring, and a trace that drops a record fails its case;
-`sched-trace-large` is the same ring at 192 MiB, and only the containment gate builds it, at
-512 MiB of RAM, since at the 1 ms slice its run of nine leases a slot writes about ten records a
-slice, twice what 64 MiB holds.
+`sched-trace-large` is the same ring at 192 MiB, and two cases build it. The containment gate
+does, at 512 MiB of RAM, since at the 1 ms slice its run of nine leases a slot writes about ten
+records a slice, twice what 64 MiB holds. So does `worst-walk`, whose run at full occupancy
+writes about 2.6 million records on rv64 and 2.9 million on rv32, past the 64 MiB ring's 2.1
+million.
 
 `boot-stats` is a diagnostic feature like `sched-trace` and `walk-trace`, but of programs, not the
 kernel: a Cargo feature of `init`, `blkd`, `verityd`, `littlefsd`, `erofsd` and `beamlet-redoubt`, off by

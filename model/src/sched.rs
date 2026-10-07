@@ -445,7 +445,8 @@ impl Scheduler {
     }
 
     /// What runs: the current thread, or (after a reconcile) the lowest-ranked queued budget's next
-    /// thread after its cursor. A new pick starts a fresh slice.
+    /// thread after its cursor. A new pick has a whole slice when it reaches user mode
+    /// ([`Scheduler::exit_work`]).
     pub fn pick(&mut self) -> Option<Current> {
         self.reconcile();
         if self.current.is_some() {
@@ -470,6 +471,16 @@ impl Scheduler {
             let dt = dt.min(c.slice_left);
             c.pending += dt;
             c.slice_left -= dt;
+        }
+    }
+
+    /// The kernel worked `work` between the pick and the running thread's return to user mode.
+    /// Who pays for it is charging's; the slice is user time and starts at the return, so none of
+    /// it comes out of the slice and a picked thread always runs (R12).
+    pub fn exit_work(&mut self, work: u64) {
+        let counted = self.broken(Mutation::R12SliceCountsExitWork);
+        if let Some(c) = self.current.as_mut().filter(|_| counted) {
+            c.slice_left = c.slice_left.saturating_sub(work);
         }
     }
 

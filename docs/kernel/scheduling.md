@@ -62,18 +62,19 @@ no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (5)</summary>
+<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (6)</summary>
 
 - bench:sched-wake-no-preempt
 - bench:budget-deadline
 - host:redoubt-model::scheduler_contracts_hold
 - mutation:R12PreemptOnWake
 - mutation:R12TimeoutWakePreempts
+- mutation:R12SliceCountsExitWork
 
 </details>
 
 The running thread keeps the CPU until one of these:
-- its slice ends: `SLICE_US` (1,000 µs) from the pick;
+- its slice ends: `SLICE_US` (1,000 µs) from its return to user mode after the pick;
 - it blocks, exits, faults or is killed;
 - a budget deadline fires.
 
@@ -799,7 +800,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (42)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (43)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -843,6 +844,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - mutation:R12NoMinimumCharge
 - mutation:R12DeadlineWorkUnbilled
 - mutation:R12RescaleOnlyOnReturn
+- mutation:R12SliceCountsExitWork
 
 </details>
 
@@ -850,7 +852,10 @@ A budget's CPU follows its free weight, in one queue with no priority. While it 
 thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No
 pattern of spinning, sleeping and waking, exiting or faulting, creating, carving and destroying
 budgets, or arming timeouts and deadlines gets it more. The rule's parts are the sections above:
-free weight, the preemption points, the wake rule and ranks, charging and inheritance.
+free weight, the preemption points, the wake rule and ranks, charging and inheritance. A slice is
+the picked thread's user time: it starts when the thread returns to user mode, so the kernel's
+work between the pick and that return, however long, never uses it up, and a picked thread runs
+its slice unless a budget deadline fires at the return.
 
 A system call's kernel time is bounded by a constant plus a term linear in the pages it maps or
 the objects it names. It never depends on the extent of an address area or on what other processes
@@ -1037,6 +1042,14 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had
   ([budgets](budgets.md)). Ending a DMA driver adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
+- **A slice end's kernel time grows with the queued budgets.** The slice is user time, so the
+  kernel's work around it (the deschedule, the reconcile, the pick and the exit path back to user
+  mode) lengthens each round instead of shortening the slice. That work reads every queued budget
+  ([charging](#charging): the reconcile's cost is above its loop bounds). In `bench:worst-walk`'s
+  checked, traced build, with about 250 budgets queued after one deadline wakes them, the exit
+  work after a pick took more than a 1 ms slice. While the slice started at the pick, the picked
+  thread was preempted at its first instruction, every time, and the case never reached its
+  destruction. Now the round grows by that work until the reconcile is held to its loop bounds.
 - **A destruction walks every process.** At full occupancy (510 processes) a destruction takes
   53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30, and breaks R12's "never depends on what
   other processes hold": three of its steps walk every process object

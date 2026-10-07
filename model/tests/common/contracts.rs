@@ -473,6 +473,21 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
         w.op(Op::Tick { dt: 1 })?;
         expect(w.k.sched.current.is_some_and(|c| c.thread == (pb, tb)), "the woken sleeper runs next")?;
     }
+    // A slice is user time: the kernel's work between a pick and the thread's return to user
+    // mode, here three slices of it, comes out of none of it, so the picked thread still runs a
+    // whole slice rather than being preempted at its first instruction (R12).
+    {
+        let mut s = redoubt_model::sched::Scheduler { mutation, ..Default::default() };
+        s.add_budget(1, None, 100);
+        s.thread_runnable(1, (1, 0));
+        s.reconcile();
+        expect(s.pick().is_some(), "the thread is picked")?;
+        s.exit_work(3 * SLICE);
+        expect(
+            s.current.is_some_and(|c| c.slice_left == SLICE),
+            "the exit work after a pick came out of its slice",
+        )?;
+    }
     // At an equal instant, a timeout goes before a budget deadline: a caller whose call its
     // server took gets Timeout (the lend consumed), not Dead from the server's death.
     expiry_order(mutation)?;
