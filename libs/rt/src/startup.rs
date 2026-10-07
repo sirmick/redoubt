@@ -188,6 +188,11 @@ impl<'a> Startup<'a> {
         self.entries().filter_map(|e| if let Entry::Namespace(path, h) = e { Some((path, h)) } else { None })
     }
 
+    /// The named handles: (name, handle), in block order.
+    pub fn handles(&self) -> impl Iterator<Item = (&'a str, Handle)> + '_ {
+        self.entries().filter_map(|e| if let Entry::Handle(name, h) = e { Some((name, h)) } else { None })
+    }
+
     /// The handle named `name`.
     pub fn handle(&self, name: &str) -> Option<Handle> {
         self.entries().find_map(|e| match e {
