@@ -19,7 +19,7 @@ failing sequence in hand.
 
 ## What the model is
 
-Status: built · partly tested: independence from the kernel's source and the empty dependency list are held by `model/Cargo.toml` and `#![forbid(unsafe_code)]`, not attacked by a case · tested: host:redoubt-model::overflow_checks_are_on, host:redoubt-model::map_fixed_near_user_top_does_not_starve_map_anon
+Status: built · partly tested: independence from the kernel's source and the empty dependency list are held by `model/Cargo.toml` and `#![forbid(unsafe_code)]`, not attacked by a case · tested: host:redoubt-model::overflow_checks_are_on, host:redoubt-model::map_fixed_near_user_top_does_not_starve_map_anon, host:redoubt-model::event_free_tick_matches_slice_reference
 
 - **Independent.** The crate is `no_std` with `alloc`, `#![forbid(unsafe_code)]`, and its
   `[dependencies]` table is empty: it links no kernel crate, not `redoubt-sys`, nothing from
@@ -61,7 +61,12 @@ Status: built · partly tested: independence from the kernel's source and the em
   when the cost table is rv32's.
 - **Threads** have no registers. A call is instantaneous and atomic; time is logical and
   advances only on a `tick`. So the model tests accounting and state changes, not real-time
-  latency, and not races between harts.
+  latency, and not races between harts. A tick charges time slice by slice, but where nothing
+  is due, to deliver or to wake, its whole slices are charged at once: with one budget queued, or
+  with several (the same picks, charges and requeues, on the queued budgets alone).
+  `event_free_tick_matches_slice_reference` holds every such tick equal to the slice-by-slice
+  reference, field by field, on boundary worlds of one to five queued budgets and on random
+  histories, with no mutation and under every one.
 - **Records** (the user memory a call reads and writes) are abstracted as a whole: owned,
   unmapped, read-only, borrowed, device memory, a copy that faults, or an address whose every
   page, for the call's record size, is checked against the modelled mappings. Byte layouts are

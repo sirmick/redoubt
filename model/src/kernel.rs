@@ -2367,6 +2367,20 @@ impl Kernel {
                 self.at_instant();
                 continue;
             }
+            // With several budgets queued and nothing due, to deliver or to wake, the timer
+            // instants between whole slices change nothing but the queue: run them on the
+            // scheduler alone (the same picks, charges and requeues as slice by slice).
+            if slices > 1
+                && c.slice_left == SLICE
+                && self.to_pump.is_empty()
+                && self.next_event().is_none_or(|e| e > self.now)
+                && self.sched.steady()
+            {
+                self.now += slices * SLICE;
+                self.sched.run_queue_slices(slices);
+                self.at_instant();
+                continue;
+            }
             let run = c.slice_left.min(limit - self.now);
             self.now += run;
             self.sched.run(run);
@@ -4026,7 +4040,7 @@ mod tick_equivalence {
     fn event_free_tick_matches_slice_reference() {
         let mut boundary_cases = 0;
         for mutation in core::iter::once(None).chain(Mutation::ALL.into_iter().map(Some)) {
-            for kind in 0..4 {
+            for kind in 0..7 {
                 let mut k = Kernel::boot(&Boot::default(), mutation).unwrap();
                 let ep = k.endpoint_create(INIT_PID).unwrap();
                 // All but the one-budget control have two runnable budgets.
@@ -4054,11 +4068,54 @@ mod tick_equivalence {
                         k.receive(INIT_PID, later, None, 7000, 0);
                     }
                     3 => k.now = u64::MAX - 35_000,
+                    // Three more budgets under `users`, of unequal weights, one with three threads
+                    // and one with two, five queued in all: the batch over several budgets, on its
+                    // own (4), up to a thread's timeout (5) and up to a budget's deadline (6).
+                    4..=6 => {
+                        let deadline = if kind == 6 { 7000 } else { FOREVER };
+                        for (weight, threads) in [(3, 3), (5, 1), (2, 2)] {
+                            let Ok(b) = k.budget_create(INIT_PID, USERS, 8, 2, weight, &[], 0, deadline)
+                            else {
+                                continue;
+                            };
+                            let Ok(p) = k.process_create(INIT_PID, b, ep) else { continue };
+                            if k.process_start(INIT_PID, p, 0, 0, 0, &[]).is_err() {
+                                continue;
+                            }
+                            let pid = *k.processes.keys().max().unwrap();
+                            for _ in 1..threads {
+                                let _ = k.thread_create(pid, 0, 0, 0);
+                            }
+                        }
+                        if kind == 5 {
+                            let sleeper = k.thread_create(INIT_PID, 0, 0, 0).unwrap();
+                            k.receive(INIT_PID, sleeper, None, 7000, 0);
+                        }
+                    }
                     _ => unreachable!(),
                 }
-                for dt in
-                    [0, 1, SLICE - 1, SLICE, SLICE + 1, 2 * SLICE, 2 * SLICE + 1, 5000, 7000, 7500, 35_001]
-                {
+                if mutation.is_none() && kind >= 4 {
+                    // Not vacuous: the specified model queues five budgets, steady (init's, the
+                    // SYSTEM child's and the three under `users`), so a long tick takes the batch
+                    // over several.
+                    let mut probe = k.clone();
+                    probe.sched.pick();
+                    assert!(probe.sched.steady() && probe.sched.runnable_budgets() == 5, "kind {kind}");
+                }
+                for dt in [
+                    0,
+                    1,
+                    SLICE - 1,
+                    SLICE,
+                    SLICE + 1,
+                    2 * SLICE,
+                    2 * SLICE + 1,
+                    5000,
+                    7000,
+                    7500,
+                    35_001,
+                    60_000_123,
+                ] {
                     compare(&k, dt);
                     boundary_cases += 1;
                 }
