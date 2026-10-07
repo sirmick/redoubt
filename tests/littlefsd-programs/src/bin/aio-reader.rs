@@ -25,12 +25,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
-use redoubt_client::aio::{COMPLETION_PAGES, Conn, Hub, Outcome};
+use redoubt_client::aio::{COMPLETION_PAGES, Conn, Hub, Outcome, RETRY_US};
 use redoubt_client::file::Connection;
 use redoubt_init_programs::Out;
-use redoubt_rt::abi::FOREVER;
+use redoubt_rt::abi::{Error as SysError, FOREVER};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::{Buffer, Event};
+use redoubt_rt::ipc::{Buffer, Delivery, Event};
 use redoubt_rt::server::ninep::mode;
 use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::ninep::Body;
@@ -43,6 +43,8 @@ const READS: usize = 64;
 const EACH: usize = 64;
 /// How long the burst waits for the second program's answer (µs).
 const SECOND_WAIT: u64 = 20_000_000;
+/// The queued waits of `RETRY_US` the burst makes with nothing delivered: `SECOND_WAIT` in all.
+const RETRIES: u64 = SECOND_WAIT / RETRY_US;
 /// Word 0 of the burst's send to the second program, and of its answer.
 const GO: u64 = 1;
 const READ_OK: u64 = 2;
@@ -153,14 +155,15 @@ fn burst(
     })?;
     // The second program reads while all 64 are held at `littlefsd`.
     peer.send(&[GO, 0, 0, 0], &[], None, FOREVER).map_err(|(e, _)| format!("go: {e:?}"))?;
+    let mut retries = RETRIES;
     let second_read = loop {
-        match own.receive(SECOND_WAIT, COMPLETION_PAGES) {
-            Ok(Event::Send(delivery)) => match hub.deliver(delivery) {
+        match idle(&mut hub, &own, &mut retries) {
+            Ok(Some(delivery)) => match hub.deliver(delivery) {
                 Some(d) if d.words[0] == READ_OK => break d.words[1] == 1,
                 // A waiter's wake-up arrived first: the hub has its buffer.
                 _ => continue,
             },
-            Ok(_) => continue,
+            Ok(None) => continue,
             Err(e) => return Err(format!("no word from the second program: {e:?}")),
         }
     };
@@ -185,9 +188,9 @@ fn burst(
         }
         if !two {
             hub.wait(fids[0].0, 1_000_000).map_err(|e| format!("wait: {e:?}"))?;
-        } else if let Event::Send(delivery) =
-            own.receive(SECOND_WAIT, COMPLETION_PAGES).map_err(|e| format!("receive: {e:?}"))?
-        {
+        } else if let Some(delivery) = idle(&mut hub, &own, &mut retries).map_err(|e| {
+            format!("receive: {e:?}; {answered} of {READS} answered, {} not yet taken", hub.queued())
+        })? {
             let _ = hub.deliver(delivery);
         }
     }
@@ -196,6 +199,29 @@ fn burst(
         fids.len(),
         hub.waiters()
     ))
+}
+
+/// Idles on `own` for a delivery, as a caller with waiters must: it enters the hub first, so
+/// what a busy server did not take is sent again, and while anything is still queued it waits at
+/// most `RETRY_US`, so the queue is tried again soon. `None`: nothing came while something was
+/// queued, or a delivery other than a send. `retries` counts the queued waits left with nothing
+/// delivered, [`RETRIES`] after each delivery: a server that never takes the queue times out as
+/// a plain wait does, and the burst says how far it got.
+fn idle(hub: &mut Hub, own: &Endpoint, retries: &mut u64) -> Result<Option<Delivery>, SysError> {
+    hub.poll();
+    let queued = hub.queued() > 0;
+    match own.receive(if queued { RETRY_US } else { SECOND_WAIT }, COMPLETION_PAGES) {
+        Ok(Event::Send(delivery)) => {
+            *retries = RETRIES;
+            Ok(Some(delivery))
+        }
+        Ok(_) => Ok(None),
+        Err(SysError::Timeout) if queued && *retries > 0 => {
+            *retries -= 1;
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn second(startup: &Startup, out: &mut Out, at: &str, own: &str, peer: &str) -> Result<String, String> {

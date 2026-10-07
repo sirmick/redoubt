@@ -498,11 +498,13 @@ schedulers submit, and a waiter per connection wakes it
 - **Submitting is inline.** A submit sends the request from the caller's own thread, waiting at
   most `SUBMIT_TIMEOUT_US` (1 ms) for the server to take it, so a busy server never stalls the
   caller (a VM's scheduler). A request not taken stays queued, in order, and goes at the hub's
-  next entry: a submit, a completion handed in, a wait or a poll. A caller enters the hub at
-  least whenever it is about to idle. Requests sent together go end to end in transfers of one
-  page, so a batch of 64 reads is one page on either width, and a send never needs more than the
-  one page a server's share may give a badge (a bucket of 2 pages is a page a badge); a request
-  longer than a page goes alone.
+  next entry: a submit, a completion handed in, a wait or a poll. Nothing else sends it: a caller
+  that queues work and then idles re-enters the hub within `RETRY_US` (10 ms) while anything is
+  queued (a poll, or a wait bounded by `RETRY_US`); a receive that outlives that is the caller's
+  bug, not the hub's. Requests sent together go end to end in transfers of one page, so a batch
+  of 64 reads is one page on either width, and a send never needs more than the one page a
+  server's share may give a badge (a bucket of 2 pages is a page a badge); a request longer than
+  a page goes alone.
 - **Data moves as the kernel moves pages.** A write's data goes in a page of its own, transferred
   to the server; a read's data comes back in the completion call's lend and is copied into the
   read's buffer, which is handed back. Writes go a page at a time, at most `MAX_WRITE` (4 072
