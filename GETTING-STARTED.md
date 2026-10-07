@@ -162,8 +162,10 @@ tools/elixir-tests            # Elixir's own suite on beamlet
 
 Redoubt's shell, `Redoubt.Shell` in `userland/shell`, is a read-eval-print loop over Elixir of
 Redoubt's own, not IEx ([the shell](docs/userland/shell.md)). It boots on Redoubt's UART console,
-and the VM's file operations run on the machine over 9P; native launching there remains planned. Host development uses
-beamlet with the same pinned OTP and Elixir as above; `./shell` puts them on the path itself.
+and the VM's file operations run on the machine over 9P. Its system natives, launching a native
+program among them, are built and tested on the host; no boot runs them
+([beamlet](docs/userland/beamlet.md#natives)). Host development uses beamlet with the same pinned
+OTP and Elixir as above; `./shell` puts them on the path itself.
 
 ```sh
 ./shell                       # the shell, the VM's / at userland/shell/_build/sandbox
