@@ -832,15 +832,7 @@ impl System {
             let Some(n) = self.natives.get(&module.name, &f.name, f.arity) else {
                 continue;
             };
-            let entry = f.start as usize + 1;
-            if module.code.get(entry).is_some_and(|i| i.op == crate::opcodes::LABEL) {
-                let index = module.body_natives.len() as u64;
-                module.body_natives.push((n, f.name, f.arity));
-                module.code[entry] = crate::module::Instr {
-                    op: crate::module::NATIVE_BODY,
-                    args: alloc::vec![crate::module::Arg::U(index)],
-                };
-            }
+            module.replace_body(f.start as usize + 1, (n, f.name, f.arity));
         }
         let name = module.name;
         if self.modules.insert(name.as_str().to_string(), Box::leak(Box::new(module))).is_some() {

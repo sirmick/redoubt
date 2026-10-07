@@ -448,9 +448,9 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
     // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
-    // ipd 4096, littlefsd:data and erofsd:system 1024 each, beamlet 20,864 pages, and a page each for the
+    // ipd 4096, littlefsd:data and erofsd:system 1024 each, beamlet 10,880 pages, and a page each for the
     // budgets.
-    let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 20_864 + 11;
+    let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 10_880 + 11;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),

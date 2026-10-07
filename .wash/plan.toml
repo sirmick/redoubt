@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 219
+revision = 228
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -999,8 +999,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["BEAM6"]
   body = "Brief: .wash/local/BEAM8-implementer.md. Found by BEAM6's breakdown: decoded code is 7,180 pages on rv64 at the shell's prompt (242,345 instructions of 32 bytes, 521,551 operands of 24 in one Vec per instruction, 82 % of what the VM accounts for). Design: a flat per-module operand array, `Instr` = op, count, start (8 bytes), `Arg::List` boxed or indexed so `Arg` is 16 bytes, pinned by size_of asserts on both widths; the interpreter reads operands through its one accessor (`interp.rs` `arg(ins, i)`); the loader, the native-body patch and `on_load_entry` go through the same view; the .beam loader's input and refusals, eager loading, literals, atoms, heaps and the interpreter's semantics unchanged. About 2,510 pages of code either width, saving about 4,670 on rv64 and 1,165 on rv32. Tier A, size M. Done when `beamlet-footprint`'s table shows it on both widths, every limits and boot case passes, and the manifest's budget follows by the six-run rule. Open: QEMU's default 256 MiB (about 2,700 pages) is still out of reach with it; code kept in its on-disk form or loaded per function is the question that package would answer."
-  state = "active"
-  revision = 177
+  state = "done"
+  revision = 228
   overrides = ["2026-10-06: started by Orchestrator before M1 (reported): BEAM8's need BEAM6 is merged; M1 is reported, the plan's state for every active package"]
 
 [[node]]
@@ -1019,8 +1019,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["B13"]
   body = "Bisected 2026-10-06 (.wash/local/bisect-main/summary.txt, summary-pre.txt): rv32 sched-share ('weight 300 got 543..544 of 1000, want 600 +- 50'), sched-exit-churn and sched-carve-return ('parent 31 lost its running turn at record 108') pass at a9f54ffcb and fail at 777bba164 (SCHED1, the 1 ms slice) and every merge after; train 3 never ran its rv32 scheduler cases. rv64 sched-share sits at 544..549 against a 550 floor and flips between merges (fails at 673be7afc and in B19's gate on 86c76a9f0, passes in the bisect at 992d447ce and 86c76a9f0). Earlier finding: the share fixtures' calibrated CPU count runs over the work it measures. Tier A (the scheduler's measurement), size M: find the bias in the calibration at the 1 ms slice (the per-switch cost SCHED1 recorded as a residual, 0.357/0.449 ms, is a third of a slice and is charged inside the measured work), make the fixtures' expected share account for it or measure net of it as B5 does for audits, so a share verdict is stable on both widths; carve-return's lost turn is a separate clause to explain. Rerun the sched-* cases both widths alone and in the light set. Needs nothing; RECON1 reduces the cost it accounts for."
-  state = "todo"
-  revision = 219
+  state = "reported"
+  revision = 227
 
 [[node]]
   id = "PACK1"
@@ -1067,8 +1067,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["EROFS1"]
   body = "Owner (2026-10-06): the SSD's writable volumes move off littlefs ('not a NAND flash one') to walfs, an xv6-style logged file system of Redoubt's own with per-block hashes (owner's decision 4e1539fe: the logged format; littlefs STAYS in the image for a flash medium; WFS1 and WFS2 both in M1). Design note .wash/local/WFS1-design.md (architect-16). Tier A, size M: the format's specification page; libs/walfs (no_std, no unsafe, deps: libs/sha256): superblock, write-ahead log of whole 4 KiB blocks with one commit block, inodes, bitmap, data, a hash region with a SHA-256 per block checked on read (corrupt, never a crash); whole-transaction atomicity (R50 exact); a model oracle with random operations, a power-loss fuzzer cutting the device at every write, image fuzzing; the host packer writes a volume. Not here: the server (WFS2), the volumes' move."
-  state = "active"
-  revision = 200
+  state = "reported"
+  revision = 225
 
 [[node]]
   id = "WFS2"
@@ -1095,8 +1095,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Train 3 and 4 (2026-10-06): model-host-tests is one #[test] (mutations_are_caught) over 147 kernel mutations on one thread; the train's run was past 3 h in debug and K19's release run past 3 h too, so release alone is not the fix. rt-miri is one 133 s job; the three Elixir oracle cases each start a BEAM on the host (154/132/50 s). These are the whole wall of a train once the scheduler packs the rest. Tier B, size M: (1) the mutations become one cargo test per mutation (a generated test list or a `--mutation N` filter the case fans out as N jobs through scripts/jobs.mk), release build, each reporting its time; the case's verdict is the conjunction and names any mutation not caught; (2) rt-miri fans out per test file; (3) the Elixir oracles share one BEAM start or a cached compiled reference, measured; (4) timeout_secs of each from a measured run plus margin; testbench.md's class note says what each costs now. Acceptance: a whole train's tail (quiet set included) under 15 min wall on 24 cores, measured with `q log`."
-  state = "active"
-  revision = 209
+  state = "reported"
+  revision = 220
 
 [[node]]
   id = "B19"
@@ -1113,8 +1113,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by K19's follow-up (report .wash/local/K19-report.md, last two sections; handoff k19-implementer-2): on main (14aceaa63 alone reproduces; train 4's worst-walk on 992d447ce hung the same way) kmain's pick sets slice_end = now + 1 ms before the exit path runs; with ~250 budgets queued the non-audit exit work (reconcile, raise_floor, the queue walk in leave) takes more than 1 ms of guest time, so the picked thread is timer-preempted at its first user instruction (gdb: sepc after the ecall, scause timer from U), forever; worst-walk never reaches its destroy. With slice-10ms it passes (rv64 468.6 s, R10 p50/p99 16,371/16,383 us). Tier A, size S: the slice is the thread's user time: start it at the return to user (or guarantee one user slice to a pick whose slice is already over at the return); kernel/scheduling.md R12 says so in one sentence and the residual names the exit cost RECON1 bounds; the model gets the rule and a mutation; a regression case (worst-walk's queue depth with the 1 ms slice, or worst-walk itself both widths) and sched-latency/sched-budget-churn rerun to show the targets stand. Lands before K19, which rebases over it. Not here: the exit path's cost (RECON1)."
-  state = "todo"
-  revision = 214
+  state = "active"
+  revision = 222
 
 [[node]]
   id = "MODEL1"
@@ -1132,5 +1132,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Bisected on 2026-10-06 over the merge points from 777bba164 (SCHED1) to 86c76a9f0 (B15), each case run alone through scripts/q (table: .wash/local/bisect-main/summary.txt): all four pass at 777bba164 and fail at 14aceaa63 (SMP1, the kernel on every hart under one big lock) and at every merge after. (1) rv64 sched-exit-churn: 'share threads-exit: net 426..445 of 1000: target missed (450 <= share)'; (2) rv64 sum-clear: 20 s timeout waiting for the expected '!!! KERNEL FAILURE !!!: CPU Exception ... Load page fault' line, so the fault is no longer raised or no longer printed; (3) rv64 lend-untouched-page smp=4: 'harts: FAIL: 4 in the tree, 4 started, 1 ran user code'; (4) rv32 sched-cluster-old-control: the control's stand-in driver_wake could not take attempt 2. Tier A (kernel), size M: find each cause in SMP1's change (the big lock's entry, per-hart idle, the timer on secondary harts, the trap path), fix with the model's rule where one applies, rerun the four both widths and the scheduler cases (sched-*), and add sched-exit-churn, sum-clear and lend-untouched-page smp=4 to the trains rule's smoke set (.wash/SWARM.md) so a merge cannot pass its short gate with them broken. Lands before SMP3."
+  state = "active"
+  revision = 224
+
+[[node]]
+  id = "B20"
+  title = "client-host-tests flakes alone about one run in eight: a_server_that_breaks_its_hold_loses_the_session_at_the_margin"
+  template = "package"
+  parent = "M1"
+  body = "Seen by B18 (2026-10-06) on the quiet core set with nothing else there: libs/client's aio.rs test a_server_that_breaks_its_hold_loses_the_session_at_the_margin fails about one run in eight; libs/client untouched by B18. A host-clock test at a margin: find whether the margin is a measurement (then widen it with the reason on the page, or make it a count as B10 did) or a race in the test's fixture. Tier B, size S: fix, run the test 50 times alone through `q run --quiet`, record the count. BEAM3 changes aio.rs's waiter (bounded hand-over): coordinate, the fix may belong in that commit."
   state = "todo"
-  revision = 219
+  revision = 221

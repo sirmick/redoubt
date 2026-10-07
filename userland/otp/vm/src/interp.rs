@@ -12,7 +12,7 @@ use crate::atom::{Atom, Atoms};
 use crate::bif::{Ctx, Native};
 use crate::bits::{self, Builder};
 use crate::loader::{MAX_Y_REGS, X_REGS};
-use crate::module::{Arg, Instr, Module};
+use crate::module::{Arg, InstrView, Module};
 use crate::opcodes as op;
 use crate::process::{Class, Cp, Exception, Frame, Handler, Process};
 use crate::sched::{Code, Sched};
@@ -122,25 +122,27 @@ pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
 
 // ---- operands ----
 
-fn arg(ins: &Instr, i: usize) -> R<&Arg> { ins.args.get(i).ok_or(Fault::BadCode("missing operand")) }
+fn arg<'a>(ins: &InstrView<'a>, i: usize) -> R<&'a Arg> {
+    ins.arg(i).ok_or(Fault::BadCode("missing operand"))
+}
 
-fn u(ins: &Instr, i: usize) -> R<usize> {
+fn u(ins: &InstrView<'_>, i: usize) -> R<usize> {
     match arg(ins, i)? {
         Arg::U(n) => usize::try_from(*n).map_err(|_| Fault::BadCode("operand too large")),
         _ => Err(Fault::BadCode("expected a number")),
     }
 }
 
-fn label(ins: &Instr, i: usize) -> R<Option<u32>> {
+fn label(ins: &InstrView<'_>, i: usize) -> R<Option<u32>> {
     match arg(ins, i)? {
         Arg::Label(l) => Ok(*l),
         _ => Err(Fault::BadCode("expected a label")),
     }
 }
 
-fn list(ins: &Instr, i: usize) -> R<&[Arg]> {
-    match arg(ins, i)? {
-        Arg::List(items) => Ok(items),
+fn list<'a>(ins: &InstrView<'a>, i: usize) -> R<&'a [Arg]> {
+    match *arg(ins, i)? {
+        Arg::List { start, len } => ins.items(start, len).ok_or(Fault::BadCode("list operand")),
         _ => Err(Fault::BadCode("expected a list")),
     }
 }
@@ -175,12 +177,12 @@ fn put(p: &mut Process, a: &Arg, t: Term) -> R {
     Ok(())
 }
 
-fn src(p: &Process, ins: &Instr, i: usize) -> R<Term> { get(p, arg(ins, i)?) }
+fn src(p: &Process, ins: &InstrView<'_>, i: usize) -> R<Term> { get(p, arg(ins, i)?) }
 
 /// A source operand (terms are copied freely: they are small values).
-fn val(p: &Process, ins: &Instr, i: usize) -> R<Term> { src(p, ins, i) }
+fn val(p: &Process, ins: &InstrView<'_>, i: usize) -> R<Term> { src(p, ins, i) }
 
-fn dst(p: &mut Process, ins: &Instr, i: usize, t: Term) -> R { put(p, arg(ins, i)?, t) }
+fn dst(p: &mut Process, ins: &InstrView<'_>, i: usize, t: Term) -> R { put(p, arg(ins, i)?, t) }
 
 /// A number that may be encoded either as an unsigned literal or as a source operand.
 fn num_operand(p: &mut Process, a: &Arg) -> R<Term> {
@@ -190,7 +192,7 @@ fn num_operand(p: &mut Process, a: &Arg) -> R<Term> {
     }
 }
 
-fn freg(ins: &Instr, i: usize) -> R<usize> {
+fn freg(ins: &InstrView<'_>, i: usize) -> R<usize> {
     match arg(ins, i)? {
         Arg::FloatReg(r) => Ok(*r as usize),
         _ => Err(Fault::BadCode("expected a float register")),
@@ -802,7 +804,7 @@ fn raise(sys: &mut Sched<'_>, p: &mut Process, mut e: Exception) -> Option<Stop>
     None
 }
 
-fn install_handler(p: &mut Process, ins: &Instr) -> R {
+fn install_handler(p: &mut Process, ins: &InstrView<'_>) -> R {
     let y = match arg(ins, 0)? {
         Arg::Y(y) => *y,
         _ => return Err(Fault::BadCode("try/catch needs a Y register")),
@@ -814,7 +816,7 @@ fn install_handler(p: &mut Process, ins: &Instr) -> R {
     Ok(())
 }
 
-fn remove_handler(p: &mut Process, ins: &Instr) -> R {
+fn remove_handler(p: &mut Process, ins: &InstrView<'_>) -> R {
     let y = match arg(ins, 0)? {
         Arg::Y(y) => *y,
         _ => return Err(Fault::BadCode("try_end needs a Y register")),
@@ -832,7 +834,7 @@ fn remove_handler(p: &mut Process, ins: &Instr) -> R {
 
 fn step(sys: &mut Sched<'_>, p: &mut Process, module: &'static Module) -> R<Flow> {
     let here = p.pc.pc;
-    let ins = module.code.get(here as usize).ok_or(Fault::BadCode("pc outside the code"))?;
+    let ins = &module.instr(here).ok_or(Fault::BadCode("pc outside the code"))?;
     p.pc.pc = here + 1;
     let a = &sys.atoms;
 
@@ -1521,7 +1523,7 @@ fn flags_signed(sys: &Sched<'_>, heap: &Heap, flags: Term) -> bool {
     heap.list_iter(flags).flatten().any(|f| f.is_atom(&sys.atoms.signed))
 }
 
-fn bs_create_bin(sys: &mut Sched<'_>, p: &mut Process, ins: &Instr, module: &Module) -> R<Flow> {
+fn bs_create_bin(sys: &mut Sched<'_>, p: &mut Process, ins: &InstrView<'_>, module: &Module) -> R<Flow> {
     let fail = label(ins, 0)?;
     let segments = list(ins, 5)?;
     if segments.len() % 6 != 0 {
@@ -1683,7 +1685,7 @@ fn bs_create_bin(sys: &mut Sched<'_>, p: &mut Process, ins: &Instr, module: &Mod
 // ---- binary matching ----
 
 /// Run the commands of a `bs_match` instruction; on the first failure, jump to its label.
-fn bs_match(sys: &mut Sched<'_>, p: &mut Process, ins: &Instr) -> R<Flow> {
+fn bs_match(sys: &mut Sched<'_>, p: &mut Process, ins: &InstrView<'_>) -> R<Flow> {
     let fail = label(ins, 0)?;
     let state = src(p, ins, 1)?;
     let (bits, mut pos) =
@@ -1807,7 +1809,7 @@ fn seg_flags(sys: &Sched<'_>, heap: &Heap, a: &Arg) -> (bool, bool) {
 
 /// The older single-segment matching instructions (`bs_get_integer2` and friends). Each reads
 /// from the match state in operand 1 and jumps to operand 0 on failure.
-fn bs_get(sys: &mut Sched<'_>, p: &mut Process, ins: &Instr, module: &Module) -> R<Flow> {
+fn bs_get(sys: &mut Sched<'_>, p: &mut Process, ins: &InstrView<'_>, module: &Module) -> R<Flow> {
     let fail = label(ins, 0)?;
     let state = src(p, ins, 1)?;
     let (bits, pos) =
@@ -1894,7 +1896,7 @@ fn bs_get(sys: &mut Sched<'_>, p: &mut Process, ins: &Instr, module: &Module) ->
             p.heap.set_match_pos(state, pos + n);
             if let Some(v) = value {
                 // The destination is the last operand.
-                dst(p, ins, ins.args.len() - 1, v)?;
+                dst(p, ins, ins.count() - 1, v)?;
             }
         }
     }
