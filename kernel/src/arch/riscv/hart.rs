@@ -23,8 +23,11 @@ use redoubt_layout::{KERNEL_PID, Pid};
 use super::process::{INITIAL_TID, Thread};
 
 /// One hart's kernel state. `repr(C)`: the trap entry and the start trampoline (`asm.rs`) read it
-/// by word offset, the `BLOCK_*` constants.
-#[repr(C)]
+/// by word offset, the `BLOCK_*` constants. Aligned to a power of two above its size, so that
+/// [`index`], which every per-hart read and the kernel lock's checked-build holder test make,
+/// is a shift and not a division.
+#[cfg_attr(target_pointer_width = "64", repr(C, align(512)))]
+#[cfg_attr(target_pointer_width = "32", repr(C, align(256)))]
 pub struct Block {
     /// Where the trap entry stashes `x1` while it finds the context.
     scratch: AtomicUsize,
@@ -77,6 +80,7 @@ const _: () = {
     assert!(core::mem::offset_of!(Block, start_block) == BLOCK_START_BLOCK * WORD);
     assert!(core::mem::size_of::<[AtomicUsize; 32]>() == core::mem::size_of::<Thread>());
     assert!(core::mem::align_of::<Block>() >= core::mem::align_of::<Thread>());
+    assert!(core::mem::size_of::<Block>().is_power_of_two());
 };
 
 impl Block {
@@ -146,7 +150,9 @@ static RAN_USER: AtomicUsize = AtomicUsize::new(0);
 
 /// A checked build's account at `system_reset`, for `smp-boot`: whether every hart in the device
 /// tree was started and ran a process, and the kernel lock's FIFO evidence, the most kernel
-/// sections any acquisition waited behind (cell.rs; at most the harts less one, R78).
+/// sections any acquisition waited behind (cell.rs; at most the harts less one, R78). A short
+/// count is a fact, not a failure: a boot with fewer runnable processes than harts leaves some
+/// idle, and only `smp-boot`, whose work fills every hart, judges it.
 #[cfg(debug_assertions)]
 pub fn report() {
     let (ran, started, found) =
@@ -154,7 +160,7 @@ pub fn report() {
     if ran == started && started == found {
         println!("harts: all {} in the tree ran user code", found);
     } else {
-        println!("harts: FAIL: {} in the tree, {} started, {} ran user code", found, started, ran);
+        println!("harts: {} in the tree, {} started, {} ran user code", found, started, ran);
     }
     println!(
         "kernel lock: most waited {} section(s), {} hart(s)",

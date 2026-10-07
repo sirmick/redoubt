@@ -79,15 +79,25 @@ struct Sched {
 struct Billing {
     /// When the hart's `cur` last went to user mode, in ticks.
     user_since: Option<u64>,
-    /// Kernel time since this tick is billed to this budget.
-    billing: Option<(u64, BudgetRef)>,
+    /// Kernel time since this tick is billed to this payer.
+    billing: Option<(u64, Payer)>,
     /// Billing paused while `kmain` expires deadlines (the walk is nobody's), to resume after.
-    paused: Option<BudgetRef>,
+    paused: Option<Payer>,
+    /// Kernel time owed by the budget `kmain` picks next ([`Payer::Next`]), not yet charged.
+    owed: u64,
+}
+
+/// Who kernel time is billed to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Payer {
+    Budget(BudgetRef),
+    /// The budget `kmain` picks next, once it is known: the pick and switch into it.
+    Next,
 }
 
 static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
     cpu: Harts::new(),
-    harts: [Billing { user_since: None, billing: None, paused: None }; MAX_HARTS],
+    harts: [Billing { user_since: None, billing: None, paused: None, owed: 0 }; MAX_HARTS],
     marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
 });
 
@@ -153,10 +163,12 @@ impl Sched {
     fn b(&mut self) -> &mut Billing { &mut self.harts[here()] }
 
     /// Close the kernel-time billing interval at `now`: `cur`'s joins its pending runtime, anyone
-    /// else's is charged at once.
+    /// else's is charged at once, and the next budget's is owed until it is picked.
     fn close_billing(&mut self, mm: &mut MemoryManager, now: u64) {
-        if let Some((since, b)) = self.b().billing.take() {
-            self.bill(mm, b, now.saturating_sub(since));
+        match self.b().billing.take() {
+            Some((since, Payer::Budget(b))) => self.bill(mm, b, now.saturating_sub(since)),
+            Some((since, Payer::Next)) => self.b().owed += now.saturating_sub(since),
+            None => {}
         }
     }
 
@@ -170,10 +182,10 @@ impl Sched {
     /// If kernel time is being billed to `b`, close the interval and reopen it: what `b` is
     /// worth is about to change (a weight change, a creation under it, its destruction).
     fn settle_billing(&mut self, mm: &mut MemoryManager, b: BudgetRef) {
-        if self.b().billing.is_some_and(|(_, payer)| payer == b) {
+        if self.b().billing.is_some_and(|(_, payer)| payer == Payer::Budget(b)) {
             let now = ticks();
             self.close_billing(mm, now);
-            self.b().billing = Some((now, b));
+            self.b().billing = Some((now, Payer::Budget(b)));
         }
     }
 
@@ -246,10 +258,20 @@ pub fn from_user() {
 pub fn begin_billing() { bill_from_now(SCHED.with(|s| s.cpu.cur(here()))); }
 
 /// From here, kernel time is `payer`'s (nobody's for `None`): the rest of an entry whose expiry
-/// billed `payer` last (`time::Expired`).
-pub fn bill_from_now(payer: Option<BudgetRef>) {
-    let now = ticks();
-    SCHED.with(|s| s.b().billing = payer.map(|b| (now, b)));
+/// billed `payer` last (`time::Expired`). Kernel time being billed is charged first: the expiry's
+/// tail is its last budget's until here ([`bill_from`]).
+pub fn bill_from_now(payer: Option<BudgetRef>) { bill_from(payer, ticks()) }
+
+/// From tick `since`, kernel time is `payer`'s (nobody's for `None`), once what was billed until
+/// then is charged: the expiry's last bill opens the rest of the entry for the budget it billed
+/// (`time::expire_due`), so its own handling is not left to nobody.
+pub fn bill_from(payer: Option<BudgetRef>, since: u64) {
+    MemoryManager::with_mut(|mm| {
+        SCHED.with(|s| {
+            s.close_billing(mm, since);
+            s.b().billing = payer.map(|b| (since, Payer::Budget(b)));
+        })
+    });
 }
 
 /// Kernel time since billing began goes to nobody: it was spent for someone else (an interrupt
@@ -269,21 +291,34 @@ pub fn pause_billing() {
     let now = ticks();
     MemoryManager::with_mut(|mm| {
         SCHED.with(|s| {
-            s.b().paused = s.b().billing.map(|(_, b)| b);
+            s.b().paused = s.b().billing.map(|(_, p)| p);
             s.close_billing(mm, now);
         })
     });
 }
 
+/// `kmain`'s expiry is done: what it left billed (its last bill's handling, [`bill_from`]) is
+/// charged, and billing resumes for whom it was paused.
 pub fn resume_billing() {
     let now = ticks();
-    SCHED.with(|s| s.b().billing = s.b().paused.take().map(|b| (now, b)));
+    MemoryManager::with_mut(|mm| {
+        SCHED.with(|s| {
+            s.close_billing(mm, now);
+            s.b().billing = s.b().paused.take().map(|b| (now, b));
+        })
+    });
 }
 
-/// `kmain` idles: nobody's work.
+/// `kmain` idles: nobody's work, and so is a pick that found nothing: what the next budget owed
+/// goes with it.
 pub fn stop_billing() {
     let now = ticks();
-    MemoryManager::with_mut(|mm| SCHED.with(|s| s.close_billing(mm, now)));
+    MemoryManager::with_mut(|mm| {
+        SCHED.with(|s| {
+            s.close_billing(mm, now);
+            s.b().owed = 0;
+        })
+    });
 }
 
 /// Charge `ticks` of kernel work done for `b` (an expired timeout of one of its threads, its
@@ -358,20 +393,21 @@ pub fn leave(pid: Pid) {
     let to_user = ProcessTable::with(|ss| {
         MemoryManager::with_mut(|mm| {
             SCHED.with(|s| {
-                let payer = s.b().billing.map(|(_, b)| b);
+                let payer = s.b().billing.map(|(_, p)| p);
                 s.close_billing(mm, now);
                 let next = if pid.get() == 1 { None } else { mm.budget_of(pid).map(|f| budget_ref(mm, f)) };
                 #[cfg(feature = "walk-trace")]
                 let _walk = trace::walk(trace::RECONCILE);
                 s.settle(ss, mm);
                 if next != s.cpu.cur(here()) {
-                    let left = s.cpu.switch(here(), mm, next, |mm, b| mm.ready(b) > 0);
+                    s.cpu.switch(here(), mm, next, |mm, b| mm.ready(b) > 0);
                     s.b().user_since = None;
-                    // `kmain`'s pick and switch after a deschedule are the descheduled budget's
-                    // work (it blocked, exited or was preempted): billed to it, as a deschedule's
-                    // cost, until the next budget runs.
-                    if next.is_none() {
-                        s.b().billing = left.filter(|b| mm.is_live_budget(*b)).map(|b| (now, b));
+                    // The budget picked pays what it owes for getting here (below).
+                    if let Some(b) = next {
+                        let owed = core::mem::take(&mut s.b().owed);
+                        if owed > 0 {
+                            s.bill(mm, b, owed);
+                        }
                     }
                 }
                 // Debug only, never in a bench build but one recorded negative run (feature
@@ -382,8 +418,13 @@ pub fn leave(pid: Pid) {
                     s.b().user_since = None;
                     // Billing closed above, so the deschedule folds what `cur` ran; it reopens for
                     // the entry's payer, who pays for the rest, and closes again at the return.
-                    if next.is_some() {
-                        s.b().billing = payer.map(|b| (now, b));
+                    if let Some(b) = next {
+                        let payer = payer.map(|p| if p == Payer::Next { Payer::Budget(b) } else { p });
+                        s.b().billing = payer.map(|p| (now, p));
+                    } else {
+                        // Back to `kmain`: its pick and switch are paid by the budget it picks,
+                        // whatever ended the run before; idle time and a pick of nothing are nobody's.
+                        s.b().billing = Some((now, Payer::Next));
                     }
                 }
                 s.reconcile(mm);
@@ -504,7 +545,7 @@ pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame, weight_returned: bool
     let limit = mm.budget(frame).weight_limit;
     SCHED.with(|s| {
         s.settle_billing(mm, child);
-        for h in s.harts.iter_mut().filter(|h| h.billing.is_some_and(|(_, b)| b == child)) {
+        for h in s.harts.iter_mut().filter(|h| h.billing.is_some_and(|(_, p)| p == Payer::Budget(child))) {
             h.billing = None;
         }
         if let Some(p) = parent {

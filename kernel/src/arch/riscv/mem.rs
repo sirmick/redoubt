@@ -190,8 +190,12 @@ mod stale {
     /// The other harts started, as a mask.
     fn others() -> u8 { (((1u32 << hart::started()) - 1) as u8) & !(1 << hart::index()) }
 
-    /// `flush` was made on this hart: the others owe it.
+    /// `flush` was made on this hart: the others owe it. On one hart nobody does, and neither
+    /// record changes: every page a mapping call writes passes here.
     pub(super) fn flushed(flush: Flush) {
+        if hart::started() == 1 {
+            return;
+        }
         #[cfg(debug_assertions)]
         {
             let me = 1 << hart::index();

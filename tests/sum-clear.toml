@@ -1,6 +1,7 @@
 description = "The kernel cannot load through a user mapping (R24): a test build loads the first caller's `ecall` straight through its user address, and the load faults as a kernel failure instead of reading it (sum-probe, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+icount = "shift=3,sleep=off"
 debug_assertions = true
 kernel_features = ["sum-probe"]
 programs = ["rng-test"]

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 264
+revision = 265
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1134,8 +1134,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Bisected on 2026-10-06 over the merge points from 777bba164 (SCHED1) to 86c76a9f0 (B15), each case run alone through scripts/q (table: .wash/local/bisect-main/summary.txt): all four pass at 777bba164 and fail at 14aceaa63 (SMP1, the kernel on every hart under one big lock) and at every merge after. (1) rv64 sched-exit-churn: 'share threads-exit: net 426..445 of 1000: target missed (450 <= share)'; (2) rv64 sum-clear: 20 s timeout waiting for the expected '!!! KERNEL FAILURE !!!: CPU Exception ... Load page fault' line, so the fault is no longer raised or no longer printed; (3) rv64 lend-untouched-page smp=4: 'harts: FAIL: 4 in the tree, 4 started, 1 ran user code'; (4) rv32 sched-cluster-old-control: the control's stand-in driver_wake could not take attempt 2. Tier A (kernel), size M: find each cause in SMP1's change (the big lock's entry, per-hart idle, the timer on secondary harts, the trap path), fix with the model's rule where one applies, rerun the four both widths and the scheduler cases (sched-*), and add sched-exit-churn, sum-clear and lend-untouched-page smp=4 to the trains rule's smoke set (.wash/SWARM.md) so a merge cannot pass its short gate with them broken. Lands before SMP3."
-  state = "reported"
-  revision = 263
+  state = "done"
+  revision = 265
 
 [[node]]
   id = "B20"

@@ -623,7 +623,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
 /// | classic | (share) spinners and sleepers: a spinner gets its weight's share over every interval |
 /// | gaming | (d) sub-slice and large-weight short bursts cannot buy more than the weight |
 /// | idle gap | (c) a sleeper waking into an empty queue cannot bank credit |
-/// | exit churn | (f) exiting on the CPU is charged |
+/// | exit churn | (f) exiting on the CPU is charged, and a timer's work for the exiter's timeouts is its |
 /// | budget churn | (g) create, run, destroy (blocking, spinning-parent, deadline-timed and billed, parking) gains nothing |
 /// | carve inflation | (h) carving moves share, never duplicates it |
 /// | debt lift | (i) a light grandchild's work reaches a shared parent normalized |
@@ -791,14 +791,21 @@ fn sched_idle_gap(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
 }
 
 /// (f) The attacker's thread runs part of a slice and exits; a new one is created. Every exit is
-/// a deschedule and is charged.
+/// a deschedule and is charged. With an odd weight the attacker also polls on a timeout after
+/// each exit, which expires while the victim runs: the timer's work for it is the attacker's.
 fn sched_exit_churn(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
     let w = rng.range(1, 100);
+    exit_churn_variant(rng, mutation, w, w % 2 == 1)
+}
+
+/// One variant of [`sched_exit_churn`] at weight `w`, `timed` with the attacker's timeout.
+pub fn exit_churn_variant(rng: &mut Rng, mutation: Option<Mutation>, w: u64, timed: bool) -> Sr {
     let mut sim = Sim::new(mutation);
     let (a, v) = (1, 2);
     sim.budget(a, ROOT_B, w, 1);
     sim.budget(v, ROOT_B, w, 1);
     let mut next = 1;
+    let mut due = false;
     while sim.now < 200 * SLICE {
         let Some((b, t, _)) = sim.run(rng.range(1, SLICE)) else { break };
         if b == a && sim.s.current.is_some_and(|c| c.thread == t) {
@@ -806,6 +813,14 @@ fn sched_exit_churn(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
             sim.s.thread_runnable(a, (a, next));
             next += 1;
             sim.s.reconcile();
+            due = timed;
+        } else if b == v && due {
+            // The attacker's timeout expired in the victim's run: the interrupt's work, a
+            // quarter slice of the machine's time, is billed to the attacker.
+            let work = SLICE / 4;
+            sim.now += work;
+            sim.s.bill_timer(a, work);
+            due = false;
         }
     }
     share_at_least("victim against exit churn", sim.ran(v), sim.now, 1, 2, 4 * SLICE)?;
@@ -1322,5 +1337,14 @@ mod churn_variants {
     #[test]
     fn unbilled_deadline_work_is_caught() {
         assert!(caught(Mutation::R12DeadlineWorkUnbilled, 2), "the deadline variant must see unbilled work");
+    }
+
+    /// A timer interrupt's work for the attacker's timeouts takes the machine's time: billed to no
+    /// budget, it comes out of the victim's half; billed to the attacker, the victim keeps it.
+    #[test]
+    fn unbilled_timer_work_is_caught() {
+        let run = |seed, m| exit_churn_variant(&mut Rng::new(seed), m, 1 + seed % 99, true);
+        assert!((0..300).any(|seed| run(seed, Some(Mutation::R12TimerWorkUnbilled)).is_err()));
+        assert!((0..50).all(|seed| run(seed, None).is_ok()), "the timed variant passes unbroken");
     }
 }

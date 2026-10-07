@@ -159,7 +159,7 @@ flowchart TD
 
 ### Charging
 
-<details><summary>Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested (16)</summary>
+<details><summary>Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested (18)</summary>
 
 - bench:sched-sleep-gaming
 - bench:sched-exit-churn
@@ -177,6 +177,8 @@ flowchart TD
 - mutation:R12NoMinimumCharge
 - mutation:R12FoldAtNewWeight
 - mutation:R12DeadlineWorkUnbilled
+- mutation:R12TimerWorkUnbilled
+- mutation:R12SwitchBilledToPrevious
 
 </details>
 
@@ -209,17 +211,23 @@ Kernel time is billed as well:
   thread blocks; a wait that ends before its timeout leaves it early, and the walk that finds the
   wait gone is billed to that thread's budget. The rest of an entry that found either, the
   timer's own handling included, is billed to the budget it found last: the budget it
-  interrupted pays for none of it. A timer interrupt that found neither is the running budget's
-  when it ends that budget's slice, and nobody's otherwise;
+  interrupted pays for none of it. Each bill closes its interval at the tick that opens the next,
+  so a bill's own handling is in the interval after it and no part of a timeout's expiry is
+  nobody's ([residual risks](#residual-risks)). A
+  timer interrupt that found neither is the running budget's when it ends that budget's slice,
+  and nobody's otherwise;
 - an interrupt's handling is billed to the owner of its device object
   ([R5 (interrupts)](devices.md#r5-interrupts)); one with no device object, to nobody;
-- `kmain`'s pick and switch after a deschedule are the descheduled budget's;
+- `kmain`'s pick and switch into a budget are paid by the budget picked, whatever ended the run
+  before: a block or an exit is paid by its actor, a timer entry's handling by the budget it
+  served, and the pick that follows by the budget it picks (a pick that cannot run leaves the
+  next pick owing it; a pick of nothing is nobody's);
 - idle time is nobody's.
 
 A slice end costs about 0.36 ms of kernel time on rv64 and 0.45 ms on rv32 in the release build
 under QEMU (about 45,000 and 56,000 instructions), most of it the reconcile that follows the entry;
 at a 1 ms slice under nine runnable budgets that is about a quarter of the CPU, billed to the
-budgets whose slices end, so relative shares hold while useful work falls to about three quarters
+budgets picked after each slice's end, so relative shares hold while useful work falls to about three quarters
 of the 10 ms build's (0.762 on rv64 and 0.718 on rv32, both in the release build). The reconcile's
 cost is above its loop bounds. This is today's cost; a later measurement replaces it.
 
@@ -257,9 +265,17 @@ the check fails on both widths: the victim pays for the attacker's waits that en
 
 A server that works for a caller spends its own budget's CPU: no time is donated
 ([Residual risks](#residual-risks)). CPU charging is separate from page charging
-([R6 (charging)](budgets.md#r6-charging)). The model charges runtime, and a deadline's
-destruction as work billed to its payer (`R12DeadlineWorkUnbilled`); billing other kernel work is
-the kernel's alone, and the boot cases are its only check.
+([R6 (charging)](budgets.md#r6-charging)). The model charges runtime, and three kinds of kernel
+work billed to a payer: a deadline's destruction (`R12DeadlineWorkUnbilled`), a timer's expiry
+of the timeouts it ends (`R12TimerWorkUnbilled`), and the pick and switch into a budget
+(`R12SwitchBilledToPrevious`). Billing other kernel work is the kernel's alone, and the boot
+cases are its only check.
+
+Against threads that each run nine tenths of a slice and exit, beside a main thread polling on a
+1 ms timeout (`sched-exit-churn`'s first share), the victim got 439 of 1000 net on rv64 and 432
+on rv32 while it paid the pick and switch at each of its own slice ends, about 90 µs at the 1 ms
+slice, a tenth of what it was charged, and while each expiry of the attacker's poll left about
+50 µs, its bills' own handling, to nobody. Billed as above it gets 492 and 487.
 
 ### Inheritance
 
@@ -802,7 +818,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (43)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (45)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -847,6 +863,8 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - mutation:R12DeadlineWorkUnbilled
 - mutation:R12RescaleOnlyOnReturn
 - mutation:R12SliceCountsExitWork
+- mutation:R12TimerWorkUnbilled
+- mutation:R12SwitchBilledToPrevious
 
 </details>
 
@@ -1010,6 +1028,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 
 ## Residual risks
 
+- **Two bills still leave their own handling to nobody.** An interrupt's handling is measured,
+  billed to its device's owner, and then the interrupted budget's billing restarts, so the bill's
+  own work is between the two; and a deadline's destruction is billed to its payer inside the
+  destruction, so what follows that bill until the expiry's next interval is nobody's. Each is a
+  bill's own handling, about 25 µs in a checked rv64 build, once per interrupt or destruction.
 - **Server work is paid by the server's weight.** Work a server does for a user is paid by the
   server's weight, not the requester's; the steward's work, by the steward. No time is donated, so
   a user who floods a server takes that server's share away from the server's other callers,

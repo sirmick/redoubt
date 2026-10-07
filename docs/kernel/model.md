@@ -187,7 +187,7 @@ second healthy DMA device exists so the generator can build the co-holder shape;
 | classic | spinners and sleepers: a spinner gets its weight's share over every interval it was runnable |
 | gaming | short bursts, below a slice or at a large weight, buy no more than the weight |
 | idle gap | a sleeper waking into an empty queue banks no credit |
-| exit churn | exiting, faulting or being killed on the CPU is charged |
+| exit churn | exiting, faulting or being killed on the CPU is charged, and a timer's work for the exiter's timeouts is its |
 | budget churn | creating, running and destroying children (blocking, with a spinning parent, by deadline, parked) gains nothing |
 | carve inflation | carving moves share to the child and never duplicates it |
 | debt lift | a light grandchild's work reaches a shared parent, normalized by weight |
@@ -229,7 +229,8 @@ from the completion table, not from the model's output. They cover:
   R13 (one outcome per call); reply masks that are positional, not a count
   (`model/tests/current_contracts.rs`);
 - a timeout wakes without preempting, a timeout and a budget deadline at one instant expire in
-  that order, and budgets with no free weight are refused a process;
+  that order, budgets with no free weight are refused a process, and the pick and switch into a
+  budget are billed to the budget picked, not to the one whose thread blocked before it;
 - a PID is reused only after its exit notice is received or dropped;
 - DMA frames stay held through `unmap`, return to the pool only after a confirmed reset, and are
   quarantined, with the co-holder's, when a reset is not confirmed
@@ -288,7 +289,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R9 (stamps)](objects.md#r9-stamps) | `R9ReceivedHandleRestamped`, `R9MintStampsCaller`, `R9MsgStampIsSenderBudget` | which budget a handle is stamped with |
 | [R10 (destruction)](budgets.md#r10-destruction) | `R10KeepForeignHandles`, `R10KeepCarvedLimits`, `R10SpareDescendantProcesses`, `R10ExitNoticesOutlivePayer`, `R10RevokedMessageDelivered`, `R10RevokedCallAnswered`, `R10SweptHandlesDropped`, `R10CreatorDeathSparesProcess`, `R10HeldPidsDropped`, `R10ReapDestroysParent`, `R10ReapKeepsCarve`, `R10ReapSkipsGrandchildren`, `BudgetDeadlineIgnored` | everything a destruction reaches, a deadline destroying the budget, and a reap destroying one child and keeping the budget |
 | [R11 (memory)](memory.md#r11-memory) | `R11NoZeroing`, `R11SetFlagsAllowsWx`, `R11SetFlagsAllowsWriteOnly`, `R11LendStaysMapped`, `R11MapFixedSkipsOverlap`, `R11ExecOnDeviceMemory`, `R11ProcessMapSkipsFlags` | zeroing, W^X per mapping and per frame, write without read, lends unmapped, `map_fixed` never replacing, `process_map`'s own flag check |
-| [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork` | one flat queue, charging, the floor, ranks, preemption, the slice as user time, inheritance at create and destroy |
+| [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork`, `R12TimerWorkUnbilled`, `R12SwitchBilledToPrevious` | one flat queue, charging, the floor, ranks, preemption, the slice as user time, inheritance at create and destroy |
 | [R13 (one outcome per call)](ipc.md#r13-one-outcome-per-call) | `IpcWrongLend`, `IpcDropPartial`, `IpcFalseDelivery`, `IpcSkipOutputCheck`, `IpcLeakRollback` | the lend disposition, a partial reply, `delivered`, the completion-time record check, rollback |
 | [R14 (unforgeable sender)](ipc.md#r14-unforgeable-sender) | `MsgNoLabels`, `MsgBadgeZero`, `MsgAccountZero`, `MsgIdsGlobal` | the attached labels, badge and account; message ids per receiving process |
 | [R18 (device authority)](devices.md#r18-device-authority) | `R18DeviceByNumber`, `DeviceInfoWrongKind` | a device reached only through a handle to it; `device_info` naming the device the handle names |
@@ -493,11 +494,13 @@ differential test drives the crate, wired as the kernel's `sched.rs` calls it, a
 threads blocked first, the budget on the CPU, a whole subtree bottom-up), wakes, blocks, runs,
 slice ends and preemptions. Over 3,000 seeds every pass, entry, remainder, tie, queue
 membership, the floor, the tie counters and the running thread must agree after every step.
-`a_broken_model_disagrees` shows the comparison bites: with any of 20 of the 22 R12 variants
+`a_broken_model_disagrees` shows the comparison bites: with any of 20 of the 25 R12 variants
 planted in the model, some sequence disagrees. It leaves out `R12TimeoutWakePreempts`, whose
-site is the kernel model's timer path, not the scheduler, and `R12DeadlineWorkUnbilled`, the
-billing of a deadline's destruction work, which the differential does not drive; the model's
-own checks catch both. The bench case `stride-host-tests` runs both tests. This compares one kernel crate with the
+site is the kernel model's timer path, not the scheduler, and `R12SliceCountsExitWork`,
+`R12DeadlineWorkUnbilled`, `R12TimerWorkUnbilled` and `R12SwitchBilledToPrevious`, kernel work
+around a run (the exit work before a slice starts, a deadline's destruction, a timer's expiry, the
+switch into a budget), which the differential does not drive; the model's own checks catch
+all five. The bench case `stride-host-tests` runs both tests. This compares one kernel crate with the
 model, on the host; the kernel's own use of it runs in boot cases
 ([scheduling](scheduling.md)).
 

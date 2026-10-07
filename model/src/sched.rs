@@ -247,6 +247,29 @@ impl Scheduler {
         if self.broken(Mutation::R12DeadlineWorkUnbilled) {
             return;
         }
+        self.bill_work(payer, work);
+    }
+
+    /// A timer interrupt spent `work` expiring `payer`'s timeouts: all of it, the bills' own
+    /// handling included, is billed to `payer`, never to the budget it interrupted nor to no one
+    /// (kernel/scheduling.md, "Charging").
+    pub fn bill_timer(&mut self, payer: u64, work: u64) {
+        if self.broken(Mutation::R12TimerWorkUnbilled) {
+            return;
+        }
+        self.bill_work(payer, work);
+    }
+
+    /// `kmain`'s pick and switch into `next` after `previous` ran took `work`: billed to `next`,
+    /// the budget picked, whatever ended the run before (kernel/scheduling.md, "Charging").
+    pub fn bill_switch(&mut self, previous: u64, next: u64, work: u64) {
+        let payer = if self.broken(Mutation::R12SwitchBilledToPrevious) { previous } else { next };
+        self.bill_work(payer, work);
+    }
+
+    /// Kernel `work` done for `payer`, as runtime at its weight now: the running budget's joins
+    /// its pending runtime.
+    fn bill_work(&mut self, payer: u64, work: u64) {
         match self.current.as_mut() {
             Some(c) if c.budget == payer => c.pending = c.pending.saturating_add(work),
             _ => {

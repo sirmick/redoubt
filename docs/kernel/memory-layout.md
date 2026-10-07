@@ -336,7 +336,11 @@ carry its ASID and wait for its next turn. A change to a leaf flushes that addre
 process's ASID, running or not; a change to a table pointer flushes the process's whole ASID; a
 change to a kernel-half leaf flushes that address in every ASID. A PID's ASID is flushed whole
 when the PID is given out, before it first runs, and a dying process's space is left before any
-of its frames is freed. A checked build logs every page-table write and stops if one is
+of its frames is freed. A user access that faults although the current space's leaf allows it
+met an entry this hart cached before another hart changed it: the kernel flushes that address in
+the ASID and runs the instruction again, once. A fault the kernel takes itself is never retried
+so: the kernel reaches no user mapping ([R24](#r24-sum-and-mxr-clear)), and its own fault is a
+kernel failure. A checked build logs every page-table write and stops if one is
 unflushed when it returns to user mode. On QEMU every `sfence.vma` and every `satp` change
 empties the whole TLB, so the cases check the kernel's flushes through the checked build's log,
 not through a stale translation; the TLB's reuse across switches shows only on hardware
