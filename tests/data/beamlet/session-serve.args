@@ -1,0 +1,2 @@
+vm=beamlet_serve:start
+serve

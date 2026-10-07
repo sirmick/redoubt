@@ -1,0 +1,69 @@
+description = "The natives refuse what the host cannot show (docs/userland/beamlet.md, \"Natives\"): one VM writes a handle it holds to the home volume as term_to_binary writes it; a second VM, launched after the first ends, reads it back as a plain reference, and every native that takes a handle refuses it, as each refuses a path with NUL or dot-dot, five words, seventeen labels and a handle of the wrong kind, by name; the kernel refuses a child budget that adds a label (class_denied: a user-class caller may not), and the VM goes on. A third VM, in alice's labelled session, runs nothing: the console carries no labels, so consoled refuses its write-open of /dev/cons (R69) and beamlet ends at its start, code 1, with no line. The sessions are carved as the steward carves them: alice's account, a sub-budget per label set"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-natives, with three VMs one after the other, the third in the labelled sub-budget the
+# tester carves as the steward would: the second's verdicts are its natives' and one the kernel's;
+# the third's is consoled's, seen in the tester's lines.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-hello" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-caller" },
+]
+timeout_secs = 180
+expect = [
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_natives_attack:write, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] attack: wrote a handle: ok$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_natives_attack:read, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] attack: another VM.s handle decodes to a reference: true$',
+    '^\[con [0-9a-f]{16}\] attack: call: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: send: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: bind: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: serve: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: budget_usage: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: launch: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: path_with_nul: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: path_with_dot_dot: \{error,bad_name\}$',
+    '^\[con [0-9a-f]{16}\] attack: five_words: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: seventeen_labels: \{raised,badarg\}$',
+    '^\[con [0-9a-f]{16}\] attack: wrong_kind: \{error,wrong_object\}$',
+    '^\[con [0-9a-f]{16}\] attack: add_label: \{error,class_denied\}$',
+    '^\[con [0-9a-f]{16}\] attack: the VM goes on: true$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_natives_attack:read ended: Exited, code 0$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_natives_attack:labelled, labels \[7\]$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_natives_attack:labelled ended: Exited, code 1$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd|beamlet-session)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'FAIL',
+    'beamlet: .* not loaded',
+    # The labelled VM has no console to say it on.
+    'attack: labels:',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/natives-attack.json" }
+
+# What the tester runs: one `vm=MODULE:FUNCTION` a line, and `serve` for the serving case, read
+# from /boot, since `init` passes the steward no arguments of a manifest's.
+[[file]]
+name = "beamlet-session.args"
+from = { path = "tests/data/beamlet/session-natives-attack.args" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/natives-userland.toml"

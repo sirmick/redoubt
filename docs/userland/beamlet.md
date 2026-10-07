@@ -360,7 +360,7 @@ VM with nobody at the console sleeps rather than spins. There is no wall clock, 
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs and `/net` are not built; the system natives are tested on the host only ([natives](#natives)) · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
+Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console, files, verified code lookup
@@ -477,8 +477,12 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 
 ### Natives
 
-<details><summary>Status: built · partly tested: on the host only, on the fake kernel and against a test platform; no boot runs the natives · tested (26)</summary>
+<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, not under the steward itself · tested (30)</summary>
 
+- bench:beamlet-natives
+- bench:beamlet-serve
+- bench:beamlet-launch
+- bench:beamlet-natives-attack
 - host:beamlet-vm::a_lookup_gives_the_prefixs_connection_and_the_rest_and_refuses_by_name
 - host:beamlet-vm::a_bind_names_a_connection_and_refuses_anything_else
 - host:beamlet-vm::the_table_lists_path_name_and_handle
@@ -625,7 +629,15 @@ names it. Delegation is always `new_connection`, a typed call on a connection, n
 ([sessions](sessions.md)). Tested: `a_decoded_handle_grants_nothing`,
 `a_dropped_handle_is_closed_when_its_holder_is_collected`,
 `arguments_of_the_wrong_type_are_badarg_and_reach_no_platform_call`,
-`lists_past_their_caps_are_refused` and `a_handle_of_the_wrong_kind_is_refused_by_name`.
+`lists_past_their_caps_are_refused` and `a_handle_of_the_wrong_kind_is_refused_by_name` on the host,
+and `beamlet-natives-attack` on the machine, where a VM offers every native a handle another VM
+wrote out, which it reads back as a plain reference, and asks the kernel for a child budget that
+adds a label (`class_denied`: a `user`-class caller may not); a VM in a labelled session runs
+nothing there, since the console carries no labels and its write-open of `/dev/cons` is refused
+([consoled](../servers/consoled.md)). The cases' tester carves each session as the steward does
+([steward](../servers/steward.md#fixed-sub-budgets-per-label-set)): the principal's account, a
+sub-budget per label set, the session from it; what it hands beyond a session's own is said in
+each case.
 
 Residuals:
 - A request the Erlang side never answers is ended at its deadline with `malformed` (status 1):
