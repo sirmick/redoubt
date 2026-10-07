@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 289
+revision = 290
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1143,8 +1143,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Seen by B18 (2026-10-06) on the quiet core set with nothing else there: libs/client's aio.rs test a_server_that_breaks_its_hold_loses_the_session_at_the_margin fails about one run in eight; libs/client untouched by B18. A host-clock test at a margin: find whether the margin is a measurement (then widen it with the reason on the page, or make it a count as B10 did) or a race in the test's fixture. Tier B, size S: fix, run the test 50 times alone through `q run --quiet`, record the count. BEAM3 changes aio.rs's waiter (bounded hand-over): coordinate, the fix may belong in that commit."
-  state = "reported"
-  revision = 287
+  state = "done"
+  revision = 290
 
 [[node]]
   id = "B21"

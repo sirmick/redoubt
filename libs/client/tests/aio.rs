@@ -366,14 +366,17 @@ fn a_tag_a_flush_names_is_not_reused_before_its_rflush() {
             other => panic!("{other:?}"),
         };
         let read = hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
+        sent(&mut hub);
         // Its answer is in the waiter's wake-up, not yet in the hub, when the flush goes.
         let answer = wake();
         let flush = hub.submit(conn, Body::Tflush { oldtag: read }, None).unwrap();
+        sent(&mut hub);
         assert!(hub.deliver(answer).is_none());
         let done = hub.completed().unwrap();
         assert_eq!((done.tag, &done.outcome), (read, &Outcome::Read(5)));
         // A new request while the Rflush is still to come: it does not get the read's tag.
         let gate = hub.read(conn, GATE_FID, 0, buffer().0).unwrap();
+        sent(&mut hub);
         assert!(gate != read && gate != flush, "tag {gate} reused");
         let mut done = Vec::new();
         while !done.iter().any(|d: &Done| d.tag == flush) {
@@ -469,6 +472,7 @@ fn two_connections_have_a_waiter_each_and_the_caller_idles_in_receive() {
                 hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
             }
         }
+        sent(&mut hub);
         let mut answered = [0; 2];
         while answered != [8, 8] {
             match receive.receive(10_000_000, MAX_LEND_PAGES).unwrap() {
@@ -517,6 +521,7 @@ fn a_caller_busy_past_the_session_bound_keeps_its_session() {
         };
         // Busy elsewhere, past the session bound, with an answer ready.
         let first = hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
+        sent(&mut hub);
         std::thread::sleep(Duration::from_micros(COLLECT_WAIT + 2_000_000));
         let Event::Send(delivery) = receive.receive(10_000_000, MAX_LEND_PAGES).unwrap() else { panic!() };
         let held = delivery.transfer.as_ref().unwrap().len();
@@ -526,6 +531,7 @@ fn a_caller_busy_past_the_session_bound_keeps_its_session() {
         assert_eq!((done.tag, data(&done)), (first, &b"hello"[..]));
         // The session lives on: a new request is answered, not ended.
         let second = hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
+        sent(&mut hub);
         let done = take(&mut hub);
         assert_eq!((done.tag, data(&done)), (second, &b"hello"[..]));
     });
@@ -538,11 +544,19 @@ fn a_server_that_breaks_its_hold_loses_the_session_at_the_margin() {
     let ep = w.connection(8);
     let f = fake();
     let (server, paused) = (w.server, w.paused.clone());
+    // Set once the read is taken: until then the server may hold the session's opening call, which
+    // `until_parked` would take for the completion call and pause the server before the read.
+    let taken = Arc::new(AtomicBool::new(false));
+    let read_taken = taken.clone();
     let client = f.run(w.client, move || {
         let mut hub = Hub::new();
         let conn = hub.connect(Endpoint::from_handle(ep)).unwrap();
         let (b, at) = buffer();
         let tag = hub.read(conn, GATE_FID, 0, b).unwrap();
+        // One still queued would make the wait hold at most `RETRY_US`, not the 50 ms this test
+        // measures from.
+        sent(&mut hub);
+        read_taken.store(true, Ordering::Release);
         // The server takes the call and stops answering: the call times out a margin past its hold.
         let started = Instant::now();
         hub.wait(conn, 50_000).unwrap();
@@ -557,6 +571,11 @@ fn a_server_that_breaks_its_hold_loses_the_session_at_the_margin() {
         assert_eq!(hub.read(conn, NOW_FID, 0, buffer().0).unwrap_err(), redoubt_client::Error::Disconnected);
         1
     });
+    let started = Instant::now();
+    while !taken.load(Ordering::Acquire) {
+        assert!(started.elapsed() < Duration::from_secs(20), "the read was never sent");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     until_parked(server);
     paused.store(true, Ordering::Release);
     assert_eq!(client.join().unwrap(), 1);
@@ -571,6 +590,17 @@ fn a_server_that_breaks_its_hold_loses_the_session_at_the_margin() {
         }
     });
     w.end();
+}
+
+/// Polls until the server has taken everything queued: a server on a busy host can miss a
+/// submit's 1 ms, and a test that then idles without entering the hub, or times a wait whose hold
+/// assumed nothing was queued, would wait on a request never sent.
+fn sent(hub: &mut Hub) {
+    let started = Instant::now();
+    while hub.queued() != 0 {
+        assert!(started.elapsed() < Duration::from_secs(20), "never sent");
+        hub.poll();
+    }
 }
 
 /// Waits until `server` holds the completion call.
