@@ -984,9 +984,11 @@ must never ship. The `ssh-loopback` kind runs sessions against a server that `ss
 for each session as its `ProxyCommand`, so nothing listens on a port: Redoubt's `sshd` on its host
 platform ([against Redoubt's sshd](#against-redoubts-sshd)), or with `server = "openssh"`
 OpenSSH's server in inetd mode, in a QEMU guest. Its log goes to a file beside the transcripts,
-never to `ssh`'s output, so a late line of the server's cannot stand in for the session's last
-output; a case's `server_log` asks what the server saw (a refused key, say), not only what the
-client printed, and its `server_log_forbid` what the server must not have done (a console
+never to `ssh`'s output; the standard error `ssh` would otherwise share with it goes to that log
+for Redoubt's `sshd` and is discarded for QEMU's. So a late line of the server's, such as the
+broken pipe it may meet writing to an `ssh` that has refused its host key and hung up, cannot
+stand in for the session's last output, which is `ssh`'s own. A case's `server_log` asks what the server saw (a refused key, say), not only what
+the client printed, and its `server_log_forbid` what the server must not have done (a console
 started, say).
 
 **OpenSSH's server runs in a QEMU guest.** On a host that enforces SELinux, `sshd` moves every
@@ -1038,7 +1040,7 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 
 ### Against Redoubt's sshd
 
-<details><summary>Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested (11)</summary>
+<details><summary>Status: built · partly tested: agent forwarding is refused inside `sunset`, which no case sees, since `ssh` asks for it without a reply ([residual risks](servers/sshd.md#residual-risks)) · tested (12)</summary>
 
 - bench:sshd-loopback-logins
 - bench:sshd-loopback-r67
@@ -1051,6 +1053,7 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 - bench:bench-ssh-loopback-host-key
 - bench:sshd-host-tests
 - host:testbench::an_ssh_lacking_an_option_is_named
+- host:testbench::the_redoubt_proxy_keeps_its_errors_off_ssh
 
 </details>
 

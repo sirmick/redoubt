@@ -59,8 +59,9 @@ steward and `/dev/cons`. On the build host it is a host tool, so the bench logs 
 
 - **Transport:** standard input and output, one connection per process, as `ssh` starts it for
   a `ProxyCommand`; a log file of the server's own lines. A client that hangs up, as `ssh` does
-  after a refused login, ends the connection without an error, so nothing of the server's
-  follows on the standard error it shares with `ssh`.
+  after a refused login, ends the connection without an error. A write to a client that has
+  gone can still fail (a broken pipe, after `ssh` refuses the host key); the bench sends the
+  server's standard error to its log, so nothing of the server's follows `ssh`'s own last line.
 - **Signer:** `keyd`'s own server code, in the same process, given one key in `keyd`'s argument
   form, `name,ssh_host,seed`. So OpenSSH verifies a signature over the exchange hash `keyd`
   built, end to end. The host tool tests the protocol, the login flow and the channel rules, not
