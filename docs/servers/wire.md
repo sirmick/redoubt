@@ -205,9 +205,10 @@ drift check holds the serving library, the client library and this page to it.
 
 ### Wire tables and the generator
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (14)</summary>
 
 - host:redoubt-wire-gen::generated_files_are_current
+- host:redoubt-wire-gen::the_elixir_client_has_one_function_per_message
 - host:redoubt-wire-gen::parses_tables
 - host:redoubt-wire-gen::refuses_bad_tables
 - host:redoubt-wire-gen::every_row_is_read_or_refused
@@ -242,8 +243,9 @@ crate `redoubt-wire-gen`) enforces every rule in it:
 - **No silent rows.** A table ends at its first blank line, and a row-like line right after it is
   refused, so a stray blank line cannot drop rows. A table with the header but no marker is
   refused. Tables inside fenced code blocks are ignored.
-- **Output.** `cargo run -p redoubt-wire-gen` writes `libs/wire/src/proto/NAME.rs` and
-  `libs/wire/elixir/proto/NAME.ex` for each protocol. The generated files are checked in, and
+- **Output.** `cargo run -p redoubt-wire-gen` writes `libs/wire/src/proto/NAME.rs`,
+  `libs/wire/elixir/proto/NAME.ex` and its client, `libs/wire/elixir/client/NAME.ex`
+  ([generated clients](#generated-clients)), for each protocol. The generated files are checked in, and
   `generated_files_are_current` fails if they differ from the tables or if a generated file has
   no table any more (`-- --check` names them). So changing a table means regenerating, in the
   same commit ([R30 (one layout per message)](#r30-one-layout-per-message)).
@@ -254,10 +256,11 @@ flowchart LR
     T --> P["the owning server's page<br/>(included)"]
     G --> R["libs/wire/src/proto/NAME.rs<br/>(checked in)"]
     G --> E["libs/wire/elixir/proto/NAME.ex<br/>(checked in)"]
+    G --> C["libs/wire/elixir/client/NAME.ex<br/>(checked in)"]
     R --> S["servers and clients"]
     G -. "generated_files_are_current" .- R
 ```
-*Figure: one table feeds the page, the Rust codec and the Elixir codec; the drift check compares the checked-in code with the tables.*
+*Figure: one table feeds the page, the Rust codec, the Elixir codec and its client; the drift check compares the checked-in code with the tables.*
 
 Each generated Rust module has a `Message` and a `Reply` enum with `decode`, `encode`,
 `decode_file` and `encode_file`, an `ErrorCode` enum, and a unit type `Protocol` implementing
@@ -269,26 +272,35 @@ fixture protocol `example`, which no server speaks.
 
 ### Generated clients
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: against a stand-in for beamlet's natives on the BEAM; a client's call on the machine is beamlet's natives' cases' · tested: host:redoubt-wire-gen::the_elixir_client_has_one_function_per_message, host:redoubt-wire-gen::generated_files_are_current, bench:elixir-oracles
 
-The generator writes, beside each protocol's Elixir codec in `libs/wire/elixir`, an Elixir client:
-one function per message, taking the request's fields and handles and returning the decoded reply,
-or the protocol's error by name, over beamlet's `call` native. It is what a session binds a server
-with ([beamlet](../userland/beamlet.md#natives)). In Rust, the client library's one typed call
-over the generated codec is the binding, one call per message
+The generator writes, beside each protocol's Elixir codec in `libs/wire/elixir`, an Elixir client,
+`libs/wire/elixir/client/NAME.ex` (`Redoubt.Wire.Client.Keyd`): one function per message, taking
+the request's fields and handles in table order and a timeout, and returning the decoded reply, or
+the protocol's error by name, over beamlet's `call` native; a `send` row's function goes over `send`.
+It is what a session binds a server with ([beamlet](../userland/beamlet.md#natives)). In Rust, the
+client library's one typed call over the generated codec is the binding, one call per message
 ([native programs](../userland/native.md#the-client-library)).
 - **Nothing to drift.** The clients are generated from the table the server is generated from,
   checked in, and held to it by `generated_files_are_current`, as the codecs are.
-- **Handles are the caller's.** A handle a reply brings is returned to the caller (a resource term
-  in Elixir, an owned handle in Rust); an error reply, or one that does not decode, keeps none of
-  the handles it brought ([R13 (one outcome per call)](../kernel/ipc.md#r13-one-outcome-per-call)).
+- **One call, one outcome.** A reply is `{:ok, reply}`, its fields and its handles by the table's
+  names, each handle a resource term the caller now holds; an error is `{:error, name}`, the
+  protocol's error code by its table's name, a codec's refusal (`:bad_handles`, `:short_fields`), or
+  why the call was not made (`:busy`, `:timeout`, `:disconnected`). The wait for the reply is bounded
+  by the call's timeout and a margin for a call that waits for one of the platform's threads; a
+  reply later than that stays in the caller's mailbox until it drops it. An error reply, or one that does
+  not decode, keeps none of the handles it brought: they are dropped, and closed when collected
+  ([R13 (one outcome per call)](../kernel/ipc.md#r13-one-outcome-per-call)).
 - **No policy.** A generated function makes the call its message describes and nothing more;
-  what a session may do is the server's check and the handle's reach.
+  what a session may do is the server's check and the handle's reach. Their shared call,
+  `Redoubt.Wire.Client` in `libs/wire/elixir/lib/client.ex`, holds no handle of its own.
 
 The hand-written layer above is thin: `littlefsd`'s operations, which name fids that live in Rust, and
-in Elixir the modules that make a server idiomatic, such as `Redoubt.Keys` over `keyd`.
-
-**Open:** none.
+in Elixir the modules that make a server idiomatic, such as `Redoubt.Keys` over `keyd`. The
+generated clients' checks run on the BEAM in `elixir-oracles`, against a stand-in for the natives
+(`libs/wire/elixir/test/client_test.ex`): a call encoded and its reply decoded, an error reply by
+name, an error reply or an undecodable one keeping none of its handles, and a request that does
+not encode making no call.
 
 ### Granting and releasing
 
