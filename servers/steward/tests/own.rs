@@ -16,27 +16,19 @@ fn read(lines: &[&str]) -> Result<Own, String> {
 fn each_line_reads_as_what_it_binds() {
     let own = read(&[
         "label \"alice-secrets\" id=7",
-        "home \"alice\" handle=littlefsd:data path=/home/alice",
-        "vault \"alice\" labels=[9,7] handle=littlefsd:alice-secrets",
+        "home \"alice\" handle=walfsd:data path=/home/alice",
+        "vault \"alice\" labels=[9,7] handle=walfsd:alice-secrets",
         "net \"alice\" 0.0.0.0/0:22,443 10.0.0.0/8:*",
     ])
     .unwrap();
     assert_eq!(own.labels, [("alice-secrets".to_string(), 7)]);
     assert_eq!(
         own.home("alice"),
-        Some(&Home {
-            principal: "alice".into(),
-            handle: "littlefsd:data".into(),
-            path: "/home/alice".into()
-        })
+        Some(&Home { principal: "alice".into(), handle: "walfsd:data".into(), path: "/home/alice".into() })
     );
     assert_eq!(
         own.vault("alice", &[7, 9]),
-        Some(&Vault {
-            principal: "alice".into(),
-            labels: vec![7, 9],
-            handle: "littlefsd:alice-secrets".into()
-        })
+        Some(&Vault { principal: "alice".into(), labels: vec![7, 9], handle: "walfsd:alice-secrets".into() })
     );
     assert!(own.home("bob").is_none() && own.vault("alice", &[7]).is_none());
     // Three connect rules: ports 22 and 443 of every address, and every port of 10/8.
@@ -63,13 +55,13 @@ fn a_malformed_line_is_refused() {
         "label \"alice-secrets\"",
         "label \"Alice Secrets\" id=7",
         "label \"alice-secrets\" id=+7",
-        "home \"alice\" handle=littlefsd:data path=home/alice",
-        "home \"alice\" handle=littlefsd:data path=/home/../etc",
-        "home \"alice\" handle=littlefsd:data",
+        "home \"alice\" handle=walfsd:data path=home/alice",
+        "home \"alice\" handle=walfsd:data path=/home/../etc",
+        "home \"alice\" handle=walfsd:data",
         "home \"alice\" handle=Fsd!data path=/home/alice",
-        "home \"alice\" handle=littlefsd:data path=/home/alice extra=1",
-        "vault \"alice\" labels=[] handle=littlefsd:alice-secrets",
-        "vault \"alice\" labels=7 handle=littlefsd:alice-secrets",
+        "home \"alice\" handle=walfsd:data path=/home/alice extra=1",
+        "vault \"alice\" labels=[] handle=walfsd:alice-secrets",
+        "vault \"alice\" labels=7 handle=walfsd:alice-secrets",
         "net \"alice\"",
         "net \"alice\" 0.0.0.0/0",
         "net \"alice\" 0.0.0.0/33:22",
@@ -82,7 +74,7 @@ fn a_malformed_line_is_refused() {
         assert!(read(&[l]).is_err(), "{l}");
     }
     for twice in
-        ["label \"a\" id=1", "home \"alice\" handle=littlefsd:data path=/a", "net \"alice\" 0.0.0.0/0:*"]
+        ["label \"a\" id=1", "home \"alice\" handle=walfsd:data path=/a", "net \"alice\" 0.0.0.0/0:*"]
     {
         assert!(read(&[twice, twice]).is_err(), "{twice}");
     }
@@ -98,7 +90,7 @@ fn the_binding_table_binds_each_slot_as_the_page_says() {
     let own = read(&[
         "label \"alice-secrets\" id=7",
         "home \"alice\" handle=walfsd:data path=/home/alice",
-        "vault \"alice\" labels=[7] handle=littlefsd:alice-secrets",
+        "vault \"alice\" labels=[7] handle=walfsd:alice-secrets",
         "net \"alice\" 0.0.0.0/0:22",
     ])
     .unwrap();
@@ -110,7 +102,7 @@ fn the_binding_table_binds_each_slot_as_the_page_says() {
     let system = Some(Bound { how: fresh(SYSTEM, ""), at: None, name: Some(SYSTEM) });
     let scope = own.net("alice").unwrap().scope.clone();
     let net = Some(Bound { how: How::Grant { scope }, at: at("/net"), name: None });
-    let vault = Some(Bound { how: fresh("littlefsd:alice-secrets", ""), at: at("/vault"), name: None });
+    let vault = Some(Bound { how: fresh("walfsd:alice-secrets", ""), at: at("/vault"), name: None });
     let table = |labels: &[u64], who: &str| (0..7).map(|s| binding(&own, who, labels, s)).collect::<Vec<_>>();
     assert_eq!(
         table(&[], "alice"),

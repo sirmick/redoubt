@@ -107,7 +107,7 @@ and a session holds only what its principal was granted.
 
 ### Vault sessions
 
-Status: built · partly tested: a vault session's own reads and writes wait for its namespace to reach the VM; the label check they meet at `littlefsd` is attacked on its own · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:littlefsd-label-check, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
+Status: built · partly tested: a vault session's own reads and writes wait for its namespace to reach the VM; the label check they meet at `walfsd` is attacked on its own · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:walfsd-label-check, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
 
 A **vault session** carries one of its principal's labels: `ssh alice+tax@box` starts a session
 whose budget has Alice's `tax` label. A budget's labels are fixed when it is created and only grow

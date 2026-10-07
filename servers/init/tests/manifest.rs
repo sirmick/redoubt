@@ -33,7 +33,7 @@ fn image() -> Manifest {
     m.steward = None;
     m.console = None;
     m.volumes.retain(|v| v.labels.is_empty());
-    m.servers.retain(|s| !["steward", "sshd", "littlefsd:alice-secrets"].contains(&s.name.as_str()));
+    m.servers.retain(|s| !["steward", "sshd", "walfsd:alice-secrets"].contains(&s.name.as_str()));
     m
 }
 
@@ -112,7 +112,7 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert_eq!(asked, ["principals[0].ssh_keys[0]", "principals[1].ssh_keys[0]", "bundle key"]);
     // Three domains (alice's {} and {alice-secrets}, bob's {}) at every shared server, beside its
     // system callers: init and sshd at keyd; init at consoled; init and the steward at bootfsd;
-    // netd, the steward and sshd at ipd; the steward at walfsd:data, littlefsd:alice-secrets and
+    // netd, the steward and sshd at ipd; the steward at walfsd:data, walfsd:alice-secrets and
     // erofsd.
     assert_eq!(plan.buckets, vec![(0, 5), (1, 4), (2, 5), (5, 6), (6, 4), (7, 4), (10, 4)]);
     // No handed item names consoled or bootfsd: init's own badge at each is 1. sshd is handed
@@ -1176,11 +1176,10 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
     });
     let base = server(&mut m, "walfsd:data").clone();
     m.servers.push(Server {
-        name: "littlefsd:alice-secrets".into(),
-        program: "littlefsd".into(),
+        name: "walfsd:alice-secrets".into(),
         volume: Some("alice-secrets".into()),
-        receives: vec!["littlefsd:alice-secrets".into()],
-        args: vec!["endpoint=littlefsd:alice-secrets".into(), "buckets=4".into()],
+        receives: vec!["walfsd:alice-secrets".into()],
+        args: vec!["endpoint=walfsd:alice-secrets".into(), "buckets=4".into()],
         ..base
     });
     m.principals[0].home = Some("data:/home/alice".into());
@@ -1189,7 +1188,7 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
         Net { prefix: "0.0.0.0/0".into(), ports: vec![22, 443] },
         Net { prefix: "10.0.0.0/8".into(), ports: vec![] },
     ];
-    for e in ["walfsd:data", "littlefsd:alice-secrets"] {
+    for e in ["walfsd:data", "walfsd:alice-secrets"] {
         server(&mut m, "steward").handed.push(Handed { endpoint: e.into(), badge: 9 });
     }
     on_virt(&m).unwrap();
@@ -1201,7 +1200,7 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
         [
             "label \"alice-secrets\" id=7",
             "home \"alice\" handle=walfsd:data path=/home/alice",
-            "vault \"alice\" labels=[7] handle=littlefsd:alice-secrets",
+            "vault \"alice\" labels=[7] handle=walfsd:alice-secrets",
             "net \"alice\" 0.0.0.0/0:22,443 10.0.0.0/8:*",
             "console \"alice\"",
         ]
@@ -1216,7 +1215,7 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
     let mut unhanded = m.clone();
     server(&mut unhanded, "steward").handed.retain(|h| h.endpoint != "walfsd:data");
     refused_at(&unhanded, "principals[0].home", Why::Unknown);
-    server(&mut m, "steward").handed.retain(|h| h.endpoint != "littlefsd:alice-secrets");
+    server(&mut m, "steward").handed.retain(|h| h.endpoint != "walfsd:alice-secrets");
     refused_at(&m, "principals[0].label_sets[0]", Why::Unknown);
 }
 
