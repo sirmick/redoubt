@@ -1,0 +1,24 @@
+[package]
+name = "redoubt-beamlet-programs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The native programs beamlet's system natives' cases start (docs/userland/beamlet.md, \"Natives\")"
+
+# A session the tester starts in the steward's place launches `beamlet-hello` from /boot; the
+# serving case's second program calls the endpoint the VM serves. Each says its lines through the
+# /dev/cons connection its launcher gave it.
+[[bin]]
+name = "beamlet-hello"
+path = "src/bin/beamlet-hello.rs"
+test = false
+
+[[bin]]
+name = "beamlet-caller"
+path = "src/bin/beamlet-caller.rs"
+test = false
+
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+redoubt-client = { path = "../../libs/client" }
+redoubt-init-programs = { path = "../init-programs" }
