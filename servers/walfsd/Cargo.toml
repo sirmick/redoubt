@@ -1,0 +1,29 @@
+[package]
+name = "redoubt-walfsd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "walfsd: one walfs volume, a range at blkd, served over 9P with its label set and the file servers' typed operations"
+
+[[bin]]
+name = "walfsd"
+path = "src/bin/walfsd.rs"
+
+# The runtime, and walfs for the medium; nothing else parses what the volume holds (TENETS.md 5).
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+walfs = { path = "../../libs/walfs" }
+
+[features]
+# Test-only, for the bench's walfsd-one-volume case, and off in every default build: before
+# serving, walfsd tries to reach past its endpoint and its range and says what it found
+# (src/one_volume.rs).
+one-volume-probe = []
+# Test-only, for the bench's walfsd-power-loss case, and off in every default build: a walk to
+# `walfsd-cut-N` ends the instance after its N-th block write from then on, and every start
+# checks the volume and says what the check found (src/cut.rs).
+cut-after-write = []
+
+[dev-dependencies]
+redoubt-fake-kernel = { path = "../../libs/rt/fake" }
+redoubt-client = { path = "../../libs/client" }
