@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 320
+revision = 321
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1263,8 +1263,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "RECON1's acceptance named an oracle line reporting how much of a slice end's kernel work is billed to nobody (K25's billing rule leaves two named gaps of ~250 ticks: bill_irq's bill then restart, a deadline destruction's bill inside destroy_subtree; scheduling.md Residual risks). RECON1 left it undone; its red ruled it report-only, not a gate, but the acceptance line is otherwise unmeasured. Add the report line to tools/testbench/src/sched_oracle.rs from the trace's billing records (the oracle already bills timer interrupts by the rule and prints 'N nobody's'): 'nobody N of 1000' = ticks billed to no budget over the case's kernel ticks, per case, in the oracle's summary; no verdict. testbench.md's oracle paragraph names the line. Size S, Tier B (bench only)."
-  state = "reported"
-  revision = 314
+  state = "done"
+  revision = 321
 
 [[node]]
   id = "BEAM12"
