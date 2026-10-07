@@ -49,7 +49,7 @@ Bob, attacking Alice.
 | A lender destroyed while `littlefsd` holds its lent pages, and `littlefsd` survives | [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls) | `uaf-lent-page`, `process-lifecycle` for the kernel; with `littlefsd` not yet |
 | Crash blame: Bob crashes `littlefsd` three times while Alice is busy; every session and lease of Bob's with that label set ends and he cannot log straight back in; Alice is unaffected, also when `littlefsd` panics rather than faults and when the crashing thread holds her calls open too; a crash from a `send` while a bystander's call is parked blames nobody; a vault session's crashes do not end its owner's unlabelled session | [R21 (crash blame)](../kernel/processes.md#r21-crash-blame), [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `process`, `process-attack` for the kernel's blame; the steward's not yet |
 | Pinned open calls: 64 lent calls parked at `ipd` with short timeouts, and `ipd` still takes `netd`'s frames and frees the abandoned calls; SSH sessions survive | [R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting), [R4a (open calls)](../kernel/ipc.md#r4a-open-calls) | `net-pinned`; with SSH not yet |
-| System fairness: a busy `littlefsd:data` does not fill `blkd`'s `WAIT_CAP` for `littlefsd:alice-secrets` | R2 | not yet |
+| System fairness: a busy `walfsd:data` does not fill `blkd`'s `WAIT_CAP` for `walfsd:alice-secrets` | R2 | not yet |
 | Server CPU: expensive requests to a server delay other users only by that server's weight | R12 | `sched-server-busy`, `sched-large-weight` |
 | Shared pools: filling the `data` volume does not fail Alice's saves; flooding `littlefsd` with handles does not grow its table | [R48 (a quota per attach root)](../servers/littlefsd.md#r48-a-quota-per-attach-root) | not yet |
 | Server authority: no server's startup block holds its budget, a manifest granting one is refused, and no server can destroy a session | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | `init-refuses-budget-handle`; that no server can destroy a session is the steward's, not yet |
@@ -143,7 +143,7 @@ Built and attack-tested today:
   [netd](../servers/netd.md), [ipd](../servers/ipd.md)).
 - **The file system's core:** littlefs against a hostile medium and power loss
   ([littlefsd](../servers/littlefsd.md#littlefs)).
-- **The file server:** `littlefsd` over `blkd`, placed by `init`, with one volume per instance, quotas
+- **The flash file server:** `littlefsd` over `blkd`, placed by `init`, with one volume per instance, quotas
   and typed operations ([littlefsd](../servers/littlefsd.md)).
 - **walfs**, the format for the SSD's writable volumes, on the host: its library against a model,
   a power cut at every write and hostile volumes, and the bench's packer; its server, `walfsd`,

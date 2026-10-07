@@ -46,7 +46,7 @@ pub fn usage(free: u64) -> Usage {
 
 /// The bundle's entries the fuzz machine has: every program `image/boot.toml` packs, and one
 /// data entry.
-pub const ENTRIES: [(&str, usize); 12] = [
+pub const ENTRIES: [(&str, usize); 13] = [
     ("manifest", 4096),
     ("keyd", 200_000),
     ("consoled", 150_000),
@@ -57,6 +57,7 @@ pub const ENTRIES: [(&str, usize); 12] = [
     ("ipd", 600_000),
     ("littlefsd", 300_000),
     ("erofsd", 150_000),
+    ("walfsd", 300_000),
     ("beamlet", 4_000_000),
     ("trace", 100),
 ];

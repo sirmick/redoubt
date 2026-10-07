@@ -15,8 +15,9 @@ bytes per attach root so one principal filling a shared volume cannot make anoth
 littlefs was chosen for a published format, an independent second implementation to test against,
 power-loss safety by design, and a size that can be read. littlefs is a file system for
 **writable** volumes only: its format is built for a written medium (commits, power loss). A
-read-only volume is EROFS, served by [`erofsd`](erofsd.md). A writable volume on flash, and
-the data volume, are littlefs; the SSD's writable volumes are walfs ([walfsd](walfsd.md)).
+read-only volume is EROFS, served by [`erofsd`](erofsd.md). The SSD's writable volumes, the
+image's data volume among them, are walfs ([walfsd](walfsd.md)); `littlefsd` serves littlefs for
+a flash medium, and for the cases that ask for a littlefs volume.
 
 ## Interface
 

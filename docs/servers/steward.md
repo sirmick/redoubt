@@ -598,8 +598,8 @@ sequenceDiagram
     participant P as Alice (owner)
     participant ST as steward
     participant R as reader budget {alice-secrets}
-    participant V as littlefsd:alice-secrets
-    participant U as littlefsd:data
+    participant V as walfsd:alice-secrets
+    participant U as walfsd:data
     Note over P,U: planned
     P-->>ST: declassify(item)
     ST-->>R: create (exact labels, deadline), call

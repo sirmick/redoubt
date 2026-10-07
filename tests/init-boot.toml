@@ -21,13 +21,13 @@ expect = [
     '^init: started blkd, console [0-9a-f]{16}$',
     '^init: started netd, console [0-9a-f]{16}$',
     '^init: started ipd, console [0-9a-f]{16}$',
-    '^init: started littlefsd:data, console [0-9a-f]{16}$',
+    '^init: started walfsd:data, console [0-9a-f]{16}$',
     '^init: started blkd:system, console [0-9a-f]{16}$',
     '^init: started verity:system, console [0-9a-f]{16}$',
     '^init: started erofsd:system, console [0-9a-f]{16}$',
     '^init: started beamlet, console [0-9a-f]{16}$',
     '^init: 0 public entries pushed to bootfsd, and sealed$',
-    # The manifest's three handed items, the three volume ranges (littlefsd:data's, erofsd:system's at
+    # The manifest's three handed items, the three volume ranges (walfsd:data's, erofsd:system's at
     # verity:system and verity:system's at blkd:system), and the nine consoles after consoled's,
     # each found gone.
     '^init: holds none of the 6 badges and 9 console connections it handed$',

@@ -1,4 +1,4 @@
-description = "The image's disk serves its staged files (image/README.md): the disk is packed from image/disk.toml as ./mkimage packs it, its data partition a littlefs volume written through littlefsd's own code, here holding the littlefsd cases' stage; init boots the image's manifest, whose littlefsd:data mounts that volume without formatting it, and a client handed a root badge at littlefsd:data reads each staged file back"
+description = "The image's disk serves its staged files (image/README.md): the disk is packed from image/disk.toml as ./mkimage packs it, its data partition a walfs volume written by libs/walfs, here holding the littlefsd cases' stage; init boots the image's manifest, whose walfsd:data mounts that volume without formatting it, and a client handed a root badge at walfsd:data (littlefsd-client, a client of either writable server) reads each staged file back"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The real init, the image's servers and beamlet, and littlefsd-client; the manifest is the image's
@@ -12,7 +12,7 @@ programs = [
     { package = "redoubt-verityd", bin = "verityd" },
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
-    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
     { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
     { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
@@ -23,7 +23,7 @@ memory_mib = 512
 timeout_secs = 60
 expect = [
     '^init: the manifest is checked: 12 servers, bound \d+ pages$',
-    '^init: started littlefsd:data, console [0-9a-f]{16}$',
+    '^init: started walfsd:data, console [0-9a-f]{16}$',
     '^init: started client, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] littlefsd-client read 2 files$',
     '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
@@ -40,8 +40,8 @@ verity = "image/userland.toml"
 name = "client"
 program = "littlefsd-client"
 budget = { pages = "256", processes = 1, weight = 100 }
-handed = [{ endpoint = "littlefsd:data", badge = "7" }]
-args = ["read", "littlefsd:data", "/motd", "Redoubt, from the image disk\n", "/etc/notes", "staged under etc\n"]
+handed = [{ endpoint = "walfsd:data", badge = "7" }]
+args = ["read", "walfsd:data", "/motd", "Redoubt, from the image disk\n", "/etc/notes", "staged under etc\n"]
 
 [disk]
 recipe = "image/disk.toml"

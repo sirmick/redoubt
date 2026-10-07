@@ -2,8 +2,8 @@
 
 A file on Redoubt is something a server serves over 9P, reached through a connection in the
 session's namespace. Elixir's `File`, `IO` and `Path` work unchanged on top: beamlet's file
-natives speak 9P to the file server, one instance per volume, which keeps the data in littlefs on
-a block device. There are no permission bits, no owners, no symlinks and no hard links. Access is
+natives speak 9P to the file server, one instance per volume, which keeps the data in walfs on
+the SSD (`walfsd`), or in littlefs on a flash medium (`littlefsd`). There are no permission bits, no owners, no symlinks and no hard links. Access is
 by capability (holding the connection) and by label (the volume's labels against the caller's);
 a **bind** puts a connection the session already holds at another path.
 
@@ -74,14 +74,15 @@ flowchart LR
     F["File, IO<br/>(Elixir)"] -.-> FM[":file, file_io_server<br/>(OTP, unchanged)"]
     FM -.-> PF["prim_file natives<br/>(beamlet)"]
     PF -.-> C["the 9P client<br/>(beamlet's Platform)"]
-    C -.->|"9P over call and lend"| LFSD["littlefsd, one per volume"]
-    LFSD -.-> LFS["littlefs"]
+    C -.->|"9P over call and lend"| LFSD["walfsd, one per volume"]
+    LFSD -.-> LFS["walfs"]
     LFS -.->|"typed calls"| B["blkd"]
     B -.-> D["virtio block device"]
 ```
 *Figure: the file I/O path from `File` to the block device. The links are built; they are drawn
 dashed until Elixir's `File` runs over them in a session. The servers are
-[the file server](../servers/littlefsd.md)'s and [blkd](../servers/blkd.md)'s pages.*
+[the file server](../servers/walfsd.md)'s and [blkd](../servers/blkd.md)'s pages; `littlefsd`
+serves the same 9P and typed calls over littlefs.*
 
 `File.read!/1` becomes OTP's `file` module, whose `prim_file` calls beamlet implements over its
 9P client ([beamlet](beamlet.md#the-platform-boundary);
@@ -95,11 +96,11 @@ neither inside nor above one is `:enoent` ([sessions](sessions.md#namespaces)).
 - **Everything moves in pieces**: a read asks at most what one answer carries (the 64 KiB `msize`
   less its header), a write at most a page, each one request on the VM's hub
   ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)), so only the
-  Erlang process that asked waits for it. `littlefsd`'s `rename` is a typed call, which no hub
+  Erlang process that asked waits for it. The file server's `rename` is a typed call, which no hub
   carries: it is made on the VM's thread.
 - **Plain 9P2000**, with no Unix extensions: a `stat` has a name, a length, a modification time
   and a qid (the server's identity and version for the file), and nothing else. Custom
-  per-file metadata is the file server's typed `set_attr` and `get_attr`, kept in littlefs
+  per-file metadata is the file server's typed `set_attr` and `get_attr`, kept in the volume's
   attributes.
 - **An error is a Redoubt error first.** The file server refuses with its own reasons
   (`not_found`, `refused`, `exists`, `not_dir`, `removed` for a fid whose file was removed,
@@ -110,7 +111,7 @@ neither inside nor above one is `:enoent` ([sessions](sessions.md#namespaces)).
 
 | Operation | What happens |
 | --- | --- |
-| `File.stat`, `:file.read_file_info` | what 9P and the file server have: the type (from the qid), the size and the modification time (0 until `littlefsd` keeps one: the residual below); `access`, `mode`, `uid`, `gid`, `links`, `inode` and `major_device` are `:undefined`, since no server says what a connection may do; attributes through `get_attr` |
+| `File.stat`, `:file.read_file_info` | what 9P and the file server have: the type (from the qid), the size and the modification time (0 until the file server keeps one: the residual below); `access`, `mode`, `uid`, `gid`, `links`, `inode` and `major_device` are `:undefined`, since no server says what a connection may do; attributes through `get_attr` |
 | `File.ls` | a read of a directory fid; entries the caller may not read are left out |
 | `File.rm` of an open file | succeeds: an "in use" refusal would tell one client about another |
 | `File.chmod`, `File.chown` | `{:error, :enotsup}`: there are no mode or owner bits, and access is by capability |
@@ -131,7 +132,8 @@ bench:beamlet-files sees `mode` undefined in a boot.
 Residuals, each a departure from the table, until the file server serves what it needs:
 - **No times are set and none is stored.** The 9P skeleton refuses `Twstat`, so `File.write_stat`
   with times, and a cut at a position (`:file.truncate/1`) other than an open's, are
-  `{:error, :enotsup}`; and `littlefsd` keeps no modification time, so it reads as 0 (1970).
+  `{:error, :enotsup}`; and no file server has a clock to keep a modification time by, so it
+  reads as 0 (1970).
 
 ### Copying, moving, removing and binds
 
@@ -161,7 +163,7 @@ into its startup block, so a session's binds reach a child only if the session p
 Status: planned · M1 (separation and containment)
 
 Labels are per volume: each volume has its own file server instance and its own label set, fixed
-when the volume is set up ([the file server](../servers/littlefsd.md)). The file server checks every
+when the volume is set up ([the file server](../servers/walfsd.md)). The file server checks every
 request against the caller's label set, which the kernel stamps on the message
 ([R14 (unforgeable sender)](../kernel/ipc.md#r14-unforgeable-sender)), by the servers' label rule
 ([labels](../servers/README.md#labels)):

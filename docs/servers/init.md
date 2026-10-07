@@ -54,7 +54,7 @@ and `init`'s only input. Its entries:
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it), and for a verified volume `verity`: its verifier (the `servers` entry of a [`verityd`](verityd.md)) and one mode, pinned, the root and data blocks it pins, `{ "server", "root": 64 lowercase hex digits, "blocks": a decimal string }`, or signed, the key its root block is signed under and the lowest version it may carry, `{ "server", "key": 64 lowercase hex digits or "bundle", "floor": a decimal string }` |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`; a volume's server has `program` `littlefsd`, or `erofsd` for a read-only volume, and no other key says the format), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`; a volume's server has `program` `walfsd` or `littlefsd` for a writable volume, or `erofsd` for a read-only one, and no other key says the format), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only) for login and approval, budget, account, owned labels, the label sets it works under (each with a fixed sub-budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -66,7 +66,7 @@ and `init`'s only input. Its entries:
   startup block's `u32`; a larger one is the wrong type. A wrong type, an unknown member or a
   repeated one is an error, and an error refuses the boot.
 - **Names.** Every name (device, label, volume, server, endpoint, principal) is 1 to 64 bytes of
-  `[a-z0-9_:+-]`, starting with a letter (`littlefsd:data`, `alice+secrets`), compared byte for byte.
+  `[a-z0-9_:+-]`, starting with a letter (`walfsd:data`, `alice+secrets`), compared byte for byte.
   Names become endpoint names, volume names and 9P paths, so no empty name, NUL, U+FEFF or control
   character may reach them. The startup block applies the same rule (`valid_name`).
 - **Stacks.** A server's `stack_pages` is the size of its first thread's stack, charged to its
@@ -106,7 +106,7 @@ and `init`'s only input. Its entries:
   carries the smallest badge from 1 that no `handed` item there uses. A manifest names each of
   these programs at most once, `keyd` exactly once: a second would run beside the one `init`
   calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35). A program
-  that may run more than once (`blkd`, one per disk; `littlefsd` or `erofsd`, one per volume) is told the endpoint
+  that may run more than once (`blkd`, one per disk; `walfsd`, `littlefsd` or `erofsd`, one per volume) is told the endpoint
   it receives on by its argument `endpoint=NAME`, which the manifest gives it; a `blkd`'s must
   name the endpoint it receives on first, where `init` mints its volumes' ranges.
 - **Volumes.** A `volumes` entry is one GPT entry of its disk, which no other entry names on
@@ -148,7 +148,7 @@ and `init`'s only input. Its entries:
   the manifest's weights are the whole scheduling policy. `init`, the steward and the drivers
   (`consoled`, `blkd`, `netd`) get weights an order of magnitude above a session's (1000 against
   a principal's 100), so they are served promptly without running ahead of the queue; the servers
-  that work for principals (`bootfsd`, `littlefsd`, `ipd`, `keyd`, `sshd`) get ordinary weights and
+  that work for principals (`bootfsd`, the file servers, `ipd`, `keyd`, `sshd`) get ordinary weights and
   bound the work of one request. The weights carve the `system` budget like every other limit.
   The kernel sizes `system`, not the manifest, and `init` refuses a manifest whose servers' pages,
   processes or weights add up to more than `system` holds
@@ -164,9 +164,9 @@ and `init`'s only input. Its entries:
   principal's account and keys.
 
 ```json
-{ "servers": [ { "name": "littlefsd:data", "program": "littlefsd", "volume": "data",
+{ "servers": [ { "name": "walfsd:data", "program": "walfsd", "volume": "data",
                  "budget": { "pages": "4096", "processes": 1, "weight": 100 },
-                 "receives": ["littlefsd:data"], "args": ["endpoint=littlefsd:data", "buckets=4"] } ],
+                 "receives": ["walfsd:data"], "args": ["endpoint=walfsd:data", "buckets=4"] } ],
   "principals": [ { "name": "alice", "account": "1001", "labels": ["alice-secrets"],
                     "ssh_keys": ["ssh-ed25519 AAAA..."], "home": "data:/home/alice",
                     "net": [ { "prefix": "0.0.0.0/0", "ports": [22, 443] } ] } ] }
@@ -220,8 +220,8 @@ steward ([steward](steward.md)). The refusal is a boot failure, not a warning
 
 The domains compared are each `servers` entry, under its `labels` (`{}` if none), and each
 principal's label sets. A server's users are the servers handed one of its endpoints, or a
-volume's range at it (a `littlefsd` on that `blkd`'s disk, or a verified volume's `verityd`; the `littlefsd`
-attaching a verified volume at its `verityd`, which counts at the verifier's first endpoint too),
+volume's range at it (a volume's server on that `blkd`'s disk, or a verified volume's `verityd`; the
+server attaching a verified volume at its `verityd`, which counts at the verifier's first endpoint too),
 and, for a shared server (one that takes
 `buckets=N`), every principal domain with the server's own label set. Only such a domain may later
 be granted a connection there, since the steward grants within a label set by this same rule, so
@@ -292,8 +292,9 @@ Reset right. The loader maps the bundle into it, read-only
    the child ([consoled](consoled.md#started-by-init)). The check refuses a manifest that hands
    any server an endpoint `consoled` receives on: a root badge there writes bare lines, and only
    `init` holds one. Without a `consoled` entry, `init` keeps the UART;
-5. starts the rest of the drivers and the servers below the steward: `bootfsd`, `blkd`, `littlefsd`
-   and `erofsd` (one per volume), `netd` and `ipd`, then pushes the `public` entries to `bootfsd`;
+5. starts the rest of the drivers and the servers below the steward: `bootfsd`, `blkd`, each
+   volume's `walfsd`, `littlefsd` or `erofsd`, `netd` and `ipd`, then pushes the `public` entries to
+   `bootfsd`;
 6. starts the steward, handing it the `users` budget, and `sshd`.
 
 Each server runs in a budget of its own, carved from `system`, and is started through the loader
@@ -319,13 +320,13 @@ sequenceDiagram
     I->>KD: holds(each login, approval and bundle key)
     KD->>I: no (a yes stops the boot)
     I->>S: launch through the stub:<br/>consoled, then bootfsd, blkd, netd, ipd
-    I-->>S: launch littlefsd, one per volume
+    I->>S: launch walfsd, littlefsd or erofsd,<br/>one per volume
     I-->>ST: launch, with the users budget
     I-->>SH: launch, with keyd's host-key badge
     SH-->>ST: a login: whose key is this?
     ST-->>ST: carve the session budget,<br/>launch the first session
 ```
-*Figure: the boot from the loader to the first session. Dashed: planned (`littlefsd`, the steward and `sshd`).*
+*Figure: the boot from the loader to the first session. Dashed: planned (the steward and `sshd`).*
 
 The attack tests: a manifest whose servers do not fit in `system`, or whose device entries do not
 match the kernel's device objects, is refused before any server runs. The verdict is `init`'s
@@ -594,7 +595,7 @@ Alice and Bob each log in over SSH; Alice has a vault label `alice-secrets` and 
 ```
 kernel
 └── init                                              root
-    ├── consoled bootfsd blkd littlefsd:data littlefsd:alice-secrets  system
+    ├── consoled bootfsd blkd walfsd:data walfsd:alice-secrets  system
     │   netd ipd:lan keyd steward sshd
     ├── session alice-1                               users/alice/{}/session-1
     ├── agent alice/researcher [lease 2 h]            users/alice/{}/researcher
@@ -605,21 +606,21 @@ kernel
 
 | Name | Alice's session | Bob's session | Enforced by |
 | --- | --- | --- | --- |
-| `/` | `littlefsd:data` at `/home/alice`, read-write | `littlefsd:data` at `/home/bob`, read-write | `littlefsd` (badge) |
+| `/` | `walfsd:data` at `/home/alice`, read-write | `walfsd:data` at `/home/bob`, read-write | `walfsd` (badge) |
 | `/dev/cons` | her SSH channel | his | `sshd` (badge, channel labels) |
 | `/net` | `ipd:lan`, connect out to ports 22 and 443, not the box's own addresses | `ipd:lan`, connect out to 443 | `ipd` (badge) |
 | `powerbox`, `budget` | hers | his | the steward, the kernel |
 
 - Weights: Alice 100, Bob 100; the agent 20, carved from Alice's, sharing her account. `init`,
   the steward and the drivers are 1000 each in the same queue.
-- The vault session reads and writes `littlefsd:alice-secrets`, reads (never writes) her home on the
-  unlabelled `littlefsd:data`, which is how data enters the vault, has no `/net`, and prints only to its
+- The vault session reads and writes `walfsd:alice-secrets`, reads (never writes) her home on the
+  unlabelled `walfsd:data`, which is how data enters the vault, has no `/net`, and prints only to its
   own channel.
 - The agent has its own principal, `/work` only and no `/net`; its escalations wait for Alice's
   approval, and the lease's end destroys its budget and everything it passed on.
 - No session or lease holds a `keyd` grant in M1 (separation and containment): `keyd`'s purposes are
   the host key and audit signing.
-- Bob crashing `littlefsd:data` three times is blamed on his account each time: his sessions end and he
+- Bob crashing `walfsd:data` three times is blamed on his account each time: his sessions end and he
   is locked out for a while; Alice is not affected.
 
 **Open:** none.

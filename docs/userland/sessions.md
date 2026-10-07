@@ -29,7 +29,7 @@ At the prompt, the session's namespace is a table you can print:
 
 ```elixir
 /home/alice (1)> ns()
-/home/alice  littlefsd:home     (Alice's home volume)
+/home/alice  walfsd:data       (Alice's home volume)
 /dev/cons    sshd         (this SSH channel)
 /boot        bootfsd      (the boot bundle, read-only)
 /net         ipd          (the hosts and ports this session may reach)
@@ -151,7 +151,7 @@ flowchart LR
             bu["budget: the session's own budget"]
         end
     end
-    h -.-> FS["littlefsd, Alice's home volume"]
+    h -.-> FS["walfsd, Alice's home volume"]
     c -.-> SH["sshd, this SSH channel"]
     b -.-> BF["bootfsd, read-only"]
     n -.-> IP["ipd, a scope of hosts and ports"]
@@ -214,7 +214,7 @@ startup block and resolves paths against it
   `etc/passwd`. A name longer than 255 bytes or holding a NUL, and a path deeper than 64
   components, are refused.
 - A named handle's name is lower-case ASCII letters, digits and `_:+-`, starting with a letter,
-  at most 64 bytes (`littlefsd:data`, `alice+secrets`).
+  at most 64 bytes (`walfsd:data`, `alice+secrets`).
 - A program started with an empty namespace fails cleanly: the echo client exits with its error
   code, and the echo server with `NO_ENDPOINT`, instead of reaching anything.
 
