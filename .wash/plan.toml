@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 317
+revision = 320
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1181,9 +1181,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["K23", "STEWARD2"]
-  body = "Found by K23 (2026-10-07): after a steward crash, init reaps the sessions' budgets and restarts the steward (K23), but an SSH channel whose session was reaped stays open: sshd ends a channel only on the steward's `ended` on the console it gave the session, that endpoint is sshd's own so a reap reaches it with no Dead, and a dead steward sends no `ended`; alice's terminal hangs until she kills ssh. Tier A (sshd, the steward protocol, the wire table), size S: at start the steward tells sshd that every session from before its start is over (one steward-protocol message with a wire.md row; sshd ends every channel it holds for them with the usual close), and sshd's channel also ends when its session's console write fails; steward-restart's verdict gets alice's channel closing back (the K23 residual on steward.md and sshd.md goes); sshd's host test for the message; the login-latency and session cases unchanged."
+  body = "A restarted steward leaves sshd with state for sessions the new steward never knew. (1) Channels: sshd's open channels for earlier sessions stay open; its ChannelClosed for ids the new steward never knew are answered Unknown and ignored. (2) Slots (found by K23): sshd keeps a slot for each login the dying steward never answered, and has 4 slots, so a few steward restarts with logins in flight leave sshd unable to take new logins. Fix both from one signal: the restarted steward (or init at the restart) tells sshd every earlier session is over; sshd ends their channels and frees every slot held for an unanswered login. A case: logins in flight across a steward restart, then a fresh login succeeds and the old channels are closed. Needs K23 and STEWARD2."
   state = "todo"
-  revision = 244
+  revision = 318
 
 [[node]]
   id = "K27"
@@ -1290,5 +1290,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by the whole bench for trains 9-11 on 26f79ed08: rv64 bench-ssh-loopback-deadlock (timeout_secs 0.2; must_fail '^session (alice|bob): step 1: timed out waiting for mark \"(alice|bob)-ready\"$') FAILS deterministically, 3/3 alone through q and 1/1 outside q: 'bench error: reading the server's log .../ssh/bench-ssh-loopback-deadlock/sshd.log: No such file or directory'; the run directory is empty. Its siblings (bench-ssh-loopback, -exit) pass. It PASSED in trains 7 (ef2ab5a94, after B22's stderr-to-log change) and 8 (bdb38430e). Merges since: K19, B8, B23, B20, B9 (tools/testbench/src/ssh.rs tests module + a doc sentence), BEAM9 (libs/rt ninep_mux copy-out), BEAM10, K28, RECON1. Bisect over those merge points with one prebuilt each (the case takes 1.5 s), name the commit, then fix: either the bench treats a missing server log as empty when the case expects a timeout before the server starts (the case's claim is ssh's timeout, not the server's log), or the cause the bisect finds. Gates: the 14 loopback cases rv64, cargo test -p testbench, docs, formatting, size/unsafe/no-cruft. Size S."
-  state = "active"
-  revision = 316
+  state = "done"
+  revision = 320
