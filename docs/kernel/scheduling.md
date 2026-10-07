@@ -94,13 +94,15 @@ context as it saves a thread's.
 
 ### The current minimum and ties
 
-<details><summary>Status: built · partly tested: wakers ahead of requeued budgets, and requeues in order, are checked on the target only when a run happens to produce such a tie; the host tests and the model attack them · tested (10)</summary>
+<details><summary>Status: built · partly tested: wakers ahead of requeued budgets, and requeues in order, are checked on the target only when a run happens to produce such a tie; the host tests and the model attack them · tested (12)</summary>
 
 - bench:sched-ties
 - bench:sched-idle-gap
 - host:redoubt-stride::ranks_follow_all_four_clauses
 - host:redoubt-stride::the_floor_survives_an_empty_queue
 - host:redoubt-stride::a_running_budget_stays_queued_and_counts_for_the_floor
+- host:redoubt-stride::a_slice_end_reads_no_more_states_for_a_longer_queue
+- host:redoubt-stride::a_rank_out_of_step_with_its_frame_trips_the_audit
 - mutation:R12WakeBanksCredit
 - mutation:R12NoFloorWhenIdle
 - mutation:R12TieQueuedFirst
@@ -113,7 +115,12 @@ A budget **wakes** when it goes from no runnable thread to one. Its pass becomes
 `max(own pass, floor)`. The **floor** is the current minimum: the lowest pass among queued
 budgets, the running one included at the pass it was last charged. The floor only rises, and it
 holds while the queue is empty. So a budget that slept while others ran, or through an idle gap,
-comes back at the floor and not with credit it banked while away.
+comes back at the floor and not with credit it banked while away. The floor is raised only when it
+can have moved (a budget at it was charged or left, or wakes filled an empty queue), from ranks the
+queue keeps beside its slots, each written where the queue changes a queued budget's pass or tie;
+the pick compares the same ranks. Neither reads a budget's frame, which stays the record: a checked
+kernel audits the ranks against the frames with the marks' audit. So a slice end's scheduler work
+is under a microsecond per queued budget, the frame reads it makes being the running budget's own.
 
 A pick takes the lowest **rank**, `(pass, tie, id)`. At an equal pass:
 1. a waker ranks ahead of a budget that was requeued;
@@ -825,7 +832,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (45)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (47)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -845,6 +852,8 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:worst-walk
 - host:redoubt-stride::the_crate_and_the_model_agree
 - host:redoubt-stride::a_broken_model_disagrees
+- host:redoubt-stride::a_slice_end_reads_no_more_states_for_a_longer_queue
+- host:redoubt-stride::a_rank_out_of_step_with_its_frame_trips_the_audit
 - host:redoubt-model::scheduler_fairness
 - host:redoubt-model::scheduler_contracts_hold
 - mutation:R12PriorityById
