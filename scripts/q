@@ -26,7 +26,8 @@ Classes are flags, not names to learn:
   Fairness: tenants are served round-robin by running cores, and while another tenant waits no
   tenant grows past half the general cores, so a long train or a big suite cannot hold the
   machine against everyone's gates. A job that cannot fit for 60 s takes the free cores if they
-  are at least half its ask (it only runs slower); below that the free cores are held for it.
+  are at least half its ask (it only runs slower); below that the free cores are held for it,
+  and after 180 s it takes whatever is free, so a hold never outlasts the jobs it waits on.
   A restarted daemon adopts the jobs still running under the old one (their taskset pins) and
   frees their cores as they exit, so a restart never double-books the machine.
   --tenant T  who is asking (default: the worktree, from cwd); tenants share the machine
@@ -47,7 +48,7 @@ import time
 
 SOCK = os.environ.get("REDOUBT_Q", "/tmp/redoubt-q.sock")
 LOG = SOCK + ".log"
-STARVE_S = 60.0  # a job that cannot fit for this long takes what is free, or holds it
+STARVE_S = 60.0  # after this a starved job takes what is free if >= half its ask; after 3x, any core
 RETRY_S = 600.0  # a client waits this long for a daemon to answer (across a restart)
 
 
@@ -171,7 +172,8 @@ class Daemon:
                 # least half its ask (a build or a test suite only runs slower), else the
                 # free cores are held for it and nothing smaller starts
                 want = min(job.want, len(self.general))
-                if len(self.free) >= max(1, want // 2):
+                floor = max(1, want // 2) if now - job.t_in < 3 * STARVE_S else 1
+                if len(self.free) >= floor:
                     self.start(job, sorted(self.free))
                 else:
                     blocked_general = True
