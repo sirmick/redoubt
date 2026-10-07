@@ -124,6 +124,8 @@ pub struct System {
     /// Open ports, by the pid of the port's process, and the port behind each program handle.
     pub(crate) ports: BTreeMap<Pid, crate::bif::port::PortState>,
     pub(crate) program_ports: BTreeMap<u64, Pid>,
+    /// Endpoints served and jobs running through the platform's `System`, whose events it polls.
+    pub(crate) system_waits: usize,
     /// Set by `erlang:halt`: the VM stops with this status.
     pub(crate) halted: Option<i64>,
     /// The process that receives console input (`beamlet:console_subscribe/0`): the `user`
@@ -554,6 +556,7 @@ impl Vm {
                 io_waits: 0,
                 ports: BTreeMap::new(),
                 program_ports: BTreeMap::new(),
+                system_waits: 0,
                 halted: None,
                 console_reader: None,
                 backtrace_depth: 8,
@@ -1117,6 +1120,7 @@ impl System {
         self.fire_timers();
         self.poll_console();
         self.poll_programs();
+        self.poll_system();
         self.poll_files();
         let Some(pid) = self.run_queue.pop_front() else {
             // Nothing runnable. While other schedulers run, wait for them: they may make work.
@@ -1140,6 +1144,7 @@ impl System {
                 }
                 None if self.console_reader.is_some()
                     || !self.program_ports.is_empty()
+                    || self.system_waits > 0
                     || self.io_waits > 0 =>
                 {
                     self.platform.lock().idle(None);
