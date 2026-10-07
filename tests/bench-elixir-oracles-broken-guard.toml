@@ -2,5 +2,8 @@ description = "self-check: with the steward reference's not_locked guard held al
 kind = "elixir"
 otp = "28.5.0.6"
 elixir = "1.20.4"
+# A cold build of beamlet and the model's trace writer on four cores, both cases at once: 33 to
+# 35 s measured, and a third.
+timeout_secs = 46
 scripts = ["libs/steward/elixir/run-traces --break not_locked"]
 must_fail = '(?m)^ +DIVERGES blame\.trace: event 11: .*\n +rust: +audit 1/7 at=13 StartFailed lease=601\n +elixir: +audit 1/7 at=13 AgentStarted lease=601 '

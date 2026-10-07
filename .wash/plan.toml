@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 252
+revision = 254
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1056,9 +1056,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   needs = ["STEWARD2"]
-  body = "Owner (2026-10-06): \"a crash should restart it\": a dead steward's restart must be a logout, not a reboot. Brief: .wash/local/K23-implementer.md (architect-16). Tier A, size M. A kernel call budget_reap(handle) -> remaining destroys one child subtree of the budget as R10 does and keeps the budget (limits, class, labels, account, deadline), returning the children left, so each kernel entry is one destruction within R10's bound; authority is the handle, as budget_destroy's; a child handle cannot reap its parent; the model gets reap_budget and three mutations. init, on the steward's exit: settles the dead steward's carve (sessions' process objects and notices go with it), reaps users in a loop, restarts the steward, which finds users empty and starts the console session again; its users-not-empty check stays as the guard. steward-restart's verdict becomes: emptied, restarted, prompt back, no reboot. Pages: budgets.md (the call, R10's paragraph, the lost-budget residual), init.md, steward.md, abi.md, SECURITY.md; docs/todo/empty-a-budget.md deleted."
-  state = "done"
-  revision = 252
+  body = "Owner (2026-10-06): \"a crash should restart it\": a dead steward's restart must be a logout, not a reboot. Brief: .wash/local/K23-implementer.md (architect-16). Tier A, size M. The kernel part is merged: budget_reap(handle) -> remaining destroys one child subtree of the budget (the newest) as R10 does and keeps the budget, authority as budget_destroy's, the model's reap rule and three mutations, the bench case budget-reap, pages. The init and steward part (init settles the dead steward's carve, reaps users to zero and restarts it; the test-only restart-probe; steward-restart's verdict: emptied, restarted, prompt back, no reboot; the todo page deleted) is on wp-K23-steward against wp-STEWARD2 and lands after STEWARD2 with its own review; the node closes then. Residual filed as K26: an sshd channel outlives its reaped session until the restarted steward tells sshd."
+  state = "reported"
+  revision = 253
   overrides = ["2026-10-07: started by Orchestrator before STEWARD2 (reported): STEWARD2 is rebasing onto main and lands within hours; K23's kernel call, model rule, init's reap loop and pages need only main, and the steward-restart case's new verdict is written against wp-STEWARD2 and rebased at its merge (the brief names the split)"]
 
 [[node]]
@@ -1097,8 +1097,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Train 3 and 4 (2026-10-06): model-host-tests is one #[test] (mutations_are_caught) over 147 kernel mutations on one thread; the train's run was past 3 h in debug and K19's release run past 3 h too, so release alone is not the fix. rt-miri is one 133 s job; the three Elixir oracle cases each start a BEAM on the host (154/132/50 s). These are the whole wall of a train once the scheduler packs the rest. Tier B, size M: (1) the mutations become one cargo test per mutation (a generated test list or a `--mutation N` filter the case fans out as N jobs through scripts/jobs.mk), release build, each reporting its time; the case's verdict is the conjunction and names any mutation not caught; (2) rt-miri fans out per test file; (3) the Elixir oracles share one BEAM start or a cached compiled reference, measured; (4) timeout_secs of each from a measured run plus margin; testbench.md's class note says what each costs now. Acceptance: a whole train's tail (quiet set included) under 15 min wall on 24 cores, measured with `q log`."
-  state = "reported"
-  revision = 220
+  state = "done"
+  revision = 254
 
 [[node]]
   id = "B19"

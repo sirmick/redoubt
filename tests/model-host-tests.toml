@@ -1,4 +1,5 @@
-description = "Executable model properties, deliberate rule breaks and host trace replay (not real-kernel conformance)"
+description = "Executable model properties and host trace replay (not real-kernel conformance): the kernel's families and the rest; the steward families run in steward-model-host-tests, the mutations in model-mutations"
 kind = "host-tests"
 # Default suites retain their sequence counts; the separate million acceptance run is described in docs/kernel/model.md.
 packages = ["redoubt-model"]
+skip = ["mutations_are_caught", "steward_policy", "steward_noninterference"]

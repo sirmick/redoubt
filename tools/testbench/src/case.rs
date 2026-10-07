@@ -1,6 +1,6 @@
 //! The on-disk format of a test case (`tests/*.toml`).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -72,6 +72,8 @@ pub struct Elixir {
     pub scripts: Vec<String>,
     /// See `Boot::must_fail`. A toolchain that is not the pinned one is never what it waits for.
     pub must_fail: Option<String>,
+    /// The deadline of all the scripts together, the builds they make included; none when absent.
+    pub timeout_secs: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,7 +221,62 @@ pub struct HostTests {
     /// case is something the host lacks, a skip only with `--allow-skip`.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Only the tests whose names contain one of these (libtest's filters, `-- NAME`); every test
+    /// when empty.
+    #[serde(default)]
+    pub filter: Vec<String>,
+    /// Tests left out of every target (`-- --skip NAME`: any whose name contains it), ones another
+    /// case runs.
+    #[serde(default)]
+    pub skip: Vec<String>,
+    /// The Cargo profile the tests build in (`--profile`); Cargo's test profile when absent.
+    pub profile: Option<String>,
+    /// Many jobs instead of one `cargo test` (`fanout.rs`).
+    pub fanout: Option<Fanout>,
+    /// With `fanout`, each job's deadline, from its start, on the cores it asks for: on fewer, the
+    /// lease q granted, it stretches in proportion. None when absent.
+    pub timeout_secs: Option<f64>,
 }
+
+/// What a `host-tests` case's jobs are, and what each asks of the machine.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fanout {
+    pub each: Each,
+    /// With `each = "value"`: the variable each job's value is set in.
+    pub env: Option<String>,
+    /// With `each = "value"`: a shell command, run from the case's workspace, each line of whose
+    /// output is one value.
+    pub values: Option<String>,
+    /// The cores each job asks `q` for.
+    #[serde(default = "one_core")]
+    pub cores: u32,
+    /// Variables every job has: a thread count to match `cores`, for a test that spawns its own.
+    /// `{cores}` in a value becomes the job's own count of cores.
+    #[serde(default)]
+    pub vars: BTreeMap<String, String>,
+    /// Values known to pass only past a bound their test keeps (a mutation caught late), each
+    /// until the follow-up its comment names: their jobs run with `TESTBENCH_LATE=1`, which the
+    /// test reads as leave to go past it, and a pass is reported as late, not hidden.
+    #[serde(default)]
+    pub late: Vec<String>,
+    /// The cores a `late` value's job asks for instead of `cores`: its search is the long one.
+    pub late_cores: Option<u32>,
+}
+
+/// One job per...
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Each {
+    /// ...line `values` prints, set in `env`, over the case's one test file.
+    Value,
+    /// ...entry of `tests`, running that file.
+    File,
+    /// ...test of every test binary the case builds, run alone (`NAME --exact`).
+    Test,
+}
+
+fn one_core() -> u32 { 1 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -866,6 +923,43 @@ impl Case {
                 check_sessions(&boot.session)
             }
             Kind::SshLoopback(loopback) => check_sessions(&loopback.session),
+            Kind::HostTests(host) => {
+                ensure!(host.timeout_secs.is_none() || host.fanout.is_some(), "timeout_secs needs a fanout");
+                // `timeout 0` is no deadline at all.
+                ensure!(host.timeout_secs.is_none_or(|t| t > 0.0), "timeout_secs must be positive");
+                let Some(fanout) = &host.fanout else { return Ok(()) };
+                let value = fanout.each == Each::Value;
+                ensure!(
+                    value == fanout.env.is_some() && value == fanout.values.is_some(),
+                    "env and values are for a fanout of each value, and it needs both"
+                );
+                // A value goes to the one test binary the case names.
+                ensure!(!value || host.tests.len() == 1, "a fanout of each value needs one of tests");
+                ensure!(
+                    fanout.each != Each::File || !host.tests.is_empty(),
+                    "a fanout of each file needs tests"
+                );
+                // Miri lists no test without interpreting the binary.
+                ensure!(fanout.each != Each::Test || !host.miri, "a fanout of each test runs no Miri");
+                ensure!(fanout.cores > 0 && fanout.late_cores != Some(0), "a job needs a core");
+                // A variable naming `{cores}` is exported by a shell, which takes only plain names.
+                for key in fanout.vars.keys() {
+                    let plain = key
+                        .chars()
+                        .enumerate()
+                        .all(|(i, c)| c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit()));
+                    ensure!(!key.is_empty() && plain, "vars: {key:?} is not a variable's name");
+                }
+                ensure!(
+                    fanout.late_cores.is_none() || !fanout.late.is_empty(),
+                    "late_cores needs late values"
+                );
+                Ok(())
+            }
+            Kind::Elixir(oracle) => {
+                ensure!(oracle.timeout_secs.is_none_or(|t| t > 0.0), "timeout_secs must be positive");
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -955,6 +1049,34 @@ mod tests {
         assert_eq!(otp.workspace.as_deref(), Some(Path::new("userland/otp")));
         assert_eq!(otp.features, ["beamlet-redoubt/fake"]);
         assert!(toml::from_str::<HostTests>("packages = ['p']\nworkspcae = 'userland/otp'").is_err());
+    }
+
+    /// A fanout's jobs are values in a variable over one test file, the test files, or the tests;
+    /// anything else, and a deadline with no jobs to hold it, is refused before anything builds.
+    #[test]
+    fn a_fanout_is_of_values_files_or_tests() {
+        let check = |fields: &str| {
+            let text = format!("description = \"d\"\nkind = \"host-tests\"\npackages = ['p']\n{fields}");
+            toml::from_str::<Case>(&text).unwrap().check()
+        };
+        let value = "fanout = { each = 'value', env = 'V', values = 'echo a' }";
+        assert!(check(&format!("tests = ['m']\n{value}\ntimeout_secs = 9")).is_ok());
+        assert!(check("tests = ['a', 'b']\nfanout = { each = 'file' }").is_ok());
+        assert!(check("fanout = { each = 'test', cores = 4, vars = { T = '4' } }").is_ok());
+        assert!(check(&format!("tests = ['a', 'b']\n{value}")).is_err(), "two files");
+        assert!(check(value).is_err(), "every file");
+        assert!(check("tests = ['m']\nfanout = { each = 'value', env = 'V' }").is_err(), "no values");
+        assert!(check("tests = ['m']\nfanout = { each = 'file', env = 'V' }").is_err(), "a value for files");
+        assert!(check("fanout = { each = 'file' }").is_err(), "no files");
+        assert!(check("miri = true\nfanout = { each = 'test' }").is_err(), "Miri lists no tests");
+        assert!(check("fanout = { each = 'test', cores = 0 }").is_err(), "no core");
+        assert!(check("fanout = { each = 'test', late_cores = 4 }").is_err(), "cores for no late value");
+        assert!(check("fanout = { each = 'test', vars = { 'A B' = '1' } }").is_err(), "not a name");
+        assert!(check("timeout_secs = 9").is_err(), "a deadline for no jobs");
+        assert!(check(&format!("tests = ['m']\n{value}\ntimeout_secs = 0")).is_err(), "no deadline at all");
+        assert!(
+            toml::from_str::<HostTests>("packages = ['p']\nfanout = { each = 'file', evn = 'V' }").is_err()
+        );
     }
 
     /// The image's recipe is the kernel, `init`, the servers, beamlet from its own workspace, and

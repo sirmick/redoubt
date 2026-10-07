@@ -177,7 +177,7 @@ description says so ("verdict: survival only").
 
 ### The case file
 
-Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures
+Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures, host:testbench::a_fanout_is_of_values_files_or_tests, host:testbench::a_job_passes_fails_or_runs_past_its_deadline, host:testbench::a_cpu_list_counts_its_ranges, bench:rt-miri, bench:model-mutations
 
 A case is one TOML file. Paths in it are relative to the workspace root, and an unknown field or
 table is an error, so a misspelling cannot silently drop a check. The one exception is a `programs`
@@ -292,7 +292,9 @@ make load-proof; and a case whose expectation is a timeout (`bench-ssh-guest`, a
 run beside other work, and the rule asks that its test threads be bounded then
 (`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The kinds that boot
 nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
-oracles) have no clock, and are verdicts anywhere.
+oracles) have no clock, and are verdicts anywhere, but for a `timeout_secs`: as for a boot, a
+host-tests job or an Elixir case that only ran out of its deadline beside other work is rerun
+alone.
 
 `scripts/q` applies that rule for a whole machine. It is one scheduler process that leases real
 cores: `q run --cores N -- <command>` waits for N free cores, runs the command pinned to them
@@ -301,14 +303,32 @@ cores: `q run --cores N -- <command>` waits for N free cores, runs the command p
 of the machine keeps working; `--lock net` keeps two `[net]` boots apart; a lease ends with the
 client process, so a killed job frees its cores. `scripts/jobs.mk` names every case as a make
 target (`rv64/<case>`, `cases-rv64`, `quiet-rv64`, `build-rv64`, `prebuilt`, `docs`) and picks
-the class for it: a boot takes one core per guest hart, a `host-tests` case four, the host-clock
-cases go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its
-width is there ([building once](#building-once)), else through `cargo testbench`. `q ls` shows
+the class for it: a boot takes one core per guest hart, a `host-tests` case or an Elixir case four
+(an Elixir case is mostly the build of beamlet and the model's trace writer), a case with a
+`fanout` two for its build while each of its jobs asks `q` for its own, and the host-clock cases
+go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its width
+is there ([building once](#building-once)), else through `cargo testbench`. A case with no `arch`
+boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. `q ls` shows
 the core map and the queue; `q log` the recent jobs with the time each waited and ran.
+
+**The heavy host cases.** What each costs on the 24-core build host, and the deadline it has
+(each a measured run and a third):
+
+| Case | Its cost | `timeout_secs` |
+| --- | --- | --- |
+| `model-mutations` | 148 jobs, one per mutation, in release, one core each; a mutation's steward families stop at 500 seeds ([mutations](kernel/model.md#mutations)) but for the one the case names as late, `PolicyDeclassifyUnfit`, whose full search to `steward_policy`'s seed 4709, on four cores of its own, is the longest job, 582 s. On one core of a full machine: `R2OneCursor` (`steward_noninterference`'s seed 345) 398 s, the rest at most 147 s | per job, 776 |
+| `model-host-tests` | one `cargo test` on four cores, every model test but the mutations and the steward families: about two minutes, the build included | none |
+| `steward-model-host-tests` | the two steward families, each a job on eight cores and threads: about 30 min of wall, 1,777 s for `steward_policy` and 1,469 s for `steward_noninterference`. A seed costs 0.6 s and 0.94 s on one thread in the model's own code, in release and dev alike: six to seven core-hours at their default counts | per job, 2369 |
+| `rt-miri` | 12 jobs, one per file, about 100 s of wall: `heap`'s 60 to 96 s; `connection` 25 s; the rest under 10 s | per job, 128 |
+| `elixir-oracles`, `bench-elixir-oracles-broken-guard` | 33 to 35 s each from a cold build on four cores, both at once; the oracles themselves run in under a second | 46 |
+
+`steward-model-host-tests` runs only by name (`whole_run = false`) until a cheaper steward seed
+brings it under ten minutes.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
-name only". It has one reason: a measurement too long to repeat at every train.
+name only"; `jobs.mk`'s `cases-*` and `quiet-*` leave it out too, and its own target runs it. It has
+one reason: a measurement too long to repeat at every train.
 
 The kinds, and the fields each takes besides `description`, `arch` and `whole_run`:
 
@@ -316,13 +336,13 @@ The kinds, and the fields each takes besides `description`, `arch` and `whole_ru
 | --- | --- | --- |
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
-| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features`, `tools` |
+| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features`, `tools`, `filter` (only the tests whose names contain one of these), `skip` (tests left out, by part of their name), `profile` (Cargo's, such as `release`), `fanout` (`each`, `env`, `values`, `cores`, `vars`, `late`, `late_cores`), `timeout_secs` (each fanned job's deadline) |
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
 | `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`, `within`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
 | `fmt` | the formatting gate ([below](#the-formatting-gate)) | `roots`, `[[skip]]` (`path`, `reason`) |
-| `elixir` | runs scripts that check an Elixir oracle on beamlet against the Rust it shadows, each of which must exit 0, on the pinned toolchain ([below](#elixir-oracles)) | `otp`, `elixir`, `scripts` (each a path and its arguments), `must_fail` |
+| `elixir` | runs scripts that check an Elixir oracle on beamlet against the Rust it shadows, each of which must exit 0, on the pinned toolchain ([below](#elixir-oracles)) | `otp`, `elixir`, `scripts` (each a path and its arguments), `must_fail`, `timeout_secs` (the scripts' together) |
 
 For `host-tests`, `workspace` defaults to the repository root and otherwise names a relative
 directory below it with a `Cargo.toml`; an absolute path, a path outside the repository or a
@@ -333,6 +353,31 @@ feature, so the two cases do not combine their Cargo features. `tools` names hos
 tests run as an oracle (`erofs-oracle`'s `mkfs.erofs`, `fsck.erofs` and `dump.erofs`): each must be
 an executable on the path, or the case fails naming the first missing, and skips it with
 `--allow-skip`, as for any other host lack.
+
+A `fanout` runs a long case as many jobs instead of one `cargo test`, one per `each`:
+`"value"`, one per line the shell command `values` prints, each running the case's one test file
+with that line in the variable `env` (`model-mutations`, one job per mutation, the names
+`cargo run --example mutations` prints, in `REDOUBT_MODEL_MUTATIONS`); `"file"`, one per entry of
+`tests` (`rt-miri`); `"test"`, one per test of every test binary the case builds, by libtest's own
+list, each run alone, those `filter` takes and `skip` does not (`steward-model-host-tests`). The
+bench builds the tests once, first, with no deadline; then each job runs its test binary as
+`cargo test` would, from its package's directory (under Miri, which runs no binary by itself,
+`cargo miri test` of the one file), through `scripts/q` on `cores` cores of its own (default one), as many at once as the
+machine has room for. `vars` are set for every job: a test that spawns its own threads is told how
+many it has (the model's `MODEL_THREADS`), since under `q` its `RUST_TEST_THREADS` is the lease's.
+Where `q` does not answer, the jobs run one after another. Each job's output is a file in
+`<case>/` of the run's directory, and `<case>.log` lists every value with the time its tests
+took; the case passes when every job does, and its failure names each value whose job failed. A
+job that runs past `timeout_secs` fails, saying so: a deadline on the cores the job asks for,
+stretched in proportion when `q`, once the job has waited, grants it fewer. `late` names values known to pass only past
+a bound their test keeps, each with the follow-up that removes it: their jobs run with
+`TESTBENCH_LATE=1`, the test's leave to go past it, and a pass is reported as "caught late,
+known" in the result and as `LATE` in the log, never hidden; any other value past the bound, an
+entry that names no job, and one whose test now passes within the bound fail the case.
+`late_cores` gives a late value's job, the long search, its own count of cores; a `{cores}` in a
+`vars` value becomes the count each job is granted, which `q` may lower from its ask once it has
+waited, so `model-mutations`' late job runs one thread per core it holds, and every other job
+one, until the follow-up on the steward model removes both.
 
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
@@ -471,11 +516,12 @@ time. The tracing kernel is a test build only
 
 ### Elixir oracles
 
-<details><summary>Status: built · tested (3)</summary>
+<details><summary>Status: built · tested (4)</summary>
 
 - bench:elixir-oracles
 - bench:bench-elixir-oracles-broken-guard
 - host:testbench::another_version_is_refused
+- host:testbench::the_scripts_share_the_case_deadline
 
 </details>
 
@@ -488,7 +534,11 @@ runs a module on beamlet. Before any script the case checks the toolchain: the `
 `releases/<major>/OTP_VERSION`), and `elixir --version` must say `elixir`. A missing or other
 toolchain fails the case even with `--allow-skip`, and no `must_fail` waits for it: an oracle that
 does not run catches nothing; the dev image carries both, and `scripts/setup.sh --with-beam`
-builds both on your own machine.
+builds both on your own machine. With `timeout_secs`, the scripts together have that deadline,
+each run under `timeout` with what the ones before it left; one past it fails the case, saying
+so, and is never what a `must_fail` waits for. Nearly all of a run is the build of beamlet and
+of the model's trace writer, which every Elixir case shares through Cargo's cache: the BEAM
+starts and the oracles run in under a second, so nothing else is shared between the cases.
 
 ## Checked builds
 
@@ -1121,8 +1171,10 @@ The ratchet counts `unsafe`; it does not check it. `rt-miri` runs the native run
 under Miri (Stacked Borrows, isolation off), which checks the heap's free lists, page buffers,
 lends and device registers that a native run only executes. It runs the files that finish in
 seconds, among them `registers` over the fake kernel's real device memory, and the heap's own,
-`heap`, in under a minute (fewer random rounds under Miri); `ipc` and `echo` take minutes under
-Miri and are run by hand. Without nightly Miri the case is missing, not passed.
+`heap`, in a minute or two (fewer random rounds under Miri), each file a job of its own
+([fanout](#the-case-file)); `ipc` and `echo` take minutes under Miri and are run by hand. Its
+files assert no wall-clock bound, only hang guards, so it is not a host-clock case. Without
+nightly Miri the case is missing, not passed.
 With the runtime's page-buffer aliasing fix reverted, `mapping_views` fails it with the Stacked
 Borrows error `not granting access to tag <wildcard> because that would remove [Unique for <…>]
 which is strongly protected`.

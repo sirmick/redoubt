@@ -69,11 +69,26 @@ struct Message {
     reason: String,
     target: Option<MessageTarget>,
     executable: Option<PathBuf>,
+    manifest_path: Option<PathBuf>,
+    profile: Option<MessageProfile>,
 }
 
 #[derive(Deserialize)]
 struct MessageTarget {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct MessageProfile {
+    test: bool,
+}
+
+/// A test binary `cargo test --no-run` built: its target's name, its path, and its package's
+/// directory, where `cargo test` would run it.
+pub struct TestBinary {
+    pub name: String,
+    pub path: PathBuf,
+    pub dir: PathBuf,
 }
 
 impl Builder {
@@ -310,11 +325,16 @@ impl Builder {
         Ok(workspace)
     }
 
-    /// `cargo test` for host packages, for the unit tests a boot cannot reach. Returns what
-    /// failed, or `None` if every test passed.
-    /// The `cargo test` a host-tests case runs. Under Miri it goes through rustup's `cargo`,
-    /// which alone takes `+nightly`, with isolation off: some tests read files or the clock.
-    fn test_command(&self, host: &HostTests, workspace: &Path) -> Command {
+    /// The `cargo test` a host-tests case runs, of the test files `tests` (every target when
+    /// empty), with `args` for Cargo. Under Miri it goes through rustup's `cargo`, which alone
+    /// takes `+nightly`, with isolation off: some tests read files or the clock.
+    pub fn test_command(
+        &self,
+        host: &HostTests,
+        workspace: &Path,
+        tests: &[String],
+        args: &[&str],
+    ) -> Command {
         let mut cargo = if host.miri {
             let mut cargo = Command::new("cargo");
             cargo.args(["+nightly", "miri"]).env("MIRIFLAGS", "-Zmiri-disable-isolation");
@@ -327,20 +347,67 @@ impl Builder {
         for package in &host.packages {
             cargo.args(["-p", package]);
         }
-        for test in &host.tests {
+        for test in tests {
             cargo.args(["--test", test]);
         }
         if !host.features.is_empty() {
             cargo.args(["--features", &host.features.join(",")]);
         }
+        if let Some(profile) = &host.profile {
+            cargo.args(["--profile", profile]);
+        }
+        cargo.args(args);
+        let libtest = libtest_args(host);
+        if !libtest.is_empty() {
+            cargo.arg("--").args(libtest);
+        }
         cargo
     }
 
-    pub fn cargo_test(&self, host: &HostTests) -> Result<Option<String>> {
+    /// Build the test files `tests` of a host-tests case without running them, and return the
+    /// test binaries Cargo reports, or, if the build failed, the end of what it said.
+    pub fn test_binaries(
+        &self,
+        host: &HostTests,
+        workspace: &Path,
+        tests: &[String],
+    ) -> Result<Result<Vec<TestBinary>, String>> {
+        let args = ["--no-run", "--message-format=json-render-diagnostics"];
+        let output = self
+            .test_command(host, workspace, tests, &args)
+            .stderr(Stdio::piped())
+            .output()
+            .context("running cargo test --no-run")?;
+        if !output.status.success() {
+            return Ok(Err(last_lines(&String::from_utf8_lossy(&output.stderr), 12)));
+        }
+        let mut binaries = Vec::new();
+        for line in output.stdout.split(|&b| b == b'\n').filter(|line| line.starts_with(b"{")) {
+            let message: Message = serde_json::from_slice(line).context("reading cargo's report")?;
+            let (Some(target), Some(path), Some(manifest), Some(profile)) =
+                (message.target, message.executable, message.manifest_path, message.profile)
+            else {
+                continue;
+            };
+            if message.reason == "compiler-artifact" && profile.test {
+                let dir = manifest.parent().context("a manifest path with no directory")?.to_path_buf();
+                binaries.push(TestBinary { name: target.name, path, dir });
+            }
+        }
+        Ok(Ok(binaries))
+    }
+
+    /// `cargo test` for host packages, for the unit tests a boot cannot reach; with a fanout, as
+    /// its jobs (`fanout.rs`). Returns what failed, or `None` if every test passed.
+    pub fn cargo_test(&self, name: &str, host: &HostTests) -> Result<Option<String>> {
         let workspace = self.host_test_workspace(host.workspace.as_deref())?;
-        let mut cargo = self.test_command(host, &workspace);
+        if let Some(fanout) = &host.fanout {
+            return crate::fanout::run(self, name, host, fanout, &workspace);
+        }
+        let quiet: &[&str] = if self.verbose { &[] } else { &["--quiet"] };
+        let mut cargo = self.test_command(host, &workspace, &host.tests, quiet);
         if !self.verbose {
-            cargo.arg("--quiet").stdout(Stdio::piped()).stderr(Stdio::piped());
+            cargo.stdout(Stdio::piped()).stderr(Stdio::piped());
         }
         let output = cargo.output().context("running cargo test")?;
         if self.verbose {
@@ -352,19 +419,21 @@ impl Builder {
         // The last lines carry the failed assertion and the test's name; the rest is noise.
         let out = String::from_utf8_lossy(&output.stdout);
         let err = String::from_utf8_lossy(&output.stderr);
-        let reason = [out.trim(), err.trim()].map(str::to_string).join("\n");
-        Ok(Some(
-            reason
-                .lines()
-                .rev()
-                .take(12)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join("\n      "),
-        ))
+        Ok(Some(last_lines(&[out.trim(), err.trim()].join("\n"), 12)))
     }
+}
+
+/// What a host-tests case tells its test binaries: its `filter`s, then a `--skip` for each of its
+/// `skip`s.
+pub fn libtest_args(host: &HostTests) -> Vec<String> {
+    let skips = host.skip.iter().flat_map(|skip| ["--skip".to_string(), skip.clone()]);
+    host.filter.iter().cloned().chain(skips).collect()
+}
+
+/// The last `n` lines of `text`, indented as a result's continuation lines.
+pub fn last_lines(text: &str, n: usize) -> String {
+    let lines: Vec<_> = text.lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n      ")
 }
 
 /// Rewrite one field of a little-endian ELF in place, or cut it short. Handles ELF32 and ELF64.
@@ -604,7 +673,7 @@ mod tests {
             staged: Default::default(),
         };
         let args = |host: &HostTests| {
-            let cargo = builder.test_command(host, &builder.workspace);
+            let cargo = builder.test_command(host, &builder.workspace, &host.tests, &["--quiet"]);
             let miriflags = cargo.get_envs().find(|(k, _)| *k == "MIRIFLAGS").and_then(|(_, v)| v);
             let args: Vec<_> = cargo.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
             (args.join(" "), miriflags.map(|v| v.to_string_lossy().into_owned()))
@@ -612,10 +681,19 @@ mod tests {
         let miri: HostTests = toml::from_str("packages = ['p']\ntests = ['a', 'b']\nmiri = true").unwrap();
         assert_eq!(
             args(&miri),
-            ("+nightly miri test -p p --test a --test b".into(), Some("-Zmiri-disable-isolation".into()))
+            (
+                "+nightly miri test -p p --test a --test b --quiet".into(),
+                Some("-Zmiri-disable-isolation".into())
+            )
         );
         let native: HostTests = toml::from_str("packages = ['p']").unwrap();
-        assert_eq!(args(&native), ("test -p p".into(), None));
+        assert_eq!(args(&native), ("test -p p --quiet".into(), None));
+        // Cargo's own arguments all come before the test binaries' filters and `--skip`s.
+        let release: HostTests = toml::from_str(
+            "packages = ['p']\nprofile = 'release'\nfilter = ['f']\nskip = ['slow', 'slower']",
+        )
+        .unwrap();
+        assert_eq!(args(&release).0, "test -p p --profile release --quiet -- f --skip slow --skip slower");
     }
 
     /// A tool the oracle needs is found on the path only as an executable file; the first
@@ -661,7 +739,7 @@ mod tests {
         )
         .unwrap();
         let workspace = builder.host_test_workspace(host.workspace.as_deref()).unwrap();
-        let cargo = builder.test_command(&host, &workspace);
+        let cargo = builder.test_command(&host, &workspace, &host.tests, &[]);
         assert_eq!(cargo.get_current_dir(), Some(otp.as_path()));
         let args: Vec<_> = cargo.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(
