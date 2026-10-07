@@ -10,10 +10,12 @@
 //! - **Submitting is inline.** [`Hub::submit`] sends the request from the calling thread, waiting at most
 //!   [`SUBMIT_TIMEOUT_US`] for the server to take it, so a busy server never stalls the caller. A send not
 //!   taken stays queued, in order, and is sent again at the hub's next entry: a submit, a completion handed
-//!   in, a [`Hub::wait`] or a [`Hub::poll`]. A caller enters the hub at least whenever it is about to idle.
-//!   Requests queued together go end to end in transfers of one page, so many small ones cost one page and a
-//!   send never needs more than the page a server's share may allow; a request longer than a page goes alone.
-//!   [`Hub::batch`] queues a run of submits to send them so.
+//!   in, a [`Hub::wait`] or a [`Hub::poll`]. Nothing else sends it: a caller that queues work and then idles
+//!   re-enters the hub within [`RETRY_US`] while anything is queued (a poll, or a wait bounded by
+//!   `RETRY_US`); a receive that outlives that is the caller's bug, not the hub's. Requests queued together
+//!   go end to end in transfers of one page, so many small ones cost one page and a send never needs more
+//!   than the page a server's share may allow; a request longer than a page goes alone. [`Hub::batch`] queues
+//!   a run of submits to send them so.
 //! - **Completions.** Each connection has one completion call, which names how long the server may hold it;
 //!   its own kernel timeout is that hold and [`COLLECT_MARGIN_US`], so a timeout means the server broke its
 //!   promise and the session is lost. A server ends a session its session bound (at most [`COLLECT_WAIT`])
