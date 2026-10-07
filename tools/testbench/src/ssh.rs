@@ -177,12 +177,13 @@ pub fn redoubt(
     host_key: Option<&str>,
 ) -> Result<Server<'static>> {
     let keys = workspace.join(KEYS);
+    let log = fresh_log(dir, case)?.display().to_string();
     let mut words = vec![
         binary.display().to_string(),
         "--host-key".into(),
         keys.join("loopback-host").display().to_string(),
         "--log".into(),
-        fresh_log(dir, case)?.display().to_string(),
+        log.clone(),
     ];
     for name in authorized {
         check_key_name(name)?;
@@ -192,7 +193,11 @@ pub fn redoubt(
     for word in &words {
         plain(word)?;
     }
-    Ok(Server::Redoubt { proxy: words.join(" "), host_key: expected_host_key(workspace, host_key)? })
+    // The server's standard error is ssh's unless sent elsewhere: an error it prints after ssh has
+    // hung up (a broken pipe, writing to a client that refused its host key) would stand in for
+    // ssh's own last line. It goes to the server's log, after the lines it wrote there itself.
+    let proxy = format!("{} 2>>{log}", words.join(" "));
+    Ok(Server::Redoubt { proxy, host_key: expected_host_key(workspace, host_key)? })
 }
 
 /// ssh's `ProxyCommand` for one session: a guest of its own, with no network and no host
@@ -842,6 +847,30 @@ mod tests {
         for case_dir in ["/w/it's", "/w/a:b", "/w/$(x)", "/w/a;b", "/w/a\nb", "/w/a,b", "/w/a b"] {
             assert!(proxy(&image, &workspace.join(case_dir)).is_err(), "{case_dir:?}");
         }
+    }
+
+    /// What Redoubt's server prints on its standard error, run as ssh runs its `ProxyCommand`
+    /// (`sh -c`), reaches its log and never ssh's standard error, so it cannot be the session's
+    /// last output: ssh's refusal of a host key is.
+    #[test]
+    fn the_redoubt_proxy_keeps_its_errors_off_ssh() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("redoubt-proxy-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("server");
+        std::fs::write(&binary, "#!/bin/sh\necho 'Error: Broken pipe (os error 32)' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let Server::Redoubt { proxy, .. } =
+            redoubt(Path::new("/w"), &binary, &dir, "case", &["alice".into()], Some("ssh-ed25519 K"))
+                .unwrap()
+        else {
+            unreachable!()
+        };
+        let output = Command::new("sh").args(["-c", &proxy]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+        let log = std::fs::read_to_string(loopback_log(&dir, "case")).unwrap();
+        assert_eq!(log, "Error: Broken pipe (os error 32)\n");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The keeper finds a process by its program and an argument naming the case's directory,
