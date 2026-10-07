@@ -28,3 +28,13 @@ it counts (`make -f jobs.mk ... rv64/<case>` already does that for the host-cloc
 other case use `$q run --quiet -- cargo testbench --arch rv64 <case>`), and the report says so.
 The whole bench (train 4) is running now; its case phase took minutes, not hours. Resume your
 work where your handoff left it.
+
+## Since B19 (on main): build once, run cases from it
+
+    make -f /home/mcloonan/redoubt/scripts/jobs.mk -C <your worktree> prebuilt     # once per tree state (~4 min)
+    make -f /home/mcloonan/redoubt/scripts/jobs.mk -C <your worktree> rv64/<case>  # then a case starts in under a second
+
+The case targets run from target/prebuilt when it is there and current (the index is
+fingerprinted on the tree: after any edit, run `prebuilt` again, or the case target reports a
+stale index). `cargo testbench --exact <case>` names one case; a bare name is still a substring.
+98 boot cases now run in guest time (icount): their verdicts hold beside anything.

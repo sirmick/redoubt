@@ -1,7 +1,8 @@
 # B18 report: the heavy host cases fanned out, measured and bounded
 
-Branch `wp-B18`, worktree `.worktrees/B18`, base `647f37dbe`. Head and acceptance numbers: see the
-end.
+Branch `wp-B18`, worktree `.worktrees/B18`, base `647f37dbe`, head `9e596306d` (nine commits,
+clean tree, not pushed). The second round follows the orchestrator's answer: (a), plus splitting
+the steward families out and bounding each mutation (the last section).
 
 ## Commits (base..head)
 
@@ -86,18 +87,61 @@ rt-miri took 133 s on the quiet set; the Elixir cases took 154/138/50 s, twice p
 
 ## Gates
 
-See the result message for the final exit codes; all were run through q or jobs.mk.
+All were run through q or jobs.mk.
 
 - `cargo test -p testbench`: 138 passed, rc 0.
 - docs, formatting, no-cruft, size-budget and unsafe-budget, as jobs.mk targets: rc 0.
 - rt-miri: rc 0 both as `cargo testbench --exact rt-miri` (92.3 s) and as `rv64/rt-miri`.
-- model-mutations and model-host-tests: rc 0 as jobs.mk targets.
+- model-mutations and model-host-tests: rc 0 as jobs.mk targets, twice each (alone and in the
+  acceptance run). jobs.mk runs `cargo testbench --exact <case>` under `q run`. They were not also
+  run outside jobs.mk: each is 12 to 33 min, and the command is the same.
 - Elixir cases: rc 0 as jobs.mk targets.
 - Acceptance: see below.
 
 ## Acceptance against the 15-minute tail
 
-ACCEPTANCE_PLACEHOLDER
+Not met. The model's steward families set a floor the fanout cannot get under; every other part of the tail is now about 2 min.
+
+Command (16:15:21 to 16:57:57, `real 42m36s`):
+
+    make -k -f .worktrees/B18/scripts/jobs.mk -C .worktrees/B18 quiet-rv64 quiet-rv32 rv64/model-mutations \
+      rv64/model-host-tests rv64/rt-miri rv64/elixir-oracles rv64/bench-elixir-oracles-broken-guard \
+      rv64/host-tests rv64/steward-host-tests rv64/memory-host-tests rv64/littlefs-host-tests
+
+The machine was shared with other tenants throughout. `q log` (end times, ran):
+
+| case | ended | ran |
+| --- | --- | --- |
+| rv32/bench-ssh-guest | 16:15:21 | 0.2 s |
+| rv64/client-host-tests | 16:15:24 | 2.8 s (FAIL, see below) |
+| rv64/rt-host-tests | 16:15:35 | 11.1 s |
+| rv64/r4-host-tests | 16:15:37 | 2.1 s |
+| rv64/bench-ssh-loopback-deadlock | 16:15:42 | 5.1 s (FAIL, see below) |
+| rv64/bench-ssh-guest | 16:15:55 | 12.8 s |
+| rv64/bench-elixir-oracles-broken-guard | 16:16:24 | 5.2 s (warm cache) |
+| rv64/elixir-oracles | 16:16:29 | 4.8 s (warm cache) |
+| rv64/steward-host-tests | 16:16:31 | 2.1 s |
+| rv64/littlefs-host-tests | 16:17:00 | 23.2 s |
+| rv64/host-tests | 16:17:00 | 35.4 s (was 1,387 s on the quiet set) |
+| rv64/memory-host-tests | 16:17:04 | 32.8 s |
+| rv64/rt-miri | 16:17:26 | 74.5 s |
+| rv64/model-mutations | 16:30:35 | 849.9 s (697 s when its jobs had the machine to themselves) |
+| rv64/model-host-tests | 16:57:57 | 2,505.1 s |
+
+- Without the two model cases, the tail ends at 16:17:26: 2 min 5 s.
+- With model-mutations it is 15 min 14 s.
+- model-host-tests sets the whole: its steward_policy job waited for an 8-core lease behind the
+  mutation jobs, then ran about 30 min.
+- The two quiet failures were each rerun alone on the quiet set:
+  - bench-ssh-loopback-deadlock: PASS, 0.2 s. The first run said the bench could not read its
+    sshd.log.
+  - client-host-tests: it fails about 1 run in 8 even alone (7 passes, then a FAIL in a loop of
+    `q run --quiet -- cargo testbench --exact -v client-host-tests`). The failing test is
+    `libs/client/tests/aio.rs` `a_server_that_breaks_its_hold_loses_the_session_at_the_margin`,
+    which panics at aio.rs:493 and :505.
+  - `cargo test -p redoubt-client` alone passed 6 runs of 6.
+  - The branch does not touch `libs/client` (no diff from base), so this flake predates B18 and
+    belongs to the client's aio work.
 
 ## Documentation check
 
@@ -142,3 +186,71 @@ ACCEPTANCE_PLACEHOLDER
 ## Next step
 
 The orchestrator's answer on the model's steward cost; review.
+
+## Second round: the split and the mutation bound
+
+Commits 7–9:
+
+- `b333260c1 testbench: a host-tests case may name the tests it runs`. This adds the `filter`
+  field: libtest name filters, placed before the `--skip`s. A fanout of each test makes jobs only of the
+  tests that `filter` takes.
+- `e2bd17f10 tests: the model's steward families get a case of their own, and a mutation they catch late fails`.
+- `9e596306d docs: the steward families' case and cost, the mutations' cap, and a host-tests filter`.
+
+**The split**
+
+- `model-host-tests` runs every model test except `mutations_are_caught` and the two steward
+  families. It is one cargo test in the bounded class (4 cores): PASS in 139.4 s, the build
+  included, so it has no deadline.
+- `model-steward-host-tests` is new and runs only `properties::steward_policy` and
+  `properties::steward_noninterference` (`tests = ["properties"]`, `filter`).
+  - It is a fanout of each test, 8 cores and `MODEL_THREADS=8` per job, so it is in the fanned
+    class, not the bounded one: a non-fanned case cannot set the model's thread count.
+  - PASS: 1,473 s and 1,435 s of run time. Its wall was 4,200 s because the 8-core leases queued
+    on a busy machine.
+  - `timeout_secs = 2369` per job (1,777 s measured earlier, and a third).
+- On the page: the steward families' per-seed cost is stated as the steward model's own, and a
+  residual risk names the follow-up (making a seed cheaper, and whether PolicyDeclassifyUnfit's
+  catch depth is a coverage weakness). The page carries no package ID.
+
+**The mutation bound**
+
+- `STEWARD_CAP = 500` seeds per steward family, per mutation. The kernel families keep 20,000,
+  because their seeds cost under 1 ms.
+- The bound is in seeds, not seconds: deterministic, and stated on the model page.
+- A mutation not caught within the caps fails the test by name. A lower cap can only fail more
+  mutations, never hide one.
+- Run through jobs.mk: FAIL, `1 of 147 jobs failed: PolicyDeclassifyUnfit`. The other 146 passed.
+  - The longest job is now that failing search, 200 s on 4 threads.
+  - Next were R2OneCursor at 164 s and PolicyAgentOtherSet at 64 s.
+  - Wall was 1,018 s on a busy machine; about 12 min with the machine to itself.
+  - `timeout_secs = 267` per job.
+- **model-mutations now fails on this branch, by design, until the steward model's follow-up.**
+  Merging it turns the case red in every train. You might want to hold the merge, or mark the
+  case `whole_run = false`, until the follow-up lands; that is your decision.
+
+**The three slow mutations**
+
+All times are with the old family order and one core, from the first measurement.
+
+| Mutation | Caught by | Seed | Time |
+| --- | --- | --- | --- |
+| PolicyDeclassifyUnfit | steward_policy | 4709 | 1,720 s on 1 core (582 s on 4 threads) |
+| R2OneCursor | steward_noninterference | 345 | over 48 min on 1 core before the reorder; 164–181 s on 4 threads after |
+| PolicyAgentOtherSet | steward_noninterference | 96 | over 48 min on 1 core before the reorder; 57–68 s on 4 threads after |
+
+- The next slowest at one core were PolicyEndLeaseAdmitted (steward_policy seed 224, 125 s) and
+  PolicyDeclassifyLive (seed 153, 62 s).
+- The kernel families catch as late as seed 8187 (R4OverdrawOnDelivery) but take only 8.6 s.
+- The steward families' per-seed cost is 0.6 s (steward_policy) and 0.94 s
+  (steward_noninterference) on one thread, in release and dev alike.
+
+**Tail with the split** (from the measurements above)
+
+- Everything except the model's mutation and steward cases ends in about 2 min 5 s.
+- model-host-tests takes 139 s.
+- model-mutations takes about 12 min with the machine to itself, and fails on PolicyDeclassifyUnfit.
+- model-steward-host-tests takes about 25–30 min of run time with its own 8-core leases; it is
+  the one case past 15 min.
+
+**Gates at the new head (9e596306d), all rc 0:** cargo test -p testbench (138 passed); docs; formatting; no-cruft; size-budget; unsafe-budget; model-host-tests and model-steward-host-tests as jobs.mk targets. model-mutations rc 1 by design (PolicyDeclassifyUnfit caught too late).
