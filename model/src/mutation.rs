@@ -222,6 +222,9 @@ pub enum Mutation {
     R12RescaleOnlyOnReturn,
     /// A deadline's destruction is billed to no budget.
     R12DeadlineWorkUnbilled,
+    /// The kernel's work between a pick and the thread's return to user mode comes out of its
+    /// slice.
+    R12SliceCountsExitWork,
     // kernel/ipc.md, Messages: what the kernel attaches, and notices.
     /// Messages carry no labels.
     MsgNoLabels,
@@ -364,7 +367,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 147] = {
+    pub const ALL: [Mutation; 148] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -457,6 +460,7 @@ impl Mutation {
             R12NoMinimumCharge,
             R12RescaleOnlyOnReturn,
             R12DeadlineWorkUnbilled,
+            R12SliceCountsExitWork,
             MsgNoLabels,
             MsgBadgeZero,
             MsgAccountZero,
@@ -603,7 +607,8 @@ impl Mutation {
             | R12FoldAtNewWeight
             | R12NoMinimumCharge
             | R12RescaleOnlyOnReturn
-            | R12DeadlineWorkUnbilled => "R12",
+            | R12DeadlineWorkUnbilled
+            | R12SliceCountsExitWork => "R12",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "R13",
             MsgNoLabels | MsgBadgeZero | MsgAccountZero | MsgIdsGlobal => "R14",
             BlameNobody

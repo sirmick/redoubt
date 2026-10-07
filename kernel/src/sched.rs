@@ -36,9 +36,9 @@
 //!
 //! # Picking and preemption
 //! `kmain` picks ([`pick`]): the queue's lowest rank, then the next thread of that budget after its
-//! round-robin cursor, in (pid, tid) order; the pick starts a slice. The running thread keeps the
-//! CPU until its slice ends, it blocks or exits, or a budget deadline fires; a wake never preempts
-//! (`time.rs` arms the timer for the slice's end).
+//! round-robin cursor, in (pid, tid) order; its slice starts when it returns to user mode
+//! ([`leave`]). The running thread keeps the CPU until its slice ends, it blocks or exits, or a
+//! budget deadline fires; a wake never preempts (`time.rs` arms the timer for the slice's end).
 //!
 //! # `kmain`'s switch
 //! `kmain` runs its pick with [`switch_to`], a private S-mode `ecall` into the kernel's own trap
@@ -351,8 +351,8 @@ pub fn audit(which: u64, check: impl FnOnce()) {
 }
 
 /// Leaving the kernel for `pid` (the kernel itself for PID 1): close the billing, deschedule the
-/// budget that ran if another runs now, reconcile, and start counting user time. Leaving for user
-/// mode, the entry's payer pays for this too, up to the return.
+/// budget that ran if another runs now, reconcile, start a picked thread's slice, and start counting
+/// user time. Leaving for user mode, the entry's payer pays for this too, up to the return.
 pub fn leave(pid: Pid) {
     let now = ticks();
     let to_user = ProcessTable::with(|ss| {
@@ -403,6 +403,10 @@ pub fn leave(pid: Pid) {
     }
     if pid.get() == 1 {
         crate::time::set_slice_end(crate::time::NEVER);
+    } else if to_user && crate::time::slice_end() == crate::time::NEVER {
+        // A picked thread's slice starts here, at its return to user mode: the slice is user time,
+        // so the exit work since the pick never uses it up; only a deadline due now preempts (R12).
+        crate::time::set_slice_end(crate::time::now_us().saturating_add(SLICE_US));
     }
     crate::time::rearm();
     if to_user && !cfg!(feature = "timer-tail-billed") {
@@ -418,8 +422,8 @@ pub fn leave(pid: Pid) {
     trace::returned(to_user);
 }
 
-/// What `kmain` runs next: the lowest-ranked queued budget's next thread after its cursor. Starts
-/// a slice. `None` when nothing is runnable.
+/// What `kmain` runs next: the lowest-ranked queued budget's next thread after its cursor. Its
+/// slice starts when it returns to user mode ([`leave`]). `None` when nothing is runnable.
 pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
     SCHED.with(|s| {
         #[cfg(feature = "walk-trace")]
@@ -438,7 +442,6 @@ pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
     let mut x = mm.budget(b.frame);
     x.cursor = Some((pid, tid));
     mm.store(b.frame, &x);
-    crate::time::set_slice_end(crate::time::now_us().saturating_add(SLICE_US));
     Some((pid, tid))
 }
 

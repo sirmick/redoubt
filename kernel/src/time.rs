@@ -49,7 +49,7 @@ struct Timer {
     /// No budget's deadline is earlier than this.
     budgets: u64,
     /// When each hart's running thread's slice ends (`sched.rs`), by boot index; `NEVER` while
-    /// `kmain` runs there.
+    /// `kmain` runs there, and from a pick until the thread returns to user mode.
     slice: [u64; MAX_HARTS],
     /// What each hart's timer is armed for, in microseconds.
     armed: [u64; MAX_HARTS],

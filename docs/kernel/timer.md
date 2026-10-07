@@ -47,8 +47,9 @@ a time never fires before `time_now` reaches it.
 </details>
 
 The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for the earliest:
-- the **slice end** of the running thread: set to the pick time plus `SLICE_US` (1,000 µs) when
-  `kmain` picks a thread, and to never while `kmain` itself runs;
+- the **slice end** of the running thread: set to the time plus `SLICE_US` (1,000 µs) when a
+  thread `kmain` picked returns to user mode, and to never while `kmain` itself runs and from a
+  pick until that return ([R12 (scheduling)](scheduling.md#r12-scheduling));
 - the **earliest timeout** of any blocked thread;
 - the **earliest deadline** of any budget.
 
@@ -70,7 +71,7 @@ once.
 flowchart TD
     blk["a thread blocks in call, send<br/>or receive with a finite timeout"] --> hto["earliest timeout: lowered"]
     mk["budget_create<br/>with a deadline"] --> hdl["earliest deadline: lowered"]
-    pick[kmain picks a thread] --> hsl["slice end: pick + SLICE_US"]
+    pick[a picked thread returns<br/>to user mode] --> hsl["slice end: return + SLICE_US"]
     leave[the kernel leaves for kmain] --> hnv["slice end: never"]
     hto --> M{earliest of the three<br/>changed?}
     hdl --> M
