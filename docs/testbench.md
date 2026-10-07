@@ -244,7 +244,7 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 131 of the 194 do. What keeps a case on the host's clock:
+something in it waits on the host, and 137 of the 205 do. What keeps a case on the host's clock:
 a disk or a userland disk (38 cases; the rule for a disk is above); host sockets, a `forward`, a
 `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
 the rv32 UART lost a burst of it); several harts that spin, since under `icount` QEMU runs the
@@ -252,10 +252,9 @@ harts in turn on one host thread and a hart spinning on the kernel's lock spends
 (3: `all-together` at 2 harts and `ipc` at 4 take from three to ten times as long, and
 `smp-boot` at 4 sees a hart that never ran user code); and a run whose purpose is the host's
 time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`, which needs
-QEMU's multi-threaded TCG). Three cases read no host clock and stay on it for now: `redoubt-ipc`
+QEMU's multi-threaded TCG). One case reads no host clock and stays on it for now: `redoubt-ipc`
 fails under `icount` on both widths (189 calls abandoned of the 256 it wants), until that is
-understood; `sum-clear` and `lend-untouched-page` (at 4 harts) fail without it too, and move
-once they pass. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
+understood. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
 is given at least four times its slowest pass alone on either width, rounded up to 10 s, and
 more than any wait of its own program, so that a stuck check reports itself; it is never raised
 without a measurement. `bench-poweroff-missing` keeps its 3 s: there the deadline is the oracle,
@@ -268,7 +267,7 @@ the host's load does not move a guest time, so its pass, and a failure the guest
 reports, are verdicts whatever ran beside it (a pinned seed adds only that the run repeats
 exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's deadline for the
 boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
-alone. A boot case without `icount` (60 of them) keeps the host's clock in the guest, so load
+alone. A boot case without `icount` (68 of them) keeps the host's clock in the guest, so load
 lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
 bound on a time, and a failure beside other work has no verdict until it fails alone. A `[net]`
 table by itself changes neither class: an empty one gives the guest a card that reaches
