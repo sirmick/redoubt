@@ -246,6 +246,8 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
 /// A trap from user mode: the user time since the last return is `cur`'s.
 pub fn from_user() {
     let now = ticks();
+    #[cfg(feature = "sched-trace")]
+    trace::kernel_from(now);
     SCHED.with(|s| {
         if let Some(since) = s.b().user_since.take() {
             s.cpu.accrue(here(), now.saturating_sub(since));
@@ -289,6 +291,8 @@ pub fn restart_billing() {
 /// its own budget (`time.rs`). Billing resumes after ([`resume_billing`]).
 pub fn pause_billing() {
     let now = ticks();
+    #[cfg(feature = "sched-trace")]
+    trace::kernel_from(now);
     MemoryManager::with_mut(|mm| {
         SCHED.with(|s| {
             s.b().paused = s.b().billing.map(|(_, p)| p);
@@ -319,6 +323,8 @@ pub fn stop_billing() {
             s.b().owed = 0;
         })
     });
+    #[cfg(feature = "sched-trace")]
+    trace::kernel_until(now);
 }
 
 /// Charge `ticks` of kernel work done for `b` (an expired timeout of one of its threads, its
@@ -374,6 +380,8 @@ pub fn audit(which: u64, check: impl FnOnce()) {
     #[cfg(not(feature = "audit-billed"))]
     {
         let ended = ticks();
+        #[cfg(feature = "sched-trace")]
+        trace::audited(ended.saturating_sub(started));
         SCHED.with(|s| {
             if let Some((since, b)) = s.b().billing {
                 s.b().billing = Some((since.saturating_add(ended.saturating_sub(started)), b));
@@ -414,6 +422,10 @@ pub fn leave(pid: Pid) {
                 // `timer-tail-billed`): user time starts here, so the rest is the next budget's.
                 if cfg!(feature = "timer-tail-billed") {
                     s.b().user_since = next.map(|_| now);
+                    #[cfg(feature = "sched-trace")]
+                    if next.is_some() {
+                        trace::kernel_until(now);
+                    }
                 } else {
                     s.b().user_since = None;
                     // Billing closed above, so the deschedule folds what `cur` ran; it reopens for
@@ -458,6 +470,8 @@ pub fn leave(pid: Pid) {
                 s.b().user_since = Some(back);
             })
         });
+        #[cfg(feature = "sched-trace")]
+        trace::kernel_until(back);
     }
     #[cfg(feature = "sched-trace")]
     trace::returned(to_user);
@@ -681,11 +695,17 @@ pub mod trace {
     /// record's kind word carries that hart's boot index above the kind's byte (0 on one hart, so
     /// a one-hart trace is as it was).
     pub fn record(kind: u8, id: u64, pass: u128) {
+        let entry = RING.with(|r| r.entry);
+        put(kind, entry, id, pass as u64);
+    }
+
+    /// Write one record's words: `entry` is the kernel entry it belongs to, but for `C`.
+    fn put(kind: u8, entry: u64, id: u64, pass: u64) {
         let kind = u64::from(kind) | (crate::arch::hart::index() as u64) << 8;
         RING.with(|r| {
             if r.n < CAP && r.pages[0] != 0 {
                 let (page, at) = (r.pages[r.n / PER_PAGE], (r.n % PER_PAGE) * 32);
-                for (k, word) in [pass as u64, r.entry, id, kind].iter().enumerate() {
+                for (k, word) in [pass, entry, id, kind].iter().enumerate() {
                     crate::kframe::write(page, at + k * 8, *word);
                 }
                 r.n += 1;
@@ -714,12 +734,55 @@ pub mod trace {
         record(TIMER_ENTRY, cur.map_or(0, |b| b.id), u128::from(crate::time::now_us()));
     }
 
-    /// `ticks` of kernel time were charged to budget `id`.
+    /// `ticks` of kernel time were charged to budget `id`: counted always, recorded (`B`) inside
+    /// a timer interrupt from user mode.
     pub fn charge(id: u64, ticks: u64) {
+        KERNEL.with(|k| k.charged += ticks);
         if RING.with(|r| r.timer) {
             record(CHARGE, id, u128::from(ticks));
         }
     }
+
+    /// The kernel's time and what of it was charged, once, at the trace's end (`C`): the id is
+    /// every hart's ticks in the kernel, from a trap's entry or `kmain`'s loop to the return to
+    /// user mode or the idle, the pass the ticks charged to budgets, and the entry field the
+    /// ticks the checked build's audits took, which nobody pays by design. What is left is
+    /// nobody's (kernel/scheduling.md, "Residual risks"). It reads only the billing's clock.
+    pub const KERNEL_TIME: u8 = b'C';
+
+    struct Kernel {
+        /// When each hart, by boot index, entered the kernel, while it is in it.
+        since: [Option<u64>; crate::arch::hart::MAX_HARTS],
+        ticks: u64,
+        charged: u64,
+        audits: u64,
+    }
+
+    static KERNEL: KernelCell<Kernel> = KernelCell::new(Kernel {
+        since: [None; crate::arch::hart::MAX_HARTS],
+        ticks: 0,
+        charged: 0,
+        audits: 0,
+    });
+
+    /// This hart is in the kernel from tick `now`, unless it already was.
+    pub fn kernel_from(now: u64) {
+        KERNEL.with(|k| {
+            k.since[crate::arch::hart::index()].get_or_insert(now);
+        });
+    }
+
+    /// This hart leaves the kernel at tick `now`, for user mode or the idle.
+    pub fn kernel_until(now: u64) {
+        KERNEL.with(|k| {
+            if let Some(since) = k.since[crate::arch::hart::index()].take() {
+                k.ticks += now.saturating_sub(since);
+            }
+        });
+    }
+
+    /// A checked build's audit took `ticks`.
+    pub fn audited(ticks: u64) { KERNEL.with(|k| k.audits += ticks); }
 
     /// The entry's expiry is done; `last` was billed last, for a wait that ended before its
     /// timeout if `stale`.
@@ -889,6 +952,15 @@ pub mod trace {
 
     /// Print the ring (at `system_reset`, before the machine goes). A drop fails the oracle.
     pub fn dump() {
+        // A hart still in the kernel is counted to now.
+        let now = super::ticks();
+        let (ticks, charged, audits) = KERNEL.with(|k| {
+            for since in k.since.iter_mut().filter_map(Option::take) {
+                k.ticks += now.saturating_sub(since);
+            }
+            (k.ticks, k.charged, k.audits)
+        });
+        put(KERNEL_TIME, audits, ticks, charged);
         RING.with(|r| {
             for seq in 0..r.n {
                 let (page, at) = (r.pages[seq / PER_PAGE], (seq % PER_PAGE) * 32);

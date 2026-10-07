@@ -142,6 +142,12 @@ pub extern "C" fn trap_handler(
             resume_current();
         }
     }
+    // A trap in `kmain`'s idle window enters the kernel here (one from user mode, at
+    // `sched::from_user`); `kmain`'s own switch is in it already.
+    #[cfg(feature = "sched-trace")]
+    if !from_user {
+        crate::sched::trace::kernel_from(crate::sched::now_ticks());
+    }
     let sc = scause::read();
 
     // If we were previously in Supervisor mode and we've just tried to write to
